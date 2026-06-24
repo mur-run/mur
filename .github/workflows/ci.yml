@@ -84,10 +84,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-14 (not macos-latest): macos-latest moved to macOS 15 / Xcode 16.4,
-        # whose toolchain is missing the static clang_rt.osx path
-        # (clang/17/lib/darwin), breaking native-dep linking (whisper-rs-sys/espeak-ng)
-        # with "ld: library 'clang_rt.osx' not found". macos-14 (Xcode 15.x) has it.
+        # macos-14: its image bundles Xcode 15.4, which we select below. The
+        # default Xcode 16.4 (now on both macos-14 and macos-latest) breaks the
+        # old vendored whisper.cpp build two ways — clang treats it as pre-C++11
+        # ("no template 'function' in namespace std", ">>" errors) and the link
+        # can't find clang_rt.osx (clang/17/lib/darwin missing). 15.4 builds it.
         os: [ubuntu-latest, macos-14, windows-latest]
     steps:
       - uses: actions/checkout@v6
@@ -100,6 +101,13 @@ jobs:
           # whisper-rs-sys CMakeCache.txt and CMake aborts on generator
           # mismatch. Keying on ImageVersion forces a fresh build on bump.
           key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
+      - name: Select Xcode 15.4 (macOS)
+        if: runner.os == 'macOS'
+        # The runner's default Xcode 16.4 breaks the old vendored whisper.cpp
+        # build (pre-C++11 clang errors) and the clang_rt.osx link. Xcode 15.4
+        # (bundled on macos-14) builds + links it cleanly. Set before any cargo
+        # build so build scripts (cc/cmake) use the right toolchain.
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
       - name: Install Linux system deps
         if: runner.os == 'Linux'
         run: |
