@@ -62,6 +62,10 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         println!("mur-agent-runtime {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    if crate::subcommand::has_flag(&argv, &["--build-id"]) {
+        println!("{}", mur_common::build::SHORT_SHA);
+        return Ok(());
+    }
 
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -515,6 +519,8 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         transports: lock_transports,
         card_digest: profile.digest.clone(),
         capabilities: profile.inner.capabilities.clone(),
+        build_sha: mur_common::build::SHORT_SHA.to_string(),
+        proto_version: mur_common::build::A2A_PROTO_VERSION,
     };
     write_lock(&lock_path, &lock)?;
     info!("agent {} ({}) ready", profile.inner.name, profile.inner.id);
