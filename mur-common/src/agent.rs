@@ -84,6 +84,11 @@ pub struct AgentProfile {
     /// the profile. Empty = all configured servers enabled.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disabled_mcp: Vec<String>,
+    /// Plugin-groups imported by this agent (add-on Phase 2). Each is
+    /// self-contained (members installed per-agent). Absent/empty in
+    /// legacy profiles (back-compat).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addons: Vec<AddonRef>,
     pub transport: TransportConfig,
     pub communication: CommunicationConfig,
     #[serde(default)]
@@ -273,6 +278,30 @@ pub struct McpServerEntry {
     /// + local-model map-reduce) need a longer budget than the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<u32>,
+}
+
+/// A plugin-group imported by one agent (add-on Phase 2). Self-contained:
+/// members are installed PER-AGENT (skills under
+/// `~/.mur/agents/<a>/skills/`, mcp appended to this profile's
+/// `mcp_servers`). No global library, no refcounting.
+///
+/// Fail-closed: `enabled` defaults to `false`. Only an explicit user
+/// toggle (CLI/Hub) or a trusted native installer flips it true — the
+/// importer always constructs it `false`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct AddonRef {
+    /// e.g. "superpowers" (local) or "superpowers@claude-plugins-official".
+    pub id: String,
+    /// Provenance, free-text. e.g. "claude-local:superpowers@6.0.3".
+    pub source: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<String>,
 }
 
 /// Display-only publisher metadata captured at install time. None of
@@ -1267,14 +1296,26 @@ impl AgentProfile {
             .expect("minimal profile fixture")
     }
 
-    /// Whether `skill_name` is enabled for this agent (Phase 1 denylist).
-    pub fn skill_enabled(&self, skill_name: &str) -> bool {
-        name_enabled(&self.disabled_skills, skill_name)
+    /// The imported add-on group a skill/mcp/command name belongs to.
+    pub fn group_of(&self, name: &str) -> Option<&AddonRef> {
+        self.addons.iter().find(|g| {
+            g.skills.iter().any(|n| n == name)
+                || g.mcp.iter().any(|n| n == name)
+                || g.commands.iter().any(|n| n == name)
+        })
     }
 
-    /// Whether MCP server `server_id` is enabled for this agent.
+    /// Whether `skill_name` is enabled (§3.3): not denied AND, if it
+    /// belongs to an imported group, that group is enabled.
+    pub fn skill_enabled(&self, skill_name: &str) -> bool {
+        name_enabled(&self.disabled_skills, skill_name)
+            && self.group_of(skill_name).is_none_or(|g| g.enabled)
+    }
+
+    /// Whether MCP server `server_id` is enabled (§3.3).
     pub fn mcp_enabled(&self, server_id: &str) -> bool {
         name_enabled(&self.disabled_mcp, server_id)
+            && self.group_of(server_id).is_none_or(|g| g.enabled)
     }
 
     /// Toggle a skill for this agent without uninstalling it.
@@ -1285,6 +1326,38 @@ impl AgentProfile {
     /// Toggle an MCP server for this agent without removing it.
     pub fn set_mcp_enabled(&mut self, server_id: &str, enabled: bool) {
         set_denylist(&mut self.disabled_mcp, server_id, enabled);
+    }
+
+    /// Toggle an imported plugin-group as a unit. Returns false if no
+    /// add-on has that id.
+    pub fn set_addon_enabled(&mut self, addon_id: &str, enabled: bool) -> bool {
+        match self.addons.iter_mut().find(|g| g.id == addon_id) {
+            Some(g) => {
+                g.enabled = enabled;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Emergency kill-switch (§7): clear every add-on's `enabled` and add
+    /// all members (skills + commands + mcp) to the denylists.
+    pub fn disable_all_addons(&mut self) {
+        let skills: Vec<String> = self
+            .addons
+            .iter()
+            .flat_map(|g| g.skills.iter().chain(g.commands.iter()).cloned())
+            .collect();
+        let mcp: Vec<String> = self.addons.iter().flat_map(|g| g.mcp.iter().cloned()).collect();
+        for g in &mut self.addons {
+            g.enabled = false;
+        }
+        for s in skills {
+            set_denylist(&mut self.disabled_skills, &s, false);
+        }
+        for m in mcp {
+            set_denylist(&mut self.disabled_mcp, &m, false);
+        }
     }
 
     /// This agent's MCP servers minus any disabled for it.
@@ -1909,5 +1982,46 @@ mod tool_policy_tests {
 
         set_denylist(&mut list, "b", true); // enabling an absent name is a no-op
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn addon_group_rule_truth_table() {
+        let mut p = AgentProfile::default_for_tests();
+        p.addons.push(AddonRef {
+            id: "grp".into(),
+            source: "claude-local:grp@1.0.0".into(),
+            enabled: false,
+            skills: vec!["g_skill".into()],
+            mcp: vec!["g_mcp".into()],
+            commands: vec!["g_cmd".into()],
+        });
+
+        // 1. standalone item, no entry anywhere => enabled (back-compat)
+        assert!(p.skill_enabled("standalone"));
+        assert!(p.mcp_enabled("standalone_mcp"));
+
+        // 2. grouped item, group disabled => off (cannot enable one member of a disabled group)
+        assert!(!p.skill_enabled("g_skill"));
+        assert!(!p.mcp_enabled("g_mcp"));
+
+        // 3. grouped item, group enabled, name not denied => on
+        assert!(p.set_addon_enabled("grp", true));
+        assert!(p.skill_enabled("g_skill"));
+        assert!(p.mcp_enabled("g_mcp"));
+
+        // 4. name in denylist overrides an enabled group => off (silence one member)
+        p.set_skill_enabled("g_skill", false);
+        assert!(!p.skill_enabled("g_skill"));
+
+        // set_addon_enabled on a missing id reports false
+        assert!(!p.set_addon_enabled("nope", true));
+
+        // kill-switch: clears every enabled flag and denies all members (skills+commands+mcp)
+        p.set_skill_enabled("g_skill", true); // un-deny so kill-switch is what disables it
+        p.disable_all_addons();
+        assert!(p.addons.iter().all(|g| !g.enabled));
+        assert!(!p.skill_enabled("g_skill"));
+        assert!(!p.skill_enabled("g_cmd"));
+        assert!(!p.mcp_enabled("g_mcp"));
     }
 }
