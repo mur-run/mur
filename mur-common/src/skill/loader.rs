@@ -142,15 +142,6 @@ where
     }
 }
 
-/// Drop skills disabled for an agent (Phase 1 denylist). Applied once at
-/// agent startup, after `load_all`, so the filtered list feeds both injection
-/// and the trigger registry.
-pub fn filter_enabled(loaded: Vec<LoadedSkill>, disabled_skills: &[String]) -> Vec<LoadedSkill> {
-    loaded
-        .into_iter()
-        .filter(|s| crate::agent::name_enabled(disabled_skills, &s.name))
-        .collect()
-}
 
 #[cfg(test)]
 mod tests {
@@ -229,20 +220,5 @@ content:
         assert_eq!(shared[0].scope, SkillScope::Agent);
     }
 
-    #[test]
-    fn filter_enabled_drops_denied_names() {
-        let mk = |n: &str| LoadedSkill {
-            name: n.to_string(),
-            manifest: make(n),
-            trust: TrustLevel::Sandboxed,
-            scope: SkillScope::Agent,
-            content_hash: String::new(),
-        };
-        let loaded = vec![mk("alpha"), mk("beta")];
-        let kept = filter_enabled(loaded, &["beta".to_string()]);
-        assert_eq!(
-            kept.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
-            ["alpha"]
-        );
-    }
+
 }
