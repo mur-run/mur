@@ -427,6 +427,8 @@ pub enum FleetAction {
     Run {
         /// Fleet name
         name: String,
+        /// Optional job text — runs one-shot (jumps ahead of queue)
+        job: Option<String>,
         /// Loop until the router converges or a guard trips (cap/deadline/stuck)
         #[arg(long = "loop")]
         loop_flag: bool,
@@ -439,6 +441,21 @@ pub enum FleetAction {
         /// Projected USD budget for the loop (overrides fleet.yaml `loop.budget_usd`)
         #[arg(long)]
         budget_usd: Option<f64>,
+    },
+    /// Queue a job for a fleet (async; drained by `run` or the daemon)
+    Send {
+        /// Fleet name
+        name: String,
+        /// The job text (becomes the goal for one run)
+        job: String,
+    },
+    /// List a fleet's jobs and their status
+    Jobs {
+        /// Fleet name
+        name: String,
+        /// Include terminal (done/failed/canceled) jobs
+        #[arg(long)]
+        all: bool,
     },
     /// Stop a fleet (kill-switch): disable auto-run and halt a running loop
     Stop {
@@ -473,6 +490,30 @@ pub enum FleetAction {
         /// Pre-approve the install confirmation (still verifies + scans)
         #[arg(long)]
         yes: bool,
+    },
+    /// Delete fleet + shared channel (member agents NOT deleted)
+    Delete {
+        /// Fleet name
+        name: String,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Add agent(s) to a fleet (member + channel role)
+    Add {
+        /// Fleet name
+        name: String,
+        /// Agent name(s) to add
+        #[arg(required = true)]
+        agents: Vec<String>,
+    },
+    /// Remove agent(s) from a fleet (member + channel)
+    Remove {
+        /// Fleet name
+        name: String,
+        /// Agent name(s) to remove
+        #[arg(required = true)]
+        agents: Vec<String>,
     },
 }
 

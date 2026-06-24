@@ -130,6 +130,63 @@ async fn missing_secret_ref_is_degraded_not_fatal() {
     assert!(mur.join("models.yaml").exists());
 }
 
+// ── Fleet command round-trip (job intake + roster management) ───────────
+
+#[test]
+fn fleet_job_and_roster_round_trip() {
+    use mur_common::fleet::JobStatus;
+    use mur_core::cmd::fleet::{create, delete, jobs, roster, store};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+
+    // create (members need not exist on disk; names canonicalize themselves)
+    create::cmd_fleet_create(
+        home,
+        "dev",
+        vec!["pm".into()],
+        None,
+        Some("standing".into()),
+    )
+    .unwrap();
+
+    // add member → fleet manifest stays in sync
+    roster::cmd_fleet_add(home, "dev", vec!["qa".into()]).unwrap();
+    assert!(
+        store::load_fleet(home, "dev")
+            .unwrap()
+            .members
+            .contains(&"qa".to_string())
+    );
+
+    // send job → lands queued (no execution)
+    jobs::cmd_fleet_send(home, "dev", "first job").unwrap();
+    let q = jobs::list_jobs(home, "dev").unwrap();
+    assert_eq!(q.len(), 1);
+    assert_eq!(q[0].status, JobStatus::Queued);
+    assert_eq!(q[0].text, "first job");
+
+    // remove member → manifest updated, others preserved
+    roster::cmd_fleet_remove(home, "dev", vec!["qa".into()]).unwrap();
+    let members = store::load_fleet(home, "dev").unwrap().members;
+    assert!(!members.contains(&"qa".to_string()), "qa must be gone");
+    assert!(members.contains(&"pm".to_string()), "pm must stay");
+
+    // delete fleet → dir + channel gone; jobs removed as part of the dir
+    let fleet = store::load_fleet(home, "dev").unwrap();
+    let channel_id = fleet.channel_id.clone();
+    delete::cmd_fleet_delete(home, "dev", true).unwrap();
+    assert!(
+        !store::fleet_dir(home, "dev").exists(),
+        "fleet dir must be gone"
+    );
+    let svc = mur_channel::ChannelService::open(home).unwrap();
+    assert!(
+        svc.store().load_manifest(&channel_id).is_err(),
+        "channel must be gone"
+    );
+}
+
 // ── Skill fleet tests ────────────────────────────────────────────────
 
 #[cfg(test)]
