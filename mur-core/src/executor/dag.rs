@@ -44,6 +44,13 @@ pub struct DagExecOptions<'a> {
     /// `idempotency_key`s for channel events. v3b sets keys; v3c enforces dedup,
     /// at which point a crash-rerun MUST reuse the same `run_id`. Empty = none.
     pub run_id: String,
+    /// Cap on the number of steps running concurrently across the whole DAG.
+    /// `None` = unbounded (every same-rank step spawned at once — prior
+    /// behaviour). `Some(n)` bounds total in-flight steps to `n.max(1)` via a
+    /// shared semaphore. The 2026 dynamic-fan-out hard precondition: cap
+    /// concurrency, not just cost, or parallel delegations cascade past API
+    /// rate limits.
+    pub max_concurrency: Option<usize>,
 }
 
 impl<'a> Default for DagExecOptions<'a> {
@@ -57,6 +64,7 @@ impl<'a> Default for DagExecOptions<'a> {
             trigger: "manual",
             channel_id: None,
             run_id: String::new(),
+            max_concurrency: None,
         }
     }
 }
@@ -751,6 +759,12 @@ pub async fn execute_dag(
     // others contribute 0) → the run's PipelineOutput.tokens_used.
     let mut overall_tokens: u64 = 0;
 
+    // Optional global concurrency cap. One semaphore for the whole run bounds
+    // total in-flight steps (across all ranks). `None` => no permit, unbounded.
+    let sem = opts
+        .max_concurrency
+        .map(|n| std::sync::Arc::new(tokio::sync::Semaphore::new(n.max(1))));
+
     for rank in 0..=max_rank {
         let indices: Vec<usize> = (0..graph.nodes.len())
             .filter(|i| graph.nodes[*i].rank == rank)
@@ -780,8 +794,14 @@ pub async fn execute_dag(
             let tr = opt_trigger.clone();
             let chan_id = opt_chan_id.clone();
             let run_id = opt_run_id.clone();
+            let sem = sem.clone();
             let mh = mur_home.to_path_buf();
             handles.push(tokio::task::spawn(async move {
+                // Hold a permit for the whole step when a cap is set.
+                let _permit = match sem {
+                    Some(s) => Some(s.acquire_owned().await.expect("semaphore open")),
+                    None => None,
+                };
                 let opts_clone = DagExecOptions {
                     yes: opt_yes,
                     input: inp,
@@ -791,6 +811,7 @@ pub async fn execute_dag(
                     trigger: &tr,
                     channel_id: chan_id,
                     run_id,
+                    max_concurrency: None,
                 };
                 execute_step(&step, &opts_clone, i, 0, &mh).await
             }));
@@ -1239,5 +1260,54 @@ mod tests {
             .find(|e| e.kind == EventKind::ToolResult)
             .unwrap();
         assert_eq!(tr.payload["exit_code"], 0);
+    }
+
+    #[tokio::test]
+    async fn max_concurrency_bounds_parallel_steps() {
+        // 6 independent rank-0 steps, each sleeping 0.2s.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let proc = Procedure {
+            variables: vec![],
+            steps: (0..6)
+                .map(|i| ProcedureStep {
+                    description: format!("s{i}"),
+                    command: Some("sleep 0.2".to_string()),
+                    id: Some(format!("s{i}")),
+                    ..Default::default()
+                })
+                .collect(),
+        };
+
+        // Bounded to 2 -> at least 3 sequential waves -> >= ~0.6s (hard floor).
+        // Split threshold is 500ms: well below the ~600ms floor, well above the
+        // ~200-300ms unbounded single-wave time.
+        let opts = DagExecOptions {
+            max_concurrency: Some(2),
+            ..Default::default()
+        };
+        let t = std::time::Instant::now();
+        execute_dag(tmp.path(), "cc-bounded", &proc, &opts)
+            .await
+            .unwrap();
+        let bounded = t.elapsed();
+        assert!(
+            bounded.as_millis() >= 500,
+            "bounded run finished too fast ({bounded:?}); cap not applied"
+        );
+
+        // Unbounded -> single wave -> ~0.2s.
+        let opts2 = DagExecOptions {
+            max_concurrency: None,
+            ..Default::default()
+        };
+        let t2 = std::time::Instant::now();
+        execute_dag(tmp.path(), "cc-unbounded", &proc, &opts2)
+            .await
+            .unwrap();
+        let unbounded = t2.elapsed();
+        assert!(
+            unbounded.as_millis() < 500,
+            "unbounded run too slow ({unbounded:?}); regression in default path"
+        );
     }
 }

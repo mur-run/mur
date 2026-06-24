@@ -81,6 +81,23 @@ pub struct Config {
     // --- Agent CLI TUI ---
     #[serde(default)]
     pub cli: CliConfig,
+
+    // --- parallel_jobs MCP tool ---
+    #[serde(default)]
+    pub parallel_jobs: ParallelJobsConfig,
+}
+
+/// Authorization gate for the `parallel_jobs` MCP tool. Stored under `parallel_jobs:`
+/// in `~/.mur/config.yaml`. Deny-by-default: an empty `targets` list means the
+/// tool cannot delegate to ANY agent (inert until the user opts specific
+/// agents in). This is a deterministic, out-of-model gate that a
+/// prompt-injected concierge cannot widen (OWASP Agentic ASI02/03/04).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ParallelJobsConfig {
+    /// Canonical agent names the `parallel_jobs` tool is allowed to delegate to.
+    /// Empty = deny all.
+    #[serde(default)]
+    pub targets: Vec<String>,
 }
 
 /// Routing for Anthropic subscription-OAuth (`sk-ant-oat*`) tokens through a
