@@ -7,9 +7,12 @@
 use std::path::Path;
 
 use anyhow::{Result, anyhow, bail};
+use mur_channel::ChannelService;
+use mur_common::pipeline::PipelineOutput;
 use mur_common::skill::manifest::{Procedure, ProcedureStep};
 
 use crate::a2a_dial::canonicalize_agent_name;
+use crate::executor::dag::{DagExecOptions, execute_dag};
 
 /// A single job: a prompt and the (canonicalized) agent to delegate it to.
 pub struct Job {
@@ -77,6 +80,32 @@ pub fn resolve_jobs(
         .collect()
 }
 
+/// Run N jobs as one ephemeral, channel-recorded DAG. Mints a throwaway
+/// workflow channel, fans the jobs out (bounded by `max_concurrency`), and
+/// returns `(channel_id, output)`. Per-job replies are persisted on the
+/// channel; the caller reads them back via `channel_id`. `yes` is passed
+/// straight through — `false` keeps risk-tiered steps fail-closed at the HITL gate.
+pub async fn run_parallel_jobs(
+    mur_home: &Path,
+    jobs: &[Job],
+    max_concurrency: Option<usize>,
+    yes: bool,
+) -> Result<(String, PipelineOutput)> {
+    let proc = build_jobs_procedure(jobs);
+    let svc = ChannelService::open(mur_home)?;
+    let channel_id = svc.create_for_workflow("parallel-jobs")?.id;
+    let opts = DagExecOptions {
+        yes,
+        trigger: "agent",
+        channel_id: Some(channel_id.clone()),
+        run_id: format!("run-{}", uuid::Uuid::now_v7()),
+        max_concurrency,
+        ..Default::default()
+    };
+    let out = execute_dag(mur_home, "parallel-jobs", &proc, &opts).await?;
+    Ok((channel_id, out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +153,24 @@ mod tests {
         // error on an empty description
         let raw = vec![RawJob { description: "  ".into(), agent: Some("rustsmith".into()) }];
         assert!(resolve_jobs(home, &raw, None).is_err());
+    }
+
+    #[tokio::test]
+    async fn run_parallel_jobs_mints_channel_even_when_delegate_unreachable() {
+        // No runtime is running, so the delegate dial fails fast (RequireRunning).
+        // run_parallel_jobs must still mint the channel and return Ok (the
+        // executor turns a failed delegate into a failed step, not an Err).
+        let tmp = tempfile::TempDir::new().unwrap();
+        let jobs = vec![Job {
+            description: "do A".into(),
+            assignee: "nonexistent-agent-xyz".into(),
+        }];
+        let (channel_id, _out) = run_parallel_jobs(tmp.path(), &jobs, Some(2), false)
+            .await
+            .expect("must not error when the delegate is unreachable");
+        assert!(!channel_id.is_empty(), "a channel should have been minted");
+        // The minted channel is persisted and loadable.
+        let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+        assert!(svc.load_events(&channel_id).is_ok());
     }
 }
