@@ -467,6 +467,28 @@ pub async fn pet_drop_files(
     .map_err(|e| format!("pet drop task panicked: {e}"))?;
 
     let reply = dialed.unwrap_or_else(|e| format!("(couldn't reach {agent_name}: {e})"));
+
+    // Persist the exchange into the agent's channel so ChatTab re-hydrates and
+    // shows the full take as a real panel message (best-effort, never blocks).
+    {
+        let agent_name2 = agent_name.clone();
+        let file_label = paths
+            .iter()
+            .filter_map(|p| {
+                std::path::Path::new(p)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let user_msg = format!("📎 {file_label}");
+        let agent_reply = reply.clone();
+        tokio::task::spawn_blocking(move || {
+            let home = mur_home();
+            mur_core::mobile::persist_mobile_exchange(&home, &agent_name2, &user_msg, &agent_reply);
+        });
+    }
+
     Ok(PetDropResult {
         reply,
         text_files: sections.len(),
