@@ -7,7 +7,7 @@ use base64::Engine as _;
 use mur_common::hub::trigger::load_triggers;
 use mur_gui_core::event_bus::{EventBus, HubEvent};
 use mur_gui_core::expression::{ExpressionChange, ExpressionStateMachine};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::oneshot;
 
@@ -26,16 +26,6 @@ pub struct PetState(pub Mutex<HashMap<String, PetHandle>>);
 
 /// Application-wide event bus (broadcast).
 pub struct EventBusState(pub EventBus);
-
-// ─── Position persistence ────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PetPosition {
-    pub x: f64,
-    pub y: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display_id: Option<String>,
-}
 
 fn mur_home() -> PathBuf {
     std::env::var("MUR_HOME")
@@ -77,30 +67,10 @@ pub(crate) fn monitor_rect_for_point(app: &AppHandle, x: i32, y: i32) -> geometr
     }
 }
 
-fn pet_position_path(agent_name: &str) -> PathBuf {
-    mur_home()
-        .join("agents")
-        .join(agent_name)
-        .join("pet_position.json")
-}
-
 /// True if `agent_name` is safe to use as a path component under
 /// `~/.mur/agents/` (canonical agent-name rules).
 fn valid_agent(agent_name: &str) -> bool {
     mur_common::agent_name::validate_agent_name(agent_name).is_ok()
-}
-
-fn save_position(agent_name: &str, pos: &PetPosition) {
-    if !valid_agent(agent_name) {
-        return;
-    }
-    let path = pet_position_path(agent_name);
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(json) = serde_json::to_string_pretty(pos) {
-        let _ = std::fs::write(path, json);
-    }
 }
 
 fn window_label(agent_name: &str) -> String {
@@ -195,11 +165,8 @@ pub fn pet_spawn_at(
         pets.remove(&agent_name);
     }
 
-    // The explicit drop point always wins over a previously saved position — a
-    // stale save could point at a display that no longer exists. Persistence is
-    // left to pet_reposition, the single writer.
-    //
-    // DOM drop coords (screen_x/y) and PET_W/PET_H are LOGICAL; the geometry
+    // The explicit drop point always wins. DOM drop coords (screen_x/y) and
+    // PET_W/PET_H are LOGICAL; the geometry
     // module + monitor rects are PHYSICAL. Convert with the monitor scale.
     // ponytail: uniform-scale assumption (primary monitor's factor); mixed-DPI
     // multi-monitor would need per-monitor scale, rare — revisit if it bites.
@@ -274,18 +241,6 @@ pub fn pet_close(
         }
     }
     Ok(())
-}
-
-#[tauri::command]
-pub fn pet_reposition(agent_name: String, x: f64, y: f64) {
-    save_position(
-        &agent_name,
-        &PetPosition {
-            x,
-            y,
-            display_id: None,
-        },
-    );
 }
 
 #[tauri::command]

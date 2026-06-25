@@ -545,7 +545,6 @@ pub fn run() {
             onboarding::first_launch::mark_first_launch_done,
             pet::pet_spawn_at,
             pet::pet_close,
-            pet::pet_reposition,
             pet::pet_return_to_hub,
             pet::pet_list,
             pet::pet_get_expression,

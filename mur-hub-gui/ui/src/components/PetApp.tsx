@@ -38,10 +38,12 @@ export function PetApp() {
   const [appearance, setAppearance] = useState<PetAppearance | null>(null);
   const [bubble, setBubble] = useState<BubbleState | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenu>({ visible: false, x: 0, y: 0 });
-  const [muted, setMuted] = useState(false);
-  const mutedRef = useRef(false); // read inside the bubble listener (stable closure)
+  const muteKey = `pet-muted:${agentName}`;
+  const [muted, setMuted] = useState(() => localStorage.getItem(muteKey) === "1");
+  const mutedRef = useRef(muted); // read inside the bubble listener (stable closure)
   const clickTimeRef = useRef<number>(0);
   const pressRef = useRef<{ x: number; y: number } | null>(null);
+  const firstMenuItemRef = useRef<HTMLButtonElement>(null);
 
   // Resolve the pet's style/family once; decides AI art vs. vector mascot.
   useEffect(() => {
@@ -112,17 +114,6 @@ export function PetApp() {
     return () => { unsub.then((f) => f()); };
   }, []);
 
-  // Persist position whenever the window is moved.
-  useEffect(() => {
-    const win = getCurrentWindow();
-    const unsub = win.listen("tauri://move", () => {
-      win.outerPosition().then((pos) => {
-        invoke("pet_reposition", { agentName, x: pos.x, y: pos.y }).catch(() => {});
-      });
-    });
-    return () => { unsub.then((f) => f()); };
-  }, [agentName]);
-
   // Close context menu on click outside.
   useEffect(() => {
     if (!contextMenu.visible) return;
@@ -131,16 +122,24 @@ export function PetApp() {
     return () => window.removeEventListener("click", close);
   }, [contextMenu.visible]);
 
-  // ESC closes bubble.
+  // ESC closes bubble and context menu.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && bubble) {
-        setBubble(null);
+      if (e.key === "Escape") {
+        if (contextMenu.visible) setContextMenu((m) => ({ ...m, visible: false }));
+        if (bubble) setBubble(null);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [bubble]);
+  }, [bubble, contextMenu.visible]);
+
+  // Focus first menu item when context menu opens.
+  useEffect(() => {
+    if (contextMenu.visible) {
+      firstMenuItemRef.current?.focus();
+    }
+  }, [contextMenu.visible]);
 
   // Click vs drag: a native startDragging() on mousedown would swallow the
   // mouseup (the window server owns the drag loop), so clicks could never be
@@ -197,6 +196,7 @@ export function PetApp() {
     setMuted((m) => {
       const next = !m;
       mutedRef.current = next;
+      localStorage.setItem(muteKey, next ? "1" : "0");
       if (next) setBubble(null);
       return next;
     });
@@ -247,15 +247,23 @@ export function PetApp() {
       )}
 
       <div
-        className={`pet-sprite pet-sprite--${expression}`}
+        className={`pet-sprite pet-sprite--${expression}${muted ? " pet-sprite--muted" : ""}`}
+        role="button"
+        tabIndex={0}
+        aria-label={t("pet.chat")}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onDoubleClick={handleChat}
-        title={t("pet.chat")}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            void handleChat();
+          }
+        }}
       >
         {imageSrc ? (
-          <img src={imageSrc} alt={agentName} className="pet-image" draggable={false} />
+          <img src={imageSrc} alt="" aria-hidden className="pet-image" draggable={false} />
         ) : appearance ? (
           <PetFace
             presetId={appearance.style_preset}
@@ -273,7 +281,7 @@ export function PetApp() {
           className="pet-context-menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
-          <button className="pet-menu-item" onClick={handleChat}>💬 {t("pet.chat")}</button>
+          <button ref={firstMenuItemRef} className="pet-menu-item" onClick={handleChat}>💬 {t("pet.chat")}</button>
           <button className="pet-menu-item" onClick={handleToggleMute}>
             {muted ? `🔔 ${t("pet.unmute")}` : `🔇 ${t("pet.mute")}`}
           </button>
