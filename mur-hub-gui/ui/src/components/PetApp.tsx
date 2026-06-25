@@ -38,6 +38,8 @@ export function PetApp() {
   const [appearance, setAppearance] = useState<PetAppearance | null>(null);
   const [bubble, setBubble] = useState<BubbleState | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenu>({ visible: false, x: 0, y: 0 });
+  const [dragOver, setDragOver] = useState(false);
+  const [pending, setPending] = useState(false);
   const muteKey = `pet-muted:${agentName}`;
   const [muted, setMuted] = useState(() => localStorage.getItem(muteKey) === "1");
   const mutedRef = useRef(muted); // read inside the bubble listener (stable closure)
@@ -57,10 +59,12 @@ export function PetApp() {
   // This is user-initiated, so it shows even when muted.
   useEffect(() => {
     const unsub = getCurrentWindow().listen<string[]>("pet://drop", (ev) => {
+      setDragOver(false); // clear highlight on drop
       const paths = ev.payload;
       if (!paths || paths.length === 0) return;
       setBubble({ text: t("pet.dropThinking"), dwell_ms: 60000, ack_required: false });
-      invoke<{ reply: string; text_files: number; skipped: string[] }>("pet_drop_files", {
+      setPending(true);
+      invoke<{ reply: string; text_files: number; skipped: string[]; remote_provider?: string }>("pet_drop_files", {
         agentName,
         paths,
       })
@@ -69,16 +73,29 @@ export function PetApp() {
           const skipped = res.skipped?.length
             ? ` ${t("pet.dropSkipped", { count: res.skipped.length })}`
             : "";
+          const disclosure = res.remote_provider
+            ? `\n${t("pet.dropSendingTo", { provider: res.remote_provider })}`
+            : "";
           setBubble({
-            text: base + skipped,
+            text: base + skipped + disclosure,
             dwell_ms: res.reply ? 12000 : 6000,
             ack_required: false,
           });
         })
-        .catch((e) => setBubble({ text: String(e), dwell_ms: 6000, ack_required: false }));
+        .catch((e) => setBubble({ text: String(e), dwell_ms: 6000, ack_required: false }))
+        .finally(() => setPending(false));
     });
     return () => { unsub.then((f) => f()); };
   }, [agentName, t]);
+
+  // Drive drag-over highlight from native Tauri drag events (HTML5 drag handlers
+  // don't fire for OS file drags when Tauri native drag-drop is enabled).
+  useEffect(() => {
+    const unsub = getCurrentWindow().listen<boolean>("pet://drag-active", (ev) => {
+      setDragOver(ev.payload);
+    });
+    return () => { unsub.then((f) => f()); };
+  }, []);
 
   // Load the AI expression image when (and only when) real art exists; otherwise
   // the vector PetFace renders the expression and no fetch is needed.
@@ -127,7 +144,7 @@ export function PetApp() {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         if (contextMenu.visible) setContextMenu((m) => ({ ...m, visible: false }));
-        if (bubble) setBubble(null);
+        if (bubble && !pending) setBubble(null);
       }
     }
     window.addEventListener("keydown", onKey);
@@ -236,18 +253,27 @@ export function PetApp() {
     .map((w) => w[0]?.toUpperCase() ?? "")
     .join("");
 
+  // While the drop dial is in flight, override the backend expression with
+  // "think" so the mascot visibly pulses. The override reverts automatically
+  // when pending goes false (computed at render time — no setState needed).
+  const shownExpression = pending ? "think" : expression;
+
   return (
-    <div className="pet-root" onContextMenu={handleContextMenu}>
+    <div
+      className={`pet-root${dragOver ? " pet-root--drag" : ""}`}
+      onContextMenu={handleContextMenu}
+    >
       {bubble && (
         <Bubble
           text={bubble.text}
           dwellMs={bubble.dwell_ms}
           onClose={handleBubbleAck}
+          pending={pending}
         />
       )}
 
       <div
-        className={`pet-sprite pet-sprite--${expression}${muted ? " pet-sprite--muted" : ""}`}
+        className={`pet-sprite pet-sprite--${shownExpression}${muted ? " pet-sprite--muted" : ""}`}
         role="button"
         tabIndex={0}
         aria-label={t("pet.chat")}
@@ -268,7 +294,7 @@ export function PetApp() {
           <PetFace
             presetId={appearance.style_preset}
             family={appearance.family}
-            expression={expression}
+            expression={shownExpression}
             size={150}
           />
         ) : (
@@ -302,9 +328,11 @@ interface BubbleProps {
   text: string;
   dwellMs: number;
   onClose: () => void;
+  /** While true, the dial is in flight — hide the close button so it can't pretend to cancel. */
+  pending?: boolean;
 }
 
-function Bubble({ text, dwellMs, onClose }: BubbleProps) {
+function Bubble({ text, dwellMs, onClose, pending }: BubbleProps) {
   const { t } = useT();
   const [remaining, setRemaining] = useState(dwellMs);
   const hoveredRef = useRef(false);
@@ -344,7 +372,9 @@ function Bubble({ text, dwellMs, onClose }: BubbleProps) {
       <div className="pet-bubble-progress">
         <div className="pet-bubble-bar" style={{ width: `${pct}%` }} />
       </div>
-      <button className="pet-bubble-close" onClick={onClose} aria-label={t("pet.dismiss")}>✕</button>
+      {!pending && (
+        <button className="pet-bubble-close" onClick={onClose} aria-label={t("pet.dismiss")}>✕</button>
+      )}
     </div>
   );
 }
