@@ -114,4 +114,19 @@ mod tests {
         };
         assert_eq!(clamp_into((50, 50), (300, 260), tiny), (0, 0));
     }
+
+    #[test]
+    fn anchors_on_a_secondary_monitor_origin() {
+        let mon = Rect { x: 1920, y: 0, w: 1440, h: 900 };
+        let pet = Rect { x: 2000, y: 100, w: 300, h: 260 };
+        let (x, y) = anchor_panel(pet, (380, 520), mon);
+        assert_eq!(x, 2000 + 300 + 8); // 2308, opens right (no room on the left within this monitor)
+        assert_eq!(y, 100);
+    }
+
+    #[test]
+    fn clamps_within_secondary_monitor_bounds() {
+        let mon = Rect { x: 1920, y: 0, w: 1440, h: 900 };
+        assert_eq!(clamp_into((1900, 50), (300, 260), mon), (1920, 50));
+    }
 }

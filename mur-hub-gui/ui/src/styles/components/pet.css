@@ -167,7 +167,7 @@ body.pet-window {
 
 /* ── Pet Bubble ───────────────────────────────────────────────────────── */
 .pet-bubble {
-  /* The pet OS window is a fixed transparent 200×200; anything painted outside
+  /* The pet OS window is a fixed transparent 300×260; anything painted outside
      it is clipped (the bubble used to sit at bottom:210px → fully off-window and
      invisible). Anchor it INSIDE the window over the pet's head, cap the size,
      and scroll long replies so a multi-sentence quick-take stays readable. */
