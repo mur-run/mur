@@ -48,9 +48,21 @@ pub fn cmd_addon_import(name: &str, plugin_dir: &str, force: bool) -> Result<()>
     // Canonicalize the plugin root (rejects a non-existent dir).
     let root = fs::canonicalize(plugin_dir)
         .map_err(|e| anyhow::anyhow!("plugin dir {plugin_dir:?}: {e}"))?;
+    // plugin.json sits at the dir root (flat layout) or under .claude-plugin/
+    // (the canonical Claude marketplace layout). Try the root first, then fall
+    // back so a stock marketplace plugin dir imports without restructuring.
+    // skills/ commands/ .mcp.json stay at the root in both layouts.
+    let manifest_path = {
+        let flat = root.join("plugin.json");
+        if flat.is_file() {
+            flat
+        } else {
+            root.join(".claude-plugin").join("plugin.json")
+        }
+    };
     let plugin: PluginJson = serde_json::from_str(
-        &fs::read_to_string(root.join("plugin.json"))
-            .map_err(|e| anyhow::anyhow!("read plugin.json: {e}"))?,
+        &fs::read_to_string(&manifest_path)
+            .map_err(|e| anyhow::anyhow!("read {}: {e}", manifest_path.display()))?,
     )?;
 
     let addon_id = plugin.name.clone();
@@ -313,6 +325,38 @@ mod tests {
                 .join("agents/bob/skills/brainstorm/skill.yaml")
                 .exists()
         );
+    }
+
+    #[test]
+    fn import_finds_plugin_json_under_dot_claude_plugin() {
+        // Stock Claude marketplace layout: plugin.json lives in .claude-plugin/,
+        // while skills/ stay at the dir root. Import must still resolve it.
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        unsafe {
+            std::env::set_var("MUR_HOME", home);
+        }
+        write_agent(home, "dana");
+        let plugin = home.join("claude-layout-plugin");
+        fs::create_dir_all(plugin.join(".claude-plugin")).unwrap();
+        fs::create_dir_all(plugin.join("skills/brainstorm")).unwrap();
+        fs::write(
+            plugin.join(".claude-plugin/plugin.json"),
+            r#"{"name":"claudefmt","version":"1.0.0","description":"d","author":"Acme"}"#,
+        )
+        .unwrap();
+        fs::write(
+            plugin.join("skills/brainstorm/SKILL.md"),
+            "---\nname: brainstorm\ndescription: think\n---\nbody\n",
+        )
+        .unwrap();
+
+        cmd_addon_import("dana", plugin.to_str().unwrap(), false).unwrap();
+
+        let (_p, dana) = crate::cmd::agent::load_profile_for_edit("dana").unwrap();
+        let g = dana.addons.iter().find(|g| g.id == "claudefmt").unwrap();
+        assert!(g.skills.contains(&"brainstorm".to_string()));
     }
 
     #[test]
