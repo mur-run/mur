@@ -280,8 +280,7 @@ export function PetFace({ presetId, family, expression, size = 140, animate = tr
       width={size}
       height={size}
       viewBox="0 0 100 100"
-      role="img"
-      aria-label={`${presetId} pet, ${expression}`}
+      aria-hidden
     >
       <g className="petface__body">
         <EarTop style={style} />
