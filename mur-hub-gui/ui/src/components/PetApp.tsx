@@ -253,6 +253,11 @@ export function PetApp() {
     .map((w) => w[0]?.toUpperCase() ?? "")
     .join("");
 
+  // While the drop dial is in flight, override the backend expression with
+  // "think" so the mascot visibly pulses. The override reverts automatically
+  // when pending goes false (computed at render time — no setState needed).
+  const shownExpression = pending ? "think" : expression;
+
   return (
     <div
       className={`pet-root${dragOver ? " pet-root--drag" : ""}`}
@@ -268,7 +273,7 @@ export function PetApp() {
       )}
 
       <div
-        className={`pet-sprite pet-sprite--${expression}${muted ? " pet-sprite--muted" : ""}`}
+        className={`pet-sprite pet-sprite--${shownExpression}${muted ? " pet-sprite--muted" : ""}`}
         role="button"
         tabIndex={0}
         aria-label={t("pet.chat")}
@@ -289,7 +294,7 @@ export function PetApp() {
           <PetFace
             presetId={appearance.style_preset}
             family={appearance.family}
-            expression={expression}
+            expression={shownExpression}
             size={150}
           />
         ) : (

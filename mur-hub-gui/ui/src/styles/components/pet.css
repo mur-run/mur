@@ -105,6 +105,19 @@ body.pet-window {
   .petface--breathe .petface__body,
   .petface--breathe .petface__eyes { animation: none; }
 }
+/* Thinking pulse: gentle scale + opacity cycle while the drop dial is in flight. */
+.petface--thinking .petface__body {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  animation: petfaceThink 1.1s ease-in-out infinite;
+}
+@keyframes petfaceThink {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.03); opacity: 0.85; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .petface--thinking .petface__body { animation: none; }
+}
 .pet-context-menu {
   position: fixed;
   background: var(--surface-card);

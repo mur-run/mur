@@ -272,11 +272,12 @@ export function PetFace({ presetId, family, expression, size = 140, animate = tr
   // Only the live pet window animates; card thumbnails pass animate={false} so
   // N cards don't each run two infinite filtered transform animations.
   const animatable =
-    animate && (expression === "idle" || expression === "smile" || expression === "peek");
+    animate && (expression === "idle" || expression === "smile" || expression === "peek" || expression === "think");
+  const thinking = expression === "think";
 
   return (
     <svg
-      className={`petface${animatable ? " petface--breathe" : ""}`}
+      className={`petface${animatable ? " petface--breathe" : ""}${thinking ? " petface--thinking" : ""}`}
       width={size}
       height={size}
       viewBox="0 0 100 100"
