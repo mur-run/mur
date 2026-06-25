@@ -250,7 +250,7 @@ body.pet-window {
 /* ── Drag-over highlight ──────────────────────────────────────────────────── */
 .pet-root--drag .pet-sprite {
   transform: scale(1.08);
-  filter: drop-shadow(0 0 0 2px var(--color-brand)) drop-shadow(0 4px 12px rgba(0,0,0,0.25));
+  filter: drop-shadow(0 0 4px var(--color-brand)) drop-shadow(0 4px 12px rgba(0,0,0,0.25));
 }
 @media (prefers-reduced-motion: reduce) {
   .pet-root--drag .pet-sprite { transform: none; }

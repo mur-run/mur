@@ -58,7 +58,7 @@ export function PetApp() {
   // This is user-initiated, so it shows even when muted.
   useEffect(() => {
     const unsub = getCurrentWindow().listen<string[]>("pet://drop", (ev) => {
-      setDragOver(false);
+      setDragOver(false); // clear highlight on drop
       const paths = ev.payload;
       if (!paths || paths.length === 0) return;
       setBubble({ text: t("pet.dropThinking"), dwell_ms: 60000, ack_required: false });
@@ -84,6 +84,15 @@ export function PetApp() {
     });
     return () => { unsub.then((f) => f()); };
   }, [agentName, t]);
+
+  // Drive drag-over highlight from native Tauri drag events (HTML5 drag handlers
+  // don't fire for OS file drags when Tauri native drag-drop is enabled).
+  useEffect(() => {
+    const unsub = getCurrentWindow().listen<boolean>("pet://drag-active", (ev) => {
+      setDragOver(ev.payload);
+    });
+    return () => { unsub.then((f) => f()); };
+  }, []);
 
   // Load the AI expression image when (and only when) real art exists; otherwise
   // the vector PetFace renders the expression and no fetch is needed.
@@ -245,9 +254,6 @@ export function PetApp() {
     <div
       className={`pet-root${dragOver ? " pet-root--drag" : ""}`}
       onContextMenu={handleContextMenu}
-      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={() => setDragOver(false)}
     >
       {bubble && (
         <Bubble
