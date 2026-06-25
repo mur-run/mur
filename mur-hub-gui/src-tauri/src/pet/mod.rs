@@ -349,6 +349,60 @@ pub struct PetDropResult {
     pub reply: String,
     pub text_files: usize,
     pub skipped: Vec<String>,
+    /// Display name of the non-local provider receiving the file contents, or
+    /// `None` when the agent is using a demonstrably local model (ollama, mlx,
+    /// lmstudio, or a loopback base_url). Used for the privacy disclosure bubble.
+    pub remote_provider: Option<String>,
+}
+
+/// Return a friendly provider display name when the provider is known to be
+/// a cloud service, or `None` when it is demonstrably local.
+///
+/// "Demonstrably local" = provider key is a known local runtime, OR the
+/// resolved base_url is a loopback address. If we cannot determine locality
+/// (e.g. an unknown custom provider), we disclose generically — fail toward
+/// disclosure.
+fn resolve_remote_provider(agent_name: &str) -> Option<String> {
+    let home = mur_home();
+    let profile_path = home.join("agents").join(agent_name).join("profile.yaml");
+    let yaml = std::fs::read_to_string(&profile_path).ok()?;
+    let profile: mur_common::AgentProfile = serde_yaml_ng::from_str(&yaml).ok()?;
+
+    // If the profile has a model_ref, look it up in models.yaml for a richer
+    // base_url check; fall back to inline model.provider.
+    let (provider, base_url): (String, Option<String>) = if let Some(ref mref) = profile.model_ref {
+        let registry_path = home.join("models.yaml");
+        if let Ok(registry) = mur_common::model::ModelRegistry::load_from(&registry_path) {
+            if let Some(entry) = registry.models.get(mref) {
+                (entry.provider.clone(), entry.base_url.clone())
+            } else {
+                (profile.model.provider.clone(), None)
+            }
+        } else {
+            (profile.model.provider.clone(), None)
+        }
+    } else {
+        (profile.model.provider.clone(), None)
+    };
+
+    // A base_url pointing at loopback is always local regardless of provider name.
+    if let Some(ref url) = base_url {
+        if url.contains("127.0.0.1") || url.contains("localhost") {
+            return None;
+        }
+    }
+
+    // Known local runtimes.
+    match provider.as_str() {
+        "ollama" | "mlx" | "lmstudio" => None,
+        // Known cloud providers — return a friendly display name.
+        "anthropic" => Some("Anthropic".into()),
+        "openai" => Some("OpenAI".into()),
+        "openrouter" => Some("OpenRouter".into()),
+        "gemini" => Some("Google Gemini".into()),
+        // Unknown provider with no loopback URL: disclose generically.
+        _ => Some("the agent's model".into()),
+    }
 }
 
 /// Handle file(s) dropped onto `agent_name`'s pet. Reads text-like files, stages
@@ -424,6 +478,7 @@ pub async fn pet_drop_files(
             reply: String::new(),
             text_files: 0,
             skipped,
+            remote_provider: None,
         });
     }
 
@@ -489,10 +544,13 @@ pub async fn pet_drop_files(
         });
     }
 
+    let remote_provider = resolve_remote_provider(&agent_name);
+
     Ok(PetDropResult {
         reply,
         text_files: sections.len(),
         skipped,
+        remote_provider,
     })
 }
 

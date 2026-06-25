@@ -60,7 +60,7 @@ export function PetApp() {
       const paths = ev.payload;
       if (!paths || paths.length === 0) return;
       setBubble({ text: t("pet.dropThinking"), dwell_ms: 60000, ack_required: false });
-      invoke<{ reply: string; text_files: number; skipped: string[] }>("pet_drop_files", {
+      invoke<{ reply: string; text_files: number; skipped: string[]; remote_provider?: string }>("pet_drop_files", {
         agentName,
         paths,
       })
@@ -69,8 +69,11 @@ export function PetApp() {
           const skipped = res.skipped?.length
             ? ` ${t("pet.dropSkipped", { count: res.skipped.length })}`
             : "";
+          const disclosure = res.remote_provider
+            ? `\n${t("pet.dropSendingTo", { provider: res.remote_provider })}`
+            : "";
           setBubble({
-            text: base + skipped,
+            text: base + skipped + disclosure,
             dwell_ms: res.reply ? 12000 : 6000,
             ack_required: false,
           });
