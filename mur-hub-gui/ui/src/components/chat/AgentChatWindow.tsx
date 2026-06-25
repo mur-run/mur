@@ -89,11 +89,10 @@ export function AgentChatWindow() {
         </div>
         <span className={`cw-title__status cw-title__status--${status}`} title={status} />
         <button
-          className="cw-title__dot"
+          className="cw-title__expand"
           onClick={expandToFull}
           title={t("chat.expand")}
           aria-label={t("chat.expand")}
-          style={{ background: "none", border: "none", cursor: "pointer", padding: "0 4px", fontSize: "14px", lineHeight: 1, color: "var(--text-secondary, #888)" }}
         >⤢</button>
       </div>
 
