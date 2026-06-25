@@ -8,6 +8,7 @@
 pub mod brain_badge;
 pub mod chat;
 pub mod chat_window;
+mod geometry;
 pub mod cli_tools;
 pub mod companion;
 pub mod detail;
