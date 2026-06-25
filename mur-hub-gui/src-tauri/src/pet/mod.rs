@@ -392,10 +392,13 @@ fn resolve_remote_provider(agent_name: &str) -> Option<String> {
     };
 
     // A base_url pointing at loopback is always local regardless of provider name.
-    if let Some(ref url) = base_url {
-        if url.contains("127.0.0.1") || url.contains("localhost") || url.contains("[::1]") || url.contains("0.0.0.0") {
-            return None;
-        }
+    if let Some(ref url) = base_url
+        && (url.contains("127.0.0.1")
+            || url.contains("localhost")
+            || url.contains("[::1]")
+            || url.contains("0.0.0.0"))
+    {
+        return None;
     }
 
     // Known local runtimes.
