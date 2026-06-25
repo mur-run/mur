@@ -38,6 +38,7 @@ export function PetApp() {
   const [appearance, setAppearance] = useState<PetAppearance | null>(null);
   const [bubble, setBubble] = useState<BubbleState | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenu>({ visible: false, x: 0, y: 0 });
+  const [dragOver, setDragOver] = useState(false);
   const muteKey = `pet-muted:${agentName}`;
   const [muted, setMuted] = useState(() => localStorage.getItem(muteKey) === "1");
   const mutedRef = useRef(muted); // read inside the bubble listener (stable closure)
@@ -57,6 +58,7 @@ export function PetApp() {
   // This is user-initiated, so it shows even when muted.
   useEffect(() => {
     const unsub = getCurrentWindow().listen<string[]>("pet://drop", (ev) => {
+      setDragOver(false);
       const paths = ev.payload;
       if (!paths || paths.length === 0) return;
       setBubble({ text: t("pet.dropThinking"), dwell_ms: 60000, ack_required: false });
@@ -240,7 +242,13 @@ export function PetApp() {
     .join("");
 
   return (
-    <div className="pet-root" onContextMenu={handleContextMenu}>
+    <div
+      className={`pet-root${dragOver ? " pet-root--drag" : ""}`}
+      onContextMenu={handleContextMenu}
+      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={() => setDragOver(false)}
+    >
       {bubble && (
         <Bubble
           text={bubble.text}
