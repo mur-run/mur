@@ -114,17 +114,6 @@ export function PetApp() {
     return () => { unsub.then((f) => f()); };
   }, []);
 
-  // Persist position whenever the window is moved.
-  useEffect(() => {
-    const win = getCurrentWindow();
-    const unsub = win.listen("tauri://move", () => {
-      win.outerPosition().then((pos) => {
-        invoke("pet_reposition", { agentName, x: pos.x, y: pos.y }).catch(() => {});
-      });
-    });
-    return () => { unsub.then((f) => f()); };
-  }, [agentName]);
-
   // Close context menu on click outside.
   useEffect(() => {
     if (!contextMenu.visible) return;
