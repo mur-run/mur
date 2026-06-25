@@ -104,6 +104,7 @@ export const zhTW: Table = {
   "detail.inbox": "收件匣",
   "detail.mobile": "手機",
   "detail.memory": "記憶",
+  "detail.plugins": "外掛",
   "detail.loading": "載入中…",
   "detail.loadFailed": "載入失敗：{error}",
   "detail.saving": "儲存中…",
@@ -156,6 +157,7 @@ export const zhTW: Table = {
   "detail.quietHours": "靜音時段",
   "detail.quietFrom": "從",
   "detail.quietUntil": "至",
+  "detail.pluginOff": "外掛已停用",
   // ── Header actions ──
   "action.run": "啟動",
   "action.stop": "停止",

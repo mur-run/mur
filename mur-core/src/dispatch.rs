@@ -7,13 +7,13 @@ use anyhow::{Context, Result};
 use clap::CommandFactory;
 
 use crate::cli::{
-    AgentAction, AgentEvalAction, AgentHooksAction, AgentMcpAction, AgentPendingAction,
-    AgentPermAction, AgentPromptAction, AgentQueueAction, AgentScheduleAction, AgentSecretAction,
-    AgentSkillAction, AgentTrashAction, AgentWebhookAction, AuthAction, ChannelAction, ChatAction,
-    Cli, CommanderAction, Commands, ConversationsAction, DaemonAction, DeployAction, DraftsAction,
-    EvalAction, ExchangeAction, FleetAction, HookEvent, InternalsAction, MurmurdAction,
-    ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction,
-    WorkflowAction,
+    AgentAction, AgentAddonAction, AgentEvalAction, AgentHooksAction, AgentMcpAction,
+    AgentPendingAction, AgentPermAction, AgentPromptAction, AgentQueueAction, AgentScheduleAction,
+    AgentSecretAction, AgentSkillAction, AgentTrashAction, AgentWebhookAction, AuthAction,
+    ChannelAction, ChatAction, Cli, CommanderAction, Commands, ConversationsAction, DaemonAction,
+    DeployAction, DraftsAction, EvalAction, ExchangeAction, FleetAction, HookEvent,
+    InternalsAction, MurmurdAction, ProjectAction, ScheduleAction, SessionAction, SleepAction,
+    SyncAction, TeamAction, VoiceAction, WorkflowAction,
 };
 use crate::store::config as store_config;
 use crate::{cmd, dashboard, team, verify};
@@ -1333,6 +1333,26 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             }
             AgentSkillAction::Disable { name, skill_id } => {
                 cmd::agent::cmd_skill_set_enabled(&name, &skill_id, false)?
+            }
+        },
+        AgentAction::Addon { action } => match action {
+            AgentAddonAction::Import {
+                name,
+                plugin_dir,
+                force,
+            } => cmd::agent::addon::cmd_addon_import(&name, &plugin_dir, force)?,
+            AgentAddonAction::List { name } => cmd::agent::addon::cmd_addon_list(&name)?,
+            AgentAddonAction::Enable { name, addon_id } => {
+                cmd::agent::addon::cmd_addon_set_enabled(&name, &addon_id, true)?
+            }
+            AgentAddonAction::Disable { name, addon_id } => {
+                cmd::agent::addon::cmd_addon_set_enabled(&name, &addon_id, false)?
+            }
+            AgentAddonAction::Remove { name, addon_id } => {
+                cmd::agent::addon::cmd_addon_remove(&name, &addon_id)?
+            }
+            AgentAddonAction::DisableAll { name } => {
+                cmd::agent::addon::cmd_addon_disable_all(&name)?
             }
         },
         AgentAction::Perm { action } => match action {
