@@ -25,6 +25,7 @@ export const TAB_ICONS: Record<string, string> = {
   permissions: "🔐",
   inbox: "📬",
   memory: "🧠",
+  plugins: "🧩",
 };
 
 import { BUILTIN_PRESETS, type AgentEntry, type RuntimeState } from "./types";

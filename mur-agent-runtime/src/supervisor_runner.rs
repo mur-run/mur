@@ -521,7 +521,10 @@ pub(crate) async fn prepare_runtime(
 
     let skills_cfg = mur_common::config::Config::load_or_default(&mur_home).skills;
     let loaded = mur_common::skill::loader::load_all(&mur_home, &profile.inner.name);
-    let loaded = mur_common::skill::loader::filter_enabled(loaded, &profile.inner.disabled_skills);
+    let loaded: Vec<_> = loaded
+        .into_iter()
+        .filter(|s| profile.inner.skill_enabled(&s.name))
+        .collect();
     let runtime_skills = Arc::new(RuntimeSkills::build(loaded));
 
     Ok((
