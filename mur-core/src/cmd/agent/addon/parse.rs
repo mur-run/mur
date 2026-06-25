@@ -249,6 +249,11 @@ pub struct McpJson {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct McpServerJson {
+    /// stdio servers carry a launch command; `type: "http"`/`sse` servers
+    /// (e.g. github, linear) carry a `url` instead and leave this empty. The
+    /// importer pins stdio binaries by sha256 and cannot pin a remote server,
+    /// so it skips empty-command entries (see import.rs).
+    #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
@@ -259,8 +264,21 @@ pub struct McpServerJson {
     pub env: BTreeMap<String, String>,
 }
 
+/// Parse a `.mcp.json` in either shape seen in the wild:
+///   - wrapped  — `{"mcpServers": {"<name>": {...}}}` (project/user `.mcp.json`)
+///   - bare map — `{"<name>": {...}}`                 (Claude plugin `.mcp.json`)
+///
+/// Every stock Claude marketplace plugin uses the bare-map form, so the old
+/// `mcpServers`-only parse silently imported zero servers from them.
 pub fn parse_mcp_json(src: &str) -> Result<McpJson> {
-    Ok(serde_json::from_str(src)?)
+    let root: serde_json::Value = serde_json::from_str(src)?;
+    let servers = match root.get("mcpServers") {
+        Some(wrapped) => wrapped.clone(),
+        None => root,
+    };
+    Ok(McpJson {
+        mcp_servers: serde_json::from_value(servers)?,
+    })
 }
 
 #[cfg(test)]
@@ -333,6 +351,28 @@ mod tests {
         assert_eq!(s.command, "weather-mcp");
         assert_eq!(s.args, vec!["--port", "9"]);
         assert!(s.env.contains_key("API_KEY"));
+    }
+
+    #[test]
+    fn parse_mcp_json_reads_bare_map_form() {
+        // Every stock Claude plugin .mcp.json is a bare server map with no
+        // `mcpServers` wrapper (e.g. context7, serena, playwright).
+        let src = r#"{"context7":{"command":"npx","args":["-y","@upstash/context7-mcp"]}}"#;
+        let j = parse_mcp_json(src).unwrap();
+        let s = j.mcp_servers.get("context7").unwrap();
+        assert_eq!(s.command, "npx");
+        assert_eq!(s.args, vec!["-y", "@upstash/context7-mcp"]);
+    }
+
+    #[test]
+    fn parse_mcp_json_tolerates_remote_http_server() {
+        // type:"http" servers (github, linear) carry a url, not a command —
+        // they must parse (empty command) so the importer can skip them
+        // instead of the whole parse blowing up.
+        let src = r#"{"github":{"type":"http","url":"https://api.example/mcp/"}}"#;
+        let j = parse_mcp_json(src).unwrap();
+        let s = j.mcp_servers.get("github").unwrap();
+        assert!(s.command.is_empty());
     }
 
     #[test]

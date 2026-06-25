@@ -136,6 +136,15 @@ pub fn cmd_addon_import(name: &str, plugin_dir: &str, force: bool) -> Result<()>
                     "MCP server '{server}' already exists on '{name}'; rename or remove it first"
                 );
             }
+            // Remote servers (type:"http"/"sse") carry a url, not a launch
+            // command — there's no local binary to pin, so skip with a notice
+            // rather than aborting the whole import.
+            if srv.command.trim().is_empty() {
+                println!(
+                    "note: MCP '{server}' is a remote (http/sse) server; NOT imported. Wire it manually with:\n  mur agent mcp add {name} {server} ..."
+                );
+                continue;
+            }
             // Resolve + hash the binary (rejects path-escape / missing binary).
             let resolved = resolve_command(&srv.command)
                 .map_err(|e| anyhow::anyhow!("MCP '{server}' command {:?}: {e}", srv.command))?;
