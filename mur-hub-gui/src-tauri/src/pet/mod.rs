@@ -391,26 +391,41 @@ fn resolve_remote_provider(agent_name: &str) -> Option<String> {
         (profile.model.provider.clone(), None)
     };
 
-    // A base_url pointing at loopback is always local regardless of provider name.
-    if let Some(ref url) = base_url
-        && (url.contains("127.0.0.1")
-            || url.contains("localhost")
-            || url.contains("[::1]")
-            || url.contains("0.0.0.0"))
-    {
-        return None;
-    }
+    classify_remote_provider(&provider, base_url.as_deref())
+}
 
-    // Known local runtimes.
-    match provider.as_str() {
-        "ollama" | "mlx" | "lmstudio" => None,
-        // Known cloud providers — return a friendly display name.
+/// True for a base_url that points at the local machine.
+fn is_loopback_url(url: &str) -> bool {
+    url.contains("127.0.0.1")
+        || url.contains("localhost")
+        || url.contains("[::1]")
+        || url.contains("0.0.0.0")
+}
+
+/// Pure provider → disclosure classification. `None` = local (no disclosure);
+/// `Some(name)` = the file contents leave the machine, so disclose `name`.
+///
+/// Provider wins over base_url: a known CLOUD provider discloses even behind a
+/// loopback base_url, because that loopback is a proxy that forwards to the
+/// cloud (e.g. cc-proxy → Anthropic) — the data still leaves the machine. Only
+/// a genuine local runtime, or an unknown provider on a loopback endpoint,
+/// counts as local.
+fn classify_remote_provider(provider: &str, base_url: Option<&str>) -> Option<String> {
+    match provider {
         "anthropic" => Some("Anthropic".into()),
         "openai" => Some("OpenAI".into()),
         "openrouter" => Some("OpenRouter".into()),
         "gemini" => Some("Google Gemini".into()),
-        // Unknown provider with no loopback URL: disclose generically.
-        _ => Some("the agent's model".into()),
+        "ollama" | "mlx" | "lmstudio" => None,
+        // Unknown provider: a loopback endpoint is genuinely local; otherwise
+        // disclose generically (fail-toward-disclosure).
+        _ => {
+            if base_url.is_some_and(is_loopback_url) {
+                None
+            } else {
+                Some("the agent's model".into())
+            }
+        }
     }
 }
 
@@ -763,5 +778,61 @@ mod tests {
         ] {
             assert!(perms.contains(&perm), "pet windows need {perm}");
         }
+    }
+
+    #[test]
+    fn cloud_provider_discloses_even_behind_loopback_proxy() {
+        // The fix: anthropic routed via loopback cc-proxy must STILL disclose
+        // (the proxy forwards to the cloud — the data leaves the machine).
+        assert_eq!(
+            super::classify_remote_provider("anthropic", Some("http://127.0.0.1:8088")),
+            Some("Anthropic".into())
+        );
+        assert_eq!(
+            super::classify_remote_provider("openai", Some("http://localhost:8088/v1")),
+            Some("OpenAI".into())
+        );
+    }
+
+    #[test]
+    fn cloud_provider_discloses_with_no_base_url() {
+        assert_eq!(
+            super::classify_remote_provider("anthropic", None),
+            Some("Anthropic".into())
+        );
+    }
+
+    #[test]
+    fn local_runtimes_never_disclose() {
+        for p in ["ollama", "mlx", "lmstudio"] {
+            assert_eq!(super::classify_remote_provider(p, None), None, "{p}");
+            assert_eq!(
+                super::classify_remote_provider(p, Some("http://127.0.0.1:11434")),
+                None,
+                "{p} loopback"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_provider_loopback_local_else_discloses() {
+        // unknown + loopback = genuinely local (no proxy-to-cloud signal).
+        assert_eq!(
+            super::classify_remote_provider("homecorp", Some("http://127.0.0.1:9000")),
+            None
+        );
+        assert_eq!(
+            super::classify_remote_provider("homecorp", Some("http://[::1]:9000")),
+            None
+        );
+        // unknown + non-loopback (or no url) = fail-toward-disclosure.
+        assert_eq!(
+            super::classify_remote_provider("homecorp", Some("https://api.homecorp.ai")),
+            Some("the agent's model".into())
+        );
+        assert_eq!(
+            super::classify_remote_provider("homecorp", None),
+            Some("the agent's model".into())
+        );
     }
 }
