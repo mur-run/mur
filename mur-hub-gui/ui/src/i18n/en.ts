@@ -102,6 +102,7 @@ export const en = {
   "detail.inbox": "Inbox",
   "detail.mobile": "Mobile",
   "detail.memory": "Memory",
+  "detail.plugins": "Plugins",
   "detail.loading": "Loading…",
   "detail.loadFailed": "Failed to load: {error}",
   "detail.saving": "Saving…",
@@ -154,6 +155,7 @@ export const en = {
   "detail.quietHours": "Quiet hours",
   "detail.quietFrom": "From",
   "detail.quietUntil": "Until",
+  "detail.pluginOff": "plugin off",
   // ── Header actions ──
   "action.run": "Run",
   "action.stop": "Stop",

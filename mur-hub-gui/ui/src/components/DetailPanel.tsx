@@ -12,6 +12,7 @@ import {
   type AgentDetail,
   type DetailPatch,
   type DetailTab,
+  type InstalledAddonView,
   type NotifConfig,
   type NotifPatch,
   type SkillInstallResult,
@@ -38,6 +39,7 @@ const TAB_LABEL_KEYS: Record<DetailTab, TranslationKey> = {
   inbox: "detail.inbox",
   mobile: "detail.mobile",
   memory: "detail.memory",
+  plugins: "detail.plugins",
 };
 
 interface Props {
@@ -250,6 +252,7 @@ export function DetailPanel({ agentName, agents, runtime, onClose }: Props) {
         {activeTab === "inbox" && <CompanionInbox agentName={agentName} />}
         {activeTab === "mobile" && <MobileTab agentName={agentName} />}
         {activeTab === "memory" && <MemoryTab agentName={agentName} />}
+        {activeTab === "plugins" && <PluginsTab detail={detail} onSaved={handleSaved} />}
       </div>
     </aside>
   );
@@ -908,6 +911,9 @@ function SkillsTab({
                   />
                 </label>
                 <div className="item-card-name">{s.name}</div>
+                {s.addon_id && detail.addons.find(a => a.id === s.addon_id)?.enabled === false && (
+                  <span className="badge-sm">{t("detail.pluginOff")}</span>
+                )}
                 {s.version && (
                   <span className="badge-sm">{s.version}</span>
                 )}
@@ -1141,6 +1147,9 @@ function McpTab({
                   />
                 </label>
                 <div className="item-card-name">{m.name}</div>
+                {m.addon_id && detail.addons.find(a => a.id === m.addon_id)?.enabled === false && (
+                  <span className="badge-sm">{t("detail.pluginOff")}</span>
+                )}
                 <code className="item-card-code">{m.command}</code>
                 {m.args.length > 0 && (
                   <div className="item-card-args">
@@ -1149,6 +1158,128 @@ function McpTab({
                     ))}
                   </div>
                 )}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Plugins Tab ──────────────────────────────────────────────────────────
+
+function PluginsTab({
+  detail,
+  onSaved,
+}: {
+  detail: AgentDetail;
+  onSaved: (d: AgentDetail) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function importPlugin() {
+    setError(null);
+    setBusy(true);
+    try {
+      const dir = await open({ directory: true, title: "Select a Claude plugin folder" });
+      if (!dir || Array.isArray(dir)) return;
+      const updated = await invoke<AgentDetail>("agent_addon_import", {
+        name: detail.agent_name,
+        pluginDir: dir,
+        force: false,
+      });
+      onSaved(updated);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleAddon(id: string, enabled: boolean) {
+    setError(null);
+    setBusy(true);
+    try {
+      const updated = await invoke<AgentDetail>("agent_addon_toggle", {
+        name: detail.agent_name,
+        addonId: id,
+        enabled,
+      });
+      onSaved(updated);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeAddon(id: string) {
+    setError(null);
+    setBusy(true);
+    try {
+      const updated = await invoke<AgentDetail>("agent_addon_remove", {
+        name: detail.agent_name,
+        addonId: id,
+      });
+      onSaved(updated);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="tab-form">
+      <button
+        className="btn btn--sm btn--primary"
+        disabled={busy}
+        onClick={importPlugin}
+        style={{ alignSelf: "flex-start" }}
+      >
+        Import plugin…
+      </button>
+      <p className="field-muted" style={{ fontSize: 12 }}>
+        Imported plugins start disabled. Enable them after reviewing their contents.
+      </p>
+      {error && <p className="save-error">{error}</p>}
+      {detail.addons.length === 0 && (
+        <div className="tab-empty">
+          <p className="field-muted">No add-ons imported.</p>
+        </div>
+      )}
+      {detail.addons.length > 0 && (
+        <>
+          <label className="field-label" style={{ marginTop: 12 }}>
+            Installed Add-ons ({detail.addons.length})
+          </label>
+          <ul className="item-list">
+            {detail.addons.map((g: InstalledAddonView) => (
+              <li key={g.id} className={g.enabled ? "item-card" : "item-card item-card-off"}>
+                <button
+                  className="item-card-remove"
+                  title="Remove"
+                  aria-label="Remove"
+                  disabled={busy}
+                  onClick={() => removeAddon(g.id)}
+                >
+                  ×
+                </button>
+                <label className="item-card-toggle" title={g.enabled ? "Disable" : "Enable"}>
+                  <input
+                    type="checkbox"
+                    checked={g.enabled}
+                    disabled={busy}
+                    onChange={(e) => toggleAddon(g.id, e.target.checked)}
+                  />
+                </label>
+                <div className="item-card-name">{g.id}</div>
+                <div className="item-card-desc">{g.source}</div>
+                <span className="field-muted" style={{ fontSize: 11 }}>
+                  skills:{g.skills.length} · mcp:{g.mcp.length} · commands:{g.commands.length}
+                </span>
               </li>
             ))}
           </ul>

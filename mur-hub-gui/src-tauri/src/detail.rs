@@ -21,6 +21,8 @@ pub struct AgentDetail {
     // Skills tab
     pub skills: Vec<SkillView>,
     pub installed_skills: Vec<InstalledSkillView>,
+    // Add-ons tab
+    pub addons: Vec<InstalledAddonView>,
     // MCP tab
     pub mcp_servers: Vec<McpServerView>,
     // Permissions tab
@@ -120,12 +122,23 @@ fn skill_path_is_loadable(agent_home: &std::path::Path, rel_path: &str) -> bool 
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledAddonView {
+    pub id: String,
+    pub source: String,
+    pub enabled: bool,
+    pub skills: Vec<String>,
+    pub mcp: Vec<String>,
+    pub commands: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledSkillView {
     pub name: String,
     pub version: String,
     pub description: String,
     pub category: String,
     pub enabled: bool,
+    pub addon_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,6 +147,7 @@ pub struct McpServerView {
     pub command: String,
     pub args: Vec<String>,
     pub enabled: bool,
+    pub addon_id: Option<String>,
 }
 
 /// Partial update to an agent's profile. All fields optional — only set
@@ -161,6 +175,92 @@ pub struct DetailPatch {
     pub role: Option<String>,
 }
 
+/// Extract a profile into the Hub's `AgentDetail` view model.
+/// Extracted so tests can build a detail directly from an `AgentProfile`
+/// without requiring on-disk access. `agent_home` is used only for the
+/// legacy per-agent skill-path loadability check; pass `None` to skip it
+/// (all paths will be reported as unloadable, which is fine for tests that
+/// don't exercise the legacy `skills` list).
+pub fn build_agent_detail(
+    profile: mur_common::AgentProfile,
+    agent_home: Option<&std::path::Path>,
+) -> AgentDetail {
+    AgentDetail {
+        persona_category: format!("{:?}", profile.persona.category).to_lowercase(),
+        persona_description: profile.persona.description.clone(),
+        persona_tone: profile.persona.traits.tone.clone(),
+        persona_risk: profile.persona.traits.risk.clone(),
+        persona_verbosity: profile.persona.traits.verbosity.clone(),
+        style_preset: profile.appearance.style_preset.clone(),
+        render_status: match profile.appearance.render_status {
+            mur_common::agent::RenderStatus::Pending => RenderStatusView::Pending,
+            mur_common::agent::RenderStatus::Rendering { done, total } => {
+                RenderStatusView::Rendering { done, total }
+            }
+            mur_common::agent::RenderStatus::Ready => RenderStatusView::Ready,
+            mur_common::agent::RenderStatus::Failed { ref reason } => RenderStatusView::Failed {
+                reason: reason.clone(),
+            },
+        },
+        behavior_preset: format!("{:?}", profile.appearance.behavior_preset).to_lowercase(),
+        skills: profile
+            .skills
+            .iter()
+            .map(|path| {
+                let loadable = agent_home
+                    .map(|home| skill_path_is_loadable(home, path))
+                    .unwrap_or(false);
+                SkillView {
+                    path: path.clone(),
+                    loadable,
+                }
+            })
+            .collect(),
+        installed_skills: profile
+            .installed_skills
+            .iter()
+            .map(|s| InstalledSkillView {
+                enabled: profile.skill_enabled(&s.name),
+                addon_id: profile.group_of(&s.name).map(|g| g.id.clone()),
+                name: s.name.clone(),
+                version: s.version.clone(),
+                description: s.description.clone(),
+                category: s.category.clone(),
+            })
+            .collect(),
+        addons: profile
+            .addons
+            .iter()
+            .map(|g| InstalledAddonView {
+                id: g.id.clone(),
+                source: g.source.clone(),
+                enabled: g.enabled,
+                skills: g.skills.clone(),
+                mcp: g.mcp.clone(),
+                commands: g.commands.clone(),
+            })
+            .collect(),
+        mcp_servers: profile
+            .mcp_servers
+            .iter()
+            .map(|m| McpServerView {
+                enabled: profile.mcp_enabled(&m.name),
+                addon_id: profile.group_of(&m.name).map(|g| g.id.clone()),
+                name: m.name.clone(),
+                command: m.command.clone(),
+                args: m.args.clone(),
+            })
+            .collect(),
+        capabilities: profile.capabilities.clone(),
+        model_ref: profile.model_ref.clone(),
+        model_provider: profile.model.provider.clone(),
+        model_name: profile.model.name.clone(),
+        role: profile.role.clone(),
+        display_name: profile.display_name.clone(),
+        agent_name: profile.name.clone(),
+    }
+}
+
 #[tauri::command]
 pub fn get_agent_detail(name: String) -> Result<AgentDetail, String> {
     let mur_home = crate::mur_home_path();
@@ -168,68 +268,8 @@ pub fn get_agent_detail(name: String) -> Result<AgentDetail, String> {
     let bytes = std::fs::read(&profile_path).map_err(|e| format!("read profile: {e}"))?;
     let profile: mur_common::AgentProfile =
         serde_yaml_ng::from_slice(&bytes).map_err(|e| format!("parse profile: {e}"))?;
-    // Phase-1 enable/disable: per-agent denylists drive the per-row toggles.
-    let disabled_skills = profile.disabled_skills.clone();
-    let disabled_mcp = profile.disabled_mcp.clone();
-
-    Ok(AgentDetail {
-        persona_category: format!("{:?}", profile.persona.category).to_lowercase(),
-        persona_description: profile.persona.description,
-        persona_tone: profile.persona.traits.tone,
-        persona_risk: profile.persona.traits.risk,
-        persona_verbosity: profile.persona.traits.verbosity,
-        style_preset: profile.appearance.style_preset,
-        render_status: match profile.appearance.render_status {
-            mur_common::agent::RenderStatus::Pending => RenderStatusView::Pending,
-            mur_common::agent::RenderStatus::Rendering { done, total } => {
-                RenderStatusView::Rendering { done, total }
-            }
-            mur_common::agent::RenderStatus::Ready => RenderStatusView::Ready,
-            mur_common::agent::RenderStatus::Failed { reason } => {
-                RenderStatusView::Failed { reason }
-            }
-        },
-        behavior_preset: format!("{:?}", profile.appearance.behavior_preset).to_lowercase(),
-        skills: {
-            let agent_home = mur_home.join("agents").join(&name);
-            profile
-                .skills
-                .into_iter()
-                .map(|path| {
-                    let loadable = skill_path_is_loadable(&agent_home, &path);
-                    SkillView { path, loadable }
-                })
-                .collect()
-        },
-        installed_skills: profile
-            .installed_skills
-            .into_iter()
-            .map(|s| InstalledSkillView {
-                enabled: !disabled_skills.iter().any(|n| n == &s.name),
-                name: s.name,
-                version: s.version,
-                description: s.description,
-                category: s.category,
-            })
-            .collect(),
-        mcp_servers: profile
-            .mcp_servers
-            .into_iter()
-            .map(|m| McpServerView {
-                enabled: !disabled_mcp.iter().any(|n| n == &m.name),
-                name: m.name,
-                command: m.command,
-                args: m.args,
-            })
-            .collect(),
-        capabilities: profile.capabilities,
-        model_ref: profile.model_ref,
-        model_provider: profile.model.provider,
-        model_name: profile.model.name,
-        role: profile.role.clone(),
-        display_name: profile.display_name,
-        agent_name: profile.name,
-    })
+    let agent_home = mur_home.join("agents").join(&name);
+    Ok(build_agent_detail(profile, Some(&agent_home)))
 }
 
 #[tauri::command]
@@ -337,5 +377,39 @@ mod tests {
 
         assert!(skill_path_is_loadable(home.path(), "skills/demo"));
         assert!(!skill_path_is_loadable(home.path(), "skills/missing"));
+    }
+}
+
+#[cfg(test)]
+mod addon_detail_tests {
+    use super::*;
+
+    #[test]
+    fn detail_surfaces_addons_and_group_off_dims_members() {
+        let mut p = mur_common::agent::AgentProfile::default_for_tests();
+        p.installed_skills.push(mur_common::agent::SkillCardEntry {
+            name: "g_skill".into(),
+            ..Default::default()
+        });
+        p.addons.push(mur_common::agent::AddonRef {
+            id: "grp".into(),
+            source: "claude-local:grp@1.0.0".into(),
+            enabled: false,
+            skills: vec!["g_skill".into()],
+            mcp: vec![],
+            commands: vec![],
+        });
+
+        let detail = build_agent_detail(p, None);
+        assert_eq!(detail.addons.len(), 1);
+        assert!(!detail.addons[0].enabled);
+        let row = detail
+            .installed_skills
+            .iter()
+            .find(|s| s.name == "g_skill")
+            .unwrap();
+        // group off => member shown disabled, with its addon id for the badge
+        assert!(!row.enabled);
+        assert_eq!(row.addon_id.as_deref(), Some("grp"));
     }
 }
