@@ -39,6 +39,8 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   const [lang, setLangState] = useState<Lang>(detectDefault);
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, lang);
+    document.documentElement.lang = lang; // WebKit uses this to pick the
+    // correct Han glyph variant (TC vs SC/JP) and CJK line-breaking rules.
   }, [lang]);
   const setLang = (l: Lang) => setLangState(l);
   const t = (k: TranslationKey, vars?: Record<string, string | number>) =>

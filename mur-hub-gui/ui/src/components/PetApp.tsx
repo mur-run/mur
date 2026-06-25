@@ -165,7 +165,9 @@ export function PetApp() {
 
   function handleMouseUp() {
     if (pressRef.current && Date.now() - clickTimeRef.current < CLICK_MS) {
+      // Greeting expression + open the chat panel (single-click is primary).
       invoke("hub_emit_event", { agentName, eventName: "user.click.pet" }).catch(() => {});
+      void handleChat();
     }
     pressRef.current = null;
   }

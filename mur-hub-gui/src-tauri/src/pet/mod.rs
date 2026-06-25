@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::oneshot;
 
+use crate::geometry;
+
 // ─── Managed state ──────────────────────────────────────────────────────────
 
 pub struct PetHandle {
@@ -39,6 +41,40 @@ fn mur_home() -> PathBuf {
     std::env::var("MUR_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join(".mur"))
+}
+
+/// Physical-pixel rect of the monitor containing `(x, y)`, falling back to the
+/// primary monitor, then a 1440×900 origin rect if no monitor is reported.
+pub(crate) fn monitor_rect_for_point(app: &AppHandle, x: i32, y: i32) -> geometry::Rect {
+    let to_rect = |m: &tauri::Monitor| {
+        let p = m.position();
+        let s = m.size();
+        geometry::Rect {
+            x: p.x,
+            y: p.y,
+            w: s.width as i32,
+            h: s.height as i32,
+        }
+    };
+    if let Ok(mons) = app.available_monitors() {
+        if let Some(m) = mons.iter().find(|m| {
+            let r = to_rect(m);
+            x >= r.x && x < r.right() && y >= r.y && y < r.bottom()
+        }) {
+            return to_rect(m);
+        }
+        // Fall back to the primary monitor.
+        if let Ok(Some(m)) = app.primary_monitor() {
+            return to_rect(&m);
+        }
+    }
+    // Last-resort fallback: a sensible 1440×900 origin rect.
+    geometry::Rect {
+        x: 0,
+        y: 0,
+        w: 1440,
+        h: 900,
+    }
 }
 
 fn pet_position_path(agent_name: &str) -> PathBuf {
@@ -162,25 +198,39 @@ pub fn pet_spawn_at(
     // The explicit drop point always wins over a previously saved position — a
     // stale save could point at a display that no longer exists. Persistence is
     // left to pet_reposition, the single writer.
-    let pos = PetPosition {
-        x: screen_x,
-        y: screen_y,
-        display_id: None,
-    };
+    //
+    // DOM drop coords (screen_x/y) and PET_W/PET_H are LOGICAL; the geometry
+    // module + monitor rects are PHYSICAL. Convert with the monitor scale.
+    // ponytail: uniform-scale assumption (primary monitor's factor); mixed-DPI
+    // multi-monitor would need per-monitor scale, rare — revisit if it bites.
+    let scale = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| m.scale_factor())
+        .unwrap_or(1.0);
+    let phys_x = (screen_x * scale) as i32;
+    let phys_y = (screen_y * scale) as i32;
+    let mon = monitor_rect_for_point(&app, phys_x, phys_y);
+    let pet_w = (PET_W as f64 * scale) as i32;
+    let pet_h = (PET_H as f64 * scale) as i32;
+    let (cx, cy) = geometry::clamp_into((phys_x, phys_y), (pet_w, pet_h), mon);
 
     let url_path = format!("index.html#/pet/{}", urlenc(&agent_name));
 
-    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url_path.into()))
+    let win = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url_path.into()))
         .transparent(true)
         .decorations(false)
         .always_on_top(true)
         .skip_taskbar(true)
         .visible_on_all_workspaces(true)
         .shadow(false)
-        .inner_size(200.0, 200.0)
-        .position(pos.x, pos.y)
+        .inner_size(PET_W as f64, PET_H as f64)
+        .visible(false) // Task 6: avoid opaque-square entrance flash
         .build()
         .map_err(|e| e.to_string())?;
+    let _ = win.set_position(tauri::PhysicalPosition::new(cx, cy));
+    let _ = win.show();
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     pets.insert(
@@ -263,16 +313,13 @@ pub fn pet_list(state: State<'_, PetState>) -> Vec<String> {
     state.0.lock().unwrap().keys().cloned().collect()
 }
 
-/// Bring the Hub dashboard to the front and ask it to open `agent_name`'s
-/// conversation. `draft`, when present, is pre-filled into the chat input
-/// (used by file-drop). The dashboard webview listens for the `pet-open-chat`
-/// event and calls `openConversation`.
+/// Open `agent_name`'s chat panel. The (hidden) dashboard webview relays the
+/// `pet-open-chat` event to `open_chat_window`. NOTE: the `draft` is emitted
+/// but not yet consumed by the chat composer (file-drop draft prefill is
+/// deferred to Phase 3); do NOT show/focus the dashboard here — that caused
+/// the Hub to "jump" alongside the chat window.
 #[tauri::command]
 pub fn pet_open_chat(agent_name: String, draft: Option<String>, app: AppHandle) {
-    if let Some(dash) = app.get_webview_window("dashboard") {
-        let _ = dash.show();
-        let _ = dash.set_focus();
-    }
     let _ = app.emit(
         "pet-open-chat",
         serde_json::json!({ "agent": agent_name, "draft": draft }),
@@ -280,6 +327,10 @@ pub fn pet_open_chat(agent_name: String, draft: Option<String>, app: AppHandle) 
 }
 
 // ─── File drop ─────────────────────────────────────────────────────────────
+
+/// Physical-pixel pet window size; the single source for both inner_size and clamp_into.
+const PET_W: i32 = 300;
+const PET_H: i32 = 260;
 
 const PET_DROP_MAX_FILES: usize = 5;
 const PET_DROP_MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024;
