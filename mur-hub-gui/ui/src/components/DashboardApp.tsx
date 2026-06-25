@@ -416,17 +416,24 @@ export function DashboardApp() {
 
   useEffect(() => {
     let cancelled = false;
-    import("@tauri-apps/plugin-updater")
-      .then(({ check }) => check())
-      .then((u) => {
-        if (u && !cancelled) {
-          updateRef.current = u;
-          setAppUpdate({ version: u.version });
-        }
-      })
-      .catch((e) => console.warn("Update check failed:", e));
+    // Check on mount, and again whenever the window regains focus — a Hub left
+    // open for days would otherwise never notice a release published meanwhile.
+    // ponytail: focus-only, no timer; add an interval if it must notice while focused for hours.
+    const runCheck = () =>
+      import("@tauri-apps/plugin-updater")
+        .then(({ check }) => check())
+        .then((u) => {
+          if (u && !cancelled) {
+            updateRef.current = u;
+            setAppUpdate({ version: u.version });
+          }
+        })
+        .catch((e) => console.warn("Update check failed:", e));
+    runCheck();
+    window.addEventListener("focus", runCheck);
     return () => {
       cancelled = true;
+      window.removeEventListener("focus", runCheck);
     };
   }, []);
 
