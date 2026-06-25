@@ -45,7 +45,7 @@ fn mur_home() -> PathBuf {
 
 /// Physical-pixel rect of the monitor containing `(x, y)`, falling back to the
 /// primary monitor, then a 1440×900 origin rect if no monitor is reported.
-fn monitor_rect_for_point(app: &AppHandle, x: i32, y: i32) -> geometry::Rect {
+pub(crate) fn monitor_rect_for_point(app: &AppHandle, x: i32, y: i32) -> geometry::Rect {
     let to_rect = |m: &tauri::Monitor| {
         let p = m.position();
         let s = m.size();
