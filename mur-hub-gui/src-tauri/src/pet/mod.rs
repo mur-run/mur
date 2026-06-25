@@ -58,9 +58,9 @@ fn monitor_rect_for_point(app: &AppHandle, x: i32, y: i32) -> geometry::Rect {
         }) {
             return to_rect(m);
         }
-        // Fall back to primary monitor (first in the list).
-        if let Some(m) = mons.first() {
-            return to_rect(m);
+        // Fall back to the primary monitor.
+        if let Ok(Some(m)) = app.primary_monitor() {
+            return to_rect(&m);
         }
     }
     // Last-resort fallback: a sensible 1440×900 origin rect.
@@ -306,7 +306,7 @@ pub fn pet_open_chat(agent_name: String, draft: Option<String>, app: AppHandle) 
 
 // ─── File drop ─────────────────────────────────────────────────────────────
 
-/// Physical-pixel pet window dimensions (matches the 300×260 inner_size in pet_spawn_at).
+/// Physical-pixel pet window size; the single source for both inner_size and clamp_into.
 const PET_W: i32 = 300;
 const PET_H: i32 = 260;
 
