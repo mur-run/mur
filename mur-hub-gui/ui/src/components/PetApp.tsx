@@ -39,6 +39,7 @@ export function PetApp() {
   const [bubble, setBubble] = useState<BubbleState | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenu>({ visible: false, x: 0, y: 0 });
   const [dragOver, setDragOver] = useState(false);
+  const [pending, setPending] = useState(false);
   const muteKey = `pet-muted:${agentName}`;
   const [muted, setMuted] = useState(() => localStorage.getItem(muteKey) === "1");
   const mutedRef = useRef(muted); // read inside the bubble listener (stable closure)
@@ -62,6 +63,7 @@ export function PetApp() {
       const paths = ev.payload;
       if (!paths || paths.length === 0) return;
       setBubble({ text: t("pet.dropThinking"), dwell_ms: 60000, ack_required: false });
+      setPending(true);
       invoke<{ reply: string; text_files: number; skipped: string[]; remote_provider?: string }>("pet_drop_files", {
         agentName,
         paths,
@@ -80,7 +82,8 @@ export function PetApp() {
             ack_required: false,
           });
         })
-        .catch((e) => setBubble({ text: String(e), dwell_ms: 6000, ack_required: false }));
+        .catch((e) => setBubble({ text: String(e), dwell_ms: 6000, ack_required: false }))
+        .finally(() => setPending(false));
     });
     return () => { unsub.then((f) => f()); };
   }, [agentName, t]);
@@ -141,7 +144,7 @@ export function PetApp() {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         if (contextMenu.visible) setContextMenu((m) => ({ ...m, visible: false }));
-        if (bubble) setBubble(null);
+        if (bubble && !pending) setBubble(null);
       }
     }
     window.addEventListener("keydown", onKey);
@@ -260,6 +263,7 @@ export function PetApp() {
           text={bubble.text}
           dwellMs={bubble.dwell_ms}
           onClose={handleBubbleAck}
+          pending={pending}
         />
       )}
 
@@ -319,9 +323,11 @@ interface BubbleProps {
   text: string;
   dwellMs: number;
   onClose: () => void;
+  /** While true, the dial is in flight — hide the close button so it can't pretend to cancel. */
+  pending?: boolean;
 }
 
-function Bubble({ text, dwellMs, onClose }: BubbleProps) {
+function Bubble({ text, dwellMs, onClose, pending }: BubbleProps) {
   const { t } = useT();
   const [remaining, setRemaining] = useState(dwellMs);
   const hoveredRef = useRef(false);
@@ -361,7 +367,9 @@ function Bubble({ text, dwellMs, onClose }: BubbleProps) {
       <div className="pet-bubble-progress">
         <div className="pet-bubble-bar" style={{ width: `${pct}%` }} />
       </div>
-      <button className="pet-bubble-close" onClick={onClose} aria-label={t("pet.dismiss")}>✕</button>
+      {!pending && (
+        <button className="pet-bubble-close" onClick={onClose} aria-label={t("pet.dismiss")}>✕</button>
+      )}
     </div>
   );
 }

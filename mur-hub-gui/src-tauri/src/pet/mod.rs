@@ -429,6 +429,15 @@ pub async fn pet_drop_files(
     let mut sections = Vec::new();
     let mut skipped = Vec::new();
     let mut total = 0u64;
+    // Honest truncation: if the drop exceeds the file cap, push a synthetic entry
+    // so the user sees "+N more (max M)" rather than a silent drop.
+    if paths.len() > PET_DROP_MAX_FILES {
+        skipped.push(format!(
+            "+{} more (max {})",
+            paths.len() - PET_DROP_MAX_FILES,
+            PET_DROP_MAX_FILES
+        ));
+    }
     for p in paths.iter().take(PET_DROP_MAX_FILES) {
         let path = std::path::Path::new(p);
         let fname = path
@@ -501,7 +510,7 @@ pub async fn pet_drop_files(
     let prompt =
         format!("Give me a brief (1-2 sentence) take on the following dropped file(s):\n\n{body}");
     let agent = agent_name.clone();
-    let dialed = tokio::task::spawn_blocking(move || {
+    let join = tokio::task::spawn_blocking(move || {
         let home = mur_home();
         let task_id = format!(
             "pet-drop-{}",
@@ -523,9 +532,12 @@ pub async fn pet_drop_files(
         )
         .map(|task| extract_reply(&task))
         .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| format!("pet drop task panicked: {e}"))?;
+    });
+    // Bounded dial: a hung runtime can't leave the bubble spinning forever.
+    let dialed = match tokio::time::timeout(std::time::Duration::from_secs(45), join).await {
+        Ok(join_result) => join_result.map_err(|e| format!("pet drop task panicked: {e}"))?,
+        Err(_) => Ok(format!("(timed out reaching {agent_name})")),
+    };
 
     let reply = dialed.unwrap_or_else(|e| format!("(couldn't reach {agent_name}: {e})"));
 
@@ -542,7 +554,13 @@ pub async fn pet_drop_files(
             })
             .collect::<Vec<_>>()
             .join(", ");
-        let user_msg = format!("📎 {file_label}");
+        // Include any skipped names so the channel record is honest.
+        let skipped_suffix = if skipped.is_empty() {
+            String::new()
+        } else {
+            format!(" (skipped: {})", skipped.join(", "))
+        };
+        let user_msg = format!("📎 {file_label}{skipped_suffix}");
         let agent_reply = reply.clone();
         tokio::task::spawn_blocking(move || {
             let home = mur_home();
