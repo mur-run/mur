@@ -38,8 +38,9 @@ export function PetApp() {
   const [appearance, setAppearance] = useState<PetAppearance | null>(null);
   const [bubble, setBubble] = useState<BubbleState | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenu>({ visible: false, x: 0, y: 0 });
-  const [muted, setMuted] = useState(false);
-  const mutedRef = useRef(false); // read inside the bubble listener (stable closure)
+  const muteKey = `pet-muted:${agentName}`;
+  const [muted, setMuted] = useState(() => localStorage.getItem(muteKey) === "1");
+  const mutedRef = useRef(muted); // read inside the bubble listener (stable closure)
   const clickTimeRef = useRef<number>(0);
   const pressRef = useRef<{ x: number; y: number } | null>(null);
   const firstMenuItemRef = useRef<HTMLButtonElement>(null);
@@ -206,6 +207,7 @@ export function PetApp() {
     setMuted((m) => {
       const next = !m;
       mutedRef.current = next;
+      localStorage.setItem(muteKey, next ? "1" : "0");
       if (next) setBubble(null);
       return next;
     });
@@ -256,7 +258,7 @@ export function PetApp() {
       )}
 
       <div
-        className={`pet-sprite pet-sprite--${expression}`}
+        className={`pet-sprite pet-sprite--${expression}${muted ? " pet-sprite--muted" : ""}`}
         role="button"
         tabIndex={0}
         aria-label={t("pet.chat")}

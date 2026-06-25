@@ -22,6 +22,7 @@ body.pet-window {
 .pet-bubble,
 .pet-context-menu { pointer-events: auto; }
 .pet-sprite {
+  position: relative;
   width: 160px;
   height: 160px;
   margin: 0;
@@ -35,6 +36,14 @@ body.pet-window {
 .pet-sprite:active { cursor: grabbing; transform: scale(0.95); }
 .pet-sprite--smile { animation: petBounce var(--dur-slow) var(--ease-spring); }
 .pet-sprite--wave  { animation: petWave 0.5s var(--ease-out) infinite alternate; }
+.pet-sprite--muted::after {
+  content: "🔇";
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  font-size: 16px;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.4));
+}
 @keyframes petBounce {
   0%   { transform: scale(1); }
   50%  { transform: scale(1.15); }
