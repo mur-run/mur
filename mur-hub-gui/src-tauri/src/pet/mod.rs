@@ -365,8 +365,14 @@ pub struct PetDropResult {
 fn resolve_remote_provider(agent_name: &str) -> Option<String> {
     let home = mur_home();
     let profile_path = home.join("agents").join(agent_name).join("profile.yaml");
-    let yaml = std::fs::read_to_string(&profile_path).ok()?;
-    let profile: mur_common::AgentProfile = serde_yaml_ng::from_str(&yaml).ok()?;
+    let yaml = match std::fs::read_to_string(&profile_path) {
+        Ok(y) => y,
+        Err(_) => return Some("the agent's model".into()), // fail-toward-disclosure
+    };
+    let profile: mur_common::AgentProfile = match serde_yaml_ng::from_str(&yaml) {
+        Ok(p) => p,
+        Err(_) => return Some("the agent's model".into()),
+    };
 
     // If the profile has a model_ref, look it up in models.yaml for a richer
     // base_url check; fall back to inline model.provider.
@@ -387,7 +393,7 @@ fn resolve_remote_provider(agent_name: &str) -> Option<String> {
 
     // A base_url pointing at loopback is always local regardless of provider name.
     if let Some(ref url) = base_url {
-        if url.contains("127.0.0.1") || url.contains("localhost") {
+        if url.contains("127.0.0.1") || url.contains("localhost") || url.contains("[::1]") || url.contains("0.0.0.0") {
             return None;
         }
     }
