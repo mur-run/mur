@@ -349,6 +349,69 @@ pub struct PetDropResult {
     pub reply: String,
     pub text_files: usize,
     pub skipped: Vec<String>,
+    /// Display name of the non-local provider receiving the file contents, or
+    /// `None` when the agent is using a demonstrably local model (ollama, mlx,
+    /// lmstudio, or a loopback base_url). Used for the privacy disclosure bubble.
+    pub remote_provider: Option<String>,
+}
+
+/// Return a friendly provider display name when the provider is known to be
+/// a cloud service, or `None` when it is demonstrably local.
+///
+/// "Demonstrably local" = provider key is a known local runtime, OR the
+/// resolved base_url is a loopback address. If we cannot determine locality
+/// (e.g. an unknown custom provider), we disclose generically — fail toward
+/// disclosure.
+fn resolve_remote_provider(agent_name: &str) -> Option<String> {
+    let home = mur_home();
+    let profile_path = home.join("agents").join(agent_name).join("profile.yaml");
+    let yaml = match std::fs::read_to_string(&profile_path) {
+        Ok(y) => y,
+        Err(_) => return Some("the agent's model".into()), // fail-toward-disclosure
+    };
+    let profile: mur_common::AgentProfile = match serde_yaml_ng::from_str(&yaml) {
+        Ok(p) => p,
+        Err(_) => return Some("the agent's model".into()),
+    };
+
+    // If the profile has a model_ref, look it up in models.yaml for a richer
+    // base_url check; fall back to inline model.provider.
+    let (provider, base_url): (String, Option<String>) = if let Some(ref mref) = profile.model_ref {
+        let registry_path = home.join("models.yaml");
+        if let Ok(registry) = mur_common::model::ModelRegistry::load_from(&registry_path) {
+            if let Some(entry) = registry.models.get(mref) {
+                (entry.provider.clone(), entry.base_url.clone())
+            } else {
+                (profile.model.provider.clone(), None)
+            }
+        } else {
+            (profile.model.provider.clone(), None)
+        }
+    } else {
+        (profile.model.provider.clone(), None)
+    };
+
+    // A base_url pointing at loopback is always local regardless of provider name.
+    if let Some(ref url) = base_url
+        && (url.contains("127.0.0.1")
+            || url.contains("localhost")
+            || url.contains("[::1]")
+            || url.contains("0.0.0.0"))
+    {
+        return None;
+    }
+
+    // Known local runtimes.
+    match provider.as_str() {
+        "ollama" | "mlx" | "lmstudio" => None,
+        // Known cloud providers — return a friendly display name.
+        "anthropic" => Some("Anthropic".into()),
+        "openai" => Some("OpenAI".into()),
+        "openrouter" => Some("OpenRouter".into()),
+        "gemini" => Some("Google Gemini".into()),
+        // Unknown provider with no loopback URL: disclose generically.
+        _ => Some("the agent's model".into()),
+    }
 }
 
 /// Handle file(s) dropped onto `agent_name`'s pet. Reads text-like files, stages
@@ -369,6 +432,15 @@ pub async fn pet_drop_files(
     let mut sections = Vec::new();
     let mut skipped = Vec::new();
     let mut total = 0u64;
+    // Honest truncation: if the drop exceeds the file cap, push a synthetic entry
+    // so the user sees "+N more (max M)" rather than a silent drop.
+    if paths.len() > PET_DROP_MAX_FILES {
+        skipped.push(format!(
+            "+{} more (max {})",
+            paths.len() - PET_DROP_MAX_FILES,
+            PET_DROP_MAX_FILES
+        ));
+    }
     for p in paths.iter().take(PET_DROP_MAX_FILES) {
         let path = std::path::Path::new(p);
         let fname = path
@@ -424,6 +496,7 @@ pub async fn pet_drop_files(
             reply: String::new(),
             text_files: 0,
             skipped,
+            remote_provider: None,
         });
     }
 
@@ -440,7 +513,7 @@ pub async fn pet_drop_files(
     let prompt =
         format!("Give me a brief (1-2 sentence) take on the following dropped file(s):\n\n{body}");
     let agent = agent_name.clone();
-    let dialed = tokio::task::spawn_blocking(move || {
+    let join = tokio::task::spawn_blocking(move || {
         let home = mur_home();
         let task_id = format!(
             "pet-drop-{}",
@@ -462,15 +535,49 @@ pub async fn pet_drop_files(
         )
         .map(|task| extract_reply(&task))
         .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| format!("pet drop task panicked: {e}"))?;
+    });
+    // Bounded dial: a hung runtime can't leave the bubble spinning forever.
+    let dialed = match tokio::time::timeout(std::time::Duration::from_secs(45), join).await {
+        Ok(join_result) => join_result.map_err(|e| format!("pet drop task panicked: {e}"))?,
+        Err(_) => Ok(format!("(timed out reaching {agent_name})")),
+    };
 
     let reply = dialed.unwrap_or_else(|e| format!("(couldn't reach {agent_name}: {e})"));
+
+    // Persist the exchange into the agent's channel so ChatTab re-hydrates and
+    // shows the full take as a real panel message (best-effort, never blocks).
+    {
+        let agent_name2 = agent_name.clone();
+        let file_label = paths
+            .iter()
+            .filter_map(|p| {
+                std::path::Path::new(p)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        // Include any skipped names so the channel record is honest.
+        let skipped_suffix = if skipped.is_empty() {
+            String::new()
+        } else {
+            format!(" (skipped: {})", skipped.join(", "))
+        };
+        let user_msg = format!("📎 {file_label}{skipped_suffix}");
+        let agent_reply = reply.clone();
+        tokio::task::spawn_blocking(move || {
+            let home = mur_home();
+            mur_core::mobile::persist_mobile_exchange(&home, &agent_name2, &user_msg, &agent_reply);
+        });
+    }
+
+    let remote_provider = resolve_remote_provider(&agent_name);
+
     Ok(PetDropResult {
         reply,
         text_files: sections.len(),
         skipped,
+        remote_provider,
     })
 }
 
