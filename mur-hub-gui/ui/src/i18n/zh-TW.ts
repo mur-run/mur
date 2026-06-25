@@ -75,6 +75,7 @@ export const zhTW: Table = {
   "chat.placeholder": "傳訊息給 {name}…",
   "chat.send": "送出",
   "chat.stop": "停止",
+  "chat.expand": "放大",
   "chat.stopped": "已停止",
   "chat.thinking": "思考中",
   "chat.suggest.0": "你能幫我做什麼？",

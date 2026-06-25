@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import type { AgentEntry, AgentRuntimeStatus, RuntimeState } from "../../types";
 import { ChatTab } from "../ChatTab";
 import { ChatChannelRail } from "./ChatChannelRail";
 import { TaskPill } from "./TaskPill";
+import { useT } from "../../i18n";
 
 function agentNameFromHash(): string {
   const hash = window.location.hash; // #/chat/<name>
@@ -20,9 +21,13 @@ function runtimeStatus(rt: RuntimeState | undefined): "running" | "failed" | "id
 
 export function AgentChatWindow() {
   const agentName = agentNameFromHash();
+  const { t } = useT();
   const [displayName, setDisplayName] = useState(agentName);
   const [status, setStatus] = useState<"running" | "failed" | "idle">("idle");
   const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
+
+  const expandToFull = () =>
+    void getCurrentWindow().setSize(new LogicalSize(780, 660)).catch(() => {});
 
   // Load display name from agent list.
   useEffect(() => {
@@ -83,6 +88,13 @@ export function AgentChatWindow() {
           )}
         </div>
         <span className={`cw-title__status cw-title__status--${status}`} title={status} />
+        <button
+          className="cw-title__dot"
+          onClick={expandToFull}
+          title={t("chat.expand")}
+          aria-label={t("chat.expand")}
+          style={{ background: "none", border: "none", cursor: "pointer", padding: "0 4px", fontSize: "14px", lineHeight: 1, color: "var(--text-secondary, #888)" }}
+        >⤢</button>
       </div>
 
       {/* Body: channel rail + main chat */}
