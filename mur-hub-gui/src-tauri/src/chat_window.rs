@@ -79,9 +79,12 @@ pub fn open_chat_window(agent_name: String, app: AppHandle) -> Result<(), String
     );
 
     // Anchor next to the pet (if it exists) on the pet's monitor.
+    // pet.outer_position/outer_size are PHYSICAL; PANEL_W/H are LOGICAL.
+    // Convert with the pet window's scale factor before calling anchor_panel.
     if let Some(pet) = app.get_webview_window(&pet_label(&agent_name))
         && let (Ok(pp), Ok(ps)) = (pet.outer_position(), pet.outer_size())
     {
+        let scale = pet.scale_factor().unwrap_or(1.0);
         let pet_rect = crate::geometry::Rect {
             x: pp.x,
             y: pp.y,
@@ -89,7 +92,9 @@ pub fn open_chat_window(agent_name: String, app: AppHandle) -> Result<(), String
             h: ps.height as i32,
         };
         let mon = crate::pet::monitor_rect_for_point(&app, pp.x, pp.y);
-        let (x, y) = crate::geometry::anchor_panel(pet_rect, (PANEL_W, PANEL_H), mon);
+        let panel_w = (PANEL_W as f64 * scale) as i32;
+        let panel_h = (PANEL_H as f64 * scale) as i32;
+        let (x, y) = crate::geometry::anchor_panel(pet_rect, (panel_w, panel_h), mon);
         let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
     }
 

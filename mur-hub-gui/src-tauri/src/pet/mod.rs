@@ -198,8 +198,23 @@ pub fn pet_spawn_at(
     // The explicit drop point always wins over a previously saved position — a
     // stale save could point at a display that no longer exists. Persistence is
     // left to pet_reposition, the single writer.
-    let mon = monitor_rect_for_point(&app, screen_x as i32, screen_y as i32);
-    let (cx, cy) = geometry::clamp_into((screen_x as i32, screen_y as i32), (PET_W, PET_H), mon);
+    //
+    // DOM drop coords (screen_x/y) and PET_W/PET_H are LOGICAL; the geometry
+    // module + monitor rects are PHYSICAL. Convert with the monitor scale.
+    // ponytail: uniform-scale assumption (primary monitor's factor); mixed-DPI
+    // multi-monitor would need per-monitor scale, rare — revisit if it bites.
+    let scale = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| m.scale_factor())
+        .unwrap_or(1.0);
+    let phys_x = (screen_x * scale) as i32;
+    let phys_y = (screen_y * scale) as i32;
+    let mon = monitor_rect_for_point(&app, phys_x, phys_y);
+    let pet_w = (PET_W as f64 * scale) as i32;
+    let pet_h = (PET_H as f64 * scale) as i32;
+    let (cx, cy) = geometry::clamp_into((phys_x, phys_y), (pet_w, pet_h), mon);
 
     let url_path = format!("index.html#/pet/{}", urlenc(&agent_name));
 
@@ -299,9 +314,10 @@ pub fn pet_list(state: State<'_, PetState>) -> Vec<String> {
 }
 
 /// Open `agent_name`'s chat panel. The (hidden) dashboard webview relays the
-/// `pet-open-chat` event to `open_chat_window` and stages any `draft`; we must
-/// NOT show/focus the dashboard here — that caused the Hub to "jump" alongside
-/// the chat window.
+/// `pet-open-chat` event to `open_chat_window`. NOTE: the `draft` is emitted
+/// but not yet consumed by the chat composer (file-drop draft prefill is
+/// deferred to Phase 3); do NOT show/focus the dashboard here — that caused
+/// the Hub to "jump" alongside the chat window.
 #[tauri::command]
 pub fn pet_open_chat(agent_name: String, draft: Option<String>, app: AppHandle) {
     let _ = app.emit(
