@@ -189,6 +189,7 @@ export const en = {
   "pet.dropThinking": "Reading…",
   "pet.dropOpened": "Opened in chat ↗",
   "pet.dropSkipped": "({count} not read)",
+  "pet.dropSendingTo": "Sending file contents to {provider}…",
   // ── Mascot speech ──
   "mascot.bubble.excited": "No flock yet! Create your first agent 🐦",
   "mascot.bubble.happy": "Your whole flock is flying! 🎉",

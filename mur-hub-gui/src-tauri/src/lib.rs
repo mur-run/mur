@@ -258,35 +258,47 @@ pub fn run() {
         // dropped paths to that pet's webview. App-level (not per-window) so it
         // covers pet windows created dynamically after launch.
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+            if let tauri::WindowEvent::DragDrop(drag_event) = event {
                 let label = window.label().to_string();
                 if !label.starts_with("pet-") {
                     return;
                 }
-                // macOS fires Drop twice per gesture (Tauri #14134); coalesce
-                // PER WINDOW so a near-simultaneous drop on a *different* pet
-                // isn't swallowed by a global timer.
-                use std::collections::HashMap;
-                use std::sync::Mutex;
-                use std::time::{Duration, Instant};
-                static LAST_DROP: Mutex<Option<HashMap<String, Instant>>> = Mutex::new(None);
-                let now = Instant::now();
-                {
-                    let mut guard = LAST_DROP.lock().unwrap_or_else(|p| p.into_inner());
-                    let map = guard.get_or_insert_with(HashMap::new);
-                    if let Some(prev) = map.get(&label)
-                        && now.duration_since(*prev) < Duration::from_millis(150)
-                    {
-                        return;
+                match drag_event {
+                    tauri::DragDropEvent::Enter { .. } | tauri::DragDropEvent::Over { .. } => {
+                        let _ = window.emit_to(&label, "pet://drag-active", true);
                     }
-                    map.insert(label.clone(), now);
+                    tauri::DragDropEvent::Leave => {
+                        let _ = window.emit_to(&label, "pet://drag-active", false);
+                    }
+                    tauri::DragDropEvent::Drop { paths, .. } => {
+                        // macOS fires Drop twice per gesture (Tauri #14134); coalesce
+                        // PER WINDOW so a near-simultaneous drop on a *different* pet
+                        // isn't swallowed by a global timer.
+                        use std::collections::HashMap;
+                        use std::sync::Mutex;
+                        use std::time::{Duration, Instant};
+                        static LAST_DROP: Mutex<Option<HashMap<String, Instant>>> =
+                            Mutex::new(None);
+                        let now = Instant::now();
+                        {
+                            let mut guard = LAST_DROP.lock().unwrap_or_else(|p| p.into_inner());
+                            let map = guard.get_or_insert_with(HashMap::new);
+                            if let Some(prev) = map.get(&label)
+                                && now.duration_since(*prev) < Duration::from_millis(150)
+                            {
+                                return;
+                            }
+                            map.insert(label.clone(), now);
+                        }
+                        let paths: Vec<String> = paths
+                            .iter()
+                            .map(|p| p.to_string_lossy().into_owned())
+                            .collect();
+                        // emit_to the pet's own label so only that pet reacts.
+                        let _ = window.emit_to(&label, "pet://drop", paths);
+                    }
+                    _ => {}
                 }
-                let paths: Vec<String> = paths
-                    .iter()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .collect();
-                // emit_to the pet's own label so only that pet reacts.
-                let _ = window.emit_to(&label, "pet://drop", paths);
             }
         })
         .setup(move |app| {
