@@ -27,7 +27,13 @@ fn pet_label(agent_name: &str) -> String {
     // Same safe-name transform as `label`, with the pet prefix.
     let safe: String = agent_name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     format!("pet-{}", safe)
 }
@@ -73,15 +79,18 @@ pub fn open_chat_window(agent_name: String, app: AppHandle) -> Result<(), String
     );
 
     // Anchor next to the pet (if it exists) on the pet's monitor.
-    if let Some(pet) = app.get_webview_window(&pet_label(&agent_name)) {
-        if let (Ok(pp), Ok(ps)) = (pet.outer_position(), pet.outer_size()) {
-            let pet_rect = crate::geometry::Rect {
-                x: pp.x, y: pp.y, w: ps.width as i32, h: ps.height as i32,
-            };
-            let mon = crate::pet::monitor_rect_for_point(&app, pp.x, pp.y);
-            let (x, y) = crate::geometry::anchor_panel(pet_rect, (PANEL_W, PANEL_H), mon);
-            let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
-        }
+    if let Some(pet) = app.get_webview_window(&pet_label(&agent_name))
+        && let (Ok(pp), Ok(ps)) = (pet.outer_position(), pet.outer_size())
+    {
+        let pet_rect = crate::geometry::Rect {
+            x: pp.x,
+            y: pp.y,
+            w: ps.width as i32,
+            h: ps.height as i32,
+        };
+        let mon = crate::pet::monitor_rect_for_point(&app, pp.x, pp.y);
+        let (x, y) = crate::geometry::anchor_panel(pet_rect, (PANEL_W, PANEL_H), mon);
+        let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
     }
 
     win.show().map_err(|e| e.to_string())?;

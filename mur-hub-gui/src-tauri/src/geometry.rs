@@ -47,12 +47,22 @@ pub fn clamp_into(pos: (i32, i32), size: (i32, i32), mon: Rect) -> (i32, i32) {
 mod tests {
     use super::*;
 
-    const MON: Rect = Rect { x: 0, y: 0, w: 1440, h: 900 };
+    const MON: Rect = Rect {
+        x: 0,
+        y: 0,
+        w: 1440,
+        h: 900,
+    };
 
     #[test]
     fn anchors_to_left_of_pet_when_room() {
         // pet at x=800; panel 380 wide fits to the left.
-        let pet = Rect { x: 800, y: 100, w: 300, h: 260 };
+        let pet = Rect {
+            x: 800,
+            y: 100,
+            w: 300,
+            h: 260,
+        };
         let (x, y) = anchor_panel(pet, (380, 520), MON);
         assert_eq!(x, 800 - 8 - 380); // 412
         assert_eq!(y, 100);
@@ -61,7 +71,12 @@ mod tests {
     #[test]
     fn flips_right_when_pet_near_left_edge() {
         // pet hugging the left edge: no room on the left, open to the right.
-        let pet = Rect { x: 10, y: 100, w: 300, h: 260 };
+        let pet = Rect {
+            x: 10,
+            y: 100,
+            w: 300,
+            h: 260,
+        };
         let (x, _) = anchor_panel(pet, (380, 520), MON);
         assert_eq!(x, 10 + 300 + 8); // 318
     }
@@ -69,7 +84,12 @@ mod tests {
     #[test]
     fn clamps_y_so_panel_bottom_stays_on_screen() {
         // pet low on screen: panel top would push the 520-tall panel off bottom.
-        let pet = Rect { x: 800, y: 700, w: 300, h: 260 };
+        let pet = Rect {
+            x: 800,
+            y: 700,
+            w: 300,
+            h: 260,
+        };
         let (_, y) = anchor_panel(pet, (380, 520), MON);
         assert_eq!(y, 900 - 520); // 380
     }
@@ -86,7 +106,12 @@ mod tests {
 
     #[test]
     fn window_larger_than_monitor_pins_to_origin() {
-        let tiny = Rect { x: 0, y: 0, w: 200, h: 150 };
+        let tiny = Rect {
+            x: 0,
+            y: 0,
+            w: 200,
+            h: 150,
+        };
         assert_eq!(clamp_into((50, 50), (300, 260), tiny), (0, 0));
     }
 }

@@ -49,7 +49,12 @@ pub(crate) fn monitor_rect_for_point(app: &AppHandle, x: i32, y: i32) -> geometr
     let to_rect = |m: &tauri::Monitor| {
         let p = m.position();
         let s = m.size();
-        geometry::Rect { x: p.x, y: p.y, w: s.width as i32, h: s.height as i32 }
+        geometry::Rect {
+            x: p.x,
+            y: p.y,
+            w: s.width as i32,
+            h: s.height as i32,
+        }
     };
     if let Ok(mons) = app.available_monitors() {
         if let Some(m) = mons.iter().find(|m| {
@@ -64,7 +69,12 @@ pub(crate) fn monitor_rect_for_point(app: &AppHandle, x: i32, y: i32) -> geometr
         }
     }
     // Last-resort fallback: a sensible 1440×900 origin rect.
-    geometry::Rect { x: 0, y: 0, w: 1440, h: 900 }
+    geometry::Rect {
+        x: 0,
+        y: 0,
+        w: 1440,
+        h: 900,
+    }
 }
 
 fn pet_position_path(agent_name: &str) -> PathBuf {
