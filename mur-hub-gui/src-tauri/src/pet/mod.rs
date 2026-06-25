@@ -288,16 +288,12 @@ pub fn pet_list(state: State<'_, PetState>) -> Vec<String> {
     state.0.lock().unwrap().keys().cloned().collect()
 }
 
-/// Bring the Hub dashboard to the front and ask it to open `agent_name`'s
-/// conversation. `draft`, when present, is pre-filled into the chat input
-/// (used by file-drop). The dashboard webview listens for the `pet-open-chat`
-/// event and calls `openConversation`.
+/// Open `agent_name`'s chat panel. The (hidden) dashboard webview relays the
+/// `pet-open-chat` event to `open_chat_window` and stages any `draft`; we must
+/// NOT show/focus the dashboard here — that caused the Hub to "jump" alongside
+/// the chat window.
 #[tauri::command]
 pub fn pet_open_chat(agent_name: String, draft: Option<String>, app: AppHandle) {
-    if let Some(dash) = app.get_webview_window("dashboard") {
-        let _ = dash.show();
-        let _ = dash.set_focus();
-    }
     let _ = app.emit(
         "pet-open-chat",
         serde_json::json!({ "agent": agent_name, "draft": draft }),
