@@ -12,6 +12,7 @@ pub mod cli_tools;
 pub mod companion;
 pub mod detail;
 pub mod export_muragent;
+mod geometry;
 pub mod hitl;
 pub mod import_muragent;
 pub mod mcp_skills;

@@ -5,17 +5,26 @@ body.pet-window {
   background: transparent;
 }
 .pet-root {
-  width: 200px;
-  height: 200px;
+  width: 300px;
+  height: 260px;
   background: transparent;
   overflow: visible;
   user-select: none;
   -webkit-user-select: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  pointer-events: none;
 }
+/* Re-enable pointer events only on the actual interactive children. */
+.pet-sprite,
+.pet-bubble,
+.pet-context-menu { pointer-events: auto; }
 .pet-sprite {
   width: 160px;
   height: 160px;
-  margin: 20px auto 0;
+  margin: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -157,13 +166,15 @@ body.pet-window {
   top: 2px;
   left: 50%;
   transform: translateX(-50%);
-  max-width: 188px;
-  min-width: 110px;
+  max-width: 260px;
+  min-width: 140px;
   max-height: 150px;
   overflow-y: auto;
   overflow-x: hidden;
-  background: var(--surface-card);
-  border: 1px solid var(--border-line);
+  background: color-mix(in srgb, var(--surface-card) 78%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid color-mix(in srgb, var(--border-line) 60%, transparent);
   border-radius: var(--radius-md);
   padding: var(--space-3) 26px var(--space-3) var(--space-4);
   box-shadow: var(--shadow-pop);
@@ -182,14 +193,15 @@ body.pet-window {
   left: 50%;
   transform: translateX(-50%);
   border: 8px solid transparent;
-  border-top-color: var(--surface-card);
+  border-top-color: color-mix(in srgb, var(--surface-card) 78%, transparent);
   border-bottom: none;
 }
 .pet-bubble-text {
   font-size: var(--text-sm);
   color: var(--text-primary);
-  line-height: 1.5;
-  word-break: break-word;
+  line-height: 1.7;            /* CJK needs more leading */
+  text-align: left;           /* never justify CJK */
+  overflow-wrap: anywhere;    /* replaces non-standard word-break: break-word */
 }
 .pet-bubble-progress {
   height: 2px;

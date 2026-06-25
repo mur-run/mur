@@ -56,6 +56,16 @@
 .cw-title__dot--min    { background: #ffbd2e; }
 .cw-title__dot--max    { background: #28c840; }
 
+.cw-title__expand {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-secondary, #888);
+}
+
 /* Centered absolutely so traffic lights and status dot stay at edges. */
 .cw-title__info {
   position: absolute;

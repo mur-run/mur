@@ -73,6 +73,7 @@ export const en = {
   "chat.placeholder": "Message {name}…",
   "chat.send": "Send",
   "chat.stop": "Stop",
+  "chat.expand": "Expand",
   "chat.stopped": "stopped",
   "chat.thinking": "thinking",
   "chat.suggest.0": "What can you help me with?",
