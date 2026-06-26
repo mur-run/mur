@@ -285,6 +285,43 @@ pub struct McpServerEntry {
     /// See `docs/superpowers/plans/2026-06-26-mcp-per-server-egress.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<McpServerNetwork>,
+
+    /// HTTP(S) base URL for a remote (Streamable-HTTP or SSE) MCP server.
+    /// Mutually exclusive with `command` in practice; `None` = stdio transport.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+
+    /// Authentication credentials for a remote MCP server.
+    /// `None` = no auth (or stdio transport).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<McpAuth>,
+}
+
+/// Authentication scheme for a remote (HTTP) MCP server.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum McpAuth {
+    /// Static bearer token stored as a secret reference.
+    Bearer { token: crate::secret::SecretRef },
+    /// OAuth 2.1 token, with dynamic client registration state.
+    Oauth(OauthAuth),
+}
+
+/// OAuth 2.1 state persisted alongside remote MCP entry.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct OauthAuth {
+    /// Authorization-server token endpoint (from discovery).
+    pub token_endpoint: String,
+    /// Client id from dynamic client registration.
+    pub client_id: String,
+    /// Keychain ref to access token.
+    pub access_token: crate::secret::SecretRef,
+    /// Keychain ref refresh token, if server issued one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<crate::secret::SecretRef>,
+    /// Unix-epoch seconds access token expires (0 = unknown).
+    #[serde(default)]
+    pub expires_at: u64,
 }
 
 /// How an MCP server's outbound network is scoped.
@@ -2098,5 +2135,35 @@ mod lockfile_compat_tests {
         let lock: LockFile = serde_json::from_str(old).unwrap();
         assert_eq!(lock.build_sha, "");
         assert_eq!(lock.proto_version, 0);
+    }
+}
+
+#[cfg(test)]
+mod remote_mcp_tests {
+    use super::*;
+
+    #[test]
+    fn mcp_entry_roundtrips_remote_bearer() {
+        let e = McpServerEntry {
+            name: "gh".into(),
+            command: String::new(),
+            url: Some("https://api.example.com/mcp".into()),
+            auth: Some(McpAuth::Bearer {
+                token: crate::secret::SecretRef::Env("GH_TOKEN".into()),
+            }),
+            ..Default::default()
+        };
+        let y = serde_yaml_ng::to_string(&e).unwrap();
+        let back: McpServerEntry = serde_yaml_ng::from_str(&y).unwrap();
+        assert_eq!(back.url.as_deref(), Some("https://api.example.com/mcp"));
+        assert!(matches!(
+            back.auth,
+            Some(McpAuth::Bearer { ref token }) if *token == crate::secret::SecretRef::Env("GH_TOKEN".into())
+        ));
+        // A legacy stdio entry (no url/auth) still parses.
+        let legacy: McpServerEntry =
+            serde_yaml_ng::from_str("name: fs\ncommand: npx\nargs: [\"-y\",\"fs\"]\n").unwrap();
+        assert!(legacy.url.is_none());
+        assert!(legacy.auth.is_none());
     }
 }
