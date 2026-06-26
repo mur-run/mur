@@ -26,6 +26,7 @@ pub mod lock_file;
 pub mod mcp;
 pub mod multi_call;
 pub mod multimodal;
+pub mod oauth;
 pub mod profile;
 pub mod protocol;
 pub mod retry;

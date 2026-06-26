@@ -819,6 +819,14 @@ pub enum AgentMcpAction {
         #[arg(long)]
         bearer_keychain: Option<String>,
     },
+    /// Run the OAuth 2.1 authorization-code + PKCE flow for a remote MCP
+    /// server (added via `add-remote`) and store the resulting tokens.
+    Login {
+        /// Agent name
+        name: String,
+        /// Server id (the local nickname used when the server was added)
+        server: String,
+    },
 }
 
 #[derive(Subcommand)]
