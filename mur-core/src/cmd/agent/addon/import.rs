@@ -45,6 +45,27 @@ pub fn cmd_addon_import(name: &str, plugin_dir: &str, force: bool) -> Result<()>
     let mur_home = crate::cmd::resolve_mur_home()?;
     let agent_skills_dir = mur_home.join("agents").join(name).join("skills");
 
+    // Network install: when the source is a git ref (`owner/repo` shorthand or
+    // a git URL) and not an existing local path, shallow-clone it into the addon
+    // cache and import from there. The fetched plugin still goes through the same
+    // security scan + fail-closed (disabled) install below.
+    let fetched;
+    let plugin_dir: &str = if std::path::Path::new(plugin_dir).exists() {
+        plugin_dir
+    } else if let AddonSource::Git {
+        clone_url,
+        cache_key,
+    } = resolve_addon_source(plugin_dir)
+    {
+        let dest = mur_home.join("cache").join("addons").join(&cache_key);
+        crate::cmd::skill_registry::git_clone_or_pull(&clone_url, &dest)?;
+        println!("Fetched {clone_url} → {}", dest.display());
+        fetched = dest.to_string_lossy().into_owned();
+        &fetched
+    } else {
+        plugin_dir
+    };
+
     // Canonicalize the plugin root (rejects a non-existent dir).
     let root = fs::canonicalize(plugin_dir)
         .map_err(|e| anyhow::anyhow!("plugin dir {plugin_dir:?}: {e}"))?;
@@ -248,7 +269,10 @@ fn scan_or_block(manifest: &mur_common::skill::SkillManifest, force: bool) -> Re
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AddonSource {
     Local,
-    Git { clone_url: String, cache_key: String },
+    Git {
+        clone_url: String,
+        cache_key: String,
+    },
 }
 
 /// Filesystem-safe cache dir name derived from a git URL (scheme/`.git`/user
@@ -286,18 +310,23 @@ pub fn resolve_addon_source(input: &str) -> AddonSource {
     }
     // `owner/repo` GitHub shorthand: exactly two git-safe segments, and not a
     // relative/absolute/home path.
-    if !s.starts_with('.') && !s.starts_with('/') && !s.starts_with('~') {
-        if let Some((owner, repo)) = s.split_once('/') {
-            let safe = |p: &str| {
-                !p.is_empty()
-                    && p.chars()
-                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    if !s.starts_with('.')
+        && !s.starts_with('/')
+        && !s.starts_with('~')
+        && let Some((owner, repo)) = s.split_once('/')
+    {
+        let safe = |p: &str| {
+            !p.is_empty()
+                && p.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        };
+        if safe(owner) && safe(repo) {
+            let clone_url = format!("https://github.com/{owner}/{repo}.git");
+            let cache_key = cache_key_for(&clone_url);
+            return AddonSource::Git {
+                clone_url,
+                cache_key,
             };
-            if safe(owner) && safe(repo) {
-                let clone_url = format!("https://github.com/{owner}/{repo}.git");
-                let cache_key = cache_key_for(&clone_url);
-                return AddonSource::Git { clone_url, cache_key };
-            }
         }
     }
     AddonSource::Local
@@ -332,7 +361,10 @@ mod tests {
             AddonSource::Git { .. }
         ));
         // Local paths stay local.
-        assert_eq!(resolve_addon_source("./plugins/ponytail"), AddonSource::Local);
+        assert_eq!(
+            resolve_addon_source("./plugins/ponytail"),
+            AddonSource::Local
+        );
         assert_eq!(resolve_addon_source("/abs/path"), AddonSource::Local);
         assert_eq!(resolve_addon_source("~/x"), AddonSource::Local);
         // A multi-segment relative path is NOT owner/repo shorthand.
