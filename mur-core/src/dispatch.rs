@@ -1353,6 +1353,9 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 };
                 cmd::agent::mcp::cmd_mcp_add_remote(&name, &server_name, &url, bearer)?
             }
+            AgentMcpAction::Login { name, server } => {
+                cmd::agent::mcp_login::cmd_mcp_login(&name, &server).await?
+            }
         },
         AgentAction::Skill { action } => match action {
             AgentSkillAction::List { name } => cmd::agent::cmd_skill_list(&name)?,
