@@ -217,7 +217,7 @@ mod tests {
 #[cfg(test)]
 mod proxy_isolation_tests {
     use super::*;
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
     /// The cc-proxy guarantee: a client built via `llm_client_builder()` reaches
@@ -231,9 +231,19 @@ mod proxy_isolation_tests {
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             if let Ok((mut s, _)) = listener.accept().await {
+                // Drain the request so the client's send completes, then reply
+                // with an explicit close + flush + graceful shutdown. Without
+                // this, dropping the socket right after write_all races the OS
+                // flush and Windows aborts the connection (os error 10053).
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf).await;
                 let _ = s
-                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
                     .await;
+                let _ = s.flush().await;
+                let _ = s.shutdown().await;
             }
         });
         // SAFETY: set/cleared within this test; reqwest reads proxy env at build.
