@@ -80,6 +80,8 @@ pub fn mcp_add(agent: &str, server_id: &str, command: &str, args: &[String]) -> 
         installed_at: Some(chrono::Utc::now()),
         timeout_secs: None,
         network: None,
+        url: None,
+        auth: None,
     });
     if !profile
         .entitlements

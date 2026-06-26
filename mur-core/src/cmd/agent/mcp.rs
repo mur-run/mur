@@ -133,6 +133,8 @@ pub fn cmd_mcp_add(
         installed_at: Some(chrono::Utc::now()),
         timeout_secs: None,
         network: None,
+        url: None,
+        auth: None,
     });
     // Sync spawn allowlist so the supervisor is permitted to launch this MCP.
     if !profile
@@ -248,6 +250,29 @@ pub fn cmd_mcp_set_network(
     Ok(())
 }
 
+/// Add a remote (Streamable HTTP) MCP server to `agent`. No binary pin — the
+/// server runs elsewhere; trust comes from the URL + bearer/OAuth auth.
+pub fn cmd_mcp_add_remote(
+    agent: &str,
+    name: &str,
+    url: &str,
+    bearer: Option<mur_common::secret::SecretRef>,
+) -> anyhow::Result<()> {
+    let (path, mut profile) = load_profile_for_edit(agent)?;
+    if profile.mcp_servers.iter().any(|m| m.name == name) {
+        anyhow::bail!("MCP server '{name}' already exists on '{agent}'; remove it first");
+    }
+    profile.mcp_servers.push(mur_common::agent::McpServerEntry {
+        name: name.to_string(),
+        url: Some(url.to_string()),
+        auth: bearer.map(|token| mur_common::agent::McpAuth::Bearer { token }),
+        ..Default::default()
+    });
+    save_profile(&path, &mut profile)?;
+    println!("Added remote MCP server '{name}' → {url} for agent '{agent}'.");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +290,41 @@ mod tests {
         let r = network_policy_from_args(vec!["example.com".into()], false).unwrap();
         assert_eq!(r.mode, McpNetMode::Restricted);
         assert_eq!(r.allow_hosts, vec!["example.com"]);
+    }
+
+    #[test]
+    fn add_remote_writes_url_and_bearer() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mur_home = tmp.path();
+
+        // Create agent dir with a default profile so load_profile_for_edit works.
+        let agent_home = mur_home.join("agents").join("alice");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let p = mur_common::agent::AgentProfile::default_for_tests();
+        std::fs::write(
+            agent_home.join("profile.yaml"),
+            serde_yaml_ng::to_string(&p).unwrap(),
+        )
+        .unwrap();
+
+        unsafe {
+            std::env::set_var("MUR_HOME", mur_home);
+        }
+
+        cmd_mcp_add_remote(
+            "alice",
+            "gh",
+            "https://api.example.com/mcp",
+            Some(mur_common::secret::SecretRef::Env("GH_TOKEN".into())),
+        )
+        .unwrap();
+
+        let (_p, profile) = load_profile_for_edit("alice").unwrap();
+        let e = profile.mcp_servers.iter().find(|m| m.name == "gh").unwrap();
+        assert_eq!(e.url.as_deref(), Some("https://api.example.com/mcp"));
+        assert!(matches!(
+            e.auth,
+            Some(mur_common::agent::McpAuth::Bearer { .. })
+        ));
     }
 }

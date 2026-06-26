@@ -45,7 +45,7 @@ impl McpPool {
         let entry = self.entries.get(server).ok_or_else(|| {
             McpError::Server(format!("no MCP server named `{server}` on this agent"))
         })?;
-        let mut client = McpClient::spawn(entry, &self.policy, self.proxy.as_ref()).await?;
+        let mut client = McpClient::connect(entry, &self.policy, self.proxy.as_ref()).await?;
         client.initialize().await?;
 
         // Drain child stderr in a background thread so the pipe never fills.

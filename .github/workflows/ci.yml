@@ -156,6 +156,12 @@ jobs:
       # caps heavy-test (lance/qdrant/tantivy) concurrency to avoid OOM on
       # 16 GB Windows runners.
       - run: cargo nextest run --workspace --locked --profile ci
+        env:
+          # The large `mur` clap CLI needs a deeper per-thread stack to parse on
+          # Windows, whose 1 MB default thread stack overflows during clap's
+          # derive parsing (each test runs on its own thread). 16 MB is safe on
+          # every OS; Linux/macOS already default higher.
+          RUST_MIN_STACK: "16777216"
 
   clippy:
     name: Clippy

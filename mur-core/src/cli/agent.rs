@@ -804,6 +804,21 @@ pub enum AgentMcpAction {
     /// Install a server from the MCP Registry onto an agent, by its registry
     /// name (e.g. `mur agent mcp registry-add rustsmith com.example/fs`).
     RegistryAdd { name: String, server: String },
+    /// Add a remote (Streamable HTTP) MCP server by URL.
+    AddRemote {
+        /// Agent name
+        name: String,
+        /// Server id (local nickname in the profile)
+        server_name: String,
+        /// HTTPS base URL of the remote MCP server
+        url: String,
+        /// Bearer token from an env var (e.g. `MY_TOKEN`).
+        #[arg(long)]
+        bearer_env: Option<String>,
+        /// Bearer token from the keychain (`service/account`).
+        #[arg(long)]
+        bearer_keychain: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

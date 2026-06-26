@@ -1331,6 +1331,28 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentMcpAction::RegistryAdd { name, server } => {
                 cmd::agent::mcp_registry::cmd_mcp_registry_add(&name, &server).await?
             }
+            AgentMcpAction::AddRemote {
+                name,
+                server_name,
+                url,
+                bearer_env,
+                bearer_keychain,
+            } => {
+                let bearer = match (bearer_env, bearer_keychain) {
+                    (Some(v), _) => Some(mur_common::secret::SecretRef::Env(v)),
+                    (_, Some(sa)) => {
+                        let (service, account) = sa.split_once('/').ok_or_else(|| {
+                            anyhow::anyhow!("--bearer-keychain expects service/account")
+                        })?;
+                        Some(mur_common::secret::SecretRef::Keychain {
+                            service: service.into(),
+                            account: account.into(),
+                        })
+                    }
+                    _ => None,
+                };
+                cmd::agent::mcp::cmd_mcp_add_remote(&name, &server_name, &url, bearer)?
+            }
         },
         AgentAction::Skill { action } => match action {
             AgentSkillAction::List { name } => cmd::agent::cmd_skill_list(&name)?,
