@@ -12,7 +12,7 @@ async fn initialize_and_tools_list() {
         ..Default::default()
     };
     let policy = SandboxPolicy::default();
-    let mut client = McpClient::spawn(&entry, &policy).await.expect("spawn");
+    let mut client = McpClient::spawn(&entry, &policy, None).await.expect("spawn");
     let info = client.initialize().await.expect("init");
     assert_eq!(info.server_name, "mock_mcp");
     let tools = client.list_tools().await.expect("list");

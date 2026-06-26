@@ -258,7 +258,26 @@ pub async fn build_provider_runner(
     // Phase-1 enable/disable: drop servers disabled for this agent so they
     // are never spawned and never advertised in tools/list.
     let enabled_mcp = profile.inner.enabled_mcp_servers();
-    let pool = McpPool::new(enabled_mcp.clone(), sandbox_policy);
+    // Start the per-server egress proxy only if some server declares a
+    // Restricted network policy (opt-in; otherwise no proxy, no change).
+    let needs_egress = enabled_mcp.iter().any(|e| {
+        matches!(
+            e.network.as_ref().map(|n| n.mode),
+            Some(mur_common::agent::McpNetMode::Restricted)
+        )
+    });
+    let egress = if needs_egress {
+        match crate::sandbox::egress_proxy::start_egress_proxy().await {
+            Ok(h) => Some(h),
+            Err(e) => {
+                tracing::warn!("egress proxy failed to start; Restricted MCP servers will be unscoped: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let pool = McpPool::new(enabled_mcp.clone(), sandbox_policy, egress);
     let bash_exec: Arc<dyn crate::tools::ToolExecutor> =
         Arc::new(BashTool::new(agent_home.to_path_buf()));
     let bash_def = bash_exec.def();

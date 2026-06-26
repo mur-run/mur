@@ -96,7 +96,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_servers_empty_result() {
-        let pool = McpPool::new(vec![], SandboxPolicy::default());
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
         let (defs, map) = build_tools(None, &[], &[], pool).await;
         assert!(defs.is_empty());
         assert!(map.is_empty());
@@ -109,7 +109,7 @@ mod tests {
             working_dir: std::path::PathBuf::from("/tmp"),
         });
         let bash_def = bash_exec.def();
-        let pool = McpPool::new(vec![], SandboxPolicy::default());
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
         let (defs, map) = build_tools(Some((bash_def, bash_exec)), &[], &[], pool).await;
         assert_eq!(defs.len(), 1);
         assert!(map.contains_key("bash"));
@@ -127,7 +127,7 @@ mod tests {
             policy: ToolPolicy::Deny,
             risk: None,
         }];
-        let pool = McpPool::new(vec![], SandboxPolicy::default());
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
         let (defs, map) = build_tools(Some((bash_def, bash_exec)), &[], &rules, pool).await;
         assert!(defs.is_empty());
         assert!(!map.contains_key("bash"));

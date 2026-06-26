@@ -53,13 +53,23 @@ impl McpClient {
     /// child inherits the supervisor's Landlock / seccomp / SBPL restrictions
     /// (B1 Tasks 2–3).  Sync stdin / stdout handles from `std::process::Child`
     /// are promoted to async via `ChildStdin::from_std` / `ChildStdout::from_std`.
-    pub async fn spawn(entry: &McpServerEntry, policy: &SandboxPolicy) -> Result<Self, McpError> {
+    pub async fn spawn(
+        entry: &McpServerEntry,
+        policy: &SandboxPolicy,
+        proxy: Option<&crate::sandbox::egress_proxy::EgressProxyHandle>,
+    ) -> Result<Self, McpError> {
         let mut std_cmd = std::process::Command::new(&entry.command);
         std_cmd
             .args(&entry.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // Per-server egress: set HTTP_PROXY ONLY on this child's env (never the
+        // runtime's) when the server declares a Restricted policy. Empty
+        // otherwise ⇒ byte-for-byte the previous behavior.
+        for (k, v) in proxy_env_for(entry, proxy) {
+            std_cmd.env(k, v);
+        }
         let mut child = crate::sandbox::child::spawn_sandboxed(std_cmd, policy)?;
 
         let raw_stdin = child.stdin.take().ok_or(McpError::StreamClosed)?;
@@ -179,5 +189,70 @@ impl McpClient {
         let _ = child.kill();
         // Reap the child off the async thread so we don't block the runtime.
         let _ = tokio::task::spawn_blocking(move || child.wait()).await;
+    }
+}
+
+/// Env vars that scope a policied MCP child to its allowlist via the egress
+/// proxy. Returns empty (no change vs today) unless the server is `Restricted`
+/// AND a proxy is available. NEVER set these on the runtime's own environment —
+/// only on the child `Command` (Global Constraint: env isolation, so the
+/// agent's own LLM/cc-proxy path is never affected).
+pub fn proxy_env_for(
+    entry: &McpServerEntry,
+    proxy: Option<&crate::sandbox::egress_proxy::EgressProxyHandle>,
+) -> Vec<(String, String)> {
+    let (Some(net), Some(proxy)) = (entry.network.as_ref(), proxy) else {
+        return vec![];
+    };
+    if net.mode != mur_common::agent::McpNetMode::Restricted {
+        return vec![];
+    }
+    let token = proxy.register(net.allow_hosts.clone());
+    let url = format!("http://{token}:x@{}", proxy.addr);
+    let no_proxy = "127.0.0.1,localhost,::1".to_string();
+    vec![
+        ("HTTP_PROXY".into(), url.clone()),
+        ("HTTPS_PROXY".into(), url.clone()),
+        ("http_proxy".into(), url.clone()),
+        ("https_proxy".into(), url),
+        ("NO_PROXY".into(), no_proxy.clone()),
+        ("no_proxy".into(), no_proxy),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mur_common::agent::{McpNetMode, McpServerNetwork};
+    use std::collections::HashMap;
+
+    #[test]
+    fn proxy_env_only_for_restricted_servers() {
+        let base = McpServerEntry { name: "x".into(), command: "npx".into(), ..Default::default() };
+
+        // No policy → no env (byte-for-byte today).
+        assert!(proxy_env_for(&base, None).is_empty());
+
+        // Restricted but no proxy handle → still empty (defensive).
+        let mut restricted = base.clone();
+        restricted.network = Some(McpServerNetwork {
+            mode: McpNetMode::Restricted,
+            allow_hosts: vec!["example.com".into()],
+        });
+        assert!(proxy_env_for(&restricted, None).is_empty());
+
+        // Restricted + proxy → HTTP_PROXY/HTTPS_PROXY/NO_PROXY set; loopback in NO_PROXY.
+        let handle = crate::sandbox::egress_proxy::EgressProxyHandle::for_test(
+            "127.0.0.1:9".parse().unwrap(),
+        );
+        let env: HashMap<_, _> = proxy_env_for(&restricted, Some(&handle)).into_iter().collect();
+        assert!(env.get("HTTP_PROXY").unwrap().contains("@127.0.0.1:9"));
+        assert!(env.get("HTTPS_PROXY").unwrap().contains("@127.0.0.1:9"));
+        assert!(env.get("NO_PROXY").unwrap().contains("127.0.0.1"));
+
+        // Inherit/None mode → no env even with a proxy.
+        let mut inherit = base.clone();
+        inherit.network = Some(McpServerNetwork { mode: McpNetMode::Inherit, allow_hosts: vec![] });
+        assert!(proxy_env_for(&inherit, Some(&handle)).is_empty());
     }
 }

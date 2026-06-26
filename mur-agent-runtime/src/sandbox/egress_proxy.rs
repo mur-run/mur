@@ -27,6 +27,15 @@ pub struct EgressProxyHandle {
 }
 
 impl EgressProxyHandle {
+    /// Test-only handle with an empty registry at a fixed address (no listener).
+    #[cfg(test)]
+    pub fn for_test(addr: SocketAddr) -> Self {
+        Self {
+            addr,
+            registry: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
     /// Register a per-server allowlist; returns the bearer token to embed in the
     /// child's `HTTP_PROXY` credentials.
     pub fn register(&self, allow_hosts: Vec<String>) -> String {
