@@ -1,4 +1,5 @@
 pub mod child;
+pub mod egress_proxy;
 pub mod policy;
 pub mod reqwest_guard;
 
