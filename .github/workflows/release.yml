@@ -314,6 +314,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Under `cargo build --target aarch64-apple-darwin`, ggml's CMake CPU
+      # detection (in the whisper-rs-sys build) fails and falls back to
+      # `-mcpu=native`, which Xcode 16.4's clang rejects. Force GGML_NATIVE=OFF
+      # (generic ARM flags, no `-mcpu=native`) via a CMake toolchain file — the
+      # `cmake` crate forwards CMAKE_TOOLCHAIN_FILE. The file sets no
+      # CMAKE_SYSTEM_NAME, so it does not trigger cross-compile mode.
+      - name: Disable ggml native arch (avoid unsupported -mcpu=native)
+        run: |
+          echo 'set(GGML_NATIVE OFF CACHE BOOL "" FORCE)' > "$RUNNER_TEMP/ggml-no-native.cmake"
+          echo "CMAKE_TOOLCHAIN_FILE=$RUNNER_TEMP/ggml-no-native.cmake" >> "$GITHUB_ENV"
+
       - name: Get Hub version from tag
         id: hub_version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
