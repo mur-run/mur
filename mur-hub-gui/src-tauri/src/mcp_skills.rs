@@ -114,7 +114,7 @@ pub fn agent_addon_import(
     plugin_dir: String,
     force: Option<bool>,
 ) -> Result<AgentDetail, String> {
-    mur_core::cmd::agent::addon::cmd_addon_import(&name, &plugin_dir, force.unwrap_or(false))
+    mur_core::cmd::agent::addon::cmd_addon_import(&name, &plugin_dir, None, force.unwrap_or(false))
         .map_err(|e| format!("{e:#}"))?;
     get_agent_detail(name)
 }

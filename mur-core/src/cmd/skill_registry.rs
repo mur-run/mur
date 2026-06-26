@@ -17,13 +17,20 @@ pub fn registry_cache_dir(mur_home: &Path) -> PathBuf {
 
 pub fn fetch_registry(mur_home: &Path, registry_url: &str) -> Result<PathBuf> {
     let cache_dir = registry_cache_dir(mur_home);
-    let git_dir = cache_dir.join(".git");
+    git_clone_or_pull(registry_url, &cache_dir)?;
+    Ok(cache_dir)
+}
 
-    if git_dir.exists() {
+/// Shallow-clone `url` into `dest`, or `git pull --ff-only` if it already
+/// exists. Shared by the skill registry and the addon network installer
+/// (`mur agent addon import <agent> owner/repo`). A failed refresh of an
+/// existing clone is a warning, not an error (we fall back to the cache).
+pub fn git_clone_or_pull(url: &str, dest: &Path) -> Result<()> {
+    if dest.join(".git").exists() {
         let status = Command::new("git")
             .args([
                 "-C",
-                &*cache_dir.to_string_lossy(),
+                &*dest.to_string_lossy(),
                 "pull",
                 "--depth=1",
                 "--ff-only",
@@ -31,25 +38,25 @@ pub fn fetch_registry(mur_home: &Path, registry_url: &str) -> Result<PathBuf> {
             .status()
             .map_err(|e| anyhow::anyhow!("git pull: {e}"))?;
         if !status.success() {
-            eprintln!("warning: registry refresh failed, using cached");
+            eprintln!(
+                "warning: refresh of {} failed, using cached",
+                dest.display()
+            );
         }
     } else {
-        let parent = cache_dir.parent().unwrap_or(mur_home);
-        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create {}", parent.display()))?;
+        }
         let status = Command::new("git")
-            .args([
-                "clone",
-                "--depth=1",
-                registry_url,
-                &*cache_dir.to_string_lossy(),
-            ])
+            .args(["clone", "--depth=1", url, &*dest.to_string_lossy()])
             .status()
             .map_err(|e| anyhow::anyhow!("git clone: {e}"))?;
         if !status.success() {
-            anyhow::bail!("failed to clone registry from {registry_url}");
+            anyhow::bail!("failed to clone {url}");
         }
     }
-    Ok(cache_dir)
+    Ok(())
 }
 
 pub fn load_index(registry_dir: &Path) -> Result<RegistryIndex> {
@@ -115,6 +122,38 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    fn git(args: &[&str], cwd: &Path) {
+        let ok = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .status()
+            .expect("run git")
+            .success();
+        assert!(ok, "git {args:?} failed");
+    }
+
+    #[test]
+    fn git_clone_or_pull_clones_then_refreshes() {
+        let tmp = tempdir().unwrap();
+        // Build a source repo with one committed file.
+        let src = tmp.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        git(&["init", "-q", "-b", "main"], &src);
+        git(&["config", "user.email", "t@t"], &src);
+        git(&["config", "user.name", "t"], &src);
+        fs::write(src.join("plugin.json"), "{}").unwrap();
+        git(&["add", "."], &src);
+        git(&["commit", "-qm", "init"], &src);
+
+        let dest = tmp.path().join("cache").join("addons").join("local-src");
+        // First call clones (dest does not exist yet; parent is created).
+        git_clone_or_pull(&src.to_string_lossy(), &dest).unwrap();
+        assert!(dest.join("plugin.json").exists(), "clone produced the file");
+        // Second call hits the pull branch and still succeeds.
+        git_clone_or_pull(&src.to_string_lossy(), &dest).unwrap();
+        assert!(dest.join("plugin.json").exists());
+    }
 
     #[test]
     fn cache_dir_path() {

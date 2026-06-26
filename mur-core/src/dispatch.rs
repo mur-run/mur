@@ -1346,8 +1346,9 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentAddonAction::Import {
                 name,
                 plugin_dir,
+                plugin,
                 force,
-            } => cmd::agent::addon::cmd_addon_import(&name, &plugin_dir, force)?,
+            } => cmd::agent::addon::cmd_addon_import(&name, &plugin_dir, plugin.as_deref(), force)?,
             AgentAddonAction::List { name } => cmd::agent::addon::cmd_addon_list(&name)?,
             AgentAddonAction::Enable { name, addon_id } => {
                 cmd::agent::addon::cmd_addon_set_enabled(&name, &addon_id, true)?
