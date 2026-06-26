@@ -36,6 +36,7 @@ mod install;
 pub mod lifecycle;
 pub mod mcp;
 pub mod mcp_discover;
+pub mod mcp_registry;
 pub mod model_resolve;
 mod peers;
 mod perm;
