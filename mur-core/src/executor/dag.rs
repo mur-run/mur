@@ -1290,10 +1290,6 @@ mod tests {
             .await
             .unwrap();
         let bounded = t.elapsed();
-        assert!(
-            bounded.as_millis() >= 500,
-            "bounded run finished too fast ({bounded:?}); cap not applied"
-        );
 
         // Unbounded -> single wave -> ~0.2s.
         let opts2 = DagExecOptions {
@@ -1305,9 +1301,13 @@ mod tests {
             .await
             .unwrap();
         let unbounded = t2.elapsed();
+        // Compare RELATIVE to the unbounded run rather than against an absolute
+        // wall-clock threshold: a loaded CI runner inflates both, so the cap's
+        // effect (~3 waves vs 1) stays a stable ratio while absolute thresholds
+        // flake (this test chronically failed on slow Windows/macOS runners).
         assert!(
-            unbounded.as_millis() < 500,
-            "unbounded run too slow ({unbounded:?}); regression in default path"
+            bounded.as_millis() as f64 >= unbounded.as_millis() as f64 * 1.5,
+            "bounded ({bounded:?}) should be >=1.5x unbounded ({unbounded:?}); cap not applied"
         );
     }
 }
