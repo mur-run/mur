@@ -240,10 +240,104 @@ fn scan_or_block(manifest: &mur_common::skill::SkillManifest, force: bool) -> Re
     Ok(())
 }
 
+/// How an addon import source was classified. An *existing* local path is
+/// always treated as Local by the caller (checked before this runs); for a
+/// non-existent input this recognizes git URLs and `owner/repo` GitHub
+/// shorthand so `mur agent addon import <agent> owner/repo` installs from the
+/// network instead of only a local directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AddonSource {
+    Local,
+    Git { clone_url: String, cache_key: String },
+}
+
+/// Filesystem-safe cache dir name derived from a git URL (scheme/`.git`/user
+/// stripped, separators flattened) so the same repo maps to one cache dir
+/// whether referenced by https, ssh, or shorthand.
+pub fn cache_key_for(url: &str) -> String {
+    let s = url
+        .trim()
+        .strip_suffix(".git")
+        .unwrap_or(url.trim())
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_start_matches("ssh://")
+        .replace("git@", "")
+        .replace(':', "/");
+    s.split('/')
+        .filter(|seg| !seg.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+pub fn resolve_addon_source(input: &str) -> AddonSource {
+    let s = input.trim();
+    // Explicit git URLs.
+    if s.starts_with("https://")
+        || s.starts_with("http://")
+        || s.starts_with("ssh://")
+        || s.starts_with("git@")
+        || s.ends_with(".git")
+    {
+        return AddonSource::Git {
+            clone_url: s.to_string(),
+            cache_key: cache_key_for(s),
+        };
+    }
+    // `owner/repo` GitHub shorthand: exactly two git-safe segments, and not a
+    // relative/absolute/home path.
+    if !s.starts_with('.') && !s.starts_with('/') && !s.starts_with('~') {
+        if let Some((owner, repo)) = s.split_once('/') {
+            let safe = |p: &str| {
+                !p.is_empty()
+                    && p.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+            };
+            if safe(owner) && safe(repo) {
+                let clone_url = format!("https://github.com/{owner}/{repo}.git");
+                let cache_key = cache_key_for(&clone_url);
+                return AddonSource::Git { clone_url, cache_key };
+            }
+        }
+    }
+    AddonSource::Local
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn resolve_addon_source_classifies_git_and_local() {
+        // GitHub `owner/repo` shorthand → clone from github over https.
+        assert_eq!(
+            resolve_addon_source("mur-run/skill-registry"),
+            AddonSource::Git {
+                clone_url: "https://github.com/mur-run/skill-registry.git".into(),
+                cache_key: "github.com-mur-run-skill-registry".into(),
+            }
+        );
+        // Explicit https URL kept as-is; same cache key as shorthand.
+        assert_eq!(
+            resolve_addon_source("https://github.com/mur-run/skill-registry.git"),
+            AddonSource::Git {
+                clone_url: "https://github.com/mur-run/skill-registry.git".into(),
+                cache_key: "github.com-mur-run-skill-registry".into(),
+            }
+        );
+        // SSH URL.
+        assert!(matches!(
+            resolve_addon_source("git@github.com:o/r.git"),
+            AddonSource::Git { .. }
+        ));
+        // Local paths stay local.
+        assert_eq!(resolve_addon_source("./plugins/ponytail"), AddonSource::Local);
+        assert_eq!(resolve_addon_source("/abs/path"), AddonSource::Local);
+        assert_eq!(resolve_addon_source("~/x"), AddonSource::Local);
+        // A multi-segment relative path is NOT owner/repo shorthand.
+        assert_eq!(resolve_addon_source("a/b/c"), AddonSource::Local);
+    }
 
     // Delegate to the shared lock defined at the addon module level so that
     // tests in import.rs and mod.rs are serialized against each other.
