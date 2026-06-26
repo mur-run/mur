@@ -155,7 +155,8 @@ pub async fn probe_mcp_descriptions(
         // the spawn to succeed for tool description hashing.
         let policy = mur_agent_runtime::sandbox::policy::SandboxPolicy::default();
         let mut client =
-            mur_agent_runtime::protocol::mcp_client::McpClient::spawn(entry, &policy, None).await?;
+            mur_agent_runtime::protocol::mcp_client::McpClient::connect(entry, &policy, None)
+                .await?;
         let _info = client.initialize().await?;
         let tools = client.list_tools().await?;
         client.shutdown().await;
@@ -199,6 +200,8 @@ pub fn build_pinned_entry(
         installed_at: Some(chrono::Utc::now()),
         timeout_secs: None,
         network: None,
+        url: None,
+        auth: None,
     }
 }
 

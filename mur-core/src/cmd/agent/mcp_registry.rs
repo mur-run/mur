@@ -4,13 +4,13 @@
 //! registry-add <agent> <name>` resolves a server's stdio package (npm→npx,
 //! pypi→uvx) into a launch command and installs it via the normal
 //! `cmd_mcp_add` path (binary pin + approval prompt). Remote-only servers
-//! (Streamable HTTP, no package) are reported as needing the remote-MCP
-//! transport (not yet implemented).
+//! (Streamable HTTP, no package) are installed by URL via `cmd_mcp_add_remote`;
+//! run `mur agent mcp login <agent> <id>` afterward to add authentication.
 
 use anyhow::Result;
 use serde::Deserialize;
 
-use super::mcp::{McpAddPin, cmd_mcp_add};
+use super::mcp::{McpAddPin, cmd_mcp_add, cmd_mcp_add_remote};
 
 /// Base URL of the official registry. Documented endpoint, not a tunable.
 const REGISTRY_BASE: &str = "https://registry.modelcontextprotocol.io";
@@ -94,6 +94,15 @@ pub fn package_command(pkg: &RegistryPackage) -> Option<(String, Vec<String>)> {
     Some((cmd.to_string(), args))
 }
 
+/// Short local id from a registry server name: take the last `/`-segment and
+/// replace `.` with `-` so the result is a valid MCP server name token.
+///
+/// Examples: `"com.example/fs"` → `"fs"`, `"ac.foo.bar/my.server"` → `"my-server"`,
+/// `"plain"` → `"plain"`.
+fn short_id(name: &str) -> String {
+    name.rsplit('/').next().unwrap_or(name).replace('.', "-")
+}
+
 /// `mur agent mcp search <query>` — list registry servers matching `query`.
 pub async fn cmd_mcp_search(query: &str) -> Result<()> {
     let body = reqwest::Client::new()
@@ -143,33 +152,31 @@ pub async fn cmd_mcp_registry_add(agent: &str, server_name: &str) -> Result<()> 
         .find(|s| s.name == server_name)
         .ok_or_else(|| anyhow::anyhow!("server '{server_name}' not found in the registry"))?;
 
-    let (command, args) = srv.packages.iter().find_map(package_command).ok_or_else(|| {
-        if !srv.remotes.is_empty() {
-            anyhow::anyhow!(
-                "'{server_name}' is a remote (Streamable HTTP) server; remote MCP transport is not yet supported"
-            )
-        } else {
-            anyhow::anyhow!("'{server_name}' has no installable stdio package")
-        }
-    })?;
+    let id = short_id(server_name);
 
-    // Short local id from the server's last path segment.
-    let id = server_name
-        .rsplit('/')
-        .next()
-        .unwrap_or(server_name)
-        .replace('.', "-");
-    cmd_mcp_add(
-        agent,
-        &id,
-        &command,
-        &args,
-        McpAddPin {
-            publisher_name: Some("mcp-registry".to_string()),
-            publisher_registry_id: Some(server_name.to_string()),
-            ..Default::default()
-        },
-    )
+    if let Some((command, args)) = srv.packages.iter().find_map(package_command) {
+        // Stdio package — install via the normal cmd_mcp_add path.
+        cmd_mcp_add(
+            agent,
+            &id,
+            &command,
+            &args,
+            McpAddPin {
+                publisher_name: Some("mcp-registry".to_string()),
+                publisher_registry_id: Some(server_name.to_string()),
+                ..Default::default()
+            },
+        )
+    } else if let Some(remote) = srv.remotes.first() {
+        // Remote-only server (Streamable HTTP) — install by URL; no bearer token yet.
+        println!(
+            "'{server_name}' is a remote MCP server; installing by URL.\n\
+             To authenticate, run: mur agent mcp login {agent} {id}"
+        );
+        cmd_mcp_add_remote(agent, &id, &remote.url, None)
+    } else {
+        anyhow::bail!("'{server_name}' has no installable package or remote endpoint")
+    }
 }
 
 #[cfg(test)]
@@ -191,6 +198,13 @@ mod tests {
         }}
       ]
     }"#;
+
+    #[test]
+    fn short_id_takes_last_segment() {
+        assert_eq!(short_id("com.example/fs"), "fs");
+        assert_eq!(short_id("ac.foo.bar/my.server"), "my-server");
+        assert_eq!(short_id("plain"), "plain");
+    }
 
     #[test]
     fn parse_servers_reads_packages_and_remotes() {
