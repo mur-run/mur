@@ -278,6 +278,35 @@ pub struct McpServerEntry {
     /// + local-model map-reduce) need a longer budget than the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<u32>,
+
+    /// Per-server outbound egress override. `None` = inherit the agent-level
+    /// policy (default; unchanged behavior). `Restricted` routes this server's
+    /// child through the runtime egress proxy with `allow_hosts` (advisory).
+    /// See `docs/superpowers/plans/2026-06-26-mcp-per-server-egress.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<McpServerNetwork>,
+}
+
+/// How an MCP server's outbound network is scoped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum McpNetMode {
+    /// Inherit the agent-level outbound policy (today's behavior). No proxy.
+    #[default]
+    Inherit,
+    /// Allow only `allow_hosts`, routed through the runtime egress proxy.
+    Restricted,
+    /// No outbound for this server at all.
+    Off,
+}
+
+/// Per-MCP-server outbound egress policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct McpServerNetwork {
+    #[serde(default)]
+    pub mode: McpNetMode,
+    #[serde(default)]
+    pub allow_hosts: Vec<String>,
 }
 
 /// A plugin-group imported by one agent (add-on Phase 2). Self-contained:
@@ -1372,6 +1401,25 @@ impl AgentProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_entry_network_is_optional_and_round_trips() {
+        // Absent in YAML → None (every existing profile keeps working).
+        let bare = "name: x\ncommand: npx\n";
+        let e: McpServerEntry = serde_yaml_ng::from_str(bare).unwrap();
+        assert!(e.network.is_none());
+
+        // Present → parsed.
+        let with = "name: browser\ncommand: npx\nnetwork:\n  mode: restricted\n  allow_hosts: [\"example.com\", \"*.api.example.com\"]\n";
+        let e2: McpServerEntry = serde_yaml_ng::from_str(with).unwrap();
+        let net = e2.network.expect("network present");
+        assert_eq!(net.mode, McpNetMode::Restricted);
+        assert_eq!(net.allow_hosts, vec!["example.com", "*.api.example.com"]);
+
+        // Round-trip keeps None out of the serialized form.
+        let out = serde_yaml_ng::to_string(&e).unwrap();
+        assert!(!out.contains("network"));
+    }
 
     #[test]
     fn profile_round_trip_yaml() {

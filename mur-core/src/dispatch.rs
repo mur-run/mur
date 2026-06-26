@@ -1318,6 +1318,12 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentMcpAction::Disable { name, server_id } => {
                 cmd::agent::cmd_mcp_set_enabled(&name, &server_id, false)?
             }
+            AgentMcpAction::SetNetwork {
+                name,
+                server_id,
+                allow_hosts,
+                off,
+            } => cmd::agent::cmd_mcp_set_network(&name, &server_id, allow_hosts, off)?,
             AgentMcpAction::Discover => cmd::agent::mcp_discover::cmd_mcp_discover()?,
         },
         AgentAction::Skill { action } => match action {

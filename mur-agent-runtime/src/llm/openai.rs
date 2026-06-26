@@ -31,7 +31,7 @@ pub struct OpenAiClient {
 
 impl OpenAiClient {
     pub fn new(base_url: String, api_key: String, model: String) -> Self {
-        let http = reqwest::Client::builder()
+        let http = crate::llm::llm_client_builder()
             .timeout(std::time::Duration::from_secs(LLM_REQUEST_TIMEOUT_SECS))
             .connect_timeout(std::time::Duration::from_secs(LLM_CONNECT_TIMEOUT_SECS))
             .build()

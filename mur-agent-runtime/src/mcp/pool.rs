@@ -9,19 +9,28 @@ use tokio::sync::Mutex;
 
 use crate::protocol::mcp_client::{McpClient, McpError, ToolInfo};
 use crate::sandbox::SandboxPolicy;
+use crate::sandbox::egress_proxy::EgressProxyHandle;
 
 pub struct McpPool {
     entries: HashMap<String, McpServerEntry>,
     policy: SandboxPolicy,
+    /// Shared egress proxy for servers with a `Restricted` network policy.
+    /// `None` when no server on this agent declares one (the common case).
+    proxy: Option<EgressProxyHandle>,
     clients: Mutex<HashMap<String, Arc<Mutex<McpClient>>>>,
 }
 
 impl McpPool {
-    pub fn new(entries: Vec<McpServerEntry>, policy: SandboxPolicy) -> Arc<Self> {
+    pub fn new(
+        entries: Vec<McpServerEntry>,
+        policy: SandboxPolicy,
+        proxy: Option<EgressProxyHandle>,
+    ) -> Arc<Self> {
         let map = entries.into_iter().map(|e| (e.name.clone(), e)).collect();
         Arc::new(Self {
             entries: map,
             policy,
+            proxy,
             clients: Mutex::new(HashMap::new()),
         })
     }
@@ -36,7 +45,7 @@ impl McpPool {
         let entry = self.entries.get(server).ok_or_else(|| {
             McpError::Server(format!("no MCP server named `{server}` on this agent"))
         })?;
-        let mut client = McpClient::spawn(entry, &self.policy).await?;
+        let mut client = McpClient::spawn(entry, &self.policy, self.proxy.as_ref()).await?;
         client.initialize().await?;
 
         // Drain child stderr in a background thread so the pipe never fills.
@@ -85,7 +94,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_server_returns_error() {
-        let pool = McpPool::new(vec![], SandboxPolicy::default());
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
         match pool.client("nonexistent").await {
             Err(e) => {
                 let msg = e.to_string();

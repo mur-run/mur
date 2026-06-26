@@ -317,6 +317,22 @@ mcp_requirements:
 
 **`mur skill show`** — When a skill has `mcp_requirements`, the command prints a formatted "MCP Requirements:" block after the YAML, listing each tool pattern with its capability and optional fallback.
 
+### Per-Server MCP Egress
+
+By default an agent's outbound network policy (`entitlements.network.outbound`) applies to the whole agent; MCP server subprocesses inherit the OS sandbox (port-level on Linux; unconfined on macOS — `sandbox/child.rs`). A single MCP server can additionally be scoped to a **host allowlist**:
+
+```bash
+mur agent mcp set-network <agent> <server> --allow-host example.com --allow-host '*.api.example.com'
+mur agent mcp set-network <agent> <server> --off       # deny all outbound for this server
+mur agent mcp set-network <agent> <server>             # clear → inherit the agent policy
+```
+
+This sets `McpServerEntry.network` (`mode: restricted|off`, `allow_hosts`). When any server is `restricted`, the supervisor starts a loopback **egress proxy** (`sandbox/egress_proxy.rs`); that server's child is spawned with `HTTP_PROXY`/`HTTPS_PROXY` pointing at it (with a per-server token), and the proxy CONNECT-tunnels only to allowlisted hosts (logging every allow/deny for audit). Restart the agent to apply.
+
+- **Isolation:** the proxy env is set ONLY on the policied child's process — never the runtime's. The agent's own LLM clients are built with `.no_proxy()` (`llm::llm_client_builder`), so LLM traffic (and a debug cc-proxy, configured via `base_url`) is never captured by the egress proxy. `NO_PROXY` covers loopback on the child.
+- **Threat model — ADVISORY.** This constrains a *cooperating* tool that honors `HTTP_PROXY`. A tool that ignores it can still reach the network directly, because the OS sandbox filters by port, not host. Airtight containment requires Linux network-namespace isolation + a macOS pre-fork launcher (the `sandbox/child.rs` macOS limitation) — out of scope. Use this for scoping/accident-prevention/audit of trusted tools, not to contain a malicious server.
+- **Opt-in:** a server with no `network` policy is spawned exactly as before; with no policied server, no proxy starts.
+
 ### Cross-Agent Observability (M7a)
 
 Read-only aggregation of peer agent skill stats and per-agent fitness scoring. New CLI surface:

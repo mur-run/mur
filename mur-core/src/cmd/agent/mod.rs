@@ -71,6 +71,7 @@ pub use lifecycle::{cmd_create, cmd_list, cmd_remove, cmd_rename, cmd_status, cm
 #[allow(unused_imports)]
 pub use mcp::{
     McpAddPin, cmd_mcp_add, cmd_mcp_list, cmd_mcp_remove, cmd_mcp_rename, cmd_mcp_set_enabled,
+    cmd_mcp_set_network,
 };
 #[allow(unused_imports)]
 pub use peers::cmd_peers;

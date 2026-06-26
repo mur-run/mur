@@ -25,6 +25,13 @@ pub fn host_matches_pattern(host: &str, pattern: &str) -> bool {
     host == suffix || host.ends_with(&format!(".{suffix}"))
 }
 
+/// True if `host` matches any allowlist pattern. An empty allowlist denies all
+/// (fail-closed). Reuses the same matcher the agent's reqwest guard uses, so
+/// per-MCP-server egress allowlisting behaves identically to agent-level hosts.
+pub fn host_allowed(host: &str, allow: &[String]) -> bool {
+    allow.iter().any(|p| host_matches_pattern(host, p))
+}
+
 /// True for IP ranges an outbound request must never reach: the link-local /
 /// cloud-metadata range (IPv4 169.254.0.0/16 — includes 169.254.169.254 — and
 /// IPv6 fe80::/10) plus the unspecified address.
@@ -183,6 +190,15 @@ impl std::error::Error for HostGuardError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_allowed_is_fail_closed_and_pattern_aware() {
+        let allow = vec!["example.com".to_string(), "*.api.example.com".to_string()];
+        assert!(host_allowed("example.com", &allow));
+        assert!(host_allowed("v1.api.example.com", &allow));
+        assert!(!host_allowed("evil.com", &allow));
+        assert!(!host_allowed("example.com", &[]), "empty allowlist denies");
+    }
 
     #[test]
     fn metadata_and_link_local_blocked() {
