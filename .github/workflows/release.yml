@@ -301,7 +301,11 @@ jobs:
   hub-macos:
     name: Build MuR Hub (macOS arm64)
     needs: validate-version
-    runs-on: macos-14
+    # macos-latest (not macos-14): the macos-14 image's current toolchain makes
+    # ggml's CMake CPU detection fail and fall back to `-mcpu=native`, which its
+    # clang rejects (whisper-rs-sys build). The CI Hub job builds whisper fine on
+    # macos-latest; both are Apple-Silicon runners so the aarch64 target is native.
+    runs-on: macos-latest
     env:
       # tauri-cli has no binstall-compatible prebuilt for this version, so a
       # plain install recompiles it from source (~10 min) every release. Pin the
