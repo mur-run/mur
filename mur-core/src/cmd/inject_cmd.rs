@@ -34,9 +34,11 @@ pub(crate) async fn cmd_inject(query: &str) -> Result<()> {
 
     let results = score_and_rank_generic(query, active);
 
+    // Resolve git worktrees to the main repo name so injection-learning scopes
+    // per-repo (matching the codebase index), not per-branch-worktree.
     let project_name = std::env::current_dir()
         .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+        .map(|p| crate::codebase::scanner::project_name_from_path(&p))
         .unwrap_or_default();
     let injected_items: Vec<_> = results
         .into_iter()
