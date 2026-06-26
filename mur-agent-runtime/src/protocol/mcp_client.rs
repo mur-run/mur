@@ -31,7 +31,7 @@ pub struct StdioMcpClient {
 /// regardless of transport.
 pub enum McpClient {
     Stdio(Box<StdioMcpClient>),
-    Http(super::http_mcp_client::HttpMcpClient),
+    Http(Box<super::http_mcp_client::HttpMcpClient>),
 }
 
 impl McpClient {
@@ -45,8 +45,10 @@ impl McpClient {
     ) -> Result<Self, McpError> {
         if let Some(url) = &entry.url {
             let bearer = resolve_bearer(&entry.auth).await?;
-            let client = super::http_mcp_client::HttpMcpClient::connect(url, bearer).await?;
-            Ok(McpClient::Http(client))
+            let refresh = build_refresh_ctx(&entry.auth).await;
+            let client =
+                super::http_mcp_client::HttpMcpClient::connect(url, bearer, refresh).await?;
+            Ok(McpClient::Http(Box::new(client)))
         } else {
             let client = StdioMcpClient::spawn(entry, policy, proxy).await?;
             Ok(McpClient::Stdio(Box::new(client)))
@@ -90,17 +92,30 @@ impl McpClient {
 }
 
 /// Resolve a bearer token from the entry's auth config.
-/// Returns `Ok(Some(token))` for Bearer auth, `Ok(None)` for OAuth (Phase 2)
-/// or when no auth is configured.
+/// Returns `Ok(Some(token))` for Bearer or OAuth auth, `Ok(None)` when no
+/// auth is configured or the token cannot be resolved.
 async fn resolve_bearer(auth: &Option<McpAuth>) -> Result<Option<String>, McpError> {
     match auth {
         Some(McpAuth::Bearer { token }) => Ok(token.resolve_to_string().await),
-        Some(McpAuth::Oauth(_)) => {
-            // Phase 2 (Task 10): resolve OAuth access token
-            Ok(None)
-        }
+        Some(McpAuth::Oauth(o)) => Ok(o.access_token.resolve_to_string().await),
         None => Ok(None),
     }
+}
+
+/// Build a `RefreshCtx` when the entry carries OAuth auth with a resolvable
+/// refresh token. Returns `None` for Bearer auth, no-auth, or when the
+/// refresh token cannot be resolved.
+async fn build_refresh_ctx(auth: &Option<McpAuth>) -> Option<super::http_mcp_client::RefreshCtx> {
+    let McpAuth::Oauth(o) = auth.as_ref()? else {
+        return None;
+    };
+    let refresh_token = o.refresh_token.as_ref()?.resolve_to_string().await?;
+    Some(super::http_mcp_client::RefreshCtx {
+        token_endpoint: o.token_endpoint.clone(),
+        client_id: o.client_id.clone(),
+        refresh_token,
+        access_token_ref: o.access_token.clone(),
+    })
 }
 
 #[derive(Debug)]
