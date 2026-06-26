@@ -921,11 +921,9 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str
     let cwd = std::env::current_dir()?;
     let targets = default_targets();
 
-    // Build project-aware query when --project is set
-    let project_name = cwd
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
+    // Build project-aware query when --project is set. Resolve git worktrees to
+    // the main repo name so sync scopes per-repo, consistent with the index.
+    let project_name = crate::codebase::scanner::project_name_from_path(&cwd);
 
     let sync_query = if project_aware {
         build_project_sync_query(&cwd, &project_name)

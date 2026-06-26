@@ -179,10 +179,38 @@ fn relative_path(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// Project name = the codebase-index key (`<name>.lance`). For a git worktree
+/// this resolves to the MAIN working tree's directory name, so every
+/// worktree/branch of one repo shares a single index instead of re-indexing the
+/// whole tree per worktree. Falls back to the path's own basename when it isn't
+/// a git repo (or git is unavailable).
 pub fn project_name_from_path(path: &Path) -> String {
-    path.file_name()
+    git_main_repo_root(path)
+        .as_deref()
+        .unwrap_or(path)
+        .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Main working-tree root for any path inside a git repo (including linked
+/// worktrees), via `git --git-common-dir`. `None` when `path` isn't in a repo or
+/// git is unavailable — callers fall back to the path's own basename.
+fn git_main_repo_root(path: &Path) -> Option<PathBuf> {
+    // ponytail: shell out — avoids threading a git2 Repository through this pure
+    // path helper; one subprocess per CLI invocation is negligible.
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    // `--git-common-dir` points at `<main-repo>/.git`; its parent is the root.
+    let common = PathBuf::from(std::str::from_utf8(&out.stdout).ok()?.trim());
+    common.parent().map(Path::to_path_buf)
 }
 
 pub fn expand_tilde(path: &str) -> PathBuf {
@@ -216,7 +244,37 @@ mod tests {
 
     #[test]
     fn test_project_name() {
+        // Non-git path falls back to its own basename.
         let path = PathBuf::from("/home/user/Projects/my-app");
         assert_eq!(project_name_from_path(&path), "my-app");
+    }
+
+    #[test]
+    fn worktree_shares_main_repo_name() {
+        use std::process::Command;
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("myrepo");
+        std::fs::create_dir(&repo).unwrap();
+
+        let git = |args: &[&str]| {
+            let ok = Command::new("git")
+                .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?} failed");
+        };
+        git(&["init", "-q"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "init"]);
+        let wt = tmp.path().join("wt-foo");
+        git(&["worktree", "add", "-q", wt.to_str().unwrap()]);
+
+        // Both the main tree and the linked worktree key to the repo's name —
+        // one shared index instead of one per worktree.
+        assert_eq!(project_name_from_path(&repo), "myrepo");
+        assert_eq!(project_name_from_path(&wt), "myrepo");
     }
 }
