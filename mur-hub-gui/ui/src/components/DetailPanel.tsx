@@ -23,6 +23,7 @@ import { ModelCombobox } from "./ModelCombobox";
 import { ModelLibrary } from "./ModelLibrary";
 import { MobileTab } from "./MobileTab";
 import { MemoryTab } from "./MemoryTab";
+import { McpDiscoverModal } from "./McpDiscoverModal";
 import { useT } from "../i18n";
 import type { TranslationKey } from "../i18n/types";
 import { CATEGORY_COLORS, TAB_ICONS, avatarInitials, avatarPreset, familyOf, runtimePill } from "../utils";
@@ -793,6 +794,13 @@ function SkillsTab({
   const hasInstalled = detail.installed_skills.length > 0;
   const hasLegacy = detail.skills.length > 0;
 
+  function revealSkill(name: string) {
+    invoke("reveal_in_finder", {
+      path: `skills/${name}`,
+      agent: detail.agent_name,
+    }).catch((e) => setError(String(e)));
+  }
+
   async function installSkill() {
     setError(null);
     setInstalledId(null);
@@ -910,7 +918,18 @@ function SkillsTab({
                     onChange={(e) => toggleSkill(s.name, e.target.checked)}
                   />
                 </label>
-                <div className="item-card-name">{s.name}</div>
+                <div className="item-card-name">
+                  {s.name}
+                  <button
+                    className="btn btn--sm btn--secondary"
+                    title={t("detail.reveal")}
+                    aria-label={t("detail.reveal")}
+                    onClick={() => revealSkill(s.name)}
+                    style={{ marginLeft: 6 }}
+                  >
+                    📁
+                  </button>
+                </div>
                 {s.addon_id && detail.addons.find(a => a.id === s.addon_id)?.enabled === false && (
                   <span className="badge-sm">{t("detail.pluginOff")}</span>
                 )}
@@ -983,6 +1002,11 @@ function McpTab({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [justAdded, setJustAdded] = useState(false);
+  const [showDiscover, setShowDiscover] = useState(false);
+
+  function reveal(path: string, agent?: string) {
+    invoke("reveal_in_finder", { path, agent }).catch((e) => setError(String(e)));
+  }
 
   async function browseCommand() {
     const picked = await open({ multiple: false }).catch(() => null);
@@ -1049,13 +1073,21 @@ function McpTab({
   return (
     <div className="tab-form">
       {!showForm && (
-        <button
-          className="btn btn--sm btn--primary"
-          onClick={() => setShowForm(true)}
-          style={{ alignSelf: "flex-start" }}
-        >
-          {t("detail.addMcp")}
-        </button>
+        <div style={{ display: "flex", gap: 8, alignSelf: "flex-start" }}>
+          <button className="btn btn--sm btn--primary" onClick={() => setShowForm(true)}>
+            {t("detail.addMcp")}
+          </button>
+          <button className="btn btn--sm btn--secondary" onClick={() => setShowDiscover(true)}>
+            {t("detail.discoverMcp")}
+          </button>
+        </div>
+      )}
+      {showDiscover && (
+        <McpDiscoverModal
+          agentName={detail.agent_name}
+          onClose={() => setShowDiscover(false)}
+          onImported={onSaved}
+        />
       )}
       {justAdded && (
         <p className="field-muted" style={{ fontSize: 12 }}>
@@ -1151,6 +1183,17 @@ function McpTab({
                   <span className="badge-sm">{t("detail.pluginOff")}</span>
                 )}
                 <code className="item-card-code">{m.command}</code>
+                {m.command.includes("/") && (
+                  <button
+                    className="btn btn--sm btn--secondary"
+                    title={t("detail.reveal")}
+                    aria-label={t("detail.reveal")}
+                    onClick={() => reveal(m.command)}
+                    style={{ marginLeft: 6 }}
+                  >
+                    📁
+                  </button>
+                )}
                 {m.args.length > 0 && (
                   <div className="item-card-args">
                     {m.args.map((a, i) => (
