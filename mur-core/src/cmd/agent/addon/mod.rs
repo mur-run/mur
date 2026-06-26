@@ -166,6 +166,8 @@ mod tests {
                 installed_at: None,
                 timeout_secs: None,
                 network: None,
+                url: None,
+                auth: None,
             });
         }
 

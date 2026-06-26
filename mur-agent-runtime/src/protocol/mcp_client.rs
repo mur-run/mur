@@ -1,14 +1,18 @@
-//! MCP client — subprocess stdio JSON-RPC 2.0.
+//! MCP client — stdio (subprocess) and HTTP (Streamable HTTP) transports.
+//!
+//! `McpClient` is a dispatch enum over `StdioMcpClient` and `HttpMcpClient`.
+//! Use `McpClient::connect` to pick the right variant based on the server entry.
 
 use crate::sandbox::SandboxPolicy;
-use mur_common::agent::McpServerEntry;
+use mur_common::agent::{McpAuth, McpServerEntry};
 use serde_json::{Value, json};
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::Mutex;
 
-pub struct McpClient {
+/// Stdio (subprocess) MCP transport.
+pub struct StdioMcpClient {
     /// Raw std child — used for kill/wait in `shutdown`.
     child: Mutex<std::process::Child>,
     stdin: Mutex<ChildStdin>,
@@ -18,6 +22,85 @@ pub struct McpClient {
     stderr: Mutex<Option<std::process::ChildStderr>>,
     next_id: Mutex<u64>,
     pub server_name: String,
+}
+
+/// Dispatch enum over stdio and HTTP MCP transports.
+///
+/// Use [`McpClient::connect`] to construct; callers hold `McpClient` and call
+/// the same `initialize` / `list_tools` / `call_tool` / `shutdown` surface
+/// regardless of transport.
+pub enum McpClient {
+    Stdio(Box<StdioMcpClient>),
+    Http(super::http_mcp_client::HttpMcpClient),
+}
+
+impl McpClient {
+    /// Connect to an MCP server, choosing the transport from the entry:
+    /// - `entry.url` is `Some` → Streamable HTTP transport (`HttpMcpClient`)
+    /// - `entry.url` is `None` → stdio subprocess (`StdioMcpClient`)
+    pub async fn connect(
+        entry: &McpServerEntry,
+        policy: &SandboxPolicy,
+        proxy: Option<&crate::sandbox::egress_proxy::EgressProxyHandle>,
+    ) -> Result<Self, McpError> {
+        if let Some(url) = &entry.url {
+            let bearer = resolve_bearer(&entry.auth).await?;
+            let client = super::http_mcp_client::HttpMcpClient::connect(url, bearer).await?;
+            Ok(McpClient::Http(client))
+        } else {
+            let client = StdioMcpClient::spawn(entry, policy, proxy).await?;
+            Ok(McpClient::Stdio(Box::new(client)))
+        }
+    }
+
+    pub async fn take_stderr(&self) -> Option<std::process::ChildStderr> {
+        match self {
+            McpClient::Stdio(c) => c.take_stderr().await,
+            McpClient::Http(_) => None,
+        }
+    }
+
+    pub async fn initialize(&mut self) -> Result<InitializeInfo, McpError> {
+        match self {
+            McpClient::Stdio(c) => c.initialize().await,
+            McpClient::Http(c) => c.initialize().await,
+        }
+    }
+
+    pub async fn list_tools(&self) -> Result<Vec<ToolInfo>, McpError> {
+        match self {
+            McpClient::Stdio(c) => c.list_tools().await,
+            McpClient::Http(c) => c.list_tools().await,
+        }
+    }
+
+    pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<Value, McpError> {
+        match self {
+            McpClient::Stdio(c) => c.call_tool(name, arguments).await,
+            McpClient::Http(c) => c.call_tool(name, arguments).await,
+        }
+    }
+
+    pub async fn shutdown(self) {
+        match self {
+            McpClient::Stdio(c) => c.shutdown().await,
+            McpClient::Http(c) => c.shutdown().await,
+        }
+    }
+}
+
+/// Resolve a bearer token from the entry's auth config.
+/// Returns `Ok(Some(token))` for Bearer auth, `Ok(None)` for OAuth (Phase 2)
+/// or when no auth is configured.
+async fn resolve_bearer(auth: &Option<McpAuth>) -> Result<Option<String>, McpError> {
+    match auth {
+        Some(McpAuth::Bearer { token }) => Ok(token.resolve_to_string().await),
+        Some(McpAuth::Oauth(_)) => {
+            // Phase 2 (Task 10): resolve OAuth access token
+            Ok(None)
+        }
+        None => Ok(None),
+    }
 }
 
 #[derive(Debug)]
@@ -44,9 +127,60 @@ pub enum McpError {
     StreamClosed,
     #[error("mcp error: {0}")]
     Server(String),
+    /// HTTP / network transport failure (Streamable HTTP transport).
+    #[error("transport: {0}")]
+    Transport(String),
+    /// JSON-RPC error object returned by the server.
+    #[error("rpc error: {0}")]
+    Rpc(String),
+    /// Unexpected response shape from the server.
+    #[error("protocol: {0}")]
+    Protocol(String),
+    /// Server returned HTTP 401 Unauthorized.
+    #[error("unauthorized")]
+    Unauthorized,
 }
 
-impl McpClient {
+impl InitializeInfo {
+    /// Build from a JSON-RPC `result` value returned by the `initialize` method.
+    /// Returns `Err(reason)` if the shape is completely wrong (empty strings are
+    /// tolerated as the stdio path does via `unwrap_or_default`).
+    pub fn from_result(result: &Value) -> Result<Self, String> {
+        Ok(Self {
+            server_name: result["serverInfo"]["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            server_version: result["serverInfo"]["version"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            protocol_version: result["protocolVersion"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+        })
+    }
+}
+
+impl ToolInfo {
+    /// Build a list of `ToolInfo` from a JSON-RPC `result` value returned by
+    /// the `tools/list` method. Missing or malformed `tools` array yields an
+    /// empty list (mirrors the stdio path which uses `unwrap_or_default`).
+    pub fn list_from_result(result: &Value) -> Result<Vec<Self>, String> {
+        let tools = result["tools"].as_array().cloned().unwrap_or_default();
+        Ok(tools
+            .into_iter()
+            .map(|t| ToolInfo {
+                name: t["name"].as_str().unwrap_or_default().to_string(),
+                description: t["description"].as_str().unwrap_or_default().to_string(),
+                input_schema: t["inputSchema"].clone(),
+            })
+            .collect())
+    }
+}
+
+impl StdioMcpClient {
     /// Spawn an MCP server subprocess under the given sandbox policy.
     ///
     /// Uses `sandbox::child::spawn_sandboxed` so that on Linux and macOS the
@@ -150,33 +284,12 @@ impl McpClient {
         // reject every subsequent request (`tools/list`, `tools/call`) with
         // "Not initialized". Universal — required by all MCP servers, not just ours.
         self.notify("notifications/initialized", json!({})).await?;
-        Ok(InitializeInfo {
-            server_name: res["serverInfo"]["name"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
-            server_version: res["serverInfo"]["version"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
-            protocol_version: res["protocolVersion"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
-        })
+        InitializeInfo::from_result(&res).map_err(McpError::Server)
     }
 
     pub async fn list_tools(&self) -> Result<Vec<ToolInfo>, McpError> {
         let res = self.request("tools/list", json!({})).await?;
-        let tools = res["tools"].as_array().cloned().unwrap_or_default();
-        Ok(tools
-            .into_iter()
-            .map(|t| ToolInfo {
-                name: t["name"].as_str().unwrap_or_default().to_string(),
-                description: t["description"].as_str().unwrap_or_default().to_string(),
-                input_schema: t["inputSchema"].clone(),
-            })
-            .collect())
+        ToolInfo::list_from_result(&res).map_err(McpError::Server)
     }
 
     pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<Value, McpError> {
@@ -263,5 +376,22 @@ mod tests {
             allow_hosts: vec![],
         });
         assert!(proxy_env_for(&inherit, Some(&handle)).is_empty());
+    }
+
+    /// `McpClient::connect` picks the HTTP variant when the entry has a `url`.
+    #[tokio::test]
+    async fn connect_picks_http_for_url_entry() {
+        let entry = McpServerEntry {
+            name: "remote".into(),
+            url: Some("https://example.com/mcp".into()),
+            ..Default::default()
+        };
+        let client = McpClient::connect(&entry, &SandboxPolicy::default(), None)
+            .await
+            .expect("connect should succeed for a url entry");
+        assert!(
+            matches!(client, McpClient::Http(_)),
+            "expected Http variant for url entry"
+        );
     }
 }
