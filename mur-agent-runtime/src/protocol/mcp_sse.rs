@@ -5,6 +5,9 @@ use serde_json::Value;
 /// JSON object and a `text/event-stream` body (one or more `data:` lines per
 /// event, events separated by blank lines). Non-JSON `data:` lines are skipped.
 pub fn parse_sse_events(body: &str) -> Vec<Value> {
+    // Normalize CRLF so SSE event boundaries (a blank line) split correctly
+    // regardless of the server's line endings.
+    let body = body.replace("\r\n", "\n");
     let trimmed = body.trim_start();
     if (trimmed.starts_with('{') || trimmed.starts_with('['))
         && let Ok(v) = serde_json::from_str::<Value>(trimmed)
@@ -51,6 +54,22 @@ mod tests {
         assert!(r.get("tools").is_some());
         assert!(jsonrpc_result_for(&events, 99).is_none());
     }
+    #[test]
+    fn parses_crlf_sse_with_interleaved_events() {
+        // A spec-compliant server may use CRLF line endings and interleave a
+        // notification with the response. Event boundaries must still split.
+        let body = "event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[]}}\r\n\r\n\
+                    event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/log\",\"params\":{}}\r\n\r\n";
+        let events = parse_sse_events(body);
+        assert_eq!(events.len(), 2);
+        assert!(
+            jsonrpc_result_for(&events, 1)
+                .unwrap()
+                .get("tools")
+                .is_some()
+        );
+    }
+
     #[test]
     fn plain_json_body_is_one_event() {
         let body = "{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"ok\":true}}";
