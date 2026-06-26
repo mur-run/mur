@@ -601,6 +601,8 @@ pub fn run() {
             mcp_skills::agent_addon_import,
             mcp_skills::agent_addon_toggle,
             mcp_skills::agent_addon_remove,
+            mcp_skills::mcp_discover,
+            mcp_skills::reveal_in_finder,
             mobile::mobile_events_read,
             notif::agent_get_notif_config,
             notif::agent_set_notif_config,

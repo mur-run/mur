@@ -796,6 +796,9 @@ pub enum AgentMcpAction {
         #[arg(long)]
         off: bool,
     },
+    /// Scan other installed tools (Claude Desktop/Code, Cursor, VS Code,
+    /// Windsurf, Antigravity, Gemini CLI, Codex) for MCP servers you can import.
+    Discover,
 }
 
 #[derive(Subcommand)]

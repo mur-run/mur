@@ -140,3 +140,109 @@ pub fn agent_addon_remove(name: String, addon_id: String) -> Result<AgentDetail,
         .map_err(|e| format!("{e:#}"))?;
     get_agent_detail(name)
 }
+
+// ── Discovery (#2) + reveal-in-Finder (#3) ──────────────────────────────────
+
+use mur_core::cmd::agent::mcp_discover::{DiscoveredServer, default_clients, discover};
+use std::path::{Path, PathBuf};
+
+/// Scan other installed tools (Claude Desktop/Code, Cursor, VS Code, Windsurf,
+/// Antigravity, Gemini CLI, Codex) for MCP servers the user can import. The
+/// frontend imports a chosen one via the existing `agent_mcp_add` command.
+#[tauri::command]
+pub fn mcp_discover() -> Result<Vec<DiscoveredServer>, String> {
+    let home = dirs::home_dir().ok_or_else(|| "cannot resolve home directory".to_string())?;
+    Ok(discover(&default_clients(), &home))
+}
+
+/// Resolve the path to reveal: an absolute path is used as-is; a relative path
+/// is taken under the agent home (`<mur_home>/agents/<agent>/<rel>`) when an
+/// agent is given, else under `mur_home` itself.
+fn resolve_reveal_target(path: &str, agent: Option<&str>, mur_home: &Path) -> PathBuf {
+    let p = Path::new(path);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else if let Some(a) = agent {
+        mur_home.join("agents").join(a).join(path)
+    } else {
+        mur_home.join(path)
+    }
+}
+
+/// Reveal a skill / MCP / discovered-config item on disk. A directory is opened;
+/// a file is revealed (selected) in the OS file manager.
+#[tauri::command]
+pub fn reveal_in_finder(path: String, agent: Option<String>) -> Result<(), String> {
+    let target = resolve_reveal_target(&path, agent.as_deref(), &crate::mur_home_path());
+    if !target.exists() {
+        return Err(format!("path not found: {}", target.display()));
+    }
+    reveal_os(&target).map_err(|e| e.to_string())
+}
+
+fn reveal_os(path: &Path) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = std::process::Command::new("open");
+        if path.is_dir() {
+            cmd.arg(path);
+        } else {
+            cmd.arg("-R").arg(path);
+        }
+        cmd.spawn().map(|_| ())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = std::process::Command::new("explorer");
+        if path.is_dir() {
+            cmd.arg(path);
+        } else {
+            cmd.arg("/select,").arg(path);
+        }
+        cmd.spawn().map(|_| ())
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let dir = if path.is_dir() {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        };
+        std::process::Command::new("xdg-open")
+            .arg(dir)
+            .spawn()
+            .map(|_| ())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reveal_target_absolute_is_used_as_is() {
+        let home = Path::new("/Users/x/.mur");
+        assert_eq!(
+            resolve_reveal_target("/abs/p", Some("a"), home),
+            PathBuf::from("/abs/p")
+        );
+    }
+
+    #[test]
+    fn reveal_target_relative_resolves_under_agent() {
+        let home = Path::new("/Users/x/.mur");
+        assert_eq!(
+            resolve_reveal_target("skills/ctx", Some("rustsmith"), home),
+            PathBuf::from("/Users/x/.mur/agents/rustsmith/skills/ctx")
+        );
+    }
+
+    #[test]
+    fn reveal_target_relative_without_agent_under_home() {
+        let home = Path::new("/Users/x/.mur");
+        assert_eq!(
+            resolve_reveal_target("models.yaml", None, home),
+            PathBuf::from("/Users/x/.mur/models.yaml")
+        );
+    }
+}
