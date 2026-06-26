@@ -44,8 +44,8 @@ pub fn as_metadata_url(issuer: &str) -> String {
 
 /// Extract the scheme+host+port from a URL — no `url` crate dependency.
 ///
-/// // ponytail: string-split is sufficient; avoid pulling a URL crate for one fn.
-fn origin_of(url: &str) -> &str {
+/// // ponytail: one origin parser, shared.
+pub(crate) fn origin_of(url: &str) -> &str {
     // Strip trailing slash, then find end of authority (third slash after scheme).
     let url = url.trim_end_matches('/');
     // scheme://host[:port][/path] — find the '//' then the next '/'
