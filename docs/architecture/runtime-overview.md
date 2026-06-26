@@ -333,6 +333,44 @@ This sets `McpServerEntry.network` (`mode: restricted|off`, `allow_hosts`). When
 - **Threat model — ADVISORY.** This constrains a *cooperating* tool that honors `HTTP_PROXY`. A tool that ignores it can still reach the network directly, because the OS sandbox filters by port, not host. Airtight containment requires Linux network-namespace isolation + a macOS pre-fork launcher (the `sandbox/child.rs` macOS limitation) — out of scope. Use this for scoping/accident-prevention/audit of trusted tools, not to contain a malicious server.
 - **Opt-in:** a server with no `network` policy is spawned exactly as before; with no policied server, no proxy starts.
 
+### Remote MCP (Streamable HTTP + OAuth 2.1)
+
+MUR agents support remote (hosted) MCP servers over the **MCP Streamable HTTP** transport in addition to local stdio subprocesses.
+
+**Registering a remote server:**
+
+```bash
+# Plain URL (no auth)
+mur agent mcp add-remote <agent> <name> <url>
+
+# Static bearer token resolved from an env var
+mur agent mcp add-remote <agent> <name> <url> --bearer-env MY_API_KEY
+
+# Static bearer token pulled from the OS keychain
+mur agent mcp add-remote <agent> <name> <url> --bearer-keychain "my-service/my-account"
+
+# Install from the MCP Registry (adds a remote-only entry; hints to run `mcp login` if OAuth is required)
+mur agent mcp registry-add <agent> <server>
+```
+
+**OAuth 2.1 authorization (`mur agent mcp login <agent> <name>`):**
+
+Runs the full RFC-compliant browser flow for servers that require OAuth:
+
+1. **Auth-server discovery** — follows RFC 9728 (protected-resource metadata) to locate the authorization server, then RFC 8414 (OAuth 2.0 authorization-server metadata) to read its endpoints.
+2. **Dynamic client registration** — registers an ephemeral client via RFC 7591 (DCR).
+3. **Authorization-code + PKCE** — generates a `code_verifier`/`code_challenge` (S256), opens the browser at the authorization URL, and captures the redirect on a loopback `127.0.0.1` callback listener. Includes a CSRF `state` check.
+4. **Token storage** — access and refresh tokens are stored in the OS keychain; the agent profile holds only `SecretRef` references (never raw tokens).
+
+**Transport internals (`HttpMcpClient`):**
+
+- POSTs JSON-RPC to the single endpoint URL; parses responses as JSON or SSE (Server-Sent Events).
+- Tracks `Mcp-Session-Id` across requests; sends `MCP-Protocol-Version: 2025-06-18`.
+- Attaches the bearer or OAuth access token on every request.
+- On a `401`, refreshes the OAuth access token once (persisting the new token to the keychain) then retries the original request — callers see a transparent retry.
+
+**Key types:** `McpClient` enum dispatches between `StdioMcpClient` and `HttpMcpClient`; `McpAuth::{Bearer, Oauth}` carries auth config; `OauthAuth` holds the `SecretRef` pair (access + refresh); `McpError::{Transport, Rpc, Protocol, Unauthorized}` propagates errors.
+
 ### Cross-Agent Observability (M7a)
 
 Read-only aggregation of peer agent skill stats and per-agent fitness scoring. New CLI surface:
