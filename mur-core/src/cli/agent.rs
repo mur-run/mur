@@ -783,6 +783,9 @@ pub enum AgentMcpAction {
     /// its pin stay in the profile; it simply stops spawning. Applies on the
     /// agent's next restart.
     Disable { name: String, server_id: String },
+    /// Scan other installed tools (Claude Desktop/Code, Cursor, VS Code,
+    /// Windsurf, Antigravity, Gemini CLI, Codex) for MCP servers you can import.
+    Discover,
 }
 
 #[derive(Subcommand)]
