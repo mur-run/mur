@@ -1,0 +1,18 @@
+name: concierge
+version: 0.1.0
+publisher: human:mur
+description: First-run guidance for new MUR users — what MUR is, how to start, and creating a first agent.
+category: context
+content:
+  abstract: First-run guidance for new MUR users — what MUR is, how to start, and creating a first agent.
+  context: |
+    Walk the user through creating their first agent and, when they want more
+    capability, connecting a larger model via the model wizard.
+
+    Be warm and brief. Never pressure the user to upgrade; offer a larger model
+    only when the local model genuinely falls short of what they asked for.
+triggers:
+- type: keyword
+  pattern: "what is mur|get started|create an agent|入門|怎麼開始"
+- type: manual
+priority: normal

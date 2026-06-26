@@ -374,6 +374,29 @@ mod tests {
     }
 
     #[test]
+    fn bundled_template_concierge_skill_is_loadable() {
+        // Regression guard: the REAL bundled template must seed a concierge skill
+        // in the loader's directory layout (skills/<name>/skill.yaml) with a
+        // valid, current-schema manifest — not the old flat skills/concierge.yaml
+        // (which the loader silently skipped, so the seeded concierge had no
+        // loadable skills).
+        use mur_common::skill::{read_from_dir, validate};
+        let tpl = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/mur-agent-template");
+        assert!(
+            !tpl.join("skills/concierge.yaml").exists(),
+            "legacy flat concierge.yaml must be gone"
+        );
+        let profile = std::fs::read_to_string(tpl.join("profile.yaml")).unwrap();
+        assert!(
+            profile.contains("- skills/concierge"),
+            "profile must reference the dir-layout skill"
+        );
+        let skill = read_from_dir(&tpl.join("skills/concierge")).expect("concierge skill loads");
+        validate(&skill).expect("concierge skill validates");
+        assert_eq!(skill.name, "concierge");
+    }
+
+    #[test]
     fn missing_template_errors_without_creating_dst() {
         let home = TempDir::new().unwrap();
         let tpl = TempDir::new().unwrap(); // empty: no profile.yaml

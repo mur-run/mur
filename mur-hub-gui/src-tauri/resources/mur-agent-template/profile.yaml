@@ -18,6 +18,8 @@ model:
     temperature: 0.7
     top_p: 0.8
     max_tokens: 1024
+skills:
+  - skills/concierge
 transport:
   stdio: true
   socket:
