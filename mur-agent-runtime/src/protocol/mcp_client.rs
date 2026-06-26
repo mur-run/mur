@@ -228,7 +228,11 @@ mod tests {
 
     #[test]
     fn proxy_env_only_for_restricted_servers() {
-        let base = McpServerEntry { name: "x".into(), command: "npx".into(), ..Default::default() };
+        let base = McpServerEntry {
+            name: "x".into(),
+            command: "npx".into(),
+            ..Default::default()
+        };
 
         // No policy → no env (byte-for-byte today).
         assert!(proxy_env_for(&base, None).is_empty());
@@ -245,14 +249,19 @@ mod tests {
         let handle = crate::sandbox::egress_proxy::EgressProxyHandle::for_test(
             "127.0.0.1:9".parse().unwrap(),
         );
-        let env: HashMap<_, _> = proxy_env_for(&restricted, Some(&handle)).into_iter().collect();
+        let env: HashMap<_, _> = proxy_env_for(&restricted, Some(&handle))
+            .into_iter()
+            .collect();
         assert!(env.get("HTTP_PROXY").unwrap().contains("@127.0.0.1:9"));
         assert!(env.get("HTTPS_PROXY").unwrap().contains("@127.0.0.1:9"));
         assert!(env.get("NO_PROXY").unwrap().contains("127.0.0.1"));
 
         // Inherit/None mode → no env even with a proxy.
         let mut inherit = base.clone();
-        inherit.network = Some(McpServerNetwork { mode: McpNetMode::Inherit, allow_hosts: vec![] });
+        inherit.network = Some(McpServerNetwork {
+            mode: McpNetMode::Inherit,
+            allow_hosts: vec![],
+        });
         assert!(proxy_env_for(&inherit, Some(&handle)).is_empty());
     }
 }

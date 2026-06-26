@@ -90,7 +90,9 @@ async fn handle_conn(mut client: TcpStream, registry: Registry) -> std::io::Resu
         .strip_prefix("CONNECT ")
         .and_then(|r| r.split(' ').next())
     else {
-        client.write_all(b"HTTP/1.1 501 Not Implemented\r\n\r\n").await?;
+        client
+            .write_all(b"HTTP/1.1 501 Not Implemented\r\n\r\n")
+            .await?;
         return Ok(());
     };
     let token = lines
@@ -152,8 +154,7 @@ mod tests {
     async fn connect_via(proxy: SocketAddr, token: &str, target: &str) -> String {
         let mut s = TcpStream::connect(proxy).await.unwrap();
         let cred = base64::engine::general_purpose::STANDARD.encode(format!("{token}:x"));
-        let req =
-            format!("CONNECT {target} HTTP/1.1\r\nProxy-Authorization: Basic {cred}\r\n\r\n");
+        let req = format!("CONNECT {target} HTTP/1.1\r\nProxy-Authorization: Basic {cred}\r\n\r\n");
         s.write_all(req.as_bytes()).await.unwrap();
         let mut buf = [0u8; 64];
         let n = s.read(&mut buf).await.unwrap();
@@ -168,15 +169,24 @@ mod tests {
         // Allowlist the upstream's loopback host → CONNECT establishes.
         let token = proxy.register(vec!["127.0.0.1".to_string()]);
         let ok = connect_via(proxy.addr, &token, &up.to_string()).await;
-        assert!(ok.starts_with("HTTP/1.1 200"), "allowed CONNECT establishes: {ok}");
+        assert!(
+            ok.starts_with("HTTP/1.1 200"),
+            "allowed CONNECT establishes: {ok}"
+        );
 
         // Token whose allowlist excludes the target → 403.
         let token2 = proxy.register(vec!["example.com".to_string()]);
         let denied = connect_via(proxy.addr, &token2, &up.to_string()).await;
-        assert!(denied.starts_with("HTTP/1.1 403"), "denied CONNECT is 403: {denied}");
+        assert!(
+            denied.starts_with("HTTP/1.1 403"),
+            "denied CONNECT is 403: {denied}"
+        );
 
         // Unknown token → 403.
         let bad = connect_via(proxy.addr, "not-a-real-token", &up.to_string()).await;
-        assert!(bad.starts_with("HTTP/1.1 403"), "unknown token is 403: {bad}");
+        assert!(
+            bad.starts_with("HTTP/1.1 403"),
+            "unknown token is 403: {bad}"
+        );
     }
 }

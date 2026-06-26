@@ -270,7 +270,9 @@ pub async fn build_provider_runner(
         match crate::sandbox::egress_proxy::start_egress_proxy().await {
             Ok(h) => Some(h),
             Err(e) => {
-                tracing::warn!("egress proxy failed to start; Restricted MCP servers will be unscoped: {e}");
+                tracing::warn!(
+                    "egress proxy failed to start; Restricted MCP servers will be unscoped: {e}"
+                );
                 None
             }
         }
