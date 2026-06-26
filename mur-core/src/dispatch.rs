@@ -1325,6 +1325,12 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 off,
             } => cmd::agent::cmd_mcp_set_network(&name, &server_id, allow_hosts, off)?,
             AgentMcpAction::Discover => cmd::agent::mcp_discover::cmd_mcp_discover()?,
+            AgentMcpAction::Search { query } => {
+                cmd::agent::mcp_registry::cmd_mcp_search(&query).await?
+            }
+            AgentMcpAction::RegistryAdd { name, server } => {
+                cmd::agent::mcp_registry::cmd_mcp_registry_add(&name, &server).await?
+            }
         },
         AgentAction::Skill { action } => match action {
             AgentSkillAction::List { name } => cmd::agent::cmd_skill_list(&name)?,
