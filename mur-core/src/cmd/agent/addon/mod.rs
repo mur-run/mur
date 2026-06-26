@@ -164,6 +164,7 @@ mod tests {
                 publisher: None,
                 installed_at: None,
                 timeout_secs: None,
+                network: None,
             });
         }
 

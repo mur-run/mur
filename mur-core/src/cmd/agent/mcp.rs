@@ -2,7 +2,7 @@
 //! an agent profile.
 
 use anyhow::{Context, Result, bail};
-use mur_common::agent::McpServerEntry;
+use mur_common::agent::{McpNetMode, McpServerEntry, McpServerNetwork};
 
 use super::{load_profile_for_edit, save_profile};
 
@@ -132,6 +132,7 @@ pub fn cmd_mcp_add(
         publisher,
         installed_at: Some(chrono::Utc::now()),
         timeout_secs: None,
+        network: None,
     });
     // Sync spawn allowlist so the supervisor is permitted to launch this MCP.
     if !profile
@@ -206,4 +207,63 @@ pub fn cmd_mcp_set_enabled(name: &str, server_id: &str, enabled: bool) -> Result
         if enabled { "Enabled" } else { "Disabled" }
     );
     Ok(())
+}
+
+/// Pure mapping from CLI args to a per-server network policy:
+/// `off` ⇒ `Off`; a non-empty allowlist ⇒ `Restricted`; empty + !off ⇒ clear
+/// to `None` (inherit the agent-level policy).
+fn network_policy_from_args(allow_hosts: Vec<String>, off: bool) -> Option<McpServerNetwork> {
+    if off {
+        Some(McpServerNetwork {
+            mode: McpNetMode::Off,
+            allow_hosts: vec![],
+        })
+    } else if allow_hosts.is_empty() {
+        None
+    } else {
+        Some(McpServerNetwork {
+            mode: McpNetMode::Restricted,
+            allow_hosts,
+        })
+    }
+}
+
+/// Set (or clear) a per-server egress policy on `server_id`. Restart the agent
+/// to apply (the sandbox + proxy are wired at supervisor startup).
+pub fn cmd_mcp_set_network(
+    agent: &str,
+    server_id: &str,
+    allow_hosts: Vec<String>,
+    off: bool,
+) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(agent)?;
+    let srv = profile
+        .mcp_servers
+        .iter_mut()
+        .find(|s| s.name == server_id)
+        .ok_or_else(|| anyhow::anyhow!("MCP server '{server_id}' not found on '{agent}'"))?;
+    srv.network = network_policy_from_args(allow_hosts, off);
+    save_profile(&path, &mut profile)?;
+    println!("Updated egress policy for '{server_id}'. Restart the agent to apply.");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn network_policy_from_args_maps_modes() {
+        // Empty + !off → clear (inherit agent policy).
+        assert_eq!(network_policy_from_args(vec![], false), None);
+        // off → Off, regardless of hosts.
+        assert_eq!(
+            network_policy_from_args(vec![], true).unwrap().mode,
+            McpNetMode::Off
+        );
+        // Non-empty allowlist → Restricted with those hosts.
+        let r = network_policy_from_args(vec!["example.com".into()], false).unwrap();
+        assert_eq!(r.mode, McpNetMode::Restricted);
+        assert_eq!(r.allow_hosts, vec!["example.com"]);
+    }
 }
