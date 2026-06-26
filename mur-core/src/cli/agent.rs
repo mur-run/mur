@@ -811,6 +811,10 @@ pub enum AgentAddonAction {
         /// `owner/repo` (GitHub), an https/ssh git URL, or any `*.git`. Git
         /// sources are shallow-cloned into `~/.mur/cache/addons/` then imported.
         plugin_dir: String,
+        /// When the source is a marketplace (`.claude-plugin/marketplace.json`
+        /// indexing many plugins), the plugin to install. Omit to list them.
+        #[arg(long)]
+        plugin: Option<String>,
         /// Override security-scan blocks (review the skill first)
         #[arg(long)]
         force: bool,

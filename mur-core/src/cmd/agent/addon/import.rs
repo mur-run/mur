@@ -3,7 +3,7 @@
 //! fail-closed (disabled) `AddonRef`.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
@@ -40,7 +40,16 @@ struct PendingMcp {
     shellish_warn: bool,
 }
 
-pub fn cmd_addon_import(name: &str, plugin_dir: &str, force: bool) -> Result<()> {
+/// Import a Claude plugin into `name`. `plugin_dir` is a local dir or a git
+/// source (owner/repo, url). `plugin` selects one plugin when the source is a
+/// marketplace (`.claude-plugin/marketplace.json` indexing many plugins).
+pub fn cmd_addon_import(
+    name: &str,
+    plugin_dir: &str,
+    plugin: Option<&str>,
+    force: bool,
+) -> Result<()> {
+    let requested = plugin_dir; // original user input, for messages
     let (profile_path, mut profile) = load_profile_for_edit(name)?;
     let mur_home = crate::cmd::resolve_mur_home()?;
     let agent_skills_dir = mur_home.join("agents").join(name).join("skills");
@@ -69,6 +78,9 @@ pub fn cmd_addon_import(name: &str, plugin_dir: &str, force: bool) -> Result<()>
     // Canonicalize the plugin root (rejects a non-existent dir).
     let root = fs::canonicalize(plugin_dir)
         .map_err(|e| anyhow::anyhow!("plugin dir {plugin_dir:?}: {e}"))?;
+    // Marketplace: if this source indexes multiple plugins, resolve the one
+    // requested by `--plugin` (cloning its source if it lives in another repo).
+    let root = resolve_marketplace(&root, plugin, requested, &mur_home)?;
     // plugin.json sits at the dir root (flat layout) or under .claude-plugin/
     // (the canonical Claude marketplace layout). Try the root first, then fall
     // back so a stock marketplace plugin dir imports without restructuring.
@@ -332,6 +344,65 @@ pub fn resolve_addon_source(input: &str) -> AddonSource {
     AddonSource::Local
 }
 
+/// If `root` contains a `marketplace.json` (flat or under `.claude-plugin/`),
+/// pick which plugin directory to import: `--plugin <name>` resolves one
+/// (cloning its source if it lives in another repo); absent `--plugin` with
+/// multiple plugins and no root `plugin.json` lists them and bails; otherwise
+/// (the root is itself a plugin) `root` is returned unchanged.
+fn resolve_marketplace(
+    root: &Path,
+    plugin: Option<&str>,
+    requested: &str,
+    mur_home: &Path,
+) -> Result<PathBuf> {
+    let mp = {
+        let flat = root.join("marketplace.json");
+        if flat.is_file() {
+            Some(flat)
+        } else {
+            let nested = root.join(".claude-plugin").join("marketplace.json");
+            nested.is_file().then_some(nested)
+        }
+    };
+    let Some(mp) = mp else {
+        return Ok(root.to_path_buf());
+    };
+    let manifest = super::marketplace::parse_marketplace(&fs::read_to_string(&mp)?)?;
+
+    if let Some(want) = plugin {
+        let entry = super::marketplace::find_plugin(&manifest, want).ok_or_else(|| {
+            anyhow::anyhow!(
+                "plugin '{want}' not in this marketplace; available: {}",
+                manifest
+                    .plugins
+                    .iter()
+                    .map(|p| p.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?;
+        let cache = mur_home.join("cache").join("addons");
+        let dir = super::marketplace::resolve_plugin_dir(entry, root, &cache)?;
+        return fs::canonicalize(&dir).map_err(|e| anyhow::anyhow!("plugin dir {dir:?}: {e}"));
+    }
+
+    // No --plugin: if the root is itself a plugin, import it (single-plugin
+    // behavior). Otherwise it's a pure marketplace — list and ask.
+    let root_is_plugin = root.join("plugin.json").is_file()
+        || root.join(".claude-plugin").join("plugin.json").is_file();
+    if !root_is_plugin && !manifest.plugins.is_empty() {
+        println!(
+            "'{requested}' is a marketplace with {} plugin(s); choose one with --plugin <name>:",
+            manifest.plugins.len()
+        );
+        for p in &manifest.plugins {
+            println!("  {}\t{}", p.name, p.description);
+        }
+        bail!("specify --plugin <name>");
+    }
+    Ok(root.to_path_buf())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,7 +505,7 @@ mod tests {
         let plugin = home.join("sample-plugin");
         write_plugin(&plugin);
 
-        cmd_addon_import("alice", plugin.to_str().unwrap(), false).unwrap();
+        cmd_addon_import("alice", plugin.to_str().unwrap(), None, false).unwrap();
 
         // Reload alice's profile.
         let (_p, alice) = crate::cmd::agent::load_profile_for_edit("alice").unwrap();
@@ -487,7 +558,7 @@ mod tests {
         )
         .unwrap();
 
-        cmd_addon_import("dana", plugin.to_str().unwrap(), false).unwrap();
+        cmd_addon_import("dana", plugin.to_str().unwrap(), None, false).unwrap();
 
         let (_p, dana) = crate::cmd::agent::load_profile_for_edit("dana").unwrap();
         let g = dana.addons.iter().find(|g| g.id == "claudefmt").unwrap();
@@ -529,7 +600,7 @@ mod tests {
         write_plugin(&plugin);
 
         // First import must succeed.
-        cmd_addon_import("charlie", plugin.to_str().unwrap(), false).unwrap();
+        cmd_addon_import("charlie", plugin.to_str().unwrap(), None, false).unwrap();
 
         // Record the original skill content so we can verify it is not modified.
         let skill_path = home.join("agents/charlie/skills/brainstorm/skill.yaml");
@@ -548,7 +619,7 @@ mod tests {
         fs::write(&profile_path, new_yaml).unwrap();
 
         // Second import must fail with the overwrite refusal message.
-        let err = cmd_addon_import("charlie", plugin.to_str().unwrap(), false)
+        let err = cmd_addon_import("charlie", plugin.to_str().unwrap(), None, false)
             .unwrap_err()
             .to_string();
         assert!(
