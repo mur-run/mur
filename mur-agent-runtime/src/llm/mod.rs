@@ -8,6 +8,16 @@ pub mod ollama;
 pub mod openai;
 pub mod stub;
 
+/// Shared reqwest builder for the agent's LLM clients. Built with `.no_proxy()`
+/// so an LLM client NEVER inherits an ambient `HTTP_PROXY`/`HTTPS_PROXY` — its
+/// destination is its `base_url` alone. This is the isolation guarantee that
+/// keeps the per-MCP-server egress proxy (and a user's debug cc-proxy, which is
+/// configured via base_url) from ever capturing the agent's own LLM traffic.
+/// See `docs/superpowers/plans/2026-06-26-mcp-per-server-egress.md`.
+pub(crate) fn llm_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder().no_proxy()
+}
+
 /// Gate function that the supervisor calls before constructing any concrete
 /// LLM client. Returns `Err` when `entitlements.llm.mode = off`, which
 /// declares the agent a "bridge" — an LLM-less mur agent that relays chat
@@ -201,5 +211,41 @@ mod tests {
         };
         assert!(r.tool_calls.is_empty());
         assert_eq!(r.stop_reason, StopReason::EndTurn);
+    }
+}
+
+#[cfg(test)]
+mod proxy_isolation_tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
+
+    /// The cc-proxy guarantee: a client built via `llm_client_builder()` reaches
+    /// its base_url DIRECTLY even when `HTTP_PROXY` points elsewhere — so the
+    /// per-server egress proxy / a debug cc-proxy never captures LLM traffic.
+    /// Without `.no_proxy()` this request would be routed to the dead proxy and
+    /// fail, so the test guards that the builder keeps `.no_proxy()`.
+    #[tokio::test]
+    async fn llm_client_builder_ignores_ambient_http_proxy() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut s, _)) = listener.accept().await {
+                let _ = s
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                    .await;
+            }
+        });
+        // SAFETY: set/cleared within this test; reqwest reads proxy env at build.
+        unsafe {
+            std::env::set_var("HTTP_PROXY", "http://127.0.0.1:1");
+        }
+        let client = llm_client_builder().build().unwrap();
+        let resp = client.get(format!("http://{addr}/")).send().await;
+        unsafe {
+            std::env::remove_var("HTTP_PROXY");
+        }
+        let resp = resp.expect("no_proxy client reaches base_url despite HTTP_PROXY");
+        assert_eq!(resp.status(), 200);
     }
 }

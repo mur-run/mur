@@ -783,6 +783,19 @@ pub enum AgentMcpAction {
     /// its pin stay in the profile; it simply stops spawning. Applies on the
     /// agent's next restart.
     Disable { name: String, server_id: String },
+    /// Scope an MCP server's outbound network to a host allowlist (routed
+    /// through the runtime egress proxy). No `--allow-host` and no `--off`
+    /// clears the policy (inherit the agent's). Applies on the agent's restart.
+    SetNetwork {
+        name: String,
+        server_id: String,
+        /// Allowed host (repeatable), e.g. `--allow-host example.com --allow-host '*.api.example.com'`.
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
+        /// Deny this server all outbound network.
+        #[arg(long)]
+        off: bool,
+    },
     /// Scan other installed tools (Claude Desktop/Code, Cursor, VS Code,
     /// Windsurf, Antigravity, Gemini CLI, Codex) for MCP servers you can import.
     Discover,
