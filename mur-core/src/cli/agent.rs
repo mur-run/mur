@@ -799,6 +799,11 @@ pub enum AgentMcpAction {
     /// Scan other installed tools (Claude Desktop/Code, Cursor, VS Code,
     /// Windsurf, Antigravity, Gemini CLI, Codex) for MCP servers you can import.
     Discover,
+    /// Search the official MCP Registry (registry.modelcontextprotocol.io).
+    Search { query: String },
+    /// Install a server from the MCP Registry onto an agent, by its registry
+    /// name (e.g. `mur agent mcp registry-add rustsmith com.example/fs`).
+    RegistryAdd { name: String, server: String },
 }
 
 #[derive(Subcommand)]
