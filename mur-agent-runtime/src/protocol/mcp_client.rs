@@ -44,6 +44,57 @@ pub enum McpError {
     StreamClosed,
     #[error("mcp error: {0}")]
     Server(String),
+    /// HTTP / network transport failure (Streamable HTTP transport).
+    #[error("transport: {0}")]
+    Transport(String),
+    /// JSON-RPC error object returned by the server.
+    #[error("rpc error: {0}")]
+    Rpc(String),
+    /// Unexpected response shape from the server.
+    #[error("protocol: {0}")]
+    Protocol(String),
+    /// Server returned HTTP 401 Unauthorized.
+    #[error("unauthorized")]
+    Unauthorized,
+}
+
+impl InitializeInfo {
+    /// Build from a JSON-RPC `result` value returned by the `initialize` method.
+    /// Returns `Err(reason)` if the shape is completely wrong (empty strings are
+    /// tolerated as the stdio path does via `unwrap_or_default`).
+    pub fn from_result(result: &Value) -> Result<Self, String> {
+        Ok(Self {
+            server_name: result["serverInfo"]["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            server_version: result["serverInfo"]["version"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            protocol_version: result["protocolVersion"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+        })
+    }
+}
+
+impl ToolInfo {
+    /// Build a list of `ToolInfo` from a JSON-RPC `result` value returned by
+    /// the `tools/list` method. Missing or malformed `tools` array yields an
+    /// empty list (mirrors the stdio path which uses `unwrap_or_default`).
+    pub fn list_from_result(result: &Value) -> Result<Vec<Self>, String> {
+        let tools = result["tools"].as_array().cloned().unwrap_or_default();
+        Ok(tools
+            .into_iter()
+            .map(|t| ToolInfo {
+                name: t["name"].as_str().unwrap_or_default().to_string(),
+                description: t["description"].as_str().unwrap_or_default().to_string(),
+                input_schema: t["inputSchema"].clone(),
+            })
+            .collect())
+    }
 }
 
 impl McpClient {
@@ -150,33 +201,12 @@ impl McpClient {
         // reject every subsequent request (`tools/list`, `tools/call`) with
         // "Not initialized". Universal — required by all MCP servers, not just ours.
         self.notify("notifications/initialized", json!({})).await?;
-        Ok(InitializeInfo {
-            server_name: res["serverInfo"]["name"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
-            server_version: res["serverInfo"]["version"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
-            protocol_version: res["protocolVersion"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
-        })
+        InitializeInfo::from_result(&res).map_err(McpError::Server)
     }
 
     pub async fn list_tools(&self) -> Result<Vec<ToolInfo>, McpError> {
         let res = self.request("tools/list", json!({})).await?;
-        let tools = res["tools"].as_array().cloned().unwrap_or_default();
-        Ok(tools
-            .into_iter()
-            .map(|t| ToolInfo {
-                name: t["name"].as_str().unwrap_or_default().to_string(),
-                description: t["description"].as_str().unwrap_or_default().to_string(),
-                input_schema: t["inputSchema"].clone(),
-            })
-            .collect())
+        ToolInfo::list_from_result(&res).map_err(McpError::Server)
     }
 
     pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<Value, McpError> {

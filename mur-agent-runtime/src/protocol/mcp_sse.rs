@@ -6,10 +6,10 @@ use serde_json::Value;
 /// event, events separated by blank lines). Non-JSON `data:` lines are skipped.
 pub fn parse_sse_events(body: &str) -> Vec<Value> {
     let trimmed = body.trim_start();
-    if trimmed.starts_with('{') || trimmed.starts_with('[') {
-        if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
-            return vec![v];
-        }
+    if (trimmed.starts_with('{') || trimmed.starts_with('['))
+        && let Ok(v) = serde_json::from_str::<Value>(trimmed)
+    {
+        return vec![v];
     }
     let mut out = Vec::new();
     for block in body.split("\n\n") {
