@@ -90,7 +90,7 @@ pub fn parse_tools_list(body: &serde_json::Value) -> Vec<ProbeTool> {
 ///
 /// Bump when MUR adopts a newer spec revision. (Constant — not a hardcoded
 /// literal scattered across the codebase.)
-pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// Transport variant detected during probe.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -309,6 +309,32 @@ mod tests {
     fn parse_tools_list_empty_on_missing_result() {
         let body = serde_json::json!({});
         assert!(parse_tools_list(&body).is_empty());
+    }
+
+    #[test]
+    fn parse_tools_list_uses_snake_case_input_schema_fallback() {
+        let schema = serde_json::json!({ "type": "object", "properties": {} });
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "tools": [
+                    {
+                        "name": "do_thing",
+                        "description": "Does a thing",
+                        "input_schema": schema
+                    }
+                ]
+            }
+        });
+        let tools = parse_tools_list(&body);
+        assert_eq!(tools.len(), 1);
+        assert_ne!(
+            tools[0].input_schema,
+            serde_json::Value::Null,
+            "input_schema fallback should produce a non-null value"
+        );
+        assert_eq!(tools[0].input_schema["type"], "object");
     }
 
     // ── Task 3 tests ──────────────────────────────────────────────────────
