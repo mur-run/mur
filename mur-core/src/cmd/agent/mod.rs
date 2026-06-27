@@ -38,6 +38,7 @@ pub mod mcp;
 pub mod mcp_discover;
 pub mod mcp_login;
 pub mod mcp_registry;
+pub mod mcp_remote;
 pub mod model_resolve;
 mod peers;
 mod perm;
