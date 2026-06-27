@@ -497,6 +497,6 @@ export const en = {
   "skillurl.accept": "I reviewed the findings — install anyway",
   "skillurl.install": "Install skill",
   "skillurl.installing": "Installing…",
-  "skillurl.restartHint": "Installed. Restart the agent to load it.",
+  "skillurl.restartHint": "After installing, restart the agent to load it.",
   "skillurl.invalidUrl": "Enter an https:// URL (http allowed only on localhost).",
 } as const;

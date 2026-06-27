@@ -35,7 +35,8 @@ export function SkillAddUrlModal({ agentName, onClose, onSaved }: Props) {
       !(
         trimmed.startsWith("https://") ||
         trimmed.startsWith("http://localhost") ||
-        trimmed.startsWith("http://127.0.0.1")
+        trimmed.startsWith("http://127.0.0.1") ||
+        trimmed.startsWith("http://[::1]")
       )
     ) {
       setError(t("skillurl.invalidUrl"));
@@ -77,6 +78,7 @@ export function SkillAddUrlModal({ agentName, onClose, onSaved }: Props) {
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal__header">
           <h2 className="modal__title">{t("skillurl.title")}</h2>
+          <button className="modal__close" onClick={onClose} aria-label={t("detail.close")}>×</button>
         </div>
         <div className="modal__body">
           <label className="field-label">{t("skillurl.url")}</label>
@@ -89,6 +91,7 @@ export function SkillAddUrlModal({ agentName, onClose, onSaved }: Props) {
               onKeyDown={(e) => e.key === "Enter" && !busy && fetchPreview()}
               placeholder={t("skillurl.urlPlaceholder")}
               style={{ flex: 1 }}
+              autoFocus
             />
             <button
               className="btn btn--sm btn--secondary"
@@ -115,7 +118,7 @@ export function SkillAddUrlModal({ agentName, onClose, onSaved }: Props) {
                   <p className="field-label">{t("skillurl.findingsHeading")}</p>
                   <ul className="item-list">
                     {preview.findings.map((f, i) => (
-                      <li key={i} className="item-card">
+                      <li key={i} className="save-error">
                         {f}
                       </li>
                     ))}

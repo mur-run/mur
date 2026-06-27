@@ -499,6 +499,6 @@ export const zhTW: Table = {
   "skillurl.accept": "我已檢視這些發現，仍要安裝",
   "skillurl.install": "安裝技能",
   "skillurl.installing": "安裝中…",
-  "skillurl.restartHint": "已安裝。重新啟動 agent 後生效。",
+  "skillurl.restartHint": "安裝後，請重新啟動 agent 使其生效。",
   "skillurl.invalidUrl": "請輸入 https:// 網址（http 僅限 localhost）。",
 };
