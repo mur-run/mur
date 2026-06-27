@@ -8,6 +8,7 @@
 
 mod access;
 mod app;
+mod footer;
 mod manage;
 mod markdown;
 mod multiplex;
