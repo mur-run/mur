@@ -106,6 +106,13 @@ No new on-disk skill format. P1 adds no persisted fields (skills install exactly
 - Auto-update of installed skills (re-install manually).
 - Changing the local "Install skill…" path beyond sharing the new consent screen.
 
+## 10a. Deferred hardening (P1 follow-up)
+
+Surfaced by the P1 final review; bounded blast radius (downloaded content is always scanned + shown for consent and never executed), so deferred — not blockers:
+- **Redirect policy.** `https`-only is enforced on the input URL; reqwest follows redirects by default, so an `https` URL could 30x to `http`/an internal IP. Make the invariant airtight with `redirect::Policy::none()` or re-validate the final URL.
+- **Streaming size cap.** The `SKILL_MAX_BYTES` cap correctly *rejects* oversized content via Content-Length pre-check + post-download length check, but a Content-Length-less server can still force peak memory up to the download; a `chunk()` loop with a running total would bound it. (The added fetch timeout limits the "stream forever" case.)
+- **Temp-file hardening.** Installs via a `<pid>-<sanitized-name>` temp file; `tempfile::NamedTempFile` (O_EXCL + unique) would remove the predictable-path/symlink edge.
+
 ## 11. Open questions
 
 - Should `skill add` auto-detect URLs, or keep a distinct `add-url` subcommand? (Lean: distinct subcommand for clarity; auto-detect is a convenience add.)
