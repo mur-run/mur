@@ -1372,6 +1372,12 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentSkillAction::Disable { name, skill_id } => {
                 cmd::agent::cmd_skill_set_enabled(&name, &skill_id, false)?
             }
+            AgentSkillAction::AddUrl { name, url, yes } => {
+                let installed_id =
+                    cmd::agent::skill_remote::install_skill_from_url(&name, &url, yes).await?;
+                println!("{installed_id}");
+                println!("Skill installed. Restart the agent for it to take effect.");
+            }
         },
         AgentAction::Addon { action } => match action {
             AgentAddonAction::Import {
