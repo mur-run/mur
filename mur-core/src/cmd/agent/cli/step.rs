@@ -25,6 +25,10 @@ pub struct StepCard {
     pub full_len: usize,
     pub error: Option<String>,
     pub duration_ms: Option<u64>,
+    /// True while this card's tool call is waiting on a HITL decision (P2 inline
+    /// approval). Set when the matching `tool/approval_needed` arrives, cleared
+    /// on decision.
+    pub awaiting_hitl: bool,
 }
 
 impl StepCard {
@@ -39,6 +43,7 @@ impl StepCard {
             full_len: 0,
             error: None,
             duration_ms: None,
+            awaiting_hitl: false,
         }
     }
 

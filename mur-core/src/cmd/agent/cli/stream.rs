@@ -141,7 +141,6 @@ pub struct HitlRequest {
     pub hitl_id: String,
     /// The `step_id` of the card that ran this tool (P2: lets the cli show the
     /// approval inline on that card). `None` on runtimes predating the field.
-    #[allow(dead_code)]
     pub step_id: Option<String>,
     pub tool_name: String,
     pub tool_input: Value,

@@ -531,6 +531,9 @@ fn decide_hitl(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: bool) {
 
 fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: bool, auto: bool) {
     if let Some(req) = app.hitl.take() {
+        if let Some(sid) = &req.step_id {
+            app.clear_card_awaiting(sid);
+        }
         let (h, a) = (app.home.clone(), app.agent.clone());
         let (id, tool) = (req.hitl_id.clone(), req.tool_name.clone());
         let t = tx.clone();
@@ -790,6 +793,9 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
         StreamMsg::Delta { text, thinking, .. } => app.append_delta(&text, thinking),
         StreamMsg::Hitl { req, .. } => {
             app.saw_hitl_this_turn = true;
+            if let Some(sid) = req.step_id.clone() {
+                app.mark_card_awaiting(&sid);
+            }
             // Session auto-approval: `/auto`/`--auto` covers every tool; the
             // modal's [a] key covers a single tool name.
             let auto = app.auto_approve || app.session_tool_allow.contains(&req.tool_name);
