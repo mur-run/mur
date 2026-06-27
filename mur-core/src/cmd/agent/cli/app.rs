@@ -667,7 +667,7 @@ impl App {
         let hint = if theme.compact_input {
             " message — Enter · Alt+Enter · /help "
         } else {
-            " message — Enter to send · Alt+Enter newline · Ctrl+V image · /help · Ctrl+D quit "
+            " message — Enter to send · Alt+Enter newline · Ctrl+V image · Ctrl+O transcript · /help · Ctrl+D quit"
         };
         let is_shell = self.input_text().trim_start().starts_with('!');
         let block = if is_shell {
@@ -694,7 +694,7 @@ impl App {
 fn new_input() -> TextArea<'static> {
     let mut ta = TextArea::default();
     ta.set_block(Block::default().borders(Borders::ALL).title(
-        " message — Enter to send · Alt+Enter newline · Ctrl+V image · /help · Ctrl+D quit ",
+        " message — Enter to send · Alt+Enter newline · Ctrl+V image · Ctrl+O transcript · /help · Ctrl+D quit",
     ));
     ta.set_cursor_line_style(Style::default());
     ta.set_placeholder_text("Type a message…");
