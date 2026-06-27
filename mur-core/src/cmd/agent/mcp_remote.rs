@@ -210,11 +210,6 @@ pub async fn probe_remote(url: &str, bearer: Option<&str>) -> Result<ProbeOutcom
 
 // ─── Hub-facing helpers ────────────────────────────────────────────────────
 
-/// Keychain service used for MUR agent secrets. Mirrors `secret::SECRET_SERVICE`
-/// — both must stay in sync. Centralised here so remote-MCP callers (Hub
-/// backend) never hardcode the service string.
-const MCP_KEYCHAIN_SERVICE: &str = "mur-agent";
-
 /// Store a bearer token for a remote MCP server in the OS keychain and return
 /// the `SecretRef` that resolves it.
 ///
@@ -226,12 +221,13 @@ pub async fn store_remote_mcp_bearer(
     server_id: &str,
     token: &str,
 ) -> Result<mur_common::secret::SecretRef> {
+    use super::secret::SECRET_SERVICE;
     let account = format!("{agent}/mcp/{server_id}");
-    mur_common::secret::keychain_set(MCP_KEYCHAIN_SERVICE, &account, token)
+    mur_common::secret::keychain_set(SECRET_SERVICE, &account, token)
         .await
         .map_err(|e| anyhow::anyhow!("keychain write failed: {e}"))?;
     Ok(mur_common::secret::SecretRef::Keychain {
-        service: MCP_KEYCHAIN_SERVICE.to_string(),
+        service: SECRET_SERVICE.to_string(),
         account,
     })
 }

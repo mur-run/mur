@@ -185,7 +185,8 @@ pub async fn agent_mcp_add_remote(
     let desc_hash = compute_probe_description_hash(&outcome.tools);
 
     // Store bearer token in keychain; build the matching SecretRef.
-    let secret_ref = if let Some(tok) = bearer {
+    // An empty/blank bearer is treated as no-auth — no token is stored.
+    let secret_ref = if let Some(tok) = bearer.filter(|s| !s.trim().is_empty()) {
         Some(
             store_remote_mcp_bearer(&name, &server_id, &tok)
                 .await
