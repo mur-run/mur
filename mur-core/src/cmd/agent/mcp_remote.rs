@@ -208,6 +208,54 @@ pub async fn probe_remote(url: &str, bearer: Option<&str>) -> Result<ProbeOutcom
     })
 }
 
+// ─── Hub-facing helpers ────────────────────────────────────────────────────
+
+/// Keychain service used for MUR agent secrets. Mirrors `secret::SECRET_SERVICE`
+/// — both must stay in sync. Centralised here so remote-MCP callers (Hub
+/// backend) never hardcode the service string.
+const MCP_KEYCHAIN_SERVICE: &str = "mur-agent";
+
+/// Store a bearer token for a remote MCP server in the OS keychain and return
+/// the `SecretRef` that resolves it.
+///
+/// Key derivation exactly matches `cmd_secret_set(agent, "mcp/<server_id>",
+/// value)`: service = `"mur-agent"`, account = `"<agent>/mcp/<server_id>"`.
+/// The returned `SecretRef::Keychain` resolves to the same item.
+pub async fn store_remote_mcp_bearer(
+    agent: &str,
+    server_id: &str,
+    token: &str,
+) -> Result<mur_common::secret::SecretRef> {
+    let account = format!("{agent}/mcp/{server_id}");
+    mur_common::secret::keychain_set(MCP_KEYCHAIN_SERVICE, &account, token)
+        .await
+        .map_err(|e| anyhow::anyhow!("keychain write failed: {e}"))?;
+    Ok(mur_common::secret::SecretRef::Keychain {
+        service: MCP_KEYCHAIN_SERVICE.to_string(),
+        account,
+    })
+}
+
+/// Compute the tool-description hash from a probe result's tool list.
+///
+/// Maps `ProbeTool` → `McpToolDescription` and delegates to
+/// `cmd::agent_mcp_pin::compute_description_hash`. Returns `None` when
+/// `tools` is empty (nothing to pin).
+pub fn compute_probe_description_hash(tools: &[ProbeTool]) -> Option<String> {
+    if tools.is_empty() {
+        return None;
+    }
+    let descs: Vec<crate::cmd::agent_mcp_pin::McpToolDescription> = tools
+        .iter()
+        .map(|t| crate::cmd::agent_mcp_pin::McpToolDescription {
+            name: t.name.clone(),
+            description: t.description.clone(),
+            input_schema: t.input_schema.clone(),
+        })
+        .collect();
+    Some(crate::cmd::agent_mcp_pin::compute_description_hash(&descs))
+}
+
 // ─── Tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
