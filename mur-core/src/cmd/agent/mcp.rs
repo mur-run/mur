@@ -279,6 +279,7 @@ pub fn cmd_mcp_add_remote(
         auth: bearer.map(|token| mur_common::agent::McpAuth::Bearer { token }),
         description_hash,
         network,
+        installed_at: Some(chrono::Utc::now()),
         ..Default::default()
     });
     save_profile(&path, &mut profile)?;
@@ -311,7 +312,7 @@ mod tests {
 
     #[test]
     fn add_remote_writes_url_and_bearer() {
-        let _lock = MUR_HOME_LOCK.lock().unwrap();
+        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::TempDir::new().unwrap();
         let mur_home = tmp.path();
 
@@ -350,7 +351,7 @@ mod tests {
 
     #[test]
     fn add_remote_sets_hash_and_default_egress() {
-        let _lock = MUR_HOME_LOCK.lock().unwrap();
+        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::TempDir::new().unwrap();
         let mur_home = tmp.path();
 
