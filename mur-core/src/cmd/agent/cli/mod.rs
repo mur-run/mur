@@ -9,6 +9,7 @@
 mod access;
 mod app;
 mod diff;
+mod dump;
 mod footer;
 mod manage;
 mod markdown;

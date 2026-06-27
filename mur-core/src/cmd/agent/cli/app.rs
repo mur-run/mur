@@ -87,6 +87,16 @@ impl ChatMsg {
     }
 }
 
+#[cfg(test)]
+impl ChatMsg {
+    pub fn for_test(role: Role, text: &str) -> Self {
+        Self::new(role, text)
+    }
+    pub fn tool_for_test(card: super::step::StepCard) -> Self {
+        Self::tool(card)
+    }
+}
+
 /// A parsed slash command.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SlashCmd {
