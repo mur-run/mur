@@ -507,4 +507,5 @@ export const en = {
   "remote.oauthLogin": "Sign in with OAuth",
   "remote.restartHint": "Added. Restart the agent to load it.",
   "remote.invalidUrl": "Enter an https:// URL (http allowed only for localhost).",
+  "remote.serverIdPlaceholder": "Server ID (optional)",
 } as const;

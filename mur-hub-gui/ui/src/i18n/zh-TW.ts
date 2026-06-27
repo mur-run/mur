@@ -509,4 +509,5 @@ export const zhTW: Table = {
   "remote.oauthLogin": "以 OAuth 登入",
   "remote.restartHint": "已新增。請重新啟動 Agent 以載入。",
   "remote.invalidUrl": "請輸入 https:// 網址（僅 localhost 允許使用 http）。",
+  "remote.serverIdPlaceholder": "伺服器 ID（可選）",
 };

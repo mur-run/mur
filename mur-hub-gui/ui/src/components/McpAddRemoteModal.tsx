@@ -43,6 +43,15 @@ export function McpAddRemoteModal({ agentName, onClose, onSaved }: Props) {
     setError(null);
     setBusy("test");
     setProbe(null);
+    const trimmed = url.trim();
+    const isLocalhost =
+      trimmed.startsWith("http://localhost") ||
+      trimmed.startsWith("http://127.0.0.1");
+    if (!trimmed.startsWith("https://") && !isLocalhost) {
+      setError(t("remote.invalidUrl"));
+      setBusy(null);
+      return;
+    }
     try {
       const out = await invoke<ProbeOutcome>("agent_mcp_test_connection", {
         url,
@@ -94,7 +103,7 @@ export function McpAddRemoteModal({ agentName, onClose, onSaved }: Props) {
 
   return (
     <div className="modal__overlay" onClick={onClose}>
-      <div className="modal__box" onClick={(e) => e.stopPropagation()}>
+      <div className="modal modal--wide" onClick={(e) => e.stopPropagation()}>
         <div className="modal__header">
           <h2 className="modal__title">{t("remote.title")}</h2>
           <button className="modal__close" onClick={onClose} aria-label={t("detail.close")}>
@@ -121,7 +130,7 @@ export function McpAddRemoteModal({ agentName, onClose, onSaved }: Props) {
             <input
               className="input"
               type="text"
-              placeholder="my-mcp-server"
+              placeholder={t("remote.serverIdPlaceholder")}
               value={serverId}
               onChange={(e) => setServerId(e.target.value)}
             />
@@ -206,7 +215,7 @@ export function McpAddRemoteModal({ agentName, onClose, onSaved }: Props) {
           )}
 
           {error && (
-            <p className="field-muted" style={{ color: "var(--color-error, #c00)", marginTop: 8 }}>
+            <p className="save-error">
               {error}
             </p>
           )}
@@ -222,7 +231,7 @@ export function McpAddRemoteModal({ agentName, onClose, onSaved }: Props) {
           {auth === "oauth" ? (
             <button
               className="btn btn--sm btn--primary"
-              disabled={!url || !serverId || busy !== null || saved}
+              disabled={!url || !serverId || !probe || busy !== null || saved}
               onClick={add}
             >
               {busy === "add" ? t("remote.adding") : t("remote.oauthLogin")}
