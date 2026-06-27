@@ -195,6 +195,28 @@ impl AnthropicClient {
 fn rich_messages_to_anthropic(
     msgs: &[RichMessage],
 ) -> (Option<String>, Vec<serde_json::Value>, Option<String>) {
+    /// Push a `{role, content}` entry, merging into the last entry when roles
+    /// match (Anthropic 400s on consecutive same-role messages).
+    fn push_coalesced(convo: &mut Vec<serde_json::Value>, role: &str, content: serde_json::Value) {
+        /// Normalize message content to an array of content blocks.
+        fn blocks(content: serde_json::Value) -> Vec<serde_json::Value> {
+            match content {
+                serde_json::Value::Array(a) => a,
+                serde_json::Value::String(s) => vec![json!({"type": "text", "text": s})],
+                other => vec![other],
+            }
+        }
+        if let Some(last) = convo.last_mut()
+            && last["role"] == role
+        {
+            let mut merged = blocks(last["content"].take());
+            merged.extend(blocks(content));
+            last["content"] = json!(merged);
+            return;
+        }
+        convo.push(json!({"role": role, "content": content}));
+    }
+
     let mut system_chunks: Vec<String> = Vec::new();
     let mut convo: Vec<serde_json::Value> = Vec::new();
 
@@ -209,7 +231,7 @@ fn rich_messages_to_anthropic(
                     } else {
                         role.as_str()
                     };
-                    convo.push(json!({"role": r, "content": content}));
+                    push_coalesced(&mut convo, r, json!(content));
                 }
             }
             RichMessage::ToolUse { text, calls } => {
@@ -227,7 +249,7 @@ fn rich_messages_to_anthropic(
                         "input": c.input,
                     }));
                 }
-                convo.push(json!({"role": "assistant", "content": parts}));
+                push_coalesced(&mut convo, "assistant", json!(parts));
             }
             RichMessage::ToolResults { results } => {
                 let parts: Vec<serde_json::Value> = results
@@ -241,7 +263,7 @@ fn rich_messages_to_anthropic(
                         })
                     })
                     .collect();
-                convo.push(json!({"role": "user", "content": parts}));
+                push_coalesced(&mut convo, "user", json!(parts));
             }
             RichMessage::ImageText {
                 role,
@@ -263,7 +285,7 @@ fn rich_messages_to_anthropic(
                 if !text.is_empty() {
                     parts.push(json!({"type": "text", "text": text}));
                 }
-                convo.push(json!({"role": r, "content": parts}));
+                push_coalesced(&mut convo, r, json!(parts));
             }
         }
     }
@@ -711,5 +733,61 @@ mod tests {
         assert_eq!(tool_calls[0].call_id, "call_1");
         assert_eq!(tool_calls[0].tool_name, "bash");
         assert_eq!(stop_reason, crate::llm::StopReason::ToolUse);
+    }
+
+    #[test]
+    fn rich_to_anthropic_coalesces_consecutive_user_messages() {
+        use crate::llm::ToolResultEntry;
+        // tool_results (user) immediately followed by an injected user steer.
+        let msgs = vec![
+            RichMessage::ToolResults {
+                results: vec![ToolResultEntry {
+                    call_id: "c1".into(),
+                    content: "ok".into(),
+                    is_error: false,
+                }],
+            },
+            RichMessage::Text {
+                role: "user".into(),
+                content: "(steering) use ripgrep".into(),
+            },
+        ];
+        let (_sys, convo, _) = rich_messages_to_anthropic(&msgs);
+        // Must be ONE user message, not two (Anthropic forbids consecutive same-role).
+        assert_eq!(
+            convo.len(),
+            1,
+            "consecutive user messages must coalesce: {convo:?}"
+        );
+        assert_eq!(convo[0]["role"], "user");
+        let content = convo[0]["content"].as_array().expect("content array");
+        // tool_result block + the steering text block
+        assert!(content.iter().any(|b| b["type"] == "tool_result"));
+        assert!(
+            content.iter().any(
+                |b| b["type"] == "text" && b["text"].as_str() == Some("(steering) use ripgrep")
+            )
+        );
+    }
+
+    #[test]
+    fn rich_to_anthropic_keeps_alternating_roles_separate() {
+        let msgs = vec![
+            RichMessage::Text {
+                role: "user".into(),
+                content: "hi".into(),
+            },
+            RichMessage::Text {
+                role: "agent".into(),
+                content: "hello".into(),
+            },
+            RichMessage::Text {
+                role: "user".into(),
+                content: "bye".into(),
+            },
+        ];
+        let (_s, convo, _) = rich_messages_to_anthropic(&msgs);
+        assert_eq!(convo.len(), 3);
+        assert_eq!(convo[1]["role"], "assistant");
     }
 }
