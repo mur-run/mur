@@ -774,8 +774,35 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
         StreamMsg::Err { error, .. } => app.fail_turn(&error),
         StreamMsg::Note(text) => app.push_system(text),
         StreamMsg::ShellDone { cmd, output } => app.push_shell(&cmd, &output),
-        // Step events are parsed and forwarded; rendering is handled in Task 3.
-        StreamMsg::StepStarted { .. } | StreamMsg::StepCompleted { .. } => {}
+        StreamMsg::StepStarted {
+            step_id,
+            name,
+            args,
+            ..
+        } => {
+            // NOTE: saw_step_this_turn is added in Task 8.
+            app.push_step_started(step_id, name, args);
+        }
+        StreamMsg::StepCompleted {
+            step_id,
+            ok,
+            output,
+            truncated,
+            full_len,
+            error,
+            duration_ms,
+            ..
+        } => {
+            app.update_step_completed(
+                &step_id,
+                ok,
+                output,
+                truncated,
+                full_len,
+                error,
+                duration_ms,
+            );
+        }
     }
 }
 

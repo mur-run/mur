@@ -11,12 +11,15 @@ pub enum StepState {
 }
 
 /// Max args lines shown inside an expanded card (mirrors the old HITL modal cap).
+// Used by the step card UI renderer (Task 5).
+#[allow(dead_code)]
 pub const ARGS_MAX_LINES: usize = 12;
 
 /// One tool call, shown inline in the transcript.
 #[derive(Debug, Clone)]
 pub struct StepCard {
     pub id: String,
+    // name, args, started consumed by the step card UI renderer (Task 5).
     pub name: String,
     pub args: serde_json::Value,
     pub state: StepState,
@@ -24,6 +27,7 @@ pub struct StepCard {
     pub truncated: bool,
     pub full_len: usize,
     pub error: Option<String>,
+    #[allow(dead_code)]
     pub started: Instant,
     pub duration_ms: Option<u64>,
 }
@@ -53,7 +57,11 @@ impl StepCard {
         error: Option<String>,
         duration_ms: u64,
     ) {
-        self.state = if ok { StepState::Done } else { StepState::Error };
+        self.state = if ok {
+            StepState::Done
+        } else {
+            StepState::Error
+        };
         self.output = output;
         self.truncated = truncated;
         self.full_len = full_len;
@@ -61,6 +69,8 @@ impl StepCard {
         self.duration_ms = Some(duration_ms);
     }
 
+    // glyph and summary are consumed by the step card UI renderer (Task 5).
+    #[allow(dead_code)]
     pub fn glyph(&self) -> &'static str {
         match self.state {
             StepState::Running => "◐",
@@ -70,6 +80,7 @@ impl StepCard {
     }
 
     /// One-line header summary: a compact hint of the first scalar arg, if any.
+    #[allow(dead_code)]
     pub fn summary(&self) -> String {
         let hint = self
             .args
@@ -89,7 +100,11 @@ mod tests {
     use super::{StepCard, StepState};
 
     fn card() -> StepCard {
-        StepCard::new("s1".into(), "read".into(), serde_json::json!({ "path": "auth.rs" }))
+        StepCard::new(
+            "s1".into(),
+            "read".into(),
+            serde_json::json!({ "path": "auth.rs" }),
+        )
     }
 
     #[test]

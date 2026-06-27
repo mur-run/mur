@@ -44,6 +44,9 @@ pub struct ChatMsg {
     /// per-frame redraw never re-parses finished messages. `None` while
     /// streaming and for user/system messages.
     pub rendered: Option<Vec<Line<'static>>>,
+    /// When set, this message renders a tool-call step card instead of text by
+    /// role. `None` for ordinary user/agent/system/shell messages.
+    pub step: Option<super::step::StepCard>,
 }
 
 impl ChatMsg {
@@ -54,6 +57,7 @@ impl ChatMsg {
             thinking: String::new(),
             streaming: false,
             rendered: None,
+            step: None,
         }
     }
 
@@ -66,6 +70,19 @@ impl ChatMsg {
             thinking: String::new(),
             streaming: false,
             rendered,
+            step: None,
+        }
+    }
+
+    /// A transcript entry that renders a tool-call step card.
+    fn tool(card: super::step::StepCard) -> Self {
+        Self {
+            role: Role::Agent,
+            text: String::new(),
+            thinking: String::new(),
+            streaming: false,
+            rendered: None,
+            step: Some(card),
         }
     }
 }
@@ -327,6 +344,12 @@ impl App {
     }
 
     pub fn append_delta(&mut self, text: &str, thinking: bool) {
+        if self.streaming_agent_mut().is_none() {
+            // Prior segment was frozen by a step card; start a new one.
+            let mut m = ChatMsg::new(Role::Agent, "");
+            m.streaming = true;
+            self.messages.push(m);
+        }
         if let Some(m) = self.streaming_agent_mut() {
             if thinking {
                 m.thinking.push_str(text);
@@ -376,6 +399,54 @@ impl App {
         }
         self.streaming = false;
         self.current_task_id = None;
+    }
+
+    /// Freeze the current streaming text segment (or drop it if empty) and push
+    /// a new running tool-call card.
+    pub fn push_step_started(&mut self, step_id: String, name: String, args: serde_json::Value) {
+        // Find the streaming agent segment, if any.
+        let idx = self
+            .messages
+            .iter()
+            .rposition(|m| m.role == Role::Agent && m.streaming);
+        if let Some(i) = idx {
+            let is_empty = self.messages[i].text.is_empty() && self.messages[i].thinking.is_empty();
+            if is_empty {
+                // Empty placeholder (agent called a tool before any text) — drop it.
+                self.messages.remove(i);
+            } else {
+                // Freeze the current text segment.
+                let rendered = Some(markdown::render(&self.messages[i].text).lines);
+                self.messages[i].streaming = false;
+                self.messages[i].rendered = rendered;
+            }
+        }
+        self.messages.push(ChatMsg::tool(super::step::StepCard::new(
+            step_id, name, args,
+        )));
+        self.scroll_back = 0;
+    }
+
+    /// Mark the matching step card as completed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_step_completed(
+        &mut self,
+        step_id: &str,
+        ok: bool,
+        output: String,
+        truncated: bool,
+        full_len: usize,
+        error: Option<String>,
+        duration_ms: u64,
+    ) {
+        if let Some(card) = self
+            .messages
+            .iter_mut()
+            .rev()
+            .find_map(|m| m.step.as_mut().filter(|c| c.id == step_id))
+        {
+            card.complete(ok, output, truncated, full_len, error, duration_ms);
+        }
     }
 
     pub fn fail_turn(&mut self, err: &str) {
@@ -520,6 +591,23 @@ fn new_input() -> TextArea<'static> {
     ta.set_placeholder_text("Type a message…");
     ta.set_placeholder_style(Style::default().fg(Color::DarkGray));
     ta
+}
+
+#[cfg(test)]
+impl App {
+    /// Minimal fixture for unit tests. Backed by a temporary directory that is
+    /// dropped on return — persist calls may fail silently (see `persist_turn`),
+    /// which is fine: all state-logic tests work on the in-memory transcript.
+    pub fn test_fixture() -> Self {
+        let home = tempfile::tempdir().unwrap();
+        let session = Session::create(home.path(), "a").unwrap();
+        App::new(
+            home.path().to_path_buf(),
+            "a".into(),
+            session,
+            &super::theme::DARK,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -755,6 +843,91 @@ mod tests {
         assert!(a.last_sent.is_none());
         assert!(a.last_esc_at.is_none());
         assert!(!a.esc_hint);
+    }
+}
+
+#[cfg(test)]
+mod step_app_tests {
+    use super::*;
+    use crate::cmd::agent::cli::step::StepState;
+
+    fn app() -> App {
+        App::test_fixture()
+    }
+
+    #[test]
+    fn step_interleaves_between_text_segments() {
+        let mut a = app();
+        a.begin_user_turn("hi");
+        a.append_delta("reading file", false);
+        a.push_step_started(
+            "s1".into(),
+            "read".into(),
+            serde_json::json!({ "path": "a.rs" }),
+        );
+        // After push_step_started: prior segment frozen, step card pushed.
+        // append_delta now creates a new streaming segment.
+        a.append_delta("done, summary", false);
+
+        // Expect 3 agent-role messages: frozen text, step card, new streaming text.
+        let agent_msgs: Vec<_> = a
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::Agent)
+            .collect();
+        assert_eq!(
+            agent_msgs.len(),
+            3,
+            "frozen segment + step card + new segment"
+        );
+        assert_eq!(agent_msgs[0].text, "reading file");
+        assert!(!agent_msgs[0].streaming, "first segment must be frozen");
+        assert!(
+            agent_msgs[1].step.is_some(),
+            "middle message must be a step card"
+        );
+        assert_eq!(agent_msgs[2].text, "done, summary");
+        assert!(agent_msgs[2].streaming, "new segment must be streaming");
+    }
+
+    #[test]
+    fn step_before_text_drops_empty_placeholder() {
+        let mut a = app();
+        a.begin_user_turn("hi");
+        // No delta yet — placeholder is empty.
+        a.push_step_started("s1".into(), "bash".into(), serde_json::json!({}));
+        // Empty placeholder dropped; only step card remains as agent message.
+        let agent_msgs: Vec<_> = a
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::Agent)
+            .collect();
+        assert_eq!(
+            agent_msgs.len(),
+            1,
+            "empty placeholder dropped, only step card"
+        );
+        assert!(agent_msgs[0].step.is_some(), "must be step card");
+    }
+
+    #[test]
+    fn update_step_completed_marks_card_done() {
+        let mut a = app();
+        a.begin_user_turn("hi");
+        a.push_step_started(
+            "s1".into(),
+            "bash".into(),
+            serde_json::json!({ "cmd": "ls" }),
+        );
+        a.update_step_completed("s1", true, "foo.rs\n".into(), false, 7, None, 42);
+        let card = a
+            .messages
+            .iter()
+            .find_map(|m| m.step.as_ref())
+            .expect("step card");
+        assert_eq!(card.state, StepState::Done);
+        assert_eq!(card.duration_ms, Some(42));
+        assert_eq!(card.output, "foo.rs\n");
     }
 }
 

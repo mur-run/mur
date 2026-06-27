@@ -44,8 +44,6 @@ pub enum StreamMsg {
     /// A local `!command` finished. Turn-independent like `Note`.
     ShellDone { cmd: String, output: String },
     /// A tool call started running (name + args).
-    // Fields consumed by the Task 3 renderer; allow dead_code until then.
-    #[allow(dead_code)]
     StepStarted {
         task_id: String,
         step_id: String,
@@ -53,8 +51,6 @@ pub enum StreamMsg {
         args: Value,
     },
     /// A tool call finished (result/error + duration).
-    // Fields consumed by the Task 3 renderer; allow dead_code until then.
-    #[allow(dead_code)]
     StepCompleted {
         task_id: String,
         step_id: String,
