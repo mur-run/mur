@@ -472,6 +472,7 @@ impl App {
         }
         self.streaming = false;
         self.current_task_id = None;
+        self.turn_started = None;
     }
 
     /// Freeze the current streaming text segment (or drop it if empty) and push
@@ -1183,6 +1184,15 @@ mod footer_state_tests {
         assert!(a.turn_started.is_some());
         a.finish_agent_turn("ok".into(), None);
         assert!(a.turn_started.is_none(), "clock cleared after finish");
+    }
+
+    #[test]
+    fn finish_partial_clears_clock() {
+        let mut a = App::test_fixture();
+        a.begin_user_turn("hi");
+        assert!(a.turn_started.is_some());
+        a.finish_partial();
+        assert!(a.turn_started.is_none());
     }
 
     #[test]

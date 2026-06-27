@@ -1,7 +1,5 @@
 //! A single tool-call step rendered inline in the cli transcript.
 
-use std::time::Instant;
-
 /// Lifecycle of a tool-call step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepState {
@@ -26,8 +24,6 @@ pub struct StepCard {
     pub truncated: bool,
     pub full_len: usize,
     pub error: Option<String>,
-    #[allow(dead_code)]
-    pub started: Instant,
     pub duration_ms: Option<u64>,
 }
 
@@ -42,7 +38,6 @@ impl StepCard {
             truncated: false,
             full_len: 0,
             error: None,
-            started: Instant::now(),
             duration_ms: None,
         }
     }
@@ -74,21 +69,6 @@ impl StepCard {
             StepState::Running => "◐",
             StepState::Done => "✔",
             StepState::Error => "✗",
-        }
-    }
-
-    /// One-line header summary: a compact hint of the first scalar arg, if any.
-    #[allow(dead_code)]
-    pub fn summary(&self) -> String {
-        let hint = self
-            .args
-            .as_object()
-            .and_then(|m| m.values().find_map(|v| v.as_str()))
-            .unwrap_or("");
-        if hint.is_empty() {
-            self.name.clone()
-        } else {
-            format!("{}  {}", self.name, hint)
         }
     }
 }
@@ -128,13 +108,5 @@ mod tests {
         assert_eq!(c.state, StepState::Error);
         assert_eq!(c.glyph(), "✗");
         assert_eq!(c.error.as_deref(), Some("exit 1"));
-    }
-
-    #[test]
-    fn summary_is_one_line_name_plus_arg_hint() {
-        let c = card();
-        let s = c.summary();
-        assert!(s.contains("read"));
-        assert!(!s.contains('\n'));
     }
 }
