@@ -84,7 +84,7 @@ pub fn parse_tools_list(body: &serde_json::Value) -> Vec<ProbeTool> {
         .collect()
 }
 
-// ─── Task 3: async probe ───────────────────────────────────────────────────
+// ─── Task 3: async probe — initialize + tools/list + 401 detection ────────
 
 /// MCP protocol revision we advertise in `initialize`.
 ///
