@@ -373,7 +373,6 @@ impl App {
             if !reply.is_empty() {
                 m.text = reply;
             }
-            m.thinking.clear();
             m.streaming = false;
             m.rendered = Some(markdown::render(&m.text).lines);
             body = Some(m.text.clone());
@@ -1056,5 +1055,23 @@ mod esc_action_tests {
     #[test]
     fn esc_nothing_when_window_expired_not_streaming_empty() {
         assert_eq!(esc_action(expired(), false, true), EscAction::Nothing);
+    }
+}
+
+#[cfg(test)]
+mod reasoning_kept_tests {
+    use super::*;
+
+    #[test]
+    fn thinking_survives_turn_finish() {
+        let mut a = App::test_fixture();
+        a.begin_user_turn("hi");
+        a.append_delta("let me think", true); // thinking delta
+        a.append_delta("the answer", false);
+        a.finish_agent_turn("the answer".into(), Some("t1".into()));
+        let last = a.messages.last().unwrap();
+        assert_eq!(last.role, Role::Agent);
+        assert_eq!(last.thinking, "let me think"); // not cleared
+        assert!(!last.streaming);
     }
 }

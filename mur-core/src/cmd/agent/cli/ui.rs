@@ -152,17 +152,18 @@ fn push_message(
                     .fg(theme.agent)
                     .add_modifier(Modifier::BOLD),
             )));
-            if m.streaming {
-                if !m.thinking.is_empty() {
-                    for l in m.thinking.lines() {
-                        lines.push(Line::styled(
-                            l.to_string(),
-                            Style::default()
-                                .fg(theme.thinking)
-                                .add_modifier(Modifier::ITALIC | Modifier::DIM),
-                        ));
-                    }
+            // Reasoning stays visible after the turn finishes (D5).
+            if !m.thinking.is_empty() {
+                for l in m.thinking.lines() {
+                    lines.push(Line::styled(
+                        l.to_string(),
+                        Style::default()
+                            .fg(theme.thinking)
+                            .add_modifier(Modifier::ITALIC | Modifier::DIM),
+                    ));
                 }
+            }
+            if m.streaming {
                 let mut body: Vec<Line> =
                     m.text.lines().map(|l| Line::raw(l.to_string())).collect();
                 // Trailing spinner so the user sees liveness.
