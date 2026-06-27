@@ -256,6 +256,12 @@ pub struct App {
     /// Set to `true` when `StepStarted` fires this turn; used by the footer
     /// to distinguish "pure chat" from "agentic" turns.
     pub saw_step_this_turn: bool,
+    /// A HITL approval arrived this turn (any runtime). Paired with
+    /// `saw_step_this_turn` to detect an old runtime that ran a tool but
+    /// streamed no step events.
+    pub saw_hitl_this_turn: bool,
+    /// The "restart for step view" hint has been shown once this session.
+    pub step_hint_shown: bool,
 }
 
 impl App {
@@ -297,6 +303,8 @@ impl App {
             ctx_tokens: 0,
             pricing: super::footer::Pricing::default(),
             saw_step_this_turn: false,
+            saw_hitl_this_turn: false,
+            step_hint_shown: false,
         }
     }
 
@@ -376,6 +384,7 @@ impl App {
         self.turn_in = 0;
         self.turn_out = 0;
         self.saw_step_this_turn = false;
+        self.saw_hitl_this_turn = false;
         self.scroll_back = 0;
         // Placeholder agent message that deltas accumulate into.
         let mut m = ChatMsg::new(Role::Agent, "");
@@ -402,6 +411,19 @@ impl App {
         // to the bottom on every token, making it impossible to scroll up while
         // the agent streams. When the user hasn't scrolled (scroll_back == 0)
         // the render already stays pinned to the newest line as content grows.
+    }
+
+    /// If a tool needed approval this turn but no step events arrived, the agent
+    /// is running an old runtime that predates the Glass Box step stream. Nudge
+    /// the user to restart it — once per session.
+    pub fn maybe_step_hint(&mut self) {
+        if self.saw_hitl_this_turn && !self.saw_step_this_turn && !self.step_hint_shown {
+            self.step_hint_shown = true;
+            let agent = self.agent.clone();
+            self.push_system(format!(
+                "↻ this agent ran a tool without streaming step detail — restart it (mur agent restart {agent}) for the step view"
+            ));
+        }
     }
 
     /// Finalize the streaming agent turn with the authoritative reply. Persist
@@ -1172,5 +1194,41 @@ mod footer_state_tests {
             &serde_json::json!({ "input_tokens": 10, "output_tokens": 5, "context_tokens": 42000 }),
         );
         assert_eq!(a.ctx_tokens, 42000);
+    }
+
+    #[test]
+    fn old_runtime_hitl_without_steps_shows_hint_once() {
+        let mut a = App::test_fixture();
+        a.begin_user_turn("do it");
+        a.saw_hitl_this_turn = true; // hitl arrived, no step events => old runtime
+        a.maybe_step_hint();
+        assert!(a.step_hint_shown);
+        let n = a
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::System && m.text.contains("restart"))
+            .count();
+        assert_eq!(n, 1);
+        // second such turn: not shown again
+        a.begin_user_turn("again");
+        a.saw_hitl_this_turn = true;
+        a.maybe_step_hint();
+        let n2 = a
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::System && m.text.contains("restart"))
+            .count();
+        assert_eq!(n2, 1);
+    }
+
+    #[test]
+    fn new_runtime_with_steps_shows_no_hint() {
+        let mut a = App::test_fixture();
+        a.begin_user_turn("do it");
+        a.saw_hitl_this_turn = true;
+        a.saw_step_this_turn = true; // new runtime emitted step events
+        a.maybe_step_hint();
+        assert!(!a.step_hint_shown);
+        assert!(!a.messages.iter().any(|m| m.text.contains("restart")));
     }
 }

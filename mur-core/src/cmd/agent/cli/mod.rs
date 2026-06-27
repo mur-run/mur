@@ -789,6 +789,7 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
     match msg {
         StreamMsg::Delta { text, thinking, .. } => app.append_delta(&text, thinking),
         StreamMsg::Hitl { req, .. } => {
+            app.saw_hitl_this_turn = true;
             // Session auto-approval: `/auto`/`--auto` covers every tool; the
             // modal's [a] key covers a single tool name.
             let auto = app.auto_approve || app.session_tool_allow.contains(&req.tool_name);
@@ -801,6 +802,7 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
             if let Some(u) = task.get("usage") {
                 app.apply_usage(u);
             }
+            app.maybe_step_hint();
             match stream::task_outcome(&task) {
                 Ok((reply, task_id)) => app.finish_agent_turn(reply, task_id),
                 Err(cause) => app.fail_turn(&cause),
