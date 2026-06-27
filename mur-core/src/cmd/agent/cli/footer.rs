@@ -1,9 +1,5 @@
 //! Pure footer math: tokens, cost, and context-window fill from `Task.usage`
 //! plus the agent's `models.yaml` pricing. No ratatui, no I/O — unit-tested.
-//!
-//! Public items here are consumed by Task-9 footer renderer; suppress dead-code
-//! lint until that wiring lands.
-#![allow(dead_code)]
 
 use serde_json::Value;
 
@@ -25,6 +21,8 @@ pub struct Pricing {
     pub window: Option<u64>,
 }
 
+// P1 footer is monochrome; threshold color wires this in P2.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CtxColor {
     Green,
@@ -67,6 +65,8 @@ pub fn context_pct(used: u64, window: u64) -> u8 {
         .clamp(0.0, 100.0) as u8
 }
 
+// P1 footer is monochrome; threshold color wires this in P2.
+#[allow(dead_code)]
 pub fn ctx_color(pct: u8) -> CtxColor {
     if pct < CTX_YELLOW_PCT {
         CtxColor::Green
