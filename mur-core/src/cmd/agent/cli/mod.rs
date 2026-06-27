@@ -13,6 +13,7 @@ mod markdown;
 mod multiplex;
 mod paste;
 pub mod persist;
+mod step;
 mod stream;
 mod theme;
 mod ui;
