@@ -148,6 +148,10 @@ Add to `McpServerEntry` (mur-common):
 - Server-side MCP hosting.
 - Changing the existing local-command add or Discover flows beyond sharing the new consent screen.
 
+## 11a. Deferred from P1 (tracked)
+
+- **OAuth: pre-commit tool consent + schema-hash pin.** The bearer/no-auth path fully honors §7 (connection test → consent screen showing full tool descriptions → pin `description_hash`). The OAuth path cannot: the tool list is only reachable *after* the browser login completes, so the entry is added before tools can be shown. P1 ships OAuth as add-entry → `mcp_login` (tools then reviewable in the MCP tab); on login failure the orphan entry is rolled back. Follow-up: after a successful `mcp_login`, re-probe with the obtained token to display tools for confirmation and pin the hash. Marked with a `TODO(feather)` in `agent_mcp_oauth_login`.
+
 ## 11. Open questions
 
 - P1 default egress: host-only allowlist vs full-deny-then-prompt? (Lean host-only so the server's own endpoint works out of the box.)
