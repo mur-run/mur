@@ -18,7 +18,7 @@ pub const ARGS_MAX_LINES: usize = 12;
 #[derive(Debug, Clone)]
 pub struct StepCard {
     pub id: String,
-    // name, args, started consumed by the step card UI renderer (Task 5).
+    // name, args, started consumed by the step card UI renderer (render_card::card_lines).
     pub name: String,
     pub args: serde_json::Value,
     pub state: StepState,

@@ -93,15 +93,20 @@ pub fn card_lines(card: &StepCard, theme: &'static Theme) -> Vec<Line<'static>> 
     out
 }
 
+/// Maximum byte length of the arg hint before truncation.
+const ARG_HINT_MAX: usize = 40;
+
 /// Compact first-scalar-arg hint for the header line (e.g. file path, query).
-/// Clips at 40 chars so long paths don't wrap the header.
+/// Clips at `ARG_HINT_MAX` chars so long paths don't wrap the header.
+/// Uses `floor_char_boundary` to avoid panicking on multi-byte chars (CJK, emoji).
 fn arg_hint(card: &StepCard) -> String {
     card.args
         .as_object()
         .and_then(|m| m.values().find_map(|v| v.as_str()))
         .map(|s| {
-            if s.len() > 40 {
-                format!("{}…", &s[..40])
+            if s.len() > ARG_HINT_MAX {
+                let end = s.floor_char_boundary(ARG_HINT_MAX);
+                format!("{}…", &s[..end])
             } else {
                 s.to_string()
             }
@@ -148,5 +153,30 @@ mod tests {
         );
         assert!(text.contains("8ms"), "expected '8ms' in: {text}");
         assert!(text.contains('✔'), "expected '✔' in: {text}");
+    }
+
+    #[test]
+    fn arg_hint_does_not_panic_on_long_multibyte_path() {
+        let long_cjk = "檔".repeat(50); // 3 bytes/char → ~150 bytes, well past 40
+        let c = StepCard::new(
+            "s1".into(),
+            "read".into(),
+            serde_json::json!({ "path": long_cjk }),
+        );
+        let _ = card_lines(&c, theme::resolve_skin("dark")); // must NOT panic
+    }
+
+    #[test]
+    fn error_card_shows_red_marker_and_message() {
+        let mut c = StepCard::new("s1".into(), "bash".into(), serde_json::json!({}));
+        c.complete(false, "boom".into(), false, 4, Some("exit 101".into()), 3);
+        let lines = card_lines(&c, theme::resolve_skin("dark"));
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("exit 101"), "expected 'exit 101' in: {text}");
+        assert!(text.contains('✗'), "expected '✗' in: {text}");
     }
 }
