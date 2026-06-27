@@ -1,8 +1,7 @@
 //! Render an edit-tool's `{file_path, old_string, new_string}` args as a
 //! bounded `-`/`+`/context diff, using the `diff` crate.
 //!
-//! Consumed by Task 7 (`render_card`); allow dead_code until that wiring lands.
-#![allow(dead_code)]
+//! Consumed by `render_card::card_lines` to show an inline diff for edit-tool cards.
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
