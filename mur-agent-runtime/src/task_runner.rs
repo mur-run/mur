@@ -139,6 +139,10 @@ pub struct TaskRunner {
     /// turn instead of broadcast to every client. Falls back to `notifier`.
     client_notifiers:
         Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::mpsc::Sender<serde_json::Value>>>>,
+    /// Per-turn steering channels keyed by task id. A running agentic loop
+    /// holds the receiver; `turn/steer` pushes a user interjection here and the
+    /// loop picks it up at the next iteration boundary.
+    steering: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::mpsc::Sender<String>>>>,
     hitl_timeout_secs: u32,
     max_iterations: u32,
     /// Per-task ceiling on cumulative input tokens for the agentic loop. The
@@ -241,6 +245,7 @@ impl TaskRunner {
             pending_approvals: None,
             notifier: None,
             client_notifiers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            steering: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             hitl_timeout_secs: 300,
             max_iterations: DEFAULT_MAX_ITERATIONS,
             max_token_budget: DEFAULT_MAX_TOKEN_BUDGET,
@@ -399,6 +404,33 @@ impl TaskRunner {
         self.client_notifiers.lock().await.remove(task_id);
     }
 
+    /// Register a steering sender for the given task id.
+    pub async fn register_steering(&self, task_id: &str, tx: tokio::sync::mpsc::Sender<String>) {
+        self.steering.lock().await.insert(task_id.to_string(), tx);
+    }
+
+    /// Drop the steering sender once the turn completes.
+    pub async fn unregister_steering(&self, task_id: &str) {
+        self.steering.lock().await.remove(task_id);
+    }
+
+    /// Push a steering message to the running task; errors if no such task.
+    pub async fn inject_steering(
+        &self,
+        task_id: &str,
+        msg: String,
+    ) -> Result<(), crate::protocol::a2a_server::HandlerError> {
+        let tx = self.steering.lock().await.get(task_id).cloned();
+        match tx {
+            Some(tx) => tx.send(msg).await.map_err(|_| {
+                crate::protocol::a2a_server::HandlerError::TaskNotFound(task_id.to_string())
+            }),
+            None => Err(crate::protocol::a2a_server::HandlerError::TaskNotFound(
+                task_id.to_string(),
+            )),
+        }
+    }
+
     pub fn with_hitl_timeout_secs(mut self, secs: u32) -> Self {
         self.hitl_timeout_secs = secs;
         self
@@ -531,7 +563,7 @@ impl TaskRunner {
     }
 
     pub async fn run_sync(&self, spec: TaskSpec) -> TaskOutcome {
-        self.run_sync_inner(spec, None).await
+        self.run_sync_inner(spec, None, None).await
     }
 
     /// Like `run_sync`, but forwards each LLM token delta to `sink` as it is
@@ -541,14 +573,16 @@ impl TaskRunner {
         &self,
         spec: TaskSpec,
         sink: tokio::sync::mpsc::Sender<crate::llm::StreamDelta>,
+        steer_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     ) -> TaskOutcome {
-        self.run_sync_inner(spec, Some(sink)).await
+        self.run_sync_inner(spec, Some(sink), steer_rx).await
     }
 
     async fn run_sync_inner(
         &self,
         spec: TaskSpec,
         sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
+        steer_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     ) -> TaskOutcome {
         // Reject new turns immediately when the runtime is draining for restart.
         // This is a transient failure — callers should retry after the agent
@@ -629,6 +663,7 @@ impl TaskRunner {
                             &spec.input,
                             spec.context_task_id.as_deref(),
                             sink,
+                            steer_rx,
                         )
                         .await
                     } else {
@@ -1171,6 +1206,7 @@ impl TaskRunner {
     /// Run the agentic loop. Returns the final agent message plus an optional
     /// `LoopStop` describing which budget (if any) forced an early, graceful
     /// exit. `None` means the model ended the turn naturally.
+    #[allow(clippy::too_many_arguments)]
     async fn run_agentic_loop(
         &self,
         task_id: &str,
@@ -1179,7 +1215,9 @@ impl TaskRunner {
         input: &Message,
         context_task_id: Option<&str>,
         _sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
+        mut steer_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     ) -> Result<(Message, Option<LoopExit>), TaskError> {
+        let _ = &mut steer_rx; // Task 3 consumes this; suppress unused-mut warning for now
         use crate::llm::{LlmRequest, RichMessage, StopReason};
 
         let tool_defs: Vec<_> = self.tools_for_loop().iter().map(|t| t.def()).collect();
@@ -1844,7 +1882,7 @@ mod tests {
             active_team: None,
         };
         let r2 = runner.clone();
-        let handle = tokio::spawn(async move { r2.run_sync_streaming(spec, tx).await });
+        let handle = tokio::spawn(async move { r2.run_sync_streaming(spec, tx, None).await });
 
         // Let the task register its cancel signal, then cancel by the known id.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -2662,5 +2700,21 @@ mod tests {
             ok,
             "registry must have no Working entries after start_async drain rejection"
         );
+    }
+
+    #[tokio::test]
+    async fn steering_register_inject_unregister() {
+        let runner = TaskRunner::new_stub_echo();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(8);
+        runner.register_steering("t1", tx).await;
+        runner
+            .inject_steering("t1", "use ripgrep".into())
+            .await
+            .unwrap();
+        assert_eq!(rx.recv().await.as_deref(), Some("use ripgrep"));
+        // unknown task → error
+        assert!(runner.inject_steering("nope", "x".into()).await.is_err());
+        runner.unregister_steering("t1").await;
+        assert!(runner.inject_steering("t1", "y".into()).await.is_err());
     }
 }

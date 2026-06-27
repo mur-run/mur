@@ -13,6 +13,9 @@ use tokio::sync::mpsc;
 /// is lossy (a dropped delta beats stalling generation on a slow client).
 const STREAM_DELTA_CAP: usize = 256;
 
+/// Buffer for per-turn steering messages (user interjections sent mid-loop).
+const STEER_CAP: usize = 16;
+
 pub struct MessageSendHandler {
     runner: Arc<TaskRunner>,
     progress: Option<mpsc::Sender<Event>>,
@@ -109,6 +112,12 @@ impl MethodHandler for MessageSendHandler {
                         .register_client_notifier(tid, notifier.clone())
                         .await;
                 }
+                // Create the steering channel so mid-turn interjections can be
+                // pushed to the agentic loop via `turn/steer` → `inject_steering`.
+                let (steer_tx, steer_rx) = tokio::sync::mpsc::channel::<String>(STEER_CAP);
+                if let Some(tid) = &turn_task_id {
+                    self.runner.register_steering(tid, steer_tx).await;
+                }
                 // Forward each LLM token delta to the connected client as a
                 // `message/delta` notification while the reply generates, stamped
                 // with task_id/context_id so the client can correlate the turn.
@@ -135,10 +144,14 @@ impl MethodHandler for MessageSendHandler {
                         }
                     }
                 });
-                let outcome = self.runner.run_sync_streaming(spec, delta_tx).await;
+                let outcome = self
+                    .runner
+                    .run_sync_streaming(spec, delta_tx, Some(steer_rx))
+                    .await;
                 let _ = forward.await;
                 if let Some(tid) = &turn_task_id {
                     self.runner.unregister_client_notifier(tid).await;
+                    self.runner.unregister_steering(tid).await;
                 }
                 outcome
             }
