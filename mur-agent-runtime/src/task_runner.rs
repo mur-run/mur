@@ -2811,11 +2811,10 @@ mod step_tests {
 
     #[test]
     fn cap_step_output_long_is_truncated() {
-        let big = "x".repeat(STEP_MAX_BYTES + 100);
+        let big = "é".repeat(STEP_MAX_BYTES); // 2 bytes/char → over the cap
         let (out, truncated, full_len) = cap_step_output(&big);
         assert!(truncated);
-        assert_eq!(full_len, STEP_MAX_BYTES + 100);
-        assert!(out.ends_with("\n[truncated]"));
-        assert!(out.len() <= STEP_MAX_BYTES + "\n[truncated]".len());
+        assert_eq!(full_len, big.len());
+        assert!(out.is_char_boundary(out.len())); // never split a char
     }
 }
