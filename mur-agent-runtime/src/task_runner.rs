@@ -1217,7 +1217,6 @@ impl TaskRunner {
         _sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
         mut steer_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     ) -> Result<(Message, Option<LoopExit>), TaskError> {
-        let _ = &mut steer_rx; // Task 3 consumes this; suppress unused-mut warning for now
         use crate::llm::{LlmRequest, RichMessage, StopReason};
 
         let tool_defs: Vec<_> = self.tools_for_loop().iter().map(|t| t.def()).collect();
@@ -1379,6 +1378,17 @@ impl TaskRunner {
             }
 
             history.push(RichMessage::ToolResults { results });
+            // Mid-turn steering: pick up any user interjection sent via turn/steer
+            // since the last LLM call and append it before the next iteration.
+            // Race-free: history is mutated only here; try_recv never blocks.
+            if let Some(rx) = steer_rx.as_mut() {
+                while let Ok(msg) = rx.try_recv() {
+                    history.push(RichMessage::Text {
+                        role: "user".into(),
+                        content: format!("(steering) {msg}"),
+                    });
+                }
+            }
             iteration += 1;
         }
 
