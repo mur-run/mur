@@ -173,7 +173,7 @@ pub async fn cmd_mcp_registry_add(agent: &str, server_name: &str) -> Result<()> 
             "'{server_name}' is a remote MCP server; installing by URL.\n\
              To authenticate, run: mur agent mcp login {agent} {id}"
         );
-        cmd_mcp_add_remote(agent, &id, &remote.url, None)
+        cmd_mcp_add_remote(agent, &id, &remote.url, None, None, None)
     } else {
         anyhow::bail!("'{server_name}' has no installable package or remote endpoint")
     }
