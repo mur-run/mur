@@ -112,12 +112,16 @@ impl MethodHandler for MessageSendHandler {
                         .register_client_notifier(tid, notifier.clone())
                         .await;
                 }
-                // Create the steering channel so mid-turn interjections can be
-                // pushed to the agentic loop via `turn/steer` → `inject_steering`.
-                let (steer_tx, steer_rx) = tokio::sync::mpsc::channel::<String>(STEER_CAP);
-                if let Some(tid) = &turn_task_id {
+                // Steering channel: only when this turn has a task id to address
+                // it by. Without an id the sender would be immediately dropped,
+                // leaving the agentic loop with a permanently-closed receiver.
+                let steer_rx = if let Some(tid) = &turn_task_id {
+                    let (steer_tx, steer_rx) = tokio::sync::mpsc::channel::<String>(STEER_CAP);
                     self.runner.register_steering(tid, steer_tx).await;
-                }
+                    Some(steer_rx)
+                } else {
+                    None
+                };
                 // Forward each LLM token delta to the connected client as a
                 // `message/delta` notification while the reply generates, stamped
                 // with task_id/context_id so the client can correlate the turn.
@@ -146,7 +150,7 @@ impl MethodHandler for MessageSendHandler {
                 });
                 let outcome = self
                     .runner
-                    .run_sync_streaming(spec, delta_tx, Some(steer_rx))
+                    .run_sync_streaming(spec, delta_tx, steer_rx)
                     .await;
                 let _ = forward.await;
                 if let Some(tid) = &turn_task_id {
