@@ -103,6 +103,11 @@ fn push_message(
     spinner: usize,
     theme: &'static super::theme::Theme,
 ) {
+    // Step cards replace role-based rendering entirely for that message.
+    if let Some(card) = &m.step {
+        lines.extend(super::render_card::card_lines(card, theme));
+        return;
+    }
     match m.role {
         Role::User => {
             lines.push(Line::from(Span::styled(

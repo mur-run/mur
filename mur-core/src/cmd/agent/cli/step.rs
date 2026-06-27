@@ -11,8 +11,7 @@ pub enum StepState {
 }
 
 /// Max args lines shown inside an expanded card (mirrors the old HITL modal cap).
-// Used by the step card UI renderer (Task 5).
-#[allow(dead_code)]
+// Used by the step card UI renderer (render_card.rs).
 pub const ARGS_MAX_LINES: usize = 12;
 
 /// One tool call, shown inline in the transcript.
@@ -69,8 +68,7 @@ impl StepCard {
         self.duration_ms = Some(duration_ms);
     }
 
-    // glyph and summary are consumed by the step card UI renderer (Task 5).
-    #[allow(dead_code)]
+    // glyph is called by render_card::card_lines.
     pub fn glyph(&self) -> &'static str {
         match self.state {
             StepState::Running => "◐",
