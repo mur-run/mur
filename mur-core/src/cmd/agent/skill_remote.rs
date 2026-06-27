@@ -1,6 +1,4 @@
 //! Remote skill install — validate URL, fetch, preview (parse+scan), install.
-// Public surface wired by quill Tasks 4-5; suppress until the call-sites land.
-#![allow(dead_code)]
 
 use anyhow::{Result, bail};
 use reqwest::Url;
@@ -60,6 +58,9 @@ pub fn preview_skill_text(text: &str, is_markdown: bool) -> Result<SkillPreview>
 /// Max bytes downloaded for a skill source.
 pub const SKILL_MAX_BYTES: usize = 1024 * 1024;
 
+/// HTTP request timeout for fetching a remote skill.
+const FETCH_TIMEOUT_SECS: u64 = 15;
+
 /// Returns `true` if the URL path points to a markdown file.
 /// Treats `.yaml`/`.yml` as canonical YAML; `.md`/`.markdown` and extensionless
 /// paths as markdown.
@@ -79,6 +80,7 @@ pub async fn fetch_skill(url: &str) -> Result<(String, bool)> {
     let is_md = is_markdown_url(&url);
     let resp = reqwest::Client::new()
         .get(&url)
+        .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
         .send()
         .await
         .map_err(|e| anyhow::anyhow!("fetch {url}: {e}"))?;
@@ -107,6 +109,8 @@ pub async fn fetch_skill(url: &str) -> Result<(String, bool)> {
 }
 
 /// Fetch + parse + scan a remote skill URL. Does NOT install.
+// Called from the mur-hub-gui Tauri backend (separate workspace crate).
+#[allow(dead_code)]
 pub async fn preview_skill_url(url: &str) -> Result<SkillPreview> {
     let (text, is_md) = fetch_skill(url).await?;
     preview_skill_text(&text, is_md)

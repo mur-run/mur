@@ -87,7 +87,7 @@ export function SkillAddUrlModal({ agentName, onClose, onSaved }: Props) {
               className="input"
               type="url"
               value={url}
-              onChange={(e) => setUrl(e.target.value)}
+              onChange={(e) => { setUrl(e.target.value); setPreview(null); setAccept(false); }}
               onKeyDown={(e) => e.key === "Enter" && !busy && fetchPreview()}
               placeholder={t("skillurl.urlPlaceholder")}
               style={{ flex: 1 }}
