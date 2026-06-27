@@ -344,10 +344,14 @@ fn apply_sse_event(acc: &mut StreamAccum, v: &serde_json::Value) -> Option<super
                     })
                 }
                 Some("input_json_delta") => {
-                    if let (Some((_, _, buf)), Some(pj)) =
-                        (acc.cur_tool.as_mut(), d["partial_json"].as_str())
-                    {
-                        buf.push_str(pj);
+                    match (acc.cur_tool.as_mut(), d["partial_json"].as_str()) {
+                        (Some((_, _, buf)), Some(pj)) => buf.push_str(pj),
+                        (None, Some(_)) => {
+                            tracing::warn!(
+                                "anthropic stream: input_json_delta with no open tool_use block — dropping args fragment"
+                            );
+                        }
+                        _ => {}
                     }
                     None
                 }
@@ -874,5 +878,55 @@ mod tests {
 
         assert_eq!(acc.tool_calls.len(), 1);
         assert_eq!(acc.tool_calls[0].input, json!({}));
+    }
+
+    #[test]
+    fn apply_sse_event_two_sequential_tool_blocks() {
+        let mut acc = StreamAccum::default();
+        // block 0: tool A
+        apply_sse_event(
+            &mut acc,
+            &serde_json::json!({
+                "type":"content_block_start","index":0,
+                "content_block":{"type":"tool_use","id":"a","name":"read","input":{}}
+            }),
+        );
+        apply_sse_event(
+            &mut acc,
+            &serde_json::json!({
+                "type":"content_block_delta","index":0,
+                "delta":{"type":"input_json_delta","partial_json":"{\"path\":\"x\"}"}
+            }),
+        );
+        apply_sse_event(
+            &mut acc,
+            &serde_json::json!({"type":"content_block_stop","index":0}),
+        );
+        // block 1: tool B
+        apply_sse_event(
+            &mut acc,
+            &serde_json::json!({
+                "type":"content_block_start","index":1,
+                "content_block":{"type":"tool_use","id":"b","name":"bash","input":{}}
+            }),
+        );
+        apply_sse_event(
+            &mut acc,
+            &serde_json::json!({
+                "type":"content_block_delta","index":1,
+                "delta":{"type":"input_json_delta","partial_json":"{\"command\":\"ls\"}"}
+            }),
+        );
+        apply_sse_event(
+            &mut acc,
+            &serde_json::json!({"type":"content_block_stop","index":1}),
+        );
+
+        assert_eq!(acc.tool_calls.len(), 2);
+        assert_eq!(acc.tool_calls[0].call_id, "a");
+        assert_eq!(acc.tool_calls[0].tool_name, "read");
+        assert_eq!(acc.tool_calls[0].input, serde_json::json!({"path":"x"}));
+        assert_eq!(acc.tool_calls[1].call_id, "b");
+        assert_eq!(acc.tool_calls[1].input, serde_json::json!({"command":"ls"}));
     }
 }
