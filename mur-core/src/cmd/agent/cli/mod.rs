@@ -773,6 +773,8 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
         StreamMsg::Err { error, .. } => app.fail_turn(&error),
         StreamMsg::Note(text) => app.push_system(text),
         StreamMsg::ShellDone { cmd, output } => app.push_shell(&cmd, &output),
+        // Step events are parsed and forwarded; rendering is handled in Task 3.
+        StreamMsg::StepStarted { .. } | StreamMsg::StepCompleted { .. } => {}
     }
 }
 
@@ -832,6 +834,7 @@ fn run_plain(home: &Path, agent: &str, auto: bool) -> Result<()> {
                     DialMode::RequireRunning,
                 );
             },
+            |_step| {},
         );
         match result {
             Ok(task) => match stream::task_outcome(&task) {

@@ -43,6 +43,28 @@ pub enum StreamMsg {
     Note(String),
     /// A local `!command` finished. Turn-independent like `Note`.
     ShellDone { cmd: String, output: String },
+    /// A tool call started running (name + args).
+    // Fields consumed by the Task 3 renderer; allow dead_code until then.
+    #[allow(dead_code)]
+    StepStarted {
+        task_id: String,
+        step_id: String,
+        name: String,
+        args: Value,
+    },
+    /// A tool call finished (result/error + duration).
+    // Fields consumed by the Task 3 renderer; allow dead_code until then.
+    #[allow(dead_code)]
+    StepCompleted {
+        task_id: String,
+        step_id: String,
+        ok: bool,
+        output: String,
+        truncated: bool,
+        full_len: usize,
+        error: Option<String>,
+        duration_ms: u64,
+    },
 }
 
 impl StreamMsg {
@@ -52,7 +74,9 @@ impl StreamMsg {
             StreamMsg::Delta { task_id, .. }
             | StreamMsg::Hitl { task_id, .. }
             | StreamMsg::Done { task_id, .. }
-            | StreamMsg::Err { task_id, .. } => Some(task_id),
+            | StreamMsg::Err { task_id, .. }
+            | StreamMsg::StepStarted { task_id, .. }
+            | StreamMsg::StepCompleted { task_id, .. } => Some(task_id),
             StreamMsg::Note(_) | StreamMsg::ShellDone { .. } => None,
         }
     }
@@ -216,6 +240,41 @@ pub fn spawn_stream(
                     task_id: tid.clone(),
                     req: HitlRequest::from_value(hitl),
                 });
+            },
+            |step| {
+                let msg = match step {
+                    crate::a2a_dial::StepEvent::Started {
+                        step_id,
+                        task_id,
+                        name,
+                        args,
+                    } => StreamMsg::StepStarted {
+                        task_id,
+                        step_id,
+                        name,
+                        args,
+                    },
+                    crate::a2a_dial::StepEvent::Completed {
+                        step_id,
+                        task_id,
+                        ok,
+                        output,
+                        truncated,
+                        full_len,
+                        error,
+                        duration_ms,
+                    } => StreamMsg::StepCompleted {
+                        task_id,
+                        step_id,
+                        ok,
+                        output,
+                        truncated,
+                        full_len,
+                        error,
+                        duration_ms,
+                    },
+                };
+                let _ = tx.blocking_send(msg);
             },
         );
         let _ = match result {
