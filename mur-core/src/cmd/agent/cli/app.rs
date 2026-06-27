@@ -377,6 +377,16 @@ impl App {
             m.streaming = false;
             m.rendered = Some(markdown::render(&m.text).lines);
             body = Some(m.text.clone());
+        } else if self.streaming && !reply.is_empty() {
+            // Tool-using turns run the agentic loop, which doesn't stream text
+            // deltas — the empty placeholder was dropped when the first step card
+            // arrived, so there's no trailing segment. Push the final reply as its
+            // own finished message instead of dropping it.
+            // Guard: self.streaming is false after finish_partial() so stale
+            // Done events from cancelled tasks are still silently ignored.
+            self.messages.push(ChatMsg::agent_rendered(reply.clone()));
+            self.scroll_back = 0;
+            body = Some(reply);
         }
         if let Some(b) = body {
             if let Some(tid) = &task_id {
@@ -928,6 +938,45 @@ mod step_app_tests {
         assert_eq!(card.state, StepState::Done);
         assert_eq!(card.duration_ms, Some(42));
         assert_eq!(card.output, "foo.rs\n");
+    }
+
+    #[test]
+    fn tool_turn_reply_is_pushed_not_dropped() {
+        let mut a = app();
+        a.begin_user_turn("read the file");
+        a.push_step_started(
+            "s1".into(),
+            "read".into(),
+            serde_json::json!({"path":"a.rs"}),
+        );
+        a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5);
+        // No streaming segment now (tool turn, no text deltas).
+        a.finish_agent_turn("here is the summary".into(), Some("t1".into()));
+        let last = a.messages.last().unwrap();
+        assert!(last.step.is_none());
+        assert_eq!(last.role, Role::Agent);
+        assert_eq!(last.text, "here is the summary");
+        assert!(!last.streaming);
+        assert!(last.rendered.is_some());
+    }
+
+    #[test]
+    fn multi_segment_finish_sets_trailing_keeps_frozen() {
+        let mut a = app();
+        a.begin_user_turn("hi");
+        a.append_delta("looking at it", false);
+        a.push_step_started("s1".into(), "read".into(), serde_json::json!({}));
+        a.append_delta("here is the answer", false);
+        // reply = final iteration text only
+        a.finish_agent_turn("here is the answer".into(), Some("t1".into()));
+        let segs: Vec<_> = a
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::Agent && m.step.is_none())
+            .collect();
+        assert_eq!(segs[0].text, "looking at it"); // frozen, untouched
+        assert_eq!(segs[1].text, "here is the answer"); // trailing got reply
+        assert!(!segs[1].streaming);
     }
 }
 
