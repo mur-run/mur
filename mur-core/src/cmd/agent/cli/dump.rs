@@ -8,7 +8,6 @@ use super::step::StepCard;
 
 /// The whole visible transcript as plain, unstyled text — tool cards expanded
 /// past the TUI's line caps — for the Ctrl+O scrollback dump.
-#[allow(dead_code)]
 pub fn transcript_to_text(messages: &[ChatMsg]) -> String {
     let mut out = String::new();
     for m in messages {
@@ -48,7 +47,6 @@ pub fn transcript_to_text(messages: &[ChatMsg]) -> String {
     out
 }
 
-#[allow(dead_code)]
 fn card_text(card: &StepCard) -> String {
     let mut s = String::new();
     let dur = card
