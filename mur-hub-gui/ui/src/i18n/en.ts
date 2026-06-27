@@ -126,6 +126,8 @@ export const en = {
   "detail.discoverTitle": "MCP servers found in other tools",
   "detail.discoverScanning": "Scanning other tools…",
   "detail.discoverEmpty": "No MCP servers found in other tools.",
+  "detail.discoverSearch": "Search MCP servers (name or command)…",
+  "detail.discoverNoMatch": "No matching MCP servers.",
   "detail.import": "Import",
   "detail.imported": "Imported",
   "detail.reveal": "Reveal in Finder",

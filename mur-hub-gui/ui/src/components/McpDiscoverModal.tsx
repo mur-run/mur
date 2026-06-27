@@ -29,6 +29,17 @@ export function McpDiscoverModal({ agentName, onClose, onImported }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [imported, setImported] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+
+  const q = query.trim().toLowerCase();
+  const filtered = (servers ?? []).filter(
+    (s) =>
+      !q ||
+      s.name.toLowerCase().includes(q) ||
+      s.client.toLowerCase().includes(q) ||
+      s.command.toLowerCase().includes(q) ||
+      s.args.some((a) => a.toLowerCase().includes(q)),
+  );
 
   useEffect(() => {
     invoke<DiscoveredServer[]>("mcp_discover")
@@ -71,15 +82,30 @@ export function McpDiscoverModal({ agentName, onClose, onImported }: Props) {
             ×
           </button>
         </div>
+        {servers && servers.length > 0 && (
+          <div className="modal__search">
+            <input
+              className="input"
+              type="text"
+              placeholder={t("detail.discoverSearch")}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              autoFocus
+            />
+          </div>
+        )}
         <div className="modal__body">
           {servers === null && <p className="field-muted">{t("detail.discoverScanning")}</p>}
           {servers !== null && servers.length === 0 && !error && (
             <p className="field-muted">{t("detail.discoverEmpty")}</p>
           )}
           {error && <p className="save-error">{error}</p>}
-          {servers && servers.length > 0 && (
+          {servers && servers.length > 0 && filtered.length === 0 && (
+            <p className="field-muted">{t("detail.discoverNoMatch")}</p>
+          )}
+          {filtered.length > 0 && (
             <ul className="item-list">
-              {servers.map((s) => {
+              {filtered.map((s) => {
                 const key = `${s.client}/${s.name}`;
                 const done = imported.has(key);
                 const remote = s.command.length === 0;

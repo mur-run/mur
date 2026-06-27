@@ -48,6 +48,13 @@
   margin: 0;
 }
 
+/* Pinned filter row above the scrolling body (stays visible while the list
+   scrolls). The input itself reuses the .input primitive. */
+.modal__search {
+  flex: 0 0 auto;
+  padding: 12px 20px 0;
+}
+
 .modal__close {
   background: transparent;
   border: none;

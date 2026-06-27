@@ -128,6 +128,8 @@ export const zhTW: Table = {
   "detail.discoverTitle": "在其他工具找到的 MCP 伺服器",
   "detail.discoverScanning": "正在掃描其他工具…",
   "detail.discoverEmpty": "其他工具中沒有找到 MCP 伺服器。",
+  "detail.discoverSearch": "搜尋 MCP 伺服器（名稱或指令）…",
+  "detail.discoverNoMatch": "沒有符合的 MCP 伺服器。",
   "detail.import": "匯入",
   "detail.imported": "已匯入",
   "detail.reveal": "在 Finder 中顯示",
