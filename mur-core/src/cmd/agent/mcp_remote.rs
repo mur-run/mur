@@ -28,6 +28,51 @@ pub fn validate_remote_url(raw: &str) -> Result<String> {
     Ok(url.as_str().trim_end_matches('/').to_string())
 }
 
+// ─── SSE body parser — network-free, fully unit-testable ─────────────────
+
+/// Extract the JSON-RPC payload from an HTTP response body that is EITHER raw
+/// JSON or an SSE stream (`event:`/`data:` lines). For SSE, concatenates the
+/// `data:` lines of each event and returns the first that parses to a JSON
+/// object containing "result" (falling back to the first that parses at all).
+pub fn parse_jsonrpc_body(body: &str) -> Option<serde_json::Value> {
+    // Fast path: try raw JSON first.
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(body.trim()) {
+        return Some(v);
+    }
+
+    // SSE path: split on blank lines to get events, join data: lines per event.
+    let mut first_parsed: Option<serde_json::Value> = None;
+    for event_block in body.split("\n\n") {
+        let data: String = event_block
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim_end_matches('\r');
+                if let Some(rest) = line.strip_prefix("data:") {
+                    // Strip one optional leading space.
+                    Some(rest.strip_prefix(' ').unwrap_or(rest))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if data.is_empty() {
+            continue;
+        }
+
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
+            if v.get("result").is_some() {
+                return Some(v);
+            }
+            if first_parsed.is_none() {
+                first_parsed = Some(v);
+            }
+        }
+    }
+    first_parsed
+}
+
 // ─── Task 2: parse helpers — network-free, fully unit-testable ────────────
 
 /// A single tool entry returned by `tools/list`.
@@ -127,9 +172,27 @@ pub fn initialize_request_body() -> serde_json::Value {
     })
 }
 
+/// Attach an `Mcp-Session-Id` header to a request builder when a session id
+/// is present. Avoids duplicating the conditional at every call site.
+fn with_session(rb: reqwest::RequestBuilder, session: &Option<String>) -> reqwest::RequestBuilder {
+    if let Some(sid) = session {
+        rb.header("Mcp-Session-Id", sid)
+    } else {
+        rb
+    }
+}
+
 /// Probe a remote MCP server. POSTs `initialize`; on `401` reports
 /// `needs_auth` + RFC-9728 metadata URL; on success reports Streamable-HTTP
 /// and fetches `tools/list`; on 400/404/405 reports deprecated SSE transport.
+///
+/// Session threading: captures `Mcp-Session-Id` from the `initialize` response
+/// and threads it through `notifications/initialized` and `tools/list` so that
+/// servers that require it (e.g. `https://huggingface.co/mcp`) answer properly.
+///
+/// SSE responses: both the `initialize` and `tools/list` responses are read as
+/// text and parsed via `parse_jsonrpc_body`, which handles both raw JSON and
+/// `text/event-stream` framing.
 pub async fn probe_remote(url: &str, bearer: Option<&str>) -> Result<ProbeOutcome> {
     let url = validate_remote_url(url)?;
     let http = reqwest::Client::new();
@@ -175,8 +238,31 @@ pub async fn probe_remote(url: &str, bearer: Option<&str>) -> Result<ProbeOutcom
         bail!("server returned {status}");
     }
 
-    // tools/list — best-effort; server may require a session we don't keep.
-    // An empty list still lets the user add the server, just without preview.
+    // Capture session id BEFORE consuming the response body.
+    let session: Option<String> = resp
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+
+    // Best-effort: send notifications/initialized (no id → notification, not request).
+    let notif_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized"
+    });
+    let mut notif_req = http
+        .post(&url)
+        .header("Accept", "application/json, text/event-stream")
+        .header("Content-Type", "application/json")
+        .json(&notif_body);
+    if let Some(tok) = bearer {
+        notif_req = notif_req.bearer_auth(tok);
+    }
+    notif_req = with_session(notif_req, &session);
+    // Ignore result — notification is fire-and-forget.
+    let _ = notif_req.send().await;
+
+    // tools/list — best-effort; empty tools still lets the user add the server.
     let mut tools = Vec::new();
     let tl_body = serde_json::json!({
         "jsonrpc": "2.0",
@@ -186,17 +272,20 @@ pub async fn probe_remote(url: &str, bearer: Option<&str>) -> Result<ProbeOutcom
     });
     let mut tl_req = http
         .post(&url)
-        .header("Accept", "application/json")
+        .header("Accept", "application/json, text/event-stream")
         .header("Content-Type", "application/json")
         .json(&tl_body);
     if let Some(tok) = bearer {
         tl_req = tl_req.bearer_auth(tok);
     }
+    tl_req = with_session(tl_req, &session);
     if let Ok(r) = tl_req.send().await
         && r.status().is_success()
-        && let Ok(body) = r.json::<serde_json::Value>().await
+        && let Ok(body) = r.text().await
     {
-        tools = parse_tools_list(&body);
+        tools = parse_jsonrpc_body(&body)
+            .map(|v| parse_tools_list(&v))
+            .unwrap_or_default();
     }
 
     Ok(ProbeOutcome {
@@ -392,5 +481,93 @@ mod tests {
         assert_eq!(b["method"], "initialize");
         assert_eq!(b["params"]["protocolVersion"], MCP_PROTOCOL_VERSION);
         assert_eq!(b["params"]["clientInfo"]["name"], "mur-hub");
+    }
+
+    // ── parse_jsonrpc_body tests ──────────────────────────────────────────
+
+    #[test]
+    fn parse_jsonrpc_body_raw_json_with_result_and_tools() {
+        let body = r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"x","description":"d","inputSchema":{}}]}}"#;
+        let v = parse_jsonrpc_body(body).expect("should parse");
+        assert!(v.get("result").is_some());
+        let tools = parse_tools_list(&v);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "x");
+    }
+
+    #[test]
+    fn parse_jsonrpc_body_sse_single_event() {
+        let body = concat!(
+            "event: message\n",
+            r#"data: {"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"x","description":"d","inputSchema":{}}]}}"#,
+            "\n\n"
+        );
+        let v = parse_jsonrpc_body(body).expect("should parse SSE");
+        assert!(v.get("result").is_some(), "should have result key");
+        let tools = parse_tools_list(&v);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "x");
+    }
+
+    #[test]
+    fn parse_jsonrpc_body_sse_multi_line_data() {
+        // Two data: lines that together form valid JSON when joined.
+        let body = concat!(
+            "event: message\n",
+            r#"data: {"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"x","#,
+            "\n",
+            r#"data: "description":"d","inputSchema":{}}]}}"#,
+            "\n\n"
+        );
+        let v = parse_jsonrpc_body(body).expect("should parse multi-line SSE");
+        assert!(v.get("result").is_some());
+    }
+
+    #[test]
+    fn parse_jsonrpc_body_garbage_returns_none() {
+        assert!(parse_jsonrpc_body("not json at all\n\n").is_none());
+        assert!(parse_jsonrpc_body("").is_none());
+    }
+
+    #[test]
+    fn parse_jsonrpc_body_sse_prefers_event_with_result() {
+        // First event has no result; second has result — should return second.
+        let body = concat!(
+            "event: message\n",
+            r#"data: {"jsonrpc":"2.0","id":1,"error":{}}"#,
+            "\n\n",
+            "event: message\n",
+            r#"data: {"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"x","description":"d","inputSchema":{}}]}}"#,
+            "\n\n"
+        );
+        let v = parse_jsonrpc_body(body).expect("should parse");
+        assert!(v.get("result").is_some(), "should prefer event with result");
+        let tools = parse_tools_list(&v);
+        assert_eq!(tools.len(), 1);
+    }
+
+    // ── Network acceptance test (live, skip in CI) ────────────────────────
+
+    #[tokio::test]
+    #[ignore]
+    async fn probe_deepwiki_returns_tools() {
+        let outcome = probe_remote("https://mcp.deepwiki.com/mcp", None)
+            .await
+            .expect("probe should not error");
+        assert_eq!(
+            outcome.transport,
+            ProbeTransport::StreamableHttp,
+            "transport mismatch"
+        );
+        assert!(!outcome.needs_auth, "deepwiki should not require auth");
+        assert!(
+            !outcome.tools.is_empty(),
+            "expected at least one tool, got none"
+        );
+        let names: Vec<&str> = outcome.tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            names.contains(&"read_wiki_structure"),
+            "expected 'read_wiki_structure' in {names:?}"
+        );
     }
 }
