@@ -603,6 +603,8 @@ pub fn run() {
             mcp_skills::agent_addon_remove,
             mcp_skills::mcp_discover,
             mcp_skills::reveal_in_finder,
+            mcp_skills::agent_skill_preview_url,
+            mcp_skills::agent_skill_install_url,
             mobile::mobile_events_read,
             notif::agent_get_notif_config,
             notif::agent_set_notif_config,
