@@ -1,12 +1,13 @@
 //! Render the visible transcript to plain text for the Ctrl+O scrollback dump.
-//! Everything is fully expanded (no TUI line caps) and unstyled, so the user
-//! can select/copy/search it natively.
+//! Tool cards are expanded past the TUI's line caps (upstream byte-truncated
+//! output can't be recovered) and unstyled, so the user can
+//! select/copy/search it natively.
 
 use super::app::{ChatMsg, Role};
 use super::step::StepCard;
 
-/// The whole visible transcript as plain, unstyled text — tool cards fully
-/// expanded — for the Ctrl+O scrollback dump.
+/// The whole visible transcript as plain, unstyled text — tool cards expanded
+/// past the TUI's line caps — for the Ctrl+O scrollback dump.
 #[allow(dead_code)]
 pub fn transcript_to_text(messages: &[ChatMsg]) -> String {
     let mut out = String::new();

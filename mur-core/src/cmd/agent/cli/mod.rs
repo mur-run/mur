@@ -424,20 +424,24 @@ fn scrollback_dump(app: &App) -> io::Result<()> {
     )?;
     disable_raw_mode()?;
 
-    use std::io::Write;
-    let mut out = io::stdout();
-    writeln!(out, "{text}")?;
-    writeln!(
-        out,
-        "\n─── full transcript · select/copy freely · saved to {} ───",
-        path.display()
-    )?;
-    write!(out, "press Enter to return to chat… ")?;
-    out.flush()?;
-    let mut buf = String::new();
-    let _ = io::stdin().read_line(&mut buf);
+    let res = (|| -> io::Result<()> {
+        use std::io::Write;
+        let mut out = io::stdout();
+        writeln!(out, "{text}")?;
+        writeln!(
+            out,
+            "\n─── full transcript · select/copy freely · saved to {} ───",
+            path.display()
+        )?;
+        write!(out, "press Enter to return to chat… ")?;
+        out.flush()?;
+        let mut buf = String::new();
+        let _ = io::stdin().read_line(&mut buf);
+        Ok(())
+    })();
 
-    // Resume.
+    // Resume UNCONDITIONALLY — even if a write above failed, never leave the
+    // terminal in the normal buffer with raw mode off.
     enable_raw_mode()?;
     execute!(
         io::stdout(),
@@ -445,7 +449,7 @@ fn scrollback_dump(app: &App) -> io::Result<()> {
         EnableBracketedPaste,
         EnableMouseCapture
     )?;
-    Ok(())
+    res
 }
 
 /// Write `cli.skin = name` to `~/.mur/config.yaml` atomically.
