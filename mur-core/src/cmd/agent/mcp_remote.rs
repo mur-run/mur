@@ -28,7 +28,7 @@ pub fn validate_remote_url(raw: &str) -> Result<String> {
     Ok(url.as_str().trim_end_matches('/').to_string())
 }
 
-// ─── Task 2: parse helpers (network-free) ──────────────────────────────────
+// ─── Task 2: parse helpers — network-free, fully unit-testable ────────────
 
 /// A single tool entry returned by `tools/list`.
 #[derive(Debug, Clone, Serialize, PartialEq)]
