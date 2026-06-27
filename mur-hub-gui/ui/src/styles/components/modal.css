@@ -14,6 +14,11 @@
 .modal {
   width: 360px;
   max-width: calc(100vw - 32px);
+  /* Cap to the viewport so a long body scrolls instead of overflowing
+     off-screen (header + footer stay pinned, body flexes + scrolls). */
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
   background: var(--surface-card);
   border: 1px solid var(--border-line);
   border-radius: var(--radius-xl);
@@ -21,7 +26,14 @@
   overflow: hidden;
 }
 
+/* Wider variant for modals whose content is wide (e.g. MCP command strings)
+   so they wrap less and the list stays short enough to scan. */
+.modal--wide {
+  width: 560px;
+}
+
 .modal__header {
+  flex: 0 0 auto;
   padding: 18px 20px;
   border-bottom: 1px solid var(--border-line);
   display: flex;
@@ -52,10 +64,31 @@
 }
 
 .modal__body {
+  /* The scroll region. min-height:0 lets this flex child shrink below its
+     content height so overflow-y can actually kick in inside the capped modal. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 20px;
 }
 
+/* Slim, theme-matched scrollbar (WebKit / Tauri macOS) so the list reads as
+   intentionally scrollable, not like a default chunky bar. */
+.modal__body::-webkit-scrollbar {
+  width: 10px;
+}
+.modal__body::-webkit-scrollbar-thumb {
+  background: var(--border-line);
+  border-radius: 6px;
+  border: 2px solid var(--surface-card);
+}
+.modal__body::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
 .modal__footer {
+  flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
   gap: 8px;

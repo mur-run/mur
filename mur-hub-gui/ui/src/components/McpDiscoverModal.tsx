@@ -64,7 +64,7 @@ export function McpDiscoverModal({ agentName, onClose, onImported }: Props) {
 
   return (
     <div className="modal__overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal modal--wide" onClick={(e) => e.stopPropagation()}>
         <div className="modal__header">
           <h2 className="modal__title">{t("detail.discoverTitle")}</h2>
           <button className="modal__close" onClick={onClose} aria-label={t("detail.close")}>
