@@ -28,6 +28,16 @@ interface Props {
   onSaved: (d: AgentDetail) => void;
 }
 
+/** Derive a server-id fallback from the URL hostname (port included if non-standard). */
+function hostOf(rawUrl: string): string {
+  try {
+    const u = new URL(rawUrl.trim());
+    return u.port ? `${u.hostname}:${u.port}` : u.hostname;
+  } catch {
+    return "";
+  }
+}
+
 export function McpAddRemoteModal({ agentName, onClose, onSaved }: Props) {
   const { t } = useT();
   const [url, setUrl] = useState("");
@@ -69,11 +79,14 @@ export function McpAddRemoteModal({ agentName, onClose, onSaved }: Props) {
   async function add() {
     setError(null);
     setBusy("add");
+    // serverId is optional — fall back to the URL hostname so the backend always
+    // gets a non-empty identifier.
+    const id = serverId.trim() || hostOf(url);
     try {
       if (auth === "oauth") {
         const detail = await invoke<AgentDetail>("agent_mcp_oauth_login", {
           name: agentName,
-          serverId,
+          serverId: id,
           url,
         });
         setSaved(true);
@@ -81,7 +94,7 @@ export function McpAddRemoteModal({ agentName, onClose, onSaved }: Props) {
       } else {
         const detail = await invoke<AgentDetail>("agent_mcp_add_remote", {
           name: agentName,
-          serverId,
+          serverId: id,
           url,
           bearer: auth === "bearer" && token ? token : null,
         });
@@ -167,7 +180,7 @@ export function McpAddRemoteModal({ agentName, onClose, onSaved }: Props) {
           <div className="mcp-form-actions" style={{ marginTop: 12 }}>
             <button
               className="btn btn--sm btn--secondary"
-              disabled={!url || !serverId || busy !== null}
+              disabled={!url || busy !== null}
               onClick={test}
             >
               {busy === "test" ? t("remote.testing") : t("remote.test")}
@@ -231,7 +244,7 @@ export function McpAddRemoteModal({ agentName, onClose, onSaved }: Props) {
           {auth === "oauth" ? (
             <button
               className="btn btn--sm btn--primary"
-              disabled={!url || !serverId || !probe || busy !== null || saved}
+              disabled={!url || !probe || busy !== null || saved}
               onClick={add}
             >
               {busy === "add" ? t("remote.adding") : t("remote.oauthLogin")}
@@ -239,7 +252,7 @@ export function McpAddRemoteModal({ agentName, onClose, onSaved }: Props) {
           ) : (
             <button
               className="btn btn--sm btn--primary"
-              disabled={!url || !serverId || !probe || busy !== null || saved}
+              disabled={!url || !probe || busy !== null || saved}
               onClick={add}
             >
               {busy === "add" ? t("remote.adding") : t("remote.add")}

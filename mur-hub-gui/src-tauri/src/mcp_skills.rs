@@ -196,8 +196,15 @@ pub async fn agent_mcp_add_remote(
         None
     };
 
-    cmd_mcp_add_remote(&name, &server_id, &url, secret_ref, desc_hash, host.as_deref())
-        .map_err(|e| format!("{e:#}"))?;
+    cmd_mcp_add_remote(
+        &name,
+        &server_id,
+        &url,
+        secret_ref,
+        desc_hash,
+        host.as_deref(),
+    )
+    .map_err(|e| format!("{e:#}"))?;
     get_agent_detail(name)
 }
 
@@ -212,7 +219,7 @@ pub async fn agent_mcp_oauth_login(
 ) -> Result<AgentDetail, String> {
     use mur_core::cmd::agent::mcp::cmd_mcp_add_remote;
     use mur_core::cmd::agent::mcp_login::cmd_mcp_login;
-    use mur_core::cmd::agent::mcp_remote::{validate_remote_url};
+    use mur_core::cmd::agent::mcp_remote::validate_remote_url;
 
     let url = validate_remote_url(&url).map_err(|e| format!("{e:#}"))?;
     let host = reqwest::Url::parse(&url)
@@ -225,9 +232,12 @@ pub async fn agent_mcp_oauth_login(
         .map_err(|e| format!("{e:#}"))?;
 
     // Run OAuth 2.1 + PKCE (opens system browser; token stored by login flow).
-    cmd_mcp_login(&name, &server_id)
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    // TODO(feather): OAuth consent + tool-schema hash pin happen post-login (deferred).
+    if let Err(e) = cmd_mcp_login(&name, &server_id).await {
+        // Roll back the orphan entry so the user can retry without "already exists".
+        let _ = mur_core::cmd::agent::mcp::cmd_mcp_remove(&name, &server_id);
+        return Err(format!("{e:#}"));
+    }
 
     get_agent_detail(name)
 }

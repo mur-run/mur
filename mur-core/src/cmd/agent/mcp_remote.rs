@@ -192,12 +192,11 @@ pub async fn probe_remote(url: &str, bearer: Option<&str>) -> Result<ProbeOutcom
     if let Some(tok) = bearer {
         tl_req = tl_req.bearer_auth(tok);
     }
-    if let Ok(tl_resp) = tl_req.send().await {
-        if tl_resp.status().is_success() {
-            if let Ok(body) = tl_resp.json::<serde_json::Value>().await {
-                tools = parse_tools_list(&body);
-            }
-        }
+    if let Ok(r) = tl_req.send().await
+        && r.status().is_success()
+        && let Ok(body) = r.json::<serde_json::Value>().await
+    {
+        tools = parse_tools_list(&body);
     }
 
     Ok(ProbeOutcome {
@@ -288,6 +287,11 @@ mod tests {
     }
 
     #[test]
+    fn rejects_non_url() {
+        assert!(validate_remote_url("not a url").is_err());
+    }
+
+    #[test]
     fn strips_trailing_slash_from_bare_host() {
         let result = validate_remote_url("https://mcp.example.com/").unwrap();
         assert_eq!(result, "https://mcp.example.com");
@@ -303,8 +307,7 @@ mod tests {
 
     #[test]
     fn parses_resource_metadata_from_header() {
-        let header =
-            r#"Bearer realm="mcp", resource_metadata="https://auth.example.com/.well-known/oauth-protected-resource""#;
+        let header = r#"Bearer realm="mcp", resource_metadata="https://auth.example.com/.well-known/oauth-protected-resource""#;
         let result = parse_resource_metadata(header);
         assert_eq!(
             result.as_deref(),
