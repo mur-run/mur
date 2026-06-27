@@ -1,4 +1,6 @@
 //! Remote skill install — validate URL, fetch, preview (parse+scan), install.
+// Public surface wired by quill Tasks 4-5; suppress until the call-sites land.
+#![allow(dead_code)]
 
 use anyhow::{Result, bail};
 use reqwest::Url;
@@ -83,6 +85,11 @@ pub async fn fetch_skill(url: &str) -> Result<(String, bool)> {
     if !resp.status().is_success() {
         bail!("fetch {url}: HTTP {}", resp.status());
     }
+    if let Some(len) = resp.content_length()
+        && len > SKILL_MAX_BYTES as u64
+    {
+        bail!("skill too large ({len} bytes; max {SKILL_MAX_BYTES})");
+    }
     let bytes = resp
         .bytes()
         .await
@@ -122,11 +129,17 @@ pub async fn install_skill_from_url(
         );
     }
     let ext = if is_md { "md" } else { "yaml" };
-    let tmp = std::env::temp_dir().join(format!(
-        "mur-skill-{}-{}.{ext}",
-        std::process::id(),
-        preview.name
-    ));
+    let safe: String = preview
+        .name
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    let safe = if safe.is_empty() {
+        "skill".to_string()
+    } else {
+        safe
+    };
+    let tmp = std::env::temp_dir().join(format!("mur-skill-{}-{safe}.{ext}", std::process::id()));
     std::fs::write(&tmp, &text).map_err(|e| anyhow::anyhow!("write temp skill: {e}"))?;
     let result = super::skill::cmd_skill_add(agent, &tmp.to_string_lossy());
     let _ = std::fs::remove_file(&tmp);
@@ -141,6 +154,10 @@ mod tests {
     #[test]
     fn url_validation() {
         assert!(validate_skill_url("https://example.com/skill.yaml").is_ok());
+        assert_eq!(
+            validate_skill_url(" https://x.com/s.yaml ").unwrap(),
+            "https://x.com/s.yaml"
+        );
         assert!(validate_skill_url("http://localhost:8080/skill.md").is_ok());
         assert!(validate_skill_url("http://127.0.0.1/skill.md").is_ok());
         assert!(validate_skill_url("http://example.com/skill.yaml").is_err());
@@ -173,6 +190,10 @@ content:
         let preview = preview_skill_text(FLAGGED_MD, true).unwrap();
         assert!(preview.blocking, "expected blocking findings");
         assert!(!preview.findings.is_empty(), "expected non-empty findings");
+        assert!(
+            preview.body.contains("Ignore all previous instructions"),
+            "body should contain the injected prompt text"
+        );
     }
 
     #[test]
@@ -181,5 +202,6 @@ content:
         assert!(is_markdown_url("https://x.com/s.markdown"));
         assert!(!is_markdown_url("https://x.com/s.yaml"));
         assert!(!is_markdown_url("https://x.com/s.yml"));
+        assert!(is_markdown_url("https://x.com/skillname"));
     }
 }
