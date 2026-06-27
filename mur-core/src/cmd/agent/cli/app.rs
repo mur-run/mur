@@ -240,6 +240,22 @@ pub struct App {
     /// Mascot color/animation mode, resolved once at startup from the theme
     /// and terminal capabilities (NO_COLOR / non-TTY / TERM=dumb → static).
     pub mascot_mode: MascotMode,
+    /// Wall-clock instant when the current agent turn began (set in
+    /// `begin_user_turn`, cleared in `finish_agent_turn` / `fail_turn`).
+    pub turn_started: Option<std::time::Instant>,
+    /// Cumulative token counts for this session (all turns combined).
+    pub session_in: u64,
+    pub session_out: u64,
+    /// Token counts for the most recent completed turn.
+    pub turn_in: u64,
+    pub turn_out: u64,
+    /// Last-known context fill from the runtime's `Task.usage.context_tokens`.
+    pub ctx_tokens: u64,
+    /// Agent's model pricing loaded at startup (used by the footer renderer).
+    pub pricing: super::footer::Pricing,
+    /// Set to `true` when `StepStarted` fires this turn; used by the footer
+    /// to distinguish "pure chat" from "agentic" turns.
+    pub saw_step_this_turn: bool,
 }
 
 impl App {
@@ -273,6 +289,14 @@ impl App {
             blink: Blink::new(),
             // Resolve color/animation once: env + TTY don't change mid-session.
             mascot_mode: resolve_mascot_mode(theme, std::io::stdout().is_terminal()),
+            turn_started: None,
+            session_in: 0,
+            session_out: 0,
+            turn_in: 0,
+            turn_out: 0,
+            ctx_tokens: 0,
+            pricing: super::footer::Pricing::default(),
+            saw_step_this_turn: false,
         }
     }
 
@@ -315,6 +339,19 @@ impl App {
         self.input = new_input();
     }
 
+    /// Ingest a `Task.usage` JSON object: update per-turn and session counters
+    /// and refresh `ctx_tokens` if the runtime emitted `context_tokens`.
+    pub fn apply_usage(&mut self, usage: &serde_json::Value) {
+        let u = super::footer::parse_usage(usage);
+        self.turn_in = u.input;
+        self.turn_out = u.output;
+        self.session_in += u.input;
+        self.session_out += u.output;
+        if let Some(c) = super::footer::context_tokens(usage) {
+            self.ctx_tokens = c;
+        }
+    }
+
     /// Replace the input buffer with `text` (used by slash-command completion).
     pub fn set_input(&mut self, text: &str) {
         self.input = new_input();
@@ -335,6 +372,10 @@ impl App {
         let task_id = uuid::Uuid::now_v7().to_string();
         self.current_task_id = Some(task_id.clone());
         self.streaming = true;
+        self.turn_started = Some(std::time::Instant::now());
+        self.turn_in = 0;
+        self.turn_out = 0;
+        self.saw_step_this_turn = false;
         self.scroll_back = 0;
         // Placeholder agent message that deltas accumulate into.
         let mut m = ChatMsg::new(Role::Agent, "");
@@ -395,6 +436,7 @@ impl App {
         }
         self.streaming = false;
         self.current_task_id = None;
+        self.turn_started = None;
     }
 
     /// Mark a partial (cancelled) turn as finished without persisting a reply.
@@ -469,6 +511,7 @@ impl App {
         self.push_system(format!("error: {err}"));
         self.streaming = false;
         self.current_task_id = None;
+        self.turn_started = None;
     }
 
     /// Reset to a brand-new conversation (drops server-side context). Any
@@ -1073,5 +1116,61 @@ mod reasoning_kept_tests {
         assert_eq!(last.role, Role::Agent);
         assert_eq!(last.thinking, "let me think"); // not cleared
         assert!(!last.streaming);
+    }
+}
+
+#[cfg(test)]
+mod footer_state_tests {
+    use super::*;
+
+    #[test]
+    fn apply_usage_accumulates_session_and_sets_turn() {
+        let mut a = App::test_fixture();
+        a.apply_usage(
+            &serde_json::json!({ "input_tokens": 100, "output_tokens": 20, "context_tokens": 100 }),
+        );
+        a.apply_usage(
+            &serde_json::json!({ "input_tokens": 50, "output_tokens": 10, "context_tokens": 150 }),
+        );
+        assert_eq!(a.turn_in, 50);
+        assert_eq!(a.turn_out, 10);
+        assert_eq!(a.session_in, 150);
+        assert_eq!(a.session_out, 30);
+        assert_eq!(a.ctx_tokens, 150);
+    }
+
+    #[test]
+    fn begin_user_turn_resets_turn_counters_and_arms_clock() {
+        let mut a = App::test_fixture();
+        // Prime some prior-turn state.
+        a.apply_usage(&serde_json::json!({ "input_tokens": 100, "output_tokens": 20 }));
+        a.begin_user_turn("hi");
+        assert_eq!(a.turn_in, 0, "turn_in reset");
+        assert_eq!(a.turn_out, 0, "turn_out reset");
+        assert!(!a.saw_step_this_turn, "saw_step reset");
+        assert!(a.turn_started.is_some(), "clock armed");
+        // session accumulators must NOT be cleared by begin_user_turn.
+        assert_eq!(a.session_in, 100, "session_in survives begin_user_turn");
+        assert_eq!(a.session_out, 20, "session_out survives begin_user_turn");
+    }
+
+    #[test]
+    fn finish_agent_turn_clears_clock() {
+        let mut a = App::test_fixture();
+        a.begin_user_turn("hi");
+        assert!(a.turn_started.is_some());
+        a.finish_agent_turn("ok".into(), None);
+        assert!(a.turn_started.is_none(), "clock cleared after finish");
+    }
+
+    #[test]
+    fn context_tokens_update_on_apply() {
+        let mut a = App::test_fixture();
+        a.apply_usage(&serde_json::json!({ "input_tokens": 10, "output_tokens": 5 }));
+        assert_eq!(a.ctx_tokens, 0, "no context_tokens field → unchanged");
+        a.apply_usage(
+            &serde_json::json!({ "input_tokens": 10, "output_tokens": 5, "context_tokens": 42000 }),
+        );
+        assert_eq!(a.ctx_tokens, 42000);
     }
 }

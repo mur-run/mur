@@ -1,5 +1,9 @@
 //! Pure footer math: tokens, cost, and context-window fill from `Task.usage`
 //! plus the agent's `models.yaml` pricing. No ratatui, no I/O — unit-tested.
+//!
+//! Public items here are consumed by Task-9 footer renderer; suppress dead-code
+//! lint until that wiring lands.
+#![allow(dead_code)]
 
 use serde_json::Value;
 
@@ -21,6 +25,7 @@ pub struct Pricing {
     pub window: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CtxColor {
     Green,
     Yellow,
@@ -73,7 +78,7 @@ pub fn ctx_color(pct: u8) -> CtxColor {
 }
 
 pub fn ctx_bar(pct: u8, width: usize) -> String {
-    let filled = (pct as usize * width) / 100;
+    let filled = (pct as usize * width / 100).min(width);
     format!("{}{}", "▓".repeat(filled), "░".repeat(width - filled))
 }
 
@@ -126,8 +131,8 @@ mod tests {
 
     #[test]
     fn bar_fills_proportionally() {
-        assert_eq!(ctx_bar(50, 6), "▓▓▓░░░");
-        assert_eq!(ctx_bar(0, 6), "░░░░░░");
-        assert_eq!(ctx_bar(100, 6), "▓▓▓▓▓▓");
+        assert_eq!(ctx_bar(50, CTX_BAR_WIDTH), "▓▓▓░░░");
+        assert_eq!(ctx_bar(0, CTX_BAR_WIDTH), "░░░░░░");
+        assert_eq!(ctx_bar(100, CTX_BAR_WIDTH), "▓▓▓▓▓▓");
     }
 }
