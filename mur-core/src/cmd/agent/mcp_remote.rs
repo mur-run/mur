@@ -40,7 +40,9 @@ pub fn parse_jsonrpc_body(body: &str) -> Option<serde_json::Value> {
         return Some(v);
     }
 
-    // SSE path: split on blank lines to get events, join data: lines per event.
+    // SSE path: normalize CRLF → LF so that reverse-proxy streams using
+    // \r\n\r\n event separators are handled correctly, then split on blank lines.
+    let body = body.replace("\r\n", "\n");
     let mut first_parsed: Option<serde_json::Value> = None;
     for event_block in body.split("\n\n") {
         let data: String = event_block
@@ -544,6 +546,30 @@ mod tests {
         assert!(v.get("result").is_some(), "should prefer event with result");
         let tools = parse_tools_list(&v);
         assert_eq!(tools.len(), 1);
+    }
+
+    #[test]
+    fn parse_jsonrpc_body_handles_crlf_multi_event() {
+        // Two events separated by \r\n\r\n; first is a non-result message,
+        // second contains the tools/list result. All lines use \r\n endings.
+        let body = "event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"notifications/initialized\"}\r\n\r\nevent: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"name\":\"t\",\"description\":\"d\",\"inputSchema\":{}}]}}\r\n\r\n";
+        let v = parse_jsonrpc_body(body).expect("should parse CRLF multi-event SSE");
+        assert!(v.get("result").is_some(), "should have result key");
+        let tools = parse_tools_list(&v);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "t");
+    }
+
+    #[test]
+    fn parse_jsonrpc_body_data_no_space() {
+        // data: with no space after the colon should still parse.
+        let body = "event: message\ndata:{\"result\":{\"ok\":true}}\n\n";
+        let v = parse_jsonrpc_body(body).expect("should parse data: without space");
+        assert!(
+            v.get("result").is_some(),
+            "should have result key; got: {v:?}"
+        );
+        assert_eq!(v["result"]["ok"], true);
     }
 
     // ── Network acceptance test (live, skip in CI) ────────────────────────
