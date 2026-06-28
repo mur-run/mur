@@ -110,6 +110,17 @@ pub enum SkillAction {
         /// Path to skill.yaml to publish.
         path: String,
     },
+    /// Validate all skills in a registry checkout and (re)generate its
+    /// `index.yaml`. With `--check`, verify the on-disk index is authoritative
+    /// (CI gate) instead of writing. Validates signatures + security scan;
+    /// never signs.
+    RegistryIndex {
+        /// Path to the skill-registry checkout (contains `skills/` + `index.yaml`).
+        dir: String,
+        /// Verify the on-disk index is authoritative (exit non-zero on mismatch).
+        #[arg(long)]
+        check: bool,
+    },
     /// Update an installed skill to the latest registry version.
     Update {
         /// Name of installed skill to update.

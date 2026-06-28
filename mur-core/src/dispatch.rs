@@ -471,6 +471,20 @@ pub async fn run(cli: Cli) -> Result<()> {
                 cmd::skill_install::cmd_install_cli(&source)?
             }
             crate::cli::SkillAction::Publish { path } => cmd::skill_publish::cmd_publish(&path)?,
+            crate::cli::SkillAction::RegistryIndex { dir, check } => {
+                let path = std::path::Path::new(&dir);
+                if check {
+                    cmd::skill_registry_index::check_index(path)?;
+                    println!("✓ index.yaml is authoritative");
+                } else {
+                    let idx = cmd::skill_registry_index::build_registry_index(path)?;
+                    let yaml = idx
+                        .to_yaml()
+                        .map_err(|e| anyhow::anyhow!("serialize index: {e}"))?;
+                    std::fs::write(path.join("index.yaml"), &yaml)?;
+                    println!("✓ regenerated index.yaml ({} skills)", idx.skills.len());
+                }
+            }
             crate::cli::SkillAction::Update { name } => cmd::skill_install::cmd_update_cli(&name)?,
             crate::cli::SkillAction::Deps { name } => cmd::skill_deps::cmd_deps_cli(&name)?,
             crate::cli::SkillAction::Generate {
