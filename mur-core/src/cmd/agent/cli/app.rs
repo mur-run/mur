@@ -275,6 +275,9 @@ pub struct App {
     pub saw_hitl_this_turn: bool,
     /// The "restart for step view" hint has been shown once this session.
     pub step_hint_shown: bool,
+    /// Optional per-session cost ceiling in USD (`--budget-usd`). `None` = no
+    /// limit. Task 2 gates new turns when `session_cost() >= budget_usd`.
+    pub budget_usd: Option<f64>,
 }
 
 impl App {
@@ -322,6 +325,29 @@ impl App {
             saw_step_this_turn: false,
             saw_hitl_this_turn: false,
             step_hint_shown: false,
+            budget_usd: None,
+        }
+    }
+
+    /// Estimated cumulative session cost in USD, or `None` if the model's
+    /// pricing is unknown. Used by Task 2 to gate new turns against
+    /// `budget_usd`. Fail-open: `None` means "can't price it, allow the turn".
+    pub fn session_cost(&self) -> Option<f64> {
+        super::footer::turn_cost(
+            &self.pricing,
+            &super::footer::UsageCounts {
+                input: self.session_in,
+                output: self.session_out,
+            },
+        )
+    }
+
+    /// True when a USD cap is set and the estimated session spend has reached
+    /// it. Fails OPEN: an unpriced model (`session_cost() == None`) never blocks.
+    pub fn over_budget(&self) -> bool {
+        match (self.budget_usd, self.session_cost()) {
+            (Some(cap), Some(spent)) => spent >= cap,
+            _ => false,
         }
     }
 
@@ -1304,5 +1330,55 @@ mod footer_state_tests {
         a.maybe_step_hint();
         assert!(!a.step_hint_shown);
         assert!(!a.messages.iter().any(|m| m.text.contains("restart")));
+    }
+}
+
+#[cfg(test)]
+mod over_budget_tests {
+    use super::*;
+
+    #[test]
+    fn over_budget_only_when_priced_and_at_or_past_cap() {
+        let mut a = App::test_fixture();
+        a.pricing = super::super::footer::Pricing {
+            in_per_1k: Some(3.0),
+            out_per_1k: Some(15.0),
+            window: None,
+        };
+        a.session_in = 1000;
+        a.session_out = 1000; // $18.00 spent
+        a.budget_usd = None;
+        assert!(!a.over_budget()); // no cap
+        a.budget_usd = Some(20.0);
+        assert!(!a.over_budget()); // under
+        a.budget_usd = Some(18.0);
+        assert!(a.over_budget()); // at cap
+        a.budget_usd = Some(5.0);
+        assert!(a.over_budget()); // over
+        a.pricing = super::super::footer::Pricing::default(); // unpriced → fail OPEN
+        a.budget_usd = Some(0.01);
+        assert!(!a.over_budget());
+    }
+}
+
+#[cfg(test)]
+mod session_cost_tests {
+    use super::*;
+
+    #[test]
+    fn session_cost_uses_pricing_over_session_tokens_or_none() {
+        let mut a = App::test_fixture();
+        a.pricing = super::super::footer::Pricing {
+            in_per_1k: Some(3.0),
+            out_per_1k: Some(15.0),
+            window: None,
+        };
+        a.session_in = 1000;
+        a.session_out = 1000;
+        // (1000/1000*3) + (1000/1000*15) = 18.0
+        assert_eq!(a.session_cost(), Some(18.0));
+        // unpriced model → None (fail-open: unknown cost never blocks)
+        a.pricing = super::super::footer::Pricing::default();
+        assert_eq!(a.session_cost(), None);
     }
 }
