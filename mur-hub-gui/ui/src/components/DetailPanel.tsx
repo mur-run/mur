@@ -24,6 +24,7 @@ import { ModelLibrary } from "./ModelLibrary";
 import { MobileTab } from "./MobileTab";
 import { MemoryTab } from "./MemoryTab";
 import { McpDiscoverModal } from "./McpDiscoverModal";
+import { McpAddRemoteModal } from "./McpAddRemoteModal";
 import { SkillAddUrlModal } from "./SkillAddUrlModal";
 import { useT } from "../i18n";
 import type { TranslationKey } from "../i18n/types";
@@ -1020,6 +1021,7 @@ function McpTab({
   const [error, setError] = useState<string | null>(null);
   const [justAdded, setJustAdded] = useState(false);
   const [showDiscover, setShowDiscover] = useState(false);
+  const [showAddRemote, setShowAddRemote] = useState(false);
 
   function reveal(path: string, agent?: string) {
     invoke("reveal_in_finder", { path, agent }).catch((e) => setError(String(e)));
@@ -1097,6 +1099,9 @@ function McpTab({
           <button className="btn btn--sm btn--secondary" onClick={() => setShowDiscover(true)}>
             {t("detail.discoverMcp")}
           </button>
+          <button className="btn btn--sm btn--secondary" onClick={() => setShowAddRemote(true)}>
+            {t("detail.addRemoteMcp")}
+          </button>
         </div>
       )}
       {showDiscover && (
@@ -1104,6 +1109,13 @@ function McpTab({
           agentName={detail.agent_name}
           onClose={() => setShowDiscover(false)}
           onImported={onSaved}
+        />
+      )}
+      {showAddRemote && (
+        <McpAddRemoteModal
+          agentName={detail.agent_name}
+          onClose={() => setShowAddRemote(false)}
+          onSaved={onSaved}
         />
       )}
       {justAdded && (

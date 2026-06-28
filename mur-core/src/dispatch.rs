@@ -1351,7 +1351,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                     }
                     _ => None,
                 };
-                cmd::agent::mcp::cmd_mcp_add_remote(&name, &server_name, &url, bearer)?
+                cmd::agent::mcp::cmd_mcp_add_remote(&name, &server_name, &url, bearer, None, None)?
             }
             AgentMcpAction::Login { name, server } => {
                 cmd::agent::mcp_login::cmd_mcp_login(&name, &server).await?

@@ -252,20 +252,34 @@ pub fn cmd_mcp_set_network(
 
 /// Add a remote (Streamable HTTP) MCP server to `agent`. No binary pin — the
 /// server runs elsewhere; trust comes from the URL + bearer/OAuth auth.
+///
+/// `description_hash` pins the tool-schema fingerprint at add-time; if `Some`,
+/// it is stored as-is (caller computes via `sha2`).  `egress_host` defaults
+/// the server's network policy to `Restricted { allow_hosts: [host] }` so the
+/// agent can reach the server's own host without extra configuration.
 pub fn cmd_mcp_add_remote(
     agent: &str,
     name: &str,
     url: &str,
     bearer: Option<mur_common::secret::SecretRef>,
+    description_hash: Option<String>,
+    egress_host: Option<&str>,
 ) -> anyhow::Result<()> {
     let (path, mut profile) = load_profile_for_edit(agent)?;
     if profile.mcp_servers.iter().any(|m| m.name == name) {
         anyhow::bail!("MCP server '{name}' already exists on '{agent}'; remove it first");
     }
+    let network = egress_host.map(|host| mur_common::agent::McpServerNetwork {
+        mode: McpNetMode::Restricted,
+        allow_hosts: vec![host.to_string()],
+    });
     profile.mcp_servers.push(mur_common::agent::McpServerEntry {
         name: name.to_string(),
         url: Some(url.to_string()),
         auth: bearer.map(|token| mur_common::agent::McpAuth::Bearer { token }),
+        description_hash,
+        network,
+        installed_at: Some(chrono::Utc::now()),
         ..Default::default()
     });
     save_profile(&path, &mut profile)?;
@@ -276,6 +290,10 @@ pub fn cmd_mcp_add_remote(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serialize tests that mutate the `MUR_HOME` env var to avoid races.
+    static MUR_HOME_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn network_policy_from_args_maps_modes() {
@@ -294,6 +312,7 @@ mod tests {
 
     #[test]
     fn add_remote_writes_url_and_bearer() {
+        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::TempDir::new().unwrap();
         let mur_home = tmp.path();
 
@@ -316,6 +335,8 @@ mod tests {
             "gh",
             "https://api.example.com/mcp",
             Some(mur_common::secret::SecretRef::Env("GH_TOKEN".into())),
+            None,
+            None,
         )
         .unwrap();
 
@@ -326,5 +347,46 @@ mod tests {
             e.auth,
             Some(mur_common::agent::McpAuth::Bearer { .. })
         ));
+    }
+
+    #[test]
+    fn add_remote_sets_hash_and_default_egress() {
+        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mur_home = tmp.path();
+
+        let agent_home = mur_home.join("agents").join("bob");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let p = mur_common::agent::AgentProfile::default_for_tests();
+        std::fs::write(
+            agent_home.join("profile.yaml"),
+            serde_yaml_ng::to_string(&p).unwrap(),
+        )
+        .unwrap();
+
+        unsafe {
+            std::env::set_var("MUR_HOME", mur_home);
+        }
+
+        cmd_mcp_add_remote(
+            "bob",
+            "srv",
+            "https://mcp.example.com/mcp",
+            None,
+            Some("abc123".into()),
+            Some("mcp.example.com"),
+        )
+        .unwrap();
+
+        let (_p, profile) = load_profile_for_edit("bob").unwrap();
+        let e = profile
+            .mcp_servers
+            .iter()
+            .find(|m| m.name == "srv")
+            .unwrap();
+        assert_eq!(e.description_hash.as_deref(), Some("abc123"));
+        let net = e.network.as_ref().expect("network should be set");
+        assert_eq!(net.mode, McpNetMode::Restricted);
+        assert_eq!(net.allow_hosts, vec!["mcp.example.com"]);
     }
 }
