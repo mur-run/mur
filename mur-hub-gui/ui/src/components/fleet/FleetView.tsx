@@ -117,6 +117,7 @@ export function FleetView() {
       <main className="fleet-view__main">
         {detail ? (
           <FleetDetail
+            key={detail.name}
             detail={detail}
             jobs={jobs}
             onRefresh={handleRefresh}
