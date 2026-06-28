@@ -16,6 +16,7 @@ import { DetailPanel } from "./DetailPanel";
 import { ConversationsView } from "./ConversationsView";
 import { WorkView } from "./work/WorkView";
 import { ChatsView } from "./ChatsView";
+import { FleetView } from "./fleet/FleetView";
 import { useConversations } from "../conversation/ConversationContext";
 import { Mascot } from "./Mascot";
 import type { MascotMood } from "./Mascot";
@@ -390,7 +391,7 @@ export function DashboardApp() {
   const { open: openConvs } = useConversations();
   const [activeRole, setActiveRole] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const [surface, setSurface] = useState<"agents" | "chats" | "work">("agents");
+  const [surface, setSurface] = useState<"agents" | "chats" | "work" | "fleet">("agents");
   const [query, setQuery] = useState("");
   const [wizardOpen, setWizardOpen] = useState(false);
   const [presetImportOpen, setPresetImportOpen] = useState(false);
@@ -719,6 +720,12 @@ export function DashboardApp() {
             >
               {t("work.toggle.work")}
             </button>
+            <button
+              className={surface === "fleet" ? "is-active" : ""}
+              onClick={() => setSurface("fleet")}
+            >
+              {t("fleet.tab")}
+            </button>
           </nav>
           <label className="field dashboard__bar-search">
             <input
@@ -777,7 +784,9 @@ export function DashboardApp() {
           </div>
         </div>
 
-        {surface === "work" ? (
+        {surface === "fleet" ? (
+          <FleetView />
+        ) : surface === "work" ? (
           <WorkView agents={agents} />
         ) : surface === "chats" ? (
           <ChatsView agents={agents} />
