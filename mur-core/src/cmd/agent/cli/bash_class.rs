@@ -1,8 +1,6 @@
 //! Conservative read-only classification of a `bash` tool command, for the
 //! cli's `--auto-reads` lane. Fail-safe: anything not provably read-only
 //! returns `false` (→ a normal HITL prompt). Never auto-approve a write.
-// Items used only in tests (or by Task 2 which wires the call site).
-#![allow(dead_code)]
 
 /// Shell metacharacters that can chain, redirect, expand, substitute, or
 /// background — any of them means "more than one simple command", so we refuse
