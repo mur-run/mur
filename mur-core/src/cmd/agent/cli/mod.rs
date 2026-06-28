@@ -96,8 +96,14 @@ pub async fn cmd_cli(
     auto: bool,
     skin: Option<String>,
     plain: bool,
+    budget_usd: Option<f64>,
 ) -> Result<()> {
     if names.len() > 1 {
+        if budget_usd.is_some() {
+            eprintln!(
+                "note: --budget-usd is only enforced in the single-agent TUI; it is ignored when opening multiple agents."
+            );
+        }
         let names = names.to_vec();
         return tokio::task::spawn_blocking(move || multiplex::run(&names, resume, auto)).await?;
     }
@@ -123,6 +129,11 @@ pub async fn cmd_cli(
     // a real stdin TTY gets an echoed prompt and a [y/a/n] HITL question; a
     // pipe gets neither.
     if plain || !io::stdout().is_terminal() {
+        if budget_usd.is_some() {
+            eprintln!(
+                "note: --budget-usd is only enforced in the interactive TUI; it is ignored in plain/piped mode."
+            );
+        }
         let home2 = home.clone();
         let agent2 = agent.clone();
         let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
@@ -130,7 +141,7 @@ pub async fn cmd_cli(
             .await?;
     }
 
-    run_tui(home, agent, resume, auto, skin).await
+    run_tui(home, agent, resume, auto, skin, budget_usd).await
 }
 
 // ── TUI mode ────────────────────────────────────────────────────────────────
@@ -173,6 +184,7 @@ async fn run_tui(
     resume: bool,
     auto: bool,
     skin: Option<String>,
+    budget_usd: Option<f64>,
 ) -> Result<()> {
     // Resolve skin: CLI flag > config > "dark"
     let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
@@ -212,6 +224,12 @@ async fn run_tui(
     if auto {
         app.auto_approve = true;
         app.push_system("auto-approve is ON for this session (--auto) — every tool call will be allowed without asking");
+    }
+    app.budget_usd = budget_usd;
+    if let Some(b) = budget_usd {
+        app.push_system(format!(
+            "session budget ${b:.2} — new turns stop once estimated spend reaches it"
+        ));
     }
     let result = event_loop(&mut terminal, &mut app).await;
 
@@ -668,6 +686,20 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         }
         return;
     }
+    // Session budget cap: refuse a NEW turn once estimated spend hits the cap.
+    // (An in-flight turn is handled by the streaming branch above; this only
+    // gates starting a fresh one.) Fails open when the model has no pricing, so
+    // it never blocks turns whose cost we can't estimate. Input is left intact
+    // so the user can copy what they composed.
+    if app.over_budget() {
+        let cap = app.budget_usd.unwrap_or(0.0);
+        let spent = app.session_cost().unwrap_or(0.0);
+        app.push_system(format!(
+            "↯ session budget reached — spent ~${spent:.2} of ${cap:.2}. Restart `mur agent cli` to reset."
+        ));
+        return;
+    }
+
     app.last_sent = Some(trimmed.clone());
     app.clear_input();
 
