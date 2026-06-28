@@ -1170,6 +1170,7 @@ impl TaskRunner {
                     "jsonrpc": "2.0",
                     "method": "tool/approval_needed",
                     "params": {
+                        "step_id": step_id,
                         "hitl_id": hitl_id,
                         "task_id": task_id,
                         "tool_name": call.tool_name,

@@ -139,6 +139,9 @@ pub async fn run_local_shell(cmd: String) -> String {
 #[derive(Debug, Clone)]
 pub struct HitlRequest {
     pub hitl_id: String,
+    /// The `step_id` of the card that ran this tool (P2: lets the cli show the
+    /// approval inline on that card). `None` on runtimes predating the field.
+    pub step_id: Option<String>,
     pub tool_name: String,
     pub tool_input: Value,
     pub prompt: String,
@@ -157,6 +160,7 @@ impl HitlRequest {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
+            step_id: v.get("step_id").and_then(Value::as_str).map(str::to_string),
             prompt: v
                 .get("prompt")
                 .and_then(Value::as_str)
@@ -495,5 +499,28 @@ mod tests {
         assert_eq!(h.tool_name, "bash");
         assert_eq!(h.prompt, "Run `bash`?");
         assert_eq!(h.tool_input["command"], "ls");
+    }
+}
+
+#[cfg(test)]
+mod hitl_step_tests {
+    use super::HitlRequest;
+
+    #[test]
+    fn parses_step_id_when_present() {
+        let v = serde_json::json!({
+            "step_id": "s-1", "hitl_id": "h-1", "tool_name": "edit",
+            "tool_input": { "file_path": "a.rs" }, "prompt": "Run `edit`?"
+        });
+        let req = HitlRequest::from_value(v);
+        assert_eq!(req.step_id.as_deref(), Some("s-1"));
+        assert_eq!(req.hitl_id, "h-1");
+    }
+
+    #[test]
+    fn step_id_none_on_old_runtime() {
+        let v = serde_json::json!({ "hitl_id": "h-1", "tool_name": "bash" });
+        let req = HitlRequest::from_value(v);
+        assert!(req.step_id.is_none());
     }
 }

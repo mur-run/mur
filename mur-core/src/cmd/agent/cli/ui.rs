@@ -29,7 +29,11 @@ pub fn render(f: &mut Frame, app: &mut App) {
     f.render_widget(&app.input, chunks[1]);
     render_status(f, app, chunks[2]);
 
-    if let Some(hitl) = &app.hitl {
+    // Inline approval lives on the card (Task 4) when the runtime sent a
+    // step_id. Fall back to the centered modal only for older runtimes.
+    if let Some(hitl) = &app.hitl
+        && hitl.step_id.is_none()
+    {
         render_hitl(f, hitl);
     }
 }
