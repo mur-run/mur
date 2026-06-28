@@ -1396,6 +1396,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                     println!("Publisher: {}", c.publisher);
                     println!("Signature: {} [{}]", c.signature.status, c.signature.key_fp);
                     println!("Hash:      {}", c.hash);
+                    println!("Trust:     {}", c.signer_trust);
                     if !c.mcp_requirements.is_empty() {
                         println!("MCP requirements: {}", c.mcp_requirements.join(", "));
                     }
@@ -1433,6 +1434,26 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                             r.name, r.category, r.publisher, r.latest, sig
                         );
                     }
+                }
+            }
+            AgentSkillAction::TrustPublisher { key_fp, name } => {
+                let mur_home = cmd::agent::resolve_mur_home()?;
+                let mut kr =
+                    mur_common::skill::publisher_trust::PublisherKeyring::load_or_seed(&mur_home)?;
+                if kr.revoked.contains(&key_fp) {
+                    anyhow::bail!("refusing to trust a revoked key: {key_fp}");
+                }
+                if kr.publishers.iter().any(|p| p.key_fp == key_fp) {
+                    println!("already trusted: {key_fp}");
+                } else {
+                    kr.publishers
+                        .push(mur_common::skill::publisher_trust::TrustedPublisher {
+                            name: name.clone().unwrap_or_else(|| "user-trusted".to_string()),
+                            key_fp: key_fp.clone(),
+                            comment: "added via trust-publisher (TOFU)".to_string(),
+                        });
+                    kr.save(&mur_home)?;
+                    println!("Trusted publisher key added: {key_fp}");
                 }
             }
         },

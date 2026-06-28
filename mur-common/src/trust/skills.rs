@@ -17,7 +17,7 @@ pub struct SkillTrustStore {
     pub revoked: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TrustEntry {
     pub name: String,
     pub version: String,
@@ -25,6 +25,12 @@ pub struct TrustEntry {
     pub installed_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publisher: Option<String>,
+    /// SHA-256 hex of the installed skill YAML; used for rug-pull detection.
+    #[serde(default)]
+    pub content_sha256: String,
+    /// Key fingerprint of the signer at install time; used for publisher-change detection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer_key_fp: Option<String>,
 }
 
 #[derive(Debug)]
@@ -147,6 +153,7 @@ mod tests {
             level: TrustLevel::Verified,
             installed_at: "2026-05-24T00:00:00Z".into(),
             publisher: Some("human:t".into()),
+            ..Default::default()
         }
     }
 

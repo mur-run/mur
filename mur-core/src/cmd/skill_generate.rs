@@ -95,6 +95,7 @@ pub async fn cmd_generate<L: LlmClient + 'static>(
             level: TrustLevel::Sandboxed,
             installed_at: chrono::Utc::now().to_rfc3339(),
             publisher: Some(manifest.publisher.clone()),
+            ..Default::default()
         },
     );
     trust.save(home).map_err(|e| anyhow!("save trust: {e}"))?;

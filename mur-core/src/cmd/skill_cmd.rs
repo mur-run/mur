@@ -471,6 +471,7 @@ pub fn cmd_trust(name: &str, level_str: &str) -> Result<()> {
             level,
             installed_at: chrono::Utc::now().to_rfc3339(),
             publisher: Some(m.publisher.clone()),
+            ..Default::default()
         },
     );
     trust

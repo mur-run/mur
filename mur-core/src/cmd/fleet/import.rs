@@ -274,6 +274,7 @@ pub fn cmd_fleet_import(mur_home: &Path, file: &Path, opts: ImportOpts) -> Resul
                 level: TrustLevel::Sandboxed,
                 installed_at: chrono::Utc::now().to_rfc3339(),
                 publisher: Some(m.publisher.clone()),
+                ..Default::default()
             },
         );
         trust
