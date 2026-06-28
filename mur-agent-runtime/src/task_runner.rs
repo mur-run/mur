@@ -1273,7 +1273,7 @@ impl TaskRunner {
         system_prompt: String,
         input: &Message,
         context_task_id: Option<&str>,
-        _sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
+        sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
     ) -> Result<(Message, Option<LoopExit>), TaskError> {
         use crate::llm::{LlmRequest, RichMessage, StopReason};
 
@@ -1325,10 +1325,11 @@ impl TaskRunner {
                 max_tokens: None,
                 tools: tool_defs.clone(),
             };
-            let resp = client
-                .generate(req)
-                .await
-                .map_err(|e| task_error("llm_error", format!("{e}"), true))?;
+            let resp = match &sink {
+                Some(s) => client.generate_stream(req, s.clone()).await,
+                None => client.generate(req).await,
+            }
+            .map_err(|e| task_error("llm_error", format!("{e}"), true))?;
 
             self.cumulative_input_tokens
                 .fetch_add(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
