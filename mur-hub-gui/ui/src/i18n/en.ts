@@ -547,4 +547,10 @@ export const en = {
   "skillreg.installAnyway": "I reviewed the findings — install anyway",
   "skillreg.install": "Install skill",
   "skillreg.backToResults": "Back to results",
+  "skillreg.trusted": "trusted",
+  "skillreg.untrusted": "untrusted",
+  "skillreg.revoked": "revoked",
+  "skillreg.trustPublisher": "Trust this publisher",
+  "skillreg.trustedDone": "MUR publisher trusted",
+  "skillreg.driftWarn": "⚠ Skill changed since last install",
 } as const;

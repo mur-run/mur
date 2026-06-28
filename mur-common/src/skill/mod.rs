@@ -18,6 +18,7 @@ pub mod manifest;
 pub mod mcp;
 pub mod parser;
 pub mod peers;
+pub mod publisher_trust;
 pub mod registry;
 pub mod resolve;
 pub mod scan;
@@ -52,6 +53,9 @@ pub use mcp::{McpRequirement, ParseCapabilityError, SkillCapability, validate_re
 pub use parser::{
     ParseError, parse_canonical, parse_legacy_markdown, parse_markdown, serialize_canonical,
     serialize_markdown, yaml_to_markdown,
+};
+pub use publisher_trust::{
+    MUR_OFFICIAL_PUBLISHER_KEY_FP, PublisherKeyring, PublisherTrust, TrustedPublisher,
 };
 pub use resolve::{Resolution, resolve_step};
 pub use sign::{SKILL_PAYLOAD_TYPE, SignError, sign_manifest, verify_manifest};

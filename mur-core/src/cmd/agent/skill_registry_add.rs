@@ -10,9 +10,11 @@ use std::path::Path;
 use anyhow::{Result, bail};
 use semver::Version;
 
+use super::skill_signer_trust::{DriftDecision, SignerTrust, check_drift, classify_signer};
 use super::skill_verify::{HashStatus, SignatureStatus, VerifyOutcome, verify_skill_install};
 use crate::cmd::skill_registry;
 use mur_common::skill::loader::is_valid_skill_name;
+use mur_common::skill::publisher_trust::PublisherKeyring;
 use mur_common::skill::{parse_canonical, scan::scan_skill};
 
 // ─── Consent / view types ──────────────────────────────────────────────────
@@ -44,8 +46,19 @@ pub struct ConsentInfo {
     pub scan_blocking: bool,
     /// Trust level that will be applied on install (always `"sandboxed"`).
     pub trust_level: String,
+    /// Publisher keyring classification of the signer:
+    /// `"trusted"` | `"untrusted"` | `"revoked"` | `"unsigned"` | `"invalid"`.
+    pub signer_trust: String,
     /// Raw YAML body of the resolved skill file (for Hub preview / consent display).
     pub body: String,
+    /// SHA-256 hex of the resolved skill YAML file (pinned at install; used for rug-pull detection).
+    pub resolved_sha256: String,
+    /// Short human description of detected drift since the last install:
+    /// `"content changed"`, `"publisher changed"`, `"downgrade X → Y"`, or `None`.
+    /// When set, `needs_ack` is also `true` (in `resolve_consent`; not in `resolve_consent_in`
+    /// which has no trust store).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drift: Option<String>,
 }
 
 /// Serialisable view of `SignatureStatus`.
@@ -139,12 +152,17 @@ pub fn gate(consent: &ConsentInfo, accept: bool) -> Result<()> {
 /// Resolve a skill from a local registry directory into a `ConsentInfo`
 /// (hash-check + signature-verify + content-scan). Does **not** install.
 ///
+/// `keyring` is the caller's publisher trust keyring; signer trust is folded
+/// into `blocking` (Revoked → unconditional block) and `needs_ack` (Untrusted
+/// → requires `--yes`).
+///
 /// This is the network-free test seam. `resolve_consent` wraps it after
 /// calling `fetch_and_load` to obtain the registry dir.
 pub fn resolve_consent_in(
     registry_dir: &Path,
     skill: &str,
     version: Option<&str>,
+    keyring: &PublisherKeyring,
 ) -> Result<ConsentInfo> {
     // Fix D: reject index-controlled path traversal in skill name.
     if !is_valid_skill_name(skill) {
@@ -183,7 +201,19 @@ pub fn resolve_consent_in(
     let manifest =
         parse_canonical(&text).map_err(|e| anyhow::anyhow!("parse skill manifest: {e}"))?;
 
+    // Compute the actual sha256 of the resolved file for drift-pinning.
+    let resolved_sha256 = {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(text.as_bytes()))
+    };
+
     let outcome: VerifyOutcome = verify_skill_install(&manifest, &text, &entry.content_sha256);
+    let signer = classify_signer(&outcome.signature, keyring);
+    // Fold publisher keyring trust into the gate flags:
+    // - Revoked → unconditional block (proven unsafe signer).
+    // - Untrusted → requires --yes (signature valid but signer not in keyring).
+    let blocking = outcome.is_blocking() || matches!(signer, SignerTrust::Revoked);
+    let needs_ack = outcome.needs_ack() || matches!(signer, SignerTrust::Untrusted);
     let report = scan_skill(&manifest).map_err(|e| anyhow::anyhow!("content scan: {e}"))?;
     let scan_blocking = report.has_blocking_findings();
 
@@ -201,22 +231,92 @@ pub fn resolve_consent_in(
             .collect(),
         // ContentScanReport has no flat `findings` field — use human_summary().
         findings: report.human_summary(),
-        blocking: outcome.is_blocking(),
-        needs_ack: outcome.needs_ack(),
+        blocking,
+        needs_ack,
         scan_blocking,
         trust_level: "sandboxed".to_string(),
+        signer_trust: signer.as_str().to_string(),
         body: text,
+        resolved_sha256,
+        // Drift is computed only by resolve_consent (has mur_home) and
+        // cmd_skill_registry_add; left None here (test seam has no trust store).
+        drift: None,
     })
+}
+
+// ─── Drift helper (shared by resolve_consent + cmd_skill_registry_add) ──────
+
+/// Load the trust store and check for drift against the prior install.
+///
+/// Returns `(description, decision)`:
+/// - `description` — a short human string (`"content changed"`, `"publisher changed"`,
+///   `"downgrade X → Y"`), or `None` for first install or no drift.
+/// - `decision` — the raw `DriftDecision` for control flow in `cmd_skill_registry_add`.
+///
+/// Uses `entries.get(name)` — registry-add pins its entry keyed by name; other install
+/// paths (`mur skill install` etc.) write hash-keyed entries. Iterating `.values()` and
+/// matching on `.name` may return a stale hash-keyed entry whose empty `content_sha256`
+/// makes `check_drift` skip both comparisons → silent rug-pull (C1 fix).
+fn drift_status(
+    mur_home: &Path,
+    name: &str,
+    new_hash: &str,
+    new_signer: Option<&str>,
+    new_ver: &str,
+) -> (Option<String>, DriftDecision) {
+    let trust_store =
+        mur_common::trust::skills::SkillTrustStore::load(mur_home).unwrap_or_default();
+    // Registry-add pins by name; other paths key by hash — look up by name.
+    let prior = trust_store.entries.get(name);
+    let prior_tuple = prior.map(|e| {
+        (
+            e.content_sha256.as_str(),
+            e.signer_key_fp.as_deref(),
+            e.version.as_str(),
+        )
+    });
+    let decision = check_drift(prior_tuple, new_hash, new_signer, new_ver);
+    let description = match &decision {
+        DriftDecision::None => None,
+        DriftDecision::Changed { what } => Some(format!("{what} changed")),
+        DriftDecision::Rollback { installed, offered } => {
+            Some(format!("downgrade {installed} → {offered}"))
+        }
+    };
+    (description, decision)
 }
 
 // ─── Public entry points ───────────────────────────────────────────────────
 
 /// Fetch the registry (git) then resolve consent. Hub preview + CLI confirm
 /// both call this; neither installs until the gate passes.
+///
+/// Drift against a prior install is computed here (we have `mur_home`), folded
+/// into `needs_ack`, and surfaced as `consent.drift` for the Hub modal.
 #[allow(dead_code)] // wired by the CLI/Hub units
 pub fn resolve_consent(mur_home: &Path, skill: &str, version: Option<&str>) -> Result<ConsentInfo> {
     let (dir, _idx) = skill_registry::fetch_and_load(mur_home, skill_registry::DEFAULT_REGISTRY)?;
-    resolve_consent_in(&dir, skill, version)
+    let keyring = PublisherKeyring::load_or_seed(mur_home)?;
+    let mut consent = resolve_consent_in(&dir, skill, version, &keyring)?;
+
+    // Compute drift and surface it so the Hub accept-checkbox appears on updates.
+    let new_signer_fp = if consent.signature.status == "verified" {
+        Some(consent.signature.key_fp.clone())
+    } else {
+        None
+    };
+    let (drift_desc, _) = drift_status(
+        mur_home,
+        &consent.name,
+        &consent.resolved_sha256,
+        new_signer_fp.as_deref(),
+        &consent.version,
+    );
+    if drift_desc.is_some() {
+        consent.needs_ack = true;
+    }
+    consent.drift = drift_desc;
+    Ok(consent)
 }
 
 /// Install a registry skill onto a specific agent at `TrustLevel::Sandboxed`.
@@ -237,16 +337,82 @@ pub async fn cmd_skill_registry_add(
     // Keep `dir` in scope so the already-resolved file stays on disk while we
     // pass its path to `cmd_skill_add` — no redundant temp copy needed.
     let (dir, _idx) = skill_registry::fetch_and_load(&mur_home, skill_registry::DEFAULT_REGISTRY)?;
-    let consent = resolve_consent_in(&dir, skill, version)?;
+    let keyring = PublisherKeyring::load_or_seed(&mur_home)?;
+    let consent = resolve_consent_in(&dir, skill, version, &keyring)?;
+
+    // ── Rug-pull / rollback: compare against any prior install record ────────
+    // Use drift_status (C1 fix): registry-add pins by name; other paths key by
+    // hash. entries.get(name) avoids returning a stale hash-keyed entry whose
+    // empty content_sha256 would make check_drift skip the comparison → silent rug-pull.
+    let new_signer_fp = if consent.signature.status == "verified" {
+        Some(consent.signature.key_fp.clone())
+    } else {
+        None
+    };
+    let (_, drift_decision) = drift_status(
+        &mur_home,
+        &consent.name,
+        &consent.resolved_sha256,
+        new_signer_fp.as_deref(),
+        &consent.version,
+    );
+    match drift_decision {
+        DriftDecision::None => {}
+        DriftDecision::Changed { what } => {
+            if !accept {
+                anyhow::bail!(
+                    "skill '{}' has changed {} since last install; pass --yes to accept the update.",
+                    consent.name,
+                    what
+                );
+            }
+        }
+        DriftDecision::Rollback { installed, offered } => {
+            if !accept {
+                anyhow::bail!(
+                    "skill '{}' downgrade refused (installed={installed}, offered={offered}); pass --yes to force.",
+                    consent.name
+                );
+            }
+        }
+    }
 
     gate(&consent, accept)?;
 
     let path = skill_registry::skill_yaml_path(&dir, skill, &consent.version);
     super::skill::cmd_skill_add(agent, &path.to_string_lossy())?;
 
-    // Registry skills load at the loader's default TrustLevel::Sandboxed (no
-    // explicit pin). A hash-keyed Sandboxed pin (+ rug-pull drift detection) is
-    // a P2.1 follow-on.
+    // Pin content hash + signer key in the trust store for future drift detection.
+    {
+        use mur_common::skill::TrustLevel;
+        use mur_common::trust::skills::{SkillTrustStore, TrustEntry};
+        let mut ts = SkillTrustStore::load(&mur_home).unwrap_or_default();
+        // Key the entry by the skill name so we can find it by name on the next
+        // install (the hash-keyed lookup is for load-time allow-listing; the
+        // name-keyed find is for drift detection).
+        ts.entries.insert(
+            consent.name.clone(),
+            TrustEntry {
+                name: consent.name.clone(),
+                version: consent.version.clone(),
+                level: TrustLevel::Sandboxed,
+                installed_at: chrono::Utc::now().to_rfc3339(),
+                publisher: if consent.publisher.is_empty() {
+                    None
+                } else {
+                    Some(consent.publisher.clone())
+                },
+                content_sha256: consent.resolved_sha256.clone(),
+                signer_key_fp: if consent.signature.key_fp.is_empty() {
+                    None
+                } else {
+                    Some(consent.signature.key_fp.clone())
+                },
+            },
+        );
+        ts.save(&mur_home)
+            .map_err(|e| anyhow::anyhow!("save trust store: {e}"))?;
+    }
 
     Ok(format!("skills/{}", consent.name))
 }
@@ -276,9 +442,19 @@ pub fn registry_search_for_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mur_common::skill::publisher_trust::PublisherKeyring;
     use std::fs;
 
     // ── fixture helpers ─────────────────────────────────────────────────
+
+    /// Keyring with no trusted or revoked entries (all signers → Unsigned/Untrusted).
+    fn empty_keyring() -> PublisherKeyring {
+        PublisherKeyring {
+            schema_version: 1,
+            publishers: vec![],
+            revoked: vec![],
+        }
+    }
 
     const SKILL_YAML: &str = r#"name: test-skill
 version: 1.0.0
@@ -316,7 +492,7 @@ content:
         let tmp = tempfile::tempdir().unwrap();
         fixture_registry(tmp.path(), "");
 
-        let consent = resolve_consent_in(tmp.path(), "test-skill", None).unwrap();
+        let consent = resolve_consent_in(tmp.path(), "test-skill", None, &empty_keyring()).unwrap();
 
         assert_eq!(consent.name, "test-skill");
         assert_eq!(consent.version, "1.0.0");
@@ -336,7 +512,7 @@ content:
         let sha = sha256_hex(SKILL_YAML);
         fixture_registry(tmp.path(), &sha);
 
-        let consent = resolve_consent_in(tmp.path(), "test-skill", None).unwrap();
+        let consent = resolve_consent_in(tmp.path(), "test-skill", None, &empty_keyring()).unwrap();
 
         assert_eq!(consent.hash, "match");
         assert_eq!(consent.signature.status, "unsigned");
@@ -350,7 +526,7 @@ content:
         let tmp = tempfile::tempdir().unwrap();
         fixture_registry(tmp.path(), "deadbeef0000000000000000bad");
 
-        let consent = resolve_consent_in(tmp.path(), "test-skill", None).unwrap();
+        let consent = resolve_consent_in(tmp.path(), "test-skill", None, &empty_keyring()).unwrap();
 
         assert_eq!(consent.hash, "mismatch");
         assert!(consent.blocking, "mismatch must be blocking");
@@ -362,7 +538,8 @@ content:
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("index.yaml"), "skills: {}\n").unwrap();
 
-        let err = resolve_consent_in(tmp.path(), "nonexistent", None).unwrap_err();
+        let err =
+            resolve_consent_in(tmp.path(), "nonexistent", None, &empty_keyring()).unwrap_err();
         assert!(err.to_string().contains("not found in registry"));
     }
 
@@ -373,7 +550,8 @@ content:
         fixture_registry(tmp.path(), "");
 
         // Request a version that doesn't exist and is not `latest`.
-        let err = resolve_consent_in(tmp.path(), "test-skill", Some("9.9.9")).unwrap_err();
+        let err = resolve_consent_in(tmp.path(), "test-skill", Some("9.9.9"), &empty_keyring())
+            .unwrap_err();
         assert!(
             err.to_string().contains("not in registry"),
             "unexpected error: {err}"
@@ -386,7 +564,8 @@ content:
         fixture_registry(tmp.path(), "");
 
         // Requesting the exact version that exists should succeed.
-        let consent = resolve_consent_in(tmp.path(), "test-skill", Some("1.0.0")).unwrap();
+        let consent =
+            resolve_consent_in(tmp.path(), "test-skill", Some("1.0.0"), &empty_keyring()).unwrap();
         assert_eq!(consent.version, "1.0.0");
     }
 
@@ -395,7 +574,7 @@ content:
         let tmp = tempfile::tempdir().unwrap();
         fixture_registry(tmp.path(), "");
 
-        let consent = resolve_consent_in(tmp.path(), "test-skill", None).unwrap();
+        let consent = resolve_consent_in(tmp.path(), "test-skill", None, &empty_keyring()).unwrap();
         assert!(
             consent.findings.is_empty(),
             "clean skill should have no findings"
@@ -424,7 +603,7 @@ mcp_requirements:
         fs::create_dir_all(&versions_dir).unwrap();
         fs::write(versions_dir.join("1.0.0.yaml"), skill_with_mcp).unwrap();
 
-        let consent = resolve_consent_in(tmp.path(), "mcp-skill", None).unwrap();
+        let consent = resolve_consent_in(tmp.path(), "mcp-skill", None, &empty_keyring()).unwrap();
         assert_eq!(consent.mcp_requirements.len(), 1);
         assert!(consent.mcp_requirements[0].contains("browser.*"));
         assert!(consent.mcp_requirements[0].contains("network_http"));
@@ -436,7 +615,7 @@ mcp_requirements:
         let tmp = tempfile::tempdir().unwrap();
         fixture_registry(tmp.path(), "");
 
-        let err = resolve_consent_in(tmp.path(), "../evil", None).unwrap_err();
+        let err = resolve_consent_in(tmp.path(), "../evil", None, &empty_keyring()).unwrap_err();
         assert!(
             err.to_string().contains("invalid skill name"),
             "unexpected: {err}"
@@ -448,7 +627,8 @@ mcp_requirements:
         let tmp = tempfile::tempdir().unwrap();
         fixture_registry(tmp.path(), "");
 
-        let err = resolve_consent_in(tmp.path(), "test-skill", Some("../evil")).unwrap_err();
+        let err = resolve_consent_in(tmp.path(), "test-skill", Some("../evil"), &empty_keyring())
+            .unwrap_err();
         assert!(
             err.to_string().contains("invalid version"),
             "unexpected: {err}"
@@ -474,7 +654,10 @@ mcp_requirements:
             needs_ack: false,
             scan_blocking: false,
             trust_level: "sandboxed".into(),
+            signer_trust: "trusted".into(),
             body: "".into(),
+            resolved_sha256: "aabbcc".into(),
+            drift: None,
         }
     }
 
@@ -514,5 +697,158 @@ mcp_requirements:
         let consent = clean_consent();
         assert!(gate(&consent, false).is_ok());
         assert!(gate(&consent, true).is_ok());
+    }
+
+    // ── I3: signer-trust fold tests (signed skill fixture) ─────────────────
+
+    /// Build a signed skill YAML fixture under `dir` (index + 1.0.0.yaml).
+    /// Returns the `key_fp` (DSSE `keyid`) for use in keyring construction.
+    fn fixture_registry_signed(dir: &std::path::Path) -> String {
+        use mur_common::identity::AgentIdentity;
+        use mur_common::muragent::dsse::DsseEnvelope;
+        use mur_common::skill::{Skill, TrustLevel, parse_canonical, sign::sign_manifest};
+
+        let id = AgentIdentity::generate();
+        let m = parse_canonical(SKILL_YAML).unwrap();
+        let env_json = sign_manifest(&m, &id).unwrap();
+
+        // Extract key_fp from the DSSE envelope signatures[0].keyid.
+        let envelope: DsseEnvelope = serde_json::from_str(&env_json).unwrap();
+        let key_fp = envelope.signatures.first().unwrap().keyid.clone();
+
+        // Serialize the full Skill struct (manifest + publisher_signature).
+        let skill = Skill {
+            manifest: m,
+            content_sha256: None,
+            trust_level: TrustLevel::Sandboxed,
+            capabilities_declared: vec![],
+            publisher_signature: Some(env_json),
+        };
+        let skill_yaml = serde_yaml_ng::to_string(&skill).unwrap();
+        let sha = sha256_hex(&skill_yaml);
+
+        let index_yaml = format!(
+            "skills:\n  test-skill:\n    latest: 1.0.0\n    description: test skill\n    publisher: human:tester\n    category: context\n    tags: []\n    content_sha256: \"{sha}\"\n    install_count: 0\n"
+        );
+        fs::write(dir.join("index.yaml"), &index_yaml).unwrap();
+        let versions_dir = dir.join("skills").join("test-skill").join("versions");
+        fs::create_dir_all(&versions_dir).unwrap();
+        fs::write(versions_dir.join("1.0.0.yaml"), &skill_yaml).unwrap();
+
+        key_fp
+    }
+
+    #[test]
+    fn signer_trusted_in_keyring_is_clean() {
+        use mur_common::skill::publisher_trust::TrustedPublisher;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let key_fp = fixture_registry_signed(tmp.path());
+
+        let keyring = PublisherKeyring {
+            schema_version: 1,
+            publishers: vec![TrustedPublisher {
+                name: "tester".into(),
+                key_fp: key_fp.clone(),
+                comment: String::new(),
+            }],
+            revoked: vec![],
+        };
+
+        let consent = resolve_consent_in(tmp.path(), "test-skill", None, &keyring).unwrap();
+        assert!(!consent.blocking, "trusted+hash-match must not be blocking");
+        assert!(!consent.needs_ack, "trusted+verified must not need ack");
+        assert_eq!(consent.signer_trust, "trusted");
+    }
+
+    #[test]
+    fn signer_revoked_is_blocking() {
+        let tmp = tempfile::tempdir().unwrap();
+        let key_fp = fixture_registry_signed(tmp.path());
+
+        let keyring = PublisherKeyring {
+            schema_version: 1,
+            publishers: vec![],
+            revoked: vec![key_fp],
+        };
+
+        let consent = resolve_consent_in(tmp.path(), "test-skill", None, &keyring).unwrap();
+        assert!(consent.blocking, "revoked signer must be blocking");
+        assert_eq!(consent.signer_trust, "revoked");
+    }
+
+    #[test]
+    fn signer_unknown_key_needs_ack() {
+        let tmp = tempfile::tempdir().unwrap();
+        fixture_registry_signed(tmp.path()); // key_fp discarded — not in keyring
+
+        // Empty keyring → signer is Untrusted (valid sig but unknown key).
+        let consent = resolve_consent_in(tmp.path(), "test-skill", None, &empty_keyring()).unwrap();
+        assert!(
+            !consent.blocking,
+            "unknown signer must not be hard-blocking"
+        );
+        assert!(consent.needs_ack, "unknown signer must require ack");
+        assert_eq!(consent.signer_trust, "untrusted");
+    }
+
+    // ── C1 regression: drift lookup must use name-key, not hash-key ─────────
+
+    #[test]
+    fn c1_drift_lookup_uses_name_key_not_hash_key() {
+        use mur_common::skill::TrustLevel;
+        use mur_common::trust::skills::{SkillTrustStore, TrustEntry};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+
+        // Insert TWO entries for "test-skill":
+        //  - hash-keyed (as written by `mur skill install`): key = 64-hex chars,
+        //    content_sha256 is empty. If returned, check_drift skips comparison → None.
+        //  - name-keyed (as written by cmd_skill_registry_add): key = "test-skill",
+        //    content_sha256 = "old_hash_value". If returned, drift is detected.
+        //
+        // In a BTreeMap, "a".repeat(64) sorts before "test-skill" (ASCII 'a' < 't'),
+        // so the buggy .values().find() returns the hash-keyed entry first → silent fail.
+        let mut ts = SkillTrustStore::default();
+        let hash_key = "a".repeat(64);
+        ts.entries.insert(
+            hash_key,
+            TrustEntry {
+                name: "test-skill".into(),
+                version: "1.0.0".into(),
+                level: TrustLevel::Sandboxed,
+                installed_at: "2026-01-01T00:00:00Z".into(),
+                publisher: None,
+                content_sha256: String::new(), // empty — would cause check_drift to skip
+                signer_key_fp: None,
+            },
+        );
+        ts.entries.insert(
+            "test-skill".into(),
+            TrustEntry {
+                name: "test-skill".into(),
+                version: "1.0.0".into(),
+                level: TrustLevel::Sandboxed,
+                installed_at: "2026-01-01T00:00:00Z".into(),
+                publisher: None,
+                content_sha256: "old_hash_value".into(), // real pin
+                signer_key_fp: None,
+            },
+        );
+        ts.save(mur_home).unwrap();
+
+        // drift_status uses entries.get("test-skill") → name-keyed entry →
+        // "old_hash_value" vs "new_different_hash" → DriftDecision::Changed.
+        let (desc, decision) =
+            drift_status(mur_home, "test-skill", "new_different_hash", None, "1.0.0");
+        assert!(
+            desc.is_some(),
+            "C1 regression: name-keyed entry must be found so drift is detected (not silently None)"
+        );
+        assert!(
+            matches!(decision, DriftDecision::Changed { .. }),
+            "C1 regression: expected Changed, got {decision:?}"
+        );
     }
 }

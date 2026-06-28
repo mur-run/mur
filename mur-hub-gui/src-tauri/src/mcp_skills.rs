@@ -362,6 +362,33 @@ pub async fn agent_skill_registry_install(
     get_agent_detail(name)
 }
 
+/// Trust a publisher key via TOFU from the Hub consent screen.
+///
+/// Fail-closed: a revoked key is never trustable regardless of the caller.
+/// Idempotent: if the key is already in the trusted list nothing is written.
+#[tauri::command]
+pub async fn agent_skill_trust_publisher(
+    key_fp: String,
+    name: Option<String>,
+) -> Result<(), String> {
+    let home = mur_core::cmd::agent::resolve_mur_home().map_err(|e| format!("{e:#}"))?;
+    let mut kr = mur_common::skill::publisher_trust::PublisherKeyring::load_or_seed(&home)
+        .map_err(|e| format!("{e:#}"))?;
+    if kr.revoked.contains(&key_fp) {
+        return Err(format!("key {key_fp} revoked"));
+    }
+    if !kr.publishers.iter().any(|p| p.key_fp == key_fp) {
+        kr.publishers
+            .push(mur_common::skill::publisher_trust::TrustedPublisher {
+                name: name.unwrap_or_else(|| "user-trusted".to_string()),
+                key_fp,
+                comment: "TOFU (Hub)".to_string(),
+            });
+        kr.save(&home).map_err(|e| format!("{e:#}"))?;
+    }
+    Ok(())
+}
+
 fn reveal_os(path: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
     {
