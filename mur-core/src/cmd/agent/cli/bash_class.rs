@@ -12,15 +12,26 @@ const SHELL_META: &[char] = &[
 ];
 
 /// Commands that only ever read (regardless of their flags).
+///
+/// REMOVED from a prior version — do NOT re-add without a full audit:
+///   `env`      — execs its argv (`env rm -rf x` runs rm). ARBITRARY EXEC.
+///   `sort`     — `sort -o FILE` writes/overwrites.
+///   `uniq`     — `uniq IN OUT` writes the 2nd positional arg.
+///   `xxd`      — `xxd IN OUT` / `xxd -r` writes the 2nd arg.
+///   `tree`     — `tree -o FILE` writes.
+///   `date`     — `date -s …` sets the system clock.
+///   `hostname` — `hostname NAME` sets the hostname.
 const READONLY_HEADS: &[&str] = &[
     "cat", "ls", "ll", "pwd", "echo", "head", "tail", "wc", "grep", "egrep", "fgrep", "rg",
-    "which", "type", "file", "stat", "du", "df", "tree", "realpath", "dirname", "basename", "env",
-    "printenv", "date", "whoami", "hostname", "uname", "sort", "uniq", "cut", "diff", "cmp",
-    "shasum", "md5sum", "xxd", "od", "nl", "tac", "column", "true", "false",
+    "which", "type", "file", "stat", "du", "df", "realpath", "dirname", "basename", "printenv",
+    "whoami", "uname", "cut", "diff", "cmp", "shasum", "md5sum", "od", "nl", "tac", "column",
+    "true", "false",
 ];
 
 /// `git` subcommands that only read (regardless of flags). Excludes anything
 /// with a write mode (`branch -D`, `tag X`, `remote add`, `config`, `stash`, …).
+///
+/// REMOVED `reflog` — `git reflog expire/delete` is destructive (prunes the reflog).
 const GIT_READONLY_SUBCMDS: &[&str] = &[
     "status",
     "log",
@@ -33,7 +44,6 @@ const GIT_READONLY_SUBCMDS: &[&str] = &[
     "cat-file",
     "describe",
     "shortlog",
-    "reflog",
     "whatchanged",
     "grep",
 ];
@@ -52,7 +62,15 @@ pub fn is_readonly_bash(cmd: &str) -> bool {
     };
     match head {
         // `find` reads UNLESS it deletes or executes.
-        "find" => !cmd.contains("-delete") && !cmd.contains("-exec") && !cmd.contains("-ok"),
+        "find" => {
+            // find can WRITE with -delete, the -exec/-ok family (runs commands),
+            // and the -fprint/-fprintf/-fls family (writes the match list to a
+            // file). The -exec/-ok substring also catches -execdir/-okdir.
+            const FIND_WRITE: &[&str] = &[
+                "-delete", "-exec", "-ok", "-fprint", "-fprintf", "-fls", "-fprint0",
+            ];
+            !FIND_WRITE.iter().any(|w| cmd.contains(w))
+        }
         // `git` only for a fixed read-only subcommand set.
         "git" => toks
             .next()
@@ -129,5 +147,63 @@ mod tests {
         assert!(!is_readonly_bash("   "));
         assert!(!is_readonly_bash("somerandomtool --flag"));
         assert!(!is_readonly_bash("git")); // bare git, no subcommand
+    }
+
+    /// Regression test: adversarial-review confirmed bypasses that were
+    /// previously auto-approved but must now be REJECTED (return false).
+    ///
+    /// Covers:
+    ///   - `env` as arbitrary exec (7 cases)
+    ///   - `sort -o` write output (2 cases)
+    ///   - `uniq` 2-positional-arg write (1 case)
+    ///   - `xxd` write / reverse (2 cases)
+    ///   - `tree -o` write (1 case)
+    ///   - `find` -fprint/-fls/-fprintf write (3 cases)
+    ///   - `git reflog expire` destructive (1 case)
+    ///   - `date -s` clock mutation (1 case)
+    ///   - `hostname NAME` hostname mutation (1 case)
+    #[test]
+    fn rejects_plain_arg_write_and_exec_bypasses() {
+        let bypasses = [
+            "env rm -rf target",
+            "env FOO=bar rm -rf x",
+            "sort -o victim.txt in.txt",
+            "sort in.txt -o in.txt",
+            "uniq in.txt out.txt",
+            "xxd Cargo.toml dump.bin",
+            "xxd -r hex.txt restored.bin",
+            "tree -o listing.html",
+            "find . -fprint /tmp/out",
+            "find . -fls /tmp/out",
+            "find . -fprintf /tmp/o %p",
+            "git reflog expire --expire=now --all",
+            "date -s 2020-01-01",
+            "hostname evil-host",
+        ];
+        for c in bypasses {
+            assert!(
+                !is_readonly_bash(c),
+                "bypass must be rejected (was wrongly auto-approved): {c}"
+            );
+        }
+
+        // Confirm the still-allowed reads continue to pass.
+        let still_reads = [
+            "cat Cargo.toml",
+            "ls -la src/",
+            "grep -rn foo src/",
+            "git status",
+            "git log --oneline -10",
+            "find . -name '*.rs'",
+            "printenv PATH",
+            "whoami",
+            "uname -a",
+        ];
+        for c in still_reads {
+            assert!(
+                is_readonly_bash(c),
+                "read-only command should still pass: {c}"
+            );
+        }
     }
 }
