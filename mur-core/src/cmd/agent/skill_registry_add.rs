@@ -12,8 +12,8 @@ use semver::Version;
 
 use super::skill_verify::{HashStatus, SignatureStatus, VerifyOutcome, verify_skill_install};
 use crate::cmd::skill_registry;
-use mur_common::skill::local::set_trust_level;
-use mur_common::skill::{TrustLevel, parse_canonical, scan::scan_skill};
+use mur_common::skill::loader::is_valid_skill_name;
+use mur_common::skill::{parse_canonical, scan::scan_skill};
 
 // ─── Consent / view types ──────────────────────────────────────────────────
 
@@ -33,10 +33,15 @@ pub struct ConsentInfo {
     pub mcp_requirements: Vec<String>,
     /// Human-readable findings from `ContentScanReport::human_summary()`.
     pub findings: Vec<String>,
-    /// Hard failure — abort unconditionally (not overridable by `--yes`).
+    /// Hard failure — hash Mismatch or invalid signature (proven tampering).
+    /// Abort unconditionally; NOT overridable by `--yes`/`accept`.
     pub blocking: bool,
     /// Not proven-bad but not proven-good — requires `--yes` acknowledgement.
+    /// Covers: unsigned, absent-hash.
     pub needs_ack: bool,
+    /// Content-scan has blocking findings (tool-poisoning / injection / secret /
+    /// executable). Requires `--yes` acknowledgement (ack gate, not verify gate).
+    pub scan_blocking: bool,
     /// Trust level that will be applied on install (always `"sandboxed"`).
     pub trust_level: String,
     /// Raw YAML body of the resolved skill file (for Hub preview / consent display).
@@ -96,6 +101,39 @@ fn sig_view(s: &SignatureStatus) -> SigView {
     }
 }
 
+// ─── Install gate (pure, testable) ───────────────────────────────────────
+
+/// Two-tier fail-closed install gate.
+///
+/// - Tier 1 (`blocking`): hash Mismatch or invalid signature — proven tampering.
+///   Abort unconditionally; `accept` does NOT override this.
+/// - Tier 2 (`needs_ack || scan_blocking`): unsigned / absent-hash / scan findings.
+///   Requires explicit `accept` (`--yes`).
+pub fn gate(consent: &ConsentInfo, accept: bool) -> Result<()> {
+    if consent.blocking {
+        bail!(
+            "skill '{}' failed verify-on-install (hash={}, signature={}) — proven tampering, install refused.",
+            consent.name,
+            consent.hash,
+            consent.signature.status
+        );
+    }
+    if (consent.needs_ack || consent.scan_blocking) && !accept {
+        bail!(
+            "'{}' needs review (signature={}, hash={}{}); pass --yes to install anyway.",
+            consent.name,
+            consent.signature.status,
+            consent.hash,
+            if consent.scan_blocking {
+                ", security-scan findings"
+            } else {
+                ""
+            }
+        );
+    }
+    Ok(())
+}
+
 // ─── TEST SEAM — takes registry dir directly, no git/network ─────────────
 
 /// Resolve a skill from a local registry directory into a `ConsentInfo`
@@ -108,6 +146,11 @@ pub fn resolve_consent_in(
     skill: &str,
     version: Option<&str>,
 ) -> Result<ConsentInfo> {
+    // Fix D: reject index-controlled path traversal in skill name.
+    if !is_valid_skill_name(skill) {
+        bail!("invalid skill name '{skill}' — must be a safe identifier (no path components)");
+    }
+
     let idx = skill_registry::load_index(registry_dir)?;
     let entry = idx
         .skills
@@ -118,6 +161,11 @@ pub fn resolve_consent_in(
         Some(v) => v.to_string(),
         None => entry.latest.clone(),
     };
+
+    // Fix D: reject version strings that contain path traversal characters.
+    if ver.contains('/') || ver.contains('\\') || ver.contains("..") {
+        bail!("invalid version '{ver}' — must not contain '/', '\\\\', or '..'");
+    }
 
     // Version existence check. When `ver == entry.latest` we allow the
     // versions-dir to be absent (caller may omit it in minimal registries).
@@ -137,6 +185,7 @@ pub fn resolve_consent_in(
 
     let outcome: VerifyOutcome = verify_skill_install(&manifest, &text, &entry.content_sha256);
     let report = scan_skill(&manifest).map_err(|e| anyhow::anyhow!("content scan: {e}"))?;
+    let scan_blocking = report.has_blocking_findings();
 
     Ok(ConsentInfo {
         name: manifest.name.clone(),
@@ -154,6 +203,7 @@ pub fn resolve_consent_in(
         findings: report.human_summary(),
         blocking: outcome.is_blocking(),
         needs_ack: outcome.needs_ack(),
+        scan_blocking,
         trust_level: "sandboxed".to_string(),
         body: text,
     })
@@ -172,8 +222,8 @@ pub fn resolve_consent(mur_home: &Path, skill: &str, version: Option<&str>) -> R
 /// Install a registry skill onto a specific agent at `TrustLevel::Sandboxed`.
 ///
 /// Fail-closed gate:
-/// - `blocking`  → abort unconditionally.
-/// - `needs_ack && !accept` → abort with a `--yes` hint.
+/// - `blocking`  → abort unconditionally (hash Mismatch or invalid signature).
+/// - `(needs_ack || scan_blocking) && !accept` → abort with a `--yes` hint.
 ///
 /// On success returns the skill path relative to the agent home (`"skills/<name>"`).
 #[allow(dead_code)] // wired by the CLI/Hub units
@@ -189,28 +239,14 @@ pub async fn cmd_skill_registry_add(
     let (dir, _idx) = skill_registry::fetch_and_load(&mur_home, skill_registry::DEFAULT_REGISTRY)?;
     let consent = resolve_consent_in(&dir, skill, version)?;
 
-    // Fail-closed gate. `blocking` is unconditional — not overridable by `--yes`.
-    if consent.blocking {
-        bail!(
-            "skill '{}' has blocking security findings — install refused.\nFindings:\n  {}",
-            consent.name,
-            consent.findings.join("\n  ")
-        );
-    }
-    if consent.needs_ack && !accept {
-        bail!(
-            "skill '{}' is unsigned or unhashed — pass --yes to acknowledge and install",
-            consent.name
-        );
-    }
+    gate(&consent, accept)?;
 
     let path = skill_registry::skill_yaml_path(&dir, skill, &consent.version);
     super::skill::cmd_skill_add(agent, &path.to_string_lossy())?;
 
-    // Least privilege. NOTE: set_trust_level defaults to Sandboxed for skills
-    // with no explicit entry, so even if this set fails the effective level
-    // stays Sandboxed (fail-safe).
-    let _ = set_trust_level(&mur_home, &consent.name, TrustLevel::Sandboxed);
+    // Registry skills load at the loader's default TrustLevel::Sandboxed (no
+    // explicit pin). A hash-keyed Sandboxed pin (+ rug-pull drift detection) is
+    // a P2.1 follow-on.
 
     Ok(format!("skills/{}", consent.name))
 }
@@ -392,5 +428,91 @@ mcp_requirements:
         assert_eq!(consent.mcp_requirements.len(), 1);
         assert!(consent.mcp_requirements[0].contains("browser.*"));
         assert!(consent.mcp_requirements[0].contains("network_http"));
+    }
+
+    // Fix D: path-sanitization tests
+    #[test]
+    fn traversal_skill_name_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        fixture_registry(tmp.path(), "");
+
+        let err = resolve_consent_in(tmp.path(), "../evil", None).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid skill name"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn traversal_version_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        fixture_registry(tmp.path(), "");
+
+        let err = resolve_consent_in(tmp.path(), "test-skill", Some("../evil")).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid version"),
+            "unexpected: {err}"
+        );
+    }
+
+    // Fix E: gate() unit tests
+    fn clean_consent() -> ConsentInfo {
+        ConsentInfo {
+            name: "foo".into(),
+            version: "1.0.0".into(),
+            publisher: "human:tester".into(),
+            category: "context".into(),
+            signature: SigView {
+                status: "verified".into(),
+                publisher: "tester".into(),
+                key_fp: "abc".into(),
+            },
+            hash: "match".into(),
+            mcp_requirements: vec![],
+            findings: vec![],
+            blocking: false,
+            needs_ack: false,
+            scan_blocking: false,
+            trust_level: "sandboxed".into(),
+            body: "".into(),
+        }
+    }
+
+    #[test]
+    fn gate_blocking_unconditional_even_with_accept() {
+        let consent = ConsentInfo {
+            blocking: true,
+            ..clean_consent()
+        };
+        // accept=true must NOT override verify-blocking
+        assert!(gate(&consent, true).is_err());
+        assert!(gate(&consent, false).is_err());
+    }
+
+    #[test]
+    fn gate_needs_ack_requires_accept() {
+        let consent = ConsentInfo {
+            needs_ack: true,
+            ..clean_consent()
+        };
+        assert!(gate(&consent, false).is_err());
+        assert!(gate(&consent, true).is_ok());
+    }
+
+    #[test]
+    fn gate_scan_blocking_requires_accept() {
+        let consent = ConsentInfo {
+            scan_blocking: true,
+            ..clean_consent()
+        };
+        assert!(gate(&consent, false).is_err());
+        assert!(gate(&consent, true).is_ok());
+    }
+
+    #[test]
+    fn gate_all_clean_always_ok() {
+        let consent = clean_consent();
+        assert!(gate(&consent, false).is_ok());
+        assert!(gate(&consent, true).is_ok());
     }
 }

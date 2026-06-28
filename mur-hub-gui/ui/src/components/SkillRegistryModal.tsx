@@ -31,6 +31,8 @@ interface ConsentInfo {
   findings: string[];
   blocking: boolean;
   needs_ack: boolean;
+  /** Content-scan has blocking findings — requires --yes acknowledgement. */
+  scan_blocking: boolean;
   trust_level: string;
   body: string;
 }
@@ -103,8 +105,9 @@ export function SkillRegistryModal({ agentName, onClose, onSaved }: Props) {
     }
   }
 
-  // Install is enabled when: not blocking, AND (no ack needed OR ack given).
-  const canInstall = !!consent && !consent.blocking && (!consent.needs_ack || accept);
+  // Install is enabled when: not verify-blocking, AND (no ack needed OR ack given).
+  // Ack is needed for: unsigned/absent-hash (needs_ack) OR scan findings (scan_blocking).
+  const canInstall = !!consent && !consent.blocking && (!(consent.needs_ack || consent.scan_blocking) || accept);
 
   const sigLabel = consent
     ? (consent.signature.status === "verified" ? t("skillreg.sigVerified")
@@ -262,7 +265,7 @@ export function SkillRegistryModal({ agentName, onClose, onSaved }: Props) {
                 </pre>
               </div>
 
-              {consent.needs_ack && !consent.blocking && (
+              {(consent.needs_ack || consent.scan_blocking) && !consent.blocking && (
                 <label
                   style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, fontSize: 13 }}
                 >
