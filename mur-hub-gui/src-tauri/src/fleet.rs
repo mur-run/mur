@@ -188,9 +188,13 @@ pub fn fleet_remove_member(name: String, agents: Vec<String>) -> Result<(), Stri
 #[tauri::command]
 pub fn fleet_export(name: String) -> Result<String, String> {
     let home = mur_home_path();
-    let exports_dir = home.join("exports");
-    std::fs::create_dir_all(&exports_dir).map_err(|e| e.to_string())?;
-    let out_path = exports_dir.join(format!("{name}.fleet"));
+    let out_path = if let Some(desktop) = dirs::desktop_dir().filter(|d| d.exists()) {
+        desktop.join(format!("{name}.fleet"))
+    } else {
+        let fallback = home.join("exports");
+        std::fs::create_dir_all(&fallback).map_err(|e| e.to_string())?;
+        fallback.join(format!("{name}.fleet"))
+    };
     let now = chrono::Utc::now().to_rfc3339();
     export::cmd_fleet_export(&home, &name, false, Some(out_path.clone()), &now)
         .map_err(|e| e.to_string())?;
