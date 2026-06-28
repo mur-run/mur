@@ -118,6 +118,8 @@ pub async fn preview_skill_url(url: &str) -> Result<SkillPreview> {
 
 /// Preview any skill URL — archive bundle or single skill.
 /// Returns a `Vec<SkillPreview>` (bundle: all previews; single: one-element vec).
+// Consumed by the workspace-excluded `mur-hub-gui` crate; unused in the workspace build.
+#[allow(dead_code)]
 pub async fn preview_any_url(url: &str) -> Result<Vec<SkillPreview>> {
     if crate::cmd::agent::skill_bundle::is_archive_url(url).is_some() {
         crate::cmd::agent::skill_bundle::preview_bundle_url(url).await
@@ -128,6 +130,8 @@ pub async fn preview_any_url(url: &str) -> Result<Vec<SkillPreview>> {
 
 /// Install from any skill URL — archive bundle or single skill.
 /// Returns installed skill ids (e.g. `["skills/foo", "skills/bar"]`).
+// Consumed by the workspace-excluded `mur-hub-gui` crate; unused in the workspace build.
+#[allow(dead_code)]
 pub async fn install_any_url(agent: &str, url: &str, accept_findings: bool) -> Result<Vec<String>> {
     if crate::cmd::agent::skill_bundle::is_archive_url(url).is_some() {
         crate::cmd::agent::skill_bundle::install_bundle_from_url(agent, url, accept_findings).await

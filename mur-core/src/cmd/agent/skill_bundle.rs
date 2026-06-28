@@ -216,6 +216,8 @@ pub async fn fetch_bundle(url: &str) -> Result<Vec<u8>> {
 }
 
 /// Fetch + extract + discover + preview each skill in a bundle. Installs nothing.
+// Consumed by the workspace-excluded `mur-hub-gui` crate; unused in the workspace build.
+#[allow(dead_code)]
 pub async fn preview_bundle_url(url: &str) -> Result<Vec<SkillPreview>> {
     let kind = is_archive_url(url).ok_or_else(|| anyhow::anyhow!("not a supported archive URL"))?;
     let bytes = fetch_bundle(url).await?;
