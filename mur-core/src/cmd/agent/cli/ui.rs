@@ -4,11 +4,14 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap,
+};
 
 use std::time::Instant;
 
 use super::app::{App, ChatMsg, Role, SPINNER};
+use super::complete;
 use super::markdown;
 use super::welcome::welcome_lines;
 
@@ -27,6 +30,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     render_transcript(f, app, chunks[0]);
     f.render_widget(&app.input, chunks[1]);
+    render_completion(f, app, chunks[1]);
     render_status(f, app, chunks[2]);
 
     // Inline approval lives on the card (Task 4) when the runtime sent a
@@ -36,6 +40,70 @@ pub fn render(f: &mut Frame, app: &mut App) {
     {
         render_hitl(f, hitl);
     }
+}
+
+/// Draw completion menu list anchored just above the input box.
+/// No-op when the menu is closed or empty.
+fn render_completion(f: &mut Frame, app: &App, input_area: Rect) {
+    let Some(state) = &app.completion else {
+        return;
+    };
+    if state.items.is_empty() {
+        return;
+    }
+    let theme = app.theme;
+
+    let rows: Vec<ListItem> = state
+        .items
+        .iter()
+        .map(|c| {
+            let mut spans = vec![Span::styled(
+                c.display.clone(),
+                Style::default().fg(theme.border_title),
+            )];
+            if !c.desc.is_empty() {
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled(
+                    c.desc.clone(),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+
+    let visible = rows.len().min(complete::MAX_MENU_ROWS) as u16;
+    let popup_height = visible + 2; // +2 for borders
+
+    // Anchor above the input box, then clamp to the frame so a popup taller
+    // than the space above the input (short / stacked-pane terminals) can never
+    // render out of bounds — ratatui panics on an out-of-buffer index.
+    let y = input_area.y.saturating_sub(popup_height);
+    let popup_area = Rect {
+        x: input_area.x,
+        y,
+        width: input_area.width,
+        height: popup_height,
+    }
+    .intersection(f.area());
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.border))
+        .title(" ↑↓ move · Tab accept · Esc close ")
+        .title_style(Style::default().fg(theme.border_title));
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(state.selected));
+
+    f.render_widget(Clear, popup_area);
+    f.render_stateful_widget(
+        List::new(rows)
+            .block(block)
+            .highlight_style(Style::default().add_modifier(Modifier::REVERSED)),
+        popup_area,
+        &mut list_state,
+    );
 }
 
 fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
