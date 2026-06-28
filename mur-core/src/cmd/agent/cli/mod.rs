@@ -99,6 +99,11 @@ pub async fn cmd_cli(
     budget_usd: Option<f64>,
 ) -> Result<()> {
     if names.len() > 1 {
+        if budget_usd.is_some() {
+            eprintln!(
+                "note: --budget-usd is only enforced in the single-agent TUI; it is ignored when opening multiple agents."
+            );
+        }
         let names = names.to_vec();
         return tokio::task::spawn_blocking(move || multiplex::run(&names, resume, auto)).await?;
     }
@@ -124,6 +129,11 @@ pub async fn cmd_cli(
     // a real stdin TTY gets an echoed prompt and a [y/a/n] HITL question; a
     // pipe gets neither.
     if plain || !io::stdout().is_terminal() {
+        if budget_usd.is_some() {
+            eprintln!(
+                "note: --budget-usd is only enforced in the interactive TUI; it is ignored in plain/piped mode."
+            );
+        }
         let home2 = home.clone();
         let agent2 = agent.clone();
         let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
