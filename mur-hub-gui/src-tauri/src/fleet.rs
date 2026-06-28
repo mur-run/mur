@@ -167,22 +167,27 @@ pub fn fleet_send(name: String, text: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn fleet_jobs(name: String) -> Result<Vec<JobRow>, String> {
+pub fn fleet_jobs(name: String, all: bool) -> Result<Vec<JobRow>, String> {
     let home = mur_home_path();
     let job_list = jobs::list_jobs(&home, &name).map_err(|e| e.to_string())?;
-    Ok(job_list.into_iter().map(job_to_row).collect())
+    let filtered: Vec<_> = if all {
+        job_list
+    } else {
+        job_list.into_iter().filter(|j| !j.status.is_terminal()).collect()
+    };
+    Ok(filtered.into_iter().map(job_to_row).collect())
 }
 
 #[tauri::command]
-pub fn fleet_add_member(name: String, agents: Vec<String>) -> Result<(), String> {
+pub fn fleet_add_member(name: String, agent: String) -> Result<(), String> {
     let home = mur_home_path();
-    roster::cmd_fleet_add(&home, &name, agents).map_err(|e| e.to_string())
+    roster::cmd_fleet_add(&home, &name, vec![agent]).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn fleet_remove_member(name: String, agents: Vec<String>) -> Result<(), String> {
+pub fn fleet_remove_member(name: String, agent: String) -> Result<(), String> {
     let home = mur_home_path();
-    roster::cmd_fleet_remove(&home, &name, agents).map_err(|e| e.to_string())
+    roster::cmd_fleet_remove(&home, &name, vec![agent]).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
