@@ -470,6 +470,7 @@ impl App {
         self.turn_out = 0;
         self.saw_step_this_turn = false;
         self.saw_hitl_this_turn = false;
+        self.pending_suggestions.clear();
         self.scroll_back = 0;
         // Placeholder agent message that deltas accumulate into.
         let mut m = ChatMsg::new(Role::Agent, "");
@@ -1320,6 +1321,19 @@ mod footer_state_tests {
         // session accumulators must NOT be cleared by begin_user_turn.
         assert_eq!(a.session_in, 100, "session_in survives begin_user_turn");
         assert_eq!(a.session_out, 20, "session_out survives begin_user_turn");
+    }
+
+    #[test]
+    fn begin_user_turn_clears_stale_pending_suggestions() {
+        let mut a = App::test_fixture();
+        // Simulate a prior turn that set suggestions but never revealed them
+        // (e.g., the turn ended in Err or was cancelled via Ctrl+C).
+        a.pending_suggestions = vec!["stale suggestion".to_string()];
+        a.begin_user_turn("new turn");
+        assert!(
+            a.pending_suggestions.is_empty(),
+            "pending_suggestions must be cleared at the start of each turn"
+        );
     }
 
     #[test]

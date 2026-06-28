@@ -406,7 +406,6 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
             {
                 if let Some(s) = app.suggestion_ghost.take() {
                     app.set_input(&s);
-                    app.input.set_placeholder_text("Type a message…");
                 }
                 return;
             }
