@@ -922,6 +922,7 @@ mod tests {
             resume,
             auto,
             skin: _,
+            plain: _,
         } = parse_cli_action(&["mur", "agent", "cli", "a1", "a2", "a3", "--auto"])
         else {
             panic!("expected Cli variant");
