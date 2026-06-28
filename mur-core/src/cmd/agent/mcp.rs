@@ -379,7 +379,11 @@ mod tests {
         .unwrap();
 
         let (_p, profile) = load_profile_for_edit("bob").unwrap();
-        let e = profile.mcp_servers.iter().find(|m| m.name == "srv").unwrap();
+        let e = profile
+            .mcp_servers
+            .iter()
+            .find(|m| m.name == "srv")
+            .unwrap();
         assert_eq!(e.description_hash.as_deref(), Some("abc123"));
         let net = e.network.as_ref().expect("network should be set");
         assert_eq!(net.mode, McpNetMode::Restricted);
