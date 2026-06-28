@@ -1,0 +1,281 @@
+//! Pure autocomplete logic for the `mur agent cli` completion menu: build the
+//! candidate set for the current input and filter it. No TUI, no I/O here
+//! (except `load_agent_skills`, which reads the agent profile at startup).
+
+use std::collections::HashSet;
+use std::path::Path;
+
+/// Most rows shown before the menu scrolls (kept in sync with `ui.rs`).
+pub const MAX_MENU_ROWS: usize = 8;
+
+/// One selectable menu entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Candidate {
+    /// What the menu shows in the left column (`/skill`, `list`, `create-pr`).
+    pub display: String,
+    /// Text that replaces the whole input line on accept (`/mcp `, `/mcp list `,
+    /// `create-pr`).
+    pub insert: String,
+    /// Right-column description (may be empty).
+    pub desc: String,
+    /// True for a top-level command that has a subcommand layer — accepting it
+    /// keeps the menu open and shows layer 2.
+    pub has_children: bool,
+}
+
+/// The live menu: the filtered candidates plus the highlighted row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompletionState {
+    pub items: Vec<Candidate>,
+    pub selected: usize,
+}
+
+/// Built-in commands: (word without slash, description, subcommands).
+/// `exit` is omitted as a duplicate of `quit`.
+const COMMANDS: &[(&str, &str, &[&str])] = &[
+    ("help", "show the command cheatsheet", &[]),
+    ("clear", "start a new conversation", &[]),
+    ("card", "show this agent's card", &[]),
+    ("sessions", "list past sessions", &[]),
+    ("channels", "list or switch channels", &[]),
+    ("auto", "session-wide auto-approval", &["on", "off"]),
+    (
+        "mcp",
+        "manage MCP servers",
+        &["list", "add", "remove", "add-remote", "login", "registry-add"],
+    ),
+    ("skill", "manage agent skills", &["list", "add", "remove"]),
+    ("skin", "switch theme", &["dark", "light", "mur"]),
+    ("quit", "exit the chat", &[]),
+];
+
+/// Subcommands for `cmd` (without leading slash), or `None` if `cmd` is unknown
+/// or takes only free-text args.
+fn subcommands_for(cmd: &str) -> Option<&'static [&'static str]> {
+    COMMANDS
+        .iter()
+        .find(|(w, _, _)| *w == cmd)
+        .map(|(_, _, subs)| *subs)
+        .filter(|subs| !subs.is_empty())
+}
+
+/// Top-level candidates: every built-in command plus the agent's skills.
+fn build_top_level(skills: &[Candidate]) -> Vec<Candidate> {
+    let mut out: Vec<Candidate> = COMMANDS
+        .iter()
+        .map(|(word, desc, subs)| Candidate {
+            display: format!("/{word}"),
+            insert: format!("/{word} "),
+            desc: (*desc).to_string(),
+            has_children: !subs.is_empty(),
+        })
+        .collect();
+    out.extend_from_slice(skills);
+    out
+}
+
+/// Layer-2 candidates for a command word.
+fn build_subcommands(cmd: &str, subs: &[&str]) -> Vec<Candidate> {
+    subs.iter()
+        .map(|sub| Candidate {
+            display: (*sub).to_string(),
+            insert: format!("/{cmd} {sub} "),
+            desc: String::new(),
+            has_children: false,
+        })
+        .collect()
+}
+
+/// Case-insensitive substring filter on the candidate word (display minus any
+/// leading `/`).
+fn filter(cands: Vec<Candidate>, query: &str) -> Vec<Candidate> {
+    let q = query.to_lowercase();
+    cands
+        .into_iter()
+        .filter(|c| c.display.trim_start_matches('/').to_lowercase().contains(&q))
+        .collect()
+}
+
+/// Derive the completion menu from the current input. Returns `None` when the
+/// input is not in a slash context or nothing matches (menu closed).
+pub fn compute(input: &str, skills: &[Candidate]) -> Option<CompletionState> {
+    // ponytail: slash commands are single-line; a multiline composer has no menu.
+    if input.contains('\n') {
+        return None;
+    }
+    let after = input.trim_start().strip_prefix('/')?;
+    let items = match after.split_once(char::is_whitespace) {
+        // Still typing the command word.
+        None => filter(build_top_level(skills), after),
+        // Command word complete → maybe a subcommand layer.
+        Some((cmd, rest)) => {
+            // A second whitespace means we're typing an arg past layer 2.
+            if rest.trim_start().contains(char::is_whitespace) {
+                return None;
+            }
+            let subs = subcommands_for(cmd)?;
+            filter(build_subcommands(cmd, subs), rest.trim_start())
+        }
+    };
+    if items.is_empty() {
+        return None;
+    }
+    Some(CompletionState { items, selected: 0 })
+}
+
+/// Best-effort display name for a skill source string: a path like
+/// `.../skills/<name>/skill.yaml` → `<name>`; `<name>.yaml` → `<name>`;
+/// a bare name → itself.
+pub fn skill_display_name(raw: &str) -> String {
+    let p = Path::new(raw);
+    if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+        if stem == "skill" {
+            if let Some(parent) = p.parent().and_then(|d| d.file_name()).and_then(|s| s.to_str()) {
+                return parent.to_string();
+            }
+        }
+        return stem.to_string();
+    }
+    raw.to_string()
+}
+
+/// Load this agent's skills as menu candidates. Fail-soft: any read error
+/// yields an empty list (the menu just shows built-in commands). Disabled
+/// skills are excluded since they are not injected. ponytail: cached once at
+/// startup; mid-session `/skill add` won't refresh it.
+pub fn load_agent_skills(agent: &str) -> Vec<Candidate> {
+    let Ok((_path, profile)) = crate::cmd::agent::load_profile_for_edit(agent) else {
+        return Vec::new();
+    };
+    let disabled: HashSet<&str> = profile.disabled_skills.iter().map(String::as_str).collect();
+    let mut out: Vec<Candidate> = Vec::new();
+    for s in &profile.installed_skills {
+        if disabled.contains(s.name.as_str()) {
+            continue;
+        }
+        out.push(Candidate {
+            display: s.name.clone(),
+            insert: s.name.clone(),
+            desc: s.description.clone(),
+            has_children: false,
+        });
+    }
+    for raw in &profile.skills {
+        let name = skill_display_name(raw);
+        if disabled.contains(name.as_str()) || out.iter().any(|c| c.display == name) {
+            continue;
+        }
+        out.push(Candidate {
+            display: name.clone(),
+            insert: name,
+            desc: String::new(),
+            has_children: false,
+        });
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn skill(name: &str) -> Candidate {
+        Candidate {
+            display: name.into(),
+            insert: name.into(),
+            desc: String::new(),
+            has_children: false,
+        }
+    }
+
+    fn displays(state: &CompletionState) -> Vec<String> {
+        state.items.iter().map(|c| c.display.clone()).collect()
+    }
+
+    #[test]
+    fn no_menu_without_leading_slash() {
+        assert!(compute("hello", &[skill("create-pr")]).is_none());
+    }
+
+    #[test]
+    fn top_level_filters_commands_by_prefix_substring() {
+        let s = compute("/sk", &[skill("create-pr")]).unwrap();
+        let d = displays(&s);
+        assert!(d.contains(&"/skill".to_string()));
+        assert!(d.contains(&"/skin".to_string()));
+        // "sk" does not match the skill "create-pr".
+        assert!(!d.contains(&"create-pr".to_string()));
+    }
+
+    #[test]
+    fn top_level_includes_matching_skills() {
+        let s = compute("/cre", &[skill("create-pr")]).unwrap();
+        assert_eq!(displays(&s), vec!["create-pr".to_string()]);
+    }
+
+    #[test]
+    fn empty_slash_shows_commands_and_skills() {
+        let s = compute("/", &[skill("create-pr")]).unwrap();
+        let d = displays(&s);
+        assert!(d.contains(&"/mcp".to_string()));
+        assert!(d.contains(&"create-pr".to_string()));
+    }
+
+    #[test]
+    fn descends_to_subcommands_after_space() {
+        let s = compute("/mcp ", &[]).unwrap();
+        let d = displays(&s);
+        assert!(d.contains(&"list".to_string()));
+        assert!(d.contains(&"add-remote".to_string()));
+        let add = s.items.iter().find(|c| c.display == "list").unwrap();
+        assert_eq!(add.insert, "/mcp list ");
+        assert!(!add.has_children);
+    }
+
+    #[test]
+    fn subcommands_filter_by_query() {
+        let s = compute("/mcp add", &[]).unwrap();
+        let d = displays(&s);
+        assert!(d.contains(&"add".to_string()));
+        assert!(d.contains(&"add-remote".to_string()));
+        assert!(!d.contains(&"list".to_string()));
+    }
+
+    #[test]
+    fn no_menu_past_layer_two() {
+        assert!(compute("/mcp add foo", &[]).is_none());
+    }
+
+    #[test]
+    fn command_without_subcommands_has_no_layer_two() {
+        assert!(compute("/help ", &[]).is_none());
+    }
+
+    #[test]
+    fn unknown_command_no_match_closes_menu() {
+        assert!(compute("/zzz", &[]).is_none());
+    }
+
+    #[test]
+    fn top_level_command_marks_children() {
+        let s = compute("/mc", &[]).unwrap();
+        let mcp = s.items.iter().find(|c| c.display == "/mcp").unwrap();
+        assert!(mcp.has_children);
+        assert_eq!(mcp.insert, "/mcp ");
+        let help = compute("/hel", &[]).unwrap();
+        let h = help.items.iter().find(|c| c.display == "/help").unwrap();
+        assert!(!h.has_children);
+    }
+
+    #[test]
+    fn skill_display_name_handles_paths_and_names() {
+        assert_eq!(skill_display_name("/a/b/skills/foo/skill.yaml"), "foo");
+        assert_eq!(skill_display_name("bar.yaml"), "bar");
+        assert_eq!(skill_display_name("baz"), "baz");
+    }
+
+    #[test]
+    fn multiline_input_has_no_menu() {
+        assert!(compute("/mcp\nlist", &[]).is_none());
+    }
+}

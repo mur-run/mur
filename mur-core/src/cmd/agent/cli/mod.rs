@@ -9,6 +9,7 @@
 mod access;
 mod app;
 mod bash_class;
+mod complete;
 mod diff;
 mod dump;
 mod footer;
