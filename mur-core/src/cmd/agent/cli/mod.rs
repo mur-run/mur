@@ -25,8 +25,9 @@ use std::time::Instant as StdInstant;
 
 use anyhow::{Context, Result};
 use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
-    EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, Event, EventStream, KeyCode, KeyEventKind, KeyModifiers,
+    MouseEventKind,
 };
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -104,7 +105,8 @@ impl TerminalGuard {
             io::stdout(),
             EnterAlternateScreen,
             EnableBracketedPaste,
-            EnableMouseCapture
+            EnableMouseCapture,
+            EnableFocusChange
         )
         .context("enter alternate screen")?;
         Ok(Self)
@@ -118,6 +120,7 @@ impl Drop for TerminalGuard {
             LeaveAlternateScreen,
             DisableBracketedPaste,
             DisableMouseCapture,
+            DisableFocusChange,
             cursor::Show
         );
         let _ = disable_raw_mode();
@@ -148,6 +151,7 @@ async fn run_tui(
             LeaveAlternateScreen,
             DisableBracketedPaste,
             DisableMouseCapture,
+            DisableFocusChange,
             cursor::Show
         );
         let _ = disable_raw_mode();
@@ -363,6 +367,8 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
             }
             _ => {}
         },
+        Event::FocusGained => app.focused = true,
+        Event::FocusLost => app.focused = false,
         _ => {}
     }
 }

@@ -223,6 +223,9 @@ pub struct App {
     /// Mascot color/animation mode, resolved once at startup from the theme
     /// and terminal capabilities (NO_COLOR / non-TTY / TERM=dumb → static).
     pub mascot_mode: MascotMode,
+    /// True while the terminal is focused. Driven by crossterm focus events;
+    /// used to suppress notifications while the user is watching.
+    pub focused: bool,
 }
 
 impl App {
@@ -256,6 +259,10 @@ impl App {
             blink: Blink::new(),
             // Resolve color/animation once: env + TTY don't change mid-session.
             mascot_mode: resolve_mascot_mode(theme, std::io::stdout().is_terminal()),
+            // Assume focused at startup; crossterm corrects it on the first
+            // FocusLost. (Terminals that don't report focus stay `true` → no
+            // notifications, which is the safe default.)
+            focused: true,
         }
     }
 
