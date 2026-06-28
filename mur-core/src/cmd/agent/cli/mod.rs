@@ -30,8 +30,9 @@ use std::time::Instant as StdInstant;
 
 use anyhow::{Context, Result};
 use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
-    EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, Event, EventStream, KeyCode, KeyEventKind, KeyModifiers,
+    MouseEventKind,
 };
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -136,7 +137,8 @@ impl TerminalGuard {
             io::stdout(),
             EnterAlternateScreen,
             EnableBracketedPaste,
-            EnableMouseCapture
+            EnableMouseCapture,
+            EnableFocusChange
         )
         .context("enter alternate screen")?;
         Ok(Self)
@@ -150,6 +152,7 @@ impl Drop for TerminalGuard {
             LeaveAlternateScreen,
             DisableBracketedPaste,
             DisableMouseCapture,
+            DisableFocusChange,
             cursor::Show
         );
         let _ = disable_raw_mode();
@@ -180,6 +183,7 @@ async fn run_tui(
             LeaveAlternateScreen,
             DisableBracketedPaste,
             DisableMouseCapture,
+            DisableFocusChange,
             cursor::Show
         );
         let _ = disable_raw_mode();
@@ -401,6 +405,8 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
             }
             _ => {}
         },
+        Event::FocusGained => app.focused = true,
+        Event::FocusLost => app.focused = false,
         _ => {}
     }
 }
@@ -867,12 +873,21 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
             // Session auto-approval: `/auto`/`--auto` covers every tool; the
             // modal's [a] key covers a single tool name.
             let auto = app.auto_approve || app.session_tool_allow.contains(&req.tool_name);
+            if !app.focused && !auto {
+                notify_unfocused(
+                    &app.agent,
+                    &format!("Tool approval needed: {}", req.tool_name),
+                );
+            }
             app.hitl = Some(req);
             if auto {
                 decide_hitl_with_note(app, tx, true, true);
             }
         }
         StreamMsg::Done { task, .. } => {
+            if !app.focused {
+                notify_unfocused(&app.agent, "Turn finished");
+            }
             if let Some(u) = task.get("usage") {
                 app.apply_usage(u);
             }
@@ -882,7 +897,12 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
                 Err(cause) => app.fail_turn(&cause),
             }
         }
-        StreamMsg::Err { error, .. } => app.fail_turn(&error),
+        StreamMsg::Err { error, .. } => {
+            if !app.focused {
+                notify_unfocused(&app.agent, "Turn failed");
+            }
+            app.fail_turn(&error);
+        }
         StreamMsg::Note(text) => app.push_system(text),
         StreamMsg::ShellDone { cmd, output } => app.push_shell(&cmd, &output),
         StreamMsg::StepStarted {
@@ -914,6 +934,62 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
                 duration_ms,
             );
         }
+    }
+}
+
+// ── OS notifications ─────────────────────────────────────────────────────────
+
+/// The macOS `osascript` line for a notification, with quotes escaped. Pure so
+/// the escaping is unit-tested; the spawn is in `notify_unfocused`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn notify_script(title: &str, message: &str) -> String {
+    format!(
+        "display notification \"{}\" with title \"{}\"",
+        message.replace('\\', "\\\\").replace('"', "\\\""),
+        title.replace('\\', "\\\\").replace('"', "\\\"")
+    )
+}
+
+/// Best-effort OS notification — fired only when the terminal is unfocused.
+/// Never blocks or errors the event loop (spawn-and-ignore), and emits no
+/// in-terminal bell (the TUI owns the alternate screen).
+fn notify_unfocused(title: &str, message: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("osascript")
+            .args(["-e", &notify_script(title, message)])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("notify-send")
+            .args([title, message])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (title, message); // no-op on other platforms
+    }
+}
+
+#[cfg(test)]
+mod notify_tests {
+    use super::notify_script;
+
+    #[test]
+    fn notify_script_escapes_quotes() {
+        let s = notify_script("rustsmith", r#"finished "the" task"#);
+        assert!(s.contains("display notification"));
+        // clean title → PLAIN quote delimiters
+        assert!(s.contains(r#"with title "rustsmith""#));
+        // embedded quotes in the message ARE escaped to \"
+        assert!(s.contains(r#"finished \"the\" task"#));
+        // the full message is wrapped in plain delimiters
+        assert!(s.contains(r#"display notification "finished \"the\" task""#));
     }
 }
 
