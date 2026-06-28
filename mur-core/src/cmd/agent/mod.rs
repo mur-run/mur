@@ -53,6 +53,7 @@ mod service;
 pub mod skill;
 pub mod skill_bundle;
 pub mod skill_remote;
+pub mod skill_verify;
 mod snapshot;
 pub mod stale;
 mod stats;
