@@ -9,6 +9,7 @@
 mod access;
 mod app;
 mod diff;
+mod dump;
 mod footer;
 mod manage;
 mod markdown;
@@ -326,6 +327,11 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                         );
                     }
                 }
+                KeyCode::Char('o') if ctrl => {
+                    if let Err(e) = scrollback_dump(app) {
+                        app.push_system(format!("scrollback view failed: {e}"));
+                    }
+                }
                 KeyCode::PageUp => {
                     app.scroll_back = app.scroll_back.saturating_add(app.scroll_page.max(1))
                 }
@@ -397,6 +403,53 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
         },
         _ => {}
     }
+}
+
+/// Suspend the TUI, print the full transcript to native scrollback (so the
+/// terminal's own select/copy/search work), also save it to a temp file, then
+/// wait for Enter and resume. Blocking is intentional — the TUI is frozen while
+/// the user reads/copies; streaming messages queue until we return.
+fn scrollback_dump(app: &App) -> io::Result<()> {
+    let text = dump::transcript_to_text(&app.messages);
+    let path = std::env::temp_dir().join(format!("mur-transcript-{}.txt", app.agent));
+    let _ = std::fs::write(&path, &text);
+
+    // Suspend: leave alt-screen + restore the normal buffer where native copy
+    // and scrollback work; drop raw mode so `read_line` is canonical.
+    execute!(
+        io::stdout(),
+        LeaveAlternateScreen,
+        DisableBracketedPaste,
+        DisableMouseCapture
+    )?;
+    disable_raw_mode()?;
+
+    let res = (|| -> io::Result<()> {
+        use std::io::Write;
+        let mut out = io::stdout();
+        writeln!(out, "{text}")?;
+        writeln!(
+            out,
+            "\n─── full transcript · select/copy freely · saved to {} ───",
+            path.display()
+        )?;
+        write!(out, "press Enter to return to chat… ")?;
+        out.flush()?;
+        let mut buf = String::new();
+        let _ = io::stdin().read_line(&mut buf);
+        Ok(())
+    })();
+
+    // Resume UNCONDITIONALLY — even if a write above failed, never leave the
+    // terminal in the normal buffer with raw mode off.
+    enable_raw_mode()?;
+    execute!(
+        io::stdout(),
+        EnterAlternateScreen,
+        EnableBracketedPaste,
+        EnableMouseCapture
+    )?;
+    res
 }
 
 /// Write `cli.skin = name` to `~/.mur/config.yaml` atomically.
