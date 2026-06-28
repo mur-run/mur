@@ -9,7 +9,109 @@
 //! check while `Command::new` runs the PATH-resolved binary.
 
 use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+
+/// File name of the MUR MCP server binary.
+#[cfg(windows)]
+const MCP_SERVER_BIN: &str = "mur-mcp-server.exe";
+#[cfg(not(windows))]
+const MCP_SERVER_BIN: &str = "mur-mcp-server";
+
+/// Canonical location MUR keeps its own copy of the MCP server binary:
+/// `~/.mur/mcp-servers/mur-mcp-server` (honors `$MUR_HOME`). Stable across how
+/// `mur` itself was installed (brew / cargo / source) and across upgrades, so
+/// agent profiles can pin this path once and never go stale.
+pub fn bundled_mcp_server_path() -> PathBuf {
+    crate::trust::mur_home()
+        .join("mcp-servers")
+        .join(MCP_SERVER_BIN)
+}
+
+/// Ensure [`bundled_mcp_server_path`] exists and matches the `mur-mcp-server`
+/// shipped alongside the running `mur` binary, copying it into place when
+/// missing or out of date. Returns the canonical target path.
+///
+/// Source resolution: the sibling of the current executable first (brew, cargo
+/// and source builds all colocate the two binaries), then `mur-mcp-server` on
+/// `PATH`. If no source is found but a copy already exists, that copy is
+/// returned (usable, just can't self-update). Errors only when there is neither
+/// a source nor an existing copy.
+///
+/// Call this BEFORE the kernel sandbox seals — the copy needs write access to
+/// `~/.mur`.
+pub fn ensure_bundled_mcp_server() -> Result<PathBuf> {
+    let target = bundled_mcp_server_path();
+    match locate_mcp_server_source() {
+        Some(src) => {
+            install_if_stale(&src, &target)?;
+            Ok(target)
+        }
+        None if target.is_file() => Ok(target),
+        None => bail!(
+            "mur-mcp-server not found next to `mur` or on PATH, and no copy at {}",
+            target.display()
+        ),
+    }
+}
+
+/// The `mur-mcp-server` to copy from: sibling of `mur` first, then PATH.
+fn locate_mcp_server_source() -> Option<PathBuf> {
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let sibling = dir.join(MCP_SERVER_BIN);
+        if sibling.is_file() {
+            return sibling.canonicalize().ok();
+        }
+    }
+    resolve_command(MCP_SERVER_BIN).ok()
+}
+
+/// Copy `src` to `target` unless `target` already byte-matches it. Idempotent;
+/// writes via a uniquely-named temp file + rename in the target dir so the swap
+/// is atomic and never leaves a half-written binary an agent might try to spawn;
+/// sets mode 0755 on unix.
+fn install_if_stale(src: &Path, target: &Path) -> Result<()> {
+    if target.is_file() && sha256_file(src)? == sha256_file(target)? {
+        return Ok(());
+    }
+    let dir = target
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("target {} has no parent", target.display()))?;
+    std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    // Unique temp name so two agents starting at once don't clobber each other.
+    let tmp = dir.join(format!(".{MCP_SERVER_BIN}.{}.tmp", std::process::id()));
+    std::fs::copy(src, &tmp)
+        .with_context(|| format!("copy {} -> {}", src.display(), tmp.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))
+            .with_context(|| format!("chmod {}", tmp.display()))?;
+    }
+    std::fs::rename(&tmp, target)
+        .with_context(|| format!("rename {} -> {}", tmp.display(), target.display()))?;
+    Ok(())
+}
+
+/// Stream-hash `path` SHA-256 (64 KiB chunks; lowercase hex).
+fn sha256_file(path: &Path) -> Result<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = f
+            .read(&mut buf)
+            .with_context(|| format!("read {}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
 
 /// Resolve `command` to an absolute path on disk.
 ///
@@ -75,5 +177,32 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let resolved = resolve_command(tmp.path().to_str().unwrap()).unwrap();
         assert!(resolved.is_absolute());
+    }
+
+    #[test]
+    fn install_if_stale_copies_then_is_idempotent_and_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src-bin");
+        let target = dir.path().join("mcp-servers/mur-mcp-server"); // parent must be created
+        std::fs::write(&src, b"v1").unwrap();
+
+        // Missing target -> copied.
+        install_if_stale(&src, &target).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"v1");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&target).unwrap().permissions().mode();
+            assert_eq!(mode & 0o111, 0o111, "target must be executable");
+        }
+
+        // Unchanged source -> no-op, still v1.
+        install_if_stale(&src, &target).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"v1");
+
+        // Updated source -> refreshed.
+        std::fs::write(&src, b"v2-newer").unwrap();
+        install_if_stale(&src, &target).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"v2-newer");
     }
 }
