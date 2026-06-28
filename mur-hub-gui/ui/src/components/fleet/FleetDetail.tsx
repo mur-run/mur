@@ -35,6 +35,7 @@ export function FleetDetail({ detail, jobs, onRefresh, onDelete }: Props) {
   const [sendInput, setSendInput] = useState("");
   const [addInput, setAddInput] = useState("");
   const [showAll, setShowAll] = useState(false);
+  const [allJobs, setAllJobs] = useState<JobRow[]>([]);
 
   async function call(cmd: string, args: Record<string, unknown>) {
     setBusy(cmd);
@@ -75,8 +76,16 @@ export function FleetDetail({ detail, jobs, onRefresh, onDelete }: Props) {
   async function handleAddMember() {
     const agent = addInput.trim();
     if (!agent) return;
-    await call("fleet_add_member", { name: detail.name, agent });
-    setAddInput("");
+    setBusy("fleet_add_member");
+    try {
+      await invoke("fleet_add_member", { name: detail.name, agent });
+      setAddInput("");
+      onRefresh();
+    } catch (err) {
+      showToast(String(err), 4000);
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function handleExport() {
@@ -121,11 +130,25 @@ export function FleetDetail({ detail, jobs, onRefresh, onDelete }: Props) {
     }
   }
 
-  function handleShowAll() {
-    setShowAll((prev) => !prev);
+  async function handleShowAll() {
+    if (showAll) {
+      setShowAll(false);
+      setAllJobs([]);
+      return;
+    }
+    setBusy("fleet_jobs");
+    try {
+      const rows = await invoke<JobRow[]>("fleet_jobs", { name: detail.name, all: true });
+      setAllJobs(rows);
+      setShowAll(true);
+    } catch (err) {
+      showToast(String(err), 4000);
+    } finally {
+      setBusy(null);
+    }
   }
 
-  const displayedJobs = showAll ? jobs : jobs.slice(0, 10);
+  const displayedJobs = showAll ? allJobs : jobs;
 
   return (
     <div className="fleet-detail">
@@ -248,7 +271,7 @@ export function FleetDetail({ detail, jobs, onRefresh, onDelete }: Props) {
         <div className="fleet-jobs__header">
           <h3>{t("fleet.jobs")}</h3>
           {jobs.length > 10 && (
-            <button className="fleet-jobs__show-all" onClick={handleShowAll}>
+            <button className="fleet-jobs__show-all" onClick={handleShowAll} disabled={busy !== null}>
               {t("fleet.showAll")} ({jobs.length})
             </button>
           )}
