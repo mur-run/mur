@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Pinned MUR official publisher key fingerprint (trust anchor).
-/// This is a placeholder; the registry-side signing task replaces it with the real fingerprint.
+/// Derived via: SHA-256(raw 32-byte pubkey), first 8 hex chars, prefixed "ed25519-".
 /// No other values are hardcoded — all trust decisions flow through the keyring.
-pub const MUR_OFFICIAL_PUBLISHER_KEY_FP: &str = "ed25519-0fficial";
+pub const MUR_OFFICIAL_PUBLISHER_KEY_FP: &str = "ed25519-861d2acb";
 
 /// Trust classification for a signer fingerprint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
