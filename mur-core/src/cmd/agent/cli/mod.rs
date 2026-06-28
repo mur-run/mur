@@ -23,7 +23,7 @@ mod theme;
 mod ui;
 mod welcome;
 
-use std::io::{self, IsTerminal, Stdout, Write};
+use std::io::{self, BufRead, IsTerminal, Stdout};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::time::Instant as StdInstant;
@@ -84,6 +84,8 @@ const RECENT_LIMIT: usize = 10;
 const MOUSE_SCROLL_STEP: u16 = 1;
 /// Spinner animation cadence.
 const SPINNER_MS: u64 = 90;
+/// Max chars of an arg hint shown on a step line in `--plain` mode.
+const PLAIN_STEP_HINT_MAX: usize = 120;
 
 const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /auto [on|off]  /mcp  /skill  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Alt+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll (or mouse wheel)";
 
@@ -1004,22 +1006,33 @@ mod notify_tests {
 /// Pipe-safe fallback: read a line from stdin, stream the reply as plain text to
 /// stdout, repeat. No ANSI, no TUI. Threads conversation context across turns.
 fn run_plain(home: &Path, agent: &str, auto: bool, interactive: bool) -> Result<()> {
-    let _ = interactive; // Tasks 2-3 use this; threaded here only
-    use std::cell::Cell;
-    use std::io::BufRead;
-    let stdin = io::stdin();
-    let mut out = io::stdout();
+    use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
+    use std::io::Write as _;
+    let out2 = RefCell::new(io::stdout());
     let mut context: Option<String> = None;
+    let pricing = load_pricing(home, agent);
 
-    for line in stdin.lock().lines() {
-        let line = line?;
-        let text = line.trim();
+    loop {
+        if interactive {
+            let _ = write!(out2.borrow_mut(), "you › ");
+            let _ = out2.borrow_mut().flush();
+        }
+        let mut line = String::new();
+        // Lock only per-read so a HITL callback (Task 3) can read stdin mid-turn.
+        if io::stdin().lock().read_line(&mut line)? == 0 {
+            break; // EOF (Ctrl-D / end of pipe)
+        }
+        let text = line.trim().to_string();
         if text.is_empty() {
             continue;
         }
         let task_id = uuid::Uuid::now_v7().to_string();
-        let params = build_params(text, &task_id, context.as_deref(), None);
+        let params = build_params(&text, &task_id, context.as_deref(), None);
         let streamed = Cell::new(false);
+        // Track step_id → name from Started events so Completed can print the name.
+        let step_names: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+
         let result = crate::a2a_dial::dial_message_streaming(
             home,
             agent,
@@ -1027,8 +1040,8 @@ fn run_plain(home: &Path, agent: &str, auto: bool, interactive: bool) -> Result<
             |delta, thinking, _task_id| {
                 if !thinking {
                     streamed.set(true);
-                    let _ = write!(out, "{delta}");
-                    let _ = out.flush();
+                    let _ = write!(out2.borrow_mut(), "{delta}");
+                    let _ = out2.borrow_mut().flush();
                 }
             },
             |hitl| {
@@ -1056,25 +1069,79 @@ fn run_plain(home: &Path, agent: &str, auto: bool, interactive: bool) -> Result<
                     DialMode::RequireRunning,
                 );
             },
-            |_step| {},
+            |step| {
+                use crate::a2a_dial::StepEvent;
+                match step {
+                    StepEvent::Started {
+                        step_id,
+                        name,
+                        args,
+                        ..
+                    } => {
+                        // Derive a short arg hint: prefer "command" arg, else JSON.
+                        let hint_raw = args
+                            .get("command")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                            .unwrap_or_else(|| args.to_string());
+                        let hint: String = hint_raw.chars().take(PLAIN_STEP_HINT_MAX).collect();
+                        step_names
+                            .borrow_mut()
+                            .insert(step_id.clone(), name.clone());
+                        let _ = writeln!(out2.borrow_mut(), "→ {name} {hint}");
+                        let _ = out2.borrow_mut().flush();
+                    }
+                    StepEvent::Completed {
+                        step_id,
+                        ok,
+                        duration_ms,
+                        ..
+                    } => {
+                        let glyph = if ok { '✔' } else { '✗' };
+                        let name = step_names
+                            .borrow()
+                            .get(&step_id)
+                            .cloned()
+                            .unwrap_or_default();
+                        let _ = writeln!(out2.borrow_mut(), "{glyph} {name} · {duration_ms}ms");
+                        let _ = out2.borrow_mut().flush();
+                    }
+                }
+            },
         );
         match result {
             Ok(task) => match stream::task_outcome(&task) {
                 Ok((reply, tid)) => {
                     // Fall back to the final reply if the agent didn't stream deltas.
                     if !streamed.get() && !reply.trim().is_empty() {
-                        write!(out, "{reply}")?;
+                        write!(out2.borrow_mut(), "{reply}")?;
                     }
-                    writeln!(out)?;
-                    out.flush()?;
+                    writeln!(out2.borrow_mut())?;
+                    // Usage footer: total tokens + cost (reuse footer helpers).
+                    if let Some(usage) = task.get("usage") {
+                        let u = footer::parse_usage(usage);
+                        match footer::turn_cost(&pricing, &u) {
+                            Some(c) => {
+                                let _ = writeln!(
+                                    out2.borrow_mut(),
+                                    "  {} tok · ${c:.3}",
+                                    u.input + u.output
+                                );
+                            }
+                            None => {
+                                let _ = writeln!(out2.borrow_mut(), "  {} tok", u.input + u.output);
+                            }
+                        }
+                    }
+                    out2.borrow_mut().flush()?;
                     context = tid;
                 }
                 Err(cause) => {
-                    writeln!(out, "\nerror: {cause}")?;
+                    writeln!(out2.borrow_mut(), "\nerror: {cause}")?;
                 }
             },
             Err(e) => {
-                writeln!(out, "\nerror: {e:#}")?;
+                writeln!(out2.borrow_mut(), "\nerror: {e:#}")?;
             }
         }
     }
