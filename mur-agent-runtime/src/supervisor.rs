@@ -189,6 +189,31 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         warn!(error = %e, "grace-period cleanup failed");
     }
 
+    // 3c. Self-heal MUR's own copy of the MCP server binary. When an enabled
+    //     MCP server points at the bundled location (~/.mur/mcp-servers/...),
+    //     refresh it from the mur-mcp-server shipped next to `mur` so it tracks
+    //     the running version regardless of how mur was installed (brew/cargo/
+    //     source). Done BEFORE the sandbox seals (needs write to ~/.mur) and
+    //     before the MCP child is spawned. Best-effort: a non-media agent skips
+    //     it entirely, and a failure leaves any existing copy in place.
+    {
+        let bundled = mur_common::exec::bundled_mcp_server_path();
+        let uses_bundled = profile
+            .inner
+            .enabled_mcp_servers()
+            .iter()
+            .any(|e| std::path::Path::new(&e.command) == bundled);
+        if uses_bundled {
+            match mur_common::exec::ensure_bundled_mcp_server() {
+                Ok(p) => info!(path = %p.display(), "ensured bundled mcp-server"),
+                Err(e) => warn!(
+                    error = %e,
+                    "could not refresh bundled mcp-server; using existing copy if present"
+                ),
+            }
+        }
+    }
+
     // B1: apply OS-level kernel sandbox based on profile entitlements.
     // Called AFTER profile load (needs entitlements) and AFTER grace cleanup.
     // BEFORE telemetry writer (its file I/O must be within sandbox bounds).
