@@ -755,6 +755,17 @@ pub enum AgentSkillAction {
         /// Search query
         query: String,
     },
+    /// Trust a skill publisher key (TOFU) — adds it to `~/.mur/trust/publishers.yaml`
+    /// so future installs signed by that key are treated as Trusted.
+    /// The fingerprint is shown in the install consent screen for
+    /// unknown-but-verified signers.
+    TrustPublisher {
+        /// Publisher key fingerprint (e.g. `ed25519-abcd1234`)
+        key_fp: String,
+        /// Friendly name recorded alongside the key
+        #[arg(long)]
+        name: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

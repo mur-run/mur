@@ -204,6 +204,7 @@ fn install_resolved_node(home: &Path, node: &ResolvedNode) -> Result<()> {
             level,
             installed_at: chrono::Utc::now().to_rfc3339(),
             publisher: Some(node.manifest.publisher.clone()),
+            ..Default::default()
         },
     );
     trust
@@ -306,6 +307,7 @@ fn install_from_agent(home: &Path, agent_name: &str, skill_name: &str) -> Result
             level: effective_level,
             installed_at: chrono::Utc::now().to_rfc3339(),
             publisher: Some(manifest.publisher.clone()),
+            ..Default::default()
         },
     );
     trust.save(home).map_err(|e| anyhow!("save trust: {e}"))?;

@@ -31,14 +31,12 @@ pub struct VerifyOutcome {
 
 impl VerifyOutcome {
     /// Hard failure — positive sign of tampering. Abort unless explicitly overridden.
-    #[allow(dead_code)] // first consumer; called by Task 2 (per-agent install gate)
     pub fn is_blocking(&self) -> bool {
         matches!(self.hash, HashStatus::Mismatch)
             || matches!(self.signature, SignatureStatus::Invalid)
     }
 
     /// Not proven-bad, but not proven-good (unsigned / unhashed). Require `--yes`.
-    #[allow(dead_code)] // first consumer; called by Task 2 (per-agent install gate)
     pub fn needs_ack(&self) -> bool {
         !self.is_blocking()
             && (matches!(self.hash, HashStatus::Absent)
@@ -63,7 +61,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// - `Mismatch` or `Invalid` ⇒ `is_blocking()` — abort unless operator overrides.
 /// - `Absent` or `Unsigned` ⇒ `needs_ack()` — warn and require `--yes`.
 /// - `Match` + `Verified`   ⇒ neither — install silently.
-#[allow(dead_code)] // first consumer; wired in Task 2 (per-agent install gate)
 pub fn verify_skill_install(
     manifest: &SkillManifest,
     file_text: &str,

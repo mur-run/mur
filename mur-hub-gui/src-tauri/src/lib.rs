@@ -611,6 +611,7 @@ pub fn run() {
             mcp_skills::agent_skill_registry_search,
             mcp_skills::agent_skill_registry_preview,
             mcp_skills::agent_skill_registry_install,
+            mcp_skills::agent_skill_trust_publisher,
             mobile::mobile_events_read,
             notif::agent_get_notif_config,
             notif::agent_set_notif_config,
