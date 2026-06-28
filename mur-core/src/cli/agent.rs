@@ -105,6 +105,10 @@ pub enum AgentAction {
         /// piping, and CI logs. Auto-enabled when stdout is not a terminal.
         #[arg(long)]
         plain: bool,
+        /// Stop accepting new turns once session's estimated cost (USD)
+        /// reaches ceiling. Omit for no limit.
+        #[arg(long = "budget-usd")]
+        budget_usd: Option<f64>,
     },
     /// Rotate an agent's Ed25519 identity keypair (P0a.6).
     Rekey {
@@ -936,6 +940,7 @@ mod tests {
             auto,
             skin: _,
             plain: _,
+            budget_usd: _,
         } = parse_cli_action(&["mur", "agent", "cli", "a1", "a2", "a3", "--auto"])
         else {
             panic!("expected Cli variant");

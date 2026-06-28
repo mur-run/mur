@@ -96,6 +96,7 @@ pub async fn cmd_cli(
     auto: bool,
     skin: Option<String>,
     plain: bool,
+    budget_usd: Option<f64>,
 ) -> Result<()> {
     if names.len() > 1 {
         let names = names.to_vec();
@@ -130,7 +131,7 @@ pub async fn cmd_cli(
             .await?;
     }
 
-    run_tui(home, agent, resume, auto, skin).await
+    run_tui(home, agent, resume, auto, skin, budget_usd).await
 }
 
 // ── TUI mode ────────────────────────────────────────────────────────────────
@@ -173,6 +174,7 @@ async fn run_tui(
     resume: bool,
     auto: bool,
     skin: Option<String>,
+    budget_usd: Option<f64>,
 ) -> Result<()> {
     // Resolve skin: CLI flag > config > "dark"
     let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
@@ -212,6 +214,12 @@ async fn run_tui(
     if auto {
         app.auto_approve = true;
         app.push_system("auto-approve is ON for this session (--auto) — every tool call will be allowed without asking");
+    }
+    app.budget_usd = budget_usd;
+    if let Some(b) = budget_usd {
+        app.push_system(format!(
+            "session budget ${b:.2} — new turns stop once estimated spend reaches it"
+        ));
     }
     let result = event_loop(&mut terminal, &mut app).await;
 

@@ -275,6 +275,9 @@ pub struct App {
     pub saw_hitl_this_turn: bool,
     /// The "restart for step view" hint has been shown once this session.
     pub step_hint_shown: bool,
+    /// Optional per-session cost ceiling in USD (`--budget-usd`). `None` = no
+    /// limit. Task 2 gates new turns when `session_cost() >= budget_usd`.
+    pub budget_usd: Option<f64>,
 }
 
 impl App {
@@ -322,7 +325,23 @@ impl App {
             saw_step_this_turn: false,
             saw_hitl_this_turn: false,
             step_hint_shown: false,
+            budget_usd: None,
         }
+    }
+
+    /// Estimated cumulative session cost in USD, or `None` if the model's
+    /// pricing is unknown. Used by Task 2 to gate new turns against
+    /// `budget_usd`. Fail-open: `None` means "can't price it, allow the turn".
+    // Task 2 will use this; allow until it does.
+    #[allow(dead_code)]
+    pub fn session_cost(&self) -> Option<f64> {
+        super::footer::turn_cost(
+            &self.pricing,
+            &super::footer::UsageCounts {
+                input: self.session_in,
+                output: self.session_out,
+            },
+        )
     }
 
     /// The in-flight agent bubble, if any. Searched from the back instead of
@@ -1304,5 +1323,27 @@ mod footer_state_tests {
         a.maybe_step_hint();
         assert!(!a.step_hint_shown);
         assert!(!a.messages.iter().any(|m| m.text.contains("restart")));
+    }
+}
+
+#[cfg(test)]
+mod session_cost_tests {
+    use super::*;
+
+    #[test]
+    fn session_cost_uses_pricing_over_session_tokens_or_none() {
+        let mut a = App::test_fixture();
+        a.pricing = super::super::footer::Pricing {
+            in_per_1k: Some(3.0),
+            out_per_1k: Some(15.0),
+            window: None,
+        };
+        a.session_in = 1000;
+        a.session_out = 1000;
+        // (1000/1000*3) + (1000/1000*15) = 18.0
+        assert_eq!(a.session_cost(), Some(18.0));
+        // unpriced model → None (fail-open: unknown cost never blocks)
+        a.pricing = super::super::footer::Pricing::default();
+        assert_eq!(a.session_cost(), None);
     }
 }
