@@ -552,4 +552,5 @@ export const en = {
   "skillreg.revoked": "revoked",
   "skillreg.trustPublisher": "Trust this publisher",
   "skillreg.trustedDone": "MUR publisher trusted",
+  "skillreg.driftWarn": "⚠ Skill changed since last install",
 } as const;

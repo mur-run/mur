@@ -37,6 +37,8 @@ interface ConsentInfo {
   scan_blocking: boolean;
   trust_level: string;
   body: string;
+  /** Short description of detected drift since last install, or null/absent if none. */
+  drift?: string | null;
 }
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -85,8 +87,10 @@ export function SkillRegistryModal({ agentName, onClose, onSaved }: Props) {
       });
       setTrustDone(true);
       // Re-run preview so signer_trust refreshes to "trusted".
+      // Pass version to avoid silently jumping to latest (M4 fix).
       const updated = await invoke<ConsentInfo>("agent_skill_registry_preview", {
         skill: consent.name,
+        version: consent.version,
       });
       setConsent(updated);
     } catch (e) {
@@ -299,6 +303,12 @@ export function SkillRegistryModal({ agentName, onClose, onSaved }: Props) {
                     ))}
                   </ul>
                 </div>
+              )}
+
+              {consent.drift && (
+                <p className="badge badge--warn" style={{ marginTop: 8 }}>
+                  {t("skillreg.driftWarn")}: {consent.drift}
+                </p>
               )}
 
               {consent.blocking && (

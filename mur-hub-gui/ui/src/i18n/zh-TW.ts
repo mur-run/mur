@@ -554,4 +554,5 @@ export const zhTW: Table = {
   "skillreg.revoked": "已撤銷",
   "skillreg.trustPublisher": "信任此發布者",
   "skillreg.trustedDone": "MUR 發布者已信任",
+  "skillreg.driftWarn": "⚠ 技能自上次安裝後已變更",
 };
