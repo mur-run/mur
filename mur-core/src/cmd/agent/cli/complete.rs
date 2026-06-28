@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 /// Most rows shown before the menu scrolls (kept in sync with `ui.rs`).
+#[allow(dead_code)]
 pub const MAX_MENU_ROWS: usize = 8;
 
 /// One selectable menu entry.
@@ -42,7 +43,14 @@ const COMMANDS: &[(&str, &str, &[&str])] = &[
     (
         "mcp",
         "manage MCP servers",
-        &["list", "add", "remove", "add-remote", "login", "registry-add"],
+        &[
+            "list",
+            "add",
+            "remove",
+            "add-remote",
+            "login",
+            "registry-add",
+        ],
     ),
     ("skill", "manage agent skills", &["list", "add", "remove"]),
     ("skin", "switch theme", &["dark", "light", "mur"]),
@@ -92,7 +100,12 @@ fn filter(cands: Vec<Candidate>, query: &str) -> Vec<Candidate> {
     let q = query.to_lowercase();
     cands
         .into_iter()
-        .filter(|c| c.display.trim_start_matches('/').to_lowercase().contains(&q))
+        .filter(|c| {
+            c.display
+                .trim_start_matches('/')
+                .to_lowercase()
+                .contains(&q)
+        })
         .collect()
 }
 
@@ -129,10 +142,13 @@ pub fn compute(input: &str, skills: &[Candidate]) -> Option<CompletionState> {
 pub fn skill_display_name(raw: &str) -> String {
     let p = Path::new(raw);
     if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-        if stem == "skill" {
-            if let Some(parent) = p.parent().and_then(|d| d.file_name()).and_then(|s| s.to_str()) {
-                return parent.to_string();
-            }
+        if stem == "skill"
+            && let Some(parent) = p
+                .parent()
+                .and_then(|d| d.file_name())
+                .and_then(|s| s.to_str())
+        {
+            return parent.to_string();
         }
         return stem.to_string();
     }

@@ -9,11 +9,11 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Padding};
 use tui_textarea::TextArea;
 
+use super::complete::{Candidate, CompletionState};
 use super::markdown;
 use super::persist::{ChannelMeta, Session, TurnRecord};
 use super::stream::HitlRequest;
 use super::theme::Theme;
-use super::complete::{Candidate, CompletionState};
 use super::welcome::{Blink, MascotMode, resolve_mascot_mode};
 
 /// Spinner frames shown while the agent is generating.
@@ -145,21 +145,6 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
         other => SlashCmd::Unknown(other.to_string()),
     })
 }
-
-/// The set of slash commands offered by tab-completion / `/help`.
-pub const SLASH_COMMANDS: [&str; 11] = [
-    "/auto",
-    "/card",
-    "/channels",
-    "/clear",
-    "/exit",
-    "/help",
-    "/mcp",
-    "/quit",
-    "/sessions",
-    "/skill",
-    "/skin",
-];
 
 pub const ESC_DOUBLE_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
 
