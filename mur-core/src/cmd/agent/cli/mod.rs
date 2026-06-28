@@ -676,6 +676,20 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         }
         return;
     }
+    // Session budget cap: refuse a NEW turn once estimated spend hits the cap.
+    // (An in-flight turn is handled by the streaming branch above; this only
+    // gates starting a fresh one.) Fails open when the model has no pricing, so
+    // it never blocks turns whose cost we can't estimate. Input is left intact
+    // so the user can copy what they composed.
+    if app.over_budget() {
+        let cap = app.budget_usd.unwrap_or(0.0);
+        let spent = app.session_cost().unwrap_or(0.0);
+        app.push_system(format!(
+            "↯ session budget reached — spent ~${spent:.2} of ${cap:.2}. Restart `mur agent cli` to reset."
+        ));
+        return;
+    }
+
     app.last_sent = Some(trimmed.clone());
     app.clear_input();
 

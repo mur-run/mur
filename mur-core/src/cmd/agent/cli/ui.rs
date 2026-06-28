@@ -255,6 +255,7 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         app.session_out,
         app.ctx_tokens,
         &app.pricing,
+        app.budget_usd,
     );
     spans.push(Span::raw(" · "));
     spans.push(Span::styled(obs, Style::default().fg(theme.system)));
@@ -382,6 +383,7 @@ fn footer_segments(
     sess_out: u64,
     ctx_tokens: u64,
     pricing: &super::footer::Pricing,
+    budget_usd: Option<f64>,
 ) -> String {
     use super::footer::{CTX_BAR_WIDTH, UsageCounts, context_pct, ctx_bar, turn_cost};
 
@@ -405,12 +407,29 @@ fn footer_segments(
         _ => String::new(),
     };
 
+    // Budget suffix: estimated session spend against the cap. The spent figure
+    // is omitted (just `/ $cap`) when the model has no pricing.
+    let budget_part = match budget_usd {
+        Some(cap) => {
+            let sess = UsageCounts {
+                input: sess_in,
+                output: sess_out,
+            };
+            match turn_cost(pricing, &sess) {
+                Some(spent) => format!(" · ${spent:.2} / ${cap:.2}"),
+                None => format!(" · / ${cap:.2}"),
+            }
+        }
+        None => String::new(),
+    };
+
     format!(
-        "{}/{} tok · {}{}",
+        "{}/{} tok · {}{}{}",
         fmt_tok(turn_tok),
         fmt_tok(sess_tok),
         cost,
-        ctx_part
+        ctx_part,
+        budget_part
     )
 }
 
@@ -440,7 +459,7 @@ mod footer_fmt_tests {
 
     #[test]
     fn shows_tokens_and_dash_cost_when_unpriced() {
-        let s = footer_segments(1240, 0, 1240, 0, 0, &Pricing::default());
+        let s = footer_segments(1240, 0, 1240, 0, 0, &Pricing::default(), None);
         assert!(s.contains("1,240 tok") || s.contains("1240 tok"));
         assert!(s.contains('\u{2014}')); // em dash — no price
     }
@@ -452,8 +471,25 @@ mod footer_fmt_tests {
             out_per_1k: Some(0.015),
             window: Some(100_000),
         };
-        let s = footer_segments(1000, 1000, 1000, 1000, 32_000, &p);
+        let s = footer_segments(1000, 1000, 1000, 1000, 32_000, &p, None);
         assert!(s.contains("$0.018"));
         assert!(s.contains("32%"));
+        assert!(!s.contains(" / $")); // no budget suffix when budget is None
+    }
+
+    #[test]
+    fn shows_budget_suffix_when_cap_set() {
+        let p = Pricing {
+            in_per_1k: Some(3.0),
+            out_per_1k: Some(15.0),
+            window: None,
+        };
+        // session 1000/1000 → $18.00 spent, cap $20.00
+        let s = footer_segments(1000, 1000, 1000, 1000, 0, &p, Some(20.0));
+        assert!(s.contains("$18.00 / $20.00"), "got: {s}");
+        // unpriced model → spent omitted, cap still shown
+        let s2 = footer_segments(1000, 1000, 1000, 1000, 0, &Pricing::default(), Some(20.0));
+        assert!(s2.contains("/ $20.00"), "got: {s2}");
+        assert!(!s2.contains("$18.00"));
     }
 }
