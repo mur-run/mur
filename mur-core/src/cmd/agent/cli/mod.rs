@@ -399,6 +399,17 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                     _ => {}
                 }
             }
+            // Agent ghost suggestion: Tab fills it when the composer is empty.
+            if app.suggestion_ghost.is_some()
+                && key.code == KeyCode::Tab
+                && app.input_text().is_empty()
+            {
+                if let Some(s) = app.suggestion_ghost.take() {
+                    app.set_input(&s);
+                    app.input.set_placeholder_text("Type a message…");
+                }
+                return;
+            }
             match key.code {
                 KeyCode::Char('d') if ctrl => request_quit(app, tx),
                 KeyCode::Char('c') if ctrl => handle_ctrl_c(app, tx),
@@ -718,6 +729,7 @@ fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: boo
 }
 
 async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
+    app.clear_suggestion_ghost();
     let trimmed = app.input_text().trim().to_string();
     // Allow an image-only send (caption optional) when a screenshot is staged.
     if trimmed.is_empty() && app.pending_image.is_none() {

@@ -41,8 +41,7 @@ pub async fn build_tools(
     // execute); per-turn streaming gating happens in task_runner. Respect an
     // explicit Deny rule.
     if resolve_tool_policy(rules, crate::tools::suggest::SUGGEST_REPLIES) != ToolPolicy::Deny {
-        let exec: Arc<dyn ToolExecutor> =
-            Arc::new(crate::tools::suggest::SuggestRepliesTool);
+        let exec: Arc<dyn ToolExecutor> = Arc::new(crate::tools::suggest::SuggestRepliesTool);
         defs.push(exec.def());
         map.insert(crate::tools::suggest::SUGGEST_REPLIES.to_string(), exec);
     }

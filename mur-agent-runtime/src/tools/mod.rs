@@ -1,8 +1,8 @@
 pub mod bash;
 pub mod mcp;
-pub(crate) mod suggest;
 pub mod naming;
 pub mod registry;
+pub(crate) mod suggest;
 
 use crate::llm::ToolDef;
 
