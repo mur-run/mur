@@ -116,13 +116,46 @@ pub async fn preview_skill_url(url: &str) -> Result<SkillPreview> {
     preview_skill_text(&text, is_md)
 }
 
+/// Preview any skill URL — archive bundle or single skill.
+/// Returns a `Vec<SkillPreview>` (bundle: all previews; single: one-element vec).
+// Consumed by the workspace-excluded `mur-hub-gui` crate; unused in the workspace build.
+#[allow(dead_code)]
+pub async fn preview_any_url(url: &str) -> Result<Vec<SkillPreview>> {
+    if crate::cmd::agent::skill_bundle::is_archive_url(url).is_some() {
+        crate::cmd::agent::skill_bundle::preview_bundle_url(url).await
+    } else {
+        Ok(vec![preview_skill_url(url).await?])
+    }
+}
+
+/// Install from any skill URL — archive bundle or single skill.
+/// Returns installed skill ids (e.g. `["skills/foo", "skills/bar"]`).
+// Consumed by the workspace-excluded `mur-hub-gui` crate; unused in the workspace build.
+#[allow(dead_code)]
+pub async fn install_any_url(agent: &str, url: &str, accept_findings: bool) -> Result<Vec<String>> {
+    if crate::cmd::agent::skill_bundle::is_archive_url(url).is_some() {
+        crate::cmd::agent::skill_bundle::install_bundle_from_url(agent, url, accept_findings).await
+    } else {
+        Ok(vec![
+            install_skill_from_url(agent, url, accept_findings).await?,
+        ])
+    }
+}
+
 /// Fetch, preview, and install a skill from a remote URL onto `agent`.
 /// Fails if the skill has blocking security findings AND `accept_findings` is false.
+/// Archive URLs (`.zip`, `.tar.gz`, `.tgz`) are transparently routed to `install_bundle_from_url`.
 pub async fn install_skill_from_url(
     agent: &str,
     url: &str,
     accept_findings: bool,
 ) -> Result<String> {
+    if crate::cmd::agent::skill_bundle::is_archive_url(url).is_some() {
+        let ids =
+            crate::cmd::agent::skill_bundle::install_bundle_from_url(agent, url, accept_findings)
+                .await?;
+        return Ok(ids.join(", "));
+    }
     let (text, is_md) = fetch_skill(url).await?;
     let preview = preview_skill_text(&text, is_md)?;
     if preview.blocking && !accept_findings {
@@ -154,6 +187,18 @@ pub async fn install_skill_from_url(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn archive_urls_route_to_bundle() {
+        use crate::cmd::agent::skill_bundle::{ArchiveKind, is_archive_url};
+        assert!(matches!(
+            is_archive_url("https://x/p.zip"),
+            Some(ArchiveKind::Zip)
+        ));
+        assert!(is_archive_url("https://x/skill.yaml").is_none());
+        // preview_any_url / install_any_url routing is exercised by bundle tests
+        // and gated network tests; these asserts verify the discriminator the router uses.
+    }
 
     #[test]
     fn url_validation() {

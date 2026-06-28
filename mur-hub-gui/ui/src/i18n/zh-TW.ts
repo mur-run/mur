@@ -526,4 +526,5 @@ export const zhTW: Table = {
   "skillurl.installing": "安裝中…",
   "skillurl.restartHint": "安裝後，請重新啟動 agent 使其生效。",
   "skillurl.invalidUrl": "請輸入 https:// 網址（http 僅限 localhost）。",
+  "skillurl.bundleHint": "壓縮檔可能包含多個技能 — 請逐一檢視。",
 };
