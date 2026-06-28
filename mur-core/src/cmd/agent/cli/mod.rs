@@ -229,6 +229,7 @@ async fn run_tui(
         Terminal::new(CrosstermBackend::new(io::stdout())).context("init terminal")?;
 
     let mut app = build_app(&home, &agent, resume, active_theme)?;
+    app.skills = complete::load_agent_skills(&agent);
     app.pricing = load_pricing(&home, &agent);
     if unknown_skin {
         app.push_system(format!(

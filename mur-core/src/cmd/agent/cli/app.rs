@@ -13,6 +13,7 @@ use super::markdown;
 use super::persist::{ChannelMeta, Session, TurnRecord};
 use super::stream::HitlRequest;
 use super::theme::Theme;
+use super::complete::{Candidate, CompletionState};
 use super::welcome::{Blink, MascotMode, resolve_mascot_mode};
 
 /// Spinner frames shown while the agent is generating.
@@ -282,6 +283,11 @@ pub struct App {
     /// Opt-in, off by default. The classifier is conservative (fail-safe false
     /// on anything uncertain). Every auto-approval is tagged on the step card.
     pub auto_reads: bool,
+    /// Live completion menu (slash commands / agent skills). `None` = closed.
+    /// Derived from the input text — recomputed on every edit by `mod.rs`.
+    pub completion: Option<CompletionState>,
+    /// This agent's skills as menu candidates, loaded once at startup.
+    pub skills: Vec<Candidate>,
 }
 
 impl App {
@@ -331,6 +337,8 @@ impl App {
             step_hint_shown: false,
             budget_usd: None,
             auto_reads: false,
+            completion: None,
+            skills: Vec::new(),
         }
     }
 
