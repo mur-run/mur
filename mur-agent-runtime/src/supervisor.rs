@@ -807,6 +807,12 @@ fn build_dispatcher(
         Box::new(TasksListHandler::new(runner.clone())),
     );
     d.register(
+        "turn/steer",
+        Box::new(crate::protocol::methods::turn::TurnSteerHandler {
+            runner: runner.clone(),
+        }),
+    );
+    d.register(
         "skills/get",
         Box::new(crate::protocol::methods::skills::SkillsGetHandler::new(
             mur_home.to_path_buf(),

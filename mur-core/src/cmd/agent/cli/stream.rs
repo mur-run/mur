@@ -311,6 +311,26 @@ pub async fn respond_hitl(
     Ok(())
 }
 
+/// Inject a steering message into the in-flight turn on a fresh connection.
+pub async fn steer_turn(
+    home: PathBuf,
+    agent: String,
+    task_id: String,
+    message: String,
+) -> Result<()> {
+    tokio::task::spawn_blocking(move || {
+        dial_method(
+            &home,
+            &agent,
+            "turn/steer",
+            json!({ "task_id": task_id, "message": message }),
+            DialMode::RequireRunning,
+        )
+    })
+    .await??;
+    Ok(())
+}
+
 /// Cancel the in-flight task by id on a fresh connection. Best-effort: the
 /// partial reply already streamed is kept by the caller.
 pub async fn cancel_task(home: PathBuf, agent: String, task_id: String) -> Result<()> {

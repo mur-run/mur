@@ -208,7 +208,10 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         )
     } else if app.streaming {
         let spin = SPINNER[app.spinner % SPINNER.len()];
-        (format!("{spin} generating… Ctrl+C to cancel"), theme.agent)
+        (
+            format!("{spin} generating… · type to steer · Ctrl+C to cancel"),
+            theme.agent,
+        )
     } else {
         let ctx = if app.context_task_id.is_some() {
             " · context kept"
