@@ -1378,6 +1378,62 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 let id = cmd::agent::skill_remote::install_skill_from_url(&name, &url, yes).await?;
                 println!("Installed {id} onto '{name}'. Restart the agent to load it.");
             }
+            AgentSkillAction::RegistryAdd {
+                name,
+                skill,
+                version,
+                yes,
+            } => {
+                // Print consent summary before installing (best-effort; if
+                // resolve_consent fails the real error surfaces from install).
+                if let Ok(c) = cmd::agent::skill_registry_add::resolve_consent(
+                    &cmd::agent::resolve_mur_home()?,
+                    &skill,
+                    version.as_deref(),
+                ) {
+                    println!("Skill:     {} v{}", c.name, c.version);
+                    println!("Publisher: {}", c.publisher);
+                    println!("Signature: {} [{}]", c.signature.status, c.signature.key_fp);
+                    println!("Hash:      {}", c.hash);
+                    if !c.mcp_requirements.is_empty() {
+                        println!("MCP requirements: {}", c.mcp_requirements.join(", "));
+                    }
+                    if !c.findings.is_empty() {
+                        println!("Findings:");
+                        for f in &c.findings {
+                            println!("  {f}");
+                        }
+                    }
+                }
+                let id = cmd::agent::skill_registry_add::cmd_skill_registry_add(
+                    &name,
+                    &skill,
+                    version.as_deref(),
+                    yes,
+                )
+                .await?;
+                println!("Installed {id} onto '{name}' (Sandboxed). Restart the agent to load it.");
+            }
+            AgentSkillAction::Search { name: _, query } => {
+                let mur_home = cmd::agent::resolve_mur_home()?;
+                let results =
+                    cmd::agent::skill_registry_add::registry_search_for_agent(&mur_home, &query)?;
+                if results.is_empty() {
+                    println!("No registry skills found for '{query}'.");
+                } else {
+                    println!(
+                        "{:25} {:10} {:20} {:10} SIGNED",
+                        "NAME", "CATEGORY", "PUBLISHER", "LATEST"
+                    );
+                    for r in &results {
+                        let sig = if r.signed_in_index { "yes" } else { "no" };
+                        println!(
+                            "{:25} {:10} {:20} {:10} {}",
+                            r.name, r.category, r.publisher, r.latest, sig
+                        );
+                    }
+                }
+            }
         },
         AgentAction::Addon { action } => match action {
             AgentAddonAction::Import {
