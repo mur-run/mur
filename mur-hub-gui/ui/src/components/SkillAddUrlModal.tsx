@@ -21,14 +21,14 @@ interface Props {
 export function SkillAddUrlModal({ agentName, onClose, onSaved }: Props) {
   const { t } = useT();
   const [url, setUrl] = useState("");
-  const [preview, setPreview] = useState<SkillPreview | null>(null);
+  const [previews, setPreviews] = useState<SkillPreview[] | null>(null);
   const [accept, setAccept] = useState(false);
   const [busy, setBusy] = useState<null | "fetch" | "install">(null);
   const [error, setError] = useState<string | null>(null);
 
   async function fetchPreview() {
     setError(null);
-    setPreview(null);
+    setPreviews(null);
     setAccept(false);
     const trimmed = url.trim();
     if (
@@ -44,9 +44,7 @@ export function SkillAddUrlModal({ agentName, onClose, onSaved }: Props) {
     }
     setBusy("fetch");
     try {
-      setPreview(
-        await invoke<SkillPreview>("agent_skill_preview_url", { url: trimmed }),
-      );
+      setPreviews(await invoke<SkillPreview[]>("agent_skill_preview_url", { url: trimmed }));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -58,11 +56,11 @@ export function SkillAddUrlModal({ agentName, onClose, onSaved }: Props) {
     setError(null);
     setBusy("install");
     try {
-      const detail = await invoke<{ detail: AgentDetail; installed_id: string }>(
+      const res = await invoke<{ detail: AgentDetail; installed_ids: string[] }>(
         "agent_skill_install_url",
         { name: agentName, url: url.trim(), acceptFindings: accept },
       );
-      onSaved(detail.detail);
+      onSaved(res.detail);
       onClose();
     } catch (e) {
       setError(String(e));
@@ -71,7 +69,8 @@ export function SkillAddUrlModal({ agentName, onClose, onSaved }: Props) {
     }
   }
 
-  const canInstall = !!preview && busy === null && (!preview.blocking || accept);
+  const anyBlocking = !!previews && previews.some((p) => p.blocking);
+  const canInstall = !!previews && previews.length > 0 && busy === null && (!anyBlocking || accept);
 
   return (
     <div className="modal__overlay" onClick={onClose}>
@@ -87,7 +86,7 @@ export function SkillAddUrlModal({ agentName, onClose, onSaved }: Props) {
               className="input"
               type="url"
               value={url}
-              onChange={(e) => { setUrl(e.target.value); setPreview(null); setAccept(false); }}
+              onChange={(e) => { setUrl(e.target.value); setPreviews(null); setAccept(false); }}
               onKeyDown={(e) => e.key === "Enter" && !busy && fetchPreview()}
               placeholder={t("skillurl.urlPlaceholder")}
               style={{ flex: 1 }}
@@ -102,58 +101,63 @@ export function SkillAddUrlModal({ agentName, onClose, onSaved }: Props) {
             </button>
           </div>
 
-          {preview && (
+          {previews && (
             <div style={{ marginTop: 12 }}>
               <p className="field-label">{t("skillurl.previewHeading")}</p>
-              <div className="item-card">
-                <span className="item-card__name">{preview.name}</span>
-                <span className="item-card__meta">{preview.category}</span>
-                <p style={{ margin: "4px 0 0", fontSize: 13 }}>
-                  {preview.description}
-                </p>
-              </div>
-
-              {preview.findings.length > 0 && (
-                <div style={{ marginTop: 10 }}>
-                  <p className="field-label">{t("skillurl.findingsHeading")}</p>
-                  <ul className="item-list">
-                    {preview.findings.map((f, i) => (
-                      <li key={i} className="save-error">
-                        {f}
-                      </li>
-                    ))}
-                  </ul>
-                  {preview.blocking && (
-                    <label
-                      style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, fontSize: 13 }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={accept}
-                        onChange={(e) => setAccept(e.target.checked)}
-                      />
-                      {t("skillurl.accept")}
-                    </label>
-                  )}
-                </div>
-              )}
-
-              <div style={{ marginTop: 10 }}>
+              {previews.length > 1 && (
                 <p className="field-muted" style={{ marginTop: 0 }}>
-                  {t("skillurl.bodyHeading")}
+                  {t("skillurl.bundleHint")}
                 </p>
-                <pre
-                  className="item-card"
-                  style={{ whiteSpace: "pre-wrap", maxHeight: 240, overflow: "auto", fontSize: 12 }}
+              )}
+              {previews.map((p, i) => (
+                <div key={i} className="item-card" style={{ marginTop: 8 }}>
+                  <span className="item-card__name">{p.name}</span>
+                  <span className="item-card__meta">{p.category}</span>
+                  <p style={{ margin: "4px 0 0", fontSize: 13 }}>
+                    {p.description}
+                  </p>
+                  {p.findings.length > 0 && (
+                    <div style={{ marginTop: 8 }}>
+                      <p className="field-label" style={{ marginTop: 0 }}>{t("skillurl.findingsHeading")}</p>
+                      <ul className="item-list">
+                        {p.findings.map((f, j) => (
+                          <li key={j} className="save-error">
+                            {f}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  <div style={{ marginTop: 8 }}>
+                    <p className="field-muted" style={{ marginTop: 0 }}>
+                      {t("skillurl.bodyHeading")}
+                    </p>
+                    <pre
+                      className="item-card"
+                      style={{ whiteSpace: "pre-wrap", maxHeight: 160, overflow: "auto", fontSize: 12 }}
+                    >
+                      {p.body}
+                    </pre>
+                  </div>
+                </div>
+              ))}
+              {anyBlocking && (
+                <label
+                  style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, fontSize: 13 }}
                 >
-                  {preview.body}
-                </pre>
-              </div>
+                  <input
+                    type="checkbox"
+                    checked={accept}
+                    onChange={(e) => setAccept(e.target.checked)}
+                  />
+                  {t("skillurl.accept")}
+                </label>
+              )}
             </div>
           )}
 
           {error && <p className="save-error">{error}</p>}
-          {preview && (
+          {previews && (
             <p className="field-muted" style={{ marginTop: 8 }}>
               {t("skillurl.restartHint")}
             </p>
