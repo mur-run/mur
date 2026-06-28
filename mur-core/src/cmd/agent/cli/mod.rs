@@ -21,6 +21,7 @@ pub mod persist;
 mod render_card;
 mod step;
 mod stream;
+mod suggest;
 mod theme;
 mod ui;
 mod welcome;
