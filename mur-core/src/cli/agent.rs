@@ -101,6 +101,10 @@ pub enum AgentAction {
         /// Visual skin: dark (default) | light | mur
         #[arg(long)]
         skin: Option<String>,
+        /// Plain line-based output (no full-screen TUI) — for screen readers,
+        /// piping, and CI logs. Auto-enabled when stdout is not a terminal.
+        #[arg(long)]
+        plain: bool,
     },
     /// Rotate an agent's Ed25519 identity keypair (P0a.6).
     Rekey {
@@ -931,6 +935,7 @@ mod tests {
             resume,
             auto,
             skin: _,
+            plain: _,
         } = parse_cli_action(&["mur", "agent", "cli", "a1", "a2", "a3", "--auto"])
         else {
             panic!("expected Cli variant");
