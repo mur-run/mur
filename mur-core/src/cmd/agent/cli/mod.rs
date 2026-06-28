@@ -8,11 +8,14 @@
 
 mod access;
 mod app;
+mod footer;
 mod manage;
 mod markdown;
 mod multiplex;
 mod paste;
 pub mod persist;
+mod render_card;
+mod step;
 mod stream;
 mod theme;
 mod ui;
@@ -43,6 +46,33 @@ use self::app::{App, EscAction, Role, SlashCmd, esc_action, parse_slash};
 use self::persist::Session;
 use self::stream::{StreamMsg, build_params, cancel_task, respond_hitl, spawn_stream};
 use crate::a2a_dial::{DialMode, canonicalize_agent_name, dial_method};
+
+/// Load the agent's model pricing from `~/.mur/models.yaml`. Falls back to
+/// `Pricing::default()` (all `None` fields) on any error or when the agent
+/// uses an inline model rather than a `model_ref:` registry alias. The footer
+/// renderer treats `None` costs/window as "unknown" and shows `—`.
+fn load_pricing(home: &std::path::Path, agent: &str) -> footer::Pricing {
+    let pricing = footer::Pricing::default();
+    let Ok((_, profile)) = crate::cmd::agent::load_profile_for_edit(agent) else {
+        return pricing;
+    };
+    let Some(model_ref) = profile.model_ref else {
+        return pricing;
+    };
+    let reg_path = home.join("models.yaml");
+    let Ok(reg) = mur_common::model::ModelRegistry::load_from(&reg_path) else {
+        return pricing;
+    };
+    let Some(entry) = reg.models.get(&model_ref) else {
+        return pricing;
+    };
+    let (input, output) = entry.effective_costs();
+    footer::Pricing {
+        in_per_1k: input,
+        out_per_1k: output,
+        window: entry.context_window,
+    }
+}
 
 /// How many recent conversations `/sessions` lists.
 const RECENT_LIMIT: usize = 10;
@@ -159,6 +189,7 @@ async fn run_tui(
         Terminal::new(CrosstermBackend::new(io::stdout())).context("init terminal")?;
 
     let mut app = build_app(&home, &agent, resume, active_theme)?;
+    app.pricing = load_pricing(&home, &agent);
     if unknown_skin {
         app.push_system(format!(
             "unknown skin '{skin_name}', using dark — valid: dark, light, mur"
@@ -758,6 +789,7 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
     match msg {
         StreamMsg::Delta { text, thinking, .. } => app.append_delta(&text, thinking),
         StreamMsg::Hitl { req, .. } => {
+            app.saw_hitl_this_turn = true;
             // Session auto-approval: `/auto`/`--auto` covers every tool; the
             // modal's [a] key covers a single tool name.
             let auto = app.auto_approve || app.session_tool_allow.contains(&req.tool_name);
@@ -766,13 +798,48 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
                 decide_hitl_with_note(app, tx, true, true);
             }
         }
-        StreamMsg::Done { task, .. } => match stream::task_outcome(&task) {
-            Ok((reply, task_id)) => app.finish_agent_turn(reply, task_id),
-            Err(cause) => app.fail_turn(&cause),
-        },
+        StreamMsg::Done { task, .. } => {
+            if let Some(u) = task.get("usage") {
+                app.apply_usage(u);
+            }
+            app.maybe_step_hint();
+            match stream::task_outcome(&task) {
+                Ok((reply, task_id)) => app.finish_agent_turn(reply, task_id),
+                Err(cause) => app.fail_turn(&cause),
+            }
+        }
         StreamMsg::Err { error, .. } => app.fail_turn(&error),
         StreamMsg::Note(text) => app.push_system(text),
         StreamMsg::ShellDone { cmd, output } => app.push_shell(&cmd, &output),
+        StreamMsg::StepStarted {
+            step_id,
+            name,
+            args,
+            ..
+        } => {
+            app.saw_step_this_turn = true;
+            app.push_step_started(step_id, name, args);
+        }
+        StreamMsg::StepCompleted {
+            step_id,
+            ok,
+            output,
+            truncated,
+            full_len,
+            error,
+            duration_ms,
+            ..
+        } => {
+            app.update_step_completed(
+                &step_id,
+                ok,
+                output,
+                truncated,
+                full_len,
+                error,
+                duration_ms,
+            );
+        }
     }
 }
 
@@ -832,6 +899,7 @@ fn run_plain(home: &Path, agent: &str, auto: bool) -> Result<()> {
                     DialMode::RequireRunning,
                 );
             },
+            |_step| {},
         );
         match result {
             Ok(task) => match stream::task_outcome(&task) {
