@@ -29,6 +29,9 @@ pub struct StepCard {
     /// approval). Set when the matching `tool/approval_needed` arrives, cleared
     /// on decision.
     pub awaiting_hitl: bool,
+    /// True when the card's tool call was auto-approved by the `--auto-reads`
+    /// read lane (rendered as `[read · auto]` tag on the header).
+    pub auto_approved: bool,
 }
 
 impl StepCard {
@@ -44,6 +47,7 @@ impl StepCard {
             error: None,
             duration_ms: None,
             awaiting_hitl: false,
+            auto_approved: false,
         }
     }
 
