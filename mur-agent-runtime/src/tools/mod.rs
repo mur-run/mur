@@ -1,6 +1,6 @@
 pub mod bash;
 pub mod mcp;
-mod suggest;
+pub(crate) mod suggest;
 pub mod naming;
 pub mod registry;
 

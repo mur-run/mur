@@ -37,6 +37,16 @@ pub async fn build_tools(
         map.insert("bash".to_string(), exec);
     }
 
+    // Built-in no-op suggest_replies. Always in the executor map (so a call can
+    // execute); per-turn streaming gating happens in task_runner. Respect an
+    // explicit Deny rule.
+    if resolve_tool_policy(rules, crate::tools::suggest::SUGGEST_REPLIES) != ToolPolicy::Deny {
+        let exec: Arc<dyn ToolExecutor> =
+            Arc::new(crate::tools::suggest::SuggestRepliesTool);
+        defs.push(exec.def());
+        map.insert(crate::tools::suggest::SUGGEST_REPLIES.to_string(), exec);
+    }
+
     let discovery_futs: Vec<_> = servers
         .iter()
         .map(|entry| {
@@ -98,8 +108,9 @@ mod tests {
     async fn no_servers_empty_result() {
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
         let (defs, map) = build_tools(None, &[], &[], pool).await;
-        assert!(defs.is_empty());
-        assert!(map.is_empty());
+        // suggest_replies is always registered as a built-in.
+        assert_eq!(defs.len(), 1);
+        assert!(map.contains_key("suggest_replies"));
     }
 
     #[tokio::test]
@@ -111,8 +122,17 @@ mod tests {
         let bash_def = bash_exec.def();
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
         let (defs, map) = build_tools(Some((bash_def, bash_exec)), &[], &[], pool).await;
-        assert_eq!(defs.len(), 1);
+        // bash + suggest_replies
+        assert_eq!(defs.len(), 2);
         assert!(map.contains_key("bash"));
+    }
+
+    #[tokio::test]
+    async fn suggest_replies_is_registered() {
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+        let (defs, map) = build_tools(None, &[], &[], pool).await;
+        assert!(map.contains_key("suggest_replies"));
+        assert!(defs.iter().any(|d| d.name == "suggest_replies"));
     }
 
     #[tokio::test]
@@ -129,7 +149,9 @@ mod tests {
         }];
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
         let (defs, map) = build_tools(Some((bash_def, bash_exec)), &[], &rules, pool).await;
-        assert!(defs.is_empty());
+        // bash is denied; suggest_replies is still registered.
+        assert_eq!(defs.len(), 1);
         assert!(!map.contains_key("bash"));
+        assert!(map.contains_key("suggest_replies"));
     }
 }
