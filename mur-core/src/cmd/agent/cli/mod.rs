@@ -1045,27 +1045,42 @@ fn run_plain(home: &Path, agent: &str, auto: bool, interactive: bool) -> Result<
                 }
             },
             |hitl| {
-                // No TTY to prompt on: resolve immediately (on a separate
-                // connection) so the turn doesn't block for the full HITL
-                // timeout — allow under --auto, deny otherwise — and tell the
-                // user on stderr.
                 let id = hitl
                     .get("hitl_id")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string();
-                if auto {
+                let tool = hitl
+                    .get("tool_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("tool");
+                let allow = if auto {
                     eprintln!("[non-interactive: auto-approving tool-approval request (--auto)]");
+                    true
+                } else if interactive {
+                    // Outer loop releases stdin lock between reads (Task 2), so
+                    // we can safely acquire a fresh lock here to prompt the user.
+                    // [a]lways approves once in v1 (no session allow-set) — intentional.
+                    let mut o = io::stdout();
+                    let _ = write!(o, "  tool approval: {tool} — [y]es / [a]lways / [n]o? ");
+                    let _ = o.flush();
+                    let mut ans = String::new();
+                    let _ = io::stdin().lock().read_line(&mut ans);
+                    matches!(
+                        ans.trim().chars().next(),
+                        Some('y') | Some('Y') | Some('a') | Some('A')
+                    )
                 } else {
                     eprintln!(
                         "[non-interactive: auto-denying tool-approval request (use --auto to allow)]"
                     );
-                }
+                    false
+                };
                 let _ = dial_method(
                     home,
                     agent,
                     "tool/hitl_respond",
-                    serde_json::json!({ "hitl_id": id, "allow": auto }),
+                    serde_json::json!({ "hitl_id": id, "allow": allow }),
                     DialMode::RequireRunning,
                 );
             },
