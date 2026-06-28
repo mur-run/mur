@@ -144,6 +144,7 @@ pub fn plan_via_router(
         params,
         |delta, _thinking, _id| out.push_str(delta),
         |_hitl| {},
+        |_step| {},
     )
     .ok()?;
     parse_router_plan(&out, &fleet.members)

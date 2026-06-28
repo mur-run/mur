@@ -137,6 +137,7 @@ pub async fn agent_chat_send(
                     }),
                 );
             },
+            |_step| {},
         ) {
             Ok(v) => Ok((v, true)),
             Err(e) if e.to_string().contains("is not running") => {

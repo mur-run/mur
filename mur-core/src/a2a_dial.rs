@@ -191,6 +191,60 @@ fn dial_socket(
     }
 }
 
+/// A tool-step notification received from the runtime during a streaming turn.
+/// Emitted by the runtime as `step/started` and `step/completed` JSON-RPC
+/// notifications; parsed by [`parse_step`] and forwarded via the `on_step`
+/// callback of [`dial_message_streaming`].
+#[derive(Debug)]
+pub enum StepEvent {
+    /// The agent started executing a tool call.
+    Started {
+        step_id: String,
+        task_id: String,
+        name: String,
+        args: Value,
+    },
+    /// A tool call finished.
+    Completed {
+        step_id: String,
+        task_id: String,
+        ok: bool,
+        output: String,
+        truncated: bool,
+        full_len: usize,
+        error: Option<String>,
+        duration_ms: u64,
+    },
+}
+
+/// Parse the `params` of a `step/started` (`completed = false`) or
+/// `step/completed` (`completed = true`) JSON-RPC notification into a
+/// [`StepEvent`].
+pub fn parse_step(p: &Value, completed: bool) -> StepEvent {
+    let s = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let step_id = s("step_id");
+    let task_id = s("task_id");
+    if completed {
+        StepEvent::Completed {
+            step_id,
+            task_id,
+            ok: p.get("ok").and_then(Value::as_bool).unwrap_or(true),
+            output: s("output"),
+            truncated: p.get("truncated").and_then(Value::as_bool).unwrap_or(false),
+            full_len: p.get("full_len").and_then(Value::as_u64).unwrap_or(0) as usize,
+            error: p.get("error").and_then(Value::as_str).map(str::to_string),
+            duration_ms: p.get("duration_ms").and_then(Value::as_u64).unwrap_or(0),
+        }
+    } else {
+        StepEvent::Started {
+            step_id,
+            task_id,
+            name: s("name"),
+            args: p.get("args").cloned().unwrap_or(Value::Null),
+        }
+    }
+}
+
 /// Dial a *running* agent's `message/send` and stream token deltas to
 /// `on_delta` as they arrive, returning the final task result. Requires the
 /// agent to be up (uses its unix socket); the runtime emits `message/delta`
@@ -201,12 +255,14 @@ fn dial_socket(
 /// `message/delta` (empty string if the agent predates per-connection routing).
 /// The runtime already routes deltas to this connection only; the id lets a
 /// client defensively drop anything not matching the turn it issued.
+/// `on_step` receives tool-step events (`step/started`, `step/completed`).
 pub fn dial_message_streaming(
     home: &Path,
     agent_name: &str,
     params: Value,
     mut on_delta: impl FnMut(&str, bool, &str),
     mut on_hitl: impl FnMut(Value),
+    mut on_step: impl FnMut(StepEvent),
 ) -> Result<Value> {
     let agent_name = &canonicalize_agent_name(home, agent_name);
     let lock_path = home.join("agents").join(agent_name).join("running.lock");
@@ -256,6 +312,18 @@ pub fn dial_message_streaming(
                         .and_then(Value::as_str)
                         .unwrap_or("");
                     on_delta(t, thinking, delta_task_id);
+                }
+                continue;
+            }
+            if v.get("method").and_then(Value::as_str) == Some("step/started") {
+                if let Some(params) = v.get("params") {
+                    on_step(parse_step(params, false));
+                }
+                continue;
+            }
+            if v.get("method").and_then(Value::as_str) == Some("step/completed") {
+                if let Some(params) = v.get("params") {
+                    on_step(parse_step(params, true));
                 }
                 continue;
             }
@@ -493,5 +561,70 @@ mod tests {
             !err.to_string().contains("stale runtime"),
             "must not gate message/send"
         );
+    }
+}
+
+#[cfg(test)]
+mod step_parse_tests {
+    use super::{StepEvent, parse_step};
+
+    #[test]
+    fn parses_started() {
+        let p = serde_json::json!({
+            "step_id": "s1",
+            "task_id": "t1",
+            "name": "edit",
+            "args": { "path": "a.rs" }
+        });
+        match parse_step(&p, false) {
+            StepEvent::Started {
+                step_id,
+                task_id,
+                name,
+                args,
+            } => {
+                assert_eq!(step_id, "s1");
+                assert_eq!(task_id, "t1");
+                assert_eq!(name, "edit");
+                assert_eq!(args["path"], "a.rs");
+            }
+            StepEvent::Completed { .. } => panic!("expected Started"),
+        }
+    }
+
+    #[test]
+    fn parses_completed() {
+        let p = serde_json::json!({
+            "step_id": "s2",
+            "task_id": "t2",
+            "ok": true,
+            "output": "done",
+            "truncated": false,
+            "full_len": 4u64,
+            "error": null,
+            "duration_ms": 123u64
+        });
+        match parse_step(&p, true) {
+            StepEvent::Completed {
+                step_id,
+                task_id,
+                ok,
+                output,
+                truncated,
+                full_len,
+                error,
+                duration_ms,
+            } => {
+                assert_eq!(step_id, "s2");
+                assert_eq!(task_id, "t2");
+                assert!(ok);
+                assert_eq!(output, "done");
+                assert!(!truncated);
+                assert_eq!(full_len, 4);
+                assert!(error.is_none());
+                assert_eq!(duration_ms, 123);
+            }
+            StepEvent::Started { .. } => panic!("expected Completed"),
+        }
     }
 }
