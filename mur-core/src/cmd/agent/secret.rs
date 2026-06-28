@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 
 use super::load_profile_for_edit;
 
-const SECRET_SERVICE: &str = "mur-agent";
+pub(crate) const SECRET_SERVICE: &str = "mur-agent";
 
 pub async fn cmd_secret_set(agent: &str, key: &str, value: Option<&str>) -> Result<()> {
     use mur_common::secret::keychain_set;
