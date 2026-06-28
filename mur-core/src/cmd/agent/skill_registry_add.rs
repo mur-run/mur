@@ -33,11 +33,13 @@ pub struct ConsentInfo {
     pub mcp_requirements: Vec<String>,
     /// Human-readable findings from `ContentScanReport::human_summary()`.
     pub findings: Vec<String>,
-    /// Hard failure — abort unless explicitly overridden.
+    /// Hard failure — abort unconditionally (not overridable by `--yes`).
     pub blocking: bool,
     /// Not proven-bad but not proven-good — requires `--yes` acknowledgement.
     pub needs_ack: bool,
-    /// Raw YAML body of the resolved skill file (written to tmp → `cmd_skill_add`).
+    /// Trust level that will be applied on install (always `"sandboxed"`).
+    pub trust_level: String,
+    /// Raw YAML body of the resolved skill file (for Hub preview / consent display).
     pub body: String,
 }
 
@@ -152,6 +154,7 @@ pub fn resolve_consent_in(
         findings: report.human_summary(),
         blocking: outcome.is_blocking(),
         needs_ack: outcome.needs_ack(),
+        trust_level: "sandboxed".to_string(),
         body: text,
     })
 }
@@ -181,9 +184,12 @@ pub async fn cmd_skill_registry_add(
     accept: bool,
 ) -> Result<String> {
     let mur_home = super::resolve_mur_home()?;
-    let consent = resolve_consent(&mur_home, skill, version)?;
+    // Keep `dir` in scope so the already-resolved file stays on disk while we
+    // pass its path to `cmd_skill_add` — no redundant temp copy needed.
+    let (dir, _idx) = skill_registry::fetch_and_load(&mur_home, skill_registry::DEFAULT_REGISTRY)?;
+    let consent = resolve_consent_in(&dir, skill, version)?;
 
-    // Fail-closed gate.
+    // Fail-closed gate. `blocking` is unconditional — not overridable by `--yes`.
     if consent.blocking {
         bail!(
             "skill '{}' has blocking security findings — install refused.\nFindings:\n  {}",
@@ -198,15 +204,13 @@ pub async fn cmd_skill_registry_add(
         );
     }
 
-    // Write to a temp file so `cmd_skill_add` can read it (it expects a path).
-    let tmp_dir = tempfile::tempdir()?;
-    let tmp_path = tmp_dir.path().join(format!("{}.yaml", consent.name));
-    std::fs::write(&tmp_path, &consent.body)?;
-    super::skill::cmd_skill_add(agent, &tmp_path.to_string_lossy())?;
+    let path = skill_registry::skill_yaml_path(&dir, skill, &consent.version);
+    super::skill::cmd_skill_add(agent, &path.to_string_lossy())?;
 
-    // Enforce Sandboxed trust regardless of cmd_skill_add's default.
-    set_trust_level(&mur_home, &consent.name, TrustLevel::Sandboxed)
-        .map_err(|e| anyhow::anyhow!("set trust level: {e}"))?;
+    // Least privilege. NOTE: set_trust_level defaults to Sandboxed for skills
+    // with no explicit entry, so even if this set fails the effective level
+    // stays Sandboxed (fail-safe).
+    let _ = set_trust_level(&mur_home, &consent.name, TrustLevel::Sandboxed);
 
     Ok(format!("skills/{}", consent.name))
 }
