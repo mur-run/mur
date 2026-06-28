@@ -121,8 +121,7 @@ pub fn fleet_create(
     goal: String,
 ) -> Result<(), String> {
     let home = mur_home_path();
-    create::cmd_fleet_create(&home, &name, members, router, Some(goal))
-        .map_err(|e| e.to_string())
+    create::cmd_fleet_create(&home, &name, members, router, Some(goal)).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -177,7 +176,10 @@ pub fn fleet_jobs(name: String, all: bool) -> Result<Vec<JobRow>, String> {
     let filtered: Vec<_> = if all {
         job_list
     } else {
-        job_list.into_iter().filter(|j| !j.status.is_terminal()).collect()
+        job_list
+            .into_iter()
+            .filter(|j| !j.status.is_terminal())
+            .collect()
     };
     Ok(filtered.into_iter().map(job_to_row).collect())
 }
@@ -223,7 +225,11 @@ pub fn fleet_import(path: String) -> Result<String, String> {
     import::cmd_fleet_import(
         &home,
         &file,
-        import::ImportOpts { force: false, no_members: false, yes: true },
+        import::ImportOpts {
+            force: false,
+            no_members: false,
+            yes: true,
+        },
     )
     .map_err(|e| e.to_string())?;
     Ok(fleet_name)
@@ -253,11 +259,23 @@ mod tests {
 
     #[test]
     fn job_to_row_maps_status_to_string() {
-        assert_eq!(job_to_row(make_job("a", JobStatus::Running)).status, "running");
+        assert_eq!(
+            job_to_row(make_job("a", JobStatus::Running)).status,
+            "running"
+        );
         assert_eq!(job_to_row(make_job("b", JobStatus::Done)).status, "done");
-        assert_eq!(job_to_row(make_job("c", JobStatus::Failed)).status, "failed");
-        assert_eq!(job_to_row(make_job("d", JobStatus::Queued)).status, "queued");
-        assert_eq!(job_to_row(make_job("e", JobStatus::Canceled)).status, "canceled");
+        assert_eq!(
+            job_to_row(make_job("c", JobStatus::Failed)).status,
+            "failed"
+        );
+        assert_eq!(
+            job_to_row(make_job("d", JobStatus::Queued)).status,
+            "queued"
+        );
+        assert_eq!(
+            job_to_row(make_job("e", JobStatus::Canceled)).status,
+            "canceled"
+        );
     }
 
     #[test]
