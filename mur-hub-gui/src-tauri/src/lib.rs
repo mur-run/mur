@@ -12,6 +12,7 @@ pub mod cli_tools;
 pub mod companion;
 pub mod detail;
 pub mod export_muragent;
+pub mod fleet;
 mod geometry;
 pub mod hitl;
 pub mod import_muragent;
@@ -622,6 +623,19 @@ pub fn run() {
             onboarding::spec::wizard_spec_generate,
             onboarding::spec::wizard_spec_approve,
             onboarding::spec::wizard_spec_cancel,
+            fleet::fleet_list,
+            fleet::fleet_detail,
+            fleet::fleet_create,
+            fleet::fleet_delete,
+            fleet::fleet_stop,
+            fleet::fleet_start,
+            fleet::fleet_run,
+            fleet::fleet_send,
+            fleet::fleet_jobs,
+            fleet::fleet_add_member,
+            fleet::fleet_remove_member,
+            fleet::fleet_export,
+            fleet::fleet_import,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
