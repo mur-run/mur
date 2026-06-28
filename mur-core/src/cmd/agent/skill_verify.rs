@@ -74,7 +74,7 @@ pub fn verify_skill_install(
         HashStatus::Absent
     } else {
         let actual = sha256_hex(file_text.as_bytes());
-        if actual == expected_sha256 {
+        if actual.eq_ignore_ascii_case(expected_sha256) {
             HashStatus::Match
         } else {
             HashStatus::Mismatch
@@ -82,30 +82,34 @@ pub fn verify_skill_install(
     };
 
     // ── 2. Publisher-signature check ──────────────────────────────────────
-    // The full skill file (serialized `Skill`) may carry `publisher_signature`.
-    // Parse `file_text` as `Skill` to extract the optional DSSE envelope JSON.
-    // Failure to parse → treat as unsigned (no forged-but-unparseable category).
-    let sig_json: Option<String> = serde_yaml_ng::from_str::<mur_common::skill::Skill>(file_text)
-        .ok()
-        .and_then(|s| s.publisher_signature);
+    // Extract `publisher_signature` as a raw YAML value independently of the full
+    // struct parse, so a present-but-broken signature can never silently downgrade
+    // to Unsigned. Invariant: if the field is present, the result is Verified or
+    // Invalid — never Unsigned.
+    let raw_sig: Option<serde_yaml_ng::Value> =
+        serde_yaml_ng::from_str::<serde_yaml_ng::Value>(file_text)
+            .ok()
+            .and_then(|v| v.get("publisher_signature").cloned());
 
-    let signature = match sig_json {
-        None => SignatureStatus::Unsigned,
-        Some(envelope_json) => match verify_manifest(manifest, &envelope_json) {
-            Ok(()) => {
-                // Extract key fingerprint from the first DSSE signature's keyid.
-                let key_fp = serde_json::from_str::<DsseEnvelope>(&envelope_json)
-                    .ok()
-                    .and_then(|e| e.signatures.into_iter().next())
-                    .map(|s| s.keyid)
-                    .unwrap_or_default();
-                SignatureStatus::Verified {
-                    publisher: manifest.publisher.clone(),
-                    key_fp,
+    let signature = match raw_sig {
+        None | Some(serde_yaml_ng::Value::Null) => SignatureStatus::Unsigned,
+        Some(serde_yaml_ng::Value::String(envelope_json)) => {
+            match verify_manifest(manifest, &envelope_json) {
+                Ok(()) => {
+                    // Extract key fingerprint from the first DSSE signature's keyid.
+                    let key_fp = serde_json::from_str::<DsseEnvelope>(&envelope_json)
+                        .ok()
+                        .and_then(|e| e.signatures.first().map(|s| s.keyid.clone()))
+                        .unwrap_or_default();
+                    SignatureStatus::Verified {
+                        publisher: manifest.publisher.clone(),
+                        key_fp,
+                    }
                 }
+                Err(_) => SignatureStatus::Invalid,
             }
-            Err(_) => SignatureStatus::Invalid,
-        },
+        }
+        Some(_) => SignatureStatus::Invalid, // present but wrong YAML type → fail-closed
     };
 
     VerifyOutcome { hash, signature }
@@ -181,6 +185,44 @@ mod tests {
         let m = parse_canonical(CLEAN).unwrap();
         let skill_yaml = format!("{CLEAN}publisher_signature: 'not-valid-json'\n");
         let o = verify_skill_install(&m, &skill_yaml, &sha(&skill_yaml));
+        assert!(matches!(o.signature, SignatureStatus::Invalid));
+        assert!(o.is_blocking());
+        assert!(!o.needs_ack());
+    }
+
+    #[test]
+    fn mismatch_plus_verified_is_blocking() {
+        // A validly-signed skill whose file bytes don't match the pinned hash → block.
+        // Mismatch || Invalid → is_blocking(); Mismatch alone is sufficient.
+        let id = AgentIdentity::generate();
+        let m = parse_canonical(CLEAN).unwrap();
+        let env = sign_manifest(&m, &id).unwrap();
+
+        let skill = mur_common::skill::Skill {
+            manifest: m.clone(),
+            content_sha256: None,
+            trust_level: mur_common::skill::TrustLevel::Sandboxed,
+            capabilities_declared: vec![],
+            publisher_signature: Some(env),
+        };
+        let skill_yaml = serde_yaml_ng::to_string(&skill).unwrap();
+
+        // Signature must verify (Verified), but deliberately pass a wrong hash.
+        let o = verify_skill_install(&m, &skill_yaml, "deadbeef00000000");
+        assert!(matches!(o.hash, HashStatus::Mismatch));
+        assert!(matches!(o.signature, SignatureStatus::Verified { .. }));
+        assert!(o.is_blocking());
+        assert!(!o.needs_ack());
+    }
+
+    #[test]
+    fn absent_hash_plus_invalid_sig_is_blocking() {
+        // Empty expected_sha256 (Absent) + publisher_signature present but invalid DSSE
+        // → Invalid sig alone is sufficient to block.
+        let m = parse_canonical(CLEAN).unwrap();
+        let skill_yaml = format!("{CLEAN}publisher_signature: 'not-valid-json'\n");
+        let o = verify_skill_install(&m, &skill_yaml, ""); // empty → Absent
+        assert!(matches!(o.hash, HashStatus::Absent));
         assert!(matches!(o.signature, SignatureStatus::Invalid));
         assert!(o.is_blocking());
         assert!(!o.needs_ack());
