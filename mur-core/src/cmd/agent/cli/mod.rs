@@ -634,10 +634,24 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         });
         return;
     }
-    // Reject (but DON'T discard) a message typed while a turn is generating —
-    // clearing the input here would silently lose what the user composed.
+    // While a turn is generating: steer it if we have a live task id,
+    // otherwise fall back to the old reject message.
     if app.streaming {
-        app.push_system("still generating — press Ctrl+C to cancel first");
+        if let Some(task_id) = app.current_task_id.clone() {
+            let (h, a) = (app.home.clone(), app.agent.clone());
+            let (msg, t) = (trimmed.clone(), tx.clone());
+            app.push_system(format!("↗ steering: {trimmed}"));
+            app.clear_input();
+            tokio::spawn(async move {
+                if let Err(e) = stream::steer_turn(h, a, task_id, msg).await {
+                    let _ = t
+                        .send(StreamMsg::Note(format!("steer failed: {e:#}")))
+                        .await;
+                }
+            });
+        } else {
+            app.push_system("still generating — press Ctrl+C to cancel first");
+        }
         return;
     }
     app.last_sent = Some(trimmed.clone());
