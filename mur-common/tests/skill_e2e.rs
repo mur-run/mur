@@ -84,6 +84,7 @@ fn full_pipeline_happy_path() {
             level: TrustLevel::Verified,
             installed_at: "2026-05-24T00:00:00Z".into(),
             publisher: Some(m.publisher.clone()),
+            ..Default::default()
         },
     );
     store.save(tmp.path()).unwrap();

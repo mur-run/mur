@@ -1085,7 +1085,12 @@ impl TaskRunner {
         // 1b. Policy gate: check before executing.
         {
             use mur_common::agent::{ToolPolicy, resolve_tool_policy};
-            match resolve_tool_policy(&self.tools_policy, &call.tool_name) {
+            let policy = if crate::tools::suggest::suggest_replies_allowed(&call.tool_name) {
+                ToolPolicy::Allow
+            } else {
+                resolve_tool_policy(&self.tools_policy, &call.tool_name)
+            };
+            match policy {
                 ToolPolicy::Deny => {
                     return Ok(ToolResultEntry {
                         call_id: call.call_id.clone(),
@@ -1314,7 +1319,15 @@ impl TaskRunner {
     ) -> Result<(Message, Option<LoopExit>), TaskError> {
         use crate::llm::{LlmRequest, RichMessage, StopReason};
 
-        let tool_defs: Vec<_> = self.tools_for_loop().iter().map(|t| t.def()).collect();
+        // `suggest_replies` is offered to the model only on streaming
+        // (interactive) turns — non-interactive callers never see it.
+        let streaming = sink.is_some();
+        let tool_defs: Vec<_> = self
+            .tools_for_loop()
+            .iter()
+            .map(|t| t.def())
+            .filter(|d| crate::tools::suggest::offer_for_streaming(&d.name, streaming))
+            .collect();
         // Seed with prior conversation threaded via `context.task_id` so the
         // model has multi-turn memory; this turn's tool scaffolding is appended
         // below and stays ephemeral (never persisted into chat memory).
