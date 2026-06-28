@@ -10,8 +10,6 @@
 //! NOT used here; that would produce a different value and cause every install
 //! to show a hash mismatch.
 
-// Wired by Task A2 CLI (skill_registry_index --check / regenerate).
-#[allow(dead_code)]
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -30,7 +28,6 @@ use mur_common::skill::{Skill, parse_canonical, scan::scan_skill, sha256_hex, va
 /// - invalid signature
 /// - has_blocking_findings() from security scan
 /// - name or version mismatch between manifest and on-disk path
-#[allow(dead_code)]
 pub fn build_registry_index(repo_dir: &Path) -> Result<RegistryIndex> {
     // Preserve install_count from an existing index, if any.
     let prior = std::fs::read_to_string(repo_dir.join("index.yaml"))
@@ -147,7 +144,6 @@ pub fn build_registry_index(repo_dir: &Path) -> Result<RegistryIndex> {
 /// Rebuild the index from disk and compare to the on-disk `index.yaml`
 /// (ignoring `updated_at`). Used as a CI gate to reject a forged or stale
 /// index without holding any signing key.
-#[allow(dead_code)]
 pub fn check_index(repo_dir: &Path) -> Result<()> {
     let rebuilt = build_registry_index(repo_dir)?;
     let on_disk = std::fs::read_to_string(repo_dir.join("index.yaml"))
