@@ -36,8 +36,10 @@ pub fn card_lines(card: &StepCard, theme: &'static Theme) -> Vec<Line<'static>> 
         Span::styled(dur, Style::default().fg(theme.system)),
     ]));
 
-    // ── Args (bounded) ────────────────────────────────────────────────────────
-    if !card.args.is_null() {
+    // ── Args: diff for edit tools, else bounded JSON ─────────────────────────
+    if let Some(diff_lines) = super::diff::edit_diff_lines(&card.name, &card.args, theme) {
+        out.extend(diff_lines);
+    } else if !card.args.is_null() {
         let pretty = serde_json::to_string_pretty(&card.args).unwrap_or_default();
         let total_lines = pretty.lines().count();
         for l in pretty.lines().take(ARGS_MAX_LINES) {
@@ -88,6 +90,33 @@ pub fn card_lines(card: &StepCard, theme: &'static Theme) -> Vec<Line<'static>> 
                     .add_modifier(Modifier::DIM),
             ));
         }
+    }
+
+    // ── Inline HITL approval (P2) ────────────────────────────────────────────
+    if card.awaiting_hitl {
+        out.push(Line::from(vec![
+            Span::styled(
+                "  [y]",
+                Style::default()
+                    .fg(ratatui::style::Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" approve  ", Style::default().fg(theme.system)),
+            Span::styled(
+                "[a]",
+                Style::default()
+                    .fg(ratatui::style::Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" always  ", Style::default().fg(theme.system)),
+            Span::styled(
+                "[n]",
+                Style::default()
+                    .fg(ratatui::style::Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" deny / Esc", Style::default().fg(theme.system)),
+        ]));
     }
 
     out
@@ -178,5 +207,47 @@ mod tests {
             .join("\n");
         assert!(text.contains("exit 101"), "expected 'exit 101' in: {text}");
         assert!(text.contains('✗'), "expected '✗' in: {text}");
+    }
+
+    #[test]
+    fn edit_card_renders_diff_not_raw_json() {
+        let c = StepCard::new(
+            "s1".into(),
+            "edit".into(),
+            serde_json::json!({"file_path":"a.rs","old_string":"old","new_string":"new"}),
+        );
+        let lines = card_lines(&c, theme::resolve_skin("dark"));
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("- old"), "expected '- old' in:\n{text}");
+        assert!(text.contains("+ new"), "expected '+ new' in:\n{text}");
+        // raw JSON key must NOT appear for an edit card
+        assert!(
+            !text.contains("\"old_string\""),
+            "raw JSON key must not appear in:\n{text}"
+        );
+    }
+
+    #[test]
+    fn awaiting_card_shows_inline_approval_row() {
+        let mut c = StepCard::new(
+            "s1".into(),
+            "edit".into(),
+            serde_json::json!({"file_path":"a.rs"}),
+        );
+        c.complete(true, "patched".into(), false, 1, None, 4);
+        c.awaiting_hitl = true;
+        let lines = card_lines(&c, theme::resolve_skin("dark"));
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("[y]"));
+        assert!(text.contains("approve"));
+        assert!(text.contains("[n]"));
     }
 }

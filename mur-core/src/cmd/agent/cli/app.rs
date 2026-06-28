@@ -523,6 +523,30 @@ impl App {
         }
     }
 
+    /// Flag the card with this `step_id` as awaiting a HITL decision.
+    pub fn mark_card_awaiting(&mut self, step_id: &str) {
+        if let Some(card) = self
+            .messages
+            .iter_mut()
+            .rev()
+            .find_map(|m| m.step.as_mut().filter(|c| c.id == step_id))
+        {
+            card.awaiting_hitl = true;
+        }
+    }
+
+    /// Clear the awaiting-HITL flag on the card with this `step_id`.
+    pub fn clear_card_awaiting(&mut self, step_id: &str) {
+        if let Some(card) = self
+            .messages
+            .iter_mut()
+            .rev()
+            .find_map(|m| m.step.as_mut().filter(|c| c.id == step_id))
+        {
+            card.awaiting_hitl = false;
+        }
+    }
+
     pub fn fail_turn(&mut self, err: &str) {
         if let Some(i) = self
             .messages
@@ -1121,6 +1145,29 @@ mod esc_action_tests {
     #[test]
     fn esc_nothing_when_window_expired_not_streaming_empty() {
         assert_eq!(esc_action(expired(), false, true), EscAction::Nothing);
+    }
+}
+
+#[cfg(test)]
+mod awaiting_tests {
+    use super::*;
+
+    #[test]
+    fn mark_and_clear_awaiting_by_step_id() {
+        let mut a = App::test_fixture();
+        a.begin_user_turn("edit it");
+        a.push_step_started(
+            "s1".into(),
+            "edit".into(),
+            serde_json::json!({"file_path":"a.rs"}),
+        );
+        a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5);
+        a.mark_card_awaiting("s1");
+        let card = a.messages.iter().find_map(|m| m.step.as_ref()).unwrap();
+        assert!(card.awaiting_hitl);
+        a.clear_card_awaiting("s1");
+        let card = a.messages.iter().find_map(|m| m.step.as_ref()).unwrap();
+        assert!(!card.awaiting_hitl);
     }
 }
 
