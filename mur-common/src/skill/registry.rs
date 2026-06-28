@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RegistryIndex {
     #[serde(default)]
     pub schema_version: u32,
@@ -13,7 +13,7 @@ pub struct RegistryIndex {
     pub skills: BTreeMap<String, RegistrySkillEntry>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RegistrySkillEntry {
     pub latest: String,
     pub description: String,
