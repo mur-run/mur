@@ -136,6 +136,8 @@ murmur coach                                  # quick form (murmur symlink), ide
 
 <p align="center"><img src="assets/demo.gif" alt="mur agent cli — streaming TUI chat with a local agent" width="92%" /></p>
 
+In the chat, type `/` to open a completion menu of slash commands (with their subcommands) and the agent's skills — `↑↓` to move, `Tab`/`Enter` to accept, `Esc` to dismiss. And when the agent offers you choices, they appear as `Tab`-to-fill suggestions right in the input: a single one as greyed ghost text, several as a picker.
+
 ### Models & providers
 
 Agents draw from a local provider/model registry at `~/.mur/models.yaml`:
