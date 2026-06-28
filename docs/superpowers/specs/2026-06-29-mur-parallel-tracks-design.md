@@ -442,6 +442,149 @@ True concurrent editing of the same function region. Only needed when partition 
 
 ---
 
+## Validation Plan
+
+The core claims of this design are novel and unproven in the mur codebase. Before investing in full implementation, each phase requires an empirical gate. **Gate failure = stop, diagnose, and re-design — not push forward.**
+
+### Core Assumptions to Validate
+
+| # | Assumption | Why it matters | How to falsify |
+|---|-----------|---------------|---------------|
+| A1 | Diverse approach prompts produce meaningfully different implementations | Without variance, N tracks are identical — the whole design collapses | Measure pairwise code similarity across tracks |
+| A2 | CyclicJudge produces stable, unbiased scores | If scores flip wildly between orderings, the judge is noise | Measure score delta across cyclic rounds |
+| A3 | Cherry-picked assembly outperforms the best single track | If not, parallel tracks are all cost with no benefit | Blind human evaluation vs. single-agent baseline |
+| A4 | CAS eliminates ≥40% of LLM judge calls in real usage | Determines cost viability of the whole approach | Measure hash-collision rate across real sessions |
+| A5 | `cargo check` pass rate on assembled code ≥ 90% | If cherry-pick routinely produces invalid code, UX is broken | Count post-assembly compilation failures |
+| A6 | tree-sitter semantic unit extraction is reliable for Rust | Malformed AST → wrong cherry-pick boundaries | Run against mur-core itself, count extraction errors |
+
+---
+
+### Validation Gate 0 — Proof of Concept (before any P0 code)
+
+**Goal:** validate A1 + A6 with minimum code. Build a standalone script, not production code.
+
+**Experiment:**
+1. Pick 3 real functions from mur-core (varying complexity: trivial / medium / complex)
+2. Prompt Claude 3× per function with 3 different `approach` texts (functional / performance / readability)
+3. Parse each output with tree-sitter, extract `SemanticUnit[]`
+4. Measure pairwise similarity: `1 - (edit_distance / max_len)`
+5. Record extraction error rate
+
+**Pass criteria:**
+- Mean pairwise similarity ≤ 0.60 (tracks are meaningfully different)
+- Tree-sitter extraction error rate ≤ 5%
+- At least 2 of 3 functions show ≥ 1 structurally different approach
+
+**Fail criteria → re-design:**
+- Similarity > 0.80 across all functions → approach prompts are too weak; redesign diversity strategy
+- Extraction error rate > 20% → tree-sitter grammar is unreliable; consider regex fallback or different parser
+
+**Deliverable:** a `scripts/parallel_poc.py` (or `.sh`) that runs the experiment and prints the metrics. Commit results to `docs/superpowers/validation/parallel-poc-results.md`.
+
+---
+
+### Validation Gate 1 — Judge Reliability (before CyclicJudge ships in P1)
+
+**Goal:** validate A2. Prove scoring is stable enough to trust.
+
+**Experiment:**
+1. Collect 20 pairs of competing function implementations (real or generated)
+2. Score each pair 3 times: round [A, B], round [B, A], round [A, B] again
+3. Record: score per round, winner per round, delta between rounds
+
+**Pass criteria:**
+- Mean absolute score delta across ordering swaps ≤ 0.15 (on a 0–10 scale)
+- Winner flip rate ≤ 20% (same pair changes winner between orderings ≤ 20% of the time)
+- After averaging cyclic rounds, winner flip rate drops to ≤ 10%
+
+**Fail criteria → re-design:**
+- Winner flip rate > 40% → judge is too noisy; consider majority-vote with N=5, or rubric re-design
+- Mean delta > 0.30 → position bias is dominant; need more aggressive prompt engineering or different model
+
+**Deliverable:** `docs/superpowers/validation/judge-reliability-results.md` with raw data + metrics.
+
+---
+
+### Validation Gate 2 — Cherry-Pick Quality (P1 alpha)
+
+**Goal:** validate A3 + A5. The assembled result must be measurably better.
+
+**Experiment:**
+1. Run 10 parallel sessions on real mur-core tasks (5 simple, 5 complex)
+2. For each session: record cherry-picked result AND best single-track result
+3. Run `cargo check` + `cargo test` on both
+4. Blind human evaluation (3 reviewers, each rates correctness / design / readability 1–5)
+
+**Pass criteria:**
+- Cherry-pick `cargo check` pass rate ≥ 90%
+- Cherry-pick mean human score ≥ best single-track mean by ≥ 0.3 points (on 1–5 scale)
+- Cherry-pick `cargo test` pass rate ≥ best single-track pass rate (must not regress)
+
+**Fail criteria → re-design before P1 ships:**
+- `cargo check` pass rate < 80% → dependency conflict detection is insufficient; strengthen signature compat check or fall back to same-track selection more aggressively
+- Human score improvement < 0.1 → cherry-pick provides no real benefit; reconsider whether speculative parallel is worth the cost
+- Test pass rate regresses → inter-unit dependencies are not correctly modeled; redesign dependency graph
+
+**Deliverable:** `docs/superpowers/validation/cherry-pick-quality-results.md`. This gate is **blocking** — P1 does not ship until it passes.
+
+---
+
+### Validation Gate 3 — Cost and CAS Efficiency (P1 alpha)
+
+**Goal:** validate A4. Confirm CAS savings are real.
+
+**Experiment:**
+1. Run 5 parallel sessions, each with 3 tracks, on the same 3 tasks repeated across sessions
+2. Record: total judge calls made vs. total judge calls skipped (CAS hit)
+3. Record: total LLM cost with CAS vs. estimated cost without CAS
+
+**Pass criteria:**
+- CAS hit rate ≥ 30% on repeated tasks (proves cross-session caching works)
+- Total cost per session with 3 tracks ≤ 2.5× single-agent cost (parallelism premium must be bounded)
+
+**Fail criteria → re-design:**
+- CAS hit rate ≈ 0% → blake3 hashing too granular or implementations always diverge; consider chunked hashing or looser similarity threshold
+- Cost per session > 4× single-agent → judge is too expensive; add cheaper pre-scoring tier (embedding similarity) before LLM judge
+
+**Deliverable:** `docs/superpowers/validation/cas-efficiency-results.md`.
+
+---
+
+### Continuous Validation (post-P1)
+
+After each release, run a **regression benchmark** against mur-core itself:
+
+```
+benchmark/
+├── tasks/           # 20 canonical Rust coding tasks (fixed, versioned)
+├── ground_truth/    # Human-reviewed gold implementations
+└── run.sh           # Run all tasks, score against ground truth, compare to previous release
+```
+
+Metrics tracked per release:
+- Mean cherry-pick score vs. single-agent baseline
+- `cargo check` pass rate
+- Mean cost per parallel session
+- P95 latency (user-facing: time from `fleet run` to `fleet cherry` available)
+
+**Score regression ≥ 0.2 below baseline → block the release.**
+
+---
+
+### Summary: Go / No-Go per Phase
+
+| Phase | Gate | Blocking? |
+|-------|------|-----------|
+| P0 start | Gate 0: diversity + tree-sitter PoC | Yes — do not write production code until passed |
+| P1 start | Gate 1: judge reliability | Yes — CyclicJudge design is load-bearing |
+| P1 ship | Gate 2: cherry-pick quality + Gate 3: cost efficiency | Yes — both must pass |
+| P1.5 start | Gate 2 + 3 passed | Yes |
+| P2 start | P1 shipped + at least 3 real user sessions logged | Yes |
+| P2.5 start | P2 stable | No — partition mode is additive |
+| P3 start | P2.5 validated + Loro API stable | No — CRDT is optional enhancement |
+
+---
+
 ## Competitive Positioning
 
 | Capability | mur P1 | mur P2 | Zed DeltaDB | Claude Code | Cursor 2.0 |
