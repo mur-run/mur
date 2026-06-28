@@ -148,9 +148,13 @@ pub fn fleet_start(name: String) -> Result<(), String> {
 pub async fn fleet_run(name: String, app: tauri::AppHandle) -> Result<(), String> {
     let home = mur_home_path();
     let fleet_name = name.clone();
-    // cmd_fleet_run is async and long-running; spawn so the command returns immediately.
-    tokio::spawn(async move {
-        let ok = run::cmd_fleet_run(&home, &fleet_name, None).await.is_ok();
+    // cmd_fleet_run is async but does blocking I/O internally (UnixStream dial).
+    // Use spawn_blocking with a dedicated runtime so tokio worker threads aren't tied up.
+    tokio::task::spawn_blocking(move || {
+        let ok = tokio::runtime::Runtime::new()
+            .expect("fleet run runtime")
+            .block_on(run::cmd_fleet_run(&home, &fleet_name, None))
+            .is_ok();
         let _ = app.emit(
             "fleet:run_done",
             serde_json::json!({ "name": fleet_name, "ok": ok }),
