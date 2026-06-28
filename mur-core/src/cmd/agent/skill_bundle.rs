@@ -3,6 +3,7 @@
 //! extracts .zip and .tar.gz bundles, discovers every skill manifest, scans
 //! each, and installs clean ones via quill P1's per-skill path. Built on
 //! `skill_remote`.
+#![allow(dead_code)] // module not yet wired to callers; suppress until integration
 
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
@@ -70,19 +71,22 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> Result<()> {
             Some(p) => p,
             None => continue,
         };
-        // Bomb guard.
-        total = total.saturating_add(entry.size());
-        if total > BUNDLE_MAX_TOTAL_UNCOMPRESSED {
-            bail!("archive uncompressed size exceeds {BUNDLE_MAX_TOTAL_UNCOMPRESSED} bytes");
-        }
         let out = dest.join(&rel);
         if let Some(parent) = out.parent() {
             std::fs::create_dir_all(parent).map_err(|e| anyhow::anyhow!("mkdir: {e}"))?;
         }
+        // Bomb guard — bound the ACTUAL read, not the header-declared size
+        // (entry.size() is attacker-controlled and can lie as 0).
+        let budget = BUNDLE_MAX_TOTAL_UNCOMPRESSED.saturating_sub(total);
         let mut data = Vec::new();
-        entry
+        // read budget+1 so we can detect overflow
+        std::io::Read::take(&mut entry, budget + 1)
             .read_to_end(&mut data)
             .map_err(|e| anyhow::anyhow!("read entry: {e}"))?;
+        total = total.saturating_add(data.len() as u64);
+        if total > BUNDLE_MAX_TOTAL_UNCOMPRESSED {
+            bail!("archive uncompressed size exceeds {BUNDLE_MAX_TOTAL_UNCOMPRESSED} bytes");
+        }
         std::fs::write(&out, &data).map_err(|e| anyhow::anyhow!("write {}: {e}", out.display()))?;
     }
     Ok(())
@@ -107,11 +111,13 @@ fn extract_targz(bytes: &[u8], dest: &Path) -> Result<()> {
         if total > BUNDLE_MAX_TOTAL_UNCOMPRESSED {
             bail!("archive uncompressed size exceeds {BUNDLE_MAX_TOTAL_UNCOMPRESSED} bytes");
         }
-        // unpack_in is documented to refuse paths that escape `dest` (returns
-        // Ok(false) and skips), giving zip-slip protection for tar.
-        let _unpacked = entry
+        // unpack_in refuses paths that escape `dest` by returning Ok(false).
+        if !entry
             .unpack_in(dest)
-            .map_err(|e| anyhow::anyhow!("unpack: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("unpack: {e}"))?
+        {
+            bail!("unsafe path in archive (refused by unpack_in)");
+        }
     }
     Ok(())
 }
@@ -171,16 +177,16 @@ fn is_md_path(p: &Path) -> bool {
 }
 
 /// Download a bundle archive, size-capped at [`BUNDLE_MAX_BYTES`].
-pub async fn fetch_bundle(url: &str, _kind: ArchiveKind) -> Result<Vec<u8>> {
+pub async fn fetch_bundle(url: &str) -> Result<Vec<u8>> {
     let url = super::skill_remote::validate_skill_url(url)?;
     let resp = reqwest::Client::new()
         .get(&url)
         .timeout(std::time::Duration::from_secs(BUNDLE_FETCH_TIMEOUT_SECS))
         .send()
         .await
-        .map_err(|e| anyhow::anyhow!("fetch {url}: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("network error: {e}"))?;
     if !resp.status().is_success() {
-        bail!("fetch {url}: HTTP {}", resp.status());
+        bail!("server returned {}", resp.status());
     }
     if let Some(len) = resp.content_length()
         && len > BUNDLE_MAX_BYTES as u64
@@ -203,12 +209,11 @@ pub async fn fetch_bundle(url: &str, _kind: ArchiveKind) -> Result<Vec<u8>> {
 /// Fetch + extract + discover + preview each skill in a bundle. Installs nothing.
 pub async fn preview_bundle_url(url: &str) -> Result<Vec<SkillPreview>> {
     let kind = is_archive_url(url).ok_or_else(|| anyhow::anyhow!("not a supported archive URL"))?;
-    let bytes = fetch_bundle(url, kind).await?;
-    let tmp = tempdir_unique("mur-bundle")?;
-    extract_archive(&bytes, kind, &tmp)?;
-    let paths = discover_skills(&tmp);
+    let bytes = fetch_bundle(url).await?;
+    let tmp = tempfile::TempDir::new().map_err(|e| anyhow::anyhow!("temp dir: {e}"))?;
+    extract_archive(&bytes, kind, tmp.path())?;
+    let paths = discover_skills(tmp.path());
     if paths.is_empty() {
-        let _ = std::fs::remove_dir_all(&tmp);
         bail!("no skills found in bundle");
     }
     let mut previews = Vec::new();
@@ -220,7 +225,6 @@ pub async fn preview_bundle_url(url: &str) -> Result<Vec<SkillPreview>> {
             }
         }
     }
-    let _ = std::fs::remove_dir_all(&tmp);
     Ok(previews)
 }
 
@@ -233,62 +237,67 @@ pub async fn install_bundle_from_url(
     accept_findings: bool,
 ) -> Result<Vec<String>> {
     let kind = is_archive_url(url).ok_or_else(|| anyhow::anyhow!("not a supported archive URL"))?;
-    let bytes = fetch_bundle(url, kind).await?;
-    let tmp = tempdir_unique("mur-bundle")?;
-    extract_archive(&bytes, kind, &tmp)?;
-    let paths = discover_skills(&tmp);
+    let bytes = fetch_bundle(url).await?;
+    let tmp = tempfile::TempDir::new().map_err(|e| anyhow::anyhow!("temp dir: {e}"))?;
+    extract_archive(&bytes, kind, tmp.path())?;
+    let paths = discover_skills(tmp.path());
     if paths.is_empty() {
-        let _ = std::fs::remove_dir_all(&tmp);
         bail!("no skills found in bundle");
     }
     let mut installed = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
     for p in &paths {
-        if let Ok(text) = std::fs::read_to_string(p) {
-            let preview = match preview_skill_text(&text, is_md_path(p)) {
-                Ok(pv) => pv,
-                Err(_) => continue,
-            };
-            // Fail-closed: skip skills with blocking findings unless accepted.
-            if preview.blocking && !accept_findings {
+        let text = match std::fs::read_to_string(p) {
+            Ok(t) => t,
+            Err(e) => {
+                errors.push(format!("{}: read failed: {e}", p.display()));
                 continue;
             }
-            let ext = if is_md_path(p) { "md" } else { "yaml" };
-            let safe: String = preview
-                .name
-                .chars()
-                .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-                .collect();
-            let safe = if safe.is_empty() {
-                "skill".to_string()
-            } else {
-                safe
-            };
-            let tmp_skill = std::env::temp_dir().join(format!(
-                "mur-skill-bundle-{}-{safe}.{ext}",
-                std::process::id()
-            ));
-            if std::fs::write(&tmp_skill, &text).is_ok() {
+        };
+        let preview = match preview_skill_text(&text, is_md_path(p)) {
+            Ok(pv) => pv,
+            Err(e) => {
+                errors.push(format!("{}: preview failed: {e}", p.display()));
+                continue;
+            }
+        };
+        // Fail-closed: skip skills with blocking findings unless accepted.
+        if preview.blocking && !accept_findings {
+            continue;
+        }
+        let ext = if is_md_path(p) { "md" } else { "yaml" };
+        let safe: String = preview
+            .name
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        let safe = if safe.is_empty() {
+            "skill".to_string()
+        } else {
+            safe
+        };
+        let tmp_skill = std::env::temp_dir().join(format!(
+            "mur-skill-bundle-{}-{safe}.{ext}",
+            std::process::id()
+        ));
+        match std::fs::write(&tmp_skill, &text) {
+            Err(e) => {
+                errors.push(format!("{}: write failed: {e}", preview.name));
+            }
+            Ok(_) => {
                 let add_result = super::skill::cmd_skill_add(agent, &tmp_skill.to_string_lossy());
                 let _ = std::fs::remove_file(&tmp_skill);
-                if add_result.is_ok() {
-                    installed.push(format!("skills/{}", preview.name));
+                match add_result {
+                    Ok(_) => installed.push(format!("skills/{}", preview.name)),
+                    Err(e) => errors.push(format!("{}: install failed: {e}", preview.name)),
                 }
             }
         }
     }
-    let _ = std::fs::remove_dir_all(&tmp);
-    Ok(installed)
-}
-
-/// Create a unique temporary directory for bundle extraction. Removes any
-/// pre-existing directory with the same name first.
-pub fn tempdir_unique(prefix: &str) -> Result<PathBuf> {
-    let dir = std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()));
-    if dir.exists() {
-        let _ = std::fs::remove_dir_all(&dir);
+    if installed.is_empty() && !errors.is_empty() {
+        bail!("no skills installed:\n{}", errors.join("\n"));
     }
-    std::fs::create_dir_all(&dir).map_err(|e| anyhow::anyhow!("mkdir temp: {e}"))?;
-    Ok(dir)
+    Ok(installed)
 }
 
 #[cfg(test)]
@@ -412,5 +421,91 @@ mod tests {
         let preview = preview_skill_text(&text, is_md_path(&skills[0])).unwrap();
         assert_eq!(preview.name, "packed");
         assert!(!preview.blocking);
+    }
+
+    // ── Fix #4 ──────────────────────────────────────────────────────────────
+    // tar.gz with a path-traversal entry → extract_archive must return Err.
+    // Both `set_path` and `append_data` validate `..`, so we build the raw
+    // 512-byte tar header block by hand, writing "../escape.txt" directly
+    // into the name field, then append the data block manually.
+    #[test]
+    fn extract_targz_refuses_path_traversal() {
+        use std::io::Write;
+        // Build a minimal POSIX tar manually with a `..` path.
+        // Tar header: 512 bytes. Name at [0..100], mode [100..108],
+        // size [124..136] (octal), typeflag [156], checksum [148..156].
+        let data = b"bad";
+        let mut header = [0u8; 512];
+        // name field
+        header[..13].copy_from_slice(b"../escape.txt");
+        // mode: "0000644\0"
+        header[100..108].copy_from_slice(b"0000644\0");
+        // uid, gid: "0000000\0"
+        header[108..116].copy_from_slice(b"0000000\0");
+        header[116..124].copy_from_slice(b"0000000\0");
+        // size: "00000000003\0" (3 bytes, octal)
+        header[124..136].copy_from_slice(b"00000000003\0");
+        // mtime: "00000000000\0"
+        header[136..148].copy_from_slice(b"00000000000\0");
+        // checksum placeholder (8 spaces for calculation)
+        header[148..156].copy_from_slice(b"        ");
+        // typeflag: '0' = regular file
+        header[156] = b'0';
+        // compute checksum
+        let cksum: u32 = header.iter().map(|&b| b as u32).sum();
+        // write checksum in octal, null-terminated with space per POSIX
+        let ck_str = format!("{:06o}\0 ", cksum);
+        header[148..156].copy_from_slice(ck_str.as_bytes());
+        // data block (padded to 512)
+        let mut data_block = [0u8; 512];
+        data_block[..data.len()].copy_from_slice(data);
+        // two end-of-archive zero blocks
+        let end_blocks = [0u8; 1024];
+        // assemble the raw tar
+        let mut tar_buf = Vec::new();
+        tar_buf.extend_from_slice(&header);
+        tar_buf.extend_from_slice(&data_block);
+        tar_buf.extend_from_slice(&end_blocks);
+        // gzip-wrap it
+        let mut gz = Vec::new();
+        {
+            use flate2::{Compression, write::GzEncoder};
+            let mut e = GzEncoder::new(&mut gz, Compression::default());
+            e.write_all(&tar_buf).unwrap();
+            e.finish().unwrap();
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let result = extract_archive(&gz, ArchiveKind::TarGz, dir.path());
+        assert!(result.is_err(), "path traversal should be rejected");
+    }
+
+    // ── Fix #1 ──────────────────────────────────────────────────────────────
+    // zip whose real uncompressed content exceeds BUNDLE_MAX_TOTAL_UNCOMPRESSED
+    // → extract_archive must return Err (zip-bomb guard on actual bytes).
+    #[test]
+    fn extract_zip_rejects_zip_bomb() {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut zw = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            // 5 entries × 7 MB zeros = 35 MB > BUNDLE_MAX_TOTAL_UNCOMPRESSED (32 MB).
+            // Zeros deflate to ~a few bytes, so the .zip is tiny and the test is fast.
+            let chunk = vec![0u8; 7 * 1024 * 1024];
+            for i in 0..5u32 {
+                zw.start_file(format!("big{i}.bin"), opts).unwrap();
+                zw.write_all(&chunk).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let result = extract_archive(&buf, ArchiveKind::Zip, dir.path());
+        assert!(result.is_err(), "zip bomb should be rejected");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("exceeds"),
+            "error should mention size limit: {msg}"
+        );
     }
 }
