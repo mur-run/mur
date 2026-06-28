@@ -273,6 +273,11 @@ pub struct App {
     pub completion: Option<CompletionState>,
     /// This agent's skills as menu candidates, loaded once at startup.
     pub skills: Vec<Candidate>,
+    /// Replies captured from a `suggest_replies` tool call this turn, revealed
+    /// after the turn finishes (see `reveal_suggestions`).
+    pub pending_suggestions: Vec<String>,
+    /// The single suggestion currently shown as ghost placeholder text, if any.
+    pub suggestion_ghost: Option<String>,
 }
 
 impl App {
@@ -324,6 +329,8 @@ impl App {
             auto_reads: false,
             completion: None,
             skills: Vec::new(),
+            pending_suggestions: Vec::new(),
+            suggestion_ghost: None,
         }
     }
 
@@ -398,6 +405,43 @@ impl App {
         self.session_out += u.output;
         if let Some(c) = super::footer::context_tokens(usage) {
             self.ctx_tokens = c;
+        }
+    }
+
+    /// Reveal suggestions captured this turn: one → ghost placeholder, many →
+    /// completion overlay. No-op unless the composer is empty. Clears
+    /// `pending_suggestions` either way.
+    pub fn reveal_suggestions(&mut self) {
+        let pending = std::mem::take(&mut self.pending_suggestions);
+        let input_empty = self.input_text().is_empty();
+        match super::suggest::plan_reveal(pending, input_empty) {
+            super::suggest::Reveal::None => {}
+            super::suggest::Reveal::Ghost(text) => {
+                self.suggestion_ghost = Some(text.clone());
+                self.input.set_placeholder_text(text);
+            }
+            super::suggest::Reveal::Chooser(items) => {
+                let candidates: Vec<super::complete::Candidate> = items
+                    .into_iter()
+                    .map(|s| super::complete::Candidate {
+                        display: s.clone(),
+                        insert: s,
+                        desc: String::new(),
+                        has_children: false,
+                    })
+                    .collect();
+                self.completion = Some(super::complete::CompletionState {
+                    items: candidates,
+                    selected: 0,
+                });
+            }
+        }
+    }
+
+    /// Clear the ghost placeholder (used when the user starts typing).
+    pub fn clear_suggestion_ghost(&mut self) {
+        if self.suggestion_ghost.take().is_some() {
+            self.input.set_placeholder_text("Type a message…");
         }
     }
 

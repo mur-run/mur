@@ -1025,6 +1025,7 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
                 Ok((reply, task_id)) => app.finish_agent_turn(reply, task_id),
                 Err(cause) => app.fail_turn(&cause),
             }
+            app.reveal_suggestions();
         }
         StreamMsg::Err { error, .. } => {
             if !app.focused {
@@ -1040,8 +1041,13 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
             args,
             ..
         } => {
-            app.saw_step_this_turn = true;
-            app.push_step_started(step_id, name, args);
+            if name == suggest::SUGGEST_REPLIES_NAME {
+                // No step card: stash replies and reveal at turn end.
+                app.pending_suggestions = suggest::parse_suggestions(&args);
+            } else {
+                app.saw_step_this_turn = true;
+                app.push_step_started(step_id, name, args);
+            }
         }
         StreamMsg::StepCompleted {
             step_id,

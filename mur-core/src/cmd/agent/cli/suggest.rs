@@ -4,6 +4,11 @@
 /// Hard cap on suggestions shown (matches the tool schema's maxItems).
 pub const MAX_SUGGESTIONS: usize = 5;
 
+/// The runtime tool name the TUI intercepts (mirrors mur-agent-runtime's
+/// `tools::suggest::SUGGEST_REPLIES`). Kept in sync by spec; both are the
+/// literal string "suggest_replies".
+pub const SUGGEST_REPLIES_NAME: &str = "suggest_replies";
+
 /// Extract non-empty reply strings from the tool-call args, capped. Fail-soft:
 /// any malformed shape yields an empty vec.
 pub fn parse_suggestions(args: &serde_json::Value) -> Vec<String> {
