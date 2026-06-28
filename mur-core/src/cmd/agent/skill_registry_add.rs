@@ -10,9 +10,11 @@ use std::path::Path;
 use anyhow::{Result, bail};
 use semver::Version;
 
+use super::skill_signer_trust::{SignerTrust, classify_signer};
 use super::skill_verify::{HashStatus, SignatureStatus, VerifyOutcome, verify_skill_install};
 use crate::cmd::skill_registry;
 use mur_common::skill::loader::is_valid_skill_name;
+use mur_common::skill::publisher_trust::PublisherKeyring;
 use mur_common::skill::{parse_canonical, scan::scan_skill};
 
 // ─── Consent / view types ──────────────────────────────────────────────────
@@ -44,6 +46,9 @@ pub struct ConsentInfo {
     pub scan_blocking: bool,
     /// Trust level that will be applied on install (always `"sandboxed"`).
     pub trust_level: String,
+    /// Publisher keyring classification of the signer:
+    /// `"trusted"` | `"untrusted"` | `"revoked"` | `"unsigned"` | `"invalid"`.
+    pub signer_trust: String,
     /// Raw YAML body of the resolved skill file (for Hub preview / consent display).
     pub body: String,
 }
@@ -139,12 +144,17 @@ pub fn gate(consent: &ConsentInfo, accept: bool) -> Result<()> {
 /// Resolve a skill from a local registry directory into a `ConsentInfo`
 /// (hash-check + signature-verify + content-scan). Does **not** install.
 ///
+/// `keyring` is the caller's publisher trust keyring; signer trust is folded
+/// into `blocking` (Revoked → unconditional block) and `needs_ack` (Untrusted
+/// → requires `--yes`).
+///
 /// This is the network-free test seam. `resolve_consent` wraps it after
 /// calling `fetch_and_load` to obtain the registry dir.
 pub fn resolve_consent_in(
     registry_dir: &Path,
     skill: &str,
     version: Option<&str>,
+    keyring: &PublisherKeyring,
 ) -> Result<ConsentInfo> {
     // Fix D: reject index-controlled path traversal in skill name.
     if !is_valid_skill_name(skill) {
@@ -184,6 +194,12 @@ pub fn resolve_consent_in(
         parse_canonical(&text).map_err(|e| anyhow::anyhow!("parse skill manifest: {e}"))?;
 
     let outcome: VerifyOutcome = verify_skill_install(&manifest, &text, &entry.content_sha256);
+    let signer = classify_signer(&outcome.signature, keyring);
+    // Fold publisher keyring trust into the gate flags:
+    // - Revoked → unconditional block (proven unsafe signer).
+    // - Untrusted → requires --yes (signature valid but signer not in keyring).
+    let blocking = outcome.is_blocking() || matches!(signer, SignerTrust::Revoked);
+    let needs_ack = outcome.needs_ack() || matches!(signer, SignerTrust::Untrusted);
     let report = scan_skill(&manifest).map_err(|e| anyhow::anyhow!("content scan: {e}"))?;
     let scan_blocking = report.has_blocking_findings();
 
@@ -201,10 +217,11 @@ pub fn resolve_consent_in(
             .collect(),
         // ContentScanReport has no flat `findings` field — use human_summary().
         findings: report.human_summary(),
-        blocking: outcome.is_blocking(),
-        needs_ack: outcome.needs_ack(),
+        blocking,
+        needs_ack,
         scan_blocking,
         trust_level: "sandboxed".to_string(),
+        signer_trust: signer.as_str().to_string(),
         body: text,
     })
 }
@@ -216,7 +233,8 @@ pub fn resolve_consent_in(
 #[allow(dead_code)] // wired by the CLI/Hub units
 pub fn resolve_consent(mur_home: &Path, skill: &str, version: Option<&str>) -> Result<ConsentInfo> {
     let (dir, _idx) = skill_registry::fetch_and_load(mur_home, skill_registry::DEFAULT_REGISTRY)?;
-    resolve_consent_in(&dir, skill, version)
+    let keyring = PublisherKeyring::load_or_seed(mur_home)?;
+    resolve_consent_in(&dir, skill, version, &keyring)
 }
 
 /// Install a registry skill onto a specific agent at `TrustLevel::Sandboxed`.
@@ -237,7 +255,8 @@ pub async fn cmd_skill_registry_add(
     // Keep `dir` in scope so the already-resolved file stays on disk while we
     // pass its path to `cmd_skill_add` — no redundant temp copy needed.
     let (dir, _idx) = skill_registry::fetch_and_load(&mur_home, skill_registry::DEFAULT_REGISTRY)?;
-    let consent = resolve_consent_in(&dir, skill, version)?;
+    let keyring = PublisherKeyring::load_or_seed(&mur_home)?;
+    let consent = resolve_consent_in(&dir, skill, version, &keyring)?;
 
     gate(&consent, accept)?;
 
@@ -276,9 +295,19 @@ pub fn registry_search_for_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mur_common::skill::publisher_trust::PublisherKeyring;
     use std::fs;
 
     // ── fixture helpers ─────────────────────────────────────────────────
+
+    /// Keyring with no trusted or revoked entries (all signers → Unsigned/Untrusted).
+    fn empty_keyring() -> PublisherKeyring {
+        PublisherKeyring {
+            schema_version: 1,
+            publishers: vec![],
+            revoked: vec![],
+        }
+    }
 
     const SKILL_YAML: &str = r#"name: test-skill
 version: 1.0.0
@@ -316,7 +345,7 @@ content:
         let tmp = tempfile::tempdir().unwrap();
         fixture_registry(tmp.path(), "");
 
-        let consent = resolve_consent_in(tmp.path(), "test-skill", None).unwrap();
+        let consent = resolve_consent_in(tmp.path(), "test-skill", None, &empty_keyring()).unwrap();
 
         assert_eq!(consent.name, "test-skill");
         assert_eq!(consent.version, "1.0.0");
@@ -336,7 +365,7 @@ content:
         let sha = sha256_hex(SKILL_YAML);
         fixture_registry(tmp.path(), &sha);
 
-        let consent = resolve_consent_in(tmp.path(), "test-skill", None).unwrap();
+        let consent = resolve_consent_in(tmp.path(), "test-skill", None, &empty_keyring()).unwrap();
 
         assert_eq!(consent.hash, "match");
         assert_eq!(consent.signature.status, "unsigned");
@@ -350,7 +379,7 @@ content:
         let tmp = tempfile::tempdir().unwrap();
         fixture_registry(tmp.path(), "deadbeef0000000000000000bad");
 
-        let consent = resolve_consent_in(tmp.path(), "test-skill", None).unwrap();
+        let consent = resolve_consent_in(tmp.path(), "test-skill", None, &empty_keyring()).unwrap();
 
         assert_eq!(consent.hash, "mismatch");
         assert!(consent.blocking, "mismatch must be blocking");
@@ -362,7 +391,8 @@ content:
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("index.yaml"), "skills: {}\n").unwrap();
 
-        let err = resolve_consent_in(tmp.path(), "nonexistent", None).unwrap_err();
+        let err =
+            resolve_consent_in(tmp.path(), "nonexistent", None, &empty_keyring()).unwrap_err();
         assert!(err.to_string().contains("not found in registry"));
     }
 
@@ -373,7 +403,8 @@ content:
         fixture_registry(tmp.path(), "");
 
         // Request a version that doesn't exist and is not `latest`.
-        let err = resolve_consent_in(tmp.path(), "test-skill", Some("9.9.9")).unwrap_err();
+        let err = resolve_consent_in(tmp.path(), "test-skill", Some("9.9.9"), &empty_keyring())
+            .unwrap_err();
         assert!(
             err.to_string().contains("not in registry"),
             "unexpected error: {err}"
@@ -386,7 +417,8 @@ content:
         fixture_registry(tmp.path(), "");
 
         // Requesting the exact version that exists should succeed.
-        let consent = resolve_consent_in(tmp.path(), "test-skill", Some("1.0.0")).unwrap();
+        let consent =
+            resolve_consent_in(tmp.path(), "test-skill", Some("1.0.0"), &empty_keyring()).unwrap();
         assert_eq!(consent.version, "1.0.0");
     }
 
@@ -395,7 +427,7 @@ content:
         let tmp = tempfile::tempdir().unwrap();
         fixture_registry(tmp.path(), "");
 
-        let consent = resolve_consent_in(tmp.path(), "test-skill", None).unwrap();
+        let consent = resolve_consent_in(tmp.path(), "test-skill", None, &empty_keyring()).unwrap();
         assert!(
             consent.findings.is_empty(),
             "clean skill should have no findings"
@@ -424,7 +456,7 @@ mcp_requirements:
         fs::create_dir_all(&versions_dir).unwrap();
         fs::write(versions_dir.join("1.0.0.yaml"), skill_with_mcp).unwrap();
 
-        let consent = resolve_consent_in(tmp.path(), "mcp-skill", None).unwrap();
+        let consent = resolve_consent_in(tmp.path(), "mcp-skill", None, &empty_keyring()).unwrap();
         assert_eq!(consent.mcp_requirements.len(), 1);
         assert!(consent.mcp_requirements[0].contains("browser.*"));
         assert!(consent.mcp_requirements[0].contains("network_http"));
@@ -436,7 +468,7 @@ mcp_requirements:
         let tmp = tempfile::tempdir().unwrap();
         fixture_registry(tmp.path(), "");
 
-        let err = resolve_consent_in(tmp.path(), "../evil", None).unwrap_err();
+        let err = resolve_consent_in(tmp.path(), "../evil", None, &empty_keyring()).unwrap_err();
         assert!(
             err.to_string().contains("invalid skill name"),
             "unexpected: {err}"
@@ -448,7 +480,8 @@ mcp_requirements:
         let tmp = tempfile::tempdir().unwrap();
         fixture_registry(tmp.path(), "");
 
-        let err = resolve_consent_in(tmp.path(), "test-skill", Some("../evil")).unwrap_err();
+        let err = resolve_consent_in(tmp.path(), "test-skill", Some("../evil"), &empty_keyring())
+            .unwrap_err();
         assert!(
             err.to_string().contains("invalid version"),
             "unexpected: {err}"
@@ -474,6 +507,7 @@ mcp_requirements:
             needs_ack: false,
             scan_blocking: false,
             trust_level: "sandboxed".into(),
+            signer_trust: "trusted".into(),
             body: "".into(),
         }
     }

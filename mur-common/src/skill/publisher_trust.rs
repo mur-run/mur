@@ -42,8 +42,6 @@ pub struct PublisherKeyring {
 
 impl PublisherKeyring {
     /// Canonical on-disk path for the keyring.
-    // Used by later units (install / verify paths); suppress until wired.
-    #[allow(dead_code)]
     pub fn path(mur_home: &Path) -> PathBuf {
         mur_home.join("trust").join("publishers.yaml")
     }
@@ -52,8 +50,6 @@ impl PublisherKeyring {
     ///
     /// **Revoked always takes precedence over Trusted (fail-closed):** a key that
     /// appears in both `publishers` and `revoked` is classified `Revoked`.
-    // Used by later units (verify step); suppress until wired.
-    #[allow(dead_code)]
     pub fn classify(&self, key_fp: &str) -> PublisherTrust {
         if self.revoked.iter().any(|r| r == key_fp) {
             return PublisherTrust::Revoked;
@@ -78,8 +74,6 @@ impl PublisherKeyring {
     }
 
     /// Load the keyring from disk; if absent, seed with the pinned official key and persist.
-    // Used by later units (install / verify paths); suppress until wired.
-    #[allow(dead_code)]
     pub fn load_or_seed(mur_home: &Path) -> anyhow::Result<Self> {
         let p = Self::path(mur_home);
         if p.exists() {
@@ -95,8 +89,6 @@ impl PublisherKeyring {
     }
 
     /// Persist the keyring to disk using temp-file + rename for atomicity.
-    // Used by later units (TOFU write-back); suppress until wired.
-    #[allow(dead_code)]
     pub fn save(&self, mur_home: &Path) -> anyhow::Result<()> {
         let p = Self::path(mur_home);
         if let Some(parent) = p.parent() {
