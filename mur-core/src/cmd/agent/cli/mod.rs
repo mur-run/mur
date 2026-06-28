@@ -8,6 +8,7 @@
 
 mod access;
 mod app;
+mod bash_class;
 mod diff;
 mod dump;
 mod footer;
@@ -97,11 +98,17 @@ pub async fn cmd_cli(
     skin: Option<String>,
     plain: bool,
     budget_usd: Option<f64>,
+    auto_reads: bool,
 ) -> Result<()> {
     if names.len() > 1 {
         if budget_usd.is_some() {
             eprintln!(
                 "note: --budget-usd is only enforced in the single-agent TUI; it is ignored when opening multiple agents."
+            );
+        }
+        if auto_reads {
+            eprintln!(
+                "note: --auto-reads is only enforced in the single-agent TUI; it is ignored when opening multiple agents."
             );
         }
         let names = names.to_vec();
@@ -134,6 +141,11 @@ pub async fn cmd_cli(
                 "note: --budget-usd is only enforced in the interactive TUI; it is ignored in plain/piped mode."
             );
         }
+        if auto_reads {
+            eprintln!(
+                "note: --auto-reads is only enforced in the interactive TUI; it is ignored in plain/piped mode."
+            );
+        }
         let home2 = home.clone();
         let agent2 = agent.clone();
         let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
@@ -141,7 +153,7 @@ pub async fn cmd_cli(
             .await?;
     }
 
-    run_tui(home, agent, resume, auto, skin, budget_usd).await
+    run_tui(home, agent, resume, auto, skin, budget_usd, auto_reads).await
 }
 
 // ── TUI mode ────────────────────────────────────────────────────────────────
@@ -185,6 +197,7 @@ async fn run_tui(
     auto: bool,
     skin: Option<String>,
     budget_usd: Option<f64>,
+    auto_reads: bool,
 ) -> Result<()> {
     // Resolve skin: CLI flag > config > "dark"
     let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
@@ -230,6 +243,10 @@ async fn run_tui(
         app.push_system(format!(
             "session budget ${b:.2} — new turns stop once estimated spend reaches it"
         ));
+    }
+    app.auto_reads = auto_reads;
+    if auto_reads {
+        app.push_system("auto-reads is ON — read-only bash commands (cat/ls/grep/git status/…) are auto-approved; writes and ambiguous commands still prompt");
     }
     let result = event_loop(&mut terminal, &mut app).await;
 
@@ -912,12 +929,24 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
             }
             // Session auto-approval: `/auto`/`--auto` covers every tool; the
             // modal's [a] key covers a single tool name.
-            let auto = app.auto_approve || app.session_tool_allow.contains(&req.tool_name);
+            // Read lane: `--auto-reads` auto-approves read-only bash commands.
+            let read_auto = app.auto_reads
+                && req.tool_name == "bash"
+                && req
+                    .tool_input
+                    .get("command")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(bash_class::is_readonly_bash);
+            let auto =
+                app.auto_approve || app.session_tool_allow.contains(&req.tool_name) || read_auto;
             if !app.focused && !auto {
                 notify_unfocused(
                     &app.agent,
                     &format!("Tool approval needed: {}", req.tool_name),
                 );
+            }
+            if read_auto && let Some(ref sid) = req.step_id {
+                app.mark_card_auto_approved(sid);
             }
             app.hitl = Some(req);
             if auto {

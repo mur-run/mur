@@ -28,12 +28,23 @@ pub fn card_lines(card: &StepCard, theme: &'static Theme) -> Vec<Line<'static>> 
         .map(|ms| format!(" · {ms}ms"))
         .unwrap_or_default();
     let header = format!("{} {} {}", card.glyph(), card.name, arg_hint(card));
+    let auto_tag = if card.auto_approved {
+        Span::styled(
+            " [read · auto]",
+            Style::default()
+                .fg(theme.system)
+                .add_modifier(Modifier::DIM),
+        )
+    } else {
+        Span::raw("")
+    };
     out.push(Line::from(vec![
         Span::styled(
             header,
             Style::default().fg(accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled(dur, Style::default().fg(theme.system)),
+        auto_tag,
     ]));
 
     // ── Args: diff for edit tools, else bounded JSON ─────────────────────────

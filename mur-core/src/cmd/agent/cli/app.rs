@@ -278,6 +278,10 @@ pub struct App {
     /// Optional per-session cost ceiling in USD (`--budget-usd`). `None` = no
     /// limit. Task 2 gates new turns when `session_cost() >= budget_usd`.
     pub budget_usd: Option<f64>,
+    /// Auto-approve read-only bash commands for this session (`--auto-reads`).
+    /// Opt-in, off by default. The classifier is conservative (fail-safe false
+    /// on anything uncertain). Every auto-approval is tagged on the step card.
+    pub auto_reads: bool,
 }
 
 impl App {
@@ -326,6 +330,7 @@ impl App {
             saw_hitl_this_turn: false,
             step_hint_shown: false,
             budget_usd: None,
+            auto_reads: false,
         }
     }
 
@@ -575,6 +580,19 @@ impl App {
             .find_map(|m| m.step.as_mut().filter(|c| c.id == step_id))
         {
             card.awaiting_hitl = true;
+        }
+    }
+
+    /// Mark the card with this `step_id` as auto-approved by the read lane
+    /// (`--auto-reads`). Call BEFORE moving `req` into `app.hitl`.
+    pub fn mark_card_auto_approved(&mut self, step_id: &str) {
+        if let Some(card) = self
+            .messages
+            .iter_mut()
+            .rev()
+            .find_map(|m| m.step.as_mut().filter(|c| c.id == step_id))
+        {
+            card.auto_approved = true;
         }
     }
 

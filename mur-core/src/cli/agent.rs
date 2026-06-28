@@ -109,6 +109,11 @@ pub enum AgentAction {
         /// reaches ceiling. Omit for no limit.
         #[arg(long = "budget-usd")]
         budget_usd: Option<f64>,
+        /// Auto-approve read-only bash commands (cat/ls/grep/git status/…).
+        /// Writes and ambiguous commands still prompt. Opt-in; classifier is
+        /// conservative (fail-safe: anything uncertain still asks).
+        #[arg(long = "auto-reads")]
+        auto_reads: bool,
     },
     /// Rotate an agent's Ed25519 identity keypair (P0a.6).
     Rekey {
@@ -941,6 +946,7 @@ mod tests {
             skin: _,
             plain: _,
             budget_usd: _,
+            auto_reads: _,
         } = parse_cli_action(&["mur", "agent", "cli", "a1", "a2", "a3", "--auto"])
         else {
             panic!("expected Cli variant");
