@@ -9,6 +9,7 @@
 mod access;
 mod app;
 mod bash_class;
+mod complete;
 mod diff;
 mod dump;
 mod footer;
@@ -228,6 +229,7 @@ async fn run_tui(
         Terminal::new(CrosstermBackend::new(io::stdout())).context("init terminal")?;
 
     let mut app = build_app(&home, &agent, resume, active_theme)?;
+    app.skills = complete::load_agent_skills(&agent);
     app.pricing = load_pricing(&home, &agent);
     if unknown_skin {
         app.push_system(format!(
@@ -364,6 +366,38 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                 app.esc_hint = false;
             }
             let alt = key.modifiers.contains(KeyModifiers::ALT);
+            // While the completion menu is open it owns navigation / accept /
+            // dismiss keys; everything else falls through to normal editing and
+            // re-filters the menu at the end of this handler.
+            if app.completion.is_some() {
+                match key.code {
+                    KeyCode::Up => {
+                        completion_move(app, -1);
+                        return;
+                    }
+                    KeyCode::Down => {
+                        completion_move(app, 1);
+                        return;
+                    }
+                    KeyCode::Char('p') if ctrl => {
+                        completion_move(app, -1);
+                        return;
+                    }
+                    KeyCode::Char('n') if ctrl => {
+                        completion_move(app, 1);
+                        return;
+                    }
+                    KeyCode::Tab | KeyCode::Enter => {
+                        completion_accept(app);
+                        return;
+                    }
+                    KeyCode::Esc => {
+                        app.completion = None;
+                        return;
+                    }
+                    _ => {}
+                }
+            }
             match key.code {
                 KeyCode::Char('d') if ctrl => request_quit(app, tx),
                 KeyCode::Char('c') if ctrl => handle_ctrl_c(app, tx),
@@ -385,7 +419,7 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                 KeyCode::PageDown => {
                     app.scroll_back = app.scroll_back.saturating_sub(app.scroll_page.max(1))
                 }
-                KeyCode::Tab => complete_slash(app),
+                KeyCode::Tab => refresh_completion(app),
                 KeyCode::Enter if alt => {
                     app.input.insert_newline();
                 }
@@ -422,6 +456,7 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                     app.input.input(key);
                 }
             }
+            refresh_completion(app);
         }
         Event::Paste(text) => {
             // How Cmd+V image paste works: the terminal eats Cmd+V and pastes
@@ -438,6 +473,7 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
             } else {
                 app.input.insert_str(text);
             }
+            refresh_completion(app);
         }
         Event::Mouse(mouse_ev) => match mouse_ev.kind {
             MouseEventKind::ScrollUp => {
@@ -572,19 +608,42 @@ fn clipboard_png() -> Option<String> {
     None
 }
 
-/// Tab completes a leading-slash command to the first matching name.
-fn complete_slash(app: &mut App) {
-    let cur = app.input_text();
-    let trimmed = cur.trim();
-    if !trimmed.starts_with('/') {
+/// Recompute the completion menu from the current input. Called after every
+/// edit and when Tab is pressed with the menu closed.
+fn refresh_completion(app: &mut App) {
+    app.completion = complete::compute(&app.input_text(), &app.skills);
+}
+
+/// Move the highlighted row by `delta`, wrapping.
+fn completion_move(app: &mut App, delta: isize) {
+    if let Some(c) = &mut app.completion {
+        let n = c.items.len() as isize;
+        if n == 0 {
+            return;
+        }
+        c.selected = (c.selected as isize + delta).rem_euclid(n) as usize;
+    }
+}
+
+/// Accept the highlighted candidate: replace the input line with its insert
+/// text. A command with a subcommand layer keeps the menu open (now showing
+/// layer 2); everything else closes it.
+fn completion_accept(app: &mut App) {
+    let Some(c) = app.completion.as_ref() else {
         return;
-    }
-    if let Some(m) = app::SLASH_COMMANDS
-        .iter()
-        .find(|c| c.starts_with(trimmed) && **c != trimmed)
-    {
-        app.set_input(m);
-    }
+    };
+    let Some(cand) = c.items.get(c.selected) else {
+        app.completion = None;
+        return;
+    };
+    let insert = cand.insert.clone();
+    let descend = cand.has_children;
+    app.set_input(&insert);
+    app.completion = if descend {
+        complete::compute(&app.input_text(), &app.skills)
+    } else {
+        None
+    };
 }
 
 /// Cancel the in-flight turn (if any) on a separate connection and mark the
