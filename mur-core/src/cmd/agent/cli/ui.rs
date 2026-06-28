@@ -87,7 +87,7 @@ fn render_completion(f: &mut Frame, app: &App, input_area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border))
-        .title(" completions ")
+        .title(" ↑↓ move · Tab accept · Esc close ")
         .title_style(Style::default().fg(theme.border_title));
 
     let mut list_state = ListState::default();
