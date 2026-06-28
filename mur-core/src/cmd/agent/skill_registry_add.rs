@@ -10,7 +10,7 @@ use std::path::Path;
 use anyhow::{Result, bail};
 use semver::Version;
 
-use super::skill_signer_trust::{SignerTrust, classify_signer};
+use super::skill_signer_trust::{DriftDecision, SignerTrust, check_drift, classify_signer};
 use super::skill_verify::{HashStatus, SignatureStatus, VerifyOutcome, verify_skill_install};
 use crate::cmd::skill_registry;
 use mur_common::skill::loader::is_valid_skill_name;
@@ -51,6 +51,8 @@ pub struct ConsentInfo {
     pub signer_trust: String,
     /// Raw YAML body of the resolved skill file (for Hub preview / consent display).
     pub body: String,
+    /// SHA-256 hex of the resolved skill YAML file (pinned at install; used for rug-pull detection).
+    pub resolved_sha256: String,
 }
 
 /// Serialisable view of `SignatureStatus`.
@@ -193,6 +195,12 @@ pub fn resolve_consent_in(
     let manifest =
         parse_canonical(&text).map_err(|e| anyhow::anyhow!("parse skill manifest: {e}"))?;
 
+    // Compute the actual sha256 of the resolved file for drift-pinning.
+    let resolved_sha256 = {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(text.as_bytes()))
+    };
+
     let outcome: VerifyOutcome = verify_skill_install(&manifest, &text, &entry.content_sha256);
     let signer = classify_signer(&outcome.signature, keyring);
     // Fold publisher keyring trust into the gate flags:
@@ -223,6 +231,7 @@ pub fn resolve_consent_in(
         trust_level: "sandboxed".to_string(),
         signer_trust: signer.as_str().to_string(),
         body: text,
+        resolved_sha256,
     })
 }
 
@@ -258,14 +267,87 @@ pub async fn cmd_skill_registry_add(
     let keyring = PublisherKeyring::load_or_seed(&mur_home)?;
     let consent = resolve_consent_in(&dir, skill, version, &keyring)?;
 
+    // ── Rug-pull / rollback: compare against any prior install record ────────
+    let trust_store =
+        mur_common::trust::skills::SkillTrustStore::load(&mur_home).unwrap_or_default();
+    let prior = trust_store
+        .entries
+        .values()
+        .find(|e| e.name == consent.name);
+    let prior_tuple = prior.map(|e| {
+        (
+            e.content_sha256.as_str(),
+            e.signer_key_fp.as_deref(),
+            e.version.as_str(),
+        )
+    });
+    let new_signer_fp = if consent.signature.status == "verified" {
+        Some(consent.signature.key_fp.as_str())
+    } else {
+        None
+    };
+    match check_drift(
+        prior_tuple,
+        &consent.resolved_sha256,
+        new_signer_fp,
+        &consent.version,
+    ) {
+        DriftDecision::None => {}
+        DriftDecision::Changed { what } => {
+            if !accept {
+                anyhow::bail!(
+                    "skill '{}' has changed {} since last install; pass --yes to accept the update.",
+                    consent.name,
+                    what
+                );
+            }
+        }
+        DriftDecision::Rollback { installed, offered } => {
+            if !accept {
+                anyhow::bail!(
+                    "skill '{}' downgrade refused (installed={installed}, offered={offered}); pass --yes to force.",
+                    consent.name
+                );
+            }
+        }
+    }
+
     gate(&consent, accept)?;
 
     let path = skill_registry::skill_yaml_path(&dir, skill, &consent.version);
     super::skill::cmd_skill_add(agent, &path.to_string_lossy())?;
 
-    // Registry skills load at the loader's default TrustLevel::Sandboxed (no
-    // explicit pin). A hash-keyed Sandboxed pin (+ rug-pull drift detection) is
-    // a P2.1 follow-on.
+    // Pin content hash + signer key in the trust store for future drift detection.
+    {
+        use mur_common::skill::TrustLevel;
+        use mur_common::trust::skills::{SkillTrustStore, TrustEntry};
+        let mut ts = SkillTrustStore::load(&mur_home).unwrap_or_default();
+        // Key the entry by the skill name so we can find it by name on the next
+        // install (the hash-keyed lookup is for load-time allow-listing; the
+        // name-keyed find is for drift detection).
+        ts.entries.insert(
+            consent.name.clone(),
+            TrustEntry {
+                name: consent.name.clone(),
+                version: consent.version.clone(),
+                level: TrustLevel::Sandboxed,
+                installed_at: chrono::Utc::now().to_rfc3339(),
+                publisher: if consent.publisher.is_empty() {
+                    None
+                } else {
+                    Some(consent.publisher.clone())
+                },
+                content_sha256: consent.resolved_sha256.clone(),
+                signer_key_fp: if consent.signature.key_fp.is_empty() {
+                    None
+                } else {
+                    Some(consent.signature.key_fp.clone())
+                },
+            },
+        );
+        ts.save(&mur_home)
+            .map_err(|e| anyhow::anyhow!("save trust store: {e}"))?;
+    }
 
     Ok(format!("skills/{}", consent.name))
 }
@@ -509,6 +591,7 @@ mcp_requirements:
             trust_level: "sandboxed".into(),
             signer_trust: "trusted".into(),
             body: "".into(),
+            resolved_sha256: "aabbcc".into(),
         }
     }
 
