@@ -24,6 +24,7 @@ import { ModelLibrary } from "./ModelLibrary";
 import { MobileTab } from "./MobileTab";
 import { MemoryTab } from "./MemoryTab";
 import { McpDiscoverModal } from "./McpDiscoverModal";
+import { SkillAddUrlModal } from "./SkillAddUrlModal";
 import { useT } from "../i18n";
 import type { TranslationKey } from "../i18n/types";
 import { CATEGORY_COLORS, TAB_ICONS, avatarInitials, avatarPreset, familyOf, runtimePill } from "../utils";
@@ -790,6 +791,7 @@ function SkillsTab({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [installedId, setInstalledId] = useState<string | null>(null);
+  const [showSkillUrl, setShowSkillUrl] = useState(false);
 
   const hasInstalled = detail.installed_skills.length > 0;
   const hasLegacy = detail.skills.length > 0;
@@ -866,14 +868,22 @@ function SkillsTab({
 
   return (
     <div className="tab-form">
-      <button
-        className="btn btn--sm btn--primary"
-        onClick={installSkill}
-        disabled={busy}
-        style={{ alignSelf: "flex-start" }}
-      >
-        {t("detail.installSkill")}
-      </button>
+      <div style={{ display: "flex", gap: 8, alignSelf: "flex-start" }}>
+        <button
+          className="btn btn--sm btn--primary"
+          onClick={installSkill}
+          disabled={busy}
+        >
+          {t("detail.installSkill")}
+        </button>
+        <button
+          className="btn btn--sm btn--secondary"
+          onClick={() => setShowSkillUrl(true)}
+          disabled={busy}
+        >
+          {t("detail.installSkillUrl")}
+        </button>
+      </div>
       <p className="field-muted" style={{ fontSize: 12 }}>
         {t("detail.skillInstallFormatHint")}
       </p>
@@ -883,6 +893,13 @@ function SkillsTab({
         </p>
       )}
       {error && <p className="save-error">{error}</p>}
+      {showSkillUrl && (
+        <SkillAddUrlModal
+          agentName={detail.agent_name}
+          onClose={() => setShowSkillUrl(false)}
+          onSaved={onSaved}
+        />
+      )}
 
       {!hasInstalled && !hasLegacy && (
         <div className="tab-empty">
