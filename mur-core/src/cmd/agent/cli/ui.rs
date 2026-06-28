@@ -75,14 +75,17 @@ fn render_completion(f: &mut Frame, app: &App, input_area: Rect) {
     let visible = rows.len().min(complete::MAX_MENU_ROWS) as u16;
     let popup_height = visible + 2; // +2 for borders
 
-    // Anchor above the input box; clamp to the top of the terminal.
+    // Anchor above the input box, then clamp to the frame so a popup taller
+    // than the space above the input (short / stacked-pane terminals) can never
+    // render out of bounds — ratatui panics on an out-of-buffer index.
     let y = input_area.y.saturating_sub(popup_height);
     let popup_area = Rect {
         x: input_area.x,
         y,
         width: input_area.width,
         height: popup_height,
-    };
+    }
+    .intersection(f.area());
 
     let block = Block::default()
         .borders(Borders::ALL)
