@@ -703,6 +703,19 @@ pub enum AgentSkillAction {
     /// files + stats are kept; it simply stops injecting. Applies on the
     /// agent's next restart.
     Disable { name: String, skill_id: String },
+    /// Fetch a skill from a remote URL, security-scan it, and install it onto
+    /// the agent. The URL must use `https` (or `http` on localhost for dev).
+    /// If the scan finds blocking issues, the install is refused unless `--yes`
+    /// is passed. Changes take effect on the agent's next restart.
+    AddUrl {
+        /// Agent name
+        name: String,
+        /// Remote skill URL (`https://…/skill.yaml` or `…/skill.md`)
+        url: String,
+        /// Accept and install despite blocking security-scan findings
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
