@@ -276,6 +276,126 @@ fn rich_messages_to_anthropic(
     (system, convo, None)
 }
 
+/// Accumulator for an Anthropic SSE response while it streams.
+struct StreamAccum {
+    text: String,
+    input_tokens: u64,
+    output_tokens: u64,
+    tool_calls: Vec<crate::llm::ToolCallResult>,
+    stop_reason: StopReason,
+    /// The in-progress tool_use block: (id, name, partial-JSON args buffer).
+    cur_tool: Option<(String, String, String)>,
+}
+
+impl Default for StreamAccum {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            input_tokens: 0,
+            output_tokens: 0,
+            tool_calls: Vec::new(),
+            stop_reason: StopReason::EndTurn,
+            cur_tool: None,
+        }
+    }
+}
+
+/// Apply one parsed SSE `data:` event to `acc`. Returns a `StreamDelta` to
+/// forward to the sink iff this event carried answer text or reasoning.
+/// Mirrors the non-stream `parse_response_body` for tool_use + stop_reason.
+fn apply_sse_event(acc: &mut StreamAccum, v: &serde_json::Value) -> Option<super::StreamDelta> {
+    use super::{StopReason, StreamDelta, ToolCallResult};
+    match v["type"].as_str() {
+        Some("content_block_start") => {
+            let cb = &v["content_block"];
+            if cb["type"].as_str() == Some("tool_use") {
+                acc.cur_tool = Some((
+                    cb["id"].as_str().unwrap_or("").to_string(),
+                    cb["name"].as_str().unwrap_or("").to_string(),
+                    String::new(),
+                ));
+            } else {
+                acc.cur_tool = None;
+            }
+            None
+        }
+        Some("content_block_delta") => {
+            let d = &v["delta"];
+            match d["type"].as_str() {
+                Some("text_delta") => {
+                    let t = d["text"].as_str().unwrap_or("");
+                    if t.is_empty() {
+                        return None;
+                    }
+                    acc.text.push_str(t);
+                    Some(StreamDelta {
+                        text: t.to_string(),
+                        thinking: false,
+                    })
+                }
+                Some("thinking_delta") => {
+                    let t = d["thinking"].as_str().unwrap_or("");
+                    if t.is_empty() {
+                        return None;
+                    }
+                    Some(StreamDelta {
+                        text: t.to_string(),
+                        thinking: true,
+                    })
+                }
+                Some("input_json_delta") => {
+                    match (acc.cur_tool.as_mut(), d["partial_json"].as_str()) {
+                        (Some((_, _, buf)), Some(pj)) => buf.push_str(pj),
+                        (None, Some(_)) => {
+                            tracing::warn!(
+                                "anthropic stream: input_json_delta with no open tool_use block — dropping args fragment"
+                            );
+                        }
+                        _ => {}
+                    }
+                    None
+                }
+                _ => None,
+            }
+        }
+        Some("content_block_stop") => {
+            if let Some((id, name, buf)) = acc.cur_tool.take() {
+                let input = if buf.trim().is_empty() {
+                    serde_json::json!({})
+                } else {
+                    serde_json::from_str(&buf).unwrap_or_else(|_| serde_json::json!({}))
+                };
+                acc.tool_calls.push(ToolCallResult {
+                    call_id: id,
+                    tool_name: name,
+                    input,
+                });
+            }
+            None
+        }
+        Some("message_start") => {
+            acc.input_tokens = v["message"]["usage"]["input_tokens"]
+                .as_u64()
+                .unwrap_or(acc.input_tokens);
+            None
+        }
+        Some("message_delta") => {
+            if let Some(sr) = v["delta"]["stop_reason"].as_str() {
+                acc.stop_reason = match sr {
+                    "tool_use" => StopReason::ToolUse,
+                    "max_tokens" => StopReason::MaxTokens,
+                    _ => StopReason::EndTurn,
+                };
+            }
+            acc.output_tokens = v["usage"]["output_tokens"]
+                .as_u64()
+                .unwrap_or(acc.output_tokens);
+            None
+        }
+        _ => None,
+    }
+}
+
 fn parse_response_body(
     v: &serde_json::Value,
 ) -> Result<
@@ -474,11 +594,11 @@ impl LlmClient for AnthropicClient {
 
         // Anthropic streams SSE: `event: <type>` + `data: {json}`. Each data
         // line carries a `type` (content_block_delta / message_start / …); we
-        // parse those and forward `text_delta` (answer) + `thinking_delta`.
+        // parse those via `apply_sse_event` which accumulates text, tool_use
+        // blocks, token counts, and stop_reason, and returns `StreamDelta`
+        // chunks to forward to the sink.
         let mut buf: Vec<u8> = Vec::new();
-        let mut text = String::new();
-        let mut input_tokens = 0u64;
-        let mut output_tokens = 0u64;
+        let mut acc = StreamAccum::default();
         while let Some(chunk) = resp.chunk().await.map_err(|e| {
             if e.is_timeout() {
                 LlmError::Timeout
@@ -500,62 +620,23 @@ impl LlmClient for AnthropicClient {
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else {
                     continue;
                 };
-                match v["type"].as_str() {
-                    Some("content_block_delta") => {
-                        let d = &v["delta"];
-                        match d["type"].as_str() {
-                            Some("text_delta") => {
-                                if let Some(t) = d["text"].as_str()
-                                    && !t.is_empty()
-                                {
-                                    text.push_str(t);
-                                    let _ = sink
-                                        .send(super::StreamDelta {
-                                            text: t.to_string(),
-                                            thinking: false,
-                                        })
-                                        .await;
-                                }
-                            }
-                            Some("thinking_delta") => {
-                                if let Some(t) = d["thinking"].as_str()
-                                    && !t.is_empty()
-                                {
-                                    let _ = sink
-                                        .send(super::StreamDelta {
-                                            text: t.to_string(),
-                                            thinking: true,
-                                        })
-                                        .await;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    Some("message_start") => {
-                        input_tokens = v["message"]["usage"]["input_tokens"]
-                            .as_u64()
-                            .unwrap_or(input_tokens);
-                    }
-                    Some("message_delta") => {
-                        output_tokens = v["usage"]["output_tokens"]
-                            .as_u64()
-                            .unwrap_or(output_tokens);
-                    }
-                    _ => {}
+                if let Some(delta) = apply_sse_event(&mut acc, &v) {
+                    let _ = sink.send(delta).await;
                 }
             }
         }
-        if text.is_empty() {
+        // A tool-only response legitimately has empty text — only error when
+        // BOTH answer text and tool calls are empty.
+        if acc.text.is_empty() && acc.tool_calls.is_empty() {
             return Err(LlmError::InvalidResponse("empty streamed response".into()));
         }
         Ok(LlmResponse {
-            text,
-            input_tokens,
-            output_tokens,
+            text: acc.text,
+            input_tokens: acc.input_tokens,
+            output_tokens: acc.output_tokens,
             model: self.model.clone(),
-            tool_calls: vec![],
-            stop_reason: StopReason::EndTurn,
+            tool_calls: acc.tool_calls,
+            stop_reason: acc.stop_reason,
         })
     }
 }
@@ -711,5 +792,141 @@ mod tests {
         assert_eq!(tool_calls[0].call_id, "call_1");
         assert_eq!(tool_calls[0].tool_name, "bash");
         assert_eq!(stop_reason, crate::llm::StopReason::ToolUse);
+    }
+
+    #[test]
+    fn apply_sse_event_streams_text_and_reasoning() {
+        let mut acc = StreamAccum::default();
+        let d = apply_sse_event(
+            &mut acc,
+            &json!({
+                "type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}
+            }),
+        );
+        assert_eq!(
+            d.as_ref().map(|x| (x.text.as_str(), x.thinking)),
+            Some(("hello", false))
+        );
+        assert_eq!(acc.text, "hello");
+
+        let d = apply_sse_event(
+            &mut acc,
+            &json!({
+                "type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"hmm"}
+            }),
+        );
+        assert_eq!(
+            d.as_ref().map(|x| (x.text.as_str(), x.thinking)),
+            Some(("hmm", true))
+        );
+        // reasoning streamed but NOT accumulated into answer text
+        assert_eq!(acc.text, "hello");
+    }
+
+    #[test]
+    fn apply_sse_event_reconstructs_tool_use_and_stop_reason() {
+        let mut acc = StreamAccum::default();
+        apply_sse_event(
+            &mut acc,
+            &json!({
+                "type":"content_block_start","index":0,
+                "content_block":{"type":"tool_use","id":"call_1","name":"bash","input":{}}
+            }),
+        );
+        apply_sse_event(
+            &mut acc,
+            &json!({
+                "type":"content_block_delta","index":0,
+                "delta":{"type":"input_json_delta","partial_json":"{\"command\":"}
+            }),
+        );
+        apply_sse_event(
+            &mut acc,
+            &json!({
+                "type":"content_block_delta","index":0,
+                "delta":{"type":"input_json_delta","partial_json":"\"echo hi\"}"}
+            }),
+        );
+        apply_sse_event(&mut acc, &json!({"type":"content_block_stop","index":0}));
+        apply_sse_event(
+            &mut acc,
+            &json!({
+                "type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":7}
+            }),
+        );
+
+        assert_eq!(acc.tool_calls.len(), 1);
+        assert_eq!(acc.tool_calls[0].call_id, "call_1");
+        assert_eq!(acc.tool_calls[0].tool_name, "bash");
+        assert_eq!(acc.tool_calls[0].input, json!({"command":"echo hi"}));
+        assert_eq!(acc.stop_reason, crate::llm::StopReason::ToolUse);
+        assert_eq!(acc.output_tokens, 7);
+    }
+
+    #[test]
+    fn apply_sse_event_no_arg_tool_defaults_to_empty_object() {
+        let mut acc = StreamAccum::default();
+        apply_sse_event(
+            &mut acc,
+            &json!({
+                "type":"content_block_start",
+                "content_block":{"type":"tool_use","id":"c","name":"now","input":{}}
+            }),
+        );
+        // No input_json_delta events — tool has no args
+        apply_sse_event(&mut acc, &json!({"type":"content_block_stop","index":0}));
+
+        assert_eq!(acc.tool_calls.len(), 1);
+        assert_eq!(acc.tool_calls[0].input, json!({}));
+    }
+
+    #[test]
+    fn apply_sse_event_two_sequential_tool_blocks() {
+        let mut acc = StreamAccum::default();
+        // block 0: tool A
+        apply_sse_event(
+            &mut acc,
+            &serde_json::json!({
+                "type":"content_block_start","index":0,
+                "content_block":{"type":"tool_use","id":"a","name":"read","input":{}}
+            }),
+        );
+        apply_sse_event(
+            &mut acc,
+            &serde_json::json!({
+                "type":"content_block_delta","index":0,
+                "delta":{"type":"input_json_delta","partial_json":"{\"path\":\"x\"}"}
+            }),
+        );
+        apply_sse_event(
+            &mut acc,
+            &serde_json::json!({"type":"content_block_stop","index":0}),
+        );
+        // block 1: tool B
+        apply_sse_event(
+            &mut acc,
+            &serde_json::json!({
+                "type":"content_block_start","index":1,
+                "content_block":{"type":"tool_use","id":"b","name":"bash","input":{}}
+            }),
+        );
+        apply_sse_event(
+            &mut acc,
+            &serde_json::json!({
+                "type":"content_block_delta","index":1,
+                "delta":{"type":"input_json_delta","partial_json":"{\"command\":\"ls\"}"}
+            }),
+        );
+        apply_sse_event(
+            &mut acc,
+            &serde_json::json!({"type":"content_block_stop","index":1}),
+        );
+
+        assert_eq!(acc.tool_calls.len(), 2);
+        assert_eq!(acc.tool_calls[0].call_id, "a");
+        assert_eq!(acc.tool_calls[0].tool_name, "read");
+        assert_eq!(acc.tool_calls[0].input, serde_json::json!({"path":"x"}));
+        assert_eq!(acc.tool_calls[1].call_id, "b");
+        assert_eq!(acc.tool_calls[1].input, serde_json::json!({"command":"ls"}));
     }
 }
