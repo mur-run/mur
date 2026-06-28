@@ -129,6 +129,11 @@ pub struct TaskRunner {
     /// `run_sync_inner` can snapshot-delta both counters and report a turn's
     /// real input+output token usage in `Task.usage` (fleet cost accounting).
     cumulative_output_tokens: AtomicU64,
+    /// Input-token count of the most recent single LLM call. Approximates the
+    /// current context window fill, unlike the cumulative total. Read by the
+    /// `token_usage` closure to populate `context_tokens` in per-turn usage JSON
+    /// so the CLI glass-box bar can show a live context gauge.
+    last_input_tokens: AtomicU64,
     hook_chain: Option<Arc<HookChain>>,
     hook_ctx: Option<HookCtx>,
     hook_cancel: Option<CancellationToken>,
@@ -239,6 +244,7 @@ impl TaskRunner {
             turn_counter: AtomicU64::new(0),
             cumulative_input_tokens: AtomicU64::new(0),
             cumulative_output_tokens: AtomicU64::new(0),
+            last_input_tokens: AtomicU64::new(0),
             hook_chain: None,
             hook_ctx: None,
             hook_cancel: None,
@@ -713,7 +719,11 @@ impl TaskRunner {
                 .cumulative_output_tokens
                 .load(Ordering::Relaxed)
                 .saturating_sub(tok_out0);
-            serde_json::json!({ "input_tokens": input_tokens, "output_tokens": output_tokens })
+            serde_json::json!({
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "context_tokens": self.last_input_tokens.load(Ordering::Relaxed),
+            })
         };
 
         let now = chrono::Utc::now().to_rfc3339();
@@ -969,6 +979,8 @@ impl TaskRunner {
                 let _prev = self
                     .cumulative_input_tokens
                     .fetch_add(resp.input_tokens, Ordering::Relaxed);
+                self.last_input_tokens
+                    .store(resp.input_tokens, Ordering::Relaxed);
                 self.cumulative_output_tokens
                     .fetch_add(resp.output_tokens, Ordering::Relaxed);
                 if let Some(tx) = &self.telemetry {
@@ -1062,6 +1074,14 @@ impl TaskRunner {
             });
         }
 
+        // Resolve step notifier once (route by task id, fall back to baked notifier).
+        // Used for step/started + step/completed in both Allow and Ask arms.
+        let step_notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>> = {
+            let routed = self.client_notifiers.lock().await.get(task_id).cloned();
+            routed.or_else(|| self.notifier.clone())
+        };
+        let step_id = uuid::Uuid::now_v7().to_string();
+
         // 1b. Policy gate: check before executing.
         {
             use mur_common::agent::{ToolPolicy, resolve_tool_policy};
@@ -1076,10 +1096,47 @@ impl TaskRunner {
                 ToolPolicy::Allow => {
                     // Execute without HITL gate below.
                     let tool = tool.unwrap();
+                    if let Some(ref n) = step_notifier {
+                        let _ = n
+                            .send(step_notification(
+                                "step/started",
+                                serde_json::json!({
+                                    "step_id": step_id,
+                                    "task_id": task_id,
+                                    "kind": "tool",
+                                    "name": call.tool_name,
+                                    "args": call.input,
+                                }),
+                            ))
+                            .await;
+                    }
+                    let t0 = std::time::Instant::now();
                     let (output, is_error) = match tool.execute(call.input.clone()).await {
                         Ok(out) => (out, false),
                         Err(e) => (format!("tool error: {e}"), true),
                     };
+                    if let Some(ref n) = step_notifier {
+                        let (out, truncated, full_len) = cap_step_output(&output);
+                        let _ = n
+                            .send(step_notification(
+                                "step/completed",
+                                serde_json::json!({
+                                    "step_id": step_id,
+                                    "task_id": task_id,
+                                    "ok": !is_error,
+                                    "output": out,
+                                    "truncated": truncated,
+                                    "full_len": full_len,
+                                    "error": if is_error {
+                                        serde_json::Value::String(output.clone())
+                                    } else {
+                                        serde_json::Value::Null
+                                    },
+                                    "duration_ms": t0.elapsed().as_millis() as u64,
+                                }),
+                            ))
+                            .await;
+                    }
                     return Ok(ToolResultEntry {
                         call_id: call.call_id.clone(),
                         content: output,
@@ -1092,10 +1149,47 @@ impl TaskRunner {
 
         // 2. Execute the tool
         let tool = tool.unwrap();
+        if let Some(ref n) = step_notifier {
+            let _ = n
+                .send(step_notification(
+                    "step/started",
+                    serde_json::json!({
+                        "step_id": step_id,
+                        "task_id": task_id,
+                        "kind": "tool",
+                        "name": call.tool_name,
+                        "args": call.input,
+                    }),
+                ))
+                .await;
+        }
+        let t0_ask = std::time::Instant::now();
         let (output, is_error) = match tool.execute(call.input.clone()).await {
             Ok(out) => (out, false),
             Err(e) => (format!("tool error: {e}"), true),
         };
+        if let Some(ref n) = step_notifier {
+            let (out, truncated, full_len) = cap_step_output(&output);
+            let _ = n
+                .send(step_notification(
+                    "step/completed",
+                    serde_json::json!({
+                        "step_id": step_id,
+                        "task_id": task_id,
+                        "ok": !is_error,
+                        "output": out,
+                        "truncated": truncated,
+                        "full_len": full_len,
+                        "error": if is_error {
+                            serde_json::Value::String(output.clone())
+                        } else {
+                            serde_json::Value::Null
+                        },
+                        "duration_ms": t0_ask.elapsed().as_millis() as u64,
+                    }),
+                ))
+                .await;
+        }
 
         // 3. HITL gate (only after tool execution). Route the approval prompt to
         // the connection that issued this turn (looked up by task id), falling
@@ -1111,6 +1205,7 @@ impl TaskRunner {
                     "jsonrpc": "2.0",
                     "method": "tool/approval_needed",
                     "params": {
+                        "step_id": step_id,
                         "hitl_id": hitl_id,
                         "task_id": task_id,
                         "tool_name": call.tool_name,
@@ -1214,7 +1309,7 @@ impl TaskRunner {
         system_prompt: String,
         input: &Message,
         context_task_id: Option<&str>,
-        _sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
+        sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
         mut steer_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     ) -> Result<(Message, Option<LoopExit>), TaskError> {
         use crate::llm::{LlmRequest, RichMessage, StopReason};
@@ -1267,13 +1362,16 @@ impl TaskRunner {
                 max_tokens: None,
                 tools: tool_defs.clone(),
             };
-            let resp = client
-                .generate(req)
-                .await
-                .map_err(|e| task_error("llm_error", format!("{e}"), true))?;
+            let resp = match &sink {
+                Some(s) => client.generate_stream(req, s.clone()).await,
+                None => client.generate(req).await,
+            }
+            .map_err(|e| task_error("llm_error", format!("{e}"), true))?;
 
             self.cumulative_input_tokens
                 .fetch_add(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
+            self.last_input_tokens
+                .store(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
             self.cumulative_output_tokens
                 .fetch_add(resp.output_tokens, std::sync::atomic::Ordering::Relaxed);
 
@@ -1443,6 +1541,8 @@ impl TaskRunner {
             Ok(resp) => {
                 self.cumulative_input_tokens
                     .fetch_add(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
+                self.last_input_tokens
+                    .store(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
                 self.cumulative_output_tokens
                     .fetch_add(resp.output_tokens, std::sync::atomic::Ordering::Relaxed);
                 Message {
@@ -1620,6 +1720,32 @@ impl AsyncTaskHandle {
             })
         })
     }
+}
+
+/// Maximum byte size of tool output included inline in a `step/completed`
+/// notification. Larger outputs are truncated; full recovery in a later phase.
+pub(crate) const STEP_MAX_BYTES: usize = 8 * 1024;
+
+/// Wrap params in a JSON-RPC notification envelope — mirrors the existing
+/// `tool/approval_needed` shape used on the streaming socket.
+pub(crate) fn step_notification(method: &str, params: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "jsonrpc": "2.0", "method": method, "params": params })
+}
+
+/// Cap tool output to `STEP_MAX_BYTES` on a char boundary.
+/// Returns `(capped_output, was_truncated, full_byte_len)`.
+pub(crate) fn cap_step_output(output: &str) -> (String, bool, usize) {
+    let full_len = output.len();
+    if full_len <= STEP_MAX_BYTES {
+        return (output.to_string(), false, full_len);
+    }
+    let mut cut = STEP_MAX_BYTES;
+    while !output.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let mut s = output[..cut].to_string();
+    s.push_str("\n[truncated]");
+    (s, true, full_len)
 }
 
 fn echo_response(input: &Message) -> Message {
@@ -2726,5 +2852,35 @@ mod tests {
         assert!(runner.inject_steering("nope", "x".into()).await.is_err());
         runner.unregister_steering("t1").await;
         assert!(runner.inject_steering("t1", "y".into()).await.is_err());
+    }
+}
+
+#[cfg(test)]
+mod step_tests {
+    use super::{STEP_MAX_BYTES, cap_step_output, step_notification};
+
+    #[test]
+    fn notification_has_jsonrpc_envelope_and_method() {
+        let n = step_notification("step/started", serde_json::json!({ "step_id": "s1" }));
+        assert_eq!(n["jsonrpc"], "2.0");
+        assert_eq!(n["method"], "step/started");
+        assert_eq!(n["params"]["step_id"], "s1");
+    }
+
+    #[test]
+    fn cap_step_output_short_unchanged() {
+        let (out, truncated, full_len) = cap_step_output("hello");
+        assert_eq!(out, "hello");
+        assert!(!truncated);
+        assert_eq!(full_len, 5);
+    }
+
+    #[test]
+    fn cap_step_output_long_is_truncated() {
+        let big = "é".repeat(STEP_MAX_BYTES); // 2 bytes/char → over the cap
+        let (out, truncated, full_len) = cap_step_output(&big);
+        assert!(truncated);
+        assert_eq!(full_len, big.len());
+        assert!(out.is_char_boundary(out.len())); // never split a char
     }
 }
