@@ -549,4 +549,10 @@ export const zhTW: Table = {
   "skillreg.installAnyway": "我已檢視這些發現，仍要安裝",
   "skillreg.install": "安裝技能",
   "skillreg.backToResults": "返回結果",
+  "skillreg.trusted": "已信任",
+  "skillreg.untrusted": "未信任",
+  "skillreg.revoked": "已撤銷",
+  "skillreg.trustPublisher": "信任此發布者",
+  "skillreg.trustedDone": "MUR 發布者已信任",
+  "skillreg.driftWarn": "⚠ 技能自上次安裝後已變更",
 };
