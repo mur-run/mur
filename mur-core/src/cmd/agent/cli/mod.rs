@@ -106,6 +106,11 @@ pub async fn cmd_cli(
                 "note: --budget-usd is only enforced in the single-agent TUI; it is ignored when opening multiple agents."
             );
         }
+        if auto_reads {
+            eprintln!(
+                "note: --auto-reads is only enforced in the single-agent TUI; it is ignored when opening multiple agents."
+            );
+        }
         let names = names.to_vec();
         return tokio::task::spawn_blocking(move || multiplex::run(&names, resume, auto)).await?;
     }
@@ -134,6 +139,11 @@ pub async fn cmd_cli(
         if budget_usd.is_some() {
             eprintln!(
                 "note: --budget-usd is only enforced in the interactive TUI; it is ignored in plain/piped mode."
+            );
+        }
+        if auto_reads {
+            eprintln!(
+                "note: --auto-reads is only enforced in the interactive TUI; it is ignored in plain/piped mode."
             );
         }
         let home2 = home.clone();
