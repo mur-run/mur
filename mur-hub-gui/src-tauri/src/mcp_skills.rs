@@ -7,7 +7,7 @@
 use crate::detail::{AgentDetail, get_agent_detail};
 use mur_core::cmd::agent::mcp::{McpAddPin, cmd_mcp_add, cmd_mcp_remove, cmd_mcp_set_enabled};
 use mur_core::cmd::agent::skill::{cmd_skill_add, cmd_skill_remove, cmd_skill_set_enabled};
-use mur_core::cmd::agent::skill_remote::{SkillPreview, install_skill_from_url, preview_skill_url};
+use mur_core::cmd::agent::skill_remote::{SkillPreview, install_any_url, preview_any_url};
 use serde::Serialize;
 
 /// Result of a skill install: the refreshed agent detail plus the id under
@@ -282,28 +282,39 @@ pub fn reveal_in_finder(path: String, agent: Option<String>) -> Result<(), Strin
     reveal_os(&target).map_err(|e| e.to_string())
 }
 
-/// Fetch, parse, and security-scan a remote skill URL for user review.
-/// Installs nothing.
-#[tauri::command]
-pub async fn agent_skill_preview_url(url: String) -> Result<SkillPreview, String> {
-    preview_skill_url(&url).await.map_err(|e| format!("{e:#}"))
+/// Result of a URL install: the refreshed agent detail plus all skill ids
+/// that were installed (one for a single skill, many for a bundle).
+#[derive(Debug, Clone, Serialize)]
+pub struct BundleInstallResult {
+    pub detail: AgentDetail,
+    /// Canonical ids of every skill installed, e.g. `["skills/foo.yaml", "skills/bar.yaml"]`.
+    pub installed_ids: Vec<String>,
 }
 
-/// Fetch and install a skill from a remote URL onto `name` agent.
-/// `accept_findings` must be `true` to install a skill with blocking security findings.
+/// Fetch, parse, and security-scan a remote skill URL for user review.
+/// Works for both single-skill URLs and archive bundles — returns one
+/// `SkillPreview` per discovered skill. Installs nothing.
+#[tauri::command]
+pub async fn agent_skill_preview_url(url: String) -> Result<Vec<SkillPreview>, String> {
+    preview_any_url(&url).await.map_err(|e| format!("{e:#}"))
+}
+
+/// Fetch and install a skill (or bundle) from a remote URL onto `name` agent.
+/// `accept_findings` gates skills with blocking scan findings; clean skills
+/// install regardless.
 #[tauri::command]
 pub async fn agent_skill_install_url(
     name: String,
     url: String,
     accept_findings: bool,
-) -> Result<SkillInstallResult, String> {
-    let installed_id = install_skill_from_url(&name, &url, accept_findings)
+) -> Result<BundleInstallResult, String> {
+    let installed_ids = install_any_url(&name, &url, accept_findings)
         .await
         .map_err(|e| format!("{e:#}"))?;
     let detail = get_agent_detail(name)?;
-    Ok(SkillInstallResult {
+    Ok(BundleInstallResult {
         detail,
-        installed_id,
+        installed_ids,
     })
 }
 

@@ -524,4 +524,5 @@ export const en = {
   "skillurl.installing": "Installing…",
   "skillurl.restartHint": "After installing, restart the agent to load it.",
   "skillurl.invalidUrl": "Enter an https:// URL (http allowed only on localhost).",
+  "skillurl.bundleHint": "An archive may contain several skills — review each below.",
 } as const;
