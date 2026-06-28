@@ -26,6 +26,7 @@ import { MemoryTab } from "./MemoryTab";
 import { McpDiscoverModal } from "./McpDiscoverModal";
 import { McpAddRemoteModal } from "./McpAddRemoteModal";
 import { SkillAddUrlModal } from "./SkillAddUrlModal";
+import { SkillRegistryModal } from "./SkillRegistryModal";
 import { useT } from "../i18n";
 import type { TranslationKey } from "../i18n/types";
 import { CATEGORY_COLORS, TAB_ICONS, avatarInitials, avatarPreset, familyOf, runtimePill } from "../utils";
@@ -793,6 +794,7 @@ function SkillsTab({
   const [error, setError] = useState<string | null>(null);
   const [installedId, setInstalledId] = useState<string | null>(null);
   const [showSkillUrl, setShowSkillUrl] = useState(false);
+  const [showSkillRegistry, setShowSkillRegistry] = useState(false);
 
   const hasInstalled = detail.installed_skills.length > 0;
   const hasLegacy = detail.skills.length > 0;
@@ -884,6 +886,13 @@ function SkillsTab({
         >
           {t("detail.installSkillUrl")}
         </button>
+        <button
+          className="btn btn--sm btn--secondary"
+          onClick={() => setShowSkillRegistry(true)}
+          disabled={busy}
+        >
+          {t("detail.browseRegistry")}
+        </button>
       </div>
       <p className="field-muted" style={{ fontSize: 12 }}>
         {t("detail.skillInstallFormatHint")}
@@ -898,6 +907,13 @@ function SkillsTab({
         <SkillAddUrlModal
           agentName={detail.agent_name}
           onClose={() => setShowSkillUrl(false)}
+          onSaved={onSaved}
+        />
+      )}
+      {showSkillRegistry && (
+        <SkillRegistryModal
+          agentName={detail.agent_name}
+          onClose={() => setShowSkillRegistry(false)}
           onSaved={onSaved}
         />
       )}

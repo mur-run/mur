@@ -729,6 +729,32 @@ pub enum AgentSkillAction {
         #[arg(long)]
         yes: bool,
     },
+    /// Install a skill from the MUR skill registry onto an agent
+    /// (e.g. `mur agent skill registry-add myagent rust-testing`).
+    /// Verifies content hash and publisher signature before installing
+    /// (fail-closed); installs at Sandboxed trust level. Use `--yes` to
+    /// accept an unsigned/unhashed skill (a hash mismatch or invalid
+    /// signature is refused unconditionally — `--yes` does not override it).
+    RegistryAdd {
+        /// Agent name
+        name: String,
+        /// Registry skill name
+        skill: String,
+        /// Specific version to install (defaults to latest)
+        #[arg(long)]
+        version: Option<String>,
+        /// Accept an unsigned/unhashed skill (hash mismatch / invalid signature
+        /// is refused unconditionally)
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Search the MUR skill registry (for skills installable onto an agent).
+    Search {
+        /// Agent name
+        name: String,
+        /// Search query
+        query: String,
+    },
 }
 
 #[derive(Subcommand)]
