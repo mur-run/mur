@@ -21,6 +21,7 @@ pub mod persist;
 mod render_card;
 mod step;
 mod stream;
+mod suggest;
 mod theme;
 mod ui;
 mod welcome;
@@ -398,6 +399,16 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                     _ => {}
                 }
             }
+            // Agent ghost suggestion: Tab fills it when the composer is empty.
+            if app.suggestion_ghost.is_some()
+                && key.code == KeyCode::Tab
+                && app.input_text().is_empty()
+            {
+                if let Some(s) = app.suggestion_ghost.take() {
+                    app.set_input(&s);
+                }
+                return;
+            }
             match key.code {
                 KeyCode::Char('d') if ctrl => request_quit(app, tx),
                 KeyCode::Char('c') if ctrl => handle_ctrl_c(app, tx),
@@ -717,6 +728,7 @@ fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: boo
 }
 
 async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
+    app.clear_suggestion_ghost();
     let trimmed = app.input_text().trim().to_string();
     // Allow an image-only send (caption optional) when a screenshot is staged.
     if trimmed.is_empty() && app.pending_image.is_none() {
@@ -1024,6 +1036,7 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
                 Ok((reply, task_id)) => app.finish_agent_turn(reply, task_id),
                 Err(cause) => app.fail_turn(&cause),
             }
+            app.reveal_suggestions();
         }
         StreamMsg::Err { error, .. } => {
             if !app.focused {
@@ -1039,8 +1052,13 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
             args,
             ..
         } => {
-            app.saw_step_this_turn = true;
-            app.push_step_started(step_id, name, args);
+            if name == suggest::SUGGEST_REPLIES_NAME {
+                // No step card: stash replies and reveal at turn end.
+                app.pending_suggestions = suggest::parse_suggestions(&args);
+            } else {
+                app.saw_step_this_turn = true;
+                app.push_step_started(step_id, name, args);
+            }
         }
         StreamMsg::StepCompleted {
             step_id,

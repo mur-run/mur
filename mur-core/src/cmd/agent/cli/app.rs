@@ -273,6 +273,11 @@ pub struct App {
     pub completion: Option<CompletionState>,
     /// This agent's skills as menu candidates, loaded once at startup.
     pub skills: Vec<Candidate>,
+    /// Replies captured from a `suggest_replies` tool call this turn, revealed
+    /// after the turn finishes (see `reveal_suggestions`).
+    pub pending_suggestions: Vec<String>,
+    /// The single suggestion currently shown as ghost placeholder text, if any.
+    pub suggestion_ghost: Option<String>,
 }
 
 impl App {
@@ -324,6 +329,8 @@ impl App {
             auto_reads: false,
             completion: None,
             skills: Vec::new(),
+            pending_suggestions: Vec::new(),
+            suggestion_ghost: None,
         }
     }
 
@@ -401,6 +408,43 @@ impl App {
         }
     }
 
+    /// Reveal suggestions captured this turn: one → ghost placeholder, many →
+    /// completion overlay. No-op unless the composer is empty. Clears
+    /// `pending_suggestions` either way.
+    pub fn reveal_suggestions(&mut self) {
+        let pending = std::mem::take(&mut self.pending_suggestions);
+        let input_empty = self.input_text().is_empty();
+        match super::suggest::plan_reveal(pending, input_empty) {
+            super::suggest::Reveal::None => {}
+            super::suggest::Reveal::Ghost(text) => {
+                self.suggestion_ghost = Some(text.clone());
+                self.input.set_placeholder_text(text);
+            }
+            super::suggest::Reveal::Chooser(items) => {
+                let candidates: Vec<super::complete::Candidate> = items
+                    .into_iter()
+                    .map(|s| super::complete::Candidate {
+                        display: s.clone(),
+                        insert: s,
+                        desc: String::new(),
+                        has_children: false,
+                    })
+                    .collect();
+                self.completion = Some(super::complete::CompletionState {
+                    items: candidates,
+                    selected: 0,
+                });
+            }
+        }
+    }
+
+    /// Clear the ghost placeholder (used when the user starts typing).
+    pub fn clear_suggestion_ghost(&mut self) {
+        if self.suggestion_ghost.take().is_some() {
+            self.input.set_placeholder_text("Type a message…");
+        }
+    }
+
     /// Replace the input buffer with `text` (used by slash-command completion).
     pub fn set_input(&mut self, text: &str) {
         self.input = new_input();
@@ -426,6 +470,7 @@ impl App {
         self.turn_out = 0;
         self.saw_step_this_turn = false;
         self.saw_hitl_this_turn = false;
+        self.pending_suggestions.clear();
         self.scroll_back = 0;
         // Placeholder agent message that deltas accumulate into.
         let mut m = ChatMsg::new(Role::Agent, "");
@@ -1276,6 +1321,19 @@ mod footer_state_tests {
         // session accumulators must NOT be cleared by begin_user_turn.
         assert_eq!(a.session_in, 100, "session_in survives begin_user_turn");
         assert_eq!(a.session_out, 20, "session_out survives begin_user_turn");
+    }
+
+    #[test]
+    fn begin_user_turn_clears_stale_pending_suggestions() {
+        let mut a = App::test_fixture();
+        // Simulate a prior turn that set suggestions but never revealed them
+        // (e.g., the turn ended in Err or was cancelled via Ctrl+C).
+        a.pending_suggestions = vec!["stale suggestion".to_string()];
+        a.begin_user_turn("new turn");
+        assert!(
+            a.pending_suggestions.is_empty(),
+            "pending_suggestions must be cleared at the start of each turn"
+        );
     }
 
     #[test]
