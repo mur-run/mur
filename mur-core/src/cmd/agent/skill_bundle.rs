@@ -3,7 +3,6 @@
 //! extracts .zip and .tar.gz bundles, discovers every skill manifest, scans
 //! each, and installs clean ones via quill P1's per-skill path. Built on
 //! `skill_remote`.
-#![allow(dead_code)] // module not yet wired to callers; suppress until integration
 
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
@@ -76,7 +75,9 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> Result<()> {
             std::fs::create_dir_all(parent).map_err(|e| anyhow::anyhow!("mkdir: {e}"))?;
         }
         // Bomb guard — bound the ACTUAL read, not the header-declared size
-        // (entry.size() is attacker-controlled and can lie as 0).
+        // (entry.size() is attacker-controlled and can lie as 0). We read
+        // actual bytes via Read::take so the property holds even if the stored
+        // uncompressed-size header is falsified.
         let budget = BUNDLE_MAX_TOTAL_UNCOMPRESSED.saturating_sub(total);
         let mut data = Vec::new();
         // read budget+1 so we can detect overflow
@@ -177,6 +178,10 @@ fn is_md_path(p: &Path) -> bool {
 }
 
 /// Download a bundle archive, size-capped at [`BUNDLE_MAX_BYTES`].
+/// Uses a streaming accumulate loop so the cap applies to actual bytes
+/// received, not just the Content-Length header (which may be absent or
+/// spoofed). Aborts the download as soon as the running total would exceed
+/// the cap — no DoS via a header-lying server that omits Content-Length.
 pub async fn fetch_bundle(url: &str) -> Result<Vec<u8>> {
     let url = super::skill_remote::validate_skill_url(url)?;
     let resp = reqwest::Client::new()
@@ -188,22 +193,26 @@ pub async fn fetch_bundle(url: &str) -> Result<Vec<u8>> {
     if !resp.status().is_success() {
         bail!("server returned {}", resp.status());
     }
+    // Early rejection when Content-Length is present and already over cap.
     if let Some(len) = resp.content_length()
         && len > BUNDLE_MAX_BYTES as u64
     {
         bail!("bundle too large ({len} bytes; max {BUNDLE_MAX_BYTES})");
     }
-    let bytes = resp
-        .bytes()
+    // Stream body and enforce cap on actual bytes received.
+    let mut buf: Vec<u8> = Vec::new();
+    let mut body = resp;
+    while let Some(chunk) = body
+        .chunk()
         .await
-        .map_err(|e| anyhow::anyhow!("read body: {e}"))?;
-    if bytes.len() > BUNDLE_MAX_BYTES {
-        bail!(
-            "bundle too large ({} bytes; max {BUNDLE_MAX_BYTES})",
-            bytes.len()
-        );
+        .map_err(|e| anyhow::anyhow!("read body: {e}"))?
+    {
+        if buf.len() + chunk.len() > BUNDLE_MAX_BYTES {
+            bail!("bundle too large (exceeds {BUNDLE_MAX_BYTES} bytes)");
+        }
+        buf.extend_from_slice(&chunk);
     }
-    Ok(bytes.to_vec())
+    Ok(buf)
 }
 
 /// Fetch + extract + discover + preview each skill in a bundle. Installs nothing.
@@ -231,6 +240,14 @@ pub async fn preview_bundle_url(url: &str) -> Result<Vec<SkillPreview>> {
 /// Fetch + extract + discover + install. Clean skills always install; skills
 /// with blocking findings install only if `accept_findings` is true.
 /// Returns installed skill ids (`skills/<name>`).
+///
+/// Errors:
+/// - If ALL skills were skipped for blocking findings (and none errored),
+///   bails with an actionable message directing the caller to pass `--yes`.
+/// - If ALL skills failed with errors (no blocking-skip), bails with the
+///   joined error list.
+/// - On PARTIAL success: returns `Ok(installed)` and writes a one-line
+///   warning to stderr naming skipped-for-findings and errored counts.
 pub async fn install_bundle_from_url(
     agent: &str,
     url: &str,
@@ -246,6 +263,7 @@ pub async fn install_bundle_from_url(
     }
     let mut installed = Vec::new();
     let mut errors: Vec<String> = Vec::new();
+    let mut skipped_for_findings: Vec<String> = Vec::new();
     for p in &paths {
         let text = match std::fs::read_to_string(p) {
             Ok(t) => t,
@@ -263,40 +281,49 @@ pub async fn install_bundle_from_url(
         };
         // Fail-closed: skip skills with blocking findings unless accepted.
         if preview.blocking && !accept_findings {
+            skipped_for_findings.push(preview.name.clone());
             continue;
         }
-        let ext = if is_md_path(p) { "md" } else { "yaml" };
-        let safe: String = preview
-            .name
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-            .collect();
-        let safe = if safe.is_empty() {
-            "skill".to_string()
-        } else {
-            safe
-        };
-        let tmp_skill = std::env::temp_dir().join(format!(
-            "mur-skill-bundle-{}-{safe}.{ext}",
-            std::process::id()
-        ));
-        match std::fs::write(&tmp_skill, &text) {
-            Err(e) => {
-                errors.push(format!("{}: write failed: {e}", preview.name));
-            }
-            Ok(_) => {
-                let add_result = super::skill::cmd_skill_add(agent, &tmp_skill.to_string_lossy());
-                let _ = std::fs::remove_file(&tmp_skill);
-                match add_result {
-                    Ok(_) => installed.push(format!("skills/{}", preview.name)),
-                    Err(e) => errors.push(format!("{}: install failed: {e}", preview.name)),
-                }
-            }
+        // Install directly from the already-extracted TempDir path — no
+        // second temp-file copy needed. cmd_skill_add derives the install id
+        // from the manifest `name` field, not the source filename.
+        match super::skill::cmd_skill_add(agent, &p.to_string_lossy()) {
+            Ok(_) => installed.push(format!("skills/{}", preview.name)),
+            Err(e) => errors.push(format!("{}: install failed: {e}", preview.name)),
         }
     }
-    if installed.is_empty() && !errors.is_empty() {
-        bail!("no skills installed:\n{}", errors.join("\n"));
+
+    if installed.is_empty() {
+        // Distinguish the two all-empty cases for actionable messaging.
+        if !skipped_for_findings.is_empty() && errors.is_empty() {
+            bail!(
+                "{} skill(s) skipped due to blocking security findings; \
+                 re-run with --yes (CLI) or tick accept (Hub) to install them",
+                skipped_for_findings.len()
+            );
+        } else if !skipped_for_findings.is_empty() {
+            bail!(
+                "{} skill(s) skipped due to blocking security findings \
+                 (re-run with --yes to install); {} additional error(s):\n{}",
+                skipped_for_findings.len(),
+                errors.len(),
+                errors.join("\n")
+            );
+        } else {
+            bail!("no skills installed:\n{}", errors.join("\n"));
+        }
     }
+
+    // Partial success: some installed, some skipped/errored — warn on stderr.
+    if !skipped_for_findings.is_empty() || !errors.is_empty() {
+        eprintln!(
+            "warning: bundle partially installed ({} ok, {} skipped for findings, {} error(s))",
+            installed.len(),
+            skipped_for_findings.len(),
+            errors.len()
+        );
+    }
+
     Ok(installed)
 }
 
@@ -482,6 +509,12 @@ mod tests {
     // ── Fix #1 ──────────────────────────────────────────────────────────────
     // zip whose real uncompressed content exceeds BUNDLE_MAX_TOTAL_UNCOMPRESSED
     // → extract_archive must return Err (zip-bomb guard on actual bytes).
+    //
+    // Note: the `zip` crate's ZipWriter always writes honest stored-size
+    // headers, so this test uses an honest zip where declared == actual.
+    // The guard in extract_zip reads actual bytes via Read::take (not
+    // entry.size()), so it correctly bounds real inflated data regardless
+    // of what the header claims — a lying header would also be caught.
     #[test]
     fn extract_zip_rejects_zip_bomb() {
         use std::io::Write;
