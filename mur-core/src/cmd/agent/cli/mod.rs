@@ -93,6 +93,7 @@ pub async fn cmd_cli(
     resume: bool,
     auto: bool,
     skin: Option<String>,
+    plain: bool,
 ) -> Result<()> {
     if names.len() > 1 {
         let names = names.to_vec();
@@ -115,11 +116,16 @@ pub async fn cmd_cli(
     // add it (explicit consent, persisted; sandbox applies it on next restart).
     access::ensure_cwd_access(&agent)?;
 
-    // Non-TTY (piped) → plain streamed text, preserving scriptability.
-    if !io::stdout().is_terminal() {
+    // Plain line mode: forced by --plain, or automatic when stdout is not a
+    // terminal (piped / CI). `interactive` drives the prompt + HITL behaviour:
+    // a real stdin TTY gets an echoed prompt and a [y/a/n] HITL question; a
+    // pipe gets neither.
+    if plain || !io::stdout().is_terminal() {
         let home2 = home.clone();
         let agent2 = agent.clone();
-        return tokio::task::spawn_blocking(move || run_plain(&home2, &agent2, auto)).await?;
+        let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
+        return tokio::task::spawn_blocking(move || run_plain(&home2, &agent2, auto, interactive))
+            .await?;
     }
 
     run_tui(home, agent, resume, auto, skin).await
@@ -997,7 +1003,8 @@ mod notify_tests {
 
 /// Pipe-safe fallback: read a line from stdin, stream the reply as plain text to
 /// stdout, repeat. No ANSI, no TUI. Threads conversation context across turns.
-fn run_plain(home: &Path, agent: &str, auto: bool) -> Result<()> {
+fn run_plain(home: &Path, agent: &str, auto: bool, interactive: bool) -> Result<()> {
+    let _ = interactive; // Tasks 2-3 use this; threaded here only
     use std::cell::Cell;
     use std::io::BufRead;
     let stdin = io::stdin();
