@@ -129,6 +129,11 @@ pub struct TaskRunner {
     /// `run_sync_inner` can snapshot-delta both counters and report a turn's
     /// real input+output token usage in `Task.usage` (fleet cost accounting).
     cumulative_output_tokens: AtomicU64,
+    /// Input-token count of the most recent single LLM call. Approximates the
+    /// current context window fill, unlike the cumulative total. Read by the
+    /// `token_usage` closure to populate `context_tokens` in per-turn usage JSON
+    /// so the CLI glass-box bar can show a live context gauge.
+    last_input_tokens: AtomicU64,
     hook_chain: Option<Arc<HookChain>>,
     hook_ctx: Option<HookCtx>,
     hook_cancel: Option<CancellationToken>,
@@ -139,6 +144,10 @@ pub struct TaskRunner {
     /// turn instead of broadcast to every client. Falls back to `notifier`.
     client_notifiers:
         Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::mpsc::Sender<serde_json::Value>>>>,
+    /// Per-turn steering channels keyed by task id. A running agentic loop
+    /// holds the receiver; `turn/steer` pushes a user interjection here and the
+    /// loop picks it up at the next iteration boundary.
+    steering: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::mpsc::Sender<String>>>>,
     hitl_timeout_secs: u32,
     max_iterations: u32,
     /// Per-task ceiling on cumulative input tokens for the agentic loop. The
@@ -235,12 +244,14 @@ impl TaskRunner {
             turn_counter: AtomicU64::new(0),
             cumulative_input_tokens: AtomicU64::new(0),
             cumulative_output_tokens: AtomicU64::new(0),
+            last_input_tokens: AtomicU64::new(0),
             hook_chain: None,
             hook_ctx: None,
             hook_cancel: None,
             pending_approvals: None,
             notifier: None,
             client_notifiers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            steering: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             hitl_timeout_secs: 300,
             max_iterations: DEFAULT_MAX_ITERATIONS,
             max_token_budget: DEFAULT_MAX_TOKEN_BUDGET,
@@ -399,6 +410,33 @@ impl TaskRunner {
         self.client_notifiers.lock().await.remove(task_id);
     }
 
+    /// Register a steering sender for the given task id.
+    pub async fn register_steering(&self, task_id: &str, tx: tokio::sync::mpsc::Sender<String>) {
+        self.steering.lock().await.insert(task_id.to_string(), tx);
+    }
+
+    /// Drop the steering sender once the turn completes.
+    pub async fn unregister_steering(&self, task_id: &str) {
+        self.steering.lock().await.remove(task_id);
+    }
+
+    /// Push a steering message to the running task; errors if no such task.
+    pub async fn inject_steering(
+        &self,
+        task_id: &str,
+        msg: String,
+    ) -> Result<(), crate::protocol::a2a_server::HandlerError> {
+        let tx = self.steering.lock().await.get(task_id).cloned();
+        match tx {
+            Some(tx) => tx.send(msg).await.map_err(|_| {
+                crate::protocol::a2a_server::HandlerError::TaskNotFound(task_id.to_string())
+            }),
+            None => Err(crate::protocol::a2a_server::HandlerError::TaskNotFound(
+                task_id.to_string(),
+            )),
+        }
+    }
+
     pub fn with_hitl_timeout_secs(mut self, secs: u32) -> Self {
         self.hitl_timeout_secs = secs;
         self
@@ -531,7 +569,7 @@ impl TaskRunner {
     }
 
     pub async fn run_sync(&self, spec: TaskSpec) -> TaskOutcome {
-        self.run_sync_inner(spec, None).await
+        self.run_sync_inner(spec, None, None).await
     }
 
     /// Like `run_sync`, but forwards each LLM token delta to `sink` as it is
@@ -541,14 +579,16 @@ impl TaskRunner {
         &self,
         spec: TaskSpec,
         sink: tokio::sync::mpsc::Sender<crate::llm::StreamDelta>,
+        steer_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     ) -> TaskOutcome {
-        self.run_sync_inner(spec, Some(sink)).await
+        self.run_sync_inner(spec, Some(sink), steer_rx).await
     }
 
     async fn run_sync_inner(
         &self,
         spec: TaskSpec,
         sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
+        steer_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     ) -> TaskOutcome {
         // Reject new turns immediately when the runtime is draining for restart.
         // This is a transient failure — callers should retry after the agent
@@ -629,6 +669,7 @@ impl TaskRunner {
                             &spec.input,
                             spec.context_task_id.as_deref(),
                             sink,
+                            steer_rx,
                         )
                         .await
                     } else {
@@ -678,7 +719,11 @@ impl TaskRunner {
                 .cumulative_output_tokens
                 .load(Ordering::Relaxed)
                 .saturating_sub(tok_out0);
-            serde_json::json!({ "input_tokens": input_tokens, "output_tokens": output_tokens })
+            serde_json::json!({
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "context_tokens": self.last_input_tokens.load(Ordering::Relaxed),
+            })
         };
 
         let now = chrono::Utc::now().to_rfc3339();
@@ -934,6 +979,8 @@ impl TaskRunner {
                 let _prev = self
                     .cumulative_input_tokens
                     .fetch_add(resp.input_tokens, Ordering::Relaxed);
+                self.last_input_tokens
+                    .store(resp.input_tokens, Ordering::Relaxed);
                 self.cumulative_output_tokens
                     .fetch_add(resp.output_tokens, Ordering::Relaxed);
                 if let Some(tx) = &self.telemetry {
@@ -1027,6 +1074,14 @@ impl TaskRunner {
             });
         }
 
+        // Resolve step notifier once (route by task id, fall back to baked notifier).
+        // Used for step/started + step/completed in both Allow and Ask arms.
+        let step_notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>> = {
+            let routed = self.client_notifiers.lock().await.get(task_id).cloned();
+            routed.or_else(|| self.notifier.clone())
+        };
+        let step_id = uuid::Uuid::now_v7().to_string();
+
         // 1b. Policy gate: check before executing.
         {
             use mur_common::agent::{ToolPolicy, resolve_tool_policy};
@@ -1041,10 +1096,47 @@ impl TaskRunner {
                 ToolPolicy::Allow => {
                     // Execute without HITL gate below.
                     let tool = tool.unwrap();
+                    if let Some(ref n) = step_notifier {
+                        let _ = n
+                            .send(step_notification(
+                                "step/started",
+                                serde_json::json!({
+                                    "step_id": step_id,
+                                    "task_id": task_id,
+                                    "kind": "tool",
+                                    "name": call.tool_name,
+                                    "args": call.input,
+                                }),
+                            ))
+                            .await;
+                    }
+                    let t0 = std::time::Instant::now();
                     let (output, is_error) = match tool.execute(call.input.clone()).await {
                         Ok(out) => (out, false),
                         Err(e) => (format!("tool error: {e}"), true),
                     };
+                    if let Some(ref n) = step_notifier {
+                        let (out, truncated, full_len) = cap_step_output(&output);
+                        let _ = n
+                            .send(step_notification(
+                                "step/completed",
+                                serde_json::json!({
+                                    "step_id": step_id,
+                                    "task_id": task_id,
+                                    "ok": !is_error,
+                                    "output": out,
+                                    "truncated": truncated,
+                                    "full_len": full_len,
+                                    "error": if is_error {
+                                        serde_json::Value::String(output.clone())
+                                    } else {
+                                        serde_json::Value::Null
+                                    },
+                                    "duration_ms": t0.elapsed().as_millis() as u64,
+                                }),
+                            ))
+                            .await;
+                    }
                     return Ok(ToolResultEntry {
                         call_id: call.call_id.clone(),
                         content: output,
@@ -1057,10 +1149,47 @@ impl TaskRunner {
 
         // 2. Execute the tool
         let tool = tool.unwrap();
+        if let Some(ref n) = step_notifier {
+            let _ = n
+                .send(step_notification(
+                    "step/started",
+                    serde_json::json!({
+                        "step_id": step_id,
+                        "task_id": task_id,
+                        "kind": "tool",
+                        "name": call.tool_name,
+                        "args": call.input,
+                    }),
+                ))
+                .await;
+        }
+        let t0_ask = std::time::Instant::now();
         let (output, is_error) = match tool.execute(call.input.clone()).await {
             Ok(out) => (out, false),
             Err(e) => (format!("tool error: {e}"), true),
         };
+        if let Some(ref n) = step_notifier {
+            let (out, truncated, full_len) = cap_step_output(&output);
+            let _ = n
+                .send(step_notification(
+                    "step/completed",
+                    serde_json::json!({
+                        "step_id": step_id,
+                        "task_id": task_id,
+                        "ok": !is_error,
+                        "output": out,
+                        "truncated": truncated,
+                        "full_len": full_len,
+                        "error": if is_error {
+                            serde_json::Value::String(output.clone())
+                        } else {
+                            serde_json::Value::Null
+                        },
+                        "duration_ms": t0_ask.elapsed().as_millis() as u64,
+                    }),
+                ))
+                .await;
+        }
 
         // 3. HITL gate (only after tool execution). Route the approval prompt to
         // the connection that issued this turn (looked up by task id), falling
@@ -1076,6 +1205,7 @@ impl TaskRunner {
                     "jsonrpc": "2.0",
                     "method": "tool/approval_needed",
                     "params": {
+                        "step_id": step_id,
                         "hitl_id": hitl_id,
                         "task_id": task_id,
                         "tool_name": call.tool_name,
@@ -1171,6 +1301,7 @@ impl TaskRunner {
     /// Run the agentic loop. Returns the final agent message plus an optional
     /// `LoopStop` describing which budget (if any) forced an early, graceful
     /// exit. `None` means the model ended the turn naturally.
+    #[allow(clippy::too_many_arguments)]
     async fn run_agentic_loop(
         &self,
         task_id: &str,
@@ -1178,7 +1309,8 @@ impl TaskRunner {
         system_prompt: String,
         input: &Message,
         context_task_id: Option<&str>,
-        _sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
+        sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
+        mut steer_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     ) -> Result<(Message, Option<LoopExit>), TaskError> {
         use crate::llm::{LlmRequest, RichMessage, StopReason};
 
@@ -1230,13 +1362,16 @@ impl TaskRunner {
                 max_tokens: None,
                 tools: tool_defs.clone(),
             };
-            let resp = client
-                .generate(req)
-                .await
-                .map_err(|e| task_error("llm_error", format!("{e}"), true))?;
+            let resp = match &sink {
+                Some(s) => client.generate_stream(req, s.clone()).await,
+                None => client.generate(req).await,
+            }
+            .map_err(|e| task_error("llm_error", format!("{e}"), true))?;
 
             self.cumulative_input_tokens
                 .fetch_add(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
+            self.last_input_tokens
+                .store(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
             self.cumulative_output_tokens
                 .fetch_add(resp.output_tokens, std::sync::atomic::Ordering::Relaxed);
 
@@ -1341,6 +1476,17 @@ impl TaskRunner {
             }
 
             history.push(RichMessage::ToolResults { results });
+            // Mid-turn steering: pick up any user interjection sent via turn/steer
+            // since the last LLM call and append it before the next iteration.
+            // Race-free: history is mutated only here; try_recv never blocks.
+            if let Some(rx) = steer_rx.as_mut() {
+                while let Ok(msg) = rx.try_recv() {
+                    history.push(RichMessage::Text {
+                        role: "user".into(),
+                        content: format!("(steering) {msg}"),
+                    });
+                }
+            }
             iteration += 1;
         }
 
@@ -1395,6 +1541,8 @@ impl TaskRunner {
             Ok(resp) => {
                 self.cumulative_input_tokens
                     .fetch_add(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
+                self.last_input_tokens
+                    .store(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
                 self.cumulative_output_tokens
                     .fetch_add(resp.output_tokens, std::sync::atomic::Ordering::Relaxed);
                 Message {
@@ -1572,6 +1720,32 @@ impl AsyncTaskHandle {
             })
         })
     }
+}
+
+/// Maximum byte size of tool output included inline in a `step/completed`
+/// notification. Larger outputs are truncated; full recovery in a later phase.
+pub(crate) const STEP_MAX_BYTES: usize = 8 * 1024;
+
+/// Wrap params in a JSON-RPC notification envelope — mirrors the existing
+/// `tool/approval_needed` shape used on the streaming socket.
+pub(crate) fn step_notification(method: &str, params: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "jsonrpc": "2.0", "method": method, "params": params })
+}
+
+/// Cap tool output to `STEP_MAX_BYTES` on a char boundary.
+/// Returns `(capped_output, was_truncated, full_byte_len)`.
+pub(crate) fn cap_step_output(output: &str) -> (String, bool, usize) {
+    let full_len = output.len();
+    if full_len <= STEP_MAX_BYTES {
+        return (output.to_string(), false, full_len);
+    }
+    let mut cut = STEP_MAX_BYTES;
+    while !output.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let mut s = output[..cut].to_string();
+    s.push_str("\n[truncated]");
+    (s, true, full_len)
 }
 
 fn echo_response(input: &Message) -> Message {
@@ -1844,7 +2018,7 @@ mod tests {
             active_team: None,
         };
         let r2 = runner.clone();
-        let handle = tokio::spawn(async move { r2.run_sync_streaming(spec, tx).await });
+        let handle = tokio::spawn(async move { r2.run_sync_streaming(spec, tx, None).await });
 
         // Let the task register its cancel signal, then cancel by the known id.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -2662,5 +2836,51 @@ mod tests {
             ok,
             "registry must have no Working entries after start_async drain rejection"
         );
+    }
+
+    #[tokio::test]
+    async fn steering_register_inject_unregister() {
+        let runner = TaskRunner::new_stub_echo();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(8);
+        runner.register_steering("t1", tx).await;
+        runner
+            .inject_steering("t1", "use ripgrep".into())
+            .await
+            .unwrap();
+        assert_eq!(rx.recv().await.as_deref(), Some("use ripgrep"));
+        // unknown task → error
+        assert!(runner.inject_steering("nope", "x".into()).await.is_err());
+        runner.unregister_steering("t1").await;
+        assert!(runner.inject_steering("t1", "y".into()).await.is_err());
+    }
+}
+
+#[cfg(test)]
+mod step_tests {
+    use super::{STEP_MAX_BYTES, cap_step_output, step_notification};
+
+    #[test]
+    fn notification_has_jsonrpc_envelope_and_method() {
+        let n = step_notification("step/started", serde_json::json!({ "step_id": "s1" }));
+        assert_eq!(n["jsonrpc"], "2.0");
+        assert_eq!(n["method"], "step/started");
+        assert_eq!(n["params"]["step_id"], "s1");
+    }
+
+    #[test]
+    fn cap_step_output_short_unchanged() {
+        let (out, truncated, full_len) = cap_step_output("hello");
+        assert_eq!(out, "hello");
+        assert!(!truncated);
+        assert_eq!(full_len, 5);
+    }
+
+    #[test]
+    fn cap_step_output_long_is_truncated() {
+        let big = "é".repeat(STEP_MAX_BYTES); // 2 bytes/char → over the cap
+        let (out, truncated, full_len) = cap_step_output(&big);
+        assert!(truncated);
+        assert_eq!(full_len, big.len());
+        assert!(out.is_char_boundary(out.len())); // never split a char
     }
 }

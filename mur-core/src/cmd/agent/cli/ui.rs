@@ -29,7 +29,11 @@ pub fn render(f: &mut Frame, app: &mut App) {
     f.render_widget(&app.input, chunks[1]);
     render_status(f, app, chunks[2]);
 
-    if let Some(hitl) = &app.hitl {
+    // Inline approval lives on the card (Task 4) when the runtime sent a
+    // step_id. Fall back to the centered modal only for older runtimes.
+    if let Some(hitl) = &app.hitl
+        && hitl.step_id.is_none()
+    {
         render_hitl(f, hitl);
     }
 }
@@ -103,6 +107,11 @@ fn push_message(
     spinner: usize,
     theme: &'static super::theme::Theme,
 ) {
+    // Step cards replace role-based rendering entirely for that message.
+    if let Some(card) = &m.step {
+        lines.extend(super::render_card::card_lines(card, theme));
+        return;
+    }
     match m.role {
         Role::User => {
             lines.push(Line::from(Span::styled(
@@ -152,17 +161,18 @@ fn push_message(
                     .fg(theme.agent)
                     .add_modifier(Modifier::BOLD),
             )));
-            if m.streaming {
-                if !m.thinking.is_empty() {
-                    for l in m.thinking.lines() {
-                        lines.push(Line::styled(
-                            l.to_string(),
-                            Style::default()
-                                .fg(theme.thinking)
-                                .add_modifier(Modifier::ITALIC | Modifier::DIM),
-                        ));
-                    }
+            // Reasoning stays visible after the turn finishes (D5).
+            if !m.thinking.is_empty() {
+                for l in m.thinking.lines() {
+                    lines.push(Line::styled(
+                        l.to_string(),
+                        Style::default()
+                            .fg(theme.thinking)
+                            .add_modifier(Modifier::ITALIC | Modifier::DIM),
+                    ));
                 }
+            }
+            if m.streaming {
                 let mut body: Vec<Line> =
                     m.text.lines().map(|l| Line::raw(l.to_string())).collect();
                 // Trailing spinner so the user sees liveness.
@@ -198,7 +208,10 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         )
     } else if app.streaming {
         let spin = SPINNER[app.spinner % SPINNER.len()];
-        (format!("{spin} generating… Ctrl+C to cancel"), theme.agent)
+        (
+            format!("{spin} generating… · type to steer · Ctrl+C to cancel"),
+            theme.agent,
+        )
     } else {
         let ctx = if app.context_task_id.is_some() {
             " · context kept"
@@ -233,6 +246,25 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::raw("  "));
     }
     spans.push(Span::styled(msg, Style::default().fg(color)));
+
+    // Glass Box observability: tokens · cost · ctx · timer.
+    let obs = footer_segments(
+        app.turn_in,
+        app.turn_out,
+        app.session_in,
+        app.session_out,
+        app.ctx_tokens,
+        &app.pricing,
+    );
+    spans.push(Span::raw(" · "));
+    spans.push(Span::styled(obs, Style::default().fg(theme.system)));
+    if let Some(t0) = app.turn_started {
+        let secs = t0.elapsed().as_secs();
+        spans.push(Span::styled(
+            format!(" · {}m{:02}s · esc=stop", secs / 60, secs % 60),
+            Style::default().fg(theme.system),
+        ));
+    }
 
     let right_hint: Option<(String, Color)> = if app.scroll_back > 0 {
         Some((
@@ -325,6 +357,63 @@ fn render_hitl(f: &mut Frame, hitl: &super::stream::HitlRequest) {
     );
 }
 
+/// Format a token count with thousands separator (e.g. 1240 → "1,240").
+fn fmt_tok(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!(
+            "{},{:03},{:03}",
+            n / 1_000_000,
+            (n / 1_000) % 1_000,
+            n % 1_000
+        )
+    } else if n >= 1_000 {
+        format!("{},{:03}", n / 1_000, n % 1_000)
+    } else {
+        n.to_string()
+    }
+}
+
+/// Pure footer formatter: `"{turn}/{sess} tok · {cost} · ctx <bar> N%"`.
+/// Cost shows `—` when unpriced; ctx part is omitted when no window is known.
+fn footer_segments(
+    turn_in: u64,
+    turn_out: u64,
+    sess_in: u64,
+    sess_out: u64,
+    ctx_tokens: u64,
+    pricing: &super::footer::Pricing,
+) -> String {
+    use super::footer::{CTX_BAR_WIDTH, UsageCounts, context_pct, ctx_bar, turn_cost};
+
+    let turn_tok = turn_in + turn_out;
+    let sess_tok = sess_in + sess_out;
+
+    let u = UsageCounts {
+        input: turn_in,
+        output: turn_out,
+    };
+    let cost = match turn_cost(pricing, &u) {
+        Some(c) => format!("${:.3} est", c),
+        None => "\u{2014}".to_string(), // em dash
+    };
+
+    let ctx_part = match pricing.window {
+        Some(w) if w > 0 => {
+            let pct = context_pct(ctx_tokens, w);
+            format!(" · ctx {} {}%", ctx_bar(pct, CTX_BAR_WIDTH), pct)
+        }
+        _ => String::new(),
+    };
+
+    format!(
+        "{}/{} tok · {}{}",
+        fmt_tok(turn_tok),
+        fmt_tok(sess_tok),
+        cost,
+        ctx_part
+    )
+}
+
 fn centered_rect(pct_x: u16, pct_y: u16, area: Rect) -> Rect {
     let v = Layout::default()
         .direction(Direction::Vertical)
@@ -342,4 +431,29 @@ fn centered_rect(pct_x: u16, pct_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - pct_x) / 2),
         ])
         .split(v[1])[1]
+}
+
+#[cfg(test)]
+mod footer_fmt_tests {
+    use super::footer_segments;
+    use crate::cmd::agent::cli::footer::Pricing;
+
+    #[test]
+    fn shows_tokens_and_dash_cost_when_unpriced() {
+        let s = footer_segments(1240, 0, 1240, 0, 0, &Pricing::default());
+        assert!(s.contains("1,240 tok") || s.contains("1240 tok"));
+        assert!(s.contains('\u{2014}')); // em dash — no price
+    }
+
+    #[test]
+    fn shows_cost_and_ctx_when_priced() {
+        let p = Pricing {
+            in_per_1k: Some(0.003),
+            out_per_1k: Some(0.015),
+            window: Some(100_000),
+        };
+        let s = footer_segments(1000, 1000, 1000, 1000, 32_000, &p);
+        assert!(s.contains("$0.018"));
+        assert!(s.contains("32%"));
+    }
 }

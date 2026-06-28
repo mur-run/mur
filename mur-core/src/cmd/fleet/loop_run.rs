@@ -515,6 +515,7 @@ fn ask_router_done(mur_home: &Path, fleet: &Fleet, events: &[ChannelEvent]) -> R
         params,
         |delta, _thinking, _id| out.push_str(delta),
         |_hitl| {},
+        |_step| {},
     )?;
     Ok(is_converged(&out))
 }
