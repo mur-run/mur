@@ -8,11 +8,16 @@
 
 mod access;
 mod app;
+mod diff;
+mod dump;
+mod footer;
 mod manage;
 mod markdown;
 mod multiplex;
 mod paste;
 pub mod persist;
+mod render_card;
+mod step;
 mod stream;
 mod theme;
 mod ui;
@@ -25,8 +30,9 @@ use std::time::Instant as StdInstant;
 
 use anyhow::{Context, Result};
 use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
-    EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, Event, EventStream, KeyCode, KeyEventKind, KeyModifiers,
+    MouseEventKind,
 };
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -43,6 +49,33 @@ use self::app::{App, EscAction, Role, SlashCmd, esc_action, parse_slash};
 use self::persist::Session;
 use self::stream::{StreamMsg, build_params, cancel_task, respond_hitl, spawn_stream};
 use crate::a2a_dial::{DialMode, canonicalize_agent_name, dial_method};
+
+/// Load the agent's model pricing from `~/.mur/models.yaml`. Falls back to
+/// `Pricing::default()` (all `None` fields) on any error or when the agent
+/// uses an inline model rather than a `model_ref:` registry alias. The footer
+/// renderer treats `None` costs/window as "unknown" and shows `—`.
+fn load_pricing(home: &std::path::Path, agent: &str) -> footer::Pricing {
+    let pricing = footer::Pricing::default();
+    let Ok((_, profile)) = crate::cmd::agent::load_profile_for_edit(agent) else {
+        return pricing;
+    };
+    let Some(model_ref) = profile.model_ref else {
+        return pricing;
+    };
+    let reg_path = home.join("models.yaml");
+    let Ok(reg) = mur_common::model::ModelRegistry::load_from(&reg_path) else {
+        return pricing;
+    };
+    let Some(entry) = reg.models.get(&model_ref) else {
+        return pricing;
+    };
+    let (input, output) = entry.effective_costs();
+    footer::Pricing {
+        in_per_1k: input,
+        out_per_1k: output,
+        window: entry.context_window,
+    }
+}
 
 /// How many recent conversations `/sessions` lists.
 const RECENT_LIMIT: usize = 10;
@@ -104,7 +137,8 @@ impl TerminalGuard {
             io::stdout(),
             EnterAlternateScreen,
             EnableBracketedPaste,
-            EnableMouseCapture
+            EnableMouseCapture,
+            EnableFocusChange
         )
         .context("enter alternate screen")?;
         Ok(Self)
@@ -118,6 +152,7 @@ impl Drop for TerminalGuard {
             LeaveAlternateScreen,
             DisableBracketedPaste,
             DisableMouseCapture,
+            DisableFocusChange,
             cursor::Show
         );
         let _ = disable_raw_mode();
@@ -148,6 +183,7 @@ async fn run_tui(
             LeaveAlternateScreen,
             DisableBracketedPaste,
             DisableMouseCapture,
+            DisableFocusChange,
             cursor::Show
         );
         let _ = disable_raw_mode();
@@ -159,6 +195,7 @@ async fn run_tui(
         Terminal::new(CrosstermBackend::new(io::stdout())).context("init terminal")?;
 
     let mut app = build_app(&home, &agent, resume, active_theme)?;
+    app.pricing = load_pricing(&home, &agent);
     if unknown_skin {
         app.push_system(format!(
             "unknown skin '{skin_name}', using dark — valid: dark, light, mur"
@@ -294,6 +331,11 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                         );
                     }
                 }
+                KeyCode::Char('o') if ctrl => {
+                    if let Err(e) = scrollback_dump(app) {
+                        app.push_system(format!("scrollback view failed: {e}"));
+                    }
+                }
                 KeyCode::PageUp => {
                     app.scroll_back = app.scroll_back.saturating_add(app.scroll_page.max(1))
                 }
@@ -363,8 +405,57 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
             }
             _ => {}
         },
+        Event::FocusGained => app.focused = true,
+        Event::FocusLost => app.focused = false,
         _ => {}
     }
+}
+
+/// Suspend the TUI, print the full transcript to native scrollback (so the
+/// terminal's own select/copy/search work), also save it to a temp file, then
+/// wait for Enter and resume. Blocking is intentional — the TUI is frozen while
+/// the user reads/copies; streaming messages queue until we return.
+fn scrollback_dump(app: &App) -> io::Result<()> {
+    let text = dump::transcript_to_text(&app.messages);
+    let path = std::env::temp_dir().join(format!("mur-transcript-{}.txt", app.agent));
+    let _ = std::fs::write(&path, &text);
+
+    // Suspend: leave alt-screen + restore the normal buffer where native copy
+    // and scrollback work; drop raw mode so `read_line` is canonical.
+    execute!(
+        io::stdout(),
+        LeaveAlternateScreen,
+        DisableBracketedPaste,
+        DisableMouseCapture
+    )?;
+    disable_raw_mode()?;
+
+    let res = (|| -> io::Result<()> {
+        use std::io::Write;
+        let mut out = io::stdout();
+        writeln!(out, "{text}")?;
+        writeln!(
+            out,
+            "\n─── full transcript · select/copy freely · saved to {} ───",
+            path.display()
+        )?;
+        write!(out, "press Enter to return to chat… ")?;
+        out.flush()?;
+        let mut buf = String::new();
+        let _ = io::stdin().read_line(&mut buf);
+        Ok(())
+    })();
+
+    // Resume UNCONDITIONALLY — even if a write above failed, never leave the
+    // terminal in the normal buffer with raw mode off.
+    enable_raw_mode()?;
+    execute!(
+        io::stdout(),
+        EnterAlternateScreen,
+        EnableBracketedPaste,
+        EnableMouseCapture
+    )?;
+    res
 }
 
 /// Write `cli.skin = name` to `~/.mur/config.yaml` atomically.
@@ -500,6 +591,9 @@ fn decide_hitl(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: bool) {
 
 fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: bool, auto: bool) {
     if let Some(req) = app.hitl.take() {
+        if let Some(sid) = &req.step_id {
+            app.clear_card_awaiting(sid);
+        }
         let (h, a) = (app.home.clone(), app.agent.clone());
         let (id, tool) = (req.hitl_id.clone(), req.tool_name.clone());
         let t = tx.clone();
@@ -546,10 +640,24 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         });
         return;
     }
-    // Reject (but DON'T discard) a message typed while a turn is generating —
-    // clearing the input here would silently lose what the user composed.
+    // While a turn is generating: steer it if we have a live task id,
+    // otherwise fall back to the old reject message.
     if app.streaming {
-        app.push_system("still generating — press Ctrl+C to cancel first");
+        if let Some(task_id) = app.current_task_id.clone() {
+            let (h, a) = (app.home.clone(), app.agent.clone());
+            let (msg, t) = (trimmed.clone(), tx.clone());
+            app.push_system(format!("↗ steering: {trimmed}"));
+            app.clear_input();
+            tokio::spawn(async move {
+                if let Err(e) = stream::steer_turn(h, a, task_id, msg).await {
+                    let _ = t
+                        .send(StreamMsg::Note(format!("steer failed: {e:#}")))
+                        .await;
+                }
+            });
+        } else {
+            app.push_system("still generating — press Ctrl+C to cancel first");
+        }
         return;
     }
     app.last_sent = Some(trimmed.clone());
@@ -758,21 +866,130 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
     match msg {
         StreamMsg::Delta { text, thinking, .. } => app.append_delta(&text, thinking),
         StreamMsg::Hitl { req, .. } => {
+            app.saw_hitl_this_turn = true;
+            if let Some(sid) = req.step_id.clone() {
+                app.mark_card_awaiting(&sid);
+            }
             // Session auto-approval: `/auto`/`--auto` covers every tool; the
             // modal's [a] key covers a single tool name.
             let auto = app.auto_approve || app.session_tool_allow.contains(&req.tool_name);
+            if !app.focused && !auto {
+                notify_unfocused(
+                    &app.agent,
+                    &format!("Tool approval needed: {}", req.tool_name),
+                );
+            }
             app.hitl = Some(req);
             if auto {
                 decide_hitl_with_note(app, tx, true, true);
             }
         }
-        StreamMsg::Done { task, .. } => match stream::task_outcome(&task) {
-            Ok((reply, task_id)) => app.finish_agent_turn(reply, task_id),
-            Err(cause) => app.fail_turn(&cause),
-        },
-        StreamMsg::Err { error, .. } => app.fail_turn(&error),
+        StreamMsg::Done { task, .. } => {
+            if !app.focused {
+                notify_unfocused(&app.agent, "Turn finished");
+            }
+            if let Some(u) = task.get("usage") {
+                app.apply_usage(u);
+            }
+            app.maybe_step_hint();
+            match stream::task_outcome(&task) {
+                Ok((reply, task_id)) => app.finish_agent_turn(reply, task_id),
+                Err(cause) => app.fail_turn(&cause),
+            }
+        }
+        StreamMsg::Err { error, .. } => {
+            if !app.focused {
+                notify_unfocused(&app.agent, "Turn failed");
+            }
+            app.fail_turn(&error);
+        }
         StreamMsg::Note(text) => app.push_system(text),
         StreamMsg::ShellDone { cmd, output } => app.push_shell(&cmd, &output),
+        StreamMsg::StepStarted {
+            step_id,
+            name,
+            args,
+            ..
+        } => {
+            app.saw_step_this_turn = true;
+            app.push_step_started(step_id, name, args);
+        }
+        StreamMsg::StepCompleted {
+            step_id,
+            ok,
+            output,
+            truncated,
+            full_len,
+            error,
+            duration_ms,
+            ..
+        } => {
+            app.update_step_completed(
+                &step_id,
+                ok,
+                output,
+                truncated,
+                full_len,
+                error,
+                duration_ms,
+            );
+        }
+    }
+}
+
+// ── OS notifications ─────────────────────────────────────────────────────────
+
+/// The macOS `osascript` line for a notification, with quotes escaped. Pure so
+/// the escaping is unit-tested; the spawn is in `notify_unfocused`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn notify_script(title: &str, message: &str) -> String {
+    format!(
+        "display notification \"{}\" with title \"{}\"",
+        message.replace('\\', "\\\\").replace('"', "\\\""),
+        title.replace('\\', "\\\\").replace('"', "\\\"")
+    )
+}
+
+/// Best-effort OS notification — fired only when the terminal is unfocused.
+/// Never blocks or errors the event loop (spawn-and-ignore), and emits no
+/// in-terminal bell (the TUI owns the alternate screen).
+fn notify_unfocused(title: &str, message: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("osascript")
+            .args(["-e", &notify_script(title, message)])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("notify-send")
+            .args([title, message])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (title, message); // no-op on other platforms
+    }
+}
+
+#[cfg(test)]
+mod notify_tests {
+    use super::notify_script;
+
+    #[test]
+    fn notify_script_escapes_quotes() {
+        let s = notify_script("rustsmith", r#"finished "the" task"#);
+        assert!(s.contains("display notification"));
+        // clean title → PLAIN quote delimiters
+        assert!(s.contains(r#"with title "rustsmith""#));
+        // embedded quotes in the message ARE escaped to \"
+        assert!(s.contains(r#"finished \"the\" task"#));
+        // the full message is wrapped in plain delimiters
+        assert!(s.contains(r#"display notification "finished \"the\" task""#));
     }
 }
 
@@ -832,6 +1049,7 @@ fn run_plain(home: &Path, agent: &str, auto: bool) -> Result<()> {
                     DialMode::RequireRunning,
                 );
             },
+            |_step| {},
         );
         match result {
             Ok(task) => match stream::task_outcome(&task) {

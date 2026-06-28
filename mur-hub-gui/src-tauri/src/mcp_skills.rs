@@ -7,6 +7,7 @@
 use crate::detail::{AgentDetail, get_agent_detail};
 use mur_core::cmd::agent::mcp::{McpAddPin, cmd_mcp_add, cmd_mcp_remove, cmd_mcp_set_enabled};
 use mur_core::cmd::agent::skill::{cmd_skill_add, cmd_skill_remove, cmd_skill_set_enabled};
+use mur_core::cmd::agent::skill_remote::{SkillPreview, install_skill_from_url, preview_skill_url};
 use serde::Serialize;
 
 /// Result of a skill install: the refreshed agent detail plus the id under
@@ -279,6 +280,31 @@ pub fn reveal_in_finder(path: String, agent: Option<String>) -> Result<(), Strin
         return Err(format!("path not found: {}", target.display()));
     }
     reveal_os(&target).map_err(|e| e.to_string())
+}
+
+/// Fetch, parse, and security-scan a remote skill URL for user review.
+/// Installs nothing.
+#[tauri::command]
+pub async fn agent_skill_preview_url(url: String) -> Result<SkillPreview, String> {
+    preview_skill_url(&url).await.map_err(|e| format!("{e:#}"))
+}
+
+/// Fetch and install a skill from a remote URL onto `name` agent.
+/// `accept_findings` must be `true` to install a skill with blocking security findings.
+#[tauri::command]
+pub async fn agent_skill_install_url(
+    name: String,
+    url: String,
+    accept_findings: bool,
+) -> Result<SkillInstallResult, String> {
+    let installed_id = install_skill_from_url(&name, &url, accept_findings)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    let detail = get_agent_detail(name)?;
+    Ok(SkillInstallResult {
+        detail,
+        installed_id,
+    })
 }
 
 fn reveal_os(path: &Path) -> std::io::Result<()> {

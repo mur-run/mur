@@ -51,6 +51,7 @@ mod restart;
 mod secret;
 mod service;
 pub mod skill;
+pub mod skill_remote;
 mod snapshot;
 pub mod stale;
 mod stats;
