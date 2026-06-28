@@ -318,6 +318,50 @@ pub async fn agent_skill_install_url(
     })
 }
 
+// ─── Skill registry (quill C — per-agent registry browse/install) ─────────────
+
+use mur_core::cmd::agent::skill_registry_add::{
+    ConsentInfo, RegistrySkillEntryView, cmd_skill_registry_add, registry_search_for_agent,
+    resolve_consent,
+};
+
+/// Search the shared skill registry by keyword. Returns registry entry views
+/// for the Hub "Browse registry" panel. Installs nothing.
+#[tauri::command]
+pub async fn agent_skill_registry_search(
+    query: String,
+) -> Result<Vec<RegistrySkillEntryView>, String> {
+    let home = mur_core::cmd::agent::resolve_mur_home().map_err(|e| format!("{e:#}"))?;
+    registry_search_for_agent(&home, &query).map_err(|e| format!("{e:#}"))
+}
+
+/// Build a consent bundle for a registry skill (hash-check + sig-verify +
+/// content-scan). Installs nothing — used to populate the Hub consent modal.
+#[tauri::command]
+pub async fn agent_skill_registry_preview(
+    skill: String,
+    version: Option<String>,
+) -> Result<ConsentInfo, String> {
+    let home = mur_core::cmd::agent::resolve_mur_home().map_err(|e| format!("{e:#}"))?;
+    resolve_consent(&home, &skill, version.as_deref()).map_err(|e| format!("{e:#}"))
+}
+
+/// Install a registry skill onto `name` agent at Sandboxed trust.
+/// `accept` gates `needs_ack` skills; blocking skills always abort.
+/// Returns the refreshed `AgentDetail` on success.
+#[tauri::command]
+pub async fn agent_skill_registry_install(
+    name: String,
+    skill: String,
+    version: Option<String>,
+    accept: bool,
+) -> Result<AgentDetail, String> {
+    cmd_skill_registry_add(&name, &skill, version.as_deref(), accept)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    get_agent_detail(name)
+}
+
 fn reveal_os(path: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
     {
