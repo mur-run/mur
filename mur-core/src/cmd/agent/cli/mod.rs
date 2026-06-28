@@ -767,18 +767,88 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
             // Session auto-approval: `/auto`/`--auto` covers every tool; the
             // modal's [a] key covers a single tool name.
             let auto = app.auto_approve || app.session_tool_allow.contains(&req.tool_name);
+            if !app.focused && !auto {
+                notify_unfocused(
+                    &app.agent,
+                    &format!("Tool approval needed: {}", req.tool_name),
+                );
+            }
             app.hitl = Some(req);
             if auto {
                 decide_hitl_with_note(app, tx, true, true);
             }
         }
-        StreamMsg::Done { task, .. } => match stream::task_outcome(&task) {
-            Ok((reply, task_id)) => app.finish_agent_turn(reply, task_id),
-            Err(cause) => app.fail_turn(&cause),
-        },
-        StreamMsg::Err { error, .. } => app.fail_turn(&error),
+        StreamMsg::Done { task, .. } => {
+            if !app.focused {
+                notify_unfocused(&app.agent, "Turn finished");
+            }
+            match stream::task_outcome(&task) {
+                Ok((reply, task_id)) => app.finish_agent_turn(reply, task_id),
+                Err(cause) => app.fail_turn(&cause),
+            }
+        }
+        StreamMsg::Err { error, .. } => {
+            if !app.focused {
+                notify_unfocused(&app.agent, "Turn failed");
+            }
+            app.fail_turn(&error);
+        }
         StreamMsg::Note(text) => app.push_system(text),
         StreamMsg::ShellDone { cmd, output } => app.push_shell(&cmd, &output),
+    }
+}
+
+// ── OS notifications ─────────────────────────────────────────────────────────
+
+/// The macOS `osascript` line for a notification, with quotes escaped. Pure so
+/// the escaping is unit-tested; the spawn is in `notify_unfocused`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn notify_script(title: &str, message: &str) -> String {
+    format!(
+        "display notification \\\"{}\\\" with title \\\"{}\\\"",
+        message.replace('\\', "\\\\").replace('"', "\\\""),
+        title.replace('\\', "\\\\").replace('"', "\\\"")
+    )
+}
+
+/// Best-effort OS notification — fired only when the terminal is unfocused.
+/// Never blocks or errors the event loop (spawn-and-ignore), and emits no
+/// in-terminal bell (the TUI owns the alternate screen).
+fn notify_unfocused(title: &str, message: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("osascript")
+            .args(["-e", &notify_script(title, message)])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("notify-send")
+            .args([title, message])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (title, message); // no-op on other platforms
+    }
+}
+
+#[cfg(test)]
+mod notify_tests {
+    use super::notify_script;
+
+    #[test]
+    fn notify_script_escapes_quotes() {
+        let s = notify_script("rustsmith", r#"finished "the" task"#);
+        assert!(s.contains("display notification"));
+        assert!(s.contains(r#"with title \"rustsmith\""#));
+        // embedded quotes in the message are escaped, not left raw
+        assert!(s.contains(r#"finished \"the\" task"#));
+        assert!(!s.contains(r#"finished "the""#)); // no unescaped inner quote
     }
 }
 
