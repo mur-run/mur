@@ -6,7 +6,6 @@ use std::collections::HashSet;
 use std::path::Path;
 
 /// Most rows shown before the menu scrolls (kept in sync with `ui.rs`).
-#[allow(dead_code)]
 pub const MAX_MENU_ROWS: usize = 8;
 
 /// One selectable menu entry.
