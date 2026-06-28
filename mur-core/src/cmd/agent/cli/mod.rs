@@ -805,7 +805,7 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn notify_script(title: &str, message: &str) -> String {
     format!(
-        "display notification \\\"{}\\\" with title \\\"{}\\\"",
+        "display notification \"{}\" with title \"{}\"",
         message.replace('\\', "\\\\").replace('"', "\\\""),
         title.replace('\\', "\\\\").replace('"', "\\\"")
     )
@@ -845,10 +845,12 @@ mod notify_tests {
     fn notify_script_escapes_quotes() {
         let s = notify_script("rustsmith", r#"finished "the" task"#);
         assert!(s.contains("display notification"));
-        assert!(s.contains(r#"with title \"rustsmith\""#));
-        // embedded quotes in the message are escaped, not left raw
+        // clean title → PLAIN quote delimiters
+        assert!(s.contains(r#"with title "rustsmith""#));
+        // embedded quotes in the message ARE escaped to \"
         assert!(s.contains(r#"finished \"the\" task"#));
-        assert!(!s.contains(r#"finished "the""#)); // no unescaped inner quote
+        // the full message is wrapped in plain delimiters
+        assert!(s.contains(r#"display notification "finished \"the\" task""#));
     }
 }
 
