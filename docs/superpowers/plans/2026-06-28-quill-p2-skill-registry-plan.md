@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Builds on the EXISTING registry; do NOT build a new one or change the index schema (`RegistrySkillEntry.content_sha256` already exists).
-- **Verify-on-install is fail-closed:** a content-hash **mismatch** or an **invalid** signature aborts the install unless `--yes`/explicit accept. **Absent** hash or **unsigned** → warn + require `--yes` (so it still works against today's unsigned registry). Never silently install on a verify failure.
+- **Verify-on-install is fail-closed:** a content-hash **mismatch** or an **invalid** signature aborts the install **unconditionally** (NOT `--yes`-overridable — this is proven tampering; the manual `mur agent skill add <local-path>` remains the escape hatch). **Absent** hash or **unsigned** → require `--yes` (so it still works against today's unsigned registry). Never silently install on a verify failure. (Adjudicated 2026-06-28: `blocking` = unconditional; only `needs_ack` is `--yes`-overridable.)
 - Registry skills install at **`TrustLevel::Sandboxed`** (least privilege).
 - Consent (CLI + Hub) shows publisher, signature status, hash status, trust level, declared MCP requirements, scan findings, and the full body BEFORE install; nothing acted on pre-consent.
 - Reuse `cmd::agent::skill::cmd_skill_add` for the actual write (it already validates + scans). Mirror feather's `mcp_registry::cmd_mcp_registry_add(agent, server_name)` shape.
@@ -483,7 +483,8 @@ git commit -m "feat(skill): per-agent registry-add (resolve+verify+install Sandb
     /// (e.g. `mur agent skill registry-add rustsmith rust-testing`). Verifies
     /// the content hash + publisher signature before installing (fail-closed);
     /// installs at the Sandboxed trust level. Use --yes to accept an
-    /// unsigned/unhashed skill or override a verify failure.
+    /// unsigned/unhashed skill (a hash mismatch / invalid signature is
+    /// refused unconditionally).
     RegistryAdd {
         /// Agent name
         name: String,

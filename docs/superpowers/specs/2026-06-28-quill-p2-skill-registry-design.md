@@ -107,7 +107,7 @@ No new index schema needed — `RegistrySkillEntry.content_sha256` already exist
 
 ## 5. Security model
 
-- **Verify-on-install, fail-closed** (§3.2): content-hash + DSSE signature checked **before** write; failure aborts unless `--yes`/explicit accept. This is the central upgrade over today's audit-only posture.
+- **Verify-on-install, fail-closed** (§3.2): content-hash + DSSE signature checked **before** write. A **hash mismatch or invalid signature** (proven tampering) aborts **unconditionally** (not `--yes`-overridable; `mur agent skill add <local-path>` is the manual escape). An **absent** hash or **unsigned** skill requires `--yes`. This is the central upgrade over today's audit-only posture.
 - **Least privilege**: registry skills install at `TrustLevel::Sandboxed`; the user elevates deliberately.
 - **Transparent consent** (§3.3): publisher, signature, trust, permissions, scan findings, full body shown before install; content not acted on pre-consent.
 - **Rug-pull** (§3.6): re-verify on update; re-prompt on drift.
