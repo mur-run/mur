@@ -26,6 +26,8 @@ interface ConsentInfo {
   publisher: string;
   category: string;
   signature: SigView;
+  /** Three-state signer trust: "trusted" | "untrusted" | "revoked" | "unsigned" | "invalid" */
+  signer_trust: string;
   hash: string;
   mcp_requirements: string[];
   findings: string[];
@@ -53,8 +55,9 @@ export function SkillRegistryModal({ agentName, onClose, onSaved }: Props) {
   const [results, setResults] = useState<RegistrySkillEntryView[] | null>(null);
   const [consent, setConsent] = useState<ConsentInfo | null>(null);
   const [accept, setAccept]   = useState(false);
-  const [busy, setBusy]       = useState<null | "search" | "preview" | "install">(null);
+  const [busy, setBusy]       = useState<null | "search" | "preview" | "install" | "trust">(null);
   const [error, setError]     = useState<string | null>(null);
+  const [trustDone, setTrustDone] = useState(false);
 
   async function search() {
     setError(null);
@@ -71,10 +74,33 @@ export function SkillRegistryModal({ agentName, onClose, onSaved }: Props) {
     }
   }
 
+  async function trustPublisher() {
+    if (!consent || !consent.signature.key_fp) return;
+    setError(null);
+    setBusy("trust");
+    try {
+      await invoke("agent_skill_trust_publisher", {
+        keyFp: consent.signature.key_fp,
+        name: consent.publisher || undefined,
+      });
+      setTrustDone(true);
+      // Re-run preview so signer_trust refreshes to "trusted".
+      const updated = await invoke<ConsentInfo>("agent_skill_registry_preview", {
+        skill: consent.name,
+      });
+      setConsent(updated);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function preview(skillName: string) {
     setError(null);
     setConsent(null);
     setAccept(false);
+    setTrustDone(false);
     setBusy("preview");
     try {
       setConsent(await invoke<ConsentInfo>("agent_skill_registry_preview", { skill: skillName }));
@@ -207,6 +233,16 @@ export function SkillRegistryModal({ agentName, onClose, onSaved }: Props) {
                   <span className="item-card__meta">{consent.category}</span>
                   <span className="item-card__meta">v{consent.version}</span>
                   <span className={sigCls}>{sigLabel}</span>
+                  {/* ── Signer trust badge ── */}
+                  {consent.signer_trust === "trusted" && (
+                    <span className="badge badge--ok">✓ {t("skillreg.trusted")}</span>
+                  )}
+                  {consent.signer_trust === "untrusted" && (
+                    <span className="badge badge--warn">⚠ {t("skillreg.untrusted")}</span>
+                  )}
+                  {consent.signer_trust === "revoked" && (
+                    <span className="badge badge--err">✗ {t("skillreg.revoked")}</span>
+                  )}
                   {consent.signature.status === "verified" && consent.signature.key_fp && (
                     <span className="field-muted" style={{ fontSize: 11, fontFamily: "monospace" }}>
                       {consent.signature.key_fp}
@@ -217,6 +253,22 @@ export function SkillRegistryModal({ agentName, onClose, onSaved }: Props) {
                   <span className="field-label" style={{ marginRight: 4 }}>{t("skillreg.publisher")}:</span>
                   {consent.publisher}
                 </p>
+                {/* ── TOFU action: only for unknown (untrusted) signed skills ── */}
+                {consent.signer_trust === "untrusted" && consent.signature.key_fp && (
+                  <div style={{ marginTop: 6 }}>
+                    {trustDone ? (
+                      <span className="badge badge--ok">{t("skillreg.trustedDone")}</span>
+                    ) : (
+                      <button
+                        className="btn btn--sm btn--secondary"
+                        disabled={busy !== null}
+                        onClick={trustPublisher}
+                      >
+                        {busy === "trust" ? "…" : t("skillreg.trustPublisher")}
+                      </button>
+                    )}
+                  </div>
+                )}
                 <p style={{ margin: "2px 0 0", fontSize: 12 }}>
                   <span className="field-label" style={{ marginRight: 4 }}>{t("skillreg.hash")}:</span>
                   <code style={{ fontSize: 11 }}>{consent.hash || t("skillreg.hashAbsent")}</code>
