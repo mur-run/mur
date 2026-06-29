@@ -33,9 +33,8 @@ use std::time::Instant as StdInstant;
 
 use anyhow::{Context, Result};
 use crossterm::event::{
-    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture, Event, EventStream, KeyCode, KeyEventKind, KeyModifiers,
-    MouseEventKind,
+    DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange, Event,
+    EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind,
 };
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -90,7 +89,7 @@ const SPINNER_MS: u64 = 90;
 /// Max chars of an arg hint shown on a step line in `--plain` mode.
 const PLAIN_STEP_HINT_MAX: usize = 120;
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /auto [on|off]  /mcp  /skill  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Alt+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll (or mouse wheel)";
+const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /auto [on|off]  /mcp  /skill  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
 pub async fn cmd_cli(
@@ -170,7 +169,6 @@ impl TerminalGuard {
             io::stdout(),
             EnterAlternateScreen,
             EnableBracketedPaste,
-            EnableMouseCapture,
             EnableFocusChange
         )
         .context("enter alternate screen")?;
@@ -184,7 +182,6 @@ impl Drop for TerminalGuard {
             io::stdout(),
             LeaveAlternateScreen,
             DisableBracketedPaste,
-            DisableMouseCapture,
             DisableFocusChange,
             cursor::Show
         );
@@ -217,7 +214,6 @@ async fn run_tui(
             io::stdout(),
             LeaveAlternateScreen,
             DisableBracketedPaste,
-            DisableMouseCapture,
             DisableFocusChange,
             cursor::Show
         );
@@ -366,7 +362,7 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                 app.last_esc_at = None;
                 app.esc_hint = false;
             }
-            let alt = key.modifiers.contains(KeyModifiers::ALT);
+            let shift = key.modifiers.contains(KeyModifiers::SHIFT);
             // While the completion menu is open it owns navigation / accept /
             // dismiss keys; everything else falls through to normal editing and
             // re-filters the menu at the end of this handler.
@@ -431,7 +427,7 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                     app.scroll_back = app.scroll_back.saturating_sub(app.scroll_page.max(1))
                 }
                 KeyCode::Tab => refresh_completion(app),
-                KeyCode::Enter if alt => {
+                KeyCode::Enter if shift => {
                     app.input.insert_newline();
                 }
                 KeyCode::Enter => submit(app, tx).await,
@@ -512,12 +508,7 @@ fn scrollback_dump(app: &App) -> io::Result<()> {
 
     // Suspend: leave alt-screen + restore the normal buffer where native copy
     // and scrollback work; drop raw mode so `read_line` is canonical.
-    execute!(
-        io::stdout(),
-        LeaveAlternateScreen,
-        DisableBracketedPaste,
-        DisableMouseCapture
-    )?;
+    execute!(io::stdout(), LeaveAlternateScreen, DisableBracketedPaste,)?;
     disable_raw_mode()?;
 
     let res = (|| -> io::Result<()> {
@@ -539,12 +530,7 @@ fn scrollback_dump(app: &App) -> io::Result<()> {
     // Resume UNCONDITIONALLY — even if a write above failed, never leave the
     // terminal in the normal buffer with raw mode off.
     enable_raw_mode()?;
-    execute!(
-        io::stdout(),
-        EnterAlternateScreen,
-        EnableBracketedPaste,
-        EnableMouseCapture
-    )?;
+    execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste,)?;
     res
 }
 
@@ -798,7 +784,10 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         app.cwd_sent = true;
         app.cwd
             .as_ref()
-            .map(|d| format!("[working directory: {}]\n\n", d.display()))
+            .map(|d| format!(
+                "[working directory: {path}] — pass `\"cwd\": \"{path}\"` in every bash tool call so commands run in this directory.\n\n",
+                path = d.display()
+            ))
             .unwrap_or_default()
     } else {
         String::new()

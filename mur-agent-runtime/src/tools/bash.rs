@@ -30,6 +30,10 @@ impl ToolExecutor for BashTool {
                     "command": {
                         "type": "string",
                         "description": "The bash command to execute"
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Working directory for the command. Defaults to the agent home directory."
                     }
                 },
                 "required": ["command"]
@@ -43,12 +47,17 @@ impl ToolExecutor for BashTool {
             .ok_or_else(|| ToolError::InvalidInput("missing 'command' field".into()))?
             .to_string();
 
+        let working_dir = input["cwd"]
+            .as_str()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.working_dir.clone());
+
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(30),
             Command::new("bash")
                 .arg("-c")
                 .arg(&command)
-                .current_dir(&self.working_dir)
+                .current_dir(&working_dir)
                 .output(),
         )
         .await
