@@ -196,7 +196,7 @@ pub fn cmd_fleet_cherry(
 }
 
 /// Copy `result_dir` contents into `dest`, refusing if `dest` has uncommitted changes.
-fn promote_cherry_result(result_dir: &Path, dest: &Path) -> Result<()> {
+pub(super) fn promote_cherry_result(result_dir: &Path, dest: &Path) -> Result<()> {
     // Guard: refuse if destination has uncommitted changes.
     let status_out = std::process::Command::new("git")
         .args(["status", "--porcelain"])
@@ -233,7 +233,7 @@ fn promote_cherry_result(result_dir: &Path, dest: &Path) -> Result<()> {
 }
 
 /// Resolve the main project root from a worktree path via git-common-dir.
-fn project_root_from_worktree(worktree: &Path) -> Option<PathBuf> {
+pub(super) fn project_root_from_worktree(worktree: &Path) -> Option<PathBuf> {
     let out = std::process::Command::new("git")
         .args(["rev-parse", "--git-common-dir"])
         .current_dir(worktree)
