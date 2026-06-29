@@ -13,7 +13,10 @@ fn handle(req: ZfsRequest) -> ZfsResponse {
             let result = zfs::dataset_for_path(&base).and_then(|ds| {
                 let snap = zfs::zfs_snapshot(&ds, &format!("mur-parallel-base-{name}"))?;
                 let track_ds = format!("{ds}/mur-tracks/{name}");
-                zfs::zfs_clone(&snap, &track_ds)
+                let mount = zfs::zfs_clone(&snap, &track_ds)?;
+                // Establish base snapshot for diff/promote.
+                zfs::zfs_snapshot(&track_ds, "mur-base")?;
+                Ok(mount)
             });
             match result {
                 Ok(path) => ZfsResponse::Track { path },
@@ -33,9 +36,17 @@ fn handle(req: ZfsRequest) -> ZfsResponse {
             }
         }
         ZfsRequest::DiffFiles { track, since } => {
-            match zfs::dataset_for_path(&track)
-                .and_then(|ds| zfs::zfs_diff(&ds, &since))
-            {
+            match zfs::dataset_for_path(&track).and_then(|ds| {
+                // `since` may be a bare label (e.g. "mur-base") or a full ref
+                // (e.g. "pool/ds@mur-base"). If it already contains '@', use it
+                // as-is; otherwise format as "{ds}@{since}".
+                let snap_ref = if since.contains('@') {
+                    since.clone()
+                } else {
+                    format!("{ds}@{since}")
+                };
+                zfs::zfs_diff_ref(&snap_ref, &ds)
+            }) {
                 Ok(paths) => ZfsResponse::Files { paths },
                 Err(e) => ZfsResponse::Error {
                     message: e.to_string(),
@@ -46,7 +57,10 @@ fn handle(req: ZfsRequest) -> ZfsResponse {
             let result = zfs::dataset_for_path(&track)
                 .and_then(|ds| zfs::zfs_diff(&ds, "mur-base"))
                 .and_then(|changed| {
-                    for rel in &changed {
+                    for abs_path in &changed {
+                        // zfs_diff returns absolute paths; strip the track mountpoint
+                        // prefix to get a relative path before joining with src/dst.
+                        let rel = abs_path.strip_prefix(&track).unwrap_or(abs_path);
                         let src = track.join(rel);
                         let dst = target.join(rel);
                         if src.is_file() {
