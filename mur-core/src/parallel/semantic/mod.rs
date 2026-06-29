@@ -1,5 +1,6 @@
 //! Semantic unit extraction and content-addressable storage.
 
+pub mod cas;
 pub mod tree_sitter_parse;
 
 use serde::{Deserialize, Serialize};
