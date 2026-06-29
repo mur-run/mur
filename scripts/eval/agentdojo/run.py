@@ -30,6 +30,31 @@ DEFAULT_FIXTURES = _HERE.parent / "fixtures" / "synthetic_cases.json"
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 
+def _deepseek_openai_client(api_key: str) -> "openai.OpenAI":
+    """Return an OpenAI client pointed at DeepSeek with a transport shim that
+    translates the 'developer' role (OpenAI SDK ≥1.x) → 'system', which
+    DeepSeek's API doesn't recognise."""
+    import json
+    import openai
+    import httpx
+
+    class _RoleFixTransport(httpx.BaseTransport):
+        def __init__(self, wrapped: httpx.BaseTransport) -> None:
+            self._wrapped = wrapped
+
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            if b"chat/completions" in request.url.raw_path and request.content:
+                body = json.loads(request.content)
+                for msg in body.get("messages", []):
+                    if msg.get("role") == "developer":
+                        msg["role"] = "system"
+                request = request.copy(content=json.dumps(body).encode())
+            return self._wrapped.handle_request(request)
+
+    http_client = httpx.Client(transport=_RoleFixTransport(httpx.HTTPTransport()))
+    return openai.OpenAI(api_key=api_key, base_url=_DEEPSEEK_BASE_URL, http_client=http_client)
+
+
 def _build_llm(backend: str, model: str):
     """Return an agentdojo LLM pipeline element for the given backend."""
     from agentdojo.agent_pipeline import AnthropicLLM, OpenAILLM
@@ -45,8 +70,10 @@ def _build_llm(backend: str, model: str):
             raise RuntimeError(
                 "DEEPSEEK_API_KEY or OPENAI_API_KEY must be set for openai/deepseek backend"
             )
-        base_url = _DEEPSEEK_BASE_URL if backend == "deepseek" else None
-        client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        if backend == "deepseek":
+            client = _deepseek_openai_client(api_key)
+        else:
+            client = openai.OpenAI(api_key=api_key)
         return OpenAILLM(client, model, temperature=0.0)
     else:
         raise ValueError(f"unsupported real-LLM backend: {backend!r}")
