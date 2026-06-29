@@ -792,7 +792,10 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         app.cwd_sent = true;
         app.cwd
             .as_ref()
-            .map(|d| format!("[working directory: {}]\n\n", d.display()))
+            .map(|d| format!(
+                "[working directory: {path}] — pass `\"cwd\": \"{path}\"` in every bash tool call so commands run in this directory.\n\n",
+                path = d.display()
+            ))
             .unwrap_or_default()
     } else {
         String::new()
