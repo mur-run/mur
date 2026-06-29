@@ -76,9 +76,10 @@ def _run_with_real_llm(
     injections = suite.get_injection_vector_defaults()
 
     llm = _build_llm(backend, model)
+    # ponytail: no SystemMessage — avoids 'developer' role rejection on
+    # DeepSeek/non-OpenAI backends; irrelevant to injection-resistance measurement.
     pipeline = AgentPipeline(
         [
-            SystemMessage("You are a helpful assistant."),
             InitQuery(),
             llm,
             ToolsExecutionLoop([llm, ToolsExecutor()]),
