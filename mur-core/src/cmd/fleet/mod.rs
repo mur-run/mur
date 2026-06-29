@@ -11,6 +11,7 @@ pub mod jobs;
 pub mod judge_cmd;
 pub mod list;
 pub mod loop_run;
+pub mod partition_cmd;
 pub mod plan;
 pub mod roster;
 pub mod run;
