@@ -66,7 +66,7 @@ mod tests {
     fn add_then_remove_member_syncs_fleet_and_is_idempotent() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, Some("g".into())).unwrap();
+        create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, Some("g".into()), None).unwrap();
 
         cmd_fleet_add(home, "dev", vec!["qa".into()]).unwrap();
         cmd_fleet_add(home, "dev", vec!["qa".into()]).unwrap(); // idempotent
@@ -89,6 +89,7 @@ mod tests {
             vec!["mur".into(), "pm".into()],
             None,
             Some("g".into()),
+            None,
         )
         .unwrap();
         assert!(cmd_fleet_remove(home, "dev", vec!["mur".into()]).is_err());
@@ -105,6 +106,7 @@ mod tests {
             vec!["mur".into(), "pm".into()],
             None,
             Some("g".into()),
+            None,
         )
         .unwrap();
 

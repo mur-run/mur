@@ -59,7 +59,7 @@ mod tests {
     fn delete_removes_fleet_dir_and_channel() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, Some("g".into())).unwrap();
+        create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, Some("g".into()), None).unwrap();
         assert!(store::fleet_path(home, "dev").exists());
         let svc = mur_channel::ChannelService::open(home).unwrap();
         assert!(svc.store().load_manifest("fleet-dev").is_ok());

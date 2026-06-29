@@ -200,7 +200,7 @@ mod tests {
         let home = tmp.path();
         // no fleet yet → error
         assert!(cmd_fleet_send(home, "dev", "do it").is_err());
-        super::super::create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, None).unwrap();
+        super::super::create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, None, None).unwrap();
         cmd_fleet_send(home, "dev", "do it").unwrap();
         let jobs = list_jobs(home, "dev").unwrap();
         assert_eq!(jobs.len(), 1);

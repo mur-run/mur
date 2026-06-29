@@ -4,6 +4,7 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 use mur_common::fleet::{CONCIERGE_AGENT, Fleet, valid_fleet_name};
+use mur_common::parallel::ParallelConfig;
 
 use super::store;
 
@@ -13,6 +14,7 @@ pub fn cmd_fleet_create(
     members: Vec<String>,
     router: Option<String>,
     goal: Option<String>,
+    parallel: Option<ParallelConfig>,
 ) -> Result<()> {
     if !valid_fleet_name(name) {
         bail!("invalid fleet name '{name}': use lowercase letters, digits, '-' or '_'");
@@ -46,7 +48,7 @@ pub fn cmd_fleet_create(
         rules: vec![],
         skills: vec![],
         loop_cfg: None,
-        parallel: None,
+        parallel,
     };
     store::save_fleet(mur_home, &fleet)?;
     println!("Created fleet '{name}' (channel {})", ch.id);
