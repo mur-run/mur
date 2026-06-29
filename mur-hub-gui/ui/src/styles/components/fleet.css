@@ -231,13 +231,11 @@
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: var(--color-brand-soft, rgba(99,102,241,0.2));
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  overflow: hidden;
   flex: none;
-  color: var(--text-primary);
 }
 
 .fleet-member__name {

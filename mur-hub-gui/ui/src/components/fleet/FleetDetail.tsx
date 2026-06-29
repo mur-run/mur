@@ -1,13 +1,17 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { useT } from "../../i18n";
 import type { TranslationKey } from "../../i18n/types";
+import type { AgentEntry } from "../../types";
+import { CATEGORY_COLORS, avatarPreset, familyOf } from "../../utils";
+import { PetFace } from "../PetFace";
 import type { FleetDetail as Detail, JobRow } from "./types";
 
 interface Props {
   detail: Detail;
   jobs: JobRow[];
+  agentMap: Map<string, AgentEntry>;
   onRefresh: () => void;
   onDelete: () => void;
 }
@@ -34,11 +38,7 @@ function jobStatusClass(status: JobRow["status"]): string {
   return `fleet-job__status fleet-job__status--${status}`;
 }
 
-function memberInitial(name: string): string {
-  return name.charAt(0).toUpperCase();
-}
-
-export function FleetDetail({ detail, jobs, onRefresh, onDelete }: Props) {
+export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Props) {
   const { t } = useT();
   const [busy, setBusy] = useState<string | null>(null);
   const [sendInput, setSendInput] = useState("");
@@ -125,7 +125,8 @@ export function FleetDetail({ detail, jobs, onRefresh, onDelete }: Props) {
 
   async function handleDelete() {
     const msg = t("fleet.confirmDelete").replace("{name}", detail.display_name);
-    if (!window.confirm(msg)) return;
+    const ok = await confirm(msg, { title: t("fleet.delete"), kind: "warning" });
+    if (!ok) return;
     setBusy("fleet_delete");
     try {
       await invoke("fleet_delete", { name: detail.name });
@@ -184,9 +185,20 @@ export function FleetDetail({ detail, jobs, onRefresh, onDelete }: Props) {
       <div className="fleet-section">
         <div className="fleet-section__label">{t("fleet.members")}</div>
         <div className="fleet-members">
-          {detail.members.map((m) => (
+          {detail.members.map((m) => {
+            const agent = agentMap.get(m) ?? agentMap.get(m.toLowerCase());
+            const color = agent ? (CATEGORY_COLORS[agent.category] ?? "#6B7280") : "#6B7280";
+            return (
             <div key={m} className="fleet-member">
-              <div className="fleet-member__avatar">{memberInitial(m)}</div>
+              <div className="fleet-member__avatar" style={agent ? {} : { background: color }}>
+                {agent ? (
+                  <PetFace presetId={avatarPreset(agent)} family={familyOf(avatarPreset(agent))} expression="idle" size={24} animate={false} />
+                ) : (
+                  <span style={{ fontSize: 12, color: "#fff", fontWeight: 600 }}>
+                    {m.charAt(0).toUpperCase()}
+                  </span>
+                )}
+              </div>
               <span className="fleet-member__name">{m}</span>
               <button
                 className="fleet-member__remove"
@@ -196,7 +208,8 @@ export function FleetDetail({ detail, jobs, onRefresh, onDelete }: Props) {
                 ✕
               </button>
             </div>
-          ))}
+            );
+          })}
         </div>
         <div className="fleet-add-member">
           <input
