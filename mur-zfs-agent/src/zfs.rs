@@ -69,6 +69,7 @@ pub fn zfs_diff(dataset: &str, since_snap: &str) -> Result<Vec<PathBuf>> {
 }
 
 /// Promote a clone dataset (makes it independent of its origin).
+#[allow(dead_code)]
 pub fn zfs_promote(dataset: &str) -> Result<()> {
     let st = Command::new("zfs")
         .args(["promote", dataset])
