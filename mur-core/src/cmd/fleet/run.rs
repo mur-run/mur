@@ -1,7 +1,7 @@
 //! `mur fleet run` — one iteration: fan the goal out to each member over the
 //! shared channel via the existing DAG executor (delegation), then print replies.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use mur_common::channel::ChannelActor;
@@ -14,6 +14,7 @@ use crate::parallel::partition::{
     prompt::region_prompt,
 };
 use crate::parallel::semantic::{SupportedLanguage, extract_units};
+use crate::parallel::track::{TrackSet, worktree};
 
 use super::store;
 
@@ -150,6 +151,63 @@ pub fn resolve_run_goal(
     Ok((goal, active))
 }
 
+/// Tier 1 worktree execution is gated (experimental, default OFF). When set,
+/// a fleet that has a `parallel:` block fans each track into its own git
+/// worktree instead of broadcasting to members in the shared checkout.
+const EXEC_FLAG_ENV: &str = "MUR_PARALLEL_EXEC";
+
+fn parallel_exec_enabled() -> bool {
+    std::env::var(EXEC_FLAG_ENV).as_deref() == Ok("1")
+}
+
+/// Main repo root (where `.worktrees/` lives), discovered from the invoking cwd.
+fn discover_repo_root() -> Result<PathBuf> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .context("git rev-parse --show-toplevel")?;
+    if !out.status.success() {
+        bail!("parallel execution must run inside a git repository");
+    }
+    Ok(PathBuf::from(
+        String::from_utf8_lossy(&out.stdout).trim().to_string(),
+    ))
+}
+
+/// Concurrency cap for the fan-out — closes the unbounded-spawn gap documented
+/// on `DagExecOptions::max_concurrency` (N worktree agents must not cascade past
+/// API rate limits). At most `cores-2`, never below 1, never above the step count.
+fn fanout_cap(n_steps: usize) -> usize {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    n_steps.min(cores.saturating_sub(2).max(1)).max(1)
+}
+
+/// Prompt-route each track's delegate step to work + commit INSIDE its own
+/// worktree, via the bash tool's existing per-call `cwd` parameter (Tier 1:
+/// no runtime change, best-effort isolation). Steps match tracks by `id`.
+fn inject_worktree_routing(procedure: &mut Procedure, tracks: &TrackSet) {
+    for step in &mut procedure.steps {
+        let Some(id) = step.id.clone() else { continue };
+        let Some(track) = tracks.tracks.iter().find(|t| t.config.name == id) else {
+            continue;
+        };
+        let wt = track.worktree_path.display();
+        let routing = format!(
+            "\n\nIMPORTANT — you are in an ISOLATED worktree; stay inside it:\n\
+             - Working directory is `{wt}`. Pass cwd=`{wt}` on EVERY bash/shell call.\n\
+             - Edit only files under `{wt}` (absolute paths). Never touch files outside it.\n\
+             - When finished, commit so your result can be merged:\n\
+             \x20   cd {wt} && git add -A && git commit -m \"{id}: done\""
+        );
+        match &mut step.intent {
+            Some(intent) => intent.push_str(&routing),
+            None => step.intent = Some(routing),
+        }
+    }
+}
+
 pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>) -> Result<()> {
     let fleet = store::load_fleet(mur_home, name)?;
     if fleet.members.is_empty() {
@@ -175,12 +233,38 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>)
         goal: goal.clone(),
         ..fleet.clone()
     };
-    // Router plans which members do what (with deps); falls back to broadcast-to-all.
-    let proc =
-        super::plan::plan_via_router(mur_home, &planning_fleet, &events).unwrap_or_else(|| {
-            build_fleet_procedure(&goal, &fleet.members, fleet.parallel.as_ref())
-                .expect("members validated by caller guard")
-        });
+    // Tier 1 parallel execution (gated, experimental): create one git worktree
+    // per track and route each delegate into it. Otherwise: router plan, else
+    // broadcast-to-all. The router does not model worktrees, so the parallel
+    // path deliberately bypasses it.
+    let exec_parallel = parallel_exec_enabled() && fleet.parallel.is_some();
+    let (proc, track_set) = if exec_parallel {
+        let cfg = fleet.parallel.as_ref().expect("guarded by exec_parallel");
+        let repo_root = discover_repo_root()?;
+        let fleet_dir = mur_home.join("fleets").join(name);
+        // Clean slate: tear down any leftover worktrees from a prior run of THIS fleet.
+        if let Ok(prev) = TrackSet::load(&fleet_dir) {
+            worktree::destroy_tracks(&prev, &repo_root);
+        }
+        let ts = worktree::create_tracks(cfg, &repo_root).context("create per-track worktrees")?;
+        ts.save(&fleet_dir)?;
+        let mut p = build_fleet_procedure(&goal, &fleet.members, Some(cfg))?;
+        inject_worktree_routing(&mut p, &ts);
+        println!(
+            "[parallel] {} worktree(s) under {}/.worktrees — routing one agent each",
+            ts.tracks.len(),
+            repo_root.display()
+        );
+        (p, Some(ts))
+    } else {
+        // Router plans which members do what (with deps); falls back to broadcast-to-all.
+        let p =
+            super::plan::plan_via_router(mur_home, &planning_fleet, &events).unwrap_or_else(|| {
+                build_fleet_procedure(&goal, &fleet.members, fleet.parallel.as_ref())
+                    .expect("members validated by caller guard")
+            });
+        (p, None)
+    };
     let run_id = format!("run-{}", uuid::Uuid::now_v7());
     let opts = crate::executor::dag::DagExecOptions {
         // Fail-closed default: do NOT blanket-approve. Fleet delegation steps carry
@@ -190,6 +274,8 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>)
         yes: false,
         channel_id: Some(fleet.channel_id.clone()),
         run_id: run_id.clone(),
+        // Cap fan-out so N worktree agents don't cascade past API rate limits.
+        max_concurrency: exec_parallel.then(|| fanout_cap(proc.steps.len())),
         ..Default::default()
     };
     // skill_name here is a readable run-history label; channel routing still uses opts.channel_id.
@@ -234,12 +320,90 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>)
             println!("[{id}] {text}");
         }
     }
+
+    // Tier 1: leave worktrees + tracks.json intact for the existing reconcilers
+    // (auto-destroy would discard the agents' committed work). Print next steps.
+    if let Some(ts) = &track_set {
+        let is_partition = fleet
+            .parallel
+            .as_ref()
+            .map(|c| c.mode == ParallelMode::Partition)
+            .unwrap_or(false);
+        println!(
+            "\n[parallel] {} track(s) done in their worktrees. Reconcile with:",
+            ts.tracks.len()
+        );
+        if is_partition {
+            println!("  mur fleet merge {name}");
+        } else {
+            println!("  mur fleet compare {name}");
+            println!("  MUR_PARALLEL_CONCURRENT=1 mur fleet merge-concurrent {name} --stats");
+        }
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exec_flag_gates_parallel_execution() {
+        unsafe { std::env::remove_var(EXEC_FLAG_ENV) };
+        assert!(!parallel_exec_enabled());
+        unsafe { std::env::set_var(EXEC_FLAG_ENV, "1") };
+        assert!(parallel_exec_enabled());
+        unsafe { std::env::remove_var(EXEC_FLAG_ENV) };
+    }
+
+    #[test]
+    fn fanout_cap_is_bounded_and_nonzero() {
+        assert!(fanout_cap(0) >= 1, "never zero");
+        assert_eq!(fanout_cap(1), 1, "never exceeds the step count");
+        assert!(fanout_cap(64) >= 1);
+    }
+
+    #[test]
+    fn worktree_routing_injected_per_track_by_id() {
+        use crate::parallel::track::{Track, TrackSet};
+        use mur_common::parallel::TrackConfig;
+        let mk = |id: &str, intent: &str| ProcedureStep {
+            id: Some(id.into()),
+            intent: Some(intent.into()),
+            ..Default::default()
+        };
+        let mut proc = Procedure {
+            variables: vec![],
+            steps: vec![
+                mk("track-a", "do A"),
+                mk("track-b", "do B"),
+                mk("other", "do C"),
+            ],
+        };
+        let track = |name: &str, path: &str| Track {
+            config: TrackConfig {
+                name: name.into(),
+                approach: String::new(),
+                model: None,
+            },
+            worktree_path: path.into(),
+        };
+        let ts = TrackSet {
+            tracks: vec![track("track-a", "/wt/a"), track("track-b", "/wt/b")],
+        };
+
+        inject_worktree_routing(&mut proc, &ts);
+
+        let a = proc.steps[0].intent.as_ref().unwrap();
+        assert!(a.starts_with("do A"), "original intent preserved");
+        assert!(
+            a.contains("/wt/a") && a.contains("cwd"),
+            "routed to its worktree via cwd"
+        );
+        assert!(proc.steps[1].intent.as_ref().unwrap().contains("/wt/b"));
+        // A step with no matching track is left untouched.
+        assert_eq!(proc.steps[2].intent.as_deref(), Some("do C"));
+    }
 
     #[test]
     fn build_fleet_procedure_one_delegate_step_per_member() {
