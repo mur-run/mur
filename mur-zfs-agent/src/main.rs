@@ -1,6 +1,7 @@
 use anyhow::Result;
 use mur_common::zfs_protocol::{ZfsRequest, ZfsResponse};
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixListener;
 
 mod zfs;
@@ -88,6 +89,7 @@ fn handle(req: ZfsRequest) -> ZfsResponse {
     }
 }
 
+#[cfg(unix)]
 fn serve(socket_path: &str) -> Result<()> {
     // Remove stale socket if present.
     let _ = std::fs::remove_file(socket_path);
@@ -117,6 +119,7 @@ fn serve(socket_path: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn handle_connection(stream: std::os::unix::net::UnixStream) -> Result<()> {
     let mut writer = stream.try_clone()?;
     let reader = BufReader::new(stream);
@@ -146,9 +149,19 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) -> Result<()> {
     Ok(())
 }
 
-fn main() -> Result<()> {
-    let socket_path =
-        std::env::var("MUR_ZFS_SOCKET").unwrap_or_else(|_| DEFAULT_SOCKET.to_string());
-
-    serve(&socket_path)
+fn main() {
+    #[cfg(not(unix))]
+    {
+        eprintln!("mur-zfs-agent only supports Unix");
+        std::process::exit(1);
+    }
+    #[cfg(unix)]
+    {
+        let socket_path =
+            std::env::var("MUR_ZFS_SOCKET").unwrap_or_else(|_| DEFAULT_SOCKET.to_string());
+        if let Err(e) = serve(&socket_path) {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    }
 }
