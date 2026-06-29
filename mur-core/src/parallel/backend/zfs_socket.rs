@@ -3,6 +3,7 @@ use super::ParallelBackend;
 use anyhow::{Context, Result, bail};
 use mur_common::zfs_protocol::{ZfsRequest, ZfsResponse};
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
@@ -19,6 +20,7 @@ impl ZfsSocketBackend {
         Self { socket_path, project_root }
     }
 
+    #[cfg(unix)]
     fn call(&self, req: ZfsRequest) -> Result<ZfsResponse> {
         let stream = UnixStream::connect(&self.socket_path)
             .context("connect to mur-zfs-agent socket")?;
@@ -31,6 +33,11 @@ impl ZfsSocketBackend {
         let mut resp_line = String::new();
         reader.read_line(&mut resp_line)?;
         serde_json::from_str(resp_line.trim()).context("parse ZfsResponse")
+    }
+
+    #[cfg(not(unix))]
+    fn call(&self, _req: ZfsRequest) -> Result<ZfsResponse> {
+        bail!("ZFS socket backend requires Unix")
     }
 }
 
@@ -69,19 +76,14 @@ impl ParallelBackend for ZfsSocketBackend {
     }
 
     fn promote(&self, track: &Path, target: &Path) -> Result<()> {
-        // OrbStack/Lima expose the same host-side absolute path, so paths are directly usable here.
-        // ponytail: breaks if VM mounts host FS at a different path prefix.
-        for rel in self.diff_files(track, "mur-base")? {
-            let src = track.join(&rel);
-            let dst = target.join(&rel);
-            if src.is_file() {
-                if let Some(p) = dst.parent() {
-                    std::fs::create_dir_all(p)?;
-                }
-                std::fs::copy(&src, &dst)?;
-            }
+        match self.call(ZfsRequest::Promote {
+            track: track.into(),
+            target: target.into(),
+        })? {
+            ZfsResponse::Ok => Ok(()),
+            ZfsResponse::Error { message } => bail!("{message}"),
+            other => bail!("unexpected response: {other:?}"),
         }
-        Ok(())
     }
 
     fn destroy(&self, track: &Path) -> Result<()> {
