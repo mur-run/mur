@@ -94,11 +94,15 @@ pub fn cmd_publish(path: &str) -> Result<()> {
 
     let skill_dir = repo_dir.join("skills").join(&m.name).join("versions");
     std::fs::create_dir_all(&skill_dir)?;
+    // Embed the DSSE envelope as `publisher_signature` in the yaml (what registry-index expects).
+    let yaml = serialize_canonical(&m)?;
+    let signed = format!(
+        "{}publisher_signature: '{}'\n",
+        yaml,
+        envelope.replace('\'', "''")
+    );
     let skill_path = skill_dir.join(format!("{}.yaml", m.version));
-    std::fs::write(&skill_path, serialize_canonical(&m)?)?;
-
-    let sig_path = skill_dir.join(format!("{}.sig.json", m.version));
-    std::fs::write(&sig_path, &envelope)?;
+    std::fs::write(&skill_path, signed)?;
 
     Command::new("git")
         .args(["-C", &*repo_dir.to_string_lossy(), "add", "."])
