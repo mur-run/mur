@@ -113,6 +113,34 @@ def _call_anthropic(
     )
 
 
+def _call_openai(
+    behavior: str, model: str, base_url: str | None = None
+) -> tuple[str, int | None, int | None]:
+    """Send the behavior as a user message to an OpenAI-compatible endpoint.
+
+    base_url=None → OpenAI; base_url="https://api.deepseek.com" → DeepSeek.
+    Single-turn, no tool calls — no tool message ordering issues.
+    """
+    import os
+    import openai
+
+    api_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    client = openai.OpenAI(api_key=api_key, base_url=base_url)
+    resp = client.chat.completions.create(
+        model=model,
+        max_tokens=1024,
+        temperature=0.0,
+        messages=[{"role": "user", "content": behavior}],
+    )
+    text = resp.choices[0].message.content or ""
+    usage = resp.usage
+    return (
+        text,
+        getattr(usage, "prompt_tokens", None),
+        getattr(usage, "completion_tokens", None),
+    )
+
+
 def run_one_case(
     case: dict[str, Any],
     *,
@@ -150,12 +178,23 @@ def run_one_case(
         extras["response_text"] = response_text
         extras["grader_kind"] = "heuristic_v1"
         extras["behavior"] = prompt
+    elif backend in ("openai", "deepseek"):
+        from grader import grade as harmbench_grade  # type: ignore
+
+        prompt = case.get("behavior") or case.get("user_task_prompt", "")
+        if not prompt:
+            raise SystemExit(
+                f"case {case['test_id']!r} missing 'behavior' field; "
+                "did you select cases via M11.3.1 Phase A?"
+            )
+        base_url = "https://api.deepseek.com" if backend == "deepseek" else None
+        response_text, tokens_input, tokens_output = _call_openai(prompt, model, base_url)
+        agent_decision = harmbench_grade(response_text)
+        extras["response_text"] = response_text
+        extras["grader_kind"] = "heuristic_v1"
+        extras["behavior"] = prompt
     else:
-        # Other backends (openai/ollama) not yet wired; fall through
-        # to a documented placeholder for now.
-        agent_decision = case["expected_outcome"]
-        tokens_input = 100
-        tokens_output = 50
+        raise ValueError(f"unsupported backend: {backend!r}")
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)
 
@@ -232,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument(
         "--backend",
-        choices=("stub", "anthropic", "openai", "ollama"),
+        choices=("stub", "anthropic", "openai", "deepseek", "ollama"),
         default="stub",
     )
     p.add_argument("--model", default="stub")
