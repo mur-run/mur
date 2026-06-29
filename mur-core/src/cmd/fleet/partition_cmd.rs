@@ -5,7 +5,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::parallel::partition::{PartitionPlan, RegionAssignment, planner::{plan_partition, validate_coverage}, merge::merge_partition_file};
+use crate::parallel::partition::{
+    PartitionPlan, RegionAssignment,
+    merge::merge_partition_file,
+    planner::{plan_partition, validate_coverage},
+};
 use crate::parallel::semantic::{SupportedLanguage, extract_units};
 use crate::parallel::track::TrackSet;
 
@@ -46,7 +50,11 @@ pub fn cmd_fleet_partition_plan(mur_home: &Path, fleet_name: &str) -> Result<()>
     let plan = plan_partition(&units, &track_names)?;
     validate_coverage(&plan, &units)?;
 
-    println!("Partition plan for `{}` ({} tracks):", partition.target_file, track_names.len());
+    println!(
+        "Partition plan for `{}` ({} tracks):",
+        partition.target_file,
+        track_names.len()
+    );
     println!("{}", render_plan(&plan));
     Ok(())
 }
@@ -109,10 +117,8 @@ pub fn cmd_fleet_merge(
     if promote {
         let dest = match target {
             Some(p) => p.to_path_buf(),
-            None => super::cherry_cmd::project_root_from_worktree(
-                &tracks.tracks[0].worktree_path,
-            )
-            .context("cannot determine project root — pass --target <path>")?,
+            None => super::cherry_cmd::project_root_from_worktree(&tracks.tracks[0].worktree_path)
+                .context("cannot determine project root — pass --target <path>")?,
         };
         super::cherry_cmd::promote_cherry_result(&result_dir, &dest)?;
     } else {
@@ -125,7 +131,11 @@ pub fn cmd_fleet_merge(
 pub(crate) fn render_plan(plan: &PartitionPlan) -> String {
     let mut s = String::new();
     for a in &plan.assignments {
-        s.push_str(&format!("{} ({} items):\n", a.track_name, a.unit_names.len()));
+        s.push_str(&format!(
+            "{} ({} items):\n",
+            a.track_name,
+            a.unit_names.len()
+        ));
         for name in &a.unit_names {
             s.push_str(&format!("  - {name}\n"));
         }
