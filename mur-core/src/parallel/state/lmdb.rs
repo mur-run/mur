@@ -83,6 +83,7 @@ mod tests {
             reasoning: "good design".into(),
             model: "claude-opus-4-8".into(),
             ts: 1_700_000_000,
+            low_confidence: false,
         };
         db.put_score(&hash, "v1", &score).unwrap();
         let retrieved = db.get_score(&hash, "v1").unwrap().unwrap();

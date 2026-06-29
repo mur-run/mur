@@ -33,8 +33,9 @@ pub fn cmd_fleet_compare(
         .map(|t| t.config.name.as_str())
         .collect();
 
-    // unit_name → Vec<(track_name, Option<score>)>
-    let mut score_map: std::collections::HashMap<String, Vec<(String, Option<f32>)>> =
+    type ScoreEntry = (String, Option<(f32, bool)>);
+    // unit_name → Vec<(track_name, Option<(score, low_confidence)>)>
+    let mut score_map: std::collections::HashMap<String, Vec<ScoreEntry>> =
         std::collections::HashMap::new();
 
     for t in &tracks.tracks {
@@ -54,15 +55,15 @@ pub fn cmd_fleet_compare(
                 if unit_filter.is_some_and(|f| !unit.name.contains(f)) {
                     continue;
                 }
-                let score_val = state_db
+                let val = state_db
                     .get_score(&unit.content_hash, &rubric_ver)
                     .ok()
                     .flatten()
-                    .map(|js| js.score);
+                    .map(|js| (js.score, js.low_confidence));
                 score_map
                     .entry(unit.name)
                     .or_default()
-                    .push((t.config.name.clone(), score_val));
+                    .push((t.config.name.clone(), val));
             }
         }
     }
@@ -72,51 +73,119 @@ pub fn cmd_fleet_compare(
         return Ok(());
     }
 
-    // Print header
     let col_w = 14usize;
     let name_w = 28usize;
-    print!("{:<name_w$}", "Unit");
+    let sep = "─".repeat(name_w + (col_w + 1) * track_names.len() + 12);
+
+    // Header
+    print!("{:<name_w$}", "unit");
     for tn in &track_names {
         print!(" {:<col_w$}", tn);
     }
-    println!(" Rec");
-    println!(
-        "{}",
-        "-".repeat(name_w + (col_w + 1) * track_names.len() + 6)
-    );
+    println!(" winner");
+    println!("{sep}");
 
-    // Print one row per unit
+    // Rows
     let mut unit_names: Vec<&String> = score_map.keys().collect();
     unit_names.sort();
-    for name in unit_names {
-        let by_track = score_map.get(name).unwrap();
-        let scores: Vec<(&str, Option<f32>)> = track_names
+
+    let mut track_sum = vec![0f32; track_names.len()];
+    let mut track_cnt = vec![0usize; track_names.len()];
+    let mut overall_winner: Option<usize> = None; // index into track_names
+
+    for name in &unit_names {
+        let by_track = score_map.get(*name).unwrap();
+        let scores: Vec<Option<(f32, bool)>> = track_names
             .iter()
             .map(|tn| {
-                let score = by_track
+                by_track
                     .iter()
                     .find(|(t, _)| t.as_str() == *tn)
-                    .and_then(|(_, s)| *s);
-                (*tn, score)
+                    .and_then(|(_, v)| *v)
             })
             .collect();
 
-        let rec = scores
+        // Find winner index (highest score)
+        let winner_idx = scores
             .iter()
-            .filter_map(|(tn, s)| s.map(|v| (tn, v)))
+            .enumerate()
+            .filter_map(|(i, v)| v.map(|(s, _)| (i, s)))
             .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(tn, _)| *tn)
-            .unwrap_or("-");
+            .map(|(i, _)| i);
+
+        // Detect tie (two or more tracks share max score)
+        let is_tie = if let Some(wi) = winner_idx {
+            let max_score = scores[wi].unwrap().0;
+            scores
+                .iter()
+                .filter(|v| v.is_some_and(|(s, _)| s == max_score))
+                .count()
+                > 1
+        } else {
+            false
+        };
 
         print!("{:<name_w$}", truncate(name, name_w));
-        for (_, score) in &scores {
-            let cell = score
-                .map(|s| format!("{:.1}", s))
-                .unwrap_or_else(|| "-".into());
+        for (i, val) in scores.iter().enumerate() {
+            let cell = match val {
+                Some((s, true)) => format!("{:.1} ⚠", s),
+                Some((s, false)) => format!("{:.1}", s),
+                None => "-".into(),
+            };
             print!(" {:<col_w$}", cell);
+
+            // accumulate averages
+            if let Some((s, _)) = val {
+                track_sum[i] += s;
+                track_cnt[i] += 1;
+            }
         }
-        println!(" {rec} ★");
+
+        let winner_label = if is_tie {
+            "(tie)".into()
+        } else {
+            winner_idx
+                .map(|i| format!("{} ✓", track_names[i]))
+                .unwrap_or_else(|| "-".into())
+        };
+        println!(" {winner_label}");
     }
+
+    // Summary row
+    println!("{sep}");
+    print!("{:<name_w$}", "average");
+    let mut best_avg = f32::NEG_INFINITY;
+    for i in 0..track_names.len() {
+        let avg = if track_cnt[i] > 0 {
+            track_sum[i] / track_cnt[i] as f32
+        } else {
+            0.0
+        };
+        if avg > best_avg {
+            best_avg = avg;
+            overall_winner = Some(i);
+        }
+        print!(" {:<col_w$}", format!("{:.2}", avg));
+    }
+    // Tie on averages?
+    let avg_winners: Vec<usize> = (0..track_names.len())
+        .filter(|&i| {
+            let avg = if track_cnt[i] > 0 {
+                track_sum[i] / track_cnt[i] as f32
+            } else {
+                0.0
+            };
+            (avg - best_avg).abs() < 0.005
+        })
+        .collect();
+    let overall_label = if avg_winners.len() > 1 {
+        "(tie)".into()
+    } else {
+        overall_winner
+            .map(|i| format!("{} ✓", track_names[i]))
+            .unwrap_or_else(|| "-".into())
+    };
+    println!(" {overall_label}");
 
     Ok(())
 }
