@@ -1,8 +1,8 @@
 # Gate 1 — CyclicJudge Reliability Results
 
-**Date:** 2026-06-29  
+**Date:** 2026-06-29 (re-confirmed 2026-06-29)  
 **Model:** claude-sonnet-4-6  
-**Method:** In-session evaluation (cc-proxy blocks Python subprocess API calls after /login rotation — same workaround as Gate 0)  
+**Method:** In-session evaluation (cc-proxy blocks Python subprocess API calls — `scripts/judge_reliability.py` returns 401 on `ANTHROPIC_API_KEY` because the key is unset in the subprocess env; workaround: evaluate in-session as the same model)  
 **Rubric:** correctness 40%, design 30%, maintainability 20%, security 10%
 
 ## Protocol
