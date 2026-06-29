@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 use mur_common::parallel::Rubric;
 
 pub fn build_judge_prompt(

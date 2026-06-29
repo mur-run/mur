@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Tree-sitter-based extraction of top-level semantic units from Rust source.
 
 use anyhow::{Result, anyhow};

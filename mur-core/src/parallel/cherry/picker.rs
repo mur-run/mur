@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Greedy best-score selection per unit across tracks.
 //! Tie-breaking: first track wins (keeps stable ordering).
 

@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! API compatibility check between cherry-picked units.
 //! Compares function signatures extracted via tree-sitter.
 

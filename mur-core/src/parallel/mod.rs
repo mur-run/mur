@@ -1,4 +1,5 @@
 //! Speculative parallel agent execution — P0/P1 foundation.
+#![allow(dead_code, unused_imports)]
 
 pub mod backend;
 pub mod cherry;

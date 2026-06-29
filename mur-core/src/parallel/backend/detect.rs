@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 use super::{GitWorktreeBackend, ParallelBackend, git_worktree::find_git_root};
 use std::path::Path;
 

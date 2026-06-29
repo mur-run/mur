@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Semantic unit extraction and content-addressable storage.
 
 pub mod cas;

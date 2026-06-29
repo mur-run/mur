@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! LMDB-backed score cache via the `heed` crate.
 //!
 //! Scores are keyed by content hash (not track ID or session), so identical

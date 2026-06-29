@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 use super::ParallelBackend;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};

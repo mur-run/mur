@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Blake3 content-addressed storage (CAS) for semantic units.
 //!
 //! Identifies which parallel-track implementations are identical (skip LLM judging)

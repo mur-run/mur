@@ -105,14 +105,13 @@ impl CyclicJudge {
         // Map label letters back to position
         let mut scores_by_position = vec![5.0f32; order.len()]; // default mid-range
         for entry in &parsed.scores {
-            if entry.label.len() == 1 {
-                if let Some(pos) = entry.label.as_bytes()[0]
+            if entry.label.len() == 1
+                && let Some(pos) = entry.label.as_bytes()[0]
                     .checked_sub(b'A')
                     .map(|p| p as usize)
                     .filter(|&p| p < order.len())
-                {
-                    scores_by_position[pos] = entry.score;
-                }
+            {
+                scores_by_position[pos] = entry.score;
             }
         }
 

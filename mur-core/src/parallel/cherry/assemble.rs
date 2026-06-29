@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Reconstruct source files from cherry-picked units.
 
 use super::CherryPlan;
