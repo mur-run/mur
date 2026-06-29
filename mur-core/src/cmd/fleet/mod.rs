@@ -2,6 +2,7 @@
 
 pub mod cherry_cmd;
 pub mod compare;
+pub mod partition_cmd;
 pub mod control;
 pub mod create;
 pub mod delete;

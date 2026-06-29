@@ -368,6 +368,19 @@ pub async fn run(cli: Cli) -> Result<()> {
                     promote,
                     target.as_deref(),
                 )?,
+                FleetAction::PartitionPlan { name } => {
+                    cmd::fleet::partition_cmd::cmd_fleet_partition_plan(&mur_home, &name)?
+                }
+                FleetAction::Merge {
+                    name,
+                    promote,
+                    target,
+                } => cmd::fleet::partition_cmd::cmd_fleet_merge(
+                    &mur_home,
+                    &name,
+                    promote,
+                    target.as_deref(),
+                )?,
             }
         }
         Commands::Commander { action } => {
