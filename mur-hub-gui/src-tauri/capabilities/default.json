@@ -8,6 +8,7 @@
     "core:window:allow-set-size",
     "core:window:allow-set-min-size",
     "shell:allow-open",
+    "dialog:allow-confirm",
     "dialog:allow-open",
     "dialog:allow-save",
     "deep-link:default",

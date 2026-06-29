@@ -270,7 +270,8 @@
   margin-top: 6px;
 }
 
-.fleet-add-member input {
+.fleet-add-member input,
+.fleet-add-member__select {
   flex: 1;
   font-size: 12px;
 }

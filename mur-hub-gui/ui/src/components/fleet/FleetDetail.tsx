@@ -199,7 +199,7 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
                   </span>
                 )}
               </div>
-              <span className="fleet-member__name">{m}</span>
+              <span className="fleet-member__name">{agent?.display_name ?? m}</span>
               <button
                 className="fleet-member__remove"
                 onClick={() => call("fleet_remove_member", { name: detail.name, agent: m })}
@@ -211,13 +211,20 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
             );
           })}
         </div>
+        {/* Add member: dropdown of known agents not already in fleet */}
         <div className="fleet-add-member">
-          <input
+          <select
             value={addInput}
             onChange={(e) => setAddInput(e.target.value)}
-            placeholder={t("fleet.addMember")}
-            onKeyDown={(e) => e.key === "Enter" && handleAddMember()}
-          />
+            className="fleet-add-member__select"
+          >
+            <option value="">{t("fleet.addMember")}</option>
+            {Array.from(agentMap.values())
+              .filter((a) => !detail.members.includes(a.name) && !detail.members.map(m => m.toLowerCase()).includes(a.name))
+              .map((a) => (
+                <option key={a.name} value={a.name}>{a.display_name}</option>
+              ))}
+          </select>
           <button className="toolbar-btn" onClick={handleAddMember} disabled={busy !== null || !addInput.trim()}>+</button>
         </div>
       </div>
