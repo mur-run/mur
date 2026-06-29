@@ -2,7 +2,6 @@
 
 pub mod cherry_cmd;
 pub mod compare;
-pub mod partition_cmd;
 pub mod control;
 pub mod create;
 pub mod delete;
@@ -12,6 +11,7 @@ pub mod jobs;
 pub mod judge_cmd;
 pub mod list;
 pub mod loop_run;
+pub mod partition_cmd;
 pub mod plan;
 pub mod roster;
 pub mod run;

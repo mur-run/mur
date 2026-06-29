@@ -6,8 +6,8 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::parallel::cherry::{CherryPlan, UnitSelection};
 use crate::parallel::cherry::assemble::{TrackSource, assemble_file};
+use crate::parallel::cherry::{CherryPlan, UnitSelection};
 use crate::parallel::semantic::SupportedLanguage;
 
 use super::PartitionPlan;
@@ -103,6 +103,9 @@ mod tests {
         let out = String::from_utf8(merged).unwrap();
         assert!(out.contains("11"), "alpha from t0: {out}");
         assert!(out.contains("22"), "beta from t1: {out}");
-        assert!(!out.contains("{ 0 }"), "no stub bodies should remain: {out}");
+        assert!(
+            !out.contains("{ 0 }"),
+            "no stub bodies should remain: {out}"
+        );
     }
 }

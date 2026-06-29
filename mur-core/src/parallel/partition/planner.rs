@@ -4,7 +4,7 @@
 use std::cmp::Reverse;
 use std::collections::HashSet;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::parallel::semantic::SemanticUnit;
 

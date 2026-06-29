@@ -44,7 +44,11 @@ mod tests {
 
     #[test]
     fn prompt_names_only_assigned_units_and_file() {
-        let units = vec![unit("alpha", 0, 5), unit("beta", 6, 9), unit("gamma", 10, 20)];
+        let units = vec![
+            unit("alpha", 0, 5),
+            unit("beta", 6, 9),
+            unit("gamma", 10, 20),
+        ];
         let assigned = RegionAssignment {
             track_name: "t0".into(),
             unit_names: vec!["alpha".into(), "gamma".into()],
