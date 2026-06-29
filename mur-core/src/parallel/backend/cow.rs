@@ -6,7 +6,7 @@
 //!
 //! Detection order:
 //!   macOS  → `cp -cR`  (APFS clone; always available on macOS 10.13+)
-//!   Linux  → `cp --reflink=auto -a`  (Btrfs/XFS if available, silent fallback otherwise)
+//!   Linux  → `cp --reflink=always -a`  (Btrfs/XFS only; fails fast on ext4 so no slow fallback copy)
 //!   other  → skip (no COW; callers still work, just no warm cache)
 
 use anyhow::Result;
@@ -21,7 +21,7 @@ const CACHE_DIRS: &[&str] = &["target"];
 pub enum CowMethod {
     /// macOS `cp -cR` — APFS block clone.
     ApfsClone,
-    /// Linux `cp --reflink=auto -a` — Btrfs/XFS reflink, silent fallback to regular.
+    /// Linux `cp --reflink=always -a` — Btrfs/XFS only; fails fast on ext4 (no slow fallback).
     Reflink,
     /// Platform has no known COW support; skip.
     Skip,
@@ -72,7 +72,7 @@ fn cow_copy_dir(method: &CowMethod, src: &Path, dst: &Path) -> Result<()> {
             .arg(dst)
             .status()?,
         CowMethod::Reflink => Command::new("cp")
-            .args(["--reflink=auto", "-a"])
+            .args(["--reflink=always", "-a"])
             .arg(src)
             .arg(dst)
             .status()?,
