@@ -20,6 +20,19 @@ use crate::conversations::backend::factory::build_for_stage;
 use judge::{CyclicJudge, JudgeTask, TrackImpl};
 use track::filter::{FilterResult, run_pre_filter};
 
+/// Statistics collected by `run_judge_pipeline_async`.
+#[derive(Debug, serde::Serialize)]
+pub struct JudgeStats {
+    pub units_total: usize,
+    pub units_cached: usize,
+    pub judge_calls: usize,
+    pub cas_hit_rate: f64,
+    /// Rough estimate: parallel cost = (num_tracks × judge_calls) requests;
+    /// single-agent cost = units_total requests. Ratio = parallel / single.
+    /// A value of 1.0 means parallel is no more expensive than sequential.
+    pub cost_ratio_vs_single: f64,
+}
+
 /// Run the full judge pipeline over all tracks:
 /// pre-filter → semantic parse → CAS dedup → LLM judge (cached) → LMDB store.
 ///
@@ -29,7 +42,7 @@ pub async fn run_judge_pipeline_async(
     tracks: &TrackSet,
     config: &ParallelConfig,
     state_db: &ParallelStateDb,
-) -> Result<()> {
+) -> Result<JudgeStats> {
     // 1. Pre-filter: discard tracks that fail cargo check / clippy.
     let live_tracks: Vec<&track::Track> = tracks
         .tracks
@@ -47,7 +60,13 @@ pub async fn run_judge_pipeline_async(
 
     if live_tracks.is_empty() {
         eprintln!("all tracks failed pre-filter — nothing to judge");
-        return Ok(());
+        return Ok(JudgeStats {
+            units_total: 0,
+            units_cached: 0,
+            judge_calls: 0,
+            cas_hit_rate: 0.0,
+            cost_ratio_vs_single: 0.0,
+        });
     }
 
     // 2. Parse .rs files in each surviving track; keep unit + its source bytes.
@@ -82,7 +101,13 @@ pub async fn run_judge_pipeline_async(
 
     if groups.needs_judge.is_empty() {
         eprintln!("all units identical across tracks (CAS hit) — no LLM calls needed");
-        return Ok(());
+        return Ok(JudgeStats {
+            units_total: 0,
+            units_cached: 0,
+            judge_calls: 0,
+            cas_hit_rate: 1.0,
+            cost_ratio_vs_single: 0.0,
+        });
     }
 
     // 4. Build LLM backend + judge once.
@@ -173,13 +198,33 @@ pub async fn run_judge_pipeline_async(
         }
     }
 
+    let units_total = groups.needs_judge.len();
+    let cas_hit_rate = if units_total > 0 {
+        cache_hits as f64 / units_total as f64
+    } else {
+        0.0
+    };
+    let n_tracks = live_tracks.len().max(1);
+    let cost_ratio_vs_single = if units_total > 0 {
+        (n_tracks as f64 * judge_calls as f64) / units_total as f64
+    } else {
+        0.0
+    };
+
     eprintln!(
-        "judge complete: {} units, {} cache hits, {} LLM calls",
-        groups.needs_judge.len(),
+        "judge complete: {} units, {} cache hits ({:.0}%), {} LLM calls",
+        units_total,
         cache_hits,
+        cas_hit_rate * 100.0,
         judge_calls
     );
-    Ok(())
+    Ok(JudgeStats {
+        units_total,
+        units_cached: cache_hits,
+        judge_calls,
+        cas_hit_rate,
+        cost_ratio_vs_single,
+    })
 }
 
 #[cfg(test)]
@@ -204,6 +249,8 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(run_judge_pipeline_async(&tracks, &config, &state_db));
         assert!(result.is_ok());
+        let stats = result.unwrap();
+        assert_eq!(stats.units_total, 0);
     }
 
     #[test]

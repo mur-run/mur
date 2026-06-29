@@ -353,8 +353,8 @@ pub async fn run(cli: Cli) -> Result<()> {
                 FleetAction::Compare { name, unit } => {
                     cmd::fleet::compare::cmd_fleet_compare(&mur_home, &name, unit.as_deref())?
                 }
-                FleetAction::Judge { name } => {
-                    cmd::fleet::judge_cmd::cmd_fleet_judge(&mur_home, &name)?
+                FleetAction::Judge { name, stats } => {
+                    cmd::fleet::judge_cmd::cmd_fleet_judge(&mur_home, &name, stats)?
                 }
                 FleetAction::Cherry { name, auto } => {
                     cmd::fleet::cherry_cmd::cmd_fleet_cherry(&mur_home, &name, auto)?
