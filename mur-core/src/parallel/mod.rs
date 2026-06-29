@@ -4,6 +4,7 @@
 pub mod backend;
 pub mod cherry;
 pub mod judge;
+pub mod partition;
 pub mod semantic;
 pub mod state;
 pub mod track;
@@ -251,6 +252,7 @@ mod tests {
                 rubric: Rubric::default(),
             },
             pre_filter: vec![],
+            partition: None,
         };
         let tracks = TrackSet { tracks: vec![] };
         let rt = tokio::runtime::Runtime::new().unwrap();
