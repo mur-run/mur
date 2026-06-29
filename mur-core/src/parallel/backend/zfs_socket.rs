@@ -17,13 +17,16 @@ pub struct ZfsSocketBackend {
 
 impl ZfsSocketBackend {
     pub fn new(socket_path: PathBuf, project_root: PathBuf) -> Self {
-        Self { socket_path, project_root }
+        Self {
+            socket_path,
+            project_root,
+        }
     }
 
     #[cfg(unix)]
     fn call(&self, req: ZfsRequest) -> Result<ZfsResponse> {
-        let stream = UnixStream::connect(&self.socket_path)
-            .context("connect to mur-zfs-agent socket")?;
+        let stream =
+            UnixStream::connect(&self.socket_path).context("connect to mur-zfs-agent socket")?;
         let mut writer = stream.try_clone()?;
         let mut line = serde_json::to_string(&req)?;
         line.push('\n');
@@ -95,7 +98,9 @@ impl ParallelBackend for ZfsSocketBackend {
     }
 
     fn destroy(&self, track: &Path) -> Result<()> {
-        match self.call(ZfsRequest::Destroy { track: track.into() })? {
+        match self.call(ZfsRequest::Destroy {
+            track: track.into(),
+        })? {
             ZfsResponse::Ok => Ok(()),
             ZfsResponse::Error { message } => bail!("{message}"),
             other => bail!("unexpected response: {other:?}"),
