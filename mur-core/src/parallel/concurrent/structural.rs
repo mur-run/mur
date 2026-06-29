@@ -2,8 +2,8 @@
 
 use anyhow::Context as _;
 
-use super::{ConcurrentMerger, MergeOutcome, OverlapRegion};
 use super::hunk::{Edit, Group, group_edits, hunks_vs_base};
+use super::{ConcurrentMerger, MergeOutcome, OverlapRegion};
 
 /// Merges N versions by line-hunk grouping.
 /// Disjoint and byte-identical hunks are applied; overlapping divergent hunks are escalated
@@ -18,7 +18,10 @@ impl ConcurrentMerger for StructuralMerger {
         for (actor, ver) in versions {
             let ver_str = std::str::from_utf8(ver).context("version is not valid UTF-8")?;
             for h in hunks_vs_base(base_str, ver_str) {
-                edits.push(Edit { actor: actor.clone(), hunk: h });
+                edits.push(Edit {
+                    actor: actor.clone(),
+                    hunk: h,
+                });
             }
         }
 
@@ -30,21 +33,33 @@ impl ConcurrentMerger for StructuralMerger {
         for g in groups {
             match g {
                 Group::Clean { hunk, .. } => clean.push(hunk),
-                Group::Conflict { base_start, base_end, actors } => {
-                    overlaps.push(OverlapRegion { base_line_range: base_start..base_end, actor_ids: actors });
+                Group::Conflict {
+                    base_start,
+                    base_end,
+                    actors,
+                } => {
+                    overlaps.push(OverlapRegion {
+                        base_line_range: base_start..base_end,
+                        actor_ids: actors,
+                    });
                 }
             }
         }
 
         // Apply clean hunks from high base_start to low so earlier indices remain valid.
         // Within the same start, apply larger ranges first (replacements before zero-width insertions).
-        clean.sort_by_key(|h| (std::cmp::Reverse(h.base_start), std::cmp::Reverse(h.base_end)));
+        clean.sort_by_key(|h| {
+            (
+                std::cmp::Reverse(h.base_start),
+                std::cmp::Reverse(h.base_end),
+            )
+        });
 
         let mut out_lines: Vec<String> = base_str.lines().map(|s| s.to_string()).collect();
         for h in clean {
             let start = h.base_start as usize;
             let end = h.base_end as usize;
-            out_lines.splice(start..end, h.replacement.into_iter());
+            out_lines.splice(start..end, h.replacement);
         }
 
         let mut merged = out_lines.join("\n");
@@ -52,7 +67,10 @@ impl ConcurrentMerger for StructuralMerger {
             merged.push('\n');
         }
 
-        Ok(MergeOutcome { merged: merged.into_bytes(), overlaps })
+        Ok(MergeOutcome {
+            merged: merged.into_bytes(),
+            overlaps,
+        })
     }
 }
 
@@ -61,7 +79,10 @@ mod tests {
     use super::*;
 
     fn vers(pairs: &[(&str, &str)]) -> Vec<(String, Vec<u8>)> {
-        pairs.iter().map(|(a, s)| (a.to_string(), s.as_bytes().to_vec())).collect()
+        pairs
+            .iter()
+            .map(|(a, s)| (a.to_string(), s.as_bytes().to_vec()))
+            .collect()
     }
 
     #[test]

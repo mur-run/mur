@@ -23,7 +23,11 @@ pub enum Group {
     /// All edits in the cluster are byte-identical — safe to apply once.
     Clean { hunk: Hunk, actors: Vec<String> },
     /// Edits in the cluster diverge — must be escalated.
-    Conflict { base_start: u32, base_end: u32, actors: Vec<String> },
+    Conflict {
+        base_start: u32,
+        base_end: u32,
+        actors: Vec<String>,
+    },
 }
 
 /// Extract line-level hunks between `base` and `version`.
@@ -97,11 +101,18 @@ pub fn group_edits(mut edits: Vec<Edit>) -> Vec<Group> {
         let all_identical = cluster.iter().all(|c| &c.hunk == first);
         let actors: Vec<String> = cluster.iter().map(|c| c.actor.clone()).collect();
         if all_identical {
-            groups.push(Group::Clean { hunk: first.clone(), actors });
+            groups.push(Group::Clean {
+                hunk: first.clone(),
+                actors,
+            });
         } else {
             let base_start = cluster.iter().map(|c| c.hunk.base_start).min().unwrap();
             let base_end = cluster.iter().map(|c| c.hunk.base_end).max().unwrap();
-            groups.push(Group::Conflict { base_start, base_end, actors });
+            groups.push(Group::Conflict {
+                base_start,
+                base_end,
+                actors,
+            });
         }
     }
     groups
@@ -112,7 +123,11 @@ mod tests {
     use super::*;
 
     fn h(base_start: u32, base_end: u32, replacement: &[&str]) -> Hunk {
-        Hunk { base_start, base_end, replacement: replacement.iter().map(|s| s.to_string()).collect() }
+        Hunk {
+            base_start,
+            base_end,
+            replacement: replacement.iter().map(|s| s.to_string()).collect(),
+        }
     }
 
     #[test]
@@ -147,8 +162,14 @@ mod tests {
     #[test]
     fn disjoint_edits_form_two_clean_groups() {
         let edits = vec![
-            Edit { actor: "x".into(), hunk: h(0, 1, &["X"]) },
-            Edit { actor: "y".into(), hunk: h(2, 3, &["Y"]) },
+            Edit {
+                actor: "x".into(),
+                hunk: h(0, 1, &["X"]),
+            },
+            Edit {
+                actor: "y".into(),
+                hunk: h(2, 3, &["Y"]),
+            },
         ];
         let groups = group_edits(edits);
         assert_eq!(groups.len(), 2);
@@ -158,8 +179,14 @@ mod tests {
     #[test]
     fn identical_edits_collapse_to_one_clean_group() {
         let edits = vec![
-            Edit { actor: "x".into(), hunk: h(1, 2, &["SAME"]) },
-            Edit { actor: "y".into(), hunk: h(1, 2, &["SAME"]) },
+            Edit {
+                actor: "x".into(),
+                hunk: h(1, 2, &["SAME"]),
+            },
+            Edit {
+                actor: "y".into(),
+                hunk: h(1, 2, &["SAME"]),
+            },
         ];
         let groups = group_edits(edits);
         assert_eq!(groups.len(), 1);
@@ -175,8 +202,14 @@ mod tests {
     #[test]
     fn divergent_overlapping_edits_form_conflict() {
         let edits = vec![
-            Edit { actor: "x".into(), hunk: h(1, 2, &["FROM_X"]) },
-            Edit { actor: "y".into(), hunk: h(1, 2, &["FROM_Y"]) },
+            Edit {
+                actor: "x".into(),
+                hunk: h(1, 2, &["FROM_X"]),
+            },
+            Edit {
+                actor: "y".into(),
+                hunk: h(1, 2, &["FROM_Y"]),
+            },
         ];
         let groups = group_edits(edits);
         assert_eq!(groups.len(), 1);

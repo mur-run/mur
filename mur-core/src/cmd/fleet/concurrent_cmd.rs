@@ -5,8 +5,8 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-use crate::parallel::concurrent::{ConcurrentMerger, structural::StructuralMerger};
 use crate::parallel::concurrent::stats::{OverlapStats, count_groups};
+use crate::parallel::concurrent::{ConcurrentMerger, structural::StructuralMerger};
 use crate::parallel::track::TrackSet;
 
 const FLAG_ENV: &str = "MUR_PARALLEL_CONCURRENT";
@@ -24,7 +24,11 @@ fn git_show(cwd: &Path, rev: &str, relpath: &str) -> Option<Vec<u8>> {
         .current_dir(cwd)
         .output()
         .ok()?;
-    if out.status.success() { Some(out.stdout) } else { None }
+    if out.status.success() {
+        Some(out.stdout)
+    } else {
+        None
+    }
 }
 
 pub fn cmd_fleet_merge_concurrent(
@@ -75,16 +79,21 @@ pub fn cmd_fleet_merge_concurrent(
 
     let merger = StructuralMerger;
     let result_dir = fleet_dir.join("cherry-result");
-    let mut stat = OverlapStats { n_tracks: tracks.tracks.len(), ..Default::default() };
+    let mut stat = OverlapStats {
+        n_tracks: tracks.tracks.len(),
+        ..Default::default()
+    };
     let mut any_overlap = false;
     let mut written: Vec<String> = Vec::new();
 
     for rel in &changed {
         let base = git_show(&t0.worktree_path, &base_rev, rel).unwrap_or_default();
-        let versions: Vec<(String, Vec<u8>)> = tracks.tracks.iter()
+        let versions: Vec<(String, Vec<u8>)> = tracks
+            .tracks
+            .iter()
             .map(|t| {
-                let bytes = std::fs::read(t.worktree_path.join(rel))
-                    .unwrap_or_else(|_| base.clone());
+                let bytes =
+                    std::fs::read(t.worktree_path.join(rel)).unwrap_or_else(|_| base.clone());
                 (t.config.name.clone(), bytes)
             })
             .collect();
@@ -100,7 +109,10 @@ pub fn cmd_fleet_merge_concurrent(
 
         if !outcome.is_clean() {
             any_overlap = true;
-            println!("OVERLAP: {rel} — {} region(s) need escalation", outcome.overlaps.len());
+            println!(
+                "OVERLAP: {rel} — {} region(s) need escalation",
+                outcome.overlaps.len()
+            );
             for o in &outcome.overlaps {
                 println!(
                     "  lines {}–{}: actors {:?}",
@@ -135,7 +147,9 @@ pub fn cmd_fleet_merge_concurrent(
 
     if promote {
         if any_overlap {
-            anyhow::bail!("--promote refused: unresolved overlaps — resolve via judge/cherry first");
+            anyhow::bail!(
+                "--promote refused: unresolved overlaps — resolve via judge/cherry first"
+            );
         }
         let dest: PathBuf = match target {
             Some(p) => p.to_path_buf(),

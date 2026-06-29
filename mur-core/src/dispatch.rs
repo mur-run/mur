@@ -381,15 +381,18 @@ pub async fn run(cli: Cli) -> Result<()> {
                     promote,
                     target.as_deref(),
                 )?,
-                FleetAction::MergeConcurrent { name, stats, promote, target } => {
-                    cmd::fleet::concurrent_cmd::cmd_fleet_merge_concurrent(
-                        &mur_home,
-                        &name,
-                        stats,
-                        promote,
-                        target.as_deref(),
-                    )?
-                }
+                FleetAction::MergeConcurrent {
+                    name,
+                    stats,
+                    promote,
+                    target,
+                } => cmd::fleet::concurrent_cmd::cmd_fleet_merge_concurrent(
+                    &mur_home,
+                    &name,
+                    stats,
+                    promote,
+                    target.as_deref(),
+                )?,
             }
         }
         Commands::Commander { action } => {
