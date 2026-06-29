@@ -20,8 +20,10 @@ pub fn cmd_fleet_judge(mur_home: &Path, fleet_name: &str, write_stats: bool) -> 
 
     let state_db = ParallelStateDb::open(&fleet_dir.join("parallel_state"))?;
 
-    let rt = tokio::runtime::Runtime::new()?;
-    let stats = rt.block_on(run_judge_pipeline_async(&tracks, parallel, &state_db))?;
+    let stats = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current()
+            .block_on(run_judge_pipeline_async(&tracks, parallel, &state_db))
+    })?;
 
     if write_stats {
         write_judge_stats(&fleet_dir, &stats)?;
