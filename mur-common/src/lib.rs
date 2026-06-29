@@ -57,6 +57,7 @@ pub mod telemetry;
 pub mod trust;
 pub mod variable;
 pub mod workflow;
+pub mod zfs_protocol;
 
 pub use actor::{Actor, ActorSource};
 pub use conversation::{CONVERSATION_SCHEMA_VERSION, Content, Message, Role, Source};
