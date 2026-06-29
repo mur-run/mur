@@ -18,8 +18,11 @@ pub fn build_fleet_procedure(
     goal: &str,
     members: &[String],
     parallel: Option<&ParallelConfig>,
-) -> Procedure {
+) -> Result<Procedure> {
     let steps = if let Some(cfg) = parallel {
+        if members.is_empty() {
+            bail!("parallel fleet requires at least one member");
+        }
         // Parallel tracks: one step per track with approach injection into goal
         cfg.tracks
             .iter()
@@ -52,10 +55,10 @@ pub fn build_fleet_procedure(
             })
             .collect()
     };
-    Procedure {
+    Ok(Procedure {
         variables: vec![],
         steps,
-    }
+    })
 }
 
 /// Pure goal resolver: explicit arg > oldest queued job > standing goal.
@@ -113,7 +116,10 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>)
     };
     // Router plans which members do what (with deps); falls back to broadcast-to-all.
     let proc = super::plan::plan_via_router(mur_home, &planning_fleet, &events)
-        .unwrap_or_else(|| build_fleet_procedure(&goal, &fleet.members, fleet.parallel.as_ref()));
+        .unwrap_or_else(|| {
+            build_fleet_procedure(&goal, &fleet.members, fleet.parallel.as_ref())
+                .expect("members validated by caller guard")
+        });
     let run_id = format!("run-{}", uuid::Uuid::now_v7());
     let opts = crate::executor::dag::DagExecOptions {
         // Fail-closed default: do NOT blanket-approve. Fleet delegation steps carry
@@ -176,7 +182,7 @@ mod tests {
 
     #[test]
     fn build_fleet_procedure_one_delegate_step_per_member() {
-        let p = build_fleet_procedure("ship it", &["pm".to_string(), "qa".to_string()], None);
+        let p = build_fleet_procedure("ship it", &["pm".to_string(), "qa".to_string()], None).unwrap();
         assert_eq!(p.steps.len(), 2);
         assert_eq!(p.steps[0].delegate_to.as_deref(), Some("pm"));
         assert_eq!(p.steps[1].delegate_to.as_deref(), Some("qa"));
@@ -206,7 +212,7 @@ mod tests {
             },
             pre_filter: vec![],
         };
-        let p = build_fleet_procedure("ship it", &["pm".to_string(), "qa".to_string()], Some(&cfg));
+        let p = build_fleet_procedure("ship it", &["pm".to_string(), "qa".to_string()], Some(&cfg)).unwrap();
         assert_eq!(p.steps.len(), 2);
         // First track should have functional style approach injected
         assert_eq!(p.steps[0].id.as_deref(), Some("track1"));

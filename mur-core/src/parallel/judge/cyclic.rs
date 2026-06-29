@@ -88,16 +88,22 @@ impl CyclicJudge {
             .context("LLM judge call failed")?
             .text;
 
-        let parsed: JudgeResponse = serde_json::from_str(response_text.trim())
+        let json_text = {
+            let t = response_text.trim();
+            let t = t.strip_prefix("```json").or_else(|| t.strip_prefix("```")).unwrap_or(t);
+            t.trim_start().strip_suffix("```").unwrap_or(t.trim_start()).trim()
+        };
+        let parsed: JudgeResponse = serde_json::from_str(json_text)
             .context("failed to parse judge JSON")?;
 
         // Map label letters back to position
         let mut scores_by_position = vec![5.0f32; order.len()]; // default mid-range
         for entry in &parsed.scores {
             if entry.label.len() == 1 {
-                let pos = (entry.label.as_bytes()[0] - b'A') as usize;
-                if pos < order.len() {
-                    scores_by_position[pos] = entry.score;
+                if let Some(pos) = entry.label.as_bytes()[0].checked_sub(b'A').map(|p| p as usize) {
+                    if pos < order.len() {
+                        scores_by_position[pos] = entry.score;
+                    }
                 }
             }
         }
