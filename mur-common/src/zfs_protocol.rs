@@ -8,6 +8,7 @@ pub enum ZfsRequest {
     CreateTrack { base: PathBuf, name: String },
     Snapshot { track: PathBuf, label: String },
     DiffFiles { track: PathBuf, since: String },
+    Promote { track: PathBuf, target: PathBuf },
     Destroy { track: PathBuf },
 }
 
@@ -66,6 +67,10 @@ mod tests {
             ZfsRequest::DiffFiles {
                 track: "/p/t".into(),
                 since: "mur-base".into(),
+            },
+            ZfsRequest::Promote {
+                track: "/p/t".into(),
+                target: "/p/main".into(),
             },
             ZfsRequest::Destroy {
                 track: "/p/t".into(),
