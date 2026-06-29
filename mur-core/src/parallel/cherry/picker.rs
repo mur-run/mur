@@ -1,8 +1,8 @@
 //! Greedy best-score selection per unit across tracks.
 //! Tie-breaking: first track wins (keeps stable ordering).
 
-use crate::parallel::judge::TrackScore;
 use super::{CherryPlan, UnitSelection};
+use crate::parallel::judge::TrackScore;
 use std::collections::HashMap;
 
 /// Select the highest-scoring track for each unit.
@@ -18,12 +18,15 @@ pub fn cherry_pick(scores_per_unit: &[(&str, Vec<TrackScore>)]) -> CherryPlan {
             })
         });
         let Some(best) = best else { continue };
-        selections.insert(unit_name.to_string(), UnitSelection {
-            unit_name: unit_name.to_string(),
-            winning_track: best.track_name.clone(),
-            score: best.score,
-            low_confidence: best.low_confidence,
-        });
+        selections.insert(
+            unit_name.to_string(),
+            UnitSelection {
+                unit_name: unit_name.to_string(),
+                winning_track: best.track_name.clone(),
+                score: best.score,
+                low_confidence: best.low_confidence,
+            },
+        );
     }
     CherryPlan { selections }
 }
@@ -34,7 +37,12 @@ mod tests {
     use crate::parallel::judge::TrackScore;
 
     fn ts(track: &str, score: f32) -> TrackScore {
-        TrackScore { track_name: track.into(), score, reasoning: String::new(), low_confidence: false }
+        TrackScore {
+            track_name: track.into(),
+            score,
+            reasoning: String::new(),
+            low_confidence: false,
+        }
     }
 
     #[test]
@@ -50,9 +58,8 @@ mod tests {
 
     #[test]
     fn tie_goes_to_first_track() {
-        let scores: Vec<(&str, Vec<TrackScore>)> = vec![
-            ("f", vec![ts("track-a", 8.0), ts("track-b", 8.0)]),
-        ];
+        let scores: Vec<(&str, Vec<TrackScore>)> =
+            vec![("f", vec![ts("track-a", 8.0), ts("track-b", 8.0)])];
         let plan = cherry_pick(&scores);
         assert_eq!(plan.winning_track_for("f").unwrap(), "track-a");
     }

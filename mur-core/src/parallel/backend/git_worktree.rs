@@ -1,7 +1,7 @@
+use super::ParallelBackend;
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use anyhow::{Context, Result};
-use super::ParallelBackend;
 
 const WORKTREES_DIR: &str = ".worktrees";
 const PARALLEL_BASE_FILE: &str = ".parallel-base";
@@ -11,7 +11,9 @@ pub struct GitWorktreeBackend {
 }
 
 impl GitWorktreeBackend {
-    pub fn new(repo_root: PathBuf) -> Self { Self { repo_root } }
+    pub fn new(repo_root: PathBuf) -> Self {
+        Self { repo_root }
+    }
 }
 
 impl ParallelBackend for GitWorktreeBackend {
@@ -34,7 +36,10 @@ impl ParallelBackend for GitWorktreeBackend {
             .output()
             .context("git rev-parse HEAD for sentinel")?;
         if !base_head.status.success() {
-            anyhow::bail!("git rev-parse failed: {}", String::from_utf8_lossy(&base_head.stderr));
+            anyhow::bail!(
+                "git rev-parse failed: {}",
+                String::from_utf8_lossy(&base_head.stderr)
+            );
         }
         std::fs::write(path.join(PARALLEL_BASE_FILE), base_head.stdout.as_slice())?;
 
@@ -48,7 +53,10 @@ impl ParallelBackend for GitWorktreeBackend {
             .output()
             .context("spawn git rev-parse")?;
         if !out.status.success() {
-            anyhow::bail!("git rev-parse failed: {}", String::from_utf8_lossy(&out.stderr));
+            anyhow::bail!(
+                "git rev-parse failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
         }
         Ok(String::from_utf8(out.stdout)?.trim().to_string())
     }
@@ -79,7 +87,9 @@ impl ParallelBackend for GitWorktreeBackend {
         for src in files {
             let rel = src.strip_prefix(track).context("strip prefix")?;
             let dst = target.join(rel);
-            if let Some(parent) = dst.parent() { std::fs::create_dir_all(parent)?; }
+            if let Some(parent) = dst.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
             std::fs::copy(&src, &dst)?;
         }
         Ok(())
@@ -102,8 +112,12 @@ impl ParallelBackend for GitWorktreeBackend {
 pub fn find_git_root(from: &Path) -> Option<PathBuf> {
     let mut cur = from.to_path_buf();
     loop {
-        if cur.join(".git").exists() { return Some(cur); }
-        if !cur.pop() { return None; }
+        if cur.join(".git").exists() {
+            return Some(cur);
+        }
+        if !cur.pop() {
+            return None;
+        }
     }
 }
 
@@ -121,7 +135,7 @@ mod tests {
         }
         let backend = GitWorktreeBackend::new(
             // Walk up to find actual git root
-            find_git_root(&repo).unwrap_or(repo)
+            find_git_root(&repo).unwrap_or(repo),
         );
         let track = backend.create_track("test-parallel-track-tmp").unwrap();
         assert!(track.exists());

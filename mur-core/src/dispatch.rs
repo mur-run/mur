@@ -274,7 +274,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                     members,
                     router,
                     goal,
-                } => cmd::fleet::create::cmd_fleet_create(&mur_home, &name, members, router, goal, None)?,
+                } => cmd::fleet::create::cmd_fleet_create(
+                    &mur_home, &name, members, router, goal, None,
+                )?,
                 FleetAction::List => cmd::fleet::list::cmd_fleet_list(&mur_home)?,
                 FleetAction::Show { name } => cmd::fleet::show::cmd_fleet_show(&mur_home, &name)?,
                 FleetAction::Run {
@@ -349,11 +351,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     cmd::fleet::roster::cmd_fleet_remove(&mur_home, &name, agents)?
                 }
                 FleetAction::Compare { name, unit } => {
-                    cmd::fleet::compare::cmd_fleet_compare(
-                        &mur_home,
-                        &name,
-                        unit.as_deref(),
-                    )?
+                    cmd::fleet::compare::cmd_fleet_compare(&mur_home, &name, unit.as_deref())?
                 }
                 FleetAction::Judge { name } => {
                     cmd::fleet::judge_cmd::cmd_fleet_judge(&mur_home, &name)?

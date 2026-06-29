@@ -63,7 +63,15 @@ mod tests {
     fn create_writes_fleet_and_channel() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        cmd_fleet_create(home, "dev", vec!["pm".into()], None, Some("ship".into()), None).unwrap();
+        cmd_fleet_create(
+            home,
+            "dev",
+            vec!["pm".into()],
+            None,
+            Some("ship".into()),
+            None,
+        )
+        .unwrap();
         let f = super::super::store::load_fleet(home, "dev").unwrap();
         assert_eq!(f.channel_id, "fleet-dev");
         assert_eq!(f.goal, "ship");

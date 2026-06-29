@@ -20,6 +20,8 @@ pub struct CherryPlan {
 
 impl CherryPlan {
     pub fn winning_track_for(&self, unit_name: &str) -> Option<&str> {
-        self.selections.get(unit_name).map(|s| s.winning_track.as_str())
+        self.selections
+            .get(unit_name)
+            .map(|s| s.winning_track.as_str())
     }
 }

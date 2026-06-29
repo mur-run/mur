@@ -8,10 +8,20 @@ use crate::parallel::state::ParallelStateDb;
 
 use super::store::load_fleet;
 
-pub fn cmd_fleet_compare(mur_home: &Path, fleet_name: &str, unit_filter: Option<&str>) -> Result<()> {
+pub fn cmd_fleet_compare(
+    mur_home: &Path,
+    fleet_name: &str,
+    unit_filter: Option<&str>,
+) -> Result<()> {
     let fleet = load_fleet(mur_home, fleet_name)?;
-    let parallel = fleet.parallel.as_ref().context("fleet has no parallel config")?;
-    let state_dir = mur_home.join("fleets").join(fleet_name).join("parallel_state");
+    let parallel = fleet
+        .parallel
+        .as_ref()
+        .context("fleet has no parallel config")?;
+    let state_dir = mur_home
+        .join("fleets")
+        .join(fleet_name)
+        .join("parallel_state");
     // Open state DB so it exists even if empty; real reads happen in Task 12.
     let _db = ParallelStateDb::open(&state_dir)?;
     let _rubric_ver = parallel.judge.rubric.version();

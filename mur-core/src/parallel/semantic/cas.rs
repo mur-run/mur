@@ -100,10 +100,7 @@ mod tests {
     #[test]
     fn same_hash_not_different() {
         let hash = [1u8; 32];
-        assert!(!units_differ(
-            &make_unit("f", hash),
-            &make_unit("f", hash)
-        ));
+        assert!(!units_differ(&make_unit("f", hash), &make_unit("f", hash)));
     }
 
     #[test]
@@ -139,7 +136,10 @@ mod tests {
             ("track-b", vec![make_unit("process", hash_b)]),
         ];
         let groups = group_by_identity(&tracks);
-        assert!(groups.skip.is_empty(), "different units should not be skipped");
+        assert!(
+            groups.skip.is_empty(),
+            "different units should not be skipped"
+        );
         assert_eq!(groups.needs_judge.len(), 1);
         assert_eq!(groups.needs_judge[0].name, "process");
         assert_eq!(groups.needs_judge[0].per_track.len(), 2);

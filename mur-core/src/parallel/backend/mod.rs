@@ -1,8 +1,8 @@
 pub mod detect;
 pub mod git_worktree;
 
-use std::path::{Path, PathBuf};
 use anyhow::Result;
+use std::path::{Path, PathBuf};
 
 pub trait ParallelBackend: Send + Sync {
     fn create_track(&self, name: &str) -> Result<PathBuf>;

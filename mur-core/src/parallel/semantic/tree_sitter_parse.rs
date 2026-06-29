@@ -1,6 +1,6 @@
 //! Tree-sitter-based extraction of top-level semantic units from Rust source.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use tree_sitter::{Node, Parser};
 
 use super::{SemanticUnit, SupportedLanguage, UnitKind};

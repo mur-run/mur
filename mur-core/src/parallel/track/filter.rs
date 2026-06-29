@@ -1,11 +1,14 @@
+use mur_common::parallel::PreFilterKind;
 use std::path::Path;
 use std::process::Command;
-use mur_common::parallel::PreFilterKind;
 
 #[derive(Debug)]
 pub enum FilterResult {
     Passed,
-    Failed { filter: PreFilterKind, stderr: String },
+    Failed {
+        filter: PreFilterKind,
+        stderr: String,
+    },
 }
 
 pub fn run_pre_filter(track_path: &Path, filters: &[PreFilterKind]) -> FilterResult {
@@ -15,7 +18,10 @@ pub fn run_pre_filter(track_path: &Path, filters: &[PreFilterKind]) -> FilterRes
             PreFilterKind::CargoClippyDeny => run_clippy(track_path),
         };
         if let Err(stderr) = result {
-            return FilterResult::Failed { filter: filter.clone(), stderr };
+            return FilterResult::Failed {
+                filter: filter.clone(),
+                stderr,
+            };
         }
     }
     FilterResult::Passed

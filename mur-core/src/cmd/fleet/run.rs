@@ -115,8 +115,8 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>)
         ..fleet.clone()
     };
     // Router plans which members do what (with deps); falls back to broadcast-to-all.
-    let proc = super::plan::plan_via_router(mur_home, &planning_fleet, &events)
-        .unwrap_or_else(|| {
+    let proc =
+        super::plan::plan_via_router(mur_home, &planning_fleet, &events).unwrap_or_else(|| {
             build_fleet_procedure(&goal, &fleet.members, fleet.parallel.as_ref())
                 .expect("members validated by caller guard")
         });
@@ -182,7 +182,8 @@ mod tests {
 
     #[test]
     fn build_fleet_procedure_one_delegate_step_per_member() {
-        let p = build_fleet_procedure("ship it", &["pm".to_string(), "qa".to_string()], None).unwrap();
+        let p =
+            build_fleet_procedure("ship it", &["pm".to_string(), "qa".to_string()], None).unwrap();
         assert_eq!(p.steps.len(), 2);
         assert_eq!(p.steps[0].delegate_to.as_deref(), Some("pm"));
         assert_eq!(p.steps[1].delegate_to.as_deref(), Some("qa"));
@@ -212,7 +213,8 @@ mod tests {
             },
             pre_filter: vec![],
         };
-        let p = build_fleet_procedure("ship it", &["pm".to_string(), "qa".to_string()], Some(&cfg)).unwrap();
+        let p = build_fleet_procedure("ship it", &["pm".to_string(), "qa".to_string()], Some(&cfg))
+            .unwrap();
         assert_eq!(p.steps.len(), 2);
         // First track should have functional style approach injected
         assert_eq!(p.steps[0].id.as_deref(), Some("track1"));
