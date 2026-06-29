@@ -122,7 +122,10 @@ pub fn cmd_fleet_cherry(mur_home: &Path, fleet_name: &str, auto: bool) -> Result
         }
         let ts_refs: Vec<TrackSource<'_>> = track_sources
             .iter()
-            .map(|(n, s)| TrackSource { track_name: n.as_str(), source: s.as_slice() })
+            .map(|(n, s)| TrackSource {
+                track_name: n.as_str(),
+                source: s.as_slice(),
+            })
             .collect();
 
         // Check conflicts (P1: always empty, cargo check is the real gate).
@@ -176,7 +179,10 @@ pub fn cmd_fleet_cherry(mur_home: &Path, fleet_name: &str, auto: bool) -> Result
 }
 
 fn cherry_result_dir(mur_home: &Path, fleet_name: &str) -> PathBuf {
-    mur_home.join("fleets").join(fleet_name).join("cherry-result")
+    mur_home
+        .join("fleets")
+        .join(fleet_name)
+        .join("cherry-result")
 }
 
 #[cfg(test)]
@@ -187,7 +193,10 @@ mod tests {
     fn cherry_result_dir_name() {
         let mur_home = PathBuf::from("/home/user/.mur");
         let fleet_name = "my-fleet";
-        let expected = mur_home.join("fleets").join(fleet_name).join("cherry-result");
+        let expected = mur_home
+            .join("fleets")
+            .join(fleet_name)
+            .join("cherry-result");
         assert_eq!(cherry_result_dir(&mur_home, fleet_name), expected);
     }
 }

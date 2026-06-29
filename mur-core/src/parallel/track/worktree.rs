@@ -87,7 +87,11 @@ mod tests {
         assert_eq!(ts.tracks.len(), 2);
         assert!(ts.tracks[0].config.name.contains("create"));
         for t in &ts.tracks {
-            assert!(t.worktree_path.exists(), "{:?} should exist", t.worktree_path);
+            assert!(
+                t.worktree_path.exists(),
+                "{:?} should exist",
+                t.worktree_path
+            );
         }
         destroy_tracks(&ts, &repo);
     }
