@@ -6641,8 +6641,6 @@ dependencies = [
  "anyhow",
  "mur-common",
  "serde_json",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
