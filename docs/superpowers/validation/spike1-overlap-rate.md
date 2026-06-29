@@ -28,14 +28,27 @@ only **≥3-way** overlaps are the CRDT's exclusive niche. Weight the verdict to
 
 ## How to run
 
-1. Need N ≥ 3 worktrees off a common base, each with a `.parallel-base` sentinel and a
-   `tracks.json` under `~/.mur/fleets/<name>/`. **Note:** `mur fleet run` does *not* yet
-   create these worktrees — the `parallel:` config only injects per-track *approach* text
-   into delegate steps (`create_tracks` has no live caller). Emergent runs therefore need
-   the **production-mode worktree wiring** (separate spec, out of P3 Phase 0 scope) plus
-   live member agents. Until then, runs are constructed (see below).
-2. `MUR_PARALLEL_CONCURRENT=1 mur fleet merge-concurrent <fleet> --stats`
-3. Read `~/.mur/fleets/<fleet>/concurrent_stats.json`.
+**Method A — observational (cheapest, decisive; what settled the gate).** Mine real git
+history: every genuine 2-parent merge is a natural concurrent-edit experiment (two branches
+diverged from a common base and both edited files). Replay each side vs the merge-base
+through the **production classifier** (`count_groups` → `group_edits`, the exact code
+`merge-concurrent --stats` uses) and aggregate. Zero agents, zero worktree infra, large
+real sample:
+
+```
+cargo run --release --example spike1_history -- <repo_path>
+```
+
+*Inference asymmetry:* 2-parent merges are N=2. The CRDT's unique niche is N>2. If even
+2-way overlap is rare in history, 3-way overlap is necessarily rarer → STOP-on-Loro holds
+*a fortiori*. (Only a *high* 2-way rate would be inconclusive — it still wouldn't prove the
+N>2 case, so it could at most justify INVESTIGATE, never PROCEED on this evidence alone.)
+
+**Method B — live emergent (richer, expensive; not needed for the gate).** Real parallel
+runs with N ≥ 3 worktrees + `tracks.json`, then `MUR_PARALLEL_CONCURRENT=1 mur fleet
+merge-concurrent <fleet> --stats`. Blocked on production-mode worktree wiring (`mur fleet
+run` has no live `create_tracks` caller) + live agents. Use only if Method A had been
+inconclusive — it wasn't.
 
 ## Decision gate
 
@@ -47,17 +60,26 @@ only **≥3-way** overlaps are the CRDT's exclusive niche. Weight the verdict to
 
 ## Results
 
-| run | source | N | files | clean_groups | overlap_regions | overlap_rate | notes |
-|-----|--------|---|-------|--------------|-----------------|--------------|-------|
-| 1 | constructed (instrument validation) | 3 | 4 | 4 | 1 | 20.0% | 1 single-actor file ×2, 1 disjoint-region file (auto-merged →2 clean), 1 **3-way** same-line collision (escalated, all 3 actors captured). Confirms disjoint auto-merge + N-way escalation work. |
-| 0 | degenerate (rejected) | 2 | 1 | 0 | 3 | 100.0% | Two agents given the **same** task on one function → manufactured 100%. Violates *both* methodology requirements; kept only as a worst-case sanity check that overlaps escalate rather than silently interleave. **Not used for the gate.** |
+| run | source | N | merges | files | clean_groups | overlap_regions | overlap_rate | notes |
+|-----|--------|---|--------|-------|--------------|-----------------|--------------|-------|
+| **2** | **observational — MUR git history (DECISIVE)** | 2 | 27 | 626 | 1633 | **2** | **0.1%** | Method A over the repo's entire merge history (27 genuine divergent 2-parent merges). Only 2 overlaps, both in registration hotspots (`main.rs`, `mur-agent-gui/.../wiring.rs` — two branches each adding an entry). The real rate at which independently-developed branches edit the same `.rs` lines. |
+| 1 | constructed (instrument validation) | 3 | — | 4 | 4 | 1 | 20.0% | 1 single-actor file ×2, 1 disjoint-region file (auto-merged →2 clean), 1 **3-way** same-line collision (escalated, all 3 actors captured). Validates the instrument (disjoint auto-merge + N-way escalation); the 20% is a *constructed* mix, not a measurement. |
+| 0 | degenerate (rejected) | 2 | — | 1 | 0 | 3 | 100.0% | Two agents given the **same** task on one function → manufactured 100%. Violates both methodology requirements; kept only as a sanity check that overlaps escalate rather than silently interleave. |
 
-**Conclusion:** _Instrument validated, gate decision DEFERRED._ Run 1 proves
-`merge-concurrent --stats` correctly (a) auto-merges disjoint hunks, (b) escalates
-same-region collisions without interleaving, (c) captures N-way (3-actor) overlaps, and
-(d) aggregates a sane rate across a multi-file run at the decision-relevant N=3. But its
-20% is a *constructed* mix, not an emergent measurement — it cannot itself decide
-STOP/INVESTIGATE/PROCEED. The real gate number requires emergent data from live parallel
-runs at N≥3, which is **blocked on the production-mode worktree wiring** (separate spec) +
-live member agents. Phase 1 (Loro) stays unbuilt until that emergent number lands above
-the gate.
+**Conclusion: STOP — skip Phase 1 (Loro). The zero-dep `StructuralMerger` (P3 Phase 0) is
+sufficient.** Run 2 measures the real overlap rate over MUR's entire history at **0.1%**
+(2 overlaps in 1635 edit groups across 626 files / 27 divergent merges) — far below the 5%
+STOP threshold. By the inference asymmetry, this is N=2 (the *easiest* case to hit
+overlap); the CRDT's only unique advantage is N>2, which is necessarily rarer, so STOP
+holds *a fortiori*. The two real overlaps are central-registration hotspots (both branches
+appending a match arm / module decl) — exactly the conflicts a line-CRDT converges but
+cannot *correctly* resolve (it would interleave two arms; still needs judge/human). So
+Loro's ~40 transitive deps would buy auto-merge on ~0.1% of cases, and even those it can't
+get right. `StructuralMerger`'s policy (auto-merge disjoint hunks, escalate every overlap)
+captures essentially all the value with zero new dependencies. Spike-2 (footprint) and
+Spike-3 (diff→ops fidelity) are therefore moot. Re-run `cargo run --example spike1_history`
+on any repo to re-confirm.
+
+*Caveats (do not change the verdict):* the sample is MUR's own history (human + some agent
+work) and N=2; both make STOP **stronger**, not weaker — pure disjoint-task agent fan-out
+would overlap even less, and N>2 is rarer than N=2.
