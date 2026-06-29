@@ -617,7 +617,6 @@ export function DashboardApp() {
 
   return (
     <div className="dashboard-root">
-      <Sidebar activeRole={activeRole} agents={agents} onSelect={setActiveRole} />
       <div className="dashboard-main dashboard">
         {showAppsBanner && (
           <div className="onboarding-banner">
@@ -791,7 +790,9 @@ export function DashboardApp() {
         ) : surface === "chats" ? (
           <ChatsView agents={agents} />
         ) : (
-          <>
+          <div className="agents-view">
+            <Sidebar activeRole={activeRole} agents={agents} onSelect={setActiveRole} />
+            <div className="agents-view__content">
             <div className="dashboard__hero">
               <Mascot floating mood={mascotMood} bubble={mascotBubble} />
               <div>
@@ -856,7 +857,8 @@ export function DashboardApp() {
                 </div>
               )}
             </div>
-          </>
+            </div>{/* agents-view__content */}
+          </div>
         )}
       </div>
 

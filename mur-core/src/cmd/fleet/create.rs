@@ -4,6 +4,7 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 use mur_common::fleet::{CONCIERGE_AGENT, Fleet, valid_fleet_name};
+use mur_common::parallel::ParallelConfig;
 
 use super::store;
 
@@ -13,6 +14,7 @@ pub fn cmd_fleet_create(
     members: Vec<String>,
     router: Option<String>,
     goal: Option<String>,
+    parallel: Option<ParallelConfig>,
 ) -> Result<()> {
     if !valid_fleet_name(name) {
         bail!("invalid fleet name '{name}': use lowercase letters, digits, '-' or '_'");
@@ -46,6 +48,7 @@ pub fn cmd_fleet_create(
         rules: vec![],
         skills: vec![],
         loop_cfg: None,
+        parallel,
     };
     store::save_fleet(mur_home, &fleet)?;
     println!("Created fleet '{name}' (channel {})", ch.id);
@@ -60,12 +63,20 @@ mod tests {
     fn create_writes_fleet_and_channel() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        cmd_fleet_create(home, "dev", vec!["pm".into()], None, Some("ship".into())).unwrap();
+        cmd_fleet_create(
+            home,
+            "dev",
+            vec!["pm".into()],
+            None,
+            Some("ship".into()),
+            None,
+        )
+        .unwrap();
         let f = super::super::store::load_fleet(home, "dev").unwrap();
         assert_eq!(f.channel_id, "fleet-dev");
         assert_eq!(f.goal, "ship");
         assert_eq!(f.router_or_concierge(), mur_common::fleet::CONCIERGE_AGENT);
         // second create errors (already exists)
-        assert!(cmd_fleet_create(home, "dev", vec![], None, None).is_err());
+        assert!(cmd_fleet_create(home, "dev", vec![], None, None, None).is_err());
     }
 }

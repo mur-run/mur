@@ -55,7 +55,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         assert!(cmd_fleet_show(home, "dev").is_err());
-        super::super::create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, None).unwrap();
+        super::super::create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, None, None)
+            .unwrap();
         assert!(cmd_fleet_show(home, "dev").is_ok());
         // With an active job queued, show must still succeed (exercises the jobs branch).
         super::super::jobs::enqueue_job(home, "dev", "do a thing", "cli").unwrap();

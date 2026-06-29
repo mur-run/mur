@@ -97,6 +97,7 @@ mod tests {
             skills: vec![],
             loop_cfg: None,
             team_id: None,
+            parallel: None,
         };
         let err = save_fleet(home, &bad).unwrap_err();
         assert!(
@@ -125,6 +126,7 @@ mod tests {
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
+            parallel: None,
         };
         save_fleet(home, &f).unwrap();
         assert!(fleet_path(home, "dev").exists());

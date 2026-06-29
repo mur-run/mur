@@ -33,6 +33,10 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 schemars = { workspace = true }
 serde_yaml_ng = "0.10"  # AgentProfile uses serde_yaml_ng::Value in model.params
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+blake3 = "1"
+heed = { version = "0.20", features = ["serde-json"] }
 libc = "0.2"
 clap = { workspace = true, optional = true }
 reqwest = { workspace = true }
