@@ -179,9 +179,16 @@ def run_one_case(
         extras["grader_kind"] = "heuristic_v1"
         extras["behavior"] = prompt
     elif backend in ("openai", "deepseek"):
+        from grader import grade as harmbench_grade  # type: ignore
+
+        prompt = case.get("behavior") or case.get("user_task_prompt", "")
+        if not prompt:
+            raise SystemExit(
+                f"case {case['test_id']!r} missing 'behavior' field; "
+                "did you select cases via M11.3.1 Phase A?"
+            )
         base_url = "https://api.deepseek.com" if backend == "deepseek" else None
         response_text, tokens_input, tokens_output = _call_openai(prompt, model, base_url)
-        from grader import grade as harmbench_grade  # type: ignore
         agent_decision = harmbench_grade(response_text)
         extras["response_text"] = response_text
         extras["grader_kind"] = "heuristic_v1"
