@@ -33,8 +33,9 @@ pub fn cmd_fleet_compare(
         .map(|t| t.config.name.as_str())
         .collect();
 
+    type ScoreEntry = (String, Option<(f32, bool)>);
     // unit_name → Vec<(track_name, Option<(score, low_confidence)>)>
-    let mut score_map: std::collections::HashMap<String, Vec<(String, Option<(f32, bool)>)>> =
+    let mut score_map: std::collections::HashMap<String, Vec<ScoreEntry>> =
         std::collections::HashMap::new();
 
     for t in &tracks.tracks {
@@ -117,7 +118,7 @@ pub fn cmd_fleet_compare(
             let max_score = scores[wi].unwrap().0;
             scores
                 .iter()
-                .filter(|v| v.map_or(false, |(s, _)| s == max_score))
+                .filter(|v| v.is_some_and(|(s, _)| s == max_score))
                 .count()
                 > 1
         } else {
@@ -131,12 +132,7 @@ pub fn cmd_fleet_compare(
                 Some((s, false)) => format!("{:.1}", s),
                 None => "-".into(),
             };
-            // Bold the winner column
-            if winner_idx == Some(i) && !is_tie {
-                print!(" {:<col_w$}", cell);
-            } else {
-                print!(" {:<col_w$}", cell);
-            }
+            print!(" {:<col_w$}", cell);
 
             // accumulate averages
             if let Some((s, _)) = val {
