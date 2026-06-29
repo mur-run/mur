@@ -23,3 +23,10 @@ harmbench @ git+https://github.com/centerforaisafety/HarmBench.git@v1.0.0
 pydantic>=2.0,<3.0
 typer>=0.12,<1.0
 rich>=13.0,<14.0
+
+# Anthropic SDK — used by agentdojo/run.py (backend=anthropic) and harmbench/run.py.
+anthropic>=0.25,<1.0
+
+# OpenAI SDK — used by agentdojo/run.py (backend=openai / deepseek).
+# DeepSeek is OpenAI-compatible; set base_url=https://api.deepseek.com.
+openai>=1.0,<2.0
