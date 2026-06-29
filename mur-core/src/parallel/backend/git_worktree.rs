@@ -19,6 +19,9 @@ impl GitWorktreeBackend {
 
 impl ParallelBackend for GitWorktreeBackend {
     fn create_track(&self, name: &str) -> Result<PathBuf> {
+        // Optional safety net: Time Machine local snapshot before first track.
+        super::cow::take_local_snapshot();
+
         let path = self.repo_root.join(WORKTREES_DIR).join(name);
         let status = Command::new("git")
             .args(["worktree", "add", "--detach"])
@@ -43,6 +46,10 @@ impl ParallelBackend for GitWorktreeBackend {
             );
         }
         std::fs::write(path.join(PARALLEL_BASE_FILE), base_head.stdout.as_slice())?;
+
+        // COW-copy build cache (e.g. target/) into the new track so agents
+        // start with a warm cache instead of a cold build.
+        super::cow::copy_build_cache(&self.repo_root, &path)?;
 
         Ok(path)
     }
