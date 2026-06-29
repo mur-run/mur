@@ -33,9 +33,8 @@ use std::time::Instant as StdInstant;
 
 use anyhow::{Context, Result};
 use crossterm::event::{
-    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture, Event, EventStream, KeyCode, KeyEventKind, KeyModifiers,
-    MouseEventKind,
+    DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange, Event,
+    EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind,
 };
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -90,7 +89,7 @@ const SPINNER_MS: u64 = 90;
 /// Max chars of an arg hint shown on a step line in `--plain` mode.
 const PLAIN_STEP_HINT_MAX: usize = 120;
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /auto [on|off]  /mcp  /skill  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Alt+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll (or mouse wheel)";
+const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /auto [on|off]  /mcp  /skill  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Alt+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
 pub async fn cmd_cli(
@@ -170,7 +169,6 @@ impl TerminalGuard {
             io::stdout(),
             EnterAlternateScreen,
             EnableBracketedPaste,
-            EnableMouseCapture,
             EnableFocusChange
         )
         .context("enter alternate screen")?;
@@ -184,7 +182,6 @@ impl Drop for TerminalGuard {
             io::stdout(),
             LeaveAlternateScreen,
             DisableBracketedPaste,
-            DisableMouseCapture,
             DisableFocusChange,
             cursor::Show
         );
@@ -217,7 +214,6 @@ async fn run_tui(
             io::stdout(),
             LeaveAlternateScreen,
             DisableBracketedPaste,
-            DisableMouseCapture,
             DisableFocusChange,
             cursor::Show
         );
@@ -516,7 +512,6 @@ fn scrollback_dump(app: &App) -> io::Result<()> {
         io::stdout(),
         LeaveAlternateScreen,
         DisableBracketedPaste,
-        DisableMouseCapture
     )?;
     disable_raw_mode()?;
 
@@ -543,7 +538,6 @@ fn scrollback_dump(app: &App) -> io::Result<()> {
         io::stdout(),
         EnterAlternateScreen,
         EnableBracketedPaste,
-        EnableMouseCapture
     )?;
     res
 }

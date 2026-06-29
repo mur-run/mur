@@ -33,12 +33,11 @@ pub struct CompletionState {
 /// Built-in commands: (word without slash, description, subcommands).
 /// `exit` is omitted as a duplicate of `quit`.
 const COMMANDS: &[(&str, &str, &[&str])] = &[
-    ("help", "show the command cheatsheet", &[]),
-    ("clear", "start a new conversation", &[]),
-    ("card", "show this agent's card", &[]),
-    ("sessions", "list past sessions", &[]),
-    ("channels", "list or switch channels", &[]),
     ("auto", "session-wide auto-approval", &["on", "off"]),
+    ("card", "show this agent's card", &[]),
+    ("channels", "list or switch channels", &[]),
+    ("clear", "start a new conversation", &[]),
+    ("help", "show the command cheatsheet", &[]),
     (
         "mcp",
         "manage MCP servers",
@@ -51,9 +50,10 @@ const COMMANDS: &[(&str, &str, &[&str])] = &[
             "registry-add",
         ],
     ),
+    ("quit", "exit the chat", &[]),
+    ("sessions", "list past sessions", &[]),
     ("skill", "manage agent skills", &["list", "add", "remove"]),
     ("skin", "switch theme", &["dark", "light", "mur"]),
-    ("quit", "exit the chat", &[]),
 ];
 
 /// Subcommands for `cmd` (without leading slash), or `None` if `cmd` is unknown

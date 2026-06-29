@@ -199,8 +199,7 @@ fn push_message(
                 lines.push(Line::styled(
                     format!("{prefix}{l}"),
                     Style::default()
-                        .fg(theme.system)
-                        .add_modifier(Modifier::ITALIC),
+                        .fg(theme.system),
                 ));
             }
         }
