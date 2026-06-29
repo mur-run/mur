@@ -19,7 +19,7 @@ export const zhTW: Table = {
   "dashboard.run": "啟動",
   "dashboard.stop": "停止",
   "dashboard.share": "分享",
-  "dashboard.open": "開啟",
+  "dashboard.settings": "設定",
   "dashboard.runTooltip": "啟動 agent runtime",
   "dashboard.startFailed": "啟動失敗：{error}",
   "dashboard.stopFailed": "停止失敗：{error}",
