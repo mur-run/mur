@@ -3,6 +3,9 @@ use std::process::Command;
 use anyhow::{Context, Result};
 use super::ParallelBackend;
 
+const WORKTREES_DIR: &str = ".worktrees";
+const PARALLEL_BASE_FILE: &str = ".parallel-base";
+
 pub struct GitWorktreeBackend {
     repo_root: PathBuf,
 }
@@ -13,13 +16,28 @@ impl GitWorktreeBackend {
 
 impl ParallelBackend for GitWorktreeBackend {
     fn create_track(&self, name: &str) -> Result<PathBuf> {
-        let path = self.repo_root.join(".worktrees").join(name);
-        Command::new("git")
+        let path = self.repo_root.join(WORKTREES_DIR).join(name);
+        let status = Command::new("git")
             .args(["worktree", "add", "--detach"])
             .arg(&path)
             .current_dir(&self.repo_root)
             .status()
-            .context("git worktree add")?;
+            .context("spawn git worktree add")?;
+        if !status.success() {
+            anyhow::bail!("git worktree add failed with {status}");
+        }
+
+        // Write the initial base snapshot to a sentinel file so promote() can use it
+        let base_head = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&path)
+            .output()
+            .context("git rev-parse HEAD for sentinel")?;
+        if !base_head.status.success() {
+            anyhow::bail!("git rev-parse failed: {}", String::from_utf8_lossy(&base_head.stderr));
+        }
+        std::fs::write(path.join(PARALLEL_BASE_FILE), base_head.stdout.as_slice())?;
+
         Ok(path)
     }
 
@@ -28,7 +46,10 @@ impl ParallelBackend for GitWorktreeBackend {
             .args(["rev-parse", "HEAD"])
             .current_dir(track)
             .output()
-            .context("git rev-parse")?;
+            .context("spawn git rev-parse")?;
+        if !out.status.success() {
+            anyhow::bail!("git rev-parse failed: {}", String::from_utf8_lossy(&out.stderr));
+        }
         Ok(String::from_utf8(out.stdout)?.trim().to_string())
     }
 
@@ -37,7 +58,10 @@ impl ParallelBackend for GitWorktreeBackend {
             .args(["diff", "--name-only", since_snapshot, "HEAD"])
             .current_dir(track)
             .output()
-            .context("git diff")?;
+            .context("spawn git diff")?;
+        if !out.status.success() {
+            anyhow::bail!("git diff failed: {}", String::from_utf8_lossy(&out.stderr));
+        }
         let files = String::from_utf8(out.stdout)?
             .lines()
             .filter(|l| !l.is_empty())
@@ -47,9 +71,11 @@ impl ParallelBackend for GitWorktreeBackend {
     }
 
     fn promote(&self, track: &Path, target: &Path) -> Result<()> {
-        // Copy changed files from track worktree into target directory
-        let since = self.base_snapshot(track)?;
-        let files = self.diff_files(track, &since)?;
+        // Read the initial HEAD saved at create_track time
+        let since = std::fs::read_to_string(track.join(PARALLEL_BASE_FILE))
+            .context("read .parallel-base sentinel — was create_track called?")?;
+        let since = since.trim();
+        let files = self.diff_files(track, since)?;
         for src in files {
             let rel = src.strip_prefix(track).context("strip prefix")?;
             let dst = target.join(rel);
@@ -60,12 +86,15 @@ impl ParallelBackend for GitWorktreeBackend {
     }
 
     fn destroy(&self, track: &Path) -> Result<()> {
-        Command::new("git")
+        let status = Command::new("git")
             .args(["worktree", "remove", "--force"])
             .arg(track)
             .current_dir(&self.repo_root)
             .status()
-            .context("git worktree remove")?;
+            .context("spawn git worktree remove")?;
+        if !status.success() {
+            anyhow::bail!("git worktree remove failed with {status}");
+        }
         Ok(())
     }
 }
