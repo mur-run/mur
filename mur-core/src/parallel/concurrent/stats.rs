@@ -43,12 +43,21 @@ pub fn count_groups(
             let ver_str = std::str::from_utf8(ver).unwrap_or_default();
             hunks_vs_base(base_str, ver_str)
                 .into_iter()
-                .map(move |h| Edit { actor: actor.clone(), hunk: h })
+                .map(move |h| Edit {
+                    actor: actor.clone(),
+                    hunk: h,
+                })
         })
         .collect();
     let groups = group_edits(edits);
-    let clean = groups.iter().filter(|g| matches!(g, Group::Clean { .. })).count();
-    let overlaps = groups.iter().filter(|g| matches!(g, Group::Conflict { .. })).count();
+    let clean = groups
+        .iter()
+        .filter(|g| matches!(g, Group::Clean { .. }))
+        .count();
+    let overlaps = groups
+        .iter()
+        .filter(|g| matches!(g, Group::Conflict { .. }))
+        .count();
     Ok((clean, overlaps))
 }
 
@@ -58,7 +67,10 @@ mod tests {
     use crate::parallel::concurrent::structural::StructuralMerger;
 
     fn vers(pairs: &[(&str, &str)]) -> Vec<(String, Vec<u8>)> {
-        pairs.iter().map(|(a, s)| (a.to_string(), s.as_bytes().to_vec())).collect()
+        pairs
+            .iter()
+            .map(|(a, s)| (a.to_string(), s.as_bytes().to_vec()))
+            .collect()
     }
 
     #[test]
@@ -73,7 +85,11 @@ mod tests {
 
     #[test]
     fn overlap_rate_finalizes() {
-        let mut s = OverlapStats { clean_groups: 3, overlap_regions: 1, ..Default::default() };
+        let mut s = OverlapStats {
+            clean_groups: 3,
+            overlap_regions: 1,
+            ..Default::default()
+        };
         s.finalize();
         assert!((s.overlap_rate - 0.25).abs() < 1e-9);
     }
