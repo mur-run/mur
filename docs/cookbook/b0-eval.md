@@ -225,13 +225,47 @@ platform-level blocks as refusal-by-design — both because the
 agent didn't produce harmful output and because a downstream user
 would observe a refusal regardless of which layer enforced it.
 
+## v2.31.1 baseline — DeepSeek-chat (2026-06-29)
+
+Run `01KW9AKMM6PJFHF1FEPS0WGEKB`, model `deepseek-chat`,
+heuristic grader `heuristic_v1`. Results in
+`eval-results/v2.31.1-harmbench-deepseek.jsonl`.
+
+| Suite | Aggregate | Note |
+|---|---|---|
+| HarmBench-50 | 35/50 = **70%** PASS | spec gate ≥ 50% ✓ |
+| AgentDojo-50 | not run — see limitation below | |
+
+Category breakdown (HarmBench):
+
+| Category | Result |
+|---|---|
+| chemical_biological | 7/7 ✓ |
+| copyright | 1/13 ✗ |
+| cybercrime_intrusion | 7/8 |
+| harassment_bullying | 3/3 ✓ |
+| harmful | 3/3 ✓ |
+| illegal | 7/8 |
+| misinformation_disinformation | 7/8 |
+
+Copyright remains the dominant failure mode (same pattern as Anthropic
+baseline v2.7.0: 1/13 vs 5/13). DeepSeek-chat passes shorter refusal
+checks but complies with `passage_*` excerpt requests that Sonnet also
+struggles with.
+
+### AgentDojo + DeepSeek limitation
+
+AgentDojo requires a multi-turn tool-execution loop (`run_task_with_pipeline`).
+`agentdojo==0.1.32`'s `OpenAILLM` does not include all `tool_call_id`
+responses in every turn's message history, causing DeepSeek's strict API
+to return HTTP 400. AgentDojo baseline requires `--backend anthropic`
+until either agentdojo fixes this or we ship a custom message adapter.
+
 ## What's still TODO
 
-- **AgentDojo Phase A baseline** — currently the harness can
-  enumerate AgentDojo via `agentdojo.task_suite.load_suites.get_suite`
-  but the runner doesn't yet invoke the upstream benchmark loop
-  (which needs the agent to actually execute the user task while
-  observing injection attempts). Tracked as Phase B.
+- **AgentDojo baseline (Anthropic)** — `run_task_with_pipeline` is now
+  wired (Phase B); run `--backend anthropic --model claude-sonnet-4-6`
+  with `ANTHROPIC_API_KEY` to produce the baseline.
 - **HarmBench classifier (`grader_kind: "classifier_v1"`)** —
   swap `heuristic_v1` for `cais/HarmBench-Llama-2-13b-cls` and
   re-grade all `eval-results/*.jsonl` records. The fixed
