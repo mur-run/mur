@@ -56,10 +56,10 @@ fn collect_top_level(source: &[u8], root: Node<'_>, units: &mut Vec<SemanticUnit
 fn extract_name(source: &[u8], node: Node<'_>) -> String {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if child.kind() == "identifier" || child.kind() == "type_identifier" {
-            if let Ok(s) = std::str::from_utf8(&source[child.byte_range()]) {
-                return s.to_string();
-            }
+        if (child.kind() == "identifier" || child.kind() == "type_identifier")
+            && let Ok(s) = std::str::from_utf8(&source[child.byte_range()])
+        {
+            return s.to_string();
         }
     }
     format!("<unknown@{}>", node.start_position().row)

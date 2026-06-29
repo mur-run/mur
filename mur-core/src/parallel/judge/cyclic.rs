@@ -109,10 +109,9 @@ impl CyclicJudge {
                 if let Some(pos) = entry.label.as_bytes()[0]
                     .checked_sub(b'A')
                     .map(|p| p as usize)
+                    .filter(|&p| p < order.len())
                 {
-                    if pos < order.len() {
-                        scores_by_position[pos] = entry.score;
-                    }
+                    scores_by_position[pos] = entry.score;
                 }
             }
         }
