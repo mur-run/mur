@@ -212,6 +212,7 @@ mod tests {
                 rubric: mur_common::parallel::Rubric::default(),
             },
             pre_filter: vec![],
+            partition: None,
         };
         let p = build_fleet_procedure("ship it", &["pm".to_string(), "qa".to_string()], Some(&cfg))
             .unwrap();

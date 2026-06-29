@@ -72,6 +72,7 @@ mod tests {
                 rubric: Rubric::default(),
             },
             pre_filter: vec![PreFilterKind::CargoCheck],
+            partition: None,
         }
     }
 
