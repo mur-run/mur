@@ -121,7 +121,8 @@ pub fn fleet_create(
     goal: String,
 ) -> Result<(), String> {
     let home = mur_home_path();
-    create::cmd_fleet_create(&home, &name, members, router, Some(goal), None).map_err(|e| e.to_string())
+    create::cmd_fleet_create(&home, &name, members, router, Some(goal), None)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
