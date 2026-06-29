@@ -65,7 +65,7 @@ interface GridCardProps {
 
 export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
   const { t } = useT();
-  const { setSelected, setDesiredDetailTab } = useAgents();
+  const { setSelected } = useAgents();
   const unread = useUnreadCount(agent.name);
   const color = CATEGORY_COLORS[agent.category] ?? "#6B7280";
   const pill = runtimePill(runtime?.state);
@@ -204,7 +204,7 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
         <div className="grid-card__actions">
           <button
             disabled={isRunning || isBusy}
-            onClick={handleRun}
+            onClick={(e) => { e.stopPropagation(); handleRun(); }}
             title={t("dashboard.run")}
             aria-label={t("dashboard.run")}
           >
@@ -212,13 +212,13 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
           </button>
           <button
             disabled={!isRunning && !isBusy}
-            onClick={handleStop}
+            onClick={(e) => { e.stopPropagation(); handleStop(); }}
             title={t("dashboard.stop")}
             aria-label={t("dashboard.stop")}
           >
             <Ico filled><rect x="6" y="6" width="12" height="12" rx="1.5" /></Ico>
           </button>
-          <button onClick={handleShare} title={t("dashboard.share")} aria-label={t("dashboard.share")}>
+          <button onClick={(e) => { e.stopPropagation(); handleShare(); }} title={t("dashboard.share")} aria-label={t("dashboard.share")}>
             <Ico>
               <path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7" />
               <polyline points="16 7 12 3 8 7" />
@@ -237,24 +237,24 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
               <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
             </Ico>
           </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setDesiredDetailTab("style");
-              setSelected(agent.name);
-            }}
-            title={t("dashboard.style")}
-            aria-label={t("dashboard.style")}
-          >
-            <Ico><path d="M17 3a2.85 2.85 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" /></Ico>
-          </button>
+
         </div>
         <div className="grid-card__foot">
           <span className={pill.cls}>
             <span className="pill__dot" />
             {t(pill.key)}
           </span>
-          <span className="grid-card__open">{t("dashboard.open")} →</span>
+          <button
+            className="grid-card__settings"
+            onClick={(e) => { e.stopPropagation(); setSelected(agent.name); }}
+            title={t("dashboard.settings")}
+            aria-label={t("dashboard.settings")}
+          >
+            <Ico>
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+              <circle cx="12" cy="12" r="3" />
+            </Ico>
+          </button>
         </div>
       </div>
 
@@ -315,7 +315,17 @@ export function ListRow({ agent, runtime, isSelected }: ListRowProps) {
         <span className="pill__dot" />
         {t(pill.key)}
       </span>
-      <span className="list-row__open">{t("dashboard.open")} →</span>
+      <button
+        className="list-row__settings"
+        onClick={(e) => { e.stopPropagation(); setSelected(isSelected ? null : agent.name); }}
+        title={t("dashboard.settings")}
+        aria-label={t("dashboard.settings")}
+      >
+        <Ico>
+          <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+          <circle cx="12" cy="12" r="3" />
+        </Ico>
+      </button>
     </div>
   );
 }
