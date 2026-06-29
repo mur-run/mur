@@ -211,20 +211,37 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
             );
           })}
         </div>
-        {/* Add member: dropdown of known agents not already in fleet */}
+        {/* Add member: searchable combobox */}
         <div className="fleet-add-member">
-          <select
-            value={addInput}
-            onChange={(e) => setAddInput(e.target.value)}
-            className="fleet-add-member__select"
-          >
-            <option value="">{t("fleet.addMember")}</option>
-            {Array.from(agentMap.values())
-              .filter((a) => !detail.members.includes(a.name) && !detail.members.map(m => m.toLowerCase()).includes(a.name))
-              .map((a) => (
-                <option key={a.name} value={a.name}>{a.display_name}</option>
-              ))}
-          </select>
+          <div className="fleet-add-member__combo">
+            <input
+              value={addInput}
+              onChange={(e) => { setAddInput(e.target.value); }}
+              placeholder={t("fleet.addMember")}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleAddMember();
+                if (e.key === "Escape") setAddInput("");
+              }}
+              autoComplete="off"
+            />
+            {addInput.length > 0 && (() => {
+              const lower = addInput.toLowerCase();
+              const memberSet = new Set(detail.members.map(m => m.toLowerCase()));
+              const suggestions = Array.from(agentMap.values()).filter(
+                (a) => !memberSet.has(a.name.toLowerCase()) &&
+                  (a.name.toLowerCase().includes(lower) || a.display_name.toLowerCase().includes(lower))
+              );
+              return suggestions.length > 0 ? (
+                <ul className="fleet-add-member__suggestions">
+                  {suggestions.map((a) => (
+                    <li key={a.name} onMouseDown={() => { setAddInput(a.name); }}>
+                      {a.display_name}
+                    </li>
+                  ))}
+                </ul>
+              ) : null;
+            })()}
+          </div>
           <button className="toolbar-btn" onClick={handleAddMember} disabled={busy !== null || !addInput.trim()}>+</button>
         </div>
       </div>
