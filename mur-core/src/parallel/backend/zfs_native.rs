@@ -82,9 +82,14 @@ fn mountpoint_of(dataset: &str) -> Result<PathBuf> {
         .args(["get", "-H", "-o", "value", "mountpoint", dataset])
         .output()
         .context("zfs get mountpoint")?;
-    Ok(PathBuf::from(
-        String::from_utf8_lossy(&out.stdout).trim(),
-    ))
+    if !out.status.success() {
+        bail!("zfs get mountpoint failed for {dataset}");
+    }
+    let p = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    if p.as_os_str().is_empty() {
+        bail!("empty mountpoint for {dataset}");
+    }
+    Ok(p)
 }
 
 impl ParallelBackend for ZfsNativeBackend {
@@ -104,9 +109,8 @@ impl ParallelBackend for ZfsNativeBackend {
 
     fn diff_files(&self, track: &Path, since_snapshot: &str) -> Result<Vec<PathBuf>> {
         let ds = dataset_for_path(track)?;
-        let since = format!("{ds}@{since_snapshot}");
         let out = Command::new("zfs")
-            .args(["diff", &since, &ds])
+            .args(["diff", since_snapshot, &ds])
             .output()
             .context("zfs diff")?;
         Ok(parse_diff_output(
@@ -116,7 +120,8 @@ impl ParallelBackend for ZfsNativeBackend {
     }
 
     fn promote(&self, track: &Path, target: &Path) -> Result<()> {
-        for rel in self.diff_files(track, "mur-base")? {
+        let snap = self.base_snapshot(track)?;
+        for rel in self.diff_files(track, &snap)? {
             let src = track.join(&rel);
             let dst = target.join(&rel);
             if src.is_file() {
