@@ -234,6 +234,7 @@ mod tests {
             vec!["pm".into()],
             None,
             Some("standing".into()),
+            None,
         )
         .unwrap();
 

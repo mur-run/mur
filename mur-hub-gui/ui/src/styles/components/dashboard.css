@@ -121,6 +121,14 @@
 .toolbar-btn--primary:hover {
   background: color-mix(in srgb, var(--color-brand) 88%, #000);
 }
+.toolbar-btn--danger {
+  background: transparent;
+  border-color: var(--color-error, #ef4444);
+  color: var(--color-error, #ef4444);
+}
+.toolbar-btn--danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
 .toolbar-btn--icon {
   display: inline-flex;
   align-items: center;

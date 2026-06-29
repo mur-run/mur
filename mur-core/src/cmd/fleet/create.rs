@@ -63,12 +63,12 @@ mod tests {
     fn create_writes_fleet_and_channel() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        cmd_fleet_create(home, "dev", vec!["pm".into()], None, Some("ship".into())).unwrap();
+        cmd_fleet_create(home, "dev", vec!["pm".into()], None, Some("ship".into()), None).unwrap();
         let f = super::super::store::load_fleet(home, "dev").unwrap();
         assert_eq!(f.channel_id, "fleet-dev");
         assert_eq!(f.goal, "ship");
         assert_eq!(f.router_or_concierge(), mur_common::fleet::CONCIERGE_AGENT);
         // second create errors (already exists)
-        assert!(cmd_fleet_create(home, "dev", vec![], None, None).is_err());
+        assert!(cmd_fleet_create(home, "dev", vec![], None, None, None).is_err());
     }
 }

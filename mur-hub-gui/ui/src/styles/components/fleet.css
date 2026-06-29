@@ -128,7 +128,7 @@
 
 .fleet-rail__status--idle    { background: var(--text-tertiary, #6b7280); }
 .fleet-rail__status--running { background: #22c55e; box-shadow: 0 0 4px #22c55e88; }
-.fleet-rail__status--stopped { background: var(--color-warn, #f59e0b); }
+.fleet-rail__status--stopped { background: var(--color-error, #ef4444); }
 
 /* ── Fleet detail panel ─────────────────────────────────────────────────── */
 
@@ -201,13 +201,52 @@
   margin-bottom: 20px;
 }
 
+.fleet-section__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-line);
+}
+
 .fleet-section__label {
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.fleet-section__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--color-brand, #6366f1);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.fleet-section--jobs {
+  background: var(--bg-card, rgba(255,255,255,0.03));
+  border: 1px solid var(--border-line);
+  border-radius: var(--radius-md, 8px);
+  padding: 12px 14px;
+}
+
+.fleet-send--inset {
+  margin-bottom: 10px;
+}
+
+.fleet-jobs__empty {
+  font-size: 12px;
   color: var(--text-tertiary);
-  margin-bottom: 8px;
+  padding: 8px 0;
 }
 
 /* ── Members ────────────────────────────────────────────────────────────── */
@@ -278,6 +317,7 @@
 .fleet-add-member__combo input {
   width: 100%;
   font-size: 12px;
+  padding: 6px 10px;
   box-sizing: border-box;
 }
 
@@ -319,6 +359,7 @@
 .fleet-send input {
   flex: 1;
   font-size: 12px;
+  padding: 6px 10px;
 }
 
 /* ── Jobs table ─────────────────────────────────────────────────────────── */
@@ -386,3 +427,40 @@
 }
 
 .fleet-jobs__more:hover { text-decoration: underline; }
+
+/* ── Detail action layout ────────────────────────────────────────────────── */
+
+.fleet-detail__run { margin-bottom: 12px; }
+.fleet-detail__run .toolbar-btn { width: 100%; padding: 8px 16px; font-size: 13px; font-weight: 600; justify-content: center; }
+
+.fleet-detail__mgmt { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
+
+/* ── Danger Zone ─────────────────────────────────────────────────────────── */
+
+.fleet-detail__danger {
+  margin-top: 32px;
+  border: 1px solid rgba(239,68,68,0.25);
+  border-radius: var(--radius-md, 8px);
+  padding: 14px 16px;
+}
+
+.fleet-detail__danger-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-error, #ef4444);
+  margin-bottom: 10px;
+}
+
+.fleet-detail__danger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.fleet-detail__danger-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+}

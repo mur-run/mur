@@ -121,7 +121,7 @@ pub fn fleet_create(
     goal: String,
 ) -> Result<(), String> {
     let home = mur_home_path();
-    create::cmd_fleet_create(&home, &name, members, router, Some(goal)).map_err(|e| e.to_string())
+    create::cmd_fleet_create(&home, &name, members, router, Some(goal), None).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -194,6 +194,14 @@ pub fn fleet_add_member(name: String, agent: String) -> Result<(), String> {
 pub fn fleet_remove_member(name: String, agent: String) -> Result<(), String> {
     let home = mur_home_path();
     roster::cmd_fleet_remove(&home, &name, vec![agent]).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn fleet_export_to(name: String, path: String) -> Result<(), String> {
+    let home = mur_home_path();
+    let out_path = PathBuf::from(&path);
+    let now = chrono::Utc::now().to_rfc3339();
+    export::cmd_fleet_export(&home, &name, false, Some(out_path), &now).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

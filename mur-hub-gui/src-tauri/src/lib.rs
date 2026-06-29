@@ -635,6 +635,7 @@ pub fn run() {
             fleet::fleet_add_member,
             fleet::fleet_remove_member,
             fleet::fleet_export,
+            fleet::fleet_export_to,
             fleet::fleet_import,
         ])
         .build(tauri::generate_context!())

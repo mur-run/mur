@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm, open } from "@tauri-apps/plugin-dialog";
+import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { useT } from "../../i18n";
 import type { TranslationKey } from "../../i18n/types";
 import type { AgentEntry } from "../../types";
@@ -95,10 +95,15 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
   }
 
   async function handleExport() {
+    const dest = await save({
+      defaultPath: `${detail.name}.fleet`,
+      filters: [{ name: "Fleet Bundle", extensions: ["fleet"] }],
+    });
+    if (!dest) return;
     setBusy("fleet_export");
     try {
-      const path = await invoke<string>("fleet_export", { name: detail.name });
-      showToast(t("fleet.exported").replace("{path}", path), 4000);
+      await invoke("fleet_export_to", { name: detail.name, path: dest });
+      showToast(t("fleet.exported").replace("{path}", dest), 4000);
     } catch (err) {
       showToast(String(err), 4000);
     } finally {
@@ -164,10 +169,15 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
         <p className="fleet-detail__router">{t("fleet.router")}: {detail.router}</p>
       </div>
 
-      <div className="fleet-detail__actions">
+      {/* Primary action */}
+      <div className="fleet-detail__run">
         <button className="toolbar-btn toolbar-btn--primary" onClick={handleRun} disabled={busy !== null}>
-          {t("fleet.run")}
+          ▶ {t("fleet.run")}
         </button>
+      </div>
+
+      {/* Management: Start/Stop · Export · Import */}
+      <div className="fleet-detail__mgmt">
         {detail.stopped ? (
           <button className="toolbar-btn" onClick={() => call("fleet_start", { name: detail.name })} disabled={busy !== null}>
             {t("fleet.start")}
@@ -179,7 +189,6 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
         )}
         <button className="toolbar-btn" onClick={handleExport} disabled={busy !== null}>{t("fleet.export")}</button>
         <button className="toolbar-btn" onClick={handleImport} disabled={busy !== null}>{t("fleet.import")}</button>
-        <button className="toolbar-btn toolbar-btn--danger" onClick={handleDelete} disabled={busy !== null}>{t("fleet.delete")}</button>
       </div>
 
       <div className="fleet-section">
@@ -246,9 +255,16 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
         </div>
       </div>
 
-      <div className="fleet-section">
-        <div className="fleet-section__label">{t("fleet.send")}</div>
-        <div className="fleet-send">
+      <div className="fleet-section fleet-section--jobs">
+        <div className="fleet-section__header">
+          <span className="fleet-section__label">{t("fleet.jobs")}</span>
+          {jobs.filter((j) => !["done", "failed", "canceled"].includes(j.status)).length > 0 && (
+            <span className="fleet-section__badge">
+              {jobs.filter((j) => !["done", "failed", "canceled"].includes(j.status)).length}
+            </span>
+          )}
+        </div>
+        <div className="fleet-send fleet-send--inset">
           <input
             value={sendInput}
             onChange={(e) => setSendInput(e.target.value)}
@@ -256,16 +272,12 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
             onKeyDown={(e) => e.key === "Enter" && handleSend()}
           />
           <button className="toolbar-btn toolbar-btn--primary" onClick={handleSend} disabled={busy !== null || !sendInput.trim()}>
-            →
+            {t("fleet.send")}
           </button>
         </div>
-      </div>
-
-      <div className="fleet-section">
-        <div className="fleet-section__label">{t("fleet.jobs")}</div>
         <div className="fleet-jobs">
           {displayedJobs.length === 0 && (
-            <span style={{ fontSize: 12, color: "var(--text-tertiary)" }}>No jobs yet.</span>
+            <span className="fleet-jobs__empty">{t("fleet.noJobs")}</span>
           )}
           {displayedJobs.map((job) => (
             <div key={job.id} className="fleet-job">
@@ -278,8 +290,19 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
           ))}
         </div>
         <button className="fleet-jobs__more" onClick={handleShowAll} disabled={busy !== null}>
-          {showAll ? "Show active only" : t("fleet.showAll")}
+          {showAll ? t("fleet.showActive") : t("fleet.showAll")}
         </button>
+      </div>
+
+      {/* Danger Zone */}
+      <div className="fleet-detail__danger">
+        <div className="fleet-detail__danger-label">{t("fleet.dangerZone")}</div>
+        <div className="fleet-detail__danger-row">
+          <span className="fleet-detail__danger-desc">{t("fleet.deleteDesc")}</span>
+          <button className="toolbar-btn toolbar-btn--danger" onClick={handleDelete} disabled={busy !== null}>
+            {t("fleet.delete")}
+          </button>
+        </div>
       </div>
     </div>
   );
