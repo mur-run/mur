@@ -336,11 +336,21 @@ mod tests {
         use mur_common::parallel::TrackConfig;
         let source = b"fn alpha() -> i32 { 0 }\nfn beta() -> i32 { 0 }\n";
         let tracks = vec![
-            TrackConfig { name: "track-0".into(), approach: String::new(), model: None },
-            TrackConfig { name: "track-1".into(), approach: String::new(), model: None },
+            TrackConfig {
+                name: "track-0".into(),
+                approach: String::new(),
+                model: None,
+            },
+            TrackConfig {
+                name: "track-1".into(),
+                approach: String::new(),
+                model: None,
+            },
         ];
         let members = vec!["pm".to_string(), "qa".to_string()];
-        let p = build_partition_procedure("build widget", "src/widget.rs", source, &members, &tracks).unwrap();
+        let p =
+            build_partition_procedure("build widget", "src/widget.rs", source, &members, &tracks)
+                .unwrap();
         assert_eq!(p.steps.len(), 2);
         // Each step delegates to a member and mentions the file
         let intents: Vec<&str> = p.steps.iter().filter_map(|s| s.intent.as_deref()).collect();
