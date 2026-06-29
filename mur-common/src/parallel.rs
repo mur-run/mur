@@ -2,17 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ParallelMode {
+    #[default]
     Speculative,
     Partition,
-}
-
-impl Default for ParallelMode {
-    fn default() -> Self {
-        Self::Speculative
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
