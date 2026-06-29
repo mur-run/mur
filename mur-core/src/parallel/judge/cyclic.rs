@@ -19,7 +19,6 @@ struct ScoreEntry {
 
 #[derive(Deserialize)]
 struct JudgeResponse {
-    #[serde(default)]
     scores: Vec<ScoreEntry>,
 }
 

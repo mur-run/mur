@@ -21,7 +21,7 @@ pub struct TrackScore {
     pub track_name: String,
     pub score: f32,
     pub reasoning: String,
-    pub low_confidence: bool, // |round1 - round2| > 0.2
+    pub low_confidence: bool, // |round1 - round2| > 2.0 on 0-10 scale
 }
 
 pub use cyclic::CyclicJudge;

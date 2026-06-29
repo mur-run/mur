@@ -21,14 +21,14 @@ pub fn build_judge_prompt(
     for (idx, (track_name, source)) in implementations.iter().enumerate() {
         let label = (b'A' + idx as u8) as char;
         prompt.push_str(&format!(
-            "## Implementation {label}: {track_name}\n\n```rust\n{source}\n```\n\n",
+            "## Option {label}: {track_name}\n\n```rust\n{source}\n```\n\n",
         ));
     }
 
     prompt.push_str(
-        "Return a JSON array of scores:\n\
-        [{\"label\": \"A\", \"score\": 8.5, \"reasoning\": \"...\"}]\n\n\
-        Score 0–10 on each criterion above. For each implementation, \
+        "Return JSON in this exact format:\n\
+        {\"scores\": [{\"label\": \"A\", \"score\": <0-10>, \"reasoning\": \"<one sentence>\"}, ...]}\n\n\
+        Score 0–10 on each criterion above. For each option, \
         return ONE entry with the average score and brief reasoning.",
     );
 
@@ -55,9 +55,9 @@ mod tests {
         assert!(prompt.contains("Maintainability"));
         assert!(prompt.contains("Security"));
 
-        // Check implementations are labeled A, B
-        assert!(prompt.contains("Implementation A:"));
-        assert!(prompt.contains("Implementation B:"));
+        // Check options are labeled A, B
+        assert!(prompt.contains("Option A"), "prompt missing 'Option A'");
+        assert!(prompt.contains("Option B"), "prompt missing 'Option B'");
 
         // Check track names appear
         assert!(prompt.contains("track-a"));
