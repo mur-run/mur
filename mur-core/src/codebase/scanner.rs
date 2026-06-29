@@ -179,18 +179,62 @@ fn relative_path(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// Project name = the codebase-index key (`<name>.lance`). For a git worktree
-/// this resolves to the MAIN working tree's directory name, so every
-/// worktree/branch of one repo shares a single index instead of re-indexing the
-/// whole tree per worktree. Falls back to the path's own basename when it isn't
-/// a git repo (or git is unavailable).
+/// Project name = the codebase-index key (`<name>.lance`).
+/// Index key for a path. The PRIMARY working tree keeps the bare repo basename
+/// (e.g. `mur`); each LINKED git worktree gets its own key
+/// `{repo}--{worktree_basename}-{hash8}` so divergent branches index into
+/// separate, isolated slots instead of thrashing one shared index.
 pub fn project_name_from_path(path: &Path) -> String {
-    git_main_repo_root(path)
+    let main_root = git_main_repo_root(path);
+    let wt_root = git_worktree_root(path);
+
+    let base = main_root
         .as_deref()
+        .or(wt_root.as_deref())
         .unwrap_or(path)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "unknown".to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    match (main_root.as_deref(), wt_root.as_deref()) {
+        // Linked worktree: its own root differs from the main repo root.
+        (Some(main), Some(wt)) if main != wt => {
+            let wt_base = wt
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "wt".to_string());
+            let hash = blake3::hash(wt.to_string_lossy().as_bytes()).to_hex();
+            format!("{base}--{wt_base}-{}", &hash[..8])
+        }
+        // Primary worktree (or non-git path): unchanged, back-compatible key.
+        _ => base,
+    }
+}
+
+/// Main repo root for any path inside a git repo (incl. linked worktrees).
+/// Public so the index can record it in metadata for the orphan-sweep guard.
+pub fn main_repo_root(path: &Path) -> Option<PathBuf> {
+    git_main_repo_root(path)
+}
+
+/// This worktree's OWN top-level root (`git rev-parse --show-toplevel`).
+/// For the primary worktree this equals `git_main_repo_root`; for a linked
+/// worktree it is the worktree dir. `None` when not in a repo / git missing.
+fn git_worktree_root(path: &Path) -> Option<PathBuf> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "--path-format=absolute", "--show-toplevel"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let top = std::str::from_utf8(&out.stdout).ok()?.trim();
+    if top.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(top))
 }
 
 /// Main working-tree root for any path inside a git repo (including linked
@@ -250,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn worktree_shares_main_repo_name() {
+    fn linked_worktrees_get_distinct_keys() {
         use std::process::Command;
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("myrepo");
@@ -269,12 +313,20 @@ mod tests {
         };
         git(&["init", "-q"]);
         git(&["commit", "-q", "--allow-empty", "-m", "init"]);
-        let wt = tmp.path().join("wt-foo");
-        git(&["worktree", "add", "-q", wt.to_str().unwrap()]);
+        let wt1 = tmp.path().join("wt-foo");
+        let wt2 = tmp.path().join("wt-bar");
+        git(&["worktree", "add", "-q", "-b", "b1", wt1.to_str().unwrap()]);
+        git(&["worktree", "add", "-q", "-b", "b2", wt2.to_str().unwrap()]);
 
-        // Both the main tree and the linked worktree key to the repo's name —
-        // one shared index instead of one per worktree.
-        assert_eq!(project_name_from_path(&repo), "myrepo");
-        assert_eq!(project_name_from_path(&wt), "myrepo");
+        // Option 2: primary tree keeps the bare repo name; each linked worktree
+        // gets its OWN namespaced key so divergent branches index into separate
+        // slots instead of thrashing one shared index.
+        let primary = project_name_from_path(&repo);
+        let k1 = project_name_from_path(&wt1);
+        let k2 = project_name_from_path(&wt2);
+        assert_eq!(primary, "myrepo", "primary keeps bare repo name");
+        assert!(k1.starts_with("myrepo--"), "worktree namespaced: {k1}");
+        assert_ne!(k1, primary);
+        assert_ne!(k1, k2, "distinct worktrees → distinct keys");
     }
 }

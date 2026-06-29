@@ -59,6 +59,12 @@ pub struct FileMeta {
 pub struct IndexMetadata {
     #[serde(default)]
     pub project_path: String,
+    /// Main repo root (== project_path for the primary worktree). Recorded so the
+    /// orphan sweep can tell "linked worktree removed" (repo present, worktree gone
+    /// → prune) from "drive unmounted / repo deleted" (repo gone → keep). Empty on
+    /// legacy metadata, which is therefore never auto-pruned.
+    #[serde(default)]
+    pub repo_root: String,
     pub files: HashMap<String, FileMeta>,
     pub last_indexed: String,
 }
@@ -487,6 +493,9 @@ impl CodebaseIndex {
 
         let mut new_meta = IndexMetadata {
             project_path: self.project_path.display().to_string(),
+            repo_root: scanner::main_repo_root(&self.project_path)
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
             files: HashMap::new(),
             last_indexed: chrono::Utc::now().to_rfc3339(),
         };
@@ -658,7 +667,105 @@ impl CodebaseIndex {
     }
 }
 
+/// Pure decision for the orphan sweep, isolated for testing.
+///
+/// Prune iff we have both paths recorded AND the repo root still exists (drive
+/// mounted / repo present) AND the worktree path is gone. When the repo root is
+/// also missing the situation is ambiguous (unmounted external drive vs. deleted
+/// repo) so we KEEP — never delete an index just because its volume is offline.
+fn orphan_should_prune(
+    repo_root: &str,
+    project_path: &str,
+    repo_exists: bool,
+    worktree_exists: bool,
+) -> bool {
+    !repo_root.is_empty() && !project_path.is_empty() && repo_exists && !worktree_exists
+}
+
+/// Garbage-collect codebase indexes whose linked worktree was removed, reclaiming
+/// their disk. Safe on external drives (see [`orphan_should_prune`]). Skips any
+/// index whose lock is held by a live worker.
+pub fn prune_orphan_indexes() {
+    let indexes_dir = crate::paths::mur_root(None)
+        .join("indexes")
+        .join("codebase");
+    let Ok(entries) = std::fs::read_dir(&indexes_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.ends_with(".lance") || !p.is_dir() {
+            continue;
+        }
+        let key = name.trim_end_matches(".lance");
+        let meta_path = indexes_dir.join(format!("{key}.meta.json"));
+        let Ok(data) = std::fs::read_to_string(&meta_path) else {
+            continue;
+        };
+        let Ok(meta) = serde_json::from_str::<IndexMetadata>(&data) else {
+            continue;
+        };
+        let repo_exists = Path::new(&meta.repo_root).exists();
+        let wt_exists = Path::new(&meta.project_path).exists();
+        if !orphan_should_prune(&meta.repo_root, &meta.project_path, repo_exists, wt_exists) {
+            continue;
+        }
+        // Don't yank an index out from under a live worker.
+        let lock_path = indexes_dir.join(format!("{key}.lock"));
+        if let Ok(ld) = std::fs::read_to_string(&lock_path)
+            && let Ok(lock) = serde_json::from_str::<IndexLock>(&ld)
+            && mur_common::lock_file::pid_alive(lock.pid)
+        {
+            continue;
+        }
+        let idx = CodebaseIndex::new(key, Path::new(&meta.project_path));
+        if idx.delete_index().is_ok() {
+            tracing::info!(
+                index = key,
+                "pruned orphan codebase index (worktree removed)"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod orphan_sweep_tests {
+    use super::orphan_should_prune;
+
+    #[test]
+    fn prunes_removed_worktree_but_never_on_unmount() {
+        // Linked worktree removed while the repo is still mounted → reclaim.
+        assert!(orphan_should_prune(
+            "/repo",
+            "/repo/.worktrees/x",
+            true,
+            false
+        ));
+        // External drive unmounted: the repo root is ALSO gone → ambiguous → KEEP.
+        assert!(!orphan_should_prune(
+            "/repo",
+            "/repo/.worktrees/x",
+            false,
+            false
+        ));
+        // Both present → nothing to GC.
+        assert!(!orphan_should_prune(
+            "/repo",
+            "/repo/.worktrees/x",
+            true,
+            true
+        ));
+        // Legacy metadata (no repo_root recorded) → never auto-prune.
+        assert!(!orphan_should_prune("", "/repo/.worktrees/x", true, false));
+    }
+}
+
 pub fn discover_all_indexes() -> Vec<DiscoveredIndex> {
+    // GC removed-worktree indexes before listing so callers see only live ones.
+    prune_orphan_indexes();
     let indexes_dir = crate::paths::mur_root(None)
         .join("indexes")
         .join("codebase");
