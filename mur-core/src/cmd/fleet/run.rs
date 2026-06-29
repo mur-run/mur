@@ -3,11 +3,17 @@
 
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use mur_common::channel::ChannelActor;
 use mur_common::fleet::{Job, JobStatus};
-use mur_common::parallel::ParallelConfig;
+use mur_common::parallel::{ParallelConfig, ParallelMode};
 use mur_common::skill::manifest::{Procedure, ProcedureStep};
+
+use crate::parallel::partition::{
+    planner::{plan_partition, validate_coverage},
+    prompt::region_prompt,
+};
+use crate::parallel::semantic::{SupportedLanguage, extract_units};
 
 use super::store;
 
@@ -19,6 +25,16 @@ pub fn build_fleet_procedure(
     members: &[String],
     parallel: Option<&ParallelConfig>,
 ) -> Result<Procedure> {
+    // Partition mode: read the target file and build per-region steps.
+    if let Some(cfg) = parallel
+        && cfg.mode == ParallelMode::Partition
+        && let Some(part) = &cfg.partition
+    {
+        let source = std::fs::read(&part.target_file)
+            .with_context(|| format!("read partition target {}", part.target_file))?;
+        return build_partition_procedure(goal, &part.target_file, &source, members, &cfg.tracks);
+    }
+
     let steps = if let Some(cfg) = parallel {
         if members.is_empty() {
             bail!("parallel fleet requires at least one member");
@@ -55,6 +71,51 @@ pub fn build_fleet_procedure(
             })
             .collect()
     };
+    Ok(Procedure {
+        variables: vec![],
+        steps,
+    })
+}
+
+/// Build a partition-mode procedure: one step per track, each constrained to its region.
+pub fn build_partition_procedure(
+    goal: &str,
+    target_file: &str,
+    source: &[u8],
+    members: &[String],
+    tracks: &[mur_common::parallel::TrackConfig],
+) -> Result<Procedure> {
+    if members.is_empty() {
+        bail!("partition fleet requires at least one member");
+    }
+    let units = extract_units(source, SupportedLanguage::Rust)?;
+    if units.is_empty() {
+        bail!("no semantic units found in {target_file}");
+    }
+    let track_names: Vec<String> = tracks.iter().map(|t| t.name.clone()).collect();
+    let plan = plan_partition(&units, &track_names)?;
+    validate_coverage(&plan, &units)?;
+
+    let steps = plan
+        .assignments
+        .iter()
+        .enumerate()
+        .map(|(i, assignment)| {
+            let constraint = region_prompt(target_file, &units, assignment);
+            let injected = format!("{goal}\n\n{constraint}");
+            let member = members
+                .get(i % members.len())
+                .cloned()
+                .expect("members guard ensures non-empty");
+            ProcedureStep {
+                description: format!("{}: {target_file} region", assignment.track_name),
+                intent: Some(injected),
+                delegate_to: Some(member),
+                id: Some(assignment.track_name.clone()),
+                ..Default::default()
+            }
+        })
+        .collect();
     Ok(Procedure {
         variables: vec![],
         steps,
@@ -268,5 +329,24 @@ mod tests {
             all_jobs.iter().any(|j| j.text == "urgent"),
             "arg job should be persisted"
         );
+    }
+
+    #[test]
+    fn partition_procedure_constrains_each_member_to_its_region() {
+        use mur_common::parallel::TrackConfig;
+        let source = b"fn alpha() -> i32 { 0 }\nfn beta() -> i32 { 0 }\n";
+        let tracks = vec![
+            TrackConfig { name: "track-0".into(), approach: String::new(), model: None },
+            TrackConfig { name: "track-1".into(), approach: String::new(), model: None },
+        ];
+        let members = vec!["pm".to_string(), "qa".to_string()];
+        let p = build_partition_procedure("build widget", "src/widget.rs", source, &members, &tracks).unwrap();
+        assert_eq!(p.steps.len(), 2);
+        // Each step delegates to a member and mentions the file
+        let intents: Vec<&str> = p.steps.iter().filter_map(|s| s.intent.as_deref()).collect();
+        assert_eq!(intents.len(), 2);
+        assert!(intents.iter().all(|i| i.contains("src/widget.rs")));
+        // Steps reference different units
+        assert_ne!(intents[0], intents[1]);
     }
 }
