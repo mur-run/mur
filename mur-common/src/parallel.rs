@@ -77,6 +77,13 @@ pub enum PreFilterKind {
     CargoClippyDeny,
 }
 
+/// Config for `ParallelMode::Partition`: split one file into disjoint regions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PartitionConfig {
+    /// Repo-relative path of the single file to partition.
+    pub target_file: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParallelConfig {
     #[serde(default)]
@@ -85,6 +92,8 @@ pub struct ParallelConfig {
     pub judge: JudgeConfig,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pre_filter: Vec<PreFilterKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition: Option<PartitionConfig>,
 }
 
 #[cfg(test)]
@@ -115,5 +124,35 @@ tracks:
         let back = serde_yaml::to_string(&cfg).unwrap();
         let cfg2: ParallelConfig = serde_yaml::from_str(&back).unwrap();
         assert_eq!(cfg, cfg2);
+    }
+
+    #[test]
+    fn partition_config_roundtrips() {
+        let yaml = r#"
+mode: partition
+judge:
+  model: claude-opus-4-8
+tracks: []
+partition:
+  target_file: src/widget.rs
+"#;
+        let cfg: ParallelConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.mode, ParallelMode::Partition);
+        let p = cfg.partition.as_ref().unwrap();
+        assert_eq!(p.target_file, "src/widget.rs");
+        let back = serde_yaml::to_string(&cfg).unwrap();
+        let cfg2: ParallelConfig = serde_yaml::from_str(&back).unwrap();
+        assert_eq!(cfg, cfg2);
+    }
+
+    #[test]
+    fn partition_absent_by_default() {
+        let yaml = r#"
+judge:
+  model: claude-opus-4-8
+tracks: []
+"#;
+        let cfg: ParallelConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(cfg.partition.is_none());
     }
 }

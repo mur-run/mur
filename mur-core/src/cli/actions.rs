@@ -545,6 +545,22 @@ pub enum FleetAction {
         #[arg(long)]
         target: Option<std::path::PathBuf>,
     },
+    /// Preview how partition-mode splits the target file across tracks
+    PartitionPlan {
+        /// Fleet name
+        name: String,
+    },
+    /// Deterministically merge partition-mode run results into one file
+    Merge {
+        /// Fleet name
+        name: String,
+        /// Copy merged file into the live project tree
+        #[arg(long)]
+        promote: bool,
+        /// Override destination for --promote
+        #[arg(long)]
+        target: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(clap::Subcommand)]
