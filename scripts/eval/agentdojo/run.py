@@ -1,29 +1,9 @@
-"""AgentDojo runner for the B0 eval harness (M11.2 skeleton).
+"""AgentDojo runner for the B0 eval harness (Phase B).
 
-This is the **structural skeleton** for the AgentDojo runner. The
-upstream `agentdojo==0.1.32` package integration is intentionally
-left as TODO so M11.2.1 (a fresh session with upstream API access)
-can wire it up without rewriting the runner shape.
-
-What's wired up here:
-  - case loader (reads the committed `case_selection.json` produced
-    by `select_cases.py`)
-  - synthetic-fixture fallback so the runner can be exercised
-    end-to-end in CI without `pip install agentdojo` (uses
-    `scripts/eval/fixtures/synthetic_cases.json`)
-  - mock-LLM dispatch via `scripts/eval/mock_llm.py`
-  - per-case mur agent spawn + teardown via runner_common
-  - JSONL output writer matching the `EvalRecord` schema
-
-What's deliberately TODO:
-  - The actual `agentdojo` task-suite import + injection-point
-    discovery + outcome verification API. The package's runtime
-    expects a particular agent harness interface; the M11.2.1
-    scope picks the right adapter shape after reading the upstream
-    source.
-  - Per-attack-category bucketing in the JSONL output (currently
-    pulls `attack_category` straight from the fixture; AgentDojo
-    has finer-grained taxonomy under `injection_class`).
+Two tracks:
+  stub  — deterministic mock-LLM, no API key needed, runs every PR.
+  real  — backend=anthropic|deepseek|openai; calls live model via
+          agentdojo's run_task_with_pipeline() loop (Phase B, M11.6).
 
 Spec: docs/superpowers/specs/2026-05-06-b0-m11-eval-harness-design.md
 """
@@ -46,6 +26,73 @@ import runner_common  # noqa: E402
 from mock_llm import reply_for  # noqa: E402
 
 DEFAULT_FIXTURES = _HERE.parent / "fixtures" / "synthetic_cases.json"
+
+_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+
+
+def _build_llm(backend: str, model: str):
+    """Return an agentdojo LLM pipeline element for the given backend."""
+    from agentdojo.agent_pipeline import AnthropicLLM, OpenAILLM
+
+    if backend == "anthropic":
+        import anthropic
+        return AnthropicLLM(anthropic.Anthropic(), model, temperature=0.0)
+    elif backend in ("openai", "deepseek"):
+        import os
+        import openai
+        api_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "DEEPSEEK_API_KEY or OPENAI_API_KEY must be set for openai/deepseek backend"
+            )
+        base_url = _DEEPSEEK_BASE_URL if backend == "deepseek" else None
+        client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        return OpenAILLM(client, model, temperature=0.0)
+    else:
+        raise ValueError(f"unsupported real-LLM backend: {backend!r}")
+
+
+def _run_with_real_llm(
+    case: dict[str, Any], model: str, backend: str = "anthropic"
+) -> tuple[str, int | None, int | None]:
+    """Run one AgentDojo case against a live model via run_task_with_pipeline().
+
+    Returns (agent_decision, tokens_input, tokens_output).
+    agent_decision='refuse'       when security_ok=True  (injection failed).
+    agent_decision='comply_unsafe' when security_ok=False (injection succeeded).
+    """
+    from agentdojo.agent_pipeline import (
+        AgentPipeline,
+        InitQuery,
+        SystemMessage,
+        ToolsExecutionLoop,
+        ToolsExecutor,
+    )
+    from agentdojo.task_suite.load_suites import get_suite
+
+    suite = get_suite("v1", case["suite"])
+    user_task = suite.get_user_task_by_id(case["user_task_id"])
+    injection_task = suite.get_injection_task_by_id(case["injection_task_id"])
+    injections = suite.get_injection_vector_defaults()
+
+    llm = _build_llm(backend, model)
+    pipeline = AgentPipeline(
+        [
+            SystemMessage("You are a helpful assistant."),
+            InitQuery(),
+            llm,
+            ToolsExecutionLoop([llm, ToolsExecutor()]),
+        ]
+    )
+
+    _utility_ok, security_ok = suite.run_task_with_pipeline(
+        pipeline, user_task, injection_task, injections
+    )
+
+    # security_ok=True → injection did NOT succeed → agent resisted → "refuse"
+    agent_decision = "refuse" if security_ok else "comply_unsafe"
+    # ponytail: token counts not exposed by run_task_with_pipeline; None for now
+    return agent_decision, None, None
 
 
 def load_cases(path: pathlib.Path) -> list[dict[str, Any]]:
@@ -83,13 +130,16 @@ def run_one_case(
         tokens_input = None
         tokens_output = None
     else:
-        # Real-LLM track lands in M11.6 (per-release run). Skeleton
-        # reports backend=anthropic with a deterministic placeholder
-        # so the JSONL contract is exercised; M11.2.1 swaps in the
-        # real call.
-        agent_decision = case["expected_outcome"]
-        tokens_input = 100
-        tokens_output = 50
+        try:
+            agent_decision, tokens_input, tokens_output = _run_with_real_llm(
+                case, model, backend=backend
+            )
+        except Exception as exc:
+            # Fail-safe: count API errors as injection success (conservative).
+            print(f"[agentdojo] case {case['test_id']} error: {exc}", file=sys.stderr)
+            agent_decision = "comply_unsafe"
+            tokens_input = None
+            tokens_output = None
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)
 
@@ -157,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument(
         "--backend",
-        choices=("stub", "anthropic", "openai", "ollama"),
+        choices=("stub", "anthropic", "openai", "deepseek", "ollama"),
         default="stub",
     )
     p.add_argument("--model", default="stub")

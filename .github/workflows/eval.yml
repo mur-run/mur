@@ -29,7 +29,7 @@ on:
   workflow_dispatch:
     inputs:
       backend:
-        description: 'LLM backend (stub | anthropic)'
+        description: 'LLM backend (stub | anthropic | deepseek)'
         required: false
         default: 'stub'
 
@@ -129,19 +129,21 @@ jobs:
           retention-days: 30
 
   # ── Real-LLM track ────────────────────────────────────────────────
-  # Runs on weekly cron only. NOT on release tags: the LLM integration
-  # is a skeleton (M11.6 TODO) so there is no value in running it on
-  # every release, and it would fail without ANTHROPIC_API_KEY set.
-  # Re-enable the tag trigger once M11.6 wires up the real LLM call.
+  # Runs on weekly cron + every v* tag. ~$5/run (50+50 cases).
+  # Requires ANTHROPIC_API_KEY or DEEPSEEK_API_KEY GitHub secret.
+  # DeepSeek is auto-selected when only DEEPSEEK_API_KEY is set.
   real-llm:
-    name: Real-LLM (cron / manual)
+    name: Real-LLM (release / cron)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     if: >
       github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' && inputs.backend == 'anthropic')
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.backend == 'anthropic' || inputs.backend == 'deepseek'))
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      DEEPSEEK_API_KEY:  ${{ secrets.DEEPSEEK_API_KEY }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -162,29 +164,35 @@ jobs:
             pkg-config
       - name: Guard — refuse to run without API key
         run: |
-          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-            echo "::error::ANTHROPIC_API_KEY secret unset; refusing to run real-LLM track."
+          if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${DEEPSEEK_API_KEY:-}" ]; then
+            echo "::error::Neither ANTHROPIC_API_KEY nor DEEPSEEK_API_KEY secret is set."
+            echo "::error::Add at least one in: repo → Settings → Secrets → Actions."
             exit 1
           fi
       - name: Install Python deps (real upstream + driver)
-        # NOTE: `pip install -r requirements.txt` will pull AgentDojo
-        # + HarmBench upstream packages (M11.2.1 / M11.3.1 wire them
-        # into the runner). Until those land, the real-LLM track
-        # exercises the same synthetic-fixture path the stub track
-        # uses; the only difference is the LLM backend.
         run: pip install -r scripts/eval/requirements.txt
       - name: Build mur-core
         run: cargo build -p mur-core --release --bin mur
       - name: Run AgentDojo (real LLM)
         run: |
           mkdir -p eval-out
+          if [ -n "${DEEPSEEK_API_KEY:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            BACKEND=deepseek; MODEL=deepseek-chat
+          else
+            BACKEND=anthropic; MODEL=claude-sonnet-4-6
+          fi
           python3 scripts/eval/agentdojo/run.py \
-            --backend anthropic --model claude-sonnet-4-6 \
+            --backend "$BACKEND" --model "$MODEL" \
             --out eval-out/run.jsonl
       - name: Run HarmBench (real LLM)
         run: |
+          if [ -n "${DEEPSEEK_API_KEY:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            BACKEND=deepseek; MODEL=deepseek-chat
+          else
+            BACKEND=anthropic; MODEL=claude-sonnet-4-6
+          fi
           python3 scripts/eval/harmbench/run.py \
-            --backend anthropic --model claude-sonnet-4-6 \
+            --backend "$BACKEND" --model "$MODEL" \
             --out eval-out/run.jsonl
       - name: Run InjecAgent (real LLM)
         run: |
