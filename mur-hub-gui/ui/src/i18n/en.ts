@@ -17,7 +17,7 @@ export const en = {
   "dashboard.run": "Run",
   "dashboard.stop": "Stop",
   "dashboard.share": "Share",
-  "dashboard.open": "Open",
+  "dashboard.settings": "Settings",
   "dashboard.runTooltip": "Start agent runtime",
   "dashboard.startFailed": "Couldn’t start: {error}",
   "dashboard.stopFailed": "Couldn’t stop: {error}",

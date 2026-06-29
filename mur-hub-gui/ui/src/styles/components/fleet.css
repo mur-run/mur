@@ -431,7 +431,7 @@
 /* ── Detail action layout ────────────────────────────────────────────────── */
 
 .fleet-detail__run { margin-bottom: 12px; }
-.fleet-detail__run .toolbar-btn { width: 100%; padding: 8px 16px; font-size: 13px; font-weight: 600; justify-content: center; }
+.fleet-detail__run .toolbar-btn { padding: 8px 16px; font-size: 13px; font-weight: 600; }
 
 .fleet-detail__mgmt { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
 
