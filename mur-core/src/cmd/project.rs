@@ -551,6 +551,9 @@ pub(crate) async fn cmd_project_index_worker(
             // auto-reindex hook on first successful index (idempotent).
             let _ = crate::codebase::ensure_git_hook(&project_path, true);
 
+            // Reclaim disk from indexes whose worktree was removed.
+            crate::codebase::prune_orphan_indexes();
+
             // Desktop notification
             send_notification(
                 &format!("mur: {} indexed", project_name),
