@@ -100,10 +100,14 @@ pub async fn run_judge_pipeline_async(
     let groups = group_by_identity(&for_grouping);
 
     if groups.needs_judge.is_empty() {
-        eprintln!("all units identical across tracks (CAS hit) — no LLM calls needed");
+        let skipped = groups.skip.len();
+        eprintln!(
+            "all {} units identical across tracks (CAS hit) — no LLM calls needed",
+            skipped
+        );
         return Ok(JudgeStats {
-            units_total: 0,
-            units_cached: 0,
+            units_total: skipped,
+            units_cached: skipped,
             judge_calls: 0,
             cas_hit_rate: 1.0,
             cost_ratio_vs_single: 0.0,
@@ -198,9 +202,11 @@ pub async fn run_judge_pipeline_async(
         }
     }
 
-    let units_total = groups.needs_judge.len();
+    let units_judged = groups.needs_judge.len();
+    let units_skipped = groups.skip.len();
+    let units_total = units_judged + units_skipped;
     let cas_hit_rate = if units_total > 0 {
-        cache_hits as f64 / units_total as f64
+        (cache_hits + units_skipped) as f64 / units_total as f64
     } else {
         0.0
     };
@@ -220,7 +226,7 @@ pub async fn run_judge_pipeline_async(
     );
     Ok(JudgeStats {
         units_total,
-        units_cached: cache_hits,
+        units_cached: cache_hits + units_skipped,
         judge_calls,
         cas_hit_rate,
         cost_ratio_vs_single,
