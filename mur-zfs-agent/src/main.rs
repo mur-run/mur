@@ -26,9 +26,7 @@ fn handle(req: ZfsRequest) -> ZfsResponse {
             }
         }
         ZfsRequest::Snapshot { track, label } => {
-            match zfs::dataset_for_path(&track)
-                .and_then(|ds| zfs::zfs_snapshot(&ds, &label))
-            {
+            match zfs::dataset_for_path(&track).and_then(|ds| zfs::zfs_snapshot(&ds, &label)) {
                 Ok(snap_id) => ZfsResponse::Snap { snap_id },
                 Err(e) => ZfsResponse::Error {
                     message: e.to_string(),
@@ -64,7 +62,9 @@ fn handle(req: ZfsRequest) -> ZfsResponse {
                         let src = track.join(rel);
                         let dst = target.join(rel);
                         if src.is_file() {
-                            if let Some(p) = dst.parent() { std::fs::create_dir_all(p)?; }
+                            if let Some(p) = dst.parent() {
+                                std::fs::create_dir_all(p)?;
+                            }
                             std::fs::copy(&src, &dst).map(|_| ())?;
                         }
                     }
@@ -147,8 +147,8 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    let socket_path = std::env::var("MUR_ZFS_SOCKET")
-        .unwrap_or_else(|_| DEFAULT_SOCKET.to_string());
+    let socket_path =
+        std::env::var("MUR_ZFS_SOCKET").unwrap_or_else(|_| DEFAULT_SOCKET.to_string());
 
     serve(&socket_path)
 }

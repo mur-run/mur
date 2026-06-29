@@ -50,8 +50,7 @@ fn dataset_for_path(path: &Path) -> Result<String> {
         .arg(path)
         .output()
         .context("zfs get name")?;
-    parse_dataset(&String::from_utf8_lossy(&out.stdout))
-        .context("path is not on a ZFS dataset")
+    parse_dataset(&String::from_utf8_lossy(&out.stdout)).context("path is not on a ZFS dataset")
 }
 
 fn dataset_snapshot(dataset: &str, label: &str) -> Result<String> {
@@ -95,8 +94,7 @@ fn mountpoint_of(dataset: &str) -> Result<PathBuf> {
 impl ParallelBackend for ZfsNativeBackend {
     fn create_track(&self, name: &str) -> Result<PathBuf> {
         let base_dataset = dataset_for_path(&self.project_root)?;
-        let snap =
-            dataset_snapshot(&base_dataset, &format!("mur-parallel-base-{name}"))?;
+        let snap = dataset_snapshot(&base_dataset, &format!("mur-parallel-base-{name}"))?;
         // Scope tracks under the project's own dataset to avoid cross-project collisions.
         let track_dataset = format!("{base_dataset}/mur-tracks/{name}");
         let mount = dataset_clone(&snap, &track_dataset)?;
