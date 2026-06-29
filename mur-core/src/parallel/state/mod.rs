@@ -13,4 +13,7 @@ pub struct JudgeScore {
     pub reasoning: String,
     pub model: String,
     pub ts: u64,
+    /// True when cyclic judge's two rounds differed by > 2.0 on the 0-10 scale.
+    #[serde(default)]
+    pub low_confidence: bool,
 }
