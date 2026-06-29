@@ -129,16 +129,16 @@ jobs:
           retention-days: 30
 
   # ── Real-LLM track ────────────────────────────────────────────────
-  # Runs on weekly cron + on every v* tag. Costs roughly $5 per run
-  # against Anthropic Sonnet (50+50 cases × ~10K input + 200 output
-  # tokens). Hard cap via timeout-minutes + a token budget gate.
+  # Runs on weekly cron only. NOT on release tags: the LLM integration
+  # is a skeleton (M11.6 TODO) so there is no value in running it on
+  # every release, and it would fail without ANTHROPIC_API_KEY set.
+  # Re-enable the tag trigger once M11.6 wires up the real LLM call.
   real-llm:
-    name: Real-LLM (release / cron)
+    name: Real-LLM (cron / manual)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     if: >
       github.event_name == 'schedule' ||
-      startsWith(github.ref, 'refs/tags/v') ||
       (github.event_name == 'workflow_dispatch' && inputs.backend == 'anthropic')
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
