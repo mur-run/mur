@@ -218,6 +218,7 @@ mod tests {
                 done_when: String::new(),
             }),
             team_id: None,
+            parallel: None,
         }
     }
 

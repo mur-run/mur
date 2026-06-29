@@ -147,6 +147,7 @@ fn fleet_job_and_roster_round_trip() {
         vec!["pm".into()],
         None,
         Some("standing".into()),
+        None,
     )
     .unwrap();
 
