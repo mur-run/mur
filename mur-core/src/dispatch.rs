@@ -356,9 +356,18 @@ pub async fn run(cli: Cli) -> Result<()> {
                 FleetAction::Judge { name, stats } => {
                     cmd::fleet::judge_cmd::cmd_fleet_judge(&mur_home, &name, stats)?
                 }
-                FleetAction::Cherry { name, auto } => {
-                    cmd::fleet::cherry_cmd::cmd_fleet_cherry(&mur_home, &name, auto)?
-                }
+                FleetAction::Cherry {
+                    name,
+                    auto,
+                    promote,
+                    target,
+                } => cmd::fleet::cherry_cmd::cmd_fleet_cherry(
+                    &mur_home,
+                    &name,
+                    auto,
+                    promote,
+                    target.as_deref(),
+                )?,
             }
         }
         Commands::Commander { action } => {

@@ -196,6 +196,7 @@ pub async fn run_judge_pipeline_async(
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_secs())
                         .unwrap_or(0),
+                    low_confidence: score.low_confidence,
                 };
                 state_db.put_score(&imp.unit.content_hash, &rubric_version, &js)?;
             }

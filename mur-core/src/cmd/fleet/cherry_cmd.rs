@@ -16,7 +16,13 @@ use crate::parallel::{
     track::TrackSet,
 };
 
-pub fn cmd_fleet_cherry(mur_home: &Path, fleet_name: &str, auto: bool) -> Result<()> {
+pub fn cmd_fleet_cherry(
+    mur_home: &Path,
+    fleet_name: &str,
+    auto: bool,
+    promote: bool,
+    target: Option<&Path>,
+) -> Result<()> {
     let fleet = load_fleet(mur_home, fleet_name)?;
     let parallel = fleet
         .parallel
@@ -174,8 +180,77 @@ pub fn cmd_fleet_cherry(mur_home: &Path, fleet_name: &str, auto: bool) -> Result
         Err(e) => eprintln!("cargo check could not run ({e}) — skipping validation"),
     }
 
-    println!("Use `mur fleet promote {fleet_name} cherry` to apply the result.");
+    if promote {
+        let dest = match target {
+            Some(p) => p.to_path_buf(),
+            None => project_root_from_worktree(&base_track.worktree_path)
+                .context("cannot determine project root — pass --target <path>")?,
+        };
+        promote_cherry_result(&result_dir, &dest)?;
+    } else {
+        println!(
+            "Run `mur fleet cherry {fleet_name} --promote` to copy the result into the project."
+        );
+    }
     Ok(())
+}
+
+/// Copy `result_dir` contents into `dest`, refusing if `dest` has uncommitted changes.
+fn promote_cherry_result(result_dir: &Path, dest: &Path) -> Result<()> {
+    // Guard: refuse if destination has uncommitted changes.
+    let status_out = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(dest)
+        .output();
+    match status_out {
+        Ok(out) if !out.stdout.is_empty() => {
+            anyhow::bail!(
+                "destination {} has uncommitted changes — commit or stash first",
+                dest.display()
+            );
+        }
+        Err(e) => eprintln!("warn: git status check failed ({e}); proceeding anyway"),
+        _ => {}
+    }
+
+    let mut copied = 0usize;
+    for entry in walkdir::WalkDir::new(result_dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+    {
+        let rel = entry.path().strip_prefix(result_dir)?;
+        let dst = dest.join(rel);
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(entry.path(), &dst)?;
+        copied += 1;
+    }
+    println!("Promoted {copied} files → {}", dest.display());
+    Ok(())
+}
+
+/// Resolve the main project root from a worktree path via git-common-dir.
+fn project_root_from_worktree(worktree: &Path) -> Option<PathBuf> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--git-common-dir"])
+        .current_dir(worktree)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let common_dir_str = String::from_utf8(out.stdout).ok()?;
+    let common_dir = PathBuf::from(common_dir_str.trim());
+    let common_dir = if common_dir.is_absolute() {
+        common_dir
+    } else {
+        worktree.join(common_dir)
+    };
+    // common_dir is <project>/.git — parent is the project root
+    common_dir.parent().map(|p| p.to_path_buf())
 }
 
 fn cherry_result_dir(mur_home: &Path, fleet_name: &str) -> PathBuf {
