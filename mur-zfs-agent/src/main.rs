@@ -2,7 +2,6 @@ use anyhow::Result;
 use mur_common::zfs_protocol::{ZfsRequest, ZfsResponse};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
-use tracing::{error, info};
 
 mod zfs;
 
@@ -43,10 +42,21 @@ fn handle(req: ZfsRequest) -> ZfsResponse {
                 },
             }
         }
-        ZfsRequest::Promote { track, target: _ } => {
-            // ZFS promote reverses origin/clone relationship, making the track
-            // independent of its parent snapshot.
-            match zfs::dataset_for_path(&track).and_then(|ds| zfs::zfs_promote(&ds)) {
+        ZfsRequest::Promote { track, target } => {
+            let result = zfs::dataset_for_path(&track)
+                .and_then(|ds| zfs::zfs_diff(&ds, "mur-base"))
+                .and_then(|changed| {
+                    for rel in &changed {
+                        let src = track.join(rel);
+                        let dst = target.join(rel);
+                        if src.is_file() {
+                            if let Some(p) = dst.parent() { std::fs::create_dir_all(p)?; }
+                            std::fs::copy(&src, &dst).map(|_| ())?;
+                        }
+                    }
+                    Ok(())
+                });
+            match result {
                 Ok(()) => ZfsResponse::Ok,
                 Err(e) => ZfsResponse::Error {
                     message: e.to_string(),
@@ -69,7 +79,7 @@ fn serve(socket_path: &str) -> Result<()> {
     let _ = std::fs::remove_file(socket_path);
 
     let listener = UnixListener::bind(socket_path)?;
-    info!("mur-zfs-agent listening on {socket_path}");
+    eprintln!("mur-zfs-agent listening on {socket_path}");
 
     for stream in listener.incoming() {
         match stream {
@@ -81,12 +91,12 @@ fn serve(socket_path: &str) -> Result<()> {
                         .and_then(|a| a.as_pathname().map(|p| p.display().to_string()))
                         .unwrap_or_else(|| "<unknown>".into());
                     if let Err(e) = handle_connection(stream) {
-                        error!("connection error from {peer_addr}: {e}");
+                        eprintln!("connection error from {peer_addr}: {e}");
                     }
                 });
             }
             Err(e) => {
-                error!("accept error: {e}");
+                eprintln!("accept error: {e}");
             }
         }
     }
@@ -123,8 +133,6 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
-
     let socket_path = std::env::var("MUR_ZFS_SOCKET")
         .unwrap_or_else(|_| DEFAULT_SOCKET.to_string());
 
