@@ -4,6 +4,7 @@
 pub mod backend;
 pub mod cherry;
 pub mod judge;
+pub mod partition;
 pub mod semantic;
 pub mod state;
 pub mod track;
