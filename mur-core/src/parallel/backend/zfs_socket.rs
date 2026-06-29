@@ -53,15 +53,11 @@ impl ParallelBackend for ZfsSocketBackend {
         }
     }
 
-    fn base_snapshot(&self, track: &Path) -> Result<String> {
-        match self.call(ZfsRequest::Snapshot {
-            track: track.into(),
-            label: "mur-base".into(),
-        })? {
-            ZfsResponse::Snap { snap_id } => Ok(snap_id),
-            ZfsResponse::Error { message } => bail!("{message}"),
-            other => bail!("unexpected response: {other:?}"),
-        }
+    fn base_snapshot(&self, _track: &Path) -> Result<String> {
+        // @mur-base is established by create_track; this is a pure read.
+        // Return a bare label; the agent's DiffFiles handler accepts both bare
+        // labels ("mur-base") and full refs ("pool/ds@mur-base").
+        Ok("mur-base".to_string())
     }
 
     fn diff_files(&self, track: &Path, since_snapshot: &str) -> Result<Vec<PathBuf>> {
@@ -69,7 +65,19 @@ impl ParallelBackend for ZfsSocketBackend {
             track: track.into(),
             since: since_snapshot.into(),
         })? {
-            ZfsResponse::Files { paths } => Ok(paths),
+            ZfsResponse::Files { paths } => {
+                // Agent returns absolute paths; strip track prefix to match
+                // ZfsNativeBackend contract of returning relative paths.
+                Ok(paths
+                    .into_iter()
+                    .map(|p| {
+                        p.strip_prefix(track)
+                            .ok()
+                            .map(|r| r.to_path_buf())
+                            .unwrap_or(p)
+                    })
+                    .collect())
+            }
             ZfsResponse::Error { message } => bail!("{message}"),
             other => bail!("unexpected response: {other:?}"),
         }

@@ -99,12 +99,15 @@ impl ParallelBackend for ZfsNativeBackend {
             dataset_snapshot(&base_dataset, &format!("mur-parallel-base-{name}"))?;
         // Scope tracks under the project's own dataset to avoid cross-project collisions.
         let track_dataset = format!("{base_dataset}/mur-tracks/{name}");
-        dataset_clone(&snap, &track_dataset)
+        let mount = dataset_clone(&snap, &track_dataset)?;
+        // Establish the base snapshot immediately so diff_files and promote work.
+        dataset_snapshot(&track_dataset, "mur-base")?;
+        Ok(mount)
     }
 
     fn base_snapshot(&self, track: &Path) -> Result<String> {
         let ds = dataset_for_path(track)?;
-        dataset_snapshot(&ds, "mur-base")
+        Ok(format!("{ds}@mur-base"))
     }
 
     fn diff_files(&self, track: &Path, since_snapshot: &str) -> Result<Vec<PathBuf>> {

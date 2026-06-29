@@ -68,6 +68,18 @@ pub fn zfs_diff(dataset: &str, since_snap: &str) -> Result<Vec<PathBuf>> {
     Ok(parse_zfs_diff_output(&String::from_utf8_lossy(&out.stdout)))
 }
 
+/// Like `zfs_diff` but accepts a full snapshot ref (e.g. `pool/ds@mur-base`).
+pub fn zfs_diff_ref(snap_ref: &str, dataset: &str) -> Result<Vec<PathBuf>> {
+    let out = Command::new("zfs")
+        .args(["diff", snap_ref, dataset])
+        .output()
+        .context("zfs diff")?;
+    if !out.status.success() {
+        bail!("zfs diff failed for {snap_ref}");
+    }
+    Ok(parse_zfs_diff_output(&String::from_utf8_lossy(&out.stdout)))
+}
+
 /// Promote a clone dataset (makes it independent of its origin).
 #[allow(dead_code)]
 pub fn zfs_promote(dataset: &str) -> Result<()> {
