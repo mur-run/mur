@@ -392,7 +392,7 @@ pub async fn run_guarded(
             ..fleet.clone()
         };
         let proc = super::plan::plan_via_router(mur_home, &planning_fleet, &pre_events)
-            .unwrap_or_else(|| build_fleet_procedure(&iter_goal, &fleet.members));
+            .unwrap_or_else(|| build_fleet_procedure(&iter_goal, &fleet.members, fleet.parallel.as_ref()));
         let opts = crate::executor::dag::DagExecOptions {
             // Fail-closed on the unattended loop path: never blanket-approve.
             // (No risk tier on fan-out steps today; this guards future
