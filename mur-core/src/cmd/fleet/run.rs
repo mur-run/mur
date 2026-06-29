@@ -29,7 +29,7 @@ pub fn build_fleet_procedure(
                 let member = members
                     .get(i % members.len())
                     .cloned()
-                    .unwrap_or_else(|| "mur".to_string());
+                    .expect("members guard ensures non-empty");
                 ProcedureStep {
                     description: format!("{}: {injected_goal}", track_cfg.name),
                     intent: Some(injected_goal),
