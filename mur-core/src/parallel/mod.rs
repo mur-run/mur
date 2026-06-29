@@ -3,6 +3,7 @@
 
 pub mod backend;
 pub mod cherry;
+pub mod concurrent;
 pub mod judge;
 pub mod partition;
 pub mod semantic;

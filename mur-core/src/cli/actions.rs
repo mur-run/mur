@@ -561,6 +561,20 @@ pub enum FleetAction {
         #[arg(long)]
         target: Option<std::path::PathBuf>,
     },
+    /// N-way concurrent line merge from a parallel run (experimental; requires MUR_PARALLEL_CONCURRENT=1)
+    MergeConcurrent {
+        /// Fleet name
+        name: String,
+        /// Write concurrent_stats.json (Spike-1 overlap rate)
+        #[arg(long)]
+        stats: bool,
+        /// Copy merged result into live project (refused if overlaps remain)
+        #[arg(long)]
+        promote: bool,
+        /// Override destination for --promote
+        #[arg(long)]
+        target: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(clap::Subcommand)]
