@@ -251,6 +251,7 @@ mod tests {
                 rubric: Rubric::default(),
             },
             pre_filter: vec![],
+            partition: None,
         };
         let tracks = TrackSet { tracks: vec![] };
         let rt = tokio::runtime::Runtime::new().unwrap();
