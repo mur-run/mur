@@ -46,6 +46,7 @@ pub fn cmd_fleet_create(
         rules: vec![],
         skills: vec![],
         loop_cfg: None,
+        parallel: None,
     };
     store::save_fleet(mur_home, &fleet)?;
     println!("Created fleet '{name}' (channel {})", ch.id);
