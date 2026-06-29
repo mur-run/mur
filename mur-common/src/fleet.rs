@@ -210,6 +210,7 @@ mod tests {
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
+            parallel: None,
         };
         assert_eq!(f.router_or_concierge(), CONCIERGE_AGENT);
         let yaml = serde_yaml::to_string(&f).unwrap();
