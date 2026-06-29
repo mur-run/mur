@@ -508,11 +508,7 @@ fn scrollback_dump(app: &App) -> io::Result<()> {
 
     // Suspend: leave alt-screen + restore the normal buffer where native copy
     // and scrollback work; drop raw mode so `read_line` is canonical.
-    execute!(
-        io::stdout(),
-        LeaveAlternateScreen,
-        DisableBracketedPaste,
-    )?;
+    execute!(io::stdout(), LeaveAlternateScreen, DisableBracketedPaste,)?;
     disable_raw_mode()?;
 
     let res = (|| -> io::Result<()> {
@@ -534,11 +530,7 @@ fn scrollback_dump(app: &App) -> io::Result<()> {
     // Resume UNCONDITIONALLY — even if a write above failed, never leave the
     // terminal in the normal buffer with raw mode off.
     enable_raw_mode()?;
-    execute!(
-        io::stdout(),
-        EnterAlternateScreen,
-        EnableBracketedPaste,
-    )?;
+    execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste,)?;
     res
 }
 

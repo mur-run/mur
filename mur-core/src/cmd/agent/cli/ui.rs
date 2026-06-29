@@ -198,8 +198,7 @@ fn push_message(
                 let prefix = if i == 0 { "· " } else { "  " };
                 lines.push(Line::styled(
                     format!("{prefix}{l}"),
-                    Style::default()
-                        .fg(theme.system),
+                    Style::default().fg(theme.system),
                 ));
             }
         }
