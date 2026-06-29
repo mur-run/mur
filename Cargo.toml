@@ -11,6 +11,7 @@ members = [
     "mur-compress",
     "mur-channel",
     "mur-mobile-sdk",
+    "mur-zfs-agent",
     # "mur-commander",  # separate crate — v0.2.0 released
 ]
 exclude = [
