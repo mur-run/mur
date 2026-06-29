@@ -1,6 +1,8 @@
 #![allow(dead_code, unused_imports)]
 pub mod detect;
 pub mod git_worktree;
+pub mod zfs_native;
+pub mod zfs_socket;
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -15,3 +17,5 @@ pub trait ParallelBackend: Send + Sync {
 
 pub use detect::detect_backend;
 pub use git_worktree::GitWorktreeBackend;
+pub use zfs_native::ZfsNativeBackend;
+pub use zfs_socket::ZfsSocketBackend;
