@@ -78,11 +78,17 @@ mod tests {
 
     #[test]
     fn merge_outcome_is_clean_when_no_overlaps() {
-        let o = MergeOutcome { merged: b"x".to_vec(), overlaps: vec![] };
+        let o = MergeOutcome {
+            merged: b"x".to_vec(),
+            overlaps: vec![],
+        };
         assert!(o.is_clean());
         let o2 = MergeOutcome {
             merged: b"x".to_vec(),
-            overlaps: vec![OverlapRegion { base_line_range: 0..1, actor_ids: vec!["a".into()] }],
+            overlaps: vec![OverlapRegion {
+                base_line_range: 0..1,
+                actor_ids: vec!["a".into()],
+            }],
         };
         assert!(!o2.is_clean());
     }
@@ -91,7 +97,10 @@ mod tests {
 
     #[test]
     fn overlap_region_display_single_actor() {
-        let r = OverlapRegion { base_line_range: 3..7, actor_ids: vec!["alice".into()] };
+        let r = OverlapRegion {
+            base_line_range: 3..7,
+            actor_ids: vec!["alice".into()],
+        };
         assert_eq!(r.to_string(), "lines 3–7 (actors: alice)");
     }
 
@@ -110,7 +119,10 @@ mod tests {
     fn summary_clean_merge() {
         // Three-line merged output, no conflicts.
         let merged = b"line1\nline2\nline3\n".to_vec();
-        let o = MergeOutcome { merged, overlaps: vec![] };
+        let o = MergeOutcome {
+            merged,
+            overlaps: vec![],
+        };
         // 3 lines total, 0 conflict lines → "3 clean, 0 overlaps"
         assert_eq!(o.summary(), "3 clean, 0 overlaps");
     }
