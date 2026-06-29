@@ -1264,50 +1264,86 @@ mod tests {
 
     #[tokio::test]
     async fn max_concurrency_bounds_parallel_steps() {
-        // 6 independent rank-0 steps, each sleeping 0.2s.
-        let tmp = tempfile::TempDir::new().unwrap();
-        let proc = Procedure {
-            variables: vec![],
-            steps: (0..6)
-                .map(|i| ProcedureStep {
-                    description: format!("s{i}"),
-                    command: Some("sleep 0.2".to_string()),
-                    id: Some(format!("s{i}")),
-                    ..Default::default()
-                })
-                .collect(),
-        };
+        // 6 independent rank-0 steps. Each registers itself in a shared `run/`
+        // dir, records how many steps are concurrently registered, sleeps, then
+        // deregisters. The MAX recorded count is the observed peak concurrency —
+        // a deterministic property of the executor's semaphore, NOT a wall-clock
+        // measurement, so it does not flake on slow/loaded CI runners the way the
+        // old timing-ratio assertion did (chronically red on Windows/macOS).
 
-        // Bounded to 2 -> at least 3 sequential waves -> >= ~0.6s (hard floor).
-        // Split threshold is 500ms: well below the ~600ms floor, well above the
-        // ~200-300ms unbounded single-wave time.
+        // Build a procedure whose steps probe live concurrency into `probe_dir`.
+        // Forward-slash paths so the `sh -c` body works under Git Bash on Windows.
+        fn probe_proc(probe_dir: &str) -> Procedure {
+            Procedure {
+                variables: vec![],
+                steps: (0..6)
+                    .map(|i| ProcedureStep {
+                        description: format!("s{i}"),
+                        command: Some(format!(
+                            "mkdir -p '{probe_dir}/run'; : > '{probe_dir}/run/{i}'; \
+                             ls '{probe_dir}/run' | wc -l >> '{probe_dir}/peaks'; \
+                             sleep 0.2; rm -f '{probe_dir}/run/{i}'"
+                        )),
+                        id: Some(format!("s{i}")),
+                        ..Default::default()
+                    })
+                    .collect(),
+            }
+        }
+        // Highest concurrency the steps observed (max line in `peaks`).
+        fn observed_peak(probe_dir: &std::path::Path) -> usize {
+            std::fs::read_to_string(probe_dir.join("peaks"))
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|l| l.trim().parse::<usize>().ok())
+                .max()
+                .unwrap_or(0)
+        }
+        fn fwd(p: &std::path::Path) -> String {
+            p.display().to_string().replace('\\', "/")
+        }
+
+        // Bounded to 2 -> the executor's semaphore guarantees <= 2 concurrent.
+        let tmp_b = tempfile::TempDir::new().unwrap();
+        let probe_b = tempfile::TempDir::new().unwrap();
         let opts = DagExecOptions {
             max_concurrency: Some(2),
             ..Default::default()
         };
-        let t = std::time::Instant::now();
-        execute_dag(tmp.path(), "cc-bounded", &proc, &opts)
-            .await
-            .unwrap();
-        let bounded = t.elapsed();
+        execute_dag(
+            tmp_b.path(),
+            "cc-bounded",
+            &probe_proc(&fwd(probe_b.path())),
+            &opts,
+        )
+        .await
+        .unwrap();
+        let bounded_peak = observed_peak(probe_b.path());
 
-        // Unbounded -> single wave -> ~0.2s.
+        // Unbounded -> all 6 run in a single wave.
+        let tmp_u = tempfile::TempDir::new().unwrap();
+        let probe_u = tempfile::TempDir::new().unwrap();
         let opts2 = DagExecOptions {
             max_concurrency: None,
             ..Default::default()
         };
-        let t2 = std::time::Instant::now();
-        execute_dag(tmp.path(), "cc-unbounded", &proc, &opts2)
-            .await
-            .unwrap();
-        let unbounded = t2.elapsed();
-        // Compare RELATIVE to the unbounded run rather than against an absolute
-        // wall-clock threshold: a loaded CI runner inflates both, so the cap's
-        // effect (~3 waves vs 1) stays a stable ratio while absolute thresholds
-        // flake (this test chronically failed on slow Windows/macOS runners).
+        execute_dag(
+            tmp_u.path(),
+            "cc-unbounded",
+            &probe_proc(&fwd(probe_u.path())),
+            &opts2,
+        )
+        .await
+        .unwrap();
+        let unbounded_peak = observed_peak(probe_u.path());
+
         assert!(
-            bounded.as_millis() as f64 >= unbounded.as_millis() as f64 * 1.5,
-            "bounded ({bounded:?}) should be >=1.5x unbounded ({unbounded:?}); cap not applied"
+            bounded_peak <= 2,
+            "bounded peak {bounded_peak} exceeded the max_concurrency cap of 2"
+        );
+        assert!(
+            unbounded_peak >= 3,
+            "unbounded peak {unbounded_peak} should exceed the cap (cap not lifted / steps not parallel)"
         );
     }
 }
