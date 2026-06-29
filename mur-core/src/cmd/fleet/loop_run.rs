@@ -717,6 +717,7 @@ mod tests {
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
+            parallel: None,
         };
         // default when nothing set
         assert_eq!(effective_max_iterations(None, &f), DEFAULT_MAX_ITERATIONS);
@@ -793,6 +794,7 @@ mod tests {
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
+            parallel: None,
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
@@ -839,6 +841,7 @@ mod tests {
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
+            parallel: None,
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
