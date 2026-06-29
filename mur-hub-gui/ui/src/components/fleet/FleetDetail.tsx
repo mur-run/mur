@@ -1,13 +1,17 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { useT } from "../../i18n";
 import type { TranslationKey } from "../../i18n/types";
+import type { AgentEntry } from "../../types";
+import { CATEGORY_COLORS, avatarPreset, familyOf } from "../../utils";
+import { PetFace } from "../PetFace";
 import type { FleetDetail as Detail, JobRow } from "./types";
 
 interface Props {
   detail: Detail;
   jobs: JobRow[];
+  agentMap: Map<string, AgentEntry>;
   onRefresh: () => void;
   onDelete: () => void;
 }
@@ -20,7 +24,12 @@ function showToast(msg: string, durationMs = 2500) {
   setTimeout(() => el.remove(), durationMs);
 }
 
-function statusBadge(d: Detail): string {
+function statusPillClass(d: Detail): string {
+  if (d.stopped) return "fleet-detail__status-pill fleet-detail__status-pill--stopped";
+  return "fleet-detail__status-pill fleet-detail__status-pill--idle";
+}
+
+function statusLabel(d: Detail): string {
   if (d.stopped) return "⏸ stopped";
   return "● idle";
 }
@@ -29,7 +38,7 @@ function jobStatusClass(status: JobRow["status"]): string {
   return `fleet-job__status fleet-job__status--${status}`;
 }
 
-export function FleetDetail({ detail, jobs, onRefresh, onDelete }: Props) {
+export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Props) {
   const { t } = useT();
   const [busy, setBusy] = useState<string | null>(null);
   const [sendInput, setSendInput] = useState("");
@@ -59,10 +68,7 @@ export function FleetDetail({ detail, jobs, onRefresh, onDelete }: Props) {
     if (!text) return;
     setBusy("fleet_send");
     try {
-      const jobId = await invoke<string>("fleet_send", {
-        name: detail.name,
-        text,
-      });
+      const jobId = await invoke<string>("fleet_send", { name: detail.name, text });
       setSendInput("");
       showToast(`Job queued: ${jobId.slice(0, 8)}`);
       onRefresh();
@@ -89,10 +95,15 @@ export function FleetDetail({ detail, jobs, onRefresh, onDelete }: Props) {
   }
 
   async function handleExport() {
+    const dest = await save({
+      defaultPath: `${detail.name}.fleet`,
+      filters: [{ name: "Fleet Bundle", extensions: ["fleet"] }],
+    });
+    if (!dest) return;
     setBusy("fleet_export");
     try {
-      const path = await invoke<string>("fleet_export", { name: detail.name });
-      showToast(t("fleet.exported").replace("{path}", path), 4000);
+      await invoke("fleet_export_to", { name: detail.name, path: dest });
+      showToast(t("fleet.exported").replace("{path}", dest), 4000);
     } catch (err) {
       showToast(String(err), 4000);
     } finally {
@@ -119,7 +130,8 @@ export function FleetDetail({ detail, jobs, onRefresh, onDelete }: Props) {
 
   async function handleDelete() {
     const msg = t("fleet.confirmDelete").replace("{name}", detail.display_name);
-    if (!window.confirm(msg)) return;
+    const ok = await confirm(msg, { title: t("fleet.delete"), kind: "warning" });
+    if (!ok) return;
     setBusy("fleet_delete");
     try {
       await invoke("fleet_delete", { name: detail.name });
@@ -131,11 +143,7 @@ export function FleetDetail({ detail, jobs, onRefresh, onDelete }: Props) {
   }
 
   async function handleShowAll() {
-    if (showAll) {
-      setShowAll(false);
-      setAllJobs([]);
-      return;
-    }
+    if (showAll) { setShowAll(false); setAllJobs([]); return; }
     setBusy("fleet_jobs");
     try {
       const rows = await invoke<JobRow[]>("fleet_jobs", { name: detail.name, all: true });
@@ -152,145 +160,150 @@ export function FleetDetail({ detail, jobs, onRefresh, onDelete }: Props) {
 
   return (
     <div className="fleet-detail">
-      <header className="fleet-detail__header">
-        <div className="fleet-detail__title">
-          <h2>{detail.display_name}</h2>
-          <span className="fleet-detail__status">{statusBadge(detail)}</span>
+      <div className="fleet-detail__header">
+        <div className="fleet-detail__title-row">
+          <h2 className="fleet-detail__title">{detail.display_name}</h2>
+          <span className={statusPillClass(detail)}>{statusLabel(detail)}</span>
         </div>
         <p className="fleet-detail__goal">{detail.goal}</p>
-        <div className="fleet-detail__meta">
-          <span>
-            {t("fleet.router")}: {detail.router}
-          </span>
-        </div>
-        <div className="fleet-detail__toolbar">
-          <button
-            className="toolbar-btn toolbar-btn--primary"
-            onClick={handleRun}
-            disabled={busy !== null}
-          >
-            {t("fleet.run")}
-          </button>
-          {detail.stopped ? (
-            <button
-              className="toolbar-btn"
-              onClick={() => call("fleet_start", { name: detail.name })}
-              disabled={busy !== null}
-            >
-              {t("fleet.start")}
-            </button>
-          ) : (
-            <button
-              className="toolbar-btn"
-              onClick={() => call("fleet_stop", { name: detail.name })}
-              disabled={busy !== null}
-            >
-              {t("fleet.stop")}
-            </button>
-          )}
-          <button
-            className="toolbar-btn"
-            onClick={handleExport}
-            disabled={busy !== null}
-          >
-            {t("fleet.export")}
-          </button>
-          <button
-            className="toolbar-btn"
-            onClick={handleImport}
-            disabled={busy !== null}
-          >
-            {t("fleet.import")}
-          </button>
-          <button
-            className="toolbar-btn toolbar-btn--danger"
-            onClick={handleDelete}
-            disabled={busy !== null}
-          >
-            {t("fleet.delete")}
-          </button>
-        </div>
-      </header>
+        <p className="fleet-detail__router">{t("fleet.router")}: {detail.router}</p>
+      </div>
 
-      {/* Members */}
-      <section className="fleet-detail__section">
-        <h3>{t("fleet.members")}</h3>
-        <ul className="fleet-members">
-          {detail.members.map((m) => (
-            <li key={m} className="fleet-members__row">
-              <span>{m}</span>
+      {/* Primary action */}
+      <div className="fleet-detail__run">
+        <button className="toolbar-btn toolbar-btn--primary" onClick={handleRun} disabled={busy !== null}>
+          ▶ {t("fleet.run")}
+        </button>
+      </div>
+
+      {/* Management: Start/Stop · Export · Import */}
+      <div className="fleet-detail__mgmt">
+        {detail.stopped ? (
+          <button className="toolbar-btn" onClick={() => call("fleet_start", { name: detail.name })} disabled={busy !== null}>
+            {t("fleet.start")}
+          </button>
+        ) : (
+          <button className="toolbar-btn" onClick={() => call("fleet_stop", { name: detail.name })} disabled={busy !== null}>
+            {t("fleet.stop")}
+          </button>
+        )}
+        <button className="toolbar-btn" onClick={handleExport} disabled={busy !== null}>{t("fleet.export")}</button>
+        <button className="toolbar-btn" onClick={handleImport} disabled={busy !== null}>{t("fleet.import")}</button>
+      </div>
+
+      <div className="fleet-section">
+        <div className="fleet-section__label">{t("fleet.members")}</div>
+        <div className="fleet-members">
+          {detail.members.map((m) => {
+            const agent = agentMap.get(m) ?? agentMap.get(m.toLowerCase());
+            const color = agent ? (CATEGORY_COLORS[agent.category] ?? "#6B7280") : "#6B7280";
+            return (
+            <div key={m} className="fleet-member">
+              <div className="fleet-member__avatar" style={agent ? {} : { background: color }}>
+                {agent ? (
+                  <PetFace presetId={avatarPreset(agent)} family={familyOf(avatarPreset(agent))} expression="idle" size={24} animate={false} />
+                ) : (
+                  <span style={{ fontSize: 12, color: "#fff", fontWeight: 600 }}>
+                    {m.charAt(0).toUpperCase()}
+                  </span>
+                )}
+              </div>
+              <span className="fleet-member__name">{agent?.display_name ?? m}</span>
               <button
-                className="fleet-members__remove"
-                onClick={() =>
-                  call("fleet_remove_member", { name: detail.name, agent: m })
-                }
+                className="fleet-member__remove"
+                onClick={() => call("fleet_remove_member", { name: detail.name, agent: m })}
                 disabled={busy !== null}
               >
-                {t("fleet.removeMember")}
+                ✕
               </button>
-            </li>
-          ))}
-        </ul>
-        <div className="fleet-members__add">
-          <input
-            value={addInput}
-            onChange={(e) => setAddInput(e.target.value)}
-            placeholder={t("fleet.addMember")}
-            onKeyDown={(e) => e.key === "Enter" && handleAddMember()}
-          />
-          <button
-            onClick={handleAddMember}
-            disabled={busy !== null || !addInput.trim()}
-          >
-            +
-          </button>
+            </div>
+            );
+          })}
         </div>
-      </section>
+        {/* Add member: searchable combobox */}
+        <div className="fleet-add-member">
+          <div className="fleet-add-member__combo">
+            <input
+              value={addInput}
+              onChange={(e) => { setAddInput(e.target.value); }}
+              placeholder={t("fleet.addMember")}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleAddMember();
+                if (e.key === "Escape") setAddInput("");
+              }}
+              autoComplete="off"
+            />
+            {addInput.length > 0 && (() => {
+              const lower = addInput.toLowerCase();
+              const memberSet = new Set(detail.members.map(m => m.toLowerCase()));
+              const suggestions = Array.from(agentMap.values()).filter(
+                (a) => !memberSet.has(a.name.toLowerCase()) &&
+                  (a.name.toLowerCase().includes(lower) || a.display_name.toLowerCase().includes(lower))
+              );
+              return suggestions.length > 0 ? (
+                <ul className="fleet-add-member__suggestions">
+                  {suggestions.map((a) => (
+                    <li key={a.name} onMouseDown={() => { setAddInput(a.name); }}>
+                      {a.display_name}
+                    </li>
+                  ))}
+                </ul>
+              ) : null;
+            })()}
+          </div>
+          <button className="toolbar-btn" onClick={handleAddMember} disabled={busy !== null || !addInput.trim()}>+</button>
+        </div>
+      </div>
 
-      {/* Send Job */}
-      <section className="fleet-detail__section">
-        <div className="fleet-send">
+      <div className="fleet-section fleet-section--jobs">
+        <div className="fleet-section__header">
+          <span className="fleet-section__label">{t("fleet.jobs")}</span>
+          {jobs.filter((j) => !["done", "failed", "canceled"].includes(j.status)).length > 0 && (
+            <span className="fleet-section__badge">
+              {jobs.filter((j) => !["done", "failed", "canceled"].includes(j.status)).length}
+            </span>
+          )}
+        </div>
+        <div className="fleet-send fleet-send--inset">
           <input
             value={sendInput}
             onChange={(e) => setSendInput(e.target.value)}
             placeholder={t("fleet.sendPlaceholder")}
             onKeyDown={(e) => e.key === "Enter" && handleSend()}
           />
-          <button
-            className="toolbar-btn toolbar-btn--primary"
-            onClick={handleSend}
-            disabled={busy !== null || !sendInput.trim()}
-          >
+          <button className="toolbar-btn toolbar-btn--primary" onClick={handleSend} disabled={busy !== null || !sendInput.trim()}>
             {t("fleet.send")}
           </button>
         </div>
-      </section>
-
-      {/* Jobs */}
-      <section className="fleet-detail__section">
-        <div className="fleet-jobs__header">
-          <h3>{t("fleet.jobs")}</h3>
-          {jobs.length > 10 && (
-            <button className="fleet-jobs__show-all" onClick={handleShowAll} disabled={busy !== null}>
-              {t("fleet.showAll")} ({jobs.length})
-            </button>
+        <div className="fleet-jobs">
+          {displayedJobs.length === 0 && (
+            <span className="fleet-jobs__empty">{t("fleet.noJobs")}</span>
           )}
-        </div>
-        <ul className="fleet-jobs">
           {displayedJobs.map((job) => (
-            <li key={job.id} className="fleet-job">
+            <div key={job.id} className="fleet-job">
               <span className={jobStatusClass(job.status)}>
                 {t(`fleet.status.${job.status}` as TranslationKey)}
               </span>
               <span className="fleet-job__text">{job.text}</span>
-              <span className="fleet-job__time">{job.created_at}</span>
-              {job.error && (
-                <span className="fleet-job__error">{job.error}</span>
-              )}
-            </li>
+              <span className="fleet-job__ts">{job.created_at.slice(0, 10)}</span>
+            </div>
           ))}
-        </ul>
-      </section>
+        </div>
+        <button className="fleet-jobs__more" onClick={handleShowAll} disabled={busy !== null}>
+          {showAll ? t("fleet.showActive") : t("fleet.showAll")}
+        </button>
+      </div>
+
+      {/* Danger Zone */}
+      <div className="fleet-detail__danger">
+        <div className="fleet-detail__danger-label">{t("fleet.dangerZone")}</div>
+        <div className="fleet-detail__danger-row">
+          <span className="fleet-detail__danger-desc">{t("fleet.deleteDesc")}</span>
+          <button className="toolbar-btn toolbar-btn--danger" onClick={handleDelete} disabled={busy !== null}>
+            {t("fleet.delete")}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

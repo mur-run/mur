@@ -515,6 +515,27 @@ pub enum FleetAction {
         #[arg(required = true)]
         agents: Vec<String>,
     },
+    /// Show per-unit scores across all parallel tracks
+    Compare {
+        /// Fleet name
+        name: String,
+        /// Filter output to a specific unit name or prefix
+        #[arg(long)]
+        unit: Option<String>,
+    },
+    /// Run the LLM judge across all parallel tracks (populated by `fleet run`)
+    Judge {
+        /// Fleet name
+        name: String,
+    },
+    /// Execute cherry-pick assembly from the best-scoring track units
+    Cherry {
+        /// Fleet name
+        name: String,
+        /// Apply the assembly without prompting
+        #[arg(long)]
+        auto: bool,
+    },
 }
 
 #[derive(clap::Subcommand)]

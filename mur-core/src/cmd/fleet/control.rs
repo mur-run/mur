@@ -60,6 +60,7 @@ mod tests {
                 rules: vec![],
                 skills: vec![],
                 loop_cfg: None,
+                parallel: None,
             },
         )
         .unwrap();

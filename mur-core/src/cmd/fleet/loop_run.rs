@@ -392,7 +392,10 @@ pub async fn run_guarded(
             ..fleet.clone()
         };
         let proc = super::plan::plan_via_router(mur_home, &planning_fleet, &pre_events)
-            .unwrap_or_else(|| build_fleet_procedure(&iter_goal, &fleet.members));
+            .unwrap_or_else(|| {
+                build_fleet_procedure(&iter_goal, &fleet.members, fleet.parallel.as_ref())
+                    .expect("members validated by caller guard")
+            });
         let opts = crate::executor::dag::DagExecOptions {
             // Fail-closed on the unattended loop path: never blanket-approve.
             // (No risk tier on fan-out steps today; this guards future
@@ -717,6 +720,7 @@ mod tests {
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
+            parallel: None,
         };
         // default when nothing set
         assert_eq!(effective_max_iterations(None, &f), DEFAULT_MAX_ITERATIONS);
@@ -748,6 +752,7 @@ mod tests {
             vec!["pm".into()],
             None,
             Some("standing".into()),
+            None,
         )
         .unwrap();
 
@@ -793,6 +798,7 @@ mod tests {
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
+            parallel: None,
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
@@ -839,6 +845,7 @@ mod tests {
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
+            parallel: None,
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)

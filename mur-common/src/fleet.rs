@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::parallel::ParallelConfig;
+
 pub const CONCIERGE_AGENT: &str = "mur";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -27,6 +29,8 @@ pub struct Fleet {
     pub skills: Vec<String>,
     #[serde(default, rename = "loop", skip_serializing_if = "Option::is_none")]
     pub loop_cfg: Option<FleetLoop>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel: Option<ParallelConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -206,6 +210,7 @@ mod tests {
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
+            parallel: None,
         };
         assert_eq!(f.router_or_concierge(), CONCIERGE_AGENT);
         let yaml = serde_yaml::to_string(&f).unwrap();

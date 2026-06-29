@@ -43,6 +43,7 @@ pub mod model_discovery;
 pub mod model_download;
 pub mod model_prices;
 pub mod nudge;
+pub mod parallel;
 pub mod paths;
 pub mod retrieve;
 pub mod route;

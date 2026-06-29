@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useT } from "../../i18n";
+import type { AgentEntry } from "../../types";
 import type { FleetSummary, FleetDetail as Detail, JobRow } from "./types";
 import { FleetRail } from "./FleetRail";
 import { FleetDetail } from "./FleetDetail";
@@ -23,6 +24,7 @@ export function FleetView() {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [showCreate, setShowCreate] = useState(false);
+  const [agentMap, setAgentMap] = useState<Map<string, AgentEntry>>(new Map());
   const selectedRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -56,9 +58,12 @@ export function FleetView() {
     }
   }
 
-  // Initial list load
+  // Initial list load + agents map
   useEffect(() => {
     void loadList();
+    invoke<AgentEntry[]>("list_agents").then((agents) => {
+      setAgentMap(new Map(agents.map((a) => [a.name, a])));
+    }).catch(() => {});
   }, []);
 
   // Load detail whenever selection changes
@@ -120,6 +125,7 @@ export function FleetView() {
             key={detail.name}
             detail={detail}
             jobs={jobs}
+            agentMap={agentMap}
             onRefresh={handleRefresh}
             onDelete={handleDelete}
           />

@@ -1,11 +1,14 @@
 //! `mur fleet` command module.
 
+pub mod cherry_cmd;
+pub mod compare;
 pub mod control;
 pub mod create;
 pub mod delete;
 pub mod export;
 pub mod import;
 pub mod jobs;
+pub mod judge_cmd;
 pub mod list;
 pub mod loop_run;
 pub mod plan;

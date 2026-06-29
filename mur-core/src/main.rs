@@ -46,6 +46,7 @@ mod inject;
 mod interactive;
 #[allow(dead_code, unused_imports)]
 mod nudge;
+mod parallel;
 mod paths;
 mod retrieve;
 mod route;

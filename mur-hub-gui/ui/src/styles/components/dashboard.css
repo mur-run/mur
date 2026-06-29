@@ -1,10 +1,24 @@
 /* ── Dashboard ────────────────────────────────────────────────────────── */
 .dashboard-root {
   display: grid;
-  /* 3rd track = conversation view (open convs); 4th = detail panel (selected agent).
+  /* 2nd track = conversation view (open convs); 3rd = detail panel (selected agent).
      Both collapse to nothing when absent. */
-  grid-template-columns: 160px 1fr auto auto;
+  grid-template-columns: 1fr auto auto;
   height: 100vh;
+  overflow: hidden;
+}
+
+.agents-view {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.agents-view__content {
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -120,6 +134,14 @@
 }
 .toolbar-btn--primary:hover {
   background: color-mix(in srgb, var(--color-brand) 88%, #000);
+}
+.toolbar-btn--danger {
+  background: transparent;
+  border-color: var(--color-error, #ef4444);
+  color: var(--color-error, #ef4444);
+}
+.toolbar-btn--danger:hover {
+  background: rgba(239, 68, 68, 0.1);
 }
 .toolbar-btn--icon {
   display: inline-flex;

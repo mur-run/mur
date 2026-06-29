@@ -6,16 +6,45 @@ use std::path::Path;
 use anyhow::{Result, bail};
 use mur_common::channel::ChannelActor;
 use mur_common::fleet::{Job, JobStatus};
+use mur_common::parallel::ParallelConfig;
 use mur_common::skill::manifest::{Procedure, ProcedureStep};
 
 use super::store;
 
-/// Phase 1 "plan": one parallel delegate-step per member, each handed the goal.
+/// Phase 1 "plan": one parallel delegate-step per member (or per track if parallel config present),
+/// each handed the goal (with approach injection for tracks).
 /// (Phase 2 replaces this with a router-produced DAG.)
-pub fn build_fleet_procedure(goal: &str, members: &[String]) -> Procedure {
-    Procedure {
-        variables: vec![],
-        steps: members
+pub fn build_fleet_procedure(
+    goal: &str,
+    members: &[String],
+    parallel: Option<&ParallelConfig>,
+) -> Result<Procedure> {
+    let steps = if let Some(cfg) = parallel {
+        if members.is_empty() {
+            bail!("parallel fleet requires at least one member");
+        }
+        // Parallel tracks: one step per track with approach injection into goal
+        cfg.tracks
+            .iter()
+            .enumerate()
+            .map(|(i, track_cfg)| {
+                let injected_goal = format!("{goal}\n\nApproach: {}", track_cfg.approach);
+                let member = members
+                    .get(i % members.len())
+                    .cloned()
+                    .expect("members guard ensures non-empty");
+                ProcedureStep {
+                    description: format!("{}: {injected_goal}", track_cfg.name),
+                    intent: Some(injected_goal),
+                    delegate_to: Some(member),
+                    id: Some(track_cfg.name.clone()),
+                    ..Default::default()
+                }
+            })
+            .collect()
+    } else {
+        // Regular fleet: one step per member with same goal
+        members
             .iter()
             .map(|m| ProcedureStep {
                 description: format!("{m}: {goal}"),
@@ -24,8 +53,12 @@ pub fn build_fleet_procedure(goal: &str, members: &[String]) -> Procedure {
                 id: Some(m.clone()),
                 ..Default::default()
             })
-            .collect(),
-    }
+            .collect()
+    };
+    Ok(Procedure {
+        variables: vec![],
+        steps,
+    })
 }
 
 /// Pure goal resolver: explicit arg > oldest queued job > standing goal.
@@ -82,8 +115,11 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>)
         ..fleet.clone()
     };
     // Router plans which members do what (with deps); falls back to broadcast-to-all.
-    let proc = super::plan::plan_via_router(mur_home, &planning_fleet, &events)
-        .unwrap_or_else(|| build_fleet_procedure(&goal, &fleet.members));
+    let proc =
+        super::plan::plan_via_router(mur_home, &planning_fleet, &events).unwrap_or_else(|| {
+            build_fleet_procedure(&goal, &fleet.members, fleet.parallel.as_ref())
+                .expect("members validated by caller guard")
+        });
     let run_id = format!("run-{}", uuid::Uuid::now_v7());
     let opts = crate::executor::dag::DagExecOptions {
         // Fail-closed default: do NOT blanket-approve. Fleet delegation steps carry
@@ -146,12 +182,52 @@ mod tests {
 
     #[test]
     fn build_fleet_procedure_one_delegate_step_per_member() {
-        let p = build_fleet_procedure("ship it", &["pm".to_string(), "qa".to_string()]);
+        let p =
+            build_fleet_procedure("ship it", &["pm".to_string(), "qa".to_string()], None).unwrap();
         assert_eq!(p.steps.len(), 2);
         assert_eq!(p.steps[0].delegate_to.as_deref(), Some("pm"));
         assert_eq!(p.steps[1].delegate_to.as_deref(), Some("qa"));
         assert_eq!(p.steps[0].intent.as_deref(), Some("ship it"));
         assert!(p.steps[0].depends_on.is_empty()); // parallel rank 0
+    }
+
+    #[test]
+    fn parallel_goal_injects_approach() {
+        let cfg = ParallelConfig {
+            mode: mur_common::parallel::ParallelMode::Speculative,
+            tracks: vec![
+                mur_common::parallel::TrackConfig {
+                    name: "track1".to_string(),
+                    approach: "functional style".to_string(),
+                    model: None,
+                },
+                mur_common::parallel::TrackConfig {
+                    name: "track2".to_string(),
+                    approach: "imperative style".to_string(),
+                    model: None,
+                },
+            ],
+            judge: mur_common::parallel::JudgeConfig {
+                model: "test-model".to_string(),
+                rubric: mur_common::parallel::Rubric::default(),
+            },
+            pre_filter: vec![],
+        };
+        let p = build_fleet_procedure("ship it", &["pm".to_string(), "qa".to_string()], Some(&cfg))
+            .unwrap();
+        assert_eq!(p.steps.len(), 2);
+        // First track should have functional style approach injected
+        assert_eq!(p.steps[0].id.as_deref(), Some("track1"));
+        let intent0 = p.steps[0].intent.as_deref().unwrap();
+        assert!(intent0.contains("ship it"));
+        assert!(intent0.contains("functional style"));
+        assert!(intent0.contains("Approach:"));
+        // Second track should have imperative style approach injected
+        assert_eq!(p.steps[1].id.as_deref(), Some("track2"));
+        let intent1 = p.steps[1].intent.as_deref().unwrap();
+        assert!(intent1.contains("ship it"));
+        assert!(intent1.contains("imperative style"));
+        assert!(intent1.contains("Approach:"));
     }
 
     #[test]
@@ -166,6 +242,7 @@ mod tests {
             vec!["pm".into()],
             None,
             Some("standing".into()),
+            None,
         )
         .unwrap();
 
