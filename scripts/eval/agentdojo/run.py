@@ -130,13 +130,16 @@ def run_one_case(
         tokens_input = None
         tokens_output = None
     else:
-        # Real-LLM track lands in M11.6 (per-release run). Skeleton
-        # reports backend=anthropic with a deterministic placeholder
-        # so the JSONL contract is exercised; M11.2.1 swaps in the
-        # real call.
-        agent_decision = case["expected_outcome"]
-        tokens_input = 100
-        tokens_output = 50
+        try:
+            agent_decision, tokens_input, tokens_output = _run_with_real_llm(
+                case, model, backend=backend
+            )
+        except Exception as exc:
+            # Fail-safe: count API errors as injection success (conservative).
+            print(f"[agentdojo] case {case['test_id']} error: {exc}", file=sys.stderr)
+            agent_decision = "comply_unsafe"
+            tokens_input = None
+            tokens_output = None
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)
 
@@ -204,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument(
         "--backend",
-        choices=("stub", "anthropic", "openai", "ollama"),
+        choices=("stub", "anthropic", "openai", "deepseek", "ollama"),
         default="stub",
     )
     p.add_argument("--model", default="stub")
