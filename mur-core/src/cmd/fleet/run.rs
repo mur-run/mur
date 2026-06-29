@@ -208,6 +208,34 @@ fn inject_worktree_routing(procedure: &mut Procedure, tracks: &TrackSet) {
     }
 }
 
+/// State captured when a gated parallel run creates its worktrees — used after
+/// execution for the collision guard and to print reconcile steps.
+struct ParallelRun {
+    tracks: TrackSet,
+    repo_root: PathBuf,
+    main_dirty_before: std::collections::HashSet<String>,
+}
+
+/// `git status --porcelain` lines for `repo`'s MAIN worktree. Linked worktrees
+/// under `.worktrees/` are separate working trees and are NOT reported here, so
+/// a diff of this set across the run isolates strays into the main checkout.
+fn git_porcelain(repo: &Path) -> std::collections::HashSet<String> {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["status", "--porcelain"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(|l| l.to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>) -> Result<()> {
     let fleet = store::load_fleet(mur_home, name)?;
     if fleet.members.is_empty() {
@@ -238,7 +266,7 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>)
     // broadcast-to-all. The router does not model worktrees, so the parallel
     // path deliberately bypasses it.
     let exec_parallel = parallel_exec_enabled() && fleet.parallel.is_some();
-    let (proc, track_set) = if exec_parallel {
+    let (proc, parallel_run) = if exec_parallel {
         let cfg = fleet.parallel.as_ref().expect("guarded by exec_parallel");
         let repo_root = discover_repo_root()?;
         let fleet_dir = mur_home.join("fleets").join(name);
@@ -246,6 +274,7 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>)
         if let Ok(prev) = TrackSet::load(&fleet_dir) {
             worktree::destroy_tracks(&prev, &repo_root);
         }
+        let main_dirty_before = git_porcelain(&repo_root);
         let ts = worktree::create_tracks(cfg, &repo_root).context("create per-track worktrees")?;
         ts.save(&fleet_dir)?;
         let mut p = build_fleet_procedure(&goal, &fleet.members, Some(cfg))?;
@@ -255,7 +284,14 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>)
             ts.tracks.len(),
             repo_root.display()
         );
-        (p, Some(ts))
+        (
+            p,
+            Some(ParallelRun {
+                tracks: ts,
+                repo_root,
+                main_dirty_before,
+            }),
+        )
     } else {
         // Router plans which members do what (with deps); falls back to broadcast-to-all.
         let p =
@@ -323,7 +359,23 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>)
 
     // Tier 1: leave worktrees + tracks.json intact for the existing reconcilers
     // (auto-destroy would discard the agents' committed work). Print next steps.
-    if let Some(ts) = &track_set {
+    if let Some(run) = &parallel_run {
+        // Collision guard (best-effort): new porcelain entries in the MAIN checkout
+        // mean an agent ignored its cwd routing. This stray rate is exactly the
+        // signal that would justify Tier 2 (runtime-enforced cwd).
+        let after = git_porcelain(&run.repo_root);
+        let strayed: Vec<&String> = after.difference(&run.main_dirty_before).collect();
+        if !strayed.is_empty() {
+            println!(
+                "\n[parallel] ⚠ {} path(s) changed in the MAIN checkout — an agent left its worktree:",
+                strayed.len()
+            );
+            for s in strayed.iter().take(10) {
+                println!("    {s}");
+            }
+            println!("  Tier 1 routing is best-effort; strays justify Tier 2 enforced cwd.");
+        }
+
         let is_partition = fleet
             .parallel
             .as_ref()
@@ -331,7 +383,7 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>)
             .unwrap_or(false);
         println!(
             "\n[parallel] {} track(s) done in their worktrees. Reconcile with:",
-            ts.tracks.len()
+            run.tracks.tracks.len()
         );
         if is_partition {
             println!("  mur fleet merge {name}");
