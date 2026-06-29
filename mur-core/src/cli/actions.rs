@@ -538,6 +538,12 @@ pub enum FleetAction {
         /// Apply the assembly without prompting
         #[arg(long)]
         auto: bool,
+        /// Copy cherry-result into the live project tree (default: fleet's git root)
+        #[arg(long)]
+        promote: bool,
+        /// Override destination for --promote
+        #[arg(long)]
+        target: Option<std::path::PathBuf>,
     },
 }
 
