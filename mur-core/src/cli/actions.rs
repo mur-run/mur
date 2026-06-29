@@ -527,6 +527,9 @@ pub enum FleetAction {
     Judge {
         /// Fleet name
         name: String,
+        /// Write judge_stats.json to the fleet dir (CAS hit rate + cost ratio)
+        #[arg(long)]
+        stats: bool,
     },
     /// Execute cherry-pick assembly from the best-scoring track units
     Cherry {
