@@ -54,4 +54,31 @@ mod tests {
         let backend = detect_backend(std::path::Path::new("."));
         let _ = backend.diff_files(std::path::Path::new("/nonexistent"), "snap");
     }
+
+    /// Gate 4 latency benchmark. Run manually on ZFS-equipped Linux machine:
+    /// ORT_STRATEGY=download cargo test -p mur-core \
+    /// "parallel::backend::detect::tests::bench_create_track" \
+    /// -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn bench_create_track() {
+        use std::time::Instant;
+        let project = std::path::Path::new(".");
+        let backend = detect_backend(project);
+        let n = 10usize;
+        let mut total = std::time::Duration::ZERO;
+        for i in 0..n {
+            let name = format!("gate4-bench-{i}");
+            let start = Instant::now();
+            let result = backend.create_track(&name);
+            let elapsed = start.elapsed();
+            if let Ok(track) = result {
+                let _ = backend.destroy(&track);
+            }
+            total += elapsed;
+            eprintln!("  iter {i}: {}ms", elapsed.as_millis());
+        }
+        let mean_ms = total.as_millis() / n as u128;
+        eprintln!("Mean latency: {}ms", mean_ms);
+    }
 }
