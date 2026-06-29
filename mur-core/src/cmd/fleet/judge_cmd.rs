@@ -4,7 +4,9 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 use super::store::load_fleet;
-use crate::parallel::{JudgeStats, run_judge_pipeline_async, state::ParallelStateDb, track::TrackSet};
+use crate::parallel::{
+    JudgeStats, run_judge_pipeline_async, state::ParallelStateDb, track::TrackSet,
+};
 
 pub fn cmd_fleet_judge(mur_home: &Path, fleet_name: &str, write_stats: bool) -> Result<()> {
     let fleet = load_fleet(mur_home, fleet_name)?;
