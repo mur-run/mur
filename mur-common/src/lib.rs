@@ -40,6 +40,7 @@ pub mod model_resolve;
 pub mod multimodal;
 pub mod muragent;
 pub mod parameterize;
+pub mod parallel;
 pub mod pattern;
 pub mod permissions;
 pub mod pipeline;
