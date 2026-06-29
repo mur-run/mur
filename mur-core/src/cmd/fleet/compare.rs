@@ -27,7 +27,11 @@ pub fn cmd_fleet_compare(
     let state_db = ParallelStateDb::open(&fleet_dir.join("parallel_state"))?;
     let rubric_ver = parallel.judge.rubric.version();
 
-    let track_names: Vec<&str> = tracks.tracks.iter().map(|t| t.config.name.as_str()).collect();
+    let track_names: Vec<&str> = tracks
+        .tracks
+        .iter()
+        .map(|t| t.config.name.as_str())
+        .collect();
 
     // unit_name → Vec<(track_name, Option<score>)>
     let mut score_map: std::collections::HashMap<String, Vec<(String, Option<f32>)>> =
@@ -76,7 +80,10 @@ pub fn cmd_fleet_compare(
         print!(" {:<col_w$}", tn);
     }
     println!(" Rec");
-    println!("{}", "-".repeat(name_w + (col_w + 1) * track_names.len() + 6));
+    println!(
+        "{}",
+        "-".repeat(name_w + (col_w + 1) * track_names.len() + 6)
+    );
 
     // Print one row per unit
     let mut unit_names: Vec<&String> = score_map.keys().collect();
@@ -103,7 +110,9 @@ pub fn cmd_fleet_compare(
 
         print!("{:<name_w$}", truncate(name, name_w));
         for (_, score) in &scores {
-            let cell = score.map(|s| format!("{:.1}", s)).unwrap_or_else(|| "-".into());
+            let cell = score
+                .map(|s| format!("{:.1}", s))
+                .unwrap_or_else(|| "-".into());
             print!(" {:<col_w$}", cell);
         }
         println!(" {rec} ★");
