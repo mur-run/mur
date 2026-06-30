@@ -10,6 +10,7 @@ import { WorkTrace } from "./WorkTrace";
 
 interface Props {
   agents: AgentEntry[];
+  query?: string;
 }
 
 /**
@@ -25,7 +26,7 @@ function isActivityChannel(ch: ChannelSummary): boolean {
   );
 }
 
-export function WorkView({ agents }: Props) {
+export function WorkView({ agents, query }: Props) {
   const [channels, setChannels] = useState<ChannelSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [events, setEvents] = useState<ChannelEvent[]>([]);
@@ -102,7 +103,11 @@ export function WorkView({ agents }: Props) {
     <div className="work-view">
       <div className="work-view__rail">
         <WorkChannelList
-          channels={channels.filter(isActivityChannel)}
+          channels={channels.filter(isActivityChannel).filter((ch) => {
+            if (!query) return true;
+            const q = query.toLowerCase();
+            return ch.title.toLowerCase().includes(q) || ch.goal.toLowerCase().includes(q);
+          })}
           selectedId={selectedId}
           nowMs={nowMs}
           onSelect={setSelectedId}

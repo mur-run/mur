@@ -17,7 +17,7 @@ function showToast(msg: string, durationMs = 2500) {
   setTimeout(() => el.remove(), durationMs);
 }
 
-export function FleetView() {
+export function FleetView({ query }: { query?: string }) {
   const { t } = useT();
   const [fleets, setFleets] = useState<FleetSummary[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
@@ -114,7 +114,10 @@ export function FleetView() {
   return (
     <div className="fleet-view">
       <FleetRail
-        fleets={fleets}
+        fleets={query ? fleets.filter((f) => {
+          const q = query.toLowerCase();
+          return f.name.toLowerCase().includes(q) || f.display_name.toLowerCase().includes(q) || f.goal.toLowerCase().includes(q);
+        }) : fleets}
         selectedName={selectedName}
         onSelect={handleSelect}
         onNew={() => setShowCreate(true)}

@@ -20,6 +20,7 @@ export const zhTW: Table = {
   "dashboard.stop": "停止",
   "dashboard.share": "分享",
   "dashboard.settings": "設定",
+  "dashboard.detail": "詳細",
   "dashboard.runTooltip": "啟動 agent runtime",
   "dashboard.startFailed": "啟動失敗：{error}",
   "dashboard.stopFailed": "停止失敗：{error}",
@@ -41,7 +42,7 @@ export const zhTW: Table = {
   "dashboard.updateError": "更新失敗：{error}",
   "dashboard.updateRetry": "重試",
   "dashboard.cliSkew":
-    "命令列工具是 v{cli}，但 MUR Hub 是 v{hub}。執行 `brew upgrade mur` 來更新。",
+    "命令列工具是 v{cli}，但 MUR Hub 是 v{hub}。執行 `{hint}` 來更新。",
   "dashboard.stat.running": "飛行中",
   "dashboard.stat.idle": "休息中",
   "dashboard.col.agent": "Agent",
