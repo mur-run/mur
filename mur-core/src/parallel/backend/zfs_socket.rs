@@ -1,4 +1,3 @@
-#![allow(dead_code, unused_imports)]
 use super::ParallelBackend;
 use anyhow::{Context, Result, bail};
 use mur_common::zfs_protocol::{ZfsRequest, ZfsResponse};
@@ -6,6 +5,10 @@ use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// Fail fast rather than wedge the whole parallel run if the agent hangs.
+const AGENT_IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Backend that talks to `mur-zfs-agent` running inside a Linux VM (OrbStack / Lima / WSL2)
 /// via a Unix domain socket forwarded to the host.
@@ -27,6 +30,10 @@ impl ZfsSocketBackend {
     fn call(&self, req: ZfsRequest) -> Result<ZfsResponse> {
         let stream =
             UnixStream::connect(&self.socket_path).context("connect to mur-zfs-agent socket")?;
+        // Bound every read/write so a hung agent fails fast instead of wedging
+        // the parallel run forever on a blocking `read_line`.
+        let _ = stream.set_read_timeout(Some(AGENT_IO_TIMEOUT));
+        let _ = stream.set_write_timeout(Some(AGENT_IO_TIMEOUT));
         let mut writer = stream.try_clone()?;
         let mut line = serde_json::to_string(&req)?;
         line.push('\n');
