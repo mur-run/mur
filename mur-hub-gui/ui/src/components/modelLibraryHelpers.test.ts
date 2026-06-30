@@ -2,15 +2,28 @@ import { describe, it, expect } from "vitest";
 import { CLOUD_PRESETS, togglePick } from "./modelLibraryHelpers";
 
 describe("CLOUD_PRESETS", () => {
-  it("ships the 5 required provider keys", () => {
+  it("ships the required provider keys", () => {
     const keys = CLOUD_PRESETS.map((p) => p.key);
     expect(keys).toEqual(
-      expect.arrayContaining(["openai", "google", "openrouter", "xai", "custom"])
+      expect.arrayContaining([
+        "openai",
+        "google",
+        "openrouter",
+        "xai",
+        "mistral",
+        "deepseek",
+        "groq",
+        "together",
+        "fireworks",
+        "cohere",
+        "custom",
+      ])
     );
   });
 
-  it("has exactly 5 presets", () => {
-    expect(CLOUD_PRESETS).toHaveLength(5);
+  it("has no duplicate provider keys", () => {
+    const keys = CLOUD_PRESETS.map((p) => p.key);
+    expect(new Set(keys).size).toBe(keys.length);
   });
 
   it("every preset has a non-empty name, baseUrl, logo, and color", () => {

@@ -120,7 +120,11 @@ export function ModelLibrary({ open, onClose }: Props) {
       <div className="ml-win">
         {/* Window chrome bar */}
         <div className="ml-bar">
-          <span className="ml-dot ml-dot--r" />
+          <button
+            className="ml-dot ml-dot--r"
+            onClick={onClose}
+            aria-label={t("detail.close")}
+          />
           <span className="ml-dot ml-dot--y" />
           <span className="ml-dot ml-dot--g" />
           <span className="ml-bar__title">MUR Hub — {t("lib.title")}</span>
@@ -234,6 +238,7 @@ export function ModelLibrary({ open, onClose }: Props) {
             ) : panel.kind === "local" ? (
               <LocalPanel
                 detected={localProviders.find((lp) => lp.key === panel.detectedKey)!}
+                registryModels={registryModels}
                 registrySet={registrySet}
                 onModelsAdded={() =>
                   invoke<ModelOption[]>("list_models")
@@ -244,6 +249,7 @@ export function ModelLibrary({ open, onClose }: Props) {
             ) : (
               <NewProviderPanel
                 preset={CLOUD_PRESETS.find((p) => p.key === panel.presetKey)!}
+                registryModels={registryModels}
                 registrySet={registrySet}
                 onModelsAdded={() =>
                   invoke<ModelOption[]>("list_models")

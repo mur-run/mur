@@ -5,7 +5,7 @@
 .modal__overlay {
   position: fixed;
   inset: 0;
-  background: rgba(16, 40, 80, 0.35);
+  background: rgba(6, 9, 18, 0.74);
   display: grid;
   place-items: center;
   z-index: 1000;
