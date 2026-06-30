@@ -45,6 +45,9 @@ const PROVIDER_COLORS: Record<string, string> = {
   local: "#6B7688",
   openrouter: "#8B5CF6",
   xai: "#111111",
+  groq: "#F55036",
+  together: "#0F6FFF",
+  fireworks: "#9215FF",
 };
 
 export function providerColor(provider: string): string {
@@ -209,6 +212,156 @@ export function ModelChecklist({
   );
 }
 
+// ── RegistryList — models already in ~/.mur/models.yaml: view / edit cost / delete ──
+
+export function RegistryList({
+  models,
+  onChanged,
+}: {
+  models: ModelOption[];
+  onChanged: () => void;
+}) {
+  const { t } = useT();
+  const [editing, setEditing] = useState<string | null>(null);
+  const [inDraft, setInDraft] = useState("");
+  const [outDraft, setOutDraft] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  if (models.length === 0) return null;
+
+  function startEdit(m: ModelOption) {
+    setEditing(m.ref_name);
+    setInDraft(m.input_cost != null ? String(m.input_cost) : "");
+    setOutDraft(m.output_cost != null ? String(m.output_cost) : "");
+    setError(null);
+  }
+
+  async function saveEdit(refName: string) {
+    setBusy(refName);
+    setError(null);
+    try {
+      await invoke("update_model", {
+        refName,
+        inputCost: inDraft.trim() === "" ? null : Number(inDraft),
+        outputCost: outDraft.trim() === "" ? null : Number(outDraft),
+      });
+      setEditing(null);
+      onChanged();
+    } catch (e) {
+      setError(t("lib.editError", { error: String(e) }));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleRemove(refName: string) {
+    setBusy(refName);
+    setError(null);
+    try {
+      await invoke("remove_model", { refName });
+      onChanged();
+    } catch (e) {
+      setError(t("lib.removeError", { error: String(e) }));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="ml-reg-list">
+      <div className="ml-disc-h">
+        <div className="ml-disc-h__title">{t("lib.registrySection")}</div>
+      </div>
+      <ul className="ml-mlist" role="list">
+        {models.map((m) => {
+          const inCost = formatCost(m.input_cost);
+          const outCost = formatCost(m.output_cost);
+          const ctx = fmtCtx(m.context_window);
+          const isBusy = busy === m.ref_name;
+          return (
+            <li key={m.ref_name}>
+              <div className="ml-mrow ml-reg-row">
+                <span className="ml-mbody">
+                  <span className="ml-mbody__id">{m.model}</span>
+                  <span className="ml-mbody__alias">
+                    <code className="ml-code">{m.ref_name}</code>
+                  </span>
+                </span>
+                <span className="ml-badges">
+                  {inCost !== null && (
+                    <span className="ml-badge ml-badge--in">in {inCost}</span>
+                  )}
+                  {outCost !== null && (
+                    <span className="ml-badge ml-badge--out">out {outCost}</span>
+                  )}
+                  {ctx !== null && <span className="ml-badge ml-badge--ctx">{ctx}</span>}
+                </span>
+                <span className="ml-reg-actions">
+                  <button
+                    className="ml-btn ml-btn--sm ml-btn--ghost"
+                    onClick={() => startEdit(m)}
+                    disabled={isBusy}
+                  >
+                    {t("lib.editBtn")}
+                  </button>
+                  <button
+                    className="ml-btn ml-btn--sm ml-btn--danger"
+                    onClick={() => handleRemove(m.ref_name)}
+                    disabled={isBusy}
+                  >
+                    {t("lib.deleteBtn")}
+                  </button>
+                </span>
+              </div>
+              {editing === m.ref_name && (
+                <div className="ml-edit-row">
+                  <div className="ml-field">
+                    <label className="ml-label">{t("lib.inputCost")}</label>
+                    <input
+                      className="ml-input"
+                      type="number"
+                      step="0.0001"
+                      min="0"
+                      value={inDraft}
+                      onChange={(e) => setInDraft(e.target.value)}
+                    />
+                  </div>
+                  <div className="ml-field">
+                    <label className="ml-label">{t("lib.outputCost")}</label>
+                    <input
+                      className="ml-input"
+                      type="number"
+                      step="0.0001"
+                      min="0"
+                      value={outDraft}
+                      onChange={(e) => setOutDraft(e.target.value)}
+                    />
+                  </div>
+                  <button
+                    className="ml-btn ml-btn--sm ml-btn--primary"
+                    onClick={() => saveEdit(m.ref_name)}
+                    disabled={isBusy}
+                  >
+                    {t("lib.saveBtn")}
+                  </button>
+                  <button
+                    className="ml-btn ml-btn--sm ml-btn--ghost"
+                    onClick={() => setEditing(null)}
+                  >
+                    {t("lib.cancelBtn")}
+                  </button>
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {error && <p className="ml-error">{error}</p>}
+    </div>
+  );
+}
+
 // ── ConnectedPanel — re-explore an already-connected cloud provider ─────────
 
 export function ConnectedPanel({
@@ -303,6 +456,8 @@ export function ConnectedPanel({
         </div>
       </div>
 
+      <RegistryList models={provModels} onChanged={onModelsAdded} />
+
       <div className="ml-field">
         <label className="ml-label">{t("lib.baseUrl")}</label>
         <input
@@ -360,15 +515,18 @@ export function ConnectedPanel({
 
 export function LocalPanel({
   detected,
+  registryModels,
   registrySet,
   onModelsAdded,
 }: {
   detected: DetectedLocalView;
+  registryModels: ModelOption[];
   registrySet: Set<string>;
   onModelsAdded: () => void;
 }) {
   const { t } = useT();
   const color = providerColor(detected.key);
+  const provModels = registryModels.filter((m) => m.provider === detected.key);
   const [picks, setPicks] = useState<Set<string>>(
     new Set(
       detected.models.filter((m) => registrySet.has(m.model)).map((m) => m.model)
@@ -415,6 +573,8 @@ export function LocalPanel({
         </div>
       </div>
 
+      <RegistryList models={provModels} onChanged={onModelsAdded} />
+
       <div className="ml-field">
         <label className="ml-label">{t("lib.baseUrl")}</label>
         <input
@@ -454,13 +614,16 @@ export function LocalPanel({
 
 export function NewProviderPanel({
   preset,
+  registryModels,
   registrySet,
   onModelsAdded,
 }: {
   preset: CloudPreset;
+  registryModels: ModelOption[];
   registrySet: Set<string>;
   onModelsAdded: () => void;
 }) {
+  const provModels = registryModels.filter((m) => m.provider === preset.key);
   const { t } = useT();
   const [baseUrl, setBaseUrl] = useState(preset.baseUrl);
   const [apiKey, setApiKey] = useState("");
@@ -552,6 +715,8 @@ export function NewProviderPanel({
           <div className="ml-panel-h__sub">{t("lib.cloud.subtitleNew")}</div>
         </div>
       </div>
+
+      <RegistryList models={provModels} onChanged={onModelsAdded} />
 
       <div className="ml-field">
         <label className="ml-label">{t("lib.baseUrl")}</label>
