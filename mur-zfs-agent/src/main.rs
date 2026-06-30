@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use mur_common::zfs_protocol::{ZfsRequest, ZfsResponse};
 use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
@@ -11,14 +11,17 @@ const DEFAULT_SOCKET: &str = "/run/mur-zfs-agent.sock";
 fn handle(req: ZfsRequest) -> ZfsResponse {
     match req {
         ZfsRequest::CreateTrack { base, name } => {
-            let result = zfs::dataset_for_path(&base).and_then(|ds| {
-                let snap = zfs::zfs_snapshot(&ds, &format!("mur-parallel-base-{name}"))?;
-                let track_ds = format!("{ds}/mur-tracks/{name}");
-                let mount = zfs::zfs_clone(&snap, &track_ds)?;
-                // Establish base snapshot for diff/promote.
-                zfs::zfs_snapshot(&track_ds, "mur-base")?;
-                Ok(mount)
-            });
+            // Validate the client-supplied name before it reaches any `zfs` arg.
+            let result = zfs::validate_zfs_name(&name)
+                .and_then(|_| zfs::dataset_for_path(&base))
+                .and_then(|ds| {
+                    let snap = zfs::zfs_snapshot(&ds, &format!("mur-parallel-base-{name}"))?;
+                    let track_ds = format!("{ds}/mur-tracks/{name}");
+                    let mount = zfs::zfs_clone(&snap, &track_ds)?;
+                    // Establish base snapshot for diff/promote.
+                    zfs::zfs_snapshot(&track_ds, "mur-base")?;
+                    Ok(mount)
+                });
             match result {
                 Ok(path) => ZfsResponse::Track { path },
                 Err(e) => ZfsResponse::Error {
@@ -27,7 +30,10 @@ fn handle(req: ZfsRequest) -> ZfsResponse {
             }
         }
         ZfsRequest::Snapshot { track, label } => {
-            match zfs::dataset_for_path(&track).and_then(|ds| zfs::zfs_snapshot(&ds, &label)) {
+            match zfs::validate_zfs_name(&label)
+                .and_then(|_| zfs::dataset_for_path(&track))
+                .and_then(|ds| zfs::zfs_snapshot(&ds, &label))
+            {
                 Ok(snap_id) => ZfsResponse::Snap { snap_id },
                 Err(e) => ZfsResponse::Error {
                     message: e.to_string(),
@@ -53,25 +59,8 @@ fn handle(req: ZfsRequest) -> ZfsResponse {
             }
         }
         ZfsRequest::Promote { track, target } => {
-            let result = zfs::dataset_for_path(&track)
-                .and_then(|ds| zfs::zfs_diff(&ds, "mur-base"))
-                .and_then(|changed| {
-                    for abs_path in &changed {
-                        // zfs_diff returns absolute paths; strip the track mountpoint
-                        // prefix to get a relative path before joining with src/dst.
-                        let rel = abs_path.strip_prefix(&track).unwrap_or(abs_path);
-                        let src = track.join(rel);
-                        let dst = target.join(rel);
-                        if src.is_file() {
-                            if let Some(p) = dst.parent() {
-                                std::fs::create_dir_all(p)?;
-                            }
-                            std::fs::copy(&src, &dst).map(|_| ())?;
-                        }
-                    }
-                    Ok(())
-                });
-            match result {
+            // Faithful promote: modifications, additions, deletions, AND renames.
+            match zfs::promote_track(&track, &target) {
                 Ok(()) => ZfsResponse::Ok,
                 Err(e) => ZfsResponse::Error {
                     message: e.to_string(),
@@ -95,6 +84,16 @@ fn serve(socket_path: &str) -> Result<()> {
     let _ = std::fs::remove_file(socket_path);
 
     let listener = UnixListener::bind(socket_path)?;
+    // Lock the privileged socket to its owner: this daemon runs `zfs destroy -r`
+    // and fs::copy as root, and `bind()` obeys umask (often world-accessible).
+    // 0600 keeps other local users out. (SO_PEERCRED same-uid checking is a libc
+    // follow-on; 0600 already restricts connections to the owner uid.)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))
+            .context("lock down agent socket permissions")?;
+    }
     eprintln!("mur-zfs-agent listening on {socket_path}");
 
     for stream in listener.incoming() {
