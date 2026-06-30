@@ -1,0 +1,77 @@
+name: parallel-decompose
+version: 0.1.0
+publisher: human:mur
+description: "Classify ANY task's TOPOLOGY before deciding how to do it — explore (read/gather → fan out, recombine by union or careful synthesis), compete (best-of-N at one goal → fan out, SELECT with an independent judge), coupled-write (interdependent edits → serialize unless disjoint + contract-frozen, escalate overlaps), or coherence-bound (one shared-taste design → single writer). Parallelism as the default decomposition lens, gated read-parallelize / write-serialize."
+category: workflow
+content:
+  abstract: |
+    Before deciding HOW to do a task, classify WHY it can (or cannot) be
+    parallelized — by its TOPOLOGY, not its domain. The hard part is
+    RECOMBINATION, not isolation: worktrees solve filesystem conflicts
+    trivially; the risk and the value are both in combining results.
+
+    Four topologies:
+    - explore (read/gather: search, find files, find content, collect evidence)
+      → outputs are ADDITIVE → fan out freely (no worktree) → recombine by
+      union/dedupe (collect) or careful synthesis (reduce).
+    - compete (best-of-N at the SAME goal: design variants, N approaches)
+      → outputs COMPETE → fan out N heterogeneous attempts → SELECT the best with
+      an INDEPENDENT judge. Never merge competing rewrites; never run a debate.
+    - coupled-write (editing interdependent code/state) → outputs CONFLICT →
+      serialize UNLESS disjoint files + contract frozen first → escalate overlaps.
+    - coherence-bound (one design whose pieces share architectural taste, or a
+      sequential dependency) → DO NOT parallelize → one coherent writer.
+
+    Grounding: Anthropic multi-agent research (breadth +90%, ~15x tokens, excludes
+    most coding); Cognition "Don't Build Multi-Agents" (share CONTEXT not STATE; the
+    Flappy-Bird trap of mismatched parallel writers); MAST (~79% of multi-agent
+    failures are specification + coordination, impossible single-agent);
+    Lost-in-the-Middle (naive concatenation of N results under-attends the middle).
+  procedure:
+    steps:
+      - description: |
+          CLASSIFY into one topology. When ambiguous, pick the safer/cheaper
+          (single-writer for writes; collect-not-reduce for reads):
+          - independent subtasks, additive outputs (find/search/gather) → explore
+          - same goal, want the best of several attempts (variants) → compete
+          - editing interdependent code/state → coupled-write
+          - one coherent design (shared taste) or a sequential dependency → coherence-bound
+      - description: |
+          ROUTE by topology:
+          - explore → fan out read-only jobs via parallel_jobs (no worktree needed).
+          - compete → fan out N HETEROGENEOUS attempts (different model/approach,
+            not personas); archive the losing variants.
+          - coupled-write → DELEGATE to the parallel-code skill's gate (disjoint files
+            + contract frozen read-only first + no sequential dependency + >=3 units +
+            worth ~3-15x tokens) — else single writer.
+          - coherence-bound → say so in one line and do it single-threaded.
+          Execution shape: known decomposition → a saved Workflow; emergent/dynamic
+          decomposition → orchestrator + parallel_jobs; not-parallel → single agent.
+      - description: |
+          RECOMBINE — choose the coordinator deliberately (this is the hard part):
+          - explore.collect → union the results and dedupe by content; return records.
+          - explore.reduce (synthesize an ANSWER) → rank/dedupe FIRST, then synthesize
+            iteratively and structurally (per-source records), NOT one concatenated
+            blob — this avoids Lost-in-the-Middle degradation.
+          - compete → score with an INDEPENDENT, heterogeneous judge (a different
+            model, or a grounded/external check) and SELECT; never a debate.
+          - coupled-write → disjoint hunks auto-merge; ANY overlap ESCALATES to
+            judge/human. A semantic conflict is a correctness problem, not a merge one.
+      - description: |
+          GUARDRAILS (always):
+          - Share CONTEXT, not STATE: workers get shared goals/conventions/contracts
+            read-only + isolated working files; share selectively, not maximally.
+          - Give each worker a SPECIFIC boundary (no vague delegation → no duplicated work).
+          - For writes: freeze the contract + assign explicit ownership BEFORE fan-out.
+          - VERIFY independently before marking done.
+          - Economics: only fan out >=3 independent units worth the ~4-15x token premium;
+            cap fan-out width; budget + kill-switch stay external (daemon).
+tags: [parallel, decomposition, orchestration, topology, fan-out, single-writer]
+triggers:
+  - type: keyword
+    pattern: "(find|search|gather|collect|look up|research).*(across|multiple|several|all|each|every)"
+  - type: keyword
+    pattern: "(design|generate|draft|propose).*(variant|alternative|option|approach|version)"
+  - type: keyword
+    pattern: "in parallel|fan.?out|split.*across|best.of.n|at the same time"
+priority: normal
