@@ -1,4 +1,3 @@
-#![allow(dead_code, unused_imports)]
 use super::ParallelBackend;
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
@@ -35,13 +34,86 @@ pub fn parse_dataset(output: &str) -> Option<String> {
     }
 }
 
-/// Parse `zfs diff` output and strip the `track_mount` prefix, returning relative paths.
-pub fn parse_diff_output(output: &str, track_mount: &Path) -> Vec<PathBuf> {
+/// A single change-type-aware `zfs diff` entry.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DiffChange {
+    Modified,
+    Added,
+    Removed,
+    Renamed,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct DiffEntry {
+    pub change: DiffChange,
+    /// Relative path (the NEW path for renames).
+    pub path: PathBuf,
+    /// Relative OLD path, present only for renames.
+    pub old_path: Option<PathBuf>,
+}
+
+/// Parse `zfs diff` output into change-type-aware entries, stripping the
+/// `track_mount` prefix. Handles `M`/`+`/`-` (`<type>\t<path>`) and the rename
+/// form `R\t<old>\t<new>` — which the old `split_once('\t')` mis-parsed into a
+/// single `old\tnew` PathBuf, silently corrupting the promoted path.
+pub fn parse_diff_entries(output: &str, track_mount: &Path) -> Vec<DiffEntry> {
+    let rel = |p: &str| {
+        Path::new(p)
+            .strip_prefix(track_mount)
+            .map(|r| r.to_path_buf())
+            .unwrap_or_else(|_| PathBuf::from(p))
+    };
     output
         .lines()
-        .filter_map(|l| l.split_once('\t').map(|(_, p)| PathBuf::from(p)))
-        .filter_map(|p| p.strip_prefix(track_mount).ok().map(|r| r.to_path_buf()))
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|line| {
+            let mut f = line.split('\t');
+            let ty = f.next()?;
+            let fields: Vec<&str> = f.collect();
+            match ty {
+                "-" => fields.first().map(|p| DiffEntry {
+                    change: DiffChange::Removed,
+                    path: rel(p),
+                    old_path: None,
+                }),
+                "+" => fields.first().map(|p| DiffEntry {
+                    change: DiffChange::Added,
+                    path: rel(p),
+                    old_path: None,
+                }),
+                "R" if fields.len() >= 2 => Some(DiffEntry {
+                    change: DiffChange::Renamed,
+                    path: rel(fields[1]),
+                    old_path: Some(rel(fields[0])),
+                }),
+                // "M", a lone "R", or any other type → treat as modified.
+                _ => fields.first().map(|p| DiffEntry {
+                    change: DiffChange::Modified,
+                    path: rel(p),
+                    old_path: None,
+                }),
+            }
+        })
         .collect()
+}
+
+/// Back-compat: just the changed (new) relative paths, for `diff_files`.
+pub fn parse_diff_output(output: &str, track_mount: &Path) -> Vec<PathBuf> {
+    parse_diff_entries(output, track_mount)
+        .into_iter()
+        .map(|e| e.path)
+        .collect()
+}
+
+/// Copy `src` → `dst` (creating parents) when `src` is a regular file.
+fn copy_file_into(src: &Path, dst: &Path) -> Result<()> {
+    if src.is_file() {
+        if let Some(p) = dst.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        std::fs::copy(src, dst)?;
+    }
+    Ok(())
 }
 
 fn dataset_for_path(path: &Path) -> Result<String> {
@@ -121,15 +193,30 @@ impl ParallelBackend for ZfsNativeBackend {
     }
 
     fn promote(&self, track: &Path, target: &Path) -> Result<()> {
+        // Faithfully reflect the track's state — including deletions and renames,
+        // not just additive copies (the previous `if src.is_file()`-only path
+        // silently dropped both).
         let snap = self.base_snapshot(track)?;
-        for rel in self.diff_files(track, &snap)? {
-            let src = track.join(&rel);
-            let dst = target.join(&rel);
-            if src.is_file() {
-                if let Some(p) = dst.parent() {
-                    std::fs::create_dir_all(p)?;
+        let ds = dataset_for_path(track)?;
+        let out = Command::new("zfs")
+            .args(["diff", &snap, &ds])
+            .output()
+            .context("zfs diff")?;
+        for entry in parse_diff_entries(&String::from_utf8_lossy(&out.stdout), track) {
+            let dst = target.join(&entry.path);
+            match entry.change {
+                DiffChange::Removed => {
+                    let _ = std::fs::remove_file(&dst);
                 }
-                std::fs::copy(&src, &dst)?;
+                DiffChange::Renamed => {
+                    if let Some(old) = &entry.old_path {
+                        let _ = std::fs::remove_file(target.join(old));
+                    }
+                    copy_file_into(&track.join(&entry.path), &dst)?;
+                }
+                DiffChange::Modified | DiffChange::Added => {
+                    copy_file_into(&track.join(&entry.path), &dst)?;
+                }
             }
         }
         Ok(())
@@ -183,5 +270,29 @@ mod tests {
         let out = "M\t/mnt/project/src/lib.rs\n";
         let paths = parse_diff_output(out, Path::new("/mnt/project"));
         assert_eq!(paths, vec![PathBuf::from("src/lib.rs")]);
+    }
+
+    #[test]
+    fn diff_entries_carry_change_type_and_rename_pair() {
+        let mount = Path::new("/wt");
+        let out = "M\t/wt/src/a.rs\n\
+                   +\t/wt/src/new.rs\n\
+                   -\t/wt/src/gone.rs\n\
+                   R\t/wt/src/old.rs\t/wt/src/renamed.rs\n";
+        let e = parse_diff_entries(out, mount);
+        assert_eq!(e.len(), 4);
+        assert_eq!(e[0].change, DiffChange::Modified);
+        assert_eq!(e[1].change, DiffChange::Added);
+        assert_eq!(e[2].change, DiffChange::Removed);
+        assert_eq!(
+            e[3],
+            DiffEntry {
+                change: DiffChange::Renamed,
+                path: PathBuf::from("src/renamed.rs"),
+                old_path: Some(PathBuf::from("src/old.rs")),
+            }
+        );
+        // The rename's NEW path must be clean — never the old `old\tnew` blob.
+        assert!(!e[3].path.to_string_lossy().contains('\t'));
     }
 }
