@@ -40,6 +40,8 @@ export const zhTW: Table = {
   "dashboard.updateDownloading": "正在下載 MUR Hub {version}… {pct}%",
   "dashboard.updateError": "更新失敗：{error}",
   "dashboard.updateRetry": "重試",
+  "dashboard.cliSkew":
+    "命令列工具是 v{cli}，但 MUR Hub 是 v{hub}。執行 `brew upgrade mur` 來更新。",
   "dashboard.stat.running": "飛行中",
   "dashboard.stat.idle": "休息中",
   "dashboard.col.agent": "Agent",
