@@ -593,6 +593,7 @@ pub fn run() {
             models_admin::test_provider,
             models_admin::add_models,
             models_admin::remove_model,
+            models_admin::update_model,
             models_admin::use_registry_model,
             model_download::download_local_model,
             mcp_skills::agent_skill_install,
