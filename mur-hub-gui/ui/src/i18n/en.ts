@@ -18,6 +18,7 @@ export const en = {
   "dashboard.stop": "Stop",
   "dashboard.share": "Share",
   "dashboard.settings": "Settings",
+  "dashboard.detail": "Details",
   "dashboard.runTooltip": "Start agent runtime",
   "dashboard.startFailed": "Couldn’t start: {error}",
   "dashboard.stopFailed": "Couldn’t stop: {error}",
@@ -39,7 +40,7 @@ export const en = {
   "dashboard.updateError": "Update failed: {error}",
   "dashboard.updateRetry": "Retry",
   "dashboard.cliSkew":
-    "Command-line tools are v{cli}, but MUR Hub is v{hub}. Run `brew upgrade mur` to update them.",
+    "Command-line tools are v{cli}, but MUR Hub is v{hub}. Run `{hint}` to update them.",
   "dashboard.stat.running": "Flying",
   "dashboard.stat.idle": "Resting",
   "dashboard.col.agent": "Agent",

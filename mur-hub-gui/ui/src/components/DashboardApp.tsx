@@ -247,11 +247,11 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
           <button
             className="grid-card__settings"
             onClick={(e) => { e.stopPropagation(); setSelected(agent.name); }}
-            title={t("dashboard.settings")}
-            aria-label={t("dashboard.settings")}
+            title={t("dashboard.detail")}
+            aria-label={t("dashboard.detail")}
           >
             <Ico>
-              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+              <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
               <circle cx="12" cy="12" r="3" />
             </Ico>
           </button>
@@ -414,7 +414,7 @@ export function DashboardApp() {
   const [nudgeDismissed, setNudgeDismissed] = useState(false);
   // Passive nudge when the PATH `mur` CLI lags this Hub. The Hub never
   // auto-upgrades it (that would clobber a brew binary) — just surface it.
-  const [cliSkew, setCliSkew] = useState<{ cli: string; hub: string } | null>(null);
+  const [cliSkew, setCliSkew] = useState<{ cli: string; hub: string; upgrade_hint: string } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   // App auto-update. Detect on mount, but never download silently: a Hub update
@@ -608,7 +608,7 @@ export function DashboardApp() {
 
   // Surface a CLI/Hub version skew on mount (None unless `mur` lags the Hub).
   useEffect(() => {
-    invoke<{ cli: string; hub: string } | null>("cli_version_skew")
+    invoke<{ cli: string; hub: string; upgrade_hint: string } | null>("cli_version_skew")
       .then((s) => setCliSkew(s))
       .catch(() => {});
   }, []);
@@ -720,7 +720,7 @@ export function DashboardApp() {
         {cliSkew && (
           <div className="upgrade-nudge-banner">
             <span>
-              {t("dashboard.cliSkew", { cli: cliSkew.cli, hub: cliSkew.hub })}
+              {t("dashboard.cliSkew", { cli: cliSkew.cli, hub: cliSkew.hub, hint: cliSkew.upgrade_hint })}
             </span>
             <button
               className="toolbar-btn"
@@ -818,11 +818,11 @@ export function DashboardApp() {
         </div>
 
         {surface === "fleet" ? (
-          <FleetView />
+          <FleetView query={query} />
         ) : surface === "work" ? (
-          <WorkView agents={agents} />
+          <WorkView agents={agents} query={query} />
         ) : surface === "chats" ? (
-          <ChatsView agents={agents} />
+          <ChatsView agents={agents} query={query} />
         ) : (
           <div className="agents-view">
             <Sidebar activeRole={activeRole} agents={agents} onSelect={setActiveRole} />

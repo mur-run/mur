@@ -7,6 +7,7 @@ import { useT } from "../i18n";
 
 interface Props {
   agents: AgentEntry[];
+  query?: string;
 }
 
 /**
@@ -15,7 +16,7 @@ interface Props {
  * continue in place). This is where 1:1 chats live now that Activity is scoped
  * to multi-agent runs.
  */
-export function ChatsView({ agents }: Props) {
+export function ChatsView({ agents, query }: Props) {
   const { t } = useT();
   const [selected, setSelected] = useState<string | null>(agents[0]?.name ?? null);
 
@@ -23,12 +24,16 @@ export function ChatsView({ agents }: Props) {
     return <div className="chats-view__empty">{t("chats.empty")}</div>;
   }
 
-  const entry = agents.find((a) => a.name === selected) ?? agents[0];
+  const q = query?.toLowerCase() ?? "";
+  const filtered = q
+    ? agents.filter((a) => a.name.toLowerCase().includes(q) || a.display_name.toLowerCase().includes(q))
+    : agents;
+  const entry = filtered.find((a) => a.name === selected) ?? filtered[0];
 
   return (
     <div className="chats-view">
       <nav className="chats-view__list">
-        {agents.map((a) => {
+        {filtered.map((a) => {
           const preset = avatarPreset(a);
           return (
             <button
