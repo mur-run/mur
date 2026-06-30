@@ -412,6 +412,9 @@ export function DashboardApp() {
   const [showAppsBanner, setShowAppsBanner] = useState(false);
   const [showUpgradeNudge, setShowUpgradeNudge] = useState(false);
   const [nudgeDismissed, setNudgeDismissed] = useState(false);
+  // Passive nudge when the PATH `mur` CLI lags this Hub. The Hub never
+  // auto-upgrades it (that would clobber a brew binary) — just surface it.
+  const [cliSkew, setCliSkew] = useState<{ cli: string; hub: string } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   // App auto-update. Detect on mount, but never download silently: a Hub update
@@ -603,6 +606,13 @@ export function DashboardApp() {
       .catch(() => {});
   }, []);
 
+  // Surface a CLI/Hub version skew on mount (None unless `mur` lags the Hub).
+  useEffect(() => {
+    invoke<{ cli: string; hub: string } | null>("cli_version_skew")
+      .then((s) => setCliSkew(s))
+      .catch(() => {});
+  }, []);
+
 
 
   // ⌘K focus search.
@@ -705,6 +715,20 @@ export function DashboardApp() {
                 </button>
               </div>
             )}
+          </div>
+        )}
+        {cliSkew && (
+          <div className="upgrade-nudge-banner">
+            <span>
+              {t("dashboard.cliSkew", { cli: cliSkew.cli, hub: cliSkew.hub })}
+            </span>
+            <button
+              className="toolbar-btn"
+              onClick={() => setCliSkew(null)}
+              title={t("dashboard.dismiss")}
+            >
+              ✕
+            </button>
           </div>
         )}
 
