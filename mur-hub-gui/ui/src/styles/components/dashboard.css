@@ -796,7 +796,7 @@
 }
 
 /* ── Settings two-pane layout ── */
-.settings-modal--paned { width: 720px; max-width: 92vw; }
+.settings-modal--paned { width: 880px; max-width: 94vw; }
 .settings-modal__panes {
   display: flex;
   min-height: 360px;

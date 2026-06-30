@@ -41,6 +41,48 @@ export const CLOUD_PRESETS: CloudPreset[] = [
     color: "#111111",
   },
   {
+    key: "mistral",
+    name: "Mistral",
+    baseUrl: "https://api.mistral.ai/v1",
+    logo: "M",
+    color: "#FF7000",
+  },
+  {
+    key: "deepseek",
+    name: "DeepSeek",
+    baseUrl: "https://api.deepseek.com/v1",
+    logo: "DS",
+    color: "#4A6CF0",
+  },
+  {
+    key: "groq",
+    name: "Groq",
+    baseUrl: "https://api.groq.com/openai/v1",
+    logo: "GQ",
+    color: "#F55036",
+  },
+  {
+    key: "together",
+    name: "Together AI",
+    baseUrl: "https://api.together.xyz/v1",
+    logo: "T",
+    color: "#0F6FFF",
+  },
+  {
+    key: "fireworks",
+    name: "Fireworks AI",
+    baseUrl: "https://api.fireworks.ai/inference/v1",
+    logo: "FW",
+    color: "#9215FF",
+  },
+  {
+    key: "cohere",
+    name: "Cohere",
+    baseUrl: "https://api.cohere.ai/compatibility/v1",
+    logo: "CO",
+    color: "#3B82F6",
+  },
+  {
     key: "custom",
     name: "Custom (OpenAI-compat)",
     baseUrl: "https://",
@@ -48,6 +90,11 @@ export const CLOUD_PRESETS: CloudPreset[] = [
     color: "#334155",
   },
 ];
+
+// Anthropic and Azure OpenAI are intentionally NOT presets here: both use a
+// non-Bearer auth header (x-api-key / api-key) that model_discovery's
+// generic OpenAI-compatible client doesn't send, so "test connection" would
+// always 401. Add them once discover_models() supports per-provider auth.
 
 /**
  * Pure immutable selection toggle — does not mutate the input Set.

@@ -276,12 +276,14 @@ export function ModelPickerModal({ isOpen, onClose }: Props) {
                 {isLocal && localProv ? (
                   <LocalPanel
                     detected={localProv}
+                    registryModels={registryModels}
                     registrySet={registrySet}
                     onModelsAdded={refreshRegistry}
                   />
                 ) : cloudPreset ? (
                   <NewProviderPanel
                     preset={cloudPreset}
+                    registryModels={registryModels}
                     registrySet={registrySet}
                     onModelsAdded={refreshRegistry}
                   />
