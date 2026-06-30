@@ -776,3 +776,20 @@
   background: var(--status-failed);
   color: #fff;
 }
+
+/* ── Settings two-pane layout ── */
+.settings-modal--paned { width: 720px; max-width: 92vw; }
+.settings-modal__panes {
+  display: flex;
+  min-height: 360px;
+  max-height: 70vh;
+}
+.settings-nav {
+  width: 180px;
+  flex: none;
+}
+.settings-modal__content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
