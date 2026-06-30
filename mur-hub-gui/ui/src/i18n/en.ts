@@ -38,6 +38,8 @@ export const en = {
   "dashboard.updateDownloading": "Downloading MUR Hub {version}… {pct}%",
   "dashboard.updateError": "Update failed: {error}",
   "dashboard.updateRetry": "Retry",
+  "dashboard.cliSkew":
+    "Command-line tools are v{cli}, but MUR Hub is v{hub}. Run `brew upgrade mur` to update them.",
   "dashboard.stat.running": "Flying",
   "dashboard.stat.idle": "Resting",
   "dashboard.col.agent": "Agent",
