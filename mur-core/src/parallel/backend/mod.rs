@@ -1,4 +1,3 @@
-#![allow(dead_code, unused_imports)]
 pub mod cow;
 pub mod detect;
 pub mod git_worktree;
