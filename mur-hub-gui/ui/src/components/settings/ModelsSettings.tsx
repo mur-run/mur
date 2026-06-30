@@ -28,7 +28,7 @@ export function ModelsSettings() {
           {t("settings.openLibrary")}
         </button>
       </div>
-      <p className="settings-section__hint">{t("settings.modelsHint")}</p>
+      <p className="settings-hint">{t("settings.modelsHint")}</p>
       <ModelLibrary open={libraryOpen} onClose={() => setLibraryOpen(false)} />
     </section>
   );

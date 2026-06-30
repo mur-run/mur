@@ -56,9 +56,6 @@ export const zhTW: Table = {
   "settings.language": "語言",
   // ── Settings panel ──
   "settings.title": "設定",
-  "settings.section.appearance": "外觀",
-  "settings.section.models": "模型",
-  "settings.section.import": "匯入",
   "settings.defaultBrain": "預設大腦",
   "settings.noBrain": "尚未設定",
   "settings.modelsHint": "每隻 agent 各自選用模型，可於模型庫管理。",

@@ -54,9 +54,6 @@ export const en = {
   "settings.language": "Language",
   // ── Settings panel ──
   "settings.title": "Settings",
-  "settings.section.appearance": "Appearance",
-  "settings.section.models": "Models",
-  "settings.section.import": "Import",
   "settings.defaultBrain": "Default brain",
   "settings.noBrain": "Not set",
   "settings.modelsHint": "Each agent picks its own model. Manage them in the Model Library.",

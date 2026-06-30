@@ -24,10 +24,10 @@ export function AboutSettings() {
         <span className="settings-row__value">MUR Hub {version}</span>
       </div>
       <div className="settings-row">
-        <button className="toolbar-btn" onClick={() => openExternal(DOCS_URL)}>
+        <button className="toolbar-btn" onClick={() => void openExternal(DOCS_URL).catch(() => {})}>
           {t("settings.about.docs")}
         </button>
-        <button className="toolbar-btn" onClick={() => openExternal(REPO_URL)}>
+        <button className="toolbar-btn" onClick={() => void openExternal(REPO_URL).catch(() => {})}>
           {t("settings.about.github")}
         </button>
       </div>
