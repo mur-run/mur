@@ -1,4 +1,3 @@
-#![allow(dead_code, unused_imports)]
 use super::ParallelBackend;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
@@ -19,9 +18,8 @@ impl GitWorktreeBackend {
 
 impl ParallelBackend for GitWorktreeBackend {
     fn create_track(&self, name: &str) -> Result<PathBuf> {
-        // Optional safety net: Time Machine local snapshot before first track.
-        super::cow::take_local_snapshot();
-
+        // (The Time Machine local snapshot is taken ONCE in `create_tracks`,
+        // before any track — not per-track here, and now for every backend.)
         let path = self.repo_root.join(WORKTREES_DIR).join(name);
         let status = Command::new("git")
             .args(["worktree", "add", "--detach"])
