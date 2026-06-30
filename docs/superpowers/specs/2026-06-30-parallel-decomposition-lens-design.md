@@ -155,6 +155,26 @@ Consistent with this repo's empirical ethos (Spike-1, the dogfood):
 - Unit-test the pure pieces: the topology classification rule, the `explore` aggregator
   (union/dedupe determinism, structured reduce shape).
 
+### Phase 1 routing validation (2026-06-30, governor skill `parallel-decompose` v0.1.0)
+
+Applied the classifier to a 7-case corpus — **7/7 routed to the expected topology**:
+
+| task | expected | classified | ✓ |
+|------|----------|------------|---|
+| "find every call site of `create_tracks` across the workspace" | explore | explore (additive find) | ✓ |
+| "search these 4 docs for the retrieval scoring formula" | explore | explore (additive read) | ✓ |
+| "design 3 async patterns for this API and pick the best" | compete | compete (best-of-N) | ✓ |
+| "draft 3 CLI layouts as variants" | compete | compete (variants) | ✓ |
+| "rename this type and update all its dependents" | coupled-write → single-writer | coupled-write; parallel-code gate **fails** (shared type) → single writer / escalate | ✓ |
+| "add error handling to these 20 independent endpoints" | coupled-write → parallel-code gate | coupled-write; gate **passes** (disjoint, mechanical, ≥3) | ✓ |
+| "design a CLI and its underlying library together" | coherence-bound | coherence-bound → single writer (**refused** naive parallel) | ✓ |
+
+The two negative cases — the shared-type rename and the coupled CLI+library design — were correctly
+**refused** parallelization, which is the load-bearing behavior (the lens must say *no* as readily as
+*yes*). The `explore` end-to-end run (governor → `parallel_jobs` fan-out → collect/dedupe) is
+**operator-pending** on a live runtime (needs cc-proxy + the skill triggering in-runtime); the
+underlying explore/partition mechanism was already proven live this session (`spike1-overlap-rate.md`).
+
 ## 9. Risks & open questions
 
 - **Classifier calibration** — the 4-way rule is a starting point; real tasks are fuzzy
