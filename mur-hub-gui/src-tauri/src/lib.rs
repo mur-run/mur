@@ -556,6 +556,7 @@ pub fn run() {
             onboarding::render_agent_expressions,
             onboarding::first_launch::check_first_launch,
             onboarding::first_launch::mark_first_launch_done,
+            onboarding::first_launch::replay_onboarding,
             pet::pet_spawn_at,
             pet::pet_close,
             pet::pet_return_to_hub,

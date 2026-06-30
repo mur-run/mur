@@ -1,6 +1,6 @@
 pub mod first_launch;
 pub mod spec;
-pub use first_launch::{check_first_launch, mark_first_launch_done};
+pub use first_launch::{check_first_launch, mark_first_launch_done, replay_onboarding};
 
 use mur_common::agent::{AgentAppearance, BehaviorPreset, RenderStatus};
 use mur_common::hub::preset_loader::{default_blob, find_preset};

@@ -1,44 +1,44 @@
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useState } from "react";
 import { useT } from "../i18n";
+import type { TranslationKey } from "../i18n/types";
+import { GeneralSettings } from "./settings/GeneralSettings";
+import { ModelsSettings } from "./settings/ModelsSettings";
+import { UpdatesSettings } from "./settings/UpdatesSettings";
+import { DataSettings } from "./settings/DataSettings";
+import { AboutSettings } from "./settings/AboutSettings";
 
 interface Props {
   isOpen: boolean;
   onClose: () => void;
-  /** Open the .muragent import flow (owned by DashboardApp). */
   onImportAgent: () => void;
-  /** Open the style-preset import flow (owned by DashboardApp). */
   onImportPreset: () => void;
 }
 
-/**
- * Hub-level settings. Consolidates the global controls that used to clutter the
- * top bar (language, brain/model, imports) into one panel so the header can be
- * about navigation + the primary action.
- */
+type SectionId = "general" | "models" | "updates" | "data" | "about";
+
+const NAV: { id: SectionId; labelKey: TranslationKey; icon: string }[] = [
+  { id: "general", labelKey: "settings.nav.general", icon: "⚙️" },
+  { id: "models", labelKey: "settings.nav.models", icon: "🧠" },
+  { id: "updates", labelKey: "settings.nav.updates", icon: "⬆️" },
+  { id: "data", labelKey: "settings.nav.data", icon: "📦" },
+  { id: "about", labelKey: "settings.nav.about", icon: "ℹ️" },
+];
+
 export function SettingsModal({
   isOpen,
   onClose,
   onImportAgent,
   onImportPreset,
 }: Props) {
-  const { t, lang, setLang } = useT();
-  const [model, setModel] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    invoke<[boolean, string | null]>("nudge_status")
-      .then(([, m]) => setModel(m))
-      .catch(() => {});
-  }, [isOpen]);
+  const { t } = useT();
+  const [active, setActive] = useState<SectionId>("general");
 
   if (!isOpen) return null;
 
   return (
     <div className="modal__overlay" onClick={onClose}>
       <div
-        className="modal settings-modal"
-        style={{ width: 460 }}
+        className="modal settings-modal settings-modal--paned"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal__header">
@@ -48,72 +48,33 @@ export function SettingsModal({
           </button>
         </div>
 
-        <div className="modal__body">
-          {/* ── Appearance ── */}
-          <section className="settings-section">
-            <h3 className="settings-section__title">
-              {t("settings.section.appearance")}
-            </h3>
-            <div className="settings-row">
-              <label className="settings-row__label" htmlFor="settings-lang">
-                {t("settings.language")}
-              </label>
-              <select
-                id="settings-lang"
-                className="input"
-                value={lang}
-                onChange={(e) => setLang(e.target.value as "en" | "zh-TW")}
-              >
-                <option value="en">English</option>
-                <option value="zh-TW">繁體中文</option>
-              </select>
-            </div>
-          </section>
-
-          {/* ── Models ── */}
-          <section className="settings-section">
-            <h3 className="settings-section__title">
-              {t("settings.section.models")}
-            </h3>
-            <div className="settings-row">
-              <span className="settings-row__label">
-                {t("settings.defaultBrain")}
-              </span>
-              <span className="settings-row__value">
-                {model ? `🧠 ${model}` : t("settings.noBrain")}
-              </span>
-            </div>
-            <p className="settings-hint">{t("settings.modelsHint")}</p>
-          </section>
-
-          {/* ── Import ── */}
-          <section className="settings-section">
-            <h3 className="settings-section__title">
-              {t("settings.section.import")}
-            </h3>
-            <div className="settings-actions">
+        <div className="settings-modal__panes">
+          <nav className="sidebar settings-nav">
+            {NAV.map((n) => (
               <button
-                className="toolbar-btn"
-                onClick={() => {
-                  onClose();
-                  onImportAgent();
-                }}
-                title={t("app.importAgentTooltip")}
+                key={n.id}
+                className={`sidebar-item${active === n.id ? " sidebar-item--active" : ""}`}
+                onClick={() => setActive(n.id)}
               >
-                {t("app.importAgent")}
+                <span className="sidebar-item__icon">{n.icon}</span>
+                <span>{t(n.labelKey)}</span>
               </button>
-              <button
-                className="toolbar-btn"
-                onClick={() => {
-                  onClose();
-                  onImportPreset();
-                }}
-                title={t("app.importPresetTooltip")}
-              >
-                {t("app.importPreset")}
-              </button>
-            </div>
-          </section>
+            ))}
+          </nav>
+
+          <div className="modal__body settings-modal__content">
+            {active === "general" && <GeneralSettings />}
+            {active === "models" && <ModelsSettings />}
+            {active === "updates" && <UpdatesSettings />}
+            {active === "data" && (
+              <DataSettings
+                onImportAgent={onImportAgent}
+                onImportPreset={onImportPreset}
+                onClose={onClose}
+              />
+            )}
+            {active === "about" && <AboutSettings />}
+          </div>
         </div>
       </div>
     </div>
