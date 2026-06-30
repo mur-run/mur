@@ -43,6 +43,17 @@ pub fn mark_first_launch_done() {
     let _ = std::fs::write(mur_home.join(MARKER), "");
 }
 
+/// Remove the first-launch marker so onboarding runs again on next launch.
+pub fn clear_marker(mur_home: &Path) {
+    let _ = std::fs::remove_file(marker_path(mur_home));
+}
+
+/// Reset onboarding: clears the marker. Next launch behaves as first launch.
+#[tauri::command]
+pub fn replay_onboarding() {
+    clear_marker(&mur_home_path());
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
 fn check_in_applications() -> bool {
@@ -119,5 +130,21 @@ mod tests {
     fn in_applications_returns_bool() {
         // Just verify it doesn't panic.
         let _ = check_in_applications();
+    }
+
+    #[test]
+    fn clear_marker_removes_existing_marker() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(marker_path(tmp.path()), "").unwrap();
+        assert!(marker_path(tmp.path()).exists());
+        clear_marker(tmp.path());
+        assert!(!marker_path(tmp.path()).exists());
+    }
+
+    #[test]
+    fn clear_marker_is_noop_when_absent() {
+        let tmp = TempDir::new().unwrap();
+        clear_marker(tmp.path()); // must not panic
+        assert!(!marker_path(tmp.path()).exists());
     }
 }
