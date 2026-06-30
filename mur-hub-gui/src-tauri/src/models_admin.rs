@@ -203,6 +203,39 @@ pub fn remove_model(ref_name: String) -> Result<(), String> {
     reg.save_to(&path).map_err(|e| e.to_string())
 }
 
+/// Overwrite the cost-per-1k (USD) of an existing registry entry in place.
+/// Split out from the `update_model` command so it's testable without disk I/O.
+pub fn apply_cost_update(
+    reg: &mut ModelRegistry,
+    ref_name: &str,
+    input_cost: Option<f64>,
+    output_cost: Option<f64>,
+) -> Result<(), String> {
+    let entry = reg
+        .models
+        .get_mut(ref_name)
+        .ok_or_else(|| format!("model '{ref_name}' not found in registry"))?;
+    entry.input_cost_per_1k = input_cost;
+    entry.output_cost_per_1k = output_cost;
+    Ok(())
+}
+
+/// Edit the cost-per-1k (USD) of an existing registry entry. Used by the
+/// Model Library / Settings "edit" affordance — discovery already fills
+/// these from the models.dev catalog, but operators override stale or
+/// missing prices here.
+#[tauri::command]
+pub fn update_model(
+    ref_name: String,
+    input_cost: Option<f64>,
+    output_cost: Option<f64>,
+) -> Result<(), String> {
+    let path = ModelRegistry::default_path().map_err(|e| e.to_string())?;
+    let mut reg = ModelRegistry::load_from(&path).map_err(|e| e.to_string())?;
+    apply_cost_update(&mut reg, &ref_name, input_cost, output_cost)?;
+    reg.save_to(&path).map_err(|e| e.to_string())
+}
+
 /// Switch the concierge to a registry model, restarting the sidecar.
 #[tauri::command]
 pub async fn use_registry_model(app: AppHandle, ref_name: String) -> Result<(), String> {
@@ -287,5 +320,32 @@ mod tests {
         assert_eq!(provider_secret_ref(&reg, "ollama"), None);
         // unknown provider → None
         assert_eq!(provider_secret_ref(&reg, "openai"), None);
+    }
+
+    #[test]
+    fn apply_cost_update_overwrites_existing_entry() {
+        let mut reg = ModelRegistry::default();
+        reg.models.insert(
+            "openai_gpt5".into(),
+            ModelEntry {
+                provider: "openai".into(),
+                model: "gpt-5.2".into(),
+                input_cost_per_1k: Some(0.001),
+                output_cost_per_1k: Some(0.01),
+                ..Default::default()
+            },
+        );
+
+        apply_cost_update(&mut reg, "openai_gpt5", Some(0.002), None).unwrap();
+
+        let entry = &reg.models["openai_gpt5"];
+        assert_eq!(entry.input_cost_per_1k, Some(0.002));
+        assert_eq!(entry.output_cost_per_1k, None);
+    }
+
+    #[test]
+    fn apply_cost_update_errors_on_unknown_ref() {
+        let mut reg = ModelRegistry::default();
+        assert!(apply_cost_update(&mut reg, "missing", Some(0.001), None).is_err());
     }
 }
