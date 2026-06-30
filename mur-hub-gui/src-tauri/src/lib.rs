@@ -582,6 +582,7 @@ pub fn run() {
             companion::companion_proactive,
             companion::companion_quiet,
             cli_tools::install_cli_tools,
+            cli_tools::cli_version_skew,
             brain_badge::nudge_status,
             brain_badge::nudge_dismiss,
             detail::get_agent_detail,
