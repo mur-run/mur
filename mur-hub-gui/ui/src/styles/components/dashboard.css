@@ -379,6 +379,24 @@
   padding-top: 13px;
   border-top: 1px solid var(--border-line);
 }
+.grid-card__settings {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-line);
+  border-radius: 7px;
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.grid-card__settings:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
 .grid-card__open {
   font-size: var(--text-sm);
   font-weight: var(--fw-bold);

@@ -76,18 +76,41 @@ fn is_older(a: &str, b: &str) -> bool {
 pub struct CliSkew {
     pub cli: String,
     pub hub: String,
+    pub upgrade_hint: String,
 }
 
-/// Report a version skew only when the PATH `mur` is OLDER than this Hub, so
-/// the UI can nudge the user to `brew upgrade mur`. Returns None when in sync,
-/// newer, missing, or a Hub-managed symlink (which reports the bundled version
-/// == the Hub version and so never skews). Read-only: never touches the CLI.
+/// Resolve the real path of `p` (following one symlink level), returning the
+/// canonicalized path or the original if resolution fails.
+fn resolve_symlink(p: &Path) -> PathBuf {
+    std::fs::read_link(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
+/// Derive the appropriate upgrade command by inspecting where the binary lives.
+fn upgrade_hint_for(mur: &Path) -> String {
+    let real = resolve_symlink(mur);
+    let s = real.to_string_lossy();
+    if s.contains("/Cellar/") || s.contains("/homebrew/") && s.contains("/bin/mur") {
+        "brew upgrade mur".to_string()
+    } else if s.contains("/.cargo/") {
+        "cargo install mur --force".to_string()
+    } else {
+        "mur update".to_string()
+    }
+}
+
+/// Report a version skew only when the PATH `mur` is OLDER than this Hub.
+/// Returns None when in sync, newer, missing, or a Hub-managed symlink.
 #[tauri::command]
 pub fn cli_version_skew(app: tauri::AppHandle) -> Option<CliSkew> {
     let home = dirs::home_dir()?;
-    let cli = read_cli_version(&path_mur(&home)?)?;
+    let mur_path = path_mur(&home)?;
+    let cli = read_cli_version(&mur_path)?;
     let hub = app.package_info().version.to_string();
-    is_older(&cli, &hub).then_some(CliSkew { cli, hub })
+    is_older(&cli, &hub).then_some(CliSkew {
+        upgrade_hint: upgrade_hint_for(&mur_path),
+        cli,
+        hub,
+    })
 }
 
 #[cfg(test)]
@@ -116,6 +139,28 @@ mod tests {
         assert_eq!(
             bundled_mur_path(exe).unwrap(),
             PathBuf::from("/Applications/MUR Hub.app/Contents/MacOS/mur")
+        );
+    }
+
+    #[test]
+    fn upgrade_hint_by_install_source() {
+        // A binary under the Homebrew prefix is brew-managed even when the
+        // symlink can't be resolved (this test path doesn't exist on disk).
+        assert_eq!(
+            upgrade_hint_for(Path::new("/opt/homebrew/bin/mur")),
+            "brew upgrade mur"
+        );
+        // Homebrew Cellar path (what the symlink resolves to)
+        assert!(
+            upgrade_hint_for(Path::new("/opt/homebrew/Cellar/mur/2.34.0/bin/mur"))
+                .contains("brew upgrade mur")
+        );
+        // Cargo
+        assert!(upgrade_hint_for(Path::new("/Users/x/.cargo/bin/mur")).contains("cargo install"));
+        // Manual / unknown
+        assert_eq!(
+            upgrade_hint_for(Path::new("/usr/local/bin/mur")),
+            "mur update"
         );
     }
 

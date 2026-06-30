@@ -270,7 +270,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-latest, windows-latest]
+        # macOS pinned to 14 (Apple Silicon): the macos-latest → macOS-26 image
+        # migration breaks the system-configuration-sys / lance build scripts
+        # ("cannot execute binary file", exit 126). The Test job pins macos-14
+        # for stability for the same reason.
+        os: [ubuntu-22.04, macos-14, windows-latest]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
