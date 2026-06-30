@@ -144,17 +144,19 @@ mod tests {
 
     #[test]
     fn upgrade_hint_by_install_source() {
+        // A binary under the Homebrew prefix is brew-managed even when the
+        // symlink can't be resolved (this test path doesn't exist on disk).
         assert_eq!(
             upgrade_hint_for(Path::new("/opt/homebrew/bin/mur")),
-            // symlink resolves to self (no real Cellar in tests) → falls through
-            "mur update"
+            "brew upgrade mur"
         );
         // Homebrew Cellar path (what the symlink resolves to)
-        assert!(upgrade_hint_for(Path::new("/opt/homebrew/Cellar/mur/2.34.0/bin/mur"))
-            .contains("brew upgrade mur"));
+        assert!(
+            upgrade_hint_for(Path::new("/opt/homebrew/Cellar/mur/2.34.0/bin/mur"))
+                .contains("brew upgrade mur")
+        );
         // Cargo
-        assert!(upgrade_hint_for(Path::new("/Users/x/.cargo/bin/mur"))
-            .contains("cargo install"));
+        assert!(upgrade_hint_for(Path::new("/Users/x/.cargo/bin/mur")).contains("cargo install"));
         // Manual / unknown
         assert_eq!(
             upgrade_hint_for(Path::new("/usr/local/bin/mur")),
