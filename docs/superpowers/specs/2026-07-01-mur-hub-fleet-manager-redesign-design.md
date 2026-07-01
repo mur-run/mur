@@ -106,14 +106,19 @@ fn parallel_exec_enabled(force: bool) -> bool {
 
 `cmd_fleet_run` gains a `force_worktree: bool` param, threaded to this call site.
 
-**`cmd/fleet/loop_run.rs`** — `cmd_fleet_run_loop` and `run_guarded` gain the same
-`force_worktree: bool` param, threaded to wherever the guarded loop triggers track
-execution. (`cmd_fleet_run_loop` already takes `Option<u32>`/`Option<String>`/
-`Option<f64>` overrides for max_iterations/deadline/budget_usd — no change needed there,
-it already falls back to the fleet's persisted `loop_cfg` when `None`.) **Implementation
-note for the plan:** verify the exact internal call graph between `run_guarded`'s
-iteration loop and `run.rs`'s track-spawn helpers to find every place
-`parallel_exec_enabled` must be threaded — not fully confirmed during brainstorming.
+**`cmd/fleet/loop_run.rs`** — **CONFIRMED during planning: no change here.**
+`run_guarded`'s iteration loop calls the same `build_fleet_procedure` as `cmd_fleet_run`
+but has none of `cmd_fleet_run`'s Tier-1 worktree machinery (`discover_repo_root`,
+`worktree::create_tracks`, `inject_worktree_routing`, the `ParallelRun` bookkeeping) —
+worktree isolation was never implemented for the guarded-loop path. Adding it is a real
+design question (worktree lifecycle across N iterations: recreate each iteration and
+lose uncommitted work, or reuse across iterations and redefine when they're torn down?)
+that belongs in its own spec, not a parameter-threading footnote here. **Scope
+correction:** the isolation checkbox in the Hub therefore only applies to the one-shot
+`Run` button, not `Run as loop` — `cmd_fleet_run_loop`/`run_guarded` are unchanged,
+`fleet_run_loop` is a pure new Tauri wrapper with no new mur-core work (the function
+already takes exactly the override params the Hub needs). `--worktree` combined with
+`--loop` on the CLI is rejected with a clear error rather than silently ignored.
 
 **CLI parity** (`mur-core/src/cli/actions.rs`):
 - New `mur fleet set-loop <name> [--trigger T] [--max-iterations N] [--deadline D]
@@ -196,7 +201,9 @@ Members → Send Job → Jobs → Danger Zone):
    show nothing (matches today exactly).
 2. **Run control**, replacing the single `▶ Run` button:
    ```
-   ☐ Use isolated worktrees (experimental)     ← only rendered if parallel_summary is Some
+   ☐ Use isolated worktrees (experimental)     ← only rendered if parallel_summary is Some;
+                                                  applies to Run only, NOT Run as loop (the
+                                                  guarded-loop path has no worktree support — §2)
    [ ▶ Run ]   [ Run as loop ▾ ]
    ```
    `Run as loop ▾` expands an inline row (iterations / deadline / budget, pre-filled
@@ -320,9 +327,9 @@ Rust unit tests (mirroring existing conventions):
 | `mur-common/src/config.rs` | add `FleetConfig` + `Config.fleet` |
 | `mur-core/src/cmd/fleet/settings.rs` | **New**: `cmd_fleet_set_loop` |
 | `mur-core/src/cmd/fleet/mod.rs` | register `settings` module |
-| `mur-core/src/cmd/fleet/create.rs` | `cmd_fleet_create` gains `parallel` param |
+| `mur-core/src/cmd/fleet/create.rs` | none — `cmd_fleet_create` already takes `parallel: Option<ParallelConfig>` |
 | `mur-core/src/cmd/fleet/run.rs` | `parallel_exec_enabled(force)`; `cmd_fleet_run` gains `force_worktree` |
-| `mur-core/src/cmd/fleet/loop_run.rs` | `cmd_fleet_run_loop`/`run_guarded` gain `force_worktree` |
+| `mur-core/src/cmd/fleet/loop_run.rs` | none — confirmed no worktree logic exists here to gate (§2) |
 | `mur-core/src/cli/actions.rs` | new `set-loop` subcommand; `--worktree` flag on `run` |
 | `mur-daemon/src/fleet_tick.rs` | gate checks config.yaml OR env var |
 | `mur-hub-gui/src-tauri/src/fleet.rs` | new/extended commands (§4) |
