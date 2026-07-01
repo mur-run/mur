@@ -237,6 +237,13 @@ pub struct App {
     pub theme: &'static Theme,
     pub last_esc_at: Option<std::time::Instant>,
     pub esc_hint: bool,
+    /// Forces a full ratatui repaint on the next frame after we manipulate the
+    /// raw terminal outside the Terminal object (e.g. Ctrl+O scrollback dump).
+    pub needs_full_redraw: bool,
+    /// Armed-at timestamp for the Ctrl+C two-press-to-quit confirmation when
+    /// the composer is empty and idle. Mirrors `last_esc_at`.
+    pub last_ctrl_c_at: Option<std::time::Instant>,
+    pub ctrl_c_hint: bool,
     pub last_sent: Option<String>,
     /// `(mime, base64)` of an image staged for the next message — either a
     /// clipboard screenshot (Ctrl+V) or an image file the terminal pasted as a
@@ -318,6 +325,9 @@ impl App {
             theme,
             last_esc_at: None,
             esc_hint: false,
+            needs_full_redraw: false,
+            last_ctrl_c_at: None,
+            ctrl_c_hint: false,
             last_sent: None,
             pending_image: None,
             blink: Blink::new(),
@@ -686,6 +696,8 @@ impl App {
         self.last_sent = None;
         self.last_esc_at = None;
         self.esc_hint = false;
+        self.last_ctrl_c_at = None;
+        self.ctrl_c_hint = false;
         self.push_system("started a new conversation");
     }
 

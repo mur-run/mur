@@ -49,7 +49,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::time::Instant as TokioInstant;
 
-use self::app::{App, EscAction, Role, SlashCmd, esc_action, parse_slash};
+use self::app::{App, ESC_DOUBLE_WINDOW, EscAction, Role, SlashCmd, esc_action, parse_slash};
 use self::persist::Session;
 use self::stream::{StreamMsg, build_params, cancel_task, respond_hitl, spawn_stream};
 use crate::a2a_dial::{DialMode, canonicalize_agent_name, dial_method};
@@ -91,7 +91,7 @@ const SPINNER_MS: u64 = 90;
 /// Max chars of an arg hint shown on a step line in `--plain` mode.
 const PLAIN_STEP_HINT_MAX: usize = 120;
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /auto [on|off]  /mcp  /skill  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
+const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /auto [on|off]  /skin [dark|light|mur]  /mcp  /skill  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
 pub async fn cmd_cli(
@@ -167,8 +167,8 @@ pub async fn cmd_cli(
 /// macOS Terminal.app) — silently skip there; Alt/Option+Enter remains a
 /// universal fallback for the newline binding since legacy terminals already
 /// report Alt via an ESC prefix with no protocol opt-in required.
-fn push_keyboard_enhancement() {
-    if matches!(supports_keyboard_enhancement(), Ok(true)) {
+fn push_keyboard_enhancement(supported: bool) {
+    if supported {
         let _ = execute!(
             io::stdout(),
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
@@ -176,14 +176,19 @@ fn push_keyboard_enhancement() {
     }
 }
 
-fn pop_keyboard_enhancement() {
-    if matches!(supports_keyboard_enhancement(), Ok(true)) {
+fn pop_keyboard_enhancement(supported: bool) {
+    if supported {
         let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
     }
 }
 
 /// RAII terminal restore — runs on every exit path including unwind.
-struct TerminalGuard;
+struct TerminalGuard {
+    /// Whether the terminal advertised keyboard-enhancement support at enter().
+    /// Queried exactly once here so Drop can reuse it instead of re-querying —
+    /// a second query leaks a stray capability-response into the shell on exit.
+    kbd_enhanced: bool,
+}
 
 impl TerminalGuard {
     fn enter() -> Result<Self> {
@@ -195,14 +200,15 @@ impl TerminalGuard {
             EnableFocusChange
         )
         .context("enter alternate screen")?;
-        push_keyboard_enhancement();
-        Ok(Self)
+        let kbd_enhanced = matches!(supports_keyboard_enhancement(), Ok(true));
+        push_keyboard_enhancement(kbd_enhanced);
+        Ok(Self { kbd_enhanced })
     }
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        pop_keyboard_enhancement();
+        pop_keyboard_enhancement(self.kbd_enhanced);
         let _ = execute!(
             io::stdout(),
             LeaveAlternateScreen,
@@ -233,9 +239,12 @@ async fn run_tui(
     let active_theme = theme::resolve_skin(skin_name);
 
     // Restore the terminal even if a later panic unwinds past the guard.
+    // Capture enhancement support once so the panic path doesn't re-query the
+    // terminal (which would leak a capability-response after the crash dump).
+    let kbd_enhanced = matches!(supports_keyboard_enhancement(), Ok(true));
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        pop_keyboard_enhancement();
+        pop_keyboard_enhancement(kbd_enhanced);
         let _ = execute!(
             io::stdout(),
             LeaveAlternateScreen,
@@ -331,6 +340,10 @@ async fn event_loop(
 
     loop {
         app.sync_input_block();
+        if app.needs_full_redraw {
+            terminal.clear()?;
+            app.needs_full_redraw = false;
+        }
         terminal.draw(|f| ui::render(f, app))?;
         if app.should_quit {
             return Ok(());
@@ -388,6 +401,13 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                 app.last_esc_at = None;
                 app.esc_hint = false;
             }
+            // Any keypress other than a repeat Ctrl+C disarms the quit
+            // confirmation, mirroring the Esc arm/hint reset above.
+            let is_ctrl_c = ctrl && matches!(key.code, KeyCode::Char('c'));
+            if !is_ctrl_c {
+                app.last_ctrl_c_at = None;
+                app.ctrl_c_hint = false;
+            }
             let shift = key.modifiers.contains(KeyModifiers::SHIFT);
             // Alt/Option+Enter is a universal newline fallback: legacy
             // terminals report Alt via a plain ESC prefix with no protocol
@@ -415,8 +435,23 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                         completion_move(app, 1);
                         return;
                     }
-                    KeyCode::Tab | KeyCode::Enter => {
+                    KeyCode::Tab => {
                         completion_accept(app);
+                        return;
+                    }
+                    KeyCode::Enter => {
+                        // Enter accepts the candidate; if it is a leaf (no
+                        // submenu) we also send right away instead of forcing a
+                        // second Enter.
+                        let sends = app
+                            .completion
+                            .as_ref()
+                            .and_then(|c| c.items.get(c.selected))
+                            .is_some_and(|cand| !cand.has_children);
+                        completion_accept(app);
+                        if sends {
+                            submit(app, tx).await;
+                        }
                         return;
                     }
                     KeyCode::Esc => {
@@ -439,6 +474,7 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
             match key.code {
                 KeyCode::Char('d') if ctrl => request_quit(app, tx),
                 KeyCode::Char('c') if ctrl => handle_ctrl_c(app, tx),
+                KeyCode::Char('u') if ctrl => app.clear_input(),
                 KeyCode::Char('v') if ctrl => {
                     if !attach_clipboard_image(app) {
                         app.push_system(
@@ -450,6 +486,7 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                     if let Err(e) = scrollback_dump(app) {
                         app.push_system(format!("scrollback view failed: {e}"));
                     }
+                    app.needs_full_redraw = true;
                 }
                 KeyCode::PageUp => {
                     app.scroll_back = app.scroll_back.saturating_add(app.scroll_page.max(1))
@@ -548,8 +585,11 @@ fn scrollback_dump(app: &App) -> io::Result<()> {
     let _ = std::fs::write(&path, &text);
 
     // Suspend: leave alt-screen + restore the normal buffer where native copy
-    // and scrollback work; drop raw mode so `read_line` is canonical.
-    pop_keyboard_enhancement();
+    // and scrollback work; drop raw mode so `read_line` is canonical. Query
+    // enhancement support once and reuse it for the matching push on resume, so
+    // we never emit an extra capability-query mid-session.
+    let kbd_enhanced = matches!(supports_keyboard_enhancement(), Ok(true));
+    pop_keyboard_enhancement(kbd_enhanced);
     execute!(io::stdout(), LeaveAlternateScreen, DisableBracketedPaste,)?;
     disable_raw_mode()?;
 
@@ -573,7 +613,7 @@ fn scrollback_dump(app: &App) -> io::Result<()> {
     // terminal in the normal buffer with raw mode off.
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste,)?;
-    push_keyboard_enhancement();
+    push_keyboard_enhancement(kbd_enhanced);
     res
 }
 
@@ -719,7 +759,20 @@ fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         cancel_in_flight(app, tx);
         app.push_system("cancelled");
     } else if app.input_text().trim().is_empty() {
-        app.should_quit = true;
+        // Empty + idle: require a second Ctrl+C within a short window to quit,
+        // matching Esc's arm-then-confirm so a stray keypress can't kill the
+        // session. The arm state is disarmed by any other key (see event loop).
+        if app
+            .last_ctrl_c_at
+            .is_some_and(|t| t.elapsed() < ESC_DOUBLE_WINDOW)
+        {
+            app.last_ctrl_c_at = None;
+            app.ctrl_c_hint = false;
+            app.should_quit = true;
+        } else {
+            app.last_ctrl_c_at = Some(std::time::Instant::now());
+            app.ctrl_c_hint = true;
+        }
     } else {
         app.clear_input();
     }
