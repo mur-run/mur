@@ -8,7 +8,14 @@ import { CATEGORY_COLORS, avatarPreset, familyOf } from "../../utils";
 import { PetFace } from "../PetFace";
 import type { FleetDetail as Detail, JobRow } from "./types";
 import { DURATION_RE } from "./fleetCreateForm";
-import { parseTrigger, buildTrigger, settingsAreValid, modeBadgeLabel, type TriggerKind } from "./fleetSettingsForm";
+import {
+  parseTrigger,
+  buildTrigger,
+  settingsAreValid,
+  modeBadgeLabel,
+  loopDeadlineIsValid,
+  type TriggerKind,
+} from "./fleetSettingsForm";
 
 interface Props {
   detail: Detail;
@@ -111,6 +118,7 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
   }
 
   async function handleRunLoop() {
+    if (!loopDeadlineIsValid(loopDeadline)) return;
     showToast(t("fleet.runStarted"));
     await call("fleet_run_loop", {
       name: detail.name,
@@ -255,26 +263,31 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
           </button>
         </div>
         {loopOpen && (
-          <div className="fleet-detail__loop-row">
-            <input
-              value={loopIterations}
-              onChange={(e) => setLoopIterations(e.target.value)}
-              placeholder="8"
-            />
-            <input
-              value={loopDeadline}
-              onChange={(e) => setLoopDeadline(e.target.value)}
-              placeholder="2h"
-            />
-            <input value={loopBudget} onChange={(e) => setLoopBudget(e.target.value)} placeholder="$" />
-            <button
-              className="toolbar-btn toolbar-btn--primary"
-              onClick={handleRunLoop}
-              disabled={busy !== null}
-            >
-              {t("fleet.run.go")}
-            </button>
-          </div>
+          <>
+            <div className="fleet-detail__loop-row">
+              <input
+                value={loopIterations}
+                onChange={(e) => setLoopIterations(e.target.value)}
+                placeholder="8"
+              />
+              <input
+                value={loopDeadline}
+                onChange={(e) => setLoopDeadline(e.target.value)}
+                placeholder="2h"
+              />
+              <input value={loopBudget} onChange={(e) => setLoopBudget(e.target.value)} placeholder="$" />
+              <button
+                className="toolbar-btn toolbar-btn--primary"
+                onClick={handleRunLoop}
+                disabled={busy !== null || !loopDeadlineIsValid(loopDeadline)}
+              >
+                {t("fleet.run.go")}
+              </button>
+            </div>
+            {!loopDeadlineIsValid(loopDeadline) && (
+              <div className="fleet-settings__warning">{t("fleet.settings.invalidDuration")}</div>
+            )}
+          </>
         )}
       </div>
 

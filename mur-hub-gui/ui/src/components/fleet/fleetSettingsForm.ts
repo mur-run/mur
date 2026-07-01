@@ -35,6 +35,16 @@ export function settingsAreValid(trigKind: TriggerKind, trigValue: string, deadl
 }
 
 /**
+ * Gates the Run-as-loop panel's Go button for its deadline override field.
+ * Same fail-open risk as settingsAreValid's deadline check: empty means "no
+ * override" (valid); non-empty must match DURATION_RE, or the backend
+ * silently treats an unparseable value as "no deadline enforced".
+ */
+export function loopDeadlineIsValid(deadline: string): boolean {
+  return deadline.trim() === "" || DURATION_RE.test(deadline.trim());
+}
+
+/**
  * Formats the fleet detail header's Mode badge for Speculative/Partition
  * fleets. Returns null for Plain fleets (no `parallel_summary`), in which
  * case the caller renders no badge at all.

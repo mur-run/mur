@@ -19,7 +19,7 @@ export function GeneralSettings() {
   const [fleetAutorun, setFleetAutorun] = useState(false);
 
   useEffect(() => {
-    invoke<boolean>("get_fleet_autorun").then(setFleetAutorun);
+    invoke<boolean>("get_fleet_autorun").then(setFleetAutorun).catch(() => {});
   }, []);
 
   async function handleFleetAutorunToggle(checked: boolean) {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseTrigger, buildTrigger, settingsAreValid, modeBadgeLabel } from "./fleetSettingsForm";
+import { parseTrigger, buildTrigger, settingsAreValid, modeBadgeLabel, loopDeadlineIsValid } from "./fleetSettingsForm";
 
 describe("parseTrigger", () => {
   it("null loop_cfg → manual", () => {
@@ -50,6 +50,25 @@ describe("settingsAreValid", () => {
 
   it("accepts manual trigger with empty deadline (nothing configured)", () => {
     expect(settingsAreValid("manual", "", "")).toBe(true);
+  });
+});
+
+describe("loopDeadlineIsValid", () => {
+  // Regression scenario mirroring settingsAreValid's: the Run-as-loop panel's
+  // deadline override is sent straight to fleet_run_loop, so a calendar-date-shaped
+  // value must NOT slip through -- parse_duration on the backend only accepts
+  // digits + optional single-char s/m/h/d suffix, and silently drops anything else
+  // (fail-open: "no deadline enforced").
+  it("rejects a calendar-date-shaped deadline", () => {
+    expect(loopDeadlineIsValid("2026-12-31")).toBe(false);
+  });
+
+  it("accepts a valid duration", () => {
+    expect(loopDeadlineIsValid("2h")).toBe(true);
+  });
+
+  it("accepts an empty string (no override)", () => {
+    expect(loopDeadlineIsValid("")).toBe(true);
   });
 });
 
