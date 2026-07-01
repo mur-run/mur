@@ -1392,12 +1392,17 @@ impl TaskRunner {
             // carries tool_calls was cut off MID-tool_use — the tool_use
             // `input` JSON is incomplete, so executing it (or appending it to
             // history and re-looping) just replays a malformed call and trips
-            // the doom-loop guard. Instead of running the broken call, append a
+            // the doom-loop guard. The same ceiling can also be hit while the
+            // model is still inside a thinking block, before any text or
+            // tool_use ever started — text and tool_calls both empty. Either
+            // way there's nothing usable to show or execute, so append a
             // user-role guidance message and continue so the model can recover
             // with a shorter, well-formed turn. This counts toward the
             // iteration budget; the iteration cap + doom-loop guard remain the
             // backstops against a model that truncates forever.
-            if resp.stop_reason == StopReason::MaxTokens && !resp.tool_calls.is_empty() {
+            if resp.stop_reason == StopReason::MaxTokens
+                && (!resp.tool_calls.is_empty() || resp.text.is_empty())
+            {
                 if !resp.text.is_empty() {
                     history.push(RichMessage::Text {
                         role: "assistant".into(),
@@ -2133,6 +2138,22 @@ mod tests {
         }
     }
 
+    /// A response truncated while still inside a thinking block: `stop_reason
+    /// == MaxTokens` but NEITHER text NOR a tool_call was ever produced. This
+    /// is what the Anthropic client now returns (instead of erroring) when
+    /// the whole `max_tokens` budget goes to reasoning before any visible
+    /// output starts.
+    fn truncated_thinking_only_response() -> crate::llm::LlmResponse {
+        crate::llm::LlmResponse {
+            text: String::new(),
+            input_tokens: 5,
+            output_tokens: 5,
+            model: "test".into(),
+            tool_calls: vec![],
+            stop_reason: crate::llm::StopReason::MaxTokens,
+        }
+    }
+
     /// Counting `bash` tool: records how many times it executes so a test can
     /// assert a (truncated) tool call was NOT run.
     struct CountingBashTool {
@@ -2218,6 +2239,36 @@ mod tests {
         assert!(
             usage.get("input_tokens").is_some() && usage.get("output_tokens").is_some(),
             "usage must report real token counts; usage={usage:?}",
+        );
+    }
+
+    /// Regression: a turn that burns its whole `max_tokens` budget inside a
+    /// thinking block — no text, no tool_use, just `stop_reason: MaxTokens` —
+    /// must recover the same way a truncated-mid-tool_use turn does, not
+    /// surface a hard error to the user (this was the "invalid response:
+    /// empty streamed response" crash reported from `murmur`).
+    #[tokio::test]
+    async fn truncated_thinking_only_injects_guidance_and_recovers() {
+        use crate::llm::stub::SequenceLlm;
+        let responses: Vec<crate::llm::LlmResponse> = vec![
+            truncated_thinking_only_response(),
+            end_turn_response("RECOVERED: produced a shorter response."),
+        ];
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                .with_max_iterations(50),
+        );
+        let outcome = runner.run_sync(loop_spec("truncate-thinking")).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed (recovered turn), got {outcome:?}");
+        };
+        let reply_text = task.messages.last().map(text_of).unwrap_or_default();
+        assert!(
+            reply_text.contains("RECOVERED"),
+            "expected the recovery turn's reply, got: {reply_text}"
         );
     }
 

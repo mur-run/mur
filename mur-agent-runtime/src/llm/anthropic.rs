@@ -418,6 +418,28 @@ fn apply_sse_event(acc: &mut StreamAccum, v: &serde_json::Value) -> Option<super
     }
 }
 
+/// Turn a fully-drained `StreamAccum` into the final result. A tool-only
+/// response legitimately has empty text — only error when BOTH answer text
+/// and tool calls are empty. A response that hit the max_tokens ceiling while
+/// still inside a thinking block (no text or tool_use ever started) is also
+/// legitimate, not malformed — let it through so task_runner's MaxTokens
+/// retry path can nudge the model toward a shorter answer instead of
+/// surfacing a raw protocol error.
+fn finish_stream(acc: StreamAccum, model: String) -> Result<LlmResponse, LlmError> {
+    if acc.text.is_empty() && acc.tool_calls.is_empty() && acc.stop_reason != StopReason::MaxTokens
+    {
+        return Err(LlmError::InvalidResponse("empty streamed response".into()));
+    }
+    Ok(LlmResponse {
+        text: acc.text,
+        input_tokens: acc.input_tokens,
+        output_tokens: acc.output_tokens,
+        model,
+        tool_calls: acc.tool_calls,
+        stop_reason: acc.stop_reason,
+    })
+}
+
 fn parse_response_body(
     v: &serde_json::Value,
 ) -> Result<
@@ -647,19 +669,7 @@ impl LlmClient for AnthropicClient {
                 }
             }
         }
-        // A tool-only response legitimately has empty text — only error when
-        // BOTH answer text and tool calls are empty.
-        if acc.text.is_empty() && acc.tool_calls.is_empty() {
-            return Err(LlmError::InvalidResponse("empty streamed response".into()));
-        }
-        Ok(LlmResponse {
-            text: acc.text,
-            input_tokens: acc.input_tokens,
-            output_tokens: acc.output_tokens,
-            model: self.model.clone(),
-            tool_calls: acc.tool_calls,
-            stop_reason: acc.stop_reason,
-        })
+        finish_stream(acc, self.model.clone())
     }
 }
 
@@ -1006,5 +1016,37 @@ mod tests {
         assert_eq!(acc.tool_calls[0].input, serde_json::json!({"path":"x"}));
         assert_eq!(acc.tool_calls[1].call_id, "b");
         assert_eq!(acc.tool_calls[1].input, serde_json::json!({"command":"ls"}));
+    }
+
+    #[test]
+    fn finish_stream_errors_on_truly_empty_response() {
+        let acc = StreamAccum::default();
+        let err = finish_stream(acc, "claude-x".into()).unwrap_err();
+        assert!(matches!(err, LlmError::InvalidResponse(_)));
+    }
+
+    #[test]
+    fn finish_stream_allows_empty_text_when_truncated_mid_thinking() {
+        // Regression: a turn that spends its whole max_tokens budget inside a
+        // thinking block, before any text or tool_use block starts, must not
+        // be treated as a malformed response — it should come back as a
+        // (textless) MaxTokens result so task_runner can retry with guidance.
+        let acc = StreamAccum {
+            stop_reason: StopReason::MaxTokens,
+            ..StreamAccum::default()
+        };
+        let resp = finish_stream(acc, "claude-x".into()).expect("should not error");
+        assert_eq!(resp.text, "");
+        assert!(resp.tool_calls.is_empty());
+        assert_eq!(resp.stop_reason, StopReason::MaxTokens);
+    }
+
+    #[test]
+    fn finish_stream_keeps_erroring_on_empty_text_for_normal_stop() {
+        let acc = StreamAccum {
+            stop_reason: StopReason::EndTurn,
+            ..StreamAccum::default()
+        };
+        assert!(finish_stream(acc, "claude-x".into()).is_err());
     }
 }
