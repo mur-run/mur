@@ -665,4 +665,6 @@ export const zhTW: Table = {
   "fleet.run.loop": "以迴圈執行",
   "fleet.run.go": "開始",
   "fleet.run.tracksSuffix": "條軌道",
+  "settings.fleetAutorun.label": "允許機群無人值守自動執行",
+  "settings.fleetAutorun.description": "已設定觸發條件與預算的機群將依排程自動執行，無需確認。預設關閉，且每個機群的預算必須大於 0。",
 };

@@ -663,4 +663,6 @@ export const en = {
   "fleet.run.loop": "Run as loop",
   "fleet.run.go": "Go",
   "fleet.run.tracksSuffix": "tracks",
+  "settings.fleetAutorun.label": "Allow fleets to auto-run unattended",
+  "settings.fleetAutorun.description": "Fleets with configured triggers and budgets will automatically run on schedule without requiring approval. Disabled by default, and each fleet must have a budget greater than 0.",
 } as const;
