@@ -304,6 +304,22 @@ pub async fn run(cli: Cli) -> Result<()> {
                         cmd::fleet::run::cmd_fleet_run(&mur_home, &name, job).await?
                     }
                 }
+                FleetAction::SetLoop {
+                    name,
+                    trigger,
+                    max_iterations,
+                    deadline,
+                    budget_usd,
+                    done_when,
+                } => cmd::fleet::settings::cmd_fleet_set_loop(
+                    &mur_home,
+                    &name,
+                    trigger,
+                    max_iterations,
+                    deadline,
+                    budget_usd,
+                    done_when,
+                )?,
                 FleetAction::Send { name, job } => {
                     cmd::fleet::jobs::cmd_fleet_send(&mur_home, &name, &job)?
                 }
