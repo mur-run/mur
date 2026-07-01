@@ -189,6 +189,11 @@
 .settings-row__label { font-size: 13px; color: var(--text-primary); }
 .settings-row__value { font-size: 13px; color: var(--text-secondary); }
 .settings-row .input { width: 160px; }
+.settings-row__hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
 .settings-hint {
   margin: 6px 0 0;
   font-size: 12px;

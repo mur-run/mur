@@ -145,14 +145,17 @@ fn autorun_flag(v: Option<&str>) -> bool {
     matches!(v, Some(s) if s == "1" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes"))
 }
 
-fn auto_run_enabled() -> bool {
+fn auto_run_enabled(mur_home: &Path) -> bool {
     autorun_flag(std::env::var("MUR_FLEET_AUTORUN").ok().as_deref())
+        || mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"))
+            .fleet
+            .autorun
 }
 
 pub fn tick(mur_home: &Path) {
     // Safety gate: unattended auto-run is OFF by default (best-practice audit;
     // OWASP Agentic ASI06 excessive agency). Opt in with `MUR_FLEET_AUTORUN=1`.
-    if !auto_run_enabled() {
+    if !auto_run_enabled(mur_home) {
         return;
     }
     let now = Utc::now().timestamp().max(0) as u64;
@@ -231,6 +234,27 @@ mod tests {
         assert!(autorun_flag(Some("1")));
         assert!(autorun_flag(Some("true")));
         assert!(autorun_flag(Some("YES")));
+    }
+
+    #[test]
+    fn auto_run_enabled_checks_env_var_or_config_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        unsafe { std::env::remove_var("MUR_FLEET_AUTORUN") };
+
+        // neither env nor config → false
+        assert!(!auto_run_enabled(home));
+
+        // config flag alone → true
+        std::fs::write(home.join("config.yaml"), "fleet:\n  autorun: true\n").unwrap();
+        assert!(auto_run_enabled(home));
+
+        // config flag false + env var set → true (env var still satisfies the gate)
+        std::fs::write(home.join("config.yaml"), "fleet:\n  autorun: false\n").unwrap();
+        unsafe { std::env::set_var("MUR_FLEET_AUTORUN", "1") };
+        assert!(auto_run_enabled(home));
+
+        unsafe { std::env::remove_var("MUR_FLEET_AUTORUN") };
     }
 
     #[test]
