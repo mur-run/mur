@@ -271,6 +271,11 @@ pub async fn cmd_fleet_run(
     // broadcast-to-all. The router does not model worktrees, so the parallel
     // path deliberately bypasses it.
     let exec_parallel = parallel_exec_enabled(force_worktree) && fleet.parallel.is_some();
+    if force_worktree && !exec_parallel {
+        eprintln!(
+            "warning: --worktree has no effect -- fleet '{name}' has no parallel: config block, so Tier 1 worktree isolation cannot activate; falling back to normal delegation"
+        );
+    }
     let (proc, parallel_run) = if exec_parallel {
         let cfg = fleet.parallel.as_ref().expect("guarded by exec_parallel");
         let repo_root = discover_repo_root()?;
@@ -298,10 +303,24 @@ pub async fn cmd_fleet_run(
             }),
         )
     } else {
+        // Regular (non-worktree) delegation: the member agent otherwise gets ONLY the
+        // bare goal and has no idea which repo/dir to work in. Best-effort: discover the
+        // repo root and append a routing note. Not being in a git repo is not fatal here.
+        let mut routed_goal = goal.clone();
+        if let Ok(repo_root) = discover_repo_root() {
+            let repo = repo_root.display();
+            routed_goal.push_str(&format!(
+                "\n\nIMPORTANT: the repository you are working on is at `{repo}`. cd there (or pass cwd=`{repo}` on every bash/tool call) before doing anything else."
+            ));
+        }
+        let routed_fleet = mur_common::fleet::Fleet {
+            goal: routed_goal.clone(),
+            ..planning_fleet.clone()
+        };
         // Router plans which members do what (with deps); falls back to broadcast-to-all.
         let p =
-            super::plan::plan_via_router(mur_home, &planning_fleet, &events).unwrap_or_else(|| {
-                build_fleet_procedure(&goal, &fleet.members, fleet.parallel.as_ref())
+            super::plan::plan_via_router(mur_home, &routed_fleet, &events).unwrap_or_else(|| {
+                build_fleet_procedure(&routed_goal, &fleet.members, fleet.parallel.as_ref())
                     .expect("members validated by caller guard")
             });
         (p, None)
