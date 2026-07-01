@@ -56,12 +56,16 @@ if $INSTALL; then
 #  cp "$BINARY" /usr/local/bin/mur
   echo "📥 Installing to /opt/homebrew/bin/mur..."
   sudo cp "$BINARY" /opt/homebrew/bin/mur
+  # Re-sign: cp can leave a stale ad-hoc code-signing verdict, causing macOS to
+  # silently SIGKILL the freshly installed binary on next launch. Force a fresh sign.
+  sudo codesign --force -s - /opt/homebrew/bin/mur || true
   sudo ln -sfn /opt/homebrew/bin/mur /opt/homebrew/bin/murmur
   echo "Installed murmur -> /opt/homebrew/bin/mur (symlink)"
 
   MCP_BINARY="$SCRIPT_DIR/target/release/mur-mcp-server"
   if [ -f "$MCP_BINARY" ]; then
     sudo cp "$MCP_BINARY" /opt/homebrew/bin/mur-mcp-server
+    sudo codesign --force -s - /opt/homebrew/bin/mur-mcp-server || true
     echo "Installed mur-mcp-server -> /opt/homebrew/bin/mur-mcp-server"
   fi
 
@@ -71,6 +75,7 @@ if $INSTALL; then
   DAEMON_BINARY="$SCRIPT_DIR/target/release/murmurd"
   if [ -f "$DAEMON_BINARY" ]; then
     sudo cp "$DAEMON_BINARY" /opt/homebrew/bin/murmurd
+    sudo codesign --force -s - /opt/homebrew/bin/murmurd || true
     echo "Installed murmurd -> /opt/homebrew/bin/murmurd"
   fi
 
@@ -83,6 +88,7 @@ if $INSTALL; then
   LOCAL_BIN="$HOME/.local/bin"; mkdir -p "$LOCAL_BIN"
   if [ -f "$RUNTIME_BINARY" ]; then
     cp "$RUNTIME_BINARY" "$LOCAL_BIN/.mur-agent-runtime.new"
+    codesign --force -s - "$LOCAL_BIN/.mur-agent-runtime.new" || true
     mv -f "$LOCAL_BIN/.mur-agent-runtime.new" "$LOCAL_BIN/mur-agent-runtime"
     echo "Installed mur-agent-runtime -> $LOCAL_BIN/mur-agent-runtime (canonical; keeps new agents current)"
   fi
