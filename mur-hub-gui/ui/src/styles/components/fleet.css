@@ -517,3 +517,38 @@
   color: var(--text-secondary);
   align-items: center;
 }
+
+/* ── Detail: Settings section ──────────────────────────────────────────── */
+
+.fleet-settings__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.fleet-settings__row label {
+  width: 110px;
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.fleet-settings__row input,
+.fleet-settings__row select {
+  flex: 1;
+  font-size: 12px;
+  padding: 5px 8px;
+}
+
+.fleet-settings__warning {
+  font-size: 11px;
+  color: #d97706;
+  margin: -4px 0 8px 118px;
+}
+
+.fleet-settings__hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin: 8px 0 12px;
+}
