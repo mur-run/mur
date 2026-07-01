@@ -464,3 +464,56 @@
   font-size: 12px;
   color: var(--text-secondary);
 }
+
+/* ── Create modal: Mode picker ─────────────────────────────────────────── */
+
+.fleet-create__mode {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0;
+}
+
+.fleet-create__mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-card, rgba(255,255,255,0.03));
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.fleet-create__mode-option input { margin-top: 2px; }
+
+.fleet-create__mode-desc {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.fleet-create__section {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-line);
+  border-radius: var(--radius-md, 8px);
+}
+
+.fleet-create__track {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.fleet-create__track input { flex: 1; font-size: 12px; padding: 6px 8px; }
+.fleet-create__track select { font-size: 12px; }
+
+.fleet-create__prefilters {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  align-items: center;
+}
