@@ -441,6 +441,10 @@ pub enum FleetAction {
         /// Projected USD budget for the loop (overrides fleet.yaml `loop.budget_usd`)
         #[arg(long)]
         budget_usd: Option<f64>,
+        /// Force Tier-1 per-track git worktree isolation for this run (one-shot only,
+        /// not supported with --loop). Equivalent to MUR_PARALLEL_EXEC=1 for this invocation.
+        #[arg(long)]
+        worktree: bool,
     },
     /// Update a fleet's loop/auto-run config (trigger, budget, iteration cap,
     /// deadline, done-when marker). Only the flags you pass are changed —
