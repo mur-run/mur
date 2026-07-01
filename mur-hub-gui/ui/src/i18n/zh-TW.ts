@@ -661,4 +661,8 @@ export const zhTW: Table = {
   "fleet.settings.save": "儲存設定",
   "fleet.settings.saved": "設定已儲存",
   "fleet.settings.invalidDuration": "請使用如 30s、5m、2h、1d 的時間長度格式",
+  "fleet.run.worktree": "使用隔離工作樹（實驗性）",
+  "fleet.run.loop": "以迴圈執行",
+  "fleet.run.go": "開始",
+  "fleet.run.tracksSuffix": "條軌道",
 };

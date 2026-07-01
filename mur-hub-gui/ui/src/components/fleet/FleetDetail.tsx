@@ -8,7 +8,7 @@ import { CATEGORY_COLORS, avatarPreset, familyOf } from "../../utils";
 import { PetFace } from "../PetFace";
 import type { FleetDetail as Detail, JobRow } from "./types";
 import { DURATION_RE } from "./fleetCreateForm";
-import { parseTrigger, buildTrigger, settingsAreValid, type TriggerKind } from "./fleetSettingsForm";
+import { parseTrigger, buildTrigger, settingsAreValid, modeBadgeLabel, type TriggerKind } from "./fleetSettingsForm";
 
 interface Props {
   detail: Detail;
@@ -95,9 +95,34 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
     }
   }
 
+  const [worktree, setWorktree] = useState(false);
+  const [loopOpen, setLoopOpen] = useState(false);
+  const [loopIterations, setLoopIterations] = useState("");
+  const [loopDeadline, setLoopDeadline] = useState("");
+  const [loopBudget, setLoopBudget] = useState("");
+
+  function toggleLoopPanel() {
+    if (!loopOpen) {
+      setLoopIterations(detail.loop_cfg?.max_iterations ? String(detail.loop_cfg.max_iterations) : "");
+      setLoopDeadline(detail.loop_cfg?.deadline ?? "");
+      setLoopBudget(detail.loop_cfg?.budget_usd ? String(detail.loop_cfg.budget_usd) : "");
+    }
+    setLoopOpen((v) => !v);
+  }
+
+  async function handleRunLoop() {
+    showToast(t("fleet.runStarted"));
+    await call("fleet_run_loop", {
+      name: detail.name,
+      maxIterations: loopIterations.trim() ? Number(loopIterations) : null,
+      deadline: loopDeadline.trim() || null,
+      budgetUsd: loopBudget.trim() ? Number(loopBudget) : null,
+    });
+  }
+
   async function handleRun() {
     showToast(t("fleet.runStarted"));
-    await call("fleet_run", { name: detail.name });
+    await call("fleet_run", { name: detail.name, worktree });
   }
 
   async function handleSend() {
@@ -201,6 +226,9 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
         <div className="fleet-detail__title-row">
           <h2 className="fleet-detail__title">{detail.display_name}</h2>
           <span className={statusPillClass(detail)}>{statusLabel(detail)}</span>
+          {modeBadgeLabel(detail.parallel_summary, t) && (
+            <span className="fleet-detail__mode-badge">{modeBadgeLabel(detail.parallel_summary, t)}</span>
+          )}
         </div>
         <p className="fleet-detail__goal">{detail.goal}</p>
         <p className="fleet-detail__router">{t("fleet.router")}: {detail.router}</p>
@@ -208,9 +236,46 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
 
       {/* Primary action */}
       <div className="fleet-detail__run">
-        <button className="toolbar-btn toolbar-btn--primary" onClick={handleRun} disabled={busy !== null}>
-          ▶ {t("fleet.run")}
-        </button>
+        {detail.parallel_summary && (
+          <label className="fleet-detail__worktree-toggle">
+            <input
+              type="checkbox"
+              checked={worktree}
+              onChange={(e) => setWorktree(e.target.checked)}
+            />
+            {t("fleet.run.worktree")}
+          </label>
+        )}
+        <div className="fleet-detail__run-buttons">
+          <button className="toolbar-btn toolbar-btn--primary" onClick={handleRun} disabled={busy !== null}>
+            ▶ {t("fleet.run")}
+          </button>
+          <button className="toolbar-btn" onClick={toggleLoopPanel} disabled={busy !== null}>
+            {t("fleet.run.loop")} {loopOpen ? "▴" : "▾"}
+          </button>
+        </div>
+        {loopOpen && (
+          <div className="fleet-detail__loop-row">
+            <input
+              value={loopIterations}
+              onChange={(e) => setLoopIterations(e.target.value)}
+              placeholder="8"
+            />
+            <input
+              value={loopDeadline}
+              onChange={(e) => setLoopDeadline(e.target.value)}
+              placeholder="2h"
+            />
+            <input value={loopBudget} onChange={(e) => setLoopBudget(e.target.value)} placeholder="$" />
+            <button
+              className="toolbar-btn toolbar-btn--primary"
+              onClick={handleRunLoop}
+              disabled={busy !== null}
+            >
+              {t("fleet.run.go")}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Management: Start/Stop · Export · Import */}

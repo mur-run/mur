@@ -659,4 +659,8 @@ export const en = {
   "fleet.settings.save": "Save Settings",
   "fleet.settings.saved": "Settings saved",
   "fleet.settings.invalidDuration": "Use a duration like 30s, 5m, 2h, 1d",
+  "fleet.run.worktree": "Use isolated worktrees (experimental)",
+  "fleet.run.loop": "Run as loop",
+  "fleet.run.go": "Go",
+  "fleet.run.tracksSuffix": "tracks",
 } as const;

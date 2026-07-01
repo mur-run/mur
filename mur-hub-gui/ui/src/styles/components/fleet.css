@@ -552,3 +552,40 @@
   color: var(--text-tertiary);
   margin: 8px 0 12px;
 }
+
+/* ── Detail: Mode badge + Run-as-loop ──────────────────────────────────── */
+
+.fleet-detail__mode-badge {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: var(--bg-card, rgba(255,255,255,0.04));
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.fleet-detail__worktree-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+
+.fleet-detail__run-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.fleet-detail__loop-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.fleet-detail__loop-row input {
+  width: 70px;
+  font-size: 12px;
+  padding: 6px 8px;
+}

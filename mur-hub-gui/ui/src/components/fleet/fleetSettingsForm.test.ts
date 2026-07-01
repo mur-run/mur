@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseTrigger, buildTrigger, settingsAreValid } from "./fleetSettingsForm";
+import { parseTrigger, buildTrigger, settingsAreValid, modeBadgeLabel } from "./fleetSettingsForm";
 
 describe("parseTrigger", () => {
   it("null loop_cfg → manual", () => {
@@ -50,5 +50,28 @@ describe("settingsAreValid", () => {
 
   it("accepts manual trigger with empty deadline (nothing configured)", () => {
     expect(settingsAreValid("manual", "", "")).toBe(true);
+  });
+});
+
+describe("modeBadgeLabel", () => {
+  const t = (key: string) =>
+    ({
+      "fleet.create.mode.speculative": "Speculative",
+      "fleet.create.mode.partition": "Partition",
+      "fleet.run.tracksSuffix": "tracks",
+    })[key] ?? key;
+
+  it("null summary → null", () => {
+    expect(modeBadgeLabel(null, t)).toBeNull();
+  });
+  it("speculative → mode · count tracks", () => {
+    expect(modeBadgeLabel({ mode: "speculative", track_count: 2, target_file: null }, t)).toBe(
+      "Speculative · 2 tracks"
+    );
+  });
+  it("partition → mode · target_file", () => {
+    expect(modeBadgeLabel({ mode: "partition", track_count: 0, target_file: "src/widget.rs" }, t)).toBe(
+      "Partition · src/widget.rs"
+    );
   });
 });

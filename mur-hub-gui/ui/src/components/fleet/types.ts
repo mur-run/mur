@@ -17,6 +17,12 @@ export interface FleetLoopView {
   last_run: string | null;
 }
 
+export interface ParallelSummary {
+  mode: "speculative" | "partition";
+  track_count: number;
+  target_file: string | null;
+}
+
 export interface FleetDetail {
   name: string;
   display_name: string;
@@ -26,6 +32,7 @@ export interface FleetDetail {
   channel_id: string;
   stopped: boolean;
   loop_cfg: FleetLoopView | null;
+  parallel_summary: ParallelSummary | null;
 }
 
 export interface JobRow {

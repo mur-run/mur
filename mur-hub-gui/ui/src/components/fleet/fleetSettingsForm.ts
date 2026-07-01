@@ -1,7 +1,8 @@
 /** Pure helpers for FleetDetail's Settings section. */
 
-import type { FleetLoopView } from "./types";
+import type { FleetLoopView, ParallelSummary } from "./types";
 import { DURATION_RE } from "./fleetCreateForm";
+import type { TranslationKey } from "../../i18n/types";
 
 export type TriggerKind = "manual" | "interval" | "cron";
 
@@ -31,4 +32,20 @@ export function settingsAreValid(trigKind: TriggerKind, trigValue: string, deadl
   if (trigKind === "cron" && trigValue.trim() === "") return false;
   if (deadline.trim() !== "" && !DURATION_RE.test(deadline.trim())) return false;
   return true;
+}
+
+/**
+ * Formats the fleet detail header's Mode badge for Speculative/Partition
+ * fleets. Returns null for Plain fleets (no `parallel_summary`), in which
+ * case the caller renders no badge at all.
+ */
+export function modeBadgeLabel(
+  summary: ParallelSummary | null,
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string
+): string | null {
+  if (!summary) return null;
+  if (summary.mode === "speculative") {
+    return `${t("fleet.create.mode.speculative")} · ${summary.track_count} ${t("fleet.run.tracksSuffix")}`;
+  }
+  return `${t("fleet.create.mode.partition")} · ${summary.target_file ?? ""}`;
 }
