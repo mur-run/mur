@@ -286,8 +286,14 @@ pub async fn run(cli: Cli) -> Result<()> {
                     max_iterations,
                     deadline,
                     budget_usd,
+                    worktree,
                 } => {
                     if loop_flag {
+                        if worktree {
+                            anyhow::bail!(
+                                "--worktree is not yet supported with --loop (the guarded-loop path has no worktree isolation)"
+                            );
+                        }
                         // job arg + --loop: enqueue the job first, then the loop drains it.
                         if let Some(text) = job {
                             cmd::fleet::jobs::enqueue_job(&mur_home, &name, &text, "cli")?;
@@ -301,9 +307,25 @@ pub async fn run(cli: Cli) -> Result<()> {
                         )
                         .await?
                     } else {
-                        cmd::fleet::run::cmd_fleet_run(&mur_home, &name, job).await?
+                        cmd::fleet::run::cmd_fleet_run(&mur_home, &name, job, worktree).await?
                     }
                 }
+                FleetAction::SetLoop {
+                    name,
+                    trigger,
+                    max_iterations,
+                    deadline,
+                    budget_usd,
+                    done_when,
+                } => cmd::fleet::settings::cmd_fleet_set_loop(
+                    &mur_home,
+                    &name,
+                    trigger,
+                    max_iterations,
+                    deadline,
+                    budget_usd,
+                    done_when,
+                )?,
                 FleetAction::Send { name, job } => {
                     cmd::fleet::jobs::cmd_fleet_send(&mur_home, &name, &job)?
                 }

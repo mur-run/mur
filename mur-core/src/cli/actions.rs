@@ -441,6 +441,32 @@ pub enum FleetAction {
         /// Projected USD budget for the loop (overrides fleet.yaml `loop.budget_usd`)
         #[arg(long)]
         budget_usd: Option<f64>,
+        /// Force Tier-1 per-track git worktree isolation for this run (one-shot only,
+        /// not supported with --loop). Equivalent to MUR_PARALLEL_EXEC=1 for this invocation.
+        #[arg(long)]
+        worktree: bool,
+    },
+    /// Update a fleet's loop/auto-run config (trigger, budget, iteration cap,
+    /// deadline, done-when marker). Only the flags you pass are changed —
+    /// everything else already set is preserved.
+    SetLoop {
+        /// Fleet name
+        name: String,
+        /// manual | interval:<dur> | cron:<5-field POSIX expr>
+        #[arg(long)]
+        trigger: Option<String>,
+        /// Iteration cap for the guarded loop
+        #[arg(long)]
+        max_iterations: Option<u32>,
+        /// Wall-clock deadline, e.g. 30s/5m/2h/1d (relative, NOT a calendar date)
+        #[arg(long)]
+        deadline: Option<String>,
+        /// Projected USD budget ceiling for the loop; required > 0 for daemon auto-run
+        #[arg(long)]
+        budget_usd: Option<f64>,
+        /// Convergence marker: `marker:<TEXT>` (own-line sentinel), or leave unset for router judgment
+        #[arg(long)]
+        done_when: Option<String>,
     },
     /// Queue a job for a fleet (async; drained by `run` or the daemon)
     Send {
