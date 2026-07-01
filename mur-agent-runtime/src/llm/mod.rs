@@ -88,8 +88,9 @@ pub enum RichMessage {
         results: Vec<ToolResultEntry>,
     },
     /// A user turn carrying an inline image (base64) plus its text caption —
-    /// e.g. a screenshot pasted into `mur agent cli`. Only the Anthropic
-    /// adapter renders the image today; other adapters drop it to text.
+    /// e.g. a screenshot pasted into `mur agent cli`. Rendered by the
+    /// Anthropic and Ollama adapters; the OpenAI adapter still drops the
+    /// image and keeps only the caption text.
     ImageText {
         role: String,
         /// e.g. "image/png" — passed straight through to the provider.
