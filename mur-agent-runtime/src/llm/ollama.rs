@@ -9,6 +9,26 @@ const LLM_REQUEST_TIMEOUT_SECS: u64 = 60;
 /// Time allowed to establish a TCP connection to the LLM endpoint.
 const LLM_CONNECT_TIMEOUT_SECS: u64 = 10;
 
+/// Convert history into Ollama's `/api/chat` message array. Ollama's
+/// per-message `images` field takes raw base64 with no data-URI prefix and
+/// auto-detects the format, so (unlike Anthropic's typed `source.media_type`)
+/// the image's mime type isn't needed here — vision-capable models served
+/// through Ollama (llava, qwen2-vl, gemma3, moondream, ...) just read it.
+/// Tool-calling messages are still dropped — Ollama tool support isn't wired
+/// up yet.
+fn to_ollama_messages(messages: &[RichMessage]) -> Vec<serde_json::Value> {
+    messages
+        .iter()
+        .filter_map(|m| match m {
+            RichMessage::Text { role, content } => Some(json!({"role": role, "content": content})),
+            RichMessage::ImageText {
+                role, text, data, ..
+            } => Some(json!({"role": role, "content": text, "images": [data]})),
+            _ => None,
+        })
+        .collect()
+}
+
 pub struct OllamaClient {
     base_url: String,
     model: String,
@@ -47,16 +67,7 @@ impl LlmClient for OllamaClient {
 
     async fn generate(&self, req: LlmRequest) -> Result<LlmResponse, LlmError> {
         let url = format!("{}/api/chat", self.base_url);
-        let messages: Vec<_> = req
-            .messages
-            .iter()
-            .filter_map(|m| match m {
-                RichMessage::Text { role, content } => {
-                    Some(json!({"role": role, "content": content}))
-                }
-                _ => None,
-            })
-            .collect();
+        let messages = to_ollama_messages(&req.messages);
         let mut body = json!({"model": self.model, "messages": messages, "stream": false});
         if let Some(t) = req.temperature {
             body["options"]["temperature"] = json!(t);
@@ -108,16 +119,7 @@ impl LlmClient for OllamaClient {
         sink: tokio::sync::mpsc::Sender<super::StreamDelta>,
     ) -> Result<LlmResponse, LlmError> {
         let url = format!("{}/api/chat", self.base_url);
-        let messages: Vec<_> = req
-            .messages
-            .iter()
-            .filter_map(|m| match m {
-                RichMessage::Text { role, content } => {
-                    Some(json!({"role": role, "content": content}))
-                }
-                _ => None,
-            })
-            .collect();
+        let messages = to_ollama_messages(&req.messages);
         let mut body = json!({"model": self.model, "messages": messages, "stream": true});
         if let Some(t) = req.temperature {
             body["options"]["temperature"] = json!(t);
@@ -206,5 +208,46 @@ impl LlmClient for OllamaClient {
             tool_calls: vec![],
             stop_reason: StopReason::EndTurn,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn to_ollama_messages_plain_text() {
+        let msgs = vec![RichMessage::Text {
+            role: "user".into(),
+            content: "hi".into(),
+        }];
+        let out = to_ollama_messages(&msgs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["role"], "user");
+        assert_eq!(out[0]["content"], "hi");
+        assert!(out[0].get("images").is_none());
+    }
+
+    #[test]
+    fn to_ollama_messages_attaches_image_as_images_array() {
+        let msgs = vec![RichMessage::ImageText {
+            role: "user".into(),
+            text: "what is this?".into(),
+            media_type: "image/png".into(),
+            data: "QkFTRTY0".into(),
+        }];
+        let out = to_ollama_messages(&msgs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["role"], "user");
+        assert_eq!(out[0]["content"], "what is this?");
+        assert_eq!(out[0]["images"], json!(["QkFTRTY0"]));
+    }
+
+    #[test]
+    fn to_ollama_messages_drops_tool_messages() {
+        // Tool-calling isn't wired for Ollama yet — filtered out rather than
+        // sent in a shape the API would reject.
+        let msgs = vec![RichMessage::ToolResults { results: vec![] }];
+        assert_eq!(to_ollama_messages(&msgs).len(), 0);
     }
 }
