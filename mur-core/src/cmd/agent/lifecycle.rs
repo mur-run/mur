@@ -53,6 +53,14 @@ pub fn cmd_create(
             _ => ("ollama".to_string(), raw_model),
         },
     };
+    // Bind the agent to a models.yaml registry entry so the runtime can
+    // resolve real credentials + base_url via `model_ref` (the path working
+    // agents use). Writing only the inline `model:` block leaves the runtime
+    // with no secret for cloud providers, which silently degrades to StubEcho.
+    // Local backends (ollama/local) need no secret, so we leave them inline.
+    let resolved_model_ref =
+        resolve_model_ref_for_create(&mur_home, &resolved_provider, &resolved_model)?;
+
     let now = chrono::Utc::now().to_rfc3339();
     let id = uuid::Uuid::now_v7().to_string();
 
@@ -99,7 +107,7 @@ pub fn cmd_create(
             name: resolved_model,
             params: BTreeMap::new(),
         },
-        model_ref: None,
+        model_ref: resolved_model_ref,
         mcp_servers: vec![],
         skills: vec![],
         transport: TransportConfig {
@@ -194,6 +202,73 @@ pub fn cmd_create(
     println!("Created agent '{}' at {}", name, agent_home.display());
     println!("Symlink: {} -> {}", symlink.display(), target.display());
     Ok(())
+}
+
+/// Resolve the `model_ref` an agent should carry so the runtime loads real
+/// credentials from `~/.mur/models.yaml`. Cloud providers (anthropic, openai,
+/// …) require a registry entry to supply the secret + proxy base URL; without
+/// one the runtime falls back to StubEcho. Local backends (`ollama`, `local`)
+/// authenticate without a secret, so they stay on the inline `model:` block.
+///
+/// Preference order for cloud providers:
+///   1. Reuse an existing registry entry whose provider+model match (inherits
+///      its secret + base_url — this is how the working agents are wired).
+///   2. Otherwise upsert a new secretless entry keyed by provider+model so the
+///      binding at least exists and the user has a single place to add a secret.
+fn resolve_model_ref_for_create(
+    mur_home: &Path,
+    provider: &str,
+    model: &str,
+) -> Result<Option<String>> {
+    use mur_common::model::{ModelEntry, ModelRegistry};
+
+    // Local backends do not need a registry-supplied secret.
+    if matches!(provider, "ollama" | "local") {
+        return Ok(None);
+    }
+
+    let reg_path = mur_home.join("models.yaml");
+    let mut reg = ModelRegistry::load_from(&reg_path)
+        .with_context(|| format!("load model registry {}", reg_path.display()))?;
+
+    // 1. Reuse an existing matching entry (case-insensitive provider match,
+    //    exact model match) — inherits its secret + base_url.
+    if let Some((key, _)) = reg.models.iter().find(|(_, e)| {
+        e.provider.eq_ignore_ascii_case(provider) && e.model == model
+    }) {
+        return Ok(Some(key.clone()));
+    }
+
+    // 2. No match: upsert a new (secretless) entry so the binding exists.
+    let key = sanitize_ref_name(&format!("{provider}_{model}"));
+    reg.models.entry(key.clone()).or_insert_with(|| ModelEntry {
+        provider: provider.to_string(),
+        model: model.to_string(),
+        base_url: None,
+        secret: None,
+        capabilities: vec![],
+        params: serde_json::Value::Null,
+        tier: None,
+        cost_per_1k_tokens: None,
+        ..Default::default()
+    });
+    reg.save_to(&reg_path)
+        .with_context(|| format!("write model registry {}", reg_path.display()))?;
+    Ok(Some(key))
+}
+
+/// Sanitize a provider/model pair into a stable, filesystem/YAML-safe registry
+/// key (mirrors `model_resolve::choice_ref_name`).
+fn sanitize_ref_name(raw: &str) -> String {
+    raw.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn validate_name(name: &str) -> Result<()> {
