@@ -7,6 +7,15 @@ import type { AgentEntry } from "../../types";
 import { CATEGORY_COLORS, avatarPreset, familyOf } from "../../utils";
 import { PetFace } from "../PetFace";
 import type { FleetDetail as Detail, JobRow } from "./types";
+import { DURATION_RE } from "./fleetCreateForm";
+import {
+  parseTrigger,
+  buildTrigger,
+  settingsAreValid,
+  modeBadgeLabel,
+  loopDeadlineIsValid,
+  type TriggerKind,
+} from "./fleetSettingsForm";
 
 interface Props {
   detail: Detail;
@@ -46,6 +55,41 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
   const [showAll, setShowAll] = useState(false);
   const [allJobs, setAllJobs] = useState<JobRow[]>([]);
 
+  const initialTrigger = parseTrigger(detail.loop_cfg);
+  const [trigKind, setTrigKind] = useState<TriggerKind>(initialTrigger.kind);
+  const [trigValue, setTrigValue] = useState(initialTrigger.value);
+  const [maxIter, setMaxIter] = useState(
+    detail.loop_cfg?.max_iterations ? String(detail.loop_cfg.max_iterations) : ""
+  );
+  const [deadline, setDeadlineValue] = useState(detail.loop_cfg?.deadline ?? "");
+  const [budget, setBudget] = useState(
+    detail.loop_cfg?.budget_usd ? String(detail.loop_cfg.budget_usd) : ""
+  );
+  const [doneWhen, setDoneWhen] = useState(detail.loop_cfg?.done_when ?? "");
+
+  const budgetWarning = trigKind !== "manual" && (!budget.trim() || Number(budget) <= 0);
+
+  async function handleSaveSettings() {
+    if (!settingsAreValid(trigKind, trigValue, deadline)) return;
+    setBusy("fleet_set_loop");
+    try {
+      await invoke("fleet_set_loop", {
+        name: detail.name,
+        trigger: buildTrigger(trigKind, trigValue),
+        maxIterations: maxIter.trim() ? Number(maxIter) : null,
+        deadline: deadline.trim() || null,
+        budgetUsd: budget.trim() ? Number(budget) : null,
+        doneWhen: doneWhen.trim() || null,
+      });
+      showToast(t("fleet.settings.saved"));
+      onRefresh();
+    } catch (err) {
+      showToast(String(err), 4000);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function call(cmd: string, args: Record<string, unknown>) {
     setBusy(cmd);
     try {
@@ -58,9 +102,35 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
     }
   }
 
+  const [worktree, setWorktree] = useState(false);
+  const [loopOpen, setLoopOpen] = useState(false);
+  const [loopIterations, setLoopIterations] = useState("");
+  const [loopDeadline, setLoopDeadline] = useState("");
+  const [loopBudget, setLoopBudget] = useState("");
+
+  function toggleLoopPanel() {
+    if (!loopOpen) {
+      setLoopIterations(detail.loop_cfg?.max_iterations ? String(detail.loop_cfg.max_iterations) : "");
+      setLoopDeadline(detail.loop_cfg?.deadline ?? "");
+      setLoopBudget(detail.loop_cfg?.budget_usd ? String(detail.loop_cfg.budget_usd) : "");
+    }
+    setLoopOpen((v) => !v);
+  }
+
+  async function handleRunLoop() {
+    if (!loopDeadlineIsValid(loopDeadline)) return;
+    showToast(t("fleet.runStarted"));
+    await call("fleet_run_loop", {
+      name: detail.name,
+      maxIterations: loopIterations.trim() ? Number(loopIterations) : null,
+      deadline: loopDeadline.trim() || null,
+      budgetUsd: loopBudget.trim() ? Number(loopBudget) : null,
+    });
+  }
+
   async function handleRun() {
     showToast(t("fleet.runStarted"));
-    await call("fleet_run", { name: detail.name });
+    await call("fleet_run", { name: detail.name, worktree });
   }
 
   async function handleSend() {
@@ -164,6 +234,9 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
         <div className="fleet-detail__title-row">
           <h2 className="fleet-detail__title">{detail.display_name}</h2>
           <span className={statusPillClass(detail)}>{statusLabel(detail)}</span>
+          {modeBadgeLabel(detail.parallel_summary, t) && (
+            <span className="fleet-detail__mode-badge">{modeBadgeLabel(detail.parallel_summary, t)}</span>
+          )}
         </div>
         <p className="fleet-detail__goal">{detail.goal}</p>
         <p className="fleet-detail__router">{t("fleet.router")}: {detail.router}</p>
@@ -171,9 +244,51 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
 
       {/* Primary action */}
       <div className="fleet-detail__run">
-        <button className="toolbar-btn toolbar-btn--primary" onClick={handleRun} disabled={busy !== null}>
-          ▶ {t("fleet.run")}
-        </button>
+        {detail.parallel_summary && (
+          <label className="fleet-detail__worktree-toggle">
+            <input
+              type="checkbox"
+              checked={worktree}
+              onChange={(e) => setWorktree(e.target.checked)}
+            />
+            {t("fleet.run.worktree")}
+          </label>
+        )}
+        <div className="fleet-detail__run-buttons">
+          <button className="toolbar-btn toolbar-btn--primary" onClick={handleRun} disabled={busy !== null}>
+            ▶ {t("fleet.run")}
+          </button>
+          <button className="toolbar-btn" onClick={toggleLoopPanel} disabled={busy !== null}>
+            {t("fleet.run.loop")} {loopOpen ? "▴" : "▾"}
+          </button>
+        </div>
+        {loopOpen && (
+          <>
+            <div className="fleet-detail__loop-row">
+              <input
+                value={loopIterations}
+                onChange={(e) => setLoopIterations(e.target.value)}
+                placeholder="8"
+              />
+              <input
+                value={loopDeadline}
+                onChange={(e) => setLoopDeadline(e.target.value)}
+                placeholder="2h"
+              />
+              <input value={loopBudget} onChange={(e) => setLoopBudget(e.target.value)} placeholder="$" />
+              <button
+                className="toolbar-btn toolbar-btn--primary"
+                onClick={handleRunLoop}
+                disabled={busy !== null || !loopDeadlineIsValid(loopDeadline)}
+              >
+                {t("fleet.run.go")}
+              </button>
+            </div>
+            {!loopDeadlineIsValid(loopDeadline) && (
+              <div className="fleet-settings__warning">{t("fleet.settings.invalidDuration")}</div>
+            )}
+          </>
+        )}
       </div>
 
       {/* Management: Start/Stop · Export · Import */}
@@ -253,6 +368,65 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
           </div>
           <button className="toolbar-btn" onClick={handleAddMember} disabled={busy !== null || !addInput.trim()}>+</button>
         </div>
+      </div>
+
+      <div className="fleet-section">
+        <div className="fleet-section__label">{t("fleet.settings.title")}</div>
+        <div className="fleet-settings__row">
+          <label>{t("fleet.settings.trigger")}</label>
+          <select value={trigKind} onChange={(e) => setTrigKind(e.target.value as TriggerKind)}>
+            <option value="manual">{t("fleet.settings.triggerManual")}</option>
+            <option value="interval">{t("fleet.settings.triggerInterval")}</option>
+            <option value="cron">{t("fleet.settings.triggerCron")}</option>
+          </select>
+          {trigKind !== "manual" && (
+            <input
+              value={trigValue}
+              onChange={(e) => setTrigValue(e.target.value)}
+              placeholder={trigKind === "interval" ? "30m" : "*/15 * * * *"}
+            />
+          )}
+        </div>
+        {trigKind === "interval" && !DURATION_RE.test(trigValue.trim()) && (
+          <div className="fleet-settings__warning">{t("fleet.settings.invalidDuration")}</div>
+        )}
+        <div className="fleet-settings__row">
+          <label>{t("fleet.settings.maxIterations")}</label>
+          <input value={maxIter} onChange={(e) => setMaxIter(e.target.value)} placeholder="8" />
+        </div>
+        <div className="fleet-settings__row">
+          <label>{t("fleet.settings.deadline")}</label>
+          <input value={deadline} onChange={(e) => setDeadlineValue(e.target.value)} placeholder="2h" />
+        </div>
+        {deadline.trim() !== "" && !DURATION_RE.test(deadline.trim()) && (
+          <div className="fleet-settings__warning">{t("fleet.settings.invalidDuration")}</div>
+        )}
+        <div className="fleet-settings__hint">{t("fleet.settings.deadlineHint")}</div>
+        <div className="fleet-settings__row">
+          <label>{t("fleet.settings.budget")}</label>
+          <input value={budget} onChange={(e) => setBudget(e.target.value)} placeholder="0.00" />
+        </div>
+        {budgetWarning && <div className="fleet-settings__warning">{t("fleet.settings.budgetWarning")}</div>}
+        <div className="fleet-settings__row">
+          <label>{t("fleet.settings.doneWhen")}</label>
+          <input
+            value={doneWhen}
+            onChange={(e) => setDoneWhen(e.target.value)}
+            placeholder={t("fleet.settings.doneWhenHint")}
+          />
+        </div>
+        <div className="fleet-settings__hint">
+          {t("fleet.settings.lastRun")}: {detail.loop_cfg?.last_run ?? t("fleet.settings.lastRunNever")}
+          <br />
+          {t("fleet.settings.stopHint")}
+        </div>
+        <button
+          className="toolbar-btn toolbar-btn--primary"
+          onClick={handleSaveSettings}
+          disabled={busy !== null || !settingsAreValid(trigKind, trigValue, deadline)}
+        >
+          {t("fleet.settings.save")}
+        </button>
       </div>
 
       <div className="fleet-section fleet-section--jobs">

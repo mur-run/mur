@@ -16,5 +16,6 @@ pub mod partition_cmd;
 pub mod plan;
 pub mod roster;
 pub mod run;
+pub mod settings;
 pub mod show;
 pub mod store;

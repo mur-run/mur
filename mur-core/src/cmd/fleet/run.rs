@@ -156,8 +156,8 @@ pub fn resolve_run_goal(
 /// worktree instead of broadcasting to members in the shared checkout.
 const EXEC_FLAG_ENV: &str = "MUR_PARALLEL_EXEC";
 
-fn parallel_exec_enabled() -> bool {
-    std::env::var(EXEC_FLAG_ENV).as_deref() == Ok("1")
+fn parallel_exec_enabled(force: bool) -> bool {
+    force || std::env::var(EXEC_FLAG_ENV).as_deref() == Ok("1")
 }
 
 /// Main repo root (where `.worktrees/` lives), discovered from the invoking cwd.
@@ -236,7 +236,12 @@ fn git_porcelain(repo: &Path) -> std::collections::HashSet<String> {
         .unwrap_or_default()
 }
 
-pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>) -> Result<()> {
+pub async fn cmd_fleet_run(
+    mur_home: &Path,
+    name: &str,
+    job_arg: Option<String>,
+    force_worktree: bool,
+) -> Result<()> {
     let fleet = store::load_fleet(mur_home, name)?;
     if fleet.members.is_empty() {
         bail!("fleet '{name}' has no members");
@@ -265,7 +270,7 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>)
     // per track and route each delegate into it. Otherwise: router plan, else
     // broadcast-to-all. The router does not model worktrees, so the parallel
     // path deliberately bypasses it.
-    let exec_parallel = parallel_exec_enabled() && fleet.parallel.is_some();
+    let exec_parallel = parallel_exec_enabled(force_worktree) && fleet.parallel.is_some();
     let (proc, parallel_run) = if exec_parallel {
         let cfg = fleet.parallel.as_ref().expect("guarded by exec_parallel");
         let repo_root = discover_repo_root()?;
@@ -402,10 +407,20 @@ mod tests {
     #[test]
     fn exec_flag_gates_parallel_execution() {
         unsafe { std::env::remove_var(EXEC_FLAG_ENV) };
-        assert!(!parallel_exec_enabled());
+        assert!(!parallel_exec_enabled(false));
         unsafe { std::env::set_var(EXEC_FLAG_ENV, "1") };
-        assert!(parallel_exec_enabled());
+        assert!(parallel_exec_enabled(false));
         unsafe { std::env::remove_var(EXEC_FLAG_ENV) };
+    }
+
+    #[test]
+    fn force_worktree_bypasses_env_var() {
+        unsafe { std::env::remove_var(EXEC_FLAG_ENV) };
+        assert!(
+            parallel_exec_enabled(true),
+            "an explicit force=true must enable isolation even with the env var unset"
+        );
+        assert!(!parallel_exec_enabled(false));
     }
 
     #[test]

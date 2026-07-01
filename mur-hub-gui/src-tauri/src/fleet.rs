@@ -3,7 +3,10 @@
 use std::path::PathBuf;
 
 use mur_common::fleet::Job;
-use mur_core::cmd::fleet::{control, create, delete, export, import, jobs, roster, run, store};
+use mur_common::parallel::ParallelConfig;
+use mur_core::cmd::fleet::{
+    control, create, delete, export, import, jobs, loop_run, roster, run, settings, store,
+};
 use serde::Serialize;
 use tauri::Emitter;
 
@@ -21,6 +24,23 @@ pub struct FleetSummary {
 }
 
 #[derive(Serialize, Clone)]
+pub struct FleetLoopView {
+    pub trigger: String,
+    pub max_iterations: u32,
+    pub budget_usd: f64,
+    pub deadline: String,
+    pub done_when: String,
+    pub last_run: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ParallelSummaryView {
+    pub mode: String,
+    pub track_count: usize,
+    pub target_file: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
 pub struct FleetDetail {
     pub name: String,
     pub display_name: String,
@@ -29,6 +49,30 @@ pub struct FleetDetail {
     pub members: Vec<String>,
     pub channel_id: String,
     pub stopped: bool,
+    pub loop_cfg: Option<FleetLoopView>,
+    pub parallel_summary: Option<ParallelSummaryView>,
+}
+
+fn parallel_summary_view(cfg: &ParallelConfig) -> ParallelSummaryView {
+    ParallelSummaryView {
+        mode: match cfg.mode {
+            mur_common::parallel::ParallelMode::Speculative => "speculative".to_string(),
+            mur_common::parallel::ParallelMode::Partition => "partition".to_string(),
+        },
+        track_count: cfg.tracks.len(),
+        target_file: cfg.partition.as_ref().map(|p| p.target_file.clone()),
+    }
+}
+
+/// Read fleet's `.last_run` auto-run sentinel (unix seconds, written by
+/// `mur-daemon`'s `fleet_tick`) format it RFC3339, if present.
+fn read_last_run_rfc3339(mur_home: &std::path::Path, name: &str) -> Option<String> {
+    let secs: i64 = std::fs::read_to_string(store::fleet_dir(mur_home, name).join(".last_run"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    chrono::DateTime::from_timestamp(secs, 0).map(|dt| dt.to_rfc3339())
 }
 
 #[derive(Serialize, Clone)]
@@ -102,6 +146,15 @@ pub fn fleet_detail(name: String) -> Result<FleetDetail, String> {
     let home = mur_home_path();
     let fleet = store::load_fleet(&home, &name).map_err(|e| e.to_string())?;
     let stopped = control::is_stopped(&home, &name);
+    let loop_cfg = fleet.loop_cfg.as_ref().map(|l| FleetLoopView {
+        trigger: l.trigger.clone(),
+        max_iterations: l.max_iterations,
+        budget_usd: l.budget_usd,
+        deadline: l.deadline.clone(),
+        done_when: l.done_when.clone(),
+        last_run: read_last_run_rfc3339(&home, &name),
+    });
+    let parallel_summary = fleet.parallel.as_ref().map(parallel_summary_view);
     Ok(FleetDetail {
         name: fleet.name.clone(),
         display_name: display(&fleet.name, &fleet.display_name),
@@ -110,6 +163,8 @@ pub fn fleet_detail(name: String) -> Result<FleetDetail, String> {
         members: fleet.members.clone(),
         channel_id: fleet.channel_id.clone(),
         stopped,
+        loop_cfg,
+        parallel_summary,
     })
 }
 
@@ -119,9 +174,10 @@ pub fn fleet_create(
     members: Vec<String>,
     router: Option<String>,
     goal: String,
+    parallel: Option<ParallelConfig>,
 ) -> Result<(), String> {
     let home = mur_home_path();
-    create::cmd_fleet_create(&home, &name, members, router, Some(goal), None)
+    create::cmd_fleet_create(&home, &name, members, router, Some(goal), parallel)
         .map_err(|e| e.to_string())
 }
 
@@ -145,7 +201,7 @@ pub fn fleet_start(name: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn fleet_run(name: String, app: tauri::AppHandle) -> Result<(), String> {
+pub async fn fleet_run(name: String, worktree: bool, app: tauri::AppHandle) -> Result<(), String> {
     let home = mur_home_path();
     let fleet_name = name.clone();
     // cmd_fleet_run is async but does blocking I/O internally (UnixStream dial).
@@ -153,7 +209,7 @@ pub async fn fleet_run(name: String, app: tauri::AppHandle) -> Result<(), String
     tokio::task::spawn_blocking(move || {
         let ok = tokio::runtime::Runtime::new()
             .expect("fleet run runtime")
-            .block_on(run::cmd_fleet_run(&home, &fleet_name, None))
+            .block_on(run::cmd_fleet_run(&home, &fleet_name, None, worktree))
             .is_ok();
         let _ = app.emit(
             "fleet:run_done",
@@ -161,6 +217,70 @@ pub async fn fleet_run(name: String, app: tauri::AppHandle) -> Result<(), String
         );
     });
     Ok(())
+}
+
+#[tauri::command]
+pub async fn fleet_run_loop(
+    name: String,
+    max_iterations: Option<u32>,
+    deadline: Option<String>,
+    budget_usd: Option<f64>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let home = mur_home_path();
+    let fleet_name = name.clone();
+    tokio::task::spawn_blocking(move || {
+        let ok = tokio::runtime::Runtime::new()
+            .expect("fleet run loop runtime")
+            .block_on(loop_run::cmd_fleet_run_loop(
+                &home,
+                &fleet_name,
+                max_iterations,
+                deadline,
+                budget_usd,
+            ))
+            .is_ok();
+        let _ = app.emit(
+            "fleet:run_done",
+            serde_json::json!({ "name": fleet_name, "ok": ok }),
+        );
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn fleet_set_loop(
+    name: String,
+    trigger: Option<String>,
+    max_iterations: Option<u32>,
+    deadline: Option<String>,
+    budget_usd: Option<f64>,
+    done_when: Option<String>,
+) -> Result<(), String> {
+    let home = mur_home_path();
+    settings::cmd_fleet_set_loop(
+        &home,
+        &name,
+        trigger,
+        max_iterations,
+        deadline,
+        budget_usd,
+        done_when,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_fleet_autorun() -> Result<bool, String> {
+    let cfg = mur_core::store::config::load_config().map_err(|e| e.to_string())?;
+    Ok(cfg.fleet.autorun)
+}
+
+#[tauri::command]
+pub fn set_fleet_autorun(enabled: bool) -> Result<(), String> {
+    let mut cfg = mur_core::store::config::load_config().map_err(|e| e.to_string())?;
+    cfg.fleet.autorun = enabled;
+    mur_core::store::config::save_config(&cfg).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -291,5 +411,72 @@ mod tests {
     fn display_falls_back_to_name() {
         assert_eq!(display("dev", ""), "dev");
         assert_eq!(display("dev", "Dev Squad"), "Dev Squad");
+    }
+
+    #[test]
+    fn parallel_summary_view_speculative_and_partition() {
+        use mur_common::parallel::{
+            JudgeConfig, ParallelConfig, ParallelMode, PartitionConfig, TrackConfig,
+        };
+
+        let spec = ParallelConfig {
+            mode: ParallelMode::Speculative,
+            tracks: vec![
+                TrackConfig {
+                    name: "a".into(),
+                    approach: "x".into(),
+                    model: None,
+                },
+                TrackConfig {
+                    name: "b".into(),
+                    approach: "y".into(),
+                    model: None,
+                },
+            ],
+            judge: JudgeConfig {
+                model: "claude-opus-4-8".into(),
+                rubric: Default::default(),
+            },
+            pre_filter: vec![],
+            partition: None,
+        };
+        let view = parallel_summary_view(&spec);
+        assert_eq!(view.mode, "speculative");
+        assert_eq!(view.track_count, 2);
+        assert_eq!(view.target_file, None);
+
+        let part = ParallelConfig {
+            mode: ParallelMode::Partition,
+            tracks: vec![],
+            judge: JudgeConfig {
+                model: "claude-opus-4-8".into(),
+                rubric: Default::default(),
+            },
+            pre_filter: vec![],
+            partition: Some(PartitionConfig {
+                target_file: "src/widget.rs".into(),
+            }),
+        };
+        let view2 = parallel_summary_view(&part);
+        assert_eq!(view2.mode, "partition");
+        assert_eq!(view2.track_count, 0);
+        assert_eq!(view2.target_file.as_deref(), Some("src/widget.rs"));
+    }
+
+    #[test]
+    fn last_run_reads_sentinel_and_handles_absence() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let fleet_dir = store::fleet_dir(home, "dev");
+        std::fs::create_dir_all(&fleet_dir).unwrap();
+
+        assert_eq!(read_last_run_rfc3339(home, "dev"), None);
+
+        std::fs::write(fleet_dir.join(".last_run"), "1751328000").unwrap();
+        let got = read_last_run_rfc3339(home, "dev").unwrap();
+        // RFC3339-parseable and round-trips to the same unix timestamp (avoids
+        // hardcoding a guessed calendar year, which would be a flaky assertion).
+        let parsed = chrono::DateTime::parse_from_rfc3339(&got).unwrap();
+        assert_eq!(parsed.timestamp(), 1751328000);
     }
 }
