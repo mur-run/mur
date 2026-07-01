@@ -109,7 +109,7 @@ fn render_completion(f: &mut Frame, app: &App, input_area: Rect) {
 fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme;
     let block = Block::default()
-        .borders(Borders::ALL)
+        .borders(Borders::TOP | Borders::BOTTOM)
         .border_type(theme.border_type)
         .border_style(Style::default().fg(theme.border))
         .padding(Padding::horizontal(theme.inner_padding as u16))

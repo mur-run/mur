@@ -19,6 +19,18 @@ use super::welcome::{Blink, MascotMode, resolve_mascot_mode};
 /// Spinner frames shown while the agent is generating.
 pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/// Compact composer-border hint. Shift+Enter doesn't need an OS-specific
+/// label (the key is "Shift" everywhere); the Alt/Option fallback chord only
+/// shows up in the full hint below, where there's room to spell it out.
+const ENTER_HINT_COMPACT: &str = " message — Enter · Shift+Enter · /help ";
+
+/// Full composer-border hint. macOS calls the modifier "Option" even though
+/// it's still crossterm's `ALT` — every other OS calls it "Alt".
+#[cfg(target_os = "macos")]
+const ENTER_HINT_FULL: &str = " message — Enter to send · Shift+Enter newline (Option+Enter also works) · Ctrl+V image · Ctrl+O transcript · /help · Ctrl+D quit";
+#[cfg(not(target_os = "macos"))]
+const ENTER_HINT_FULL: &str = " message — Enter to send · Shift+Enter newline (Alt+Enter also works) · Ctrl+V image · Ctrl+O transcript · /help · Ctrl+D quit";
+
 /// Who authored a message in the transcript.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -754,21 +766,21 @@ impl App {
     pub fn sync_input_block(&mut self) {
         let theme = self.theme;
         let hint = if theme.compact_input {
-            " message — Enter · Alt+Enter · /help "
+            ENTER_HINT_COMPACT
         } else {
-            " message — Enter to send · Alt+Enter newline · Ctrl+V image · Ctrl+O transcript · /help · Ctrl+D quit"
+            ENTER_HINT_FULL
         };
         let is_shell = self.input_text().trim_start().starts_with('!');
         let block = if is_shell {
             Block::default()
-                .borders(Borders::ALL)
+                .borders(Borders::TOP | Borders::BOTTOM)
                 .border_type(theme.border_type)
                 .border_style(Style::default().fg(Color::Red))
                 .padding(Padding::horizontal(theme.inner_padding as u16))
                 .title(" ! shell command — output shared with agent ")
         } else {
             Block::default()
-                .borders(Borders::ALL)
+                .borders(Borders::TOP | Borders::BOTTOM)
                 .border_type(theme.border_type)
                 .border_style(Style::default().fg(theme.border))
                 .padding(Padding::horizontal(theme.inner_padding as u16))
@@ -782,9 +794,11 @@ impl App {
 /// Build the styled multiline input widget.
 fn new_input() -> TextArea<'static> {
     let mut ta = TextArea::default();
-    ta.set_block(Block::default().borders(Borders::ALL).title(
-        " message — Enter to send · Alt+Enter newline · Ctrl+V image · Ctrl+O transcript · /help · Ctrl+D quit",
-    ));
+    ta.set_block(
+        Block::default()
+            .borders(Borders::TOP | Borders::BOTTOM)
+            .title(ENTER_HINT_FULL),
+    );
     ta.set_cursor_line_style(Style::default());
     ta.set_placeholder_text("Type a message…");
     ta.set_placeholder_style(Style::default().fg(Color::DarkGray));
