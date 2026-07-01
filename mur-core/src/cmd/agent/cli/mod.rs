@@ -34,10 +34,12 @@ use std::time::Instant as StdInstant;
 use anyhow::{Context, Result};
 use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange, Event,
-    EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind,
+    EventStream, KeyCode, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MouseEventKind,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    supports_keyboard_enhancement,
 };
 use crossterm::{cursor, execute};
 use futures::StreamExt;
@@ -159,6 +161,27 @@ pub async fn cmd_cli(
 
 // ── TUI mode ────────────────────────────────────────────────────────────────
 
+/// Try to enable disambiguated escape codes so Shift+Enter (and other
+/// modified keys) are reported with a distinct modifier instead of looking
+/// like a bare keypress. Not every terminal supports this protocol (e.g.
+/// macOS Terminal.app) — silently skip there; Alt/Option+Enter remains a
+/// universal fallback for the newline binding since legacy terminals already
+/// report Alt via an ESC prefix with no protocol opt-in required.
+fn push_keyboard_enhancement() {
+    if matches!(supports_keyboard_enhancement(), Ok(true)) {
+        let _ = execute!(
+            io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
+    }
+}
+
+fn pop_keyboard_enhancement() {
+    if matches!(supports_keyboard_enhancement(), Ok(true)) {
+        let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+    }
+}
+
 /// RAII terminal restore — runs on every exit path including unwind.
 struct TerminalGuard;
 
@@ -172,12 +195,14 @@ impl TerminalGuard {
             EnableFocusChange
         )
         .context("enter alternate screen")?;
+        push_keyboard_enhancement();
         Ok(Self)
     }
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        pop_keyboard_enhancement();
         let _ = execute!(
             io::stdout(),
             LeaveAlternateScreen,
@@ -210,6 +235,7 @@ async fn run_tui(
     // Restore the terminal even if a later panic unwinds past the guard.
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        pop_keyboard_enhancement();
         let _ = execute!(
             io::stdout(),
             LeaveAlternateScreen,
@@ -363,6 +389,11 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                 app.esc_hint = false;
             }
             let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+            // Alt/Option+Enter is a universal newline fallback: legacy
+            // terminals report Alt via a plain ESC prefix with no protocol
+            // opt-in, unlike Shift which needs the (not-universally-supported)
+            // keyboard-enhancement protocol pushed in `TerminalGuard::enter`.
+            let alt = key.modifiers.contains(KeyModifiers::ALT);
             // While the completion menu is open it owns navigation / accept /
             // dismiss keys; everything else falls through to normal editing and
             // re-filters the menu at the end of this handler.
@@ -427,7 +458,7 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                     app.scroll_back = app.scroll_back.saturating_sub(app.scroll_page.max(1))
                 }
                 KeyCode::Tab => refresh_completion(app),
-                KeyCode::Enter if shift => {
+                KeyCode::Enter if shift || alt => {
                     app.input.insert_newline();
                 }
                 KeyCode::Enter => submit(app, tx).await,
@@ -508,6 +539,7 @@ fn scrollback_dump(app: &App) -> io::Result<()> {
 
     // Suspend: leave alt-screen + restore the normal buffer where native copy
     // and scrollback work; drop raw mode so `read_line` is canonical.
+    pop_keyboard_enhancement();
     execute!(io::stdout(), LeaveAlternateScreen, DisableBracketedPaste,)?;
     disable_raw_mode()?;
 
@@ -531,6 +563,7 @@ fn scrollback_dump(app: &App) -> io::Result<()> {
     // terminal in the normal buffer with raw mode off.
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste,)?;
+    push_keyboard_enhancement();
     res
 }
 
