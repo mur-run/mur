@@ -8,7 +8,7 @@ import { CATEGORY_COLORS, avatarPreset, familyOf } from "../../utils";
 import { PetFace } from "../PetFace";
 import type { FleetDetail as Detail, JobRow } from "./types";
 import { DURATION_RE } from "./fleetCreateForm";
-import { parseTrigger, buildTrigger, type TriggerKind } from "./fleetSettingsForm";
+import { parseTrigger, buildTrigger, settingsAreValid, type TriggerKind } from "./fleetSettingsForm";
 
 interface Props {
   detail: Detail;
@@ -60,17 +60,10 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
   );
   const [doneWhen, setDoneWhen] = useState(detail.loop_cfg?.done_when ?? "");
 
-  function settingsValid(): boolean {
-    if (trigKind === "interval" && !DURATION_RE.test(trigValue.trim())) return false;
-    if (trigKind === "cron" && trigValue.trim() === "") return false;
-    if (deadline.trim() !== "" && !DURATION_RE.test(deadline.trim())) return false;
-    return true;
-  }
-
   const budgetWarning = trigKind !== "manual" && (!budget.trim() || Number(budget) <= 0);
 
   async function handleSaveSettings() {
-    if (!settingsValid()) return;
+    if (!settingsAreValid(trigKind, trigValue, deadline)) return;
     setBusy("fleet_set_loop");
     try {
       await invoke("fleet_set_loop", {
@@ -352,7 +345,7 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
         <button
           className="toolbar-btn toolbar-btn--primary"
           onClick={handleSaveSettings}
-          disabled={busy !== null || !settingsValid()}
+          disabled={busy !== null || !settingsAreValid(trigKind, trigValue, deadline)}
         >
           {t("fleet.settings.save")}
         </button>
