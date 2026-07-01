@@ -442,25 +442,25 @@ pub enum FleetAction {
         #[arg(long)]
         budget_usd: Option<f64>,
     },
-    /// Update fleet's loop/auto-run config (trigger, budget, iteration cap,
-    /// deadline, done-when marker). Only flags passed changed —
-    /// everything else already set preserved.
+    /// Update a fleet's loop/auto-run config (trigger, budget, iteration cap,
+    /// deadline, done-when marker). Only the flags you pass are changed —
+    /// everything else already set is preserved.
     SetLoop {
         /// Fleet name
         name: String,
         /// manual | interval:<dur> | cron:<5-field POSIX expr>
         #[arg(long)]
         trigger: Option<String>,
-        /// Iteration cap guarded loop
+        /// Iteration cap for the guarded loop
         #[arg(long)]
         max_iterations: Option<u32>,
-        /// Wall-clock deadline, e.g. 30s/5m/2h/1d (relative, NOT calendar date)
+        /// Wall-clock deadline, e.g. 30s/5m/2h/1d (relative, NOT a calendar date)
         #[arg(long)]
         deadline: Option<String>,
-        /// Projected USD budget ceiling loop; required 0 daemon auto-run
+        /// Projected USD budget ceiling for the loop; required > 0 for daemon auto-run
         #[arg(long)]
         budget_usd: Option<f64>,
-        /// Convergence marker: `marker:<TEXT>` (own-line sentinel), leave unset router judgment
+        /// Convergence marker: `marker:<TEXT>` (own-line sentinel), or leave unset for router judgment
         #[arg(long)]
         done_when: Option<String>,
     },
