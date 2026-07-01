@@ -506,8 +506,18 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
             let trimmed = text.trim();
             if let Some((mime, b64)) = paste::image_from_paste(trimmed) {
                 stage_image(app, mime, b64);
-            } else if trimmed.is_empty() && attach_clipboard_image(app) {
-                // image grabbed off the clipboard
+            } else if trimmed.is_empty() {
+                // An empty bracketed paste is the terminal's signal for "the
+                // clipboard has content but no text to give you" — try
+                // reading an image off it directly. Previously a failed
+                // read here fell through to `insert_str("")`, a silent
+                // no-op with zero feedback; now it reports the same way
+                // Ctrl+V does on the identical failure.
+                if !attach_clipboard_image(app) {
+                    app.push_system(
+                        "paste looked like an image but the clipboard had none — copy a screenshot first",
+                    );
+                }
             } else {
                 app.input.insert_str(text);
             }
