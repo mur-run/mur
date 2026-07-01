@@ -773,14 +773,14 @@ impl App {
         let is_shell = self.input_text().trim_start().starts_with('!');
         let block = if is_shell {
             Block::default()
-                .borders(Borders::ALL)
+                .borders(Borders::TOP | Borders::BOTTOM)
                 .border_type(theme.border_type)
                 .border_style(Style::default().fg(Color::Red))
                 .padding(Padding::horizontal(theme.inner_padding as u16))
                 .title(" ! shell command — output shared with agent ")
         } else {
             Block::default()
-                .borders(Borders::ALL)
+                .borders(Borders::TOP | Borders::BOTTOM)
                 .border_type(theme.border_type)
                 .border_style(Style::default().fg(theme.border))
                 .padding(Padding::horizontal(theme.inner_padding as u16))
@@ -796,7 +796,7 @@ fn new_input() -> TextArea<'static> {
     let mut ta = TextArea::default();
     ta.set_block(
         Block::default()
-            .borders(Borders::ALL)
+            .borders(Borders::TOP | Borders::BOTTOM)
             .title(ENTER_HINT_FULL),
     );
     ta.set_cursor_line_style(Style::default());
