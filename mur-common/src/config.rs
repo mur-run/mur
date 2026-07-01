@@ -85,6 +85,10 @@ pub struct Config {
     // --- parallel_jobs MCP tool ---
     #[serde(default)]
     pub parallel_jobs: ParallelJobsConfig,
+
+    // --- Hub Fleet Manager redesign ---
+    #[serde(default)]
+    pub fleet: FleetConfig,
 }
 
 /// Authorization gate for the `parallel_jobs` MCP tool. Stored under `parallel_jobs:`
@@ -98,6 +102,36 @@ pub struct ParallelJobsConfig {
     /// Empty = deny all.
     #[serde(default)]
     pub targets: Vec<String>,
+}
+
+/// Daemon-wide gate for unattended fleet auto-run (`mur-daemon`'s `fleet_tick`).
+/// Stored under `fleet:` in `~/.mur/config.yaml`. Either this flag OR the
+/// `MUR_FLEET_AUTORUN` env var satisfies the gate — both are equally explicit,
+/// off-by-default opt-ins; the env var remains for ops/CI use, this flag is
+/// what the Hub's Settings toggle controls. Per-fleet `budget_usd > 0` and the
+/// `.stopped` kill-switch are unaffected — see `mur-daemon/src/fleet_tick.rs`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct FleetConfig {
+    /// Allow fleets with a trigger + budget configured to auto-run unattended.
+    #[serde(default)]
+    pub autorun: bool,
+}
+
+#[cfg(test)]
+mod fleet_config_tests {
+    use super::*;
+
+    #[test]
+    fn fleet_config_defaults_off_and_roundtrips() {
+        assert!(!FleetConfig::default().autorun);
+
+        let cfg: Config = serde_yaml_ng::from_str("fleet:\n  autorun: true\n").unwrap();
+        assert!(cfg.fleet.autorun);
+
+        // `fleet:` key entirely absent → defaults to off
+        let cfg2: Config = serde_yaml_ng::from_str("{}").unwrap();
+        assert!(!cfg2.fleet.autorun);
+    }
 }
 
 /// Routing for Anthropic subscription-OAuth (`sk-ant-oat*`) tokens through a
