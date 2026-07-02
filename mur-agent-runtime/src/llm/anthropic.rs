@@ -556,7 +556,7 @@ impl LlmClient for AnthropicClient {
         if !status.is_success() {
             tracing::warn!(status = %status, body = %body_text, "anthropic non-2xx");
             if status == 429 {
-                return Err(LlmError::Http(format!("rate limit: {body_text}")));
+                return Err(LlmError::RateLimit);
             }
             return Err(LlmError::Http(format!("status {status}: {body_text}")));
         }
@@ -632,6 +632,9 @@ impl LlmClient for AnthropicClient {
             })?;
         let status = resp.status();
         if !status.is_success() {
+            if status == 429 {
+                return Err(LlmError::RateLimit);
+            }
             let body_text = resp.text().await.unwrap_or_default();
             return Err(LlmError::Http(format!("status {status}: {body_text}")));
         }
