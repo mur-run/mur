@@ -28,6 +28,7 @@ mod welcome;
 
 use std::io::{self, BufRead, IsTerminal, Stdout};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::time::Instant as StdInstant;
 
@@ -167,17 +168,31 @@ pub async fn cmd_cli(
 /// macOS Terminal.app) — silently skip there; Alt/Option+Enter remains a
 /// universal fallback for the newline binding since legacy terminals already
 /// report Alt via an ESC prefix with no protocol opt-in required.
+// Remembers whether the push below actually enabled the protocol, so pop
+// never re-queries the terminal (see `pop_keyboard_enhancement`).
+static KB_ENHANCEMENT_ACTIVE: AtomicBool = AtomicBool::new(false);
+
 fn push_keyboard_enhancement() {
-    if matches!(supports_keyboard_enhancement(), Ok(true)) {
-        let _ = execute!(
+    if matches!(supports_keyboard_enhancement(), Ok(true))
+        && execute!(
             io::stdout(),
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-        );
+        )
+        .is_ok()
+    {
+        KB_ENHANCEMENT_ACTIVE.store(true, Ordering::Relaxed);
     }
 }
 
+// Deliberately does NOT call `supports_keyboard_enhancement()` again: that
+// sends a second terminal query-and-wait (up to crossterm's 2s timeout) at
+// shutdown. If the reply arrives after we've already disabled raw mode /
+// left the alternate screen, nothing reads it — the raw escape bytes fall
+// through to the shell's cooked-mode stdin and get echoed as garbage
+// (e.g. `^[[?1u^[[?62;22;52c`). We already know from the push above
+// whether the protocol is active, so just use that.
 fn pop_keyboard_enhancement() {
-    if matches!(supports_keyboard_enhancement(), Ok(true)) {
+    if KB_ENHANCEMENT_ACTIVE.swap(false, Ordering::Relaxed) {
         let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
     }
 }
