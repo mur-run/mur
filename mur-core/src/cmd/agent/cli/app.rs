@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Padding};
@@ -193,6 +194,31 @@ pub fn esc_action(
     }
 }
 
+/// Result of a keypress while the transcript overlay (Ctrl+O) is open.
+#[derive(Debug, PartialEq, Eq)]
+pub enum OverlayKeyAction {
+    /// Close the overlay and resume normal input.
+    Close,
+    /// Close the overlay, then request the app quit (Ctrl+D while reading).
+    CloseAndQuit,
+    /// Swallow the key — never inserted into the composer.
+    Ignore,
+}
+
+/// Pure function — no IO, fully testable. The transcript overlay only
+/// recognises Esc/Enter (return to chat) and Ctrl+D (quit); every other key
+/// is swallowed so it can never leak into the input box once the overlay
+/// closes.
+pub fn overlay_key_action(code: KeyCode, modifiers: KeyModifiers) -> OverlayKeyAction {
+    if code == KeyCode::Char('d') && modifiers.contains(KeyModifiers::CONTROL) {
+        return OverlayKeyAction::CloseAndQuit;
+    }
+    match code {
+        KeyCode::Esc | KeyCode::Enter => OverlayKeyAction::Close,
+        _ => OverlayKeyAction::Ignore,
+    }
+}
+
 /// All mutable TUI state.
 pub struct App {
     pub home: PathBuf,
@@ -240,6 +266,13 @@ pub struct App {
     /// Forces a full ratatui repaint on the next frame after we manipulate the
     /// raw terminal outside the Terminal object (e.g. Ctrl+O scrollback dump).
     pub needs_full_redraw: bool,
+    /// True while the Ctrl+O transcript overlay is showing. The overlay
+    /// stays in raw mode/alt-screen and keys route through the normal event
+    /// loop (`overlay_key_action`) instead of a blocking stdin read.
+    pub overlay_open: bool,
+    /// Plain-text transcript rendered full-screen while `overlay_open` is
+    /// true. `None` when the overlay is closed.
+    pub overlay_text: Option<String>,
     /// Armed-at timestamp for the Ctrl+C two-press-to-quit confirmation when
     /// the composer is empty and idle. Mirrors `last_esc_at`.
     pub last_ctrl_c_at: Option<std::time::Instant>,
@@ -326,6 +359,8 @@ impl App {
             last_esc_at: None,
             esc_hint: false,
             needs_full_redraw: false,
+            overlay_open: false,
+            overlay_text: None,
             last_ctrl_c_at: None,
             ctrl_c_hint: false,
             last_sent: None,
@@ -1270,6 +1305,68 @@ mod esc_action_tests {
     #[test]
     fn esc_nothing_when_window_expired_not_streaming_empty() {
         assert_eq!(esc_action(expired(), false, true), EscAction::Nothing);
+    }
+}
+
+#[cfg(test)]
+mod overlay_key_action_tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    #[test]
+    fn esc_closes() {
+        assert_eq!(
+            overlay_key_action(KeyCode::Esc, KeyModifiers::NONE),
+            OverlayKeyAction::Close
+        );
+    }
+
+    #[test]
+    fn enter_closes() {
+        assert_eq!(
+            overlay_key_action(KeyCode::Enter, KeyModifiers::NONE),
+            OverlayKeyAction::Close
+        );
+    }
+
+    #[test]
+    fn ctrl_d_closes_and_quits() {
+        assert_eq!(
+            overlay_key_action(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            OverlayKeyAction::CloseAndQuit
+        );
+    }
+
+    #[test]
+    fn plain_d_is_ignored_not_quit() {
+        assert_eq!(
+            overlay_key_action(KeyCode::Char('d'), KeyModifiers::NONE),
+            OverlayKeyAction::Ignore
+        );
+    }
+
+    #[test]
+    fn other_chars_are_ignored_never_inserted() {
+        assert_eq!(
+            overlay_key_action(KeyCode::Char('x'), KeyModifiers::NONE),
+            OverlayKeyAction::Ignore
+        );
+    }
+
+    #[test]
+    fn arrow_keys_are_ignored() {
+        assert_eq!(
+            overlay_key_action(KeyCode::Down, KeyModifiers::NONE),
+            OverlayKeyAction::Ignore
+        );
+    }
+
+    #[test]
+    fn ctrl_c_is_ignored_overlay_only_recognises_ctrl_d() {
+        assert_eq!(
+            overlay_key_action(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            OverlayKeyAction::Ignore
+        );
     }
 }
 
