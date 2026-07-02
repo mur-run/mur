@@ -1,9 +1,11 @@
 use mur_compress::{CompressConfig, CompressEngine, RetrieveResult};
 
 fn engine(dir: &std::path::Path) -> CompressEngine {
-    let mut cfg = CompressConfig::default();
-    cfg.protect_head_lines = 2;
-    cfg.protect_tail_lines = 1;
+    let mut cfg = CompressConfig {
+        protect_head_lines: 2,
+        protect_tail_lines: 1,
+        ..Default::default()
+    };
     cfg.store.compress_at_rest = false;
     CompressEngine::new(dir, cfg).unwrap()
 }

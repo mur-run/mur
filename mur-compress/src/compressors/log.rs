@@ -86,9 +86,11 @@ mod tests {
 
     #[test]
     fn keeps_errors_offloads_noise() {
-        let mut cfg = CompressConfig::default();
-        cfg.protect_head_lines = 0;
-        cfg.protect_tail_lines = 0;
+        let cfg = CompressConfig {
+            protect_head_lines: 0,
+            protect_tail_lines: 0,
+            ..Default::default()
+        };
         let dir = tempfile::tempdir().unwrap();
         let store = CcrStore::new(dir.path(), 3600, 100, 1 << 30, false).unwrap();
         let ctx = CompressCtx {

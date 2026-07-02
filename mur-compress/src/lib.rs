@@ -217,8 +217,10 @@ mod tests {
     #[test]
     fn disabled_config_is_a_passthrough() {
         let dir = tempfile::tempdir().unwrap();
-        let mut cfg = CompressConfig::default();
-        cfg.enabled = false;
+        let cfg = CompressConfig {
+            enabled: false,
+            ..Default::default()
+        };
         let eng = engine(dir.path(), cfg);
         // A long search result that would normally offload.
         let input = (0..40)

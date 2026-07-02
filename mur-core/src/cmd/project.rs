@@ -129,9 +129,7 @@ pub async fn do_project_search(
 
     // If an explicit --project filter matched no indexed project at all, that is
     // a distinct condition from "project indexed but zero results".
-    if !matched_any_project
-        && let Some(name) = project_filter
-    {
+    if !matched_any_project && let Some(name) = project_filter {
         anyhow::bail!(
             "project `{name}` is not indexed. Run `mur project index` in that project first."
         );
