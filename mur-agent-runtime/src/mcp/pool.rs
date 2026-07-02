@@ -79,7 +79,12 @@ impl McpPool {
         let clients: Vec<_> = guard.drain().map(|(_, v)| v).collect();
         drop(guard);
         for arc in clients {
-            // Only shut down if we hold the last Arc reference.
+            // Only shut down if we hold the last Arc reference. When another
+            // holder (e.g. an in-flight tool call) still has a clone, we
+            // can't kill+wait the child here without racing that call; the
+            // eventual last drop is still reap-safe because
+            // `StdioMcpClient`'s `Drop` impl kills and waits synchronously,
+            // so no zombie survives regardless of which reference is last.
             if let Ok(mutex) = Arc::try_unwrap(arc) {
                 mutex.into_inner().shutdown().await;
             }
