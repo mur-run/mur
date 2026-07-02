@@ -6,12 +6,14 @@
 //! launchd needs the process to exit, not the lock to disappear.
 
 use std::fs;
-use std::path::Path;
+use std::fs::OpenOptions;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use anyhow::{Result, bail};
 use mur_common::{AgentProfile as _AgentProfile, LockFile};
 
-use super::{pid_alive, resolve_mur_home, stale};
+use super::{pid_alive, resolve_mur_home, resolve_runtime_target, stale};
 
 /// Extra grace period added on top of the runtime's `stop_timeout_secs` before
 /// the SIGKILL fallback fires.  The SIGKILL wait MUST outlast the runtime's own
@@ -182,6 +184,13 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<()> {
     let old_pid = lock.pid;
     let old_sha = lock.build_sha.clone();
 
+    // Whether a launchd/systemd service unit is installed for this agent —
+    // computed before signalling so we know, once the old pid is dead,
+    // whether to expect an automatic respawn or do it ourselves.
+    let has_service = service_unit_path(name)
+        .map(|p| service_unit_exists(&p))
+        .unwrap_or(false);
+
     // Load stop_timeout_secs from the agent's profile (mirrors cmd_stop).
     // The SIGKILL fallback must wait at least this long so the runtime's
     // cooperative drain can complete before we force-kill.
@@ -217,6 +226,44 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<()> {
             libc::kill(old_pid as libc::pid_t, libc::SIGKILL);
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+
+    // ── No installed service → nothing will respawn us automatically ──
+    // Spawn the runtime directly, detached, so the respawn-poll loop below
+    // (shared with the service-managed path) has a fresh process to find.
+    if !has_service {
+        println!("agent '{name}' has no service installed; respawning runtime directly");
+        let target = resolve_runtime_target();
+        let mur_home = resolve_mur_home()?;
+        let stderr_log = agent_home.join("stderr.log");
+        let stdout_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&stderr_log)
+            .map_err(|e| {
+                anyhow::anyhow!("open {} for respawn stdout: {e}", stderr_log.display())
+            })?;
+        let stderr_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&stderr_log)
+            .map_err(|e| {
+                anyhow::anyhow!("open {} for respawn stderr: {e}", stderr_log.display())
+            })?;
+        Command::new(&target)
+            .arg("--profile")
+            .arg(name)
+            .env("MUR_HOME", &mur_home)
+            .stdin(Stdio::null())
+            .stdout(stdout_file)
+            .stderr(stderr_file)
+            .spawn()
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to respawn runtime for '{name}' at {}: {e}",
+                    target.display()
+                )
+            })?;
     }
 
     // ── Poll for fresh running.lock with a different pid ──────────────
@@ -261,6 +308,35 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<()> {
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────
+
+/// Whether a service-unit file exists at `path`. Pure and OS-agnostic —
+/// callers build the path with [`service_unit_path`], which is the only
+/// cfg-gated piece.
+fn service_unit_exists(path: &Path) -> bool {
+    path.exists()
+}
+
+/// Build the expected service-unit path for `name`, mirroring the exact
+/// paths `cmd_install_service` writes in `service.rs`:
+///   - macOS: `~/Library/LaunchAgents/run.mur.agent.<name>.plist`
+///   - Linux: `$XDG_CONFIG_HOME/systemd/user/mur-agent-<name>.service`
+///
+/// Returns `None` when the home/config dir can't be resolved, or on
+/// unsupported platforms (mirrors `install-service`'s platform gate).
+#[cfg(target_os = "macos")]
+fn service_unit_path(name: &str) -> Option<PathBuf> {
+    Some(dirs::home_dir()?.join(format!("Library/LaunchAgents/run.mur.agent.{name}.plist")))
+}
+
+#[cfg(target_os = "linux")]
+fn service_unit_path(name: &str) -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join(format!("systemd/user/mur-agent-{name}.service")))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn service_unit_path(_name: &str) -> Option<PathBuf> {
+    None
+}
 
 fn read_lock(path: &Path) -> std::io::Result<Option<LockFile>> {
     mur_common::lock_file::read(path)
@@ -372,6 +448,21 @@ mod tests {
         fs::create_dir_all(home.join("agents")).unwrap();
         let result = select_targets(home, None, true, false).unwrap();
         assert!(result.is_empty());
+    }
+
+    /// The pure exists-helper simply reflects on-disk state for the path
+    /// it's given — path construction is cfg-gated separately and not
+    /// exercised here (this test is OS-agnostic).
+    #[test]
+    fn service_unit_exists_reflects_disk_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("run.mur.agent.test.plist");
+        assert!(!service_unit_exists(&path), "must be false before creation");
+        fs::write(&path, b"unit").unwrap();
+        assert!(
+            service_unit_exists(&path),
+            "must be true once the file exists"
+        );
     }
 
     /// Fix 1: SIGKILL-fallback wait must be derived from stop_timeout_secs so
