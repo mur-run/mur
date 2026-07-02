@@ -1,6 +1,7 @@
 use super::{SandboxPolicy, SandboxStatus};
 use anyhow::Context;
 use std::ffi::CString;
+use std::path::PathBuf;
 
 pub fn apply_macos(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
     let profile = build_sbpl_profile(policy);
@@ -79,6 +80,39 @@ fn sbpl_escape(s: &str) -> String {
     out
 }
 
+/// Resolve MUR_HOME the same way the supervisor does (`supervisor.rs`'s
+/// startup resolution): the `MUR_HOME` env var if set, else `$HOME/.mur`.
+/// Needed so the per-agent `agents/` directory (peer `agent.sock` files,
+/// dialed for A2A) can be subpath-allowed for unix-socket network-outbound
+/// below — mirrors how `SandboxPolicy::from_entitlements` derives home-based
+/// paths, but falls back to `/tmp` instead of panicking (this runs inside
+/// the already-sandboxing process, where a hard `.expect` would be fatal).
+fn resolved_mur_home() -> PathBuf {
+    std::env::var_os("MUR_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .join(".mur")
+        })
+}
+
+/// AF_UNIX socket paths the restricted network profile must not blanket-deny.
+/// Unix-socket `connect` is itself a `network-outbound` operation under SBPL,
+/// so the `(deny network-outbound)` baseline (see below) would otherwise
+/// reject any process- or test-owned domain socket. Scoped to: the macOS
+/// per-user temp root and `/tmp` (where test/tool sockets land — same dirs
+/// `system_read_paths` re-allows for reads in `policy.rs`), and this agent's
+/// own `<mur_home>/agents` directory (peer `agent.sock` files dialed for
+/// A2A). Subpaths, not path-literals, since exact socket filenames vary.
+fn unix_socket_allow_paths() -> Vec<PathBuf> {
+    vec![
+        PathBuf::from("/private/var/folders"),
+        PathBuf::from("/private/tmp"),
+        resolved_mur_home().join("agents"),
+    ]
+}
+
 /// Build an SBPL profile string from the policy.
 ///
 /// Strategy: default-allow for reads/exec/network (so the process can load
@@ -140,6 +174,16 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
             lines.push(format!(
                 "(allow network-outbound (remote unix-socket (path-literal \"{MDNSRESPONDER_SOCKET}\")))"
             ));
+            // Scoped AF_UNIX carve-out (see unix_socket_allow_paths doc): test/tool
+            // sockets under the temp dirs, and peer agent.sock dialing under
+            // <mur_home>/agents. Does NOT widen general network-outbound access —
+            // TCP stays port-gated by the loop below.
+            for p in unix_socket_allow_paths() {
+                let p = sbpl_escape(&p.to_string_lossy());
+                lines.push(format!(
+                    "(allow network-outbound (remote unix-socket (subpath \"{p}\")))"
+                ));
+            }
             for port in ports {
                 lines.push(format!(
                     "(allow network-outbound (remote tcp \"*:{port}\"))"
@@ -285,5 +329,50 @@ mod tests {
         let policy = policy_with(vec![], vec![]); // net_allow_ports defaults to None
         let sbpl = build_sbpl_profile(&policy);
         assert!(!sbpl.contains("network-outbound"));
+    }
+
+    #[test]
+    fn restricted_allows_scoped_unix_sockets() {
+        // AF_UNIX connect is itself `network-outbound` under SBPL, so the
+        // `(deny network-outbound)` baseline would otherwise break any
+        // domain socket (test sockets, peer agent.sock dialing). These three
+        // subpath carve-outs must be present without widening general
+        // network access (TCP stays port-gated — see the next test).
+        let mut policy = policy_with(vec![], vec![]);
+        policy.net_allow_ports = Some(vec![443]);
+        let sbpl = build_sbpl_profile(&policy);
+        assert!(
+            sbpl.contains(
+                "(allow network-outbound (remote unix-socket (subpath \"/private/var/folders\")))"
+            ),
+            "restricted profile must allow unix sockets under macOS per-user temp:\n{sbpl}"
+        );
+        assert!(
+            sbpl.contains(
+                "(allow network-outbound (remote unix-socket (subpath \"/private/tmp\")))"
+            ),
+            "restricted profile must allow unix sockets under /private/tmp:\n{sbpl}"
+        );
+        let agents_dir = resolved_mur_home().join("agents");
+        let agents_dir = sbpl_escape(&agents_dir.to_string_lossy());
+        assert!(
+            sbpl.contains(&format!(
+                "(allow network-outbound (remote unix-socket (subpath \"{agents_dir}\")))"
+            )),
+            "restricted profile must allow unix sockets under <mur_home>/agents (A2A agent.sock):\n{sbpl}"
+        );
+    }
+
+    #[test]
+    fn off_mode_does_not_allow_unix_sockets() {
+        // Off (deny-all) must not get the scoped AF_UNIX carve-out either —
+        // it stays fully air-gapped, matching off_mode_denies_network.
+        let mut policy = policy_with(vec![], vec![]);
+        policy.net_allow_ports = Some(vec![]);
+        let sbpl = build_sbpl_profile(&policy);
+        assert!(
+            !sbpl.contains("(allow network-outbound"),
+            "Off mode must not allow any outbound, including unix sockets:\n{sbpl}"
+        );
     }
 }
