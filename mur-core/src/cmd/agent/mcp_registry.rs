@@ -137,7 +137,12 @@ pub async fn cmd_mcp_search(query: &str) -> Result<()> {
 
 /// `mur agent mcp registry-add <agent> <name>` — resolve a registry server's
 /// stdio package and install it onto `agent` via `cmd_mcp_add`.
-pub async fn cmd_mcp_registry_add(agent: &str, server_name: &str) -> Result<()> {
+///
+/// `force = true` skips the y/N install confirmation prompt, following the
+/// same precedent as `mcp add --force` and `skill registry-add --yes`; it
+/// does not affect the binary-pin hash computed by `cmd_mcp_add`, which is
+/// unconditional and fail-closed regardless of `force`.
+pub async fn cmd_mcp_registry_add(agent: &str, server_name: &str, force: bool) -> Result<()> {
     let body = reqwest::Client::new()
         .get(format!("{REGISTRY_BASE}/v0/servers"))
         .query(&[("search", server_name), ("limit", "50")])
@@ -162,6 +167,7 @@ pub async fn cmd_mcp_registry_add(agent: &str, server_name: &str) -> Result<()> 
             &command,
             &args,
             McpAddPin {
+                force,
                 publisher_name: Some("mcp-registry".to_string()),
                 publisher_registry_id: Some(server_name.to_string()),
                 ..Default::default()

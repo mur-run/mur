@@ -312,11 +312,28 @@ impl StdioMcpClient {
             .await
     }
 
-    pub async fn shutdown(self) {
-        let mut child = self.child.into_inner();
+    pub async fn shutdown(mut self) {
+        // `StdioMcpClient` implements `Drop`, so `self.child` (a `Mutex<..>`
+        // field) cannot be moved out of `self` (E0509) — use `get_mut()` on
+        // the `&mut self` binding instead, which only borrows the field.
+        let child = self.child.get_mut();
         let _ = child.kill();
-        // Reap the child off the async thread so we don't block the runtime.
-        let _ = tokio::task::spawn_blocking(move || child.wait()).await;
+        let _ = child.wait();
+    }
+}
+
+impl Drop for StdioMcpClient {
+    /// Safety net for paths that never reach `shutdown()` — e.g. the pool
+    /// evicting a client whose last `Arc` reference was just dropped, or
+    /// `McpPool::client()` bailing out of `initialize()` before `shutdown()`
+    /// is called. `std::process::Child` (unlike `tokio::process::Child`) has
+    /// no background reaper, so an un-waited child becomes a permanent
+    /// zombie once it exits. `kill()` + `wait()` are synchronous std calls
+    /// and are safe to run directly here.
+    fn drop(&mut self) {
+        let child = self.child.get_mut();
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }
 
