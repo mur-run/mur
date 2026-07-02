@@ -50,7 +50,10 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::time::Instant as TokioInstant;
 
-use self::app::{App, ESC_DOUBLE_WINDOW, EscAction, Role, SlashCmd, esc_action, parse_slash};
+use self::app::{
+    App, ESC_DOUBLE_WINDOW, EscAction, OverlayKeyAction, Role, SlashCmd, esc_action,
+    overlay_key_action, parse_slash,
+};
 use self::persist::Session;
 use self::stream::{StreamMsg, build_params, cancel_task, respond_hitl, spawn_stream};
 use crate::a2a_dial::{DialMode, canonicalize_agent_name, dial_method};
@@ -391,6 +394,28 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
     match ev {
         Event::Key(key) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
             let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            // The transcript overlay (Ctrl+O) is a full-screen view drawn over
+            // everything else, including the HITL modal. It stays in raw mode
+            // and routes every key through the pure `overlay_key_action`
+            // dispatch instead of dropping to a blocking stdin read, so
+            // Ctrl+D/Esc are never swallowed and no key ever leaks into the
+            // composer once it closes.
+            if app.overlay_open {
+                match overlay_key_action(key.code, key.modifiers) {
+                    OverlayKeyAction::Close => {
+                        app.overlay_open = false;
+                        app.overlay_text = None;
+                        app.needs_full_redraw = true;
+                    }
+                    OverlayKeyAction::CloseAndQuit => {
+                        app.overlay_open = false;
+                        app.overlay_text = None;
+                        request_quit(app, tx);
+                    }
+                    OverlayKeyAction::Ignore => {}
+                }
+                return;
+            }
             // HITL prompt owns the decision keys — but Ctrl+C/Ctrl+D must stay
             // live so the user is never trapped by a stale/unanswerable modal,
             // and any other key keeps going to the composer so typed text isn't
@@ -502,10 +527,7 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                     }
                 }
                 KeyCode::Char('o') if ctrl => {
-                    if let Err(e) = scrollback_dump(app) {
-                        app.push_system(format!("scrollback view failed: {e}"));
-                    }
-                    app.needs_full_redraw = true;
+                    scrollback_dump(app);
                 }
                 KeyCode::PageUp => {
                     app.scroll_back = app.scroll_back.saturating_add(app.scroll_page.max(1))
@@ -594,46 +616,26 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
     }
 }
 
-/// Suspend the TUI, print the full transcript to native scrollback (so the
-/// terminal's own select/copy/search work), also save it to a temp file, then
-/// wait for Enter and resume. Blocking is intentional — the TUI is frozen while
-/// the user reads/copies; streaming messages queue until we return.
-fn scrollback_dump(app: &App) -> io::Result<()> {
+/// Open the full-screen transcript overlay (Ctrl+O). Unlike the old
+/// implementation this never drops raw mode or the alt-screen and never
+/// blocks on a stdin read — it stashes the rendered text on `App` and flips
+/// `overlay_open`, so the next `terminal.draw` paints it and every keypress
+/// keeps flowing through the normal event loop (`overlay_key_action`
+/// dispatches Esc/Enter/Ctrl+D; everything else is swallowed). That's what
+/// makes Ctrl+D/Esc actually work here — the previous blocking
+/// `io::stdin().read_line` outside raw mode ate Ctrl+D and turned Esc into
+/// literal escape bytes that leaked into the composer.
+///
+/// Also saves the transcript to a temp file (best-effort) so it stays
+/// reachable via the OS's native scrollback tooling even after the overlay
+/// closes.
+fn scrollback_dump(app: &mut App) {
     let text = dump::transcript_to_text(&app.messages);
     let path = std::env::temp_dir().join(format!("mur-transcript-{}.txt", app.agent));
     let _ = std::fs::write(&path, &text);
-
-    // Suspend: leave alt-screen + restore the normal buffer where native copy
-    // and scrollback work; drop raw mode so `read_line` is canonical. Query
-    // enhancement support once and reuse it for the matching push on resume, so
-    // we never emit an extra capability-query mid-session.
-    let kbd_enhanced = matches!(supports_keyboard_enhancement(), Ok(true));
-    pop_keyboard_enhancement(kbd_enhanced);
-    execute!(io::stdout(), LeaveAlternateScreen, DisableBracketedPaste,)?;
-    disable_raw_mode()?;
-
-    let res = (|| -> io::Result<()> {
-        use std::io::Write;
-        let mut out = io::stdout();
-        writeln!(out, "{text}")?;
-        writeln!(
-            out,
-            "\n─── full transcript · select/copy freely · saved to {} ───",
-            path.display()
-        )?;
-        write!(out, "press Enter to return to chat… ")?;
-        out.flush()?;
-        let mut buf = String::new();
-        let _ = io::stdin().read_line(&mut buf);
-        Ok(())
-    })();
-
-    // Resume UNCONDITIONALLY — even if a write above failed, never leave the
-    // terminal in the normal buffer with raw mode off.
-    enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste,)?;
-    push_keyboard_enhancement(kbd_enhanced);
-    res
+    app.overlay_text = Some(text);
+    app.overlay_open = true;
+    app.needs_full_redraw = true;
 }
 
 /// Write `cli.skin = name` to `~/.mur/config.yaml` atomically.
