@@ -801,7 +801,14 @@
 }
 
 /* ── Settings two-pane layout ── */
-.settings-modal--paned { width: 880px; max-width: 94vw; }
+/* Scales with the Hub window instead of capping out at a fixed 880px, which
+   left the content pane too narrow on smaller windows (model registry rows
+   designed for the ~900px-wide Model Library modal wrapped/overlapped).
+   Compound selector (not just `.settings-modal--paned`) is required: this
+   rule and `.modal`'s `width: 360px` (modal.css) have equal specificity, and
+   modal.css loads after dashboard.css, so a single-class selector here always
+   lost the cascade — the 880px/90vw width was dead CSS. */
+.modal.settings-modal--paned { width: 90vw; max-width: 1200px; }
 .settings-modal__panes {
   display: flex;
   min-height: 360px;
