@@ -66,3 +66,25 @@ fn live_lock_not_stale() {
     write_lock(&path, &sample_lock()).unwrap();
     assert!(!is_stale(&path).unwrap(), "held lock should not be stale");
 }
+
+#[test]
+fn stale_sentinel_content_does_not_block_acquire() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("running.lock");
+    let sentinel = tmp.path().join("running.sentinel");
+    // Bogus pid text with no flock holder: acquire must still succeed since
+    // ownership is determined by flock, not by file contents.
+    fs::write(&sentinel, b"999999").unwrap();
+    let _handle = LockHandle::acquire(&path).unwrap();
+}
+
+#[test]
+fn sentinel_records_current_pid_after_acquire() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("running.lock");
+    let sentinel = tmp.path().join("running.sentinel");
+    let _handle = LockHandle::acquire(&path).unwrap();
+    let contents = fs::read_to_string(&sentinel).unwrap();
+    let pid: u32 = contents.trim().parse().unwrap();
+    assert_eq!(pid, std::process::id());
+}
