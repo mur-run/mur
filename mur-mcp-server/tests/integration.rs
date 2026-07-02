@@ -12,14 +12,40 @@ fn read_response(stdout: &mut impl BufRead) -> serde_json::Value {
     serde_json::from_str(&line).unwrap()
 }
 
+/// RAII guard that ensures a spawned child process is killed and reaped even
+/// if the test panics or returns early, avoiding zombie processes.
+struct ChildGuard(std::process::Child);
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+impl std::ops::Deref for ChildGuard {
+    type Target = std::process::Child;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for ChildGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 #[test]
 fn test_initialize_and_list_tools() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mur-mcp-server"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut child = ChildGuard(
+        Command::new(env!("CARGO_BIN_EXE_mur-mcp-server"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
 
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
@@ -86,19 +112,19 @@ fn test_initialize_and_list_tools() {
     assert!(names.contains(&"mur_retrieve"));
     assert!(names.contains(&"mur_compress_stats"));
     assert!(names.contains(&"parallel_jobs"));
-
-    child.kill().ok();
 }
 
 #[test]
 fn test_tools_list_response_under_token_budget() {
     // Verify tools/list JSON stays under ~5000 tokens (~25,000 chars).
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mur-mcp-server"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut child = ChildGuard(
+        Command::new(env!("CARGO_BIN_EXE_mur-mcp-server"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
 
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
@@ -126,18 +152,18 @@ fn test_tools_list_response_under_token_budget() {
         "tools/list response is {} chars, must stay under 25,000 (5,000 token budget)",
         tools_json.len()
     );
-
-    child.kill().ok();
 }
 
 #[test]
 fn lists_project_search_tool() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mur-mcp-server"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut child = ChildGuard(
+        Command::new(env!("CARGO_BIN_EXE_mur-mcp-server"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
 
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
@@ -171,21 +197,21 @@ fn lists_project_search_tool() {
         names.iter().any(|n| n == "mur_project_search"),
         "tools/list must include mur_project_search; got {names:?}"
     );
-
-    let _ = child.kill();
 }
 
 #[test]
 fn calls_mur_compress_tool() {
     // Isolate the CCR store in a throwaway MUR_HOME for the child process.
     let home = tempfile::tempdir().unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mur-mcp-server"))
-        .env("MUR_HOME", home.path())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut child = ChildGuard(
+        Command::new(env!("CARGO_BIN_EXE_mur-mcp-server"))
+            .env("MUR_HOME", home.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
 
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
@@ -228,18 +254,18 @@ fn calls_mur_compress_tool() {
         resp_str.contains("hash="),
         "mur_compress result should include a retrieval-hash note: {resp_str}"
     );
-
-    child.kill().ok();
 }
 
 #[test]
 fn parallel_jobs_rejects_empty_jobs() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mur-mcp-server"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut child = ChildGuard(
+        Command::new(env!("CARGO_BIN_EXE_mur-mcp-server"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
 
@@ -264,6 +290,4 @@ fn parallel_jobs_rejects_empty_jobs() {
         resp_str.contains("isError") || resp_str.to_lowercase().contains("error"),
         "empty jobs should yield an error envelope: {resp_str}"
     );
-
-    child.kill().ok();
 }
