@@ -15,8 +15,21 @@ use super::complete;
 use super::markdown;
 use super::welcome::welcome_lines;
 
+/// Footer hint shown at the bottom of the full-screen transcript overlay
+/// (Ctrl+O). Enter and Esc both return to chat; Ctrl+D quits outright, same
+/// as the composer — the overlay never lets a keypress fall through
+/// unhandled into the input box.
+const OVERLAY_HINT: &str = " press Enter or Esc to return · Ctrl+D quit ";
+
 /// Draw the whole UI for one frame.
 pub fn render(f: &mut Frame, app: &mut App) {
+    // Full-screen transcript overlay (Ctrl+O) takes over the whole frame and
+    // owns every keypress (see `overlay_key_action` in `mod.rs`'s
+    // `handle_event`) — nothing else renders underneath it this frame.
+    if app.overlay_open {
+        render_overlay(f, app);
+        return;
+    }
     let input_lines = app.input.lines().len() as u16;
     let input_height = (input_lines + 2).clamp(3, 8);
     let chunks = Layout::default()
@@ -40,6 +53,47 @@ pub fn render(f: &mut Frame, app: &mut App) {
     {
         render_hitl(f, hitl);
     }
+}
+
+/// Draw the full-screen transcript overlay (Ctrl+O): the plain-text
+/// transcript (native select/copy/search works because we never leave raw
+/// mode or the alt-screen — this is just another ratatui frame) plus a
+/// footer hint. Scroll follows the normal `scroll_back`/PageUp/PageDown
+/// state so the same keys work here as in the regular transcript pane.
+fn render_overlay(f: &mut Frame, app: &App) {
+    let area = f.area();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(area);
+
+    let text = app.overlay_text.as_deref().unwrap_or("");
+    let total_lines = text.lines().count() as u16;
+    let visible = chunks[0].height;
+    let max_scroll = total_lines.saturating_sub(visible);
+    let scroll = app.scroll_back.min(max_scroll);
+    // scroll_back counts lines up from the bottom; ratatui's Paragraph scroll
+    // counts down from the top, so invert it.
+    let top_offset = max_scroll.saturating_sub(scroll);
+
+    f.render_widget(Clear, area);
+    let block = Block::default().borders(Borders::ALL).title(" transcript ");
+    f.render_widget(
+        Paragraph::new(Text::raw(text))
+            .block(block)
+            .scroll((top_offset, 0)),
+        chunks[0],
+    );
+
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            OVERLAY_HINT,
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
+        ))),
+        chunks[1],
+    );
 }
 
 /// Draw completion menu list anchored just above the input box.
