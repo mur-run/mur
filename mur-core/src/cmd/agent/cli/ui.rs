@@ -267,9 +267,17 @@ fn push_message(
 
 fn render_status(f: &mut Frame, app: &App, area: Rect) {
     let theme = app.theme;
-    let (msg, color) = if app.hitl.is_some() {
+    let (msg, color) = if let Some(req) = &app.hitl {
+        // Surface the auto-deny clock: the gate expires approvals after
+        // DEFAULT_TIMEOUT (300s). Reuse `created_at` rather than tracking new
+        // state; the status bar redraws on each blink deadline so it ticks.
+        let remaining = crate::hitl::gate::DEFAULT_TIMEOUT
+            .as_secs()
+            .saturating_sub(req.created_at.elapsed().as_secs());
         (
-            "tool approval needed — [y] approve · [a] always (session) · [n] deny".to_string(),
+            format!(
+                "tool approval needed (auto-deny in {remaining}s) — [y] approve · [a] always (session) · [n] deny"
+            ),
             Color::Yellow,
         )
     } else if app.streaming {
@@ -345,6 +353,8 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
             "ESC again to clear"
         };
         Some((hint.to_string(), theme.system))
+    } else if app.ctrl_c_hint {
+        Some(("Ctrl+C again to quit".to_string(), theme.system))
     } else {
         None
     };

@@ -145,6 +145,9 @@ pub struct HitlRequest {
     pub tool_name: String,
     pub tool_input: Value,
     pub prompt: String,
+    /// When the CLI first saw this approval request; used to show the
+    /// auto-deny countdown against the gate's DEFAULT_TIMEOUT.
+    pub created_at: std::time::Instant,
 }
 
 impl HitlRequest {
@@ -168,6 +171,7 @@ impl HitlRequest {
                 .unwrap_or_else(|| format!("Run `{tool_name}`?")),
             tool_input: v.get("tool_input").cloned().unwrap_or(Value::Null),
             tool_name,
+            created_at: std::time::Instant::now(),
         }
     }
 }

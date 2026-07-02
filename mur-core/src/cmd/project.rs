@@ -70,6 +70,10 @@ pub async fn do_project_search(
     limit: usize,
     all: bool,
 ) -> Result<ProjectSearchResult> {
+    if query.trim().is_empty() {
+        anyhow::bail!("query cannot be empty");
+    }
+
     let cfg = load_config()?;
     let embed_config = EmbeddingConfig::from_config(&cfg);
     let query_embedding = embed(query, &embed_config).await?;
@@ -90,6 +94,7 @@ pub async fn do_project_search(
     let effective_filter = project_filter.or(cwd_project.as_deref());
 
     let mut all_chunks: Vec<ProjectSearchChunk> = Vec::new();
+    let mut matched_any_project = false;
 
     for discovered in &indexes {
         if let Some(filter) = effective_filter
@@ -97,6 +102,7 @@ pub async fn do_project_search(
         {
             continue;
         }
+        matched_any_project = true;
 
         let project_path = discovered
             .project_path
@@ -121,11 +127,27 @@ pub async fn do_project_search(
         }
     }
 
+    // If an explicit --project filter matched no indexed project at all, that is
+    // a distinct condition from "project indexed but zero results".
+    if !matched_any_project && let Some(name) = project_filter {
+        anyhow::bail!(
+            "project `{name}` is not indexed. Run `mur project index` in that project first."
+        );
+    }
+
     all_chunks.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+
+    // Git worktrees of the same repo share byte-identical files, so the same
+    // chunk can appear once per worktree. Deduplicate by exact content, keeping
+    // the first (highest-score) occurrence since we already sorted by score.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    all_chunks.retain(|c| seen.insert(c.content.clone()));
+
+    // Duplicates are not meaningfully separate hits: count post-dedup.
     let total = all_chunks.len();
     all_chunks.truncate(limit);
 
@@ -199,7 +221,7 @@ pub fn do_project_list() -> Result<Vec<ProjectStatusInfo>> {
                 name: idx.name,
                 path: project_path.to_string(),
                 indexed: true,
-                chunks: Some(0), // quick — don't load stats for list view
+                chunks: None, // not computed for this view — None avoids falsely reporting 0
                 last_indexed: idx.last_indexed,
                 indexing_in_progress: false,
                 progress: None,

@@ -178,14 +178,14 @@ mod tests {
 
     #[test]
     fn rejects_oversized_single_file() {
-        let p = make_targz(&[("big.bin", &vec![0u8; 200])]);
+        let p = make_targz(&[("big.bin", &[0u8; 200])]);
         let err = MuragentArchive::read_with_limits(&p, 10, 100, 1_000_000).unwrap_err();
         assert!(format!("{err}").contains("exceeds"), "got: {err}");
     }
 
     #[test]
     fn rejects_oversized_total() {
-        let p = make_targz(&[("a.bin", &vec![0u8; 100]), ("b.bin", &vec![0u8; 100])]);
+        let p = make_targz(&[("a.bin", &[0u8; 100]), ("b.bin", &[0u8; 100])]);
         let err = MuragentArchive::read_with_limits(&p, 10, 1024, 150).unwrap_err();
         assert!(format!("{err}").contains("total"), "got: {err}");
     }

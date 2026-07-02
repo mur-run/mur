@@ -76,12 +76,27 @@ fn refresh_snapshot(agent_name: &str) {
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("mur")))
         .unwrap_or_else(|| PathBuf::from("mur"));
-    let _ = std::process::Command::new(&mur_bin)
+    // Fire-and-forget, but `std::process::Child` has no background reaper
+    // (unlike `tokio::process::Child`): an un-waited subprocess becomes a
+    // permanent zombie once it exits. Reap it on a detached thread instead
+    // of leaking (dogfood issue 11).
+    match std::process::Command::new(&mur_bin)
         .args(["agent", "snapshot", "pull", agent_name])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .spawn();
-    info!(agent = %agent_name, "agent sleep-cycle: snapshot pull triggered");
+        .spawn()
+    {
+        Ok(child) => {
+            std::thread::spawn(move || {
+                let mut child = child;
+                let _ = child.wait();
+            });
+            info!(agent = %agent_name, "agent sleep-cycle: snapshot pull triggered");
+        }
+        Err(e) => {
+            warn!(agent = %agent_name, error = %e, "agent sleep-cycle: snapshot pull spawn failed");
+        }
+    }
 }
 
 fn mur_inbox_dir() -> Result<PathBuf> {

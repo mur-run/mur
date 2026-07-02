@@ -8,6 +8,18 @@ use serde_json::{Value, json};
 
 use crate::CompressEngine;
 
+/// Absolute floor for `auto.min_tokens`, regardless of what `compress.yaml`
+/// configures. Mirrors headroom's under-500-token skip: outputs this small
+/// are cheap to read as-is and not worth the compression + retrieval-hop
+/// overhead, so no configured value can push the gate below this.
+pub const MIN_TOKENS_FLOOR: usize = 500;
+
+/// Default `auto.min_tokens` when `compress.yaml` doesn't set one. Lowered
+/// from the original 1500 so mid-size (multi-KB) tool outputs — which used
+/// to slip through uncompressed in high-output sessions — now qualify,
+/// while staying above [`MIN_TOKENS_FLOOR`].
+pub const DEFAULT_MIN_TOKENS: usize = 800;
+
 /// `auto:` section of `compress.yaml`. Controls *automatic* compression at
 /// LLM-facing call sites. The manual `mur_compress`/`mur_retrieve` tools are
 /// unaffected by these flags.
@@ -16,20 +28,26 @@ pub struct AutoCfg {
     /// Master switch for all automatic compression.
     pub enabled: bool,
     /// Outputs counting fewer than this many tokens are never auto-compressed.
+    /// Defaults to [`DEFAULT_MIN_TOKENS`]; whatever value is configured here
+    /// is still clamped up to [`MIN_TOKENS_FLOOR`] at compression time, so
+    /// tiny outputs can never be auto-compressed even via misconfiguration.
     pub min_tokens: usize,
     /// Surface 1: compress MCP tool outputs.
     pub mcp: bool,
     /// Surface 2: compress agent-runtime `post_tool_use` outputs.
     pub agent_runtime: bool,
+    /// Surface 3: compress Claude Code PostToolUse hook stdout-replacement output.
+    pub claude_hook: bool,
 }
 
 impl Default for AutoCfg {
     fn default() -> Self {
         Self {
             enabled: true,
-            min_tokens: 1500,
+            min_tokens: DEFAULT_MIN_TOKENS,
             mcp: true,
             agent_runtime: true,
+            claude_hook: true,
         }
     }
 }
@@ -56,6 +74,9 @@ pub fn auto_compress(
     query: Option<&str>,
     min_tokens: usize,
 ) -> AutoOutcome {
+    // Clamp the caller/config-supplied gate up to the floor: no configured
+    // value can make auto-compression fire on outputs this small.
+    let min_tokens = min_tokens.max(MIN_TOKENS_FLOOR);
     let before = engine.count_tokens(text);
     if before < min_tokens {
         return AutoOutcome {
@@ -183,6 +204,40 @@ mod tests {
         assert!(!out.fired);
         assert_eq!(out.text, "tiny output");
         assert!(out.hash.is_none());
+    }
+
+    // Compile-time invariants on the constants themselves (clippy flags a
+    // plain `assert!` on constant operands, so this is a const block instead).
+    const _: () = assert!(DEFAULT_MIN_TOKENS > MIN_TOKENS_FLOOR);
+    const _: () = assert!(DEFAULT_MIN_TOKENS < 1500);
+
+    #[test]
+    fn default_min_tokens_is_lowered_but_above_floor() {
+        assert_eq!(AutoCfg::default().min_tokens, DEFAULT_MIN_TOKENS);
+    }
+
+    #[test]
+    fn config_override_of_min_tokens_is_respected() {
+        let (_dir, eng) = engine();
+        // A wide gap between the configured minimum and the input's token
+        // count proves the override (not the default) is what's applied.
+        let out = auto_compress(&eng, &big_json_array(), None, 2_000);
+        assert!(
+            out.fired,
+            "configured min_tokens below the input size should fire"
+        );
+    }
+
+    #[test]
+    fn min_tokens_below_floor_is_clamped_up() {
+        let (_dir, eng) = engine();
+        // "tiny output" is well under MIN_TOKENS_FLOOR; even a misconfigured
+        // min_tokens of 0 must not let it through.
+        let out = auto_compress(&eng, "tiny output", None, 0);
+        assert!(
+            !out.fired,
+            "floor must gate out tiny output regardless of config"
+        );
     }
 
     #[test]
