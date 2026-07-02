@@ -63,11 +63,66 @@ impl SandboxPolicy {
             }
         };
 
-        let mut fs_read: Vec<PathBuf> = ent.filesystem.read.iter().map(|s| expand(s)).collect();
-        let mut fs_write: Vec<PathBuf> = ent.filesystem.write.iter().map(|s| expand(s)).collect();
+        // USER-DECLARED read/write entitlement paths are existence-checked at
+        // profile-build time and dropped (fail-closed, warned) if missing.
+        // Rationale (Issue 16): a `fs_write`/`fs_read` entry that names a
+        // nonexistent path (e.g. a removed git worktree) still gets emitted
+        // as an ordinary SBPL `subpath` grant with no existence requirement,
+        // so `sandbox_init_with_parameters` accepts it silently — but the
+        // resulting unresolvable grant was observed to destabilize *other*
+        // unrelated `file-write*` checks under the same compiled policy
+        // (30s tool-call hangs, not EPERM, until the agent restarts with the
+        // dead path recreated or removed from entitlements). Mirrors the
+        // fail-closed discipline `resolve_binary_path`/`is_executable_file`
+        // already apply to `spawn_allowed_paths` below.
+        let mut fs_read: Vec<PathBuf> = ent
+            .filesystem
+            .read
+            .iter()
+            .map(|s| expand(s))
+            .filter(|p| {
+                if std::fs::metadata(p).is_ok() {
+                    true
+                } else {
+                    tracing::warn!(
+                        path = %p.display(),
+                        "filesystem read entitlement path does not exist on disk; \
+                         agent will NOT have read access to it (dropping dead grant \
+                         to avoid destabilizing the sandbox profile — Issue 16)"
+                    );
+                    false
+                }
+            })
+            .collect();
+        let mut fs_write: Vec<PathBuf> = ent
+            .filesystem
+            .write
+            .iter()
+            .map(|s| expand(s))
+            .filter(|p| {
+                if std::fs::metadata(p).is_ok() {
+                    true
+                } else {
+                    tracing::warn!(
+                        path = %p.display(),
+                        "filesystem write entitlement path does not exist on disk; \
+                         agent will NOT have write access to it (dropping dead grant \
+                         to avoid destabilizing the sandbox profile — Issue 16)"
+                    );
+                    false
+                }
+            })
+            .collect();
+        // fs_deny entries are kept verbatim even if the path doesn't exist:
+        // dropping a dead deny entry would be fail-OPEN — if the path later
+        // appears (mount, create, restore) the agent would silently regain
+        // access we meant to permanently deny. Deny-side dead paths are
+        // harmless (confirmed: no hang mechanism triggers off `fs_deny`).
         let fs_deny: Vec<PathBuf> = ent.filesystem.deny.iter().map(|s| expand(s)).collect();
 
         // agent_home is always read+write — runtime cannot function without it.
+        // (Its existence is a precondition of the runtime starting at all —
+        // profile.yaml must already live there — so no create_dir_all needed.)
         if !fs_write.contains(&agent_home.to_path_buf()) {
             fs_write.push(agent_home.to_path_buf());
         }
@@ -83,6 +138,12 @@ impl SandboxPolicy {
             .map(|m| m.join("channels"))
             && !fs_write.contains(&channels)
         {
+            // Ensure the directory exists before granting it — same idiom as
+            // the VLC `runtime_dir` precedent below in supervisor.rs. Unlike
+            // user-declared entries, this path is runtime-owned so we create
+            // it rather than drop the grant (Issue 16: a dead grant here
+            // would destabilize other file-write* checks under this policy).
+            let _ = std::fs::create_dir_all(&channels);
             fs_write.push(channels);
         }
 
@@ -322,13 +383,23 @@ mod tests {
 
     #[test]
     fn tilde_expands_to_home_dir() {
+        // Exercised via `deny` rather than `read`/`write`: deny entries are
+        // exempt from the dead-grant existence filter by design (a stale
+        // deny path is kept verbatim rather than dropped, since dropping it
+        // would be fail-open). `~/Documents` may not exist on CI runners
+        // (e.g. Ubuntu, no home Documents dir), so asserting through `read`
+        // makes this test's outcome depend on runner environment. Routing
+        // it through `deny` still exercises the same `expand` tilde
+        // substitution logic while staying environment-independent.
+        let mut ent = minimal_entitlements();
+        ent.filesystem.deny.push("~/Documents".to_string());
         let agent_home = PathBuf::from("/tmp/agent_home_test");
-        let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+        let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
         let expected = dirs::home_dir().unwrap().join("Documents");
         assert!(
-            policy.fs_read.contains(&expected),
+            policy.fs_deny.contains(&expected),
             "~/Documents should expand to {expected:?}, got: {:?}",
-            policy.fs_read
+            policy.fs_deny
         );
     }
 
@@ -452,6 +523,83 @@ mod tests {
         let resolved =
             resolve_binary_path("definitely-does-not-exist", &[tmp.path().to_path_buf()]);
         assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn from_entitlements_drops_dead_read_write_but_keeps_dead_deny() {
+        // Issue 16 regression: a user-declared fs_read/fs_write entitlement
+        // path that does not exist on disk (e.g. a removed git worktree)
+        // must be dropped at profile-build time rather than emitted as a
+        // dead SBPL `subpath` grant — a dead grant there was observed to
+        // destabilize other, unrelated file-write* checks under the same
+        // compiled sandbox policy (30s tool-call hangs, not EPERM). A dead
+        // `fs_deny` entry, by contrast, must be KEPT verbatim: dropping it
+        // would be fail-OPEN if the path later reappears.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let live_dir = tmp.path().join("live");
+        std::fs::create_dir(&live_dir).expect("mkdir live");
+        let dead_dir = tmp.path().join("dead");
+        std::fs::create_dir(&dead_dir).expect("mkdir dead");
+        std::fs::remove_dir(&dead_dir).expect("rmdir dead (now nonexistent)");
+
+        let mut ent = minimal_entitlements();
+        ent.filesystem.read = vec![
+            live_dir.to_string_lossy().to_string(),
+            dead_dir.to_string_lossy().to_string(),
+        ];
+        ent.filesystem.write = vec![
+            live_dir.to_string_lossy().to_string(),
+            dead_dir.to_string_lossy().to_string(),
+        ];
+        // Same dead path, but declared as a deny entry: must survive.
+        ent.filesystem.deny = vec![dead_dir.to_string_lossy().to_string()];
+
+        // Nest agent_home two levels inside the tempdir so the derived
+        // channels dir (`agent_home.parent().parent()/channels`) stays
+        // inside the tempdir too, rather than touching the real system /tmp.
+        let agent_home = tmp.path().join("agents").join("dead-grant-test");
+        let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
+
+        assert!(
+            policy.fs_read.contains(&live_dir),
+            "live read path must be kept: {:?}",
+            policy.fs_read
+        );
+        assert!(
+            !policy.fs_read.contains(&dead_dir),
+            "dead read path must be dropped: {:?}",
+            policy.fs_read
+        );
+        assert!(
+            policy.fs_write.contains(&live_dir),
+            "live write path must be kept: {:?}",
+            policy.fs_write
+        );
+        assert!(
+            !policy.fs_write.contains(&dead_dir),
+            "dead write path must be dropped: {:?}",
+            policy.fs_write
+        );
+        assert!(
+            policy.fs_deny.contains(&dead_dir),
+            "dead deny path must be KEPT verbatim (dropping would be fail-open): {:?}",
+            policy.fs_deny
+        );
+
+        #[cfg(target_os = "macos")]
+        {
+            let sbpl = crate::sandbox::macos::build_sbpl_profile(&policy);
+            let live_p = live_dir.to_string_lossy();
+            let dead_p = dead_dir.to_string_lossy();
+            assert!(
+                sbpl.contains(&format!("(allow file-write* (subpath \"{live_p}\"))")),
+                "SBPL must contain an allow-write subpath for the live path"
+            );
+            assert!(
+                !sbpl.contains(&format!("(allow file-write* (subpath \"{dead_p}\"))")),
+                "SBPL must NOT contain an allow-write subpath for the dropped dead path"
+            );
+        }
     }
 
     #[test]
