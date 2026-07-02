@@ -28,6 +28,7 @@ mod welcome;
 
 use std::io::{self, BufRead, IsTerminal, Stdout};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::time::Instant as StdInstant;
 
@@ -167,17 +168,35 @@ pub async fn cmd_cli(
 /// macOS Terminal.app) — silently skip there; Alt/Option+Enter remains a
 /// universal fallback for the newline binding since legacy terminals already
 /// report Alt via an ESC prefix with no protocol opt-in required.
+// Remembers whether the push below actually activated the protocol (i.e. the
+// terminal both advertised support and the enable escape was written
+// successfully), so pop never has to re-derive that itself.
+static KB_ENHANCEMENT_ACTIVE: AtomicBool = AtomicBool::new(false);
+
 fn push_keyboard_enhancement(supported: bool) {
-    if supported {
-        let _ = execute!(
+    if supported
+        && execute!(
             io::stdout(),
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-        );
+        )
+        .is_ok()
+    {
+        KB_ENHANCEMENT_ACTIVE.store(true, Ordering::Relaxed);
     }
 }
 
-fn pop_keyboard_enhancement(supported: bool) {
-    if supported {
+// Callers pass their own cached `supports_keyboard_enhancement()` result (see
+// `TerminalGuard`/panic hook/`scrollback_dump`) purely so *they* don't have to
+// re-query the terminal — but the actual decision to pop is driven by
+// `KB_ENHANCEMENT_ACTIVE`, not by that flag. Deliberately does NOT call
+// `supports_keyboard_enhancement()` itself: that sends a second terminal
+// query-and-wait (up to crossterm's 2s timeout). If the reply arrives after
+// we've already disabled raw mode / left the alternate screen, nothing reads
+// it — the raw escape bytes fall through to the shell's cooked-mode stdin and
+// get echoed as garbage (e.g. `^[[?1u^[[?62;22;52c`). We already know from the
+// push above whether the protocol is actually active, so just use that.
+fn pop_keyboard_enhancement(_supported: bool) {
+    if KB_ENHANCEMENT_ACTIVE.swap(false, Ordering::Relaxed) {
         let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
     }
 }
