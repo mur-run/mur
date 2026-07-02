@@ -12,6 +12,25 @@ use mur_core::store::vector::factory::get_vector_store;
 use std::fs;
 use tempfile::TempDir;
 
+// Test fixture tuple: (name, description, triggers, requires, usage, success,
+// last_used_days_ago, lifecycle_state, pinned) - alias avoids clippy::type_complexity
+// on the long-hand tuple-slice type used purely for test-table readability.
+type SkillConfigRow<'a> = (
+    &'a str,
+    &'a str,
+    &'a [&'a str],
+    &'a [&'a str],
+    u64,
+    u64,
+    i64,
+    LifecycleState,
+    bool,
+);
+
+// Test helper mirrors the fixture tuple's 10 fields 1:1 for readability at call sites;
+// splitting it would obscure the table-driven test data below. clippy::too_many_arguments
+// allowed for test ergonomics.
+#[allow(clippy::too_many_arguments)]
 fn make_skill_view(
     name: &str,
     description: &str,
@@ -378,17 +397,7 @@ fn consolidate_all_passes_integration() {
     let skills_dir = home.join("skills");
     fs::create_dir_all(&skills_dir).unwrap();
 
-    let skill_configs: &[(
-        &str,
-        &str,
-        &[&str],
-        &[&str],
-        u64,
-        u64,
-        i64,
-        LifecycleState,
-        bool,
-    )] = &[
+    let skill_configs: &[SkillConfigRow] = &[
         (
             "pricing-research",
             "Research pricing data using web search for competitive market analysis",
