@@ -125,9 +125,11 @@ mod tests {
 
     #[test]
     fn offloads_tail_and_keeps_query_relevant() {
-        let mut cfg = CompressConfig::default();
-        cfg.protect_head_lines = 1;
-        cfg.retrieve_top_k = 1;
+        let cfg = CompressConfig {
+            protect_head_lines: 1,
+            retrieve_top_k: 1,
+            ..Default::default()
+        };
         let dir = tempfile::tempdir().unwrap();
         let store = mk(dir.path());
         let ctx = CompressCtx {

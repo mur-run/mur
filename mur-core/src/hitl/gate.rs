@@ -41,7 +41,7 @@ pub struct GateDecision {
 
 /// How often the wait loop re-reads the log, and the default wait budget.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
+pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Gate an action. `yes` auto-approves Ask-tier actions (records an `auto`
 /// HitlResponse for the audit trail). Read tier returns `allow` immediately.

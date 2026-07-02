@@ -66,8 +66,10 @@ mod tests {
 
     #[test]
     fn collapses_long_array() {
-        let mut cfg = CompressConfig::default();
-        cfg.protect_head_lines = 2;
+        let cfg = CompressConfig {
+            protect_head_lines: 2,
+            ..Default::default()
+        };
         let dir = tempfile::tempdir().unwrap();
         let store = CcrStore::new(dir.path(), 3600, 100, 1 << 30, false).unwrap();
         let ctx = CompressCtx {

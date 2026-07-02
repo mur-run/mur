@@ -311,6 +311,55 @@ mod tests {
     }
 
     #[test]
+    fn add_with_force_skips_prompt_and_installs() {
+        // Regression test for dogfood issue 3: `force = true` must install
+        // without touching stdin (the y/N prompt is skipped entirely), and
+        // the resulting entry must still carry a real binary_sha256 pin —
+        // `force` only bypasses the *consent prompt*, never the hash.
+        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mur_home = tmp.path();
+
+        let agent_home = mur_home.join("agents").join("carol");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let p = mur_common::agent::AgentProfile::default_for_tests();
+        std::fs::write(
+            agent_home.join("profile.yaml"),
+            serde_yaml_ng::to_string(&p).unwrap(),
+        )
+        .unwrap();
+
+        unsafe {
+            std::env::set_var("MUR_HOME", mur_home);
+        }
+
+        // `true` (the `true` binary, present on every unix box) resolves on
+        // PATH, so this also exercises the hash-computation branch.
+        cmd_mcp_add(
+            "carol",
+            "echo-srv",
+            "true",
+            &[],
+            McpAddPin {
+                force: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let (_p, profile) = load_profile_for_edit("carol").unwrap();
+        let e = profile
+            .mcp_servers
+            .iter()
+            .find(|m| m.name == "echo-srv")
+            .unwrap();
+        assert!(
+            e.binary_sha256.is_some(),
+            "force must skip only the prompt, not the binary hash pin"
+        );
+    }
+
+    #[test]
     fn add_remote_writes_url_and_bearer() {
         let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::TempDir::new().unwrap();

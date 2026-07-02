@@ -3,7 +3,7 @@
 
 use crate::hitl::HitlApprovals;
 use crate::hooks::{HookChain, HookCtx, PromptView, ToolCall, ToolResult};
-use crate::llm::{LlmClient, LlmRequest};
+use crate::llm::{LlmClient, LlmError, LlmRequest};
 use crate::skills::RuntimeSkills;
 use crate::skills::injector::inject_layer2;
 use crate::skills::trigger_matcher::{format_layer3, layer3_body, match_prompt};
@@ -1375,11 +1375,33 @@ impl TaskRunner {
                 max_tokens: None,
                 tools: tool_defs.clone(),
             };
-            let resp = match &sink {
-                Some(s) => client.generate_stream(req, s.clone()).await,
-                None => client.generate(req).await,
-            }
-            .map_err(|e| task_error("llm_error", format!("{e}"), true))?;
+            // Bounded retry for a transient empty-stream hiccup: an
+            // `InvalidResponse` carrying "empty streamed response" is usually a
+            // momentary network/proxy blip (sometimes surfacing as a totally
+            // blank agent reply), so retry the call ONCE. Any other error type,
+            // or a second consecutive empty-stream, propagates as before.
+            let resp = {
+                let mut attempt = 0u8;
+                loop {
+                    let req_try = req.clone();
+                    let result = match &sink {
+                        Some(s) => client.generate_stream(req_try, s.clone()).await,
+                        None => client.generate(req_try).await,
+                    };
+                    match result {
+                        Ok(r) => break r,
+                        Err(LlmError::InvalidResponse(ref msg))
+                            if attempt == 0 && msg.contains("empty streamed response") =>
+                        {
+                            attempt += 1;
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(task_error("llm_error", format!("{e}"), true));
+                        }
+                    }
+                }
+            };
 
             self.cumulative_input_tokens
                 .fetch_add(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
@@ -2262,6 +2284,65 @@ mod tests {
                 .with_max_iterations(50),
         );
         let outcome = runner.run_sync(loop_spec("truncate-thinking")).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed (recovered turn), got {outcome:?}");
+        };
+        let reply_text = task.messages.last().map(text_of).unwrap_or_default();
+        assert!(
+            reply_text.contains("RECOVERED"),
+            "expected the recovery turn's reply, got: {reply_text}"
+        );
+    }
+
+    /// Returns `InvalidResponse("empty streamed response")` on its first call,
+    /// then delegates to `inner` — used to test the bounded retry for a
+    /// transient empty-stream hiccup (task_runner's LLM call site).
+    struct EmptyStreamOnceThenLlm {
+        inner: crate::llm::stub::SequenceLlm,
+        failed_once: std::sync::atomic::AtomicBool,
+    }
+
+    impl EmptyStreamOnceThenLlm {
+        fn new(responses: Vec<crate::llm::LlmResponse>) -> Self {
+            Self {
+                inner: crate::llm::stub::SequenceLlm::new(responses),
+                failed_once: std::sync::atomic::AtomicBool::new(false),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::llm::LlmClient for EmptyStreamOnceThenLlm {
+        async fn generate(
+            &self,
+            req: crate::llm::LlmRequest,
+        ) -> Result<crate::llm::LlmResponse, crate::llm::LlmError> {
+            if !self.failed_once.swap(true, Ordering::Relaxed) {
+                return Err(crate::llm::LlmError::InvalidResponse(
+                    "empty streamed response".into(),
+                ));
+            }
+            self.inner.generate(req).await
+        }
+        fn model_name(&self) -> &str {
+            "empty-stream-once-then-stub"
+        }
+    }
+
+    /// Regression: a transient empty-stream error (a momentary network/proxy
+    /// hiccup) must be retried once and recover silently, not surface as a
+    /// hard task error or a blank agent reply.
+    #[tokio::test]
+    async fn empty_stream_error_retries_once_and_recovers() {
+        let responses = vec![end_turn_response("RECOVERED: retried after empty stream.")];
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(EmptyStreamOnceThenLlm::new(responses)))
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                .with_max_iterations(50),
+        );
+        let outcome = runner.run_sync(loop_spec("empty-stream-retry")).await;
         let TaskOutcome::Completed(task) = outcome else {
             panic!("expected Completed (recovered turn), got {outcome:?}");
         };

@@ -823,6 +823,7 @@ mod auto_compress_tests {
             min_tokens: 1,
             mcp: true,
             agent_runtime: true,
+            claude_hook: true,
         };
         let big = big_search_output();
         let out = apply_auto_compress(&eng, &auto, "mur_compress", &json!({}), big.clone());
@@ -852,6 +853,7 @@ mod auto_compress_tests {
             min_tokens: 50,
             mcp: true,
             agent_runtime: true,
+            claude_hook: true,
         };
         let out = apply_auto_compress(
             &eng,
