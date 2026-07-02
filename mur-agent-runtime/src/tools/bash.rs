@@ -196,6 +196,7 @@ mod tests {
         assert!(matches!(result, Err(ToolError::InvalidInput(_))));
     }
 
+    #[cfg(unix)]
     #[test]
     fn augmented_path_adds_standard_dirs_to_minimal_path() {
         // Simulate a service-manager launch with the classic minimal PATH.
@@ -211,6 +212,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn augmented_path_does_not_duplicate_existing_entries() {
         let result = augmented_path(Some("/opt/homebrew/bin:/usr/bin"));
