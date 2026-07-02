@@ -45,11 +45,19 @@ fn process_event(event: &NormalizedEvent) -> Result<()> {
                 .and_then(|p| p.parent().map(|d| d.join("mur")))
                 .unwrap_or_else(|| std::path::PathBuf::from("mur"));
             for subcmd in &["sync", "evolve", "emerge"] {
-                let _ = std::process::Command::new(&mur_bin)
+                if let Ok(mut child) = std::process::Command::new(&mur_bin)
                     .arg(subcmd)
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
-                    .spawn();
+                    .spawn()
+                {
+                    // Detached fire-and-forget: reap on a background thread so
+                    // the child never lingers as a zombie (std::process::Child
+                    // has no built-in reaper, unlike tokio's).
+                    std::thread::spawn(move || {
+                        let _ = child.wait();
+                    });
+                }
             }
         }
         _ => {}
