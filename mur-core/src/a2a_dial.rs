@@ -657,6 +657,7 @@ mod tests {
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 mod timeout_tests {
     //! Regression coverage for the dogfood hang: `mur agent send` blocked
     //! indefinitely against a peer that accepted the connection but never
