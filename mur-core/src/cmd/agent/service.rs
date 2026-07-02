@@ -30,10 +30,18 @@ pub fn cmd_install_service(name: &str, dry_run: bool) -> Result<()> {
             fs::create_dir_all(parent)?;
         }
         write_atomic(&dest, plist.as_bytes())?;
-        let _ = std::process::Command::new("launchctl")
+        let load_output = std::process::Command::new("launchctl")
             .args(["load", "-w"])
             .arg(&dest)
-            .status();
+            .output()?;
+        if !load_output.status.success() {
+            let stderr = String::from_utf8_lossy(&load_output.stderr);
+            bail!(
+                "wrote plist to {} but `launchctl load -w` failed: {stderr}; the plist is still on disk, try `launchctl bootstrap gui/$UID {}` to load it manually",
+                dest.display(),
+                dest.display()
+            );
+        }
         println!("Installed launchd service at {}", dest.display());
     }
     #[cfg(target_os = "linux")]
@@ -53,10 +61,17 @@ pub fn cmd_install_service(name: &str, dry_run: bool) -> Result<()> {
         let _ = std::process::Command::new("systemctl")
             .args(["--user", "daemon-reload"])
             .status();
-        let _ = std::process::Command::new("systemctl")
+        let enable_output = std::process::Command::new("systemctl")
             .args(["--user", "enable", "--now"])
             .arg(format!("mur-agent-{name}.service"))
-            .status();
+            .output()?;
+        if !enable_output.status.success() {
+            let stderr = String::from_utf8_lossy(&enable_output.stderr);
+            bail!(
+                "wrote unit to {} but `systemctl --user enable --now` failed: {stderr}; the unit file is still on disk, try `systemctl --user enable --now mur-agent-{name}.service` to retry manually",
+                dest.display()
+            );
+        }
         println!("Installed systemd --user unit at {}", dest.display());
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
