@@ -233,9 +233,11 @@ fn resolve_model_ref_for_create(
 
     // 1. Reuse an existing matching entry (case-insensitive provider match,
     //    exact model match) — inherits its secret + base_url.
-    if let Some((key, _)) = reg.models.iter().find(|(_, e)| {
-        e.provider.eq_ignore_ascii_case(provider) && e.model == model
-    }) {
+    if let Some((key, _)) = reg
+        .models
+        .iter()
+        .find(|(_, e)| e.provider.eq_ignore_ascii_case(provider) && e.model == model)
+    {
         return Ok(Some(key.clone()));
     }
 

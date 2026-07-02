@@ -41,6 +41,6 @@ mod tests {
         assert_eq!(method_min_proto("message/send"), 0);
         assert_eq!(method_min_proto("agent/card"), 0);
         // The current proto is at least the highest gated method.
-        assert!(A2A_PROTO_VERSION >= 1);
+        const { assert!(A2A_PROTO_VERSION >= 1) };
     }
 }
