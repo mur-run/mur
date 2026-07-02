@@ -295,7 +295,6 @@ mod tests {
     fn concurrent_merge_both_increments_commit() {
         let (_dir, path) = temp_stats_path();
         let skill_name = "concurrent-test".to_string();
-        let path = std::path::PathBuf::from(path); // decouple from tempdir lifetime
         let path2 = path.clone();
 
         // Init the file
