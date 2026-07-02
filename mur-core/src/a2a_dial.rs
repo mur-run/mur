@@ -8,6 +8,7 @@
 
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use mur_common::LockFile;
@@ -30,6 +31,34 @@ pub enum DialMode {
     /// pulling skills from agents that the user explicitly does not want
     /// to keep resident.
     ForceEphemeral,
+}
+
+/// Default idle read/write timeout for a dialed agent socket. Chosen to sit
+/// comfortably above the runtime's default HITL approval wait (300s, see
+/// `mur-agent-runtime::task_runner::HitlConfig::default`) plus headroom for
+/// slow generation, while still guaranteeing `mur agent send` cannot hang
+/// forever on a stalled or crashed peer (dogfood issue: one-shot send hung
+/// for 5+ minutes with no feedback). Overridable for tests and for callers
+/// who know their turns run long.
+const DEFAULT_DIAL_IO_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Resolve the idle I/O timeout for a dialed socket, honoring
+/// `MUR_A2A_IO_TIMEOUT_SECS` (mainly for tests) with a sane default.
+fn dial_io_timeout() -> Duration {
+    std::env::var("MUR_A2A_IO_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_DIAL_IO_TIMEOUT)
+}
+
+/// True if `err` looks like a socket read/write timeout (`SO_RCVTIMEO`/
+/// `SO_SNDTIMEO` firing), as opposed to a genuine connection error.
+fn is_io_timeout(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    )
 }
 
 /// Resolve a user-typed agent name to the canonical on-disk agent name,
@@ -164,13 +193,44 @@ fn dial_socket(
     #[cfg(unix)]
     {
         use std::io::{BufRead, BufReader, Write};
+        let timeout = dial_io_timeout();
         let mut stream = std::os::unix::net::UnixStream::connect(&sock)
             .with_context(|| format!("connect {sock}"))?;
+        // Bound both directions: without these, a stalled or crashed peer
+        // (or one silently waiting on a HITL prompt) blocks `mur agent send`
+        // forever with no feedback (dogfood issue: hung for 5+ minutes).
+        stream
+            .set_write_timeout(Some(timeout))
+            .context("set write timeout")?;
+        stream
+            .set_read_timeout(Some(timeout))
+            .context("set read timeout")?;
         let line = format!("{}\n", serde_json::to_string(request)?);
-        stream.write_all(line.as_bytes())?;
+        stream.write_all(line.as_bytes()).map_err(|e| {
+            if is_io_timeout(&e) {
+                anyhow!(
+                    "agent '{agent_name}' did not accept the request within {}s (write timed out); \
+                     check `mur agent logs {agent_name}`",
+                    timeout.as_secs()
+                )
+            } else {
+                anyhow!(e).context("write request")
+            }
+        })?;
+        stream.flush().context("flush request")?;
         let reader = BufReader::new(stream.try_clone()?);
         for line in reader.lines() {
-            let line = line.context("read response line")?;
+            let line = line.map_err(|e| {
+                if is_io_timeout(&e) {
+                    anyhow!(
+                        "agent '{agent_name}' did not respond within {}s; \
+                         check `mur agent logs {agent_name}`",
+                        timeout.as_secs()
+                    )
+                } else {
+                    anyhow!(e).context("read response line")
+                }
+            })?;
             let v: Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -289,13 +349,45 @@ pub fn dial_message_streaming(
     #[cfg(unix)]
     {
         use std::io::{BufRead, BufReader, Write};
+        let timeout = dial_io_timeout();
         let mut stream = std::os::unix::net::UnixStream::connect(&sock)
             .with_context(|| format!("connect {sock}"))?;
+        // Bound both directions — see `dial_socket` for why. This is an idle
+        // timeout: each `message/delta`/`step/*` notification during
+        // generation resets it, so legitimately long-but-active turns are
+        // unaffected; only a genuinely stalled peer trips it.
+        stream
+            .set_write_timeout(Some(timeout))
+            .context("set write timeout")?;
+        stream
+            .set_read_timeout(Some(timeout))
+            .context("set read timeout")?;
         let line = format!("{}\n", serde_json::to_string(&request)?);
-        stream.write_all(line.as_bytes())?;
+        stream.write_all(line.as_bytes()).map_err(|e| {
+            if is_io_timeout(&e) {
+                anyhow!(
+                    "agent '{agent_name}' did not accept the request within {}s (write timed out); \
+                     check `mur agent logs {agent_name}`",
+                    timeout.as_secs()
+                )
+            } else {
+                anyhow!(e).context("write request")
+            }
+        })?;
+        stream.flush().context("flush request")?;
         let reader = BufReader::new(stream.try_clone()?);
         for line in reader.lines() {
-            let line = line.context("read response line")?;
+            let line = line.map_err(|e| {
+                if is_io_timeout(&e) {
+                    anyhow!(
+                        "agent '{agent_name}' went idle for {}s without a response; \
+                         check `mur agent logs {agent_name}`",
+                        timeout.as_secs()
+                    )
+                } else {
+                    anyhow!(e).context("read response line")
+                }
+            })?;
             let v: Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -561,6 +653,111 @@ mod tests {
             !err.to_string().contains("stale runtime"),
             "must not gate message/send"
         );
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    //! Regression coverage for the dogfood hang: `mur agent send` blocked
+    //! indefinitely against a peer that accepted the connection but never
+    //! wrote a response line (simulating a stalled/wedged runtime, or one
+    //! silently waiting past the client's patience). `dial_socket` must now
+    //! bound the wait and return an actionable error instead of hanging.
+    //!
+    //! Gated behind `MUR_TEST_SOCKETS=1`: some sandboxed CI/dev environments
+    //! deny `AF_UNIX` `connect(2)` outright (observed as `EPERM`, "Operation
+    //! not permitted", even against a freshly bound `/tmp` socket with a
+    //! same-process listener already accepting) regardless of socket path
+    //! length or `TMPDIR` location. The test is fully functional on CI and
+    //! normal dev machines; set the env var there (or anywhere unix-domain
+    //! sockets are actually permitted) to run it.
+    use super::*;
+    use std::io::Read;
+    use std::os::unix::net::UnixListener;
+
+    /// Serial guard: `MUR_A2A_IO_TIMEOUT_SECS` is process-global env, and
+    /// `cargo test` runs tests in this file concurrently by default.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn dial_socket_times_out_instead_of_hanging_forever() {
+        if std::env::var("MUR_TEST_SOCKETS").as_deref() != Ok("1") {
+            eprintln!(
+                "skipping dial_socket_times_out_instead_of_hanging_forever: \
+                 set MUR_TEST_SOCKETS=1 on a machine that permits AF_UNIX \
+                 connects (see module docs for why this is gated)"
+            );
+            return;
+        }
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock_path = tmp.path().join("agent.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+
+        // Fake peer: accepts the connection, reads the request so the
+        // client's write doesn't itself block, then goes silent forever
+        // (drops the byte stream only when the test ends and the listener
+        // thread's stream is dropped).
+        let server = std::thread::spawn(move || {
+            if let Ok((mut conn, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                // Drain whatever the client sent; ignore the result — we
+                // never reply, which is the whole point of this test.
+                let _ = conn.read(&mut buf);
+                // Hold the connection open (don't drop `conn`) well past
+                // the client's configured timeout, so a passing test proves
+                // the client-side timeout fired rather than an EOF race.
+                std::thread::sleep(Duration::from_secs(5));
+            }
+        });
+
+        let agent_dir = tmp.path().join("agents").join("stalled");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(
+            agent_dir.join("running.lock"),
+            serde_json::json!({
+                "schema": 1,
+                "uuid": "u",
+                "name": "stalled",
+                "pid": 1,
+                "ppid": 1,
+                "started_at": "t",
+                "binary_version": "test",
+                "transports": { "stdio": true, "unix_socket": sock_path.to_str().unwrap() },
+                "card_digest": "d",
+                "capabilities": [],
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        // SAFETY (test-only env mutation): serialized by `ENV_LOCK` above so
+        // no other test in this process observes a torn value.
+        unsafe { std::env::set_var("MUR_A2A_IO_TIMEOUT_SECS", "1") };
+        let start = std::time::Instant::now();
+        let result = dial_method(
+            tmp.path(),
+            "stalled",
+            "message/send",
+            serde_json::json!({}),
+            DialMode::RequireRunning,
+        );
+        let elapsed = start.elapsed();
+        unsafe { std::env::remove_var("MUR_A2A_IO_TIMEOUT_SECS") };
+
+        let err = result.unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("did not respond") && msg.contains("stalled"),
+            "expected an actionable timeout error, got: {msg}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(4),
+            "dial_socket should time out near the configured 1s bound, took {elapsed:?} \
+             (a regression here means the hang is back)"
+        );
+
+        let _ = server.join();
     }
 }
 
