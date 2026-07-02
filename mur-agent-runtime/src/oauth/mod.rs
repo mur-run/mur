@@ -230,13 +230,23 @@ pub async fn run_authorization_flow(
 
     // 3. Best-effort browser launch; always print so the user can paste.
     println!("Open this URL to authorize MUR:\n  {auth_url}");
-    let _ = std::process::Command::new(if cfg!(target_os = "macos") {
+    // Fire-and-forget, but `std::process::Child` has no background reaper
+    // (unlike `tokio::process::Child`): an un-waited launcher process
+    // becomes a permanent zombie once it exits. Reap it on a detached
+    // thread instead of leaking (dogfood issue 11).
+    if let Ok(child) = std::process::Command::new(if cfg!(target_os = "macos") {
         "open"
     } else {
         "xdg-open"
     })
     .arg(&auth_url)
-    .spawn();
+    .spawn()
+    {
+        std::thread::spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        });
+    }
 
     // 4. Wait for the localhost redirect (state verified inside), then exchange.
     let code = wait_for_code(redirect_port, &state).await?;

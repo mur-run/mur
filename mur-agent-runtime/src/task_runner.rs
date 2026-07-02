@@ -1397,7 +1397,7 @@ impl TaskRunner {
                             continue;
                         }
                         Err(e) => {
-                            return Err(task_error("llm_error", format!("{e}"), true).into());
+                            return Err(task_error("llm_error", format!("{e}"), true));
                         }
                     }
                 }

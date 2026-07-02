@@ -95,18 +95,34 @@ impl ToolExecutor for BashTool {
 
         let path = augmented_path(std::env::var("PATH").ok().as_deref());
 
-        let output = tokio::time::timeout(
+        let child = Command::new("bash")
+            .arg("-c")
+            .arg(&command)
+            .current_dir(&working_dir)
+            .env("PATH", path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| ToolError::Execution(format!("spawn failed: {e}")))?;
+
+        let output = match tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            Command::new("bash")
-                .arg("-c")
-                .arg(&command)
-                .current_dir(&working_dir)
-                .env("PATH", path)
-                .output(),
+            child.wait_with_output(),
         )
         .await
-        .map_err(|_| ToolError::Execution("command timed out after 30s".into()))?
-        .map_err(|e| ToolError::Execution(format!("spawn failed: {e}")))?;
+        {
+            Ok(result) => result.map_err(|e| ToolError::Execution(format!("spawn failed: {e}")))?,
+            Err(_) => {
+                // `wait_with_output` consumed `child`, so on timeout we never
+                // get a handle back to kill/reap it here; `kill_on_drop`
+                // above ensures tokio's process driver still sends the kill
+                // and reaps the exit status in the background instead of
+                // leaving a zombie behind (dogfood issue 11).
+                return Err(ToolError::Execution("command timed out after 30s".into()));
+            }
+        };
 
         let mut combined = String::new();
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -213,6 +229,77 @@ mod tests {
         let result = augmented_path(None);
         let dirs: Vec<_> = std::env::split_paths(&result).collect();
         assert!(dirs.contains(&PathBuf::from("/opt/homebrew/bin")));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timeout_kill_path_leaves_no_zombie_children() {
+        // Regression test for dogfood issue 11: murmurd/mur-agent-runtime
+        // accumulated hundreds of defunct children (631 zombies on one
+        // murmurd, 585 and 291 on two runtime instances, ~1.6 new
+        // zombies/minute on a fresh process) because the bash tool's
+        // timeout branch dropped its `Child` without ever waiting on it.
+        // `BashTool::execute` only returns captured text, so there's no
+        // pid to inspect after the fact; this mirrors its exact spawn +
+        // `kill_on_drop(true)` + timeout shape to capture pids directly
+        // and confirm each one is *fully reaped* (not left defunct) once
+        // the timed-out future's `Child` is dropped.
+        let mut pids = Vec::new();
+
+        for _ in 0..5 {
+            let mut child = Command::new("bash")
+                .arg("-c")
+                .arg("sleep 60")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .expect("spawn failed");
+            let pid = child.id().expect("child should have a pid") as libc::pid_t;
+            pids.push(pid);
+
+            // Same shape as `execute`'s timeout branch: a short timeout
+            // fires long before the 60s sleep finishes, and the `Child`
+            // (owned by the timed-out future) is dropped here at the end
+            // of this loop iteration.
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(50), child.wait()).await;
+        }
+
+        // Give tokio's process-driver orphan reaper a moment to finish
+        // reaping in the background: `kill_on_drop` only *starts* the
+        // kill on drop, reaping the exit status happens asynchronously.
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        for pid in pids {
+            // SAFETY: `pid` is a plain integer obtained from `Child::id()`
+            // moments ago in this same test process, which is the direct
+            // parent of that pid. `waitpid` with `WNOHANG` is a
+            // non-blocking status query on a raw pid/status buffer we own
+            // on the stack; there is no aliasing or lifetime hazard.
+            let mut status: libc::c_int = 0;
+            let ret = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            let errno = std::io::Error::last_os_error();
+
+            // A leaked zombie would still be sitting defunct in the
+            // process table, so `waitpid` would successfully reap it
+            // right here (`ret == pid`). Once the timeout-kill path
+            // properly reaps its children (the fix), the kernel has no
+            // child entry left for `pid` by the time we get here, so
+            // `waitpid` fails with `ECHILD`.
+            assert_eq!(
+                ret, -1,
+                "pid {pid} was still present (zombie or running) after \
+                 the timeout-kill path instead of already being reaped; \
+                 waitpid returned {ret}, status {status}, errno {errno:?}"
+            );
+            assert_eq!(
+                errno.raw_os_error(),
+                Some(libc::ECHILD),
+                "expected ECHILD (no such child) confirming pid {pid} was \
+                 already reaped in the background, got errno {errno:?}"
+            );
+        }
     }
 
     #[tokio::test]
