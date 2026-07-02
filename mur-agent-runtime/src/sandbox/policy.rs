@@ -383,13 +383,23 @@ mod tests {
 
     #[test]
     fn tilde_expands_to_home_dir() {
+        // Exercised via `deny` rather than `read`/`write`: deny entries are
+        // exempt from the dead-grant existence filter by design (a stale
+        // deny path is kept verbatim rather than dropped, since dropping it
+        // would be fail-open). `~/Documents` may not exist on CI runners
+        // (e.g. Ubuntu, no home Documents dir), so asserting through `read`
+        // makes this test's outcome depend on runner environment. Routing
+        // it through `deny` still exercises the same `expand` tilde
+        // substitution logic while staying environment-independent.
+        let mut ent = minimal_entitlements();
+        ent.filesystem.deny.push("~/Documents".to_string());
         let agent_home = PathBuf::from("/tmp/agent_home_test");
-        let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+        let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
         let expected = dirs::home_dir().unwrap().join("Documents");
         assert!(
-            policy.fs_read.contains(&expected),
+            policy.fs_deny.contains(&expected),
             "~/Documents should expand to {expected:?}, got: {:?}",
-            policy.fs_read
+            policy.fs_deny
         );
     }
 
