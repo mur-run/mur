@@ -152,13 +152,24 @@ pub fn auto_compress_value(
             o.fired.then(|| value_replacement(&o, query))
         }
         Value::Object(map) => {
+            // Candidate fields are arrays (e.g. MCP list results) or strings
+            // (e.g. a real Bash tool_response's `stdout`/`stderr`), since
+            // Claude Code's PostToolUse stdin wraps tool output as an object
+            // like `{stdout: <string>, stderr: <string>, interrupted: bool}`.
             let key = map
                 .iter()
-                .filter(|(_, v)| v.is_array())
+                .filter(|(_, v)| v.is_array() || v.is_string())
                 .max_by_key(|(_, v)| v.to_string().len())
                 .map(|(k, _)| k.clone())?;
-            let arr_text = map.get(&key).map(|v| v.to_string()).unwrap_or_default();
-            let o = auto_compress(engine, &arr_text, query, min_tokens);
+            let field = map.get(&key)?;
+            // Pass a string field's raw contents (not its JSON-quoted
+            // `to_string()`) so the engine sees the real text to compress;
+            // arrays still go through `to_string()` since they're already
+            // top-level-array-shaped JSON.
+            let o = match field {
+                Value::String(s) => auto_compress(engine, s, query, min_tokens),
+                _ => auto_compress(engine, &field.to_string(), query, min_tokens),
+            };
             if !o.fired {
                 return None;
             }
@@ -295,6 +306,35 @@ mod tests {
     fn value_small_object_returns_none() {
         let (_dir, eng) = engine();
         let v = serde_json::json!({"results": ["a", "b"], "count": 2});
+        assert!(auto_compress_value(&eng, &v, None, 1500).is_none());
+    }
+
+    // Real Claude Code PostToolUse stdin wraps Bash tool output as an
+    // object: `{stdout: <string>, stderr: <string>, interrupted: bool}`.
+    // The Object branch must consider string fields too, not just arrays.
+    #[test]
+    fn value_object_tool_response_compresses_large_stdout_string() {
+        let (_dir, eng) = engine();
+        let v = serde_json::json!({
+            "stdout": big_json_array(),
+            "stderr": "",
+            "interrupted": false,
+        });
+        let out = auto_compress_value(&eng, &v, None, 50).expect("should fire");
+        assert_eq!(out["interrupted"], serde_json::json!(false));
+        assert_eq!(out["stderr"], serde_json::json!(""));
+        assert_eq!(out["stdout"]["compressed"], serde_json::json!(true));
+        assert!(out["stdout"]["hash"].as_str().is_some());
+    }
+
+    #[test]
+    fn value_object_tool_response_small_stdout_returns_none() {
+        let (_dir, eng) = engine();
+        let v = serde_json::json!({
+            "stdout": "ok",
+            "stderr": "",
+            "interrupted": false,
+        });
         assert!(auto_compress_value(&eng, &v, None, 1500).is_none());
     }
 }
