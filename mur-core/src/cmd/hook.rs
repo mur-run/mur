@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use mur_compress::{AutoCfg, CompressConfig, CompressEngine};
 use std::io::Read;
 
 use crate::inject::event::{EventKind, parse_event};
@@ -29,6 +30,50 @@ pub(crate) fn extract_query(raw: &serde_json::Value) -> Option<String> {
 
 fn is_pre_tool_use(raw: &serde_json::Value) -> bool {
     !matches!(raw.get("tool_response"), Some(v) if !v.is_null())
+}
+
+/// True iff `value` is already a compressed envelope, i.e. a JSON object
+/// whose top-level `"compressed"` key is `true`.
+fn is_compressed_envelope(value: &serde_json::Value) -> bool {
+    value
+        .as_object()
+        .and_then(|m| m.get("compressed"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Decide whether the PostToolUse `tool_response` should be auto-compressed
+/// and, if so, build the full printable hook-output line. Pure/unit-testable:
+/// takes the already-constructed engine and config, does no I/O itself.
+///
+/// Returns `None` when the gate doesn't fire (feature disabled, no
+/// `tool_response`, already a compressed envelope, or compression didn't
+/// pay off) — in which case the caller must print nothing.
+fn compress_tool_response(
+    raw: &serde_json::Value,
+    cfg: &AutoCfg,
+    engine: &CompressEngine,
+) -> Option<String> {
+    if !(cfg.enabled && cfg.claude_hook) {
+        return None;
+    }
+    let tool_response = raw.get("tool_response")?;
+    if tool_response.is_null() || is_compressed_envelope(tool_response) {
+        return None;
+    }
+    let replacement =
+        mur_compress::auto_compress_value(engine, tool_response, None, cfg.min_tokens)?;
+    let updated_tool_output = match replacement {
+        serde_json::Value::String(s) => s,
+        other => serde_json::to_string(&other).ok()?,
+    };
+    let line = serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "updatedToolOutput": updated_tool_output,
+        }
+    });
+    serde_json::to_string(&line).ok()
 }
 
 fn is_l2_tool(tool_name: &str) -> bool {
@@ -205,6 +250,20 @@ pub(crate) async fn cmd_hook_tool(tool: &str) -> Result<()> {
     if !is_pre_tool_use(&raw) {
         // PostToolUse: ambient-capture the executed tool call (input + exit code).
         let _ = crate::session::ambient::capture(&event);
+
+        // Best-effort auto-compression of the tool_response, gated on
+        // auto.enabled && auto.claude_hook. Any failure to build the engine
+        // is silently skipped — identical behavior to today.
+        if let Ok(home) = crate::cmd::agent::resolve_mur_home() {
+            let cfg = CompressConfig::load(&home);
+            let auto_cfg = cfg.auto.clone();
+            if let Ok(engine) = CompressEngine::new(home.join("compress"), cfg)
+                && let Some(line) = compress_tool_response(&raw, &auto_cfg, &engine)
+            {
+                println!("{line}");
+            }
+        }
+
         return Ok(());
     }
     let tool_called = event.tool_called.as_deref().unwrap_or("");
@@ -452,5 +511,95 @@ mod tests {
     fn extract_query_missing_returns_none() {
         let raw = json!({"tool_name": "Edit"});
         assert!(extract_query(&raw).is_none());
+    }
+}
+
+#[cfg(test)]
+mod compress_tool_response_tests {
+    use super::*;
+    use mur_compress::{AutoCfg, CompressConfig, CompressEngine};
+    use serde_json::json;
+
+    /// Mirrors the `engine()` test helper in `mur-compress/src/auto.rs`: a
+    /// throwaway store dir plus a default-config `CompressEngine`.
+    fn engine() -> (tempfile::TempDir, CompressEngine) {
+        let dir = tempfile::tempdir().unwrap();
+        let eng = CompressEngine::new(dir.path().to_path_buf(), CompressConfig::default()).unwrap();
+        (dir, eng)
+    }
+
+    fn auto_cfg() -> AutoCfg {
+        AutoCfg {
+            enabled: true,
+            claude_hook: true,
+            ..AutoCfg::default()
+        }
+    }
+
+    /// Large, repetitive JSON array well above the `min_tokens` gate — stands
+    /// in for an oversized MCP tool result.
+    fn big_tool_response() -> serde_json::Value {
+        let items: Vec<String> = (0..4000)
+            .map(|i| format!("{{\"id\":{i},\"name\":\"item-{i}\",\"value\":{}}}", i * 7))
+            .collect();
+        serde_json::from_str(&format!("[{}]", items.join(","))).unwrap()
+    }
+
+    #[test]
+    fn oversized_mcp_tool_result_compresses_and_prints_line() {
+        let (_dir, eng) = engine();
+        let cfg = auto_cfg();
+        let raw = json!({
+            "tool_name": "mcp__desktop-commander__list_processes",
+            "tool_response": big_tool_response(),
+        });
+
+        let line = compress_tool_response(&raw, &cfg, &eng).expect("gate should fire");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&line).expect("line must be valid JSON");
+
+        assert_eq!(
+            parsed["hookSpecificOutput"]["hookEventName"],
+            json!("PostToolUse")
+        );
+        let updated = parsed["hookSpecificOutput"]["updatedToolOutput"]
+            .as_str()
+            .expect("updatedToolOutput must be a JSON string");
+        assert!(!updated.is_empty());
+        assert!(
+            updated.contains("mur_retrieve"),
+            "expected retrieval hash marker in: {updated}"
+        );
+    }
+
+    #[test]
+    fn small_tool_response_below_floor_is_none() {
+        let (_dir, eng) = engine();
+        let cfg = auto_cfg();
+        let raw = json!({
+            "tool_name": "mcp__desktop-commander__list_processes",
+            "tool_response": "tiny output",
+        });
+
+        assert!(compress_tool_response(&raw, &cfg, &eng).is_none());
+    }
+
+    #[test]
+    fn already_compressed_envelope_is_none() {
+        let (_dir, eng) = engine();
+        let cfg = auto_cfg();
+        let raw = json!({
+            "tool_name": "mcp__desktop-commander__list_processes",
+            "tool_response": {
+                "compressed": true,
+                "content": "already compressed",
+                "hash": "deadbeef",
+                "original_tokens": 9000,
+                "compressed_tokens": 12,
+                "note": "Large output compressed; original stored.",
+            },
+        });
+
+        assert!(compress_tool_response(&raw, &cfg, &eng).is_none());
     }
 }
