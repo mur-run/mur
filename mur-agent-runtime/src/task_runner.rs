@@ -181,6 +181,15 @@ const LOOP_WINDOW: usize = 8;
 /// trips the doom-loop guard.
 const LOOP_REPEAT_THRESHOLD: usize = 3;
 
+/// Max number of times a single turn retries an `LlmError::RateLimit` (HTTP
+/// 429) before giving up and propagating the error. Separate from the
+/// empty-stream retry's own attempt counter.
+const MAX_RATE_LIMIT_RETRIES: u8 = 3;
+
+/// Base delay for the rate-limit backoff: attempt N sleeps
+/// `RATE_LIMIT_BACKOFF_BASE * 2^N` (1-indexed attempts give 2s, 4s, 8s, ...).
+const RATE_LIMIT_BACKOFF_BASE: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Why the agentic loop stopped short of a natural end-turn. Carried out of the
 /// loop into the task's `usage` JSON so callers can tell a clean completion from
 /// a budget-truncated one.
@@ -1382,6 +1391,7 @@ impl TaskRunner {
             // or a second consecutive empty-stream, propagates as before.
             let resp = {
                 let mut attempt = 0u8;
+                let mut rate_limit_attempt = 0u8;
                 loop {
                     let req_try = req.clone();
                     let result = match &sink {
@@ -1394,6 +1404,20 @@ impl TaskRunner {
                             if attempt == 0 && msg.contains("empty streamed response") =>
                         {
                             attempt += 1;
+                            continue;
+                        }
+                        // Transient 429: back off exponentially and retry, up to
+                        // MAX_RATE_LIMIT_RETRIES times, so a momentary burst
+                        // across parallel agents doesn't kill the turn outright.
+                        Err(LlmError::RateLimit) if rate_limit_attempt < MAX_RATE_LIMIT_RETRIES => {
+                            rate_limit_attempt += 1;
+                            let delay = rate_limit_backoff_delay(rate_limit_attempt);
+                            tracing::warn!(
+                                attempt = rate_limit_attempt,
+                                delay_secs = delay.as_secs(),
+                                "llm rate limited (429); backing off and retrying"
+                            );
+                            tokio::time::sleep(delay).await;
                             continue;
                         }
                         Err(e) => {
@@ -1601,6 +1625,13 @@ impl TaskRunner {
             }
         }
     }
+}
+
+/// Backoff delay for rate-limit retry attempt `attempt` (1-indexed: the first
+/// retry is attempt 1). Doubles `RATE_LIMIT_BACKOFF_BASE` per attempt, giving
+/// 2s, 4s, 8s for attempts 1, 2, 3 with the current base of 1s.
+fn rate_limit_backoff_delay(attempt: u8) -> std::time::Duration {
+    RATE_LIMIT_BACKOFF_BASE * (1u32 << u32::from(attempt))
 }
 
 /// Deterministic hash of a tool call's arguments. Serializes to canonical JSON
@@ -2997,6 +3028,34 @@ mod tests {
         assert!(runner.inject_steering("nope", "x".into()).await.is_err());
         runner.unregister_steering("t1").await;
         assert!(runner.inject_steering("t1", "y".into()).await.is_err());
+    }
+
+    #[test]
+    fn rate_limit_backoff_delay_matches_spec() {
+        assert_eq!(
+            rate_limit_backoff_delay(1),
+            std::time::Duration::from_secs(2)
+        );
+        assert_eq!(
+            rate_limit_backoff_delay(2),
+            std::time::Duration::from_secs(4)
+        );
+        assert_eq!(
+            rate_limit_backoff_delay(3),
+            std::time::Duration::from_secs(8)
+        );
+    }
+
+    #[test]
+    fn rate_limit_retry_constants_are_sane() {
+        // Must retry at least once for the backoff to matter, and stay small
+        // enough that a still-limited account fails a turn in a bounded time
+        // (2s + 4s + 8s = 14s at the current base) rather than hanging.
+        assert!(MAX_RATE_LIMIT_RETRIES >= 1);
+        assert!(MAX_RATE_LIMIT_RETRIES <= 5);
+        assert!(RATE_LIMIT_BACKOFF_BASE >= std::time::Duration::from_millis(1));
+        let max_delay = rate_limit_backoff_delay(MAX_RATE_LIMIT_RETRIES);
+        assert!(max_delay <= std::time::Duration::from_secs(60));
     }
 }
 
