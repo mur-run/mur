@@ -1,10 +1,12 @@
-use mur_common::agent::{Entitlements, NetworkOutboundMode};
+use mur_common::agent::{Entitlements, NetworkOutboundMode, SpawnMode};
+#[cfg(not(target_os = "windows"))]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 /// Resolved, OS-ready sandbox policy derived from agent entitlements.
 /// All paths are absolute (tilde expanded). All fields are ready to
 /// feed directly to Landlock / SBPL / Job Object APIs.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SandboxPolicy {
     /// Paths the process may read (not write).
     pub fs_read: Vec<PathBuf>,
@@ -14,6 +16,14 @@ pub struct SandboxPolicy {
     pub fs_deny: Vec<PathBuf>,
     /// Directories containing executable binaries the process may exec.
     pub fs_exec: Vec<PathBuf>,
+    /// The agent's process-spawn policy (allowlist / any / none), from
+    /// entitlements.processes.spawn.mode.
+    pub spawn_mode: SpawnMode,
+    /// Absolute paths resolved from `entitlements.processes.spawn.allowed`
+    /// bare binary names. Entries that could not be resolved to an
+    /// executable file are dropped (fail-closed for that one binary; never
+    /// fail-open for the whole profile).
+    pub spawn_allowed_paths: Vec<PathBuf>,
     /// Outbound TCP ports that are allowed. `None` = allow all; `Some([])` = deny all.
     pub net_allow_ports: Option<Vec<u16>>,
     /// Outbound hostnames for the reqwest guard layer.
@@ -21,6 +31,22 @@ pub struct SandboxPolicy {
     pub net_allow_hosts: Option<Vec<String>>,
     /// Memory limit in megabytes (for Windows Job Object).
     pub memory_limit_mb: Option<u64>,
+}
+
+impl Default for SandboxPolicy {
+    fn default() -> Self {
+        SandboxPolicy {
+            fs_read: Vec::new(),
+            fs_write: Vec::new(),
+            fs_deny: Vec::new(),
+            fs_exec: Vec::new(),
+            spawn_mode: SpawnMode::Allowlist,
+            spawn_allowed_paths: Vec::new(),
+            net_allow_ports: None,
+            net_allow_hosts: None,
+            memory_limit_mb: None,
+        }
+    }
 }
 
 impl SandboxPolicy {
@@ -71,6 +97,27 @@ impl SandboxPolicy {
         // Standard binary exec paths (needed for MCP spawn + shell tools).
         let fs_exec = system_exec_paths(&home);
 
+        // Resolve each allowlisted bare binary name to an absolute,
+        // executable path. Unresolved entries are dropped with a warning —
+        // fail-closed for that one binary, never fail-open for the profile.
+        let spawn_mode = ent.processes.spawn.mode;
+        let spawn_allowed_paths: Vec<PathBuf> = ent
+            .processes
+            .spawn
+            .allowed
+            .iter()
+            .filter_map(|name| match resolve_binary_path(name, &fs_exec) {
+                Some(p) => Some(p),
+                None => {
+                    tracing::warn!(
+                        binary = %name,
+                        "spawn allowlist entry could not be resolved to an executable; dropping"
+                    );
+                    None
+                }
+            })
+            .collect();
+
         let (net_allow_ports, net_allow_hosts) = match ent.network.outbound.mode {
             NetworkOutboundMode::Unrestricted => (None, None),
             NetworkOutboundMode::Restricted => {
@@ -86,6 +133,8 @@ impl SandboxPolicy {
             fs_write,
             fs_deny,
             fs_exec,
+            spawn_mode,
+            spawn_allowed_paths,
             net_allow_ports,
             net_allow_hosts,
             memory_limit_mb: Some(ent.limits.memory_mb),
@@ -123,6 +172,51 @@ impl SandboxPolicy {
             }
         }
     }
+}
+
+/// Resolve a bare binary name (e.g. `"jq"`) to an absolute path by
+/// searching `PATH` env dirs followed by the sandbox's own `fs_exec`
+/// directories, returning the first candidate that exists and has at
+/// least one executable bit set.
+///
+/// If `name` is already absolute, it is checked directly (and only
+/// returned if it resolves to an executable file). Returns `None` if no
+/// candidate resolves — callers must treat that as "drop this entry",
+/// never as "allow anyway".
+fn resolve_binary_path(name: &str, fs_exec: &[PathBuf]) -> Option<PathBuf> {
+    let candidate_path = Path::new(name);
+    if candidate_path.is_absolute() {
+        return is_executable_file(candidate_path).then(|| candidate_path.to_path_buf());
+    }
+
+    let path_dirs = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    path_dirs
+        .iter()
+        .chain(fs_exec.iter())
+        .map(|dir| dir.join(name))
+        .find(|candidate| is_executable_file(candidate))
+}
+
+/// True if `path` exists, is a regular file, and has at least one
+/// executable permission bit set (owner/group/other).
+#[cfg(not(target_os = "windows"))]
+fn is_executable_file(path: &Path) -> bool {
+    match std::fs::metadata(path) {
+        Ok(meta) => meta.is_file() && meta.permissions().mode() & 0o111 != 0,
+        Err(_) => false,
+    }
+}
+
+/// Windows has no POSIX executable bit; treat any existing regular file
+/// as a resolvable candidate (mirrors PATH lookup semantics on Windows).
+#[cfg(target_os = "windows")]
+fn is_executable_file(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|meta| meta.is_file())
+        .unwrap_or(false)
 }
 
 fn system_exec_paths(home: &Path) -> Vec<PathBuf> {
@@ -330,5 +424,53 @@ mod tests {
         // Idempotent — re-adding doesn't duplicate.
         policy.allow_extra_write_paths(std::slice::from_ref(&extra));
         assert_eq!(policy.fs_write.iter().filter(|p| **p == extra).count(), 1);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn make_fake_executable(dir: &Path, name: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, b"#!/bin/sh\nexit 0\n").expect("write fake executable");
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).expect("chmod fake executable");
+        path
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn resolve_binary_path_finds_executable_in_fs_exec_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let bin_path = make_fake_executable(tmp.path(), "fake-tool");
+
+        let resolved = resolve_binary_path("fake-tool", &[tmp.path().to_path_buf()]);
+        assert_eq!(resolved, Some(bin_path));
+    }
+
+    #[test]
+    fn resolve_binary_path_drops_missing_binary_without_panic() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let resolved =
+            resolve_binary_path("definitely-does-not-exist", &[tmp.path().to_path_buf()]);
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn from_entitlements_resolves_spawn_allowed_and_drops_unresolved() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let bin_path = make_fake_executable(tmp.path(), "fake-tool");
+
+        let mut ent = minimal_entitlements();
+        ent.processes.spawn.mode = SpawnMode::Allowlist;
+        ent.processes.spawn.allowed = vec![
+            bin_path.to_string_lossy().to_string(),
+            "definitely-does-not-exist".to_string(),
+        ];
+
+        let agent_home = PathBuf::from("/tmp/agent_home_spawn");
+        let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
+
+        assert_eq!(policy.spawn_mode, SpawnMode::Allowlist);
+        assert_eq!(policy.spawn_allowed_paths, vec![bin_path]);
     }
 }
