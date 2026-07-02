@@ -1,5 +1,6 @@
 use super::{SandboxPolicy, SandboxStatus};
 use anyhow::Context;
+use mur_common::agent::SpawnMode;
 use std::ffi::CString;
 use std::path::PathBuf;
 
@@ -57,6 +58,28 @@ const MACOS_SYSTEM_WRITE_PATHS: &[&str] = &[
     "/dev/stdout",
     "/dev/stderr",
 ];
+
+/// Standard macOS binary locations a process must be able to exec in order
+/// to run the shell interpreter and coreutils (per-agent spawn allowlists
+/// enumerate arbitrary tool binaries, but the shell itself and basic
+/// coreutils it relies on live here). Mirrors `system_exec_paths` in
+/// `policy.rs`'s narrower set — this is deliberately the coarse system
+/// locations only; anything else must be explicitly allowlisted via
+/// `spawn_allowed_paths`.
+///
+/// **Exemption semantic (intentional, not a bug):** every binary under
+/// these three roots — `mkdir`, `cat`, `cp`, `git`, etc. — is exec'able
+/// regardless of `spawn_allowed_paths`, because the shell tool (`bash`)
+/// needs a working coreutils environment to be usable at all (see
+/// `hooks/b0.rs`'s coarse spawn gate, which defers per-binary enforcement
+/// to this layer). This wave's `spawn_allowed_paths` allowlist therefore
+/// bounds the real threat surface — downloaded, Homebrew-installed, and
+/// project-local binaries outside the system roots — not an executable
+/// already trusted enough to ship with the OS. A stricter "Strict" spawn
+/// mode that also fences in these system paths (breaking `bash` down to
+/// only the exact allowlisted binaries, no shell built-ins) is a
+/// documented follow-up, not shipped this wave.
+const MACOS_SYSTEM_EXEC_PATHS: &[&str] = &["/bin", "/usr/bin", "/usr/lib"];
 
 /// Escape a string for safe inclusion in an SBPL double-quoted literal.
 ///
@@ -148,6 +171,32 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
     for path in &policy.fs_write {
         let p = sbpl_escape(&path.to_string_lossy());
         lines.push(format!("(allow file-write* (subpath \"{p}\"))"));
+    }
+
+    // Process-exec restrictions. Under `(allow default)` any binary is
+    // spawnable unless explicitly denied. When spawn_mode is not `Any`
+    // (i.e. Allowlist or None), deny all exec by default and re-allow only
+    // the standard system exec locations (shell interpreter + coreutils,
+    // needed for MCP spawn / shell tools to keep functioning) plus the
+    // policy's own fs_exec dirs, then allow each individually-resolved
+    // spawn_allowed_paths binary by exact path-literal. `Any` emits no exec
+    // clauses at all, falling through to the top-level `(allow default)`.
+    if policy.spawn_mode != SpawnMode::Any {
+        lines.push("(deny process-exec* (subpath \"/\"))".to_string());
+
+        for p in MACOS_SYSTEM_EXEC_PATHS {
+            lines.push(format!("(allow process-exec* (subpath \"{p}\"))"));
+        }
+
+        for path in &policy.fs_exec {
+            let p = sbpl_escape(&path.to_string_lossy());
+            lines.push(format!("(allow process-exec* (subpath \"{p}\"))"));
+        }
+
+        for path in &policy.spawn_allowed_paths {
+            let p = sbpl_escape(&path.to_string_lossy());
+            lines.push(format!("(allow process-exec* (path-literal \"{p}\"))"));
+        }
     }
 
     // Network restrictions. NOTE: macOS SBPL `remote tcp` only accepts `*` or
@@ -373,6 +422,48 @@ mod tests {
         assert!(
             !sbpl.contains("(allow network-outbound"),
             "Off mode must not allow any outbound, including unix sockets:\n{sbpl}"
+        );
+    }
+
+    #[test]
+    fn allowlist_mode_emits_exec_deny_baseline_and_system_reallows() {
+        let mut policy = policy_with(vec![], vec![]);
+        policy.spawn_mode = SpawnMode::Allowlist;
+        policy.spawn_allowed_paths = vec![PathBuf::from("/usr/bin/env")];
+        let sbpl = build_sbpl_profile(&policy);
+
+        assert!(
+            sbpl.contains("(deny process-exec* (subpath \"/\"))"),
+            "missing default-deny-exec baseline:\n{sbpl}"
+        );
+        for p in MACOS_SYSTEM_EXEC_PATHS {
+            assert!(
+                sbpl.contains(&format!("(allow process-exec* (subpath \"{p}\"))")),
+                "missing system exec re-allow for {p}:\n{sbpl}"
+            );
+        }
+        for p in &policy.fs_exec {
+            let p = sbpl_escape(&p.to_string_lossy());
+            assert!(
+                sbpl.contains(&format!("(allow process-exec* (subpath \"{p}\"))")),
+                "missing fs_exec re-allow for {p}:\n{sbpl}"
+            );
+        }
+        assert!(
+            sbpl.contains("(allow process-exec* (path-literal \"/usr/bin/env\"))"),
+            "missing path-literal allow for the resolved spawn binary:\n{sbpl}"
+        );
+    }
+
+    #[test]
+    fn any_mode_emits_no_process_exec_clauses() {
+        let mut policy = policy_with(vec![], vec![]);
+        policy.spawn_mode = SpawnMode::Any;
+        policy.spawn_allowed_paths = vec![PathBuf::from("/usr/bin/env")];
+        let sbpl = build_sbpl_profile(&policy);
+        assert!(
+            !sbpl.contains("process-exec*"),
+            "Any mode must fall through to the top-level allow default, no exec clauses:\n{sbpl}"
         );
     }
 }
