@@ -866,7 +866,14 @@ pub enum AgentMcpAction {
     Search { query: String },
     /// Install a server from the MCP Registry onto an agent, by its registry
     /// name (e.g. `mur agent mcp registry-add rustsmith com.example/fs`).
-    RegistryAdd { name: String, server: String },
+    RegistryAdd {
+        name: String,
+        server: String,
+        /// Skip the y/N install confirmation prompt (B0 rule 6 / M9.2).
+        /// Use for scripted / non-interactive installs.
+        #[arg(long)]
+        force: bool,
+    },
     /// Add a remote (Streamable HTTP) MCP server by URL.
     AddRemote {
         /// Agent name
@@ -1005,5 +1012,59 @@ mod tests {
     #[test]
     fn agent_cli_requires_at_least_one_name() {
         assert!(Cli::try_parse_from(["mur", "agent", "cli"]).is_err());
+    }
+
+    #[test]
+    fn mcp_registry_add_force_flag_parses() {
+        let cli = Cli::try_parse_from([
+            "mur",
+            "agent",
+            "mcp",
+            "registry-add",
+            "rustsmith",
+            "com.example/fs",
+            "--force",
+        ])
+        .expect("parse argv");
+        let Commands::Agent {
+            action: AgentAction::Mcp { action },
+        } = cli.command
+        else {
+            panic!("expected Agent::Mcp variant");
+        };
+        let crate::cli::agent::AgentMcpAction::RegistryAdd {
+            name,
+            server,
+            force,
+        } = action
+        else {
+            panic!("expected Mcp::RegistryAdd variant");
+        };
+        assert_eq!(name, "rustsmith");
+        assert_eq!(server, "com.example/fs");
+        assert!(force);
+    }
+
+    #[test]
+    fn mcp_registry_add_defaults_force_to_false() {
+        let cli = Cli::try_parse_from([
+            "mur",
+            "agent",
+            "mcp",
+            "registry-add",
+            "rustsmith",
+            "com.example/fs",
+        ])
+        .expect("parse argv");
+        let Commands::Agent {
+            action: AgentAction::Mcp { action },
+        } = cli.command
+        else {
+            panic!("expected Agent::Mcp variant");
+        };
+        let crate::cli::agent::AgentMcpAction::RegistryAdd { force, .. } = action else {
+            panic!("expected Mcp::RegistryAdd variant");
+        };
+        assert!(!force);
     }
 }
