@@ -82,12 +82,19 @@ fn gc_if_due(mur_dir: &Path) {
         }
     }
 
-    // Spawn detached — don't block daemon startup.
+    // Spawn detached — don't block daemon startup. std::process::Child has no
+    // built-in reaper (unlike tokio's), so wait for it on a background thread
+    // instead of dropping the handle, or it becomes a zombie on exit.
     let gc_ok = std::process::Command::new("git")
         .args(["-C", &mur_dir.to_string_lossy(), "gc", "--auto", "--quiet"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
+        .map(|mut child| {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        })
         .is_ok();
 
     if gc_ok {
