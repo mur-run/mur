@@ -309,7 +309,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
 
     // 5. Acquire running.lock
     let lock_path = agent_home.join("running.lock");
-    let _lock_handle =
+    let lock_handle =
         LockHandle::acquire(&lock_path).map_err(|e| anyhow::anyhow!("already running ({e})"))?;
 
     // 6. Build dispatcher (shared Arc so multiple transports can read it)
@@ -707,7 +707,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         })
         .await;
     writer.flush().await;
-    let _ = std::fs::remove_file(&lock_path);
+    lock_handle.release();
     Ok(())
 }
 

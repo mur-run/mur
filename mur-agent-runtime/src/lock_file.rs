@@ -45,7 +45,7 @@ impl LockHandle {
             fs::create_dir_all(parent)?;
         }
         let sentinel = sentinel_path(path);
-        let file = OpenOptions::new()
+        let mut file = OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
@@ -53,6 +53,11 @@ impl LockHandle {
             .open(&sentinel)?;
         file.try_lock_exclusive()
             .map_err(|_| LockError::AlreadyHeld)?;
+        // Record the holder pid in the sentinel, best-effort: failure to
+        // write must not tear down the lock we just acquired.
+        if file.set_len(0).is_ok() {
+            let _ = file.write_all(std::process::id().to_string().as_bytes());
+        }
         Ok(Self {
             _sentinel: file,
             path: path.to_path_buf(),
