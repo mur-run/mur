@@ -1412,9 +1412,11 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentMcpAction::Search { query } => {
                 cmd::agent::mcp_registry::cmd_mcp_search(&query).await?
             }
-            AgentMcpAction::RegistryAdd { name, server } => {
-                cmd::agent::mcp_registry::cmd_mcp_registry_add(&name, &server).await?
-            }
+            AgentMcpAction::RegistryAdd {
+                name,
+                server,
+                force,
+            } => cmd::agent::mcp_registry::cmd_mcp_registry_add(&name, &server, force).await?,
             AgentMcpAction::AddRemote {
                 name,
                 server_name,
