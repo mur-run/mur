@@ -4,6 +4,17 @@ use tokio::process::Command;
 use super::{ToolError, ToolExecutor};
 use crate::llm::ToolDef;
 
+/// Default timeout (in seconds) applied to a bash command when the caller
+/// doesn't supply `timeout_secs` in the tool input.
+const DEFAULT_TIMEOUT_SECS: u64 = 30;
+
+/// Upper bound (in seconds) on the `timeout_secs` a caller may request.
+/// Requests above this (or invalid/non-positive values) are clamped down to
+/// this ceiling, so agents can run long builds without the risk of an
+/// effectively unbounded command (dogfood issue 8: the old hardcoded 30s cap
+/// made the `nohup` workaround undiscoverable for anything longer).
+const MAX_TIMEOUT_SECS: u64 = 600;
+
 /// Directories that must be on `PATH` for the bash tool's spawned commands,
 /// even when the agent-runtime process itself was launched by a service
 /// manager (launchd/systemd) with a minimal default `PATH`
@@ -49,6 +60,18 @@ pub struct BashTool {
     pub working_dir: PathBuf,
 }
 
+/// Resolve the effective timeout (in seconds) from the tool input's optional
+/// `timeout_secs` field: missing or non-positive/invalid values fall back to
+/// [`DEFAULT_TIMEOUT_SECS`], and anything above [`MAX_TIMEOUT_SECS`] is
+/// clamped down to it, so a caller can never request an effectively
+/// unbounded command.
+fn resolve_timeout_secs(requested: Option<i64>) -> u64 {
+    match requested {
+        Some(secs) if secs >= 1 => (secs as u64).min(MAX_TIMEOUT_SECS),
+        _ => DEFAULT_TIMEOUT_SECS,
+    }
+}
+
 impl BashTool {
     pub fn new(working_dir: PathBuf) -> Self {
         Self { working_dir }
@@ -64,7 +87,11 @@ impl ToolExecutor for BashTool {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "bash".into(),
-            description: "Run a bash shell command. Returns combined stdout+stderr. Non-zero exit codes appear in the output but are not errors.".into(),
+            description: format!(
+                "Run a bash shell command. Returns combined stdout+stderr. Non-zero exit codes appear in the output but are not errors. \
+Commands are killed after `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {MAX_TIMEOUT_SECS}s) \
+— pass a larger `timeout_secs` for long-running commands like builds instead of resorting to `nohup`."
+            ),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -75,6 +102,13 @@ impl ToolExecutor for BashTool {
                     "cwd": {
                         "type": "string",
                         "description": "Working directory for the command. Defaults to the agent home directory."
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "description": format!(
+                            "Maximum seconds to let the command run before it is killed. Defaults to {DEFAULT_TIMEOUT_SECS} \
+            if omitted or invalid, clamped to the range 1-{MAX_TIMEOUT_SECS}. Use a larger value for slow commands such as builds or test suites."
+                        )
                     }
                 },
                 "required": ["command"]
@@ -93,6 +127,8 @@ impl ToolExecutor for BashTool {
             .map(PathBuf::from)
             .unwrap_or_else(|| self.working_dir.clone());
 
+        let timeout_secs = resolve_timeout_secs(input["timeout_secs"].as_i64());
+
         let path = augmented_path(std::env::var("PATH").ok().as_deref());
 
         let child = Command::new("bash")
@@ -108,7 +144,7 @@ impl ToolExecutor for BashTool {
             .map_err(|e| ToolError::Execution(format!("spawn failed: {e}")))?;
 
         let output = match tokio::time::timeout(
-            std::time::Duration::from_secs(30),
+            std::time::Duration::from_secs(timeout_secs),
             child.wait_with_output(),
         )
         .await
@@ -120,7 +156,9 @@ impl ToolExecutor for BashTool {
                 // above ensures tokio's process driver still sends the kill
                 // and reaps the exit status in the background instead of
                 // leaving a zombie behind (dogfood issue 11).
-                return Err(ToolError::Execution("command timed out after 30s".into()));
+                return Err(ToolError::Execution(format!(
+                    "command timed out after {timeout_secs}s"
+                )));
             }
         };
 
@@ -155,6 +193,25 @@ mod tests {
 
     fn make_tool() -> BashTool {
         BashTool::new(std::env::temp_dir())
+    }
+
+    #[test]
+    fn resolve_timeout_secs_defaults_clamps_and_passes_through() {
+        // Absent -> default.
+        assert_eq!(resolve_timeout_secs(None), DEFAULT_TIMEOUT_SECS);
+        // Non-positive/invalid -> default.
+        assert_eq!(resolve_timeout_secs(Some(0)), DEFAULT_TIMEOUT_SECS);
+        assert_eq!(resolve_timeout_secs(Some(-5)), DEFAULT_TIMEOUT_SECS);
+        // In-range value passes through unchanged.
+        assert_eq!(resolve_timeout_secs(Some(120)), 120);
+        // Above the ceiling is clamped down to it.
+        assert_eq!(resolve_timeout_secs(Some(10_000)), MAX_TIMEOUT_SECS);
+        // Exactly at the boundaries.
+        assert_eq!(resolve_timeout_secs(Some(1)), 1);
+        assert_eq!(
+            resolve_timeout_secs(Some(MAX_TIMEOUT_SECS as i64)),
+            MAX_TIMEOUT_SECS
+        );
     }
 
     #[cfg(unix)]
