@@ -78,6 +78,10 @@ fn stale_sentinel_content_does_not_block_acquire() {
     let _handle = LockHandle::acquire(&path).unwrap();
 }
 
+// Windows LockFileEx is a mandatory lock, so reading the sentinel while the
+// flock is held from the same process is denied there (os error 33); unix
+// flock is advisory, so the read-back succeeds.
+#[cfg(unix)]
 #[test]
 fn sentinel_records_current_pid_after_acquire() {
     let tmp = TempDir::new().unwrap();
