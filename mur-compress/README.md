@@ -33,6 +33,7 @@ auto:
   min_tokens: 800      # outputs smaller than this are never auto-compressed (floor: 500)
   mcp: true            # MCP tool outputs
   agent_runtime: true  # agent post_tool_use outputs
+  claude_hook: true    # Claude Code PostToolUse hook stdout replacement
 ```
 
 When fired, the bulky part of the result becomes `{ compressed:true, content, hash, note }`;

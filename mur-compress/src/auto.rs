@@ -36,6 +36,8 @@ pub struct AutoCfg {
     pub mcp: bool,
     /// Surface 2: compress agent-runtime `post_tool_use` outputs.
     pub agent_runtime: bool,
+    /// Surface 3: compress Claude Code PostToolUse hook stdout-replacement output.
+    pub claude_hook: bool,
 }
 
 impl Default for AutoCfg {
@@ -45,6 +47,7 @@ impl Default for AutoCfg {
             min_tokens: DEFAULT_MIN_TOKENS,
             mcp: true,
             agent_runtime: true,
+            claude_hook: true,
         }
     }
 }
@@ -231,7 +234,10 @@ mod tests {
         // "tiny output" is well under MIN_TOKENS_FLOOR; even a misconfigured
         // min_tokens of 0 must not let it through.
         let out = auto_compress(&eng, "tiny output", None, 0);
-        assert!(!out.fired, "floor must gate out tiny output regardless of config");
+        assert!(
+            !out.fired,
+            "floor must gate out tiny output regardless of config"
+        );
     }
 
     #[test]

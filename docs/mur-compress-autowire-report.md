@@ -54,6 +54,7 @@ auto:
   min_tokens: 1500     # outputs smaller than this are never auto-compressed
   mcp: true            # Surface 1
   agent_runtime: true  # Surface 2
+  claude_hook: true    # Surface 3
 ```
 
 Set `enabled: false` for exact pre-change behavior (manual tools still work). The agent-facing guide ships as the `mur-compress` skill; see also [`mur-compress/README.md`](../mur-compress/README.md).
