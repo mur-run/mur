@@ -58,14 +58,26 @@ if $INSTALL; then
   sudo cp "$BINARY" /opt/homebrew/bin/mur
   # Re-sign: cp can leave a stale ad-hoc code-signing verdict, causing macOS to
   # silently SIGKILL the freshly installed binary on next launch. Force a fresh sign.
-  sudo codesign --force -s - /opt/homebrew/bin/mur || true
+  #
+  # One-time setup for stable signing identity (avoids TCC re-prompts on every
+  # rebuild): ad-hoc signing (-s -) gives each build a fresh CDHash, so macOS
+  # treats it as a new binary and re-prompts for removable-volume access every
+  # time. launchd-managed background agents can't show that prompt, so their
+  # file operations just hang. To fix: create or pick a stable signing
+  # certificate in Keychain Access (a Developer ID certificate, or a
+  # self-signed one is fine for local use), then export its name:
+  #   export MUR_CODESIGN_IDENTITY="Your Certificate Name"
+  # With that set, rebuilds keep a consistent identity and TCC grants survive
+  # reinstalls. Leave it unset to keep today's ad-hoc signing behavior.
+  CODESIGN_IDENTITY="${MUR_CODESIGN_IDENTITY:--}"
+  sudo codesign --force -s "$CODESIGN_IDENTITY" /opt/homebrew/bin/mur || true
   sudo ln -sfn /opt/homebrew/bin/mur /opt/homebrew/bin/murmur
   echo "Installed murmur -> /opt/homebrew/bin/mur (symlink)"
 
   MCP_BINARY="$SCRIPT_DIR/target/release/mur-mcp-server"
   if [ -f "$MCP_BINARY" ]; then
     sudo cp "$MCP_BINARY" /opt/homebrew/bin/mur-mcp-server
-    sudo codesign --force -s - /opt/homebrew/bin/mur-mcp-server || true
+    sudo codesign --force -s "$CODESIGN_IDENTITY" /opt/homebrew/bin/mur-mcp-server || true
     echo "Installed mur-mcp-server -> /opt/homebrew/bin/mur-mcp-server"
   fi
 
@@ -75,7 +87,7 @@ if $INSTALL; then
   DAEMON_BINARY="$SCRIPT_DIR/target/release/murmurd"
   if [ -f "$DAEMON_BINARY" ]; then
     sudo cp "$DAEMON_BINARY" /opt/homebrew/bin/murmurd
-    sudo codesign --force -s - /opt/homebrew/bin/murmurd || true
+    sudo codesign --force -s "$CODESIGN_IDENTITY" /opt/homebrew/bin/murmurd || true
     echo "Installed murmurd -> /opt/homebrew/bin/murmurd"
   fi
 
@@ -88,7 +100,7 @@ if $INSTALL; then
   LOCAL_BIN="$HOME/.local/bin"; mkdir -p "$LOCAL_BIN"
   if [ -f "$RUNTIME_BINARY" ]; then
     cp "$RUNTIME_BINARY" "$LOCAL_BIN/.mur-agent-runtime.new"
-    codesign --force -s - "$LOCAL_BIN/.mur-agent-runtime.new" || true
+    codesign --force -s "$CODESIGN_IDENTITY" "$LOCAL_BIN/.mur-agent-runtime.new" || true
     mv -f "$LOCAL_BIN/.mur-agent-runtime.new" "$LOCAL_BIN/mur-agent-runtime"
     echo "Installed mur-agent-runtime -> $LOCAL_BIN/mur-agent-runtime (canonical; keeps new agents current)"
   fi
