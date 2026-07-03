@@ -167,9 +167,16 @@ pub async fn run_judge_pipeline_async(
             continue;
         }
 
+        let set_hash = crate::parallel::state::ParallelStateDb::competitor_set_hash(
+            &impls
+                .iter()
+                .map(|i| i.unit.content_hash)
+                .collect::<Vec<_>>(),
+        );
+
         // Cache check: use first impl's hash as group representative.
         if state_db
-            .get_score(&impls[0].unit.content_hash, &rubric_version)?
+            .get_score(&impls[0].unit.content_hash, &set_hash, &rubric_version)?
             .is_some()
         {
             cache_hits += 1;
@@ -200,7 +207,7 @@ pub async fn run_judge_pipeline_async(
                         .unwrap_or(0),
                     low_confidence: score.low_confidence,
                 };
-                state_db.put_score(&imp.unit.content_hash, &rubric_version, &js)?;
+                state_db.put_score(&imp.unit.content_hash, &set_hash, &rubric_version, &js)?;
             }
         }
     }

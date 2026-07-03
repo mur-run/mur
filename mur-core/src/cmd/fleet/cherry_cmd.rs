@@ -45,6 +45,13 @@ pub fn cmd_fleet_cherry(
     let mut scores_per_unit: std::collections::HashMap<String, Vec<TrackScore>> =
         std::collections::HashMap::new();
 
+    // Pass 1: collect (track_name, content_hash) per unit.name across all
+    // tracks. The competitor set for a unit is only known once every
+    // track's implementation has been collected (issue #545: CyclicJudge
+    // scores are relative to the competitor set).
+    let mut by_name: std::collections::BTreeMap<String, Vec<(String, [u8; 32])>> =
+        std::collections::BTreeMap::new();
+
     for t in &tracks.tracks {
         for entry in walkdir::WalkDir::new(&t.worktree_path)
             .follow_links(false)
@@ -59,23 +66,36 @@ pub fn cmd_fleet_cherry(
                 continue;
             };
             for unit in units {
-                let Some(js) = state_db
-                    .get_score(&unit.content_hash, &rubric_ver)
-                    .ok()
-                    .flatten()
-                else {
-                    continue;
-                };
-                scores_per_unit
+                by_name
                     .entry(unit.name)
                     .or_default()
-                    .push(TrackScore {
-                        track_name: t.config.name.clone(),
-                        score: js.score,
-                        reasoning: js.reasoning,
-                        low_confidence: false,
-                    });
+                    .push((t.config.name.clone(), unit.content_hash));
             }
+        }
+    }
+
+    // Pass 2: now that the full competitor set per unit is known, compute
+    // its set hash and look up each track's score against that exact set.
+    for (name, members) in &by_name {
+        let set_hash =
+            ParallelStateDb::competitor_set_hash(&members.iter().map(|m| m.1).collect::<Vec<_>>());
+        for (track, hash) in members {
+            let Some(js) = state_db
+                .get_score(hash, &set_hash, &rubric_ver)
+                .ok()
+                .flatten()
+            else {
+                continue;
+            };
+            scores_per_unit
+                .entry(name.clone())
+                .or_default()
+                .push(TrackScore {
+                    track_name: track.clone(),
+                    score: js.score,
+                    reasoning: js.reasoning,
+                    low_confidence: false,
+                });
         }
     }
 
