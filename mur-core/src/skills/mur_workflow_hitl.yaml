@@ -1,0 +1,53 @@
+name: mur-workflow-hitl
+version: 0.1.0
+publisher: human:mur
+description: "Risk-tiered human approval gates on channel workflow runs: pause, approve/deny, resume."
+category: context
+visibility: on_demand
+hosts: [all]
+content:
+  abstract: |
+    Workflow-skill DAGs can include approval nodes that pause a run and
+    wait on a human. Gates are risk-tiered so low-risk steps auto-pass
+    while high-risk ones require an explicit approve/deny before the
+    workflow resumes.
+  context: |
+    # Human-in-the-Loop Workflow Gates
+
+    ## Risk tiers
+    Approval nodes declare a risk tier that decides who must respond
+    and how long the run will wait:
+    - **low** — informational; auto-approved unless a reviewer opts in.
+    - **medium** — requires one approval from any authorized reviewer.
+    - **high** — requires explicit approval from a named owner/role;
+      no timeout auto-approve.
+    Tier is set per-node in the DAG (`kind: approval`, `risk: low |
+    medium | high`).
+
+    ## Channel runs
+    When a workflow skill with approval nodes runs, MUR posts the
+    pending decision to the configured channel (chat, CLI session, or
+    notification target) attached to that run. The message includes
+    the step context, the risk tier, and the exact command to respond.
+    Multiple concurrent runs are distinguishable by run ID in the
+    channel message.
+
+    ## Approve
+    - `mur workflow approve <run-id> [--step <id>]` — approve the
+      pending gate and let the DAG proceed to its next edge.
+    - `mur workflow deny <run-id> [--step <id>] [--reason "<text>"]` —
+      deny the gate; the run transitions to a failed/blocked state and
+      does not continue past that node.
+
+    ## Resume & auto
+    - `mur workflow resume <run-id>` — after approval, resumes execution
+      from the paused node if it didn't auto-continue.
+    - Low-tier gates may be configured with `auto_approve_after: <dur>`
+      to proceed automatically if no human responds within the window;
+      medium/high tiers never auto-approve regardless of timeout.
+    - A denied or timed-out high-tier gate leaves the run paused for
+      manual intervention rather than auto-failing silently.
+
+    Ground truth: mur <cmd> --help · Full tutorial: https://app.mur.run/tutorials/mur-daily-jobs-cookbook.html
+tags: [mur, workflow, hitl, context]
+priority: normal
