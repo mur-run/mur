@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use tokio::process::Command;
 
 use super::{ToolError, ToolExecutor};
+use crate::exec_dirs;
 use crate::llm::ToolDef;
 
 /// Default timeout (in seconds) applied to a bash command when the caller
@@ -15,37 +16,21 @@ const DEFAULT_TIMEOUT_SECS: u64 = 30;
 /// made the `nohup` workaround undiscoverable for anything longer).
 const MAX_TIMEOUT_SECS: u64 = 600;
 
-/// Directories that must be on `PATH` for the bash tool's spawned commands,
-/// even when the agent-runtime process itself was launched by a service
-/// manager (launchd/systemd) with a minimal default `PATH`
-/// (`/usr/bin:/bin:/usr/sbin:/sbin`). Without this, agents hit
-/// `bash: mur: command not found` / `npx: command not found` for tools
-/// installed via Homebrew, Cargo, or user-local pip/npm — even though those
-/// binaries are on the *interactive* user's `PATH` (dogfood issue 1).
-fn standard_exec_dirs() -> Vec<PathBuf> {
-    let mut dirs = vec![
-        PathBuf::from("/opt/homebrew/bin"),
-        PathBuf::from("/opt/homebrew/sbin"),
-        PathBuf::from("/usr/local/bin"),
-    ];
-    if let Some(home) = dirs::home_dir() {
-        dirs.push(home.join(".local/bin"));
-        dirs.push(home.join(".cargo/bin"));
-    }
-    dirs
-}
-
 /// Build the `PATH` to use for spawned bash commands: start from whatever
 /// `PATH` the current process has (so we never lose anything the caller set
-/// up), and append any of [`standard_exec_dirs`] that aren't already present.
-/// This works whether the runtime inherited a rich interactive `PATH` or a
-/// minimal service-manager one.
+/// up), and append any of [`exec_dirs::standard_exec_dirs`] that aren't
+/// already present. This works whether the runtime inherited a rich
+/// interactive `PATH` or a minimal service-manager one
+/// (launchd/systemd, e.g. `/usr/bin:/bin:/usr/sbin:/sbin`) — without it,
+/// agents hit `bash: mur: command not found` / `npx: command not found` for
+/// tools installed via Homebrew, Cargo, or user-local pip/npm, even though
+/// those binaries are on the *interactive* user's `PATH` (dogfood issue 1).
 fn augmented_path(current_path: Option<&str>) -> String {
     let mut components: Vec<PathBuf> = current_path
         .map(|p| std::env::split_paths(p).collect())
         .unwrap_or_default();
 
-    for dir in standard_exec_dirs() {
+    for dir in exec_dirs::standard_exec_dirs() {
         if !components.contains(&dir) {
             components.push(dir);
         }
