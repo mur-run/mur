@@ -1,32 +1,11 @@
 name: parallel-decompose
 version: 0.1.0
 publisher: human:mur
-description: "Classify ANY task's TOPOLOGY before deciding how to do it — explore (read/gather → fan out, recombine by union or careful synthesis), compete (best-of-N at one goal → fan out, SELECT with an independent judge), coupled-write (interdependent edits → serialize unless disjoint + contract-frozen, escalate overlaps), or coherence-bound (one shared-taste design → single writer). Parallelism as the default decomposition lens, gated read-parallelize / write-serialize."
+description: "Classify a task's topology (explore/compete/coupled-write/coherence-bound) before choosing serial or parallel."
 category: workflow
 content:
   abstract: |
-    Before deciding HOW to do a task, classify WHY it can (or cannot) be
-    parallelized — by its TOPOLOGY, not its domain. The hard part is
-    RECOMBINATION, not isolation: worktrees solve filesystem conflicts
-    trivially; the risk and the value are both in combining results.
-
-    Four topologies:
-    - explore (read/gather: search, find files, find content, collect evidence)
-      → outputs are ADDITIVE → fan out freely (no worktree) → recombine by
-      union/dedupe (collect) or careful synthesis (reduce).
-    - compete (best-of-N at the SAME goal: design variants, N approaches)
-      → outputs COMPETE → fan out N heterogeneous attempts → SELECT the best with
-      an INDEPENDENT judge. Never merge competing rewrites; never run a debate.
-    - coupled-write (editing interdependent code/state) → outputs CONFLICT →
-      serialize UNLESS disjoint files + contract frozen first → escalate overlaps.
-    - coherence-bound (one design whose pieces share architectural taste, or a
-      sequential dependency) → DO NOT parallelize → one coherent writer.
-
-    Grounding: Anthropic multi-agent research (breadth +90%, ~15x tokens, excludes
-    most coding); Cognition "Don't Build Multi-Agents" (share CONTEXT not STATE; the
-    Flappy-Bird trap of mismatched parallel writers); MAST (~79% of multi-agent
-    failures are specification + coordination, impossible single-agent);
-    Lost-in-the-Middle (naive concatenation of N results under-attends the middle).
+    Before decomposing any task, classify its topology: explore (fan out reads), compete (best-of-N with a judge), coupled-write (serialize unless disjoint), coherence-bound (single writer). Load parallel-topology-guide for the full method; mur-parallel-exec maps topologies to MUR commands.
   procedure:
     steps:
       - description: |

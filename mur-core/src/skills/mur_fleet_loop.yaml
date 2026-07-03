@@ -1,0 +1,56 @@
+name: mur-fleet-loop
+version: 0.1.0
+publisher: human:mur
+description: "Guarded fleet loops: iteration caps, deadlines, real budgets, done markers, kill-switch, unattended autorun."
+category: context
+visibility: on_demand
+content:
+  abstract: |
+    Fleet loops are guarded, not open-ended: an iteration cap, a wall-clock
+    deadline, a real USD budget, and a done-when marker can each stop a
+    run early. A kill-switch halts loops and blocks autorun; unattended
+    autorun requires an explicit safety triad before it fires on its own.
+  context: |
+    ## Guarded loop
+
+    - `mur fleet run <name> --loop --max-iterations 5 --deadline 30m --budget-usd 5.0`
+
+    `--deadline` is a RELATIVE duration (`30s`/`5m`/`2h`/`1d`), never a
+    calendar date. There is no `--yes` flag for loops. Guards are enforced
+    outside the agents themselves: an iteration cap (default 8), the
+    deadline, stuck-detection, and the budget.
+
+    ## Convergence
+
+    - `mur fleet set-loop <name> --done-when "marker:ALL_GREEN"`
+
+    The loop converges only when a member emits the marker alone on its
+    own line during that run. If `--done-when` is unset, the router judges
+    DONE vs CONTINUE each iteration, fail-safe defaulting to continue.
+
+    ## Budget
+
+    Budget tracking uses real token accounting, summed from Task usage.
+    The cost rate resolves from `MUR_FLEET_COST_PER_1K`, else the highest
+    output rate in `models.yaml`, else a documented default. Iterations
+    reporting zero tokens fall back to a projection so cost is never
+    under-counted.
+
+    ## Kill-switch
+
+    - `mur fleet stop <name>` writes `~/.mur/fleets/<name>/.stopped` — a
+      running loop bails at its next iteration, the daemon skips the
+      fleet, and a manual `run` refuses to start.
+    - `mur fleet start <name>` clears the kill-switch.
+
+    ## Unattended autorun
+
+    - `mur fleet set-loop <name> --trigger interval:30m|"cron:0 9 * * 1-5" --budget-usd 3`
+
+    Autorun requires a safety triad: `MUR_FLEET_AUTORUN=1` (or config
+    `fleet.autorun: true`) AND a per-fleet budget greater than 0 AND the
+    fleet not stopped. A `.last_run` stamp tracks intervals; cron fleets
+    are baseline-stamped on first sight so they never fire spuriously the
+    moment autorun is enabled.
+
+    Ground truth: mur <cmd> --help · Full tutorial: https://app.mur.run/tutorials/mur-daily-jobs-cookbook.html

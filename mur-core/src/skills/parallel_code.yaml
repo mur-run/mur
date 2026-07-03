@@ -1,25 +1,11 @@
 name: parallel-code
 version: 0.1.0
 publisher: human:mur
-description: "Decide whether a coding task should be fanned out across parallel coder sub-agents. Default is a single coherent writer; propose parallel ONLY for disjoint, mechanical, contract-pinned work, and only after the user approves."
+description: "Decide whether a coding task should fan out across parallel coder sub-agents — default is a single writer."
 category: workflow
 content:
   abstract: |
-    Most coding tasks should NOT be parallelized — default to one single-threaded
-    coherent writer. Use this to recognize the narrow class that genuinely benefits
-    and, only then, PROPOSE a parallel fan-out for the user's approval before running.
-
-    Single-writer principle (why serial is the default): parallel code WRITERS make
-    conflicting, context-starved decisions — mismatched styles, duplicated helpers,
-    semantic contradictions that compile + lint clean but break at runtime; a clean
-    textual merge is NOT proof of correctness. Both canonical sources converge:
-    Anthropic's multi-agent research system wins on breadth-first READ tasks and
-    explicitly excludes most coding; Cognition's "Don't Build Multi-Agents" attacks
-    parallel writers (the Flappy-Bird trap — mismatched styles). Both land on: fan
-    out reads/analysis/review, keep WRITES single-threaded — UNLESS the work is
-    genuinely disjoint files + mechanical, behind a contract frozen BEFORE fan-out
-    (N unrelated adapters, per-module boilerplate, a mechanical cross-file refactor)
-    — never one design whose pieces must share architectural taste.
+    Propose parallel coders ONLY for disjoint, mechanical, contract-pinned work, and only after user approval; otherwise keep one coherent writer. Load parallel-topology-guide for the criteria and escalation rules.
   procedure:
     steps:
       - description: "DEFAULT: do the change single-threaded. Only even consider parallel when the task is large AND obviously spans many files."
