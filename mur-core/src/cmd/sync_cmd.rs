@@ -908,13 +908,13 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str
     // pristine home the corpus is empty and the early return below would
     // otherwise skip installation forever (issue #593).
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?;
-    let skill_installed = ensure_mur_skill(&home)?;
+    let mur_dir = mur_common::trust::mur_home();
+    let skill_installed = ensure_mur_skill(&home, &mur_dir)?;
     if !quiet && skill_installed {
         println!("  🎓 MUR skill installed/updated for AI tools");
     }
 
     // Skills are the sync content source (workflow-engine v2 P1b).
-    let mur_dir = mur_common::trust::mur_home();
     let candidates =
         crate::retrieve::skill_candidates::load_skill_candidates(&mur_dir.join("skills"), &mur_dir)
             .unwrap_or_default();
@@ -1068,7 +1068,7 @@ fn is_index_dirty(home: &std::path::Path) -> bool {
 /// Install/update the MUR skill for AI tools that support skills.
 /// Writes canonical copies to ~/.mur/skills/ and symlinks from tool dirs.
 /// Returns true if any skill was written.
-pub(crate) fn ensure_mur_skill(home: &std::path::Path) -> Result<bool> {
+pub(crate) fn ensure_mur_skill(home: &std::path::Path, mur_root: &std::path::Path) -> Result<bool> {
     let skills: &[(&str, &str)] = &[
         ("mur-context", include_str!("../skills/mur_context.yaml")),
         ("mur-in", include_str!("../skills/mur_in.yaml")),
@@ -1170,7 +1170,7 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path) -> Result<bool> {
         ),
     ];
 
-    let mur_skills_dir = home.join(".mur").join("skills");
+    let mur_skills_dir = mur_root.join("skills");
 
     // Clean up deprecated/renamed skills
     let deprecated_skills = ["mur-workflow", "mur"];
@@ -1564,7 +1564,7 @@ mod sync_skill_tests {
         ));
         std::fs::create_dir_all(&home).unwrap();
 
-        super::ensure_mur_skill(&home).unwrap();
+        super::ensure_mur_skill(&home, &home.join(".mur")).unwrap();
 
         let skill_yaml = home
             .join(".mur")
