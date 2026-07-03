@@ -14,6 +14,7 @@ pub mod companion;
 pub mod crashlog;
 pub mod durable;
 pub mod entitlements;
+mod exec_dirs;
 pub mod export;
 pub mod expression;
 pub mod federation;
