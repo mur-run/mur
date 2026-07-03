@@ -253,7 +253,7 @@ mod tests {
     use super::*;
     use crate::retrieve::scoring::ScoringHints;
     use chrono::Duration;
-    use mur_common::skill::manifest::Content;
+    use mur_common::skill::manifest::{Content, Visibility};
     use mur_common::skill::types::Category;
 
     fn fake_loaded(name: &str, priority: Priority) -> LoadedSkill {
@@ -265,6 +265,7 @@ mod tests {
             category: Category::Context,
             hosts: vec![],
             scope: Default::default(),
+            visibility: Visibility::default(),
             fleet: None,
             project: None,
             team: None,
@@ -532,7 +533,7 @@ mod tests {
 
     #[test]
     fn text_includes_note_body_when_present() {
-        use mur_common::skill::manifest::Content;
+        use mur_common::skill::manifest::{Content, Visibility};
         use mur_common::skill::types::Category;
 
         let mut s = fake_loaded("note-skill", Priority::Normal);
@@ -564,7 +565,7 @@ mod tests {
 
     #[test]
     fn filter_by_scope_excludes_team_skill_when_no_active_team() {
-        use mur_common::skill::manifest::SkillScope;
+        use mur_common::skill::manifest::{SkillScope, Visibility};
         use std::fs;
         use tempfile::tempdir;
 
@@ -580,6 +581,7 @@ mod tests {
             category: Category::Context,
             hosts: vec![],
             scope: SkillScope::Team,
+            visibility: Visibility::default(),
             team: Some("org-x".into()),
             fleet: None,
             project: None,
@@ -624,7 +626,7 @@ mod tests {
 
     #[test]
     fn filter_by_scope_includes_team_skill_when_team_matches() {
-        use mur_common::skill::manifest::SkillScope;
+        use mur_common::skill::manifest::{SkillScope, Visibility};
         use std::fs;
         use tempfile::tempdir;
 
@@ -640,6 +642,7 @@ mod tests {
             category: Category::Context,
             hosts: vec![],
             scope: SkillScope::Team,
+            visibility: Visibility::default(),
             team: Some("org-x".into()),
             fleet: None,
             project: None,

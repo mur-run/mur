@@ -46,7 +46,7 @@ pub fn embed_manifest(m: &SkillManifest) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mur_common::skill::manifest::{Content, Procedure, ProcedureStep, Trigger};
+    use mur_common::skill::manifest::{Content, Procedure, ProcedureStep, Trigger, Visibility};
     use mur_common::skill::types::TriggerKind;
 
     fn make_manifest(name: &str, desc: &str, abstract_: &str) -> SkillManifest {
@@ -58,6 +58,7 @@ mod tests {
             category: mur_common::skill::types::Category::Context,
             hosts: vec![],
             scope: Default::default(),
+            visibility: Visibility::default(),
             fleet: None,
             project: None,
             team: None,
