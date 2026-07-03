@@ -32,6 +32,28 @@ impl SkillScope {
     }
 }
 
+/// Progressive disclosure: whether a skill appears in the always-injected
+/// learning index or is loadable on demand only.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Visibility {
+    /// Listed in the session-start learning index (default).
+    #[default]
+    Indexed,
+    /// Excluded from the index and Layer-2 abstract injection; reachable via
+    /// `mur skill show`, search, and retrieval.
+    OnDemand,
+}
+
+impl Visibility {
+    /// Returns `true` if this is the default `Indexed` visibility.
+    pub fn is_indexed(&self) -> bool {
+        matches!(self, Visibility::Indexed)
+    }
+}
+
 /// Governance identification for Commander integration.
 /// Current code: serde-only seam, never read at runtime.
 /// Commander reads `org_id` + `constitution_hash` to load the applicable
@@ -110,6 +132,11 @@ pub struct SkillManifest {
     /// Defaults to `User` for back-compat with unsigned skills.
     #[serde(default, skip_serializing_if = "SkillScope::is_user")]
     pub scope: SkillScope,
+
+    /// Progressive disclosure: `on_demand` skills never appear in the
+    /// session-start learning index or Layer-2 abstract injection.
+    #[serde(default, skip_serializing_if = "Visibility::is_indexed")]
+    pub visibility: Visibility,
 
     /// Fleet identifier (required if scope is Fleet).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -393,6 +420,31 @@ fn default_any_version() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visibility_defaults_to_indexed_and_parses_on_demand() {
+        let yaml = r#"
+name: vis-default
+version: 0.1.0
+publisher: human:test
+description: test
+category: workflow
+content:
+  abstract: test
+"#;
+        let m: SkillManifest = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(m.visibility, Visibility::Indexed);
+
+        let yaml2 = format!("{yaml}visibility: on_demand\n");
+        let m2: SkillManifest = serde_yaml_ng::from_str(&yaml2).unwrap();
+        assert_eq!(m2.visibility, Visibility::OnDemand);
+
+        // Default is omitted on serialize (keeps existing manifests signature-stable).
+        let out = serde_yaml_ng::to_string(&m).unwrap();
+        assert!(!out.contains("visibility"));
+        let out2 = serde_yaml_ng::to_string(&m2).unwrap();
+        assert!(out2.contains("visibility: on_demand"));
+    }
 
     #[test]
     fn procedure_step_dag_fields_roundtrip() {
