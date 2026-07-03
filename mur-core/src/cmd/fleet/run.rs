@@ -318,8 +318,8 @@ pub async fn cmd_fleet_run(
             ..planning_fleet.clone()
         };
         // Router plans which members do what (with deps); falls back to broadcast-to-all.
-        let p =
-            super::plan::plan_via_router(mur_home, &routed_fleet, &events).unwrap_or_else(|| {
+        let p = super::plan::plan_via_router(mur_home, &routed_fleet, &routed_goal, &events)
+            .unwrap_or_else(|| {
                 build_fleet_procedure(&routed_goal, &fleet.members, fleet.parallel.as_ref())
                     .expect("members validated by caller guard")
             });
