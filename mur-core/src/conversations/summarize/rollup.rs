@@ -122,7 +122,12 @@ pub async fn rollup_week(
         .timestamp();
 
     let cfg_loaded = crate::store::config::load_config().ok().unwrap_or_default();
-    let embed_cfg = crate::store::embedding::EmbeddingConfig::from_config(&cfg_loaded);
+    let mut embed_cfg = crate::store::embedding::EmbeddingConfig::from_config(&cfg_loaded);
+    // Pin to the layer-2 writer's default (summarize/mod.rs): the index is
+    // created at 1024 dims, so honoring a different config dim here
+    // split-brains the index and fails every weekly rollup (issue #594).
+    // Phase 3 unifies BOTH paths via cfg.
+    embed_cfg.dimensions = 1024;
     let embed_dims = embed_cfg.dimensions as i32;
     let idx =
         crate::conversations::index::ConversationIndex::open(embed_dims, root_override).await?;
@@ -373,7 +378,12 @@ pub async fn rollup_month(
         .timestamp();
 
     let cfg_loaded = crate::store::config::load_config().ok().unwrap_or_default();
-    let embed_cfg = crate::store::embedding::EmbeddingConfig::from_config(&cfg_loaded);
+    let mut embed_cfg = crate::store::embedding::EmbeddingConfig::from_config(&cfg_loaded);
+    // Pin to the layer-2 writer's default (summarize/mod.rs): the index is
+    // created at 1024 dims, so honoring a different config dim here
+    // split-brains the index and fails every weekly rollup (issue #594).
+    // Phase 3 unifies BOTH paths via cfg.
+    embed_cfg.dimensions = 1024;
     let embed_dims = embed_cfg.dimensions as i32;
     let idx =
         crate::conversations::index::ConversationIndex::open(embed_dims, root_override).await?;
