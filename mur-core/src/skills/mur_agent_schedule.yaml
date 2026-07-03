@@ -1,0 +1,31 @@
+name: mur-agent-schedule
+category: context
+visibility: on_demand
+publisher: human:mur
+version: 1.0.0
+description: "Wake agents on cron beats or idle triggers — message injection, next-fire preview, cooldowns."
+content:
+  abstract: |
+    Wake agents on cron beats or idle timers by injecting messages into a
+    running agent — not saved procedures. Add cron schedules, preview next
+    fire times, or set idle triggers with cooldowns. Distinguishes agent
+    schedule from workflow schedule (OS cron) and fleet loop.trigger for
+    unattended squads.
+  context: |
+    ## Cron messages
+    `mur agent schedule add <agent> --cron "30 9 * * 1-5" --message "…" [--sends-to <agent>]`
+    `mur agent schedule list <agent>`
+    `mur agent schedule next <agent> --count 3`
+    `mur agent schedule remove <agent> <index>` (0-based)
+
+    ## Idle triggers
+    `mur agent schedule idle-add <agent> --after-secs 3600 --message "…" [--cooldown-secs 600]`
+    `mur agent schedule idle-list <agent>`
+    `mur agent schedule idle-remove <agent> <index>`
+
+    ## Which scheduler?
+    Agent schedule = message injection into a running agent.
+    `mur workflow schedule` = saved procedure via OS cron.
+    Fleet `loop.trigger` + `MUR_FLEET_AUTORUN` = unattended squads.
+
+    Ground truth: mur <cmd> --help · Full tutorial: https://app.mur.run/tutorials/mur-daily-jobs-cookbook.html
