@@ -103,9 +103,7 @@ pub fn build_from_skills(
     let mut entries: Vec<(f64, CapabilityEntry)> = skills
         .iter()
         .filter(|s| s.stats.lifecycle_state != LifecycleState::Archived)
-        .filter(|s| {
-            s.manifest.visibility != mur_common::skill::manifest::Visibility::OnDemand
-        })
+        .filter(|s| s.manifest.visibility != mur_common::skill::manifest::Visibility::OnDemand)
         .map(|s| {
             (
                 s.stats.anchor_confidence,

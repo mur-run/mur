@@ -1241,9 +1241,7 @@ fn disclosure_findings(
             message: format!(
                 "abstract is {words} words (budget 50) — sink methodology into the body"
             ),
-            remediation: Some(
-                "trim content.abstract to scope + one caveat + a load hint".into(),
-            ),
+            remediation: Some("trim content.abstract to scope + one caveat + a load hint".into()),
             fixable: false,
         });
     }
@@ -1655,7 +1653,10 @@ content:
         let fat_abs = vec!["word"; 51].join(" ");
         let f = disclosure_findings(&manifest(&fat_desc, &fat_abs), "t");
         assert_eq!(f.len(), 2);
-        assert!(f.iter().all(|x| x.check_id == "disclosure" && x.severity == Severity::Warn));
+        assert!(
+            f.iter()
+                .all(|x| x.check_id == "disclosure" && x.severity == Severity::Warn)
+        );
 
         let ok = disclosure_findings(&manifest("short", "brief abstract"), "t");
         assert!(ok.is_empty());

@@ -103,9 +103,7 @@ pub fn cmd_list() -> Result<()> {
         // flag directories that `list` would otherwise present as normal skills.
         match local::load_installed(&home, name) {
             Ok(m) => {
-                let marker = if m.visibility
-                    == mur_common::skill::manifest::Visibility::OnDemand
-                {
+                let marker = if m.visibility == mur_common::skill::manifest::Visibility::OnDemand {
                     "  [on-demand]"
                 } else {
                     ""
