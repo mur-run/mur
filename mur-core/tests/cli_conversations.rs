@@ -1456,6 +1456,7 @@ async fn ask_generate_against_wiremocked_anthropic_sse_streams_text() {
         model: "claude-haiku-4-5".into(),
         endpoint: Some(server.uri()),
         api_key_env: Some("MUR_TEST_ANTHROPIC_KEY_I5".into()),
+        api_key_ref: None,
         timeout_secs: Some(5),
     };
     let backend = mur_core::conversations::backend::factory::build(&cfg).unwrap();

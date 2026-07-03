@@ -145,6 +145,7 @@ mod tests {
             model: "qwen3:14b".into(),
             endpoint: Some(endpoint.into()),
             api_key_env: None,
+            api_key_ref: None,
             timeout_secs: Some(timeout_secs),
         }
     }
@@ -197,6 +198,7 @@ mod tests {
             model: "claude-haiku-4-5".into(),
             endpoint: None,
             api_key_env: Some("MUR_TEST_ANTHROPIC_KEY".into()),
+            api_key_ref: None,
             timeout_secs: None,
         };
         let b = build(&cfg).unwrap();
@@ -216,6 +218,7 @@ mod tests {
             model: "claude-haiku-4-5".into(),
             endpoint: None,
             api_key_env: Some("MUR_TEST_NONEXISTENT_KEY".into()),
+            api_key_ref: None,
             timeout_secs: None,
         };
         let r = build(&cfg);
@@ -236,6 +239,7 @@ mod tests {
             model: "claude-haiku-4-5".into(),
             endpoint: None,
             api_key_env: None,
+            api_key_ref: None,
             timeout_secs: None,
         };
         let r = build(&cfg);
@@ -257,6 +261,7 @@ mod tests {
             model: "gpt-4o-mini".into(),
             endpoint: None,
             api_key_env: Some("MUR_TEST_OPENAI_KEY".into()),
+            api_key_ref: None,
             timeout_secs: None,
         };
         let b = build(&cfg).unwrap();
@@ -276,6 +281,7 @@ mod tests {
             model: "gemini-pro-3".into(),
             endpoint: None,
             api_key_env: Some("MUR_TEST_GEMINI_KEY".into()),
+            api_key_ref: None,
             timeout_secs: None,
         };
         let b = build(&cfg).unwrap();
@@ -295,6 +301,7 @@ mod tests {
             model: "anthropic/claude-haiku-4-5".into(),
             endpoint: None, // factory should auto-set https://openrouter.ai/api/v1
             api_key_env: Some("MUR_TEST_OR_KEY".into()),
+            api_key_ref: None,
             timeout_secs: None,
         };
         let b = build(&cfg).unwrap();
@@ -318,6 +325,7 @@ mod tests {
             model: "claude-haiku-4-5".into(),
             endpoint: None,
             api_key_env: None, // factory uses default_key_env("anthropic") = "ANTHROPIC_API_KEY"
+            api_key_ref: None,
             timeout_secs: None,
         };
         let b = build(&cfg).unwrap();
@@ -337,6 +345,7 @@ mod tests {
             model: "qwen3:14b".into(),
             endpoint: Some("http://localhost:11434".into()),
             api_key_env: None,
+            api_key_ref: None,
             timeout_secs: Some(5),
         };
         let b = build_for_stage(&cfg, "extractive").unwrap();
@@ -391,6 +400,7 @@ mod tests {
             model: "qwen3:14b".into(),
             endpoint: Some("http://127.0.0.1:1".into()),
             api_key_env: None,
+            api_key_ref: None,
             timeout_secs: Some(1),
         };
         let b = build_for_stage(&cfg, "rewriter").unwrap();
@@ -406,6 +416,7 @@ mod tests {
             model: "command-r".into(),
             endpoint: None,
             api_key_env: None,
+            api_key_ref: None,
             timeout_secs: None,
         };
         let r = build(&cfg);
@@ -467,6 +478,7 @@ data: {\"type\":\"message_stop\"}
             model: "claude-haiku-4-5".into(),
             endpoint: Some(server.uri()),
             api_key_env: Some("MUR_TEST_ANTHROPIC_KEY_I3".into()),
+            api_key_ref: None,
             timeout_secs: Some(5),
         };
         let b = build(&cfg).unwrap();
@@ -537,6 +549,7 @@ data: {\"type\":\"message_stop\"}
             model: "claude-haiku-4-5".into(),
             endpoint: Some(server.uri()),
             api_key_env: Some("MUR_TEST_ANTHROPIC_KEY_I4".into()),
+            api_key_ref: None,
             timeout_secs: Some(5),
         };
 
