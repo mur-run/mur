@@ -20,6 +20,11 @@ impl ParallelBackend for GitWorktreeBackend {
     fn create_track(&self, name: &str) -> Result<PathBuf> {
         // (The Time Machine local snapshot is taken ONCE in `create_tracks`,
         // before any track — not per-track here, and now for every backend.)
+        // Track names come from user-editable fleet.yaml — reject anything
+        // that could escape .worktrees/ (issue #546).
+        if !mur_common::fleet::valid_fleet_name(name) {
+            anyhow::bail!("invalid track name '{name}': use lowercase letters, digits, '-' or '_'");
+        }
         let path = self.repo_root.join(WORKTREES_DIR).join(name);
         let status = Command::new("git")
             .args(["worktree", "add", "--detach"])
@@ -93,10 +98,17 @@ impl ParallelBackend for GitWorktreeBackend {
         for src in files {
             let rel = src.strip_prefix(track).context("strip prefix")?;
             let dst = target.join(rel);
-            if let Some(parent) = dst.parent() {
-                std::fs::create_dir_all(parent)?;
+            // `git diff --name-only` lists deletions too — fs::copy on a
+            // deleted file aborts promote halfway (issue #544). Propagate
+            // the deletion instead.
+            if src.exists() {
+                if let Some(parent) = dst.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::copy(&src, &dst)?;
+            } else if dst.exists() {
+                std::fs::remove_file(&dst)?;
             }
-            std::fs::copy(&src, &dst)?;
         }
         Ok(())
     }
@@ -133,19 +145,94 @@ mod tests {
 
     #[test]
     fn create_and_destroy_worktree() {
-        // Requires running inside a git repo — skip in CI if not
-        let repo = std::env::current_dir().unwrap();
-        if !repo.join(".git").exists() && !repo.join("../../.git").exists() {
-            eprintln!("skip: not in a git repo");
-            return;
-        }
-        let backend = GitWorktreeBackend::new(
-            // Walk up to find actual git root
-            find_git_root(&repo).unwrap_or(repo),
-        );
+        let repo = temp_git_repo();
+        let backend = GitWorktreeBackend::new(repo.path().to_path_buf());
         let track = backend.create_track("test-parallel-track-tmp").unwrap();
         assert!(track.exists());
         backend.destroy(&track).unwrap();
         assert!(!track.exists());
+    }
+
+    #[test]
+    fn create_track_rejects_traversal_names() {
+        let td = tempfile::tempdir().unwrap();
+        let b = GitWorktreeBackend::new(td.path().to_path_buf());
+        for evil in ["../../etc", "a/b", "a\\b", "..", "UPPER", "sp ace"] {
+            let err = b.create_track(evil).unwrap_err();
+            assert!(
+                err.to_string().contains("invalid track name"),
+                "{evil}: {err}"
+            );
+        }
+        assert!(!td.path().join("..").join("etc").exists());
+    }
+
+    fn temp_git_repo() -> tempfile::TempDir {
+        let td = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(args)
+                .current_dir(td.path())
+                .status()
+                .unwrap();
+            assert!(st.success(), "git {args:?} failed");
+        };
+        run(&["init", "-q"]);
+        std::fs::write(td.path().join("keep.txt"), "keep").unwrap();
+        std::fs::write(td.path().join("gone.txt"), "gone").unwrap();
+        run(&["add", "."]);
+        run(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "-m",
+            "init",
+        ]);
+        td
+    }
+
+    #[test]
+    fn promote_propagates_deletions_instead_of_crashing() {
+        let repo = temp_git_repo();
+        let b = GitWorktreeBackend::new(repo.path().to_path_buf());
+        let track = b.create_track("t1").unwrap();
+        // Track deletes one file and modifies another, then commits.
+        std::fs::remove_file(track.join("gone.txt")).unwrap();
+        std::fs::write(track.join("keep.txt"), "changed").unwrap();
+        let run_in = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&track)
+                .status()
+                .unwrap();
+            assert!(st.success());
+        };
+        run_in(&["add", "-A"]);
+        run_in(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "-m",
+            "track work",
+        ]);
+        // Promote into a fresh copy of the original tree.
+        let target = tempfile::tempdir().unwrap();
+        std::fs::write(target.path().join("keep.txt"), "keep").unwrap();
+        std::fs::write(target.path().join("gone.txt"), "gone").unwrap();
+        b.promote(&track, target.path()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(target.path().join("keep.txt")).unwrap(),
+            "changed"
+        );
+        assert!(
+            !target.path().join("gone.txt").exists(),
+            "deletion must propagate"
+        );
     }
 }
