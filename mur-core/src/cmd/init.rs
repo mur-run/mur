@@ -889,7 +889,7 @@ Run `mur learn` to extract new patterns from recent sessions.
     // Skills teach AI tools about mur commands and how to interact
     // with the pattern system (feedback, create, search, etc.)
     if install_hooks {
-        let _ = super::sync_cmd::ensure_mur_skill(&home);
+        let _ = super::sync_cmd::ensure_mur_skill(&home, &mur_common::trust::mur_home());
     }
 
     // ─── Step G: Interactive LLM/Embedding setup ─────────────────
