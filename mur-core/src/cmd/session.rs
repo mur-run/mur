@@ -465,7 +465,7 @@ async fn accept_proposal_as_skill(
 ) -> anyhow::Result<String> {
     use mur_common::skill::{
         SkillManifest,
-        manifest::{Content, Procedure, ProcedureStep},
+        manifest::{Content, Procedure, ProcedureStep, Visibility},
         store::{global_skill_dir, write_to_dir},
         types::{Category, Priority, Provenance},
     };
@@ -547,6 +547,7 @@ async fn accept_proposal_as_skill(
         } else {
             Default::default()
         },
+        visibility: Visibility::default(),
         fleet: None,
         team: None,
         governance: None,

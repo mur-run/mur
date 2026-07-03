@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
-use mur_common::skill::manifest::{Content, SkillManifest};
+use mur_common::skill::manifest::{Content, SkillManifest, Visibility};
 use mur_common::skill::stats::{LifecycleState, SkillStats};
 use mur_common::skill::store::{global_skill_dir, read_from_dir, write_to_dir};
 use mur_common::skill::types::{Category, Priority};
@@ -35,6 +35,7 @@ pub fn do_create(mur_home: &Path, name: &str, description: &str, body: &str) -> 
         category: Category::Note,
         hosts: vec![],
         scope: Default::default(),
+        visibility: Visibility::default(),
         fleet: None,
         team: None,
         governance: None,
