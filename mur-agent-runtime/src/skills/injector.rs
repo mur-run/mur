@@ -71,9 +71,7 @@ pub fn inject_layer2(
                 active_team,
             )
         })
-        .filter(|s| {
-            s.manifest.visibility != mur_common::skill::manifest::Visibility::OnDemand
-        })
+        .filter(|s| s.manifest.visibility != mur_common::skill::manifest::Visibility::OnDemand)
         .collect();
 
     // Sort: trust desc, recent-fired boost, then priority asc, then name for determinism.
