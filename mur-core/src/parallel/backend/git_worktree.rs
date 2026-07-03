@@ -20,6 +20,13 @@ impl ParallelBackend for GitWorktreeBackend {
     fn create_track(&self, name: &str) -> Result<PathBuf> {
         // (The Time Machine local snapshot is taken ONCE in `create_tracks`,
         // before any track — not per-track here, and now for every backend.)
+        // Track names come from user-editable fleet.yaml — reject anything
+        // that could escape .worktrees/ (issue #546).
+        if !mur_common::fleet::valid_fleet_name(name) {
+            anyhow::bail!(
+                "invalid track name '{name}': use lowercase letters, digits, '-' or '_'"
+            );
+        }
         let path = self.repo_root.join(WORKTREES_DIR).join(name);
         let status = Command::new("git")
             .args(["worktree", "add", "--detach"])
@@ -147,5 +154,19 @@ mod tests {
         assert!(track.exists());
         backend.destroy(&track).unwrap();
         assert!(!track.exists());
+    }
+
+    #[test]
+    fn create_track_rejects_traversal_names() {
+        let td = tempfile::tempdir().unwrap();
+        let b = GitWorktreeBackend::new(td.path().to_path_buf());
+        for evil in ["../../etc", "a/b", "a\\b", "..", "UPPER", "sp ace"] {
+            let err = b.create_track(evil).unwrap_err();
+            assert!(
+                err.to_string().contains("invalid track name"),
+                "{evil}: {err}"
+            );
+        }
+        assert!(!td.path().join("..").join("etc").exists());
     }
 }
