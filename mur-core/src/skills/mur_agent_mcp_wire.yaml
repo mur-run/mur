@@ -1,0 +1,30 @@
+name: mur-agent-mcp-wire
+category: context
+visibility: on_demand
+publisher: human:mur
+version: 1.0.0
+description: "Give agents MCP tools: local stdio servers, remote HTTP with bearer/OAuth, registry installs, drift audits."
+content:
+  abstract: |
+    Give agents MCP tools three ways: local stdio servers (auto-synced into the
+    process spawn allowlist), remote HTTP servers with bearer tokens or OAuth
+    2.1, and registry installs via search. Audit wiring with inspect --probe to
+    catch drift, unpinned, or missing servers before agents run.
+  context: |
+    ## Local stdio
+    `mur agent mcp add <agent> <id> --command npx --arg -y --arg <pkg> [--force]`
+    This auto-syncs the command into the agent's `processes.spawn` allowlist,
+    OS-enforced.
+    `mur agent mcp remove <agent> <id>` | `enable` | `disable` | `rename`
+
+    ## Remote
+    `mur agent mcp add-remote <agent> <id> <url> [--bearer-env VAR | --bearer-keychain svc/acct]`
+    OAuth 2.1: `mur agent mcp login <agent> <id>`
+    Registry: `mur agent mcp search <q>` then `mur agent mcp registry-add <agent> <server>`
+
+    ## Audit
+    `mur agent mcp list <agent>`
+    `mur agent mcp inspect <agent> --probe` (exit 0 clean / 1 drift / 4 unpinned / 5 missing)
+    `mur agent mcp pin <agent> <id>`
+
+    Ground truth: mur <cmd> --help · Full tutorial: https://app.mur.run/tutorials/mur-daily-jobs-cookbook.html

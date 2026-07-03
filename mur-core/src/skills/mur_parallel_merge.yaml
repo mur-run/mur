@@ -1,0 +1,24 @@
+name: mur-parallel-merge
+version: 1.0.0
+publisher: human:mur
+description: "Reassemble parallel work: deterministic partition merges and experimental concurrent N-way merges."
+category: context
+visibility: on_demand
+content:
+  abstract: |
+    Reassemble output from parallel fan-out: deterministic partition merges for disjoint-file splits, and an experimental concurrent N-way merge that reports overlaps instead of silently merging them.
+  context: |
+    ## Partition mode
+    parallel.mode: partition plus partition: {target_file: src/widget.rs}.
+    Preview `mur fleet partition-plan <name>` (from repo root); run `--worktree`;
+    reassemble `mur fleet merge <name> --promote [--target <repo>]` —
+    deterministic, no LLM in the merge.
+
+    ## Concurrent N-way merge (experimental)
+    `MUR_PARALLEL_CONCURRENT=1 mur fleet merge-concurrent <name> [--stats] [--promote] [--target <repo>]`.
+    Disjoint hunks auto-merge order-independently; overlaps are REPORTED, never
+    silently merged; --promote refuses on unresolved overlaps, runs cargo check
+    in the destination and reverts on failure; results staged in
+    ~/.mur/fleets/<name>/cherry-result/.
+
+    Ground truth: mur <cmd> --help · Full tutorial: https://app.mur.run/tutorials/mur-daily-jobs-cookbook.html

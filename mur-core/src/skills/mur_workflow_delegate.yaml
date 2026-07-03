@@ -1,0 +1,42 @@
+name: mur-workflow-delegate
+version: 0.1.0
+publisher: human:mur
+description: "Fan workflow steps out to specialist agents over A2A with signed, attributable replies."
+category: context
+visibility: on_demand
+hosts: [all]
+content:
+  abstract: |
+    Workflow-skill DAG nodes of kind `delegate` hand a step to another
+    agent over A2A instead of running it locally. Replies are signed
+    and attributable, so a delegated result's origin is always
+    verifiable before it's folded back into the run.
+  context: |
+    # Delegating Workflow Steps to Agents
+
+    ## Delegate steps
+    A `kind: delegate` node names a target `agent:` and a payload
+    (typically the node's own inputs/context). MUR sends the step over
+    A2A to that agent, marks the node as `awaiting_reply`, and blocks
+    the DAG edge until a reply arrives or the step times out. Delegate
+    nodes can run in parallel with independent branches of the DAG.
+
+    ## Trust model
+    Every A2A message and reply is signed by its originating agent's
+    key. The workflow engine verifies the signature before accepting a
+    delegate reply and records the signer identity alongside the result.
+    Unsigned or unverifiable replies are rejected and the node fails
+    rather than silently accepting untrusted output.
+
+    ## Observe
+    - `mur workflow show <run-id> --md` — see which nodes are delegated,
+      to whom, and their current state (awaiting_reply / done / failed).
+    - `mur agent inbox` — view pending delegate requests addressed to
+      the local agent.
+    - Delegate results are attributed in run history: each folded-back
+      result carries the signer identity, not just the node id, so
+      downstream review can trace exactly which agent produced it.
+
+    Ground truth: mur <cmd> --help · Full tutorial: https://app.mur.run/tutorials/mur-daily-jobs-cookbook.html
+tags: [mur, workflow, delegate, context]
+priority: normal

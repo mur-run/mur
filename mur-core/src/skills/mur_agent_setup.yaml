@@ -1,0 +1,43 @@
+name: mur-agent-setup
+category: context
+publisher: human:mur
+version: 1.0.0
+triggers:
+  - type: keyword
+    pattern: "model registry"
+  - type: keyword
+    pattern: "api key"
+  - type: keyword
+    pattern: "mur model"
+description: "Wire up agents: model registry + secrets (StubEcho gotcha), verification; MCP tools and schedules via leaves."
+content:
+  abstract: |
+    A cloud agent created without a registered secret silently degrades into an
+    echo stub — it never calls the model. This skill covers the model registry,
+    the two-step secret setup, and verification commands. Leaf skills
+    mur-agent-mcp-wire and mur-agent-schedule cover MCP tool wiring and
+    cron/idle schedules.
+  context: |
+    ## Model registry
+    `mur model add <alias> --provider anthropic --model <id> --secret env:VAR --tier frontier`
+    Secret refs: `env:VAR` | `keychain:svc/acct` | `file:/path` | `cmd:./script`
+    `mur model list` | `mur model show <alias>` | `mur model remove <alias>`
+    `mur model prices refresh` | `mur model prices show`
+
+    ## Cloud agent = TWO steps (StubEcho gotcha)
+    1. `mur agent create assistant --provider anthropic --model <id>`
+    2. `mur agent secret assistant set ANTHROPIC_API_KEY`
+    Without the secret, the agent silently echoes (StubEcho) instead of
+    calling the model. Diagnose with `mur agent secret <name> list`.
+
+    ## Verify
+    `mur agent status <name>` | `mur agent card <name>` | `mur agent logs <name> --tail 100`
+    `mur agent send` sends raw A2A JSON for a single turn with NO tools —
+    probe only. For real tool use, run `mur agent cli <name>` or `murmur`.
+
+    ## Deep-dive
+    Run `mur skill show mur-agent-mcp-wire` and `mur skill show mur-agent-schedule`
+    for MCP wiring and schedules. Lifecycle (create/stop/restart/export)
+    lives in the `mur-agent-manage` skill.
+
+    Ground truth: mur <cmd> --help · Full tutorial: https://app.mur.run/tutorials/mur-daily-jobs-cookbook.html
