@@ -1114,6 +1114,55 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path) -> Result<bool> {
             "parallel-decompose",
             include_str!("../skills/parallel_decompose.yaml"),
         ),
+        (
+            "mur-fleet-manage",
+            include_str!("../skills/mur_fleet_manage.yaml"),
+        ),
+        ("mur-fleet-loop", include_str!("../skills/mur_fleet_loop.yaml")),
+        (
+            "mur-fleet-share",
+            include_str!("../skills/mur_fleet_share.yaml"),
+        ),
+        (
+            "mur-workflow-author",
+            include_str!("../skills/mur_workflow_author.yaml"),
+        ),
+        (
+            "mur-workflow-hitl",
+            include_str!("../skills/mur_workflow_hitl.yaml"),
+        ),
+        (
+            "mur-workflow-delegate",
+            include_str!("../skills/mur_workflow_delegate.yaml"),
+        ),
+        (
+            "mur-agent-setup",
+            include_str!("../skills/mur_agent_setup.yaml"),
+        ),
+        (
+            "mur-agent-mcp-wire",
+            include_str!("../skills/mur_agent_mcp_wire.yaml"),
+        ),
+        (
+            "mur-agent-schedule",
+            include_str!("../skills/mur_agent_schedule.yaml"),
+        ),
+        (
+            "mur-parallel-exec",
+            include_str!("../skills/mur_parallel_exec.yaml"),
+        ),
+        (
+            "mur-parallel-tracks",
+            include_str!("../skills/mur_parallel_tracks.yaml"),
+        ),
+        (
+            "mur-parallel-merge",
+            include_str!("../skills/mur_parallel_merge.yaml"),
+        ),
+        (
+            "parallel-topology-guide",
+            include_str!("../skills/parallel_topology_guide.yaml"),
+        ),
     ];
 
     let mur_skills_dir = home.join(".mur").join("skills");
@@ -1525,5 +1574,121 @@ mod sync_skill_tests {
         assert!(body.contains("name: mur-project-search"));
 
         std::fs::remove_dir_all(&home).ok();
+    }
+}
+
+
+#[cfg(test)]
+mod builtin_skill_tests {
+    #[test]
+    fn new_builtin_skills_parse_and_respect_disclosure_budgets() {
+        // (name, yaml, expect_on_demand)
+        let cases: &[(&str, &str, bool)] = &[
+            (
+                "mur-fleet-manage",
+                include_str!("../skills/mur_fleet_manage.yaml"),
+                false,
+            ),
+            (
+                "mur-fleet-loop",
+                include_str!("../skills/mur_fleet_loop.yaml"),
+                true,
+            ),
+            (
+                "mur-fleet-share",
+                include_str!("../skills/mur_fleet_share.yaml"),
+                true,
+            ),
+            (
+                "mur-workflow-author",
+                include_str!("../skills/mur_workflow_author.yaml"),
+                false,
+            ),
+            (
+                "mur-workflow-hitl",
+                include_str!("../skills/mur_workflow_hitl.yaml"),
+                true,
+            ),
+            (
+                "mur-workflow-delegate",
+                include_str!("../skills/mur_workflow_delegate.yaml"),
+                true,
+            ),
+            (
+                "mur-agent-setup",
+                include_str!("../skills/mur_agent_setup.yaml"),
+                false,
+            ),
+            (
+                "mur-agent-mcp-wire",
+                include_str!("../skills/mur_agent_mcp_wire.yaml"),
+                true,
+            ),
+            (
+                "mur-agent-schedule",
+                include_str!("../skills/mur_agent_schedule.yaml"),
+                true,
+            ),
+            (
+                "mur-parallel-exec",
+                include_str!("../skills/mur_parallel_exec.yaml"),
+                false,
+            ),
+            (
+                "mur-parallel-tracks",
+                include_str!("../skills/mur_parallel_tracks.yaml"),
+                true,
+            ),
+            (
+                "mur-parallel-merge",
+                include_str!("../skills/mur_parallel_merge.yaml"),
+                true,
+            ),
+            (
+                "parallel-topology-guide",
+                include_str!("../skills/parallel_topology_guide.yaml"),
+                true,
+            ),
+            (
+                "parallel-decompose",
+                include_str!("../skills/parallel_decompose.yaml"),
+                false,
+            ),
+            (
+                "parallel-code",
+                include_str!("../skills/parallel_code.yaml"),
+                false,
+            ),
+        ];
+        use mur_common::skill::manifest::Visibility;
+        for (name, yaml, on_demand) in cases {
+            let m = mur_common::skill::parse_canonical(yaml)
+                .unwrap_or_else(|e| panic!("{name}: parse failed: {e}"));
+            assert_eq!(&m.name, name);
+            assert_eq!(
+                m.visibility == Visibility::OnDemand,
+                *on_demand,
+                "{name}: wrong visibility"
+            );
+            assert!(
+                m.description.chars().count() <= 120,
+                "{name}: description over 120 chars"
+            );
+            assert!(
+                m.content.r#abstract.split_whitespace().count() <= 50,
+                "{name}: abstract over 50 words"
+            );
+            let body = m
+                .content
+                .context
+                .clone()
+                .or_else(|| m.content.note.clone())
+                .unwrap_or_default();
+            let body_lines = body.lines().count();
+            assert!(
+                body_lines <= 150,
+                "{name}: body {body_lines} lines (budget 150)"
+            );
+        }
     }
 }
