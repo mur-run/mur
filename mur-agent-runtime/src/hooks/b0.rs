@@ -420,6 +420,41 @@ impl Hook for B0SafetyHook {
                         });
                     }
                 }
+                mur_common::agent::SpawnMode::Strict if call.name() == "bash" => {
+                    // Same free-form-command caveat as `Allowlist`: `bash`'s
+                    // input has no argv array to check per-binary against
+                    // `spawn.allowed`. Strict mode's actual guarantee (the
+                    // resolved shell binary is auto-seeded into
+                    // `spawn_allowed_paths`, and system paths are NOT
+                    // exempted) is enforced entirely in the OS Seatbelt /
+                    // sandbox layer (see
+                    // `mur-agent-runtime/src/sandbox/{policy,macos}.rs`),
+                    // not this coarse hook. Unlike `Allowlist`, this arm
+                    // has no system-path pass-through to omit -- this hook
+                    // never granted one for either mode; the only
+                    // difference between the two lives in the SBPL
+                    // emission (`macos.rs`).
+                }
+                mur_common::agent::SpawnMode::Strict => {
+                    let argv0 = call
+                        .input
+                        .get("argv")
+                        .and_then(|v| v.as_array())
+                        .and_then(|a| a.first())
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !spawn.allowed.iter().any(|p| p == argv0) {
+                        return Ok(Decision::Deny {
+                            reason: format!(
+                                "process spawn `{}` is not in the agent's allowlist \
+                                 (mode=strict); enable with `mur agent perm \
+                                 allow-spawn <name> \"{}\"` (or set spawn.mode to \
+                                 `any` for unrestricted)",
+                                argv0, argv0,
+                            ),
+                        });
+                    }
+                }
             }
         }
         // ── Rule 1: FS confinement (advisory). ───────────────────────────

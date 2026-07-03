@@ -606,6 +606,12 @@ pub enum SpawnMode {
     Allowlist,
     Any,
     None,
+    /// Shell-only: fences the system exec paths (`/bin`, `/usr/bin`,
+    /// `/usr/lib`) that `Allowlist` mode exempts by default, so only the
+    /// resolved shell binary the `bash` tool itself spawns plus the
+    /// profile's own `spawn_allowed_paths`/`spawn_allowed_prefixes` may be
+    /// exec'd -- no other system binary (coreutils, `git`, etc.) is implied.
+    Strict,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
