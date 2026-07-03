@@ -1118,7 +1118,10 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path) -> Result<bool> {
             "mur-fleet-manage",
             include_str!("../skills/mur_fleet_manage.yaml"),
         ),
-        ("mur-fleet-loop", include_str!("../skills/mur_fleet_loop.yaml")),
+        (
+            "mur-fleet-loop",
+            include_str!("../skills/mur_fleet_loop.yaml"),
+        ),
         (
             "mur-fleet-share",
             include_str!("../skills/mur_fleet_share.yaml"),
@@ -1576,7 +1579,6 @@ mod sync_skill_tests {
         std::fs::remove_dir_all(&home).ok();
     }
 }
-
 
 #[cfg(test)]
 mod builtin_skill_tests {
