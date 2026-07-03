@@ -1,0 +1,1501 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUR Daily Jobs Cookbook · MUR 日常任務手冊</title>
+<style>
+  :root {
+    --paper: #F5F7F6;
+    --panel: #ECF1EF;
+    --ink: #1B232A;
+    --muted: #5A6B75;
+    --line: #DBE3E0;
+    --accent: #0E7568;
+    --accent-deep: #0A5A50;
+    --accent-wash: #E2EFEC;
+    --code-bg: #0F161B;
+    --code-fg: #D5DEE4;
+    --code-cmt: #64788A;
+    --d1: #2F9E63;
+    --d2: #C08A1D;
+    --d3: #C75B24;
+    --d4: #B0384D;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "PingFang TC", "PingFang SC", "Hiragino Sans", "Yu Gothic UI", "Apple SD Gothic Neo", "Malgun Gothic", "Microsoft JhengHei", "Microsoft YaHei", sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    font-family: var(--sans);
+    background: var(--paper);
+    color: var(--ink);
+    line-height: 1.65;
+    font-size: 16px;
+  }
+  body.en :is(.tw,.cn,.ja,.ko) { display: none; }
+  body.tw :is(.en,.cn,.ja,.ko) { display: none; }
+  body.cn :is(.en,.tw,.ja,.ko) { display: none; }
+  body.ja :is(.en,.tw,.cn,.ko) { display: none; }
+  body.ko :is(.en,.tw,.cn,.ja) { display: none; }
+
+  .app { display: flex; min-height: 100vh; }
+
+  /* ── Sidebar ─────────────────────────────── */
+  nav.side {
+    width: 292px;
+    flex: 0 0 292px;
+    background: var(--panel);
+    border-right: 1px solid var(--line);
+    padding: 22px 18px 40px;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    box-sizing: border-box;
+  }
+  .brand { font-family: var(--mono); font-size: 13px; letter-spacing: .14em; color: var(--accent-deep); text-transform: uppercase; margin-bottom: 2px; }
+  .brand b { color: var(--ink); }
+  .lang-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 18px; }
+  .lang-btn {
+    font-family: var(--mono); font-size: 12px; padding: 4px 12px;
+    border: 1px solid var(--line); border-radius: 3px; background: var(--paper);
+    color: var(--muted); cursor: pointer;
+  }
+  .lang-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .lang-btn:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 1px; }
+  .nav-group { margin-bottom: 16px; }
+  .nav-part {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--muted); margin: 14px 0 6px; display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .nav-part .lv { font-size: 10px; }
+  nav.side a {
+    display: flex; gap: 8px; align-items: baseline;
+    color: var(--ink); text-decoration: none; font-size: 13px;
+    padding: 3px 6px; border-radius: 3px;
+  }
+  nav.side a:hover { background: var(--accent-wash); }
+  nav.side a .n { font-family: var(--mono); font-size: 11px; color: var(--accent-deep); min-width: 18px; text-align: right; }
+  .legend { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 12px; font-size: 12px; color: var(--muted); }
+  .legend div { margin-bottom: 4px; }
+
+  /* ── Main column ─────────────────────────── */
+  main { flex: 1; min-width: 0; padding: 46px clamp(24px, 5vw, 72px) 120px; }
+  .col { max-width: 780px; }
+
+  .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .18em; text-transform: uppercase; color: var(--accent-deep); }
+  h1 { font-size: clamp(30px, 4.4vw, 44px); font-weight: 800; letter-spacing: -0.02em; line-height: 1.12; margin: 8px 0 14px; text-wrap: balance; }
+  .lede { font-size: 17px; color: var(--muted); max-width: 62ch; }
+  .stats { display: flex; flex-wrap: wrap; gap: 10px; margin: 22px 0 8px; }
+  .stat {
+    font-family: var(--mono); font-size: 12px; padding: 6px 12px;
+    background: var(--accent-wash); color: var(--accent-deep);
+    border: 1px solid #CBE0DB; border-radius: 3px;
+  }
+
+  /* ── Parts & jobs ────────────────────────── */
+  .part-head { margin: 72px 0 8px; padding-top: 18px; border-top: 3px solid var(--ink); }
+  .part-head .eyebrow { color: var(--ink); }
+  .part-head h2 { font-size: 26px; font-weight: 800; letter-spacing: -0.015em; margin: 6px 0 4px; }
+  .part-head p { color: var(--muted); margin: 0; max-width: 62ch; }
+
+  article.job {
+    margin-top: 44px; padding: 26px 28px 22px;
+    background: #fff; border: 1px solid var(--line); border-radius: 6px;
+  }
+  .job-head { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 6px; }
+  .jnum {
+    font-family: var(--mono); font-size: 22px; font-weight: 700; color: var(--accent);
+    border-bottom: 3px solid var(--accent); padding: 2px 2px 0; line-height: 1.3; flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+  }
+  .job h3 { font-size: 20px; font-weight: 750; letter-spacing: -0.01em; margin: 0 0 6px; line-height: 1.3; text-wrap: balance; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .dots { font-family: var(--mono); font-size: 12px; letter-spacing: 2px; }
+  .dots.e1 { color: var(--d1); } .dots.e2 { color: var(--d2); }
+  .dots.e3 { color: var(--d3); } .dots.e4 { color: var(--d4); }
+  .badge {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 3px; border: 1px solid var(--line); color: var(--muted); background: var(--paper);
+  }
+  .badge.par { background: var(--accent-wash); border-color: #BCD9D2; color: var(--accent-deep); font-weight: 600; }
+  .goal { margin: 14px 0 4px; }
+  .goal b { color: var(--accent-deep); }
+  .scene { color: var(--muted); font-size: 15px; margin: 4px 0 14px; }
+
+  /* ── Code blocks ─────────────────────────── */
+  .codewrap { position: relative; margin: 14px 0; }
+  pre {
+    background: var(--code-bg); color: var(--code-fg);
+    font-family: var(--mono); font-size: 13px; line-height: 1.62;
+    padding: 16px 18px; border-radius: 6px; overflow-x: auto; margin: 0;
+  }
+  pre .c  { color: #5F7280; }              /* comment */
+  pre .p  { color: #3ECFBA; user-select: none; } /* prompt $ */
+  pre .o  { color: #8FA3AE; }              /* output */
+  pre .k  { color: #E8C580; }              /* highlight token */
+  .copy-btn {
+    position: absolute; top: 8px; right: 8px;
+    font-family: var(--mono); font-size: 11px; padding: 3px 10px;
+    background: #1D2830; color: #9FB2BC; border: 1px solid #2C3A44; border-radius: 3px; cursor: pointer;
+  }
+  .copy-btn:hover { color: #fff; border-color: #3ECFBA; }
+  .copy-btn:focus-visible { outline: 2px solid #3ECFBA; }
+
+  .explain { margin-top: 10px; }
+  .explain ul { margin: 6px 0 0; padding-left: 20px; }
+  .explain li { margin-bottom: 5px; }
+  .tip {
+    margin-top: 14px; padding: 10px 14px; font-size: 14px;
+    background: var(--accent-wash); border-left: 3px solid var(--accent); border-radius: 0 4px 4px 0;
+  }
+  .warn {
+    margin-top: 14px; padding: 10px 14px; font-size: 14px;
+    background: #F7EEE3; border-left: 3px solid var(--d3); border-radius: 0 4px 4px 0;
+  }
+  code {
+    font-family: var(--mono); font-size: .88em;
+    background: #E9EEEC; padding: 1px 5px; border-radius: 3px;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+
+  /* ── Tables ──────────────────────────────── */
+  .tablewrap { overflow-x: auto; margin: 16px 0; border: 1px solid var(--line); border-radius: 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; background: #fff; }
+  th {
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .1em;
+    text-align: left; color: var(--muted); background: var(--panel);
+    padding: 9px 14px; border-bottom: 2px solid var(--line); white-space: nowrap;
+  }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td code { white-space: nowrap; }
+
+  footer { margin-top: 90px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+
+  @media (max-width: 980px) {
+    .app { flex-direction: column; }
+    nav.side { width: auto; flex: none; position: static; height: auto; max-height: 40vh; border-right: none; border-bottom: 1px solid var(--line); }
+    main { padding-top: 28px; }
+  }
+</style>
+
+<div class="app">
+<nav class="side">
+  <div class="brand">MUR <b>·</b> Field Guide</div>
+  <div style="font-size:12px;color:var(--muted)">
+    <span class="en">Daily Jobs Cookbook</span><span class="tw">日常任務手冊</span><span class="cn">日常任务手册</span><span class="ja">日常タスクハンドブック</span><span class="ko">일상 작업 핸드북</span>
+  </div>
+  <div class="lang-row">
+    <button class="lang-btn" data-lang="en" type="button">EN</button>
+    <button class="lang-btn" data-lang="tw" type="button">繁中</button>
+    <button class="lang-btn" data-lang="cn" type="button">简中</button>
+    <button class="lang-btn" data-lang="ja" type="button">日本語</button>
+    <button class="lang-btn" data-lang="ko" type="button">한국어</button>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-part"><span><span class="en">Setup</span><span class="tw">前置準備</span><span class="cn">前置准备</span><span class="ja">事前準備</span><span class="ko">사전 준비</span></span></div>
+    <a href="#setup"><span class="n">0</span><span><span class="en">Install &amp; first-run checklist</span><span class="tw">安裝與首次啟動檢查</span><span class="cn">安装与首次启动检查</span><span class="ja">インストールと初回起動チェック</span><span class="ko">설치 및 첫 실행 점검</span></span></a>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-part"><span><span class="en">Part 1 · Agents</span><span class="tw">第一部 · Agent</span><span class="cn">第一部 · Agent</span><span class="ja">第1部 · Agent</span><span class="ko">제1부 · Agent</span></span><span class="lv" style="color:var(--d1)">●○○○</span></div>
+    <a href="#job-1"><span class="n">1</span><span><span class="en">Create your first agent</span><span class="tw">建立第一個 Agent</span><span class="cn">创建第一个 Agent</span><span class="ja">最初の Agent を作成</span><span class="ko">첫 Agent 만들기</span></span></a>
+    <a href="#job-2"><span class="n">2</span><span><span class="en">Chat in the terminal</span><span class="tw">終端機對話</span><span class="cn">终端对话</span><span class="ja">ターミナル対話</span><span class="ko">터미널 대화</span></span></a>
+    <a href="#job-3"><span class="n">3</span><span><span class="en">Personal knowledge notes</span><span class="tw">個人知識筆記</span><span class="cn">个人知识笔记</span><span class="ja">個人ナレッジノート</span><span class="ko">개인 지식 노트</span></span></a>
+    <a href="#job-4"><span class="n">4</span><span><span class="en">Semantic code search</span><span class="tw">語意程式碼搜尋</span><span class="cn">语义代码搜索</span><span class="ja">セマンティックコード検索</span><span class="ko">시맨틱 코드 검색</span></span></a>
+    <a href="#job-5"><span class="n">5</span><span><span class="en">Teach a skill</span><span class="tw">教 Agent 一個技能</span><span class="cn">教 Agent 一个技能</span><span class="ja">Agent にスキルを教える</span><span class="ko">Agent에게 스킬 가르치기</span></span></a>
+    <a href="#job-6"><span class="n">6</span><span><span class="en">Wire up MCP tools</span><span class="tw">接上 MCP 工具</span><span class="cn">接入 MCP 工具</span><span class="ja">MCP ツールを接続</span><span class="ko">MCP 도구 연결</span></span></a>
+    <a href="#job-7"><span class="n">7</span><span><span class="en">Schedule a daily briefing</span><span class="tw">排程每日簡報</span><span class="cn">定时每日简报</span><span class="ja">毎日のブリーフィングをスケジュール</span><span class="ko">매일 브리핑 스케줄링</span></span></a>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-part"><span><span class="en">Part 2 · Workflows</span><span class="tw">第二部 · Workflow</span><span class="cn">第二部 · Workflow</span><span class="ja">第2部 · Workflow</span><span class="ko">제2부 · Workflow</span></span><span class="lv" style="color:var(--d2)">●●○○</span></div>
+    <a href="#job-8"><span class="n">8</span><span><span class="en">Save &amp; run a workflow</span><span class="tw">儲存並執行 Workflow</span><span class="cn">保存并运行 Workflow</span><span class="ja">Workflow の保存と実行</span><span class="ko">Workflow 저장 및 실행</span></span></a>
+    <a href="#job-9"><span class="n">9</span><span><span class="en">Harvest yesterday's session</span><span class="tw">收割昨天的工作階段</span><span class="cn">收割昨天的会话</span><span class="ja">昨日のセッションをハーベスト</span><span class="ko">어제 세션 수확하기</span></span></a>
+    <a href="#job-10"><span class="n">10</span><span><span class="en">Put a workflow on cron</span><span class="tw">Workflow 排程執行</span><span class="cn">Workflow 定时执行</span><span class="ja">Workflow のスケジュール実行</span><span class="ko">Workflow 스케줄 실행</span></span></a>
+    <a href="#job-11"><span class="n">11</span><span><span class="en">Parallel steps in a DAG</span><span class="tw">DAG 平行步驟</span><span class="cn">DAG 并行步骤</span><span class="ja">DAG 並列ステップ</span><span class="ko">DAG 병렬 단계</span></span></a>
+    <a href="#job-12"><span class="n">12</span><span><span class="en">Human approval gates (HITL)</span><span class="tw">人工核准關卡（HITL）</span><span class="cn">人工审批关卡（HITL）</span><span class="ja">人手による承認ゲート（HITL）</span><span class="ko">수동 승인 게이트(HITL)</span></span></a>
+    <a href="#job-13"><span class="n">13</span><span><span class="en">Delegate to specialists</span><span class="tw">委派給專家 Agent</span><span class="cn">委派给专家 Agent</span><span class="ja">専門 Agent への委任</span><span class="ko">전문가 Agent에게 위임</span></span></a>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-part"><span><span class="en">Part 3 · Fleets</span><span class="tw">第三部 · Fleet</span><span class="cn">第三部 · Fleet</span><span class="ja">第3部 · Fleet</span><span class="ko">제3부 · Fleet</span></span><span class="lv" style="color:var(--d3)">●●●○</span></div>
+    <a href="#job-14"><span class="n">14</span><span><span class="en">Create &amp; run a fleet</span><span class="tw">建立並執行 Fleet</span><span class="cn">创建并运行 Fleet</span><span class="ja">Fleet の作成と実行</span><span class="ko">Fleet 생성 및 실행</span></span></a>
+    <a href="#job-15"><span class="n">15</span><span><span class="en">Fleet job queue</span><span class="tw">Fleet 工作佇列</span><span class="cn">Fleet 任务队列</span><span class="ja">Fleet ジョブキュー</span><span class="ko">Fleet 작업 큐</span></span></a>
+    <a href="#job-16"><span class="n">16</span><span><span class="en">Router planning</span><span class="tw">Router 規劃派工</span><span class="cn">Router 规划派工</span><span class="ja">Router による計画と割り当て</span><span class="ko">Router 계획 배정</span></span></a>
+    <a href="#job-17"><span class="n">17</span><span><span class="en">Guarded loop until done</span><span class="tw">收斂式守護迴圈</span><span class="cn">收敛式守护循环</span><span class="ja">収束型ガード付きループ</span><span class="ko">수렴형 가드 루프</span></span></a>
+    <a href="#job-18"><span class="n">18</span><span><span class="en">Budget &amp; kill-switch</span><span class="tw">預算與緊急停止</span><span class="cn">预算与紧急停止</span><span class="ja">予算と緊急停止</span><span class="ko">예산과 긴급 정지</span></span></a>
+    <a href="#job-19"><span class="n">19</span><span><span class="en">Unattended auto-run</span><span class="tw">無人值守自動執行</span><span class="cn">无人值守自动运行</span><span class="ja">無人自動実行</span><span class="ko">무인 자동 실행</span></span></a>
+    <a href="#job-20"><span class="n">20</span><span><span class="en">Fleet-scoped skills &amp; roster</span><span class="tw">Fleet 技能與名冊</span><span class="cn">Fleet 技能与名单</span><span class="ja">Fleet スキルとロースター</span><span class="ko">Fleet 스킬과 명단</span></span></a>
+    <a href="#job-21"><span class="n">21</span><span><span class="en">Commander governance</span><span class="tw">Commander 治理</span><span class="cn">Commander 治理</span><span class="ja">Commander ガバナンス</span><span class="ko">Commander 거버넌스</span></span></a>
+    <a href="#job-22"><span class="n">22</span><span><span class="en">Share a fleet bundle</span><span class="tw">分享 Fleet 套件</span><span class="cn">分享 Fleet 包</span><span class="ja">Fleet バンドルの共有</span><span class="ko">Fleet 번들 공유</span></span></a>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-part"><span><span class="en">Part 4 · Parallel deep-dive</span><span class="tw">第四部 · 平行執行</span><span class="cn">第四部 · 并行执行</span><span class="ja">第4部 · 並列実行</span><span class="ko">제4부 · 병렬 실행</span></span><span class="lv" style="color:var(--d4)">●●●●</span></div>
+    <a href="#job-23"><span class="n">23</span><span><span class="en">parallel_jobs fan-out</span><span class="tw">parallel_jobs 動態展開</span><span class="cn">parallel_jobs 动态展开</span><span class="ja">parallel_jobs の動的ファンアウト</span><span class="ko">parallel_jobs 동적 팬아웃</span></span></a>
+    <a href="#job-24"><span class="n">24</span><span><span class="en">Speculative tracks (best-of-N)</span><span class="tw">推測賽道（N 選一）</span><span class="cn">推测赛道（N 选一）</span><span class="ja">投機トラック（N 者択一）</span><span class="ko">추측 트랙(N개 중 선택)</span></span></a>
+    <a href="#job-25"><span class="n">25</span><span><span class="en">Partition &amp; deterministic merge</span><span class="tw">分割與確定性合併</span><span class="cn">分割与确定性合并</span><span class="ja">分割と決定的マージ</span><span class="ko">분할과 결정적 병합</span></span></a>
+    <a href="#job-26"><span class="n">26</span><span><span class="en">Concurrent N-way merge</span><span class="tw">並行 N 路合併</span><span class="cn">并发 N 路合并</span><span class="ja">並行 N-way マージ</span><span class="ko">동시 N-웨이 병합</span></span></a>
+    <a href="#matrix"><span class="n">◆</span><span><span class="en">Parallel patterns at a glance</span><span class="tw">平行模式總覽</span><span class="cn">并行模式总览</span><span class="ja">並列パターン一覧</span><span class="ko">병렬 패턴 개요</span></span></a>
+  </div>
+
+  <div class="legend">
+    <div><span class="dots e1">●○○○</span> <span class="en">easy</span><span class="tw">入門</span><span class="cn">入门</span><span class="ja">入門</span><span class="ko">입문</span> ·
+         <span class="dots e2">●●○○</span> <span class="en">medium</span><span class="tw">中階</span><span class="cn">中级</span><span class="ja">中級</span><span class="ko">중급</span></div>
+    <div><span class="dots e3">●●●○</span> <span class="en">hard</span><span class="tw">進階</span><span class="cn">进阶</span><span class="ja">上級</span><span class="ko">고급</span> ·
+         <span class="dots e4">●●●●</span> <span class="en">expert</span><span class="tw">專家</span><span class="cn">专家</span><span class="ja">エキスパート</span><span class="ko">전문가</span></div>
+    <div style="margin-top:6px"><span class="badge par">Parallel</span> <span class="en">= demonstrates a parallel pattern</span><span class="tw">= 示範一種平行模式</span><span class="cn">= 演示一种并行模式</span><span class="ja">= 並列パターンを 1 つ実演</span><span class="ko">= 병렬 패턴 하나를 시연</span></div>
+  </div>
+</nav>
+
+<main><div class="col">
+
+<header>
+  <div class="eyebrow"><span class="en">Field guide · learn by doing</span><span class="tw">實戰手冊 · 邊做邊學</span><span class="cn">实战手册 · 边做边学</span><span class="ja">実践ハンドブック · 手を動かして学ぶ</span><span class="ko">실전 핸드북 · 하면서 배우기</span></div>
+  <h1><span class="en">MUR Daily Jobs Cookbook</span><span class="tw">MUR 日常任務手冊</span><span class="cn">MUR 日常任务手册</span><span class="ja">MUR 日常タスクハンドブック</span><span class="ko">MUR 일상 작업 핸드북</span></h1>
+  <p class="lede">
+    <span class="en">26 hands-on tutorials for the MUR local-first agent platform — agents, workflows, and fleets, from your first <code>mur agent create</code> to N-way parallel merges. Every command is copy-paste ready and sourced from the actual CLI.</span>
+    <span class="tw">26 個 MUR 本地優先 Agent 平台的實戰教學 — 從第一次 <code>mur agent create</code> 到 N 路平行合併，涵蓋 Agent、Workflow、Fleet。每一條指令都可直接複製貼上，並以實際 CLI 原始碼為準。</span><span class="cn">26 个 MUR 本地优先 Agent 平台的实战教程 — 从第一次 <code>mur agent create</code> 到 N 路并行合并，涵盖 Agent、Workflow、Fleet。每一条命令都可直接复制粘贴，并以实际 CLI 源代码为准。</span><span class="ja">ローカルファースト Agent プラットフォーム MUR の実践チュートリアル 26 本 — 初めての <code>mur agent create</code> から N-way 並列マージまで、Agent・Workflow・Fleet を網羅します。どのコマンドもそのままコピー＆ペーストでき、実際の CLI ソースコードに準拠しています。</span><span class="ko">MUR 로컬 우선 Agent 플랫폼의 실전 튜토리얼 26개 — 첫 <code>mur agent create</code>부터 N-웨이 병렬 병합까지, Agent, Workflow, Fleet를 다룹니다. 모든 명령은 그대로 복사해 붙여넣을 수 있으며, 실제 CLI 소스 코드를 기준으로 합니다.</span>
+  </p>
+  <div class="stats">
+    <span class="stat">26 <span class="en">jobs</span><span class="tw">任務</span><span class="cn">任务</span><span class="ja">タスク</span><span class="ko">작업</span></span>
+    <span class="stat">4 <span class="en">difficulty levels</span><span class="tw">個難度等級</span><span class="cn">个难度等级</span><span class="ja">段階の難易度</span><span class="ko">개 난이도 등급</span></span>
+    <span class="stat">8 <span class="en">parallel patterns</span><span class="tw">種平行模式</span><span class="cn">种并行模式</span><span class="ja">種類の並列パターン</span><span class="ko">가지 병렬 패턴</span></span>
+    <span class="stat"><span class="en">copy-paste ready</span><span class="tw">指令可直接使用</span><span class="cn">命令可直接使用</span><span class="ja">コマンドはそのまま使用可能</span><span class="ko">명령 바로 사용 가능</span></span>
+  </div>
+</header>
+
+<!-- ══════════════ PART 0 · SETUP ══════════════ -->
+<div class="part-head" id="setup">
+  <div class="eyebrow"><span class="en">Part 0 · Before you start</span><span class="tw">第零部 · 開始之前</span><span class="cn">第零部 · 开始之前</span><span class="ja">第0部 · はじめる前に</span><span class="ko">제0부 · 시작하기 전에</span></div>
+  <h2><span class="en">Install &amp; first-run checklist</span><span class="tw">安裝與首次啟動檢查</span><span class="cn">安装与首次启动检查</span><span class="ja">インストールと初回起動チェック</span><span class="ko">설치 및 첫 실행 점검</span></h2>
+  <p>
+    <span class="en">MUR is a single Rust binary plus per-agent runtimes. Everything lives under <code>~/.mur/</code>. Five minutes of setup covers every tutorial below.</span>
+    <span class="tw">MUR 是一個 Rust 單一執行檔加上每個 Agent 各自的 runtime。所有資料都在 <code>~/.mur/</code> 底下。五分鐘的準備就能跑完以下所有教學。</span><span class="cn">MUR 是一个 Rust 单一可执行文件加上每个 Agent 各自的 runtime。所有数据都在 <code>~/.mur/</code> 之下。五分钟的准备就能跑完以下所有教程。</span><span class="ja">MUR は 1 つの Rust 実行ファイルに、Agent ごとの runtime を加えた構成です。すべてのデータは <code>~/.mur/</code> の下にあります。5 分の準備で、以下のチュートリアルをすべて実行できます。</span><span class="ko">MUR는 Rust 단일 실행 파일에 Agent별 runtime이 더해진 구조입니다. 모든 데이터는 <code>~/.mur/</code> 아래에 있습니다. 5분만 준비하면 아래 모든 튜토리얼을 실행할 수 있습니다.</span>
+  </p>
+</div>
+
+<article class="job" id="job-0">
+  <div class="job-head">
+    <span class="jnum">00</span>
+    <div class="jtitle">
+      <h3><span class="en">Install, verify, register a model</span><span class="tw">安裝、驗證、註冊模型</span><span class="cn">安装、验证、注册模型</span><span class="ja">インストール、検証、モデル登録</span><span class="ko">설치, 검증, 모델 등록</span></h3>
+      <div class="meta"><span class="dots e1">●○○○</span><span class="badge">setup</span></div>
+    </div>
+  </div>
+  <div class="codewrap"><pre><code><span class="c"># Install via Homebrew, or build from source / 用 Homebrew 安裝，或從原始碼建置</span>
+<span class="p">$</span> brew install mur            <span class="c"># from source: ./install.sh</span>
+<span class="p">$</span> mur --version
+
+<span class="c"># Option A — local model via Ollama (no API key, fully offline)</span>
+<span class="c"># 選項 A — Ollama 本地模型（免 API key，完全離線）</span>
+<span class="p">$</span> ollama pull llama3.2:3b
+
+<span class="c"># Option B — cloud model: register it in the model registry (~/.mur/models.yaml)</span>
+<span class="c"># 選項 B — 雲端模型：先在模型註冊表登記（~/.mur/models.yaml）</span>
+<span class="p">$</span> mur model add anthropic_opus \
+    --provider anthropic --model claude-opus-4-7 \
+    --secret env:ANTHROPIC_API_KEY --tier frontier
+<span class="p">$</span> mur model list
+<span class="p">$</span> mur model prices show        <span class="c"># cached models.dev pricing catalog / 快取的價格目錄</span></code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en">The registry entry's <code>--secret</code> accepts <code>env:VAR</code>, <code>keychain:svc/acct</code>, <code>file:/path</code>, or <code>cmd:./script</code> — agents reference the entry via <code>model_ref</code> and never hold raw keys.</span>
+          <span class="tw">註冊表項目的 <code>--secret</code> 接受 <code>env:VAR</code>、<code>keychain:svc/acct</code>、<code>file:/path</code>、<code>cmd:./script</code> — Agent 透過 <code>model_ref</code> 引用，本身不保存明文金鑰。</span><span class="cn">注册表条目的 <code>--secret</code> 接受 <code>env:VAR</code>、<code>keychain:svc/acct</code>、<code>file:/path</code>、<code>cmd:./script</code> — Agent 通过 <code>model_ref</code> 引用，本身不保存明文密钥。</span><span class="ja">レジストリ項目の <code>--secret</code> は <code>env:VAR</code>、<code>keychain:svc/acct</code>、<code>file:/path</code>、<code>cmd:./script</code> を受け付けます — Agent は <code>model_ref</code> 経由で参照し、平文のキーを自身には保存しません。</span><span class="ko">레지스트리 항목의 <code>--secret</code>은 <code>env:VAR</code>, <code>keychain:svc/acct</code>, <code>file:/path</code>, <code>cmd:./script</code>를 받습니다 — Agent는 <code>model_ref</code>로 참조할 뿐, 평문 키를 직접 보관하지 않습니다.</span></li>
+      <li><span class="en"><code>mur model add</code> auto-fills pricing + context window from the models.dev catalog unless you pass <code>--no-fetch</code>.</span>
+          <span class="tw">除非加 <code>--no-fetch</code>，<code>mur model add</code> 會自動從 models.dev 目錄補上價格與 context window。</span><span class="cn">除非加 <code>--no-fetch</code>，<code>mur model add</code> 会自动从 models.dev 目录补上价格与 context window。</span><span class="ja"><code>--no-fetch</code> を付けない限り、<code>mur model add</code> は models.dev カタログから価格と context window を自動補完します。</span><span class="ko"><code>--no-fetch</code>를 붙이지 않는 한, <code>mur model add</code>는 models.dev 카탈로그에서 가격과 context window를 자동으로 채웁니다.</span></li>
+    </ul>
+  </div>
+</article>
+
+<!-- ══════════════ PART 1 · AGENTS ══════════════ -->
+<div class="part-head" id="part1">
+  <div class="eyebrow"><span class="en">Part 1 · Easy</span><span class="tw">第一部 · 入門</span><span class="cn">第一部 · 入门</span><span class="ja">第1部 · 入門</span><span class="ko">제1부 · 입문</span></div>
+  <h2><span class="en">Agents — your daily companions</span><span class="tw">Agent — 你的日常夥伴</span><span class="cn">Agent — 你的日常伙伴</span><span class="ja">Agent — 日々の相棒</span><span class="ko">Agent — 당신의 일상 파트너</span></h2>
+  <p>
+    <span class="en">A MUR agent is a supervised local process with its own identity (Ed25519), system prompt, model, skills, MCP tools, and OS-enforced sandbox. These seven jobs are the moves you'll make every day.</span>
+    <span class="tw">MUR Agent 是受監管的本地行程，擁有自己的身分（Ed25519）、系統提示詞、模型、技能、MCP 工具與作業系統層級的沙箱。這七個任務就是你每天的基本動作。</span><span class="cn">MUR Agent 是受监管的本地进程，拥有自己的身份（Ed25519）、系统提示词、模型、技能、MCP 工具与操作系统层面的沙箱。这七个任务就是你每天的基本动作。</span><span class="ja">MUR の Agent は監督下にあるローカルプロセスで、固有のアイデンティティ（Ed25519）、システムプロンプト、モデル、スキル、MCP ツール、そして OS レベルのサンドボックスを持ちます。この 7 つのタスクが毎日の基本動作です。</span><span class="ko">MUR Agent는 감독되는 로컬 프로세스로, 자체 신원(Ed25519), 시스템 프롬프트, 모델, 스킬, MCP 도구, OS 수준 샌드박스를 갖습니다. 이 일곱 가지 작업이 매일의 기본 동작입니다.</span>
+  </p>
+</div>
+
+<article class="job" id="job-1">
+  <div class="job-head">
+    <span class="jnum">01</span>
+    <div class="jtitle">
+      <h3><span class="en">Create your first agent and say hello</span><span class="tw">建立第一個 Agent 並打聲招呼</span><span class="cn">创建第一个 Agent 并打声招呼</span><span class="ja">最初の Agent を作成して挨拶する</span><span class="ko">첫 Agent를 만들고 인사 건네기</span></h3>
+      <div class="meta"><span class="dots e1">●○○○</span><span class="badge">lifecycle</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">stand up a personal assistant agent — local or cloud — and confirm it's alive.</span>
+    <span class="tw">建立一個私人助理 Agent — 本地或雲端皆可 — 並確認它真的活著。</span><span class="cn">创建一个私人助理 Agent — 本地或云端皆可 — 并确认它真的活着。</span><span class="ja">個人アシスタントの Agent を作成し — ローカルでもクラウドでも構いません — 本当に生きていることを確認します。</span><span class="ko">개인 비서 Agent를 만들고 — 로컬이든 클라우드든 — 실제로 살아 있는지 확인합니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># Local agent (Ollama, zero keys) / 本地 Agent（Ollama，不需金鑰）</span>
+<span class="p">$</span> mur agent create helper --model llama3.2:3b
+
+<span class="c"># Cloud agent (Claude) — TWO steps / 雲端 Agent（Claude）— 必須兩步</span>
+<span class="p">$</span> mur agent create assistant --provider anthropic --model claude-opus-4-7
+<span class="p">$</span> mur agent secret assistant set ANTHROPIC_API_KEY   <span class="c"># hidden prompt → OS keychain</span>
+
+<span class="c"># Start it: run the per-agent runtime symlink, or install a service</span>
+<span class="c"># 啟動：執行該 Agent 專屬的 runtime 符號連結，或安裝成系統服務</span>
+<span class="p">$</span> ~/.local/bin/mur_agent_assistant start &amp;
+<span class="c">#   …or as a login service (launchd / systemd) / 或裝成登入服務</span>
+<span class="p">$</span> mur agent install-service assistant
+
+<span class="c"># Verify / 驗證</span>
+<span class="p">$</span> mur agent list
+<span class="p">$</span> mur agent status assistant
+<span class="p">$</span> mur agent card assistant          <span class="c"># A2A agent card (JSON)</span>
+
+<span class="c"># One raw A2A turn (JSON message) / 一個原生 A2A 回合（JSON 訊息）</span>
+<span class="p">$</span> mur agent send assistant '{"role":"user","parts":[{"kind":"text","text":"hello"}]}'</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en">Everything lands in <code>~/.mur/agents/assistant/</code>: <code>profile.yaml</code> (model, tools, entitlements), <code>sys_prompt.md</code>, identity keys, <code>agent.sock</code>.</span>
+          <span class="tw">所有東西都在 <code>~/.mur/agents/assistant/</code>：<code>profile.yaml</code>（模型、工具、權限）、<code>sys_prompt.md</code>、身分金鑰、<code>agent.sock</code>。</span><span class="cn">所有东西都在 <code>~/.mur/agents/assistant/</code>：<code>profile.yaml</code>（模型、工具、权限）、<code>sys_prompt.md</code>、身份密钥、<code>agent.sock</code>。</span><span class="ja">すべては <code>~/.mur/agents/assistant/</code> にあります：<code>profile.yaml</code>（モデル、ツール、権限）、<code>sys_prompt.md</code>、アイデンティティ鍵、<code>agent.sock</code>。</span><span class="ko">모든 것이 <code>~/.mur/agents/assistant/</code>에 있습니다: <code>profile.yaml</code>(모델, 도구, 권한), <code>sys_prompt.md</code>, 신원 키, <code>agent.sock</code>.</span></li>
+      <li><span class="en">Agent names are case-insensitive at the CLI (<code>mur agent send Assistant</code> resolves), but the canonical on-disk name is what the runtime enforces.</span>
+          <span class="tw">CLI 的 Agent 名稱不分大小寫（<code>mur agent send Assistant</code> 也解析得到），但 runtime 強制使用磁碟上的正規名稱。</span><span class="cn">CLI 的 Agent 名称不区分大小写（<code>mur agent send Assistant</code> 也能解析），但 runtime 强制使用磁盘上的规范名称。</span><span class="ja">CLI の Agent 名は大文字・小文字を区別しません（<code>mur agent send Assistant</code> でも解決されます）が、runtime はディスク上の正規名を強制します。</span><span class="ko">CLI의 Agent 이름은 대소문자를 구분하지 않지만(<code>mur agent send Assistant</code>도 해석됩니다), runtime은 디스크상의 정규 이름을 강제합니다.</span></li>
+      <li><span class="en"><code>mur agent send</code> is a single LLM turn with <b>no tool execution</b> — a probe, not a work order. Real tool use happens in the interactive TUI (job 2) or via workflows/fleets.</span>
+          <span class="tw"><code>mur agent send</code> 是單一 LLM 回合，<b>不會執行工具</b> — 適合探測，不適合派工。真正的工具使用在互動 TUI（任務 2）或 workflow／fleet。</span><span class="cn"><code>mur agent send</code> 是单次 LLM 回合，<b>不会执行工具</b> — 适合探测，不适合派发任务。真正的工具使用在交互式 TUI（任务 2）或 workflow／fleet。</span><span class="ja"><code>mur agent send</code> は単一の LLM ターンで、<b>ツールは実行しません</b> — 疎通確認には向きますが、作業の割り当てには不向きです。実際のツール使用は対話型 TUI（タスク 2）または workflow／fleet で行います。</span><span class="ko"><code>mur agent send</code>는 단일 LLM 턴이며 <b>도구를 실행하지 않습니다</b> — 상태 탐침에는 적합하지만 작업 배정에는 부적합합니다. 실제 도구 사용은 인터랙티브 TUI(작업 2)나 workflow/fleet에서 이루어집니다.</span></li>
+    </ul>
+  </div>
+  <div class="warn"><span class="en"><b>Gotcha:</b> a cloud agent whose registry entry has no secret silently degrades to a stub that just echoes — if replies look suspiciously parrot-like, run <code>mur agent secret assistant list</code> and set the missing key.</span>
+  <span class="tw"><b>陷阱：</b>註冊表沒設 secret 的雲端 Agent 會靜默降級成只會回音的 stub — 如果回覆像鸚鵡學舌，跑 <code>mur agent secret assistant list</code> 檢查並補上金鑰。</span><span class="cn"><b>陷阱：</b>注册表没设 secret 的云端 Agent 会静默降级成只会回声的 stub — 如果回复像鹦鹉学舌，运行 <code>mur agent secret assistant list</code> 检查并补上密钥。</span><span class="ja"><b>落とし穴：</b>レジストリに secret が未設定のクラウド Agent は、エコーを返すだけの stub に静かに降格します — 返答がオウム返しに見えたら、<code>mur agent secret assistant list</code> で確認してキーを補ってください。</span><span class="ko"><b>함정:</b> 레지스트리에 secret이 설정되지 않은 클라우드 Agent는 에코만 하는 stub으로 조용히 강등됩니다 — 응답이 앵무새처럼 들리면 <code>mur agent secret assistant list</code>로 확인하고 키를 채워 넣으십시오.</span></div>
+</article>
+
+<article class="job" id="job-2">
+  <div class="job-head">
+    <span class="jnum">02</span>
+    <div class="jtitle">
+      <h3><span class="en">Chat in the terminal — the daily driver</span><span class="tw">終端機對話 — 每天的主力介面</span><span class="cn">终端对话 — 每天的主力界面</span><span class="ja">ターミナル対話 — 毎日のメインインターフェース</span><span class="ko">터미널 대화 — 매일의 주력 인터페이스</span></h3>
+      <div class="meta"><span class="dots e1">●○○○</span><span class="badge">TUI</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">open a streaming chat with real tool execution, resume yesterday's conversation, and drive several agents side by side.</span>
+    <span class="tw">開一個支援即時串流與真實工具執行的聊天視窗、接續昨天的對話，並同時駕馭多個 Agent。</span><span class="cn">打开一个支持实时流式输出与真实工具执行的聊天窗口、接续昨天的对话，并同时驾驭多个 Agent。</span><span class="ja">リアルタイムストリーミングと実ツール実行に対応したチャット画面を開き、昨日の会話を再開し、複数の Agent を同時に操ります。</span><span class="ko">실시간 스트리밍과 실제 도구 실행을 지원하는 채팅 창을 열고, 어제의 대화를 이어가며, 여러 Agent를 동시에 다룹니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># Interactive chat with tools + HITL approvals / 互動聊天（含工具與人工核准）</span>
+<span class="p">$</span> mur agent cli assistant
+
+<span class="c"># The murmur shortcut / murmur 捷徑</span>
+<span class="p">$</span> murmur                       <span class="c"># bare = the mur concierge / 不帶參數 = 總管 mur</span>
+<span class="p">$</span> murmur pm qa                 <span class="c"># 2+ names = one split pane each (tmux) / 每個 Agent 一格</span>
+
+<span class="c"># Useful flags / 常用旗標</span>
+<span class="p">$</span> mur agent cli assistant --resume            <span class="c"># continue last conversation / 續聊</span>
+<span class="p">$</span> mur agent cli assistant --auto-reads        <span class="c"># auto-approve read-only bash / 唯讀指令自動核准</span>
+<span class="p">$</span> mur agent cli assistant --budget-usd 2      <span class="c"># session cost ceiling / 本次花費上限</span>
+<span class="p">$</span> mur agent cli assistant --skin mur --plain  <span class="c"># skin; line mode for pipes / 佈景；管線用行模式</span></code></pre></div>
+  <div class="codewrap"><pre><code><span class="c"># Inside the session / 會話中指令</span>
+/help          /clear          /sessions       /channels [N]
+/auto [on|off] /skin [dark|light|mur]          /card           /quit
+/mcp add &lt;name&gt; &lt;command&gt; [args…]   /skill add &lt;path&gt;    <span class="c"># live tool/skill mgmt</span>
+!git status    <span class="c"># run locally; output is attached to your next message
+               # 在本機執行；輸出會附在你下一則訊息前</span></code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en"><code>--auto</code> approves <i>every</i> tool call for the session — handy for trusted chores, dangerous for anything else. <code>--auto-reads</code> is the safer everyday middle ground.</span>
+          <span class="tw"><code>--auto</code> 會核准本次會話<i>所有</i>工具呼叫 — 跑可信雜務方便，其他情況危險。<code>--auto-reads</code> 是日常較安全的折衷。</span><span class="cn"><code>--auto</code> 会批准本次会话<i>所有</i>工具调用 — 跑可信杂务方便，其他情况危险。<code>--auto-reads</code> 是日常较安全的折中。</span><span class="ja"><code>--auto</code> はこのセッションの<i>すべての</i>ツール呼び出しを承認します — 信頼できる雑務には便利ですが、それ以外では危険です。<code>--auto-reads</code> が日常向けのより安全な折衷案です。</span><span class="ko"><code>--auto</code>는 이번 세션의 <i>모든</i> 도구 호출을 승인합니다 — 신뢰할 수 있는 잡무에는 편리하지만 그 외에는 위험합니다. <code>--auto-reads</code>가 일상적으로 더 안전한 절충안입니다.</span></li>
+      <li><span class="en"><code>/channels 3</code> switches the chat onto channel #3 from the list — you can watch a fleet channel live from inside a chat.</span>
+          <span class="tw"><code>/channels 3</code> 會把對話切到清單上第 3 條 channel — 你可以在聊天視窗裡即時看 fleet channel。</span><span class="cn"><code>/channels 3</code> 会把对话切到列表中第 3 条 channel — 你可以在聊天窗口里实时查看 fleet channel。</span><span class="ja"><code>/channels 3</code> は会話をリストの 3 番目の channel に切り替えます — チャット画面の中から fleet の channel をリアルタイムで見られます。</span><span class="ko"><code>/channels 3</code>은 대화를 목록의 3번째 channel로 전환합니다 — 채팅 창 안에서 fleet channel을 실시간으로 볼 수 있습니다.</span></li>
+    </ul>
+  </div>
+</article>
+
+<article class="job" id="job-3">
+  <div class="job-head">
+    <span class="jnum">03</span>
+    <div class="jtitle">
+      <h3><span class="en">Keep and search personal knowledge notes</span><span class="tw">建立並搜尋個人知識筆記</span><span class="cn">创建并搜索个人知识笔记</span><span class="ja">個人ナレッジノートの作成と検索</span><span class="ko">개인 지식 노트 만들고 검색하기</span></h3>
+      <div class="meta"><span class="dots e1">●○○○</span><span class="badge">memory</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">capture the deploy checklist you keep re-deriving, then find it (and everything related) by meaning, not filename.</span>
+    <span class="tw">把你一再重新推導的部署檢查表記下來，之後用「語意」找回它 — 不用記檔名。</span><span class="cn">把你一再重新推导的部署检查清单记下来，之后用“语义”找回它 — 不用记文件名。</span><span class="ja">何度も導き直しているデプロイチェックリストを書き留めておき、後で「意味」で探し出します — ファイル名を覚える必要はありません。</span><span class="ko">매번 다시 떠올리던 배포 체크리스트를 기록해 두고, 나중에 "의미"로 다시 찾습니다 — 파일명을 기억할 필요가 없습니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># Create a note / 建立筆記</span>
+<span class="p">$</span> mur notes create deploy-checklist -d "Production deploy checklist" --body-file checklist.md
+<span class="c">#   (or pipe stdin / 或用stdin)</span>
+<span class="p">$</span> echo "1. tag  2. push  3. verify brew" | mur notes create release-steps -d "Release steps"
+
+<span class="c"># Find things by meaning / 語意搜尋</span>
+<span class="p">$</span> mur notes search "what do I check before deploying"
+<span class="p">$</span> mur notes list --maturity stable
+<span class="p">$</span> mur notes show deploy-checklist
+
+<span class="c"># Unified search across notes + connected sources (Obsidian/Notion/Joplin)</span>
+<span class="c"># 跨筆記與外部來源（Obsidian/Notion/Joplin）的統一搜尋</span>
+<span class="p">$</span> mur search "key rotation procedure" -k 5</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en">Notes are knowledge objects with a maturity lifecycle (draft → emerging → stable → canonical) and decay — frequently-used knowledge surfaces first.</span>
+          <span class="tw">筆記是有成熟度生命週期（draft → emerging → stable → canonical）與衰減機制的知識物件 — 常用的知識優先浮上來。</span><span class="cn">笔记是具有成熟度生命周期（draft → emerging → stable → canonical）与衰减机制的知识对象 — 常用的知识优先浮上来。</span><span class="ja">ノートは成熟度ライフサイクル（draft → emerging → stable → canonical）と減衰メカニズムを持つ知識オブジェクトです — よく使う知識ほど優先的に浮かび上がります。</span><span class="ko">노트는 성숙도 수명주기(draft → emerging → stable → canonical)와 감쇠 메커니즘을 가진 지식 객체입니다 — 자주 쓰는 지식이 먼저 떠오릅니다.</span></li>
+      <li><span class="en">The same retrieval pipeline powers automatic context injection into your AI tools — what you save here shows up as ambient knowledge in tomorrow's sessions.</span>
+          <span class="tw">同一條檢索管線也負責自動注入 AI 工具的上下文 — 今天存的，明天的工作階段就會自動出現。</span><span class="cn">同一条检索管道也负责自动注入 AI 工具的上下文 — 今天存的，明天的会话就会自动出现。</span><span class="ja">同じ検索パイプラインが AI ツールへのコンテキスト自動注入も担います — 今日保存したものは、明日のセッションに自動的に現れます。</span><span class="ko">같은 검색 파이프라인이 AI 도구의 컨텍스트 자동 주입도 담당합니다 — 오늘 저장한 것이 내일 세션에 자동으로 나타납니다.</span></li>
+    </ul>
+  </div>
+</article>
+
+<article class="job" id="job-4">
+  <div class="job-head">
+    <span class="jnum">04</span>
+    <div class="jtitle">
+      <h3><span class="en">Index the repo, search it by meaning</span><span class="tw">為 Repo 建索引，用語意搜尋程式碼</span><span class="cn">为 Repo 建索引，用语义搜索代码</span><span class="ja">リポジトリをインデックス化し、コードを意味で検索する</span><span class="ko">Repo를 인덱싱하고 시맨틱 검색으로 코드 찾기</span></h3>
+      <div class="meta"><span class="dots e1">●○○○</span><span class="badge">code search</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">"where do we validate session tokens?" — ask the codebase in plain language instead of guessing grep patterns.</span>
+    <span class="tw">「session token 是在哪裡驗證的？」— 用白話問程式碼庫，不用猜 grep 的正規表達式。</span><span class="cn">“session token 是在哪里验证的？”— 用大白话问代码库，不用猜 grep 的正则表达式。</span><span class="ja">「session token はどこで検証されている？」— grep の正規表現を推測せず、平易な言葉でコードベースに尋ねます。</span><span class="ko">"session token은 어디서 검증되나?" — 일상 언어로 코드베이스에 물어봅니다. grep 정규식을 추측할 필요가 없습니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># Index the current repo (do this after commits) / 建索引（commit 後執行）</span>
+<span class="p">$</span> cd ~/code/my-service &amp;&amp; mur project index
+
+<span class="c"># Ask by intent / 用意圖查詢</span>
+<span class="p">$</span> mur project search "where do we validate session tokens" --limit 5
+<span class="p">$</span> mur project search "retry logic for outbound webhooks" --all   <span class="c"># all projects / 跨專案</span>
+
+<span class="c"># Hygiene / 維護</span>
+<span class="p">$</span> mur project status
+<span class="p">$</span> mur project list
+<span class="p">$</span> mur project remove ~/code/old-service     <span class="c"># free disk from stale indexes / 清舊索引</span></code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en">Search is hybrid vector + BM25 — meaning first, keywords as tiebreaker. Use <code>grep</code> for exact strings and exhaustive matches; use this for concepts.</span>
+          <span class="tw">搜尋是向量＋BM25 混合 — 語意優先、關鍵字加權。找精確字串與全面比對用 <code>grep</code>；找概念用這個。</span><span class="cn">搜索是向量＋BM25 混合 — 语义优先、关键字加权。找精确字符串与穷举匹配用 <code>grep</code>；找概念用这个。</span><span class="ja">検索はベクトル＋BM25 のハイブリッドです — 意味を優先し、キーワードで重み付けします。正確な文字列や網羅的な照合には <code>grep</code> を、概念を探すにはこちらを使います。</span><span class="ko">검색은 벡터＋BM25 하이브리드입니다 — 의미 우선, 키워드 가중. 정확한 문자열과 전수 매칭은 <code>grep</code>으로, 개념 검색은 이것으로 하십시오.</span></li>
+      <li><span class="en">The index is a rebuildable cache — deleting it never loses data (<code>mur project index --rebuild</code>).</span>
+          <span class="tw">索引只是可重建的快取 — 刪掉不會遺失任何資料（<code>mur project index --rebuild</code>）。</span><span class="cn">索引只是可重建的缓存 — 删掉不会丢失任何数据（<code>mur project index --rebuild</code>）。</span><span class="ja">インデックスは再構築可能なキャッシュにすぎません — 削除してもデータは一切失われません（<code>mur project index --rebuild</code>）。</span><span class="ko">인덱스는 재구축 가능한 캐시일 뿐입니다 — 지워도 데이터를 잃지 않습니다(<code>mur project index --rebuild</code>).</span></li>
+    </ul>
+  </div>
+</article>
+
+<article class="job" id="job-5">
+  <div class="job-head">
+    <span class="jnum">05</span>
+    <div class="jtitle">
+      <h3><span class="en">Teach a skill — knowledge your agents act on</span><span class="tw">教一個技能 — Agent 會照著做的知識</span><span class="cn">教一个技能 — Agent 会照着做的知识</span><span class="ja">スキルを教える — Agent がそのとおりに実行する知識</span><span class="ko">스킬 가르치기 — Agent가 그대로 따라 하는 지식</span></h3>
+      <div class="meta"><span class="dots e1">●○○○</span><span class="badge">skills</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">your team's code-review checklist should live in the agent, not in your head. Author it once, install it on any agent, share it safely.</span>
+    <span class="tw">團隊的 code review 檢查表應該住在 Agent 裡，而不是你腦中。寫一次、裝到任何 Agent 上、安全地分享。</span><span class="cn">团队的 code review 检查清单应该住在 Agent 里，而不是你脑中。写一次、装到任何 Agent 上、安全地分享。</span><span class="ja">チームの code review チェックリストは、あなたの頭の中ではなく Agent の中に住むべきです。一度書けば、どの Agent にも装着でき、安全に共有できます。</span><span class="ko">팀의 code review 체크리스트는 당신 머릿속이 아니라 Agent 안에 있어야 합니다. 한 번 작성해서 어떤 Agent에든 설치하고 안전하게 공유합니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># Scaffold + edit / 建骨架並編輯</span>
+<span class="p">$</span> mur skill new review-checklist --category context
+<span class="p">$</span> mur skill edit review-checklist        <span class="c"># opens $EDITOR, validates on save</span></code></pre></div>
+  <div class="codewrap"><pre><code><span class="c"># ~/.mur/skills/review-checklist/skill.yaml — minimal valid manifest</span>
+name: review-checklist
+version: 0.1.0
+publisher: human:peggy
+description: What we always check in a code review
+category: context            <span class="c"># context | workflow | command | meta | note | media</span>
+triggers:
+  - type: keyword            <span class="c"># command | keyword | session_start | manual</span>
+    pattern: "code review"
+content:
+  abstract: The five checks every review must pass.
+  context: |
+    1. Tests cover the change   2. No hardcoded values
+    3. Errors are handled       4. Docs updated   5. No secret material</code></pre></div>
+  <div class="codewrap"><pre><code><span class="c"># Install onto an agent / 安裝到 Agent</span>
+<span class="p">$</span> mur agent skill add assistant ~/.mur/skills/review-checklist/skill.yaml
+<span class="p">$</span> mur agent skill list assistant
+<span class="p">$</span> mur agent skill disable assistant review-checklist   <span class="c"># keep files, stop injecting</span>
+
+<span class="c"># Install from a URL — fetched, schema-validated, SECURITY-SCANNED first</span>
+<span class="c"># 從網址安裝 — 先抓取、驗證結構、再做安全掃描</span>
+<span class="p">$</span> mur agent skill add-url assistant https://example.com/skills/rust-review.yaml
+
+<span class="c"># Trust a publisher key once (TOFU), later installs auto-trust</span>
+<span class="c"># 首次信任發佈者金鑰（TOFU），之後的安裝自動信任</span>
+<span class="p">$</span> mur agent skill trust-publisher &lt;key-fingerprint&gt; --name alice</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en"><code>content</code> takes exactly one mode: <code>context</code> (guidance text), <code>procedure</code> (a runnable DAG — that's a workflow skill, jobs 11–13), <code>command</code>, or <code>note</code>.</span>
+          <span class="tw"><code>content</code> 只能選一種模式：<code>context</code>（指引文字）、<code>procedure</code>（可執行 DAG — 即 workflow 技能，任務 11–13）、<code>command</code> 或 <code>note</code>。</span><span class="cn"><code>content</code> 只能选一种模式：<code>context</code>（指导文字）、<code>procedure</code>（可执行 DAG — 即 workflow 技能，任务 11–13）、<code>command</code> 或 <code>note</code>。</span><span class="ja"><code>content</code> はいずれか 1 つのモードだけを選べます：<code>context</code>（ガイダンステキスト）、<code>procedure</code>（実行可能な DAG — すなわち workflow スキル、タスク 11–13）、<code>command</code> または <code>note</code>。</span><span class="ko"><code>content</code>는 한 가지 모드만 선택할 수 있습니다: <code>context</code>(안내 텍스트), <code>procedure</code>(실행 가능한 DAG — 즉 workflow 스킬, 작업 11–13), <code>command</code> 또는 <code>note</code>.</span></li>
+      <li><span class="en">Remote installs are fail-closed: blocking security findings refuse the install unless you explicitly <code>--yes</code>; registry installs verify content hash + publisher signature.</span>
+          <span class="tw">遠端安裝失敗即拒絕：安全掃描發現阻斷性問題就拒裝，除非你明確 <code>--yes</code>；registry 安裝會驗證內容雜湊與發佈者簽章。</span><span class="cn">远程安装失败即拒绝：安全扫描发现阻断性问题就拒装，除非你明确 <code>--yes</code>；registry 安装会验证内容哈希与发布者签名。</span><span class="ja">リモートインストールはフェイルクローズドです：セキュリティスキャンがブロッキングな問題を見つけると、明示的に <code>--yes</code> しない限りインストールを拒否します。registry からのインストールではコンテンツハッシュと発行者署名を検証します。</span><span class="ko">원격 설치는 실패 시 거부(fail-closed)입니다: 보안 스캔이 차단성 문제를 발견하면 명시적으로 <code>--yes</code>를 주지 않는 한 설치를 거부합니다. registry 설치는 콘텐츠 해시와 게시자 서명을 검증합니다.</span></li>
+      <li><span class="en">Skills mature with use (Draft → Emerging → Stable → Canonical) and are injected by relevance — <code>mur skill stats</code> shows how often one actually fires.</span>
+          <span class="tw">技能隨使用成熟（Draft → Emerging → Stable → Canonical）並依關聯性注入 — <code>mur skill stats</code> 可看實際觸發頻率。</span><span class="cn">技能随使用成熟（Draft → Emerging → Stable → Canonical）并按相关性注入 — <code>mur skill stats</code> 可查看实际触发频率。</span><span class="ja">スキルは使用に応じて成熟し（Draft → Emerging → Stable → Canonical）、関連性に基づいて注入されます — <code>mur skill stats</code> で実際の発火頻度を確認できます。</span><span class="ko">스킬은 사용에 따라 성숙하며(Draft → Emerging → Stable → Canonical) 관련성에 따라 주입됩니다 — 실제 트리거 빈도는 <code>mur skill stats</code>로 확인할 수 있습니다.</span></li>
+    </ul>
+  </div>
+</article>
+
+<article class="job" id="job-6">
+  <div class="job-head">
+    <span class="jnum">06</span>
+    <div class="jtitle">
+      <h3><span class="en">Wire tools into an agent with MCP</span><span class="tw">用 MCP 幫 Agent 接上工具</span><span class="cn">用 MCP 帮 Agent 接入工具</span><span class="ja">MCP で Agent にツールを接続する</span><span class="ko">MCP로 Agent에 도구 연결하기</span></h3>
+      <div class="meta"><span class="dots e1">●○○○</span><span class="badge">MCP</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">give your agent real capabilities — a filesystem server, a remote API with OAuth, tools from the official MCP registry.</span>
+    <span class="tw">給 Agent 真正的能力 — 檔案系統伺服器、需要 OAuth 的遠端 API、官方 MCP registry 上的工具。</span><span class="cn">给 Agent 真正的能力 — 文件系统服务器、需要 OAuth 的远程 API、官方 MCP registry 上的工具。</span><span class="ja">Agent に本物の能力を与えます — ファイルシステムサーバー、OAuth が必要なリモート API、公式 MCP registry 上のツール。</span><span class="ko">Agent에게 진짜 능력을 줍니다 — 파일 시스템 서버, OAuth가 필요한 원격 API, 공식 MCP registry의 도구.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># Local stdio server / 本地 stdio 伺服器</span>
+<span class="p">$</span> mur agent mcp add assistant weather --command npx --arg -y --arg @anthropic-mcp/weather
+
+<span class="c"># Remote Streamable-HTTP server with a bearer token / 帶 bearer token 的遠端伺服器</span>
+<span class="p">$</span> mur agent mcp add-remote assistant myapi https://mcp.example.com --bearer-env MY_TOKEN
+
+<span class="c"># Remote server with OAuth 2.1 (auth-code + PKCE) / OAuth 2.1 登入</span>
+<span class="p">$</span> mur agent mcp add-remote assistant linear https://mcp.linear.app/mcp
+<span class="p">$</span> mur agent mcp login assistant linear
+
+<span class="c"># From the official MCP registry / 從官方 registry 安裝</span>
+<span class="p">$</span> mur agent mcp search "github"
+<span class="p">$</span> mur agent mcp registry-add assistant com.example/github
+
+<span class="c"># Audit &amp; control / 稽核與控制</span>
+<span class="p">$</span> mur agent mcp list assistant
+<span class="p">$</span> mur agent mcp inspect assistant --probe      <span class="c"># drift/pin check / 漂移與釘選檢查</span>
+<span class="p">$</span> mur agent mcp disable assistant weather
+
+<span class="c"># Bonus: give Claude Code MUR's own tools / 反向：讓 Claude Code 用 MUR 的工具</span>
+<span class="p">$</span> claude mcp add mur -- mur-mcp-server</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en">Adding an MCP server auto-syncs its command into the agent's <b>spawn allowlist</b> (<code>processes.spawn</code> entitlement) — agents can only exec what you granted, enforced by the OS sandbox.</span>
+          <span class="tw">加入 MCP 伺服器會自動把指令同步進 Agent 的<b>生成允許清單</b>（<code>processes.spawn</code> 權限）— Agent 只能執行你授權的程式，由作業系統沙箱強制。</span><span class="cn">添加 MCP 服务器会自动把命令同步进 Agent 的<b>生成允许列表</b>（<code>processes.spawn</code> 权限）— Agent 只能执行你授权的程序，由操作系统沙箱强制执行。</span><span class="ja">MCP サーバーを追加すると、コマンドが Agent の<b>スポーン許可リスト</b>（<code>processes.spawn</code> 権限）に自動同期されます — Agent はあなたが許可したプログラムしか実行できず、OS のサンドボックスがそれを強制します。</span><span class="ko">MCP 서버를 추가하면 해당 명령이 Agent의 <b>스폰 허용 목록</b>(<code>processes.spawn</code> 권한)에 자동으로 동기화됩니다 — Agent는 당신이 승인한 프로그램만 실행할 수 있으며, OS 샌드박스가 이를 강제합니다.</span></li>
+      <li><span class="en">MUR's own MCP server exposes 19 read-only tools (notes/project search, compression, agent status, <code>parallel_jobs</code>…) to any MCP client.</span>
+          <span class="tw">MUR 自己的 MCP 伺服器對任何 MCP 客戶端提供 19 個唯讀工具（筆記／專案搜尋、壓縮、Agent 狀態、<code>parallel_jobs</code>…）。</span><span class="cn">MUR 自己的 MCP 服务器向任何 MCP 客户端提供 19 个只读工具（笔记／项目搜索、压缩、Agent 状态、<code>parallel_jobs</code>…）。</span><span class="ja">MUR 自身の MCP サーバーは、任意の MCP クライアントに 19 個の読み取り専用ツールを提供します（ノート／プロジェクト検索、圧縮、Agent ステータス、<code>parallel_jobs</code>…）。</span><span class="ko">MUR 자체 MCP 서버는 어떤 MCP 클라이언트에든 19개의 읽기 전용 도구를 제공합니다(노트/프로젝트 검색, 압축, Agent 상태, <code>parallel_jobs</code>…).</span></li>
+    </ul>
+  </div>
+</article>
+
+<article class="job" id="job-7">
+  <div class="job-head">
+    <span class="jnum">07</span>
+    <div class="jtitle">
+      <h3><span class="en">Schedule a daily briefing</span><span class="tw">排程每日簡報</span><span class="cn">定时每日简报</span><span class="ja">毎日のブリーフィングをスケジュールする</span><span class="ko">매일 브리핑 스케줄링</span></h3>
+      <div class="meta"><span class="dots e1">●○○○</span><span class="badge">schedule</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">at 9:30 every weekday, your assistant should brief you — unprompted. Agent schedules inject a message into the agent on a cron beat.</span>
+    <span class="tw">每個平日 9:30，助理應該主動向你簡報。Agent 排程會按 cron 節拍把訊息注入 Agent。</span><span class="cn">每个工作日 9:30，助理应该主动向你简报。Agent 定时任务会按 cron 节拍把消息注入 Agent。</span><span class="ja">平日の 9:30 には、アシスタントが自発的にブリーフィングしてくれるべきです。Agent スケジュールは cron のリズムに合わせてメッセージを Agent に注入します。</span><span class="ko">평일마다 9:30에 비서가 먼저 브리핑해 주어야 합니다. Agent 스케줄은 cron 박자에 맞춰 메시지를 Agent에 주입합니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># Cron-triggered message (5-field POSIX cron) / cron 觸發訊息（五欄位）</span>
+<span class="p">$</span> mur agent schedule add assistant \
+    --cron "30 9 * * 1-5" \
+    --message "Brief me: yesterday's channel activity, open PRs, today's schedule"
+
+<span class="c"># Manage / 管理</span>
+<span class="p">$</span> mur agent schedule list assistant
+<span class="p">$</span> mur agent schedule next assistant --count 3     <span class="c"># preview next fire times / 預覽下次觸發</span>
+<span class="p">$</span> mur agent schedule remove assistant 0           <span class="c"># by index / 依索引移除</span>
+
+<span class="c"># Idle trigger: nudge after 1h of silence / 閒置觸發：安靜一小時後提醒</span>
+<span class="p">$</span> mur agent schedule idle-add assistant --after-secs 3600 \
+    --message "Anything I should pick up while you're away?" --cooldown-secs 7200</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en">This is <i>message injection</i>: the runtime wakes the agent with your text as a normal turn — the agent can then use its tools, message other agents (<code>--sends-to</code>), or notify you via its companion channel.</span>
+          <span class="tw">這是<i>訊息注入</i>：runtime 到點以你的文字喚醒 Agent，當成一般回合 — Agent 可以動用工具、傳訊給其他 Agent（<code>--sends-to</code>），或透過 companion 管道通知你。</span><span class="cn">这是<i>消息注入</i>：runtime 到点用你的文字唤醒 Agent，当作普通回合 — Agent 可以动用工具、给其他 Agent 发消息（<code>--sends-to</code>），或通过 companion 通道通知你。</span><span class="ja">これは<i>メッセージ注入</i>です：時刻になると runtime があなたのテキストで Agent を起こし、通常のターンとして扱います — Agent はツールを使い、他の Agent にメッセージを送り（<code>--sends-to</code>）、あるいは companion チャネル経由であなたに通知できます。</span><span class="ko">이것은 <i>메시지 주입</i>입니다: 시간이 되면 runtime이 당신의 텍스트로 Agent를 깨워 일반 턴처럼 처리합니다 — Agent는 도구를 쓰고, 다른 Agent에게 메시지를 보내고(<code>--sends-to</code>), companion 채널로 당신에게 알릴 수 있습니다.</span></li>
+      <li><span class="en">Contrast with job 10 (workflow schedules, which run a saved procedure) and job 19 (fleet auto-run, which runs a whole squad).</span>
+          <span class="tw">對照任務 10（workflow 排程：執行既存程序）與任務 19（fleet 自動執行：出動整支小隊）。</span><span class="cn">对照任务 10（workflow 定时：执行既有流程）与任务 19（fleet 自动运行：出动整支小队）。</span><span class="ja">タスク 10（workflow スケジュール：既存の手順を実行）およびタスク 19（fleet 自動実行：チーム全体を出動）と比較してください。</span><span class="ko">작업 10(workflow 스케줄: 기존 절차 실행), 작업 19(fleet 자동 실행: 스쿼드 전체 출동)와 비교해 보십시오.</span></li>
+    </ul>
+  </div>
+</article>
+
+<!-- ══════════════ PART 2 · WORKFLOWS ══════════════ -->
+<div class="part-head" id="part2">
+  <div class="eyebrow"><span class="en">Part 2 · Medium</span><span class="tw">第二部 · 中階</span><span class="cn">第二部 · 中级</span><span class="ja">第2部 · 中級</span><span class="ko">제2부 · 중급</span></div>
+  <h2><span class="en">Workflows — repeatable procedures</span><span class="tw">Workflow — 可重複的作業程序</span><span class="cn">Workflow — 可重复的作业流程</span><span class="ja">Workflow — 繰り返し可能な作業手順</span><span class="ko">Workflow — 반복 가능한 작업 절차</span></h2>
+  <p>
+    <span class="en">A workflow is a saved procedure MUR can re-run. Two flavors exist: <b>flat workflows</b> (<code>~/.mur/workflows/*.yaml</code> — simple ordered steps) and <b>workflow skills</b> (<code>category: workflow</code> in <code>~/.mur/skills/</code> — a real DAG with parallelism, delegation and approval gates). Jobs 8–10 use the flat kind; jobs 11–13 use the DAG kind.</span>
+    <span class="tw">Workflow 是 MUR 可重複執行的既存程序。有兩種形態：<b>扁平 Workflow</b>（<code>~/.mur/workflows/*.yaml</code>，單純的循序步驟）與 <b>Workflow 技能</b>（<code>~/.mur/skills/</code> 中 <code>category: workflow</code>，真正的 DAG，支援平行、委派與核准關卡）。任務 8–10 用前者，任務 11–13 用後者。</span><span class="cn">Workflow 是 MUR 可重复执行的既有流程。有两种形态：<b>扁平 Workflow</b>（<code>~/.mur/workflows/*.yaml</code>，单纯的顺序步骤）与 <b>Workflow 技能</b>（<code>~/.mur/skills/</code> 中 <code>category: workflow</code>，真正的 DAG，支持并行、委派与审批关卡）。任务 8–10 用前者，任务 11–13 用后者。</span><span class="ja">Workflow は MUR が繰り返し実行できる既存の手順です。形態は 2 つあります：<b>フラット Workflow</b>（<code>~/.mur/workflows/*.yaml</code>、単純な逐次ステップ）と <b>Workflow スキル</b>（<code>~/.mur/skills/</code> 内の <code>category: workflow</code>、本物の DAG で並列・委任・承認ゲートに対応）。タスク 8–10 は前者、タスク 11–13 は後者を使います。</span><span class="ko">Workflow는 MUR가 반복 실행할 수 있는 기존 절차입니다. 두 가지 형태가 있습니다: <b>플랫 Workflow</b>(<code>~/.mur/workflows/*.yaml</code>, 단순 순차 단계)와 <b>Workflow 스킬</b>(<code>~/.mur/skills/</code>의 <code>category: workflow</code>, 병렬·위임·승인 게이트를 지원하는 진짜 DAG). 작업 8–10은 전자를, 작업 11–13은 후자를 사용합니다.</span>
+  </p>
+</div>
+
+<article class="job" id="job-8">
+  <div class="job-head">
+    <span class="jnum">08</span>
+    <div class="jtitle">
+      <h3><span class="en">Save a morning-triage workflow and run it</span><span class="tw">建立「晨間巡檢」Workflow 並執行</span><span class="cn">创建“晨间巡检”Workflow 并运行</span><span class="ja">「朝の巡回チェック」Workflow を作成して実行する</span><span class="ko">"아침 점검" Workflow 만들고 실행하기</span></h3>
+      <div class="meta"><span class="dots e2">●●○○</span><span class="badge">workflow</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">every morning you run the same three commands to see repo health. Save them once, run them with one command forever.</span>
+    <span class="tw">每天早上你都跑同樣三條指令檢查 repo 狀態。存一次，之後一條指令搞定。</span><span class="cn">每天早上你都跑同样三条命令检查 repo 状态。存一次，之后一条命令搞定。</span><span class="ja">毎朝、同じ 3 つのコマンドでリポジトリの状態を確認しています。一度保存すれば、以後はコマンド 1 つで済みます。</span><span class="ko">매일 아침 같은 세 명령으로 repo 상태를 확인합니다. 한 번 저장하면 이후에는 명령 하나로 끝납니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># 1. Author the workflow file / 撰寫 workflow 檔</span>
+<span class="p">$</span> cat &gt; ~/.mur/workflows/morning-triage.yaml &lt;&lt;'EOF'
+name: morning-triage
+description: Repo health check to start the day
+content: Pull, test, and list open PRs every morning
+trigger: "when starting the work day"
+steps:
+  - order: 1
+    description: Sync with main
+    command: "git pull --rebase"
+  - order: 2
+    description: Fast test suite
+    command: "cargo nextest run --workspace"
+    on_failure: abort
+  - order: 3
+    description: What needs review
+    command: "gh pr list --state open"
+EOF
+
+<span class="c"># 2. Run it (exact-name match) / 執行（名稱精準比對）</span>
+<span class="p">$</span> mur workflow run morning-triage
+
+<span class="c"># Fuzzy also works — semantic search resolves it / 模糊查詢也行（語意搜尋）</span>
+<span class="p">$</span> mur workflow run "check repo health"
+
+<span class="c"># Inspect what you have / 檢視現有 workflow</span>
+<span class="p">$</span> mur workflow list
+<span class="p">$</span> mur workflow show morning-triage --md</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en"><code>mur workflow run &lt;query&gt;</code> resolves in order: exact name → semantic search (&gt;0.6 similarity) → keyword match → workflow-skill fallback.</span>
+          <span class="tw"><code>mur workflow run &lt;query&gt;</code> 依序解析：精準名稱 → 語意搜尋（相似度 &gt;0.6）→ 關鍵字比對 → workflow 技能後備。</span><span class="cn"><code>mur workflow run &lt;query&gt;</code> 依次解析：精确名称 → 语义搜索（相似度 &gt;0.6）→ 关键字匹配 → workflow 技能兜底。</span><span class="ja"><code>mur workflow run &lt;query&gt;</code> は次の順で解決します：完全一致の名前 → セマンティック検索（類似度 &gt;0.6）→ キーワード照合 → workflow スキルへのフォールバック。</span><span class="ko"><code>mur workflow run &lt;query&gt;</code>는 다음 순서로 해석합니다: 정확한 이름 → 시맨틱 검색(유사도 &gt;0.6) → 키워드 매칭 → workflow 스킬 폴백.</span></li>
+      <li><span class="en">Flat steps run <b>sequentially</b> by <code>order</code>; <code>on_failure: abort</code> stops the run, <code>skip</code> continues, <code>retry</code> retries.</span>
+          <span class="tw">扁平步驟依 <code>order</code> <b>循序</b>執行；<code>on_failure: abort</code> 中止、<code>skip</code> 跳過、<code>retry</code> 重試。</span><span class="cn">扁平步骤按 <code>order</code> <b>顺序</b>执行；<code>on_failure: abort</code> 中止、<code>skip</code> 跳过、<code>retry</code> 重试。</span><span class="ja">フラットなステップは <code>order</code> に従って<b>逐次</b>実行されます。<code>on_failure: abort</code> は中止、<code>skip</code> はスキップ、<code>retry</code> は再試行です。</span><span class="ko">플랫 단계는 <code>order</code>에 따라 <b>순차</b> 실행됩니다. <code>on_failure: abort</code>는 중단, <code>skip</code>은 건너뛰기, <code>retry</code>는 재시도입니다.</span></li>
+      <li><span class="en"><code>--yes</code> auto-approves steps marked <code>needs_approval: true</code>; <code>--prompt</code> prints the workflow as an AI prompt instead of executing.</span>
+          <span class="tw"><code>--yes</code> 會自動核准 <code>needs_approval: true</code> 的步驟；<code>--prompt</code> 則把 workflow 印成 AI 提示詞而不執行。</span><span class="cn"><code>--yes</code> 会自动批准 <code>needs_approval: true</code> 的步骤；<code>--prompt</code> 则把 workflow 打印成 AI 提示词而不执行。</span><span class="ja"><code>--yes</code> は <code>needs_approval: true</code> のステップを自動承認します。<code>--prompt</code> は workflow を実行せず、AI プロンプトとして出力します。</span><span class="ko"><code>--yes</code>는 <code>needs_approval: true</code> 단계를 자동 승인합니다. <code>--prompt</code>는 workflow를 실행하지 않고 AI 프롬프트로 출력합니다.</span></li>
+    </ul>
+  </div>
+  <div class="tip"><span class="en"><b>Tip:</b> prefer <code>mur workflow new</code> for an interactive scaffold (name / description / trigger / steps prompts) if you don't like writing YAML by hand.</span>
+  <span class="tw"><b>提示：</b>不想手寫 YAML 的話，用 <code>mur workflow new</code> 互動式建立（依提示輸入名稱／描述／觸發語／步驟）。</span><span class="cn"><b>提示：</b>不想手写 YAML 的话，用 <code>mur workflow new</code> 交互式创建（按提示输入名称／描述／触发语／步骤）。</span><span class="ja"><b>ヒント：</b>YAML を手書きしたくない場合は、<code>mur workflow new</code> で対話的に作成できます（プロンプトに従って名前／説明／トリガー／ステップを入力）。</span><span class="ko"><b>팁:</b> YAML을 손으로 쓰기 싫다면 <code>mur workflow new</code>로 대화식으로 만드십시오(프롬프트에 따라 이름/설명/트리거/단계 입력).</span></div>
+</article>
+
+<article class="job" id="job-9">
+  <div class="job-head">
+    <span class="jnum">09</span>
+    <div class="jtitle">
+      <h3><span class="en">Harvest yesterday's session into a workflow</span><span class="tw">把昨天的工作階段收割成 Workflow</span><span class="cn">把昨天的会话收割成 Workflow</span><span class="ja">昨日のセッションを Workflow としてハーベストする</span><span class="ko">어제 세션을 Workflow로 수확하기</span></h3>
+      <div class="meta"><span class="dots e2">●●○○</span><span class="badge">memory</span><span class="badge">harvest</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">you just finished a fiddly release procedure in Claude Code. MUR's ambient capture recorded every step — turn it into a reusable workflow instead of re-discovering it next month.</span>
+    <span class="tw">你剛在 Claude Code 完成一套繁瑣的發版流程。MUR 的環境擷取已默默記下每一步 — 把它變成可重用的 workflow，下個月不用重新摸索。</span><span class="cn">你刚在 Claude Code 完成一套繁琐的发版流程。MUR 的环境捕获已默默记下每一步 — 把它变成可复用的 workflow，下个月不用重新摸索。</span><span class="ja">Claude Code で面倒なリリース手順を終えたばかりです。MUR のアンビエントキャプチャがすべてのステップを静かに記録済み — それを再利用可能な workflow に変えれば、来月ゼロから思い出す必要はありません。</span><span class="ko">방금 Claude Code에서 번거로운 릴리스 절차를 마쳤습니다. MUR의 앰비언트 캡처가 이미 모든 단계를 조용히 기록했습니다 — 재사용 가능한 workflow로 바꾸면 다음 달에 다시 더듬을 필요가 없습니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># During the important session: pin it so harvest never skips it</span>
+<span class="c"># 重要工作階段進行中：標記它，收割關卡就不會略過</span>
+<span class="p">$</span> mur in
+
+<span class="c"># Later (or next morning): review what MUR proposes</span>
+<span class="c"># 之後（或隔天早上）：審查 MUR 提出的 workflow 草案</span>
+<span class="p">$</span> mur out
+<span class="o">Proposal: "release procedure for mur-core" (14 steps, 38 min)</span>
+<span class="o">  ✓ Accept draft workflow   ⏭ Skip   ✗ Quit review</span>
+
+<span class="c"># Accept → saved as a workflow SKILL, runnable immediately</span>
+<span class="c"># 接受後 → 存成 workflow「技能」，立即可執行</span>
+<span class="o">✓ Skill saved as release-procedure</span>
+<span class="o">  edit: ~/.mur/skills/release-procedure/skill.yaml</span>
+<span class="o">  run:  mur run release-procedure</span>
+
+<span class="c"># Non-interactive review (scripts/CI) / 非互動審查</span>
+<span class="p">$</span> mur out --action analyze</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en">Ambient capture is always on (hooks record events to <code>~/.mur/session/recordings/</code>); the harvest gate only proposes workflows from sessions that look valuable — <code>mur in</code> guarantees yours qualifies.</span>
+          <span class="tw">環境擷取隨時進行（hook 把事件寫入 <code>~/.mur/session/recordings/</code>）；收割關卡只會從看起來有價值的工作階段提案 — <code>mur in</code> 保證你這場入選。</span><span class="cn">环境捕获随时进行（hook 把事件写入 <code>~/.mur/session/recordings/</code>）；收割关卡只会从看起来有价值的会话提出提案 — <code>mur in</code> 保证你这场入选。</span><span class="ja">アンビエントキャプチャは常時動いています（hook がイベントを <code>~/.mur/session/recordings/</code> に書き込みます）。ハーベストゲートは価値がありそうなセッションからのみ提案します — <code>mur in</code> で今回のセッションの選出を保証できます。</span><span class="ko">앰비언트 캡처는 항상 동작합니다(hook이 이벤트를 <code>~/.mur/session/recordings/</code>에 기록). 수확 게이트는 가치 있어 보이는 세션에서만 제안을 만듭니다 — <code>mur in</code>은 이번 세션의 선정을 보장합니다.</span></li>
+      <li><span class="en">Proposals wait in <code>~/.mur/inbox/workflow-proposals/</code> until you review them. Accepting converts the linear steps into a chained DAG skill with volatile literals skeletonized (<code>&lt;STR&gt;</code>, <code>&lt;N&gt;</code>).</span>
+          <span class="tw">提案存放於 <code>~/.mur/inbox/workflow-proposals/</code> 等你審查。接受後會把線性步驟轉為串鏈 DAG 技能，並把易變字面值骨架化（<code>&lt;STR&gt;</code>、<code>&lt;N&gt;</code>）。</span><span class="cn">提案存放在 <code>~/.mur/inbox/workflow-proposals/</code> 等你审查。接受后会把线性步骤转为链式 DAG 技能，并把易变字面量骨架化（<code>&lt;STR&gt;</code>、<code>&lt;N&gt;</code>）。</span><span class="ja">提案は <code>~/.mur/inbox/workflow-proposals/</code> に置かれ、あなたのレビューを待ちます。受け入れると線形ステップがチェーン状の DAG スキルに変換され、変わりやすいリテラルはスケルトン化されます（<code>&lt;STR&gt;</code>、<code>&lt;N&gt;</code>）。</span><span class="ko">제안은 <code>~/.mur/inbox/workflow-proposals/</code>에 저장되어 검토를 기다립니다. 수락하면 선형 단계를 체인형 DAG 스킬로 변환하고, 변하기 쉬운 리터럴을 스켈레톤화합니다(<code>&lt;STR&gt;</code>, <code>&lt;N&gt;</code>).</span></li>
+    </ul>
+  </div>
+</article>
+
+<article class="job" id="job-10">
+  <div class="job-head">
+    <span class="jnum">10</span>
+    <div class="jtitle">
+      <h3><span class="en">Put a workflow on a schedule</span><span class="tw">讓 Workflow 按表定時執行</span><span class="cn">让 Workflow 按表定时执行</span><span class="ja">Workflow をスケジュールどおりに実行させる</span><span class="ko">Workflow를 일정대로 실행하기</span></h3>
+      <div class="meta"><span class="dots e2">●●○○</span><span class="badge">cron</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">run <code>morning-triage</code> automatically at 9:00 on weekdays — no terminal required.</span>
+    <span class="tw">平日早上九點自動跑 <code>morning-triage</code>，不用開終端機。</span><span class="cn">工作日早上九点自动跑 <code>morning-triage</code>，不用开终端。</span><span class="ja">平日の朝 9 時に <code>morning-triage</code> を自動実行します。ターミナルを開く必要はありません。</span><span class="ko">평일 아침 9시에 <code>morning-triage</code>를 자동 실행합니다. 터미널을 열 필요가 없습니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># Attach a cron schedule (5-field) / 掛上 cron 排程（五欄位）</span>
+<span class="p">$</span> mur workflow schedule set morning-triage "0 9 * * 1-5"
+
+<span class="c"># Inspect, pause, resume, remove / 檢視、暫停、恢復、移除</span>
+<span class="p">$</span> mur workflow schedule list
+<span class="p">$</span> mur workflow schedule disable morning-triage
+<span class="p">$</span> mur workflow schedule enable morning-triage
+<span class="p">$</span> mur workflow schedule remove morning-triage</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en">On macOS this installs a LaunchAgent (<code>~/Library/LaunchAgents/com.mur.schedule.&lt;name&gt;.plist</code>); on Linux, a crontab line. Both simply invoke <code>mur run &lt;name&gt;</code> at the appointed time and log to <code>~/.mur/logs/</code>.</span>
+          <span class="tw">macOS 上會安裝 LaunchAgent（<code>~/Library/LaunchAgents/com.mur.schedule.&lt;name&gt;.plist</code>）；Linux 則寫入 crontab。兩者到點都是執行 <code>mur run &lt;name&gt;</code>，日誌在 <code>~/.mur/logs/</code>。</span><span class="cn">macOS 上会安装 LaunchAgent（<code>~/Library/LaunchAgents/com.mur.schedule.&lt;name&gt;.plist</code>）；Linux 则写入 crontab。两者到点都是执行 <code>mur run &lt;name&gt;</code>，日志在 <code>~/.mur/logs/</code>。</span><span class="ja">macOS では LaunchAgent（<code>~/Library/LaunchAgents/com.mur.schedule.&lt;name&gt;.plist</code>）がインストールされ、Linux では crontab に書き込まれます。どちらも時刻になると <code>mur run &lt;name&gt;</code> を実行し、ログは <code>~/.mur/logs/</code> にあります。</span><span class="ko">macOS에서는 LaunchAgent(<code>~/Library/LaunchAgents/com.mur.schedule.&lt;name&gt;.plist</code>)를 설치하고, Linux에서는 crontab에 기록합니다. 둘 다 시간이 되면 <code>mur run &lt;name&gt;</code>을 실행하며, 로그는 <code>~/.mur/logs/</code>에 있습니다.</span></li>
+      <li><span class="en">Schedules are recorded in <code>~/.mur/schedules.yaml</code>; if the Commander daemon is running it claims the schedule instead of the OS.</span>
+          <span class="tw">排程記錄在 <code>~/.mur/schedules.yaml</code>；若 Commander 常駐程式在跑，會由它接手而非作業系統。</span><span class="cn">定时任务记录在 <code>~/.mur/schedules.yaml</code>；若 Commander 守护进程在跑，会由它接管而非操作系统。</span><span class="ja">スケジュールは <code>~/.mur/schedules.yaml</code> に記録されます。Commander デーモンが動いていれば、OS ではなくそちらが引き継ぎます。</span><span class="ko">스케줄은 <code>~/.mur/schedules.yaml</code>에 기록됩니다. Commander 데몬이 실행 중이면 OS 대신 데몬이 넘겨받습니다.</span></li>
+    </ul>
+  </div>
+  <div class="warn"><span class="en"><b>Safety:</b> scheduled runs are non-interactive — keep scheduled workflows read-safe. A step with <code>needs_approval: true</code> can't be approved at 9am with nobody watching.</span>
+  <span class="tw"><b>安全：</b>排程執行沒有互動介面 — 排程的 workflow 請保持唯讀安全。<code>needs_approval: true</code> 的步驟在早上九點沒人看著時是無法核准的。</span><span class="cn"><b>安全：</b>定时执行没有交互界面 — 定时的 workflow 请保持只读安全。<code>needs_approval: true</code> 的步骤在早上九点没人盯着时是无法批准的。</span><span class="ja"><b>安全上の注意：</b>スケジュール実行には対話インターフェースがありません — スケジュールする workflow は読み取り専用の安全なものにしてください。<code>needs_approval: true</code> のステップは、朝 9 時に誰も見ていなければ承認できません。</span><span class="ko"><b>안전:</b> 스케줄 실행에는 인터랙티브 인터페이스가 없습니다 — 스케줄된 workflow는 읽기 전용으로 안전하게 유지하십시오. <code>needs_approval: true</code> 단계는 아침 9시에 지켜보는 사람이 없으면 승인될 수 없습니다.</span></div>
+</article>
+
+<article class="job" id="job-11">
+  <div class="job-head">
+    <span class="jnum">11</span>
+    <div class="jtitle">
+      <h3><span class="en">A real DAG: run independent steps in parallel</span><span class="tw">真正的 DAG：獨立步驟平行執行</span><span class="cn">真正的 DAG：独立步骤并行执行</span><span class="ja">本物の DAG：独立したステップを並列実行する</span><span class="ko">진짜 DAG: 독립 단계의 병렬 실행</span></h3>
+      <div class="meta"><span class="dots e2">●●○○</span><span class="badge par">Parallel · DAG fan-out</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">lint and test don't depend on each other — why wait? Author a <b>workflow skill</b> whose independent steps run concurrently, then a report step that waits for both.</span>
+    <span class="tw">lint 與 test 彼此不相依 — 何必排隊？寫一個 <b>workflow 技能</b>，讓獨立步驟同時跑，最後的報告步驟等它們全部完成。</span><span class="cn">lint 与 test 彼此不依赖 — 何必排队？写一个 <b>workflow 技能</b>，让独立步骤同时跑，最后的报告步骤等它们全部完成。</span><span class="ja">lint と test は互いに依存しません — 順番待ちをする理由はありません。<b>workflow スキル</b>を書いて独立ステップを同時に走らせ、最後のレポートステップで全完了を待ちます。</span><span class="ko">lint와 test는 서로 의존하지 않습니다 — 굳이 줄 세울 이유가 있을까요? <b>workflow 스킬</b>을 작성해 독립 단계를 동시에 실행하고, 마지막 보고 단계가 이들의 완료를 기다리게 합니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># ~/.mur/skills/repo-health/skill.yaml</span>
+name: repo-health
+version: 0.1.0
+publisher: human:you
+description: Lint and test in parallel, then summarize
+category: workflow
+content:
+  abstract: Fan out lint + test concurrently; report when both finish.
+  procedure:
+    steps:
+      <span class="c"># rank 0 — no depends_on → BOTH run at the same time</span>
+      <span class="c"># rank 0 — 沒有 depends_on → 兩個同時開跑</span>
+      - id: lint
+        description: Clippy over the workspace
+        command: "cargo clippy --workspace -- -D warnings"
+      - id: test
+        description: Fast test suite
+        command: "cargo nextest run --workspace"
+        on_failure: retry
+        retry: { max_retries: 1, backoff_secs: 5 }
+        timeout_secs: 900
+      <span class="c"># rank 1 — waits for BOTH roots / 等兩個根步驟都完成</span>
+      - id: report
+        description: Summarize results
+        depends_on: [lint, test]
+        command: "echo 'repo-health: lint + test done'"</code></pre></div>
+  <div class="codewrap"><pre><code><span class="c"># Run it — same command as any workflow / 執行方式與一般 workflow 相同</span>
+<span class="p">$</span> mur workflow run repo-health
+
+<span class="c"># Cancel siblings on first failure / 首個失敗即取消其他平行分支</span>
+<span class="p">$</span> mur workflow run repo-health --fail-fast</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en"><b>How parallelism works:</b> the executor topo-sorts steps into ranks. Every step with an empty <code>depends_on</code> is rank 0; all steps in the same rank are spawned concurrently and joined before the next rank starts.</span>
+          <span class="tw"><b>平行原理：</b>執行器把步驟拓撲排序成 rank。<code>depends_on</code> 為空的步驟都是 rank 0；同 rank 的步驟同時啟動，全部結束後才進入下一個 rank。</span><span class="cn"><b>并行原理：</b>执行器把步骤拓扑排序成 rank。<code>depends_on</code> 为空的步骤都是 rank 0；同 rank 的步骤同时启动，全部结束后才进入下一个 rank。</span><span class="ja"><b>並列の仕組み：</b>実行エンジンはステップをトポロジカルソートして rank に分けます。<code>depends_on</code> が空のステップはすべて rank 0 です。同じ rank のステップは同時に起動し、全部終わってから次の rank に進みます。</span><span class="ko"><b>병렬 원리:</b> 실행기는 단계를 토폴로지 정렬해 rank로 나눕니다. <code>depends_on</code>이 비어 있는 단계는 모두 rank 0이며, 같은 rank의 단계는 동시에 시작하고 전부 끝난 뒤에야 다음 rank로 넘어갑니다.</span></li>
+      <li><span class="en">Cycles and unknown <code>depends_on</code> ids are rejected at build time with a clear error.</span>
+          <span class="tw">循環相依或不存在的 <code>depends_on</code> id 會在建構期就被拒絕，並給出明確錯誤。</span><span class="cn">循环依赖或不存在的 <code>depends_on</code> id 会在构建期就被拒绝，并给出明确错误。</span><span class="ja">循環依存や存在しない <code>depends_on</code> の id は構築時点で拒否され、明確なエラーが返ります。</span><span class="ko">순환 의존이나 존재하지 않는 <code>depends_on</code> id는 빌드 시점에 거부되며 명확한 오류를 냅니다.</span></li>
+      <li><span class="en">This is single-machine parallelism over <b>command steps</b>. For multi-agent parallelism, see job 13.</span>
+          <span class="tw">這是單機上 <b>command 步驟</b> 的平行。多 Agent 平行見任務 13。</span><span class="cn">这是单机上 <b>command 步骤</b> 的并行。多 Agent 并行见任务 13。</span><span class="ja">これは単一マシン上での <b>command ステップ</b> の並列です。複数 Agent の並列はタスク 13 を参照してください。</span><span class="ko">이것은 단일 머신에서 <b>command 단계</b>의 병렬화입니다. 다중 Agent 병렬은 작업 13을 보십시오.</span></li>
+    </ul>
+  </div>
+</article>
+
+<article class="job" id="job-12">
+  <div class="job-head">
+    <span class="jnum">12</span>
+    <div class="jtitle">
+      <h3><span class="en">Gate the risky step behind human approval</span><span class="tw">把高風險步驟鎖在人工核准之後</span><span class="cn">把高风险步骤锁在人工审批之后</span><span class="ja">高リスクなステップを人手の承認の後ろにロックする</span><span class="ko">고위험 단계를 수동 승인 뒤에 잠그기</span></h3>
+      <div class="meta"><span class="dots e2">●●○○</span><span class="badge">HITL</span><span class="badge">channel</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">your deploy workflow should build and verify on its own — but the actual deploy must wait for you to say go.</span>
+    <span class="tw">部署 workflow 應該自己完成建置與驗證 — 但真正的部署動作必須等你點頭。</span><span class="cn">部署 workflow 应该自己完成构建与验证 — 但真正的部署动作必须等你点头。</span><span class="ja">デプロイの workflow はビルドと検証を自力で終えるべきです — ただし実際のデプロイ操作は、あなたのゴーサインを待たなければなりません。</span><span class="ko">배포 workflow는 빌드와 검증을 스스로 끝내야 합니다 — 하지만 실제 배포 동작은 당신의 승인을 기다려야 합니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># In the skill's procedure, tag the mutating step with a risk tier:</span>
+<span class="c"># 在技能的 procedure 中，替會改變狀態的步驟標上風險層級：</span>
+      - id: deploy
+        description: Deploy to production
+        depends_on: [verify]
+        command: "fly deploy --app my-api"
+        risk: write        <span class="c"># read &lt; write &lt; network-egress &lt; spend &lt; destructive &lt; privileged</span>
+        on_failure: abort</code></pre></div>
+  <div class="codewrap"><pre><code><span class="c"># Run over a channel — the gate only fires on channel runs</span>
+<span class="c"># 掛上 channel 執行 — 關卡只在 channel 執行時生效</span>
+<span class="p">$</span> mur workflow run deploy-api --channel-new
+<span class="o"># channel: ch-0198f2...        ← printed to stderr / 印在 stderr</span>
+<span class="o">… build ✓  verify ✓</span>
+<span class="o">⏸ deploy paused: HitlRequest written, waiting for approval (300s)</span>
+
+<span class="c"># In another terminal: find the pending request's hitl id</span>
+<span class="c"># 另一個終端機：找出待核准請求的 hitl id</span>
+<span class="p">$</span> grep HitlRequest ~/.mur/channels/ch-0198f2*/events.jsonl | tail -1 | jq .payload.hitl_id
+<span class="o">"hitl-0198f3ab..."</span>
+
+<span class="c"># Approve — or deny with a reason / 核准，或附理由拒絕</span>
+<span class="p">$</span> mur channel approve ch-0198f2... hitl-0198f3ab...
+<span class="p">$</span> mur channel approve ch-0198f2... hitl-0198f3ab... --deny --reason "not before the demo"</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en"><code>risk: read</code> runs unattended (audit only). Every other tier pauses the step, writes a <code>HitlRequest</code> event, and waits — default 300&nbsp;s, then <b>fail-closed deny</b>.</span>
+          <span class="tw"><code>risk: read</code> 不需等待（僅留稽核紀錄）。其他層級都會暫停步驟、寫入 <code>HitlRequest</code> 事件並等待 — 預設 300 秒，逾時<b>失敗即拒絕</b>。</span><span class="cn"><code>risk: read</code> 无需等待（仅留审计记录）。其他级别都会暂停步骤、写入 <code>HitlRequest</code> 事件并等待 — 默认 300 秒，超时<b>失败即拒绝</b>。</span><span class="ja"><code>risk: read</code> は待機不要です（監査記録だけ残します）。それ以外のレベルはステップを一時停止し、<code>HitlRequest</code> イベントを書き込んで待機します — デフォルト 300 秒、タイムアウトは<b>フェイルクローズド</b>で拒否です。</span><span class="ko"><code>risk: read</code>는 대기하지 않습니다(감사 기록만 남김). 다른 등급은 모두 단계를 일시 정지하고 <code>HitlRequest</code> 이벤트를 기록한 뒤 대기합니다 — 기본 300초, 시간 초과 시 <b>실패로 거부(fail-closed)</b>됩니다.</span></li>
+      <li><span class="en">The command is SHA-256 pinned at request time and re-verified at the execute boundary — if anything drifted between approval and execution, MUR refuses to run it.</span>
+          <span class="tw">指令在請求當下以 SHA-256 釘住，執行前再驗證一次 — 核准與執行之間若有任何改動，MUR 直接拒絕執行。</span><span class="cn">命令在请求当下以 SHA-256 固定，执行前再验证一次 — 审批与执行之间若有任何改动，MUR 直接拒绝执行。</span><span class="ja">コマンドはリクエスト時点で SHA-256 によりピン留めされ、実行前にもう一度検証されます — 承認から実行までの間に少しでも変更があれば、MUR は実行を即座に拒否します。</span><span class="ko">명령은 요청 시점에 SHA-256으로 고정(pin)되고 실행 직전에 다시 검증됩니다 — 승인과 실행 사이에 어떤 변경이라도 있으면 MUR는 실행을 그대로 거부합니다.</span></li>
+      <li><span class="en"><code>--yes</code> auto-approves Ask-tier gates (recorded as an <code>auto</code> response). Crashed runs resume: re-running with the same run id skips steps whose successful <code>ToolResult</code> is already on the channel.</span>
+          <span class="tw"><code>--yes</code> 會自動核准 Ask 層級的關卡（以 <code>auto</code> 回應記錄）。中斷的執行可續跑：相同 run id 重跑會跳過 channel 上已有成功 <code>ToolResult</code> 的步驟。</span><span class="cn"><code>--yes</code> 会自动批准 Ask 级别的关卡（以 <code>auto</code> 响应记录）。中断的执行可续跑：相同 run id 重跑会跳过 channel 上已有成功 <code>ToolResult</code> 的步骤。</span><span class="ja"><code>--yes</code> は Ask レベルのゲートを自動承認します（<code>auto</code> 応答として記録）。中断した実行は再開できます：同じ run id で再実行すると、channel 上に成功した <code>ToolResult</code> があるステップはスキップされます。</span><span class="ko"><code>--yes</code>는 Ask 등급 게이트를 자동 승인합니다(<code>auto</code> 응답으로 기록). 중단된 실행은 이어서 실행할 수 있습니다: 같은 run id로 재실행하면 channel에 이미 성공한 <code>ToolResult</code>가 있는 단계를 건너뜁니다.</span></li>
+    </ul>
+  </div>
+</article>
+
+<article class="job" id="job-13">
+  <div class="job-head">
+    <span class="jnum">13</span>
+    <div class="jtitle">
+      <h3><span class="en">Delegate parallel steps to specialist agents</span><span class="tw">把平行步驟委派給專家 Agent</span><span class="cn">把并行步骤委派给专家 Agent</span><span class="ja">並列ステップを専門 Agent に委任する</span><span class="ko">병렬 단계를 전문가 Agent에게 위임하기</span></h3>
+      <div class="meta"><span class="dots e2">●●○○</span><span class="badge par">Parallel · delegation fan-out</span><span class="badge">A2A</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">code review day: have a coder agent analyze the diff while a docs agent checks the changelog — at the same time, each writing its own signed reply into one shared channel.</span>
+    <span class="tw">Code review 日：讓 coder Agent 分析 diff、docs Agent 檢查 changelog — 同時進行，各自把「自己簽章」的回覆寫進同一條共享 channel。</span><span class="cn">Code review 日：让 coder Agent 分析 diff、docs Agent 检查 changelog — 同时进行，各自把“自己签名”的回复写进同一条共享 channel。</span><span class="ja">Code review の日：coder Agent に diff を分析させ、docs Agent に changelog をチェックさせます — 同時進行で、それぞれが「自分で署名した」返信を同じ共有 channel に書き込みます。</span><span class="ko">Code review 날: coder Agent가 diff를 분석하고 docs Agent가 changelog를 점검하게 합니다 — 동시에 진행하며, 각자 "자기 서명"한 응답을 같은 공유 channel에 기록합니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># ~/.mur/skills/parallel-review/skill.yaml (procedure excerpt)</span>
+    steps:
+      <span class="c"># rank 0 — two delegate steps dial two agents CONCURRENTLY</span>
+      <span class="c"># rank 0 — 兩個委派步驟「同時」呼叫兩個 Agent</span>
+      - id: code-review
+        description: Review the diff
+        delegate_to: coder
+        intent: "review the current git diff for correctness and risk"
+      - id: docs-review
+        description: Check docs drift
+        delegate_to: docs
+        intent: "verify CHANGELOG and README match the diff"
+      <span class="c"># rank 1 — synthesis waits for both / 綜整步驟等兩者完成</span>
+      - id: synthesize
+        description: Merge findings
+        depends_on: [code-review, docs-review]
+        command: "echo 'both reviews are on the channel'"</code></pre></div>
+  <div class="codewrap"><pre><code><span class="c"># Delegation requires a channel + running agents / 委派需要 channel 與運行中的 Agent</span>
+<span class="p">$</span> mur agent status
+<span class="p">$</span> mur workflow run parallel-review --channel-new</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en">Each <code>delegate_to</code> step dials the specialist over A2A (<code>channel/delegate</code>). The specialist runs its turn and <b>signs + writes its own reply</b> into the shared channel — the router never ghost-writes for it.</span>
+          <span class="tw">每個 <code>delegate_to</code> 步驟透過 A2A（<code>channel/delegate</code>）呼叫專家。專家跑完自己的回合後，<b>親自簽章並寫入</b>共享 channel — router 絕不代筆。</span><span class="cn">每个 <code>delegate_to</code> 步骤通过 A2A（<code>channel/delegate</code>）调用专家。专家跑完自己的回合后，<b>亲自签名并写入</b>共享 channel — router 绝不代笔。</span><span class="ja">各 <code>delegate_to</code> ステップは A2A（<code>channel/delegate</code>）経由でスペシャリストを呼び出します。スペシャリストは自分のターンを終えると、共有 channel に<b>自ら署名して書き込みます</b> — router が代筆することは決してありません。</span><span class="ko">각 <code>delegate_to</code> 단계는 A2A(<code>channel/delegate</code>)를 통해 전문가를 호출합니다. 전문가는 자기 턴을 마친 뒤 공유 channel에 <b>직접 서명해 기록합니다</b> — router는 절대 대필하지 않습니다.</span></li>
+      <li><span class="en">One compliant agent can serve N concurrent delegate turns — you don't need N distinct agents to fan out.</span>
+          <span class="tw">一個 Agent 就能同時服務 N 個委派回合 — 平行展開不需要 N 個不同的 Agent。</span><span class="cn">一个 Agent 就能同时服务 N 个委派回合 — 并行展开不需要 N 个不同的 Agent。</span><span class="ja">1 つの Agent が N 個の委任ターンを同時にさばけます — 並列ファンアウトに N 個の別々の Agent は必要ありません。</span><span class="ko">Agent 하나가 N개의 위임 턴을 동시에 처리할 수 있습니다 — 병렬 팬아웃에 서로 다른 Agent N개가 필요하지 않습니다.</span></li>
+      <li><span class="en">Every event is Ed25519-signed by its actor and verified per-actor on fold; retries get distinct idempotency keys so events never collide.</span>
+          <span class="tw">每個事件都由其行為者以 Ed25519 簽章、讀取時逐行為者驗證；重試使用不同的冪等鍵，事件不會相撞。</span><span class="cn">每个事件都由其行为者用 Ed25519 签名、读取时逐行为者验证；重试使用不同的幂等键，事件不会相撞。</span><span class="ja">すべてのイベントはそのアクター自身が Ed25519 で署名し、読み取り時にアクターごとに検証されます。リトライは別の冪等キーを使うため、イベントが衝突することはありません。</span><span class="ko">모든 이벤트는 해당 행위자가 Ed25519로 서명하고, 읽을 때 행위자별로 검증됩니다. 재시도는 다른 멱등 키를 사용하므로 이벤트가 충돌하지 않습니다.</span></li>
+    </ul>
+  </div>
+  <div class="tip"><span class="en"><b>Where's the transcript?</b> <code>~/.mur/channels/&lt;id&gt;/events.jsonl</code> — an append-only, signed event log: <code>Delegation</code>, agent replies, <code>ToolCall</code>/<code>ToolResult</code>, <code>StateChange</code>.</span>
+  <span class="tw"><b>對話紀錄在哪？</b> <code>~/.mur/channels/&lt;id&gt;/events.jsonl</code> — 只增不改、有簽章的事件日誌：<code>Delegation</code>、Agent 回覆、<code>ToolCall</code>/<code>ToolResult</code>、<code>StateChange</code>。</span><span class="cn"><b>对话记录在哪？</b> <code>~/.mur/channels/&lt;id&gt;/events.jsonl</code> — 只增不改、带签名的事件日志：<code>Delegation</code>、Agent 回复、<code>ToolCall</code>/<code>ToolResult</code>、<code>StateChange</code>。</span><span class="ja"><b>会話ログはどこに？</b> <code>~/.mur/channels/&lt;id&gt;/events.jsonl</code> — 追記専用で署名付きのイベントログです：<code>Delegation</code>、Agent の返信、<code>ToolCall</code>/<code>ToolResult</code>、<code>StateChange</code>。</span><span class="ko"><b>대화 기록은 어디에?</b> <code>~/.mur/channels/&lt;id&gt;/events.jsonl</code> — 추가 전용이며 서명된 이벤트 로그입니다: <code>Delegation</code>, Agent 응답, <code>ToolCall</code>/<code>ToolResult</code>, <code>StateChange</code>.</span></div>
+</article>
+
+<!-- ══════════════ PART 3 · FLEETS ══════════════ -->
+<div class="part-head" id="part3">
+  <div class="eyebrow"><span class="en">Part 3 · Hard</span><span class="tw">第三部 · 進階</span><span class="cn">第三部 · 进阶</span><span class="ja">第3部 · 上級</span><span class="ko">제3부 · 고급</span></div>
+  <h2><span class="en">Fleets — agent squads on a shared goal</span><span class="tw">Fleet — 為共同目標編組的 Agent 小隊</span><span class="cn">Fleet — 为共同目标编组的 Agent 小队</span><span class="ja">Fleet — 共通の目標のために編成された Agent チーム</span><span class="ko">Fleet — 공동 목표로 편성된 Agent 스쿼드</span></h2>
+  <p>
+    <span class="en">A fleet is a named squad of agents working one goal over a single signed channel (<code>fleet-&lt;name&gt;</code>), with a router agent coordinating. Fleets add the safety rails autonomy needs: iteration caps, deadlines, budgets, kill-switches, and cryptographic governance.</span>
+    <span class="tw">Fleet 是一支有名字的 Agent 小隊，在同一條簽章 channel（<code>fleet-&lt;name&gt;</code>）上為單一目標工作，由 router Agent 協調。Fleet 補上自主運作必要的安全欄杆：迭代上限、期限、預算、緊急停止與加密治理。</span><span class="cn">Fleet 是一支有名字的 Agent 小队，在同一条签名 channel（<code>fleet-&lt;name&gt;</code>）上为单一目标工作，由 router Agent 协调。Fleet 补上自主运作所需的安全护栏：迭代上限、期限、预算、紧急停止与加密治理。</span><span class="ja">Fleet は名前を持つ Agent のチームで、単一の目標のために同じ署名付き channel（<code>fleet-&lt;name&gt;</code>）上で働き、router Agent が調整します。Fleet は自律運用に不可欠な安全ガードレールを備えます：反復回数上限、期限、予算、緊急停止、そして暗号学的ガバナンスです。</span><span class="ko">Fleet는 이름을 가진 Agent 스쿼드로, 같은 서명 channel(<code>fleet-&lt;name&gt;</code>) 위에서 단일 목표를 위해 일하며 router Agent가 조율합니다. Fleet는 자율 운용에 필수적인 안전 난간을 더합니다: 반복 상한, 기한, 예산, 긴급 정지, 암호학적 거버넌스.</span>
+  </p>
+</div>
+
+<article class="job" id="job-14">
+  <div class="job-head">
+    <span class="jnum">14</span>
+    <div class="jtitle">
+      <h3><span class="en">Create a dev-team fleet and run one iteration</span><span class="tw">建立 devteam Fleet 並跑一輪</span><span class="cn">创建 devteam Fleet 并跑一轮</span><span class="ja">devteam Fleet を作成して 1 回実行する</span><span class="ko">devteam Fleet 만들고 한 차례 실행하기</span></h3>
+      <div class="meta"><span class="dots e3">●●●○</span><span class="badge par">Parallel · broadcast</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">you have three specialist agents (pm, qa, ghmanager). Squad them up under one standing goal and fan that goal out to all of them in one command.</span>
+    <span class="tw">你有三個專家 Agent（pm、qa、ghmanager）。把他們編成一隊、掛上常設目標，一條指令將目標同時廣播給所有成員。</span><span class="cn">你有三个专家 Agent（pm、qa、ghmanager）。把它们编成一队、挂上常设目标，一条命令将目标同时广播给所有成员。</span><span class="ja">3 つの専門 Agent（pm、qa、ghmanager）がいます。これらを 1 つのチームに編成し、常設の目標を掛けて、コマンド 1 つで目標を全メンバーへ同時にブロードキャストします。</span><span class="ko">전문가 Agent 셋(pm, qa, ghmanager)이 있습니다. 이들을 한 팀으로 편성하고 상설 목표를 걸어, 명령 하나로 목표를 모든 멤버에게 동시에 브로드캐스트합니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># Create the fleet / 建立 Fleet</span>
+<span class="p">$</span> mur fleet create devteam \
+    --members pm,qa,ghmanager \
+    --router mur \
+    --goal "Keep the repo green: triage, fix, test, report."
+
+<span class="c"># Inspect / 檢視</span>
+<span class="p">$</span> mur fleet list
+<span class="p">$</span> mur fleet show devteam
+
+<span class="c"># Members must be running / 成員 Agent 必須在運行中</span>
+<span class="p">$</span> mur agent status
+
+<span class="c"># One iteration: goal fans out to every member in parallel</span>
+<span class="c"># 跑一輪：目標平行廣播給每位成員</span>
+<span class="p">$</span> mur fleet run devteam</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en"><code>create</code> writes <code>~/.mur/fleets/devteam/fleet.yaml</code> and mints the shared signed channel <code>fleet-devteam</code> (router role for the router, delegate role for members). Omit <code>--router</code> and the concierge <code>mur</code> routes.</span>
+          <span class="tw"><code>create</code> 會寫入 <code>~/.mur/fleets/devteam/fleet.yaml</code> 並建立共享簽章 channel <code>fleet-devteam</code>（router 擔任 Router 角色、成員為 Delegate）。省略 <code>--router</code> 則由總管 <code>mur</code> 擔任。</span><span class="cn"><code>create</code> 会写入 <code>~/.mur/fleets/devteam/fleet.yaml</code> 并创建共享签名 channel <code>fleet-devteam</code>（router 担任 Router 角色、成员为 Delegate）。省略 <code>--router</code> 则由总管 <code>mur</code> 担任。</span><span class="ja"><code>create</code> は <code>~/.mur/fleets/devteam/fleet.yaml</code> を書き込み、共有署名 channel <code>fleet-devteam</code> を作成します（router が Router ロール、メンバーが Delegate）。<code>--router</code> を省略するとコンシェルジュの <code>mur</code> が担当します。</span><span class="ko"><code>create</code>는 <code>~/.mur/fleets/devteam/fleet.yaml</code>을 기록하고 공유 서명 channel <code>fleet-devteam</code>을 만듭니다(router가 Router 역할, 멤버는 Delegate). <code>--router</code>를 생략하면 컨시어지 <code>mur</code>가 맡습니다.</span></li>
+      <li><span class="en">Under the hood <code>run</code> builds an in-memory DAG of delegate steps (job 13's machinery) — one per member, all rank 0 — so members work <b>concurrently</b> and each signs its own reply on the fleet channel.</span>
+          <span class="tw"><code>run</code> 底層建出記憶體中的委派 DAG（任務 13 的機制）— 每位成員一步、全在 rank 0 — 成員<b>同時</b>工作，並各自在 fleet channel 上簽署回覆。</span><span class="cn"><code>run</code> 底层构建出内存中的委派 DAG（任务 13 的机制）— 每位成员一步、全在 rank 0 — 成员<b>同时</b>工作，并各自在 fleet channel 上签署回复。</span><span class="ja"><code>run</code> は内部でメモリ上の委任 DAG を構築します（タスク 13 の仕組み）— メンバーごとに 1 ステップ、すべて rank 0 — メンバーは<b>同時に</b>働き、それぞれ fleet の channel 上で返信に署名します。</span><span class="ko"><code>run</code>은 내부적으로 메모리상의 위임 DAG를 만듭니다(작업 13의 메커니즘) — 멤버당 한 단계, 전부 rank 0 — 멤버는 <b>동시에</b> 일하며 각자 fleet channel에 서명한 응답을 남깁니다.</span></li>
+      <li><span class="en">Runs pass <code>yes: false</code> — risk-tiered steps are never blanket-approved (fail-closed).</span>
+          <span class="tw">執行一律 <code>yes: false</code> — 風險分級步驟絕不概括核准（失敗即關閉）。</span><span class="cn">执行一律 <code>yes: false</code> — 风险分级步骤绝不一揽子批准（失败即关闭）。</span><span class="ja">実行は常に <code>yes: false</code> です — リスク階層付きステップを一括承認することは決してありません（フェイルクローズド）。</span><span class="ko">실행은 항상 <code>yes: false</code>입니다 — 위험 등급 단계는 절대 일괄 승인되지 않습니다(fail-closed).</span></li>
+    </ul>
+  </div>
+  <div class="tip"><span class="en"><b>fleet ≠ team ≠ fleet_sync:</b> a fleet is an agent squad; “team” is your human org/seats; “fleet_sync” is device sync. Unrelated subsystems.</span>
+  <span class="tw"><b>fleet ≠ team ≠ fleet_sync：</b>fleet 是 Agent 小隊；team 是人類組織／席次；fleet_sync 是裝置同步。三者互不相關。</span><span class="cn"><b>fleet ≠ team ≠ fleet_sync：</b>fleet 是 Agent 小队；team 是人类组织／席位；fleet_sync 是设备同步。三者互不相关。</span><span class="ja"><b>fleet ≠ team ≠ fleet_sync：</b>fleet は Agent のチーム、team は人間の組織／シート、fleet_sync はデバイス同期です。三者は互いに無関係です。</span><span class="ko"><b>fleet ≠ team ≠ fleet_sync:</b> fleet는 Agent 스쿼드, team은 인간 조직/좌석, fleet_sync는 기기 동기화입니다. 셋은 서로 무관합니다.</span></div>
+</article>
+
+<article class="job" id="job-15">
+  <div class="job-head">
+    <span class="jnum">15</span>
+    <div class="jtitle">
+      <h3><span class="en">Queue work for the fleet</span><span class="tw">把工作丟進 Fleet 佇列</span><span class="cn">把任务丢进 Fleet 队列</span><span class="ja">ジョブを Fleet のキューに投入する</span><span class="ko">작업을 Fleet 큐에 넣기</span></h3>
+      <div class="meta"><span class="dots e3">●●●○</span><span class="badge">jobs</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">issues arrive all day. Queue them as fleet jobs instead of editing fleet.yaml or babysitting a terminal.</span>
+    <span class="tw">issue 整天不斷進來。把它們排入 fleet 工作佇列，不用改 fleet.yaml，也不用守著終端機。</span><span class="cn">issue 整天不断进来。把它们排入 fleet 任务队列，不用改 fleet.yaml，也不用守着终端。</span><span class="ja">issue は一日中絶えず入ってきます。fleet のジョブキューに積んでおけば、fleet.yaml を編集する必要も、ターミナルに張り付く必要もありません。</span><span class="ko">issue가 하루 종일 계속 들어옵니다. fleet 작업 큐에 넣어 두면 fleet.yaml을 고칠 필요도, 터미널을 지킬 필요도 없습니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># Queue async jobs (FIFO) / 排入非同步工作（先進先出）</span>
+<span class="p">$</span> mur fleet send devteam "triage issue #142 and propose a fix"
+<span class="p">$</span> mur fleet send devteam "update the release notes for v2.33"
+
+<span class="c"># See the queue (--all includes finished) / 查看佇列（--all 含已完成）</span>
+<span class="p">$</span> mur fleet jobs devteam --all
+
+<span class="c"># One-shot job that jumps the queue / 插隊的一次性工作</span>
+<span class="p">$</span> mur fleet run devteam "hotfix: CI is red on main, investigate now"</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en">Jobs persist as <code>~/.mur/fleets/devteam/jobs/&lt;uuidv7&gt;.yaml</code> — one file per job, ordered by filename (uuidv7 is time-sortable).</span>
+          <span class="tw">工作以 <code>~/.mur/fleets/devteam/jobs/&lt;uuidv7&gt;.yaml</code> 保存 — 一件一檔，按檔名排序（uuidv7 依時間可排序）。</span><span class="cn">任务以 <code>~/.mur/fleets/devteam/jobs/&lt;uuidv7&gt;.yaml</code> 保存 — 一件一个文件，按文件名排序（uuidv7 按时间可排序）。</span><span class="ja">ジョブは <code>~/.mur/fleets/devteam/jobs/&lt;uuidv7&gt;.yaml</code> として保存されます — 1 件 1 ファイルで、ファイル名順に並びます（uuidv7 は時間順にソート可能）。</span><span class="ko">작업은 <code>~/.mur/fleets/devteam/jobs/&lt;uuidv7&gt;.yaml</code>로 저장됩니다 — 건당 파일 하나, 파일명 순 정렬(uuidv7은 시간순 정렬 가능).</span></li>
+      <li><span class="en">Passing a job string to <code>run</code> executes that job immediately for this iteration instead of the standing goal.</span>
+          <span class="tw">給 <code>run</code> 帶上工作字串，該輪就改執行這件事，而不是常設目標。</span><span class="cn">给 <code>run</code> 带上任务字符串，该轮就改为执行这件事，而不是常设目标。</span><span class="ja"><code>run</code> にジョブ文字列を渡すと、その回は常設目標ではなくそのジョブを実行します。</span><span class="ko"><code>run</code>에 작업 문자열을 넘기면 그 회차는 상설 목표 대신 그 일을 실행합니다.</span></li>
+    </ul>
+  </div>
+</article>
+
+<article class="job" id="job-16">
+  <div class="job-head">
+    <span class="jnum">16</span>
+    <div class="jtitle">
+      <h3><span class="en">Let the router plan who does what</span><span class="tw">讓 Router 規劃誰做什麼</span><span class="cn">让 Router 规划谁做什么</span><span class="ja">Router に誰が何をするかを計画させる</span><span class="ko">Router가 누가 무엇을 할지 계획하게 하기</span></h3>
+      <div class="meta"><span class="dots e3">●●●○</span><span class="badge par">Parallel · routed plan</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">not every task needs every member. On each iteration the router can emit a structured plan — a validated DAG that routes work to the right members with dependencies — instead of broadcasting to everyone.</span>
+    <span class="tw">不是每件事都需要全員出動。每輪迭代 router 可產出結構化計畫 — 一個經驗證的 DAG，把工作派給合適成員並帶相依關係 — 而非對全員廣播。</span><span class="cn">不是每件事都需要全员出动。每轮迭代 router 可产出结构化计划 — 一个经过验证的 DAG，把任务派给合适成员并带依赖关系 — 而非向全员广播。</span><span class="ja">すべての仕事に全員出動が必要なわけではありません。router は各イテレーションで、全員へのブロードキャストの代わりに構造化された計画 — 適切なメンバーへ依存関係付きで仕事を割り当てる、検証済みの DAG — を生成できます。</span><span class="ko">모든 일에 전원이 출동할 필요는 없습니다. 매 반복마다 router는 구조화된 계획을 내놓을 수 있습니다 — 적합한 멤버에게 일을 배정하고 의존 관계를 담은, 검증된 DAG — 전원 브로드캐스트 대신 말입니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># Same command — planning happens inside the run</span>
+<span class="c"># 指令相同 — 規劃在執行內部發生</span>
+<span class="p">$</span> mur fleet run devteam "ship the login fix: code it, test it, open the PR"
+
+<span class="c"># Watch what the router decided / 觀察 router 的決策</span>
+<span class="p">$</span> tail -f ~/.mur/channels/fleet-devteam/events.jsonl | jq -r .kind
+<span class="o">Delegation      ← router planned: pm→plan, qa→test (after), ghmanager→PR (after)</span>
+<span class="o">Message …</span></code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en">The router's plan is validated hard: members must exist, dependencies must resolve, cycles are rejected.</span>
+          <span class="tw">router 的計畫經嚴格驗證：成員必須存在、相依必須可解析、循環一律拒絕。</span><span class="cn">router 的计划经严格验证：成员必须存在、依赖必须可解析、循环一律拒绝。</span><span class="ja">router の計画は厳密に検証されます：メンバーは実在し、依存関係は解決可能でなければならず、循環は必ず拒否されます。</span><span class="ko">router의 계획은 엄격히 검증됩니다: 멤버는 존재해야 하고, 의존성은 해석 가능해야 하며, 순환은 무조건 거부됩니다.</span></li>
+      <li><span class="en"><b>Fail-safe:</b> any absent or invalid plan falls back to broadcast-to-all — the fleet never stalls because the router hallucinated a plan.</span>
+          <span class="tw"><b>失效保護：</b>計畫缺席或無效時自動退回全員廣播 — router 亂寫計畫也不會讓 fleet 卡死。</span><span class="cn"><b>失效保护：</b>计划缺失或无效时自动回退到全员广播 — router 乱写计划也不会让 fleet 卡死。</span><span class="ja"><b>フェイルセーフ：</b>計画が欠けているか無効な場合は全員ブロードキャストに自動フォールバックします — router がでたらめな計画を書いても fleet が止まることはありません。</span><span class="ko"><b>페일세이프:</b> 계획이 없거나 무효이면 자동으로 전원 브로드캐스트로 되돌아갑니다 — router가 엉터리 계획을 내도 fleet가 멈추지 않습니다.</span></li>
+      <li><span class="en">Plan steps with dependencies land at higher ranks, so “code → test → PR” chains execute in order while independent branches still run in parallel.</span>
+          <span class="tw">帶相依的計畫步驟落在較高 rank，「寫碼 → 測試 → 開 PR」依序執行，獨立分支仍然平行。</span><span class="cn">带依赖的计划步骤落在较高 rank，“写码 → 测试 → 开 PR”依次执行，独立分支仍然并行。</span><span class="ja">依存関係を持つ計画ステップは高い rank に置かれ、「コーディング → テスト → PR 作成」は順番に実行されますが、独立した枝は引き続き並列です。</span><span class="ko">의존성이 있는 계획 단계는 더 높은 rank에 놓여 "코드 작성 → 테스트 → PR 열기"가 순서대로 실행되고, 독립 분기는 여전히 병렬로 돕니다.</span></li>
+    </ul>
+  </div>
+</article>
+
+<article class="job" id="job-17">
+  <div class="job-head">
+    <span class="jnum">17</span>
+    <div class="jtitle">
+      <h3><span class="en">Loop until the job is actually done</span><span class="tw">迴圈執行直到真正完成</span><span class="cn">循环执行直到真正完成</span><span class="ja">本当に完了するまでループ実行する</span><span class="ko">정말 끝날 때까지 루프 실행하기</span></h3>
+      <div class="meta"><span class="dots e3">●●●○</span><span class="badge">guarded loop</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">“keep iterating until all tests pass” — with hard guards so it can't run away: iteration cap, wall-clock deadline, budget, stuck-detection, and a deterministic done-marker.</span>
+    <span class="tw">「反覆迭代直到測試全綠」— 並加上硬性防護避免失控：迭代上限、時鐘期限、預算、卡住偵測，以及確定性的完成標記。</span><span class="cn">“反复迭代直到测试全绿”— 并加上硬性防护避免失控：迭代上限、时钟期限、预算、卡住检测，以及确定性的完成标记。</span><span class="ja">「テストが全部グリーンになるまで繰り返す」— そして暴走を防ぐ強制ガードを加えます：反復回数上限、時計ベースの期限、予算、スタック検知、そして決定的な完了マーカーです。</span><span class="ko">"테스트가 전부 초록이 될 때까지 반복" — 그리고 폭주를 막는 강제 가드를 더합니다: 반복 상한, 시계 기한, 예산, 멈춤 감지, 결정적 완료 마커.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># Configure convergence once / 先設定收斂條件</span>
+<span class="p">$</span> mur fleet set-loop devteam --done-when "marker:ALL_GREEN" --max-iterations 8
+
+<span class="c"># Run the guarded loop / 執行守護迴圈</span>
+<span class="p">$</span> mur fleet run devteam --loop --max-iterations 5 --deadline 30m --budget-usd 5.0
+<span class="o">iteration 1/5 … members report … no marker → continue</span>
+<span class="o">iteration 2/5 … qa emits "ALL_GREEN" on its own line → converged ✓</span></code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en"><b>Deterministic convergence:</b> <code>done_when: marker:&lt;TEXT&gt;</code> converges only when a member emits the marker <b>alone on its own line</b> in this run — prose that merely quotes or negates it can't false-converge. No marker configured? The router judges DONE/CONTINUE, failing safe to continue.</span>
+          <span class="tw"><b>確定性收斂：</b><code>done_when: marker:&lt;TEXT&gt;</code> 只在成員於本輪把標記<b>單獨成行</b>輸出時收斂 — 內文引用或否定它都不會誤判。沒設標記？由 router 判斷 DONE/CONTINUE，且失效預設為繼續。</span><span class="cn"><b>确定性收敛：</b><code>done_when: marker:&lt;TEXT&gt;</code> 只在成员于本轮把标记<b>单独成行</b>输出时收敛 — 正文引用或否定它都不会误判。没设标记？由 router 判断 DONE/CONTINUE，且失效默认为继续。</span><span class="ja"><b>決定的な収束：</b><code>done_when: marker:&lt;TEXT&gt;</code> は、メンバーがこの回にマーカーを<b>単独の行として</b>出力した場合にのみ収束します — 本文中で引用しても否定しても誤判定しません。マーカー未設定なら router が DONE/CONTINUE を判断し、失敗時のデフォルトは継続です。</span><span class="ko"><b>결정적 수렴:</b> <code>done_when: marker:&lt;TEXT&gt;</code>는 멤버가 이번 회차에 마커를 <b>한 줄에 단독으로</b> 출력했을 때만 수렴합니다 — 본문에서 인용하거나 부정해도 오판하지 않습니다. 마커를 안 정했다면? router가 DONE/CONTINUE를 판정하며, 실패 시 기본값은 계속 진행입니다.</span></li>
+      <li><span class="en">Guards live <i>outside</i> any agent (in the CLI loop runner): iteration cap (default 8), relative deadline (<code>30s/5m/2h/1d</code> — not a calendar date), stuck-detection, and the budget from job 18.</span>
+          <span class="tw">防護都在 Agent <i>外部</i>（CLI 迴圈執行器）：迭代上限（預設 8）、相對期限（<code>30s/5m/2h/1d</code>，不是日期）、卡住偵測，以及任務 18 的預算。</span><span class="cn">防护都在 Agent <i>外部</i>（CLI 循环执行器）：迭代上限（默认 8）、相对期限（<code>30s/5m/2h/1d</code>，不是日期）、卡住检测，以及任务 18 的预算。</span><span class="ja">ガードはすべて Agent の<i>外側</i>にあります（CLI のループランナー）：反復回数上限（デフォルト 8）、相対期限（<code>30s/5m/2h/1d</code>、日付ではありません）、スタック検知、そしてタスク 18 の予算です。</span><span class="ko">가드는 전부 Agent <i>외부</i>(CLI 루프 실행기)에 있습니다: 반복 상한(기본 8), 상대 기한(<code>30s/5m/2h/1d</code>, 날짜가 아님), 멈춤 감지, 그리고 작업 18의 예산.</span></li>
+      <li><span class="en">CLI flags override the <code>loop:</code> block in fleet.yaml for this run only.</span>
+          <span class="tw">CLI 旗標僅在本次執行覆寫 fleet.yaml 的 <code>loop:</code> 區塊。</span><span class="cn">CLI 标志仅在本次执行覆盖 fleet.yaml 的 <code>loop:</code> 块。</span><span class="ja">CLI フラグは今回の実行に限り fleet.yaml の <code>loop:</code> ブロックを上書きします。</span><span class="ko">CLI 플래그는 이번 실행에 한해 fleet.yaml의 <code>loop:</code> 블록을 덮어씁니다.</span></li>
+    </ul>
+  </div>
+</article>
+
+<article class="job" id="job-18">
+  <div class="job-head">
+    <span class="jnum">18</span>
+    <div class="jtitle">
+      <h3><span class="en">Real budgets and the kill-switch</span><span class="tw">真實預算與緊急停止</span><span class="cn">真实预算与紧急停止</span><span class="ja">実コストの予算と緊急停止</span><span class="ko">실제 예산과 긴급 정지</span></h3>
+      <div class="meta"><span class="dots e3">●●●○</span><span class="badge">safety</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">cap what a loop can spend, watch real token accounting, and stop everything instantly when you need to.</span>
+    <span class="tw">限制迴圈能花多少錢、看真實 token 計帳，需要時立刻叫停一切。</span><span class="cn">限制循环能花多少钱、查看真实 token 记账，需要时立刻叫停一切。</span><span class="ja">ループが使える金額を制限し、実際の token 課金を確認し、必要なときはすべてを即座に停止します。</span><span class="ko">루프가 쓸 수 있는 돈을 제한하고, 실제 token 정산을 확인하고, 필요하면 즉시 모든 것을 멈춥니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># Budget-capped loop: stops BEFORE cumulative cost exceeds the cap</span>
+<span class="c"># 預算上限迴圈：累計成本超過前就先停</span>
+<span class="p">$</span> mur fleet run devteam --loop --budget-usd 2.50
+
+<span class="c"># Cost rate resolution / 費率解析順序:</span>
+<span class="c">#   MUR_FLEET_COST_PER_1K env → dearest output rate in ~/.mur/models.yaml → default</span>
+<span class="p">$</span> MUR_FLEET_COST_PER_1K=0.03 mur fleet run devteam --loop --budget-usd 1
+
+<span class="c"># KILL-SWITCH: stop everything now / 緊急停止：立即全面停止</span>
+<span class="p">$</span> mur fleet stop devteam
+<span class="o">✋ a running --loop bails next iteration; the daemon skips it; manual run refuses</span>
+
+<span class="c"># Resume when ready / 恢復</span>
+<span class="p">$</span> mur fleet start devteam</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en"><b>Spend is real, not projected:</b> each turn's actual input+output tokens flow back through the task usage into the loop's ledger; a 0-token iteration falls back to projection so spend can never silently under-count.</span>
+          <span class="tw"><b>花費是真實值，不是預估：</b>每回合實際的輸入＋輸出 token 會經由任務用量回流到迴圈帳本；0 token 的迭代退回預估值，花費絕不會被靜默低估。</span><span class="cn"><b>花费是真实值，不是预估：</b>每回合实际的输入＋输出 token 会经由任务用量回流到循环账本；0 token 的迭代回退到预估值，花费绝不会被静默低估。</span><span class="ja"><b>支出は実測値であり、見積もりではありません：</b>各ターンの実際の入力＋出力 token がタスクの使用量経由でループの帳簿に還流します。0 token のイテレーションは見積もり値にフォールバックするため、支出が静かに過小計上されることは決してありません。</span><span class="ko"><b>지출은 실제 값이지 추정치가 아닙니다:</b> 매 턴의 실제 입력＋출력 token이 작업 사용량을 통해 루프 장부로 되돌아옵니다. 0 token 반복은 추정치로 폴백하므로 지출이 조용히 과소 계상되는 일은 절대 없습니다.</span></li>
+      <li><span class="en"><code>stop</code> writes a <code>.stopped</code> sentinel in <code>~/.mur/fleets/devteam/</code>; <code>start</code> clears it. Simple, inspectable, and honored by every execution path.</span>
+          <span class="tw"><code>stop</code> 會在 <code>~/.mur/fleets/devteam/</code> 寫入 <code>.stopped</code> 哨兵檔；<code>start</code> 清除它。簡單、可檢視，且所有執行路徑都遵守。</span><span class="cn"><code>stop</code> 会在 <code>~/.mur/fleets/devteam/</code> 写入 <code>.stopped</code> 哨兵文件；<code>start</code> 清除它。简单、可查看，且所有执行路径都遵守。</span><span class="ja"><code>stop</code> は <code>~/.mur/fleets/devteam/</code> に <code>.stopped</code> センチネルファイルを書き込み、<code>start</code> がそれを消去します。シンプルで、目視確認でき、すべての実行経路がこれに従います。</span><span class="ko"><code>stop</code>은 <code>~/.mur/fleets/devteam/</code>에 <code>.stopped</code> 센티널 파일을 기록하고, <code>start</code>는 이를 지웁니다. 단순하고 들여다볼 수 있으며, 모든 실행 경로가 이를 지킵니다.</span></li>
+    </ul>
+  </div>
+</article>
+
+<article class="job" id="job-19">
+  <div class="job-head">
+    <span class="jnum">19</span>
+    <div class="jtitle">
+      <h3><span class="en">Unattended: let the daemon run the fleet</span><span class="tw">無人值守：讓常駐程式自動跑 Fleet</span><span class="cn">无人值守：让守护进程自动跑 Fleet</span><span class="ja">無人運転：デーモンに Fleet を自動実行させる</span><span class="ko">무인 운영: 데몬이 Fleet를 자동 실행하게 하기</span></h3>
+      <div class="meta"><span class="dots e3">●●●○</span><span class="badge">daemon</span><span class="badge">cron</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">a docs-gardening fleet that wakes every 30 minutes (or weekdays at 09:00) without you — protected by an explicit opt-in switch, a mandatory budget, and the kill-switch.</span>
+    <span class="tw">一支每 30 分鐘（或平日 09:00）自動甦醒的文件維護 fleet — 由明確的啟用開關、強制預算與緊急停止共同保護。</span><span class="cn">一支每 30 分钟（或工作日 09:00）自动苏醒的文档维护 fleet — 由明确的启用开关、强制预算与紧急停止共同保护。</span><span class="ja">30 分ごと（または平日 09:00）に自動で目覚めるドキュメント保守 fleet — 明示的な有効化スイッチ、強制予算、緊急停止によって保護されます。</span><span class="ko">30분마다(또는 평일 09:00에) 스스로 깨어나는 문서 유지보수 fleet — 명시적 활성화 스위치, 강제 예산, 긴급 정지가 함께 보호합니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># 1. Give the fleet a trigger + budget / 設定觸發器與預算</span>
+<span class="p">$</span> mur fleet set-loop docs --trigger interval:30m --budget-usd 3 --max-iterations 4
+<span class="c">#    …or cron (5-field POSIX, local timezone) / 或 cron（五欄位，當地時區）</span>
+<span class="p">$</span> mur fleet set-loop docs --trigger "cron:0 9 * * 1-5" --budget-usd 3
+
+<span class="c"># 2. Opt in — auto-run is OFF by default / 明確啟用 — 預設為關閉</span>
+<span class="p">$</span> export MUR_FLEET_AUTORUN=1        <span class="c"># or config.yaml: fleet.autorun: true</span>
+
+<span class="c"># 3. The daemon's 30s tick now auto-runs due fleets</span>
+<span class="c">#    常駐程式每 30 秒檢查，到期的 fleet 自動執行</span></code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en"><b>The safety triad — all three or nothing runs:</b> (1) <code>MUR_FLEET_AUTORUN</code> switch on, (2) per-fleet <code>budget_usd &gt; 0</code>, (3) no <code>.stopped</code> sentinel. Plus commander governance (job 21) checked fail-closed.</span>
+          <span class="tw"><b>安全三要件 — 缺一不跑：</b>(1) <code>MUR_FLEET_AUTORUN</code> 開關開啟、(2) 該 fleet 的 <code>budget_usd &gt; 0</code>、(3) 沒有 <code>.stopped</code> 哨兵。另加 Commander 治理（任務 21），讀取失敗即拒絕。</span><span class="cn"><b>安全三要素 — 缺一不跑：</b>(1) <code>MUR_FLEET_AUTORUN</code> 开关开启、(2) 该 fleet 的 <code>budget_usd &gt; 0</code>、(3) 没有 <code>.stopped</code> 哨兵。另加 Commander 治理（任务 21），读取失败即拒绝。</span><span class="ja"><b>安全の三要件 — 1 つでも欠ければ動きません：</b>(1) <code>MUR_FLEET_AUTORUN</code> スイッチが有効、(2) その fleet の <code>budget_usd &gt; 0</code>、(3) <code>.stopped</code> センチネルが存在しない。さらに Commander ガバナンス（タスク 21）が加わり、読み取り失敗はフェイルクローズドで拒否されます。</span><span class="ko"><b>안전 3요소 — 하나라도 빠지면 실행되지 않습니다:</b> (1) <code>MUR_FLEET_AUTORUN</code> 스위치 켜짐, (2) 해당 fleet의 <code>budget_usd &gt; 0</code>, (3) <code>.stopped</code> 센티널 없음. 여기에 Commander 거버넌스(작업 21)가 더해지며, 읽기 실패 시 거부(fail-closed)입니다.</span></li>
+      <li><span class="en">Last run time is stamped in <code>~/.mur/fleets/&lt;name&gt;/.last_run</code>. Cron fleets are baseline-stamped on first sight, so enabling one never fires spuriously — it waits for the next real boundary.</span>
+          <span class="tw">上次執行時間記在 <code>~/.mur/fleets/&lt;name&gt;/.last_run</code>。cron fleet 首次被看到時會先蓋基準戳記，啟用當下絕不誤發 — 等到下一個真正的時間點才跑。</span><span class="cn">上次执行时间记在 <code>~/.mur/fleets/&lt;name&gt;/.last_run</code>。cron fleet 首次被看到时会先盖基准戳记，启用当下绝不误发 — 等到下一个真正的时间点才跑。</span><span class="ja">前回の実行時刻は <code>~/.mur/fleets/&lt;name&gt;/.last_run</code> に記録されます。cron の fleet は初めて認識された時点でベースラインのスタンプが押されるため、有効化した瞬間に誤発火することはありません — 次の本当の時刻境界を待ってから実行されます。</span><span class="ko">마지막 실행 시각은 <code>~/.mur/fleets/&lt;name&gt;/.last_run</code>에 기록됩니다. cron fleet는 처음 발견될 때 기준 타임스탬프를 먼저 찍으므로 활성화 순간에 잘못 발화하지 않습니다 — 다음 진짜 시각이 되어서야 실행됩니다.</span></li>
+      <li><span class="en">Each auto-run loop gets its own thread + runtime, so a slow router dial can never stall the daemon.</span>
+          <span class="tw">每次自動執行都有獨立執行緒與 runtime，router 撥號再慢也不會卡住常駐程式。</span><span class="cn">每次自动运行都有独立线程与 runtime，router 拨号再慢也不会卡住守护进程。</span><span class="ja">自動実行のたびに独立したスレッドと runtime が用意されるため、router へのダイヤルがどれだけ遅くてもデーモンが詰まることはありません。</span><span class="ko">자동 실행마다 독립 스레드와 runtime을 가지므로, router 다이얼이 아무리 느려도 데몬이 멈추지 않습니다.</span></li>
+    </ul>
+  </div>
+</article>
+
+<article class="job" id="job-20">
+  <div class="job-head">
+    <span class="jnum">20</span>
+    <div class="jtitle">
+      <h3><span class="en">Fleet-scoped skills and roster management</span><span class="tw">Fleet 範圍技能與名冊管理</span><span class="cn">Fleet 范围技能与名单管理</span><span class="ja">Fleet スコープのスキルとロースター管理</span><span class="ko">Fleet 범위 스킬과 명단 관리</span></h3>
+      <div class="meta"><span class="dots e3">●●●○</span><span class="badge">skills</span><span class="badge">scope</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">your triage checklist should only inject for members of the devteam fleet — not for every agent on the machine. And the roster changes: add a reviewer, drop the docs agent.</span>
+    <span class="tw">你的分診檢查表應該只注入給 devteam fleet 的成員 — 而不是機器上所有 Agent。名冊也會變動：加一個 reviewer、移除 docs。</span><span class="cn">你的分诊检查清单应该只注入给 devteam fleet 的成员 — 而不是机器上所有 Agent。名单也会变动：加一个 reviewer、移除 docs。</span><span class="ja">トリアージのチェックリストは devteam fleet のメンバーにだけ注入されるべきです — マシン上のすべての Agent にではなく。ロースターも変わります：reviewer を 1 人追加し、docs を外す、といった具合です。</span><span class="ko">당신의 트리아지 체크리스트는 devteam fleet 멤버에게만 주입되어야 합니다 — 머신의 모든 Agent가 아니라. 명단도 바뀝니다: reviewer 하나 추가, docs 제거.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># Scope a skill to the fleet / 把技能範圍限定到 fleet</span>
+<span class="p">$</span> mur skill scope triage-checklist --fleet devteam
+
+<span class="c"># Other scopes / 其他範圍</span>
+<span class="p">$</span> mur skill scope repo-conventions --project     <span class="c"># current git repo / 目前的 repo</span>
+<span class="p">$</span> mur skill scope triage-checklist --user        <span class="c"># reset to personal / 還原成個人</span>
+
+<span class="c"># Roster management / 名冊管理</span>
+<span class="p">$</span> mur fleet add devteam reviewer
+<span class="p">$</span> mur fleet remove devteam docs
+
+<span class="c"># Delete the fleet (agents survive) / 刪除 fleet（Agent 不會被刪）</span>
+<span class="p">$</span> mur fleet delete devteam --yes</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en">Fleet-scoped skills inject only when the agent's <i>active fleet</i> matches — derived from the <code>fleet-&lt;name&gt;</code> channel id and gated on verified local fleet membership, fail-closed. No spoofing your way into fleet knowledge.</span>
+          <span class="tw">Fleet 範圍技能只在 Agent 的<i>作用中 fleet</i>吻合時注入 — 由 <code>fleet-&lt;name&gt;</code> channel id 推導，並經本地成員資格驗證把關，失敗即拒絕。想偽裝混入 fleet 知識是行不通的。</span><span class="cn">Fleet 范围技能只在 Agent 的<i>活动 fleet</i>匹配时注入 — 由 <code>fleet-&lt;name&gt;</code> channel id 推导，并经本地成员资格验证把关，失败即拒绝。想伪装混入 fleet 知识是行不通的。</span><span class="ja">Fleet スコープのスキルは、Agent の<i>アクティブな fleet</i> が一致する場合にのみ注入されます — <code>fleet-&lt;name&gt;</code> の channel id から導出され、ローカルのメンバーシップ検証でゲートされ、失敗すればフェイルクローズドで拒否されます。なりすまして fleet の知識に潜り込むことはできません。</span><span class="ko">Fleet 범위 스킬은 Agent의 <i>활성 fleet</i>가 일치할 때만 주입됩니다 — <code>fleet-&lt;name&gt;</code> channel id에서 파생되고 로컬 멤버십 검증으로 게이트되며, 실패 시 거부(fail-closed)입니다. 위장해서 fleet 지식에 섞여 들 수는 없습니다.</span></li>
+      <li><span class="en">Harvest (job 9) stamps <code>--project</code> scope automatically from the repo root, so harvested workflows stay with their repo.</span>
+          <span class="tw">收割（任務 9）會自動依 repo 根目錄標記 <code>--project</code> 範圍，收割出的 workflow 跟著 repo 走。</span><span class="cn">收割（任务 9）会自动按 repo 根目录标记 <code>--project</code> 范围，收割出的 workflow 跟着 repo 走。</span><span class="ja">ハーベスト（タスク 9）はリポジトリのルートに基づいて自動的に <code>--project</code> スコープを付けるため、ハーベストされた workflow はリポジトリと一緒に移動します。</span><span class="ko">수확(작업 9)은 repo 루트를 기준으로 <code>--project</code> 범위를 자동으로 표시하므로, 수확된 workflow는 repo를 따라갑니다.</span></li>
+    </ul>
+  </div>
+</article>
+
+<article class="job" id="job-21">
+  <div class="job-head">
+    <span class="jnum">21</span>
+    <div class="jtitle">
+      <h3><span class="en">Commander governance: signed kill &amp; budget ceilings</span><span class="tw">Commander 治理：簽章停止令與預算天花板</span><span class="cn">Commander 治理：签名停止令与预算上限</span><span class="ja">Commander ガバナンス：署名付き停止命令と予算上限</span><span class="ko">Commander 거버넌스: 서명된 정지 명령과 예산 상한</span></h3>
+      <div class="meta"><span class="dots e3">●●●○</span><span class="badge">governance</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">the operator (maybe not the same person running the terminal) needs authority over every fleet: a cryptographically signed kill order or a spend ceiling that no loop can ignore.</span>
+    <span class="tw">營運者（可能不是敲終端機的那個人）需要凌駕所有 fleet 的權限：加密簽章的停止令，或任何迴圈都無法忽視的花費天花板。</span><span class="cn">运营者（可能不是敲终端的那个人）需要凌驾所有 fleet 的权限：加密签名的停止令，或任何循环都无法忽视的花费上限。</span><span class="ja">運用者（ターミナルを叩いている本人とは限りません）には、すべての fleet に優越する権限が必要です：暗号署名付きの停止命令、あるいはどのループも無視できない支出の上限です。</span><span class="ko">운영자(터미널을 두드리는 사람이 아닐 수도 있음)에게는 모든 fleet를 넘어서는 권한이 필요합니다: 암호 서명된 정지 명령, 또는 어떤 루프도 무시할 수 없는 지출 상한.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># One-time: pin the operator's Ed25519 public key / 一次性：釘選營運者公鑰</span>
+<span class="p">$</span> mur commander pin z6Mk...operatorPubKey
+<span class="p">$</span> mur commander status
+
+<span class="c"># Signed directives into the fleet channel / 對 fleet channel 下達簽章指令</span>
+<span class="p">$</span> mur commander directive devteam kill
+<span class="p">$</span> mur commander directive devteam budget-ceiling --budget-usd 2.50
+<span class="p">$</span> mur commander directive devteam resume</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en">Directives are Ed25519-signed events on the <code>fleet-devteam</code> channel — an immutable, replay-resistant audit trail (folded by issue time).</span>
+          <span class="tw">指令是 <code>fleet-devteam</code> channel 上的 Ed25519 簽章事件 — 不可竄改、抗重放的稽核軌跡（依簽發時間折疊）。</span><span class="cn">指令是 <code>fleet-devteam</code> channel 上的 Ed25519 签名事件 — 不可篡改、抗重放的审计轨迹（按签发时间折叠）。</span><span class="ja">指令は <code>fleet-devteam</code> channel 上の Ed25519 署名イベントです — 改ざん不能でリプレイ耐性のある監査証跡です（発行時刻でフォールドされます）。</span><span class="ko">지시는 <code>fleet-devteam</code> channel 위의 Ed25519 서명 이벤트입니다 — 변조 불가·재생 저항성 감사 추적(발행 시각 기준 폴드).</span></li>
+      <li><span class="en">Priority is absolute: <code>kill</code> halts loops and blocks daemon auto-run; a <code>budget-ceiling</code> of exactly 0 is a hard halt; otherwise the ceiling is min'd with the fleet/CLI budget. Governance read errors fail closed.</span>
+          <span class="tw">優先權絕對：<code>kill</code> 中止迴圈並阻擋常駐自動執行；<code>budget-ceiling</code> 為 0 即硬停止；否則天花板與 fleet／CLI 預算取最小值。治理讀取失敗一律拒絕執行。</span><span class="cn">优先级绝对：<code>kill</code> 中止循环并阻止守护进程自动运行；<code>budget-ceiling</code> 为 0 即硬停止；否则上限与 fleet／CLI 预算取最小值。治理读取失败一律拒绝执行。</span><span class="ja">優先度は絶対です：<code>kill</code> はループを中止しデーモンの自動実行をブロックします。<code>budget-ceiling</code> が 0 ならハードストップ、そうでなければ上限と fleet／CLI 予算の小さい方が採用されます。ガバナンスの読み取りに失敗した場合は必ず実行を拒否します。</span><span class="ko">우선순위는 절대적입니다: <code>kill</code>은 루프를 중단시키고 데몬 자동 실행을 차단합니다. <code>budget-ceiling</code>이 0이면 즉시 하드 스톱이고, 그 외에는 상한과 fleet/CLI 예산 중 최솟값을 취합니다. 거버넌스 읽기 실패 시 실행은 무조건 거부됩니다.</span></li>
+      <li><span class="en">Re-pinning requires <code>--force</code> and preserves the previous key for verification of older directives.</span>
+          <span class="tw">重新釘選需要 <code>--force</code>，且會保留舊公鑰以驗證先前的指令。</span><span class="cn">重新固定需要 <code>--force</code>，且会保留旧公钥以验证先前的指令。</span><span class="ja">再ピン留めには <code>--force</code> が必要で、以前の指令を検証できるよう旧公開鍵は保持されます。</span><span class="ko">다시 고정(pin)하려면 <code>--force</code>가 필요하며, 이전 지시를 검증할 수 있도록 예전 공개 키를 보존합니다.</span></li>
+    </ul>
+  </div>
+</article>
+
+<article class="job" id="job-22">
+  <div class="job-head">
+    <span class="jnum">22</span>
+    <div class="jtitle">
+      <h3><span class="en">Share a fleet with a friend (.fleet bundle)</span><span class="tw">把 Fleet 分享給朋友（.fleet 套件）</span><span class="cn">把 Fleet 分享给朋友（.fleet 包）</span><span class="ja">Fleet を友人に共有する（.fleet バンドル）</span><span class="ko">Fleet를 친구에게 공유하기(.fleet 번들)</span></h3>
+      <div class="meta"><span class="dots e3">●●●○</span><span class="badge">export</span><span class="badge">trust</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">your devteam fleet works great — package it (config + fleet-scoped skills + member profiles) and hand it to a teammate, safely.</span>
+    <span class="tw">你的 devteam fleet 運作良好 — 把它打包（設定＋fleet 範圍技能＋成員設定檔）安全地交給同事。</span><span class="cn">你的 devteam fleet 运作良好 — 把它打包（配置＋fleet 范围技能＋成员配置文件）安全地交给同事。</span><span class="ja">devteam fleet はうまく機能しています — それをパッケージ化して（設定＋fleet スコープのスキル＋メンバープロファイル）同僚に安全に渡します。</span><span class="ko">devteam fleet가 잘 돌아갑니다 — 이를 패키징해(설정＋fleet 범위 스킬＋멤버 프로필) 동료에게 안전하게 건넵니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># Export: signed tar.gz bundle / 匯出：簽章的 tar.gz 套件</span>
+<span class="p">$</span> mur fleet export devteam --with-members -o devteam.fleet
+
+<span class="c"># On the teammate's machine / 在同事的機器上</span>
+<span class="p">$</span> mur fleet import devteam.fleet --yes
+<span class="c"># variants / 變化型:</span>
+<span class="p">$</span> mur fleet import devteam.fleet --no-members   <span class="c"># fleet config only / 只要設定</span>
+<span class="p">$</span> mur fleet import devteam.fleet --force        <span class="c"># overwrite same-name fleet / 覆寫同名</span></code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en">Import is paranoid by design: verifies the bundle signature, security-scans every skill, installs at the lowest trust tier (peer TOFU), and <b>never</b> copies private keys — member identities are regenerated locally.</span>
+          <span class="tw">匯入天生多疑：驗證套件簽章、逐一安全掃描技能、以最低信任層級安裝（peer TOFU），且<b>絕不</b>複製私鑰 — 成員身分在本地重新產生。</span><span class="cn">导入天生多疑：验证包签名、逐一安全扫描技能、以最低信任级别安装（peer TOFU），且<b>绝不</b>复制私钥 — 成员身份在本地重新生成。</span><span class="ja">インポートは生まれつき疑り深い設計です：バンドル署名を検証し、スキルを 1 つずつセキュリティスキャンし、最低の信頼レベルでインストールし（peer TOFU）、秘密鍵は<b>決して</b>コピーしません — メンバーのアイデンティティはローカルで再生成されます。</span><span class="ko">가져오기는 태생적으로 의심이 많습니다: 번들 서명을 검증하고, 스킬을 하나하나 보안 스캔하고, 최저 신뢰 등급으로 설치하며(peer TOFU), 개인 키는 <b>절대</b> 복사하지 않습니다 — 멤버 신원은 로컬에서 새로 생성됩니다.</span></li>
+      <li><span class="en">Existing agents are never overwritten, and an imported fleet never auto-runs — the receiver must consciously start it.</span>
+          <span class="tw">既有 Agent 絕不被覆寫；匯入的 fleet 也絕不自動執行 — 收件人必須自己有意識地啟動。</span><span class="cn">既有 Agent 绝不被覆盖；导入的 fleet 也绝不自动运行 — 接收者必须自己有意识地启动。</span><span class="ja">既存の Agent が上書きされることは決してなく、インポートされた fleet が自動実行されることもありません — 受け取った人が自分の意思で起動する必要があります。</span><span class="ko">기존 Agent는 절대 덮어써지지 않고, 가져온 fleet도 절대 자동 실행되지 않습니다 — 받는 사람이 직접 의식적으로 시작해야 합니다.</span></li>
+    </ul>
+  </div>
+</article>
+
+<!-- ══════════════ PART 4 · PARALLEL DEEP-DIVE ══════════════ -->
+<div class="part-head" id="part4">
+  <div class="eyebrow"><span class="en">Part 4 · Expert</span><span class="tw">第四部 · 專家</span><span class="cn">第四部 · 专家</span><span class="ja">第4部 · エキスパート</span><span class="ko">제4부 · 전문가</span></div>
+  <h2><span class="en">Parallel execution deep-dive</span><span class="tw">平行執行深入篇</span><span class="cn">并行执行深入篇</span><span class="ja">並列実行の深掘り</span><span class="ko">병렬 실행 심화편</span></h2>
+  <p>
+    <span class="en">You've already used four parallel patterns (DAG fan-out, delegation, broadcast, routed plans). These last four are the heavy machinery: dynamic fan-out from a conversation, best-of-N competition, file partitioning, and N-way merges. The matrix at the end maps every pattern to when you should reach for it.</span>
+    <span class="tw">你已經用過四種平行模式（DAG 展開、委派、廣播、路由計畫）。最後四個是重型機具：對話中動態展開、N 選一競爭、檔案分割、N 路合併。文末的矩陣說明每種模式該在什麼時機使用。</span><span class="cn">你已经用过四种并行模式（DAG 展开、委派、广播、路由计划）。最后四个是重型机械：对话中动态展开、N 选一竞争、文件分割、N 路合并。文末的矩阵说明每种模式该在什么时机使用。</span><span class="ja">ここまでで 4 つの並列パターン（DAG ファンアウト、委任、ブロードキャスト、ルーティング計画）を使ってきました。残りの 4 つは重機です：会話中の動的ファンアウト、N 者択一の競争、ファイル分割、N-way マージ。章末のマトリクスが、各パターンをいつ使うべきかを示します。</span><span class="ko">이미 네 가지 병렬 패턴(DAG 팬아웃, 위임, 브로드캐스트, 라우팅 계획)을 써 봤습니다. 마지막 넷은 중장비입니다: 대화 중 동적 팬아웃, N개 중 하나를 고르는 경쟁, 파일 분할, N-웨이 병합. 글 끝의 매트릭스가 각 패턴을 언제 써야 하는지 설명합니다.</span>
+  </p>
+</div>
+
+<article class="job" id="job-23">
+  <div class="job-head">
+    <span class="jnum">23</span>
+    <div class="jtitle">
+      <h3><span class="en">Dynamic fan-out from a conversation: parallel_jobs</span><span class="tw">對話中動態展開：parallel_jobs</span><span class="cn">对话中动态展开：parallel_jobs</span><span class="ja">会話中の動的ファンアウト：parallel_jobs</span><span class="ko">대화 중 동적 팬아웃: parallel_jobs</span></h3>
+      <div class="meta"><span class="dots e4">●●●●</span><span class="badge par">Parallel · ephemeral fan-out</span><span class="badge">MCP</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">mid-conversation with your concierge you realize three unrelated things need doing. Fan them out to three agents right now — no fleet file, no YAML, one tool call.</span>
+    <span class="tw">跟總管聊到一半，發現有三件不相干的事要辦。立刻展開給三個 Agent — 不用 fleet 檔、不用 YAML，一個工具呼叫搞定。</span><span class="cn">跟总管聊到一半，发现有三件不相干的事要办。立刻展开给三个 Agent — 不用 fleet 文件、不用 YAML，一个工具调用搞定。</span><span class="ja">コンシェルジュと話している途中で、無関係な用事が 3 件あることに気づきました。すぐに 3 つの Agent へファンアウトします — fleet ファイルも YAML も不要、ツール呼び出し 1 つで完了です。</span><span class="ko">컨시어지와 대화하다가 서로 무관한 일 세 가지를 처리해야 함을 깨닫습니다. 즉시 세 Agent에게 팬아웃합니다 — fleet 파일도 YAML도 필요 없이 도구 호출 한 번이면 끝입니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># One-time: allowlist the agents this tool may target (DENY-BY-DEFAULT)</span>
+<span class="c"># 一次性設定：允許此工具指派的 Agent 清單（預設全部拒絕）</span>
+<span class="c"># ~/.mur/config.yaml</span>
+parallel_jobs:
+  targets:
+    - pm
+    - qa
+    - ghmanager</code></pre></div>
+  <div class="codewrap"><pre><code><span class="c"># The MCP tool call any client (e.g. your concierge) makes:</span>
+<span class="c"># 任何 MCP 客戶端（例如總管）發出的工具呼叫：</span>
+{
+  "jobs": [
+    { "description": "audit README for stale commands", "agent": "qa" },
+    { "description": "summarize open PRs and CI status", "agent": "ghmanager" },
+    { "description": "draft next sprint plan from the backlog", "agent": "pm" }
+  ],
+  "max_concurrency": 3,      <span class="c">// 1–32, default 8</span>
+  "yes": false               <span class="c">// fail-closed: risky steps still gate / 風險步驟仍需核准</span>
+}
+<span class="c"># → returns { "channel_id": "...", "output": "…all replies…" }</span></code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en">Under the hood MUR builds an in-memory rank-0 DAG — one delegate step per job — and mints an ephemeral channel for the run. Same machinery as jobs 13–14, zero authored files.</span>
+          <span class="tw">MUR 底層建出記憶體中的 rank-0 DAG — 每件工作一個委派步驟 — 並為本次執行鑄造一條臨時 channel。機制與任務 13–14 相同，但完全不需撰寫檔案。</span><span class="cn">MUR 底层构建出内存中的 rank-0 DAG — 每件任务一个委派步骤 — 并为本次执行铸造一条临时 channel。机制与任务 13–14 相同，但完全无需编写文件。</span><span class="ja">MUR は内部でメモリ上の rank-0 DAG を構築し — ジョブごとに 1 つの委任ステップ — この実行のために一時的な channel を鋳造します。仕組みはタスク 13–14 と同じですが、ファイルを書く必要は一切ありません。</span><span class="ko">MUR는 내부적으로 메모리상의 rank-0 DAG를 만들고 — 작업당 위임 단계 하나 — 이번 실행을 위한 임시 channel을 발행합니다. 메커니즘은 작업 13–14와 같지만 파일을 전혀 쓸 필요가 없습니다.</span></li>
+      <li><span class="en"><b>The allowlist is out-of-model:</b> a prompt-injected concierge cannot widen the target set — authorization is checked before any channel is created, and an empty list means the tool can't delegate at all.</span>
+          <span class="tw"><b>允許清單在模型之外：</b>被提示注入的總管也無法擴大目標集合 — 授權在建立任何 channel 之前檢查，清單為空則工具完全無法委派。</span><span class="cn"><b>允许列表在模型之外：</b>被提示注入的总管也无法扩大目标集合 — 授权在创建任何 channel 之前检查，列表为空则工具完全无法委派。</span><span class="ja"><b>許可リストはモデルの外側にあります：</b>プロンプトインジェクションを受けたコンシェルジュでもターゲット集合を広げることはできません — 認可はいかなる channel の作成よりも前にチェックされ、リストが空ならこのツールは一切委任できません。</span><span class="ko"><b>허용 목록은 모델 밖에 있습니다:</b> 프롬프트 주입을 당한 컨시어지라도 대상 집합을 넓힐 수 없습니다 — 권한 부여는 어떤 channel이 만들어지기 전에 검사되며, 목록이 비어 있으면 도구는 아예 위임할 수 없습니다.</span></li>
+      <li><span class="en"><b>vs. fleet run:</b> parallel_jobs = N <i>distinct</i> prompts, free assignee per job, one-shot and attended. Fleet = one standing goal, fixed roster, loopable and budgetable. Ad-hoc chores → parallel_jobs; recurring missions → fleet.</span>
+          <span class="tw"><b>與 fleet run 的差別：</b>parallel_jobs 是 N 個<i>不同的</i>提示、每件工作自由指派、一次性且有人看著。Fleet 是單一常設目標、固定名冊、可迴圈可設預算。臨時雜務用 parallel_jobs；例行任務用 fleet。</span><span class="cn"><b>与 fleet run 的区别：</b>parallel_jobs 是 N 个<i>不同的</i>提示、每件任务自由指派、一次性且有人盯着。Fleet 是单一常设目标、固定名单、可循环可设预算。临时杂务用 parallel_jobs；例行任务用 fleet。</span><span class="ja"><b>fleet run との違い：</b>parallel_jobs は N 個の<i>異なる</i>プロンプトで、ジョブごとに自由に割り当てられ、一回限りで人が見守ります。Fleet は単一の常設目標と固定ロースターを持ち、ループ化も予算設定もできます。臨時の雑務には parallel_jobs、定常タスクには fleet を使います。</span><span class="ko"><b>fleet run과의 차이:</b> parallel_jobs는 N개의 <i>서로 다른</i> 프롬프트, 작업별 자유 지정, 일회성이며 사람이 지켜봅니다. Fleet는 단일 상설 목표, 고정 명단, 루프와 예산 설정이 가능합니다. 임시 잡무에는 parallel_jobs, 정례 작업에는 fleet를 쓰십시오.</span></li>
+    </ul>
+  </div>
+</article>
+
+<article class="job" id="job-24">
+  <div class="job-head">
+    <span class="jnum">24</span>
+    <div class="jtitle">
+      <h3><span class="en">Speculative tracks: N approaches compete, a judge picks</span><span class="tw">推測賽道：N 種解法競爭，由裁判挑選</span><span class="cn">推测赛道：N 种解法竞争，由裁判挑选</span><span class="ja">投機トラック：N 個の解法を競わせ、審査役が選ぶ</span><span class="ko">추측 트랙: N가지 해법이 경쟁하고 심판이 선택</span></h3>
+      <div class="meta"><span class="dots e4">●●●●</span><span class="badge par">Parallel · compete (best-of-N)</span><span class="badge">worktrees</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">a gnarly refactor with no obvious best approach. Let two tracks attack it in <i>isolated git worktrees</i> — different philosophies, optionally different models — then compare, judge, and promote the winner.</span>
+    <span class="tw">一個棘手的重構，沒有明顯的最佳解。讓兩條賽道在<i>隔離的 git worktree</i> 裡各自進攻 — 不同哲學、甚至不同模型 — 然後比較、評審、把贏家晉升進主樹。</span><span class="cn">一个棘手的重构，没有明显的最佳解。让两条赛道在<i>隔离的 git worktree</i> 里各自进攻 — 不同哲学、甚至不同模型 — 然后比较、评审、把赢家提升进主树。</span><span class="ja">厄介なリファクタリングで、明白な最適解がありません。2 本のトラックに<i>隔離された git worktree</i> の中でそれぞれ攻めさせます — 異なる哲学、場合によっては異なるモデルで — その後、比較・審査し、勝者をメインツリーへ昇格させます。</span><span class="ko">까다로운 리팩터링인데 뚜렷한 최선의 해법이 없습니다. 두 트랙이 <i>격리된 git worktree</i> 안에서 각자 공략하게 합니다 — 서로 다른 철학, 심지어 다른 모델로 — 그런 다음 비교하고 심사해서 승자를 메인 트리로 승격합니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># Add a parallel: block to ~/.mur/fleets/refactor/fleet.yaml (hand-edit)</span>
+<span class="c"># 在 fleet.yaml 手動加入 parallel: 區塊</span>
+parallel:
+  mode: speculative
+  tracks:
+    - name: track-functional
+      approach: "functional style, minimize allocations"
+      model: claude-opus-4-8          <span class="c"># optional per-track model / 每軌可選模型</span>
+    - name: track-iterative
+      approach: "performance first, keep it imperative"
+  judge:
+    model: claude-opus-4-8
+    rubric: { correctness: 0.40, design: 0.30, maintainability: 0.20, security: 0.10 }
+  pre_filter: [cargo_check]           <span class="c"># losers that don't compile never reach the judge</span></code></pre></div>
+  <div class="codewrap"><pre><code><span class="c"># Run with worktree isolation (from the repo root) / 在 repo 根目錄以 worktree 隔離執行</span>
+<span class="p">$</span> mur fleet run refactor --worktree      <span class="c"># or: MUR_PARALLEL_EXEC=1 mur fleet run refactor</span>
+<span class="o">.worktrees/track-functional/   ← each track codes + commits in its own tree</span>
+<span class="o">.worktrees/track-iterative/      每軌在自己的樹裡寫碼並 commit</span>
+
+<span class="c"># Compare, judge, promote / 比較、評審、晉升</span>
+<span class="p">$</span> mur fleet compare refactor
+<span class="p">$</span> mur fleet judge refactor --stats
+<span class="p">$</span> mur fleet cherry refactor --auto --promote --target ~/code/my-service</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en">Each track gets a detached worktree under <code>.worktrees/</code> with a <code>.parallel-base</code> sentinel (the base commit). Fan-out is auto-capped at <code>min(tracks, cores−2)</code>. Worktrees and <code>tracks.json</code> survive the run — nothing committed is ever auto-destroyed.</span>
+          <span class="tw">每軌各有一個 detached worktree（位於 <code>.worktrees/</code>），並帶 <code>.parallel-base</code> 基準戳記。展開數自動封頂為 <code>min(軌數, 核心數−2)</code>。Worktree 與 <code>tracks.json</code> 在執行後保留 — 已 commit 的成果絕不自動銷毀。</span><span class="cn">每轨各有一个 detached worktree（位于 <code>.worktrees/</code>），并带 <code>.parallel-base</code> 基准戳记。展开数自动封顶为 <code>min(軌數, 核心數−2)</code>。Worktree 与 <code>tracks.json</code> 在执行后保留 — 已 commit 的成果绝不自动销毁。</span><span class="ja">トラックごとに detached worktree（<code>.worktrees/</code> 配下）が 1 つずつ用意され、<code>.parallel-base</code> のベースラインスタンプが付きます。ファンアウト数は自動的に <code>min(軌數, 核心數−2)</code> に上限が設けられます。Worktree と <code>tracks.json</code> は実行後も残ります — commit 済みの成果が自動的に破棄されることは決してありません。</span><span class="ko">트랙마다 detached worktree(<code>.worktrees/</code> 아래) 하나와 <code>.parallel-base</code> 기준 스탬프가 붙습니다. 팬아웃 수는 자동으로 <code>min(軌數, 核心數−2)</code>로 상한이 걸립니다. Worktree와 <code>tracks.json</code>은 실행 후에도 보존됩니다 — commit된 성과물은 절대 자동 삭제되지 않습니다.</span></li>
+      <li><span class="en">A collision guard snapshots the main checkout before/after — any agent that strays out of its worktree into the main tree is reported.</span>
+          <span class="tw">碰撞防護會在執行前後對主 checkout 拍快照 — 任何越界跑進主樹的 Agent 都會被回報。</span><span class="cn">碰撞防护会在执行前后对主 checkout 拍快照 — 任何越界跑进主树的 Agent 都会被上报。</span><span class="ja">衝突ガードは実行の前後でメインの checkout のスナップショットを取ります — メインツリーに越境した Agent はすべて報告されます。</span><span class="ko">충돌 가드는 실행 전후로 메인 checkout의 스냅샷을 찍습니다 — 경계를 넘어 메인 트리로 들어간 Agent는 모두 보고됩니다.</span></li>
+      <li><span class="en"><code>--worktree</code> is one-shot only (incompatible with <code>--loop</code>). This is the <b>compete</b> topology: same goal, independent attempts, an independent judge selects.</span>
+          <span class="tw"><code>--worktree</code> 僅限單輪（與 <code>--loop</code> 不相容）。這是 <b>compete</b> 拓撲：同一目標、彼此獨立的嘗試、由獨立裁判選出優勝。</span><span class="cn"><code>--worktree</code> 仅限单轮（与 <code>--loop</code> 不兼容）。这是 <b>compete</b> 拓扑：同一目标、彼此独立的尝试、由独立裁判选出优胜。</span><span class="ja"><code>--worktree</code> は単一回のみです（<code>--loop</code> とは併用不可）。これは <b>compete</b> トポロジーです：同一の目標、互いに独立した試行、独立した審査役による勝者の選出。</span><span class="ko"><code>--worktree</code>는 단일 회차 전용입니다(<code>--loop</code>와 호환되지 않음). 이것은 <b>compete</b> 토폴로지입니다: 같은 목표, 서로 독립적인 시도, 독립 심판이 승자를 선정.</span></li>
+    </ul>
+  </div>
+</article>
+
+<article class="job" id="job-25">
+  <div class="job-head">
+    <span class="jnum">25</span>
+    <div class="jtitle">
+      <h3><span class="en">Partition one file, merge deterministically</span><span class="tw">分割單一檔案，確定性合併</span><span class="cn">分割单一文件，确定性合并</span><span class="ja">単一ファイルを分割し、決定的にマージする</span><span class="ko">단일 파일 분할, 결정적 병합</span></h3>
+      <div class="meta"><span class="dots e4">●●●●</span><span class="badge par">Parallel · partition (coupled-write)</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">one big file needs several independent edits (say, implementing three TODO blocks). Split the file into per-track slices, edit in parallel worktrees, then merge back mechanically — no LLM in the merge.</span>
+    <span class="tw">一個大檔案需要多處彼此獨立的修改（例如實作三段 TODO）。把檔案切成每軌一片，在平行 worktree 中修改，再機械式合併回來 — 合併過程不經 LLM。</span><span class="cn">一个大文件需要多处彼此独立的修改（例如实现三段 TODO）。把文件切成每轨一片，在并行 worktree 中修改，再机械式合并回来 — 合并过程不经 LLM。</span><span class="ja">大きなファイルに、互いに独立した複数の修正が必要です（たとえば 3 か所の TODO を実装する）。ファイルをトラックごとに 1 スライスずつ切り分け、並列の worktree で修正し、機械的にマージして戻します — マージの過程に LLM は介在しません。</span><span class="ko">큰 파일 하나에 서로 독립적인 수정이 여러 군데 필요합니다(예: TODO 세 구간 구현). 파일을 트랙당 한 조각으로 잘라 병렬 worktree에서 수정한 뒤 기계적으로 다시 병합합니다 — 병합 과정에 LLM이 개입하지 않습니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># fleet.yaml: switch the parallel block to partition mode</span>
+<span class="c"># fleet.yaml：把 parallel 區塊切到 partition 模式</span>
+parallel:
+  mode: partition
+  tracks:
+    - { name: track-a, approach: "implement the parser TODOs" }
+    - { name: track-b, approach: "implement the formatter TODOs" }
+  judge: { model: claude-opus-4-8 }
+  partition:
+    target_file: src/widget.rs        <span class="c"># repo-relative / 相對 repo 根目錄</span></code></pre></div>
+  <div class="codewrap"><pre><code><span class="c"># Preview how MUR will slice the file (run from repo root)</span>
+<span class="c"># 預覽 MUR 會怎麼切這個檔案（在 repo 根目錄執行）</span>
+<span class="p">$</span> mur fleet partition-plan refactor
+
+<span class="c"># Execute in worktrees, then merge slices back / 在 worktree 執行，再把切片合併回來</span>
+<span class="p">$</span> mur fleet run refactor --worktree
+<span class="p">$</span> mur fleet merge refactor --promote --target ~/code/my-service</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en">This is the <b>coupled-write</b> topology done safely: writes to one artifact are only parallelized after being made <i>disjoint by construction</i> (each track owns its slice), so the merge is deterministic reassembly, not conflict resolution.</span>
+          <span class="tw">這是 <b>coupled-write</b> 拓撲的安全做法：對同一產出物的寫入，先<i>從結構上切成不相交</i>（每軌擁有自己的切片）才平行化，因此合併是確定性重組，不是衝突調解。</span><span class="cn">这是 <b>coupled-write</b> 拓扑的安全做法：对同一产出物的写入，先<i>从结构上切成不相交</i>（每轨拥有自己的切片）才并行化，因此合并是确定性重组，不是冲突调解。</span><span class="ja">これは <b>coupled-write</b> トポロジーの安全なやり方です：同一の成果物への書き込みを、まず<i>構造的に互いに素へ分割</i>してから（各トラックが自分のスライスを所有）並列化します。そのためマージは決定的な再組み立てであり、コンフリクトの調停ではありません。</span><span class="ko">이것이 <b>coupled-write</b> 토폴로지의 안전한 방식입니다: 같은 산출물에 대한 쓰기를 먼저 <i>구조적으로 서로소가 되게 분할</i>(트랙마다 자기 조각 소유)한 뒤에야 병렬화하므로, 병합은 결정적 재조립이지 충돌 조정이 아닙니다.</span></li>
+      <li><span class="en">Merged output lands in <code>~/.mur/fleets/refactor/cherry-result/</code> before <code>--promote</code> copies it into the live tree.</span>
+          <span class="tw">合併結果先落在 <code>~/.mur/fleets/refactor/cherry-result/</code>，<code>--promote</code> 才複製進正式樹。</span><span class="cn">合并结果先落在 <code>~/.mur/fleets/refactor/cherry-result/</code>，<code>--promote</code> 才复制进正式树。</span><span class="ja">マージ結果はまず <code>~/.mur/fleets/refactor/cherry-result/</code> に置かれ、<code>--promote</code> で初めて本番ツリーにコピーされます。</span><span class="ko">병합 결과는 먼저 <code>~/.mur/fleets/refactor/cherry-result/</code>에 놓이고, <code>--promote</code>를 해야 정식 트리로 복사됩니다.</span></li>
+    </ul>
+  </div>
+</article>
+
+<article class="job" id="job-26">
+  <div class="job-head">
+    <span class="jnum">26</span>
+    <div class="jtitle">
+      <h3><span class="en">Concurrent N-way merge of overlapping work</span><span class="tw">重疊成果的並行 N 路合併</span><span class="cn">重叠成果的并发 N 路合并</span><span class="ja">重なり合う成果の並行 N-way マージ</span><span class="ko">겹치는 성과물의 동시 N-웨이 병합</span></h3>
+      <div class="meta"><span class="dots e4">●●●●</span><span class="badge par">Parallel · concurrent merge</span><span class="badge">experimental</span></div>
+    </div>
+  </div>
+  <p class="goal"><b><span class="en">Daily job</span><span class="tw">日常情境</span><span class="cn">日常场景</span><span class="ja">日常のシナリオ</span><span class="ko">일상 시나리오</span>:</b>
+    <span class="en">tracks weren't pre-partitioned and touched overlapping files. Merge everything that's disjoint automatically, and get every real overlap <i>reported</i> — never silently merged.</span>
+    <span class="tw">賽道事先沒有分割，改到了重疊的檔案。所有不相交的修改自動合併，真正重疊的區域則被<i>如實回報</i> — 絕不靜默合併。</span><span class="cn">赛道事先没有分割，改到了重叠的文件。所有不相交的修改自动合并，真正重叠的区域则被<i>如实上报</i> — 绝不静默合并。</span><span class="ja">トラックを事前に分割しておらず、重複するファイルに手が入りました。互いに素な修正はすべて自動マージされ、本当に重なった領域は<i>ありのまま報告</i>されます — 静かにマージされることは決してありません。</span><span class="ko">트랙을 사전에 분할하지 않았고, 겹치는 파일을 수정했습니다. 서로소인 수정은 전부 자동 병합되고, 실제로 겹치는 영역은 <i>있는 그대로 보고</i>됩니다 — 절대 조용히 병합되지 않습니다.</span>
+  </p>
+  <div class="codewrap"><pre><code><span class="c"># Experimental — explicitly opt in / 實驗性功能 — 需明確啟用</span>
+<span class="p">$</span> MUR_PARALLEL_CONCURRENT=1 mur fleet merge-concurrent refactor --stats
+<span class="o">Spike-1: 1/834 hunk groups overlapped (rate=0.1%)   → concurrent_stats.json</span>
+
+<span class="c"># Promote only when clean; verified by cargo check, reverted on failure</span>
+<span class="c"># 只有乾淨時才晉升；以 cargo check 驗證，失敗自動還原</span>
+<span class="p">$</span> MUR_PARALLEL_CONCURRENT=1 mur fleet merge-concurrent refactor --promote --target ~/code/my-service</code></pre></div>
+  <div class="explain">
+    <ul>
+      <li><span class="en">Disjoint hunks across all N tracks auto-merge with deterministic, order-independent convergence (merged bytes are identical whatever order tracks land in). Overlapping regions are escalated to you or the judge/cherry flow.</span>
+          <span class="tw">N 軌之間不相交的 hunk 自動合併，且收斂具確定性、與順序無關（不論賽道先後，合併位元組完全相同）。重疊區域則升級給你或 judge／cherry 流程處理。</span><span class="cn">N 轨之间不相交的 hunk 自动合并，且收敛具确定性、与顺序无关（不论赛道先后，合并字节完全相同）。重叠区域则升级给你或 judge／cherry 流程处理。</span><span class="ja">N トラック間で互いに素な hunk は自動マージされ、収束は決定的かつ順序に依存しません（トラックの順番がどうであれ、マージ後のバイト列は完全に同一です）。重複した領域は、あなたまたは judge／cherry フローにエスカレーションされます。</span><span class="ko">N개 트랙 사이의 서로소 hunk는 자동 병합되며, 수렴은 결정적이고 순서와 무관합니다(트랙 순서가 어떻든 병합된 바이트는 완전히 동일). 겹치는 영역은 당신 또는 judge/cherry 플로우로 에스컬레이션됩니다.</span></li>
+      <li><span class="en"><code>--promote</code> refuses while any overlap is unresolved, runs <code>cargo check</code> in the destination, and reverts the promoted files if it fails. Convergence is guaranteed; <i>correctness is not</i> — the compile check is the backstop.</span>
+          <span class="tw"><code>--promote</code> 在仍有未解重疊時直接拒絕，並在目的地跑 <code>cargo check</code>，失敗即還原晉升的檔案。收斂有保證，<i>正確性沒有</i> — 編譯檢查是最後防線。</span><span class="cn"><code>--promote</code> 在仍有未解重叠时直接拒绝，并在目标位置跑 <code>cargo check</code>，失败即还原提升的文件。收敛有保证，<i>正确性没有</i> — 编译检查是最后防线。</span><span class="ja"><code>--promote</code> は未解決の重複が残っていれば即座に拒否し、昇格先で <code>cargo check</code> を実行して、失敗すれば昇格したファイルを元に戻します。収束は保証されますが、<i>正しさは保証されません</i> — コンパイルチェックが最後の防衛線です。</span><span class="ko"><code>--promote</code>는 미해결 겹침이 남아 있으면 그대로 거부하고, 대상 위치에서 <code>cargo check</code>를 실행해 실패하면 승격된 파일을 되돌립니다. 수렴은 보장되지만 <i>정확성은 보장되지 않습니다</i> — 컴파일 검사가 마지막 방어선입니다.</span></li>
+      <li><span class="en">Fun fact: mining real git-merge history through this classifier measured a 0.1% overlap rate — which is why this simple structural merger, not a CRDT engine, is the shipped answer.</span>
+          <span class="tw">冷知識：用這個分類器回放真實 git 合併歷史，量得重疊率僅 0.1% — 所以最終方案是這個簡單的結構化合併器，而不是 CRDT 引擎。</span><span class="cn">冷知识：用这个分类器回放真实 git 合并历史，测得重叠率仅 0.1% — 所以最终方案是这个简单的结构化合并器，而不是 CRDT 引擎。</span><span class="ja">豆知識：この分類器で実際の git マージ履歴をリプレイしたところ、測定された重複率はわずか 0.1% でした — だからこそ最終的な解はこのシンプルな構造化マージャーであり、CRDT エンジンではないのです。</span><span class="ko">여담: 이 분류기로 실제 git 병합 이력을 재생해 측정한 겹침률은 겨우 0.1%였습니다 — 그래서 최종 해법은 CRDT 엔진이 아니라 이 단순한 구조적 병합기입니다.</span></li>
+    </ul>
+  </div>
+</article>
+
+<!-- ══════════════ MATRIX ══════════════ -->
+<div class="part-head" id="matrix">
+  <div class="eyebrow"><span class="en">Reference</span><span class="tw">參考</span><span class="cn">参考</span><span class="ja">リファレンス</span><span class="ko">참고</span></div>
+  <h2><span class="en">Parallel patterns at a glance</span><span class="tw">平行模式總覽</span><span class="cn">并行模式总览</span><span class="ja">並列パターン一覧</span><span class="ko">병렬 패턴 개요</span></h2>
+  <p>
+    <span class="en">Classify the task's <b>topology</b> first, then pick the primitive. Reads parallelize freely; writes serialize unless made disjoint; one-taste design work stays with a single writer.</span>
+    <span class="tw">先判斷任務的<b>拓撲</b>，再挑原語。讀取可放心平行；寫入除非切成不相交否則序列化；需要單一品味的設計工作交給單一寫手。</span><span class="cn">先判断任务的<b>拓扑</b>，再挑原语。读取可放心并行；写入除非切成不相交否则串行化；需要单一品味的设计工作交给单一写手。</span><span class="ja">まずタスクの<b>トポロジー</b>を見極めてから、プリミティブを選びます。読み取りは安心して並列化できます。書き込みは互いに素に分割できない限り直列化します。単一の審美眼が要る設計作業は単一の書き手に任せます。</span><span class="ko">먼저 작업의 <b>토폴로지</b>를 판단한 뒤 프리미티브를 고르십시오. 읽기는 안심하고 병렬화하고, 쓰기는 서로소로 분할하지 않는 한 직렬화하며, 단일한 감각이 필요한 설계 작업은 단일 작성자에게 맡깁니다.</span>
+  </p>
+</div>
+
+<div class="tablewrap">
+<table>
+  <thead><tr>
+    <th>#</th>
+    <th><span class="en">Pattern</span><span class="tw">模式</span><span class="cn">模式</span><span class="ja">パターン</span><span class="ko">패턴</span></th>
+    <th><span class="en">Topology</span><span class="tw">拓撲</span><span class="cn">拓扑</span><span class="ja">トポロジー</span><span class="ko">토폴로지</span></th>
+    <th><span class="en">Entry point</span><span class="tw">入口</span><span class="cn">入口</span><span class="ja">エントリポイント</span><span class="ko">진입점</span></th>
+    <th><span class="en">Reach for it when…</span><span class="tw">適用時機</span><span class="cn">适用时机</span><span class="ja">使いどころ</span><span class="ko">적용 시점</span></th>
+    <th><span class="en">Job</span><span class="tw">任務</span><span class="cn">任务</span><span class="ja">タスク</span><span class="ko">작업</span></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>1</td>
+      <td><span class="en">DAG step fan-out</span><span class="tw">DAG 步驟展開</span><span class="cn">DAG 步骤展开</span><span class="ja">DAG ステップのファンアウト</span><span class="ko">DAG 단계 팬아웃</span></td>
+      <td>explore</td>
+      <td><code>mur workflow run</code> <span class="en">(same-rank steps)</span><span class="tw">（同 rank 步驟）</span><span class="cn">（同 rank 步骤）</span><span class="ja">（同一 rank のステップ）</span><span class="ko">(같은 rank 단계)</span></td>
+      <td><span class="en">independent <i>commands</i> on one machine (lint + test)</span><span class="tw">單機上互不相依的<i>指令</i>（lint＋test）</span><span class="cn">单机上互不依赖的<i>命令</i>（lint＋test）</span><span class="ja">単一マシン上の互いに依存しない<i>コマンド</i>（lint＋test）</span><span class="ko">단일 머신에서 서로 의존하지 않는 <i>명령</i>(lint＋test)</span></td>
+      <td><a href="#job-11">11</a></td></tr>
+    <tr><td>2</td>
+      <td><span class="en">Delegation fan-out</span><span class="tw">委派展開</span><span class="cn">委派展开</span><span class="ja">委任ファンアウト</span><span class="ko">위임 팬아웃</span></td>
+      <td>explore</td>
+      <td><code>delegate_to</code> + <code>--channel-new</code></td>
+      <td><span class="en">independent <i>agent work</i> with signed, attributable replies</span><span class="tw">互不相依的 <i>Agent 工作</i>，回覆需簽章可歸屬</span><span class="cn">互不依赖的 <i>Agent 任务</i>，回复需签名可归属</span><span class="ja">互いに依存しない <i>Agent の作業</i>で、返信に署名付きの帰属が必要な場合</span><span class="ko">서로 의존하지 않는 <i>Agent 작업</i>, 응답은 서명되어 귀속 가능해야 함</span></td>
+      <td><a href="#job-13">13</a></td></tr>
+    <tr><td>3</td>
+      <td><span class="en">Fleet broadcast</span><span class="tw">Fleet 廣播</span><span class="cn">Fleet 广播</span><span class="ja">Fleet ブロードキャスト</span><span class="ko">Fleet 브로드캐스트</span></td>
+      <td>explore</td>
+      <td><code>mur fleet run</code></td>
+      <td><span class="en">one standing goal, every member's perspective</span><span class="tw">單一常設目標，需要每位成員的視角</span><span class="cn">单一常设目标，需要每位成员的视角</span><span class="ja">単一の常設目標で、各メンバーの視点が必要な場合</span><span class="ko">단일 상설 목표, 각 멤버의 관점이 필요할 때</span></td>
+      <td><a href="#job-14">14</a></td></tr>
+    <tr><td>4</td>
+      <td><span class="en">Routed plan</span><span class="tw">路由計畫</span><span class="cn">路由计划</span><span class="ja">ルーティング計画</span><span class="ko">라우팅 계획</span></td>
+      <td><span class="en">explore + deps</span><span class="tw">explore＋相依</span><span class="cn">explore＋依赖</span><span class="ja">explore＋依存関係</span><span class="ko">explore＋의존성</span></td>
+      <td><code>mur fleet run</code> <span class="en">(router DAG)</span><span class="tw">（router DAG）</span><span class="cn">（router DAG）</span><span class="ja">（router DAG）</span><span class="ko">(router DAG)</span></td>
+      <td><span class="en">right member for each sub-task, with ordering</span><span class="tw">子任務各找對的人，且有先後順序</span><span class="cn">子任务各找对的人，且有先后顺序</span><span class="ja">サブタスクごとに適任者が異なり、実行順序がある場合</span><span class="ko">하위 작업마다 적임자를 찾고 선후 순서가 있을 때</span></td>
+      <td><a href="#job-16">16</a></td></tr>
+    <tr><td>5</td>
+      <td><span class="en">Ephemeral fan-out</span><span class="tw">臨時展開</span><span class="cn">临时展开</span><span class="ja">アドホックファンアウト</span><span class="ko">임시 팬아웃</span></td>
+      <td>explore</td>
+      <td><code>parallel_jobs</code> (MCP)</td>
+      <td><span class="en">ad-hoc N distinct chores, mid-conversation, no files</span><span class="tw">對話中臨時的 N 件雜務，不寫任何檔案</span><span class="cn">对话中临时的 N 件杂务，不写任何文件</span><span class="ja">会話中に生じた N 件の雑務を、ファイルを一切書かずに処理する場合</span><span class="ko">대화 중 즉석에서 생긴 N건의 잡무, 파일은 전혀 쓰지 않음</span></td>
+      <td><a href="#job-23">23</a></td></tr>
+    <tr><td>6</td>
+      <td><span class="en">Speculative tracks</span><span class="tw">推測賽道</span><span class="cn">推测赛道</span><span class="ja">投機トラック</span><span class="ko">추측 트랙</span></td>
+      <td>compete</td>
+      <td><code>fleet run --worktree</code> + judge/cherry</td>
+      <td><span class="en">no obvious best approach — try N, select with an independent judge</span><span class="tw">沒有明顯最佳解 — 試 N 種，由獨立裁判選</span><span class="cn">没有明显最佳解 — 试 N 种，由独立裁判选</span><span class="ja">明白な最適解がない — N 案を試し、独立した審査役が選ぶ</span><span class="ko">뚜렷한 최선이 없을 때 — N가지를 시도하고 독립 심판이 선택</span></td>
+      <td><a href="#job-24">24</a></td></tr>
+    <tr><td>7</td>
+      <td><span class="en">Partition</span><span class="tw">分割</span><span class="cn">分割</span><span class="ja">分割</span><span class="ko">분할</span></td>
+      <td>coupled-write</td>
+      <td><code>partition-plan</code> → <code>merge</code></td>
+      <td><span class="en">one artifact, edits made disjoint <i>by construction</i></span><span class="tw">同一產出物，先<i>從結構上</i>把修改切開</span><span class="cn">同一产出物，先<i>从结构上</i>把修改切开</span><span class="ja">同一の成果物に対し、修正を先に<i>構造的に</i>切り分ける場合</span><span class="ko">같은 산출물, 수정을 먼저 <i>구조적으로</i> 분리</span></td>
+      <td><a href="#job-25">25</a></td></tr>
+    <tr><td>8</td>
+      <td><span class="en">Concurrent merge</span><span class="tw">並行合併</span><span class="cn">并发合并</span><span class="ja">並行マージ</span><span class="ko">동시 병합</span></td>
+      <td><span class="en">coupled-write (post-hoc)</span><span class="tw">coupled-write（事後）</span><span class="cn">coupled-write（事后）</span><span class="ja">coupled-write（事後）</span><span class="ko">coupled-write(사후)</span></td>
+      <td><code>merge-concurrent</code></td>
+      <td><span class="en">overlap wasn't prevented — auto-merge disjoint, escalate the rest</span><span class="tw">事先沒防重疊 — 不相交自動合併，其餘升級處理</span><span class="cn">事先没防重叠 — 不相交自动合并，其余升级处理</span><span class="ja">事前の重複防止なし — 互いに素なら自動マージ、残りはエスカレーション</span><span class="ko">사전에 겹침을 막지 않았을 때 — 서로소는 자동 병합, 나머지는 에스컬레이션</span></td>
+      <td><a href="#job-26">26</a></td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="tip">
+  <span class="en"><b>The fourth topology — coherence-bound:</b> work needing one consistent voice or design taste (an API's shape, a doc's narrative) should NOT be parallelized. Give it to a single agent (<code>murmur</code>, or one <code>delegate_to</code>) and let the parallel patterns feed it inputs.</span>
+  <span class="tw"><b>第四種拓撲 — coherence-bound（一致性受限）：</b>需要單一聲音或設計品味的工作（API 的形狀、文件的敘事）<b>不應</b>平行化。交給單一 Agent（<code>murmur</code> 或一個 <code>delegate_to</code>），讓各種平行模式為它供應素材。</span><span class="cn"><b>第四种拓扑 — coherence-bound（一致性受限）：</b>需要单一声音或设计品味的工作（API 的形状、文档的叙事）<b>不应</b>并行化。交给单一 Agent（<code>murmur</code> 或一个 <code>delegate_to</code>），让各种并行模式为它供应素材。</span><span class="ja"><b>第 4 のトポロジー — coherence-bound（一貫性拘束）：</b>単一の声や設計の審美眼が必要な作業（API の形、ドキュメントの語り口）は並列化<b>すべきではありません</b>。単一の Agent（<code>murmur</code> または 1 つの <code>delegate_to</code>）に任せ、各種の並列パターンにはその素材を供給させます。</span><span class="ko"><b>네 번째 토폴로지 — coherence-bound(일관성 제약):</b> 단일한 목소리나 설계 감각이 필요한 작업(API의 형태, 문서의 서사)은 병렬화하면 <b>안 됩니다</b>. 단일 Agent(<code>murmur</code> 또는 하나의 <code>delegate_to</code>)에게 맡기고, 여러 병렬 패턴이 그에게 재료를 공급하게 하십시오.</span>
+</div>
+
+<footer>
+  <p>
+    <span class="en">Sourced from the MUR codebase (CLI definitions, serde schemas, and design specs) on 2026-07-03. Commands target the current <code>main</code>; flags may evolve — <code>mur &lt;cmd&gt; --help</code> is always the ground truth. Experimental features (<code>MUR_PARALLEL_EXEC</code>, <code>MUR_PARALLEL_CONCURRENT</code>) are off by default by design.</span>
+    <span class="tw">內容取自 MUR 程式碼庫（CLI 定義、serde 結構與設計規格），日期 2026-07-03。指令以目前的 <code>main</code> 為準；旗標可能演進 — <code>mur &lt;cmd&gt; --help</code> 永遠是最終依據。實驗性功能（<code>MUR_PARALLEL_EXEC</code>、<code>MUR_PARALLEL_CONCURRENT</code>）依設計預設關閉。</span><span class="cn">内容取自 MUR 代码库（CLI 定义、serde 结构与设计规范），日期 2026-07-03。命令以当前的 <code>main</code> 为准；标志可能演进 — <code>mur &lt;cmd&gt; --help</code> 永远是最终依据。实验性功能（<code>MUR_PARALLEL_EXEC</code>、<code>MUR_PARALLEL_CONCURRENT</code>）按设计默认关闭。</span><span class="ja">内容は MUR のコードベース（CLI 定義、serde 構造体、設計仕様）に基づきます。日付は 2026-07-03 です。コマンドは現行の <code>main</code> に準拠します。フラグは進化する可能性があります — <code>mur &lt;cmd&gt; --help</code> が常に最終的な拠り所です。実験的機能（<code>MUR_PARALLEL_EXEC</code>、<code>MUR_PARALLEL_CONCURRENT</code>）は設計どおりデフォルトで無効です。</span><span class="ko">내용은 MUR 코드베이스(CLI 정의, serde 구조체, 설계 명세)에서 가져왔으며, 기준일은 2026-07-03입니다. 명령은 현재의 <code>main</code>을 기준으로 하고, 플래그는 진화할 수 있습니다 — <code>mur &lt;cmd&gt; --help</code>가 언제나 최종 근거입니다. 실험적 기능(<code>MUR_PARALLEL_EXEC</code>, <code>MUR_PARALLEL_CONCURRENT</code>)은 설계상 기본 꺼짐입니다.</span>
+  </p>
+</footer>
+
+</div></main>
+</div>
+
+<script>
+  (function () {
+    var setLang = function (l) {
+      document.body.className = l;
+      document.documentElement.lang = ({en:'en',tw:'zh-Hant',cn:'zh-Hans',ja:'ja',ko:'ko'})[l] || 'en';
+      try { localStorage.setItem('mur-lang', l); } catch (e) {}
+      document.querySelectorAll('.lang-btn').forEach(function (b) {
+        b.classList.toggle('active', b.getAttribute('data-lang') === l);
+      });
+    };
+    document.querySelectorAll('.lang-btn').forEach(function (b) {
+      b.addEventListener('click', function () { setLang(b.getAttribute('data-lang')); });
+    });
+    var saved = 'en';
+    try { saved = localStorage.getItem('mur-lang') || 'en'; } catch (e) {}
+    setLang(saved);
+
+    document.querySelectorAll('pre').forEach(function (pre) {
+      var wrap = pre.parentElement;
+      if (!wrap || !wrap.classList.contains('codewrap')) return;
+      var btn = document.createElement('button');
+      btn.className = 'copy-btn';
+      btn.type = 'button';
+      btn.textContent = 'copy';
+      btn.addEventListener('click', function () {
+        var lines = [];
+        pre.innerText.split('\n').forEach(function (ln) { lines.push(ln); });
+        var text = lines.join('\n');
+        var done = function () { btn.textContent = 'copied ✓'; setTimeout(function () { btn.textContent = 'copy'; }, 1400); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, function () { btn.textContent = 'select + ⌘C'; });
+        } else { btn.textContent = 'select + ⌘C'; }
+      });
+      wrap.appendChild(btn);
+    });
+  })();
+</script>
