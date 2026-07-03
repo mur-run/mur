@@ -197,6 +197,19 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
             let p = sbpl_escape(&path.to_string_lossy());
             lines.push(format!("(allow process-exec* (path-literal \"{p}\"))"));
         }
+
+        // Issue 17: a resolved spawn_allowed_paths literal is often just one
+        // entry point into a directory tree of siblings the tool needs at
+        // runtime (rustup toolchain `bin/` siblings like `cargo`/`rustc`
+        // invoked via shims, a Homebrew keg's `libexec/git-core` helpers, or
+        // the Xcode Command Line Tools `usr/bin` tree). spawn_allowed_prefixes
+        // grants exec on the whole containing directory (package/toolchain
+        // root, or immediate parent when that root would be too broad) so
+        // those siblings work without allowlisting every binary individually.
+        for path in &policy.spawn_allowed_prefixes {
+            let p = sbpl_escape(&path.to_string_lossy());
+            lines.push(format!("(allow process-exec* (subpath \"{p}\"))"));
+        }
     }
 
     // Network restrictions. NOTE: macOS SBPL `remote tcp` only accepts `*` or
