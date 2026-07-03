@@ -1,0 +1,57 @@
+name: parallel-topology-guide
+version: 0.1.0
+publisher: human:mur
+description: "Full methodology behind parallel-decompose and parallel-code — load on demand when applying the topology lens."
+category: note
+visibility: on_demand
+content:
+  abstract: "Displaced methodology from the two parallel skills; load when you need the full criteria."
+  note: |
+    ## From parallel-decompose
+
+    Classify ANY task's TOPOLOGY before deciding how to do it — explore (read/gather → fan out, recombine by union or careful synthesis), compete (best-of-N at one goal → fan out, SELECT with an independent judge), coupled-write (interdependent edits → serialize unless disjoint + contract-frozen, escalate overlaps), or coherence-bound (one shared-taste design → single writer). Parallelism as the default decomposition lens, gated read-parallelize / write-serialize.
+
+    Before deciding HOW to do a task, classify WHY it can (or cannot) be
+    parallelized — by its TOPOLOGY, not its domain. The hard part is
+    RECOMBINATION, not isolation: worktrees solve filesystem conflicts
+    trivially; the risk and the value are both in combining results.
+
+    Four topologies:
+    - explore (read/gather: search, find files, find content, collect evidence)
+      → outputs are ADDITIVE → fan out freely (no worktree) → recombine by
+      union/dedupe (collect) or careful synthesis (reduce).
+    - compete (best-of-N at the SAME goal: design variants, N approaches)
+      → outputs COMPETE → fan out N heterogeneous attempts → SELECT the best with
+      an INDEPENDENT judge. Never merge competing rewrites; never run a debate.
+    - coupled-write (editing interdependent code/state) → outputs CONFLICT →
+      serialize UNLESS disjoint files + contract frozen first → escalate overlaps.
+    - coherence-bound (one design whose pieces share architectural taste, or a
+      sequential dependency) → DO NOT parallelize → one coherent writer.
+
+    Grounding: Anthropic multi-agent research (breadth +90%, ~15x tokens, excludes
+    most coding); Cognition "Don't Build Multi-Agents" (share CONTEXT not STATE; the
+    Flappy-Bird trap of mismatched parallel writers); MAST (~79% of multi-agent
+    failures are specification + coordination, impossible single-agent);
+    Lost-in-the-Middle (naive concatenation of N results under-attends the middle).
+
+    ## From parallel-code
+
+    Decide whether a coding task should be fanned out across parallel coder sub-agents. Default is a single coherent writer; propose parallel ONLY for disjoint, mechanical, contract-pinned work, and only after the user approves.
+
+    Most coding tasks should NOT be parallelized — default to one single-threaded
+    coherent writer. Use this to recognize the narrow class that genuinely benefits
+    and, only then, PROPOSE a parallel fan-out for the user's approval before running.
+
+    Single-writer principle (why serial is the default): parallel code WRITERS make
+    conflicting, context-starved decisions — mismatched styles, duplicated helpers,
+    semantic contradictions that compile + lint clean but break at runtime; a clean
+    textual merge is NOT proof of correctness. Both canonical sources converge:
+    Anthropic's multi-agent research system wins on breadth-first READ tasks and
+    explicitly excludes most coding; Cognition's "Don't Build Multi-Agents" attacks
+    parallel writers (the Flappy-Bird trap — mismatched styles). Both land on: fan
+    out reads/analysis/review, keep WRITES single-threaded — UNLESS the work is
+    genuinely disjoint files + mechanical, behind a contract frozen BEFORE fan-out
+    (N unrelated adapters, per-module boilerplate, a mechanical cross-file refactor)
+    — never one design whose pieces must share architectural taste.
+
+    Ground truth: mur <cmd> --help · Full tutorial: https://app.mur.run/tutorials/mur-daily-jobs-cookbook.html
