@@ -19,11 +19,30 @@ pub struct SandboxPolicy {
     /// The agent's process-spawn policy (allowlist / any / none), from
     /// entitlements.processes.spawn.mode.
     pub spawn_mode: SpawnMode,
-    /// Absolute paths resolved from `entitlements.processes.spawn.allowed`
-    /// bare binary names. Entries that could not be resolved to an
-    /// executable file are dropped (fail-closed for that one binary; never
-    /// fail-open for the whole profile).
+    /// LITERAL exec grants (Issue 17): every absolute, canonicalized path
+    /// resolved from `entitlements.processes.spawn.allowed` bare binary
+    /// names, searched across [`crate::exec_dirs::standard_exec_dirs`],
+    /// [`system_exec_paths`], and (existence-checked) the active
+    /// Xcode/CommandLineTools developer dirs. An entry may resolve to
+    /// MULTIPLE literal paths (e.g. the same binary name present under
+    /// both Homebrew and the developer tools). Entries that resolve to
+    /// nothing are dropped with a warning — fail-closed for that one
+    /// binary, never fail-open for the whole profile.
     pub spawn_allowed_paths: Vec<PathBuf>,
+    /// PREFIX exec grants (Issue 17) derived from `spawn_allowed_paths`:
+    /// for each literal match, the enclosing package/toolchain directory
+    /// (the binary's parent, or grandparent when the parent is literally
+    /// named `bin`) — e.g. a Homebrew keg's prefix (covering sibling
+    /// `libexec/git-core`, `lib`) or a rustup toolchain directory (covering
+    /// sibling `lib`, `libexec`). Never a filesystem root, `/usr`, `/opt`,
+    /// `/opt/homebrew`, the home directory, or a top-level `/Volumes/<name>`
+    /// mount — those are guarded back down to just the binary's own parent
+    /// dir, since granting exec over the whole prefix there would be far
+    /// broader than the single allowlisted binary. Consumed by
+    /// `macos::build_sbpl_profile` as `subpath` (not `path-literal`) allow
+    /// clauses, so a toolchain's helper binaries keep working without each
+    /// one being individually allowlisted.
+    pub spawn_allowed_prefixes: Vec<PathBuf>,
     /// Outbound TCP ports that are allowed. `None` = allow all; `Some([])` = deny all.
     pub net_allow_ports: Option<Vec<u16>>,
     /// Outbound hostnames for the reqwest guard layer.
@@ -42,6 +61,7 @@ impl Default for SandboxPolicy {
             fs_exec: Vec::new(),
             spawn_mode: SpawnMode::Allowlist,
             spawn_allowed_paths: Vec::new(),
+            spawn_allowed_prefixes: Vec::new(),
             net_allow_ports: None,
             net_allow_hosts: None,
             memory_limit_mb: None,
@@ -158,26 +178,97 @@ impl SandboxPolicy {
         // Standard binary exec paths (needed for MCP spawn + shell tools).
         let fs_exec = system_exec_paths(&home);
 
-        // Resolve each allowlisted bare binary name to an absolute,
-        // executable path. Unresolved entries are dropped with a warning —
-        // fail-closed for that one binary, never fail-open for the profile.
+        // Search dirs for resolving bare `spawn.allowed` binary names
+        // (Issue 17): the shared exec_dirs list (Homebrew/Cargo/user-local,
+        // kept in lockstep with the bash tool's PATH augmentation), the
+        // standard system exec dirs, and — existence-checked, no subprocess
+        // spawned — the active Xcode/CommandLineTools developer dirs. The
+        // active developer dir is read directly from the
+        // `/var/db/xcode_select_link` symlink target (this is exactly what
+        // `xcode-select -p` resolves; reading the symlink avoids spawning a
+        // subprocess to determine it, which the sandboxed exec chain cannot
+        // rely on being permitted — Issue 17).
+        let mut spawn_search_dirs: Vec<PathBuf> = crate::exec_dirs::standard_exec_dirs();
+        spawn_search_dirs.extend(system_exec_paths(&home));
+        if let Ok(xcode_dir) = std::fs::read_link("/var/db/xcode_select_link") {
+            let usr_bin = xcode_dir.join("usr/bin");
+            if usr_bin.exists() {
+                spawn_search_dirs.push(usr_bin);
+            }
+        }
+        let clt_usr_bin = PathBuf::from("/Library/Developer/CommandLineTools/usr/bin");
+        if clt_usr_bin.exists() {
+            spawn_search_dirs.push(clt_usr_bin);
+        }
+
+        // Resolve each allowlisted binary name to EVERY absolute,
+        // canonicalized, executable path it matches (Issue 17): a bare name
+        // may resolve to multiple literal paths (e.g. the same binary name
+        // present under both Homebrew and the developer tools), and all of
+        // them must be granted so the resolved path matches whichever one
+        // actually executes at spawn time. An entry that names an absolute
+        // path is canonicalized and kept only if executable — no directory
+        // search. Entries that resolve to nothing are dropped with a
+        // warning — fail-closed for that one binary, never fail-open for
+        // the profile. Canonicalization failures are dropped the same way
+        // (Issue 16 discipline: never emit an unresolvable grant).
         let spawn_mode = ent.processes.spawn.mode;
-        let spawn_allowed_paths: Vec<PathBuf> = ent
-            .processes
-            .spawn
-            .allowed
-            .iter()
-            .filter_map(|name| match resolve_binary_path(name, &fs_exec) {
-                Some(p) => Some(p),
-                None => {
-                    tracing::warn!(
-                        binary = %name,
-                        "spawn allowlist entry could not be resolved to an executable; dropping"
-                    );
-                    None
+        let mut spawn_allowed_paths: Vec<PathBuf> = Vec::new();
+        for name in &ent.processes.spawn.allowed {
+            let mut matched_any = false;
+            if name.contains(std::path::MAIN_SEPARATOR) {
+                let candidate = Path::new(name);
+                if is_executable_file(candidate)
+                    && let Ok(canon) = std::fs::canonicalize(candidate)
+                {
+                    matched_any = true;
+                    if !spawn_allowed_paths.contains(&canon) {
+                        spawn_allowed_paths.push(canon);
+                    }
                 }
-            })
-            .collect();
+            } else {
+                for dir in &spawn_search_dirs {
+                    let candidate = dir.join(name);
+                    if !is_executable_file(&candidate) {
+                        continue;
+                    }
+                    match std::fs::canonicalize(&candidate) {
+                        Ok(canon) => {
+                            matched_any = true;
+                            if !spawn_allowed_paths.contains(&canon) {
+                                spawn_allowed_paths.push(canon);
+                            }
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                binary = %name,
+                                path = %candidate.display(),
+                                error = %err,
+                                "spawn allowlist candidate could not be canonicalized; \
+                                 dropping this match"
+                            );
+                        }
+                    }
+                }
+            }
+            if !matched_any {
+                tracing::warn!(
+                    binary = %name,
+                    "spawn allowlist entry could not be resolved to an executable; dropping"
+                );
+            }
+        }
+
+        // Derive the prefix grants from the resolved literals (Issue 17):
+        // see the `spawn_allowed_prefixes` field doc for the parent/
+        // grandparent-if-`bin` rule and the guard list.
+        let mut spawn_allowed_prefixes: Vec<PathBuf> = Vec::new();
+        for literal in &spawn_allowed_paths {
+            let prefix = compute_spawn_prefix(literal, &home);
+            if prefix.exists() && !spawn_allowed_prefixes.contains(&prefix) {
+                spawn_allowed_prefixes.push(prefix);
+            }
+        }
 
         let (net_allow_ports, net_allow_hosts) = match ent.network.outbound.mode {
             NetworkOutboundMode::Unrestricted => (None, None),
@@ -196,6 +287,7 @@ impl SandboxPolicy {
             fs_exec,
             spawn_mode,
             spawn_allowed_paths,
+            spawn_allowed_prefixes,
             net_allow_ports,
             net_allow_hosts,
             memory_limit_mb: Some(ent.limits.memory_mb),
@@ -280,6 +372,52 @@ fn is_executable_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Derive the PREFIX exec grant (Issue 17) for a resolved literal binary
+/// path: the enclosing package/toolchain directory, so sibling binaries
+/// under the same Homebrew keg or rustup toolchain (e.g. `libexec/git-core`,
+/// `lib`) are exec-permitted without listing each one individually.
+///
+/// Rule: the binary's parent directory, or its GRANDPARENT when the parent
+/// is literally named `bin` (covers `<prefix>/bin/<tool>` layouts — Homebrew
+/// kegs, rustup toolchains, CommandLineTools). Falls back to the parent
+/// itself when that would otherwise resolve to a filesystem root, `/usr`,
+/// `/opt`, `/opt/homebrew`, the user's home directory, or a top-level
+/// `/Volumes/<name>` mount (depth <= 2) — granting exec over any of those
+/// wholesale would be far broader than the "one toolchain" intent.
+fn compute_spawn_prefix(literal: &Path, home: &Path) -> PathBuf {
+    let parent = literal.parent().unwrap_or(literal);
+    let candidate = if parent.file_name().is_some_and(|n| n == "bin") {
+        parent.parent().unwrap_or(parent)
+    } else {
+        parent
+    };
+
+    if is_guarded_prefix(candidate, home) {
+        parent.to_path_buf()
+    } else {
+        candidate.to_path_buf()
+    }
+}
+
+/// True if `path` is too broad to grant as an exec prefix: a filesystem
+/// root, `/usr`, `/opt`, `/opt/homebrew`, the home directory, or a
+/// top-level `/Volumes/<name>` mount (depth <= 2, i.e. `/Volumes` or
+/// `/Volumes/<name>` itself).
+fn is_guarded_prefix(path: &Path, home: &Path) -> bool {
+    if path == Path::new("/")
+        || path == Path::new("/usr")
+        || path == Path::new("/opt")
+        || path == Path::new("/opt/homebrew")
+        || path == home
+    {
+        return true;
+    }
+    if let Ok(rest) = path.strip_prefix("/Volumes") {
+        let depth = rest.components().count();
+        return depth <= 1;
+    }
+    false
+}
 fn system_exec_paths(home: &Path) -> Vec<PathBuf> {
     #[cfg(not(target_os = "windows"))]
     {
@@ -619,6 +757,102 @@ mod tests {
         let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
 
         assert_eq!(policy.spawn_mode, SpawnMode::Allowlist);
-        assert_eq!(policy.spawn_allowed_paths, vec![bin_path]);
+        let expected_canonical_bin =
+            std::fs::canonicalize(&bin_path).expect("canonicalize fake tool");
+        assert_eq!(policy.spawn_allowed_paths, vec![expected_canonical_bin]);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn from_entitlements_resolves_symlinked_spawn_entry_to_canonical_prefix() {
+        // Issue 17: an allowlist entry may be an absolute path to a symlink
+        // (e.g. a shim/wrapper) rather than the real binary. The resolved
+        // literal must be the CANONICAL target, and the derived prefix must
+        // be computed from that canonical path — a `<pkg>/<version>/bin/tool`
+        // layout should yield `<pkg>/<version>` as the prefix (grandparent,
+        // since the parent is named `bin`), not the shim's own directory.
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        let real_bin_dir = tmp.path().join("pkg").join("1.0").join("bin");
+        std::fs::create_dir_all(&real_bin_dir).expect("mkdir real bin dir");
+        let real_tool = make_fake_executable(&real_bin_dir, "tool");
+
+        let shim_dir = tmp.path().join("shim-bin");
+        std::fs::create_dir_all(&shim_dir).expect("mkdir shim dir");
+        let shim_tool = shim_dir.join("tool");
+        std::os::unix::fs::symlink(&real_tool, &shim_tool).expect("symlink shim -> real tool");
+
+        let mut ent = minimal_entitlements();
+        ent.processes.spawn.mode = SpawnMode::Allowlist;
+        ent.processes.spawn.allowed = vec![shim_tool.to_string_lossy().to_string()];
+
+        let agent_home = tmp.path().join("agents").join("symlink-test");
+        let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
+
+        let expected_canonical = std::fs::canonicalize(&real_tool).expect("canonicalize real tool");
+        assert!(
+            policy.spawn_allowed_paths.contains(&expected_canonical),
+            "spawn_allowed_paths must contain the canonical target of the symlink: {:?}",
+            policy.spawn_allowed_paths
+        );
+
+        let expected_prefix = std::fs::canonicalize(tmp.path().join("pkg").join("1.0"))
+            .expect("canonicalize pkg/1.0");
+        assert!(
+            policy.spawn_allowed_prefixes.contains(&expected_prefix),
+            "spawn_allowed_prefixes must contain the grandparent pkg/1.0 dir \
+             (parent is `bin`): {:?}",
+            policy.spawn_allowed_prefixes
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn from_entitlements_spawn_prefix_is_immediate_parent_when_not_under_bin() {
+        // When the binary's parent directory is NOT named `bin`, the prefix
+        // must be that immediate parent itself (no grandparent hop, no
+        // broad-root guard triggered) — deterministic, without needing to
+        // fake a real filesystem root or /usr.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let just_a_dir = tmp.path().join("just-a-dir");
+        std::fs::create_dir_all(&just_a_dir).expect("mkdir just-a-dir");
+        let tool_path = make_fake_executable(&just_a_dir, "tool");
+
+        let mut ent = minimal_entitlements();
+        ent.processes.spawn.mode = SpawnMode::Allowlist;
+        ent.processes.spawn.allowed = vec![tool_path.to_string_lossy().to_string()];
+
+        let agent_home = tmp.path().join("agents").join("non-bin-prefix-test");
+        let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
+
+        let expected_prefix = std::fs::canonicalize(&just_a_dir).expect("canonicalize just-a-dir");
+        assert_eq!(
+            policy.spawn_allowed_prefixes,
+            vec![expected_prefix],
+            "prefix must be the immediate parent dir when it isn't named `bin`"
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn from_entitlements_empty_spawn_allowlist_yields_empty_paths_and_prefixes() {
+        let mut ent = minimal_entitlements();
+        ent.processes.spawn.mode = SpawnMode::Allowlist;
+        ent.processes.spawn.allowed = vec![];
+
+        let agent_home = PathBuf::from("/tmp/agent_home_empty_spawn");
+        let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
+
+        assert_eq!(policy.spawn_mode, SpawnMode::Allowlist);
+        assert!(
+            policy.spawn_allowed_paths.is_empty(),
+            "empty allowlist must yield no resolved paths: {:?}",
+            policy.spawn_allowed_paths
+        );
+        assert!(
+            policy.spawn_allowed_prefixes.is_empty(),
+            "empty allowlist must yield no derived prefixes: {:?}",
+            policy.spawn_allowed_prefixes
+        );
     }
 }
