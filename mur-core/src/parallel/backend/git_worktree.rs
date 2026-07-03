@@ -23,9 +23,7 @@ impl ParallelBackend for GitWorktreeBackend {
         // Track names come from user-editable fleet.yaml — reject anything
         // that could escape .worktrees/ (issue #546).
         if !mur_common::fleet::valid_fleet_name(name) {
-            anyhow::bail!(
-                "invalid track name '{name}': use lowercase letters, digits, '-' or '_'"
-            );
+            anyhow::bail!("invalid track name '{name}': use lowercase letters, digits, '-' or '_'");
         }
         let path = self.repo_root.join(WORKTREES_DIR).join(name);
         let status = Command::new("git")
@@ -147,16 +145,8 @@ mod tests {
 
     #[test]
     fn create_and_destroy_worktree() {
-        // Requires running inside a git repo — skip in CI if not
-        let repo = std::env::current_dir().unwrap();
-        if !repo.join(".git").exists() && !repo.join("../../.git").exists() {
-            eprintln!("skip: not in a git repo");
-            return;
-        }
-        let backend = GitWorktreeBackend::new(
-            // Walk up to find actual git root
-            find_git_root(&repo).unwrap_or(repo),
-        );
+        let repo = temp_git_repo();
+        let backend = GitWorktreeBackend::new(repo.path().to_path_buf());
         let track = backend.create_track("test-parallel-track-tmp").unwrap();
         assert!(track.exists());
         backend.destroy(&track).unwrap();
@@ -192,8 +182,14 @@ mod tests {
         std::fs::write(td.path().join("gone.txt"), "gone").unwrap();
         run(&["add", "."]);
         run(&[
-            "-c", "user.email=t@t", "-c", "user.name=t",
-            "commit", "-q", "-m", "init",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "-m",
+            "init",
         ]);
         td
     }
@@ -216,8 +212,14 @@ mod tests {
         };
         run_in(&["add", "-A"]);
         run_in(&[
-            "-c", "user.email=t@t", "-c", "user.name=t",
-            "commit", "-q", "-m", "track work",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "-m",
+            "track work",
         ]);
         // Promote into a fresh copy of the original tree.
         let target = tempfile::tempdir().unwrap();
@@ -228,6 +230,9 @@ mod tests {
             std::fs::read_to_string(target.path().join("keep.txt")).unwrap(),
             "changed"
         );
-        assert!(!target.path().join("gone.txt").exists(), "deletion must propagate");
+        assert!(
+            !target.path().join("gone.txt").exists(),
+            "deletion must propagate"
+        );
     }
 }
