@@ -4,7 +4,7 @@ use std::fs;
 
 use anyhow::{Context, Result, anyhow, bail};
 use mur_common::LockFile;
-use mur_common::agent::{NetworkOutboundMode, ToolPolicy, ToolRule};
+use mur_common::agent::{NetworkOutboundMode, SpawnMode, ToolPolicy, ToolRule};
 
 use super::{load_profile_for_edit, pid_alive, resolve_mur_home, save_profile};
 
@@ -57,20 +57,38 @@ pub fn cmd_perm_show(name: &str, section: Option<&str>) -> Result<()> {
 }
 
 pub fn cmd_perm_set_mode(name: &str, key: &str, value: &str) -> Result<()> {
-    if key != "network.outbound" {
-        bail!("set-mode: unsupported key '{key}' (only network.outbound)");
+    match key {
+        "network.outbound" => {
+            let mode = match value {
+                "restricted" => NetworkOutboundMode::Restricted,
+                "unrestricted" => NetworkOutboundMode::Unrestricted,
+                "off" => NetworkOutboundMode::Off,
+                other => bail!("invalid outbound mode '{other}'"),
+            };
+            let (path, mut profile) = load_profile_for_edit(name)?;
+            profile.entitlements.network.outbound.mode = mode;
+            save_profile(&path, &mut profile)?;
+            warn_if_running(name);
+            Ok(())
+        }
+        "processes.spawn" => {
+            let mode = match value {
+                "strict" => SpawnMode::Strict,
+                "allowlist" => SpawnMode::Allowlist,
+                "any" => SpawnMode::Any,
+                "none" => SpawnMode::None,
+                other => bail!("invalid spawn mode '{other}'"),
+            };
+            let (path, mut profile) = load_profile_for_edit(name)?;
+            profile.entitlements.processes.spawn.mode = mode;
+            save_profile(&path, &mut profile)?;
+            warn_if_running(name);
+            Ok(())
+        }
+        other => bail!(
+            "set-mode: unsupported key '{other}' (valid keys: network.outbound, processes.spawn)"
+        ),
     }
-    let mode = match value {
-        "restricted" => NetworkOutboundMode::Restricted,
-        "unrestricted" => NetworkOutboundMode::Unrestricted,
-        "off" => NetworkOutboundMode::Off,
-        other => bail!("invalid outbound mode '{other}'"),
-    };
-    let (path, mut profile) = load_profile_for_edit(name)?;
-    profile.entitlements.network.outbound.mode = mode;
-    save_profile(&path, &mut profile)?;
-    warn_if_running(name);
-    Ok(())
 }
 
 pub fn cmd_perm_allow_host(name: &str, glob: &str) -> Result<()> {
