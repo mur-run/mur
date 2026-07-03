@@ -402,3 +402,26 @@ Propagation uses three configurable gates (`min_samples`, `min_fitness`, `min_so
 M7c preserves the M7a read-only invariant — propagation never mutates peer agent state. See `docs/superpowers/specs/2026-05-26-mur-skill-ecosystem-m7c-design.md`.
 
 Execution-time enforcement of these requirements (resolving globs, checking tool availability, applying fallbacks) is deferred to M6b.
+
+## Repo-ops agent roles: model and spawn-allowlist guidance
+
+Field notes from supervised fleet operation (issue #596):
+
+**Minimum model capability.** Scripted repo operations (verbatim `git`/`gh`
+command sequences, PR creation with provided title/body) require a
+sonnet-class model or better. Small quantized local models (observed:
+Qwen3.5-4B-MLX-4bit) return empty turns on these jobs — no tool calls, no
+text — even when every command is supplied verbatim. Assign repo-manager
+roles a cloud or ≥14B local model, or route their jobs through a supervisor.
+
+**SSH remotes need an explicit spawn grant.** `git push` over an SSH remote
+execs `ssh`, which is not in the typical repo-manager spawn allowlist
+(`gh`, `git`, `glab`, `tea`, `bb`, `acli`, `curl`) — the push dies at the
+kernel-level exec check, not in git. Either:
+
+- grant it: `mur agent perm allow-spawn <agent> ssh`, or
+- stay on HTTPS: `gh auth setup-git` so `git` uses gh's HTTPS credential
+  helper, avoiding `ssh` entirely (preferred for sandboxed agents).
+
+A repo-manager profile should choose one of these deliberately; the default
+allowlist plus an SSH remote is a silent-failure combination.
