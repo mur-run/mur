@@ -201,6 +201,24 @@ impl SandboxPolicy {
             spawn_search_dirs.push(clt_usr_bin);
         }
 
+        // Rustup toolchain bin dirs (Issue 17): the `cargo`/`rustc`/etc.
+        // shims installed in `~/.cargo/bin` are rustup PROXIES that re-exec
+        // the active toolchain's real binary under
+        // `<rustup_home>/toolchains/<toolchain>/bin/` at runtime. Seatbelt
+        // must see that real exec path too, so search every toolchain's
+        // `bin` dir directly (existence-checked, no subprocess spawned).
+        let rustup_home = std::env::var_os("RUSTUP_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".rustup"));
+        if let Ok(entries) = std::fs::read_dir(rustup_home.join("toolchains")) {
+            for entry in entries.flatten() {
+                let bin_dir = entry.path().join("bin");
+                if bin_dir.is_dir() {
+                    spawn_search_dirs.push(bin_dir);
+                }
+            }
+        }
+
         // Resolve each allowlisted binary name to EVERY absolute,
         // canonicalized, executable path it matches (Issue 17): a bare name
         // may resolve to multiple literal paths (e.g. the same binary name
@@ -222,8 +240,17 @@ impl SandboxPolicy {
                     && let Ok(canon) = std::fs::canonicalize(candidate)
                 {
                     matched_any = true;
+                    let differs = canon != candidate;
                     if !spawn_allowed_paths.contains(&canon) {
                         spawn_allowed_paths.push(canon);
+                    }
+                    // A relocated-home ancestor (e.g. a symlinked package
+                    // dir) means the exec path Seatbelt actually checks at
+                    // spawn time may be either the original or the
+                    // canonical form — keep both (dedup above/below still
+                    // applies to each individually).
+                    if differs && !spawn_allowed_paths.contains(&candidate.to_path_buf()) {
+                        spawn_allowed_paths.push(candidate.to_path_buf());
                     }
                 }
             } else {
@@ -235,8 +262,14 @@ impl SandboxPolicy {
                     match std::fs::canonicalize(&candidate) {
                         Ok(canon) => {
                             matched_any = true;
+                            let differs = canon != candidate;
                             if !spawn_allowed_paths.contains(&canon) {
                                 spawn_allowed_paths.push(canon);
+                            }
+                            // See the relocated-home comment above: keep
+                            // both forms when they differ.
+                            if differs && !spawn_allowed_paths.contains(&candidate) {
+                                spawn_allowed_paths.push(candidate.clone());
                             }
                         }
                         Err(err) => {
@@ -759,7 +792,23 @@ mod tests {
         assert_eq!(policy.spawn_mode, SpawnMode::Allowlist);
         let expected_canonical_bin =
             std::fs::canonicalize(&bin_path).expect("canonicalize fake tool");
-        assert_eq!(policy.spawn_allowed_paths, vec![expected_canonical_bin]);
+        // Tempdirs may sit behind a symlinked ancestor (e.g. /var ->
+        // /private/var on macOS), in which case BOTH the original and
+        // canonical forms are kept. Assert the canonical form is present and
+        // that no unrelated binary name leaked in.
+        assert!(
+            policy.spawn_allowed_paths.contains(&expected_canonical_bin),
+            "spawn_allowed_paths must contain the canonical fake tool path: {:?}",
+            policy.spawn_allowed_paths
+        );
+        assert!(
+            policy
+                .spawn_allowed_paths
+                .iter()
+                .all(|p| p.ends_with("fake-tool")),
+            "no unrelated binary name should have leaked into spawn_allowed_paths: {:?}",
+            policy.spawn_allowed_paths
+        );
     }
 
     #[test]
@@ -826,10 +875,22 @@ mod tests {
         let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
 
         let expected_prefix = std::fs::canonicalize(&just_a_dir).expect("canonicalize just-a-dir");
-        assert_eq!(
-            policy.spawn_allowed_prefixes,
-            vec![expected_prefix],
-            "prefix must be the immediate parent dir when it isn't named `bin`"
+        // Tempdirs may sit behind a symlinked ancestor (e.g. /var ->
+        // /private/var on macOS), in which case BOTH the original and
+        // canonical forms are kept. Assert the canonical form is present and
+        // that no unrelated directory name leaked in.
+        assert!(
+            policy.spawn_allowed_prefixes.contains(&expected_prefix),
+            "prefixes must contain the canonical just-a-dir path: {:?}",
+            policy.spawn_allowed_prefixes
+        );
+        assert!(
+            policy
+                .spawn_allowed_prefixes
+                .iter()
+                .all(|p| p.ends_with("just-a-dir")),
+            "no unrelated directory should have leaked into spawn_allowed_prefixes: {:?}",
+            policy.spawn_allowed_prefixes
         );
     }
 
@@ -853,6 +914,99 @@ mod tests {
             policy.spawn_allowed_prefixes.is_empty(),
             "empty allowlist must yield no derived prefixes: {:?}",
             policy.spawn_allowed_prefixes
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn fake_rustup_toolchain_bin_is_searched() {
+        // Issue 17: `~/.cargo/bin/cargo` is a rustup PROXY that re-execs the
+        // real binary under `<rustup_home>/toolchains/<toolchain>/bin/` at
+        // runtime — that real exec path must be discoverable via a bare
+        // `cargo` allowlist entry, without a real rustup install present.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let toolchain_bin = tmp.path().join("toolchains").join("tc1").join("bin");
+        std::fs::create_dir_all(&toolchain_bin).expect("mkdir toolchain bin dir");
+        let cargo_path = make_fake_executable(&toolchain_bin, "cargo");
+
+        let rustup_home = tmp.path().to_path_buf();
+        // SAFETY: set/cleared within this test; no other test in this
+        // process reads RUSTUP_HOME concurrently in a way that would race
+        // with this value (tests run single-threaded per-process here or
+        // isolated via nextest).
+        unsafe {
+            std::env::set_var("RUSTUP_HOME", &rustup_home);
+        }
+
+        let mut ent = minimal_entitlements();
+        ent.processes.spawn.mode = SpawnMode::Allowlist;
+        ent.processes.spawn.allowed = vec!["cargo".to_string()];
+
+        let agent_home = tmp.path().join("agents").join("rustup-test");
+        let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
+
+        // SAFETY: paired with the set_var above; always run even if an
+        // assertion below panics would be nicer, but this mirrors the
+        // existing set_var/remove_var pattern used elsewhere in this repo
+        // (see llm::tests).
+        unsafe {
+            std::env::remove_var("RUSTUP_HOME");
+        }
+
+        let expected_canonical =
+            std::fs::canonicalize(&cargo_path).expect("canonicalize toolchain cargo");
+        assert!(
+            policy.spawn_allowed_paths.contains(&expected_canonical),
+            "spawn_allowed_paths must contain the rustup toolchain's cargo: {:?}",
+            policy.spawn_allowed_paths
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn both_path_forms_kept_for_symlinked_ancestor() {
+        // Issue 17: when an ANCESTOR directory of an allowlisted absolute
+        // path is a symlink (not the file itself), Seatbelt's exec-path
+        // check may observe either the original (symlink-form) path or the
+        // canonicalized one depending on how the process is launched — both
+        // forms must be granted.
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        let real_bin_dir = tmp.path().join("pkg").join("bin");
+        std::fs::create_dir_all(&real_bin_dir).expect("mkdir real bin dir");
+        let real_tool = make_fake_executable(&real_bin_dir, "tool");
+
+        let link_pkg = tmp.path().join("link-pkg");
+        std::os::unix::fs::symlink(tmp.path().join("pkg"), &link_pkg)
+            .expect("symlink link-pkg -> pkg");
+
+        let symlink_form_tool = tmp.path().join("link-pkg").join("bin").join("tool");
+
+        let mut ent = minimal_entitlements();
+        ent.processes.spawn.mode = SpawnMode::Allowlist;
+        ent.processes.spawn.allowed = vec![symlink_form_tool.to_string_lossy().to_string()];
+
+        let agent_home = tmp.path().join("agents").join("symlink-ancestor-test");
+        let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
+
+        let expected_canonical = std::fs::canonicalize(&real_tool).expect("canonicalize real tool");
+        // The symlink-form entry stored in `spawn_allowed_paths` is the
+        // ORIGINAL entitlement literal, reconstructed verbatim from the
+        // string via `Path::new` — never itself canonicalized (only the
+        // resolved `canon` value is). `symlink_form_tool` was built the
+        // same way (joined on `tmp.path()` as returned, before any
+        // canonicalization), so it is the exact expected value — no need
+        // to canonicalize `tmp.path()` here, since doing so would collapse
+        // the `link-pkg` symlink hop this test specifically exercises.
+        assert!(
+            policy.spawn_allowed_paths.contains(&symlink_form_tool),
+            "spawn_allowed_paths must contain the symlink-form path: {:?}",
+            policy.spawn_allowed_paths
+        );
+        assert!(
+            policy.spawn_allowed_paths.contains(&expected_canonical),
+            "spawn_allowed_paths must contain the canonical form: {:?}",
+            policy.spawn_allowed_paths
         );
     }
 }
