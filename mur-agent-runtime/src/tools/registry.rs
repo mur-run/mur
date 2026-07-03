@@ -23,6 +23,7 @@ use crate::mcp::pool::McpPool;
 /// - `pool`: shared `McpPool` for the agent.
 pub async fn build_tools(
     bash: Option<(ToolDef, Arc<dyn ToolExecutor>)>,
+    read_file: Option<(ToolDef, Arc<dyn ToolExecutor>)>,
     servers: &[McpServerEntry],
     rules: &[ToolRule],
     pool: Arc<McpPool>,
@@ -35,6 +36,13 @@ pub async fn build_tools(
     {
         defs.push(def);
         map.insert("bash".to_string(), exec);
+    }
+
+    if let Some((def, exec)) = read_file
+        && resolve_tool_policy(rules, "read_file") != ToolPolicy::Deny
+    {
+        defs.push(def);
+        map.insert("read_file".to_string(), exec);
     }
 
     // Built-in no-op suggest_replies. Always in the executor map (so a call can
@@ -106,7 +114,7 @@ mod tests {
     #[tokio::test]
     async fn no_servers_empty_result() {
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
-        let (defs, map) = build_tools(None, &[], &[], pool).await;
+        let (defs, map) = build_tools(None, None, &[], &[], pool).await;
         // suggest_replies is always registered as a built-in.
         assert_eq!(defs.len(), 1);
         assert!(map.contains_key("suggest_replies"));
@@ -120,7 +128,7 @@ mod tests {
         });
         let bash_def = bash_exec.def();
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
-        let (defs, map) = build_tools(Some((bash_def, bash_exec)), &[], &[], pool).await;
+        let (defs, map) = build_tools(Some((bash_def, bash_exec)), None, &[], &[], pool).await;
         // bash + suggest_replies
         assert_eq!(defs.len(), 2);
         assert!(map.contains_key("bash"));
@@ -129,7 +137,7 @@ mod tests {
     #[tokio::test]
     async fn suggest_replies_is_registered() {
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
-        let (defs, map) = build_tools(None, &[], &[], pool).await;
+        let (defs, map) = build_tools(None, None, &[], &[], pool).await;
         assert!(map.contains_key("suggest_replies"));
         assert!(defs.iter().any(|d| d.name == "suggest_replies"));
     }
@@ -147,10 +155,54 @@ mod tests {
             risk: None,
         }];
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
-        let (defs, map) = build_tools(Some((bash_def, bash_exec)), &[], &rules, pool).await;
+        let (defs, map) = build_tools(Some((bash_def, bash_exec)), None, &[], &rules, pool).await;
         // bash is denied; suggest_replies is still registered.
         assert_eq!(defs.len(), 1);
         assert!(!map.contains_key("bash"));
+        assert!(map.contains_key("suggest_replies"));
+    }
+
+    #[tokio::test]
+    async fn read_file_tool_included_when_allowed() {
+        use crate::tools::read_file::ReadFileTool;
+        let read_file_exec: Arc<dyn ToolExecutor> = Arc::new(ReadFileTool::new(
+            std::path::PathBuf::from("/tmp"),
+            mur_common::agent::FilesystemEntitlement::default(),
+        ));
+        let read_file_def = read_file_exec.def();
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+        let (defs, map) =
+            build_tools(None, Some((read_file_def, read_file_exec)), &[], &[], pool).await;
+        // read_file + suggest_replies
+        assert_eq!(defs.len(), 2);
+        assert!(map.contains_key("read_file"));
+    }
+
+    #[tokio::test]
+    async fn read_file_tool_excluded_when_denied() {
+        use crate::tools::read_file::ReadFileTool;
+        let read_file_exec: Arc<dyn ToolExecutor> = Arc::new(ReadFileTool::new(
+            std::path::PathBuf::from("/tmp"),
+            mur_common::agent::FilesystemEntitlement::default(),
+        ));
+        let read_file_def = read_file_exec.def();
+        let rules = vec![ToolRule {
+            pattern: "read_file".to_string(),
+            policy: ToolPolicy::Deny,
+            risk: None,
+        }];
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+        let (defs, map) = build_tools(
+            None,
+            Some((read_file_def, read_file_exec)),
+            &[],
+            &rules,
+            pool,
+        )
+        .await;
+        // read_file is denied; suggest_replies is still registered.
+        assert_eq!(defs.len(), 1);
+        assert!(!map.contains_key("read_file"));
         assert!(map.contains_key("suggest_replies"));
     }
 }
