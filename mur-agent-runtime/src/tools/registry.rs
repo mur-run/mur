@@ -24,6 +24,8 @@ use crate::mcp::pool::McpPool;
 pub async fn build_tools(
     bash: Option<(ToolDef, Arc<dyn ToolExecutor>)>,
     read_file: Option<(ToolDef, Arc<dyn ToolExecutor>)>,
+    write_file: Option<(ToolDef, Arc<dyn ToolExecutor>)>,
+    edit_file: Option<(ToolDef, Arc<dyn ToolExecutor>)>,
     servers: &[McpServerEntry],
     rules: &[ToolRule],
     pool: Arc<McpPool>,
@@ -43,6 +45,20 @@ pub async fn build_tools(
     {
         defs.push(def);
         map.insert("read_file".to_string(), exec);
+    }
+
+    if let Some((def, exec)) = write_file
+        && resolve_tool_policy(rules, "write_file") != ToolPolicy::Deny
+    {
+        defs.push(def);
+        map.insert("write_file".to_string(), exec);
+    }
+
+    if let Some((def, exec)) = edit_file
+        && resolve_tool_policy(rules, "edit_file") != ToolPolicy::Deny
+    {
+        defs.push(def);
+        map.insert("edit_file".to_string(), exec);
     }
 
     // Built-in no-op suggest_replies. Always in the executor map (so a call can
@@ -114,7 +130,7 @@ mod tests {
     #[tokio::test]
     async fn no_servers_empty_result() {
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
-        let (defs, map) = build_tools(None, None, &[], &[], pool).await;
+        let (defs, map) = build_tools(None, None, None, None, &[], &[], pool).await;
         // suggest_replies is always registered as a built-in.
         assert_eq!(defs.len(), 1);
         assert!(map.contains_key("suggest_replies"));
@@ -128,7 +144,16 @@ mod tests {
         });
         let bash_def = bash_exec.def();
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
-        let (defs, map) = build_tools(Some((bash_def, bash_exec)), None, &[], &[], pool).await;
+        let (defs, map) = build_tools(
+            Some((bash_def, bash_exec)),
+            None,
+            None,
+            None,
+            &[],
+            &[],
+            pool,
+        )
+        .await;
         // bash + suggest_replies
         assert_eq!(defs.len(), 2);
         assert!(map.contains_key("bash"));
@@ -137,7 +162,7 @@ mod tests {
     #[tokio::test]
     async fn suggest_replies_is_registered() {
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
-        let (defs, map) = build_tools(None, None, &[], &[], pool).await;
+        let (defs, map) = build_tools(None, None, None, None, &[], &[], pool).await;
         assert!(map.contains_key("suggest_replies"));
         assert!(defs.iter().any(|d| d.name == "suggest_replies"));
     }
@@ -155,7 +180,16 @@ mod tests {
             risk: None,
         }];
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
-        let (defs, map) = build_tools(Some((bash_def, bash_exec)), None, &[], &rules, pool).await;
+        let (defs, map) = build_tools(
+            Some((bash_def, bash_exec)),
+            None,
+            None,
+            None,
+            &[],
+            &rules,
+            pool,
+        )
+        .await;
         // bash is denied; suggest_replies is still registered.
         assert_eq!(defs.len(), 1);
         assert!(!map.contains_key("bash"));
@@ -171,8 +205,16 @@ mod tests {
         ));
         let read_file_def = read_file_exec.def();
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
-        let (defs, map) =
-            build_tools(None, Some((read_file_def, read_file_exec)), &[], &[], pool).await;
+        let (defs, map) = build_tools(
+            None,
+            Some((read_file_def, read_file_exec)),
+            None,
+            None,
+            &[],
+            &[],
+            pool,
+        )
+        .await;
         // read_file + suggest_replies
         assert_eq!(defs.len(), 2);
         assert!(map.contains_key("read_file"));
@@ -195,6 +237,8 @@ mod tests {
         let (defs, map) = build_tools(
             None,
             Some((read_file_def, read_file_exec)),
+            None,
+            None,
             &[],
             &rules,
             pool,
@@ -203,6 +247,114 @@ mod tests {
         // read_file is denied; suggest_replies is still registered.
         assert_eq!(defs.len(), 1);
         assert!(!map.contains_key("read_file"));
+        assert!(map.contains_key("suggest_replies"));
+    }
+
+    #[tokio::test]
+    async fn write_file_tool_included_when_allowed() {
+        use crate::tools::write_file::WriteFileTool;
+        let write_file_exec: Arc<dyn ToolExecutor> = Arc::new(WriteFileTool::new(
+            std::path::PathBuf::from("/tmp"),
+            mur_common::agent::FilesystemEntitlement::default(),
+        ));
+        let write_file_def = write_file_exec.def();
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+        let (defs, map) = build_tools(
+            None,
+            None,
+            Some((write_file_def, write_file_exec)),
+            None,
+            &[],
+            &[],
+            pool,
+        )
+        .await;
+        // write_file + suggest_replies
+        assert_eq!(defs.len(), 2);
+        assert!(map.contains_key("write_file"));
+    }
+
+    #[tokio::test]
+    async fn write_file_tool_excluded_when_denied() {
+        use crate::tools::write_file::WriteFileTool;
+        let write_file_exec: Arc<dyn ToolExecutor> = Arc::new(WriteFileTool::new(
+            std::path::PathBuf::from("/tmp"),
+            mur_common::agent::FilesystemEntitlement::default(),
+        ));
+        let write_file_def = write_file_exec.def();
+        let rules = vec![ToolRule {
+            pattern: "write_file".to_string(),
+            policy: ToolPolicy::Deny,
+            risk: None,
+        }];
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+        let (defs, map) = build_tools(
+            None,
+            None,
+            Some((write_file_def, write_file_exec)),
+            None,
+            &[],
+            &rules,
+            pool,
+        )
+        .await;
+        // write_file is denied; suggest_replies is still registered.
+        assert_eq!(defs.len(), 1);
+        assert!(!map.contains_key("write_file"));
+        assert!(map.contains_key("suggest_replies"));
+    }
+
+    #[tokio::test]
+    async fn edit_file_tool_included_when_allowed() {
+        use crate::tools::edit_file::EditFileTool;
+        let edit_file_exec: Arc<dyn ToolExecutor> = Arc::new(EditFileTool::new(
+            std::path::PathBuf::from("/tmp"),
+            mur_common::agent::FilesystemEntitlement::default(),
+        ));
+        let edit_file_def = edit_file_exec.def();
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+        let (defs, map) = build_tools(
+            None,
+            None,
+            None,
+            Some((edit_file_def, edit_file_exec)),
+            &[],
+            &[],
+            pool,
+        )
+        .await;
+        // edit_file + suggest_replies
+        assert_eq!(defs.len(), 2);
+        assert!(map.contains_key("edit_file"));
+    }
+
+    #[tokio::test]
+    async fn edit_file_tool_excluded_when_denied() {
+        use crate::tools::edit_file::EditFileTool;
+        let edit_file_exec: Arc<dyn ToolExecutor> = Arc::new(EditFileTool::new(
+            std::path::PathBuf::from("/tmp"),
+            mur_common::agent::FilesystemEntitlement::default(),
+        ));
+        let edit_file_def = edit_file_exec.def();
+        let rules = vec![ToolRule {
+            pattern: "edit_file".to_string(),
+            policy: ToolPolicy::Deny,
+            risk: None,
+        }];
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+        let (defs, map) = build_tools(
+            None,
+            None,
+            None,
+            Some((edit_file_def, edit_file_exec)),
+            &[],
+            &rules,
+            pool,
+        )
+        .await;
+        // edit_file is denied; suggest_replies is still registered.
+        assert_eq!(defs.len(), 1);
+        assert!(!map.contains_key("edit_file"));
         assert!(map.contains_key("suggest_replies"));
     }
 }
