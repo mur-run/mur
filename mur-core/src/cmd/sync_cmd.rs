@@ -904,6 +904,15 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str
         eprintln!("  ⚠ Device sync error: {}", e);
     }
 
+    // Ensure built-in skills are installed BEFORE loading the corpus — on a
+    // pristine home the corpus is empty and the early return below would
+    // otherwise skip installation forever (issue #593).
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?;
+    let skill_installed = ensure_mur_skill(&home)?;
+    if !quiet && skill_installed {
+        println!("  🎓 MUR skill installed/updated for AI tools");
+    }
+
     // Skills are the sync content source (workflow-engine v2 P1b).
     let mur_dir = mur_common::trust::mur_home();
     let candidates =
@@ -965,13 +974,6 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str
                 target_path.display()
             );
         }
-    }
-
-    // ─── Ensure skills are installed ───────────────────────────
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?;
-    let skill_installed = ensure_mur_skill(&home)?;
-    if !quiet && skill_installed {
-        println!("  🎓 MUR skill installed/updated for AI tools");
     }
 
     // ─── Auto-reindex if dirty ───────────────────────────────
