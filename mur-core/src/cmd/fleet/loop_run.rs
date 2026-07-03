@@ -391,7 +391,7 @@ pub async fn run_guarded(
             goal: iter_goal.clone(),
             ..fleet.clone()
         };
-        let proc = super::plan::plan_via_router(mur_home, &planning_fleet, &pre_events)
+        let proc = super::plan::plan_via_router(mur_home, &planning_fleet, &iter_goal, &pre_events)
             .unwrap_or_else(|| {
                 build_fleet_procedure(&iter_goal, &fleet.members, fleet.parallel.as_ref())
                     .expect("members validated by caller guard")
