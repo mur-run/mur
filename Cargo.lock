@@ -6447,6 +6447,7 @@ name = "mur-compress"
 version = "2.36.0"
 dependencies = [
  "blake3",
+ "chrono",
  "flate2",
  "fs2",
  "regex",
