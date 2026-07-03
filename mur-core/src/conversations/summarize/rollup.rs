@@ -182,6 +182,7 @@ pub async fn rollup_week(
         model: cfg.abstractive_model.clone(),
         endpoint: Some(cfg.ollama_endpoint.clone()),
         api_key_env: None,
+        api_key_ref: None,
         timeout_secs: Some(120),
     };
     let abstractive_backend =
@@ -435,6 +436,7 @@ pub async fn rollup_month(
         model: cfg.abstractive_model.clone(),
         endpoint: Some(cfg.ollama_endpoint.clone()),
         api_key_env: None,
+        api_key_ref: None,
         timeout_secs: Some(120),
     };
     let abstractive_backend =

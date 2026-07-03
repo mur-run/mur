@@ -223,6 +223,7 @@ pub async fn ask_stream(
             model: req.model.clone(),
             endpoint: Some(req.endpoint.clone()),
             api_key_env: None,
+            api_key_ref: None,
             timeout_secs: Some(req.timeout.as_secs()),
         }
     };

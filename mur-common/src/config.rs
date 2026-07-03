@@ -274,6 +274,11 @@ pub struct EmbeddingConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key_env: Option<String>,
 
+    /// SecretRef string for the API key (e.g. "keychain:mur/anthropic",
+    /// "env:ANTHROPIC_API_KEY"). Takes precedence over `api_key_env`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_ref: Option<String>,
+
     /// Custom OpenAI-compatible API URL (e.g. for OpenRouter)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openai_url: Option<String>,
@@ -287,6 +292,7 @@ impl Default for EmbeddingConfig {
             dimensions: default_dimensions(),
             ollama_endpoint: default_ollama_endpoint(),
             api_key_env: None,
+            api_key_ref: None,
             openai_url: None,
         }
     }
@@ -305,6 +311,11 @@ pub struct LlmConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key_env: Option<String>,
 
+    /// SecretRef string for the API key (e.g. "keychain:mur/anthropic",
+    /// "env:ANTHROPIC_API_KEY"). Takes precedence over `api_key_env`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_ref: Option<String>,
+
     /// Custom OpenAI-compatible API URL (e.g. for OpenRouter)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openai_url: Option<String>,
@@ -316,6 +327,7 @@ impl Default for LlmConfig {
             provider: default_llm_provider(),
             model: default_llm_model(),
             api_key_env: Some("ANTHROPIC_API_KEY".to_string()),
+            api_key_ref: None,
             openai_url: None,
         }
     }
@@ -345,6 +357,7 @@ impl LlmConfig {
             model: self.model.clone(),
             endpoint: self.openai_url.clone(),
             api_key_env: self.api_key_env.clone(),
+            api_key_ref: self.api_key_ref.clone(),
             timeout_secs: None,
         }
     }
@@ -372,6 +385,8 @@ pub struct BackendConfig {
     pub endpoint: Option<String>,
     /// Env var holding the API key. None = no auth (ollama).
     pub api_key_env: Option<String>,
+    /// SecretRef string for the API key. Takes precedence over `api_key_env`.
+    pub api_key_ref: Option<String>,
     /// Per-call timeout in seconds. None = 120s.
     pub timeout_secs: Option<u64>,
 }
@@ -383,6 +398,7 @@ impl Default for BackendConfig {
             model: DEFAULT_LOCAL_LLM_MODEL.into(),
             endpoint: None,
             api_key_env: None,
+            api_key_ref: None,
             timeout_secs: None,
         }
     }
@@ -621,6 +637,7 @@ impl AskConfig {
             model: self.model.clone(),
             endpoint: Some(self.ollama_endpoint.clone()),
             api_key_env: None,
+            api_key_ref: None,
             timeout_secs: Some(self.timeout_secs as u64),
         })
     }
@@ -642,6 +659,7 @@ impl AskConfig {
                 model: self.model.clone(),
                 endpoint: Some(self.ollama_endpoint.clone()),
                 api_key_env: None,
+                api_key_ref: None,
                 timeout_secs: Some(self.rewriter_timeout_secs as u64),
             })
     }
@@ -816,6 +834,7 @@ impl CompactConfig {
                 model: self.extractive_model.clone(),
                 endpoint: Some(self.ollama_endpoint.clone()),
                 api_key_env: None,
+                api_key_ref: None,
                 timeout_secs: Some(120),
             })
     }
@@ -830,6 +849,7 @@ impl CompactConfig {
                 model: self.abstractive_model.clone(),
                 endpoint: Some(self.ollama_endpoint.clone()),
                 api_key_env: None,
+                api_key_ref: None,
                 timeout_secs: Some(120),
             })
     }
@@ -1286,6 +1306,7 @@ embedding:
             provider: "anthropic".into(),
             model: "claude-haiku-4-5".into(),
             api_key_env: Some("ANTHROPIC_API_KEY".into()),
+            api_key_ref: None,
             openai_url: None,
         };
         let b = cfg.to_backend_config();
@@ -1302,6 +1323,7 @@ embedding:
             provider: "openai".into(),
             model: "gpt-4o-mini".into(),
             api_key_env: None,
+            api_key_ref: None,
             openai_url: Some("https://api.together.xyz/v1".into()),
         };
         let b = cfg.to_backend_config();
@@ -1316,6 +1338,7 @@ embedding:
             provider: "ollama".into(),
             model: "qwen3:14b".into(),
             api_key_env: None,
+            api_key_ref: None,
             openai_url: Some("http://192.168.1.10:11434".into()),
         };
         let b = cfg.to_backend_config();
@@ -1332,6 +1355,7 @@ embedding:
             provider: "custom-name".into(),
             model: "some-model".into(),
             api_key_env: Some("CUSTOM_KEY".into()),
+            api_key_ref: None,
             openai_url: Some("https://my-proxy.local/v1".into()),
         };
         let b = cfg.to_backend_config();
@@ -1340,6 +1364,28 @@ embedding:
             "unknown provider + openai_url should alias to openai"
         );
         assert_eq!(b.endpoint.as_deref(), Some("https://my-proxy.local/v1"));
+    }
+
+    #[test]
+    fn api_key_ref_roundtrips_and_defaults_none() {
+        // Old YAML without the field still parses, field defaults to None.
+        let b: BackendConfig = serde_yaml_ng::from_str("provider: anthropic\nmodel: m\n").unwrap();
+        assert_eq!(b.api_key_ref, None);
+        let l: LlmConfig = serde_yaml_ng::from_str("provider: anthropic\nmodel: m\n").unwrap();
+        assert_eq!(l.api_key_ref, None);
+        let e: EmbeddingConfig = serde_yaml_ng::from_str("provider: ollama\nmodel: m\n").unwrap();
+        assert_eq!(e.api_key_ref, None);
+
+        // Set → survives YAML round-trip and to_backend_config.
+        let mut l2 = LlmConfig::default();
+        l2.api_key_ref = Some("keychain:mur/anthropic".into());
+        let y = serde_yaml_ng::to_string(&l2).unwrap();
+        let l3: LlmConfig = serde_yaml_ng::from_str(&y).unwrap();
+        assert_eq!(l3.api_key_ref.as_deref(), Some("keychain:mur/anthropic"));
+        assert_eq!(
+            l3.to_backend_config().api_key_ref.as_deref(),
+            Some("keychain:mur/anthropic")
+        );
     }
 }
 
@@ -1390,6 +1436,7 @@ timeout_secs: 60
             model: "claude-haiku-4-5".into(),
             endpoint: Some("https://api.anthropic.com".into()),
             api_key_env: Some("ANTHROPIC_API_KEY".into()),
+            api_key_ref: None,
             timeout_secs: Some(60),
         };
         let yaml = serde_yaml::to_string(&original).unwrap();
@@ -1910,6 +1957,7 @@ backend:
             model: "claude-haiku-4-5".into(),
             endpoint: None,
             api_key_env: Some("ANTHROPIC_API_KEY".into()),
+            api_key_ref: None,
             timeout_secs: Some(10),
         });
         let b = cfg.synthesize_backend();
@@ -1946,6 +1994,7 @@ backend:
             model: "claude-haiku-4-5".into(),
             endpoint: None,
             api_key_env: Some("ANTHROPIC_API_KEY".into()),
+            api_key_ref: None,
             timeout_secs: Some(30),
         });
         let b = cfg.synthesize_rewriter_backend();

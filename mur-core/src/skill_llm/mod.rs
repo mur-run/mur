@@ -109,6 +109,7 @@ fn backend_config_from_entry(entry: &ModelEntry) -> BackendConfig {
         model: entry.model.clone(),
         endpoint: entry.base_url.clone(),
         api_key_env,
+        api_key_ref: None,
         timeout_secs: None,
     }
 }
