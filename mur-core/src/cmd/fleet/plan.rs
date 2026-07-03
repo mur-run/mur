@@ -85,7 +85,7 @@ fn extract_plan(text: &str) -> Option<RouterPlan> {
 /// broadcast. Validates: parseable JSON, non-empty and ≤ `MAX_PLAN_STEPS`, every
 /// `member` is a real fleet member, and (via the executor's own validator)
 /// resolvable `depends_on` with no cycles.
-pub fn parse_router_plan(text: &str, members: &[String]) -> Option<Procedure> {
+pub fn parse_router_plan(text: &str, members: &[String], goal: &str) -> Option<Procedure> {
     let plan = extract_plan(text)?;
     if plan.steps.len() > MAX_PLAN_STEPS {
         return None;
@@ -103,7 +103,10 @@ pub fn parse_router_plan(text: &str, members: &[String]) -> Option<Procedure> {
         };
         steps.push(ProcedureStep {
             description: format!("{}: {task}", ps.member),
-            intent: Some(task),
+            intent: Some(format!(
+                "{goal}\n\n[Router assignment for {}]: {task}",
+                ps.member
+            )),
             delegate_to: Some(ps.member.clone()),
             id: Some(ps.id.clone().unwrap_or_else(|| format!("s{i}"))),
             depends_on: ps.depends_on.clone(),
@@ -131,6 +134,7 @@ pub fn parse_router_plan(text: &str, members: &[String]) -> Option<Procedure> {
 pub fn plan_via_router(
     mur_home: &Path,
     fleet: &Fleet,
+    goal: &str,
     events: &[ChannelEvent],
 ) -> Option<Procedure> {
     let prompt = build_plan_prompt(fleet, events);
@@ -147,7 +151,7 @@ pub fn plan_via_router(
         |_step| {},
     )
     .ok()?;
-    parse_router_plan(&out, &fleet.members)
+    parse_router_plan(&out, &fleet.members, goal)
 }
 
 fn build_plan_prompt(fleet: &Fleet, events: &[ChannelEvent]) -> String {
@@ -187,18 +191,21 @@ mod tests {
             {"id":"a","member":"pm","task":"triage"},
             {"id":"b","member":"qa","task":"test","depends_on":["a"]}
         ]}"#;
-        let p = parse_router_plan(txt, &members()).unwrap();
+        let p = parse_router_plan(txt, &members(), "G").unwrap();
         assert_eq!(p.steps.len(), 2);
         assert_eq!(p.steps[0].delegate_to.as_deref(), Some("pm"));
         assert_eq!(p.steps[1].delegate_to.as_deref(), Some("qa"));
         assert_eq!(p.steps[1].depends_on, vec!["a".to_string()]);
-        assert_eq!(p.steps[0].intent.as_deref(), Some("triage"));
+        assert_eq!(
+            p.steps[0].intent.as_deref(),
+            Some("G\n\n[Router assignment for pm]: triage")
+        );
     }
 
     #[test]
     fn extracts_json_from_prose_and_fences() {
         let txt = "Sure! Here is the plan:\n```json\n{\"steps\":[{\"member\":\"pm\",\"task\":\"go\"}]}\n```\nHope that helps.";
-        let p = parse_router_plan(txt, &members()).unwrap();
+        let p = parse_router_plan(txt, &members(), "G").unwrap();
         assert_eq!(p.steps.len(), 1);
         assert_eq!(p.steps[0].delegate_to.as_deref(), Some("pm"));
     }
@@ -206,14 +213,14 @@ mod tests {
     #[test]
     fn falls_back_on_unknown_member() {
         let txt = r#"{"steps":[{"member":"intruder","task":"x"}]}"#;
-        assert!(parse_router_plan(txt, &members()).is_none());
+        assert!(parse_router_plan(txt, &members(), "G").is_none());
     }
 
     #[test]
     fn falls_back_on_malformed_or_empty() {
-        assert!(parse_router_plan("not json at all", &members()).is_none());
-        assert!(parse_router_plan(r#"{"steps":[]}"#, &members()).is_none());
-        assert!(parse_router_plan("{ totally broken", &members()).is_none());
+        assert!(parse_router_plan("not json at all", &members(), "G").is_none());
+        assert!(parse_router_plan(r#"{"steps":[]}"#, &members(), "G").is_none());
+        assert!(parse_router_plan("{ totally broken", &members(), "G").is_none());
     }
 
     #[test]
@@ -223,10 +230,10 @@ mod tests {
             {"id":"a","member":"pm","task":"x","depends_on":["b"]},
             {"id":"b","member":"qa","task":"y","depends_on":["a"]}
         ]}"#;
-        assert!(parse_router_plan(cyc, &members()).is_none());
+        assert!(parse_router_plan(cyc, &members(), "G").is_none());
         // depends_on an id that doesn't exist
         let bad = r#"{"steps":[{"id":"a","member":"pm","task":"x","depends_on":["ghost"]}]}"#;
-        assert!(parse_router_plan(bad, &members()).is_none());
+        assert!(parse_router_plan(bad, &members(), "G").is_none());
     }
 
     #[test]
@@ -235,7 +242,7 @@ mod tests {
             {"id":"s1","member":"pm","task":"a"},
             {"id":"s1","member":"qa","task":"b"}
         ]}"#;
-        assert!(parse_router_plan(txt, &members()).is_none());
+        assert!(parse_router_plan(txt, &members(), "G").is_none());
     }
 
     #[test]
@@ -243,7 +250,7 @@ mod tests {
         // A stray brace before the real JSON (and trailing prose braces) must
         // not defeat extraction — the greedy first-{ to last-} version failed.
         let txt = "Plan: give work to {member} thus: {\"steps\":[{\"member\":\"pm\",\"task\":\"go\"}]} ok}";
-        let p = parse_router_plan(txt, &members()).unwrap();
+        let p = parse_router_plan(txt, &members(), "G").unwrap();
         assert_eq!(p.steps.len(), 1);
         assert_eq!(p.steps[0].delegate_to.as_deref(), Some("pm"));
     }
@@ -252,8 +259,24 @@ mod tests {
     fn ignores_braces_inside_strings() {
         // `}{` inside a task string must not be read as object boundaries.
         let txt = r#"{"steps":[{"member":"pm","task":"emit }{ verbatim"}]}"#;
-        let p = parse_router_plan(txt, &members()).unwrap();
+        let p = parse_router_plan(txt, &members(), "G").unwrap();
         assert_eq!(p.steps.len(), 1);
-        assert_eq!(p.steps[0].intent.as_deref(), Some("emit }{ verbatim"));
+        assert_eq!(
+            p.steps[0].intent.as_deref(),
+            Some("G\n\n[Router assignment for pm]: emit }{ verbatim")
+        );
+    }
+
+    #[test]
+    fn plan_intent_carries_original_goal_verbatim() {
+        let goal = "Implement the FULL spec at /abs/path/spec.md — do not paraphrase.";
+        let text = r#"{"steps":[{"member":"pm","task":"do part one"}]}"#;
+        let p = parse_router_plan(text, &["pm".to_string()], goal).unwrap();
+        let intent = p.steps[0].intent.as_deref().unwrap();
+        assert!(
+            intent.starts_with(goal),
+            "original goal must lead the intent"
+        );
+        assert!(intent.contains("do part one"));
     }
 }
