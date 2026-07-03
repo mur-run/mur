@@ -1,9 +1,12 @@
 pub mod bash;
+pub mod edit_file;
+pub(crate) mod fs_policy;
 pub mod mcp;
 pub mod naming;
 pub mod read_file;
 pub mod registry;
 pub(crate) mod suggest;
+pub mod write_file;
 
 use crate::llm::ToolDef;
 

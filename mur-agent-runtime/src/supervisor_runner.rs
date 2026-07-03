@@ -289,10 +289,24 @@ pub async fn build_provider_runner(
             profile.inner.entitlements.filesystem.clone(),
         ));
     let read_file_def = read_file_exec.def();
+    let write_file_exec: Arc<dyn crate::tools::ToolExecutor> =
+        Arc::new(crate::tools::write_file::WriteFileTool::new(
+            agent_home.to_path_buf(),
+            profile.inner.entitlements.filesystem.clone(),
+        ));
+    let write_file_def = write_file_exec.def();
+    let edit_file_exec: Arc<dyn crate::tools::ToolExecutor> =
+        Arc::new(crate::tools::edit_file::EditFileTool::new(
+            agent_home.to_path_buf(),
+            profile.inner.entitlements.filesystem.clone(),
+        ));
+    let edit_file_def = edit_file_exec.def();
     let tools_policy = profile.inner.entitlements.tools.clone();
     let (_defs, tool_map) = build_tools(
         Some((bash_def, bash_exec)),
         Some((read_file_def, read_file_exec)),
+        Some((write_file_def, write_file_exec)),
+        Some((edit_file_def, edit_file_exec)),
         &enabled_mcp,
         &tools_policy,
         pool.clone(),
