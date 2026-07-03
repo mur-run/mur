@@ -60,6 +60,32 @@ mod tests {
     use mur_common::parallel::{JudgeConfig, ParallelConfig, PreFilterKind, Rubric, TrackConfig};
     use std::path::PathBuf;
 
+    /// Throwaway git repo with one commit — hermetic ground for worktree ops.
+    fn temp_repo() -> tempfile::TempDir {
+        let td = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(args)
+                .current_dir(td.path())
+                .status()
+                .unwrap();
+            assert!(st.success(), "git {args:?} failed");
+        };
+        run(&["init", "-q"]);
+        run(&[
+            "-c",
+            "user.email=test@test",
+            "-c",
+            "user.name=test",
+            "commit",
+            "--allow-empty",
+            "-q",
+            "-m",
+            "init",
+        ]);
+        td
+    }
+
     /// Walk up from `from` looking for a `.git` DIRECTORY (main repo root, not a worktree).
     fn find_main_repo(from: &Path) -> Option<PathBuf> {
         let mut cur = from.to_path_buf();
@@ -183,11 +209,8 @@ mod tests {
 
     #[test]
     fn create_tracks_returns_one_track_per_config() {
-        let cwd = std::env::current_dir().unwrap();
-        let Some(repo) = find_main_repo(&cwd) else {
-            eprintln!("skip: not in git repo");
-            return;
-        };
+        let td = temp_repo();
+        let repo = td.path().to_path_buf();
         let cfg = make_config("create");
         let ts = create_tracks(&cfg, &repo).unwrap();
         assert_eq!(ts.tracks.len(), 2);
@@ -204,11 +227,8 @@ mod tests {
 
     #[test]
     fn destroy_tracks_removes_worktrees() {
-        let cwd = std::env::current_dir().unwrap();
-        let Some(repo) = find_main_repo(&cwd) else {
-            eprintln!("skip: not in git repo");
-            return;
-        };
+        let td = temp_repo();
+        let repo = td.path().to_path_buf();
         let cfg = make_config("destroy");
         let ts = create_tracks(&cfg, &repo).unwrap();
         let paths: Vec<_> = ts.tracks.iter().map(|t| t.worktree_path.clone()).collect();
