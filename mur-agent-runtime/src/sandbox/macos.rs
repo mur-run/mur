@@ -67,18 +67,23 @@ const MACOS_SYSTEM_WRITE_PATHS: &[&str] = &[
 /// locations only; anything else must be explicitly allowlisted via
 /// `spawn_allowed_paths`.
 ///
-/// **Exemption semantic (intentional, not a bug):** every binary under
-/// these three roots — `mkdir`, `cat`, `cp`, `git`, etc. — is exec'able
-/// regardless of `spawn_allowed_paths`, because the shell tool (`bash`)
-/// needs a working coreutils environment to be usable at all (see
-/// `hooks/b0.rs`'s coarse spawn gate, which defers per-binary enforcement
-/// to this layer). This wave's `spawn_allowed_paths` allowlist therefore
-/// bounds the real threat surface — downloaded, Homebrew-installed, and
-/// project-local binaries outside the system roots — not an executable
-/// already trusted enough to ship with the OS. A stricter "Strict" spawn
-/// mode that also fences in these system paths (breaking `bash` down to
-/// only the exact allowlisted binaries, no shell built-ins) is a
-/// documented follow-up, not shipped this wave.
+/// **Exemption semantic (intentional, not a bug) — `Allowlist`/`None` only:**
+/// under `SpawnMode::Allowlist` (and the exec-deny baseline `None` shares),
+/// every binary under these three roots — `mkdir`, `cat`, `cp`, `git`,
+/// etc. — is exec'able regardless of `spawn_allowed_paths`, because the
+/// shell tool (`bash`) needs a working coreutils environment to be usable
+/// at all (see `hooks/b0.rs`'s coarse spawn gate, which defers per-binary
+/// enforcement to this layer). That allowlist therefore bounds the real
+/// threat surface — downloaded, Homebrew-installed, and project-local
+/// binaries outside the system roots — not an executable already trusted
+/// enough to ship with the OS.
+///
+/// `SpawnMode::Strict` does NOT get this exemption (see `build_sbpl_profile`):
+/// it skips this whole path list, so only the resolved shell binary the
+/// `bash` tool spawns (auto-seeded into `spawn_allowed_paths` by
+/// `SandboxPolicy::from_entitlements`) plus the profile's own
+/// `spawn_allowed_paths`/`spawn_allowed_prefixes` remain exec'able — no
+/// other system binary, including coreutils, is implied.
 const MACOS_SYSTEM_EXEC_PATHS: &[&str] = &["/bin", "/usr/bin", "/usr/lib"];
 
 /// Escape a string for safe inclusion in an SBPL double-quoted literal.
@@ -175,17 +180,25 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
 
     // Process-exec restrictions. Under `(allow default)` any binary is
     // spawnable unless explicitly denied. When spawn_mode is not `Any`
-    // (i.e. Allowlist or None), deny all exec by default and re-allow only
-    // the standard system exec locations (shell interpreter + coreutils,
-    // needed for MCP spawn / shell tools to keep functioning) plus the
-    // policy's own fs_exec dirs, then allow each individually-resolved
-    // spawn_allowed_paths binary by exact path-literal. `Any` emits no exec
-    // clauses at all, falling through to the top-level `(allow default)`.
+    // (i.e. Allowlist, None, or Strict), deny all exec by default and
+    // re-allow: the policy's own fs_exec dirs, each individually-resolved
+    // spawn_allowed_paths binary by exact path-literal, and
+    // spawn_allowed_prefixes subpaths. `Allowlist` and `None` additionally
+    // re-allow the standard system exec locations (shell interpreter +
+    // coreutils, needed for MCP spawn / shell tools to keep functioning) --
+    // `Strict` deliberately skips that exemption (see the
+    // `MACOS_SYSTEM_EXEC_PATHS` doc comment): only the shell binary
+    // auto-seeded into `spawn_allowed_paths` by
+    // `SandboxPolicy::from_entitlements` plus the profile's own allowlist
+    // remain exec'able. `Any` emits no exec clauses at all, falling through
+    // to the top-level `(allow default)`.
     if policy.spawn_mode != SpawnMode::Any {
         lines.push("(deny process-exec* (subpath \"/\"))".to_string());
 
-        for p in MACOS_SYSTEM_EXEC_PATHS {
-            lines.push(format!("(allow process-exec* (subpath \"{p}\"))"));
+        if policy.spawn_mode != SpawnMode::Strict {
+            for p in MACOS_SYSTEM_EXEC_PATHS {
+                lines.push(format!("(allow process-exec* (subpath \"{p}\"))"));
+            }
         }
 
         for path in &policy.fs_exec {
@@ -477,6 +490,42 @@ mod tests {
         assert!(
             !sbpl.contains("process-exec*"),
             "Any mode must fall through to the top-level allow default, no exec clauses:\n{sbpl}"
+        );
+    }
+
+    #[test]
+    fn strict_mode_denies_system_exec_paths_but_allows_shell_literal() {
+        let mut policy = policy_with(vec![], vec![]);
+        policy.spawn_mode = SpawnMode::Strict;
+        // Simulate what `SandboxPolicy::from_entitlements` would have
+        // produced: the auto-seeded shell literal plus a fake
+        // profile-declared allowlist entry and prefix.
+        policy.spawn_allowed_paths =
+            vec![PathBuf::from("/bin/bash"), PathBuf::from("/opt/fake/tool")];
+        policy.spawn_allowed_prefixes = vec![PathBuf::from("/opt/fake")];
+        let sbpl = build_sbpl_profile(&policy);
+
+        assert!(
+            sbpl.contains("(deny process-exec* (subpath \"/\"))"),
+            "missing default-deny-exec baseline:\n{sbpl}"
+        );
+        for p in MACOS_SYSTEM_EXEC_PATHS {
+            assert!(
+                !sbpl.contains(&format!("(allow process-exec* (subpath \"{p}\"))")),
+                "strict mode must NOT re-allow system exec path {p}:\n{sbpl}"
+            );
+        }
+        assert!(
+            sbpl.contains("(allow process-exec* (path-literal \"/bin/bash\"))"),
+            "missing path-literal allow for the auto-seeded shell binary:\n{sbpl}"
+        );
+        assert!(
+            sbpl.contains("(allow process-exec* (path-literal \"/opt/fake/tool\"))"),
+            "missing path-literal allow for the profile's own spawn_allowed_paths entry:\n{sbpl}"
+        );
+        assert!(
+            sbpl.contains("(allow process-exec* (subpath \"/opt/fake\"))"),
+            "missing subpath allow for spawn_allowed_prefixes:\n{sbpl}"
         );
     }
 }

@@ -292,6 +292,34 @@ impl SandboxPolicy {
             }
         }
 
+        // Strict-mode shell guarantee: the runtime, not the profile author,
+        // is responsible for keeping the bash TOOL functional once the
+        // system exec-path exemption is fenced off. Resolve the same
+        // `bash` the bash tool itself spawns (see `tools/bash.rs` --
+        // `Command::new("bash")`, a PATH lookup) by searching the same
+        // `spawn_search_dirs` used for allowlist resolution above --
+        // on macOS this lands on `/bin/bash` -- and push its canonicalized
+        // path into `spawn_allowed_paths` automatically. Strict contract:
+        // the bash tool can still launch its shell; nothing else is
+        // implied -- every other system binary stays fenced.
+        if spawn_mode == SpawnMode::Strict {
+            for dir in &spawn_search_dirs {
+                let candidate = dir.join("bash");
+                if !is_executable_file(&candidate) {
+                    continue;
+                }
+                if let Ok(canon) = std::fs::canonicalize(&candidate) {
+                    if !spawn_allowed_paths.contains(&canon) {
+                        spawn_allowed_paths.push(canon.clone());
+                    }
+                    if canon != candidate && !spawn_allowed_paths.contains(&candidate) {
+                        spawn_allowed_paths.push(candidate.clone());
+                    }
+                    break;
+                }
+            }
+        }
+
         // Derive the prefix grants from the resolved literals (Issue 17):
         // see the `spawn_allowed_prefixes` field doc for the parent/
         // grandparent-if-`bin` rule and the guard list.
@@ -915,6 +943,44 @@ mod tests {
             "empty allowlist must yield no derived prefixes: {:?}",
             policy.spawn_allowed_prefixes
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn strict_mode_seeds_shell_into_spawn_allowed() {
+        // Decision (i): in Strict mode the runtime itself guarantees the
+        // bash TOOL stays functional by resolving the same `bash` binary
+        // `tools/bash.rs` spawns (a PATH lookup) and auto-seeding its
+        // canonical path into `spawn_allowed_paths` -- even when the
+        // profile author declared an empty allowlist.
+        let mut ent = minimal_entitlements();
+        ent.processes.spawn.mode = SpawnMode::Strict;
+        ent.processes.spawn.allowed = vec![];
+
+        let agent_home = PathBuf::from("/tmp/agent_home_strict_shell_seed");
+        let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
+
+        assert_eq!(policy.spawn_mode, SpawnMode::Strict);
+        assert!(
+            policy
+                .spawn_allowed_paths
+                .iter()
+                .any(|p| p.ends_with("bash")),
+            "strict mode must auto-seed a resolved bash path even with an \
+             empty allowlist: {:?}",
+            policy.spawn_allowed_paths
+        );
+        // On a normal macOS/unix host `bash` resolves via PATH to the
+        // canonical system shell at /bin/bash.
+        let canonical_bash = std::fs::canonicalize("/bin/bash");
+        if let Ok(canonical_bash) = canonical_bash {
+            assert!(
+                policy.spawn_allowed_paths.contains(&canonical_bash),
+                "expected the canonical /bin/bash to be seeded into \
+                 spawn_allowed_paths: {:?}",
+                policy.spawn_allowed_paths
+            );
+        }
     }
 
     #[test]

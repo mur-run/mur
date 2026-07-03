@@ -81,9 +81,21 @@ gated at two layers:
      deliberate exemption, not a gap**: any binary under those three
      system roots execs regardless of the allowlist; the allowlist instead
      bounds the real threat surface — downloaded, Homebrew-installed, and
-     project-local binaries outside the system roots. A stricter
-     shell-only "Strict" spawn mode that also fences system paths is a
-     documented follow-up, not shipped in v2.
+     project-local binaries outside the system roots.
+
+     A stricter shell-only `Strict` spawn mode is shipped for callers who
+     want the system exec roots fenced too: `process-exec` is denied for
+     everything under `/bin`, `/usr/bin`, and `/usr/lib` except the resolved
+     shell binary the `bash` tool itself spawns — that shell path is seeded
+     into `spawn_allowed_paths` automatically by
+     `SandboxPolicy::from_entitlements`, so the `bash` tool keeps working
+     with no manual configuration — plus whatever the profile lists in
+     `spawn_allowed_paths`/`spawn_allowed_prefixes`. No other system binary
+     (coreutils, `git`, etc.) execs unless explicitly allowlisted. Enable it
+     with:
+     ```
+     mur agent perm set-mode <agent> processes.spawn strict
+     ```
    - **Linux**: seccomp BPF denies dangerous syscalls (`ptrace`,
      `mount`, `kexec_load`, `bpf`, `unshare`) but does **not** currently
      enforce a per-binary exec allowlist — `spawn_allowed_paths` is
@@ -119,8 +131,9 @@ allowlist as the parent.
 - **Nested sandboxes**: macOS rejects a second `sandbox_init` call.
   If the agent binary was already sandbox-exec'd, B1 SBPL is skipped.
 - **Process-spawn exec allowlist**: kernel-enforced today on macOS only
-  (SBPL `process-exec` deny + `spawn_allowed_paths`/system-path exemption,
-  see "Process-spawn enforcement" above). Linux and Windows enforce
+  (SBPL `process-exec` deny + `spawn_allowed_paths`/system-path exemption
+  in `allowlist` mode, or the fully-fenced `strict` mode — see
+  "Process-spawn enforcement" above). Linux and Windows enforce
   `spawn_allowed_paths` at the B0 hook layer only — no kernel-level
   per-binary exec allowlist yet.
 
