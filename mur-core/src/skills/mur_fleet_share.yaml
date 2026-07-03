@@ -1,0 +1,37 @@
+name: mur-fleet-share
+version: 0.1.0
+publisher: human:mur
+description: "Share fleets as signed .fleet bundles and govern them with commander kill/budget directives."
+category: context
+visibility: on_demand
+content:
+  abstract: |
+    Fleets export as signed .fleet bundles for import elsewhere — verified,
+    security-scanned, installed at low trust, never overwriting existing
+    agents or auto-running. A pinned commander key can then issue signed
+    kill/resume/budget-ceiling directives that govern a fleet's loops.
+  context: |
+    ## Share bundles
+
+    - `mur fleet export <name> --with-members -o <name>.fleet`
+    - `mur fleet import <file> [--force] [--no-members] [--yes]`
+
+    Import verifies the bundle signature, security-scans included skills,
+    installs at the lowest trust level (peer TOFU), and regenerates member
+    agent identities — private keys are never copied. Import never
+    overwrites an existing agent or fleet of the same name unless
+    `--force`, and never auto-runs the imported fleet.
+
+    ## Commander governance
+
+    - `mur commander pin <pubkey> [--force]`
+    - `mur commander status`
+    - `mur commander directive <fleet> kill|resume|budget-ceiling --budget-usd 2.50`
+
+    Directives are Ed25519-signed channel events. `kill` halts running
+    loops and blocks autorun; `resume` clears it. A `budget-ceiling` of
+    0.0 is a hard halt; any other value is min'd against the fleet's own
+    and any CLI-supplied budget. Governance folding is fail-closed: a
+    channel read error refuses rather than silently allowing the run.
+
+    Ground truth: mur <cmd> --help · Full tutorial: https://app.mur.run/tutorials/mur-daily-jobs-cookbook.html

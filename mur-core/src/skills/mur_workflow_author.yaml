@@ -1,0 +1,75 @@
+name: mur-workflow-author
+version: 0.1.0
+publisher: human:mur
+description: "Author and run MUR workflows — flat sequences vs DAG skills, scheduling; HITL and delegation via leaves."
+category: context
+hosts: [all]
+content:
+  abstract: |
+    Two different things share the name "workflow": flat step sequences
+    (`mur workflow`) and DAG-based workflow skills. Only workflow skills
+    support DAG procedures, human-in-the-loop gates, and agent delegation.
+    Know which one you're authoring before you reach for those features.
+  context: |
+    # Authoring MUR Workflows
+
+    ## Two kinds (critical)
+    MUR has two things people call "workflows":
+    1. **Flat workflows** (`mur workflow`) — an ordered list of steps
+       saved from a session or written by hand. No branching, no HITL,
+       no delegation. Good for repeatable checklists.
+    2. **Workflow skills** — regular skills whose `content` encodes a
+       **DAG procedure** (nodes + edges). These are the only ones that
+       support conditional branching, human-in-the-loop approval gates,
+       and delegation of individual steps to other agents. If a task
+       needs a pause-for-approval step or fan-out to a specialist agent,
+       it must be a workflow skill, not a flat workflow.
+
+    ## Run
+    - `mur workflow show <name> --md` — view variables / tools / steps
+      of a flat workflow.
+    - `mur run <name>` — produce a ready-to-execute prompt for a flat
+      workflow or trigger a workflow skill by name.
+    - `mur workflow list` — enumerate saved flat workflows.
+
+    ## DAG procedure schema
+    A workflow-skill DAG procedure is expressed as:
+    ```
+    content:
+      procedure:
+        nodes:
+          - id: step_id
+            kind: task | approval | delegate
+            agent: <optional target agent for delegate nodes>
+        edges:
+          - from: step_id
+            to: next_step_id
+            when: <optional condition expression>
+    ```
+    `kind: approval` nodes pause execution for a human decision (see the
+    HITL companion doc). `kind: delegate` nodes hand the step to another
+    agent over A2A (see the delegation companion doc).
+
+    ## Schedule
+    Flat workflows and workflow skills can both be scheduled:
+    - `mur workflow schedule <name> --cron "<expr>"` — recurring runs.
+    - `mur workflow schedule <name> --at <time>` — one-shot run.
+    Scheduled runs execute non-interactively; any approval node in a
+    scheduled workflow skill still pauses and waits, so scheduling a
+    workflow with unresolved HITL gates just defers the wait, not the
+    approval itself.
+
+    ## Deep-dive
+    For risk-tiered approval gates, see the workflow-hitl doc. For
+    fan-out to specialist agents and trust/signing model, see the
+    workflow-delegate doc. Both are loaded on demand, not injected by
+    default, to keep this context lean.
+
+    Ground truth: mur <cmd> --help · Full tutorial: https://app.mur.run/tutorials/mur-daily-jobs-cookbook.html
+tags: [mur, workflow, context]
+priority: normal
+triggers:
+  - type: keyword
+    pattern: "workflow"
+  - type: keyword
+    pattern: "mur workflow"

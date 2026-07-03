@@ -1,0 +1,42 @@
+name: mur-parallel-exec
+version: 1.0.0
+publisher: human:mur
+description: "Map a chosen topology to the MUR command that executes it — fan-out, tracks, partition, merges, parallel_jobs."
+category: context
+triggers:
+  - type: keyword
+    pattern: "parallel"
+  - type: keyword
+    pattern: "fan out"
+content:
+  abstract: |
+    parallel-decompose picks the topology; this skill maps each topology to the MUR mechanism and command; body holds the matrix and the parallel_jobs allowlist config.
+  context: |
+    ## Topology → command matrix
+    - DAG rank fan-out → same-rank steps in a workflow skill.
+    - Delegation fan-out → delegate_to + --channel-new.
+    - Fleet broadcast → mur fleet run.
+    - Routed plan → automatic inside run.
+    - Ephemeral fan-out → parallel_jobs MCP tool.
+    - Speculative tracks → mur fleet run --worktree + judge/cherry.
+    - Partition → partition-plan / merge.
+    - Concurrent merge → merge-concurrent.
+    Coherence-bound work stays with ONE agent.
+
+    ## parallel_jobs (ephemeral fan-out)
+    Allowlist REQUIRED in ~/.mur/config.yaml:
+    ```
+    parallel_jobs:
+      targets: [pm, qa]
+    ```
+    Deny-by-default, checked before any channel is minted.
+    Call shape: jobs: [{description, agent?}] (1–32), optional default agent,
+    max_concurrency 1–32 (default 8), yes (default false, fail-closed).
+    Returns {channel_id, output}.
+    vs fleet: N distinct one-shot prompts vs one standing loopable goal.
+
+    ## Deep-dive
+    Run `mur skill show mur-parallel-tracks`, `mur skill show mur-parallel-merge`,
+    `mur skill show parallel-topology-guide`.
+
+    Ground truth: mur <cmd> --help · Full tutorial: https://app.mur.run/tutorials/mur-daily-jobs-cookbook.html
