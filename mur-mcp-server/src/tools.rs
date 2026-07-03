@@ -704,6 +704,7 @@ async fn dispatch_tool(name: &str, arguments: &Value) -> Result<Value, String> {
                 "total_tokens_saved": s.total_tokens_saved,
                 "savings_percent": s.savings_percent,
                 "estimated_cost_saved_usd": s.estimated_cost_saved_usd,
+                "buckets": s.buckets,
                 "store": { "entries": s.store_entries, "bytes": s.store_bytes },
             }))
         }
