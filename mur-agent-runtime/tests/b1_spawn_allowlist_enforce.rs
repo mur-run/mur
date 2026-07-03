@@ -24,8 +24,11 @@
 //! binaries (downloaded, Homebrew, project-local) — the real threat
 //! surface — proven by
 //! `non_allowlisted_tempdir_binary_is_denied_under_enforced_profile`. A
-//! stricter shell-only "Strict" mode that also fences system paths is a
-//! documented follow-up, not shipped this wave.
+//! stricter shell-only `SpawnMode::Strict` also fences those system
+//! paths (only the resolved shell + spawn_allowed_paths/prefixes remain
+//! exec-able); see
+//! `strict_mode_denies_system_path_but_allows_shell_and_allowlisted_binary`
+//! below.
 #![cfg(target_os = "macos")]
 
 use mur_agent_runtime::sandbox::SandboxPolicy;
@@ -184,5 +187,92 @@ fn non_allowlisted_python3_is_denied_under_enforced_profile() {
         !status.success(),
         "python3 is not in the spawn allowlist and must be denied by the \
          kernel, got exit status {status:?}"
+    );
+}
+
+/// Build a `SpawnMode::Strict` policy: one tempdir-local allowlisted
+/// binary (a copy of `/usr/bin/true`, so it is a real executable that is
+/// NOT under any `MACOS_SYSTEM_EXEC_PATHS` root) plus `/bin/bash` itself
+/// (mirroring what `SandboxPolicy::from_entitlements` auto-seeds into
+/// `spawn_allowed_paths` for `Strict` mode — see `policy.rs`'s
+/// `strict_mode_seeds_shell_into_spawn_allowed` unit test). Unlike
+/// `write_allowlist_profile`, `MACOS_SYSTEM_EXEC_PATHS` is NOT re-allowed
+/// under `Strict`, so a coreutil like `/bin/mkdir` must be kernel-denied.
+fn write_strict_profile() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let dir = tempfile::TempDir::new().expect("create temp dir for profile");
+
+    let allowed_binary = dir.path().join("strict_allowed_true");
+    std::fs::copy("/usr/bin/true", &allowed_binary).expect("copy /usr/bin/true into tempdir");
+    let mut perms = std::fs::metadata(&allowed_binary)
+        .expect("stat copied binary")
+        .permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+    std::fs::set_permissions(&allowed_binary, perms).expect("chmod copied binary");
+
+    // Seatbelt path-literal matching is on the canonical vnode path.
+    // macOS tempdirs live under `/var/folders/...`, itself a symlink to
+    // `/private/var/folders/...`; without canonicalizing here the SBPL
+    // literal would never match what the kernel actually resolves at
+    // exec time (`from_entitlements` does this same canonicalization
+    // for real profiles -- see e.g. policy.rs lines ~240 and ~262-280).
+    let allowed_binary_canonical =
+        std::fs::canonicalize(&allowed_binary).expect("canonicalize copied binary");
+
+    let policy = SandboxPolicy {
+        spawn_mode: SpawnMode::Strict,
+        spawn_allowed_paths: vec![allowed_binary_canonical.clone(), PathBuf::from("/bin/bash")],
+        ..SandboxPolicy::default()
+    };
+    let sbpl = build_sbpl_profile(&policy);
+
+    let profile_path = dir.path().join("strict.sb");
+    let mut f = std::fs::File::create(&profile_path).expect("create profile file");
+    f.write_all(sbpl.as_bytes()).expect("write profile file");
+    (dir, profile_path, allowed_binary_canonical)
+}
+
+#[test]
+fn strict_mode_denies_system_path_but_allows_shell_and_allowlisted_binary() {
+    if skip_unless_opted_in(
+        "strict_mode_denies_system_path_but_allows_shell_and_allowlisted_binary",
+    ) {
+        return;
+    }
+    let (_dir, profile_path, allowed_binary) = write_strict_profile();
+    let target = _dir.path().join("strict_mode_probe");
+
+    // /bin/mkdir is a system-path coreutil, NOT in spawn_allowed_paths.
+    // Under Allowlist mode this is exempted (see
+    // `system_path_coreutil_runs_under_enforced_profile` above); under
+    // Strict mode the MACOS_SYSTEM_EXEC_PATHS re-allow is dropped, so the
+    // kernel must deny it.
+    let mkdir_status = run_under_profile(&profile_path, &["/bin/mkdir", target.to_str().unwrap()]);
+    assert!(
+        !mkdir_status.success(),
+        "/bin/mkdir must be kernel-denied under Strict mode (system-path \
+         exemption is fenced), got exit status {mkdir_status:?}"
+    );
+    assert!(
+        !target.exists(),
+        "mkdir must not have actually run under the Strict-mode deny"
+    );
+
+    // A tempdir-local binary explicitly present in spawn_allowed_paths
+    // must still exec successfully.
+    let allowed_status = run_under_profile(&profile_path, &[allowed_binary.to_str().unwrap()]);
+    assert!(
+        allowed_status.success(),
+        "a binary explicitly in spawn_allowed_paths must exec successfully \
+         under Strict mode, got exit status {allowed_status:?}"
+    );
+
+    // bash itself (the shell the bash tool spawns) must still be
+    // exec-able — the whole point of the Strict contract is "the bash
+    // tool can still launch its shell; nothing else is implied".
+    let bash_status = run_under_profile(&profile_path, &["/bin/bash", "-c", "true"]);
+    assert!(
+        bash_status.success(),
+        "/bin/bash must remain exec-able under Strict mode so the bash \
+         tool can still function, got exit status {bash_status:?}"
     );
 }
