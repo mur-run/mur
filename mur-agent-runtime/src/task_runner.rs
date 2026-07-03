@@ -1601,7 +1601,7 @@ impl TaskRunner {
             max_tokens: None,
             tools: vec![], // tools disabled: force a textual summary
         };
-        match client.generate(req).await {
+        let mut text = match client.generate(req).await {
             Ok(resp) => {
                 self.cumulative_input_tokens
                     .fetch_add(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
@@ -1609,20 +1609,24 @@ impl TaskRunner {
                     .store(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
                 self.cumulative_output_tokens
                     .fetch_add(resp.output_tokens, std::sync::atomic::Ordering::Relaxed);
-                Message {
-                    role: "agent".into(),
-                    parts: vec![mur_common::a2a::MessagePart::Text { text: resp.text }],
-                }
+                resp.text
             }
             Err(_) => {
                 // Never lose work: return the last assistant text from history.
-                let text = last_assistant_text(history)
-                    .unwrap_or_else(|| format!("Stopped: {} budget reached.", reason.as_str()));
-                Message {
-                    role: "agent".into(),
-                    parts: vec![mur_common::a2a::MessagePart::Text { text }],
-                }
+                last_assistant_text(history)
+                    .unwrap_or_else(|| format!("Stopped: {} budget reached.", reason.as_str()))
             }
+        };
+        // #595: mark output that ended at the iteration cap so partial
+        // execution is visible instead of silently reported as clean.
+        if matches!(reason, LoopStop::MaxIterations) {
+            text.push_str(
+                "\n\n[runtime: turn ended at the iteration cap — output may be incomplete]",
+            );
+        }
+        Message {
+            role: "agent".into(),
+            parts: vec![mur_common::a2a::MessagePart::Text { text }],
         }
     }
 }
@@ -2890,6 +2894,43 @@ mod tests {
                  result_ids={result_ids:?}"
             );
         }
+    }
+
+    /// #595 — graceful_exit must append the iteration-cap marker to the
+    /// output text ONLY when the stop reason is `MaxIterations`, so partial
+    /// execution at the cap is visible instead of looking like a clean
+    /// completion. A sibling reason (`LoopDetected`) must NOT carry it.
+    #[tokio::test]
+    async fn graceful_exit_marks_output_only_at_iteration_cap() {
+        use crate::llm::stub::SequenceLlm;
+        let client: Arc<dyn crate::llm::LlmClient> = Arc::new(SequenceLlm::new(vec![
+            end_turn_response("partial work done"),
+            end_turn_response("partial work done"),
+        ]));
+        let runner = TaskRunner::with_llm(client.clone());
+        let history = vec![crate::llm::RichMessage::Text {
+            role: "user".into(),
+            content: "do the thing".into(),
+        }];
+
+        let capped = runner
+            .graceful_exit(client.as_ref(), &history, LoopStop::MaxIterations)
+            .await;
+        assert!(
+            text_of(&capped)
+                .contains("[runtime: turn ended at the iteration cap — output may be incomplete]"),
+            "MaxIterations exit must carry the iteration-cap marker: {}",
+            text_of(&capped)
+        );
+
+        let other = runner
+            .graceful_exit(client.as_ref(), &history, LoopStop::LoopDetected)
+            .await;
+        assert!(
+            !text_of(&other).contains("iteration cap"),
+            "LoopDetected exit must NOT carry the iteration-cap marker: {}",
+            text_of(&other)
+        );
     }
 
     #[test]
