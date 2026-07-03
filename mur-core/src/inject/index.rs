@@ -103,6 +103,7 @@ pub fn build_from_skills(
     let mut entries: Vec<(f64, CapabilityEntry)> = skills
         .iter()
         .filter(|s| s.stats.lifecycle_state != LifecycleState::Archived)
+        .filter(|s| s.manifest.visibility != mur_common::skill::manifest::Visibility::OnDemand)
         .map(|s| {
             (
                 s.stats.anchor_confidence,
@@ -127,6 +128,34 @@ pub fn build_from_skills(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_from_skills_excludes_on_demand() {
+        use crate::retrieve::skill_candidates::LoadedSkill;
+        use mur_common::skill::parse_canonical;
+        use mur_common::skill::stats::SkillStats;
+
+        let mk = |name: &str, extra: &str| {
+            let yaml = format!(
+                r#"name: {name}
+version: 0.1.0
+publisher: human:t
+description: test skill
+category: context
+content:
+  abstract: a
+  context: b
+{extra}"#
+            );
+            let manifest = parse_canonical(&yaml).unwrap();
+            let stats = SkillStats::new(name, "0.1.0", "digest", chrono::Utc::now());
+            LoadedSkill { manifest, stats }
+        };
+        let skills = vec![mk("visible", ""), mk("hidden", "visibility: on_demand\n")];
+        let idx = build_from_skills(&skills, None);
+        let names: Vec<_> = idx.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["visible"]);
+    }
 
     // ── Task 2: format_l0 ──────────────────────────────────────────────────────
 

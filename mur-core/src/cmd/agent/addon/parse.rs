@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use serde::Deserialize;
 
-use mur_common::skill::manifest::SkillScope;
+use mur_common::skill::manifest::{SkillScope, Visibility};
 use mur_common::skill::{
     Category, Content, Priority, Provenance, SkillManifest, Trigger, TriggerKind,
 };
@@ -67,6 +67,7 @@ fn base_manifest(
         description,
         category,
         scope: SkillScope::User,
+        visibility: Visibility::default(),
         fleet: None,
         team: None,
         governance: None,

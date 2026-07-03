@@ -830,7 +830,7 @@ mod tests {
     #[test]
     fn manifest_lww_newer_remote_wins() {
         use mur_common::skill::event_log::resolve_manifest_lww;
-        use mur_common::skill::manifest::{Content, Skill, SkillManifest};
+        use mur_common::skill::manifest::{Content, Skill, SkillManifest, Visibility};
         use mur_common::skill::types::Category;
 
         let t_old = chrono::DateTime::from_timestamp(1_000, 0).unwrap();
@@ -846,6 +846,7 @@ mod tests {
                 provenance: Default::default(),
                 hosts: vec![],
                 scope: Default::default(),
+                visibility: Visibility::default(),
                 fleet: None,
                 project: None,
                 team: None,
@@ -886,7 +887,7 @@ mod tests {
     #[test]
     fn manifest_lww_force_local_overrides() {
         use mur_common::skill::event_log::resolve_manifest_lww;
-        use mur_common::skill::manifest::{Content, Skill, SkillManifest};
+        use mur_common::skill::manifest::{Content, Skill, SkillManifest, Visibility};
         use mur_common::skill::types::Category;
 
         let t_old = chrono::DateTime::from_timestamp(1_000, 0).unwrap();
@@ -902,6 +903,7 @@ mod tests {
                 provenance: Default::default(),
                 hosts: vec![],
                 scope: Default::default(),
+                visibility: Visibility::default(),
                 fleet: None,
                 project: None,
                 team: None,

@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn manifest_lww_prefers_remote_when_newer() {
-        use crate::skill::manifest::{Content, Skill, SkillManifest};
+        use crate::skill::manifest::{Content, Skill, SkillManifest, Visibility};
         use crate::skill::types::Category;
         let t1 = chrono::DateTime::from_timestamp(1_000, 0).unwrap();
         let t2 = chrono::DateTime::from_timestamp(2_000, 0).unwrap();
@@ -451,6 +451,7 @@ mod tests {
                 description: "d".into(),
                 category: Category::Context,
                 scope: Default::default(),
+                visibility: Visibility::default(),
                 fleet: None,
                 team: None,
                 governance: None,
@@ -489,7 +490,7 @@ mod tests {
 
     #[test]
     fn manifest_lww_respects_force_local() {
-        use crate::skill::manifest::{Content, Skill, SkillManifest};
+        use crate::skill::manifest::{Content, Skill, SkillManifest, Visibility};
         use crate::skill::types::Category;
         let t1 = chrono::DateTime::from_timestamp(1_000, 0).unwrap();
         let t2 = chrono::DateTime::from_timestamp(2_000, 0).unwrap();
@@ -502,6 +503,7 @@ mod tests {
                 description: "d".into(),
                 category: Category::Context,
                 scope: Default::default(),
+                visibility: Visibility::default(),
                 fleet: None,
                 team: None,
                 governance: None,

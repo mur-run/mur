@@ -147,6 +147,7 @@ pub fn cmd_doctor(
         "mcp-requirements-coverage",
         "mcp-capability-available",
         "intent-resolvable",
+        "disclosure",
     ];
     let active_checks: Vec<&str> = if checks.is_empty() {
         all_checks.to_vec()
@@ -201,6 +202,9 @@ pub fn cmd_doctor(
                 }
                 "intent-resolvable" => {
                     findings.extend(run_intent_resolvable(&ctx, skill_name));
+                }
+                "disclosure" => {
+                    findings.extend(run_disclosure(&ctx, skill_name));
                 }
                 _ => {}
             }
@@ -1197,6 +1201,53 @@ fn run_intent_resolvable(ctx: &DoctorCtx, skill_name: &str) -> Vec<Finding> {
     findings
 }
 
+fn run_disclosure(ctx: &DoctorCtx, skill_name: &str) -> Vec<Finding> {
+    match load_manifest(&ctx.home, skill_name) {
+        Some(m) => disclosure_findings(&m, skill_name),
+        None => Vec::new(),
+    }
+}
+
+/// Progressive-disclosure budgets (spec 2026-07-03 §4): description ≤ 120
+/// chars, abstract ≤ 50 words. Warn-only — third-party skills stay valid.
+fn disclosure_findings(
+    m: &mur_common::skill::manifest::SkillManifest,
+    skill_name: &str,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let desc_chars = m.description.chars().count();
+    if desc_chars > 120 {
+        findings.push(Finding {
+            check_id: "disclosure".into(),
+            category: "disclosure".into(),
+            severity: Severity::Warn,
+            skill_name: skill_name.to_string(),
+            message: format!(
+                "description is {desc_chars} chars (budget 120) — the index line should say when to reach for the skill, not how"
+            ),
+            remediation: Some(
+                "shorten description; move detail into content.abstract or the body".into(),
+            ),
+            fixable: false,
+        });
+    }
+    let words = m.content.r#abstract.split_whitespace().count();
+    if words > 50 {
+        findings.push(Finding {
+            check_id: "disclosure".into(),
+            category: "disclosure".into(),
+            severity: Severity::Warn,
+            skill_name: skill_name.to_string(),
+            message: format!(
+                "abstract is {words} words (budget 50) — sink methodology into the body"
+            ),
+            remediation: Some("trim content.abstract to scope + one caveat + a load hint".into()),
+            fixable: false,
+        });
+    }
+    findings
+}
+
 fn exit_code(findings: &[Finding], strict: bool) -> i32 {
     let any_fail = findings.iter().any(|f| f.severity == Severity::Fail);
     let any_warn = findings.iter().any(|f| f.severity == Severity::Warn);
@@ -1579,5 +1630,35 @@ content:
             findings.is_empty(),
             "steps without intent should be skipped, got {findings:?}"
         );
+    }
+
+    fn manifest(desc: &str, abstract_: &str) -> mur_common::skill::manifest::SkillManifest {
+        let yaml = format!(
+            r#"name: t
+version: 0.1.0
+publisher: human:t
+description: "{desc}"
+category: context
+content:
+  abstract: "{abstract_}"
+  context: b
+"#
+        );
+        mur_common::skill::parse_canonical(&yaml).unwrap()
+    }
+
+    #[test]
+    fn disclosure_flags_fat_description_and_abstract() {
+        let fat_desc = "d".repeat(121);
+        let fat_abs = vec!["word"; 51].join(" ");
+        let f = disclosure_findings(&manifest(&fat_desc, &fat_abs), "t");
+        assert_eq!(f.len(), 2);
+        assert!(
+            f.iter()
+                .all(|x| x.check_id == "disclosure" && x.severity == Severity::Warn)
+        );
+
+        let ok = disclosure_findings(&manifest("short", "brief abstract"), "t");
+        assert!(ok.is_empty());
     }
 }

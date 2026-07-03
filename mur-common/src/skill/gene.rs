@@ -237,7 +237,7 @@ impl GeneDiff {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::skill::manifest::{Content, Procedure, ProcedureStep, Trigger};
+    use crate::skill::manifest::{Content, Procedure, ProcedureStep, Trigger, Visibility};
     use crate::skill::types::{Category, TriggerKind};
 
     fn manifest_with_steps(steps: Vec<ProcedureStep>, triggers: Vec<Trigger>) -> SkillManifest {
@@ -248,6 +248,7 @@ mod tests {
             description: "t".into(),
             category: Category::Workflow,
             scope: Default::default(),
+            visibility: Visibility::default(),
             fleet: None,
             team: None,
             governance: None,
