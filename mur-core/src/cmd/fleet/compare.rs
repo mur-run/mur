@@ -38,6 +38,13 @@ pub fn cmd_fleet_compare(
     let mut score_map: std::collections::HashMap<String, Vec<ScoreEntry>> =
         std::collections::HashMap::new();
 
+    // Pass 1: collect (track_name, content_hash) per unit.name across all
+    // tracks. We cannot look up scores yet — the competitor set for a unit
+    // is only known once every track's implementation has been collected
+    // (issue #545: CyclicJudge scores are relative to the competitor set).
+    let mut by_name: std::collections::BTreeMap<String, Vec<(String, [u8; 32])>> =
+        std::collections::BTreeMap::new();
+
     for t in &tracks.tracks {
         for entry in walkdir::WalkDir::new(&t.worktree_path)
             .follow_links(false)
@@ -55,16 +62,29 @@ pub fn cmd_fleet_compare(
                 if unit_filter.is_some_and(|f| !unit.name.contains(f)) {
                     continue;
                 }
-                let val = state_db
-                    .get_score(&unit.content_hash, &rubric_ver)
-                    .ok()
-                    .flatten()
-                    .map(|js| (js.score, js.low_confidence));
-                score_map
+                by_name
                     .entry(unit.name)
                     .or_default()
-                    .push((t.config.name.clone(), val));
+                    .push((t.config.name.clone(), unit.content_hash));
             }
+        }
+    }
+
+    // Pass 2: now that the full competitor set per unit is known, compute
+    // its set hash and look up each track's score against that exact set.
+    for (name, members) in &by_name {
+        let set_hash =
+            ParallelStateDb::competitor_set_hash(&members.iter().map(|m| m.1).collect::<Vec<_>>());
+        for (track, hash) in members {
+            let val = state_db
+                .get_score(hash, &set_hash, &rubric_ver)
+                .ok()
+                .flatten()
+                .map(|js| (js.score, js.low_confidence));
+            score_map
+                .entry(name.clone())
+                .or_default()
+                .push((track.clone(), val));
         }
     }
 
