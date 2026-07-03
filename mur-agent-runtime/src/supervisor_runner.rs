@@ -283,9 +283,16 @@ pub async fn build_provider_runner(
     let bash_exec: Arc<dyn crate::tools::ToolExecutor> =
         Arc::new(BashTool::new(agent_home.to_path_buf()));
     let bash_def = bash_exec.def();
+    let read_file_exec: Arc<dyn crate::tools::ToolExecutor> =
+        Arc::new(crate::tools::read_file::ReadFileTool::new(
+            agent_home.to_path_buf(),
+            profile.inner.entitlements.filesystem.clone(),
+        ));
+    let read_file_def = read_file_exec.def();
     let tools_policy = profile.inner.entitlements.tools.clone();
     let (_defs, tool_map) = build_tools(
         Some((bash_def, bash_exec)),
+        Some((read_file_def, read_file_exec)),
         &enabled_mcp,
         &tools_policy,
         pool.clone(),
