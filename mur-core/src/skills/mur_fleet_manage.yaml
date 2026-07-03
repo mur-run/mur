@@ -1,0 +1,56 @@
+name: mur-fleet-manage
+version: 0.1.0
+publisher: human:mur
+description: "Run agent squads on a shared goal — create/show fleets, run iterations, queue jobs; loops/budgets/sharing via leaves."
+category: context
+triggers:
+  - type: keyword
+    pattern: "mur fleet"
+  - type: keyword
+    pattern: "agent squad"
+content:
+  abstract: |
+    Fleets are named agent squads working one shared goal over a single
+    signed fleet-<name> channel with a router. Members must already be
+    running. Runs are fail-closed. Load this body for create/run/queue
+    commands; load the leaf skills for guarded loops, budgets, and
+    sharing/governance.
+  context: |
+    ## Create & inspect
+
+    - `mur fleet create <name> --members pm,qa --router mur --goal "…"`
+    - `mur fleet list`
+    - `mur fleet show <name>`
+    - `mur fleet add <name> <agents…>` / `mur fleet remove <name> <agents…>`
+    - `mur fleet delete <name> --yes`
+
+    Gotchas: `<name>` is a lowercase slug; the `fleet-<name>` channel is
+    created automatically on `create`; member agents are NOT deleted when
+    the fleet is deleted.
+
+    ## Run & queue
+
+    - `mur fleet run <name> ["one-shot job"]`
+    - `mur fleet send <name> "job"`
+    - `mur fleet jobs <name> --all`
+
+    Gotchas: every member must already be running — check with
+    `mur agent status`; queued jobs persist as
+    `~/.mur/fleets/<name>/jobs/<uuidv7>.yaml` and drain FIFO via `run` or
+    the daemon.
+
+    ## Router planning
+
+    Planning runs automatically inside `run`. The router validates the
+    member list, dependencies, and cycles; an invalid plan falls back to
+    broadcast-to-all. Observe planning and execution on the channel at
+    `~/.mur/channels/fleet-<name>/events.jsonl`.
+
+    ## Deep-dive
+
+    - `mur skill show mur-fleet-loop` — guarded loops, budgets,
+      kill-switch, unattended autorun
+    - `mur skill show mur-fleet-share` — signed .fleet bundles and
+      commander governance
+
+    Ground truth: mur <cmd> --help · Full tutorial: https://app.mur.run/tutorials/mur-daily-jobs-cookbook.html
