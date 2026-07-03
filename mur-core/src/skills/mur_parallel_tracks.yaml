@@ -1,0 +1,42 @@
+name: mur-parallel-tracks
+version: 1.0.0
+publisher: human:mur
+description: "Speculative best-of-N: isolated worktree tracks per approach, judge scoring, cherry promotion."
+category: context
+visibility: on_demand
+content:
+  abstract: |
+    Run speculative best-of-N tracks in isolated git worktrees, one per approach, then score with a judge rubric and cherry-pick the winner into the target repo.
+  context: |
+    ## parallel: block (fleet.yaml, hand-edit)
+    ```
+    parallel:
+      mode: speculative
+      tracks:
+        - name: <track>
+          approach: <approach>
+          model: <model?>
+      judge:
+        model: <model>
+        rubric:
+          correctness: 0.40
+          design: 0.30
+          maintainability: 0.20
+          security: 0.10
+      pre_filter: [cargo_check|cargo_clippy_deny]
+    ```
+    NO max_concurrency field — fan-out auto-caps at min(tracks, cores−2).
+
+    ## Run in worktrees
+    `mur fleet run <name> --worktree` (or MUR_PARALLEL_EXEC=1).
+    One-shot only — incompatible with --loop; requires a git repo root +
+    parallel: block. Creates .worktrees/<track>/ + .parallel-base + tracks.json;
+    a collision guard reports strays into the main checkout; worktrees persist
+    after the run.
+
+    ## Pick a winner
+    `mur fleet compare <name> [--unit <prefix>]`;
+    `mur fleet judge <name> --stats`;
+    `mur fleet cherry <name> --auto --promote --target <repo>`.
+
+    Ground truth: mur <cmd> --help · Full tutorial: https://app.mur.run/tutorials/mur-daily-jobs-cookbook.html
