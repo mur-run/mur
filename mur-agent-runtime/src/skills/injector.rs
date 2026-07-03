@@ -71,6 +71,9 @@ pub fn inject_layer2(
                 active_team,
             )
         })
+        .filter(|s| {
+            s.manifest.visibility != mur_common::skill::manifest::Visibility::OnDemand
+        })
         .collect();
 
     // Sort: trust desc, recent-fired boost, then priority asc, then name for determinism.
@@ -195,6 +198,27 @@ content:
         assert!(names(Some("/repo")).contains(&"p".to_string()));
         // wrong project → fail-closed
         assert!(!names(Some("/other")).contains(&"p".to_string()));
+    }
+
+    #[test]
+    fn on_demand_skill_never_injects_layer2() {
+        let s = loaded(
+            "hidden-leaf",
+            "should never appear",
+            TrustLevel::Verified,
+            "visibility: on_demand\ntriggers:\n  - type: session_start\n    pattern: \"\"",
+        );
+        let result = inject_layer2(
+            &[s],
+            &SkillsConfig::default(),
+            0.0,
+            &HashSet::new(),
+            None,
+            None,
+            None,
+        );
+        assert!(result.injected_names.is_empty());
+        assert!(result.system_addendum.is_empty());
     }
 
     #[test]
