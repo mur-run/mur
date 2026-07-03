@@ -154,6 +154,42 @@ mur model prices refresh                      # refresh the cached models.dev pr
 
 API keys are stored as `SecretRef`s (`env:`, `keychain:`, `file:`, `cmd:`) — never written to config in plaintext. The **MUR Hub** desktop app has a **Model Library** that connects cloud providers (key saved to the macOS Keychain), auto-detects local runtimes (Ollama / MLX / LM Studio), discovers their models via `/v1/models`, and adds them to the registry — no YAML editing required.
 
+#### Cloud LLM backend (opt-in)
+
+Conversation summarization and ask stages default to local Ollama. Each stage
+accepts an optional `BackendConfig` override in `~/.mur/config.yaml`, so you
+can route individual stages through Anthropic while everything else stays
+local:
+
+```yaml
+conversations:
+  compact:
+    # extractive stage → cloud (fast + cheap), abstractive stays local
+    extractive_backend:
+      provider: anthropic          # ollama | anthropic
+      model: claude-haiku-4-5
+      api_key_env: ANTHROPIC_API_KEY
+      # endpoint: https://api.anthropic.com   # optional override
+      # timeout_secs: 120                     # optional, default 120
+  ask:
+    # answer stage → cloud, query rewriter stays local
+    backend:
+      provider: anthropic
+      model: claude-sonnet-5
+      api_key_env: ANTHROPIC_API_KEY
+    # rewriter_backend:                       # same shape, per-stage
+```
+
+Fields: `provider`, `model`, optional `endpoint`, `api_key_env` (name of the
+env var holding the key — the key itself never lives in config), and
+`timeout_secs`. Leaving an override unset keeps that stage on the legacy
+local fields (`extractive_model` / `abstractive_model` + `ollama_endpoint`).
+
+Typical cost with Haiku-extractive + Sonnet-ask is on the order of a few
+dollars per month of daily use. Verify your setup with the ignored live
+test: `cargo test -p mur-core live_anthropic_haiku_responds -- --ignored`
+(requires `ANTHROPIC_API_KEY`; costs ~$0.0001 per run).
+
 ### Teach the AI tools you already use
 
 MUR's memory layer works even if you never create an agent — it rides along with
