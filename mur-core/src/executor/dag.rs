@@ -23,6 +23,10 @@ use mur_common::skill::manifest::{FailureAction, Procedure, ProcedureStep};
 use sha2::{Digest, Sha256};
 use tokio::time::{Duration, sleep, timeout as tokio_timeout};
 
+/// Appended to every delegated sub-goal so partial execution is declared
+/// instead of silent (issue #595).
+pub const DELEGATE_REPLY_CONTRACT: &str = "\n\n---\nReply contract: end with a 'Completion:' checklist naming EVERY requested item as done / skipped / blocked. If you run low on turns, deliver partial work and declare the shortfall — never report clean completion over partial execution.";
+
 /// Options for a single DAG execution.
 pub struct DagExecOptions<'a> {
     /// Piped input from a previous pipeline stage (for `{{input}}` substitution).
@@ -87,6 +91,7 @@ fn build_channel_delegate_params(
     child_task_id: &str,
     idempotency_key: &str,
 ) -> serde_json::Value {
+    let text = format!("{}{}", text, DELEGATE_REPLY_CONTRACT);
     serde_json::json!({
         "message": { "role": "user", "parts": [{ "kind": "text", "text": text }] },
         "channel_id": channel_id,
@@ -1001,7 +1006,9 @@ mod tests {
         assert_eq!(p["task_id"], "child-1");
         assert_eq!(p["idempotency_key"], "rk-deadbeef");
         assert_eq!(p["message"]["role"], "user");
-        assert_eq!(p["message"]["parts"][0]["text"], "find the bug");
+        let text = p["message"]["parts"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with("find the bug"));
+        assert!(text.contains("Completion:"));
     }
 
     #[test]
