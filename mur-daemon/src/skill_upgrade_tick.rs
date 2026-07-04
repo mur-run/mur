@@ -69,9 +69,8 @@ pub fn tick(mur_home: &Path) {
 
     let home = mur_home.to_path_buf();
     std::thread::spawn(move || {
-        let registry_url = std::env::var("MUR_SKILL_REGISTRY_URL").unwrap_or_else(|_| {
-            mur_core::cmd::skill_registry::DEFAULT_REGISTRY.to_string()
-        });
+        let registry_url = std::env::var("MUR_SKILL_REGISTRY_URL")
+            .unwrap_or_else(|_| mur_core::cmd::skill_registry::DEFAULT_REGISTRY.to_string());
         let registry_dir = match mur_core::cmd::skill_registry::fetch_registry(&home, &registry_url)
         {
             Ok(dir) => dir,
@@ -84,9 +83,18 @@ pub fn tick(mur_home: &Path) {
         let upgraded = report
             .items
             .iter()
-            .filter(|i| matches!(i.status, mur_core::cmd::skill_upgrade::UpgradeStatus::Upgraded { .. }))
+            .filter(|i| {
+                matches!(
+                    i.status,
+                    mur_core::cmd::skill_upgrade::UpgradeStatus::Upgraded { .. }
+                )
+            })
             .count();
-        tracing::info!(upgraded, total = report.items.len(), "skill_upgrade_tick: auto-upgrade pass complete");
+        tracing::info!(
+            upgraded,
+            total = report.items.len(),
+            "skill_upgrade_tick: auto-upgrade pass complete"
+        );
     });
 }
 
