@@ -41,14 +41,17 @@ pub struct InstallRequest {
 }
 
 /// One line of `<mur_home>/hub/install-requests.jsonl`.
+///
+/// Public so the Hub GUI (`install_inbox.rs`) can parse the jsonl
+/// directly when listing pending requests for the consent modal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct InstallRequestRecord {
-    kind: String,
+pub struct InstallRequestRecord {
+    pub kind: String,
     #[serde(rename = "type")]
-    install_type: String,
-    id: String,
-    requested_at: u64,
-    request_id: String,
+    pub install_type: String,
+    pub id: String,
+    pub requested_at: u64,
+    pub request_id: String,
 }
 
 fn install_requests_path(mur_home: &Path) -> PathBuf {

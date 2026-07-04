@@ -419,6 +419,11 @@
   background: var(--surface-hover);
   border-radius: var(--radius-sm, 4px);
 }
+.badge-sm--official {
+  margin-left: 6px;
+  color: var(--color-brand-contrast, #fff);
+  background: var(--color-brand);
+}
 
 /* ── Save error inline ────────────────────────────────────────────────── */
 .save-error {
