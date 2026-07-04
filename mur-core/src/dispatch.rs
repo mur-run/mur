@@ -553,6 +553,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                 }
             }
             crate::cli::SkillAction::Update { name } => cmd::skill_install::cmd_update_cli(&name)?,
+            crate::cli::SkillAction::Upgrade { check, json } => {
+                cmd::skill_upgrade_cmd::cmd_upgrade_cli(check, json)?
+            }
             crate::cli::SkillAction::Deps { name } => cmd::skill_deps::cmd_deps_cli(&name)?,
             crate::cli::SkillAction::Generate {
                 from_session,
