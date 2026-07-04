@@ -1,7 +1,7 @@
 # Derived from obra/superpowers using-git-worktrees (MIT).
 name: using-git-worktrees
 version: "1.0.0"
-publisher: human:mur-official
+publisher: human:david
 description: "Ensure feature work happens in an isolated git worktree under the repo's .worktrees/ dir"
 category: workflow
 content:

@@ -1,7 +1,7 @@
 # Derived from obra/superpowers writing-plans (MIT).
 name: writing-plans
 version: "1.0.0"
-publisher: human:mur-official
+publisher: human:david
 description: "Write a bite-sized, file-path-exact implementation plan before touching code"
 category: workflow
 content:

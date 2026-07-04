@@ -1,7 +1,7 @@
 # Derived from obra/superpowers finishing-a-development-branch (MIT).
 name: finishing-a-development-branch
 version: "1.0.0"
-publisher: human:mur-official
+publisher: human:david
 description: "Verify tests, then present merge/PR/keep/discard options to finish a development branch"
 category: workflow
 content:

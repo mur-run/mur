@@ -1,7 +1,7 @@
 # Derived from obra/superpowers test-driven-development (MIT).
 name: test-driven-development
 version: "1.0.0"
-publisher: human:mur-official
+publisher: human:david
 description: "Red-Green-Refactor — write the failing test first, watch it fail, then implement"
 category: workflow
 content:
