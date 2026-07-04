@@ -155,10 +155,10 @@ When making changes, check whether these need updating:
 1. **`README.md`** — `/Volumes/Firecuda4tb/Projects/mur/README.md`
 2. **Documents page** — https://app.mur.run/docs/core
    - Source: `/Volumes/Firecuda4tb/Projects/mur-server/dashboard/docs-content/`
-   - Page component: `dashboard/src/app/docs/core/[[...slug]]/page.tsx`
-   - Navigation: `dashboard/src/components/docs/coreNavigation.tsx`
-3. **Product page** — https://app.mur.run/products/core
-   - Source: `dashboard/src/app/products/core/page.tsx`
+   - Page component: `/Volumes/Firecuda4tb/Projects/mur-server/dashboard/src/app/docs/core/[[...slug]]/page.tsx`
+   - Navigation: `/Volumes/Firecuda4tb/Projects/mur-server/dashboard/src/components/docs/coreNavigation.tsx`
+3. **Product page** — https://app.mur.run/products/mur
+   - Source: `/Volumes/Firecuda4tb/Projects/mur-server/dashboard/src/app/products/mur/page.tsx`
 
 ## Mandatory Rules
 

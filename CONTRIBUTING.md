@@ -99,8 +99,8 @@ tests or commands without hitting a real provider, set:
 This is wired in `mur-agent-runtime/src/supervisor.rs`: when the variable is
 set, the supervisor skips provider initialisation and routes all LLM calls
 through a deterministic stub-echo runner. The integration tests (M8.*) all
-use it. Real-LLM smoke runs are nightly-only
-(`scripts/e2e/companion-ollama-nightly.sh`, optional).
+use it. There is no real-LLM nightly smoke script yet; run against a live
+provider manually by unsetting the variable.
 
 Note: `MUR_LLM_PROVIDER=stub` is NOT currently wired. Use
 `MUR_AGENT_FORCE_ECHO=1` instead.
