@@ -20,6 +20,7 @@ model:
     max_tokens: 1024
 skills:
   - skills/concierge
+  - skills/brainstorming
 transport:
   stdio: true
   socket:
