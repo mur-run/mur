@@ -10,6 +10,7 @@ import { WizardModal } from "./wizard/WizardModal";
 import { PresetImportModal } from "./PresetImportModal";
 import { MuragentImportModal } from "./MuragentImportModal";
 import { SettingsModal } from "./SettingsModal";
+import { ModelSetupWizard } from "./ModelSetupWizard";
 import { ModelPickerModal } from "./ModelPickerModal";
 import { useUnreadCount } from "./CompanionInbox";
 import { DetailPanel } from "./DetailPanel";
@@ -408,6 +409,7 @@ export function DashboardApp() {
   const [muragentImportOpen, setMuragentImportOpen] = useState(false);
   const [muragentImportPath, setMuragentImportPath] = useState<string | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [showModelWizard, setShowModelWizard] = useState(false);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [showAppsBanner, setShowAppsBanner] = useState(false);
   const [showUpgradeNudge, setShowUpgradeNudge] = useState(false);
@@ -592,6 +594,9 @@ export function DashboardApp() {
       }
       if (status.is_first_launch) {
         invoke("mark_first_launch_done").catch(() => {});
+        invoke<{ needs_setup: boolean }>("model_setup_status")
+          .then((s) => { if (s.needs_setup) setShowModelWizard(true); })
+          .catch(() => {});
       }
     }).catch(() => {});
   }, []);
@@ -927,6 +932,14 @@ export function DashboardApp() {
           setMuragentImportOpen(false);
           setMuragentImportPath(undefined);
           invoke("list_agents").catch(() => {});
+        }}
+      />
+      <ModelSetupWizard
+        open={showModelWizard}
+        onClose={() => setShowModelWizard(false)}
+        onCustomize={() => {
+          setShowModelWizard(false);
+          setSettingsOpen(true);
         }}
       />
       <SettingsModal
