@@ -1,0 +1,28 @@
+# Derived from obra/superpowers using-git-worktrees (MIT).
+name: using-git-worktrees
+version: "1.0.0"
+publisher: human:mur-official
+description: "Ensure feature work happens in an isolated git worktree under the repo's .worktrees/ dir"
+category: workflow
+content:
+  abstract: |
+    Detect existing isolation first, then create an isolated workspace only if
+    needed. MUR's convention is a worktree under the repo's own `.worktrees/`
+    directory — never under `~/.mur` (that path is reserved for MUR's runtime
+    data and would collide with agent state).
+  procedure:
+    steps:
+      - description: "Detect existing isolation: compare `git rev-parse --git-dir` and `--git-common-dir`. If they differ and you're not inside a git submodule (`git rev-parse --show-superproject-working-tree` returns empty), you're already in a linked worktree — skip creation and go straight to project setup."
+      - description: "If in a normal checkout and no worktree preference was already declared, ask for consent before creating one: it protects the current branch from in-progress changes."
+      - description: "Check for an existing project-local worktree directory: prefer `.worktrees/` at the repo root (MUR's convention); fall back to `worktrees/` only if `.worktrees/` doesn't exist. Never use `~/.mur/worktrees` — that collides with the MUR runtime home."
+      - description: "Verify the chosen directory is git-ignored (`git check-ignore -q .worktrees`); if not, add it to `.gitignore` and commit that change before creating the worktree."
+      - description: "Create the worktree: `git worktree add .worktrees/<branch-name> -b <branch-name>`, then operate with that path as cwd for all subsequent file and bash operations. If the sandbox denies worktree creation, report the denial and work in place instead."
+      - description: "Run project setup in the new worktree (e.g. `cargo build --workspace` for this repo) and verify a clean baseline test run before starting feature work; if baseline tests fail, report the failures and ask whether to proceed."
+      - description: "Report readiness: worktree path, baseline test result, and which feature is about to be implemented."
+tags: [coder, git, worktree, workflow, superpowers-derived]
+triggers:
+  - type: keyword
+    pattern: "using-git-worktrees"
+  - type: keyword
+    pattern: "isolated workspace"
+priority: normal

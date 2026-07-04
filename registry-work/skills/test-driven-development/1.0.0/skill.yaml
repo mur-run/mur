@@ -1,0 +1,27 @@
+# Derived from obra/superpowers test-driven-development (MIT).
+name: test-driven-development
+version: "1.0.0"
+publisher: human:mur-official
+description: "Red-Green-Refactor — write the failing test first, watch it fail, then implement"
+category: workflow
+content:
+  abstract: |
+    No production code without a failing test first. Write one minimal test,
+    watch it fail for the right reason, write the smallest code to pass, then
+    refactor while staying green. Applies to every feature, bugfix, and refactor.
+  procedure:
+    steps:
+      - description: "RED: Write one minimal test for one behavior, with a clear name showing intent. Use real code paths, not mocks, unless a dependency is genuinely unavoidable to fake."
+      - description: "Verify RED: run the test (e.g. `cargo nextest run -p <crate> <test_name>` or `cargo test <test_name>`) and confirm it fails for the expected reason — feature missing, not a typo or setup error. If it passes immediately, you're testing existing behavior; fix the test."
+      - description: "GREEN: write the simplest code that makes the test pass. Don't add unrequested options, refactor unrelated code, or generalize beyond what the test demands (YAGNI)."
+      - description: "Verify GREEN: re-run the test and the full suite. Confirm the target test passes, no other tests broke, and output is clean (no warnings/errors)."
+      - description: "REFACTOR: with tests green, remove duplication, improve names, extract helpers. Do not add new behavior during refactor; keep re-running tests to stay green."
+      - description: "Repeat the cycle for the next behavior. For a discovered bug: write a failing test that reproduces it first, then follow the same RED-GREEN-REFACTOR cycle — never patch a bug without a regression test."
+      - description: "Before claiming a task done, confirm every new function has a test, every test was watched failing before the fix, and the full test command's fresh output shows 0 failures (see verification-before-completion)."
+tags: [coder, testing, tdd, workflow, superpowers-derived]
+triggers:
+  - type: keyword
+    pattern: "test-driven-development"
+  - type: keyword
+    pattern: "TDD"
+priority: normal
