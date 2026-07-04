@@ -81,7 +81,10 @@ fn compact_pair(cfg: &Config) -> (String, String) {
 }
 
 fn rollup_pair(cfg: &Config) -> (String, String) {
-    ("ollama".into(), cfg.conversations.rollup.extractive_model.clone())
+    (
+        "ollama".into(),
+        cfg.conversations.rollup.extractive_model.clone(),
+    )
 }
 
 fn health_for(provider: &str, api_key_ref: Option<&str>) -> String {
@@ -100,10 +103,21 @@ fn health_for(provider: &str, api_key_ref: Option<&str>) -> String {
     }
 }
 
-fn slot_view(provider: String, model: String, api_key_ref: Option<String>, smart: &(String, String)) -> SlotView {
+fn slot_view(
+    provider: String,
+    model: String,
+    api_key_ref: Option<String>,
+    smart: &(String, String),
+) -> SlotView {
     let health = health_for(&provider, api_key_ref.as_deref());
     let follows_smart = (&provider, &model) == (&smart.0, &smart.1);
-    SlotView { provider, model, api_key_ref, health, follows_smart }
+    SlotView {
+        provider,
+        model,
+        api_key_ref,
+        health,
+        follows_smart,
+    }
 }
 
 pub fn get_slots() -> Result<ModelSlotsView> {
@@ -126,7 +140,11 @@ pub fn get_slots() -> Result<ModelSlotsView> {
     let ask = slot_view(
         ap,
         am,
-        cfg.conversations.ask.backend.as_ref().and_then(|b| b.api_key_ref.clone()),
+        cfg.conversations
+            .ask
+            .backend
+            .as_ref()
+            .and_then(|b| b.api_key_ref.clone()),
         &smart_pair,
     );
     let (cp, cm) = compact_pair(&cfg);
@@ -179,7 +197,12 @@ fn resolve_selection(sel: &SlotSelection, reg: &ModelRegistry) -> Result<Resolve
                 api_key_ref: entry.secret.as_ref().map(|s| s.to_string()),
             })
         }
-        SlotSelection::Local { provider, model, base_url, .. } => Ok(Resolved {
+        SlotSelection::Local {
+            provider,
+            model,
+            base_url,
+            ..
+        } => Ok(Resolved {
             provider: provider.clone(),
             model: model.clone(),
             endpoint: Some(base_url.clone()),
@@ -191,7 +214,12 @@ fn resolve_selection(sel: &SlotSelection, reg: &ModelRegistry) -> Result<Resolve
 /// Writes a resolved selection into an Ask/Compact per-stage backend override
 /// (Local clears the override back to the legacy string field; Registry sets
 /// an explicit override), or into Rollup's legacy field directly (Local only).
-fn write_conversation_stage(cfg: &mut Config, id: SlotId, sel: &SlotSelection, r: &Resolved) -> Result<()> {
+fn write_conversation_stage(
+    cfg: &mut Config,
+    id: SlotId,
+    sel: &SlotSelection,
+    r: &Resolved,
+) -> Result<()> {
     match id {
         SlotId::Ask => match sel {
             SlotSelection::Local { .. } => {
@@ -226,7 +254,9 @@ fn write_conversation_stage(cfg: &mut Config, id: SlotId, sel: &SlotSelection, r
             }
         },
         SlotId::Rollup => match sel {
-            SlotSelection::Local { .. } => cfg.conversations.rollup.extractive_model = r.model.clone(),
+            SlotSelection::Local { .. } => {
+                cfg.conversations.rollup.extractive_model = r.model.clone()
+            }
             SlotSelection::Registry { .. } => bail!("this stage runs locally; pick a local model"),
         },
         _ => unreachable!("write_conversation_stage only called for Ask/Compact/Rollup"),
@@ -289,9 +319,7 @@ pub fn set_slot(slot: SlotId, sel: &SlotSelection) -> Result<ModelSlotsView> {
             if compact_follows {
                 write_conversation_stage(&mut cfg, SlotId::Compact, sel, &r)?;
             }
-            if rollup_follows
-                && let SlotSelection::Local { .. } = sel
-            {
+            if rollup_follows && let SlotSelection::Local { .. } = sel {
                 write_conversation_stage(&mut cfg, SlotId::Rollup, sel, &r)?;
             }
         }
@@ -316,7 +344,9 @@ pub fn set_slot(slot: SlotId, sel: &SlotSelection) -> Result<ModelSlotsView> {
             write_conversation_stage(&mut cfg, slot, sel, &r)?;
         }
         SlotId::Summarize => match sel {
-            SlotSelection::Local { model, .. } => cfg.conversations.ask.summarize_model = Some(model.clone()),
+            SlotSelection::Local { model, .. } => {
+                cfg.conversations.ask.summarize_model = Some(model.clone())
+            }
             SlotSelection::Registry { .. } => bail!("this stage runs locally; pick a local model"),
         },
         SlotId::Reflector | SlotId::Curator => unreachable!("handled above"),
@@ -370,7 +400,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
 
-        let sel = SlotSelection::Registry { ref_name: "whatever".into() };
+        let sel = SlotSelection::Registry {
+            ref_name: "whatever".into(),
+        };
         assert!(set_slot(SlotId::Rollup, &sel).is_err());
 
         unsafe { std::env::remove_var("MUR_HOME") };
