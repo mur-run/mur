@@ -122,6 +122,7 @@ pub async fn run_judge_pipeline_async(
         model: config.judge.model.clone(),
         endpoint: None,
         api_key_env: None,
+        api_key_ref: None,
         timeout_secs: Some(120),
     };
     let backend = build_for_stage(&backend_cfg, "parallel.judge")?;

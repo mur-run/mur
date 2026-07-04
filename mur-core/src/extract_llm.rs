@@ -271,6 +271,12 @@ pub fn has_llm_config() -> bool {
     if llm.provider == "ollama" {
         return true;
     }
+    if let Some(r) = llm.api_key_ref.as_deref() {
+        return r
+            .parse::<mur_common::secret::SecretRef>()
+            .map(|s| s.resolve_to_string_blocking().is_some())
+            .unwrap_or(false);
+    }
     let env_var = llm
         .api_key_env
         .as_deref()
