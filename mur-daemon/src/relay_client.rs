@@ -682,14 +682,15 @@ async fn handle_relay_command(mur_home: &Path, write: &mut WsWrite, envelope: &V
                     })
                     .unwrap_or(Value::Null),
             ) {
-                Ok(req) => match mur_core::install_request::record_install_request(mur_home, &req)
-                {
-                    Ok(_) => (true, None),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "mobile relay: record_install_request failed");
-                        (false, Some(e.to_string()))
+                Ok(req) => {
+                    match mur_core::install_request::record_install_request(mur_home, &req) {
+                        Ok(_) => (true, None),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "mobile relay: record_install_request failed");
+                            (false, Some(e.to_string()))
+                        }
                     }
-                },
+                }
                 Err(e) => {
                     tracing::warn!(error = %e, "mobile relay: bad install_request params");
                     (false, Some(format!("bad install_request params: {e}")))
