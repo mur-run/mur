@@ -6,6 +6,8 @@
 //! functions — probing (env/keychain/discovery) happens in the callers'
 //! gather helpers so `recommend` is unit-testable.
 
+pub mod slots;
+
 use serde::{Deserialize, Serialize};
 
 use crate::discovery::aggregate::{MenuRowKind, build_embedding_menu, build_llm_menu};
