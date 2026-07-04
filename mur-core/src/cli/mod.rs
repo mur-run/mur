@@ -238,6 +238,7 @@ pub enum Commands {
         patterns: bool,
     },
     /// Verify documentation claims (paths, commands, code refs) against actual codebase
+    #[command(hide = true)]
     Verify {
         /// Specific file to verify (default: scan all docs)
         #[arg(long)]
