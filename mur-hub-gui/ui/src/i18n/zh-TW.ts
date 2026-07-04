@@ -683,4 +683,12 @@ export const zhTW: Table = {
   "fleet.run.tracksSuffix": "條軌道",
   "settings.fleetAutorun.label": "允許機群無人值守自動執行",
   "settings.fleetAutorun.description": "已設定觸發條件與預算的機群將依排程自動執行，無需確認。預設關閉，且每個機群的預算必須大於 0。",
+  "wizard.models.title": "設定模型",
+  "wizard.models.detecting": "正在偵測本地執行環境與已連接的供應商…",
+  "wizard.models.apply": "套用建議配置",
+  "wizard.models.customize": "自訂…",
+  "wizard.models.skip": "暫時跳過",
+  "wizard.models.connect": "連接供應商",
+  "wizard.models.done": "模型已設定:",
+  "wizard.models.hint": "之後隨時可到 設定 → Models 調整。",
 };

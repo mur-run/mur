@@ -681,4 +681,12 @@ export const en = {
   "fleet.run.tracksSuffix": "tracks",
   "settings.fleetAutorun.label": "Allow fleets to auto-run unattended",
   "settings.fleetAutorun.description": "Fleets with configured triggers and budgets will automatically run on schedule without requiring approval. Disabled by default, and each fleet must have a budget greater than 0.",
+  "wizard.models.title": "Set up models",
+  "wizard.models.detecting": "Detecting local runtimes and connected providers…",
+  "wizard.models.apply": "Apply recommended setup",
+  "wizard.models.customize": "Customize…",
+  "wizard.models.skip": "Skip for now",
+  "wizard.models.connect": "Connect a provider",
+  "wizard.models.done": "Models configured:",
+  "wizard.models.hint": "You can change this anytime in Settings → Models.",
 } as const;
