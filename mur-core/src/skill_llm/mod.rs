@@ -109,7 +109,10 @@ fn backend_config_from_entry(entry: &ModelEntry) -> BackendConfig {
         model: entry.model.clone(),
         endpoint: entry.base_url.clone(),
         api_key_env,
-        api_key_ref: None,
+        // Keychain/file/cmd refs previously dropped silently — now carried.
+        // SecretRef's Display impl round-trips through its FromStr parser
+        // (env:VAR, keychain:service/account, file:path, cmd:spec).
+        api_key_ref: entry.secret.as_ref().map(|s| s.to_string()),
         timeout_secs: None,
     }
 }

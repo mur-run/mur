@@ -61,6 +61,17 @@ fn default_key_env(provider: &str) -> &'static str {
 }
 
 fn resolve_api_key(cfg: &BackendConfig) -> Result<String> {
+    if let Some(r) = cfg.api_key_ref.as_deref() {
+        let sref: mur_common::secret::SecretRef = r
+            .parse()
+            .map_err(|e| anyhow::anyhow!("{} backend api_key_ref invalid: {e}", cfg.provider))?;
+        return sref.resolve_to_string_blocking().ok_or_else(|| {
+            anyhow::anyhow!(
+                "{} backend api_key_ref {r} did not resolve (and no usable api_key_env fallback was attempted — fix or remove api_key_ref)",
+                cfg.provider
+            )
+        });
+    }
     let env_var = cfg
         .api_key_env
         .as_deref()
@@ -409,8 +420,34 @@ mod tests {
         unsafe { std::env::remove_var("MUR_TELEMETRY_DISABLE") };
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn api_key_ref_takes_precedence_over_env() {
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        unsafe { std::env::set_var("MUR_TEST_REF_KEY", "key-from-ref") };
+        let cfg = BackendConfig {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+            endpoint: None,
+            api_key_env: Some("MUR_TEST_NONEXISTENT_KEY".into()),
+            api_key_ref: Some("env:MUR_TEST_REF_KEY".into()),
+            timeout_secs: None,
+        };
+        // ref resolves → build succeeds even though api_key_env is unset
+        assert!(build(&cfg).is_ok());
+        unsafe { std::env::remove_var("MUR_TEST_REF_KEY") };
+        // ref no longer resolves → error mentions the ref
+        let err = format!("{:#}", build(&cfg).err().unwrap());
+        assert!(err.contains("MUR_TEST_REF_KEY"), "err was: {err}");
+    }
+
     #[test]
     fn unsupported_provider_errors() {
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
         let cfg = BackendConfig {
             provider: "cohere".into(),
             model: "command-r".into(),
