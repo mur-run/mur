@@ -80,6 +80,7 @@ fn bump_index_latest(reg_root: &Path, name: &str, version: &str) {
         tags: vec![],
         content_sha256: String::new(),
         install_count: 0,
+        recommended_roles: vec![],
     });
     entry.latest = version.into();
     std::fs::write(&p, idx.to_yaml().unwrap()).unwrap();

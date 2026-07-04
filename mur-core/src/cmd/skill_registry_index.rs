@@ -121,6 +121,11 @@ pub fn build_registry_index(repo_dir: &Path) -> Result<RegistryIndex> {
                         .and_then(|i| i.skills.get(&manifest.name))
                         .map(|e| e.install_count)
                         .unwrap_or(0),
+                    recommended_roles: prior
+                        .as_ref()
+                        .and_then(|i| i.skills.get(&manifest.name))
+                        .map(|e| e.recommended_roles.clone())
+                        .unwrap_or_default(),
                 };
 
                 match best.get(&manifest.name) {

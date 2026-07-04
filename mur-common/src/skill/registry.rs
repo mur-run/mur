@@ -25,6 +25,8 @@ pub struct RegistrySkillEntry {
     pub content_sha256: String,
     #[serde(default)]
     pub install_count: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recommended_roles: Vec<String>,
 }
 
 impl RegistryIndex {
@@ -116,6 +118,29 @@ skills:
     fn no_match_returns_empty() {
         let idx = RegistryIndex::from_yaml(SAMPLE).unwrap();
         assert!(idx.search("zzz").is_empty());
+    }
+
+    #[test]
+    fn recommended_roles_parses_and_defaults_empty() {
+        let idx = RegistryIndex::from_yaml(SAMPLE).unwrap();
+        assert!(idx.skills["research-prices"].recommended_roles.is_empty());
+
+        let with_roles = RegistryIndex::from_yaml(
+            r#"
+skills:
+  writing-plans:
+    latest: 1.0.0
+    description: d
+    publisher: mur-official
+    category: workflow
+    recommended_roles: [pm]
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            with_roles.skills["writing-plans"].recommended_roles,
+            vec!["pm".to_string()]
+        );
     }
 
     #[test]
