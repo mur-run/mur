@@ -375,7 +375,18 @@ fn extract_code_refs(line: &str) -> Vec<String> {
         // Skip common non-code words
         if !matches!(
             name,
-            "README" | "CLAUDE" | "YAML" | "JSON" | "TOML" | "HTTP" | "HTTPS" | "UUID" | "UTC"
+            "README"
+                | "CLAUDE"
+                | "YAML"
+                | "JSON"
+                | "TOML"
+                | "HTTP"
+                | "HTTPS"
+                | "UUID"
+                | "UTC"
+                // External crate types discussed in docs, not local code
+                | "FromRequestParts"
+                | "ConnectInfo"
         ) {
             let r = name.to_string();
             if !refs.contains(&r) {
@@ -571,8 +582,10 @@ fn verify_code_ref(code_ref: &str, project_root: &Path) -> VerifyResult {
         }
         return VerifyResult::Invalid(format!("method `{method}` not found in source"));
     } else {
-        // Standalone PascalCase type name
-        format!(r"(struct|enum|trait|type)\s+{code_ref}\b")
+        // Standalone PascalCase name — bare word match. Covers enum variants
+        // (e.g. `StateChange`), which aren't declared via `enum StateChange`
+        // themselves — they live inside their enum's braces.
+        format!(r"\b{code_ref}\b")
     };
 
     if grep_source(project_root, &pattern) {
