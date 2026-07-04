@@ -138,6 +138,18 @@ pub struct SkillManifest {
     #[serde(default, skip_serializing_if = "Visibility::is_indexed")]
     pub visibility: Visibility,
 
+    /// Registry origin stamp: `registry:<publisher>/<name>`. Present on
+    /// built-in registry-installed skills; drives upgrade pipeline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    /// Version installed from the registry at stamp time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_version: Option<String>,
+    /// `content_hash_for_origin` of the content as shipped; mismatch against
+    /// current content means the user modified the skill locally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_hash: Option<String>,
+
     /// Fleet identifier (required if scope is Fleet).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fleet: Option<String>,
