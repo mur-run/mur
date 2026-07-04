@@ -25,12 +25,19 @@ impl EmbeddingConfig {
     pub fn from_config(cfg: &mur_common::config::Config) -> Self {
         let provider = match cfg.embedding.provider.as_str() {
             "openai" | "gemini" | "anthropic" | "voyage" | "omlx" | "mlx" => {
-                // Resolve API key from api_key_env or fall back to OPENAI_API_KEY
+                // Resolve API key from api_key_ref, then api_key_env, then OPENAI_API_KEY
                 let api_key = cfg
                     .embedding
-                    .api_key_env
+                    .api_key_ref
                     .as_deref()
-                    .and_then(|env| std::env::var(env).ok())
+                    .and_then(|r| r.parse::<mur_common::secret::SecretRef>().ok())
+                    .and_then(|s| s.resolve_to_string_blocking())
+                    .or_else(|| {
+                        cfg.embedding
+                            .api_key_env
+                            .as_deref()
+                            .and_then(|env| std::env::var(env).ok())
+                    })
                     .unwrap_or_else(|| std::env::var("OPENAI_API_KEY").unwrap_or_default());
                 let base_url = cfg
                     .embedding
@@ -298,5 +305,19 @@ mod tests {
             matches!(ec.provider, EmbeddingProvider::Ollama { .. }),
             "ollama provider must produce Ollama variant regardless of openai_url"
         );
+    }
+
+    #[test]
+    fn from_config_prefers_api_key_ref() {
+        unsafe { std::env::set_var("MUR_TEST_EMB_REF", "emb-key") };
+        let mut cfg = mur_common::config::Config::default();
+        cfg.embedding.provider = "openai".into();
+        cfg.embedding.api_key_ref = Some("env:MUR_TEST_EMB_REF".into());
+        let ec = EmbeddingConfig::from_config(&cfg);
+        match ec.provider {
+            EmbeddingProvider::OpenAI { api_key, .. } => assert_eq!(api_key, "emb-key"),
+            _ => panic!("expected OpenAI provider"),
+        }
+        unsafe { std::env::remove_var("MUR_TEST_EMB_REF") };
     }
 }

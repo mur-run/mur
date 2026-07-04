@@ -143,6 +143,29 @@ impl SecretRef {
             .ok()
             .map(|s| s.expose_secret().to_string())
     }
+
+    /// Synchronous resolve for callers outside an async context (CLI
+    /// factories, config loaders). Inside a multi-thread tokio runtime it
+    /// uses block_in_place; otherwise it spins a current-thread runtime.
+    pub fn resolve_blocking(&self) -> Result<SecretString, SecretError> {
+        match tokio::runtime::Handle::try_current() {
+            Ok(h) => tokio::task::block_in_place(|| h.block_on(self.resolve())),
+            Err(_) => tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| SecretError::KeychainBackend(format!("runtime: {e}")))?
+                .block_on(self.resolve()),
+        }
+    }
+
+    /// Blocking analogue of `resolve_to_string` — same materialization
+    /// caveats apply.
+    pub fn resolve_to_string_blocking(&self) -> Option<String> {
+        use secrecy::ExposeSecret;
+        self.resolve_blocking()
+            .ok()
+            .map(|s| s.expose_secret().to_string())
+    }
 }
 
 /// Read a secret from the OS keychain.
@@ -697,5 +720,19 @@ mod keychain_helpers_tests {
         let _g = install_mock(None).await;
         // No prior set — must still return Ok.
         keychain_delete("mur-test", "never-set").await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod resolve_blocking_tests {
+    use super::*;
+
+    #[test]
+    fn resolve_blocking_env_and_missing() {
+        unsafe { std::env::set_var("MUR_TEST_SECRET_BLOCKING", "s3cret") };
+        let r: SecretRef = "env:MUR_TEST_SECRET_BLOCKING".parse().unwrap();
+        assert_eq!(r.resolve_to_string_blocking().as_deref(), Some("s3cret"));
+        unsafe { std::env::remove_var("MUR_TEST_SECRET_BLOCKING") };
+        assert!(r.resolve_blocking().is_err());
     }
 }
