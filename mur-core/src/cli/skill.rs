@@ -126,6 +126,16 @@ pub enum SkillAction {
         /// Name of installed skill to update.
         name: String,
     },
+    /// Upgrade all origin-stamped (registry-installed) skills to the latest
+    /// registry version. Skips anything user-modified since install.
+    Upgrade {
+        /// Report what would be upgraded without writing anything.
+        #[arg(long)]
+        check: bool,
+        /// Emit the report as JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Print the resolved dependency tree for an installed skill.
     Deps {
         /// Name of installed skill.
