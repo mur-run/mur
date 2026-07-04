@@ -61,6 +61,17 @@ fn default_key_env(provider: &str) -> &'static str {
 }
 
 fn resolve_api_key(cfg: &BackendConfig) -> Result<String> {
+    if let Some(r) = cfg.api_key_ref.as_deref() {
+        let sref: mur_common::secret::SecretRef = r
+            .parse()
+            .map_err(|e| anyhow::anyhow!("{} backend api_key_ref invalid: {e}", cfg.provider))?;
+        return sref.resolve_to_string_blocking().ok_or_else(|| {
+            anyhow::anyhow!(
+                "{} backend api_key_ref {r} did not resolve (and no usable api_key_env fallback was attempted — fix or remove api_key_ref)",
+                cfg.provider
+            )
+        });
+    }
     let env_var = cfg
         .api_key_env
         .as_deref()
@@ -145,6 +156,7 @@ mod tests {
             model: "qwen3:14b".into(),
             endpoint: Some(endpoint.into()),
             api_key_env: None,
+            api_key_ref: None,
             timeout_secs: Some(timeout_secs),
         }
     }
@@ -197,6 +209,7 @@ mod tests {
             model: "claude-haiku-4-5".into(),
             endpoint: None,
             api_key_env: Some("MUR_TEST_ANTHROPIC_KEY".into()),
+            api_key_ref: None,
             timeout_secs: None,
         };
         let b = build(&cfg).unwrap();
@@ -216,6 +229,7 @@ mod tests {
             model: "claude-haiku-4-5".into(),
             endpoint: None,
             api_key_env: Some("MUR_TEST_NONEXISTENT_KEY".into()),
+            api_key_ref: None,
             timeout_secs: None,
         };
         let r = build(&cfg);
@@ -236,6 +250,7 @@ mod tests {
             model: "claude-haiku-4-5".into(),
             endpoint: None,
             api_key_env: None,
+            api_key_ref: None,
             timeout_secs: None,
         };
         let r = build(&cfg);
@@ -257,6 +272,7 @@ mod tests {
             model: "gpt-4o-mini".into(),
             endpoint: None,
             api_key_env: Some("MUR_TEST_OPENAI_KEY".into()),
+            api_key_ref: None,
             timeout_secs: None,
         };
         let b = build(&cfg).unwrap();
@@ -276,6 +292,7 @@ mod tests {
             model: "gemini-pro-3".into(),
             endpoint: None,
             api_key_env: Some("MUR_TEST_GEMINI_KEY".into()),
+            api_key_ref: None,
             timeout_secs: None,
         };
         let b = build(&cfg).unwrap();
@@ -295,6 +312,7 @@ mod tests {
             model: "anthropic/claude-haiku-4-5".into(),
             endpoint: None, // factory should auto-set https://openrouter.ai/api/v1
             api_key_env: Some("MUR_TEST_OR_KEY".into()),
+            api_key_ref: None,
             timeout_secs: None,
         };
         let b = build(&cfg).unwrap();
@@ -318,6 +336,7 @@ mod tests {
             model: "claude-haiku-4-5".into(),
             endpoint: None,
             api_key_env: None, // factory uses default_key_env("anthropic") = "ANTHROPIC_API_KEY"
+            api_key_ref: None,
             timeout_secs: None,
         };
         let b = build(&cfg).unwrap();
@@ -337,6 +356,7 @@ mod tests {
             model: "qwen3:14b".into(),
             endpoint: Some("http://localhost:11434".into()),
             api_key_env: None,
+            api_key_ref: None,
             timeout_secs: Some(5),
         };
         let b = build_for_stage(&cfg, "extractive").unwrap();
@@ -391,6 +411,7 @@ mod tests {
             model: "qwen3:14b".into(),
             endpoint: Some("http://127.0.0.1:1".into()),
             api_key_env: None,
+            api_key_ref: None,
             timeout_secs: Some(1),
         };
         let b = build_for_stage(&cfg, "rewriter").unwrap();
@@ -399,13 +420,40 @@ mod tests {
         unsafe { std::env::remove_var("MUR_TELEMETRY_DISABLE") };
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn api_key_ref_takes_precedence_over_env() {
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        unsafe { std::env::set_var("MUR_TEST_REF_KEY", "key-from-ref") };
+        let cfg = BackendConfig {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+            endpoint: None,
+            api_key_env: Some("MUR_TEST_NONEXISTENT_KEY".into()),
+            api_key_ref: Some("env:MUR_TEST_REF_KEY".into()),
+            timeout_secs: None,
+        };
+        // ref resolves → build succeeds even though api_key_env is unset
+        assert!(build(&cfg).is_ok());
+        unsafe { std::env::remove_var("MUR_TEST_REF_KEY") };
+        // ref no longer resolves → error mentions the ref
+        let err = format!("{:#}", build(&cfg).err().unwrap());
+        assert!(err.contains("MUR_TEST_REF_KEY"), "err was: {err}");
+    }
+
     #[test]
     fn unsupported_provider_errors() {
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
         let cfg = BackendConfig {
             provider: "cohere".into(),
             model: "command-r".into(),
             endpoint: None,
             api_key_env: None,
+            api_key_ref: None,
             timeout_secs: None,
         };
         let r = build(&cfg);
@@ -467,6 +515,7 @@ data: {\"type\":\"message_stop\"}
             model: "claude-haiku-4-5".into(),
             endpoint: Some(server.uri()),
             api_key_env: Some("MUR_TEST_ANTHROPIC_KEY_I3".into()),
+            api_key_ref: None,
             timeout_secs: Some(5),
         };
         let b = build(&cfg).unwrap();
@@ -537,6 +586,7 @@ data: {\"type\":\"message_stop\"}
             model: "claude-haiku-4-5".into(),
             endpoint: Some(server.uri()),
             api_key_env: Some("MUR_TEST_ANTHROPIC_KEY_I4".into()),
+            api_key_ref: None,
             timeout_secs: Some(5),
         };
 
