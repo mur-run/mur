@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn text_includes_note_body_when_present() {
-        use mur_common::skill::manifest::{Content, Visibility};
+        use mur_common::skill::manifest::Content;
         use mur_common::skill::types::Category;
 
         let mut s = fake_loaded("note-skill", Priority::Normal);
