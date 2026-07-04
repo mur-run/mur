@@ -160,6 +160,9 @@ async fn run_once(
                     Some("heartbeat_ack") => {
                         tracing::debug!("mobile relay: heartbeat_ack");
                     }
+                    Some("command") => {
+                        handle_relay_command(mur_home, &mut write, &envelope).await;
+                    }
                     Some("mobile_frame") => {
                         let payload = match envelope.get("payload") {
                             Some(p) => p.to_string(),
@@ -648,6 +651,69 @@ async fn relay_send(write: &mut WsWrite, frame: &ServerFrame) -> Result<()> {
         serde_json::to_string(&json!({ "type": "mobile_frame", "payload": payload_val }))?;
     write.send(Message::Text(wrapped.into())).await?;
     Ok(())
+}
+
+/// Handles a `{"type":"command", "id", "action", "params"}` frame from the
+/// mur-server relay (`internal/relay/hub.go` `Command`/`sendToAgent`). Only
+/// `action == "install_request"` is implemented today (Dashboard "Install to
+/// Hub" button). Always acks with a `result` frame carrying the same `id` —
+/// `Hub.SendCommand` blocks on that ack to consider the command delivered —
+/// so this never lets a bad/unknown payload hang the caller or crash the
+/// relay read loop.
+async fn handle_relay_command(mur_home: &Path, write: &mut WsWrite, envelope: &Value) {
+    let Some(cmd_id) = envelope.get("id").and_then(|v| v.as_str()) else {
+        tracing::warn!("mobile relay: command frame missing id, dropping");
+        return;
+    };
+    let action = envelope.get("action").and_then(|v| v.as_str());
+
+    let (success, error) = match action {
+        Some("install_request") => {
+            match serde_json::from_value::<mur_core::install_request::InstallRequest>(
+                envelope
+                    .get("params")
+                    .cloned()
+                    .unwrap_or(Value::Null)
+                    .as_object()
+                    .map(|obj| {
+                        let mut obj = obj.clone();
+                        obj.insert("request_id".to_string(), json!(cmd_id));
+                        Value::Object(obj)
+                    })
+                    .unwrap_or(Value::Null),
+            ) {
+                Ok(req) => match mur_core::install_request::record_install_request(mur_home, &req)
+                {
+                    Ok(_) => (true, None),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "mobile relay: record_install_request failed");
+                        (false, Some(e.to_string()))
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(error = %e, "mobile relay: bad install_request params");
+                    (false, Some(format!("bad install_request params: {e}")))
+                }
+            }
+        }
+        other => {
+            tracing::warn!(action = ?other, "mobile relay: unknown command action");
+            (false, Some(format!("unknown action: {other:?}")))
+        }
+    };
+
+    let result = json!({
+        "type": "result",
+        "id": cmd_id,
+        "success": success,
+        "data": Value::Null,
+        "error": error,
+    });
+    if let Ok(text) = serde_json::to_string(&result)
+        && let Err(e) = write.send(Message::Text(text.into())).await
+    {
+        tracing::warn!(error = %e, "mobile relay: failed to send command result");
+    }
 }
 
 // --- helpers ---

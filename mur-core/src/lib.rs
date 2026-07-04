@@ -37,6 +37,7 @@ pub mod federation;
 pub mod harvest;
 pub mod hitl;
 pub mod inject;
+pub mod install_request;
 pub mod interactive;
 pub mod mobile;
 pub mod model_discovery;
