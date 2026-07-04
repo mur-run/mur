@@ -13,6 +13,20 @@ pub fn content_hash_for_trust(m: &SkillManifest) -> Result<String, crate::skill:
     content_sha256(&clone)
 }
 
+/// Origin-stable content hash — excludes `origin`, `origin_version`,
+/// `origin_hash` (the stamp itself) plus `transfer_chain`/`evolution_log`
+/// (trust-excluded already) so restamping a skill never changes its own
+/// hash, but a real content edit always does.
+pub fn content_hash_for_origin(m: &SkillManifest) -> Result<String, crate::skill::ParseError> {
+    let mut clone = m.clone();
+    clone.transfer_chain = vec![];
+    clone.evolution_log = vec![];
+    clone.origin = None;
+    clone.origin_version = None;
+    clone.origin_hash = None;
+    content_sha256(&clone)
+}
+
 /// Hex-encoded SHA-256 of the canonical YAML form. Lowercase.
 pub fn content_sha256(m: &SkillManifest) -> Result<String, crate::skill::ParseError> {
     let yaml = serialize_canonical(m)?;
@@ -131,6 +145,21 @@ content:
         }];
         let h2 = content_hash_for_trust(&m2).unwrap();
         assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn origin_hash_stable_across_restamp_but_not_content_edit() {
+        let m = parse_canonical(SAMPLE).unwrap();
+        let before = content_hash_for_origin(&m).unwrap();
+        let mut m2 = m.clone();
+        m2.origin = Some("registry:mur-official/hashable".into());
+        m2.origin_version = Some("1.1.0".into());
+        m2.origin_hash = Some(before.clone());
+        assert_eq!(content_hash_for_origin(&m2).unwrap(), before);
+
+        // but real content changes DO change it
+        m2.description = "changed".into();
+        assert_ne!(content_hash_for_origin(&m2).unwrap(), before);
     }
 
     #[test]
