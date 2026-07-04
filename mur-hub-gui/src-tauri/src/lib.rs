@@ -21,6 +21,7 @@ pub mod memory;
 pub mod mlx_sidecar;
 pub mod mobile;
 pub mod model_download;
+pub mod model_slots;
 pub mod models_admin;
 pub mod notif;
 pub mod onboarding;
@@ -557,6 +558,8 @@ pub fn run() {
             onboarding::first_launch::check_first_launch,
             onboarding::first_launch::mark_first_launch_done,
             onboarding::first_launch::replay_onboarding,
+            model_slots::model_slots_get,
+            model_slots::model_slots_set,
             pet::pet_spawn_at,
             pet::pet_close,
             pet::pet_return_to_hub,

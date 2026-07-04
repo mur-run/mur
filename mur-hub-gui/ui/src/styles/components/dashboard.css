@@ -201,6 +201,44 @@
 }
 .settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
+.slot-select {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border-line);
+  border-radius: 6px;
+  background: var(--surface-secondary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+}
+.slot-health {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.slot-health--ready { color: var(--status-running); background: color-mix(in srgb, var(--status-running) 15%, transparent); }
+.slot-health--key_missing { color: var(--status-restarting); background: color-mix(in srgb, var(--status-restarting) 15%, transparent); }
+.slot-health--unset { color: var(--text-tertiary); background: var(--surface-secondary); }
+.slot-tag {
+  margin-left: 6px;
+  font-size: 10px;
+  font-style: normal;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.slot-advanced { margin-top: 8px; }
+.slot-advanced > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 4px 0;
+}
+.slot-error { color: var(--status-failed); }
+
 /* ── Hero ─────────────────────────────────────────────────────────────── */
 .dashboard__hero {
   display: flex;
