@@ -463,6 +463,13 @@ pub fn run() {
                         }
                         Err(e) => tracing::warn!("seed Mur failed: {e}"),
                     }
+                    match seed_mur::seed_missing_bundled_skills(&template_dir, &mur_home) {
+                        Ok(seeded) if !seeded.is_empty() => {
+                            tracing::info!("seeded missing bundled skills: {seeded:?}");
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!("seed missing bundled skills failed: {e}"),
+                    }
                 }
                 None => tracing::warn!(
                     "seed Mur: bundled mur-agent-template resource not found; skipping"
