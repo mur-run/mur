@@ -50,7 +50,10 @@ async fn build_plan() -> Result<mur_core::model_setup::ModelSetupPlan, String> {
 #[tauri::command]
 pub async fn model_setup_preview() -> Result<SetupPreview, String> {
     let plan = build_plan().await?;
-    Ok(SetupPreview { summary: plan.summary.clone(), has_plan: plan.smart.is_some() })
+    Ok(SetupPreview {
+        summary: plan.summary.clone(),
+        has_plan: plan.smart.is_some(),
+    })
 }
 
 #[tauri::command]
@@ -61,5 +64,8 @@ pub async fn model_setup_apply_recommended() -> Result<SetupPreview, String> {
         mur_core::model_setup::apply(&plan, &mut cfg);
         mur_core::store::config::save_config(&cfg).map_err(|e| e.to_string())?;
     }
-    Ok(SetupPreview { summary: plan.summary.clone(), has_plan: plan.smart.is_some() })
+    Ok(SetupPreview {
+        summary: plan.summary.clone(),
+        has_plan: plan.smart.is_some(),
+    })
 }
