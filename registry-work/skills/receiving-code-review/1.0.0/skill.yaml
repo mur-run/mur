@@ -1,7 +1,7 @@
 # Derived from obra/superpowers receiving-code-review (MIT).
 name: receiving-code-review
 version: "1.0.0"
-publisher: human:mur-official
+publisher: human:david
 description: "Verify code review feedback technically before implementing it — no performative agreement"
 category: workflow
 content:
