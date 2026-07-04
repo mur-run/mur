@@ -1,0 +1,29 @@
+# Derived from obra/superpowers requesting-code-review (MIT).
+name: code-review
+version: "1.0.0"
+publisher: human:mur-official
+description: "Review a diff against its plan/spec and report severity-ranked findings — the qa role IS the reviewer"
+category: workflow
+content:
+  abstract: |
+    Act as the reviewer, not the requester: given a diff (or commit range) and
+    the plan/spec it's supposed to satisfy, evaluate the work product in
+    isolation and report ranked findings back over the channel. Review early,
+    review often — after each task, after a major feature, before a merge.
+  procedure:
+    steps:
+      - description: "Gather exactly the context needed to evaluate the work in isolation: the base/head commit SHAs (or diff), a one-line description of what was built, and the plan or spec section it's meant to satisfy. Do not pull in the requester's session history or chat — evaluate the artifact on its own."
+      - description: "Read the diff between base and head in full. For a fleet review request delivered over `channel/delegate`, treat the delegated message's SHAs/description/plan reference as the entire brief."
+      - description: "Check correctness first: does the diff actually implement what the plan/spec section asked for? Note any requirement in the spec with no corresponding change."
+      - description: "Check for regressions and missed edge cases: run or read the affected tests, verify error handling exists for the failure modes the spec implies, and confirm the change doesn't silently break an adjacent feature."
+      - description: "Rank every finding by severity — Critical (breaks correctness/security), Important (should fix before proceeding), Minor (note for later, non-blocking) — one line each: what's wrong, where, why it matters."
+      - description: "Also flag reuse/simplification opportunities and YAGNI violations (unused 'professional' additions) as a separate, lower-priority note — this is a quality signal, not a blocking finding, unless it hides a real bug."
+      - description: "Report findings back to the requester (or the fleet channel) as a structured list, most severe first, with an overall assessment (ready to proceed / fix Critical first / needs another pass). Never soften or omit a Critical finding to be agreeable."
+      - description: "If asked to review again after fixes, re-check specifically that the previously Critical/Important findings were addressed before signing off."
+tags: [qa, code-review, workflow, superpowers-derived]
+triggers:
+  - type: keyword
+    pattern: "code-review"
+  - type: command
+    pattern: "/code-review"
+priority: normal

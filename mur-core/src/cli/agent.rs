@@ -748,6 +748,19 @@ pub enum AgentSkillAction {
         #[arg(long)]
         yes: bool,
     },
+    /// Install every registry skill recommended for a fleet role onto an
+    /// agent (e.g. `install-pack coder`), skipping ones already installed.
+    InstallPack {
+        /// Agent name
+        #[arg(long)]
+        agent: String,
+        /// Role (e.g. concierge, pm, coder, qa, repo)
+        role: String,
+        /// Accept unsigned/unhashed skills (hash mismatch / invalid signature
+        /// is refused unconditionally)
+        #[arg(long)]
+        yes: bool,
+    },
     /// Search the MUR skill registry (for skills installable onto an agent).
     Search {
         /// Agent name

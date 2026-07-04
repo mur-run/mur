@@ -1,0 +1,27 @@
+# Derived from obra/superpowers verification-before-completion (MIT).
+name: verification-before-completion
+version: "1.0.0"
+publisher: human:mur-official
+description: "Run the verification command and read its fresh output before claiming anything is done"
+category: workflow
+content:
+  abstract: |
+    Claiming work is complete without running a fresh verification is dishonest,
+    not efficient. Identify the exact command that proves the claim, run it in
+    this turn, read the full output, and only then state the result — with the
+    evidence attached.
+  procedure:
+    steps:
+      - description: "Before any completion claim, identify the exact command that proves it: the test command for 'tests pass', the build command for 'build succeeds', the linter for 'lint clean', a re-run of the original failing repro for 'bug fixed'."
+      - description: "Run that full command fresh, in this turn — never reuse a previous run's output, and never substitute a partial or related check (e.g. linter output does not prove the build compiles)."
+      - description: "Read the complete output: exit code, failure count, warnings. Confirm it actually supports the claim before saying anything positive."
+      - description: "State the claim only with the evidence attached (e.g. 'cargo nextest run -p mur-common: 42/42 passed' — not 'should pass now' or 'looks correct')."
+      - description: "Never trust a delegated agent's or subagent's self-reported success at face value — after delegation, independently check the diff/VCS state or re-run the verification yourself."
+      - description: "Apply this before every completion-adjacent moment: committing, opening a PR, moving to the next task, or reporting a milestone back to a fleet router."
+tags: [coder, verification, workflow, superpowers-derived]
+triggers:
+  - type: keyword
+    pattern: "verification-before-completion"
+  - type: keyword
+    pattern: "claim complete"
+priority: normal
