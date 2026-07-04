@@ -52,7 +52,7 @@ pub fn cmd_install(home: &Path, registry_url: &str, source: &str) -> Result<()> 
 
     // Install leaves first. The root is the last entry.
     for node in &order {
-        install_resolved_node(home, node)?;
+        install_resolved_node(home, &input.registry_dir, node)?;
     }
 
     // Write lock at the root skill dir.
@@ -185,10 +185,27 @@ fn safe_skill_dir(home: &Path, name: &str) -> Result<std::path::PathBuf> {
     Ok(global_skill_dir(home, name))
 }
 
-fn install_resolved_node(home: &Path, node: &ResolvedNode) -> Result<()> {
+/// Stamp a registry-sourced manifest with its origin before writing to disk.
+/// Drives `mur skill upgrade`. Called ONLY for skills resolved from the
+/// registry cache — never for local-path or `agent://` peer-transfer
+/// installs, which have no registry version to upgrade against.
+pub fn stamp_registry_origin(m: &mut SkillManifest) {
+    m.origin = Some(format!("registry:{}/{}", m.publisher, m.name));
+    m.origin_version = Some(m.version.clone());
+    m.origin_hash = mur_common::skill::hash::content_hash_for_origin(m).ok();
+}
+
+fn install_resolved_node(home: &Path, registry_dir: &Path, node: &ResolvedNode) -> Result<()> {
     let report = scan_skill(&node.manifest)?;
     let dir = safe_skill_dir(home, &node.name)?;
-    write_to_dir(&dir, &node.manifest)?;
+    let mut manifest = node.manifest.clone();
+    // Registry-resolved nodes always load their yaml from inside the
+    // registry cache dir (root via RegistryLatest, transitive deps always
+    // via pick_best). A LocalFile root's yaml_path lives outside it.
+    if node.yaml_path.starts_with(registry_dir) {
+        stamp_registry_origin(&mut manifest);
+    }
+    write_to_dir(&dir, &manifest)?;
     let hash = content_sha256(&node.manifest)?;
     let mut trust = SkillTrustStore::load(home).map_err(|e| anyhow::anyhow!("load trust: {e}"))?;
     let level = if report.has_blocking_findings() {
@@ -507,6 +524,19 @@ fn try_embed_skill(home: &Path, name: &str, version: &str, manifest: &SkillManif
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn registry_install_stamps_origin() {
+        let yaml = "name: t\nversion: 1.2.0\npublisher: human:mur-official\ndescription: d\ncategory: workflow\ncontent:\n  abstract: a\n";
+        let mut m: SkillManifest = mur_common::skill::parse_canonical(yaml).unwrap();
+        stamp_registry_origin(&mut m);
+        assert_eq!(m.origin.as_deref(), Some("registry:human:mur-official/t"));
+        assert_eq!(m.origin_version.as_deref(), Some("1.2.0"));
+        assert_eq!(
+            m.origin_hash.as_deref().unwrap(),
+            mur_common::skill::hash::content_hash_for_origin(&m).unwrap()
+        );
+    }
 
     #[test]
     fn safe_skill_dir_rejects_traversal_names() {
