@@ -1,0 +1,71 @@
+name: brainstorming
+version: 1.0.0
+publisher: human:mur-official
+description: >-
+  Turns a rough idea into an approved design through one-question-at-a-time,
+  multiple-choice-first dialogue, then hands the agreed design to the `pm`
+  agent to author the spec/plan — never writes or scaffolds code itself.
+  Derived from obra/superpowers brainstorming (MIT).
+category: workflow
+origin: registry:mur-official/brainstorming
+origin_version: 1.0.0
+origin_hash: bf800c07b9ebf01d236d504ec26d62c325a60dd4892ada5a38893ecc163321e4
+content:
+  abstract: >-
+    Use before any new feature, component, or design decision: explores intent,
+    constraints, and trade-offs one question at a time before any spec gets
+    written, then delegates spec/plan authoring to the `pm` agent.
+  procedure:
+    steps:
+      - description: >-
+          HARD GATE: do not propose scaffolding, code, or any implementation
+          action at any point in this skill, however simple the request looks.
+          A one-paragraph design is fine for a simple request, but skipping
+          the process is not. The terminal action is handing the agreed
+          design summary to the `pm` agent for spec/plan authoring — nothing
+          more.
+      - description: >-
+          Explore context first: look at what already exists (relevant files,
+          prior notes/specs, recent history) before asking anything, so
+          questions build on what's already known instead of re-asking it.
+      - description: >-
+          Scope check: if the request bundles several independent subsystems,
+          say so up front and offer to split it into separate design passes —
+          one sub-project per brainstorming cycle — rather than spending
+          questions refining a project that first needs decomposing.
+      - description: >-
+          Ask exactly one question per turn. Prefer presenting 2-3 concrete
+          options (A/B/C, multiple-choice style) with a recommended default
+          over open-ended questions; open-ended is a fallback only. Cover
+          purpose, constraints, and success criteria before moving on.
+      - description: >-
+          Once purpose and constraints are clear, present 2-3 possible
+          approaches as a short multiple-choice list, trade-offs included,
+          leading with the recommended one and why.
+      - description: >-
+          Present the design in sections sized to their complexity — a
+          sentence or two for a simple piece, more for a nuanced one. Ask
+          after each section whether it looks right before moving to the
+          next. Cover shape, components, data/control flow, error handling,
+          and how it will be verified.
+      - description: >-
+          If the human pushes back on a section, revise that section and
+          re-confirm before continuing — never plow ahead with an
+          unconfirmed section.
+      - description: >-
+          Once every section is confirmed, summarize the agreed design and
+          delegate it to the `pm` agent to author the actual spec/plan
+          document, via a fleet channel/delegation (e.g. `mur fleet run` or
+          a channel `delegate_to` step targeting `pm`) — do not write the
+          spec/plan yourself and do not take any implementation action.
+          Tell the human where to find the spec/plan pm produces so they can
+          review it before any implementation work starts.
+triggers:
+  - type: keyword
+    pattern: "brainstorm|design discussion|幫我想|腦暴|頭腦風暴|設計討論"
+  - type: manual
+priority: normal
+tags:
+  - design
+  - planning
+  - dialogue
