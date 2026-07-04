@@ -186,12 +186,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn write_registry_entry(
-        registry_dir: &Path,
-        name: &str,
-        version: &str,
-        yaml: &str,
-    ) {
+    fn write_registry_entry(registry_dir: &Path, name: &str, version: &str, yaml: &str) {
         let path = skill_yaml_path(registry_dir, name, version);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, yaml).unwrap();
@@ -216,10 +211,7 @@ mod tests {
         let mut m = mur_common::skill::parse_canonical(&yaml).unwrap();
         m.origin = Some(format!("registry:human:mur-official/{name}"));
         m.origin_version = Some(version.to_string());
-        m.origin_hash = Some(
-            content_hash_for_origin(stamp_hash_from.unwrap_or(&m))
-                .unwrap(),
-        );
+        m.origin_hash = Some(content_hash_for_origin(stamp_hash_from.unwrap_or(&m)).unwrap());
         let dir = mur_home.join("skills").join(name);
         write_to_dir(&dir, &m).unwrap();
         dir
