@@ -58,8 +58,8 @@ pub fn cmd_upgrade_cli(check: bool, json: bool) -> Result<()> {
     let home = resolve_mur_home()?;
     let registry_url = std::env::var("MUR_SKILL_REGISTRY_URL")
         .unwrap_or_else(|_| skill_registry::DEFAULT_REGISTRY.to_string());
-    let registry_dir = skill_registry::fetch_registry(&home, &registry_url)
-        .context("fetch skill registry")?;
+    let registry_dir =
+        skill_registry::fetch_registry(&home, &registry_url).context("fetch skill registry")?;
 
     let report = upgrade_all(&home, &registry_dir, !check);
 
