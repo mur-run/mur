@@ -7,6 +7,7 @@ mod lock;
 mod mobile_server;
 mod relay_client;
 mod signal_server;
+mod skill_upgrade_tick;
 mod sleep;
 mod store_health;
 mod stt_sink;
@@ -164,6 +165,8 @@ async fn main() -> Result<()> {
             }
             // Phase 2b: auto-run any fleets whose interval trigger is due.
             fleet_tick::tick(&mur_home_tick);
+            // Daily auto-upgrade of origin-stamped (registry-installed) skills.
+            skill_upgrade_tick::tick(&mur_home_tick);
         }
     });
 
