@@ -45,6 +45,8 @@ mod federation;
 mod harvest;
 mod hitl;
 mod inject;
+#[allow(dead_code)]
+mod install_request;
 mod interactive;
 #[allow(dead_code, unused_imports)]
 mod nudge;
