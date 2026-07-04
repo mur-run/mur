@@ -548,6 +548,9 @@ async fn accept_proposal_as_skill(
             Default::default()
         },
         visibility: Visibility::default(),
+        origin: None,
+        origin_version: None,
+        origin_hash: None,
         fleet: None,
         team: None,
         governance: None,
