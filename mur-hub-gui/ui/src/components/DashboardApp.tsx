@@ -12,6 +12,7 @@ import { MuragentImportModal } from "./MuragentImportModal";
 import { SettingsModal } from "./SettingsModal";
 import { ModelSetupWizard } from "./ModelSetupWizard";
 import { ModelPickerModal } from "./ModelPickerModal";
+import { InstallInboxModal } from "./InstallInboxModal";
 import { useUnreadCount } from "./CompanionInbox";
 import { DetailPanel } from "./DetailPanel";
 import { ConversationsView } from "./ConversationsView";
@@ -952,6 +953,7 @@ export function DashboardApp() {
         isOpen={modelPickerOpen}
         onClose={() => setModelPickerOpen(false)}
       />
+      <InstallInboxModal />
     </div>
   );
 }
