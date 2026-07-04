@@ -16,6 +16,7 @@ pub mod fleet;
 mod geometry;
 pub mod hitl;
 pub mod import_muragent;
+pub mod install_inbox;
 pub mod mcp_skills;
 pub mod memory;
 pub mod mlx_sidecar;
@@ -528,6 +529,25 @@ pub fn run() {
                 }
             }
 
+            // Watch the install-request inbox; emit `install-inbox-updated` so
+            // the Hub consent modal live-refreshes without polling.
+            {
+                let handle = app.handle().clone();
+                let home = crate::mur_home_path();
+                match crate::install_inbox::watch_install_requests(&home, move || {
+                    let _ = handle.emit("install-inbox-updated", ());
+                }) {
+                    Ok(watcher) => {
+                        // Distinct newtype so Tauri's type-keyed state doesn't
+                        // collide with the channel watcher managed just above
+                        // (both would otherwise be `Mutex<Option<RecommendedWatcher>>`).
+                        struct InstallInboxWatcher(notify::RecommendedWatcher);
+                        app.manage(std::sync::Mutex::new(Some(InstallInboxWatcher(watcher))));
+                    }
+                    Err(e) => tracing::warn!("install-inbox watcher failed to start: {e:#}"),
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -576,6 +596,8 @@ pub fn run() {
             pet::pet_speak,
             preset::import_preset_file,
             preset::import_preset_url,
+            install_inbox::install_inbox_list,
+            install_inbox::install_inbox_consent,
             import_muragent::inspect_muragent_file,
             import_muragent::install_muragent_file,
             import_muragent::model_resolution_view,
