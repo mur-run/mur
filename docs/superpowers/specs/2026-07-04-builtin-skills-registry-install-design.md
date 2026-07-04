@@ -38,33 +38,46 @@
   skill only when absent; it never overwrites anything. Upgrades flow
   through the registry channel (C).
 
-### B. Dashboard one-click install (web → Hub bridge)
+### B. Dashboard one-click install (web → Hub, relay-direct)
 
-**Deep link** (the vscode:// pattern), via the Tauri deep-link plugin:
+The account-level authenticated chain already exists: the Mac daemon
+connects to the relay with the user's MUR API key
+(`mur-daemon/src/relay_client.rs`, Bearer auth); the server resolves
+the user and routes per user ID (`internal/relay/hub.go`). Install
+requests ride that same channel — no new auth system, no URL scheme.
 
-```
-mur://install?type=skill|mcp|workflow|plugin&url=<https source>&name=<display>
-```
+Flow:
 
-- Dashboard cards get an "Install to Hub" button = a `mur://` anchor,
-  plus a "copy CLI command" fallback (`mur agent skill install <url>`,
-  `mur agent mcp add-remote …`) for users without the Hub.
-  Dashboard side is UI-only; no server backend needed.
-- Rejected alternatives: localhost HTTP from dashboard JS (CORS, port
-  probing by arbitrary pages — worst security); relay-based install
-  queue (cross-device, needs account/queue/poll — deferred to P2).
+1. Dashboard (logged-in session) → `POST /api/v1/install-request`
+   `{type: skill|mcp|workflow|plugin, id: mur-official/…}`.
+2. mur-server relay hub forwards a new frame type
+   (`install_request`) to that user's connected Mac daemon.
+   If no Mac is connected, the API returns "Hub offline" and the
+   Dashboard shows it (no queue in P1).
+3. Daemon `relay_client` handles the frame by writing an
+   install-request event; the Hub GUI picks it up via the existing
+   `mobile-events.jsonl` live-tail and opens the consent modal.
+4. On consent, the Hub downloads the item from mur-server using the
+   already-configured API key (content is auth-gated) and routes to
+   the type-specific installer below.
 
-**Security (fail-closed, non-negotiable):** any web page can forge a
-`mur://` link, therefore:
+**Security (fail-closed):** requests originate only from the user's
+authenticated Dashboard session — not forgeable by arbitrary web pages
+(the reason `mur://` deep links were rejected). The Hub still NEVER
+auto-installs: every request goes through fetch → preview →
+security-scan → consent modal before anything is written.
 
-- The Hub NEVER auto-installs from a deep link. Every install routes
-  through the existing fetch → preview → consent modal (source URL,
-  content summary, security-scan result) before anything is written.
-- `url` must be https (reuse `validate_skill_url`; http only for
-  localhost dev). Official registry domains show an "official" badge;
-  any other domain shows a prominent warning.
-- Cold start: if the Hub isn't running the OS launches it; the
-  deep-link plugin delivers the pending URL, consent modal opens then.
+Rejected alternatives: `mur://` deep link (forgeable by any page,
+can't fetch auth-gated content without a grant-token side system,
+3-platform scheme registration, same-machine only, no status
+feedback); localhost HTTP from dashboard JS (CORS, port probing —
+worst security).
+
+Prerequisite: user logged in / API key configured + daemon running —
+already required since registry content is login-gated. The Dashboard
+button guides unpaired users to the Devices pairing flow. A "copy CLI
+command" fallback remains on each card
+(`mur agent skill install <url>`, `mur agent mcp add-remote …`).
 
 **Routing per type — all reuse existing installers:**
 
@@ -129,8 +142,7 @@ agent gets its role pack in one action instead of per-skill installs.
 
 ## Out of scope (deferred)
 
-- Relay-based cross-device install queue (P2)
-- Installed-state feedback on the Dashboard (needs a return channel, P2)
+- Offline install queue (Hub offline → Dashboard just reports it, P2)
 - Signature verification beyond quill's existing TOFU
 - Auto-tracking upstream superpowers releases
 
@@ -139,4 +151,4 @@ agent gets its role pack in one action instead of per-skill installs.
 1. **C first** (origin stamps + update check) — A and D depend on it
 2. **A** (port brainstorming, seed template, registry publish)
 3. **D** (port the remaining role skills, `recommended_roles`, wizard pack UI)
-4. **B** (deep link plugin + consent routing + workflow installer + Dashboard buttons)
+4. **B** (relay install_request frame + daemon handler + Hub consent routing + workflow installer + Dashboard buttons)
