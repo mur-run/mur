@@ -23,7 +23,11 @@ pub fn pack_members(idx: &RegistryIndex, role: &str) -> Vec<String> {
 
 /// Installs `pack_members(role)` onto `agent`, skipping already-installed
 /// skills. Returns `(installed, skipped)` names.
-pub async fn cmd_skill_install_pack(agent: &str, role: &str, yes: bool) -> Result<(Vec<String>, Vec<String>)> {
+pub async fn cmd_skill_install_pack(
+    agent: &str,
+    role: &str,
+    yes: bool,
+) -> Result<(Vec<String>, Vec<String>)> {
     let mur_home = super::resolve_mur_home()?;
     let (_dir, idx) = skill_registry::fetch_and_load(&mur_home, skill_registry::DEFAULT_REGISTRY)?;
     let members = pack_members(&idx, role);
@@ -67,8 +71,10 @@ mod tests {
             skills: Default::default(),
         };
         idx.skills.insert("writing-plans".into(), entry(&["pm"]));
-        idx.skills.insert("test-driven-development".into(), entry(&["coder"]));
-        idx.skills.insert("systematic-debugging".into(), entry(&["coder"]));
+        idx.skills
+            .insert("test-driven-development".into(), entry(&["coder"]));
+        idx.skills
+            .insert("systematic-debugging".into(), entry(&["coder"]));
 
         let mut coder = pack_members(&idx, "coder");
         coder.sort();
