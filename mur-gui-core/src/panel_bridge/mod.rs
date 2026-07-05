@@ -17,8 +17,13 @@ use tokio::sync::mpsc;
 #[derive(Debug)]
 pub enum PanelEvent {
     /// Any frame from a session, including the initial `Hello`.
-    Frame { pid: u32, frame: PanelFrame },
-    SessionDown { pid: u32 },
+    Frame {
+        pid: u32,
+        frame: PanelFrame,
+    },
+    SessionDown {
+        pid: u32,
+    },
 }
 
 pub(crate) type Senders = Arc<Mutex<HashMap<u32, mpsc::Sender<HubFrame>>>>;
