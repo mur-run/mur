@@ -53,7 +53,7 @@ same 80 columns.
 └──────┬────────┘                                     └───────┬──────────┘
        │ writes/removes                                       │ EventBus →
        ▼                                                      ▼ Tauri events
-~/.mur/run/murmur/<session>.json   ◀── dir watcher ── mur-hub-gui panel.rs
+~/.mur/runtime/murmur/<session>.json   ◀── dir watcher ── mur-hub-gui panel.rs
   (pid, sock, agent, cwd,                                     │
    terminal hint)                                             ▼
                                                      PanelWindow (React)
@@ -77,11 +77,11 @@ the murmur side exposes only the socket.
 ## Transport & Lifecycle
 
 - On TUI start, murmur writes
-  `~/.mur/run/murmur/<session-id>.json` — `{pid, sock, agent, cwd,
+  `~/.mur/runtime/murmur/<session-id>.json` — `{pid, sock, agent, cwd,
   terminal: {program, pid}, proto_version, started}` — and listens on
   the Unix socket (mode 0600) in the same directory. Both are removed
   on clean exit.
-- The Hub watches `~/.mur/run/murmur/` (reusing the existing watcher
+- The Hub watches `~/.mur/runtime/murmur/` (reusing the existing watcher
   pattern). New live session → connect the socket. A scanner reaps
   stale session files whose pid fails `kill -0`.
 - First `/panel` invocation when the Hub is not running: murmur runs
@@ -174,7 +174,7 @@ the Panel → text appears in murmur's input box).
 
 ## Security & Error Handling
 
-- Socket mode 0600 under `~/.mur/run/murmur/`; local user only.
+- Socket mode 0600 under `~/.mur/runtime/murmur/`; local user only.
 - Insert-only: no frame can trigger execution; the user always confirms
   in the terminal (fail-closed, consistent with HITL).
 - Preview URLs restricted to localhost; iframe sandboxed (no
