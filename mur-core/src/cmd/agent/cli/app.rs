@@ -128,6 +128,8 @@ pub enum SlashCmd {
     Skill(Vec<String>),
     /// `/skin [dark|light|mur]` — show or switch the active skin (persists to config).
     Skin(Option<String>),
+    /// `/panel [tab] [target]` — open/drive the MUR Hub companion window.
+    Panel(Vec<String>),
     Quit,
     Unknown(String),
 }
@@ -154,6 +156,7 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
         "mcp" => SlashCmd::Mcp(words.map(str::to_string).collect()),
         "skill" | "skills" => SlashCmd::Skill(words.map(str::to_string).collect()),
         "skin" | "theme" => SlashCmd::Skin(words.next().map(str::to_string)),
+        "panel" => SlashCmd::Panel(words.map(str::to_string).collect()),
         "exit" | "quit" | "q" => SlashCmd::Quit,
         other => SlashCmd::Unknown(other.to_string()),
     })
@@ -252,6 +255,9 @@ pub struct App {
     /// Set once we've warned the user that session writes are failing, so the
     /// warning isn't repeated every turn.
     persist_warned: bool,
+    /// Panel server handle (`/panel` companion window). None only in tests;
+    /// dropping it removes the session record + socket.
+    pub panel: Option<super::panel::PanelHandle>,
     /// Working directory captured at CLI startup; sent to the agent once per
     /// session so it knows what project the user is in.
     pub cwd: Option<PathBuf>,
@@ -353,6 +359,7 @@ impl App {
             session_tool_allow: HashSet::new(),
             pending_shell: Vec::new(),
             persist_warned: false,
+            panel: None,
             cwd: std::env::current_dir().ok(),
             cwd_sent: false,
             theme,
@@ -908,6 +915,18 @@ mod tests {
         );
         assert_eq!(parse_slash("hello"), None);
         assert_eq!(parse_slash("  not/a/cmd"), None);
+    }
+
+    #[test]
+    fn parses_panel() {
+        assert_eq!(parse_slash("/panel"), Some(SlashCmd::Panel(vec![])));
+        assert_eq!(
+            parse_slash("/panel preview out/report.html"),
+            Some(SlashCmd::Panel(vec![
+                "preview".to_string(),
+                "out/report.html".to_string()
+            ]))
+        );
     }
 
     #[test]
