@@ -7,6 +7,7 @@ pub mod ccr;
 pub mod compressors;
 pub mod config;
 pub mod detect;
+pub mod skeleton;
 pub mod stats;
 pub mod tokenizer;
 pub mod types;
@@ -147,7 +148,7 @@ impl CompressEngine {
             return Self::passthrough(content, before, ct);
         }
 
-        self.stats.record_compression(before, after);
+        self.stats.record_compression(ct.as_str(), before, after);
 
         CompressResult {
             compressed: out.compressed,
@@ -159,6 +160,23 @@ impl CompressEngine {
             transforms: out.transforms,
             content_type: ct,
         }
+    }
+
+    /// Unconditionally store `content` in the CCR store and return its hash,
+    /// bypassing `compress()`'s content-type dispatch and payoff gating.
+    ///
+    /// `compress()` only offloads when the matched content-type compressor
+    /// chooses to (`fallback`/Generic — most prose and code — never does).
+    /// Callers that need a retrieval handle for content they are dropping for
+    /// reasons *other* than "it compresses well" (e.g. a superseded read, an
+    /// exact duplicate of a later tool result) use this instead, so the
+    /// original stays recoverable via [`Self::retrieve`] regardless of
+    /// content type. Best-effort: a store write failure returns `None`, and
+    /// the caller falls back to a non-retrievable stub.
+    pub fn archive(&self, content: &str) -> Option<String> {
+        self.store
+            .put_original(content, Vec::new(), ContentType::Generic, self.tok.as_ref())
+            .ok()
     }
 
     /// Retrieve a stored original by hash, optionally BM25-filtered by query.
@@ -212,6 +230,22 @@ mod tests {
 
     fn engine(dir: &std::path::Path, cfg: CompressConfig) -> CompressEngine {
         CompressEngine::new(dir, cfg).unwrap()
+    }
+
+    #[test]
+    fn archive_stores_generic_content_compress_would_skip() {
+        let dir = tempfile::tempdir().unwrap();
+        let eng = engine(dir.path(), CompressConfig::default());
+        let prose = "fn main() {\n    println!(\"hi\");\n}\n".repeat(50);
+        // compress() on plain code/prose (Generic) never offloads.
+        assert!(eng.compress(&prose, None).hash.is_none());
+        let hash = eng.archive(&prose).expect("archive should store");
+        match eng.retrieve(&hash, None) {
+            RetrieveResult::Full { original_content, .. } => {
+                assert_eq!(original_content, prose);
+            }
+            other => panic!("expected Full, got {other:?}"),
+        }
     }
 
     #[test]
