@@ -16,6 +16,7 @@ mod footer;
 mod manage;
 mod markdown;
 mod multiplex;
+mod panel;
 mod paste;
 pub mod persist;
 mod render_card;
