@@ -686,6 +686,7 @@ pub fn run() {
             skills_installed::skills_installed,
             workflows_list::workflows_list,
             mcp_skills::mcp_installed,
+            mcp_skills::addons_installed,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
