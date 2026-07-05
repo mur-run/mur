@@ -1,5 +1,6 @@
 :root {
   --color-brand:var(--blue-500); --color-brand-strong:var(--blue-700);
+  --text-on-brand:#fff;
   --color-accent:var(--coral-500); --color-accent-strong:var(--coral-600);
   --color-accent-soft:var(--coral-soft); --color-brand-soft:var(--blue-soft);
   --surface-bg:var(--n-bg); --surface-secondary:var(--n-secondary);
