@@ -105,6 +105,7 @@ export const en = {
   "detail.persona": "Persona",
   "detail.tone": "Tone",
   "chat.close": "Close conversation",
+  "chat.popout": "Open in a separate window",
   "chat.empty": "Say hi to {name} 👋  Send a message to get started.",
   "chat.placeholder": "Message {name}…",
   "chat.send": "Send",
