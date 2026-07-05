@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { currentMonitor, getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -12,7 +12,8 @@ import { ModelSetupWizard } from "./ModelSetupWizard";
 import { ModelPickerModal } from "./ModelPickerModal";
 import { ModelsPage } from "./library/ModelsPage";
 import { InstallInboxModal } from "./InstallInboxModal";
-import { DetailPanel } from "./DetailPanel";
+import { Inspector, hasInspector, type InspectorSelection } from "./shell/Inspector";
+import type { LibrarySelection } from "./inspector/LibraryInspector";
 import { HomePage } from "./home/HomePage";
 import { useInbox } from "./home/useInbox";
 import { inboxBadge, visibleInboxItems } from "./home/inbox";
@@ -70,6 +71,18 @@ export function DashboardApp() {
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   // Active shell page. Home is the default mission-control surface.
   const [page, setPage] = useState<PageId>("home");
+  // Per-page selection that drives the contextual right-pane Inspector. The
+  // agents-page selection lives in AgentContext (selectedAgent); these cover
+  // the chats / fleets / library pages.
+  const [chatAgent, setChatAgent] = useState<{ name: string; displayName?: string } | null>(null);
+  const [fleetName, setFleetName] = useState<string | null>(null);
+  const [libItem, setLibItem] = useState<LibrarySelection | null>(null);
+  // Stable callbacks so the pages' report-up effects don't loop.
+  const onChatActive = useCallback((name: string | null, displayName?: string) => {
+    setChatAgent(name ? { name, displayName } : null);
+  }, []);
+  const onFleetSelect = useCallback((name: string | null) => setFleetName(name), []);
+  const onLibrarySelect = useCallback((item: LibrarySelection | null) => setLibItem(item), []);
   // Unified inbox — owned here so the sidebar + Dock badges stay in sync with
   // what HomePage renders.
   const { items: inboxItems, refresh: refreshInbox } = useInbox();
@@ -174,6 +187,8 @@ export function DashboardApp() {
   useEffect(() => {
     const unSelect = listen<string>("select-agent", (e) => {
       setSelected(e.payload);
+      // Selection drives the agents-page inspector, so surface that page.
+      setPage("agents");
       setTimeout(() => {
         document
           .querySelector(`[data-agent="${e.payload}"]`)
@@ -297,6 +312,45 @@ export function DashboardApp() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Esc deselects the current page's inspector target (which auto-hides the
+  // column). Ignored while a modal/input is focused so it doesn't fight them.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      const el = document.activeElement;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) return;
+      setSelected(null);
+      setChatAgent(null);
+      setFleetName(null);
+      setLibItem(null);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setSelected]);
+
+  // Build the contextual inspector for the current page + selection.
+  const inspectorSelection: InspectorSelection = {
+    agent: selectedAgent,
+    chatAgent: chatAgent?.name ?? null,
+    chatDisplayName: chatAgent?.displayName,
+    fleet: fleetName,
+    library: libItem,
+  };
+  const inspectorNode = hasInspector(page, inspectorSelection) ? (
+    <Inspector
+      page={page}
+      selection={inspectorSelection}
+      agents={agents}
+      runtimeMap={runtimeMap}
+      onClose={() => {
+        setSelected(null);
+        setChatAgent(null);
+        setFleetName(null);
+        setLibItem(null);
+      }}
+    />
+  ) : undefined;
 
   return (
     <div className="dashboard-root">
@@ -458,7 +512,7 @@ export function DashboardApp() {
           page={page}
           onNavigate={(id) => setPage(id)}
           badge={badgeCount}
-          inspector={undefined}
+          inspector={inspectorNode}
         >
           {page === "home" ? (
             <HomePage
@@ -471,9 +525,9 @@ export function DashboardApp() {
               onCreateAgent={() => setWizardOpen(true)}
             />
           ) : page === "chats" ? (
-            <ChatsPage agents={agents} query={query} />
+            <ChatsPage agents={agents} query={query} onActiveChange={onChatActive} />
           ) : page === "fleets" ? (
-            <FleetView query={query} />
+            <FleetView query={query} onSelect={onFleetSelect} />
           ) : page === "agents" ? (
             <AgentsPage
               agents={agents}
@@ -486,28 +540,18 @@ export function DashboardApp() {
           ) : page === "models" ? (
             <ModelsPage />
           ) : page === "skills" ? (
-            <SkillsPage />
+            <SkillsPage onSelect={onLibrarySelect} />
           ) : page === "mcp" ? (
-            <McpPage />
+            <McpPage onSelect={onLibrarySelect} />
           ) : page === "workflows" ? (
-            <WorkflowsPage />
+            <WorkflowsPage onSelect={onLibrarySelect} />
           ) : page === "plugins" ? (
-            <PluginsPage />
+            <PluginsPage onSelect={onLibrarySelect} />
           ) : (
             <PlaceholderPage id={page} />
           )}
         </Shell>
       </div>
-
-      {/* Detail panel — slides in when an agent is selected */}
-      {selectedAgent && (
-        <DetailPanel
-          agentName={selectedAgent}
-          agents={agents}
-          runtime={runtimeMap.get(selectedAgent)}
-          onClose={() => setSelected(null)}
-        />
-      )}
 
       <WizardModal
         isOpen={wizardOpen}

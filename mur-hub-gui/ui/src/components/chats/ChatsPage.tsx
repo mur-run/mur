@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentEntry } from "../../types";
 import { ChatTab } from "../ChatTab";
@@ -11,6 +11,8 @@ import { buildChatList } from "./chatList";
 interface Props {
   agents: AgentEntry[];
   query?: string;
+  /** Reports the active chat's agent up so the Shell inspector can show it. */
+  onActiveChange?: (agentName: string | null, displayName?: string) => void;
 }
 
 /**
@@ -23,17 +25,23 @@ interface Props {
  * streaming, image paste, suggested replies, autocomplete, in-thread HITL
  * cards, and per-connection stream isolation all behave exactly as before.
  */
-export function ChatsPage({ agents, query }: Props) {
+export function ChatsPage({ agents, query, onActiveChange }: Props) {
   const { t } = useT();
   const { attention } = useConversations();
   const [selected, setSelected] = useState<string | null>(null);
 
+  const items = agents.length === 0 ? [] : buildChatList(agents, attention, query);
+  const active = items.find((i) => i.name === selected) ?? items[0];
+
+  // Report the active chat up so DashboardApp can show the ChatInspector.
+  useEffect(() => {
+    onActiveChange?.(active?.name ?? null, active?.displayName);
+    return () => onActiveChange?.(null);
+  }, [active?.name, active?.displayName, onActiveChange]);
+
   if (agents.length === 0) {
     return <div className="chats-view__empty">{t("chats.empty")}</div>;
   }
-
-  const items = buildChatList(agents, attention, query);
-  const active = items.find((i) => i.name === selected) ?? items[0];
 
   function popOut(name: string) {
     invoke("open_chat_window", { agentName: name }).catch(console.error);
