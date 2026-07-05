@@ -16,10 +16,10 @@ export interface LibrarySelection {
 }
 
 const KIND_LABEL: Record<LibrarySelection["kind"], string> = {
-  skill: "Skill",
-  mcp: "MCP Server",
-  workflow: "Workflow",
-  plugin: "Plugin",
+  skill: "libraryInspector.kind.skill",
+  mcp: "libraryInspector.kind.mcp",
+  workflow: "libraryInspector.kind.workflow",
+  plugin: "libraryInspector.kind.plugin",
 };
 
 interface Props {
@@ -35,7 +35,7 @@ export function LibraryInspector({ item, onClose }: Props) {
         <div className="detail-panel__top">
           <div className="detail-panel__ident">
             <div className="detail-panel__name">{item.name}</div>
-            <span className="field-muted" style={{ fontSize: 12 }}>{KIND_LABEL[item.kind]}</span>
+            <span className="field-muted" style={{ fontSize: 12 }}>{t(KIND_LABEL[item.kind])}</span>
           </div>
           <button
             className="detail-panel__close"

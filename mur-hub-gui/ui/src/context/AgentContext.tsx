@@ -8,7 +8,7 @@ interface AgentContextValue {
   runtimeStatuses: AgentRuntimeStatus[];
   selectedAgent: string | null;
   setSelected: (name: string | null) => void;
-  /** When set, the DetailPanel opens focused on this tab (consumed once). */
+  /** When set, the AgentInspector opens focused on this tab (consumed once). */
   desiredDetailTab: string | null;
   setDesiredDetailTab: (tab: string | null) => void;
 }
