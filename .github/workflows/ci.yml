@@ -220,11 +220,17 @@ jobs:
         with:
           workspaces: mur-agent-gui/src-tauri
           key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version-file: 'mur-agent-gui/ui/.nvmrc'
           cache: 'npm'
           cache-dependency-path: 'mur-agent-gui/ui/package-lock.json'
+      - name: Refresh apt lists (avoid stale-index 404 on transitive deps)
+        # The runner image ships a snapshot apt index; when Ubuntu security-
+        # updates a transitive dep (e.g. libnghttp2-dev) the old version's .deb
+        # is pulled from the mirror and the pinned index 404s. cache-apt-pkgs
+        # does not `apt-get update` first, so refresh the index here.
+        run: sudo apt-get update
       - name: Install Linux system libraries (Tauri 2 + voice + OCR)
         # cache-apt-pkgs-action caches the apt download tarball at
         # ~/.apt-cache and replays installs from there on subsequent runs.
@@ -285,11 +291,14 @@ jobs:
         with:
           workspaces: mur-hub-gui/src-tauri
           key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version-file: 'mur-hub-gui/ui/.nvmrc'
           cache: 'npm'
           cache-dependency-path: 'mur-hub-gui/ui/package-lock.json'
+      - name: Refresh apt lists (avoid stale-index 404 on transitive deps)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update
       - name: Install Linux system libraries (Tauri 2)
         if: runner.os == 'Linux'
         uses: awalsh128/cache-apt-pkgs-action@latest
@@ -351,7 +360,7 @@ jobs:
     # Always run — 5s, runs against any source change so safe to keep.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Run gate
         run: scripts/check-required-reason-apis.sh
 
