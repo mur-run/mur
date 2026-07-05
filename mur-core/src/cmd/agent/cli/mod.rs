@@ -16,6 +16,7 @@ mod footer;
 mod manage;
 mod markdown;
 mod multiplex;
+mod panel;
 mod paste;
 pub mod persist;
 mod render_card;
@@ -95,7 +96,7 @@ const SPINNER_MS: u64 = 90;
 /// Max chars of an arg hint shown on a step line in `--plain` mode.
 const PLAIN_STEP_HINT_MAX: usize = 120;
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /auto [on|off]  /skin [dark|light|mur]  /mcp  /skill  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
+const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /auto [on|off]  /skin [dark|light|mur]  /mcp  /skill  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
 pub async fn cmd_cli(
@@ -304,7 +305,10 @@ async fn run_tui(
     if auto_reads {
         app.push_system("auto-reads is ON — read-only bash commands (cat/ls/grep/git status/…) are auto-approved; writes and ambiguous commands still prompt");
     }
-    let result = event_loop(&mut terminal, &mut app).await;
+    let cwd = app.cwd.clone().unwrap_or_else(|| PathBuf::from("."));
+    let (panel_rx, panel_handle) = panel::start(&app.home, &app.agent, &cwd);
+    app.panel = Some(panel_handle);
+    let result = event_loop(&mut terminal, &mut app, panel_rx).await;
 
     drop(_guard);
     let _ = terminal.show_cursor();
@@ -355,6 +359,7 @@ fn build_app(home: &Path, agent: &str, resume: bool, theme: &'static theme::Them
 async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
+    mut panel_rx: mpsc::Receiver<mur_common::panel::HubFrame>,
 ) -> Result<()> {
     let (tx, mut rx) = mpsc::channel::<StreamMsg>(stream::STREAM_CHANNEL_CAP);
     let mut events = EventStream::new();
@@ -382,6 +387,11 @@ async fn event_loop(
                 Some(Err(_)) | None => return Ok(()),
             },
             Some(msg) = rx.recv() => handle_stream(app, msg, &tx),
+            // Never closes: PanelHandle in `app` holds a keepalive sender,
+            // so this arm can't spin on a dead channel.
+            Some(f) = panel_rx.recv() => match f {
+                mur_common::panel::HubFrame::Insert { text } => app.set_input(&text),
+            },
             _ = spinner.tick(), if app.streaming => app.tick_spinner(),
             // Wake at the blink deadline; the loop redraws at the top of the
             // next iteration, advancing the eye frame. No state change needed.
@@ -1070,6 +1080,7 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
                 }
             }
         },
+        SlashCmd::Panel(args) => panel::handle_panel_command(app, &args),
         SlashCmd::Unknown(c) => app.push_system(format!("unknown command: /{c} — try /help")),
     }
 }

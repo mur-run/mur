@@ -50,6 +50,11 @@ const COMMANDS: &[(&str, &str, &[&str])] = &[
             "registry-add",
         ],
     ),
+    (
+        "panel",
+        "companion window (MUR Hub)",
+        &["information", "activities", "preview", "notifications"],
+    ),
     ("quit", "exit the chat", &[]),
     ("sessions", "list past sessions", &[]),
     ("skill", "manage agent skills", &["list", "add", "remove"]),
@@ -234,6 +239,13 @@ mod tests {
         let d = displays(&s);
         assert!(d.contains(&"/mcp".to_string()));
         assert!(d.contains(&"create-pr".to_string()));
+    }
+
+    #[test]
+    fn panel_subcommands() {
+        let s = compute("/panel ", &[]).unwrap();
+        assert!(s.items.iter().any(|c| c.insert == "/panel preview "));
+        assert_eq!(s.items.len(), 4);
     }
 
     #[test]

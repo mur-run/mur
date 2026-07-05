@@ -6797,6 +6797,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
+ "core-foundation 0.10.1",
  "dirs 5.0.1",
  "mur-channel",
  "mur-common",
