@@ -26,6 +26,7 @@ import type { TranslationKey } from "../i18n/types";
 import { Shell } from "./shell/Shell";
 import type { PageId } from "./shell/nav";
 import { AgentsPage } from "./agents/AgentsPage";
+import { SkillsPage } from "./library/SkillsPage";
 
 // ─── PlaceholderPage ─────────────────────────────────────────────────────────
 
@@ -483,6 +484,8 @@ export function DashboardApp() {
             />
           ) : page === "models" ? (
             <PlaceholderPage id={page} onOpen={() => setModelLibraryOpen(true)} />
+          ) : page === "skills" ? (
+            <SkillsPage />
           ) : (
             <PlaceholderPage id={page} />
           )}
