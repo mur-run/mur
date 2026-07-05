@@ -572,6 +572,7 @@ pub fn run() {
             work::channel_get,
             hitl::agent_hitl_respond,
             hitl::channel_hitl_respond,
+            hitl::hitl_pending_list,
             open_dashboard,
             toggle_popover,
             onboarding::wizard_open,
