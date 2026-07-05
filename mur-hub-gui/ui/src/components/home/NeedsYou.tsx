@@ -10,38 +10,30 @@ import type {
 } from "./useInbox";
 
 interface Props {
+  /** Already filtered by the caller's dismissed-set (single source of truth). */
   items: InboxItem[];
   /** Re-pull the inbox after an action resolves an item. */
   onRefresh: () => void;
+  /** Dismiss an item for this session; owned by the caller so the badge stays in sync. */
+  onDismiss: (item: InboxItem) => void;
 }
 
 /**
  * Unified inbox — one card per pending item, dispatched by kind. Hidden
- * entirely when there is nothing to act on. Locally-dismissed upgrade cards
- * are suppressed for this session only.
+ * entirely when there is nothing to act on. `items` arrives pre-filtered by
+ * the caller's dismissed-set so this list and the sidebar/Dock badge never
+ * drift apart.
  */
-export function NeedsYou({ items, onRefresh }: Props) {
+export function NeedsYou({ items, onRefresh, onDismiss }: Props) {
   const { t } = useT();
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
-  const visible = items.filter(
-    (it) => !dismissed.has(`${it.kind}:${it.id}`),
-  );
-  if (visible.length === 0) return null;
-
-  function dismiss(it: InboxItem) {
-    setDismissed((prev) => {
-      const next = new Set(prev);
-      next.add(`${it.kind}:${it.id}`);
-      return next;
-    });
-  }
+  if (items.length === 0) return null;
 
   return (
     <section className="home-section home-needs-you">
       <h2 className="home-section__title">{t("home.needsYou")}</h2>
       <div className="home-cards">
-        {visible.map((it) => {
+        {items.map((it) => {
           switch (it.kind) {
             case "hitl":
               return (
@@ -74,7 +66,7 @@ export function NeedsYou({ items, onRefresh }: Props) {
                   key={`upgrade:${it.id}`}
                   item={it}
                   raw={it.payload as RawBlockedItem}
-                  onKeep={() => dismiss(it)}
+                  onKeep={() => onDismiss(it)}
                 />
               );
             default:

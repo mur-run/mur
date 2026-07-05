@@ -16,7 +16,8 @@ import { DetailPanel } from "./DetailPanel";
 import { ConversationsView } from "./ConversationsView";
 import { HomePage } from "./home/HomePage";
 import { useInbox } from "./home/useInbox";
-import { inboxBadge } from "./home/inbox";
+import { inboxBadge, visibleInboxItems } from "./home/inbox";
+import type { InboxItem } from "./home/inbox";
 import { ChatsView } from "./ChatsView";
 import { FleetView } from "./fleet/FleetView";
 import { useConversations } from "../conversation/ConversationContext";
@@ -69,6 +70,18 @@ export function DashboardApp() {
   // Unified inbox — owned here so the sidebar + Dock badges stay in sync with
   // what HomePage renders.
   const { items: inboxItems, refresh: refreshInbox } = useInbox();
+  // Session-local dismissal (e.g. "keep" on a blocked-upgrade card). Lifted
+  // here — the single source of truth — so the sidebar/Dock badge and the
+  // NeedsYou list are always computed from the same filtered array.
+  const [dismissedInbox, setDismissedInbox] = useState<Set<string>>(new Set());
+  const visibleInbox = visibleInboxItems(inboxItems, dismissedInbox);
+  function dismissInboxItem(it: InboxItem) {
+    setDismissedInbox((prev) => {
+      const next = new Set(prev);
+      next.add(`${it.kind}:${it.id}`);
+      return next;
+    });
+  }
   const [query, setQuery] = useState("");
   const [wizardOpen, setWizardOpen] = useState(false);
   const [presetImportOpen, setPresetImportOpen] = useState(false);
@@ -149,7 +162,7 @@ export function DashboardApp() {
   );
 
   // Mirror the unified-inbox count to the macOS Dock / taskbar badge.
-  const badgeCount = inboxBadge(inboxItems);
+  const badgeCount = inboxBadge(visibleInbox);
   useEffect(() => {
     getCurrentWindow()
       .setBadgeCount(badgeCount > 0 ? badgeCount : undefined)
@@ -449,8 +462,9 @@ export function DashboardApp() {
             <HomePage
               agents={agents}
               runtimeStatuses={runtimeStatuses}
-              items={inboxItems}
+              items={visibleInbox}
               onRefresh={refreshInbox}
+              onDismiss={dismissInboxItem}
               onNavigate={(id) => setPage(id)}
               onCreateAgent={() => setWizardOpen(true)}
             />
