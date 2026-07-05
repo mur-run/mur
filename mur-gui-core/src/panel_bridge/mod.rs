@@ -3,15 +3,22 @@
 //! client per session, republishes frames as [`PanelEvent`]s; sends
 //! [`PanelBridge::insert`] back (insert-only by protocol design).
 
+#[cfg(unix)]
 mod client;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result};
-use mur_common::panel::{HubFrame, PanelFrame, murmur_run_dir};
-use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::Result;
+#[cfg(unix)]
+use mur_common::panel::murmur_run_dir;
+use mur_common::panel::{HubFrame, PanelFrame};
+use notify::RecommendedWatcher;
+#[cfg(unix)]
+use notify::{EventKind, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
 
 #[derive(Debug)]
@@ -36,6 +43,13 @@ pub struct PanelBridge {
 impl PanelBridge {
     /// Scan for existing sessions and watch for new ones. Must be called
     /// from within a tokio runtime (spawns per-session client tasks).
+    /// Unsupported off-unix (murmur speaks unix domain sockets).
+    #[cfg(not(unix))]
+    pub fn start(_mur_home: PathBuf, _tx: mpsc::Sender<PanelEvent>) -> Result<Self> {
+        anyhow::bail!("murmur panel bridge requires unix domain sockets")
+    }
+
+    #[cfg(unix)]
     pub fn start(mur_home: PathBuf, tx: mpsc::Sender<PanelEvent>) -> Result<Self> {
         let dir = murmur_run_dir(&mur_home);
         std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
@@ -89,7 +103,7 @@ impl PanelBridge {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use mur_common::panel::{
