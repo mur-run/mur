@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { currentMonitor, getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -12,15 +12,14 @@ import { ModelSetupWizard } from "./ModelSetupWizard";
 import { ModelPickerModal } from "./ModelPickerModal";
 import { ModelsPage } from "./library/ModelsPage";
 import { InstallInboxModal } from "./InstallInboxModal";
-import { DetailPanel } from "./DetailPanel";
-import { ConversationsView } from "./ConversationsView";
+import { Inspector, hasInspector, type InspectorSelection } from "./shell/Inspector";
+import type { LibrarySelection } from "./inspector/LibraryInspector";
 import { HomePage } from "./home/HomePage";
 import { useInbox } from "./home/useInbox";
 import { inboxBadge, visibleInboxItems } from "./home/inbox";
 import type { InboxItem } from "./home/inbox";
-import { ChatsView } from "./ChatsView";
+import { ChatsPage } from "./chats/ChatsPage";
 import { FleetView } from "./fleet/FleetView";
-import { useConversations } from "../conversation/ConversationContext";
 import { useT } from "../i18n";
 import type { TranslationKey } from "../i18n/types";
 import { Shell } from "./shell/Shell";
@@ -67,10 +66,21 @@ type UpdaterEvent =
 export function DashboardApp() {
   const { t } = useT();
   const { agents, runtimeStatuses, selectedAgent, setSelected } = useAgents();
-  const { open: openConvs } = useConversations();
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   // Active shell page. Home is the default mission-control surface.
   const [page, setPage] = useState<PageId>("home");
+  // Per-page selection that drives the contextual right-pane Inspector. The
+  // agents-page selection lives in AgentContext (selectedAgent); these cover
+  // the chats / fleets / library pages.
+  const [chatAgent, setChatAgent] = useState<{ name: string; displayName?: string } | null>(null);
+  const [fleetName, setFleetName] = useState<string | null>(null);
+  const [libItem, setLibItem] = useState<LibrarySelection | null>(null);
+  // Stable callbacks so the pages' report-up effects don't loop.
+  const onChatActive = useCallback((name: string | null, displayName?: string) => {
+    setChatAgent(name ? { name, displayName } : null);
+  }, []);
+  const onFleetSelect = useCallback((name: string | null) => setFleetName(name), []);
+  const onLibrarySelect = useCallback((item: LibrarySelection | null) => setLibItem(item), []);
   // Unified inbox — owned here so the sidebar + Dock badges stay in sync with
   // what HomePage renders.
   const { items: inboxItems, refresh: refreshInbox } = useInbox();
@@ -175,6 +185,8 @@ export function DashboardApp() {
   useEffect(() => {
     const unSelect = listen<string>("select-agent", (e) => {
       setSelected(e.payload);
+      // Selection drives the agents-page inspector, so surface that page.
+      setPage("agents");
       setTimeout(() => {
         document
           .querySelector(`[data-agent="${e.payload}"]`)
@@ -224,11 +236,18 @@ export function DashboardApp() {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
-  // Auto-resize window when the detail panel or conversation surface
-  // opens/closes, so the dashboard keeps a usable width instead of being
-  // squeezed by the side panels. Clamped to the monitor so the window
-  // never grows past the visible screen.
-  const hasConvs = openConvs.length > 0;
+  // Auto-resize the window when the contextual inspector opens/closes, so the
+  // main pane keeps a usable width instead of being squeezed by the 320px
+  // inspector column. Keys on ANY inspector selection (agent/chat/fleet/
+  // library), matching the shell's --shell-inspector-width. Clamped to the
+  // monitor so the window never grows past the visible screen.
+  const inspectorOpen = hasInspector(page, {
+    agent: selectedAgent,
+    chatAgent: chatAgent?.name ?? null,
+    chatDisplayName: chatAgent?.displayName,
+    fleet: fleetName,
+    library: libItem,
+  });
   useEffect(() => {
     (async () => {
       const win = getCurrentWindow();
@@ -236,20 +255,17 @@ export function DashboardApp() {
       const scale = monitor?.scaleFactor ?? 1;
       const availW = monitor ? monitor.size.width / scale - 16 : 1440;
       const availH = monitor ? monitor.size.height / scale - 60 : 800;
-      const desiredW = 960 + (selectedAgent ? 240 : 0) + (hasConvs ? 480 : 0);
-      const desiredH = selectedAgent || hasConvs ? 720 : 620;
+      const desiredW = 960 + (inspectorOpen ? 320 : 0);
+      const desiredH = inspectorOpen ? 720 : 620;
       const width = Math.min(desiredW, availW);
       const height = Math.min(desiredH, availH);
       win.setSize(new LogicalSize(width, height)).catch(console.error);
-      const minW = Math.min(
-        720 + (selectedAgent ? 180 : 0) + (hasConvs ? 360 : 0),
-        availW,
-      );
+      const minW = Math.min(720 + (inspectorOpen ? 320 : 0), availW);
       win
         .setMinSize(new LogicalSize(minW, Math.min(480, availH)))
         .catch(console.error);
     })().catch(console.error);
-  }, [selectedAgent, hasConvs]);
+  }, [inspectorOpen]);
 
   // First-launch check: show banner if not running from /Applications
   useEffect(() => {
@@ -298,6 +314,45 @@ export function DashboardApp() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Esc deselects the current page's inspector target (which auto-hides the
+  // column). Ignored while a modal/input is focused so it doesn't fight them.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      const el = document.activeElement;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) return;
+      setSelected(null);
+      setChatAgent(null);
+      setFleetName(null);
+      setLibItem(null);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setSelected]);
+
+  // Build the contextual inspector for the current page + selection.
+  const inspectorSelection: InspectorSelection = {
+    agent: selectedAgent,
+    chatAgent: chatAgent?.name ?? null,
+    chatDisplayName: chatAgent?.displayName,
+    fleet: fleetName,
+    library: libItem,
+  };
+  const inspectorNode = hasInspector(page, inspectorSelection) ? (
+    <Inspector
+      page={page}
+      selection={inspectorSelection}
+      agents={agents}
+      runtimeMap={runtimeMap}
+      onClose={() => {
+        setSelected(null);
+        setChatAgent(null);
+        setFleetName(null);
+        setLibItem(null);
+      }}
+    />
+  ) : undefined;
 
   return (
     <div className="dashboard-root">
@@ -459,7 +514,7 @@ export function DashboardApp() {
           page={page}
           onNavigate={(id) => setPage(id)}
           badge={badgeCount}
-          inspector={undefined}
+          inspector={inspectorNode}
         >
           {page === "home" ? (
             <HomePage
@@ -472,9 +527,9 @@ export function DashboardApp() {
               onCreateAgent={() => setWizardOpen(true)}
             />
           ) : page === "chats" ? (
-            <ChatsView agents={agents} query={query} />
+            <ChatsPage agents={agents} query={query} onActiveChange={onChatActive} />
           ) : page === "fleets" ? (
-            <FleetView query={query} />
+            <FleetView query={query} onSelect={onFleetSelect} />
           ) : page === "agents" ? (
             <AgentsPage
               agents={agents}
@@ -487,31 +542,18 @@ export function DashboardApp() {
           ) : page === "models" ? (
             <ModelsPage />
           ) : page === "skills" ? (
-            <SkillsPage />
+            <SkillsPage onSelect={onLibrarySelect} />
           ) : page === "mcp" ? (
-            <McpPage />
+            <McpPage onSelect={onLibrarySelect} />
           ) : page === "workflows" ? (
-            <WorkflowsPage />
+            <WorkflowsPage onSelect={onLibrarySelect} />
           ) : page === "plugins" ? (
-            <PluginsPage />
+            <PluginsPage onSelect={onLibrarySelect} />
           ) : (
             <PlaceholderPage id={page} />
           )}
         </Shell>
       </div>
-
-      {/* Conversation rail — slides in when conversations are open */}
-      {openConvs.length > 0 && <ConversationsView />}
-
-      {/* Detail panel — slides in when an agent is selected */}
-      {selectedAgent && (
-        <DetailPanel
-          agentName={selectedAgent}
-          agents={agents}
-          runtime={runtimeMap.get(selectedAgent)}
-          onClose={() => setSelected(null)}
-        />
-      )}
 
       <WizardModal
         isOpen={wizardOpen}

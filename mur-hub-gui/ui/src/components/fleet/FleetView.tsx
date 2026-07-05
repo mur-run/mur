@@ -17,7 +17,7 @@ function showToast(msg: string, durationMs = 2500) {
   setTimeout(() => el.remove(), durationMs);
 }
 
-export function FleetView({ query }: { query?: string }) {
+export function FleetView({ query, onSelect }: { query?: string; onSelect?: (name: string | null) => void }) {
   const { t } = useT();
   const [fleets, setFleets] = useState<FleetSummary[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
@@ -30,6 +30,12 @@ export function FleetView({ query }: { query?: string }) {
   useEffect(() => {
     selectedRef.current = selectedName;
   }, [selectedName]);
+
+  // Report the selected fleet up so DashboardApp can show the FleetInspector.
+  useEffect(() => {
+    onSelect?.(selectedName);
+    return () => onSelect?.(null);
+  }, [selectedName, onSelect]);
 
   async function loadList() {
     try {
