@@ -45,6 +45,22 @@ struct StatsData {
     /// bucketed.
     #[serde(default)]
     buckets: HashMap<String, HashMap<String, BucketData>>,
+
+    /// Per-`ContentType::as_str()` totals (code/json/search_results/build_log/
+    /// git_diff/generic), so we can see where tokens actually sit and which
+    /// content types compress well vs. barely at all. Additive only, same
+    /// backfill rule as `buckets`.
+    #[serde(default)]
+    by_type: HashMap<String, TypeStats>,
+}
+
+/// Running totals for one content type across all-time compressions.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TypeStats {
+    pub compressions: u64,
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub total_tokens_saved: u64,
 }
 
 /// Counts for one `(mur_version, day)` bucket. Mirrors the shape of the
@@ -76,6 +92,9 @@ pub struct StatsSnapshot {
     /// sums, etc.) is left to consumers (MCP tool, CLI) rather than computed
     /// here, so this stays a thin, order-independent map.
     pub buckets: HashMap<String, HashMap<String, BucketData>>,
+
+    /// Raw per-content-type totals, straight from `StatsData::by_type`.
+    pub by_type: HashMap<String, TypeStats>,
 }
 
 /// Current crate version, used as the bucket's version key. `mur-compress`
@@ -148,13 +167,14 @@ impl StatsTracker {
         }
     }
 
-    pub fn record_compression(&self, before: usize, after: usize) {
+    pub fn record_compression(&self, content_type: &str, before: usize, after: usize) {
         let day = today_key();
+        let saved = before.saturating_sub(after) as u64;
         self.update(|d| {
             d.compressions += 1;
             d.total_input_tokens += before as u64;
             d.total_output_tokens += after as u64;
-            d.total_tokens_saved += before.saturating_sub(after) as u64;
+            d.total_tokens_saved += saved;
 
             let bucket = d
                 .buckets
@@ -165,7 +185,13 @@ impl StatsTracker {
             bucket.compressions += 1;
             bucket.total_input_tokens += before as u64;
             bucket.total_output_tokens += after as u64;
-            bucket.total_tokens_saved += before.saturating_sub(after) as u64;
+            bucket.total_tokens_saved += saved;
+
+            let ts = d.by_type.entry(content_type.to_string()).or_default();
+            ts.compressions += 1;
+            ts.total_input_tokens += before as u64;
+            ts.total_output_tokens += after as u64;
+            ts.total_tokens_saved += saved;
         });
     }
 
@@ -210,6 +236,7 @@ impl StatsTracker {
             store_entries,
             store_bytes,
             buckets: d.buckets,
+            by_type: d.by_type,
         }
     }
 }
@@ -223,7 +250,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("stats.json");
         let t = StatsTracker::new(path.clone());
-        t.record_compression(100, 30);
+        t.record_compression("generic", 100, 30);
         t.record_retrieval();
         let snap = t.snapshot(3.0, 1, 123);
         assert_eq!(snap.compressions, 1);
@@ -243,8 +270,8 @@ mod tests {
         let path = dir.path().join("stats.json");
         let a = StatsTracker::new(path.clone());
         let b = StatsTracker::new(path.clone());
-        a.record_compression(100, 30); // saved 70
-        b.record_compression(50, 10); // saved 40
+        a.record_compression("generic", 100, 30); // saved 70
+        b.record_compression("generic", 50, 10); // saved 40
         a.record_retrieval();
         b.record_retrieval();
 
@@ -260,8 +287,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("stats.json");
         let t = StatsTracker::new(path.clone());
-        t.record_compression(100, 30); // saved 70
-        t.record_compression(50, 10); // saved 40
+        t.record_compression("generic", 100, 30); // saved 70
+        t.record_compression("generic", 50, 10); // saved 40
 
         let snap = t.snapshot(3.0, 0, 0);
         assert_eq!(snap.compressions, 2);
@@ -306,7 +333,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("stats.json");
         let t = StatsTracker::new(path);
-        t.record_compression(200, 20); // saved 180
+        t.record_compression("generic", 200, 20); // saved 180
         t.record_retrieval();
 
         let snap = t.snapshot(3.0, 0, 0);
@@ -319,5 +346,25 @@ mod tests {
         assert_eq!(bucket.compressions, 1);
         assert_eq!(bucket.retrievals, 1);
         assert_eq!(bucket.total_tokens_saved, 180);
+    }
+
+    #[test]
+    fn snapshot_exposes_by_type_breakdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stats.json");
+        let t = StatsTracker::new(path);
+        t.record_compression("code", 1000, 900); // saved 100, barely compresses
+        t.record_compression("json", 1000, 100); // saved 900, compresses well
+        t.record_compression("json", 500, 50); // saved 450
+
+        let snap = t.snapshot(3.0, 0, 0);
+        let code = snap.by_type.get("code").expect("code entry");
+        assert_eq!(code.compressions, 1);
+        assert_eq!(code.total_tokens_saved, 100);
+
+        let json = snap.by_type.get("json").expect("json entry");
+        assert_eq!(json.compressions, 2);
+        assert_eq!(json.total_input_tokens, 1500);
+        assert_eq!(json.total_tokens_saved, 1350);
     }
 }
