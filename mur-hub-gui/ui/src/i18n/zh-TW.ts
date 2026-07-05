@@ -567,6 +567,7 @@ export const zhTW: Table = {
   "remote.serverIdPlaceholder": "伺服器 ID（可選）",
   "detail.installSkillUrl": "用網址安裝…",
   "detail.browseRegistry": "瀏覽技能登錄庫…",
+  "library.installTo": "安裝至",
   "skillurl.title": "從網址安裝技能",
   "skillurl.url": "技能網址",
   "skillurl.urlPlaceholder": "https://example.com/skill.md",
