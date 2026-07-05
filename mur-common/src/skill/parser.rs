@@ -52,9 +52,30 @@ pub fn serialize_canonical(m: &SkillManifest) -> Result<String, ParseError> {
 pub fn parse_markdown(input: &str) -> Result<SkillManifest, ParseError> {
     let (frontmatter, body) = split_frontmatter(input)?;
     let mut value: serde_yaml_ng::Value = serde_yaml_ng::from_str(frontmatter)?;
+    // Non-MUR skills (Claude Code plugins etc.) carry only `name` +
+    // `description`; default the MUR-specific fields so external SKILL.md
+    // files import seamlessly. `name`/`description` stay required.
+    fill_manifest_defaults(&mut value)?;
     inject_content_from_body(&mut value, body)?;
     let m: SkillManifest = serde_yaml_ng::from_value(value)?;
     Ok(m)
+}
+
+/// Default the MUR-specific manifest fields that external (Claude-style)
+/// SKILL.md frontmatter omits.
+fn fill_manifest_defaults(value: &mut serde_yaml_ng::Value) -> Result<(), ParseError> {
+    use serde_yaml_ng::Value;
+    let map = value
+        .as_mapping_mut()
+        .ok_or_else(|| ParseError::MalformedFrontmatter("frontmatter is not a mapping".into()))?;
+    let key = |k: &str| Value::String(k.into());
+    map.entry(key("version"))
+        .or_insert(Value::String("0.0.0".into()));
+    map.entry(key("publisher"))
+        .or_insert(Value::String("human:import".into()));
+    map.entry(key("category"))
+        .or_insert(Value::String("context".into()));
+    Ok(())
 }
 
 fn split_frontmatter(input: &str) -> Result<(&str, &str), ParseError> {
@@ -241,13 +262,9 @@ pub fn parse_legacy_markdown(input: &str) -> Result<SkillManifest, ParseError> {
         .as_mapping_mut()
         .ok_or_else(|| ParseError::LegacyMarkdown("frontmatter is not a mapping".into()))?;
     use serde_yaml_ng::Value;
-    let key = |k: &str| Value::String(k.into());
-    map.entry(key("version"))
-        .or_insert(Value::String("0.0.0".into()));
-    map.entry(key("publisher"))
+    map.entry(Value::String("publisher".into()))
         .or_insert(Value::String("human:mur".into()));
-    map.entry(key("category"))
-        .or_insert(Value::String("context".into()));
+    fill_manifest_defaults(&mut value)?;
     inject_content_from_body(&mut value, body)?;
     let m: SkillManifest = serde_yaml_ng::from_value(value)?;
     Ok(m)
@@ -371,6 +388,16 @@ Does a thing.
         let proc = m.content.procedure.expect("procedure populated");
         assert_eq!(proc.steps.len(), 3);
         assert_eq!(proc.steps[0].description, "Navigate somewhere");
+    }
+
+    #[test]
+    fn external_claude_style_frontmatter_defaults_mur_fields() {
+        // Claude Code plugin SKILL.md: only name + description.
+        let md = "---\nname: ponytail\ndescription: Lazy senior dev mode.\n---\n\nBe lazy.\n";
+        let m = parse_markdown(md).unwrap();
+        assert_eq!(m.version, "0.0.0");
+        assert_eq!(m.publisher, "human:import");
+        assert!(super::super::validate::validate(&m).is_ok());
     }
 
     #[test]
