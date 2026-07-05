@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "panel",
+  "description": "Capability set for the murmur Panel companion window (murmur-panel label): listen to panel events, invoke panel commands, basic window controls.",
+  "windows": ["murmur-panel"],
+  "permissions": [
+    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-size",
+    "core:window:allow-set-focus"
+  ]
+}
