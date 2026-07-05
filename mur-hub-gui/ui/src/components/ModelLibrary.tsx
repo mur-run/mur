@@ -49,7 +49,9 @@ function deriveConnected(models: ModelOption[]): ConnectedProvider[] {
 
 interface Props {
   open: boolean;
-  onClose: () => void;
+  onClose?: () => void;
+  /** Render inline (no overlay/backdrop, no close button) for use as a page. */
+  embedded?: boolean;
 }
 
 // ── Selection key helpers ──────────────────────────────────────────────────
@@ -61,7 +63,7 @@ type PanelKind =
 
 // ── Component ──────────────────────────────────────────────────────────────
 
-export function ModelLibrary({ open, onClose }: Props) {
+export function ModelLibrary({ open, onClose, embedded = false }: Props) {
   const { t } = useT();
 
   // ── Registry models (for connected list + "already in registry" badge) ──
@@ -107,18 +109,9 @@ export function ModelLibrary({ open, onClose }: Props) {
   const connected = deriveConnected(registryModels);
   const registrySet = new Set(registryModels.map((m) => m.model));
 
-  return (
-    <div
-      className="ml-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label={t("lib.title")}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="ml-win">
-        {/* Window chrome bar */}
+  const inner = (
+    <div className={embedded ? "ml-win ml-win--embedded" : "ml-win"}>
+      {!embedded && (
         <div className="ml-bar">
           <button
             className="ml-dot ml-dot--r"
@@ -132,6 +125,7 @@ export function ModelLibrary({ open, onClose }: Props) {
             ×
           </button>
         </div>
+      )}
 
         {/* Two-pane layout */}
         <div className="ml-pane">
@@ -260,7 +254,24 @@ export function ModelLibrary({ open, onClose }: Props) {
             )}
           </div>
         </div>
-      </div>
+    </div>
+  );
+
+  if (embedded) {
+    return inner;
+  }
+
+  return (
+    <div
+      className="ml-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("lib.title")}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose?.();
+      }}
+    >
+      {inner}
     </div>
   );
 }
