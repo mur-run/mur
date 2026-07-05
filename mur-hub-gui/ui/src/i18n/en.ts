@@ -708,4 +708,6 @@ export const en = {
   "nav.mcp": "MCP",
   "nav.models": "Models",
   "nav.plugins": "Plugins",
+  "placeholder.body": "Coming in this redesign.",
+  "placeholder.open": "Open Model Library",
 } as const;
