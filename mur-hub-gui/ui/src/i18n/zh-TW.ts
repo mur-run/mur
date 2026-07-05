@@ -710,6 +710,7 @@ export const zhTW: Table = {
   "nav.mcp": "MCP",
   "nav.models": "模型",
   "nav.plugins": "外掛",
+  "skillslib.loading": "正在載入技能…",
   "placeholder.body": "此改版即將推出。",
   "placeholder.open": "開啟模型庫",
   "home.needsYou": "需要你處理",
