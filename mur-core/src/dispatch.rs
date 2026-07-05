@@ -1448,7 +1448,18 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         },
         AgentAction::Skill { action } => match action {
             AgentSkillAction::List { name } => cmd::agent::cmd_skill_list(&name)?,
-            AgentSkillAction::Add { name, source } => cmd::agent::cmd_skill_add(&name, &source)?,
+            AgentSkillAction::Add { name, source } => {
+                // A URL source is what `add-url` handles — route it there
+                // instead of failing on a nonexistent local path.
+                if source.starts_with("http://") || source.starts_with("https://") {
+                    let id =
+                        cmd::agent::skill_remote::install_skill_from_url(&name, &source, false)
+                            .await?;
+                    println!("Installed {id} onto '{name}'. Restart the agent to load it.");
+                } else {
+                    cmd::agent::cmd_skill_add(&name, &source)?
+                }
+            }
             AgentSkillAction::Remove { name, skill_id } => {
                 cmd::agent::cmd_skill_remove(&name, &skill_id)?
             }
