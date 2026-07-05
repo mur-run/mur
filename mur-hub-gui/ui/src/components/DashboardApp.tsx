@@ -27,6 +27,7 @@ import { Shell } from "./shell/Shell";
 import type { PageId } from "./shell/nav";
 import { AgentsPage } from "./agents/AgentsPage";
 import { SkillsPage } from "./library/SkillsPage";
+import { McpPage } from "./library/McpPage";
 
 // ─── PlaceholderPage ─────────────────────────────────────────────────────────
 
@@ -486,6 +487,8 @@ export function DashboardApp() {
             <PlaceholderPage id={page} onOpen={() => setModelLibraryOpen(true)} />
           ) : page === "skills" ? (
             <SkillsPage />
+          ) : page === "mcp" ? (
+            <McpPage />
           ) : (
             <PlaceholderPage id={page} />
           )}
