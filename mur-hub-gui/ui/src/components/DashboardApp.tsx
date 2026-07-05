@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { currentMonitor, getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import { save } from "@tauri-apps/plugin-dialog";
 import { useAgents } from "../context/AgentContext";
 import type { AgentEntry, AgentRuntimeStatus } from "../types";
 import { WizardModal } from "./wizard/WizardModal";
@@ -12,380 +10,42 @@ import { MuragentImportModal } from "./MuragentImportModal";
 import { SettingsModal } from "./SettingsModal";
 import { ModelSetupWizard } from "./ModelSetupWizard";
 import { ModelPickerModal } from "./ModelPickerModal";
+import { ModelLibrary } from "./ModelLibrary";
 import { InstallInboxModal } from "./InstallInboxModal";
-import { useUnreadCount } from "./CompanionInbox";
 import { DetailPanel } from "./DetailPanel";
 import { ConversationsView } from "./ConversationsView";
 import { WorkView } from "./work/WorkView";
 import { ChatsView } from "./ChatsView";
 import { FleetView } from "./fleet/FleetView";
 import { useConversations } from "../conversation/ConversationContext";
-import { Mascot } from "./Mascot";
-import type { MascotMood } from "./Mascot";
-import { PetFace } from "./PetFace";
 import { useT } from "../i18n";
-import { CATEGORY_COLORS, avatarInitials, avatarPreset, familyOf, runtimePill, timeGreetingKey } from "../utils";
+import type { TranslationKey } from "../i18n/types";
+import { Shell } from "./shell/Shell";
+import type { PageId } from "./shell/nav";
+import { AgentsPage } from "./agents/AgentsPage";
 
-// ─── Shared helpers ────────────────────────────────────────────────────────
+// ─── PlaceholderPage ─────────────────────────────────────────────────────────
 
-function showToast(msg: string, durationMs = 2000) {
-  const el = document.createElement("div");
-  el.className = "toast";
-  el.textContent = msg;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), durationMs);
-}
-
-
-// Monochrome (currentColor) action glyphs — WKWebView ignores font-variant-emoji,
-// so emoji codepoints render in color; inline SVG is the only reliable mono path.
-function Ico({ filled, children }: { filled?: boolean; children: ReactNode }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="15"
-      height="15"
-      fill={filled ? "currentColor" : "none"}
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {children}
-    </svg>
-  );
-}
-
-// ─── GridCard ──────────────────────────────────────────────────────────────
-
-interface GridCardProps {
-  agent: AgentEntry;
-  runtime: AgentRuntimeStatus | undefined;
-  isSelected: boolean;
-}
-
-export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
+// Library / home pages not yet built in the redesign. Shows the page label, a
+// "coming in this redesign" line, and — where a corresponding modal already
+// exists — a button that opens it (currently only the models page → ModelLibrary).
+function PlaceholderPage({ id, onOpen }: { id: PageId; onOpen?: () => void }) {
   const { t } = useT();
-  const { setSelected } = useAgents();
-  const unread = useUnreadCount(agent.name);
-  const color = CATEGORY_COLORS[agent.category] ?? "#6B7280";
-  const pill = runtimePill(runtime?.state);
-  const isRunning = runtime?.state.state === "running";
-  const isBusy = runtime?.state.state === "restarting";
-
-  // Drag-to-spawn state
-  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [dragging, setDragging] = useState(false);
-  const [ghostPos, setGhostPos] = useState({ x: 0, y: 0 });
-  const cursorOutsideRef = useRef(false);
-  const mouseDownPosRef = useRef({ x: 0, y: 0 });
-
-  async function handleRun() {
-    await invoke("start_agent", { name: agent.name }).catch((e) =>
-      showToast(t("dashboard.startFailed", { error: String(e) })),
-    );
-  }
-  async function handleStop() {
-    await invoke("stop_agent", { name: agent.name }).catch((e) =>
-      showToast(t("dashboard.stopFailed", { error: String(e) })),
-    );
-  }
-  async function handleShare() {
-    const outPath = await save({
-      defaultPath: `${agent.name}.muragent`,
-      filters: [{ name: "MUR Agent", extensions: ["muragent"] }],
-    });
-    if (!outPath) return;
-    invoke<string>("export_muragent_file", { name: agent.name, outPath })
-      .then(() => showToast(`Exported ${agent.name}.muragent`))
-      .catch((e) => showToast(`Export failed: ${e}`, 6000));
-  }
-
-  function startHold(e: React.MouseEvent) {
-    if (e.button !== 0) return;
-    mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
-    holdTimer.current = setTimeout(() => {
-      holdTimer.current = null;
-      setDragging(true);
-      setGhostPos({ x: e.screenX, y: e.screenY });
-      cursorOutsideRef.current = false;
-    }, 300);
-  }
-
-  function cancelHold() {
-    if (holdTimer.current) {
-      clearTimeout(holdTimer.current);
-      holdTimer.current = null;
-    }
-  }
-
-  // A natural press-and-drag leaves the card before the hold timer fires; treat
-  // that as entering the drag instead of cancelling, or the pet can never spawn.
-  function leaveCard(e: React.MouseEvent) {
-    if (holdTimer.current && (e.buttons & 1) !== 0) {
-      cancelHold();
-      setDragging(true);
-      setGhostPos({ x: e.screenX, y: e.screenY });
-      cursorOutsideRef.current = false;
-      return;
-    }
-    cancelHold();
-  }
-
-  useEffect(() => {
-    if (!dragging) return;
-
-    function onMove(e: MouseEvent) {
-      setGhostPos({ x: e.screenX, y: e.screenY });
-    }
-    function onLeave() { cursorOutsideRef.current = true; }
-    function onEnter() { cursorOutsideRef.current = false; }
-    function onUp(e: MouseEvent) {
-      setDragging(false);
-      // Treat the release as "dropped on the desktop" if it lands outside the Hub
-      // window. Decide from the release coordinates vs the window bounds rather than
-      // relying on a document `mouseleave`, which does NOT fire during a button-held
-      // drag out of the window (macOS captures mouse events to the origin window), so
-      // the pet would otherwise never spawn.
-      const outsideByBounds =
-        e.screenX < window.screenX ||
-        e.screenX > window.screenX + window.outerWidth ||
-        e.screenY < window.screenY ||
-        e.screenY > window.screenY + window.outerHeight;
-      if (cursorOutsideRef.current || outsideByBounds) {
-        invoke("pet_spawn_at", {
-          agentName: agent.name,
-          screenX: e.screenX,
-          screenY: e.screenY,
-        }).catch((err) => showToast(`Pet: ${err}`));
-      }
-    }
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-    document.addEventListener("mouseleave", onLeave);
-    document.addEventListener("mouseenter", onEnter);
-    return () => {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-      document.removeEventListener("mouseleave", onLeave);
-      document.removeEventListener("mouseenter", onEnter);
-    };
-  }, [dragging, agent.name]);
-
   return (
-    <>
-      <div
-        className={`grid-card${isSelected ? " grid-card--selected" : ""}${dragging ? " grid-card--dragging" : ""}`}
-        style={{ ["--cat" as string]: color }}
-        data-agent={agent.name}
-        onMouseDown={startHold}
-        onMouseUp={cancelHold}
-        onMouseLeave={leaveCard}
-        onClick={() => setSelected(isSelected ? null : agent.name)}
-      >
-        <div className="grid-card__head">
-          <div className="grid-card__avatar grid-card__avatar--pet" title={avatarPreset(agent)}>
-            <PetFace
-              presetId={avatarPreset(agent)}
-              family={familyOf(avatarPreset(agent))}
-              expression="idle"
-              size={44}
-              animate={false}
-            />
-            {unread > 0 && (
-              <span className="unread-badge">{unread > 99 ? "99+" : unread}</span>
-            )}
-          </div>
-          <div>
-            <p className="grid-card__name">{agent.display_name}</p>
-            {agent.role && <span className="role-chip">{agent.role}</span>}
-            <p className="grid-card__cat">{t(`category.${agent.category}` as Parameters<typeof t>[0])}</p>
-          </div>
-        </div>
-        <div className="grid-card__actions">
-          <button
-            disabled={isRunning || isBusy}
-            onClick={(e) => { e.stopPropagation(); handleRun(); }}
-            title={t("dashboard.run")}
-            aria-label={t("dashboard.run")}
-          >
-            <Ico filled><polygon points="6 4 20 12 6 20 6 4" /></Ico>
-          </button>
-          <button
-            disabled={!isRunning && !isBusy}
-            onClick={(e) => { e.stopPropagation(); handleStop(); }}
-            title={t("dashboard.stop")}
-            aria-label={t("dashboard.stop")}
-          >
-            <Ico filled><rect x="6" y="6" width="12" height="12" rx="1.5" /></Ico>
-          </button>
-          <button onClick={(e) => { e.stopPropagation(); handleShare(); }} title={t("dashboard.share")} aria-label={t("dashboard.share")}>
-            <Ico>
-              <path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7" />
-              <polyline points="16 7 12 3 8 7" />
-              <line x1="12" y1="3" x2="12" y2="15" />
-            </Ico>
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              invoke("open_chat_window", { agentName: agent.name }).catch(console.error);
-            }}
-            title={t("detail.chat")}
-            aria-label={t("detail.chat")}
-          >
-            <Ico>
-              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
-            </Ico>
-          </button>
-
-        </div>
-        <div className="grid-card__foot">
-          <span className={pill.cls}>
-            <span className="pill__dot" />
-            {t(pill.key)}
-          </span>
-          <button
-            className="grid-card__settings"
-            onClick={(e) => { e.stopPropagation(); setSelected(agent.name); }}
-            title={t("dashboard.detail")}
-            aria-label={t("dashboard.detail")}
-          >
-            <Ico>
-              <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
-              <circle cx="12" cy="12" r="3" />
-            </Ico>
-          </button>
-        </div>
+    <div className="shell-placeholder">
+      <div className="shell-placeholder__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" />
+        </svg>
       </div>
-
-      {dragging && (
-        <div
-          className="drag-ghost"
-          style={{
-            position: "fixed",
-            left: ghostPos.x - window.screenX - 40,
-            top: ghostPos.y - window.screenY - 40,
-            pointerEvents: "none",
-          }}
-        >
-          <div className="drag-ghost-avatar" style={{ background: color }}>
-            {avatarInitials(agent.display_name)}
-          </div>
-          <span className="drag-ghost-label">{agent.display_name}</span>
-        </div>
+      <h3>{t(`nav.${id}` as TranslationKey)}</h3>
+      <p>{t("placeholder.body")}</p>
+      {onOpen && (
+        <button className="btn btn--primary" onClick={onOpen}>
+          {t("placeholder.open")}
+        </button>
       )}
-    </>
-  );
-}
-
-// ─── ListRow ───────────────────────────────────────────────────────────────
-
-interface ListRowProps {
-  agent: AgentEntry;
-  runtime: AgentRuntimeStatus | undefined;
-  isSelected: boolean;
-}
-
-export function ListRow({ agent, runtime, isSelected }: ListRowProps) {
-  const { t } = useT();
-  const { setSelected } = useAgents();
-  const color = CATEGORY_COLORS[agent.category] ?? "#6B7280";
-  const pill = runtimePill(runtime?.state);
-  const model =
-    agent.model_id.length > 24 ? agent.model_id.slice(0, 24) + "…" : agent.model_id;
-  return (
-    <div
-      className={`list-row${isSelected ? " list-row--selected" : ""}`}
-      style={{ ["--cat" as string]: color }}
-      data-agent={agent.name}
-      onClick={() => setSelected(isSelected ? null : agent.name)}
-    >
-      <div className="list-row__main">
-        <div className="list-avatar" style={{ background: color }}>
-          {avatarInitials(agent.display_name)}
-        </div>
-        <span className="list-name">{agent.display_name}</span>
-        {agent.role && <span className="role-chip">{agent.role}</span>}
-      </div>
-      <span className="list-category">{t(`category.${agent.category}` as Parameters<typeof t>[0])}</span>
-      <span className="list-model" title={agent.model_id}>
-        {model}
-      </span>
-      <span className={pill.cls}>
-        <span className="pill__dot" />
-        {t(pill.key)}
-      </span>
-      <button
-        className="list-row__settings"
-        onClick={(e) => { e.stopPropagation(); setSelected(isSelected ? null : agent.name); }}
-        title={t("dashboard.settings")}
-        aria-label={t("dashboard.settings")}
-      >
-        <Ico>
-          <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-          <circle cx="12" cy="12" r="3" />
-        </Ico>
-      </button>
     </div>
-  );
-}
-
-// ─── Sidebar ───────────────────────────────────────────────────────────────
-
-/** Sentinel for the "no role assigned" sidebar bucket. */
-export const NO_ROLE = "__none__";
-
-interface SidebarProps {
-  activeRole: string | null;
-  agents: AgentEntry[];
-  onSelect: (role: string | null) => void;
-}
-
-/**
- * Left rail filters by ROLE (was persona category, which was useless — nearly
- * every agent is "custom"). Lists each distinct role + a "no role" bucket.
- */
-export function Sidebar({ activeRole, agents, onSelect }: SidebarProps) {
-  const { t } = useT();
-  const counts: Record<string, number> = {};
-  let noRole = 0;
-  for (const a of agents) {
-    const r = a.role?.trim();
-    if (r) counts[r] = (counts[r] ?? 0) + 1;
-    else noRole++;
-  }
-  const roles = Object.keys(counts).sort((x, y) => x.localeCompare(y));
-
-  return (
-    <nav className="sidebar">
-      <button
-        className={`sidebar-item${activeRole === null ? " sidebar-item--active" : ""}`}
-        onClick={() => onSelect(null)}
-      >
-        {t("dashboard.all")} <span className="badge">{agents.length}</span>
-      </button>
-      {roles.map((role) => (
-        <button
-          key={role}
-          className={`sidebar-item${activeRole === role ? " sidebar-item--active" : ""}`}
-          onClick={() => onSelect(role)}
-        >
-          <span className="sidebar-item__icon">🎭</span>
-          {role} <span className="badge">{counts[role]}</span>
-        </button>
-      ))}
-      {noRole > 0 && (
-        <button
-          className={`sidebar-item${activeRole === NO_ROLE ? " sidebar-item--active" : ""}`}
-          onClick={() => onSelect(NO_ROLE)}
-        >
-          <span className="sidebar-item__icon">∅</span>
-          {t("dashboard.noRole")} <span className="badge">{noRole}</span>
-        </button>
-      )}
-    </nav>
   );
 }
 
@@ -401,9 +61,11 @@ export function DashboardApp() {
   const { t } = useT();
   const { agents, runtimeStatuses, selectedAgent, setSelected } = useAgents();
   const { open: openConvs } = useConversations();
-  const [activeRole, setActiveRole] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const [surface, setSurface] = useState<"agents" | "chats" | "work" | "fleet">("agents");
+  // Active shell page. Includes the transitional "work" surface, which has no
+  // sidebar slot yet (WorkView is removed in a later phase); kept reachable
+  // programmatically so the render branch and import stay live this phase.
+  const [page, setPage] = useState<PageId | "work">("agents");
   const [query, setQuery] = useState("");
   const [wizardOpen, setWizardOpen] = useState(false);
   const [presetImportOpen, setPresetImportOpen] = useState(false);
@@ -412,6 +74,7 @@ export function DashboardApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showModelWizard, setShowModelWizard] = useState(false);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [modelLibraryOpen, setModelLibraryOpen] = useState(false);
   const [showAppsBanner, setShowAppsBanner] = useState(false);
   const [showUpgradeNudge, setShowUpgradeNudge] = useState(false);
   const [nudgeDismissed, setNudgeDismissed] = useState(false);
@@ -481,30 +144,6 @@ export function DashboardApp() {
   const runtimeMap = new Map<string, AgentRuntimeStatus>(
     runtimeStatuses.map((s) => [s.name, s]),
   );
-
-  // Flock stats for the hero: count agents whose runtime is actively running.
-  const runningCount = agents.filter(
-    (a) => runtimeMap.get(a.name)?.state.state === "running",
-  ).length;
-  const idleCount = agents.length - runningCount;
-
-  const mascotMood: MascotMood =
-    agents.length === 0
-      ? "excited"
-      : runningCount === agents.length
-        ? "happy"
-        : runningCount === 0
-          ? "worried"
-          : "idle";
-
-  const mascotBubble =
-    mascotMood === "excited"
-      ? t("mascot.bubble.excited")
-      : mascotMood === "happy"
-        ? t("mascot.bubble.happy")
-        : mascotMood === "worried"
-          ? t("mascot.bubble.worried")
-          : t("mascot.bubble.idle", { running: runningCount, idle: idleCount });
 
   useEffect(() => {
     const unSelect = listen<string>("select-agent", (e) => {
@@ -633,14 +272,6 @@ export function DashboardApp() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const q = query.toLowerCase();
-  const visible = agents.filter(
-    (a) =>
-      (activeRole === null ||
-        (activeRole === NO_ROLE ? !a.role?.trim() : a.role?.trim() === activeRole)) &&
-      (!q || a.name.toLowerCase().includes(q) || a.display_name.toLowerCase().includes(q)),
-  );
-
   return (
     <div className="dashboard-root">
       <div className="dashboard-main dashboard">
@@ -740,32 +371,6 @@ export function DashboardApp() {
 
         <div className="dashboard__bar">
           <span className="dashboard__brand">MUR</span>
-          <nav className="surface-toggle dashboard__bar-nav">
-            <button
-              className={surface === "agents" ? "is-active" : ""}
-              onClick={() => setSurface("agents")}
-            >
-              {t("work.toggle.agents")}
-            </button>
-            <button
-              className={surface === "chats" ? "is-active" : ""}
-              onClick={() => setSurface("chats")}
-            >
-              {t("work.toggle.chats")}
-            </button>
-            <button
-              className={surface === "work" ? "is-active" : ""}
-              onClick={() => setSurface("work")}
-            >
-              {t("work.toggle.work")}
-            </button>
-            <button
-              className={surface === "fleet" ? "is-active" : ""}
-              onClick={() => setSurface("fleet")}
-            >
-              {t("fleet.tab")}
-            </button>
-          </nav>
           <label className="field dashboard__bar-search">
             <input
               ref={searchRef}
@@ -823,83 +428,33 @@ export function DashboardApp() {
           </div>
         </div>
 
-        {surface === "fleet" ? (
-          <FleetView query={query} />
-        ) : surface === "work" ? (
-          <WorkView agents={agents} query={query} />
-        ) : surface === "chats" ? (
-          <ChatsView agents={agents} query={query} />
-        ) : (
-          <div className="agents-view">
-            <Sidebar activeRole={activeRole} agents={agents} onSelect={setActiveRole} />
-            <div className="agents-view__content">
-            <div className="dashboard__hero">
-              <Mascot floating mood={mascotMood} bubble={mascotBubble} />
-              <div>
-                <h3>{t(timeGreetingKey())}</h3>
-                <p>
-                  {t("dashboard.flockStatus", {
-                    running: runningCount,
-                    idle: idleCount,
-                  })}
-                </p>
-              </div>
-              <div className="dashboard__stats">
-                <div className="stat">
-                  <div className="stat__n stat__n--run">{runningCount}</div>
-                  <div className="stat__l">{t("dashboard.stat.running")}</div>
-                </div>
-                <div className="stat">
-                  <div className="stat__n">{idleCount}</div>
-                  <div className="stat__l">{t("dashboard.stat.idle")}</div>
-                </div>
-              </div>
-            </div>
-
-            <div className="dashboard-content">
-              {visible.length === 0 ? (
-                <div className="empty-state">
-                  <Mascot floating size={96} mood="excited" bubble={t("mascot.bubble.excited")} />
-                  <h3>{t("dashboard.empty.title")}</h3>
-                  <p>{t("dashboard.empty.body")}</p>
-                  <button className="btn btn--primary" onClick={() => setWizardOpen(true)}>
-                    {t("dashboard.empty.cta")}
-                  </button>
-                </div>
-              ) : viewMode === "grid" ? (
-                <div className="agent-grid">
-                  {visible.map((a) => (
-                    <GridCard
-                      key={a.name}
-                      agent={a}
-                      runtime={runtimeMap.get(a.name)}
-                      isSelected={selectedAgent === a.name}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="agent-list">
-                  <div className="agent-list__head">
-                    <span>{t("dashboard.col.agent")}</span>
-                    <span>{t("dashboard.col.category")}</span>
-                    <span>{t("dashboard.col.model")}</span>
-                    <span>{t("dashboard.col.status")}</span>
-                    <span />
-                  </div>
-                  {visible.map((a) => (
-                    <ListRow
-                      key={a.name}
-                      agent={a}
-                      runtime={runtimeMap.get(a.name)}
-                      isSelected={selectedAgent === a.name}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-            </div>{/* agents-view__content */}
-          </div>
-        )}
+        <Shell
+          page={page === "work" ? "agents" : page}
+          onNavigate={(id) => setPage(id)}
+          badge={0}
+          inspector={undefined}
+        >
+          {page === "chats" ? (
+            <ChatsView agents={agents} query={query} />
+          ) : page === "fleets" ? (
+            <FleetView query={query} />
+          ) : page === "work" ? (
+            <WorkView agents={agents} query={query} />
+          ) : page === "agents" ? (
+            <AgentsPage
+              agents={agents}
+              runtimeMap={runtimeMap}
+              query={query}
+              viewMode={viewMode}
+              selectedAgent={selectedAgent}
+              onNewAgent={() => setWizardOpen(true)}
+            />
+          ) : page === "models" ? (
+            <PlaceholderPage id={page} onOpen={() => setModelLibraryOpen(true)} />
+          ) : (
+            <PlaceholderPage id={page} />
+          )}
+        </Shell>
       </div>
 
       {/* Conversation rail — slides in when conversations are open */}
@@ -953,7 +508,9 @@ export function DashboardApp() {
         isOpen={modelPickerOpen}
         onClose={() => setModelPickerOpen(false)}
       />
+      <ModelLibrary open={modelLibraryOpen} onClose={() => setModelLibraryOpen(false)} />
       <InstallInboxModal />
     </div>
   );
 }
+
