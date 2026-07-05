@@ -1,6 +1,8 @@
 // Sidebar navigation model — Hub redesign Phase 1 three-pane shell.
 // Order and grouping per spec §1: workspace items first, then library items.
 
+import type { TranslationKey } from "../../i18n/types";
+
 export type PageId =
   | "home"
   | "chats"
@@ -14,7 +16,7 @@ export type PageId =
 
 export interface NavItem {
   id: PageId;
-  labelKey: string;
+  labelKey: TranslationKey;
   group: "workspace" | "library";
 }
 

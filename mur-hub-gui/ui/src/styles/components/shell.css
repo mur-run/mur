@@ -45,7 +45,7 @@
 
 .shell-sidebar-item--active {
   background: var(--color-brand);
-  color: #fff;
+  color: var(--text-on-brand);
 }
 
 .shell-sidebar-item__icon {
