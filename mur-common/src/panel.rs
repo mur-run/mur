@@ -48,13 +48,23 @@ pub enum PreviewKind {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PanelFrame {
     /// Sent once per connection, immediately on accept.
-    Hello { session: PanelSession },
+    Hello {
+        session: PanelSession,
+    },
     /// Reserved for later phases (cwd/agent changes mid-session).
-    State { cwd: String, agent: String },
+    State {
+        cwd: String,
+        agent: String,
+    },
     /// `/panel <tab>` — open/focus the Panel window on a tab.
-    Panel { focus: PanelTab },
+    Panel {
+        focus: PanelTab,
+    },
     /// `/panel preview <target>` — set preview target (rendered in P3).
-    Preview { kind: PreviewKind, target: String },
+    Preview {
+        kind: PreviewKind,
+        target: String,
+    },
     Bye,
 }
 

@@ -73,7 +73,10 @@ fn on_frame(app: &AppHandle, pid: u32, frame: PanelFrame) {
         }
         PanelFrame::Panel { focus } => {
             open_or_focus(app, Some(pid));
-            let _ = app.emit("panel-focus", serde_json::json!({ "pid": pid, "tab": focus }));
+            let _ = app.emit(
+                "panel-focus",
+                serde_json::json!({ "pid": pid, "tab": focus }),
+            );
         }
         PanelFrame::Preview { kind, target } => {
             open_or_focus(app, Some(pid));
@@ -155,7 +158,11 @@ pub fn panel_insert(pid: u32, text: String, state: State<PanelState>) -> Result<
         .as_ref()
         .map(|b| b.insert(pid, text))
         .unwrap_or(false);
-    if ok { Ok(()) } else { Err("session gone".into()) }
+    if ok {
+        Ok(())
+    } else {
+        Err("session gone".into())
+    }
 }
 
 #[tauri::command]
