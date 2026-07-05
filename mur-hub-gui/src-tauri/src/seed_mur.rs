@@ -315,6 +315,75 @@ pub fn seed_mur_if_missing(template_dir: &Path, mur_home: &Path) -> std::io::Res
     Ok(true)
 }
 
+/// For an already-seeded `mur` agent, copy in any bundled template skill dirs
+/// missing from `<mur_home>/agents/mur/skills/` and append them to the
+/// agent's `profile.yaml` `skills:` list. Existing skill dirs are left
+/// completely untouched (never overwritten). Returns the names seeded.
+///
+/// Called on Hub launch right after `seed_mur_if_missing` — a cheap no-op
+/// when nothing is missing, so upgrades pick up new bundled skills (e.g.
+/// brainstorming) without touching an agent the user already customized.
+pub fn seed_missing_bundled_skills(
+    template_dir: &Path,
+    mur_home: &Path,
+) -> std::io::Result<Vec<String>> {
+    let agent_dir = mur_home.join("agents").join("mur");
+    let template_skills = template_dir.join("skills");
+    if !agent_dir.join("profile.yaml").is_file() || !template_skills.is_dir() {
+        return Ok(vec![]);
+    }
+
+    let profile_path = agent_dir.join("profile.yaml");
+    let mut profile = std::fs::read_to_string(&profile_path)?;
+    let mut seeded = Vec::new();
+
+    for entry in std::fs::read_dir(&template_skills)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let dst = agent_dir.join("skills").join(&name);
+        let was_missing = !dst.exists();
+        if was_missing {
+            copy_tree(&entry.path(), &dst)?;
+        }
+        let reference = format!("skills/{name}");
+        if !profile
+            .lines()
+            .any(|l| l.trim() == format!("- {reference}"))
+        {
+            profile = append_skill_reference(&profile, &reference);
+        }
+        if was_missing {
+            seeded.push(name);
+        }
+    }
+
+    std::fs::write(&profile_path, profile)?;
+    Ok(seeded)
+}
+
+/// Append `- <reference>` as the last entry of the `skills:` list in `profile`.
+fn append_skill_reference(profile: &str, reference: &str) -> String {
+    let mut lines: Vec<&str> = profile.lines().collect();
+    let skills_idx = lines
+        .iter()
+        .position(|l| l.trim_end() == "skills:")
+        .expect("template profile.yaml must have a skills: list");
+    let mut insert_at = skills_idx + 1;
+    while insert_at < lines.len() && lines[insert_at].trim_start().starts_with("- ") {
+        insert_at += 1;
+    }
+    let new_line = format!("  - {reference}");
+    lines.insert(insert_at, &new_line);
+    let mut out = lines.join("\n");
+    if profile.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,6 +408,105 @@ mod tests {
                 .join("agents/mur/skills/concierge.yaml")
                 .exists()
         );
+    }
+
+    fn make_dir_skill_template(dir: &Path) {
+        std::fs::create_dir_all(dir.join("skills/concierge")).unwrap();
+        std::fs::create_dir_all(dir.join("skills/brainstorming")).unwrap();
+        std::fs::write(
+            dir.join("profile.yaml"),
+            "name: Mur\nskills:\n  - skills/concierge\n  - skills/brainstorming\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("sys_prompt.md"), "# Mur\n").unwrap();
+        std::fs::write(dir.join("skills/concierge/skill.yaml"), "name: concierge\n").unwrap();
+        std::fs::write(
+            dir.join("skills/brainstorming/skill.yaml"),
+            "name: brainstorming\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn seeds_missing_skill_into_existing_agent() {
+        let home = TempDir::new().unwrap();
+        let tpl = TempDir::new().unwrap();
+        make_dir_skill_template(tpl.path());
+
+        // Agent already seeded with only the concierge skill (pre-upgrade state).
+        let agent_dir = home.path().join("agents/mur");
+        std::fs::create_dir_all(agent_dir.join("skills/concierge")).unwrap();
+        std::fs::write(
+            agent_dir.join("profile.yaml"),
+            "name: Mur\nskills:\n  - skills/concierge\n",
+        )
+        .unwrap();
+        std::fs::write(
+            agent_dir.join("skills/concierge/skill.yaml"),
+            "name: concierge\n",
+        )
+        .unwrap();
+
+        let seeded = seed_missing_bundled_skills(tpl.path(), home.path()).unwrap();
+        assert_eq!(seeded, vec!["brainstorming".to_string()]);
+        assert!(agent_dir.join("skills/brainstorming/skill.yaml").exists());
+        let profile = std::fs::read_to_string(agent_dir.join("profile.yaml")).unwrap();
+        assert!(profile.contains("- skills/brainstorming"));
+    }
+
+    #[test]
+    fn never_overwrites_existing_skill() {
+        let home = TempDir::new().unwrap();
+        let tpl = TempDir::new().unwrap();
+        make_dir_skill_template(tpl.path());
+
+        let agent_dir = home.path().join("agents/mur");
+        std::fs::create_dir_all(agent_dir.join("skills/brainstorming")).unwrap();
+        std::fs::create_dir_all(agent_dir.join("skills/concierge")).unwrap();
+        std::fs::write(
+            agent_dir.join("skills/concierge/skill.yaml"),
+            "name: concierge\n",
+        )
+        .unwrap();
+        let sentinel = "name: brainstorming\n# USER EDIT\n";
+        std::fs::write(agent_dir.join("skills/brainstorming/skill.yaml"), sentinel).unwrap();
+        std::fs::write(
+            agent_dir.join("profile.yaml"),
+            "name: Mur\nskills:\n  - skills/concierge\n  - skills/brainstorming\n",
+        )
+        .unwrap();
+
+        let seeded = seed_missing_bundled_skills(tpl.path(), home.path()).unwrap();
+        assert_eq!(seeded, Vec::<String>::new());
+        assert_eq!(
+            std::fs::read_to_string(agent_dir.join("skills/brainstorming/skill.yaml")).unwrap(),
+            sentinel
+        );
+    }
+
+    #[test]
+    fn idempotent_profile_reference() {
+        let home = TempDir::new().unwrap();
+        let tpl = TempDir::new().unwrap();
+        make_dir_skill_template(tpl.path());
+
+        let agent_dir = home.path().join("agents/mur");
+        std::fs::create_dir_all(agent_dir.join("skills/concierge")).unwrap();
+        std::fs::write(
+            agent_dir.join("skills/concierge/skill.yaml"),
+            "name: concierge\n",
+        )
+        .unwrap();
+        std::fs::write(
+            agent_dir.join("profile.yaml"),
+            "name: Mur\nskills:\n  - skills/concierge\n",
+        )
+        .unwrap();
+
+        seed_missing_bundled_skills(tpl.path(), home.path()).unwrap();
+        seed_missing_bundled_skills(tpl.path(), home.path()).unwrap();
+        let profile = std::fs::read_to_string(agent_dir.join("profile.yaml")).unwrap();
+        assert_eq!(profile.matches("- skills/brainstorming").count(), 1);
     }
 
     #[test]
@@ -394,6 +562,35 @@ mod tests {
         let skill = read_from_dir(&tpl.join("skills/concierge")).expect("concierge skill loads");
         validate(&skill).expect("concierge skill validates");
         assert_eq!(skill.name, "concierge");
+    }
+
+    #[test]
+    fn bundled_template_brainstorming_skill_is_loadable_and_stamped() {
+        // Regression guard: the bundled brainstorming skill loads, validates,
+        // and carries the origin stamp the upgrade pipeline needs.
+        use mur_common::skill::{content_hash_for_origin, read_from_dir, validate};
+        let tpl = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/mur-agent-template");
+        let profile = std::fs::read_to_string(tpl.join("profile.yaml")).unwrap();
+        assert!(
+            profile.contains("- skills/brainstorming"),
+            "profile must reference the brainstorming skill"
+        );
+        let skill =
+            read_from_dir(&tpl.join("skills/brainstorming")).expect("brainstorming skill loads");
+        validate(&skill).expect("brainstorming skill validates");
+        assert_eq!(skill.name, "brainstorming");
+        assert_eq!(
+            skill.origin.as_deref(),
+            Some("registry:mur-official/brainstorming")
+        );
+        assert_eq!(
+            skill.origin_version.as_deref(),
+            Some(skill.version.as_str())
+        );
+        assert_eq!(
+            skill.origin_hash.as_deref(),
+            Some(content_hash_for_origin(&skill).unwrap().as_str())
+        );
     }
 
     #[test]
