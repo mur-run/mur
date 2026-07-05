@@ -4,6 +4,7 @@
 //! the page already has in hand — no extra fetch.
 
 import { useT } from "../../i18n";
+import type { TranslationKey } from "../../i18n/types";
 
 export interface LibrarySelection {
   kind: "skill" | "mcp" | "workflow" | "plugin";
@@ -15,7 +16,7 @@ export interface LibrarySelection {
   meta?: { label: string; value: string }[];
 }
 
-const KIND_LABEL: Record<LibrarySelection["kind"], string> = {
+const KIND_LABEL: Record<LibrarySelection["kind"], TranslationKey> = {
   skill: "libraryInspector.kind.skill",
   mcp: "libraryInspector.kind.mcp",
   workflow: "libraryInspector.kind.workflow",
