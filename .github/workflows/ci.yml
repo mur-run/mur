@@ -240,6 +240,7 @@ jobs:
             libayatana-appindicator3-dev
             librsvg2-dev
             libasound2-dev
+            libdbus-1-dev
             pkg-config
             protobuf-compiler
             libprotobuf-dev
@@ -303,6 +304,7 @@ jobs:
             protobuf-compiler
             libprotobuf-dev
             libasound2-dev
+            libdbus-1-dev
       - name: Install protobuf (macOS)
         if: runner.os == 'macOS'
         run: brew install protobuf
