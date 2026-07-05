@@ -15,6 +15,7 @@ use crate::channel_writer::ROUTER_AGENT;
 /// Deliberately flat/serde-friendly rather than re-exporting `HitlRequest`
 /// directly, so callers aren't coupled to the channel-event payload shape.
 #[derive(Debug, Clone, serde::Serialize)]
+#[allow(dead_code)] // consumed by mur-hub-gui (workspace-excluded Home inbox)
 pub struct PendingHitlGate {
     pub channel_id: String,
     pub hitl_id: String,
@@ -28,6 +29,7 @@ pub struct PendingHitlGate {
 /// `HitlResponse` in the same channel — i.e. gates still waiting on a human.
 /// Read errors on an individual channel are skipped (fail-open: a corrupt or
 /// unreadable channel must not hide gates in every other channel).
+#[allow(dead_code)] // consumed by mur-hub-gui (workspace-excluded Home inbox)
 pub fn pending_hitl_gates(mur_home: &Path) -> Result<Vec<PendingHitlGate>> {
     let svc = ChannelService::open(mur_home)?;
     let ids = svc.store().list_ids()?;
