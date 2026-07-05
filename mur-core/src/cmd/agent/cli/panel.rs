@@ -6,11 +6,14 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
 use anyhow::{Context, Result};
-use mur_common::panel::{
-    HubFrame, PANEL_PROTO_VERSION, PanelFrame, PanelSession, decode_line, murmur_run_dir,
-};
+#[cfg(unix)]
+use mur_common::panel::decode_line;
+use mur_common::panel::{HubFrame, PANEL_PROTO_VERSION, PanelFrame, PanelSession, murmur_run_dir};
+#[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 
@@ -65,12 +68,20 @@ pub fn start(home: &Path, agent: &str, cwd: &Path) -> (mpsc::Receiver<HubFrame>,
         terminal_program: std::env::var("TERM_PROGRAM").ok(),
         proto_version: PANEL_PROTO_VERSION,
     };
+    #[cfg(unix)]
     if let Err(e) = serve(&dir, &json_path, &sock_path, session, in_tx, out_rx) {
         tracing::warn!("panel: server disabled: {e:#}");
+    }
+    // ponytail: Windows named pipes when someone actually runs murmur there.
+    #[cfg(not(unix))]
+    {
+        let _ = (dir, session, in_tx, out_rx);
+        tracing::debug!("panel: unix sockets unavailable on this platform");
     }
     (rx, handle)
 }
 
+#[cfg(unix)]
 fn serve(
     dir: &Path,
     json_path: &Path,
@@ -93,6 +104,7 @@ fn serve(
     Ok(())
 }
 
+#[cfg(unix)]
 /// One Hub client at a time; a new connection is served after the previous
 /// one disconnects.
 async fn accept_loop(
@@ -112,6 +124,7 @@ async fn accept_loop(
     }
 }
 
+#[cfg(unix)]
 /// Returns true when the client went away (keep accepting), false when the
 /// TUI's outgoing channel closed (shut down).
 async fn pump(
@@ -222,6 +235,7 @@ fn ensure_hub_running(app: &mut super::app::App) {
 #[cfg(not(target_os = "macos"))]
 fn ensure_hub_running(_app: &mut super::app::App) {}
 
+#[cfg(unix)]
 async fn write_line(
     w: &mut tokio::net::unix::OwnedWriteHalf,
     f: &PanelFrame,
@@ -231,7 +245,7 @@ async fn write_line(
     w.write_all(&buf).await
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use mur_common::panel::{PanelFrame, PanelSession, murmur_run_dir};
