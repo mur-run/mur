@@ -26,6 +26,7 @@ pub mod model_slots;
 pub mod models_admin;
 pub mod notif;
 pub mod onboarding;
+pub mod panel;
 pub mod pet;
 pub mod preset;
 pub mod seed_mur;
