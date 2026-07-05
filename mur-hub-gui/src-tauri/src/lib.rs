@@ -541,6 +541,7 @@ pub fn run() {
                         // Distinct newtype so Tauri's type-keyed state doesn't
                         // collide with the channel watcher managed just above
                         // (both would otherwise be `Mutex<Option<RecommendedWatcher>>`).
+                        #[allow(dead_code)] // held only to keep the watcher alive
                         struct InstallInboxWatcher(notify::RecommendedWatcher);
                         app.manage(std::sync::Mutex::new(Some(InstallInboxWatcher(watcher))));
                     }
