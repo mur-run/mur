@@ -15,6 +15,8 @@ interface Props {
   /** Unified inbox items (owned by DashboardApp so the badge stays in sync). */
   items: InboxItem[];
   onRefresh: () => void;
+  /** Dismiss an inbox item for this session (single source of truth lives in DashboardApp). */
+  onDismiss: (item: InboxItem) => void;
   onNavigate: (id: PageId) => void;
   onCreateAgent: () => void;
 }
@@ -29,6 +31,7 @@ export function HomePage({
   runtimeStatuses,
   items,
   onRefresh,
+  onDismiss,
   onNavigate,
   onCreateAgent,
 }: Props) {
@@ -50,7 +53,7 @@ export function HomePage({
 
   return (
     <div className="home-page">
-      <NeedsYou items={items} onRefresh={onRefresh} />
+      <NeedsYou items={items} onRefresh={onRefresh} onDismiss={onDismiss} />
 
       {showEmpty ? (
         <div className="home-empty">

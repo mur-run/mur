@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inboxBadge, mergeInbox, type InboxItem } from "./inbox";
+import { inboxBadge, mergeInbox, visibleInboxItems, type InboxItem } from "./inbox";
 
 function item(kind: InboxItem["kind"], id: string, ts: number, title = id): InboxItem {
   return { kind, id, ts, title, subtitle: "", payload: null };
@@ -50,5 +50,35 @@ describe("inboxBadge", () => {
 
   it("is 0 for empty list", () => {
     expect(inboxBadge([])).toBe(0);
+  });
+});
+
+describe("visibleInboxItems", () => {
+  it("removes dismissed items by kind:id", () => {
+    const items: InboxItem[] = [
+      item("upgrade_blocked", "1", 1),
+      item("upgrade_blocked", "2", 2),
+      item("hitl", "3", 3),
+    ];
+    const dismissed = new Set(["upgrade_blocked:1"]);
+    const visible = visibleInboxItems(items, dismissed);
+    expect(visible.map((i) => i.id)).toEqual(["2", "3"]);
+  });
+
+  it("keeps everything when nothing is dismissed", () => {
+    const items: InboxItem[] = [item("hitl", "1", 1), item("companion", "2", 2)];
+    expect(visibleInboxItems(items, new Set())).toHaveLength(2);
+  });
+
+  it("badge count matches the filtered length (no drift)", () => {
+    const items: InboxItem[] = [
+      item("upgrade_blocked", "1", 1),
+      item("upgrade_blocked", "2", 2),
+      item("hitl", "3", 3),
+    ];
+    const dismissed = new Set(["upgrade_blocked:1", "upgrade_blocked:2"]);
+    const visible = visibleInboxItems(items, dismissed);
+    expect(inboxBadge(visible)).toBe(visible.length);
+    expect(inboxBadge(visible)).toBe(1);
   });
 });

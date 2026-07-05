@@ -37,3 +37,16 @@ export function mergeInbox(sources: InboxItem[][]): InboxItem[] {
 export function inboxBadge(items: InboxItem[]): number {
   return items.length;
 }
+
+/**
+ * Filter out session-dismissed items (keyed by `kind:id`, matching the key
+ * NeedsYou cards use). This is the single source of truth for "what's
+ * actually actionable" — apply it BEFORE both `inboxBadge()` and rendering
+ * so the sidebar/Dock badge and the visible card list never drift apart.
+ */
+export function visibleInboxItems(
+  items: InboxItem[],
+  dismissed: ReadonlySet<string>,
+): InboxItem[] {
+  return items.filter((it) => !dismissed.has(`${it.kind}:${it.id}`));
+}
