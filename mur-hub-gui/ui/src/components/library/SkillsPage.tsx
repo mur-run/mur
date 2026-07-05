@@ -5,6 +5,7 @@ import type { AgentDetail } from "../../types";
 import { useT } from "../../i18n";
 import { SkillRegistryModal } from "../SkillRegistryModal";
 import { SkillAddUrlModal } from "../SkillAddUrlModal";
+import { AgentPicker } from "./AgentPicker";
 
 // ─── Backend shape ───────────────────────────────────────────────────────────
 
@@ -19,7 +20,7 @@ interface InstalledSkillView {
 // ─── Status → badge variant ──────────────────────────────────────────────────
 
 /** Pure mapping: backend status label -> badge CSS variant. Exported for
- * testing; the backend already reduces `UpgradeStatus` to these labels. */
+ * testing; backend already reduces `UpgradeStatus` labels. */
 export function statusBadgeClass(status: string): string {
   switch (status) {
     case "modified":
@@ -43,6 +44,13 @@ export function SkillsPage() {
   const [error, setError] = useState<string | null>(null);
   const [showRegistry, setShowRegistry] = useState(false);
   const [showAddUrl, setShowAddUrl] = useState(false);
+  const [targetAgent, setTargetAgent] = useState<string>(agents[0]?.name ?? "");
+
+  useEffect(() => {
+    if (!targetAgent && agents[0]?.name) {
+      setTargetAgent(agents[0].name);
+    }
+  }, [agents, targetAgent]);
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -59,18 +67,20 @@ export function SkillsPage() {
     refresh();
   }, [refresh]);
 
-  // The registry/URL-install modals are per-agent (they install into an
-  // agent's own skill dir); reused as-is here targeting the first available
-  // agent, since this library view has no separate agent-scoped concept.
-  const targetAgent = agents[0]?.name;
-
-  function handleSaved(_detail: AgentDetail) {
-    refresh();
-  }
+  const handleSaved = useCallback(
+    (_d: AgentDetail) => {
+      refresh();
+    },
+    [refresh],
+  );
 
   return (
-    <div className="tab-form">
-      <div style={{ display: "flex", gap: 8, alignSelf: "flex-start", marginBottom: 12 }}>
+    <div>
+      <div
+        className="tab-form"
+        style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 12 }}
+      >
+        <AgentPicker agents={agents} value={targetAgent} onChange={setTargetAgent} />
         <button
           className="btn btn--sm btn--secondary"
           onClick={() => setShowAddUrl(true)}
