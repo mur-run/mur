@@ -565,6 +565,7 @@ export const en = {
   "remote.serverIdPlaceholder": "Server ID (optional)",
   "detail.installSkillUrl": "Install from URL…",
   "detail.browseRegistry": "Browse registry…",
+  "library.installTo": "Install to",
   "skillurl.title": "Install skill from URL",
   "skillurl.url": "Skill URL",
   "skillurl.urlPlaceholder": "https://example.com/skill.md",
