@@ -9,6 +9,16 @@
   overflow: hidden;
 }
 
+/* Inspector variant — fills the Shell's inspector column (width comes from the
+   shell grid track, --shell-inspector-width). Drop the fixed width + slide-in
+   shadow so it reads as an in-flow pane, not a floating overlay. */
+.detail-panel--inspector {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  box-shadow: none;
+}
+
 /* ── Header ───────────────────────────────────────────────────────────── */
 .detail-panel__header {
   position: relative;
@@ -326,6 +336,11 @@
 .item-card-remove:hover {
   background: var(--status-failed);
   color: #fff;
+}
+/* Selected library row (drives the LibraryInspector). */
+.item-card--selected {
+  border-color: var(--color-brand);
+  box-shadow: 0 0 0 2px var(--color-brand-soft, rgba(74, 144, 217, 0.18));
 }
 /* ── Phase-1 enable/disable toggle ────────────────────────────────────── */
 .item-card-off {
