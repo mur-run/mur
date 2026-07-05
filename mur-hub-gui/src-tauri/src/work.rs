@@ -144,26 +144,6 @@ pub async fn channel_list() -> Result<Vec<ChannelSummary>, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Tauri: events for one channel (the feed).
-#[tauri::command]
-pub async fn channel_events(channel_id: String) -> Result<Vec<ChannelEvent>, String> {
-    let home = crate::mur_home_path();
-    tokio::task::spawn_blocking(move || events_for(&home, &channel_id))
-        .await
-        .map_err(|e| format!("channel_events task panicked: {e}"))?
-        .map_err(|e| e.to_string())
-}
-
-/// Tauri: one channel manifest (the trace pane).
-#[tauri::command]
-pub async fn channel_get(channel_id: String) -> Result<Channel, String> {
-    let home = crate::mur_home_path();
-    tokio::task::spawn_blocking(move || manifest_for(&home, &channel_id))
-        .await
-        .map_err(|e| format!("channel_get task panicked: {e}"))?
-        .map_err(|e| e.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

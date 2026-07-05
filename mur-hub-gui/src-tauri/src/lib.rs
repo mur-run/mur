@@ -570,8 +570,6 @@ pub fn run() {
             chat::channel_load,
             chat_window::open_chat_window,
             work::channel_list,
-            work::channel_events,
-            work::channel_get,
             hitl::agent_hitl_respond,
             hitl::channel_hitl_respond,
             hitl::hitl_pending_list,
