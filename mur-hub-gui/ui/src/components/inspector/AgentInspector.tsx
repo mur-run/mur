@@ -1,6 +1,6 @@
 //! Agent inspector — contextual right-pane column shown in the Shell's
 //! inspector slot when an agent is selected. Restyled from the former
-//! full-page slide-in DetailPanel; content (status header + the
+//! full-page detail panel; content (status header + the
 //! persona/style/behavior/skills/MCP/permissions/inbox/mobile/memory/plugins
 //! tabs) is unchanged. Tab bodies live in ./tabs/*.
 //!
