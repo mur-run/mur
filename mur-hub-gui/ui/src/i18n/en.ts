@@ -708,6 +708,7 @@ export const en = {
   "nav.mcp": "MCP",
   "nav.models": "Models",
   "nav.plugins": "Plugins",
+  "skillslib.loading": "Loading skills…",
   "placeholder.body": "Coming in this redesign.",
   "placeholder.open": "Open Model Library",
   "home.needsYou": "Needs you",

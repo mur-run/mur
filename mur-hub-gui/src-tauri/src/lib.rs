@@ -29,6 +29,7 @@ pub mod onboarding;
 pub mod pet;
 pub mod preset;
 pub mod seed_mur;
+pub mod skills_installed;
 pub mod upgrade_status;
 pub mod work;
 
@@ -683,6 +684,7 @@ pub fn run() {
             fleet::fleet_export_to,
             fleet::fleet_import,
             upgrade_status::skill_upgrade_status,
+            skills_installed::skills_installed,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
