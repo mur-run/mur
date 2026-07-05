@@ -20,7 +20,6 @@ import { inboxBadge, visibleInboxItems } from "./home/inbox";
 import type { InboxItem } from "./home/inbox";
 import { ChatsPage } from "./chats/ChatsPage";
 import { FleetView } from "./fleet/FleetView";
-import { useConversations } from "../conversation/ConversationContext";
 import { useT } from "../i18n";
 import type { TranslationKey } from "../i18n/types";
 import { Shell } from "./shell/Shell";
@@ -67,7 +66,6 @@ type UpdaterEvent =
 export function DashboardApp() {
   const { t } = useT();
   const { agents, runtimeStatuses, selectedAgent, setSelected } = useAgents();
-  const { open: openConvs } = useConversations();
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   // Active shell page. Home is the default mission-control surface.
   const [page, setPage] = useState<PageId>("home");
@@ -238,11 +236,18 @@ export function DashboardApp() {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
-  // Auto-resize window when the detail panel or conversation surface
-  // opens/closes, so the dashboard keeps a usable width instead of being
-  // squeezed by the side panels. Clamped to the monitor so the window
-  // never grows past the visible screen.
-  const hasConvs = openConvs.length > 0;
+  // Auto-resize the window when the contextual inspector opens/closes, so the
+  // main pane keeps a usable width instead of being squeezed by the 320px
+  // inspector column. Keys on ANY inspector selection (agent/chat/fleet/
+  // library), matching the shell's --shell-inspector-width. Clamped to the
+  // monitor so the window never grows past the visible screen.
+  const inspectorOpen = hasInspector(page, {
+    agent: selectedAgent,
+    chatAgent: chatAgent?.name ?? null,
+    chatDisplayName: chatAgent?.displayName,
+    fleet: fleetName,
+    library: libItem,
+  });
   useEffect(() => {
     (async () => {
       const win = getCurrentWindow();
@@ -250,20 +255,17 @@ export function DashboardApp() {
       const scale = monitor?.scaleFactor ?? 1;
       const availW = monitor ? monitor.size.width / scale - 16 : 1440;
       const availH = monitor ? monitor.size.height / scale - 60 : 800;
-      const desiredW = 960 + (selectedAgent ? 240 : 0) + (hasConvs ? 480 : 0);
-      const desiredH = selectedAgent || hasConvs ? 720 : 620;
+      const desiredW = 960 + (inspectorOpen ? 320 : 0);
+      const desiredH = inspectorOpen ? 720 : 620;
       const width = Math.min(desiredW, availW);
       const height = Math.min(desiredH, availH);
       win.setSize(new LogicalSize(width, height)).catch(console.error);
-      const minW = Math.min(
-        720 + (selectedAgent ? 180 : 0) + (hasConvs ? 360 : 0),
-        availW,
-      );
+      const minW = Math.min(720 + (inspectorOpen ? 320 : 0), availW);
       win
         .setMinSize(new LogicalSize(minW, Math.min(480, availH)))
         .catch(console.error);
     })().catch(console.error);
-  }, [selectedAgent, hasConvs]);
+  }, [inspectorOpen]);
 
   // First-launch check: show banner if not running from /Applications
   useEffect(() => {
