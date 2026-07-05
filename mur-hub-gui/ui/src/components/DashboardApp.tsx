@@ -14,7 +14,10 @@ import { ModelLibrary } from "./ModelLibrary";
 import { InstallInboxModal } from "./InstallInboxModal";
 import { DetailPanel } from "./DetailPanel";
 import { ConversationsView } from "./ConversationsView";
-import { WorkView } from "./work/WorkView";
+import { HomePage } from "./home/HomePage";
+import { useInbox } from "./home/useInbox";
+import { inboxBadge, visibleInboxItems } from "./home/inbox";
+import type { InboxItem } from "./home/inbox";
 import { ChatsView } from "./ChatsView";
 import { FleetView } from "./fleet/FleetView";
 import { useConversations } from "../conversation/ConversationContext";
@@ -62,10 +65,23 @@ export function DashboardApp() {
   const { agents, runtimeStatuses, selectedAgent, setSelected } = useAgents();
   const { open: openConvs } = useConversations();
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  // Active shell page. Includes the transitional "work" surface, which has no
-  // sidebar slot yet (WorkView is removed in a later phase); kept reachable
-  // programmatically so the render branch and import stay live this phase.
-  const [page, setPage] = useState<PageId | "work">("agents");
+  // Active shell page. Home is the default mission-control surface.
+  const [page, setPage] = useState<PageId>("home");
+  // Unified inbox — owned here so the sidebar + Dock badges stay in sync with
+  // what HomePage renders.
+  const { items: inboxItems, refresh: refreshInbox } = useInbox();
+  // Session-local dismissal (e.g. "keep" on a blocked-upgrade card). Lifted
+  // here — the single source of truth — so the sidebar/Dock badge and the
+  // NeedsYou list are always computed from the same filtered array.
+  const [dismissedInbox, setDismissedInbox] = useState<Set<string>>(new Set());
+  const visibleInbox = visibleInboxItems(inboxItems, dismissedInbox);
+  function dismissInboxItem(it: InboxItem) {
+    setDismissedInbox((prev) => {
+      const next = new Set(prev);
+      next.add(`${it.kind}:${it.id}`);
+      return next;
+    });
+  }
   const [query, setQuery] = useState("");
   const [wizardOpen, setWizardOpen] = useState(false);
   const [presetImportOpen, setPresetImportOpen] = useState(false);
@@ -144,6 +160,14 @@ export function DashboardApp() {
   const runtimeMap = new Map<string, AgentRuntimeStatus>(
     runtimeStatuses.map((s) => [s.name, s]),
   );
+
+  // Mirror the unified-inbox count to the macOS Dock / taskbar badge.
+  const badgeCount = inboxBadge(visibleInbox);
+  useEffect(() => {
+    getCurrentWindow()
+      .setBadgeCount(badgeCount > 0 ? badgeCount : undefined)
+      .catch(() => {});
+  }, [badgeCount]);
 
   useEffect(() => {
     const unSelect = listen<string>("select-agent", (e) => {
@@ -429,17 +453,25 @@ export function DashboardApp() {
         </div>
 
         <Shell
-          page={page === "work" ? "agents" : page}
+          page={page}
           onNavigate={(id) => setPage(id)}
-          badge={0}
+          badge={badgeCount}
           inspector={undefined}
         >
-          {page === "chats" ? (
+          {page === "home" ? (
+            <HomePage
+              agents={agents}
+              runtimeStatuses={runtimeStatuses}
+              items={visibleInbox}
+              onRefresh={refreshInbox}
+              onDismiss={dismissInboxItem}
+              onNavigate={(id) => setPage(id)}
+              onCreateAgent={() => setWizardOpen(true)}
+            />
+          ) : page === "chats" ? (
             <ChatsView agents={agents} query={query} />
           ) : page === "fleets" ? (
             <FleetView query={query} />
-          ) : page === "work" ? (
-            <WorkView agents={agents} query={query} />
           ) : page === "agents" ? (
             <AgentsPage
               agents={agents}
