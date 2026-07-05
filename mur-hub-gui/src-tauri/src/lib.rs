@@ -26,6 +26,7 @@ pub mod model_slots;
 pub mod models_admin;
 pub mod notif;
 pub mod onboarding;
+pub mod panel;
 pub mod pet;
 pub mod preset;
 pub mod seed_mur;
@@ -260,6 +261,7 @@ pub fn run() {
         .manage(PetState(Mutex::new(std::collections::HashMap::new())))
         .manage(EventBusState(EventBus::new(256)))
         .manage(BridgeState::default())
+        .manage(panel::PanelState::default())
         // OS file-drop onto a desktop pet (`pet-<agent>` window) → forward the
         // dropped paths to that pet's webview. App-level (not per-window) so it
         // covers pet windows created dynamically after launch.
@@ -328,6 +330,16 @@ pub fn run() {
 
             // Bridge supervisor status → Tauri events.
             spawn_runtime_watcher(app.handle().clone(), runtime_rx);
+
+            // murmur Panel: discover TUI sessions, route frames to the
+            // companion window. Spawned so PanelBridge::start sees a runtime.
+            {
+                let handle = app.handle().clone();
+                let home = mur_home.clone();
+                tauri::async_runtime::spawn(async move {
+                    panel::spawn_bridge(handle, home);
+                });
+            }
 
             // Scan for stale OS stubs and regenerate in a background task (§5.4).
             stub::scan_and_regenerate_stale(env!("CARGO_PKG_VERSION").into(), mur_home.clone());
@@ -563,6 +575,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_agents,
+            panel::panel_sessions,
+            panel::panel_insert,
+            panel::open_panel_window,
             start_agent,
             stop_agent,
             chat::agent_chat_send,
