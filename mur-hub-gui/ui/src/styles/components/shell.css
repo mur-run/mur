@@ -1,0 +1,76 @@
+/* Hub redesign — Phase 1 three-pane shell: Sidebar navigation. */
+
+.shell-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 12px 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.shell-sidebar__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.shell-sidebar__group-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  padding: 4px 10px;
+}
+
+.shell-sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.shell-sidebar-item:hover {
+  background: var(--surface-hover);
+}
+
+.shell-sidebar-item--active {
+  background: var(--color-brand);
+  color: #fff;
+}
+
+.shell-sidebar-item__icon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.shell-sidebar-item__label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-sidebar-item__badge {
+  font-size: 11px;
+  line-height: 1;
+  background: rgba(0, 0, 0, 0.15);
+  padding: 2px 6px;
+  border-radius: 10px;
+  flex: none;
+}
+
+.shell-sidebar-item--active .shell-sidebar-item__badge {
+  background: rgba(255, 255, 255, 0.25);
+}
