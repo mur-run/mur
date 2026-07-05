@@ -1,0 +1,27 @@
+# Derived from obra/superpowers executing-plans (MIT).
+name: executing-plans
+version: "1.0.0"
+publisher: human:david
+description: "Load a written plan, execute its tasks sequentially with checkpoints, stop when blocked"
+category: workflow
+content:
+  abstract: |
+    Batch/checkpoint execution of an already-written plan file: load it, review
+    critically, run each task's steps in order, verify as specified, and stop
+    to ask rather than guess when blocked. No sub-agent fan-out — sequential.
+  procedure:
+    steps:
+      - description: "Read the plan file. If no plan file exists yet, the pm role's writing-plans skill produces one first — do not improvise a plan here."
+      - description: "Review the plan critically: identify gaps, unclear instructions, or concerns. If any exist, raise them with the human partner or the fleet router before starting; if none, track each task as a checklist item."
+      - description: "For each task in order: mark it in-progress (in the checklist you're tracking, or by reporting status into the channel), follow each bite-sized step exactly, run the verifications the plan specifies, then mark it complete."
+      - description: "STOP immediately and ask for clarification (never guess) on: a missing dependency, an unclear instruction, a verification that fails repeatedly, or a plan with a critical gap that blocks starting."
+      - description: "If the plan changes mid-execution (partner feedback) or the approach needs fundamental rethinking, return to the load-and-review step rather than forcing through."
+      - description: "After all tasks are complete and verified, hand off to the repo role's finishing-a-development-branch skill to decide how to integrate the work (merge / PR / keep / discard)."
+      - description: "Never start implementation directly on main/master without explicit consent; verify the working tree is on a feature branch or isolated worktree first (see the using-git-worktrees skill)."
+tags: [coder, execution, workflow, superpowers-derived]
+triggers:
+  - type: keyword
+    pattern: "executing-plans"
+  - type: keyword
+    pattern: "execute the plan"
+priority: normal

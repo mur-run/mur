@@ -553,6 +553,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                 }
             }
             crate::cli::SkillAction::Update { name } => cmd::skill_install::cmd_update_cli(&name)?,
+            crate::cli::SkillAction::Upgrade { check, json } => {
+                cmd::skill_upgrade_cmd::cmd_upgrade_cli(check, json)?
+            }
             crate::cli::SkillAction::Deps { name } => cmd::skill_deps::cmd_deps_cli(&name)?,
             crate::cli::SkillAction::Generate {
                 from_session,
@@ -1498,6 +1501,16 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 )
                 .await?;
                 println!("Installed {id} onto '{name}' (Sandboxed). Restart the agent to load it.");
+            }
+            AgentSkillAction::InstallPack { agent, role, yes } => {
+                let (installed, skipped) =
+                    cmd::agent::skill_install_pack::cmd_skill_install_pack(&agent, &role, yes)
+                        .await?;
+                println!("installed: {:?}", installed);
+                println!("skipped:   {:?}", skipped);
+                if !installed.is_empty() {
+                    println!("Restart '{agent}' to load the new skills.");
+                }
             }
             AgentSkillAction::Search { name: _, query } => {
                 let mur_home = cmd::agent::resolve_mur_home()?;
