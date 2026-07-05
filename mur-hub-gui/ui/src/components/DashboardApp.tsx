@@ -28,6 +28,7 @@ import type { PageId } from "./shell/nav";
 import { AgentsPage } from "./agents/AgentsPage";
 import { SkillsPage } from "./library/SkillsPage";
 import { McpPage } from "./library/McpPage";
+import { PluginsPage } from "./library/PluginsPage";
 import { WorkflowsPage } from "./library/WorkflowsPage";
 
 // ─── PlaceholderPage ─────────────────────────────────────────────────────────
@@ -491,6 +492,8 @@ export function DashboardApp() {
             <McpPage />
           ) : page === "workflows" ? (
             <WorkflowsPage />
+          ) : page === "plugins" ? (
+            <PluginsPage />
           ) : (
             <PlaceholderPage id={page} />
           )}
