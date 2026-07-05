@@ -239,7 +239,7 @@ jobs:
         # packages so the cache invalidates.
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
-          version: 1.0
+          version: "1.1"
           packages: >-
             libwebkit2gtk-4.1-dev
             libsoup-3.0-dev
@@ -303,7 +303,7 @@ jobs:
         if: runner.os == 'Linux'
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
-          version: 1.0
+          version: "1.1"
           packages: >-
             libwebkit2gtk-4.1-dev
             libsoup-3.0-dev
