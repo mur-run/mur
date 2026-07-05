@@ -1,0 +1,28 @@
+# Derived from obra/superpowers systematic-debugging (MIT).
+name: systematic-debugging
+version: "1.0.0"
+publisher: human:david
+description: "Phase-gated root-cause investigation before proposing any fix"
+category: workflow
+content:
+  abstract: |
+    No fixes without root-cause investigation first. Four gated phases: read
+    the evidence, find the pattern, form and test one hypothesis, then
+    implement the fix at the root — never patch symptoms.
+  procedure:
+    steps:
+      - description: "Phase 1 — Root cause: read the full error/stack trace, reproduce the issue consistently (exact steps, every time; if not reproducible, gather more evidence instead of guessing), and check recent changes (git diff, new deps, config/env drift)."
+      - description: "Phase 1 — Multi-component evidence: if the failure spans component boundaries (e.g. CI → build → sign, or agent → channel → runtime), add diagnostic logging at each boundary and run once to see exactly where it breaks before analyzing further."
+      - description: "Phase 1 — Trace data flow: for errors deep in a call stack, trace backward from the bad value to its origin; fix at the source, not where the symptom surfaces."
+      - description: "Phase 2 — Pattern analysis: find a working example similar to the broken one, read any reference implementation completely (not skimmed), and list every difference between working and broken, however small."
+      - description: "Phase 3 — Hypothesis: state a single, specific hypothesis ('I think X is the root cause because Y'). Make the smallest possible change to test it, one variable at a time. If it doesn't confirm, form a new hypothesis — don't stack a second fix on top."
+      - description: "Phase 4 — Implementation: write a failing test that reproduces the bug first (see test-driven-development), implement one fix addressing the root cause, then verify the test passes and no other tests broke."
+      - description: "If 3 or more fix attempts have failed, stop attempting further point fixes. Each new failure surfacing in a different place is a signal the architecture itself is unsound — raise this with the human partner or router before trying fix #4."
+      - description: "Once fixed, hand off to verification-before-completion before claiming the bug resolved."
+tags: [coder, debugging, root-cause, workflow, superpowers-derived]
+triggers:
+  - type: keyword
+    pattern: "systematic-debugging"
+  - type: keyword
+    pattern: "root cause"
+priority: normal

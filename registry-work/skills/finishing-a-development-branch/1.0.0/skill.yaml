@@ -1,0 +1,28 @@
+# Derived from obra/superpowers finishing-a-development-branch (MIT).
+name: finishing-a-development-branch
+version: "1.0.0"
+publisher: human:david
+description: "Verify tests, then present merge/PR/keep/discard options to finish a development branch"
+category: workflow
+content:
+  abstract: |
+    Verify tests → detect environment → present exactly the right options →
+    execute the choice → clean up. This project's convention is a merge
+    commit (never squash) when the base of a stacked PR chain is involved.
+  procedure:
+    steps:
+      - description: "Verify tests pass first: run the project's full test command (e.g. `cargo test --workspace` or `cargo nextest run`). If any fail, report the failures and stop — do not present integration options until tests are green."
+      - description: "Detect the workspace environment: compare `git rev-parse --git-dir` vs `--git-common-dir` to tell whether this is a normal checkout, a named-branch worktree, or a detached-HEAD worktree — this determines which menu and which cleanup rules apply."
+      - description: "Determine the base branch (`git merge-base HEAD main` or ask if ambiguous)."
+      - description: "Present exactly these options for a normal repo or named-branch worktree: 1) merge back to the base branch locally, 2) push and open a PR, 3) keep the branch as-is, 4) discard the work. For detached HEAD, present only options 1 (as 'push as new branch + PR'), 2 (keep), 3 (discard) — no local merge."
+      - description: "Merge option: cd to the main repo root first, merge the feature branch into base, re-run the full test suite on the merged result, and only after that succeeds remove the worktree and delete the branch. If the base of a stacked PR chain is being merged, use a merge commit — never squash-merge a base branch, since squashing severs ancestry for its child branches."
+      - description: "PR option: push the branch; do NOT clean up the worktree — the user needs it alive to iterate on review feedback."
+      - description: "Discard option: require the literal typed word 'discard' as confirmation before force-deleting the branch and removing the worktree."
+      - description: "Only clean up a worktree if it lives under this repo's `.worktrees/` (or `worktrees/`) directory — that's the marker that this tooling created it. Never remove a worktree the harness or a different session owns; always `cd` to the main repo root before running `git worktree remove`, then `git worktree prune`."
+tags: [repo, git, merge, workflow, superpowers-derived]
+triggers:
+  - type: keyword
+    pattern: "finishing-a-development-branch"
+  - type: keyword
+    pattern: "finish this branch"
+priority: normal
