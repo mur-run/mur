@@ -685,6 +685,7 @@ pub fn run() {
             fleet::fleet_import,
             upgrade_status::skill_upgrade_status,
             skills_installed::skills_installed,
+            mcp_skills::mcp_installed,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
