@@ -5,6 +5,7 @@ import { useAgents } from "../../context/AgentContext";
 import type { AgentDetail } from "../../types";
 import { useT } from "../../i18n";
 import { AgentPicker } from "./AgentPicker";
+import type { LibrarySelection } from "../inspector/LibraryInspector";
 
 // ─── Backend shape (snake_case, from `addons_installed`) ─────────────────────
 
@@ -24,7 +25,7 @@ interface InstalledAddonAgg {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function PluginsPage() {
+export function PluginsPage({ onSelect }: { onSelect?: (item: LibrarySelection | null) => void }) {
   const { t } = useT();
   const { agents } = useAgents();
   const [addons, setAddons] = useState<InstalledAddonAgg[]>([]);
@@ -32,6 +33,21 @@ export function PluginsPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [targetAgent, setTargetAgent] = useState<string>(agents[0]?.name ?? "");
+  const [selected, setSelected] = useState<string | null>(null);
+
+  function pick(a: InstalledAddonAgg) {
+    setSelected(a.id);
+    onSelect?.({
+      kind: "plugin",
+      name: a.id,
+      origin: a.source,
+      meta: [
+        { label: "Skills", value: String(a.skill_count) },
+        { label: "MCP", value: String(a.mcp_count) },
+        { label: "Commands", value: String(a.command_count) },
+      ],
+    });
+  }
 
   useEffect(() => {
     if (!targetAgent && agents[0]?.name) {
@@ -134,10 +150,11 @@ export function PluginsPage() {
       ) : (
         <ul className="item-list">
           {addons.map((a) => (
-            <li key={a.id} className="item-card">
+            <li key={a.id} className={`item-card${selected === a.id ? " item-card--selected" : ""}`}>
               <div
                 className="item-card-name"
-                style={{ display: "flex", gap: 6, alignItems: "center" }}
+                style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}
+                onClick={() => pick(a)}
               >
                 <span style={{ fontWeight: 600 }}>{a.id}</span>
                 <span className="item-card__meta">{a.source}</span>
