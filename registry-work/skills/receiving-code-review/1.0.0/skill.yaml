@@ -1,0 +1,29 @@
+# Derived from obra/superpowers receiving-code-review (MIT).
+name: receiving-code-review
+version: "1.0.0"
+publisher: human:david
+description: "Verify code review feedback technically before implementing it — no performative agreement"
+category: workflow
+content:
+  abstract: |
+    Code review requires technical evaluation, not emotional performance.
+    Read feedback fully, verify it against the actual codebase, then either
+    implement or push back with reasoning — never agree performatively and
+    never blind-implement unverified suggestions.
+  procedure:
+    steps:
+      - description: "Read the complete feedback without reacting or starting to implement yet. If any item is unclear, stop and ask for clarification on the unclear items before touching anything — partial understanding across related items produces wrong implementations."
+      - description: "Restate the technical requirement in your own words (to yourself or the reviewer) rather than opening with agreement phrases like 'you're absolutely right' or 'great point' — those are forbidden performative responses."
+      - description: "Verify the suggestion against codebase reality: does it break existing functionality, is there a documented reason for the current implementation, does it hold across the platforms/versions this code must support?"
+      - description: "If the reviewer suggests a 'proper' or 'production-grade' addition, grep the codebase for actual usage first (YAGNI check) — if the code path is unused, propose removing it instead of gold-plating it."
+      - description: "If the suggestion is technically wrong for this codebase, push back with concrete technical reasoning (reference the working code/tests), rather than silently complying or silently ignoring it."
+      - description: "When feedback is correct, just fix it and state what changed factually ('Fixed. <what changed>') — no gratitude phrasing, no over-explaining."
+      - description: "Implement one item at a time in this order: blocking issues (breaks/security) first, then simple fixes, then complex refactors — testing each fix individually before moving to the next."
+      - description: "If your own earlier pushback turns out wrong, state the correction factually ('Verified this and you're correct because X. Fixing.') without a long apology."
+tags: [coder, code-review, workflow, superpowers-derived]
+triggers:
+  - type: keyword
+    pattern: "receiving-code-review"
+  - type: keyword
+    pattern: "review feedback"
+priority: normal

@@ -39,7 +39,8 @@ pub use event_log::{
 pub use evolution::EvolutionEvent;
 pub use gene::{GeneDiff, McpGene, SkillGene, StepGene, TriggerGene};
 pub use hash::{
-    DriftStatus, content_hash_for_trust, content_sha256, ct_eq_hex, drift_status, sha256_hex,
+    DriftStatus, content_hash_for_origin, content_hash_for_trust, content_sha256, ct_eq_hex,
+    drift_status, sha256_hex,
 };
 pub use inventory::McpInventory;
 pub use lifecycle::{

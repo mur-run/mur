@@ -1,0 +1,29 @@
+# Derived from obra/superpowers writing-plans (MIT).
+name: writing-plans
+version: "1.0.0"
+publisher: human:david
+description: "Write a bite-sized, file-path-exact implementation plan before touching code"
+category: workflow
+content:
+  abstract: |
+    Turn a spec or design summary into a comprehensive implementation plan: exact
+    file paths, bite-sized (2-5 minute) steps, no placeholders. Terminal state is
+    a saved plan file whose path gets reported back, not code written in this pass.
+  procedure:
+    steps:
+      - description: "Consume the design summary (e.g. from a concierge brainstorming pass) and confirm the spec is scoped to one subsystem; if it spans several independent subsystems, split into one plan per subsystem."
+      - description: "Map out which files will be created or modified and what each one is responsible for — decompose by responsibility, not technical layer; prefer several small focused files over one large file."
+      - description: "Draft the plan header: Goal (one sentence), Architecture (2-3 sentences), Tech Stack, and a Global Constraints section copying the spec's project-wide requirements verbatim (versions, naming rules, platform requirements)."
+      - description: "Break work into tasks. A task is the smallest unit that carries its own test cycle and deserves an independent review gate — fold setup/config/docs into the task that needs them; split only where a task could be approved independently of its neighbor."
+      - description: "For each task, write bite-sized steps (one action each, ~2-5 minutes): write the failing test, run it to confirm it fails, write minimal implementation, run tests to confirm pass, commit. Include exact file paths, complete code (no 'TODO'/'similar to Task N'/'add appropriate error handling'), exact commands with expected output."
+      - description: "For each task, record an Interfaces block: what it Consumes from earlier tasks (exact signatures) and what it Produces for later tasks (exact function/type names) — the implementer of a later task may only see its own task text."
+      - description: "Self-review with fresh eyes: check every spec requirement maps to a task (list gaps), scan for placeholder red flags, and verify method/type names used in later tasks match names defined in earlier tasks. Fix inline; don't re-review."
+      - description: "Write the plan to `docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md` (or the user's declared location) and report the saved path back to the router/human — this is the terminal state of this skill; do not begin implementation here."
+      - description: "State the two follow-on options: the coder role's executing-plans skill for sequential batch execution with checkpoints, or fanning tasks out concurrently via `mur fleet run` / a `parallel_jobs` MCP call when tasks are genuinely independent."
+tags: [pm, planning, workflow, superpowers-derived]
+triggers:
+  - type: keyword
+    pattern: "writing-plans"
+  - type: keyword
+    pattern: "implementation plan"
+priority: normal
