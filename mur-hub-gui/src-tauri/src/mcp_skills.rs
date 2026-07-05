@@ -533,6 +533,117 @@ pub fn mcp_installed() -> Result<Vec<InstalledMcpView>, String> {
     Ok(aggregate_mcp_servers(&by_agent))
 }
 
+// ─── Add-ons (Phase-2 Plugins library) ────────────────────────────────────
+
+/// Per-agent enabled state of an aggregated add-on, for the Plugins library
+/// "used by" list.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AddonAgentState {
+    pub agent: String,
+    pub enabled: bool,
+}
+
+/// One add-on folded across every agent that has it installed.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct InstalledAddonAgg {
+    pub id: String,
+    pub source: String,
+    pub skill_count: usize,
+    pub mcp_count: usize,
+    pub command_count: usize,
+    pub agents: Vec<AddonAgentState>,
+}
+
+/// Pure aggregation: given each agent's configured add-ons, fold add-ons
+/// that share the same `id` into one `InstalledAddonAgg` whose `agents` list
+/// carries the per-agent enabled state. Skill/MCP/command counts are taken
+/// from the first agent seen with that add-on (an add-on's contents are the
+/// same everywhere it's installed). Kept free of I/O so it's unit-testable
+/// without touching `~/.mur`.
+fn aggregate_addons(
+    by_agent: &std::collections::BTreeMap<String, Vec<mur_common::agent::AddonRef>>,
+) -> Vec<InstalledAddonAgg> {
+    let mut views: std::collections::BTreeMap<String, InstalledAddonAgg> =
+        std::collections::BTreeMap::new();
+
+    for (agent_name, addons) in by_agent {
+        for addon in addons {
+            let entry = views
+                .entry(addon.id.clone())
+                .or_insert_with(|| InstalledAddonAgg {
+                    id: addon.id.clone(),
+                    source: addon.source.clone(),
+                    skill_count: addon.skills.len(),
+                    mcp_count: addon.mcp.len(),
+                    command_count: addon.commands.len(),
+                    agents: Vec::new(),
+                });
+            entry.agents.push(AddonAgentState {
+                agent: agent_name.clone(),
+                enabled: addon.enabled,
+            });
+        }
+    }
+
+    let mut result: Vec<InstalledAddonAgg> = views.into_values().collect();
+    for v in &mut result {
+        v.agents.sort_by(|a, b| a.agent.cmp(&b.agent));
+    }
+    result.sort_by(|a, b| a.id.cmp(&b.id));
+    result
+}
+
+/// List every add-on (imported Claude plugin) configured on any agent,
+/// folding duplicates (same add-on imported by multiple agents) into one
+/// entry with a per-agent enabled state. Fail-open: an unreadable agent
+/// profile is skipped (+ `tracing::warn`); a missing/unreadable agents dir
+/// yields an empty list.
+#[tauri::command]
+pub fn addons_installed() -> Result<Vec<InstalledAddonAgg>, String> {
+    let mur_home = crate::mur_home_path();
+    let agents_dir = mur_home.join("agents");
+
+    if !agents_dir.exists() {
+        return Ok(vec![]);
+    }
+
+    let entries = match std::fs::read_dir(&agents_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!(dir = %agents_dir.display(), error = %e, "addons_installed: cannot read agents dir");
+            return Ok(vec![]);
+        }
+    };
+
+    let mut by_agent: std::collections::BTreeMap<String, Vec<mur_common::agent::AddonRef>> =
+        std::collections::BTreeMap::new();
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Some(agent_name) = dir.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let profile_path = dir.join("profile.yaml");
+        match std::fs::read(&profile_path) {
+            Ok(bytes) => match serde_yaml_ng::from_slice::<mur_common::AgentProfile>(&bytes) {
+                Ok(profile) => {
+                    by_agent.insert(agent_name.to_string(), profile.addons.clone());
+                }
+                Err(e) => {
+                    tracing::warn!(agent = %agent_name, error = %e, "addons_installed: skipping unparsable profile");
+                }
+            },
+            Err(e) => {
+                tracing::warn!(agent = %agent_name, error = %e, "addons_installed: skipping unreadable profile");
+            }
+        }
+    }
+
+    Ok(aggregate_addons(&by_agent))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -617,5 +728,63 @@ mod tests {
     fn aggregate_empty_map_returns_empty_list() {
         let by_agent = std::collections::BTreeMap::new();
         assert!(aggregate_mcp_servers(&by_agent).is_empty());
+    }
+
+    fn addon(id: &str, enabled: bool) -> mur_common::agent::AddonRef {
+        mur_common::agent::AddonRef {
+            id: id.to_string(),
+            source: format!("claude-local:{id}@1.0.0"),
+            enabled,
+            skills: vec!["s1".to_string()],
+            mcp: vec!["m1".to_string(), "m2".to_string()],
+            commands: vec![],
+        }
+    }
+
+    #[test]
+    fn aggregate_addons_shared_across_agents_one_entry_per_agent_state() {
+        let mut by_agent = std::collections::BTreeMap::new();
+        by_agent.insert("a1".to_string(), vec![addon("superpowers", true)]);
+        by_agent.insert("a2".to_string(), vec![addon("superpowers", false)]);
+
+        let views = aggregate_addons(&by_agent);
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].id, "superpowers");
+        assert_eq!(views[0].skill_count, 1);
+        assert_eq!(views[0].mcp_count, 2);
+        assert_eq!(views[0].command_count, 0);
+        assert_eq!(
+            views[0].agents,
+            vec![
+                AddonAgentState {
+                    agent: "a1".to_string(),
+                    enabled: true
+                },
+                AddonAgentState {
+                    agent: "a2".to_string(),
+                    enabled: false
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn aggregate_addons_distinct_ids_produce_distinct_entries() {
+        let mut by_agent = std::collections::BTreeMap::new();
+        by_agent.insert(
+            "a1".to_string(),
+            vec![addon("superpowers", true), addon("quill", false)],
+        );
+
+        let views = aggregate_addons(&by_agent);
+        assert_eq!(views.len(), 2);
+        assert_eq!(views[0].id, "quill");
+        assert_eq!(views[1].id, "superpowers");
+    }
+
+    #[test]
+    fn aggregate_addons_empty_map_returns_empty_list() {
+        let by_agent = std::collections::BTreeMap::new();
+        assert!(aggregate_addons(&by_agent).is_empty());
     }
 }
