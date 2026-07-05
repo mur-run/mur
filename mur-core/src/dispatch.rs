@@ -1502,6 +1502,16 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 .await?;
                 println!("Installed {id} onto '{name}' (Sandboxed). Restart the agent to load it.");
             }
+            AgentSkillAction::InstallPack { agent, role, yes } => {
+                let (installed, skipped) =
+                    cmd::agent::skill_install_pack::cmd_skill_install_pack(&agent, &role, yes)
+                        .await?;
+                println!("installed: {:?}", installed);
+                println!("skipped:   {:?}", skipped);
+                if !installed.is_empty() {
+                    println!("Restart '{agent}' to load the new skills.");
+                }
+            }
             AgentSkillAction::Search { name: _, query } => {
                 let mur_home = cmd::agent::resolve_mur_home()?;
                 let results =
