@@ -216,10 +216,15 @@ export function useInbox(): { items: InboxItem[]; refresh: () => void } {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const agentIdentityKey = agents
+    .map((a) => a.name)
+    .sort()
+    .join(",");
+
   useEffect(() => {
     refreshCompanion();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agents.length]);
+  }, [agentIdentityKey]);
 
   const items = mergeInbox([hitlItems, installItems, companionItems, blockedItems]);
 
