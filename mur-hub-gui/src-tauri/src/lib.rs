@@ -32,6 +32,7 @@ pub mod seed_mur;
 pub mod skills_installed;
 pub mod upgrade_status;
 pub mod work;
+pub mod workflows_list;
 
 use companion::BridgeState;
 use mur_gui_core::discovery::{AgentDiscovery, AgentEntry};
@@ -685,6 +686,7 @@ pub fn run() {
             fleet::fleet_import,
             upgrade_status::skill_upgrade_status,
             skills_installed::skills_installed,
+            workflows_list::workflows_list,
             mcp_skills::mcp_installed,
         ])
         .build(tauri::generate_context!())
