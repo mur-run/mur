@@ -26,8 +26,7 @@ pub fn watch_install_requests(
     on_change: impl Fn() + Send + 'static,
 ) -> Result<notify::RecommendedWatcher> {
     let root = mur_home.join("hub");
-    std::fs::create_dir_all(&root)
-        .with_context(|| format!("create {}", root.display()))?;
+    std::fs::create_dir_all(&root).with_context(|| format!("create {}", root.display()))?;
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if res.is_ok() {
             on_change();
@@ -170,7 +169,8 @@ async fn fetch_item(mur_home: &Path, install_type: &str, id: &str) -> Result<Str
         .api_key
         .filter(|k| !k.trim().is_empty())
         .context("mobile_relay.api_key not configured; run `mur agent mcp login` or set it in config.yaml")?;
-    let base = std::env::var("MUR_REGISTRY_URL").unwrap_or_else(|_| "https://app.mur.run".to_string());
+    let base =
+        std::env::var("MUR_REGISTRY_URL").unwrap_or_else(|_| "https://app.mur.run".to_string());
     let url = format!("{base}/api/v1/registry/{install_type}/{id}/download");
     let resp = reqwest::Client::new()
         .get(&url)
@@ -201,7 +201,9 @@ pub async fn install_inbox_consent(request_id: String, approve: bool) -> Result<
     };
 
     if approve {
-        route_install(&home, &req).await.map_err(|e| format!("{e:#}"))?;
+        route_install(&home, &req)
+            .await
+            .map_err(|e| format!("{e:#}"))?;
     }
 
     mark_install_request_done(&home, &request_id).map_err(|e| format!("{e:#}"))
@@ -218,10 +220,7 @@ async fn route_install(mur_home: &Path, req: &InstallRequestView) -> Result<()> 
             // concept for inbox installs, so we install onto the concierge
             // ("mur") agent — matching the Hub's existing default elsewhere.
             mur_core::cmd::agent::skill_registry_add::cmd_skill_registry_add(
-                "mur",
-                &req.id,
-                None,
-                true,
+                "mur", &req.id, None, true,
             )
             .await
             .map(|_| ())
@@ -246,13 +245,8 @@ async fn route_install(mur_home: &Path, req: &InstallRequestView) -> Result<()> 
             // item is that path (mur-server stages it locally before
             // returning). See `agent_addon_import` in `mcp_skills.rs`.
             let plugin_dir = fetch_item(mur_home, "plugin", &req.id).await?;
-            mur_core::cmd::agent::addon::cmd_addon_import(
-                "mur",
-                plugin_dir.trim(),
-                None,
-                true,
-            )
-            .context("plugin import failed")
+            mur_core::cmd::agent::addon::cmd_addon_import("mur", plugin_dir.trim(), None, true)
+                .context("plugin import failed")
         }
         "workflow" => {
             let yaml = fetch_item(mur_home, "workflow", &req.id).await?;
