@@ -1,0 +1,53 @@
+.panel-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  font: 13px/1.5 -apple-system, sans-serif;
+}
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+}
+.panel-title {
+  font-weight: 600;
+}
+.panel-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+}
+.panel-tab {
+  flex: 1;
+  padding: 6px 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  opacity: 0.65;
+  color: inherit;
+}
+.panel-tab.active {
+  opacity: 1;
+  font-weight: 600;
+  border-bottom: 2px solid currentColor;
+}
+.panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+.panel-empty {
+  opacity: 0.65;
+}
+.panel-info dt {
+  font-weight: 600;
+  margin-top: 8px;
+}
+.panel-info dd {
+  margin: 0;
+  word-break: break-all;
+}
+.panel-test {
+  margin-top: 16px;
+}
