@@ -10,7 +10,7 @@ import { MuragentImportModal } from "./MuragentImportModal";
 import { SettingsModal } from "./SettingsModal";
 import { ModelSetupWizard } from "./ModelSetupWizard";
 import { ModelPickerModal } from "./ModelPickerModal";
-import { ModelLibrary } from "./ModelLibrary";
+import { ModelsPage } from "./library/ModelsPage";
 import { InstallInboxModal } from "./InstallInboxModal";
 import { DetailPanel } from "./DetailPanel";
 import { ConversationsView } from "./ConversationsView";
@@ -26,6 +26,10 @@ import type { TranslationKey } from "../i18n/types";
 import { Shell } from "./shell/Shell";
 import type { PageId } from "./shell/nav";
 import { AgentsPage } from "./agents/AgentsPage";
+import { SkillsPage } from "./library/SkillsPage";
+import { McpPage } from "./library/McpPage";
+import { PluginsPage } from "./library/PluginsPage";
+import { WorkflowsPage } from "./library/WorkflowsPage";
 
 // ─── PlaceholderPage ─────────────────────────────────────────────────────────
 
@@ -90,7 +94,6 @@ export function DashboardApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showModelWizard, setShowModelWizard] = useState(false);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
-  const [modelLibraryOpen, setModelLibraryOpen] = useState(false);
   const [showAppsBanner, setShowAppsBanner] = useState(false);
   const [showUpgradeNudge, setShowUpgradeNudge] = useState(false);
   const [nudgeDismissed, setNudgeDismissed] = useState(false);
@@ -482,7 +485,15 @@ export function DashboardApp() {
               onNewAgent={() => setWizardOpen(true)}
             />
           ) : page === "models" ? (
-            <PlaceholderPage id={page} onOpen={() => setModelLibraryOpen(true)} />
+            <ModelsPage />
+          ) : page === "skills" ? (
+            <SkillsPage />
+          ) : page === "mcp" ? (
+            <McpPage />
+          ) : page === "workflows" ? (
+            <WorkflowsPage />
+          ) : page === "plugins" ? (
+            <PluginsPage />
           ) : (
             <PlaceholderPage id={page} />
           )}
@@ -540,7 +551,6 @@ export function DashboardApp() {
         isOpen={modelPickerOpen}
         onClose={() => setModelPickerOpen(false)}
       />
-      <ModelLibrary open={modelLibraryOpen} onClose={() => setModelLibraryOpen(false)} />
       <InstallInboxModal />
     </div>
   );
