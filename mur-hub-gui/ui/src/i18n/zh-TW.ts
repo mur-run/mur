@@ -107,6 +107,7 @@ export const zhTW: Table = {
   "detail.persona": "人格",
   "detail.tone": "語氣",
   "chat.close": "關閉對話",
+  "chat.popout": "在獨立視窗開啟",
   "chat.empty": "跟 {name} 打聲招呼 👋  傳一則訊息開始對話。",
   "chat.placeholder": "傳訊息給 {name}…",
   "chat.send": "送出",
