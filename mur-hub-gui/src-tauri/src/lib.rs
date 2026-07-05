@@ -29,6 +29,7 @@ pub mod onboarding;
 pub mod pet;
 pub mod preset;
 pub mod seed_mur;
+pub mod upgrade_status;
 pub mod work;
 
 use companion::BridgeState;
@@ -680,6 +681,7 @@ pub fn run() {
             fleet::fleet_export,
             fleet::fleet_export_to,
             fleet::fleet_import,
+            upgrade_status::skill_upgrade_status,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
