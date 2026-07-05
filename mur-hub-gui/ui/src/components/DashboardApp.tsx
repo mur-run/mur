@@ -13,12 +13,11 @@ import { ModelPickerModal } from "./ModelPickerModal";
 import { ModelsPage } from "./library/ModelsPage";
 import { InstallInboxModal } from "./InstallInboxModal";
 import { DetailPanel } from "./DetailPanel";
-import { ConversationsView } from "./ConversationsView";
 import { HomePage } from "./home/HomePage";
 import { useInbox } from "./home/useInbox";
 import { inboxBadge, visibleInboxItems } from "./home/inbox";
 import type { InboxItem } from "./home/inbox";
-import { ChatsView } from "./ChatsView";
+import { ChatsPage } from "./chats/ChatsPage";
 import { FleetView } from "./fleet/FleetView";
 import { useConversations } from "../conversation/ConversationContext";
 import { useT } from "../i18n";
@@ -472,7 +471,7 @@ export function DashboardApp() {
               onCreateAgent={() => setWizardOpen(true)}
             />
           ) : page === "chats" ? (
-            <ChatsView agents={agents} query={query} />
+            <ChatsPage agents={agents} query={query} />
           ) : page === "fleets" ? (
             <FleetView query={query} />
           ) : page === "agents" ? (
@@ -499,9 +498,6 @@ export function DashboardApp() {
           )}
         </Shell>
       </div>
-
-      {/* Conversation rail — slides in when conversations are open */}
-      {openConvs.length > 0 && <ConversationsView />}
 
       {/* Detail panel — slides in when an agent is selected */}
       {selectedAgent && (
