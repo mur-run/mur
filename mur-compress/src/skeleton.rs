@@ -117,7 +117,12 @@ fn lang_spec_for(ext: &str) -> Option<LangSpec> {
         "java" => LangSpec {
             language: || tree_sitter_java::LANGUAGE.into(),
             function_kinds: &["method_declaration", "constructor_declaration"],
-            container_kinds: &["program", "class_declaration", "class_body", "interface_body"],
+            container_kinds: &[
+                "program",
+                "class_declaration",
+                "class_body",
+                "interface_body",
+            ],
         },
         "swift" => LangSpec {
             language: || tree_sitter_swift::LANGUAGE.into(),
@@ -321,6 +326,9 @@ mod tests {
         let once = skeletonize(src, "a.rs").expect("first pass elides the body");
         assert!(once.len() < src.len());
         let twice = skeletonize(&once, "a.rs");
-        assert!(twice.is_none(), "already-elided body has nothing left to shrink");
+        assert!(
+            twice.is_none(),
+            "already-elided body has nothing left to shrink"
+        );
     }
 }

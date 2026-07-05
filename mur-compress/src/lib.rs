@@ -241,7 +241,9 @@ mod tests {
         assert!(eng.compress(&prose, None).hash.is_none());
         let hash = eng.archive(&prose).expect("archive should store");
         match eng.retrieve(&hash, None) {
-            RetrieveResult::Full { original_content, .. } => {
+            RetrieveResult::Full {
+                original_content, ..
+            } => {
                 assert_eq!(original_content, prose);
             }
             other => panic!("expected Full, got {other:?}"),
