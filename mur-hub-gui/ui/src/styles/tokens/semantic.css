@@ -1,5 +1,6 @@
 :root {
   --color-brand:var(--blue-500); --color-brand-strong:var(--blue-700);
+  --text-on-brand:#fff;
   --color-accent:var(--coral-500); --color-accent-strong:var(--coral-600);
   --color-accent-soft:var(--coral-soft); --color-brand-soft:var(--blue-soft);
   --surface-bg:var(--n-bg); --surface-secondary:var(--n-secondary);
@@ -9,6 +10,9 @@
   --status-running:var(--green-600); --status-idle:var(--slate-400);
   --status-restarting:var(--amber-500); --status-failed:var(--red-600);
   --shadow-1:var(--shadow-card); --shadow-pop:var(--shadow-pop); --shadow-focus:var(--shadow-focus);
+  /* Sidebar vibrancy: set --sidebar-bg to a `-solid` variant (below) to
+     disable backdrop-filter blur if WKWebView renders artifacts. */
+  --sidebar-bg:var(--n-sidebar-vibrancy); --sidebar-bg-solid:var(--n-sidebar-solid);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -16,6 +20,7 @@
     --surface-card:var(--d-card); --surface-hover:var(--d-hover);
     --border-line:var(--d-line);
     --text-primary:var(--d-text); --text-secondary:var(--d-text2); --text-tertiary:var(--d-text3);
+    --sidebar-bg:var(--d-sidebar-vibrancy); --sidebar-bg-solid:var(--d-sidebar-solid);
   }
 }
 :root[data-theme="dark"] {
@@ -23,10 +28,12 @@
   --surface-card:var(--d-card); --surface-hover:var(--d-hover);
   --border-line:var(--d-line);
   --text-primary:var(--d-text); --text-secondary:var(--d-text2); --text-tertiary:var(--d-text3);
+  --sidebar-bg:var(--d-sidebar-vibrancy); --sidebar-bg-solid:var(--d-sidebar-solid);
 }
 :root[data-theme="light"] {
   --surface-bg:var(--n-bg); --surface-secondary:var(--n-secondary);
   --surface-card:var(--n-card); --surface-hover:var(--n-hover);
   --border-line:var(--n-line);
   --text-primary:var(--n-text); --text-secondary:var(--n-text2); --text-tertiary:var(--n-text3);
+  --sidebar-bg:var(--n-sidebar-vibrancy); --sidebar-bg-solid:var(--n-sidebar-solid);
 }
