@@ -73,6 +73,8 @@ pub mod skill_resolver;
 pub mod skill_stats;
 pub mod skill_suggest;
 pub mod skill_sweep;
+pub mod skill_upgrade;
+pub mod skill_upgrade_cmd;
 pub(crate) mod sleep;
 pub(crate) mod sync_cmd;
 pub(crate) mod system_schedule;

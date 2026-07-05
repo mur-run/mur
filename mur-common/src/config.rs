@@ -1473,9 +1473,20 @@ pub struct SkillsConfig {
     /// deployments see no behaviour change without an explicit config entry.
     #[serde(default)]
     pub lifecycle: SkillLifecycleConfig,
+
+    /// Daily daemon auto-upgrade of origin-stamped (registry-installed)
+    /// skills (`mur-daemon` `skill_upgrade_tick`). Non-destructive: never
+    /// overwrites a locally-modified skill (origin hash drift blocks it).
+    /// Defaults to `true`.
+    #[serde(default = "default_auto_upgrade")]
+    pub auto_upgrade: bool,
 }
 
 fn default_require_human_curation() -> bool {
+    true
+}
+
+fn default_auto_upgrade() -> bool {
     true
 }
 
@@ -1488,6 +1499,7 @@ impl Default for SkillsConfig {
             adaptive: Some(AdaptiveSkillsConfig::default()),
             require_human_curation_before_stable: default_require_human_curation(),
             lifecycle: SkillLifecycleConfig::default(),
+            auto_upgrade: default_auto_upgrade(),
         }
     }
 }
