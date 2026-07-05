@@ -150,6 +150,78 @@ async fn pump(
     }
 }
 
+const PANEL_HINT: &str =
+    "usage: /panel [information|activities|preview|notifications] · /panel preview <path|url>";
+
+/// `/panel [tab] [target]` — fire-and-forget; opens/focuses the Hub Panel
+/// window on the given tab.
+pub fn handle_panel_command(app: &mut super::app::App, args: &[String]) {
+    use mur_common::panel::{PanelTab, PreviewKind};
+    let frame = match args.first().map(String::as_str) {
+        Some("information" | "info") => PanelFrame::Panel {
+            focus: PanelTab::Information,
+        },
+        Some("activities") => PanelFrame::Panel {
+            focus: PanelTab::Activities,
+        },
+        Some("notifications") => PanelFrame::Panel {
+            focus: PanelTab::Notifications,
+        },
+        Some("preview") => match args.get(1) {
+            Some(t) if t.starts_with("http://") || t.starts_with("https://") => {
+                PanelFrame::Preview {
+                    kind: PreviewKind::Url,
+                    target: t.clone(),
+                }
+            }
+            Some(t) => PanelFrame::Preview {
+                kind: PreviewKind::File,
+                target: absolutize(app.cwd.as_deref().unwrap_or(Path::new(".")), t),
+            },
+            None => PanelFrame::Panel {
+                focus: PanelTab::Preview,
+            },
+        },
+        None => PanelFrame::Panel {
+            focus: PanelTab::Information,
+        },
+        Some(other) => {
+            app.push_system(format!("unknown panel tab: {other} — {PANEL_HINT}"));
+            return;
+        }
+    };
+    ensure_hub_running(app);
+    if let Some(panel) = &app.panel {
+        panel.send(frame);
+    }
+}
+
+/// Relative preview targets resolve against the session cwd.
+fn absolutize(cwd: &Path, target: &str) -> String {
+    let p = Path::new(target);
+    if p.is_absolute() {
+        target.to_string()
+    } else {
+        cwd.join(p).to_string_lossy().into_owned()
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_hub_running(app: &mut super::app::App) {
+    // -g: don't steal focus from the terminal. No-op when already running.
+    let ok = std::process::Command::new("open")
+        .args(["-g", "-a", "MUR Hub"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !ok {
+        app.push_system("panel: MUR Hub app not found — install the Hub to use /panel");
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn ensure_hub_running(_app: &mut super::app::App) {}
+
 async fn write_line(
     w: &mut tokio::net::unix::OwnedWriteHalf,
     f: &PanelFrame,
@@ -165,6 +237,15 @@ mod tests {
     use mur_common::panel::{PanelFrame, PanelSession, murmur_run_dir};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixStream;
+
+    #[test]
+    fn absolutize_paths() {
+        assert_eq!(
+            absolutize(Path::new("/repo"), "out/x.html"),
+            "/repo/out/x.html"
+        );
+        assert_eq!(absolutize(Path::new("/repo"), "/abs/x.html"), "/abs/x.html");
+    }
 
     #[tokio::test]
     async fn hello_insert_bye_cleanup() {
