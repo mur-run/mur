@@ -6,6 +6,7 @@ import { useT } from "../../i18n";
 import { SkillRegistryModal } from "../SkillRegistryModal";
 import { SkillAddUrlModal } from "../SkillAddUrlModal";
 import { AgentPicker } from "./AgentPicker";
+import type { LibrarySelection } from "../inspector/LibraryInspector";
 
 // ─── Backend shape ───────────────────────────────────────────────────────────
 
@@ -36,7 +37,7 @@ export function statusBadgeClass(status: string): string {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function SkillsPage() {
+export function SkillsPage({ onSelect }: { onSelect?: (item: LibrarySelection | null) => void }) {
   const { t } = useT();
   const { agents } = useAgents();
   const [skills, setSkills] = useState<InstalledSkillView[]>([]);
@@ -45,6 +46,21 @@ export function SkillsPage() {
   const [showRegistry, setShowRegistry] = useState(false);
   const [showAddUrl, setShowAddUrl] = useState(false);
   const [targetAgent, setTargetAgent] = useState<string>(agents[0]?.name ?? "");
+  const [selected, setSelected] = useState<string | null>(null);
+
+  function pick(s: InstalledSkillView) {
+    setSelected(s.name);
+    onSelect?.({
+      kind: "skill",
+      name: s.name,
+      version: s.origin_version,
+      description: s.description,
+      meta: [
+        { label: t("detail.category"), value: s.category },
+        { label: "Status", value: s.status },
+      ],
+    });
+  }
 
   useEffect(() => {
     if (!targetAgent && agents[0]?.name) {
@@ -108,7 +124,12 @@ export function SkillsPage() {
       ) : (
         <ul className="item-list">
           {skills.map((s) => (
-            <li key={s.name} className="item-card">
+            <li
+              key={s.name}
+              className={`item-card${selected === s.name ? " item-card--selected" : ""}`}
+              onClick={() => pick(s)}
+              style={{ cursor: "pointer" }}
+            >
               <div className="item-card-name" style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <span style={{ fontWeight: 600 }}>{s.name}</span>
                 <span className="item-card__meta">{s.category}</span>

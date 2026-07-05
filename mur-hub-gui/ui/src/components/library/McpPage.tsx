@@ -6,6 +6,7 @@ import { useT } from "../../i18n";
 import { McpDiscoverModal } from "../McpDiscoverModal";
 import { McpAddRemoteModal } from "../McpAddRemoteModal";
 import { AgentPicker } from "./AgentPicker";
+import type { LibrarySelection } from "../inspector/LibraryInspector";
 
 // ─── Backend shape ───────────────────────────────────────────────────────────
 
@@ -19,7 +20,7 @@ interface InstalledMcpView {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function McpPage() {
+export function McpPage({ onSelect }: { onSelect?: (item: LibrarySelection | null) => void }) {
   const { t } = useT();
   const { agents } = useAgents();
   const [servers, setServers] = useState<InstalledMcpView[]>([]);
@@ -28,6 +29,20 @@ export function McpPage() {
   const [showDiscover, setShowDiscover] = useState(false);
   const [showAddRemote, setShowAddRemote] = useState(false);
   const [targetAgent, setTargetAgent] = useState<string>(agents[0]?.name ?? "");
+  const [selected, setSelected] = useState<string | null>(null);
+
+  function pick(s: InstalledMcpView) {
+    setSelected(s.id);
+    onSelect?.({
+      kind: "mcp",
+      name: s.name,
+      description: s.description,
+      meta: [
+        { label: "Transport", value: s.transport },
+        { label: "Agents", value: String(s.agents.length) },
+      ],
+    });
+  }
 
   useEffect(() => {
     if (!targetAgent && agents[0]?.name) {
@@ -91,7 +106,12 @@ export function McpPage() {
       ) : (
         <ul className="item-list">
           {servers.map((s) => (
-            <li key={s.id} className="item-card">
+            <li
+              key={s.id}
+              className={`item-card${selected === s.id ? " item-card--selected" : ""}`}
+              onClick={() => pick(s)}
+              style={{ cursor: "pointer" }}
+            >
               <div className="item-card-name" style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <span style={{ fontWeight: 600 }}>{s.name}</span>
                 <span className="item-card__meta">{s.transport}</span>
