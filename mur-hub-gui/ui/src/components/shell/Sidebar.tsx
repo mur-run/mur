@@ -74,7 +74,7 @@ export function Sidebar({ active, badge, onSelect }: SidebarProps) {
   const workspace = NAV_ITEMS.filter((i) => i.group === "workspace");
   const library = NAV_ITEMS.filter((i) => i.group === "library");
 
-  const renderItem = (id: PageId, labelKey: string) => (
+  const renderItem = (id: PageId, labelKey: TranslationKey) => (
     <button
       key={id}
       type="button"
@@ -85,7 +85,7 @@ export function Sidebar({ active, badge, onSelect }: SidebarProps) {
       <span className="shell-sidebar-item__icon">
         <Ico>{GLYPHS[id]}</Ico>
       </span>
-      <span className="shell-sidebar-item__label">{t(labelKey as TranslationKey)}</span>
+      <span className="shell-sidebar-item__label">{t(labelKey)}</span>
       {id === "home" && badge > 0 && (
         <span className="shell-sidebar-item__badge">{badge > 99 ? "99+" : badge}</span>
       )}
