@@ -3,7 +3,8 @@
 .shell {
   display: grid;
   grid-template-columns: var(--shell-sidebar-width) 1fr;
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
   width: 100%;
   font-family: var(--font-sans);
   font-size: var(--text-base);
