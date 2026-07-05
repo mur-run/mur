@@ -424,6 +424,226 @@ fn reveal_os(path: &Path) -> std::io::Result<()> {
     }
 }
 
+// ─── Installed-MCP-servers list (Hub Library page) ─────────────────────────
+
+/// One installed MCP server as shown in the MCP Servers library list,
+/// aggregated across every agent that has it configured.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct InstalledMcpView {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub transport: String,
+    pub agents: Vec<String>,
+}
+
+/// Pure aggregation: given each agent's configured MCP servers, fold servers
+/// that share the same identity (name) into one `InstalledMcpView` whose
+/// `agents` list names every agent using it. Kept free of I/O so it's
+/// unit-testable without touching `~/.mur`.
+fn aggregate_mcp_servers(
+    by_agent: &std::collections::BTreeMap<String, Vec<mur_common::agent::McpServerEntry>>,
+) -> Vec<InstalledMcpView> {
+    let mut views: std::collections::BTreeMap<String, InstalledMcpView> =
+        std::collections::BTreeMap::new();
+
+    for (agent_name, servers) in by_agent {
+        for server in servers {
+            let entry = views
+                .entry(server.name.clone())
+                .or_insert_with(|| InstalledMcpView {
+                    id: server.name.clone(),
+                    name: server.name.clone(),
+                    description: match &server.url {
+                        Some(url) => url.clone(),
+                        None => {
+                            let mut parts = vec![server.command.clone()];
+                            parts.extend(server.args.clone());
+                            parts.join(" ")
+                        }
+                    },
+                    transport: if server.url.is_some() {
+                        "remote".to_string()
+                    } else {
+                        "stdio".to_string()
+                    },
+                    agents: Vec::new(),
+                });
+            if !entry.agents.contains(agent_name) {
+                entry.agents.push(agent_name.clone());
+            }
+        }
+    }
+
+    let mut result: Vec<InstalledMcpView> = views.into_values().collect();
+    for v in &mut result {
+        v.agents.sort();
+    }
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+    result
+}
+
+/// List every MCP server configured on any agent, folding duplicates
+/// (same server on multiple agents) into one entry with an `agents` list.
+/// Fail-open: an unreadable agent profile is skipped (+ `tracing::warn`);
+/// a missing/unreadable agents dir yields an empty list.
+#[tauri::command]
+pub fn mcp_installed() -> Result<Vec<InstalledMcpView>, String> {
+    let mur_home = crate::mur_home_path();
+    let agents_dir = mur_home.join("agents");
+
+    if !agents_dir.exists() {
+        return Ok(vec![]);
+    }
+
+    let entries = match std::fs::read_dir(&agents_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!(dir = %agents_dir.display(), error = %e, "mcp_installed: cannot read agents dir");
+            return Ok(vec![]);
+        }
+    };
+
+    let mut by_agent: std::collections::BTreeMap<String, Vec<mur_common::agent::McpServerEntry>> =
+        std::collections::BTreeMap::new();
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Some(agent_name) = dir.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let profile_path = dir.join("profile.yaml");
+        match std::fs::read(&profile_path) {
+            Ok(bytes) => match serde_yaml_ng::from_slice::<mur_common::AgentProfile>(&bytes) {
+                Ok(profile) => {
+                    by_agent.insert(agent_name.to_string(), profile.mcp_servers.clone());
+                }
+                Err(e) => {
+                    tracing::warn!(agent = %agent_name, error = %e, "mcp_installed: skipping unparsable profile");
+                }
+            },
+            Err(e) => {
+                tracing::warn!(agent = %agent_name, error = %e, "mcp_installed: skipping unreadable profile");
+            }
+        }
+    }
+
+    Ok(aggregate_mcp_servers(&by_agent))
+}
+
+// ─── Add-ons (Phase-2 Plugins library) ────────────────────────────────────
+
+/// Per-agent enabled state of an aggregated add-on, for the Plugins library
+/// "used by" list.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AddonAgentState {
+    pub agent: String,
+    pub enabled: bool,
+}
+
+/// One add-on folded across every agent that has it installed.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct InstalledAddonAgg {
+    pub id: String,
+    pub source: String,
+    pub skill_count: usize,
+    pub mcp_count: usize,
+    pub command_count: usize,
+    pub agents: Vec<AddonAgentState>,
+}
+
+/// Pure aggregation: given each agent's configured add-ons, fold add-ons
+/// that share the same `id` into one `InstalledAddonAgg` whose `agents` list
+/// carries the per-agent enabled state. Skill/MCP/command counts are taken
+/// from the first agent seen with that add-on (an add-on's contents are the
+/// same everywhere it's installed). Kept free of I/O so it's unit-testable
+/// without touching `~/.mur`.
+fn aggregate_addons(
+    by_agent: &std::collections::BTreeMap<String, Vec<mur_common::agent::AddonRef>>,
+) -> Vec<InstalledAddonAgg> {
+    let mut views: std::collections::BTreeMap<String, InstalledAddonAgg> =
+        std::collections::BTreeMap::new();
+
+    for (agent_name, addons) in by_agent {
+        for addon in addons {
+            let entry = views
+                .entry(addon.id.clone())
+                .or_insert_with(|| InstalledAddonAgg {
+                    id: addon.id.clone(),
+                    source: addon.source.clone(),
+                    skill_count: addon.skills.len(),
+                    mcp_count: addon.mcp.len(),
+                    command_count: addon.commands.len(),
+                    agents: Vec::new(),
+                });
+            entry.agents.push(AddonAgentState {
+                agent: agent_name.clone(),
+                enabled: addon.enabled,
+            });
+        }
+    }
+
+    let mut result: Vec<InstalledAddonAgg> = views.into_values().collect();
+    for v in &mut result {
+        v.agents.sort_by(|a, b| a.agent.cmp(&b.agent));
+    }
+    result.sort_by(|a, b| a.id.cmp(&b.id));
+    result
+}
+
+/// List every add-on (imported Claude plugin) configured on any agent,
+/// folding duplicates (same add-on imported by multiple agents) into one
+/// entry with a per-agent enabled state. Fail-open: an unreadable agent
+/// profile is skipped (+ `tracing::warn`); a missing/unreadable agents dir
+/// yields an empty list.
+#[tauri::command]
+pub fn addons_installed() -> Result<Vec<InstalledAddonAgg>, String> {
+    let mur_home = crate::mur_home_path();
+    let agents_dir = mur_home.join("agents");
+
+    if !agents_dir.exists() {
+        return Ok(vec![]);
+    }
+
+    let entries = match std::fs::read_dir(&agents_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!(dir = %agents_dir.display(), error = %e, "addons_installed: cannot read agents dir");
+            return Ok(vec![]);
+        }
+    };
+
+    let mut by_agent: std::collections::BTreeMap<String, Vec<mur_common::agent::AddonRef>> =
+        std::collections::BTreeMap::new();
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Some(agent_name) = dir.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let profile_path = dir.join("profile.yaml");
+        match std::fs::read(&profile_path) {
+            Ok(bytes) => match serde_yaml_ng::from_slice::<mur_common::AgentProfile>(&bytes) {
+                Ok(profile) => {
+                    by_agent.insert(agent_name.to_string(), profile.addons.clone());
+                }
+                Err(e) => {
+                    tracing::warn!(agent = %agent_name, error = %e, "addons_installed: skipping unparsable profile");
+                }
+            },
+            Err(e) => {
+                tracing::warn!(agent = %agent_name, error = %e, "addons_installed: skipping unreadable profile");
+            }
+        }
+    }
+
+    Ok(aggregate_addons(&by_agent))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,5 +673,118 @@ mod tests {
             resolve_reveal_target("models.yaml", None, home),
             PathBuf::from("/Users/x/.mur/models.yaml")
         );
+    }
+
+    fn stdio_entry(name: &str) -> mur_common::agent::McpServerEntry {
+        mur_common::agent::McpServerEntry {
+            name: name.to_string(),
+            command: "npx".to_string(),
+            args: vec!["-y".to_string(), name.to_string()],
+            ..Default::default()
+        }
+    }
+
+    fn remote_entry(name: &str, url: &str) -> mur_common::agent::McpServerEntry {
+        mur_common::agent::McpServerEntry {
+            name: name.to_string(),
+            url: Some(url.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn aggregate_shared_server_lists_both_agents_once() {
+        let mut by_agent = std::collections::BTreeMap::new();
+        by_agent.insert("a1".to_string(), vec![stdio_entry("shared")]);
+        by_agent.insert("a2".to_string(), vec![stdio_entry("shared")]);
+
+        let views = aggregate_mcp_servers(&by_agent);
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].name, "shared");
+        assert_eq!(views[0].transport, "stdio");
+        assert_eq!(views[0].agents, vec!["a1".to_string(), "a2".to_string()]);
+    }
+
+    #[test]
+    fn aggregate_distinct_servers_produce_distinct_entries() {
+        let mut by_agent = std::collections::BTreeMap::new();
+        by_agent.insert(
+            "a1".to_string(),
+            vec![
+                stdio_entry("local-one"),
+                remote_entry("remote-one", "https://example.com/mcp"),
+            ],
+        );
+
+        let views = aggregate_mcp_servers(&by_agent);
+        assert_eq!(views.len(), 2);
+        let remote = views.iter().find(|v| v.name == "remote-one").unwrap();
+        assert_eq!(remote.transport, "remote");
+        assert_eq!(remote.description, "https://example.com/mcp");
+        assert_eq!(remote.agents, vec!["a1".to_string()]);
+    }
+
+    #[test]
+    fn aggregate_empty_map_returns_empty_list() {
+        let by_agent = std::collections::BTreeMap::new();
+        assert!(aggregate_mcp_servers(&by_agent).is_empty());
+    }
+
+    fn addon(id: &str, enabled: bool) -> mur_common::agent::AddonRef {
+        mur_common::agent::AddonRef {
+            id: id.to_string(),
+            source: format!("claude-local:{id}@1.0.0"),
+            enabled,
+            skills: vec!["s1".to_string()],
+            mcp: vec!["m1".to_string(), "m2".to_string()],
+            commands: vec![],
+        }
+    }
+
+    #[test]
+    fn aggregate_addons_shared_across_agents_one_entry_per_agent_state() {
+        let mut by_agent = std::collections::BTreeMap::new();
+        by_agent.insert("a1".to_string(), vec![addon("superpowers", true)]);
+        by_agent.insert("a2".to_string(), vec![addon("superpowers", false)]);
+
+        let views = aggregate_addons(&by_agent);
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].id, "superpowers");
+        assert_eq!(views[0].skill_count, 1);
+        assert_eq!(views[0].mcp_count, 2);
+        assert_eq!(views[0].command_count, 0);
+        assert_eq!(
+            views[0].agents,
+            vec![
+                AddonAgentState {
+                    agent: "a1".to_string(),
+                    enabled: true
+                },
+                AddonAgentState {
+                    agent: "a2".to_string(),
+                    enabled: false
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn aggregate_addons_distinct_ids_produce_distinct_entries() {
+        let mut by_agent = std::collections::BTreeMap::new();
+        by_agent.insert(
+            "a1".to_string(),
+            vec![addon("superpowers", true), addon("quill", false)],
+        );
+
+        let views = aggregate_addons(&by_agent);
+        assert_eq!(views.len(), 2);
+        assert_eq!(views[0].id, "quill");
+        assert_eq!(views[1].id, "superpowers");
+    }
+
+    #[test]
+    fn aggregate_addons_empty_map_returns_empty_list() {
+        let by_agent = std::collections::BTreeMap::new();
+        assert!(aggregate_addons(&by_agent).is_empty());
     }
 }

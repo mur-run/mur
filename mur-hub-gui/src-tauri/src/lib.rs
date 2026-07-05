@@ -30,8 +30,10 @@ pub mod panel;
 pub mod pet;
 pub mod preset;
 pub mod seed_mur;
+pub mod skills_installed;
 pub mod upgrade_status;
 pub mod work;
+pub mod workflows_list;
 
 use companion::BridgeState;
 use mur_gui_core::discovery::{AgentDiscovery, AgentEntry};
@@ -583,8 +585,6 @@ pub fn run() {
             chat::channel_load,
             chat_window::open_chat_window,
             work::channel_list,
-            work::channel_events,
-            work::channel_get,
             hitl::agent_hitl_respond,
             hitl::channel_hitl_respond,
             hitl::hitl_pending_list,
@@ -698,6 +698,10 @@ pub fn run() {
             fleet::fleet_export_to,
             fleet::fleet_import,
             upgrade_status::skill_upgrade_status,
+            skills_installed::skills_installed,
+            workflows_list::workflows_list,
+            mcp_skills::mcp_installed,
+            mcp_skills::addons_installed,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

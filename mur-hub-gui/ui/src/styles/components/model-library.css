@@ -23,6 +23,16 @@
   flex-direction: column;
 }
 
+.ml-win--embedded {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 /* ── Window chrome bar ──────────────────────────────────────────────────── */
 
 .ml-bar {

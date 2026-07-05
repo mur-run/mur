@@ -150,7 +150,6 @@ function HitlInboxCard({
 // surfaces it in the inbox. The button re-triggers the watcher refresh so the
 // modal is guaranteed present.
 function InstallInboxCard({ item, raw }: { item: InboxItem; raw: RawInstall }) {
-  const { t } = useT();
   return (
     <div className="home-card home-card--install">
       <div className="home-card__head">
@@ -161,16 +160,6 @@ function InstallInboxCard({ item, raw }: { item: InboxItem; raw: RawInstall }) {
         )}
       </div>
       <p className="home-card__body">{item.subtitle}</p>
-      <div className="home-card__actions">
-        <button
-          className="btn btn--sm btn--primary"
-          onClick={() =>
-            invoke("install_inbox_list").catch(() => {})
-          }
-        >
-          {t("home.install.open")}
-        </button>
-      </div>
     </div>
   );
 }
