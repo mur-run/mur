@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../i18n";
+import type { LibrarySelection } from "../inspector/LibraryInspector";
 
 // ─── Backend shape ───────────────────────────────────────────────────────────
 
@@ -16,11 +17,17 @@ interface WorkflowView {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function WorkflowsPage() {
+export function WorkflowsPage({ onSelect }: { onSelect?: (item: LibrarySelection | null) => void }) {
   const { t } = useT();
   const [workflows, setWorkflows] = useState<WorkflowView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+
+  function pick(w: WorkflowView) {
+    setSelected(w.path);
+    onSelect?.({ kind: "workflow", name: w.name, origin: w.path, description: w.description });
+  }
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -54,7 +61,12 @@ export function WorkflowsPage() {
       ) : (
         <ul className="item-list">
           {workflows.map((w) => (
-            <li key={w.path} className="item-card">
+            <li
+              key={w.path}
+              className={`item-card${selected === w.path ? " item-card--selected" : ""}`}
+              onClick={() => pick(w)}
+              style={{ cursor: "pointer" }}
+            >
               <div
                 className="item-card-name"
                 style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "space-between" }}
@@ -62,7 +74,7 @@ export function WorkflowsPage() {
                 <span style={{ fontWeight: 600 }}>{w.name}</span>
                 <button
                   className="btn btn--sm btn--secondary"
-                  onClick={() => openFolder(w.path)}
+                  onClick={(e) => { e.stopPropagation(); openFolder(w.path); }}
                 >
                   {t("workflowslib.openFolder")}
                 </button>
