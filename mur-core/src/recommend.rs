@@ -162,12 +162,133 @@ pub fn recommend_for_input(cwd: &Path, input: &str, limit: usize) -> Vec<Recomme
     if trimmed.chars().count() < mur_common::panel::MIN_QUERY_CHARS {
         return recommend_for_cwd(cwd, limit);
     }
+    let mur_dir = mur_common::trust::mur_home();
+    let adaptive = adaptive_best(&load_adaptive(&mur_dir), trimmed, now_secs());
     // Input words first so they dominate the word-overlap scoring; cwd
     // terms trail as context.
     let query = format!("{} {}", trimmed, cwd_query(cwd));
     let mut out = rank_input(trimmed, recommend_with_query(&query, limit * 2));
+    // Adaptive history outranks everything (Firefox: "infinite frecency").
+    if let Some(name) = adaptive
+        && let Some(idx) = out.iter().position(|r| r.name == name)
+        && idx > 0
+    {
+        let hit = out.remove(idx);
+        out.insert(0, hit);
+    }
     out.truncate(limit);
     out
+}
+
+// ── Adaptive query→picked history (Firefox urlbar parameters) ─────────────
+
+/// use_count = use_count * 0.9 + 1 on pick, saturating here.
+pub(crate) const ADAPTIVE_USE_CAP: f32 = 10.0;
+/// Effective score decays 0.975/day since last use.
+const ADAPTIVE_DAILY_DECAY: f32 = 0.975;
+/// Entries unused this long are dropped.
+const ADAPTIVE_EXPIRE_DAYS: f32 = 90.0;
+/// Normalized query length bound.
+const ADAPTIVE_QUERY_MAX: usize = 64;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct AdaptiveEntry {
+    pub query: String,
+    pub picked: String,
+    pub use_count: f32,
+    /// Unix seconds.
+    pub last_used: u64,
+}
+
+fn adaptive_path(mur_home: &Path) -> std::path::PathBuf {
+    mur_home.join("panel").join("adaptive.yaml")
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn normalize_query(q: &str) -> String {
+    q.trim()
+        .to_lowercase()
+        .chars()
+        .take(ADAPTIVE_QUERY_MAX)
+        .collect()
+}
+
+pub(crate) fn load_adaptive(mur_home: &Path) -> Vec<AdaptiveEntry> {
+    std::fs::read_to_string(adaptive_path(mur_home))
+        .ok()
+        .and_then(|s| serde_yaml::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Best adaptive pick for `query`: prefix match either direction, expired
+/// entries skipped, ranked by decayed use_count.
+pub(crate) fn adaptive_best(
+    entries: &[AdaptiveEntry],
+    query: &str,
+    now_secs: u64,
+) -> Option<String> {
+    let q = normalize_query(query);
+    if q.is_empty() {
+        return None;
+    }
+    entries
+        .iter()
+        .filter_map(|e| {
+            let days = now_secs.saturating_sub(e.last_used) as f32 / 86_400.0;
+            if days > ADAPTIVE_EXPIRE_DAYS {
+                return None;
+            }
+            if !(q.starts_with(&e.query) || e.query.starts_with(&q)) {
+                return None;
+            }
+            Some((e.use_count * ADAPTIVE_DAILY_DECAY.powf(days), &e.picked))
+        })
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, picked)| picked.clone())
+}
+
+/// Record that the user picked `picked` after typing `query`. Fail-soft:
+/// any I/O error is swallowed (suggestion quality, not correctness).
+pub fn record_pick(mur_home: &Path, query: &str, picked: &str) {
+    let q = normalize_query(query);
+    if q.is_empty() || picked.is_empty() {
+        return;
+    }
+    let mut entries = load_adaptive(mur_home);
+    let now = now_secs();
+    if let Some(e) = entries
+        .iter_mut()
+        .find(|e| e.query == q && e.picked == picked)
+    {
+        e.use_count = (e.use_count * 0.9 + 1.0).min(ADAPTIVE_USE_CAP);
+        e.last_used = now;
+    } else {
+        entries.push(AdaptiveEntry {
+            query: q,
+            picked: picked.to_string(),
+            use_count: 1.0,
+            last_used: now,
+        });
+    }
+    // Expire on write so the file can't grow unbounded.
+    entries.retain(|e| now.saturating_sub(e.last_used) as f32 / 86_400.0 <= ADAPTIVE_EXPIRE_DAYS);
+    let dir = adaptive_path(mur_home);
+    if let Some(parent) = dir.parent()
+        && std::fs::create_dir_all(parent).is_ok()
+        && let Ok(s) = serde_yaml::to_string(&entries)
+    {
+        // temp + rename for atomicity, same convention as store/yaml.rs
+        let tmp = dir.with_extension("yaml.tmp");
+        if std::fs::write(&tmp, s).is_ok() {
+            let _ = std::fs::rename(&tmp, &dir);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -225,5 +346,66 @@ mod tests {
         let out = rank_input("zzz", recs);
         assert_eq!(out[0].name, "aaa");
         assert_eq!(out[1].name, "bbb");
+    }
+
+    const DAY: u64 = 86_400;
+
+    fn entry(q: &str, p: &str, count: f32, last: u64) -> AdaptiveEntry {
+        AdaptiveEntry {
+            query: q.into(),
+            picked: p.into(),
+            use_count: count,
+            last_used: last,
+        }
+    }
+
+    #[test]
+    fn adaptive_prefix_match_wins() {
+        let now = 100 * DAY;
+        let es = vec![
+            entry("run boo", "book-search", 3.0, now - DAY),
+            entry("deploy", "deployer", 9.0, now - DAY),
+        ];
+        // typed query extends the stored one → match
+        assert_eq!(
+            adaptive_best(&es, "run book", now).as_deref(),
+            Some("book-search")
+        );
+        // stored query extends the typed one → also match
+        assert_eq!(
+            adaptive_best(&es, "run b", now).as_deref(),
+            Some("book-search")
+        );
+        assert_eq!(adaptive_best(&es, "xyz", now), None);
+    }
+
+    #[test]
+    fn adaptive_decays_and_expires() {
+        let now = 200 * DAY;
+        // 90+ days unused → expired
+        let es = vec![entry("run boo", "book-search", 9.0, now - 91 * DAY)];
+        assert_eq!(adaptive_best(&es, "run boo", now), None);
+        // Decay: fresher-but-smaller beats stale-but-bigger
+        let es = vec![
+            entry("run boo", "old-pick", 5.0, now - 60 * DAY), // 5 * 0.975^60 ≈ 1.1
+            entry("run boo", "new-pick", 2.0, now - DAY),      // 2 * 0.975   ≈ 1.95
+        ];
+        assert_eq!(
+            adaptive_best(&es, "run boo", now).as_deref(),
+            Some("new-pick")
+        );
+    }
+
+    #[test]
+    fn record_pick_saturates_and_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        for _ in 0..30 {
+            record_pick(dir.path(), "Run Book", "book-search");
+        }
+        let es = load_adaptive(dir.path());
+        assert_eq!(es.len(), 1);
+        assert_eq!(es[0].query, "run book"); // normalized
+        assert!(es[0].use_count <= ADAPTIVE_USE_CAP);
+        assert!(es[0].use_count > 9.0); // converges toward the cap
     }
 }
