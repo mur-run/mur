@@ -163,8 +163,7 @@ async fn pump(
     }
 }
 
-const PANEL_HINT: &str =
-    "usage: /panel [information|activities|preview|notifications] · /panel preview <path|url>";
+const PANEL_HINT: &str = "usage: /panel [information|activities|preview|notifications|schedule] · /panel preview <path|url>";
 
 /// `/panel [tab] [target]` — fire-and-forget; opens/focuses the Hub Panel
 /// window on the given tab.
@@ -179,6 +178,9 @@ pub fn handle_panel_command(app: &mut super::app::App, args: &[String]) {
         },
         Some("notifications") => PanelFrame::Panel {
             focus: PanelTab::Notifications,
+        },
+        Some("schedule") => PanelFrame::Panel {
+            focus: PanelTab::Schedule,
         },
         Some("preview") => match args.get(1) {
             Some(t) if t.starts_with("http://") || t.starts_with("https://") => {
