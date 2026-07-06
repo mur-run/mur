@@ -213,6 +213,64 @@ Configured in ~/.mur/compress.yaml under `auto:` (`enabled`, `min_tokens`,
 `mcp`, `agent_runtime`). Set `enabled: false` to disable entirely.
 
 
+### Author and run MUR workflows — flat sequences vs DAG skills, scheduling; HITL and delegation via leaves.
+# Authoring MUR Workflows
+
+## Two kinds (critical)
+MUR has two things people call "workflows":
+1. **Flat workflows** (`mur workflow`) — an ordered list of steps
+   saved from a session or written by hand. No branching, no HITL,
+   no delegation. Good for repeatable checklists.
+2. **Workflow skills** — regular skills whose `content` encodes a
+   **DAG procedure** (nodes + edges). These are the only ones that
+   support conditional branching, human-in-the-loop approval gates,
+   and delegation of individual steps to other agents. If a task
+   needs a pause-for-approval step or fan-out to a specialist agent,
+   it must be a workflow skill, not a flat workflow.
+
+## Run
+- `mur workflow show <name> --md` — view variables / tools / steps
+  of a flat workflow.
+- `mur run <name>` — produce a ready-to-execute prompt for a flat
+  workflow or trigger a workflow skill by name.
+- `mur workflow list` — enumerate saved flat workflows.
+
+## DAG procedure schema
+A workflow-skill DAG procedure is expressed as:
+```
+content:
+  procedure:
+    nodes:
+      - id: step_id
+        kind: task | approval | delegate
+        agent: <optional target agent for delegate nodes>
+    edges:
+      - from: step_id
+        to: next_step_id
+        when: <optional condition expression>
+```
+`kind: approval` nodes pause execution for a human decision (see the
+HITL companion doc). `kind: delegate` nodes hand the step to another
+agent over A2A (see the delegation companion doc).
+
+## Schedule
+Flat workflows and workflow skills can both be scheduled:
+- `mur workflow schedule <name> --cron "<expr>"` — recurring runs.
+- `mur workflow schedule <name> --at <time>` — one-shot run.
+Scheduled runs execute non-interactively; any approval node in a
+scheduled workflow skill still pauses and waits, so scheduling a
+workflow with unresolved HITL gates just defers the wait, not the
+approval itself.
+
+## Deep-dive
+For risk-tiered approval gates, see the workflow-hitl doc. For
+fan-out to specialist agents and trust/signing model, see the
+workflow-delegate doc. Both are loaded on demand, not injected by
+default, to keep this context lean.
+
+Ground truth: mur <cmd> --help · Full tutorial: https://app.mur.run/tutorials/mur-daily-jobs-cookbook.html
+
+
 ### Manage MUR agent lifecycle: create, run as a service, stop, export.
 Guide through MUR agent lifecycle management.
 
@@ -220,42 +278,6 @@ Guide through MUR agent lifecycle management.
 ### Review workflow proposals MUR harvested from recent sessions
 Review pending workflow proposals harvested from recent sessions.
 Accept turns a proposal into a draft workflow runnable via `mur workflow run`.
-
-
-### Search project code by meaning. Use for concept/intent queries; use grep for exact strings and exhaustive matches.
-# mur-project-search — Pick the right code search tool
-
-Semantic search (hybrid vector + BM25) answers *intent* questions and is
-usually cheaper than grepping then opening many files. But grep is exact,
-exhaustive, and always reflects the working tree right now. Choose per query:
-
-## Use `mur project search "<query>"` (or mur_project_search MCP tool) when
-- You are looking for a concept or behavior, not a known token:
-  "where is the logic that handles retries", "how does auth work",
-  "which file is responsible for decay scoring".
-
-## Use grep when
-- You know the exact symbol, string, import, or config key.
-- You need every occurrence (rename, find all callers, dead-code removal).
-  Semantic search returns ranked top-k, not all matches — it will miss some.
-
-## Scope (important)
-- By default `mur project search` searches across ALL indexed projects, not
-  just the current directory — top results may come from unrelated repos.
-  To restrict to one project, pass `--project <name>` (and `--limit <n>` to
-  widen/narrow the ranked results). The mur_project_search MCP tool takes the
-  same optional `project` argument.
-
-## Hard rules (correctness)
-- Code you created or edited this session and have NOT committed/indexed is
-  not in the index yet — use grep for it. Semantic results always lag
-  un-committed edits.
-- Before trusting semantic results, check freshness with
-  `mur project status`. If it reports no index or indexing in progress,
-  fall back to grep.
-
-The index is kept fresh automatically by a post-commit hook (installed on
-first `mur project index`). See the mur-project-index skill.
 
 
 <!-- MUR:END -->
