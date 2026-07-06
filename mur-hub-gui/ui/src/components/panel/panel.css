@@ -51,3 +51,78 @@
 .panel-test {
   margin-top: 16px;
 }
+.panel-tab-header {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 12px 0;
+}
+.panel-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0.8;
+  cursor: pointer;
+}
+.panel-headline {
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+.panel-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+}
+.panel-list-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.15);
+}
+.panel-list-clickable {
+  cursor: pointer;
+}
+.panel-list-clickable:hover {
+  background: rgba(128, 128, 128, 0.1);
+}
+.panel-list-name {
+  font-weight: 600;
+}
+.panel-list-preview {
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.panel-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: rgba(128, 128, 128, 0.2);
+  font-size: 11px;
+}
+.panel-badge-ok {
+  background: rgba(60, 180, 90, 0.2);
+  color: #2f9e4f;
+}
+.panel-badge-warn {
+  background: rgba(220, 80, 60, 0.2);
+  color: #d0442a;
+}
+.panel-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.panel-table th,
+.panel-table td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.15);
+}
+.panel-muted {
+  opacity: 0.6;
+  font-size: 12px;
+}
+.panel-warnings {
+  margin-top: 12px;
+}

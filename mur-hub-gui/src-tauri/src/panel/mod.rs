@@ -2,6 +2,7 @@
 //! `murmur-panel`) snapped beside the TUI's terminal. Bridge events route
 //! here; clicks go back insert-only.
 
+pub mod data;
 pub mod pos;
 
 use std::collections::HashMap;

@@ -169,6 +169,15 @@ cd mur-agent-gui/src-tauri && cargo tauri dev          # 6-tab settings window o
 
 ---
 
+## murmur Panel (Hub GUI data tabs, P1+P2)
+
+The Hub's per-agent detail panel surfaces read-only operational data alongside the chat/CLI view. P2 (2026-07) shipped five tabs: **Information** (git status/branch + cost/token usage), **Activities** (recent tool calls/events), **Preview** (deferred to P3 — placeholder tab), **Notifications** (pending workflow proposals), and **Schedule** (unified view across agent/workflow/fleet schedulers). Data flows from `mur-core` command output parsed into typed frames (`mur-core/src/panel.rs` — `frames_round_trip`/`unknown_frames_are_none` tests cover forward-compat with unrecognized frame kinds); the Hub calls `mur-core` directly rather than shelling out. Refresh is poll-based (~30s) with fail-soft rendering on missing/partial data.
+
+- **`mur internals schedule-status`** — unified schedule query across the agent scheduler, workflow scheduler, and fleet loop triggers; emits JSON (no `--json` flag needed, always structured) consumed by the Schedule tab.
+- **Spec:** see `.superpowers/sdd/` task briefs on branch `feat/murmur-panel-p2` for the full task breakdown (Tasks 1-9).
+
+---
+
 ## Agent Runtime (murmur P0a)
 
 The per-agent supervisor lives in `mur-agent-runtime/`. Each agent has a directory under `~/.mur/agents/<name>/` (`profile.yaml`, `sys_prompt.md`, `skills/`, `running.lock`, `telemetry/<date>.jsonl`) and a symlink in `MUR_AGENT_BIN_DIR` (default `~/.local/bin`) named `mur_agent_<name>`. The symlink is the runtime binary; argv[0] tells it which profile to load.

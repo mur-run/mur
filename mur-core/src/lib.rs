@@ -49,6 +49,7 @@ pub mod parallel;
 pub mod paths;
 pub mod retrieve;
 pub mod route;
+pub mod schedule_status;
 pub mod session;
 pub mod skill_consolidate;
 pub mod skill_gen;

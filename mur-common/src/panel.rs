@@ -34,6 +34,7 @@ pub enum PanelTab {
     Activities,
     Preview,
     Notifications,
+    Schedule,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +119,12 @@ mod tests {
         })
         .unwrap();
         assert!(line.contains("\"focus\":\"preview\""));
+
+        let line = serde_json::to_string(&PanelFrame::Panel {
+            focus: PanelTab::Schedule,
+        })
+        .unwrap();
+        assert!(line.contains("\"focus\":\"schedule\""));
 
         let line = serde_json::to_string(&HubFrame::Insert {
             text: "/help".into(),
