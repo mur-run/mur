@@ -138,6 +138,8 @@ export function PanelWindow() {
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [pinned, setPinned] = useState(true);
 
+  const recGen = useRef(0);
+
   useEffect(() => {
     void invoke<PanelSession[]>("panel_sessions").then((s) => {
       setSessions(s);
@@ -167,10 +169,17 @@ export function PanelWindow() {
         setPreviewMode("target");
       },
     );
+    const unInput = listen<{ pid: number }>("panel-input-changed", () => {
+      // Re-rank for whichever session is active; fetchTabData reads current
+      // state and the generation counter drops stale responses. Keep the
+      // current list rendered until the new one lands (no flash-to-empty).
+      fetchTabData.current();
+    });
     return () => {
       unSessions.then((f) => f());
       unFocus.then((f) => f());
       unPreview.then((f) => f());
+      unInput.then((f) => f());
     };
   }, []);
 
@@ -199,9 +208,13 @@ export function PanelWindow() {
     if (tab === "information") {
       void invoke<GitInfo>("panel_git_info", { cwd: sess.cwd }).then(setGitInfo);
       void invoke<TokenTotals>("panel_cost", { agent: sess.agent }).then(setCost);
-      void invoke<Recommendation[]>("panel_recommend", { cwd: sess.cwd }).then(
-        setRecommendations,
-      );
+      const gen = ++recGen.current;
+      void invoke<Recommendation[]>("panel_recommend_input", {
+        pid: sess.pid,
+        cwd: sess.cwd,
+      }).then((r) => {
+        if (gen === recGen.current) setRecommendations(r);
+      });
     } else if (tab === "activities") {
       void invoke<Activities>("panel_activities", { agent: sess.agent }).then(setActivities);
     } else if (tab === "notifications") {
@@ -232,8 +245,8 @@ export function PanelWindow() {
     return () => clearInterval(id);
   }, [tab]);
 
-  const insert = (text: string) => {
-    if (pid !== null) void invoke("panel_insert", { pid, text });
+  const insert = (text: string, picked?: string) => {
+    if (pid !== null) void invoke("panel_insert", { pid, text, picked: picked ?? null });
   };
 
   return (
@@ -353,7 +366,7 @@ export function PanelWindow() {
                   <li
                     key={`${r.kind}-${r.name}`}
                     className="panel-list-row panel-list-clickable"
-                    onClick={() => insert(r.command)}
+                    onClick={() => insert(r.command, r.name)}
                   >
                     <span className={`panel-badge panel-badge-${r.kind}`}>
                       {r.kind}
