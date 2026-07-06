@@ -369,7 +369,7 @@ export function PanelWindow() {
                         {s.kind === "fleet" && (
                           <span className="panel-muted">
                             {" "}
-                            budget ${s.budget_usd}
+                            budget ${s.budget_usd.toFixed(2)}
                             {!s.autorun_env && " · autorun off"}
                           </span>
                         )}
