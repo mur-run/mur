@@ -47,6 +47,7 @@ pub mod model_setup;
 pub mod nudge;
 pub mod parallel;
 pub mod paths;
+pub mod recommend;
 pub mod retrieve;
 pub mod route;
 pub mod schedule_status;
