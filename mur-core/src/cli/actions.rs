@@ -164,6 +164,13 @@ pub enum InternalsAction {
     },
     /// One-shot: import legacy cli-sessions into Channels.
     MigrateChannels,
+    /// Unified schedule view (agent/workflow/fleet) as JSON — Panel data source
+    #[command(hide = true)]
+    ScheduleStatus {
+        /// Filter to one agent's entries (globals always included)
+        #[arg(long)]
+        agent: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
