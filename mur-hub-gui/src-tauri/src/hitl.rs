@@ -68,18 +68,25 @@ impl From<mur_core::cmd::channel::PendingHitlGate> for HitlRequestView {
     }
 }
 
-/// List every unresolved HITL gate across all channels, for the Home unified
-/// inbox. Fail-open: any read error yields an empty list rather than
-/// surfacing an error to the UI (the per-agent chat views remain the
-/// authoritative HITL surface; this is a convenience rollup).
-#[tauri::command]
-pub fn hitl_pending_list() -> Result<Vec<HitlRequestView>, String> {
+/// Pure(ish): list every unresolved HITL gate across all channels. Fail-open:
+/// any read error yields an empty list rather than propagating (the per-agent
+/// chat views remain the authoritative HITL surface; this is a convenience
+/// rollup). Shared by `hitl_pending_list` (Home inbox) and `panel_activities`
+/// (Activities tab, filtered by agent).
+pub fn pending_views() -> Vec<HitlRequestView> {
     let home = crate::mur_home_path();
     match mur_core::cmd::channel::pending_hitl_gates(&home) {
-        Ok(gates) => Ok(gates.into_iter().map(HitlRequestView::from).collect()),
+        Ok(gates) => gates.into_iter().map(HitlRequestView::from).collect(),
         Err(e) => {
-            tracing::warn!("hitl_pending_list: failed to fold channels: {e:#}");
-            Ok(vec![])
+            tracing::warn!("pending_views: failed to fold channels: {e:#}");
+            vec![]
         }
     }
+}
+
+/// List every unresolved HITL gate across all channels, for the Home unified
+/// inbox.
+#[tauri::command]
+pub fn hitl_pending_list() -> Result<Vec<HitlRequestView>, String> {
+    Ok(pending_views())
 }
