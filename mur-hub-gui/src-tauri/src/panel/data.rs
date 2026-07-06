@@ -69,6 +69,17 @@ pub fn panel_recommend(cwd: String) -> Vec<mur_core::recommend::Recommendation> 
     mur_core::recommend::recommend_for_cwd(Path::new(&cwd), 5)
 }
 
+/// Response for `panel_recommend_input`: the ranked items plus a boolean
+/// flag telling the webview whether ranking was driven by the live input
+/// (spec §3.4 "matching your input" caption). Raw input text stays in
+/// Rust; the webview only ever sees ranked results + this flag.
+#[derive(Debug, Clone, Serialize)]
+pub struct RecommendResponse {
+    /// True when the ranking used the live murmur input (>= MIN_QUERY_CHARS).
+    pub input_driven: bool,
+    pub items: Vec<mur_core::recommend::Recommendation>,
+}
+
 /// Recommendations driven by the live murmur input snapshot for `pid`
 /// (falls back to cwd-only when there is no/short input). The raw snapshot
 /// stays in Rust; the webview only ever sees ranked results.
@@ -77,9 +88,13 @@ pub fn panel_recommend_input(
     pid: u32,
     cwd: String,
     state: tauri::State<crate::panel::PanelState>,
-) -> Vec<mur_core::recommend::Recommendation> {
+) -> RecommendResponse {
     let input = state.inputs_snapshot(pid).unwrap_or_default();
-    mur_core::recommend::recommend_for_input(Path::new(&cwd), &input, 5)
+    let input_driven = input.trim().chars().count() >= mur_common::panel::MIN_QUERY_CHARS;
+    RecommendResponse {
+        input_driven,
+        items: mur_core::recommend::recommend_for_input(Path::new(&cwd), &input, 5),
+    }
 }
 
 /// Best-effort `git` shell-out; returns an empty `GitInfo` for non-repos.
