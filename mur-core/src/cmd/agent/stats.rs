@@ -133,6 +133,8 @@ mod tests {
             concat!(
                 r#"{"gen_ai.request.model":"m","gen_ai.usage.input_tokens":100,"gen_ai.usage.output_tokens":40}"#,
                 "\n",
+                r#"{"not":"an llm row"}"#,
+                "\n",
                 r#"{"gen_ai.request.model":"m","gen_ai.usage.input_tokens":10,"gen_ai.usage.output_tokens":5}"#,
             ),
         )
