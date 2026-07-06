@@ -1,6 +1,8 @@
 //! Panel P2 data commands: thin adapters over mur-core lib fns.
 //! Spec: docs/superpowers/specs/2026-07-06-murmur-panel-p2-data-tabs-design.md
 
+use std::path::Path;
+
 use serde::Serialize;
 
 use crate::mur_home_path;
@@ -60,6 +62,11 @@ pub async fn panel_activities(agent: String) -> Activities {
         .filter(|h| h.agent.eq_ignore_ascii_case(&agent))
         .collect();
     Activities { channels, hitl }
+}
+
+#[tauri::command]
+pub fn panel_recommend(cwd: String) -> Vec<mur_core::recommend::Recommendation> {
+    mur_core::recommend::recommend_for_cwd(Path::new(&cwd), 5)
 }
 
 /// Best-effort `git` shell-out; returns an empty `GitInfo` for non-repos.

@@ -143,3 +143,44 @@
   word-break: break-word;
   font-size: 12px;
 }
+
+.panel-badge-skill {
+  background: rgba(90, 130, 220, 0.2);
+  color: #4568c9;
+}
+.panel-badge-workflow {
+  background: rgba(160, 90, 220, 0.2);
+  color: #8c4dd4;
+}
+
+.panel-subtoggle {
+  display: flex;
+  gap: 4px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(128, 128, 128, 0.25);
+}
+.panel-subtoggle-btn {
+  padding: 3px 10px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  opacity: 0.65;
+  color: inherit;
+  font-size: 12px;
+}
+.panel-subtoggle-btn.active {
+  opacity: 1;
+  font-weight: 600;
+  background: rgba(128, 128, 128, 0.15);
+}
+
+.stream-tail {
+  height: 100%;
+  margin: 0;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}

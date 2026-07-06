@@ -1213,6 +1213,13 @@ pub async fn run(cli: Cli) -> Result<()> {
                 let st = crate::schedule_status::schedule_status(&home, agent.as_deref());
                 println!("{}", serde_json::to_string_pretty(&st)?);
             }
+            InternalsAction::Recommend { cwd, limit } => {
+                let recs = crate::recommend::recommend_for_cwd(std::path::Path::new(&cwd), limit);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({ "recommendations": recs }))?
+                );
+            }
         },
         // Deprecated: use `mur skill eval`
         Commands::Eval { action } => {
