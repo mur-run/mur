@@ -340,6 +340,11 @@ pub struct App {
     pub pending_suggestions: Vec<String>,
     /// The single suggestion currently shown as ghost placeholder text, if any.
     pub suggestion_ghost: Option<String>,
+    /// Input-driven suggestions (spec §3.5): last input text observed by the
+    /// debounce, last snapshot actually sent, and the pending deadline.
+    pub panel_input_seen: String,
+    pub panel_input_sent: String,
+    pub panel_input_deadline: Option<std::time::Instant>,
 }
 
 impl App {
@@ -400,6 +405,9 @@ impl App {
             skills: Vec::new(),
             pending_suggestions: Vec::new(),
             suggestion_ghost: None,
+            panel_input_seen: String::new(),
+            panel_input_sent: String::new(),
+            panel_input_deadline: None,
         }
     }
 
@@ -872,6 +880,30 @@ fn new_input() -> TextArea<'static> {
     ta
 }
 
+/// Arm/reset the InputChanged debounce when the input text changed since the
+/// last observation. Called every event-loop iteration.
+pub(crate) fn arm_input_debounce(app: &mut App, now: std::time::Instant) {
+    let cur = app.input_text();
+    if cur != app.panel_input_seen {
+        app.panel_input_seen = cur;
+        app.panel_input_deadline =
+            Some(now + std::time::Duration::from_millis(mur_common::panel::INPUT_DEBOUNCE_MS));
+    }
+}
+
+/// If the debounce deadline has passed and the text differs from the last
+/// sent snapshot, consume the deadline and return the raw text to send.
+pub(crate) fn take_due_input(app: &mut App, now: std::time::Instant) -> Option<String> {
+    if app.panel_input_deadline.is_some_and(|d| now >= d) {
+        app.panel_input_deadline = None;
+        if app.panel_input_seen != app.panel_input_sent {
+            app.panel_input_sent = app.panel_input_seen.clone();
+            return Some(app.panel_input_sent.clone());
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 impl App {
     /// Minimal fixture for unit tests. Backed by a temporary directory that is
@@ -903,6 +935,41 @@ mod tests {
             session,
             &super::super::theme::DARK,
         )
+    }
+
+    #[test]
+    fn input_debounce_arms_and_fires_once() {
+        use std::time::{Duration, Instant};
+        let mut app = app();
+        let t0 = Instant::now();
+
+        // No edit → nothing armed, nothing due.
+        arm_input_debounce(&mut app, t0);
+        assert!(take_due_input(&mut app, t0 + Duration::from_secs(1)).is_none());
+
+        // Edit arms the deadline; before expiry nothing fires.
+        app.set_input("run boo");
+        arm_input_debounce(&mut app, t0);
+        assert!(take_due_input(&mut app, t0).is_none());
+
+        // Continued typing re-arms (debounce reset).
+        app.set_input("run book");
+        arm_input_debounce(&mut app, t0 + Duration::from_millis(100));
+
+        // After the (re-armed) deadline the latest snapshot fires exactly once.
+        let due = t0 + Duration::from_millis(100 + mur_common::panel::INPUT_DEBOUNCE_MS + 1);
+        assert_eq!(take_due_input(&mut app, due).as_deref(), Some("run book"));
+        assert!(take_due_input(&mut app, due).is_none()); // no repeat
+
+        // Unchanged text never re-fires even after another arm pass.
+        arm_input_debounce(&mut app, due);
+        assert!(take_due_input(&mut app, due + Duration::from_secs(1)).is_none());
+
+        // Clearing the input fires an empty snapshot (panel resets to cwd mode).
+        app.clear_input();
+        arm_input_debounce(&mut app, due);
+        let later = due + Duration::from_millis(mur_common::panel::INPUT_DEBOUNCE_MS + 1);
+        assert_eq!(take_due_input(&mut app, later).as_deref(), Some(""));
     }
 
     /// Helper that borrows an existing TempDir so the directory survives the test.
