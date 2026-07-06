@@ -73,13 +73,13 @@ pub fn panel_watch_preview(
     let watch_target = target.clone();
 
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if let Ok(ev) = res {
-            if ev.paths.iter().any(|p| p == &watch_target) {
-                let _ = app.emit(
-                    "panel-preview-changed",
-                    serde_json::json!({ "path": watch_target.display().to_string() }),
-                );
-            }
+        if let Ok(ev) = res
+            && ev.paths.iter().any(|p| p == &watch_target)
+        {
+            let _ = app.emit(
+                "panel-preview-changed",
+                serde_json::json!({ "path": watch_target.display().to_string() }),
+            );
         }
     })
     .map_err(|e| e.to_string())?;
