@@ -29,6 +29,36 @@ pub struct GitInfo {
     pub dirty: bool,
 }
 
+/// Channels the agent participates in + its pending HITL gates, for the
+/// Activities tab.
+#[derive(Debug, Clone, Serialize)]
+pub struct Activities {
+    pub channels: Vec<crate::work::ChannelSummary>,
+    pub hitl: Vec<crate::hitl::HitlRequestView>,
+}
+
+#[tauri::command]
+pub async fn panel_activities(agent: String) -> Activities {
+    let home = mur_home_path();
+    let channels = tokio::task::spawn_blocking(move || crate::work::list_channels(&home))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|c| {
+            c.participants
+                .iter()
+                .any(|p| p.id.eq_ignore_ascii_case(&agent))
+        })
+        .collect();
+    let hitl = crate::hitl::pending_views()
+        .into_iter()
+        .filter(|h| h.agent.eq_ignore_ascii_case(&agent))
+        .collect();
+    Activities { channels, hitl }
+}
+
 /// Best-effort `git` shell-out; returns an empty `GitInfo` for non-repos.
 #[tauri::command]
 pub fn panel_git_info(cwd: String) -> GitInfo {
