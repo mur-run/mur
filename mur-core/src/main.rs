@@ -54,6 +54,9 @@ mod parallel;
 mod paths;
 mod retrieve;
 mod route;
+// wired via dispatch in the lib crate; this bin re-declaration is unused.
+#[allow(dead_code)]
+mod schedule_status;
 mod server;
 #[cfg(feature = "server")]
 mod server_agents;

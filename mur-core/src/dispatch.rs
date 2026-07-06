@@ -1208,6 +1208,11 @@ pub async fn run(cli: Cli) -> Result<()> {
                 let n = cmd::agent::channel_import::migrate_all(&home)?;
                 println!("✅ imported {n} CLI session(s) into channels");
             }
+            InternalsAction::ScheduleStatus { agent } => {
+                let home = crate::paths::mur_root(None);
+                let st = crate::schedule_status::schedule_status(&home, agent.as_deref());
+                println!("{}", serde_json::to_string_pretty(&st)?);
+            }
         },
         // Deprecated: use `mur skill eval`
         Commands::Eval { action } => {

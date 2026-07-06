@@ -59,7 +59,7 @@ pub mod skill_signer_trust;
 pub mod skill_verify;
 mod snapshot;
 pub mod stale;
-mod stats;
+pub mod stats;
 
 // `pub use` re-exports for the public CLI dispatch API. The lib crate doesn't
 // reference these names internally; consumers (main.rs, agent_admin) reach them
