@@ -365,18 +365,48 @@ pub fn seed_missing_bundled_skills(
 }
 
 /// Append `- <reference>` as the last entry of the `skills:` list in `profile`.
+///
+/// This edits the *user's* live profile.yaml textually (to preserve their
+/// formatting), so it must accept every form the key can take and never
+/// panic: block lists, inline flow lists (`skills: []`, `skills: [a, b]` —
+/// converted to block style), and a missing key (a section is appended).
 fn append_skill_reference(profile: &str, reference: &str) -> String {
-    let mut lines: Vec<&str> = profile.lines().collect();
-    let skills_idx = lines
-        .iter()
-        .position(|l| l.trim_end() == "skills:")
-        .expect("template profile.yaml must have a skills: list");
-    let mut insert_at = skills_idx + 1;
-    while insert_at < lines.len() && lines[insert_at].trim_start().starts_with("- ") {
-        insert_at += 1;
+    let mut lines: Vec<String> = profile.lines().map(str::to_owned).collect();
+    let new_entry = format!("  - {reference}");
+
+    if let Some(idx) = lines.iter().position(|l| {
+        let t = l.trim_end();
+        t == "skills:" || t.starts_with("skills: ") || t.starts_with("skills:\t")
+    }) {
+        let rest = lines[idx].trim_end()["skills:".len()..].trim().to_owned();
+        if !rest.is_empty() {
+            // Inline flow list: convert to block style, keeping existing entries.
+            let items: Vec<String> = rest
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect();
+            if items.iter().any(|i| i == reference) {
+                return profile.to_owned();
+            }
+            lines[idx] = "skills:".to_owned();
+            for (offset, item) in items.iter().enumerate() {
+                lines.insert(idx + 1 + offset, format!("  - {item}"));
+            }
+        }
+        let mut insert_at = idx + 1;
+        while insert_at < lines.len() && lines[insert_at].trim_start().starts_with("- ") {
+            insert_at += 1;
+        }
+        lines.insert(insert_at, new_entry);
+    } else {
+        lines.push("skills:".to_owned());
+        lines.push(new_entry);
     }
-    let new_line = format!("  - {reference}");
-    lines.insert(insert_at, &new_line);
+
     let mut out = lines.join("\n");
     if profile.ends_with('\n') {
         out.push('\n');
@@ -507,6 +537,94 @@ mod tests {
         seed_missing_bundled_skills(tpl.path(), home.path()).unwrap();
         let profile = std::fs::read_to_string(agent_dir.join("profile.yaml")).unwrap();
         assert_eq!(profile.matches("- skills/brainstorming").count(), 1);
+    }
+
+    #[test]
+    fn appends_into_inline_empty_skills_list() {
+        // Older seeders wrote `skills: []` (inline flow list). Must not panic.
+        let home = TempDir::new().unwrap();
+        let tpl = TempDir::new().unwrap();
+        make_dir_skill_template(tpl.path());
+
+        let agent_dir = home.path().join("agents/mur");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(
+            agent_dir.join("profile.yaml"),
+            "name: Mur\nskills: []\ntransport:\n  stdio: true\n",
+        )
+        .unwrap();
+
+        let seeded = seed_missing_bundled_skills(tpl.path(), home.path()).unwrap();
+        assert_eq!(seeded.len(), 2);
+        let profile = std::fs::read_to_string(agent_dir.join("profile.yaml")).unwrap();
+        assert!(!profile.contains("skills: []"), "profile: {profile}");
+        assert!(
+            profile.contains("skills:\n  - skills/"),
+            "profile: {profile}"
+        );
+        assert!(profile.contains("- skills/concierge"), "profile: {profile}");
+        assert!(
+            profile.contains("- skills/brainstorming"),
+            "profile: {profile}"
+        );
+        assert!(
+            profile.contains("transport:\n  stdio: true"),
+            "profile: {profile}"
+        );
+    }
+
+    #[test]
+    fn appends_into_inline_nonempty_skills_list() {
+        // Hand-edited flow list: keep existing entries, no duplicates, no panic.
+        let home = TempDir::new().unwrap();
+        let tpl = TempDir::new().unwrap();
+        make_dir_skill_template(tpl.path());
+
+        let agent_dir = home.path().join("agents/mur");
+        std::fs::create_dir_all(agent_dir.join("skills/concierge")).unwrap();
+        std::fs::write(
+            agent_dir.join("skills/concierge/skill.yaml"),
+            "name: concierge\n",
+        )
+        .unwrap();
+        std::fs::write(
+            agent_dir.join("profile.yaml"),
+            "name: Mur\nskills: [skills/concierge]\n",
+        )
+        .unwrap();
+
+        seed_missing_bundled_skills(tpl.path(), home.path()).unwrap();
+        let profile = std::fs::read_to_string(agent_dir.join("profile.yaml")).unwrap();
+        assert_eq!(
+            profile.matches("- skills/concierge").count(),
+            1,
+            "profile: {profile}"
+        );
+        assert_eq!(
+            profile.matches("- skills/brainstorming").count(),
+            1,
+            "profile: {profile}"
+        );
+        assert!(!profile.contains('['), "profile: {profile}");
+    }
+
+    #[test]
+    fn appends_skills_section_when_key_missing() {
+        // A profile with no skills key at all must not panic the Hub.
+        let home = TempDir::new().unwrap();
+        let tpl = TempDir::new().unwrap();
+        make_dir_skill_template(tpl.path());
+
+        let agent_dir = home.path().join("agents/mur");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(agent_dir.join("profile.yaml"), "name: Mur\n").unwrap();
+
+        seed_missing_bundled_skills(tpl.path(), home.path()).unwrap();
+        let profile = std::fs::read_to_string(agent_dir.join("profile.yaml")).unwrap();
+        assert!(
+            profile.contains("skills:\n  - skills/"),
+            "profile: {profile}"
+        );
     }
 
     #[test]
