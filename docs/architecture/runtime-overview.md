@@ -169,9 +169,11 @@ cd mur-agent-gui/src-tauri && cargo tauri dev          # 6-tab settings window o
 
 ---
 
-## murmur Panel (Hub GUI data tabs, P1+P2)
+## murmur Panel (Hub GUI data tabs, P1–P3)
 
-The Hub's per-agent detail panel surfaces read-only operational data alongside the chat/CLI view. P2 (2026-07) shipped five tabs: **Information** (git status/branch + cost/token usage), **Activities** (recent tool calls/events), **Preview** (deferred to P3 — placeholder tab), **Notifications** (pending workflow proposals), and **Schedule** (unified view across agent/workflow/fleet schedulers). Data flows from `mur-core` command output parsed into typed frames (`mur-core/src/panel.rs` — `frames_round_trip`/`unknown_frames_are_none` tests cover forward-compat with unrecognized frame kinds); the Hub calls `mur-core` directly rather than shelling out. Refresh is poll-based (~30s) with fail-soft rendering on missing/partial data.
+The Hub's per-agent detail panel surfaces read-only operational data alongside the chat/CLI view. P2 (2026-07) shipped five tabs: **Information** (git status/branch + cost/token usage), **Activities** (recent tool calls/events), **Preview**, **Notifications** (pending workflow proposals), and **Schedule** (unified view across agent/workflow/fleet schedulers). Data flows from `mur-core` command output parsed into typed frames (`mur-core/src/panel.rs` — `frames_round_trip`/`unknown_frames_are_none` tests cover forward-compat with unrecognized frame kinds); the Hub calls `mur-core` directly rather than shelling out. Refresh is poll-based (~30s) with fail-soft rendering on missing/partial data.
+
+P3 (2026-07) filled the **Preview** tab: `/panel preview <path|url>` renders a Markdown file (via the shared `Markdown` component), an HTML file (sandboxed `srcDoc`, scripts only), or a localhost dev-server URL (sandboxed iframe, host restricted to `localhost`/`127.0.0.1`/`[::1]`). File previews auto-reload via a single-slot `notify` watcher on the file's parent directory (`mur-hub-gui/src-tauri/src/panel/preview.rs`, emitting `panel-preview-changed`); reads are capped at 2 MiB.
 
 - **`mur internals schedule-status`** — unified schedule query across the agent scheduler, workflow scheduler, and fleet loop triggers; emits JSON (no `--json` flag needed, always structured) consumed by the Schedule tab.
 - **Spec:** see `.superpowers/sdd/` task briefs on branch `feat/murmur-panel-p2` for the full task breakdown (Tasks 1-9).

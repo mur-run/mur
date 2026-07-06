@@ -4,6 +4,7 @@
 
 pub mod data;
 pub mod pos;
+pub mod preview;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
