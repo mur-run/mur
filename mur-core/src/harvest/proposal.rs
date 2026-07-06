@@ -38,6 +38,39 @@ pub struct Proposal {
     pub project: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)]
+pub struct ProposalSummary {
+    pub file: String,
+    pub modified: String,
+}
+
+/// Pending proposals in `<home>/inbox/workflow-proposals`, newest first, capped at `limit`.
+#[allow(dead_code)]
+pub fn list_pending(mur_home: &Path, limit: usize) -> Vec<ProposalSummary> {
+    let dir = mur_home.join("inbox").join("workflow-proposals");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut items: Vec<(std::time::SystemTime, String)> = entries
+        .flatten()
+        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("yaml"))
+        .filter_map(|e| {
+            let m = e.metadata().ok()?.modified().ok()?;
+            Some((m, e.file_name().to_string_lossy().to_string()))
+        })
+        .collect();
+    items.sort_by_key(|b| std::cmp::Reverse(b.0));
+    items
+        .into_iter()
+        .take(limit)
+        .map(|(m, file)| ProposalSummary {
+            file,
+            modified: chrono::DateTime::<chrono::Utc>::from(m).to_rfc3339(),
+        })
+        .collect()
+}
+
 pub fn inbox_dir() -> PathBuf {
     crate::paths::mur_root(None)
         .join("inbox")
@@ -173,5 +206,23 @@ mod tests {
             "fix-hub-dark-mode-contrast"
         );
         assert_eq!(suggest_name("???"), "captured-workflow");
+    }
+
+    #[test]
+    fn list_pending_newest_first_capped() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("inbox").join("workflow-proposals");
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in ["a.yaml", "b.yaml", "c.yaml"] {
+            std::fs::write(dir.join(n), "test: 1\n").unwrap();
+        }
+        let list = list_pending(tmp.path(), 2);
+        assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn list_pending_empty_dir_is_empty() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert!(list_pending(tmp.path(), 5).is_empty());
     }
 }
