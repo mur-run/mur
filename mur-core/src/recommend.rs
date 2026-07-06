@@ -65,14 +65,19 @@ pub fn recommend_for_cwd(cwd: &Path, limit: usize) -> Vec<Recommendation> {
     if query.trim().is_empty() {
         return Vec::new();
     }
+    recommend_with_query(&query, limit)
+}
 
+/// Run the skill + workflow retrieval for an arbitrary query string.
+/// (Shared by `recommend_for_cwd` and `recommend_for_input`.)
+fn recommend_with_query(query: &str, limit: usize) -> Vec<Recommendation> {
     let mur_dir = mur_common::trust::mur_home();
 
     // Skills: exact pipeline cmd_hook_prompt uses for its fallback path.
     let mut skills = Vec::new();
     if let Ok(mut candidates) = load_skill_candidates(&mur_dir.join("skills"), &mur_dir) {
         filter_by_scope(&mut candidates, &ActiveScope::detect());
-        for scored in score_and_rank_generic(&query, candidates) {
+        for scored in score_and_rank_generic(query, candidates) {
             skills.push(Recommendation {
                 name: scored.item.manifest.name.clone(),
                 kind: "skill".into(),
@@ -134,6 +139,37 @@ pub fn recommend_for_cwd(cwd: &Path, limit: usize) -> Vec<Recommendation> {
     out
 }
 
+/// Rank tier for input-driven suggestions: name prefix/exact matches first
+/// (VS Code Quick Open lesson — exact beats fuzzy), then retrieval score,
+/// then stable name tie-break.
+pub(crate) fn rank_input(query: &str, mut recs: Vec<Recommendation>) -> Vec<Recommendation> {
+    let q = query.trim().to_ascii_lowercase();
+    recs.sort_by(|a, b| {
+        let ap = a.name.to_ascii_lowercase().starts_with(&q);
+        let bp = b.name.to_ascii_lowercase().starts_with(&q);
+        bp.cmp(&ap) // prefix matches first
+            .then(b.score.total_cmp(&a.score))
+            .then(a.name.cmp(&b.name))
+    });
+    recs
+}
+
+/// Input-driven recommendations (spec §3.3). Input text is the query; cwd
+/// terms are appended as low-weight context. Below `MIN_QUERY_CHARS` this
+/// is exactly `recommend_for_cwd`. Fail-soft like everything else here.
+pub fn recommend_for_input(cwd: &Path, input: &str, limit: usize) -> Vec<Recommendation> {
+    let trimmed = input.trim();
+    if trimmed.chars().count() < mur_common::panel::MIN_QUERY_CHARS {
+        return recommend_for_cwd(cwd, limit);
+    }
+    // Input words first so they dominate the word-overlap scoring; cwd
+    // terms trail as context.
+    let query = format!("{} {}", trimmed, cwd_query(cwd));
+    let mut out = rank_input(trimmed, recommend_with_query(&query, limit * 2));
+    out.truncate(limit);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +189,41 @@ mod tests {
         // sandbox → must return without panicking or erroring.
         let recs = recommend_for_cwd(Path::new("/nonexistent/dir"), 5);
         assert!(recs.len() <= 5);
+    }
+
+    fn rec(name: &str, score: f32) -> Recommendation {
+        Recommendation {
+            name: name.into(),
+            kind: "skill".into(),
+            score,
+            description: String::new(),
+            command: format!("mur skill show {name}"),
+        }
+    }
+
+    #[test]
+    fn short_input_falls_back_to_cwd() {
+        // 1 trimmed char < MIN_QUERY_CHARS → identical to recommend_for_cwd
+        // (fail-soft: both empty in a test sandbox, and neither panics).
+        let a = recommend_for_input(Path::new("/nonexistent/dir"), "x", 5);
+        let b = recommend_for_cwd(Path::new("/nonexistent/dir"), 5);
+        assert_eq!(a.len(), b.len());
+    }
+
+    #[test]
+    fn prefix_matches_outrank_score() {
+        let recs = vec![rec("zeta-high", 0.9), rec("book-search", 0.5)];
+        let out = rank_input("book", recs);
+        // prefix match beats a higher retrieval score
+        assert_eq!(out[0].name, "book-search");
+        assert_eq!(out[1].name, "zeta-high");
+    }
+
+    #[test]
+    fn ties_break_by_name_ascending() {
+        let recs = vec![rec("bbb", 0.5), rec("aaa", 0.5)];
+        let out = rank_input("zzz", recs);
+        assert_eq!(out[0].name, "aaa");
+        assert_eq!(out[1].name, "bbb");
     }
 }
