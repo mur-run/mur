@@ -3,6 +3,7 @@
 //! here; clicks go back insert-only.
 
 pub mod data;
+pub mod follow;
 pub mod pos;
 pub mod preview;
 
