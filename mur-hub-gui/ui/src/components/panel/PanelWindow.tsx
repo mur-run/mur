@@ -136,6 +136,7 @@ export function PanelWindow() {
   const [schedule, setSchedule] = useState<ScheduleStatus | null>(null);
   const [proposals, setProposals] = useState<ProposalSummary[]>([]);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
+  const [recInputDriven, setRecInputDriven] = useState(false);
   const [pinned, setPinned] = useState(true);
 
   const recGen = useRef(0);
@@ -209,11 +210,14 @@ export function PanelWindow() {
       void invoke<GitInfo>("panel_git_info", { cwd: sess.cwd }).then(setGitInfo);
       void invoke<TokenTotals>("panel_cost", { agent: sess.agent }).then(setCost);
       const gen = ++recGen.current;
-      void invoke<Recommendation[]>("panel_recommend_input", {
+      void invoke<{ input_driven: boolean; items: Recommendation[] }>("panel_recommend_input", {
         pid: sess.pid,
         cwd: sess.cwd,
       }).then((r) => {
-        if (gen === recGen.current) setRecommendations(r);
+        if (gen === recGen.current) {
+          setRecommendations(r.items);
+          setRecInputDriven(r.input_driven);
+        }
       });
     } else if (tab === "activities") {
       void invoke<Activities>("panel_activities", { agent: sess.agent }).then(setActivities);
@@ -357,7 +361,10 @@ export function PanelWindow() {
                 </>
               )}
             </dl>
-            <h3>Recommended</h3>
+            <h3>
+              Recommended
+              {recInputDriven && <span className="panel-empty"> matching your input</span>}
+            </h3>
             {recommendations.length === 0 ? (
               <p className="panel-empty">No recommendations.</p>
             ) : (
