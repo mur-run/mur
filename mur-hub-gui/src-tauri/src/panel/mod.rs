@@ -91,6 +91,12 @@ fn on_frame(app: &AppHandle, pid: u32, frame: PanelFrame) {
                 serde_json::json!({ "pid": pid, "kind": kind, "target": target }),
             );
         }
+        PanelFrame::Stream { delta } => {
+            let _ = app.emit(
+                "panel-stream",
+                serde_json::json!({ "pid": pid, "delta": delta }),
+            );
+        }
         PanelFrame::Bye => {}
     }
 }

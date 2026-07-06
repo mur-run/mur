@@ -258,6 +258,10 @@ pub struct App {
     /// Panel server handle (`/panel` companion window). None only in tests;
     /// dropping it removes the session record + socket.
     pub panel: Option<super::panel::PanelHandle>,
+    /// Per-session gate for forwarding agent-output deltas to the Panel.
+    /// Default OFF; toggled ONLY via `/panel stream on|off` from this
+    /// terminal — the Hub has no frame that can flip it (fail-closed).
+    pub panel_stream: bool,
     /// Working directory captured at CLI startup; sent to the agent once per
     /// session so it knows what project the user is in.
     pub cwd: Option<PathBuf>,
@@ -360,6 +364,7 @@ impl App {
             pending_shell: Vec::new(),
             persist_warned: false,
             panel: None,
+            panel_stream: false,
             cwd: std::env::current_dir().ok(),
             cwd_sent: false,
             theme,
@@ -556,6 +561,14 @@ impl App {
             } else {
                 m.text.push_str(text);
             }
+        }
+        if !thinking
+            && self.panel_stream
+            && let Some(panel) = &self.panel
+        {
+            panel.send(mur_common::panel::PanelFrame::Stream {
+                delta: text.to_string(),
+            });
         }
         // NB: do not reset scroll_back here — that would yank the viewport back
         // to the bottom on every token, making it impossible to scroll up while

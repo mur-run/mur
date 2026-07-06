@@ -163,12 +163,26 @@ async fn pump(
     }
 }
 
-const PANEL_HINT: &str = "usage: /panel [information|activities|preview|notifications|schedule] · /panel preview <path|url>";
+const PANEL_HINT: &str = "usage: /panel [information|activities|preview|notifications|schedule|stream on|off] · /panel preview <path|url>";
 
 /// `/panel [tab] [target]` — fire-and-forget; opens/focuses the Hub Panel
 /// window on the given tab.
 pub fn handle_panel_command(app: &mut super::app::App, args: &[String]) {
     use mur_common::panel::{PanelTab, PreviewKind};
+    if args.first().map(String::as_str) == Some("stream") {
+        match args.get(1).map(String::as_str) {
+            Some("on") => {
+                app.panel_stream = true;
+                app.push_system("panel stream: on".to_string());
+            }
+            Some("off") => {
+                app.panel_stream = false;
+                app.push_system("panel stream: off".to_string());
+            }
+            _ => app.push_system(format!("usage: /panel stream on|off — {PANEL_HINT}")),
+        }
+        return;
+    }
     let frame = match args.first().map(String::as_str) {
         Some("information" | "info") => PanelFrame::Panel {
             focus: PanelTab::Information,

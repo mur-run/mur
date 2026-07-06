@@ -59,6 +59,7 @@ const COMMANDS: &[(&str, &str, &[&str])] = &[
             "preview",
             "notifications",
             "schedule",
+            "stream",
         ],
     ),
     ("quit", "exit the chat", &[]),
@@ -251,7 +252,7 @@ mod tests {
     fn panel_subcommands() {
         let s = compute("/panel ", &[]).unwrap();
         assert!(s.items.iter().any(|c| c.insert == "/panel preview "));
-        assert_eq!(s.items.len(), 5);
+        assert_eq!(s.items.len(), 6);
     }
 
     #[test]
