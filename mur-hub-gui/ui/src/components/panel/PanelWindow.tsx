@@ -136,6 +136,7 @@ export function PanelWindow() {
   const [schedule, setSchedule] = useState<ScheduleStatus | null>(null);
   const [proposals, setProposals] = useState<ProposalSummary[]>([]);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
+  const [pinned, setPinned] = useState(true);
 
   useEffect(() => {
     void invoke<PanelSession[]>("panel_sessions").then((s) => {
@@ -178,6 +179,17 @@ export function PanelWindow() {
   useEffect(() => {
     setPreviewMode(preview ? "target" : "live");
   }, [sess?.pid]);
+
+  // Live-follow: while pinned, poll the terminal window and reposition the
+  // panel beside it (Task 1's backend loop). Unpinning / session change stops
+  // it. A user-drag pauses the backend loop; re-pin (toggle off/on) restarts.
+  useEffect(() => {
+    const tp = pinned ? (sess?.terminal_program ?? null) : null;
+    invoke("panel_follow", { termProgram: tp }).catch(() => {});
+    return () => {
+      invoke("panel_follow", { termProgram: null }).catch(() => {});
+    };
+  }, [sess?.pid, sess?.terminal_program, pinned]);
 
   // Fetch data for the active tab whenever the session, tab, showAll toggle
   // change, or the window regains focus.
@@ -238,6 +250,13 @@ export function PanelWindow() {
             </option>
           ))}
         </select>
+        <button
+          className={pinned ? "panel-pin active" : "panel-pin"}
+          title="Follow terminal window (re-pin after moving the panel)"
+          onClick={() => setPinned((p) => !p)}
+        >
+          📌
+        </button>
       </header>
       <nav className="panel-tabs">
         {TABS.map((t) => (
