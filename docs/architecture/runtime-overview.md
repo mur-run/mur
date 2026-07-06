@@ -169,7 +169,7 @@ cd mur-agent-gui/src-tauri && cargo tauri dev          # 6-tab settings window o
 
 ---
 
-## murmur Panel (Hub GUI data tabs, P1–P4)
+## murmur Panel (Hub GUI data tabs, P1–P5)
 
 The Hub's per-agent detail panel surfaces read-only operational data alongside the chat/CLI view. P2 (2026-07) shipped five tabs: **Information** (git status/branch + cost/token usage), **Activities** (recent tool calls/events), **Preview**, **Notifications** (pending workflow proposals), and **Schedule** (unified view across agent/workflow/fleet schedulers). Data flows from `mur-core` command output parsed into typed frames (`mur-core/src/panel.rs` — `frames_round_trip`/`unknown_frames_are_none` tests cover forward-compat with unrecognized frame kinds); the Hub calls `mur-core` directly rather than shelling out. Refresh is poll-based (~30s) with fail-soft rendering on missing/partial data.
 
@@ -178,6 +178,8 @@ P3 (2026-07) filled the **Preview** tab: `/panel preview <path|url>` renders a M
 - **`mur internals schedule-status`** — unified schedule query across the agent scheduler, workflow scheduler, and fleet loop triggers; emits JSON (no `--json` flag needed, always structured) consumed by the Schedule tab.
 
 P4 (2026-07) added recommendations and a gated live stream. **`mur internals recommend`** reuses `score_and_rank_generic` to surface cwd-relevant skills/workflows as ready-to-run `mur` commands; the Panel's **Information** tab lists them, and clicking one inserts the command text for the user to review/edit before running (no auto-execution). The Preview tab gained a **Live/Target** sub-toggle: `/panel stream on|off` is a murmur-side, per-session, opt-in (default OFF) slash command that forwards the agent's live output as `PanelFrame::Stream { delta }` frames; when Live is selected the Preview tab renders a capped 20,000-character rolling tail of the streamed text. The stream gate can only be flipped from the terminal the user is sitting at — the Hub has no frame to enable it remotely.
+
+P5 (2026-07) made the panel **follow the terminal window**. A permission-free poll loop (`mur-hub-gui/src-tauri/src/panel/follow.rs`, `panel_follow` command) reads the terminal window's bounds via `CGWindowList` every 600 ms and re-invokes `reposition` when they change — no Accessibility/AXObserver permission needed. A pure `follow_tick` decides reposition/idle/pause; it **pauses when the user drags the panel** (never fights the user) and stays idle when the terminal is minimized/on another Space (no teleport). A 📌 pin toggle in the panel header starts/stops following (default on); re-pin restarts after a manual move. Chosen over AXObserver: zero permissions beat sub-second latency for a companion panel.
 
 - **Specs & plans:** `docs/superpowers/specs/2026-07-06-murmur-panel-p2-data-tabs-design.md` and the `docs/superpowers/plans/2026-07-06-murmur-panel-p{2,3,4,5}-*.md` implementation plans.
 
