@@ -185,7 +185,7 @@ fn list_launchd() -> Vec<(String, String)> {
 
 const CRON_TAG_PREFIX: &str = "# mur-schedule:";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SystemSchedule {
     pub workflow: String,
     pub cron: Option<String>,
@@ -297,8 +297,8 @@ pub(crate) fn calendar_interval_to_cron(plist: &str) -> Option<String> {
 /// Extract first five whitespace-separated fields from crontab line (cron expression).
 pub(crate) fn crontab_line_to_cron(line: &str) -> Option<String> {
     let fields: Vec<&str> = line.split_whitespace().take(6).collect();
-    if fields.len() < 5 {
-        return None; // needs at least 5 schedule fields
+    if fields.len() < 6 {
+        return None; // needs at least 5 schedule fields + at least one command token
     }
     Some(fields[..5].join(" "))
 }
