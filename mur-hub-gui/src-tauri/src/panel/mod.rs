@@ -26,6 +26,7 @@ pub struct PanelState {
 /// Start the bridge and the event pump. Called from Tauri setup, inside
 /// the runtime (`PanelBridge::start` requires it).
 pub fn spawn_bridge(app: AppHandle, mur_home: std::path::PathBuf) {
+    tracing::info!("panel: spawn_bridge starting (home {})", mur_home.display());
     let (tx, mut rx) = mpsc::channel::<PanelEvent>(64);
     match PanelBridge::start(mur_home, tx) {
         Ok(bridge) => *app.state::<PanelState>().bridge.lock().unwrap() = Some(bridge),
