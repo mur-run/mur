@@ -107,7 +107,7 @@ pub fn decode_line<T: serde::de::DeserializeOwned>(line: &str) -> Option<T> {
 /// (the tail is what the user is currently typing).
 pub fn input_snapshot(text: &str) -> String {
     let redacted: Vec<String> = text
-        .split(' ')
+        .split_whitespace()
         .map(|tok| {
             if looks_secret(tok) {
                 "[redacted]".to_string()
@@ -253,6 +253,12 @@ mod tests {
         assert_eq!(input_snapshot("fix the panel"), "fix the panel");
         let hex31 = "0123456789abcdef0123456789abcde";
         assert_eq!(input_snapshot(hex31), hex31);
+    }
+
+    #[test]
+    fn snapshot_redacts_across_newlines() {
+        let s = input_snapshot("line1\nsk-abcdefghijklmnop1234\tend");
+        assert_eq!(s, "line1 [redacted] end");
     }
 
     #[test]
