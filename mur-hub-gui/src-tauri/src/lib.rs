@@ -589,6 +589,7 @@ pub fn run() {
             panel::data::panel_git_info,
             panel::data::panel_activities,
             panel::data::panel_recommend,
+            panel::data::panel_recommend_input,
             start_agent,
             stop_agent,
             chat::agent_chat_send,

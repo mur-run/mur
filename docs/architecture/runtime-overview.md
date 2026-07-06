@@ -183,6 +183,8 @@ P5 (2026-07) made the panel **follow the terminal window**. A permission-free po
 
 - **Specs & plans:** `docs/superpowers/specs/2026-07-06-murmur-panel-p2-data-tabs-design.md` and the `docs/superpowers/plans/2026-07-06-murmur-panel-p{2,3,4,5}-*.md` implementation plans.
 
+P6 (input-driven suggestions): murmur debounces the message input (200 ms) and pushes redacted `PanelFrame::InputChanged` snapshots over the panel socket (proto v2). The Hub keeps the latest snapshot per pid in memory only and pings the Panel webview (pid-only — raw text never enters the webview), which re-queries `panel_recommend_input`: adaptive query→picked history (Firefox urlbar decay parameters, `~/.mur/panel/adaptive.yaml`) > name-prefix matches > the standard retrieval ranking, capped at 5. Clicking a suggestion stays insert-only and records the adaptive pair server-side. Spec: `docs/superpowers/specs/2026-07-06-murmur-panel-input-driven-suggestions-design.md`.
+
 ---
 
 ## Agent Runtime (murmur P0a)
