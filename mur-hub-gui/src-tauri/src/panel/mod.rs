@@ -21,6 +21,16 @@ pub const PANEL_LABEL: &str = "murmur-panel";
 pub struct PanelState {
     bridge: Mutex<Option<PanelBridge>>,
     sessions: Mutex<HashMap<u32, PanelSession>>,
+    /// Latest InputChanged snapshot per session. Local-only: never persisted,
+    /// never sent to the webview (it gets a pid-only ping), dropped on
+    /// SessionDown. Spec §3.2.
+    inputs: Mutex<HashMap<u32, String>>,
+}
+
+impl PanelState {
+    pub(crate) fn inputs_snapshot(&self, pid: u32) -> Option<String> {
+        self.inputs.lock().unwrap().get(&pid).cloned()
+    }
 }
 
 /// Start the bridge and the event pump. Called from Tauri setup, inside
@@ -40,11 +50,9 @@ pub fn spawn_bridge(app: AppHandle, mur_home: std::path::PathBuf) {
             match ev {
                 PanelEvent::Frame { pid, frame } => on_frame(&app, pid, frame),
                 PanelEvent::SessionDown { pid } => {
-                    app.state::<PanelState>()
-                        .sessions
-                        .lock()
-                        .unwrap()
-                        .remove(&pid);
+                    let st = app.state::<PanelState>();
+                    st.sessions.lock().unwrap().remove(&pid);
+                    st.inputs.lock().unwrap().remove(&pid);
                     emit_sessions(&app);
                 }
             }
@@ -98,6 +106,14 @@ fn on_frame(app: &AppHandle, pid: u32, frame: PanelFrame) {
                 "panel-stream",
                 serde_json::json!({ "pid": pid, "delta": delta }),
             );
+        }
+        PanelFrame::InputChanged { text } => {
+            app.state::<PanelState>()
+                .inputs
+                .lock()
+                .unwrap()
+                .insert(pid, text);
+            let _ = app.emit("panel-input-changed", serde_json::json!({ "pid": pid }));
         }
         PanelFrame::Bye => {}
     }
@@ -160,7 +176,19 @@ pub fn panel_sessions(state: State<PanelState>) -> Vec<PanelSession> {
 }
 
 #[tauri::command]
-pub fn panel_insert(pid: u32, text: String, state: State<PanelState>) -> Result<(), String> {
+pub fn panel_insert(
+    pid: u32,
+    text: String,
+    picked: Option<String>,
+    state: State<PanelState>,
+) -> Result<(), String> {
+    // Record BEFORE inserting: the insert clears/replaces the input, and the
+    // pairing must use the query that produced the suggestion.
+    if let Some(name) = picked.filter(|n| !n.is_empty())
+        && let Some(query) = state.inputs_snapshot(pid)
+    {
+        mur_core::recommend::record_pick(&crate::mur_home_path(), &query, &name);
+    }
     let ok = state
         .bridge
         .lock()
