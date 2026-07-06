@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import PreviewPane from "./PreviewPane";
 import "./panel.css";
 
 type PanelSession = {
@@ -114,7 +115,10 @@ export function PanelWindow() {
   const [sessions, setSessions] = useState<PanelSession[]>([]);
   const [pid, setPid] = useState<number | null>(null);
   const [tab, setTab] = useState<Tab>("information");
-  const [previewTarget, setPreviewTarget] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{
+    kind: "file" | "url";
+    target: string;
+  } | null>(null);
   const [showAll, setShowAll] = useState(false);
 
   const [gitInfo, setGitInfo] = useState<GitInfo | null>(null);
@@ -144,7 +148,11 @@ export function PanelWindow() {
     });
     const unPreview = listen<{ pid: number; kind: string; target: string }>(
       "panel-preview",
-      (e) => setPreviewTarget(e.payload.target),
+      (e) =>
+        setPreview({
+          kind: e.payload.kind === "url" ? "url" : "file",
+          target: e.payload.target,
+        }),
     );
     return () => {
       unSessions.then((f) => f());
@@ -389,10 +397,15 @@ export function PanelWindow() {
               </footer>
             )}
           </div>
-        ) : tab === "preview" && previewTarget ? (
-          <p className="panel-empty">
-            Preview target: <code>{previewTarget}</code> (rendering lands in P3)
-          </p>
+        ) : tab === "preview" ? (
+          preview ? (
+            <PreviewPane target={preview.target} kind={preview.kind} />
+          ) : (
+            <p className="panel-empty">
+              No preview target — type{" "}
+              <code>/panel preview &lt;path|url&gt;</code> in murmur.
+            </p>
+          )
         ) : (
           <p className="panel-empty">{TAB_LABEL[tab]} lands in a later phase.</p>
         )}
