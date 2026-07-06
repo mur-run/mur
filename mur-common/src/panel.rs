@@ -66,6 +66,10 @@ pub enum PanelFrame {
         kind: PreviewKind,
         target: String,
     },
+    /// Live agent-output delta (P4; sent only while the session gate is on).
+    Stream {
+        delta: String,
+    },
     Bye,
 }
 
@@ -125,6 +129,16 @@ mod tests {
         })
         .unwrap();
         assert!(line.contains("\"focus\":\"schedule\""));
+
+        let line = serde_json::to_string(&PanelFrame::Stream {
+            delta: "tok".into(),
+        })
+        .unwrap();
+        assert!(line.contains("\"type\":\"stream\""));
+        assert!(matches!(
+            decode_line::<PanelFrame>(&line),
+            Some(PanelFrame::Stream { delta }) if delta == "tok"
+        ));
 
         let line = serde_json::to_string(&HubFrame::Insert {
             text: "/help".into(),
