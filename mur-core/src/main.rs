@@ -54,9 +54,7 @@ mod parallel;
 mod paths;
 mod retrieve;
 mod route;
-// Lib-only for now (no CLI command wires it up yet); declared here too so the
-// binary's separate module tree resolves `crate::schedule_status` cleanly if
-// a future CLI subcommand needs it.
+// wired via dispatch in the lib crate; this bin re-declaration is unused.
 #[allow(dead_code)]
 mod schedule_status;
 mod server;

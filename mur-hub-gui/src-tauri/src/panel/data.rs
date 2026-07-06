@@ -12,6 +12,9 @@ pub fn panel_schedule_status(agent: Option<String>) -> mur_core::schedule_status
 
 #[tauri::command]
 pub fn panel_cost(agent: String) -> mur_core::cmd::agent::stats::TokenTotals {
+    if agent.contains('/') || agent.contains('\\') || agent.contains("..") {
+        return mur_core::cmd::agent::stats::TokenTotals::default();
+    }
     mur_core::cmd::agent::stats::agent_token_totals(&mur_home_path().join("agents").join(agent))
 }
 
