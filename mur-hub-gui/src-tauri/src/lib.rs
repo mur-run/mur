@@ -262,6 +262,7 @@ pub fn run() {
         .manage(EventBusState(EventBus::new(256)))
         .manage(BridgeState::default())
         .manage(panel::PanelState::default())
+        .manage(panel::preview::PreviewWatch::default())
         // OS file-drop onto a desktop pet (`pet-<agent>` window) → forward the
         // dropped paths to that pet's webview. App-level (not per-window) so it
         // covers pet windows created dynamically after launch.
@@ -578,6 +579,8 @@ pub fn run() {
             panel::panel_sessions,
             panel::panel_insert,
             panel::open_panel_window,
+            panel::preview::panel_read_preview_file,
+            panel::preview::panel_watch_preview,
             panel::data::panel_schedule_status,
             panel::data::panel_cost,
             panel::data::panel_proposals,
