@@ -52,8 +52,8 @@ use tokio::sync::mpsc;
 use tokio::time::Instant as TokioInstant;
 
 use self::app::{
-    App, ESC_DOUBLE_WINDOW, EscAction, OverlayKeyAction, Role, SlashCmd, esc_action,
-    overlay_key_action, parse_slash,
+    App, ESC_DOUBLE_WINDOW, EscAction, OverlayKeyAction, Role, SlashCmd, arm_input_debounce,
+    esc_action, overlay_key_action, parse_slash, take_due_input,
 };
 use self::persist::Session;
 use self::stream::{StreamMsg, build_params, cancel_task, respond_hitl, spawn_stream};
@@ -367,6 +367,7 @@ async fn event_loop(
 
     loop {
         app.sync_input_block();
+        arm_input_debounce(app, StdInstant::now());
         if app.needs_full_redraw {
             terminal.clear()?;
             app.needs_full_redraw = false;
@@ -381,6 +382,11 @@ async fn event_loop(
         // Otherwise this arm is disabled and never wakes the loop.
         let blink_live = app.mascot_mode.animated() && app.messages.is_empty() && !app.streaming;
         let blink_at = TokioInstant::from_std(app.blink.next_deadline(StdInstant::now()));
+        let input_due = app
+            .panel_input_deadline
+            .map(TokioInstant::from_std)
+            .unwrap_or_else(|| TokioInstant::from_std(StdInstant::now()));
+        let input_armed = app.panel_input_deadline.is_some();
         tokio::select! {
             maybe = events.next() => match maybe {
                 Some(Ok(ev)) => handle_event(app, ev, &tx).await,
@@ -396,6 +402,15 @@ async fn event_loop(
             // Wake at the blink deadline; the loop redraws at the top of the
             // next iteration, advancing the eye frame. No state change needed.
             _ = tokio::time::sleep_until(blink_at), if blink_live => {}
+            _ = tokio::time::sleep_until(input_due), if input_armed => {
+                if let Some(raw) = take_due_input(app, StdInstant::now())
+                    && let Some(p) = &app.panel
+                {
+                    p.send(mur_common::panel::PanelFrame::InputChanged {
+                        text: mur_common::panel::input_snapshot(&raw),
+                    });
+                }
+            }
         }
     }
 }
