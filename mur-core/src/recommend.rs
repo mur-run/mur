@@ -50,32 +50,31 @@ pub fn cwd_query(cwd: &Path) -> String {
     parts.join(" ")
 }
 
-/// Minimum word-overlap score for an unscored workflow to be considered
-/// relevant. Mirrors the score floor semantics `score_and_rank_generic` uses
-/// for skills, applied to the simpler workflow-name/description overlap.
-const WORKFLOW_SCORE_FLOOR: f32 = 0.0;
-
 /// Recommend skills/workflows relevant to the given working directory.
 ///
 /// Fail-soft: any store error (missing `~/.mur`, unreadable skills dir,
 /// missing workflow store) yields an empty `Vec`, never a panic or `Err`.
+///
+/// Tiered by kind: skills are ranked among themselves by their real
+/// `score_and_rank_generic` score (0.42+ floor), then workflows are ranked
+/// among themselves by word-overlap (0.0–1.0). Skills appear first in the
+/// result, followed by workflows, then truncated to limit. This prevents
+/// high-overlap workflows from outranking lower-scored but more relevant
+/// skills across incompatible scoring scales.
 pub fn recommend_for_cwd(cwd: &Path, limit: usize) -> Vec<Recommendation> {
     let query = cwd_query(cwd);
     if query.trim().is_empty() {
         return Vec::new();
     }
 
-    let mut out = Vec::new();
     let mur_dir = mur_common::trust::mur_home();
 
     // Skills: exact pipeline cmd_hook_prompt uses for its fallback path.
+    let mut skills = Vec::new();
     if let Ok(mut candidates) = load_skill_candidates(&mur_dir.join("skills"), &mur_dir) {
         filter_by_scope(&mut candidates, &ActiveScope::detect());
-        for scored in score_and_rank_generic(&query, candidates)
-            .into_iter()
-            .take(limit)
-        {
-            out.push(Recommendation {
+        for scored in score_and_rank_generic(&query, candidates) {
+            skills.push(Recommendation {
                 name: scored.item.manifest.name.clone(),
                 kind: "skill".into(),
                 score: scored.score as f32,
@@ -89,34 +88,37 @@ pub fn recommend_for_cwd(cwd: &Path, limit: usize) -> Vec<Recommendation> {
     // `score_and_rank_generic` path to reuse for it (only `Pattern` and
     // `LoadedSkill` do). Load via the same store hook.rs uses and rank with a
     // simple case-insensitive word-overlap score against the query.
+    let mut workflows = Vec::new();
     if let Ok(store) = WorkflowYamlStore::default_store()
-        && let Ok(workflows) = store.list_all()
+        && let Ok(list) = store.list_all()
     {
         let query_words: Vec<String> = query
             .to_ascii_lowercase()
             .split_whitespace()
             .map(str::to_owned)
             .collect();
-        let mut scored_workflows: Vec<(f32, mur_common::workflow::Workflow)> = workflows
+        let mut scored_workflows: Vec<(f32, mur_common::workflow::Workflow)> = list
             .into_iter()
-            .map(|w| {
+            .filter_map(|w| {
                 let haystack = format!("{} {}", w.name, w.description).to_ascii_lowercase();
                 let hits = query_words
                     .iter()
                     .filter(|qw| haystack.contains(qw.as_str()))
                     .count();
+                if hits == 0 {
+                    return None;
+                }
                 let score = if query_words.is_empty() {
                     0.0
                 } else {
                     hits as f32 / query_words.len() as f32
                 };
-                (score, w)
+                Some((score, w))
             })
-            .filter(|(score, _)| *score > WORKFLOW_SCORE_FLOOR)
             .collect();
         scored_workflows.sort_by(|a, b| b.0.total_cmp(&a.0));
-        for (score, w) in scored_workflows.into_iter().take(limit) {
-            out.push(Recommendation {
+        for (score, w) in scored_workflows {
+            workflows.push(Recommendation {
                 name: w.name.clone(),
                 kind: "workflow".into(),
                 score,
@@ -126,7 +128,9 @@ pub fn recommend_for_cwd(cwd: &Path, limit: usize) -> Vec<Recommendation> {
         }
     }
 
-    out.sort_by(|a, b| b.score.total_cmp(&a.score));
+    // Tier: all sorted skills first, then all sorted workflows appended.
+    let mut out = skills;
+    out.extend(workflows);
     out.truncate(limit);
     out
 }
