@@ -31,17 +31,16 @@ pub struct Recommendation {
 /// Build a query string from a cwd's trailing path components (project dir +
 /// parent dir name) — the only cwd signal a session itself carries.
 pub fn cwd_query(cwd: &Path) -> String {
+    // Only real path segments (Component::Normal) — skips root/prefix/separator
+    // components in a platform-agnostic way (on Windows the root renders as
+    // "\\", not "/", so a string comparison would leak it into the query).
     let parts: Vec<String> = cwd
         .components()
         .rev()
         .take(2)
-        .filter_map(|c| {
-            let s = c.as_os_str().to_string_lossy();
-            if s.is_empty() || s == "/" {
-                None
-            } else {
-                Some(s.to_string())
-            }
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+            _ => None,
         })
         .collect::<Vec<_>>()
         .into_iter()
