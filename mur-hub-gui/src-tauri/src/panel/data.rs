@@ -69,6 +69,19 @@ pub fn panel_recommend(cwd: String) -> Vec<mur_core::recommend::Recommendation> 
     mur_core::recommend::recommend_for_cwd(Path::new(&cwd), 5)
 }
 
+/// Recommendations driven by the live murmur input snapshot for `pid`
+/// (falls back to cwd-only when there is no/short input). The raw snapshot
+/// stays in Rust; the webview only ever sees ranked results.
+#[tauri::command]
+pub fn panel_recommend_input(
+    pid: u32,
+    cwd: String,
+    state: tauri::State<crate::panel::PanelState>,
+) -> Vec<mur_core::recommend::Recommendation> {
+    let input = state.inputs_snapshot(pid).unwrap_or_default();
+    mur_core::recommend::recommend_for_input(Path::new(&cwd), &input, 5)
+}
+
 /// Best-effort `git` shell-out; returns an empty `GitInfo` for non-repos.
 #[tauri::command]
 pub fn panel_git_info(cwd: String) -> GitInfo {
