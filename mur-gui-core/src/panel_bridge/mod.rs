@@ -52,6 +52,7 @@ impl PanelBridge {
     #[cfg(unix)]
     pub fn start(mur_home: PathBuf, tx: mpsc::Sender<PanelEvent>) -> Result<Self> {
         let dir = murmur_run_dir(&mur_home);
+        tracing::info!("panel bridge: watching {}", dir.display());
         std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
         let senders: Senders = Arc::new(Mutex::new(HashMap::new()));
         let rt = tokio::runtime::Handle::current();

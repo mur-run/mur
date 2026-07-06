@@ -32,10 +32,12 @@ pub(crate) fn spawn(
         }
         let Ok(stream) = UnixStream::connect(&sess.sock).await else {
             // Socket gone but record present: crashed murmur. Reap.
+            tracing::debug!("panel_bridge: reaping dead session pid={pid}");
             let _ = std::fs::remove_file(&json_path);
             let _ = std::fs::remove_file(&sess.sock);
             return;
         };
+        tracing::info!("panel_bridge: connected to murmur session pid={pid}");
         let (out_tx, mut out_rx) = mpsc::channel::<HubFrame>(16);
         senders.lock().unwrap().insert(pid, out_tx);
         let (r, mut w) = stream.into_split();
