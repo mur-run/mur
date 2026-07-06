@@ -19,3 +19,4 @@ research/
 .superpowers/
 mur-hub-gui/src-tauri/resources/models/default/
 eval-out/
+.tokensave/
