@@ -185,6 +185,12 @@ fn list_launchd() -> Vec<(String, String)> {
 
 const CRON_TAG_PREFIX: &str = "# mur-schedule:";
 
+#[derive(Debug, Clone)]
+pub struct SystemSchedule {
+    pub workflow: String,
+    pub cron: Option<String>,
+}
+
 fn install_crontab(workflow_name: &str, cron_expr: &str) -> Result<()> {
     let mur = mur_binary();
     let tag = format!("{}{}", CRON_TAG_PREFIX, workflow_name);
@@ -262,6 +268,73 @@ fn remove_crontab(workflow_name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Extract cron expression from plist's StartCalendarInterval block.
+/// Returns 5-field cron expression (minute hour day month weekday).
+/// Single-integer fields become that value; missing fields become "*".
+pub(crate) fn calendar_interval_to_cron(plist: &str) -> Option<String> {
+    if !plist.contains("StartCalendarInterval") {
+        return None;
+    }
+    let field = |key: &str| -> String {
+        plist
+            .split(&format!("<key>{key}</key>"))
+            .nth(1)
+            .and_then(|rest| rest.split("<integer>").nth(1))
+            .and_then(|rest| rest.split("</integer>").next())
+            .map(|v| v.trim().to_string())
+            .unwrap_or_else(|| "*".to_string())
+    };
+    Some(format!(
+        "{} {} {} {} {}",
+        field("Minute"),
+        field("Hour"),
+        field("Day"),
+        field("Month"),
+        field("Weekday"),
+    ))
+}
+
+/// Extract first five whitespace-separated fields from crontab line (cron expression).
+pub(crate) fn crontab_line_to_cron(line: &str) -> Option<String> {
+    let fields: Vec<&str> = line.split_whitespace().take(6).collect();
+    if fields.len() < 5 {
+        return None; // needs at least 5 schedule fields
+    }
+    Some(fields[..5].join(" "))
+}
+
+/// Detailed variant of list_system_schedules that recovers each entry's cron expression.
+pub fn list_system_schedules_detailed() -> Vec<SystemSchedule> {
+    if cfg!(target_os = "macos") {
+        list_launchd()
+            .into_iter()
+            .map(|(workflow, _)| {
+                let cron = std::fs::read_to_string(plist_path(&workflow))
+                    .ok()
+                    .and_then(|body| calendar_interval_to_cron(&body));
+                SystemSchedule { workflow, cron }
+            })
+            .collect()
+    } else {
+        // Tagged crontab lines: "<5 cron fields> <cmd...> # mur-schedule:<name>"
+        let output = std::process::Command::new("crontab").arg("-l").output();
+        let Ok(out) = output else {
+            return Vec::new();
+        };
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| {
+                let name = line.split(CRON_TAG_PREFIX).nth(1)?.trim().to_string();
+                let cron = crontab_line_to_cron(line);
+                Some(SystemSchedule {
+                    workflow: name,
+                    cron,
+                })
+            })
+            .collect()
+    }
+}
+
 fn list_crontab() -> Vec<(String, String)> {
     let existing = std::process::Command::new("crontab")
         .arg("-l")
@@ -276,4 +349,45 @@ fn list_crontab() -> Vec<(String, String)> {
                 .map(|name| (name.to_string(), "crontab".to_string()))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod p2_tests {
+    use super::*;
+
+    #[test]
+    fn calendar_interval_round_trips_cron() {
+        // What install_launchd writes for "30 9 * * 1-5" — only Minute/Hour/Weekday present.
+        let plist = r#"<dict>
+  <key>StartCalendarInterval</key>
+    <dict>
+      <key>Minute</key>
+      <integer>30</integer>
+      <key>Hour</key>
+      <integer>9</integer>
+      <key>Weekday</key>
+      <integer>1</integer>
+    </dict>
+</dict>"#;
+        assert_eq!(
+            calendar_interval_to_cron(plist).as_deref(),
+            Some("30 9 * * 1")
+        );
+    }
+
+    #[test]
+    fn calendar_interval_missing_block_is_none() {
+        assert_eq!(calendar_interval_to_cron("<dict></dict>"), None);
+    }
+
+    #[test]
+    fn crontab_line_extracts_first_five_fields() {
+        let line = "0 9 * * * /opt/homebrew/bin/mur run daily >> ~/.mur/logs/x.log 2>&1 # mur-schedule:daily";
+        assert_eq!(crontab_line_to_cron(line).as_deref(), Some("0 9 * * *"));
+    }
+
+    #[test]
+    fn crontab_short_line_is_none() {
+        assert_eq!(crontab_line_to_cron("0 9 *"), None);
+    }
 }
