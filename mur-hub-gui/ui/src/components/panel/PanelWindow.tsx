@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import PreviewPane from "./PreviewPane";
+import StreamTail from "./StreamTail";
 import "./panel.css";
 
 type PanelSession = {
@@ -64,6 +65,13 @@ type GitInfo = {
   dirty: boolean;
 };
 type ProposalSummary = { file: string; modified: string };
+type Recommendation = {
+  name: string;
+  kind: "skill" | "workflow";
+  score: number;
+  description: string;
+  command: string;
+};
 
 type WorkParticipant = { id: string };
 type ChannelSummary = {
@@ -120,12 +128,14 @@ export function PanelWindow() {
     target: string;
   } | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const [previewMode, setPreviewMode] = useState<"target" | "live">("target");
 
   const [gitInfo, setGitInfo] = useState<GitInfo | null>(null);
   const [cost, setCost] = useState<TokenTotals | null>(null);
   const [activities, setActivities] = useState<Activities | null>(null);
   const [schedule, setSchedule] = useState<ScheduleStatus | null>(null);
   const [proposals, setProposals] = useState<ProposalSummary[]>([]);
+  const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
 
   useEffect(() => {
     void invoke<PanelSession[]>("panel_sessions").then((s) => {
@@ -148,11 +158,13 @@ export function PanelWindow() {
     });
     const unPreview = listen<{ pid: number; kind: string; target: string }>(
       "panel-preview",
-      (e) =>
+      (e) => {
         setPreview({
           kind: e.payload.kind === "url" ? "url" : "file",
           target: e.payload.target,
-        }),
+        });
+        setPreviewMode("target");
+      },
     );
     return () => {
       unSessions.then((f) => f());
@@ -163,6 +175,10 @@ export function PanelWindow() {
 
   const sess = sessions.find((s) => s.pid === pid);
 
+  useEffect(() => {
+    setPreviewMode(preview ? "target" : "live");
+  }, [sess?.pid]);
+
   // Fetch data for the active tab whenever the session, tab, showAll toggle
   // change, or the window regains focus.
   const fetchTabData = useRef<() => void>(() => {});
@@ -171,6 +187,9 @@ export function PanelWindow() {
     if (tab === "information") {
       void invoke<GitInfo>("panel_git_info", { cwd: sess.cwd }).then(setGitInfo);
       void invoke<TokenTotals>("panel_cost", { agent: sess.agent }).then(setCost);
+      void invoke<Recommendation[]>("panel_recommend", { cwd: sess.cwd }).then(
+        setRecommendations,
+      );
     } else if (tab === "activities") {
       void invoke<Activities>("panel_activities", { agent: sess.agent }).then(setActivities);
     } else if (tab === "notifications") {
@@ -243,6 +262,24 @@ export function PanelWindow() {
           </label>
         </div>
       )}
+      {tab === "preview" && sess && (
+        <div className="panel-tab-header">
+          <div className="panel-subtoggle">
+            <button
+              className={previewMode === "target" ? "panel-subtoggle-btn active" : "panel-subtoggle-btn"}
+              onClick={() => setPreviewMode("target")}
+            >
+              Target
+            </button>
+            <button
+              className={previewMode === "live" ? "panel-subtoggle-btn active" : "panel-subtoggle-btn"}
+              onClick={() => setPreviewMode("live")}
+            >
+              Live
+            </button>
+          </div>
+        </div>
+      )}
       <main className="panel-body">
         {!sess ? (
           <p className="panel-empty">
@@ -288,6 +325,26 @@ export function PanelWindow() {
                 </>
               )}
             </dl>
+            <h3>Recommended</h3>
+            {recommendations.length === 0 ? (
+              <p className="panel-empty">No recommendations.</p>
+            ) : (
+              <ul className="panel-list">
+                {recommendations.map((r) => (
+                  <li
+                    key={`${r.kind}-${r.name}`}
+                    className="panel-list-row panel-list-clickable"
+                    onClick={() => insert(r.command)}
+                  >
+                    <span className={`panel-badge panel-badge-${r.kind}`}>
+                      {r.kind}
+                    </span>
+                    <span className="panel-list-name">{r.name}</span>
+                    <span className="panel-list-preview">{r.description}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         ) : tab === "activities" ? (
           <div className="panel-activities">
@@ -398,7 +455,9 @@ export function PanelWindow() {
             )}
           </div>
         ) : tab === "preview" ? (
-          preview ? (
+          previewMode === "live" ? (
+            <StreamTail pid={sess.pid} />
+          ) : preview ? (
             <PreviewPane target={preview.target} kind={preview.kind} />
           ) : (
             <p className="panel-empty">
