@@ -53,7 +53,13 @@ const COMMANDS: &[(&str, &str, &[&str])] = &[
     (
         "panel",
         "companion window (MUR Hub)",
-        &["information", "activities", "preview", "notifications"],
+        &[
+            "information",
+            "activities",
+            "preview",
+            "notifications",
+            "schedule",
+        ],
     ),
     ("quit", "exit the chat", &[]),
     ("sessions", "list past sessions", &[]),
@@ -245,7 +251,7 @@ mod tests {
     fn panel_subcommands() {
         let s = compute("/panel ", &[]).unwrap();
         assert!(s.items.iter().any(|c| c.insert == "/panel preview "));
-        assert_eq!(s.items.len(), 4);
+        assert_eq!(s.items.len(), 5);
     }
 
     #[test]
