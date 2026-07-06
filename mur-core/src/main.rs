@@ -52,6 +52,9 @@ mod interactive;
 mod nudge;
 mod parallel;
 mod paths;
+// wired via dispatch in the lib crate; this bin re-declaration is unused.
+#[allow(dead_code)]
+mod recommend;
 mod retrieve;
 mod route;
 // wired via dispatch in the lib crate; this bin re-declaration is unused.

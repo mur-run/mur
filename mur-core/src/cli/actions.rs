@@ -171,6 +171,16 @@ pub enum InternalsAction {
         #[arg(long)]
         agent: Option<String>,
     },
+    /// Context recommendations working directory JSON — Panel data source
+    #[command(hide = true)]
+    Recommend {
+        /// Working directory recommend
+        #[arg(long)]
+        cwd: String,
+        /// Max items
+        #[arg(long, default_value_t = 5)]
+        limit: usize,
+    },
 }
 
 #[derive(Subcommand)]
