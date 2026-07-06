@@ -184,3 +184,18 @@
   font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+
+.panel-pin {
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font-size: 14px;
+  opacity: 0.4;
+  filter: grayscale(1);
+  padding: 2px 4px;
+  line-height: 1;
+}
+.panel-pin.active {
+  opacity: 1;
+  filter: none;
+}
