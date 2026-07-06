@@ -61,6 +61,9 @@ pub fn spawn_bridge(app: AppHandle, mur_home: std::path::PathBuf) {
 }
 
 fn on_frame(app: &AppHandle, pid: u32, frame: PanelFrame) {
+    // Lifecycle tracing (PR #639 spirit). Never log frame payloads —
+    // InputChanged carries user input (spec §3.2).
+    tracing::debug!(pid, kind = frame_kind(&frame), "panel: frame received");
     match frame {
         PanelFrame::Hello { session } => {
             app.state::<PanelState>()
@@ -116,6 +119,18 @@ fn on_frame(app: &AppHandle, pid: u32, frame: PanelFrame) {
             let _ = app.emit("panel-input-changed", serde_json::json!({ "pid": pid }));
         }
         PanelFrame::Bye => {}
+    }
+}
+
+fn frame_kind(f: &PanelFrame) -> &'static str {
+    match f {
+        PanelFrame::Hello { .. } => "hello",
+        PanelFrame::State { .. } => "state",
+        PanelFrame::Panel { .. } => "panel",
+        PanelFrame::Preview { .. } => "preview",
+        PanelFrame::Stream { .. } => "stream",
+        PanelFrame::InputChanged { .. } => "input_changed",
+        PanelFrame::Bye => "bye",
     }
 }
 
