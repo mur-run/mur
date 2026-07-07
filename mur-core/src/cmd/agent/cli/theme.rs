@@ -17,6 +17,9 @@ pub struct Theme {
     pub thinking: Color,   // streaming thinking tokens (italic+dim)
     // ── chrome ────────────────────────────────────────────────────────────────
     pub system: Color,       // system hints, errors, slash-cmd output
+    pub warn: Color,         // amber: warnings / degraded notices
+    pub error: Color,        // red: failures
+    pub success: Color,      // green: completed actions
     pub border: Color,       // transcript + input box borders
     pub border_title: Color, // text inside the border title
     pub separator: Color,    // inter-message separator line
@@ -40,6 +43,9 @@ pub const DARK: Theme = Theme {
     agent_text: Color::Rgb(0xea, 0xea, 0xea),
     thinking: Color::Rgb(0x8a, 0x8a, 0x8a),
     system: Color::Rgb(0x8a, 0x8a, 0x8a),
+    warn: Color::Rgb(0xe5, 0xa5, 0x3a),
+    error: Color::Rgb(0xe0, 0x6c, 0x6c),
+    success: Color::Rgb(0x6c, 0xc0, 0x7a),
     border: Color::Rgb(0x55, 0x55, 0x55),
     border_title: Color::Rgb(0x70, 0x70, 0x70),
     separator: Color::Rgb(0x45, 0x45, 0x45),
@@ -61,6 +67,9 @@ pub const LIGHT: Theme = Theme {
     agent_text: Color::Rgb(0x22, 0x22, 0x33),
     thinking: Color::Rgb(0x88, 0x88, 0x99),
     system: Color::Rgb(0x77, 0x77, 0x88),
+    warn: Color::Rgb(0xb5, 0x74, 0x00),
+    error: Color::Rgb(0xc0, 0x30, 0x30),
+    success: Color::Rgb(0x1c, 0x7a, 0x3a),
     border: Color::Rgb(0xd0, 0xd0, 0xe0),
     border_title: Color::Rgb(0x99, 0x99, 0x99),
     separator: Color::Rgb(0xd8, 0xd8, 0xe8),
@@ -82,6 +91,9 @@ pub const MUR: Theme = Theme {
     agent_text: Color::Rgb(0xe0, 0xe0, 0xf0),
     thinking: Color::Rgb(0x86, 0x86, 0xc0),
     system: Color::Rgb(0x77, 0x77, 0xaa),
+    warn: Color::Rgb(0xf0, 0xc0, 0x60),
+    error: Color::Rgb(0xf0, 0x80, 0x90),
+    success: Color::Rgb(0x80, 0xd0, 0x90),
     border: Color::Rgb(0x50, 0x50, 0x90),
     border_title: Color::Rgb(0x55, 0x55, 0x99),
     separator: Color::Rgb(0x22, 0x22, 0x44),
