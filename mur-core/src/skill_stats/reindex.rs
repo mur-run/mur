@@ -6,6 +6,9 @@ use chrono::{DateTime, Utc};
 use mur_common::skill::stats::SkillStats;
 use std::path::Path;
 
+/// Default trace window for rebuilds (matches the CLI default).
+pub const DEFAULT_DAYS_BACK: u32 = 30;
+
 pub struct ReindexOptions {
     pub skill_filter: Option<String>,
     #[allow(dead_code)]
@@ -19,7 +22,7 @@ pub struct ReindexReport {
 }
 
 /// Rebuild stats for installed skills by scanning trace JSONL files.
-pub async fn reindex_stats(mur_home: &Path, opts: ReindexOptions) -> Result<ReindexReport> {
+pub fn reindex_stats(mur_home: &Path, opts: ReindexOptions) -> Result<ReindexReport> {
     let traces_dir = mur_home.join("traces");
     let today = Utc::now();
 
@@ -274,8 +277,8 @@ mod tests {
         assert!(!p.matches("test-ab"));
     }
 
-    #[tokio::test]
-    async fn reindex_counts_note_retrieval_events_as_usage_and_success() {
+    #[test]
+    fn reindex_counts_note_retrieval_events_as_usage_and_success() {
         use chrono::Utc;
         use mur_common::skill::stats::SkillStats;
         use tempfile::tempdir;
@@ -314,7 +317,6 @@ mod tests {
                 days_back: 1,
             },
         )
-        .await
         .unwrap();
 
         let stats = SkillStats::load(&SkillStats::path(tmp.path(), "my-note"))
@@ -324,8 +326,8 @@ mod tests {
         assert_eq!(stats.success_count, 3);
     }
 
-    #[tokio::test]
-    async fn reindex_sets_curated_at_without_counting_usage() {
+    #[test]
+    fn reindex_sets_curated_at_without_counting_usage() {
         use mur_common::skill::stats::SkillStats;
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
@@ -362,7 +364,6 @@ mod tests {
                 days_back: 1,
             },
         )
-        .await
         .unwrap();
 
         let stats = SkillStats::load(&SkillStats::path(home, "my-skill"))

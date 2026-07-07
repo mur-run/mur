@@ -630,7 +630,6 @@ mod tests {
                 days_back: 1,
             },
         )
-        .await
         .unwrap();
 
         let stats_path = SkillStats::path(tmp.path(), "rust-errors");
