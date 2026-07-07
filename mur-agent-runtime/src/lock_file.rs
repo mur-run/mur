@@ -65,6 +65,14 @@ impl LockHandle {
     }
 
     pub fn release(self) {
+        // Only remove the lock if we still own it: a stale duplicate instance
+        // shutting down must not clobber the lock a newer instance has since
+        // written (its release would leave the live agent looking stopped).
+        if let Ok(lock) = read_lock(&self.path)
+            && lock.pid != std::process::id()
+        {
+            return;
+        }
         let _ = fs::remove_file(&self.path);
         let _ = fs::remove_file(sentinel_path(&self.path));
     }
@@ -124,4 +132,55 @@ pub fn is_stale(path: &Path) -> Result<bool, LockError> {
         return Ok(true);
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mur_common::agent::LockTransports;
+
+    fn lock_json(pid: u32) -> LockFile {
+        LockFile {
+            schema: 1,
+            uuid: "u".into(),
+            name: "t".into(),
+            pid,
+            ppid: 0,
+            started_at: String::new(),
+            binary_version: String::new(),
+            transports: LockTransports {
+                stdio: true,
+                unix_socket: None,
+                tcp: None,
+                webhook: None,
+            },
+            card_digest: String::new(),
+            capabilities: vec![],
+            build_sha: String::new(),
+            proto_version: 0,
+        }
+    }
+
+    #[test]
+    fn release_skips_when_lock_owned_by_other_pid() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("running.lock");
+        let handle = LockHandle::acquire(&path).unwrap();
+        // A newer instance has since written its own lock.
+        write_lock(&path, &lock_json(std::process::id() + 1)).unwrap();
+        handle.release();
+        assert!(path.exists(), "release must not clobber another pid's lock");
+        assert!(sentinel_path(&path).exists());
+    }
+
+    #[test]
+    fn release_removes_own_lock() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("running.lock");
+        let handle = LockHandle::acquire(&path).unwrap();
+        write_lock(&path, &lock_json(std::process::id())).unwrap();
+        handle.release();
+        assert!(!path.exists());
+        assert!(!sentinel_path(&path).exists());
+    }
 }
