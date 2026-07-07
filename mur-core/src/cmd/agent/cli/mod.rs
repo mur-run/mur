@@ -422,14 +422,63 @@ fn leave_fullscreen(app: &mut App) {
     app.needs_full_redraw = true;
 }
 
-/// Rebuild the Inline-viewport terminal at the current anchor after the
-/// terminal's size changed (font zoom / window resize). `Terminal::clear`
-/// on an Inline viewport moves the cursor to the viewport's top row and
-/// clears down, so `with_options` re-anchors the fresh viewport in place;
-/// scrollback above is untouched. Coordinates can be slightly off after the
-/// terminal reflowed wrapped lines — approximate by design. Caller must
-/// drop any live `EventStream` first: `with_options` reads the terminal's
-/// cursor-position response from stdin.
+/// Desired Inline-viewport height for the current app state: the full
+/// [`INLINE_VIEWPORT_HEIGHT`] while a turn is active (streaming reply, HITL
+/// gate, or a chooser band open — they all render inside the viewport), and
+/// a compact `transcript-min + composer + status` band when idle, so the
+/// idle UI hugs the transcript instead of reserving a mostly-blank preview
+/// area (the "why so much blank space" complaint).
+fn desired_viewport_h(app: &App) -> u16 {
+    let chooser_open = app
+        .completion
+        .as_ref()
+        .is_some_and(|c| c.spaced && !c.items.is_empty());
+    // An empty transcript renders the welcome screen inside the transcript
+    // band — keep the full viewport so it fits.
+    if app.streaming || app.hitl.is_some() || chooser_open || app.messages.is_empty() {
+        return INLINE_VIEWPORT_HEIGHT;
+    }
+    let input_h = (app.input.lines().len() as u16 + 2).clamp(3, 8);
+    // 3 = the transcript band's layout minimum (Constraint::Min(3) in
+    // ui::render); +1 = status line.
+    (3 + input_h + 1).min(INLINE_VIEWPORT_HEIGHT)
+}
+
+/// Re-anchor a fresh Inline viewport of height `h` at the current
+/// viewport's top row. `Terminal::clear` on an Inline viewport moves the
+/// cursor to the viewport's top-left and clears down, so `with_options`
+/// rebuilds in place: scrollback above is untouched, growth makes room via
+/// `append_lines` (scrolling scrollback up properly), and shrinking leaves
+/// the freed rows blank BELOW the viewport (bottom of the screen — natural,
+/// like a shell mid-screen) rather than between transcript and composer.
+/// Caller must drop any live `EventStream` first: `with_options` reads the
+/// terminal's cursor-position response from stdin.
+fn reanchor_inline(terminal: &mut Terminal<CrosstermBackend<Stdout>>, h: u16) -> Result<()> {
+    terminal.clear().context("clear old viewport")?;
+    // The cursor-position query inside `with_options` needs crossterm's
+    // internal event reader; a just-dropped EventStream's background thread
+    // can hold that lock for a beat longer. Retry briefly.
+    let mut last_err = None;
+    for _ in 0..20 {
+        match Terminal::with_options(
+            CrosstermBackend::new(io::stdout()),
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Inline(h),
+            },
+        ) {
+            Ok(t) => {
+                *terminal = t;
+                return Ok(());
+            }
+            Err(e) => {
+                last_err = Some(e);
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+    Err(last_err.unwrap()).context("reanchor terminal")
+}
+
 /// Rebuild the terminal after its size changed (font zoom / window resize).
 ///
 /// A terminal reflow moves the Inline viewport's rows in ways we cannot
@@ -445,6 +494,7 @@ fn leave_fullscreen(app: &mut App) {
 fn rebuild_after_resize(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
+    h: u16,
 ) -> Result<()> {
     use crossterm::cursor::MoveTo;
     use crossterm::terminal::{Clear, ClearType};
@@ -472,7 +522,7 @@ fn rebuild_after_resize(
         match Terminal::with_options(
             CrosstermBackend::new(io::stdout()),
             ratatui::TerminalOptions {
-                viewport: ratatui::Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
+                viewport: ratatui::Viewport::Inline(h),
             },
         ) {
             Ok(t) => {
@@ -498,6 +548,10 @@ async fn event_loop(
     let mut events = EventStream::new();
     let mut spinner = tokio::time::interval(Duration::from_millis(SPINNER_MS));
     let mut last_size = terminal.backend().size()?;
+    // Dynamic Inline-viewport height: compact when idle, full while a turn
+    // is active. Tracks the height the live terminal actually has.
+    let mut viewport_h = INLINE_VIEWPORT_HEIGHT;
+    let mut prev_active = false;
 
     loop {
         // Terminal size changed (font zoom, window resize): ratatui's
@@ -516,7 +570,7 @@ async fn event_loop(
                 // Fail-open: if the rebuild can't read the cursor position,
                 // keep the old terminal — ratatui's autoresize will leak a
                 // stale viewport copy (cosmetic), which beats exiting.
-                let _ = rebuild_after_resize(terminal, app);
+                let _ = rebuild_after_resize(terminal, app, viewport_h);
                 events = EventStream::new();
                 last_size = terminal.backend().size()?;
             }
@@ -527,6 +581,32 @@ async fn event_loop(
         // the live viewport only ever paints the current streaming tail (or
         // nothing). No-op in Fullscreen mode and when nothing new settled.
         ui::flush_finished(terminal, app)?;
+
+        // Dynamic viewport height. Grow eagerly (a starting turn needs room
+        // for the streaming tail before the next draw); shrink only at the
+        // active→idle transition or when the composer is empty, so plain
+        // typing never thrashes the terminal. Runs after flush_finished so
+        // settled messages reach scrollback at the old height first.
+        if app.render_mode == RenderMode::Inline {
+            let chooser_open = app
+                .completion
+                .as_ref()
+                .is_some_and(|c| c.spaced && !c.items.is_empty());
+            let active = app.streaming || app.hitl.is_some() || chooser_open;
+            let desired = desired_viewport_h(app);
+            let grow = desired > viewport_h;
+            let shrink = desired < viewport_h && !active && (prev_active || app.input.is_empty());
+            if grow || shrink {
+                drop(events);
+                // Fail-open: on error keep the old (possibly taller)
+                // viewport — cosmetic — and leave viewport_h untouched.
+                if reanchor_inline(terminal, desired).is_ok() {
+                    viewport_h = desired;
+                }
+                events = EventStream::new();
+            }
+            prev_active = active;
+        }
         // Keep the terminal surface in sync with the render mode BEFORE the
         // draw: an overlay open/close this iteration may have toggled
         // `render_mode`, and the draw below must land on the matching
