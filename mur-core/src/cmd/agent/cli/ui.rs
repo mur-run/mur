@@ -1,16 +1,17 @@
 //! Ratatui rendering: transcript pane, input box, status bar, HITL modal.
 
 use ratatui::Frame;
+use ratatui::backend::Backend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
-    Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap,
+    Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Widget, Wrap,
 };
 
 use std::time::Instant;
 
-use super::app::{App, ChatMsg, Role, SPINNER};
+use super::app::{App, ChatMsg, Role, SPINNER, Severity};
 use super::complete;
 use super::markdown;
 use super::welcome::welcome_lines;
@@ -160,6 +161,80 @@ fn render_completion(f: &mut Frame, app: &App, input_area: Rect) {
     );
 }
 
+/// Draws the transcript pane and returns its *ideal* height (content rows +
+/// borders, unclamped by `area`) — the caller uses this to shrink the inline
+/// viewport itself via `Terminal::resize` before the next frame. Clamped
+/// drawing still happens against `area` here so a still-oversized viewport
+/// (the frame right after content shrinks, before the resize takes effect)
+/// never panics or scrolls oddly.
+/// Fixed separator width for flushed scrollback lines: the real frame width
+/// isn't known at flush time (content prints above the inline viewport and
+/// the terminal soft-wraps it), so a modest fixed rule stands in.
+const SEPARATOR_WIDTH: usize = 60;
+
+/// Flush every settled message into the terminal's native scrollback via
+/// `Terminal::insert_before`, so the live viewport only ever paints the
+/// currently-streaming tail. A message is "settled" once it can no longer
+/// change: not itself streaming, and not the trailing entry while a turn is
+/// in progress (the tail may still gain appended text). No-op in Fullscreen
+/// mode (the overlay reads `app.messages` directly) and when nothing new has
+/// settled since the last call.
+pub fn flush_finished<B: Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+    app: &mut App,
+) -> std::io::Result<()> {
+    use super::app::RenderMode;
+    if app.render_mode != RenderMode::Inline {
+        return Ok(());
+    }
+    let theme = app.theme;
+    let total = app.messages.len();
+    let ceiling = if app.streaming {
+        total.saturating_sub(1)
+    } else {
+        total
+    };
+    let mut end = app.flushed_upto;
+    while end < ceiling && !app.messages[end].streaming {
+        end += 1;
+    }
+    if end <= app.flushed_upto {
+        return Ok(());
+    }
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for i in app.flushed_upto..end {
+        if i > 0 {
+            if theme.show_separator {
+                lines.push(Line::styled(
+                    "─".repeat(SEPARATOR_WIDTH),
+                    Style::default().fg(theme.separator),
+                ));
+            } else {
+                lines.push(Line::default());
+            }
+        }
+        push_message(&mut lines, &app.messages[i], app.spinner, theme);
+    }
+
+    let height = lines.len() as u16;
+    terminal.insert_before(height, |buf| {
+        let area = buf.area;
+        Paragraph::new(Text::from(lines))
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    })?;
+    app.flushed_upto = end;
+    Ok(())
+}
+
+/// Draws the *live* region only: everything at index `< app.flushed_upto` has
+/// already been flushed into the terminal's own scrollback (see
+/// `flush_finished`), so this is at most the one currently-streaming message
+/// — auto-following its tail as it grows, the same way `tail -f` does, rather
+/// than user-controlled paging (there's nothing left here to page through;
+/// full history lives in native scrollback, or the Ctrl+O overlay's own
+/// `scroll_back`-driven view of the complete `app.messages`).
 fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme;
     let block = Block::default()
@@ -170,25 +245,15 @@ fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         .title(format!(" chat · {} ", app.agent))
         .title_style(Style::default().fg(theme.border_title));
     let inner = block.inner(area);
+    let inner_width = inner.width;
 
+    let start = app.flushed_upto.min(app.messages.len());
     let mut lines: Vec<Line> = Vec::new();
-    let msg_count = app.messages.len();
-    for (i, m) in app.messages.iter().enumerate() {
+    for m in &app.messages[start..] {
         push_message(&mut lines, m, app.spinner, theme);
-        if i + 1 < msg_count {
-            if theme.show_separator {
-                let sep_width = inner.width as usize;
-                lines.push(Line::styled(
-                    "─".repeat(sep_width),
-                    Style::default().fg(theme.separator),
-                ));
-            } else {
-                lines.push(Line::default());
-            }
-        }
     }
 
-    if lines.is_empty() {
+    if lines.is_empty() && start == 0 {
         // Empty transcript → progressive-disclosure welcome (mascot + identity +
         // one example + /help hint) instead of a bare prompt. The eye frame is a
         // pure function of wall-clock time; the event loop schedules redraws on
@@ -202,25 +267,14 @@ fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         );
     }
 
-    let total = lines.len() as u16;
+    // Same wrapped-row accounting as before (`line_count`, not `lines.len()`),
+    // just always auto-following the bottom instead of reading `scroll_back`.
+    let output = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+    let total = output.line_count(inner_width) as u16;
     let visible = inner.height;
-    let max_off = total.saturating_sub(visible);
-    let offset = max_off.saturating_sub(app.scroll_back);
+    let offset = total.saturating_sub(visible);
 
-    let output = Paragraph::new(Text::from(lines))
-        .block(block)
-        .wrap(Wrap { trim: false })
-        .scroll((offset, 0));
-    f.render_widget(output, area);
-
-    // Clamp away over-scroll so PageDown never needs "dead" presses, and record
-    // the page size for the key handler. Done after render: the immutable `lines`
-    // borrow of `app` ends when `output` is consumed above.
-    // ponytail: scroll_back counts logical (pre-wrap) lines while `.scroll()`
-    // takes post-wrap rows, so a page can be a row or two off under heavy
-    // wrapping. Upgrade to wrapped-row accounting if that ever feels wrong.
-    app.scroll_back = app.scroll_back.min(max_off);
-    app.scroll_page = visible;
+    f.render_widget(output.block(block).scroll((offset, 0)), area);
 }
 
 fn push_message(
@@ -248,12 +302,26 @@ fn push_message(
             }
         }
         Role::System => {
+            // Severity paints the whole note and picks a lead glyph, so a
+            // warning reads amber and a success reads green at a glance.
+            let (color, glyph) = match m.severity {
+                Severity::Info => (theme.system, "·"),
+                Severity::Warn => (theme.warn, "▲"),
+                Severity::Error => (theme.error, "✖"),
+                Severity::Success => (theme.success, "✔"),
+            };
+            let bold = !matches!(m.severity, Severity::Info);
             for (i, l) in m.text.lines().enumerate() {
-                let prefix = if i == 0 { "· " } else { "  " };
-                lines.push(Line::styled(
-                    format!("{prefix}{l}"),
-                    Style::default().fg(theme.system),
-                ));
+                let prefix = if i == 0 {
+                    format!("{glyph} ")
+                } else {
+                    "  ".to_string()
+                };
+                let mut style = Style::default().fg(color);
+                if bold {
+                    style = style.add_modifier(Modifier::BOLD);
+                }
+                lines.push(Line::styled(format!("{prefix}{l}"), style));
             }
         }
         Role::Shell => {
@@ -275,12 +343,20 @@ fn push_message(
             }
         }
         Role::Agent => {
-            lines.push(Line::from(Span::styled(
-                "● agent",
-                Style::default()
-                    .fg(theme.agent)
-                    .add_modifier(Modifier::BOLD),
-            )));
+            // Animated bullet while streaming, solid bullet once done — so an
+            // in-progress turn reads as "live" at a glance vs. a finished one.
+            let (bullet, header_style) = if m.streaming {
+                let spin = SPINNER[spinner % SPINNER.len()];
+                (format!("{spin} agent"), Style::default().fg(theme.agent))
+            } else {
+                (
+                    "● agent".to_string(),
+                    Style::default()
+                        .fg(theme.agent)
+                        .add_modifier(Modifier::BOLD),
+                )
+            };
+            lines.push(Line::from(Span::styled(bullet, header_style)));
             // Reasoning stays visible after the turn finishes (D5).
             if !m.thinking.is_empty() {
                 for l in m.thinking.lines() {
