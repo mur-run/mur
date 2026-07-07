@@ -1,6 +1,6 @@
 //! First-party full-file write tool (issue #591, PR2).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use mur_common::agent::FilesystemEntitlement;
 
@@ -48,11 +48,7 @@ impl ToolExecutor for WriteFileTool {
         let content = input["content"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("missing 'content' field".into()))?;
-        let joined = if Path::new(raw).is_absolute() {
-            PathBuf::from(raw)
-        } else {
-            self.working_dir.join(raw)
-        };
+        let joined = crate::tools::fs_policy::resolve_path(&self.working_dir, raw);
         let parent = joined
             .parent()
             .ok_or_else(|| ToolError::InvalidInput("path has no parent directory".into()))?;
