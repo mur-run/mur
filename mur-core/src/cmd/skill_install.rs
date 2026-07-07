@@ -481,6 +481,30 @@ pub fn cmd_update_cli(name: &str) -> Result<()> {
     cmd_update(&home, &registry_url, name)
 }
 
+/// Drive `build()`'s future to completion on a dedicated thread with its own
+/// current-thread runtime. Safe to call from inside an existing tokio runtime,
+/// where `Handle::block_on` panics ("Cannot start a runtime from within a
+/// runtime"). The future is built and driven entirely on the worker thread, so
+/// it need not be `Send`; only the captured references cross the boundary.
+fn block_on_isolated<B, F, T>(build: B) -> Result<T>
+where
+    B: FnOnce() -> F + Send,
+    F: std::future::Future<Output = T>,
+    T: Send,
+{
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .context("build embed runtime")?;
+            Ok(rt.block_on(build()))
+        })
+        .join()
+        .map_err(|_| anyhow!("embed worker thread panicked"))?
+    })
+}
+
 /// Best-effort embedding after install. Failure is non-fatal — the skill is
 /// usable without an embedding (Jaccard path still works), and reindex-vec
 /// can backfill.
@@ -491,11 +515,11 @@ fn try_embed_skill(home: &Path, name: &str, version: &str, manifest: &SkillManif
     let embed_config = EmbeddingConfig::from_config(&cfg);
     let index_dir = home.join("lance");
 
-    let handle = match tokio::runtime::Handle::try_current() {
-        Ok(h) => h,
-        Err(_) => return,
-    };
-    let result = handle.block_on(async {
+    // `mur` runs inside a tokio runtime, so `Handle::try_current()` succeeds
+    // and `handle.block_on(...)` panics ("Cannot start a runtime from within a
+    // runtime"). Drive the async embed on a dedicated thread with its own
+    // runtime instead — safe whether or not a runtime is already active.
+    let result = block_on_isolated(|| async {
         let store = crate::store::vector::factory::get_vector_store(&cfg, &index_dir).await?;
         crate::skill_index::embed_manifest_and_upsert(
             manifest,
@@ -505,7 +529,8 @@ fn try_embed_skill(home: &Path, name: &str, version: &str, manifest: &SkillManif
             &*store,
         )
         .await
-    });
+    })
+    .and_then(|inner| inner);
 
     match result {
         Ok(dims) => {
@@ -524,6 +549,15 @@ fn try_embed_skill(home: &Path, name: &str, version: &str, manifest: &SkillManif
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    // Regression: install runs inside `mur`'s tokio runtime; the old
+    // `Handle::try_current()` + `block_on` panicked ("Cannot start a runtime
+    // from within a runtime"). `block_on_isolated` must complete instead.
+    #[tokio::test]
+    async fn block_on_isolated_runs_inside_ambient_runtime() {
+        let out = block_on_isolated(|| async { 1 + 1 }).expect("no panic inside runtime");
+        assert_eq!(out, 2);
+    }
 
     #[test]
     fn registry_install_stamps_origin() {
