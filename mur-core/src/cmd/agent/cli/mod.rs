@@ -52,7 +52,8 @@ use tokio::sync::mpsc;
 use tokio::time::Instant as TokioInstant;
 
 use self::app::{
-    App, ESC_DOUBLE_WINDOW, EscAction, OverlayKeyAction, Role, SlashCmd, arm_input_debounce,
+    App, ESC_DOUBLE_WINDOW, EscAction, OverlayKeyAction, RenderMode, Role, SlashCmd,
+    arm_input_debounce,
     esc_action, overlay_key_action, parse_slash, take_due_input,
 };
 use self::persist::Session;
@@ -91,6 +92,13 @@ const RECENT_LIMIT: usize = 10;
 /// Mouse wheel scrolls one line per event (trackpads fire 10-20 events/sec, so
 /// per-line granularity stays smooth); PageUp/PageDown move a full screenful.
 const MOUSE_SCROLL_STEP: u16 = 1;
+/// Fixed height of the Inline-mode viewport: 8 (max composer lines) + 2
+/// (composer border) + 1 (status line) + 9 (tail preview of the
+/// currently-streaming reply, plus its own top/bottom border). Generous
+/// enough that the common case (short composer, short-to-medium reply)
+/// never scrolls within its own area; a very long streaming reply just
+/// shows its latest lines until it finishes and flushes to scrollback.
+const INLINE_VIEWPORT_HEIGHT: u16 = 20;
 /// Spinner animation cadence.
 const SPINNER_MS: u64 = 90;
 /// Max chars of an arg hint shown on a step line in `--plain` mode.
@@ -205,6 +213,14 @@ fn pop_keyboard_enhancement(_supported: bool) {
     }
 }
 
+/// Tracks whether the physical terminal is currently on the alternate screen.
+/// Owned here (not inside `sync_surface`) so the RAII guard's `Drop` and the
+/// panic hook can decide whether a `LeaveAlternateScreen` is actually needed —
+/// Inline mode never entered the alt-screen, so leaving it would corrupt the
+/// user's scrollback on exit. `sync_surface` is the only writer during normal
+/// operation; the guard/panic paths only read.
+static ON_ALT: AtomicBool = AtomicBool::new(false);
+
 /// RAII terminal restore — runs on every exit path including unwind.
 struct TerminalGuard {
     /// Whether the terminal advertised keyboard-enhancement support at enter().
@@ -216,13 +232,15 @@ struct TerminalGuard {
 impl TerminalGuard {
     fn enter() -> Result<Self> {
         enable_raw_mode().context("enable raw mode")?;
-        execute!(
-            io::stdout(),
-            EnterAlternateScreen,
-            EnableBracketedPaste,
-            EnableFocusChange
-        )
-        .context("enter alternate screen")?;
+        // No EnterAlternateScreen and no EnableMouseCapture here: the TUI
+        // starts on the MAIN screen with a small fixed-height inline
+        // viewport, so native scrollback and native mouse-drag text
+        // selection both work untouched. `sync_surface` enters the
+        // alt-screen only for heavy overlays (Ctrl+O, /mcp, /skill), which
+        // is a fire-and-forget mode-set escape, not a query — safe to toggle
+        // even with the async `EventStream` reading stdin concurrently.
+        execute!(io::stdout(), EnableBracketedPaste, EnableFocusChange)
+            .context("enable terminal modes")?;
         let kbd_enhanced = matches!(supports_keyboard_enhancement(), Ok(true));
         push_keyboard_enhancement(kbd_enhanced);
         Ok(Self { kbd_enhanced })
@@ -232,9 +250,11 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         pop_keyboard_enhancement(self.kbd_enhanced);
+        if ON_ALT.swap(false, Ordering::Relaxed) {
+            let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        }
         let _ = execute!(
             io::stdout(),
-            LeaveAlternateScreen,
             DisableBracketedPaste,
             DisableFocusChange,
             cursor::Show
@@ -268,9 +288,11 @@ async fn run_tui(
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         pop_keyboard_enhancement(kbd_enhanced);
+        if ON_ALT.swap(false, Ordering::Relaxed) {
+            let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        }
         let _ = execute!(
             io::stdout(),
-            LeaveAlternateScreen,
             DisableBracketedPaste,
             DisableFocusChange,
             cursor::Show
@@ -280,8 +302,19 @@ async fn run_tui(
     }));
 
     let _guard = TerminalGuard::enter()?;
-    let mut terminal =
-        Terminal::new(CrosstermBackend::new(io::stdout())).context("init terminal")?;
+    // Fixed height, never resized: enough for the composer at its max 8
+    // input lines + borders + status + a comfortable tail preview of the
+    // currently-streaming reply. `Terminal::resize` on an Inline viewport
+    // needs a live cursor-position query that hangs under this app's async
+    // `EventStream`, so the viewport size is a constant for the process's
+    // whole life instead — see `RenderMode` for the full explanation.
+    let mut terminal = Terminal::with_options(
+        CrosstermBackend::new(io::stdout()),
+        ratatui::TerminalOptions {
+            viewport: ratatui::Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
+        },
+    )
+    .context("init terminal")?;
 
     let mut app = build_app(&home, &agent, resume, active_theme)?;
     app.skills = complete::load_agent_skills(&agent);
@@ -356,6 +389,40 @@ fn build_app(home: &Path, agent: &str, resume: bool, theme: &'static theme::Them
     Ok(app)
 }
 
+/// Bring the physical terminal surface in line with `app.render_mode`.
+///
+/// Entering/leaving the alternate screen is a fire-and-forget mode-set
+/// escape code — unlike `Terminal::resize`, it needs no reply from the
+/// terminal, so it's safe to call here even with the async `EventStream`
+/// concurrently reading the same stdin. This only performs the transition
+/// exactly on the edges (recording the surface it last applied via
+/// `ON_ALT`), so repeated calls are cheap no-ops; `needs_full_redraw` makes
+/// the next `terminal.clear()` repaint the fresh surface.
+fn sync_surface(app: &mut App) -> Result<()> {
+    let want_alt = app.render_mode == RenderMode::Fullscreen;
+    let on_alt = ON_ALT.load(Ordering::Relaxed);
+    if want_alt == on_alt {
+        return Ok(());
+    }
+    if want_alt {
+        execute!(io::stdout(), EnterAlternateScreen)?;
+    } else {
+        execute!(io::stdout(), LeaveAlternateScreen)?;
+    }
+    ON_ALT.store(want_alt, Ordering::Relaxed);
+    app.needs_full_redraw = true;
+    Ok(())
+}
+
+/// Return from a heavy overlay to the inline chat surface. Idempotent.
+fn leave_fullscreen(app: &mut App) {
+    if app.render_mode == RenderMode::Inline {
+        return;
+    }
+    app.render_mode = RenderMode::Inline;
+    app.needs_full_redraw = true;
+}
+
 async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
@@ -368,6 +435,15 @@ async fn event_loop(
     loop {
         app.sync_input_block();
         arm_input_debounce(app, StdInstant::now());
+        // Flush settled messages into native scrollback BEFORE the draw so
+        // the live viewport only ever paints the current streaming tail (or
+        // nothing). No-op in Fullscreen mode and when nothing new settled.
+        ui::flush_finished(terminal, app)?;
+        // Keep the terminal surface in sync with the render mode BEFORE the
+        // draw: an overlay open/close this iteration may have toggled
+        // `render_mode`, and the draw below must land on the matching
+        // surface (small inline viewport vs. full-frame alt-screen).
+        sync_surface(app)?;
         if app.needs_full_redraw {
             terminal.clear()?;
             app.needs_full_redraw = false;
@@ -430,11 +506,12 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                     OverlayKeyAction::Close => {
                         app.overlay_open = false;
                         app.overlay_text = None;
-                        app.needs_full_redraw = true;
+                        leave_fullscreen(app);
                     }
                     OverlayKeyAction::CloseAndQuit => {
                         app.overlay_open = false;
                         app.overlay_text = None;
+                        leave_fullscreen(app);
                         request_quit(app, tx);
                     }
                     OverlayKeyAction::Ignore => {}
@@ -660,6 +737,9 @@ fn scrollback_dump(app: &mut App) {
     let _ = std::fs::write(&path, &text);
     app.overlay_text = Some(text);
     app.overlay_open = true;
+    // Heavy overlay → borrow the alt-screen. `sync_surface` performs the
+    // actual EnterAlternateScreen before the next draw.
+    app.render_mode = RenderMode::Fullscreen;
     app.needs_full_redraw = true;
 }
 
@@ -847,11 +927,13 @@ fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: boo
                     .await;
             }
         });
-        app.push_system(match (allow, auto) {
-            (true, true) => format!("auto-approved `{}` (session)", req.tool_name),
-            (true, false) => format!("approved `{}`", req.tool_name),
-            (false, _) => format!("denied `{}`", req.tool_name),
-        });
+        match (allow, auto) {
+            (true, true) => {
+                app.push_success(format!("auto-approved `{}` (session)", req.tool_name))
+            }
+            (true, false) => app.push_success(format!("approved `{}`", req.tool_name)),
+            (false, _) => app.push_warn(format!("denied `{}`", req.tool_name)),
+        }
     }
 }
 
@@ -1109,8 +1191,8 @@ where
     let agent = app.agent.clone();
     match tokio::task::spawn_blocking(move || f(agent)).await {
         Ok(Ok(text)) => app.push_system(text),
-        Ok(Err(e)) => app.push_system(format!("error: {e:#}")),
-        Err(e) => app.push_system(format!("task failed: {e}")),
+        Ok(Err(e)) => app.push_error(format!("error: {e:#}")),
+        Err(e) => app.push_error(format!("task failed: {e}")),
     }
 }
 
