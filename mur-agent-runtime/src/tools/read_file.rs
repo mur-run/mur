@@ -81,11 +81,7 @@ Paths resolve relative to the agent working directory; reads are checked against
         let raw = input["path"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("missing 'path' field".into()))?;
-        let joined = if Path::new(raw).is_absolute() {
-            PathBuf::from(raw)
-        } else {
-            self.working_dir.join(raw)
-        };
+        let joined = crate::tools::fs_policy::resolve_path(&self.working_dir, raw);
         let canonical = std::fs::canonicalize(&joined)
             .map_err(|e| ToolError::Execution(format!("cannot read {}: {e}", joined.display())))?;
         self.check_entitlement(&canonical)?;
