@@ -46,7 +46,7 @@ use crossterm::terminal::{
 use crossterm::{cursor, execute};
 use futures::StreamExt;
 use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::{Backend, CrosstermBackend};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::time::Instant as TokioInstant;
@@ -422,6 +422,73 @@ fn leave_fullscreen(app: &mut App) {
     app.needs_full_redraw = true;
 }
 
+/// Rebuild the Inline-viewport terminal at the current anchor after the
+/// terminal's size changed (font zoom / window resize). `Terminal::clear`
+/// on an Inline viewport moves the cursor to the viewport's top row and
+/// clears down, so `with_options` re-anchors the fresh viewport in place;
+/// scrollback above is untouched. Coordinates can be slightly off after the
+/// terminal reflowed wrapped lines — approximate by design. Caller must
+/// drop any live `EventStream` first: `with_options` reads the terminal's
+/// cursor-position response from stdin.
+/// Rebuild the terminal after its size changed (font zoom / window resize).
+///
+/// A terminal reflow moves the Inline viewport's rows in ways we cannot
+/// track, so any in-place fix leaves a stale copy of the old viewport in
+/// scrollback (ratatui's own `autoresize` leaks the same way). The only
+/// deterministic recovery is scorched earth: wait for the size to settle
+/// (font zoom fires one resize per keypress), wipe the screen AND
+/// scrollback, re-anchor a fresh viewport at the top, and reset
+/// `flushed_upto` so the next `flush_finished` re-emits the whole
+/// transcript wrapped at the new width. Caller must drop any live
+/// `EventStream` first: re-anchoring reads the terminal's cursor-position
+/// response from stdin.
+fn rebuild_after_resize(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    app: &mut App,
+) -> Result<()> {
+    use crossterm::cursor::MoveTo;
+    use crossterm::terminal::{Clear, ClearType};
+    // Let the reflow storm settle so we rebuild once, not per event.
+    let mut size = crossterm::terminal::size()?;
+    loop {
+        std::thread::sleep(Duration::from_millis(80));
+        let now = crossterm::terminal::size()?;
+        if now == size {
+            break;
+        }
+        size = now;
+    }
+    crossterm::execute!(
+        io::stdout(),
+        MoveTo(0, 0),
+        Clear(ClearType::All),
+        Clear(ClearType::Purge),
+    )?;
+    // The cursor-position query inside `with_options` needs crossterm's
+    // internal event reader; the just-dropped EventStream's background
+    // thread can hold that lock for a beat longer. Retry briefly.
+    let mut last_err = None;
+    for _ in 0..20 {
+        match Terminal::with_options(
+            CrosstermBackend::new(io::stdout()),
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
+            },
+        ) {
+            Ok(t) => {
+                *terminal = t;
+                app.flushed_upto = 0;
+                return Ok(());
+            }
+            Err(e) => {
+                last_err = Some(e);
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+    Err(last_err.unwrap()).context("reanchor terminal")
+}
+
 async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
@@ -430,8 +497,30 @@ async fn event_loop(
     let (tx, mut rx) = mpsc::channel::<StreamMsg>(stream::STREAM_CHANNEL_CAP);
     let mut events = EventStream::new();
     let mut spinner = tokio::time::interval(Duration::from_millis(SPINNER_MS));
+    let mut last_size = terminal.backend().size()?;
 
     loop {
+        // Terminal size changed (font zoom, window resize): ratatui's
+        // `autoresize` (inside `draw`) re-anchors an Inline viewport with
+        // `append_lines`, leaking up to viewport-height blank rows into
+        // scrollback on EVERY size change. Detect the change ourselves
+        // (ioctl, no cursor query) and rebuild the terminal at the current
+        // anchor instead, so `autoresize` never fires.
+        if app.render_mode == RenderMode::Inline {
+            let size = terminal.backend().size()?;
+            if size != last_size {
+                // Rebuilding queries the cursor position by reading the
+                // terminal's stdin response — drop the EventStream first so
+                // that read doesn't hang (see the viewport comment in `run`).
+                drop(events);
+                // Fail-open: if the rebuild can't read the cursor position,
+                // keep the old terminal — ratatui's autoresize will leak a
+                // stale viewport copy (cosmetic), which beats exiting.
+                let _ = rebuild_after_resize(terminal, app);
+                events = EventStream::new();
+                last_size = terminal.backend().size()?;
+            }
+        }
         app.sync_input_block();
         arm_input_debounce(app, StdInstant::now());
         // Flush settled messages into native scrollback BEFORE the draw so
