@@ -1,7 +1,7 @@
 //! First-party exact-literal edit tool (issue #591, PR2). No regex —
 //! ambiguity fails closed instead of guessing.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use mur_common::agent::FilesystemEntitlement;
 
@@ -59,11 +59,7 @@ impl ToolExecutor for EditFileTool {
                 "'old_string' must be non-empty".into(),
             ));
         }
-        let joined = if Path::new(raw).is_absolute() {
-            PathBuf::from(raw)
-        } else {
-            self.working_dir.join(raw)
-        };
+        let joined = crate::tools::fs_policy::resolve_path(&self.working_dir, raw);
         let canonical = std::fs::canonicalize(&joined)
             .map_err(|e| ToolError::Execution(format!("cannot edit {}: {e}", joined.display())))?;
         check_write_entitlement(&self.fs, &canonical)?;
