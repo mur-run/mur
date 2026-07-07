@@ -53,7 +53,7 @@ pub const DARK: Theme = Theme {
     badge_fg: Color::Black,
     badge_bg: Color::Cyan,
     border_type: BorderType::Plain,
-    inner_padding: 0,
+    inner_padding: 1,
     show_separator: false,
     compact_input: false,
 };
