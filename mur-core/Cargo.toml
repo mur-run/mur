@@ -112,6 +112,10 @@ ulid = { workspace = true }  # cmd::agent_companion::card::import inbox id
 ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
 crossterm = { version = "0.28", features = ["event-stream"] }
 tui-textarea = "0.7"
+# Measure grapheme display width so we can blank the continuation cell after a
+# wide (CJK) char in the `insert_before` scrollback path — ratatui 0.29's
+# `draw_lines` prints those cells verbatim (a space), spacing out CJK text.
+unicode-width = "0.1"
 
 [features]
 default = ["cli", "server", "sources"]

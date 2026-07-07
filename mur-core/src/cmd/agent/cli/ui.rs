@@ -22,6 +22,16 @@ use super::welcome::welcome_lines;
 /// unhandled into the input box.
 const OVERLAY_HINT: &str = " press Enter or Esc to return · Ctrl+D quit ";
 
+/// Body indent under a role header ("you ›" / "● agent") so a message's content
+/// reads as belonging to its speaker rather than sitting flush with the header.
+const MSG_INDENT: &str = "  ";
+
+/// Prepend the body indent to an already-styled line (e.g. cached markdown).
+fn indent_line(mut line: Line<'static>) -> Line<'static> {
+    line.spans.insert(0, Span::raw(MSG_INDENT));
+    line
+}
+
 /// Draw the whole UI for one frame.
 pub fn render(f: &mut Frame, app: &mut App) {
     // Full-screen transcript overlay (Ctrl+O) takes over the whole frame and
@@ -33,19 +43,29 @@ pub fn render(f: &mut Frame, app: &mut App) {
     }
     let input_lines = app.input.lines().len() as u16;
     let input_height = (input_lines + 2).clamp(3, 8);
+    // The agent chooser (suggested replies) renders as its own layout band
+    // between transcript and composer — never a Clear-overlay popup — so it
+    // can't cover the reply the user must read to choose. The slash-command
+    // menu keeps the compact popup (the user is typing, not reading).
+    let chooser_h = chooser_band_height(app, f.area().height, input_height);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
+            Constraint::Length(chooser_h),
             Constraint::Length(input_height),
             Constraint::Length(1),
         ])
         .split(f.area());
 
     render_transcript(f, app, chunks[0]);
-    f.render_widget(&app.input, chunks[1]);
-    render_completion(f, app, chunks[1]);
-    render_status(f, app, chunks[2]);
+    if chooser_h > 0 {
+        render_chooser_band(f, app, chunks[1]);
+    } else {
+        render_completion(f, app, chunks[2]);
+    }
+    f.render_widget(&app.input, chunks[2]);
+    render_status(f, app, chunks[3]);
 
     // Inline approval lives on the card (Task 4) when the runtime sent a
     // step_id. Fall back to the centered modal only for older runtimes.
@@ -108,27 +128,52 @@ fn render_completion(f: &mut Frame, app: &App, input_area: Rect) {
     }
     let theme = app.theme;
 
+    // The suggested-reply chooser (`spaced`) is a Claude-Code-style option list:
+    // each option gets a label line, an optional dimmed description line, and a
+    // blank spacer row so the choices breathe. The slash-command menu stays
+    // one-line-per-row and reverse-highlighted.
     let rows: Vec<ListItem> = state
         .items
         .iter()
-        .map(|c| {
-            let mut spans = vec![Span::styled(
-                c.display.clone(),
-                Style::default().fg(theme.border_title),
-            )];
-            if !c.desc.is_empty() {
-                spans.push(Span::raw(" "));
-                spans.push(Span::styled(
-                    c.desc.clone(),
-                    Style::default().fg(Color::DarkGray),
-                ));
+        .enumerate()
+        .map(|(i, c)| {
+            if state.spaced {
+                // Numbered option: "N  label" + a dimmed, aligned description +
+                // a spacer. The number is a quiet affordance for digit-select.
+                let mut lines = vec![Line::from(vec![
+                    Span::styled(format!("{}  ", i + 1), Style::default().fg(theme.system)),
+                    Span::styled(c.display.clone(), Style::default().fg(theme.agent_text)),
+                ])];
+                if !c.desc.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("   {}", c.desc), // align under the label (past "N  ")
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                lines.push(Line::default()); // spacer between options
+                ListItem::new(lines)
+            } else {
+                let mut spans = vec![Span::styled(
+                    c.display.clone(),
+                    Style::default().fg(theme.border_title),
+                )];
+                if !c.desc.is_empty() {
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(
+                        c.desc.clone(),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                ListItem::new(Line::from(spans))
             }
-            ListItem::new(Line::from(spans))
         })
         .collect();
 
-    let visible = rows.len().min(complete::MAX_MENU_ROWS) as u16;
-    let popup_height = visible + 2; // +2 for borders
+    // Height = actual rendered lines of the shown items (+2 borders). Spaced
+    // items span several lines each, so a flat item count would clip them.
+    let shown = rows.len().min(complete::MAX_MENU_ROWS);
+    let content_lines: usize = rows.iter().take(shown).map(ListItem::height).sum();
+    let popup_height = (content_lines as u16).saturating_add(2);
 
     // Anchor above the input box, then clamp to the frame so a popup taller
     // than the space above the input (short / stacked-pane terminals) can never
@@ -142,21 +187,146 @@ fn render_completion(f: &mut Frame, app: &App, input_area: Rect) {
     }
     .intersection(f.area());
 
+    let title = if state.spaced {
+        " 1-9 pick · ↑↓ move · Enter accept · Esc close "
+    } else {
+        " ↑↓ move · Tab accept · Esc close "
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border))
-        .title(" ↑↓ move · Tab accept · Esc close ")
+        .padding(Padding::horizontal(state.spaced as u16))
+        .title(title)
         .title_style(Style::default().fg(theme.border_title));
 
     let mut list_state = ListState::default();
     list_state.select(Some(state.selected));
 
+    // Spaced items are multi-line; a full reverse bar would paint the spacer and
+    // description too. Mark the selection with a caret + accent-bold label
+    // instead. The slash menu keeps its compact reverse highlight.
+    let (highlight_style, highlight_symbol) = if state.spaced {
+        (
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+            "❯ ",
+        )
+    } else {
+        (Style::default().add_modifier(Modifier::REVERSED), "")
+    };
+
     f.render_widget(Clear, popup_area);
     f.render_stateful_widget(
         List::new(rows)
             .block(block)
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED)),
+            .highlight_style(highlight_style)
+            .highlight_symbol(highlight_symbol),
         popup_area,
+        &mut list_state,
+    );
+}
+
+/// Height of the chooser band, or 0 when no agent chooser is open (slash
+/// menu stays a popup). Full spaced rows (label + optional desc + spacer)
+/// when they fit above the composer while leaving the transcript at least
+/// `MIN_TRANSCRIPT_ROWS`; otherwise compact one-line rows; never taller
+/// than the space available (the List scrolls the selection into view).
+const MIN_TRANSCRIPT_ROWS: u16 = 3;
+
+fn chooser_band_height(app: &App, total_h: u16, input_height: u16) -> u16 {
+    let Some(state) = &app.completion else {
+        return 0;
+    };
+    if !state.spaced || state.items.is_empty() {
+        return 0;
+    }
+    let available = total_h
+        .saturating_sub(input_height + 1) // composer + status line
+        .saturating_sub(MIN_TRANSCRIPT_ROWS);
+    let full: u16 = state
+        .items
+        .iter()
+        .map(|c| 2 + u16::from(!c.desc.is_empty())) // label + spacer (+ desc)
+        .sum::<u16>()
+        .saturating_add(2); // borders
+    let compact = (state.items.len() as u16).saturating_add(2);
+    let auto = full.min(available).max(compact.min(available)).max(3);
+    // Ctrl+↑/↓ while the chooser is open grows/shrinks the band on top of
+    // the auto height, clamped so the transcript keeps its minimum rows.
+    (i32::from(auto) + i32::from(app.chooser_grow)).clamp(3, i32::from(available.max(3))) as u16
+}
+
+/// Draw the agent chooser into its own layout band. Falls back to compact
+/// one-line rows ("N label — desc") when the band is shorter than the full
+/// spaced form.
+fn render_chooser_band(f: &mut Frame, app: &App, area: Rect) {
+    let Some(state) = &app.completion else {
+        return;
+    };
+    let theme = app.theme;
+    let full: u16 = state
+        .items
+        .iter()
+        .map(|c| 2 + u16::from(!c.desc.is_empty()))
+        .sum::<u16>()
+        .saturating_add(2);
+    let compact = area.height < full;
+
+    let rows: Vec<ListItem> = state
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            if compact {
+                let mut spans = vec![
+                    Span::styled(format!("{} ", i + 1), Style::default().fg(theme.system)),
+                    Span::styled(c.display.clone(), Style::default().fg(theme.agent_text)),
+                ];
+                if !c.desc.is_empty() {
+                    spans.push(Span::styled(
+                        format!(" — {}", c.desc),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                ListItem::new(Line::from(spans))
+            } else {
+                let mut lines = vec![Line::from(vec![
+                    Span::styled(format!("{} ", i + 1), Style::default().fg(theme.system)),
+                    Span::styled(c.display.clone(), Style::default().fg(theme.agent_text)),
+                ])];
+                if !c.desc.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("   {}", c.desc),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                lines.push(Line::default());
+                ListItem::new(lines)
+            }
+        })
+        .collect();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.border))
+        .padding(Padding::horizontal(1))
+        .title(" 1-9 pick · ↑↓ move · Enter accept · Esc close · Ctrl+↑↓ resize ")
+        .title_style(Style::default().fg(theme.border_title));
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(state.selected));
+
+    f.render_stateful_widget(
+        List::new(rows)
+            .block(block)
+            .highlight_style(
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("❯ "),
+        area,
         &mut list_state,
     );
 }
@@ -214,18 +384,64 @@ pub fn flush_finished<B: Backend>(
                 lines.push(Line::default());
             }
         }
-        push_message(&mut lines, &app.messages[i], app.spinner, theme);
+        push_message(
+            &mut lines,
+            &app.messages[i],
+            app.spinner,
+            theme,
+            app.cards_expanded,
+        );
     }
 
-    let height = lines.len() as u16;
+    // Height must be the WRAPPED (physical) row count, not the logical line
+    // count: `insert_before` renders into a buffer exactly `height` rows tall,
+    // and `Wrap` soft-wraps any line wider than the pane into extra rows. Using
+    // `lines.len()` clips every wrapped overflow row — a long message loses its
+    // tail into the void (never reaches scrollback, so it can't be scrolled
+    // back to). `Paragraph::line_count(width)` accounts for wrap + the padding
+    // block. (Enabled by the `unstable-rendered-line-info` ratatui feature.)
+    let pad = theme.inner_padding as u16;
+    let width = terminal.size()?.width.max(1);
+    let text = Text::from(lines);
+    let block = || Block::default().padding(Padding::horizontal(pad));
+    let height = (Paragraph::new(text.clone())
+        .wrap(Wrap { trim: false })
+        .block(block())
+        .line_count(width) as u16)
+        .max(1);
     terminal.insert_before(height, |buf| {
-        let area = buf.area;
-        Paragraph::new(Text::from(lines))
+        Paragraph::new(text)
             .wrap(Wrap { trim: false })
-            .render(area, buf);
+            .block(block())
+            .render(buf.area, buf);
+        blank_wide_char_continuations(buf);
     })?;
     app.flushed_upto = end;
     Ok(())
+}
+
+/// Work around a ratatui 0.29 bug: `Terminal::insert_before` flushes the whole
+/// buffer through `draw_lines`, which (unlike the normal diff-based flush) does
+/// NOT skip the trailing continuation cell of a wide (CJK) grapheme. That cell
+/// holds a space, so every wide char prints as "char " — spacing out CJK text
+/// in scrollback. Blank the continuation cell's symbol so the backend prints
+/// nothing there; the cursor has already advanced two columns for the wide
+/// char, so the next glyph lands correctly. (Live-viewport draws use the diff
+/// path and are unaffected.)
+fn blank_wide_char_continuations(buf: &mut ratatui::buffer::Buffer) {
+    use unicode_width::UnicodeWidthStr;
+    let area = buf.area;
+    for y in area.top()..area.bottom() {
+        let mut x = area.left();
+        while x + 1 < area.right() {
+            if buf[(x, y)].symbol().width() >= 2 {
+                buf[(x + 1, y)].set_symbol("");
+                x += 2;
+            } else {
+                x += 1;
+            }
+        }
+    }
 }
 
 /// Draws the *live* region only: everything at index `< app.flushed_upto` has
@@ -250,7 +466,7 @@ fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let start = app.flushed_upto.min(app.messages.len());
     let mut lines: Vec<Line> = Vec::new();
     for m in &app.messages[start..] {
-        push_message(&mut lines, m, app.spinner, theme);
+        push_message(&mut lines, m, app.spinner, theme, app.cards_expanded);
     }
 
     if lines.is_empty() && start == 0 {
@@ -267,12 +483,17 @@ fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         );
     }
 
-    // Same wrapped-row accounting as before (`line_count`, not `lines.len()`),
-    // just always auto-following the bottom instead of reading `scroll_back`.
+    // Same wrapped-row accounting as before (`line_count`, not `lines.len()`).
+    // `scroll_back` counts lines up from the bottom (0 = follow the tail);
+    // PageUp/PageDown and the chooser both rely on this so a long unflushed
+    // reply stays reachable even while an option list is open.
     let output = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
     let total = output.line_count(inner_width) as u16;
     let visible = inner.height;
-    let offset = total.saturating_sub(visible);
+    app.scroll_page = visible.max(1);
+    let max_scroll = total.saturating_sub(visible);
+    app.scroll_back = app.scroll_back.min(max_scroll);
+    let offset = max_scroll - app.scroll_back;
 
     f.render_widget(output.block(block).scroll((offset, 0)), area);
 }
@@ -282,10 +503,11 @@ fn push_message(
     m: &ChatMsg,
     spinner: usize,
     theme: &'static super::theme::Theme,
+    cards_expanded: bool,
 ) {
     // Step cards replace role-based rendering entirely for that message.
     if let Some(card) = &m.step {
-        lines.extend(super::render_card::card_lines(card, theme));
+        lines.extend(super::render_card::card_lines(card, theme, cards_expanded));
         return;
     }
     match m.role {
@@ -296,7 +518,7 @@ fn push_message(
             )));
             for l in m.text.lines() {
                 lines.push(Line::styled(
-                    l.to_string(),
+                    format!("{MSG_INDENT}{l}"),
                     Style::default().fg(theme.user_text),
                 ));
             }
@@ -361,7 +583,7 @@ fn push_message(
             if !m.thinking.is_empty() {
                 for l in m.thinking.lines() {
                     lines.push(Line::styled(
-                        l.to_string(),
+                        format!("{MSG_INDENT}{l}"),
                         Style::default()
                             .fg(theme.thinking)
                             .add_modifier(Modifier::ITALIC | Modifier::DIM),
@@ -369,8 +591,11 @@ fn push_message(
                 }
             }
             if m.streaming {
-                let mut body: Vec<Line> =
-                    m.text.lines().map(|l| Line::raw(l.to_string())).collect();
+                let mut body: Vec<Line> = m
+                    .text
+                    .lines()
+                    .map(|l| Line::raw(format!("{MSG_INDENT}{l}")))
+                    .collect();
                 // Trailing spinner so the user sees liveness.
                 let spin = SPINNER[spinner % SPINNER.len()];
                 match body.last_mut() {
@@ -386,10 +611,10 @@ fn push_message(
                 lines.extend(body);
             } else if let Some(cached) = &m.rendered {
                 // Finished reply: reuse the markdown rendered once at finish time.
-                lines.extend(cached.iter().cloned());
+                lines.extend(cached.iter().cloned().map(indent_line));
             } else {
                 // Fallback (should not happen): render on the fly.
-                lines.extend(markdown::render(&m.text).lines);
+                lines.extend(markdown::render(&m.text).lines.into_iter().map(indent_line));
             }
         }
     }
@@ -656,6 +881,37 @@ fn centered_rect(pct_x: u16, pct_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - pct_x) / 2),
         ])
         .split(v[1])[1]
+}
+
+#[cfg(test)]
+mod wide_char_tests {
+    use super::blank_wide_char_continuations;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::{Paragraph, Widget, Wrap};
+
+    #[test]
+    fn cjk_continuation_cells_are_blanked() {
+        let area = Rect::new(0, 0, 20, 1);
+        let mut buf = Buffer::empty(area);
+        Paragraph::new("有既有workflow")
+            .wrap(Wrap { trim: false })
+            .render(area, &mut buf);
+        // ratatui fills wide-char continuation cells with a space.
+        assert_eq!(buf[(1, 0)].symbol(), " ");
+        blank_wide_char_continuations(&mut buf);
+        // After the fix: each CJK glyph is followed by an empty (skipped) cell,
+        // so the backend prints "有既有" with no interleaved spaces.
+        assert_eq!(buf[(0, 0)].symbol(), "有");
+        assert_eq!(buf[(1, 0)].symbol(), "");
+        assert_eq!(buf[(2, 0)].symbol(), "既");
+        assert_eq!(buf[(3, 0)].symbol(), "");
+        assert_eq!(buf[(4, 0)].symbol(), "有");
+        assert_eq!(buf[(5, 0)].symbol(), "");
+        // ASCII run is untouched.
+        assert_eq!(buf[(6, 0)].symbol(), "w");
+        assert_eq!(buf[(7, 0)].symbol(), "o");
+    }
 }
 
 #[cfg(test)]

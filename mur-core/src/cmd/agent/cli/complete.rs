@@ -28,6 +28,10 @@ pub struct Candidate {
 pub struct CompletionState {
     pub items: Vec<Candidate>,
     pub selected: usize,
+    /// True when this menu is the agent's suggested-reply chooser rather than
+    /// the slash-command menu. The chooser renders each option with a blank
+    /// spacer row so the choices don't crowd each other.
+    pub spaced: bool,
 }
 
 /// Built-in commands: (word without slash, description, subcommands).
@@ -66,6 +70,7 @@ const COMMANDS: &[(&str, &str, &[&str])] = &[
     ("sessions", "list past sessions", &[]),
     ("skill", "manage agent skills", &["list", "add", "remove"]),
     ("skin", "switch theme", &["dark", "light", "mur"]),
+    ("verbose", "expand tool cards", &["on", "off"]),
 ];
 
 /// Subcommands for `cmd` (without leading slash), or `None` if `cmd` is unknown
@@ -144,7 +149,11 @@ pub fn compute(input: &str, skills: &[Candidate]) -> Option<CompletionState> {
     if items.is_empty() {
         return None;
     }
-    Some(CompletionState { items, selected: 0 })
+    Some(CompletionState {
+        items,
+        selected: 0,
+        spaced: false,
+    })
 }
 
 /// Best-effort display name for a skill source string: a path like
@@ -181,25 +190,44 @@ pub fn load_agent_skills(agent: &str) -> Vec<Candidate> {
             continue;
         }
         out.push(Candidate {
-            display: s.name.clone(),
-            insert: s.name.clone(),
+            display: format!("/{}", s.name),
+            insert: format!("/{} ", s.name),
             desc: s.description.clone(),
             has_children: false,
         });
     }
     for raw in &profile.skills {
         let name = skill_display_name(raw);
-        if disabled.contains(name.as_str()) || out.iter().any(|c| c.display == name) {
+        let display = format!("/{name}");
+        if disabled.contains(name.as_str()) || out.iter().any(|c| c.display == display) {
             continue;
         }
         out.push(Candidate {
-            display: name.clone(),
-            insert: name,
+            display,
+            insert: format!("/{name} "),
             desc: String::new(),
             has_children: false,
         });
     }
     out
+}
+
+/// If `line` is a leading-slash invocation whose command word matches one of
+/// the agent's `skills` (surfaced in the menu as `/name`), return
+/// `(skill_name, trailing_args)`. Callers route this to the agent as a skill
+/// invocation instead of the "unknown command" branch. Returns `None` for
+/// ordinary input or built-in commands.
+pub fn matched_skill(line: &str, skills: &[Candidate]) -> Option<(String, String)> {
+    let rest = line.trim().strip_prefix('/')?;
+    let (word, args) = match rest.split_once(char::is_whitespace) {
+        Some((w, a)) => (w, a.trim()),
+        None => (rest, ""),
+    };
+    let want = format!("/{word}");
+    skills
+        .iter()
+        .find(|c| c.display == want)
+        .map(|_| (word.to_string(), args.to_string()))
 }
 
 #[cfg(test)]
@@ -222,6 +250,23 @@ mod tests {
     #[test]
     fn no_menu_without_leading_slash() {
         assert!(compute("hello", &[skill("create-pr")]).is_none());
+    }
+
+    #[test]
+    fn matched_skill_resolves_slash_form_and_args() {
+        // Real skill candidates carry a leading slash (see load_agent_skills).
+        let skills = [skill("/brainstorming"), skill("/create-pr")];
+        assert_eq!(
+            matched_skill("/brainstorming", &skills),
+            Some(("brainstorming".into(), String::new()))
+        );
+        assert_eq!(
+            matched_skill("/create-pr fix the bug", &skills),
+            Some(("create-pr".into(), "fix the bug".into()))
+        );
+        // Non-skill slash words and plain text don't match.
+        assert_eq!(matched_skill("/help", &skills), None);
+        assert_eq!(matched_skill("hello", &skills), None);
     }
 
     #[test]
