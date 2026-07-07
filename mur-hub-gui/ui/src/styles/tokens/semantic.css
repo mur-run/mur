@@ -16,6 +16,12 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
+    /* Soft tints must darken too: the light pastels (#EAF3FC / #FFF1EE)
+       under light text made selected rows unreadable in dark mode. The
+       paired -strong text colors lighten so they stay readable on the
+       dark tints. */
+    --color-brand-soft:var(--blue-soft-dark); --color-accent-soft:var(--coral-soft-dark);
+    --color-brand-strong:var(--blue-300); --color-accent-strong:var(--coral-300);
     --surface-bg:var(--d-bg); --surface-secondary:var(--d-secondary);
     --surface-card:var(--d-card); --surface-hover:var(--d-hover);
     --border-line:var(--d-line);
@@ -24,6 +30,8 @@
   }
 }
 :root[data-theme="dark"] {
+  --color-brand-soft:var(--blue-soft-dark); --color-accent-soft:var(--coral-soft-dark);
+  --color-brand-strong:var(--blue-300); --color-accent-strong:var(--coral-300);
   --surface-bg:var(--d-bg); --surface-secondary:var(--d-secondary);
   --surface-card:var(--d-card); --surface-hover:var(--d-hover);
   --border-line:var(--d-line);
@@ -31,6 +39,8 @@
   --sidebar-bg:var(--d-sidebar-vibrancy); --sidebar-bg-solid:var(--d-sidebar-solid);
 }
 :root[data-theme="light"] {
+  --color-brand-soft:var(--blue-soft); --color-accent-soft:var(--coral-soft);
+  --color-brand-strong:var(--blue-700); --color-accent-strong:var(--coral-600);
   --surface-bg:var(--n-bg); --surface-secondary:var(--n-secondary);
   --surface-card:var(--n-card); --surface-hover:var(--n-hover);
   --border-line:var(--n-line);
