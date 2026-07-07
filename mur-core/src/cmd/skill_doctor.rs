@@ -218,6 +218,7 @@ pub fn cmd_doctor(
         let repairs: Vec<Box<dyn crate::skill_repair::Repair>> = vec![
             Box::new(crate::skill_repair::tool_availability::ToolAvailabilityRepair),
             Box::new(crate::skill_repair::dep_freshness::DepFreshnessRepair),
+            Box::new(crate::skill_repair::stats_sidecar::StatsSidecarRepair),
         ];
         let repair_ctx = crate::skill_repair::RepairCtx {
             home: &ctx.home,

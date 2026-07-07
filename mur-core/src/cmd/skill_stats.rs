@@ -60,8 +60,7 @@ pub async fn cmd_reindex_stats(skill_filter: Option<&str>, days_back: u32) -> Re
             since: None,
             days_back,
         },
-    )
-    .await?;
+    )?;
     println!(
         "Reindexed {} skill(s) from {} trace line(s)",
         report.skills_touched, report.lines_consumed
