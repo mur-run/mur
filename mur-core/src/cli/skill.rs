@@ -246,10 +246,10 @@ pub enum SkillAction {
         /// CI-friendly mode where warnings exit 1.
         #[arg(long)]
         strict: bool,
-        /// Accepted for forward CLI stability; no-op in M5a.
+        /// Repair fixable findings (dry-run unless --apply is also given).
         #[arg(long)]
         fix: bool,
-        /// Accepted for forward CLI stability; no-op in M5a.
+        /// With --fix: actually write the repairs instead of dry-running.
         #[arg(long)]
         apply: bool,
         /// Enable LLM-augmented checks (api-drift, coverage-gap).
