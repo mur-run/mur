@@ -149,6 +149,8 @@ pub enum SlashCmd {
     Channels(Option<usize>),
     /// `/auto [on|off]` — toggle (None) or set session-wide auto-approval.
     Auto(Option<bool>),
+    /// `/verbose [on|off]` — toggle (None) or set expanded tool-card rendering.
+    Verbose(Option<bool>),
     /// `/mcp [list|add|remove] …` — manage the agent's MCP servers.
     Mcp(Vec<String>),
     /// `/skill [list|add|remove] …` — manage the agent's skills.
@@ -176,6 +178,11 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
             SlashCmd::Channels(words.next().and_then(|s| s.parse::<usize>().ok()))
         }
         "auto" => SlashCmd::Auto(match words.next() {
+            Some("on") => Some(true),
+            Some("off") => Some(false),
+            _ => None,
+        }),
+        "verbose" => SlashCmd::Verbose(match words.next() {
             Some("on") => Some(true),
             Some("off") => Some(false),
             _ => None,
@@ -292,6 +299,10 @@ pub struct App {
     /// Transcript viewport height (rows), captured each render so PageUp/Down
     /// move a screenful and `scroll_back` can be clamped to the real maximum.
     pub scroll_page: u16,
+    /// User adjustment to the chooser band height (Ctrl+↑/↓ while the
+    /// chooser is open), in rows relative to the auto-computed height.
+    /// Persists for the session so a preferred size sticks between turns.
+    pub chooser_grow: i16,
     pub spinner: usize,
     pub should_quit: bool,
     /// Session-wide auto-approval of every tool call (`/auto` or `--auto`).
@@ -389,6 +400,9 @@ pub struct App {
     /// Opt-in, off by default. The classifier is conservative (fail-safe false
     /// on anything uncertain). Every auto-approval is tagged on the step card.
     pub auto_reads: bool,
+    /// When true, tool-call step cards render fully (args + result) instead of
+    /// the default one-line collapsed summary. Toggled with `/verbose`.
+    pub cards_expanded: bool,
     /// Live completion menu (slash commands / agent skills). `None` = closed.
     /// Derived from the input text — recomputed on every edit by `mod.rs`.
     pub completion: Option<CompletionState>,
@@ -396,7 +410,7 @@ pub struct App {
     pub skills: Vec<Candidate>,
     /// Replies captured from a `suggest_replies` tool call this turn, revealed
     /// after the turn finishes (see `reveal_suggestions`).
-    pub pending_suggestions: Vec<String>,
+    pub pending_suggestions: Vec<super::suggest::Suggestion>,
     /// The single suggestion currently shown as ghost placeholder text, if any.
     pub suggestion_ghost: Option<String>,
     /// Input-driven suggestions (spec §3.5): last input text observed by the
@@ -421,6 +435,7 @@ impl App {
             channel: None,
             scroll_back: 0,
             scroll_page: 0,
+            chooser_grow: 0,
             spinner: 0,
             should_quit: false,
             auto_approve: false,
@@ -462,6 +477,7 @@ impl App {
             step_hint_shown: false,
             budget_usd: None,
             auto_reads: false,
+            cards_expanded: false,
             completion: None,
             skills: Vec::new(),
             pending_suggestions: Vec::new(),
@@ -562,15 +578,16 @@ impl App {
                 let candidates: Vec<super::complete::Candidate> = items
                     .into_iter()
                     .map(|s| super::complete::Candidate {
-                        display: s.clone(),
-                        insert: s,
-                        desc: String::new(),
+                        display: s.text.clone(),
+                        insert: s.text,
+                        desc: s.desc.unwrap_or_default(),
                         has_children: false,
                     })
                     .collect();
                 self.completion = Some(super::complete::CompletionState {
                     items: candidates,
                     selected: 0,
+                    spaced: true,
                 });
             }
         }
@@ -1633,7 +1650,10 @@ mod footer_state_tests {
         let mut a = App::test_fixture();
         // Simulate a prior turn that set suggestions but never revealed them
         // (e.g., the turn ended in Err or was cancelled via Ctrl+C).
-        a.pending_suggestions = vec!["stale suggestion".to_string()];
+        a.pending_suggestions = vec![super::super::suggest::Suggestion {
+            text: "stale suggestion".to_string(),
+            desc: None,
+        }];
         a.begin_user_turn("new turn");
         assert!(
             a.pending_suggestions.is_empty(),

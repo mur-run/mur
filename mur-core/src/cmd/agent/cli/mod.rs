@@ -103,7 +103,7 @@ const SPINNER_MS: u64 = 90;
 /// Max chars of an arg hint shown on a step line in `--plain` mode.
 const PLAIN_STEP_HINT_MAX: usize = 120;
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /auto [on|off]  /skin [dark|light|mur]  /mcp  /skill  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
+const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /mcp  /skill  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
 pub async fn cmd_cli(
@@ -564,6 +564,41 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
             // re-filters the menu at the end of this handler.
             if app.completion.is_some() {
                 match key.code {
+                    // Chooser (suggested replies): a digit picks that option and
+                    // sends it straight away — the fast path fzf/gum/Claude Code
+                    // all offer. Only in `spaced` mode and only for an in-range
+                    // index, so digit-typing still works in the slash menu.
+                    KeyCode::Char(d @ '1'..='9')
+                        if !ctrl
+                            && !alt
+                            && app.completion.as_ref().is_some_and(|c| {
+                                c.spaced && (d as usize - '1' as usize) < c.items.len()
+                            }) =>
+                    {
+                        let idx = d as usize - '1' as usize;
+                        if let Some(c) = app.completion.as_mut() {
+                            c.selected = idx;
+                        }
+                        let sends = app
+                            .completion
+                            .as_ref()
+                            .and_then(|c| c.items.get(idx))
+                            .is_some_and(|cand| !cand.has_children);
+                        completion_accept(app);
+                        if sends {
+                            submit(app, tx).await;
+                        }
+                        return;
+                    }
+                    // Ctrl+↑/↓ resizes the chooser band (agent chooser only).
+                    KeyCode::Up if ctrl && app.completion.as_ref().is_some_and(|c| c.spaced) => {
+                        app.chooser_grow = app.chooser_grow.saturating_add(1);
+                        return;
+                    }
+                    KeyCode::Down if ctrl && app.completion.as_ref().is_some_and(|c| c.spaced) => {
+                        app.chooser_grow = app.chooser_grow.saturating_sub(1);
+                        return;
+                    }
                     KeyCode::Up => {
                         completion_move(app, -1);
                         return;
@@ -938,16 +973,32 @@ fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: boo
 
 async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
     app.clear_suggestion_ghost();
-    let trimmed = app.input_text().trim().to_string();
+    let mut trimmed = app.input_text().trim().to_string();
     // Allow an image-only send (caption optional) when a screenshot is staged.
     if trimmed.is_empty() && app.pending_image.is_none() {
         return;
     }
 
     if let Some(cmd) = parse_slash(&trimmed) {
-        app.clear_input();
-        handle_slash(app, cmd, tx).await;
-        return;
+        // Skills are surfaced in the completion menu as slash commands
+        // (`/brainstorming`) but are not built-ins, so parse_slash reports them
+        // as Unknown. Route a matched skill to the agent as an invocation (the
+        // runtime's trigger matcher picks it up) rather than erroring.
+        if matches!(cmd, SlashCmd::Unknown(_))
+            && let Some((skill, args)) = complete::matched_skill(&trimmed, &app.skills)
+        {
+            let extra = if args.is_empty() {
+                String::new()
+            } else {
+                format!(" {args}")
+            };
+            trimmed = format!("Use the `{skill}` skill.{extra}");
+            // fall through into the normal send path below
+        } else {
+            app.clear_input();
+            handle_slash(app, cmd, tx).await;
+            return;
+        }
     }
     // `!command` — run locally (like Claude Code's bang escape). Allowed while
     // a turn is generating: it never touches the agent connection.
@@ -1148,6 +1199,16 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
                 }
             } else {
                 app.push_system("auto-approve OFF — tool calls ask again");
+            }
+        }
+        SlashCmd::Verbose(set) => {
+            app.cards_expanded = set.unwrap_or(!app.cards_expanded);
+            if app.cards_expanded {
+                app.push_system(
+                    "verbose ON — tool cards show full args + result (Ctrl+O for the transcript any time)",
+                );
+            } else {
+                app.push_system("verbose OFF — tool cards collapse to a one-line summary");
             }
         }
         SlashCmd::Mcp(args) => run_manage(app, move |agent| manage::run_mcp(&agent, &args)).await,

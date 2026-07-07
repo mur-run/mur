@@ -23,9 +23,15 @@ impl ToolExecutor for SuggestRepliesTool {
             description: "Offer the user 1-5 short quick-reply options when they \
                 would likely pick from a small set — e.g. after you ask a question \
                 or propose a choice. Each option is a complete message the user \
-                could send verbatim. The options are shown as Tab-to-fill \
-                suggestions in the user's input; calling this does NOT end your \
-                turn. Do not call it for open-ended turns with no natural shortlist."
+                could send verbatim, with an optional one-line description of the \
+                trade-off. The options appear as a chooser in the user's input. \
+                You decide what happens next: if you genuinely need their answer \
+                before proceeding, end your turn after offering the options and \
+                wait for their reply; if you already know the next step (e.g. a \
+                plan they've approved), just take it — don't offer a chooser in \
+                place of acting. Do NOT number the options yourself (no \"A:\" / \
+                \"1.\" prefixes) — the UI marks and spaces them. Skip it on \
+                open-ended turns with no natural shortlist."
                 .into(),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -33,10 +39,32 @@ impl ToolExecutor for SuggestRepliesTool {
                 "properties": {
                     "replies": {
                         "type": "array",
-                        "items": { "type": "string" },
+                        "items": {
+                            "oneOf": [
+                                {
+                                    "type": "string",
+                                    "description": "A complete message the user could send."
+                                },
+                                {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "text": {
+                                            "type": "string",
+                                            "description": "The message the user sends if they pick this option."
+                                        },
+                                        "description": {
+                                            "type": "string",
+                                            "description": "Optional one-line rationale / trade-off shown under the option."
+                                        }
+                                    },
+                                    "required": ["text"]
+                                }
+                            ]
+                        },
                         "minItems": 1,
                         "maxItems": 5,
-                        "description": "1-5 short complete messages the user could send."
+                        "description": "1-5 options, each a string or {text, description}."
                     }
                 },
                 "required": ["replies"]
