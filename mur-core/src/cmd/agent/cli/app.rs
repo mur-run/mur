@@ -597,8 +597,7 @@ impl App {
     /// System notice tagged with an importance so the transcript can color-code
     /// it (errors red, warnings amber, successes green).
     pub fn push_system_sev(&mut self, text: impl Into<String>, severity: Severity) {
-        self.messages
-            .push(ChatMsg::system_sev(text, severity));
+        self.messages.push(ChatMsg::system_sev(text, severity));
         self.scroll_back = 0;
     }
 

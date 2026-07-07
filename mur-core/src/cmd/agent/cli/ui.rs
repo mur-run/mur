@@ -1,17 +1,17 @@
 //! Ratatui rendering: transcript pane, input box, status bar, HITL modal.
 
 use ratatui::Frame;
+use ratatui::backend::Backend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::backend::Backend;
 use ratatui::widgets::{
     Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Widget, Wrap,
 };
 
 use std::time::Instant;
 
-use super::app::{App, ChatMsg, Role, Severity, SPINNER};
+use super::app::{App, ChatMsg, Role, SPINNER, Severity};
 use super::complete;
 use super::markdown;
 use super::welcome::welcome_lines;
@@ -179,7 +179,10 @@ const SEPARATOR_WIDTH: usize = 60;
 /// in progress (the tail may still gain appended text). No-op in Fullscreen
 /// mode (the overlay reads `app.messages` directly) and when nothing new has
 /// settled since the last call.
-pub fn flush_finished<B: Backend>(terminal: &mut ratatui::Terminal<B>, app: &mut App) -> std::io::Result<()> {
+pub fn flush_finished<B: Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+    app: &mut App,
+) -> std::io::Result<()> {
     use super::app::RenderMode;
     if app.render_mode != RenderMode::Inline {
         return Ok(());
@@ -344,10 +347,7 @@ fn push_message(
             // in-progress turn reads as "live" at a glance vs. a finished one.
             let (bullet, header_style) = if m.streaming {
                 let spin = SPINNER[spinner % SPINNER.len()];
-                (
-                    format!("{spin} agent"),
-                    Style::default().fg(theme.agent),
-                )
+                (format!("{spin} agent"), Style::default().fg(theme.agent))
             } else {
                 (
                     "● agent".to_string(),
