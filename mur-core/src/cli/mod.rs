@@ -218,7 +218,17 @@ pub enum Commands {
         #[command(subcommand)]
         action: AgentAction,
     },
-    /// Manage skills — validate, fmt (M0).
+    /// Manage skills — list, install, author, audit, and evolve.
+    #[command(after_help = "Command groups:
+  Everyday:    list, show, search, info, install, remove, update, upgrade
+  Authoring:   new, edit, validate, fmt, deps, publish, exchange, drafts
+  Trust:       audit, trust, scope, curate
+  Lifecycle:   stats, doctor, pin, unpin, sweep, archive, consolidate,
+               evolve, generate, suggest, recombine, credit, eval
+
+Internal/plumbing commands (schema, registry-index, reindex-stats,
+reindex-vec, intent) are hidden from this list but still available;
+see `mur skill <command> --help`.")]
     Skill {
         #[command(subcommand)]
         action: SkillAction,
