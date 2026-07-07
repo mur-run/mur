@@ -4,6 +4,7 @@ use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum SkillAction {
+    #[command(display_order = 20)]
     /// Scaffold a new skill manifest from a template.
     New {
         /// Skill name (lowercase-kebab, e.g. `my-skill`).
@@ -21,6 +22,7 @@ pub enum SkillAction {
         #[arg(long)]
         force: bool,
     },
+    #[command(display_order = 21)]
     /// Open a skill's skill.yaml in $EDITOR, then validate it.
     Edit {
         /// Skill name.
@@ -32,6 +34,7 @@ pub enum SkillAction {
         #[arg(long)]
         dir: Option<String>,
     },
+    #[command(display_order = 22)]
     /// Run schema validation + full security content scan on a skill file.
     Validate {
         #[arg(default_value = "skill.yaml")]
@@ -40,11 +43,13 @@ pub enum SkillAction {
         warnings_only: bool,
     },
     /// Emit the JSON Schema of the skill manifest (for the Hub DAG editor).
+    #[command(hide = true)]
     Schema {
         /// Write to a file instead of stdout
         #[arg(long)]
         out: Option<String>,
     },
+    #[command(display_order = 23)]
     /// Convert between canonical YAML and markdown frontmatter.
     Fmt {
         path: String,
@@ -54,11 +59,15 @@ pub enum SkillAction {
         write: bool,
     },
     /// List installed skills (from ~/.mur/skills/).
+    #[command(display_order = 1)]
     List,
     /// Show full content of an installed skill.
+    #[command(display_order = 2)]
     Show { name: String },
     /// Uninstall a skill.
+    #[command(display_order = 6)]
     Remove { name: String },
+    #[command(display_order = 42)]
     /// Set a skill's visibility scope (so the scope-aware injector only surfaces
     /// it in the matching context). Choose exactly one of the flags.
     Scope {
@@ -77,12 +86,14 @@ pub enum SkillAction {
         #[arg(long)]
         user: bool,
     },
+    #[command(display_order = 3)]
     /// Search installed skills (--local) or remote registry.
     Search {
         query: String,
         #[arg(long)]
         local: bool,
     },
+    #[command(display_order = 4)]
     /// Show Layer 1+2 summary of an installed skill.
     Info {
         name: String,
@@ -92,19 +103,23 @@ pub enum SkillAction {
         #[arg(long)]
         metrics: bool,
     },
+    #[command(display_order = 40)]
     /// Run full security scan + signature check on an installed skill.
     Audit { name: String },
+    #[command(display_order = 41)]
     /// Promote or demote a skill's trust level.
     Trust {
         name: String,
         #[arg(long)]
         level: String,
     },
+    #[command(display_order = 5)]
     /// Install a skill from registry, file, or URL.
     Install {
         /// Skill name (registry), local path, or git URL.
         source: String,
     },
+    #[command(display_order = 25)]
     /// Publish a local skill to the default registry.
     Publish {
         /// Path to skill.yaml to publish.
@@ -114,6 +129,7 @@ pub enum SkillAction {
     /// `index.yaml`. With `--check`, verify the on-disk index is authoritative
     /// (CI gate) instead of writing. Validates signatures + security scan;
     /// never signs.
+    #[command(hide = true)]
     RegistryIndex {
         /// Path to the skill-registry checkout (contains `skills/` + `index.yaml`).
         dir: String,
@@ -121,11 +137,13 @@ pub enum SkillAction {
         #[arg(long)]
         check: bool,
     },
+    #[command(display_order = 7)]
     /// Update an installed skill to the latest registry version.
     Update {
         /// Name of installed skill to update.
         name: String,
     },
+    #[command(display_order = 8)]
     /// Upgrade all origin-stamped (registry-installed) skills to the latest
     /// registry version. Skips anything user-modified since install.
     Upgrade {
@@ -136,11 +154,13 @@ pub enum SkillAction {
         #[arg(long)]
         json: bool,
     },
+    #[command(display_order = 24)]
     /// Print the resolved dependency tree for an installed skill.
     Deps {
         /// Name of installed skill.
         name: String,
     },
+    #[command(display_order = 68)]
     /// Generate a skill from a session recording.
     Generate {
         #[arg(long)]
@@ -154,6 +174,7 @@ pub enum SkillAction {
         #[arg(long, default_value = "4")]
         parallel: usize,
     },
+    #[command(display_order = 69)]
     /// Scan recent sessions for repeat task patterns (>=3 occurrences).
     Suggest {
         /// Max sessions to scan (default 20).
@@ -163,6 +184,7 @@ pub enum SkillAction {
         #[clap(long, default_value = "3")]
         threshold: usize,
     },
+    #[command(display_order = 67)]
     /// Self-evolve a skill by analyzing telemetry and applying minimal fixes.
     Evolve {
         /// Skill name to evolve.
@@ -174,6 +196,7 @@ pub enum SkillAction {
         #[clap(long, default_value = "3")]
         max_iterations: usize,
     },
+    #[command(display_order = 60)]
     /// Show runtime statistics for an installed skill (M5a).
     Stats {
         /// Skill name.
@@ -185,6 +208,7 @@ pub enum SkillAction {
         #[arg(long)]
         json: bool,
     },
+    #[command(display_order = 62)]
     /// Pin a skill to prevent auto-demotion (M5a).
     Pin {
         /// Skill name.
@@ -193,12 +217,14 @@ pub enum SkillAction {
         #[arg(long)]
         reason: Option<String>,
     },
+    #[command(display_order = 63)]
     /// Unpin a previously pinned skill (M5a).
     Unpin {
         /// Skill name.
         name: String,
     },
     /// Rebuild stats sidecars from the JSONL trace log (M5a).
+    #[command(hide = true)]
     ReindexStats {
         /// Skill filter (exact name or glob, e.g. 'research-*').
         name: Option<String>,
@@ -206,6 +232,7 @@ pub enum SkillAction {
         #[arg(long, default_value = "30")]
         days_back: u32,
     },
+    #[command(display_order = 61)]
     /// Run health checks on installed skills (M5a read-only).
     Doctor {
         /// Skill name(s) or glob pattern(s) to check (default: all installed).
@@ -232,6 +259,7 @@ pub enum SkillAction {
         #[arg(long)]
         llm_status: bool,
     },
+    #[command(display_order = 64)]
     /// Run lifecycle sweep across installed skills (M5b).
     Sweep {
         /// Skill filter (exact name or glob, e.g. 'research-*').
@@ -240,6 +268,7 @@ pub enum SkillAction {
         #[arg(long)]
         dry_run: bool,
     },
+    #[command(display_order = 65)]
     /// Archive a skill (M5b).
     Archive {
         /// Skill name.
@@ -249,6 +278,7 @@ pub enum SkillAction {
         reason: Option<String>,
     },
     /// Rebuild skill embedding index (M6c.1).
+    #[command(hide = true)]
     ReindexVec {
         /// Optional skill name to reindex; all if omitted.
         name: Option<String>,
@@ -256,6 +286,7 @@ pub enum SkillAction {
         #[arg(long)]
         prune: bool,
     },
+    #[command(display_order = 66)]
     /// Run consolidation pass: dedup + contradiction + orphan (M5b).
     Consolidate {
         /// Preview findings without writing.
@@ -274,12 +305,14 @@ pub enum SkillAction {
         #[arg(long)]
         cross_agent: bool,
     },
+    #[command(display_order = 43)]
     /// Record a human curation event for an LLM-extracted skill, so it can
     /// promote past Emerging (amendment A1).
     Curate {
         /// Skill name to curate.
         name: String,
     },
+    #[command(display_order = 70)]
     /// Recombine two skills into a new Draft offspring on this agent.
     Recombine {
         /// First parent ref: `<name>` (local) or `agent://<peer>/<name>`.
@@ -302,6 +335,7 @@ pub enum SkillAction {
         #[arg(long)]
         json: bool,
     },
+    #[command(display_order = 71)]
     /// Show the credit lineage for a skill (M7c).
     Credit {
         /// Skill name
@@ -313,23 +347,26 @@ pub enum SkillAction {
         #[arg(long)]
         json: bool,
     },
+    #[command(display_order = 26)]
     /// Import/export skills in MKEF format
     Exchange {
         #[command(subcommand)]
         action: crate::cli::actions::ExchangeAction,
     },
+    #[command(display_order = 27)]
     /// Manage pending skill drafts
     Drafts {
         #[command(subcommand)]
         action: crate::cli::actions::DraftsAction,
     },
+    #[command(display_order = 72)]
     /// Run eval suites
     Eval {
         #[command(subcommand)]
         action: crate::cli::actions::EvalAction,
     },
     /// Host-level intent canonicalisation (M7c).
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Intent(IntentAction),
 }
 
