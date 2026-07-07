@@ -53,8 +53,7 @@ use tokio::time::Instant as TokioInstant;
 
 use self::app::{
     App, ESC_DOUBLE_WINDOW, EscAction, OverlayKeyAction, RenderMode, Role, SlashCmd,
-    arm_input_debounce,
-    esc_action, overlay_key_action, parse_slash, take_due_input,
+    arm_input_debounce, esc_action, overlay_key_action, parse_slash, take_due_input,
 };
 use self::persist::Session;
 use self::stream::{StreamMsg, build_params, cancel_task, respond_hitl, spawn_stream};
