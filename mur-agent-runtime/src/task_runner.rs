@@ -70,6 +70,14 @@ const MAX_CONVERSATIONS: usize = 256;
 /// cap — switch to a token budget if turn sizes vary wildly.
 const MAX_CONV_MESSAGES: usize = 40;
 
+/// Injected into every agent's system prompt so authored files land where MUR
+/// can read them instead of the working directory. Guidance, not enforcement.
+const OUTPUT_LOCATIONS_RULE: &str = "\n\n## Output locations\n\
+When you produce files, put them where MUR can read them — never write them into the current working directory (often a source tree):\n\
+- Knowledge objects (workflows, skills, notes): register with the real command so they land in ~/.mur and show up in MUR and the Hub — `mur skill install <path>` for a skill, `mur workflow new` for a workflow. Never leave the definition in the working directory.\n\
+- Run artifacts (reports, quarantined files, scratch output): write to ~/.mur/artifacts/<your-agent-name>/<run>/, where <run> is a short timestamp or task label. Never the working directory.\n\
+- The only reason to write into the working directory is to edit an existing file in a repository you have been granted access to.";
+
 /// In-memory multi-turn chat memory. The CLI and Hub thread `context.task_id` =
 /// the prior reply's id on every send, so we key stored history by the id of the
 /// turn that produced it; the next turn's `context.task_id` then recalls its
@@ -468,7 +476,8 @@ impl TaskRunner {
         active_fleet: Option<&str>,
         active_team: Option<&str>,
     ) -> (String, Vec<String>) {
-        let base = self.system_prompt.clone().unwrap_or_default();
+        let mut base = self.system_prompt.clone().unwrap_or_default();
+        base.push_str(OUTPUT_LOCATIONS_RULE);
         let Some(skills) = &self.skills else {
             return (base, vec![]);
         };
@@ -3097,6 +3106,25 @@ mod tests {
         assert!(RATE_LIMIT_BACKOFF_BASE >= std::time::Duration::from_millis(1));
         let max_delay = rate_limit_backoff_delay(MAX_RATE_LIMIT_RETRIES);
         assert!(max_delay <= std::time::Duration::from_secs(60));
+    }
+
+    #[test]
+    fn assemble_system_prompt_appends_output_locations_rule() {
+        let runner = TaskRunner::new_stub_echo().with_system_prompt(Some("BASE PROMPT".into()));
+        let (sys, _fired) = runner.assemble_system_prompt("hello", None, None);
+        assert!(
+            sys.starts_with("BASE PROMPT"),
+            "keeps the agent's own prompt first"
+        );
+        assert!(sys.contains("Output locations"), "injects the rule heading");
+        assert!(
+            sys.contains("~/.mur/artifacts/"),
+            "names the run-artifact dir"
+        );
+        assert!(
+            sys.contains("mur skill install"),
+            "names the register command"
+        );
     }
 }
 
