@@ -44,10 +44,27 @@ pub enum Role {
     Shell,
 }
 
+/// Visual importance of a System notice, used to color-code the transcript so
+/// errors/warnings stand out from ordinary hints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Severity {
+    /// Ordinary hint or slash-command output.
+    #[default]
+    Info,
+    /// Something the user should notice (cancelled, restored, degraded).
+    Warn,
+    /// A failure.
+    Error,
+    /// A completed action worth a nod (saved, done).
+    Success,
+}
+
 /// One message in the visible transcript.
 #[derive(Debug, Clone)]
 pub struct ChatMsg {
     pub role: Role,
+    /// Importance of a System notice; ignored for other roles.
+    pub severity: Severity,
     /// Visible body. For a streaming agent turn this accumulates token deltas;
     /// it is replaced by the authoritative final reply on completion.
     pub text: String,
@@ -67,6 +84,7 @@ impl ChatMsg {
     fn new(role: Role, text: impl Into<String>) -> Self {
         Self {
             role,
+            severity: Severity::Info,
             text: text.into(),
             thinking: String::new(),
             streaming: false,
@@ -75,11 +93,19 @@ impl ChatMsg {
         }
     }
 
+    /// A System notice tagged with an importance for color-coding.
+    fn system_sev(text: impl Into<String>, severity: Severity) -> Self {
+        let mut m = Self::new(Role::System, text);
+        m.severity = severity;
+        m
+    }
+
     /// A finished agent message whose markdown is pre-rendered (resume path).
     fn agent_rendered(text: String) -> Self {
         let rendered = Some(markdown::render(&text).lines);
         Self {
             role: Role::Agent,
+            severity: Severity::Info,
             text,
             thinking: String::new(),
             streaming: false,
@@ -92,6 +118,7 @@ impl ChatMsg {
     fn tool(card: super::step::StepCard) -> Self {
         Self {
             role: Role::Agent,
+            severity: Severity::Info,
             text: String::new(),
             thinking: String::new(),
             streaming: false,
@@ -222,6 +249,30 @@ pub fn overlay_key_action(code: KeyCode, modifiers: KeyModifiers) -> OverlayKeyA
     }
 }
 
+/// The terminal surface the TUI is currently drawing on.
+///
+/// `Inline` is the steady state: a small, FIXED-height inline viewport (the
+/// composer + status + the currently-streaming reply's tail) sitting on the
+/// main screen. Every message that finishes gets flushed straight into the
+/// terminal's own native scrollback via `Terminal::insert_before` — so mouse
+/// wheel scroll and text selection over history are 100% native, no app
+/// mouse-capture needed. The viewport height is a compile-time constant and
+/// is NEVER resized after creation: `Terminal::resize` on an Inline viewport
+/// queries the terminal for its cursor position, and that query races the
+/// async `EventStream` reader for the same stdin bytes and hangs under
+/// nested tmux/remote terminals — fixing the height instead of resizing it
+/// sidesteps that entirely.
+///
+/// `Fullscreen` is for heavy overlays (Ctrl+O transcript, `/mcp`/`/skill`
+/// browsers) that need the whole screen: entering/leaving the alternate
+/// screen is a fire-and-forget mode-set escape code, not a query, so it's
+/// safe to toggle on every mode edge (see `sync_surface`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderMode {
+    Inline,
+    Fullscreen,
+}
+
 /// All mutable TUI state.
 pub struct App {
     pub home: PathBuf,
@@ -276,6 +327,14 @@ pub struct App {
     /// Forces a full ratatui repaint on the next frame after we manipulate the
     /// raw terminal outside the Terminal object (e.g. Ctrl+O scrollback dump).
     pub needs_full_redraw: bool,
+    /// Current render surface — see `RenderMode`.
+    pub render_mode: RenderMode,
+    /// Count of leading `messages` already flushed into the terminal's native
+    /// scrollback via `Terminal::insert_before` (Inline mode). Only messages
+    /// at index `>= flushed_upto` are still painted in the live viewport —
+    /// in practice that's at most the one currently-streaming message, since
+    /// a message is flushed the moment it stops streaming.
+    pub flushed_upto: usize,
     /// True while the Ctrl+O transcript overlay is showing. The overlay
     /// stays in raw mode/alt-screen and keys route through the normal event
     /// loop (`overlay_key_action`) instead of a blocking stdin read.
@@ -376,6 +435,8 @@ impl App {
             last_esc_at: None,
             esc_hint: false,
             needs_full_redraw: false,
+            render_mode: RenderMode::Inline,
+            flushed_upto: 0,
             overlay_open: false,
             overlay_text: None,
             last_ctrl_c_at: None,
@@ -531,6 +592,25 @@ impl App {
     pub fn push_system(&mut self, text: impl Into<String>) {
         self.messages.push(ChatMsg::new(Role::System, text));
         self.scroll_back = 0;
+    }
+
+    /// System notice tagged with an importance so the transcript can color-code
+    /// it (errors red, warnings amber, successes green).
+    pub fn push_system_sev(&mut self, text: impl Into<String>, severity: Severity) {
+        self.messages.push(ChatMsg::system_sev(text, severity));
+        self.scroll_back = 0;
+    }
+
+    pub fn push_error(&mut self, text: impl Into<String>) {
+        self.push_system_sev(text, Severity::Error);
+    }
+
+    pub fn push_warn(&mut self, text: impl Into<String>) {
+        self.push_system_sev(text, Severity::Warn);
+    }
+
+    pub fn push_success(&mut self, text: impl Into<String>) {
+        self.push_system_sev(text, Severity::Success);
     }
 
     /// Record a user turn (visible + persisted) and return the new task id for
@@ -751,6 +831,8 @@ impl App {
         self.session = session;
         self.channel = None;
         self.messages.clear();
+        self.flushed_upto = 0;
+        self.needs_full_redraw = true;
         self.context_task_id = None;
         self.current_task_id = None;
         self.streaming = false;
@@ -772,6 +854,7 @@ impl App {
         self.session = session;
         self.channel = None;
         self.messages.clear();
+        self.flushed_upto = 0;
         self.context_task_id = None;
         self.current_task_id = None;
         self.streaming = false;
