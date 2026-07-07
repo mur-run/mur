@@ -1,9 +1,9 @@
 /* Raw scales. Never referenced directly by components — only by semantic.css. */
 :root {
   /* brand blue */
-  --blue-700:#2F6FB0; --blue-500:#4A90D9; --blue-soft:#EAF3FC;
+  --blue-700:#2F6FB0; --blue-500:#4A90D9; --blue-300:#8FC1EC; --blue-soft:#EAF3FC; --blue-soft-dark:rgba(74,144,217,.22);
   /* accent coral */
-  --coral-600:#F0563D; --coral-500:#FB6B53; --coral-soft:#FFF1EE;
+  --coral-600:#F0563D; --coral-500:#FB6B53; --coral-300:#FFA290; --coral-soft:#FFF1EE; --coral-soft-dark:rgba(251,107,83,.20);
   /* category */
   --cat-research:#4A90D9; --cat-automation:#10B981; --cat-monitor:#F59E0B;
   --cat-notify:#EF4444; --cat-commerce:#8B5CF6; --cat-custom:#64748B;
