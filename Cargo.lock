@@ -6560,6 +6560,7 @@ dependencies = [
  "tree-sitter-rust",
  "tui-textarea",
  "ulid",
+ "unicode-width 0.1.14",
  "urlencoding",
  "uuid",
  "walkdir",

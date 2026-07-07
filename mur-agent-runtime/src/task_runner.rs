@@ -1540,6 +1540,14 @@ impl TaskRunner {
             }
 
             history.push(RichMessage::ToolResults { results });
+
+            // Note: `suggest_replies` does NOT hard-end the turn. Whether to stop
+            // and wait for the user's pick, or keep going, is the model's call —
+            // it ends the turn by emitting `stop_reason: end_turn` after offering
+            // the options (soft-guided by the tool description) when it needs the
+            // answer, and continues when it already knows the next step. Forcing
+            // an end here would rob the model of that judgement.
+
             // Mid-turn steering: pick up any user interjection sent via turn/steer
             // since the last LLM call and append it before the next iteration.
             // Race-free: history is mutated only here; try_recv never blocks.
