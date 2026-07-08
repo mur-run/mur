@@ -797,7 +797,9 @@ pub enum AgentMcpAction {
         server_id: String,
         #[arg(long)]
         command: String,
-        #[arg(long = "arg")]
+        /// A single argument for the MCP command (repeatable). Values may
+        /// start with `-`/`--`, e.g. `--arg --engine` or `--arg=--engine`.
+        #[arg(long = "arg", allow_hyphen_values = true)]
         args: Vec<String>,
         /// Skip the y/N install confirmation prompt (B0 rule 6 / M9.2).
         /// Use for scripted / non-interactive installs.
@@ -1098,5 +1100,34 @@ mod tests {
             panic!("expected Mcp::RegistryAdd variant");
         };
         assert!(!force);
+    }
+
+    #[test]
+    fn mcp_add_arg_accepts_hyphen_prefixed_values() {
+        // Regression: `--arg --engine` must be consumed as the value, not
+        // rejected as an unknown flag (allow_hyphen_values).
+        let cli = Cli::try_parse_from([
+            "mur",
+            "agent",
+            "mcp",
+            "add",
+            "t",
+            "x",
+            "--command",
+            "foo",
+            "--arg",
+            "--engine",
+        ])
+        .expect("parse argv");
+        let Commands::Agent {
+            action: AgentAction::Mcp { action },
+        } = cli.command
+        else {
+            panic!("expected Agent::Mcp variant");
+        };
+        let crate::cli::agent::AgentMcpAction::Add { args, .. } = action else {
+            panic!("expected Mcp::Add variant");
+        };
+        assert_eq!(args, vec!["--engine".to_string()]);
     }
 }
