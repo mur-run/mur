@@ -874,9 +874,22 @@ pub enum AgentMcpAction {
         /// Allowed host (repeatable), e.g. `--allow-host example.com --allow-host '*.api.example.com'`.
         #[arg(long = "allow-host")]
         allow_hosts: Vec<String>,
+        /// Denied host (repeatable). With `--broad-audited`, these are the
+        /// deny-overlay hosts; ignored otherwise.
+        #[arg(long = "deny-host")]
+        deny_hosts: Vec<String>,
         /// Deny this server all outbound network.
         #[arg(long)]
         off: bool,
+        /// Grant allow-ALL-except-`--deny-host` egress, routed through the
+        /// audited proxy. Permission-required: requires operator consent
+        /// (prompts unless `--yes`) and records who authorized it and when.
+        #[arg(long = "broad-audited", conflicts_with = "off")]
+        broad_audited: bool,
+        /// Skip the y/N consent prompt for `--broad-audited`. Use for
+        /// scripted / non-interactive grants.
+        #[arg(long)]
+        yes: bool,
     },
     /// Scan other installed tools (Claude Desktop/Code, Cursor, VS Code,
     /// Windsurf, Antigravity, Gemini CLI, Codex) for MCP servers you can import.
