@@ -413,6 +413,12 @@ pub struct App {
     pub pending_suggestions: Vec<super::suggest::Suggestion>,
     /// The single suggestion currently shown as ghost placeholder text, if any.
     pub suggestion_ghost: Option<String>,
+    /// Sent-message history for shell-style ↑/↓ recall in the composer.
+    pub sent_history: Vec<String>,
+    /// Current position while browsing `sent_history` (None = not browsing).
+    pub hist_idx: Option<usize>,
+    /// Draft stashed when browsing starts; restored on ↓ past the newest.
+    pub hist_stash: String,
     /// Input-driven suggestions (spec §3.5): last input text observed by the
     /// debounce, last snapshot actually sent, and the pending deadline.
     pub panel_input_seen: String,
@@ -482,6 +488,9 @@ impl App {
             skills: Vec::new(),
             pending_suggestions: Vec::new(),
             suggestion_ghost: None,
+            sent_history: Vec::new(),
+            hist_idx: None,
+            hist_stash: String::new(),
             panel_input_seen: String::new(),
             panel_input_sent: String::new(),
             panel_input_deadline: None,
@@ -925,10 +934,63 @@ impl App {
                 }
                 self.messages.push(ChatMsg::agent_rendered(t.text));
             } else {
+                if role == Role::User {
+                    self.history_record(&t.text);
+                }
                 self.messages.push(ChatMsg::new(role, t.text));
             }
         }
         self.context_task_id = last_task;
+    }
+
+    // ── Composer input history (shell-style ↑/↓ recall) ────────────────────
+
+    /// Record a sent message for ↑ recall. Skips blanks and immediate
+    /// duplicates; always exits browsing mode.
+    pub fn history_record(&mut self, text: &str) {
+        if !text.trim().is_empty() && self.sent_history.last().map(String::as_str) != Some(text) {
+            self.sent_history.push(text.to_string());
+        }
+        self.hist_idx = None;
+        self.hist_stash.clear();
+    }
+
+    /// ↑ on the composer's first line: recall the previous sent message.
+    /// Returns false (key not consumed) when there is no history.
+    pub fn history_prev(&mut self) -> bool {
+        if self.sent_history.is_empty() {
+            return false;
+        }
+        let next = match self.hist_idx {
+            None => {
+                self.hist_stash = self.input_text();
+                self.sent_history.len() - 1
+            }
+            Some(0) => return true, // already at oldest — swallow the key
+            Some(i) => i - 1,
+        };
+        self.hist_idx = Some(next);
+        let text = self.sent_history[next].clone();
+        self.set_input(&text);
+        true
+    }
+
+    /// ↓ on the composer's last line while browsing: newer entry, or restore
+    /// the stashed draft past the newest. Returns false when not browsing.
+    pub fn history_next(&mut self) -> bool {
+        let Some(i) = self.hist_idx else {
+            return false;
+        };
+        if i + 1 < self.sent_history.len() {
+            self.hist_idx = Some(i + 1);
+            let text = self.sent_history[i + 1].clone();
+            self.set_input(&text);
+        } else {
+            self.hist_idx = None;
+            let stash = std::mem::take(&mut self.hist_stash);
+            self.set_input(&stash);
+        }
+        true
     }
 
     pub fn tick_spinner(&mut self) {
@@ -1265,6 +1327,29 @@ mod tests {
         );
         assert_eq!(parse_slash("/chan"), Some(SlashCmd::Channels(None)));
         assert_eq!(parse_slash("/channels x"), Some(SlashCmd::Channels(None)));
+    }
+
+    #[test]
+    fn input_history_recall_cycle() {
+        let home = tempdir().unwrap();
+        let mut a = app_at(&home);
+        a.history_record("first");
+        a.history_record("second");
+        a.history_record("second"); // consecutive dup skipped
+        assert_eq!(a.sent_history.len(), 2);
+
+        a.set_input("draft");
+        assert!(a.history_prev());
+        assert_eq!(a.input_text(), "second");
+        assert!(a.history_prev());
+        assert_eq!(a.input_text(), "first");
+        assert!(a.history_prev()); // at oldest — swallowed, unchanged
+        assert_eq!(a.input_text(), "first");
+        assert!(a.history_next());
+        assert_eq!(a.input_text(), "second");
+        assert!(a.history_next()); // past newest — draft restored
+        assert_eq!(a.input_text(), "draft");
+        assert!(!a.history_next()); // not browsing — key not consumed
     }
 
     #[test]
