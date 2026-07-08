@@ -245,8 +245,13 @@ pub enum AgentAction {
         /// Device fingerprint (see `mur agent devices`) or full pubkey.
         fingerprint: String,
     },
-    /// Run prereq checks for export targets (no build, just diagnostics)
+    /// Run prereq checks for export targets (no build, just diagnostics).
+    /// With NAME, runs per-agent health checks (model_ref, MCP command
+    /// resolution, entitlements) instead.
     Doctor {
+        /// Agent name to run per-agent health checks for. Omit for the
+        /// existing export-prereq checks.
+        name: Option<String>,
         /// What format the doctor should validate prereqs for: "gui" / "bin" / "pkg" / "all"
         #[arg(long, default_value = "all")]
         format: String,
