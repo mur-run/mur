@@ -2,18 +2,29 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Stand up `aura`, a MUR agent that runs end-to-end web research as a fleet of parallel workers, using `agent-browser` (default `--engine lightpanda`, ~24MB; chrome fallback) for JS/login pages.
+> **⚠ REVISED 2026-07-08 — fleet dropped; one core, two modes.** The live E2E showed
+> the multi-worker fleet is the wrong shape: the `deep-research` workflow already does
+> decomposition + parallel fan-out + verification + synthesis, and its ephemeral
+> subagents avoid the per-agent sandbox/entitlement cost that blocked the fleet. New
+> design (spec §4.4): **Mode 1** = one-shot public research, no agent, just invoke
+> `deep-research` (ships today, no gap). **Mode 2** = ONE persistent `aura` agent for
+> login-state / scheduling / memory, calling `deep-research` for volume and using its
+> browser tier only for login-gated / heavy-JS pages. **Task 5 (fleet) is REMOVED;
+> worker clones `aura-w1/-w2` are deleted.** Tasks 1–4 stand (single `aura` + browser
+> tier + skills). Task 6 is reframed to Mode-1/Mode-2 verification.
 
-**Architecture:** AURA is composed from existing MUR primitives, not new runtime code: a `mur agent` profile + the `agent-browser` MCP tool + four agent-scoped skills + a `mur fleet`. The discovery/verification layer reuses the existing `deep-research` workflow; the full-browser layer is a swappable `agent-browser` control surface.
+**Goal:** Deliver a two-mode research capability: Mode 1 (invoke `deep-research`, no agent) and Mode 2 (one persistent `aura` agent adding login/schedule/memory), sharing one research core.
 
-**Tech Stack:** MUR CLI (`mur agent`, `mur skill`, `mur fleet`), `agent-browser` (npm, Apache-2.0), Lightpanda engine (AGPL-3.0, subprocess-only).
+**Architecture:** Composed from existing MUR primitives, not new runtime code. Mode 1 needs no build (the `deep-research` workflow exists). Mode 2 = a single `mur agent` profile + the `agent-browser` MCP tool + five User-scoped skills. Parallelism lives in the workflow's ephemeral subagents, not a fleet.
+
+**Tech Stack:** MUR CLI (`mur agent`, `mur skill`), `deep-research` workflow, `agent-browser` (npm, Apache-2.0), Lightpanda engine (AGPL-3.0, subprocess-only).
 
 ## Global Constraints
 
 - Brand name user-facing is uppercase **AURA**; internal `name` is lowercase `aura` (matches on-disk dir + runtime spoof check). — spec §4.1, CLAUDE.md rule 7.
 - Lightpanda (AGPL-3.0) may only be invoked as a **separate subprocess over CDP** — never linked in-process, never forked/modified. Ship unmodified upstream binary + AGPL attribution. — spec §3.
 - `agent-browser` is the single control surface; engine/args/executable are set via env (`AGENT_BROWSER_ENGINE`, `AGENT_BROWSER_ARGS`, `AGENT_BROWSER_EXECUTABLE_PATH`) or per-call flags, fleet logic unchanged. `--engine lightpanda` requires the Lightpanda binary installed separately + `AGENT_BROWSER_ARGS=""` (Chrome stealth args must not reach lightpanda). — spec §4.3, verified 0.31.1.
-- Fleet safety triad reused unchanged: `MUR_FLEET_AUTORUN` off by default + per-fleet `budget_usd` + `mur fleet stop` kill-switch; steps pass `yes:false` (fail-closed). — spec §4.4.
+- Mode 2 persistence (login/schedule/memory) is the ONLY justification for the agent; if none are needed, use Mode 1 (no agent). — spec §4.4.
 - No hardcoded values: model alias comes from `~/.mur/models.yaml` (operator selects), never hardcoded. — CLAUDE.md rule 1.
 - This plan writes configuration + skill YAML only. It does not add Rust code. If any task appears to need a new MUR runtime feature, STOP and raise it — that is a separate spec.
 
@@ -304,69 +315,12 @@ git add -A && git commit -m "feat(aura): author 5 research skills (preflight, es
 
 ---
 
-### Task 5: Create the `aura-research` fleet
+### Task 5: ~~Create the `aura-research` fleet~~ — REMOVED
 
-**Files:**
-- Create: `~/.mur/fleets/aura-research/fleet.yaml` (via CLI) + shared channel `fleet-aura-research`
-- Reference: `mur-core/src/cmd/fleet/create.rs` (`cmd_fleet_create`)
-
-**Interfaces:**
-- Consumes: the `aura` agent (Task 2). For real member fan-out, additional runnable member agents are needed (see Step 2).
-- Produces: a runnable fleet with router + members over one signed channel; consumed by Task 6.
-
-- [ ] **Step 1: Create the fleet with a goal**
-
-```bash
-mur fleet create aura-research --goal "Answer the operator's research question with a cited, verified report."
-mur fleet show aura-research
-```
-Expected: `~/.mur/fleets/aura-research/fleet.yaml` written; router + channel `fleet-aura-research` present (see `create.rs`). Fleet name validated as a lowercase slug.
-
-- [ ] **Step 2: Add members (aura workers)**
-
-The fleet needs >=2 runnable member agents for parallel fan-out. VERIFIED: there is
-NO `mur agent import --as` command (only `install`, which can't rename). Clone by
-repeating Task 2 + Task 3 per worker (create + wire both browser tools):
-```bash
-for w in aura-w1 aura-w2; do
-  mur agent create "$w" --no-interactive --display-name AURA --model claude-sonnet-5 --provider anthropic
-  # verify model_ref: claude_sonnet in ~/.mur/agents/$w/profile.yaml; add it if the create bug drops it
-  mur agent mcp add "$w" agent-browser --command agent-browser --force \
-    --arg=--engine --arg=lightpanda --arg=--executable-path --arg="$HOME/.mur/aura/lightpanda" \
-    --arg=--args --arg="" --arg=mcp --arg=--tools --arg=core
-  mur agent mcp add "$w" agent-browser-chrome --command agent-browser --force \
-    --arg=--engine --arg=chrome --arg=mcp --arg=--tools --arg=core
-  mur agent set-prompt "$w" ...   # same AURA prompt as Task 2 Step 3 (or `mur agent prompt set`)
-done
-mur fleet add aura-research aura-w1 aura-w2   # SPACE-separated variadic — NOT comma-separated
-mur fleet show aura-research
-```
-Expected: `mur fleet show aura-research` lists router `mur` (concierge default) + members `aura-w1`, `aura-w2` (Delegate role in the channel yaml). Fleet-scoped skills inject to members via membership — they do NOT need copying. Confirm each worker: `mur agent mcp list <w>` shows both tools and `profile.yaml` has `model_ref: claude_sonnet`.
-
-- [ ] **Step 3: Set the safety guards**
-
-```bash
-# budget is required for any future auto-run; keep autorun OFF (default)
-mur fleet set-loop aura-research --budget-usd 5.0
-mur fleet show aura-research      # confirm no autorun trigger set
-```
-`mur fleet set-loop --budget-usd` writes `loop.budget_usd` (verified) so a future `--loop` or auto-run can never exceed it (spec §4.4). Confirm `trigger: manual` (not `interval:`/`cron:`) in fleet.yaml and do NOT set `MUR_FLEET_AUTORUN`.
-Expected: `budget_usd > 0`, no `loop.trigger`.
-
-- [ ] **Step 4: Verify one iteration runs (fail-closed)**
-
-```bash
-mur fleet run aura-research
-```
-Expected: the router fans the goal to members via the DAG executor; each member runs one turn; run completes without blanket-approving any risk-tiered step (`yes:false`). Requires the member agents to be running (operator-tested).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add -A && git commit -m "feat(aura): create aura-research fleet with budget guard"
-```
-
----
+The fleet-of-workers shape is dropped (see revision banner + spec §4.4). Parallelism is
+provided by the `deep-research` workflow's ephemeral subagents, not persistent agents.
+The worker clones `aura-w1/-w2` and the `aura-research` fleet created during the build
+were deleted. Nothing to do here.
 
 ### Task 6: End-to-end acceptance — a real research question
 
@@ -376,41 +330,49 @@ Prove the whole system produces a cited, verified report and that the escalation
 - Create: `docs/superpowers/plans/artifacts/aura-e2e-report.md` (captured output)
 
 **Interfaces:**
-- Consumes: everything from Tasks 1–5.
-- Produces: acceptance evidence.
+- Consumes: Mode 1 = the `deep-research` workflow (exists); Mode 2 = Tasks 1–4.
+- Produces: acceptance evidence for both modes.
 
-- [ ] **Step 1: Run a JS/login-requiring research question through the fleet**
+- [ ] **Step 1: Mode 1 — one-shot public research (ships today, no gap)**
 
-Pick a question that forces at least one JS-rendered page (so the browser tier is exercised). Run:
-```bash
-mur fleet run aura-research    # with the question as the goal/input per `mur fleet run --help`
-```
-Expected: a synthesized answer where claims carry source URLs (citation-discipline skill), and at least one source was fetched via `agent-browser` (escalation-ladder skill fired). Capture output to the artifact file.
+Invoke the `deep-research` workflow directly with the research question (no agent, no
+fleet). This is the common path and does not touch the per-agent sandbox/entitlement.
+Expected: a synthesized report where claims carry source URLs + quotes. Capture to the
+artifact file. (Verified pattern: the two deep-research runs during this build produced
+exactly this — cited, adversarially-verified reports.)
 
 - [ ] **Step 2: Verify citation discipline held**
 
-Inspect the report: every non-trivial claim has a URL + quote; no unsourced claims shipped. If any claim is unsourced, the `aura-citation-discipline` skill needs stronger content — fix and re-run.
+Inspect the Mode-1 report: every non-trivial claim has a URL + quote; no unsourced
+claims. Deep-research already enforces this (verify phase + `sources`); confirm.
 Expected: PASS = zero unsourced claims.
 
-- [ ] **Step 3: Verify the escalation ladder did not over-escalate**
+- [ ] **Step 3: Mode 2 — persistent agent login-gated fetch (the agent's reason to exist)**
 
-Check the run's tool calls (channel events / transcript): plain pages were read via `WebFetch`, only JS pages hit `agent-browser`. A browser call for a page plain fetch could read = ladder violation; strengthen the skill.
-Expected: PASS = no gratuitous browser calls.
-
-- [ ] **Step 4: Verify the kill-switch**
-
+Interactively drive `aura` at a page a workflow can't reach (login-gated or heavy-JS):
 ```bash
-mur fleet stop aura-research
-mur fleet run aura-research      # must refuse
-mur fleet start aura-research    # clears the sentinel
+mur agent cli aura
+# prompt: "Use the browser tool to open <a JS/login page> and extract <X>."
 ```
-Expected: `run` refuses while stopped (`.stopped` sentinel), then works after `start`. Confirms the kill-switch (spec §4.4).
+Expected: `aura` uses `agent-browser` (lightpanda→chrome per the escalation-ladder
+skill) and returns the content. This is the ONLY path that touches the per-agent
+network entitlement — and is gated on the operator's `network.outbound` decision (see
+Runtime gaps §3). Requires `aura` running (`mur agent install-service aura`) with the
+PATH + sbpl entitlements from Runtime gaps §1–2 applied.
+
+- [ ] **Step 4: Confirm scheduling/memory hooks (Mode 2 differentiators)**
+
+Verify the persistence features that justify Mode 2 over Mode 1:
+```bash
+mur agent schedule --help    # confirm aura can be scheduled (nightly/triggered research)
+```
+Expected: scheduling is available; auth-vault + memory noted as follow-on (§ open questions).
 
 - [ ] **Step 5: Commit acceptance evidence**
 
 ```bash
 git add docs/superpowers/plans/artifacts/aura-e2e-report.md
-git commit -m "test(aura): end-to-end acceptance — cited report, ladder, kill-switch verified"
+git commit -m "test(aura): acceptance — Mode 1 cited report + Mode 2 login-gated fetch"
 ```
 
 ---
