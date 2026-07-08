@@ -159,6 +159,7 @@ triggers:
             trust: TrustLevel::Verified,
             scope: SkillScope::Global,
             content_hash: String::new(),
+            dir: std::path::PathBuf::new(),
         }
     }
 
@@ -199,6 +200,7 @@ triggers:
             trust: TrustLevel::Sandboxed,
             scope: SkillScope::Global,
             content_hash: String::new(),
+            dir: std::path::PathBuf::new(),
         };
         let triggers = register_from(&[s]);
         assert!(triggers.is_empty());
