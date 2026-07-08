@@ -496,8 +496,6 @@ fn rebuild_after_resize(
     app: &mut App,
     h: u16,
 ) -> Result<()> {
-    use crossterm::cursor::MoveTo;
-    use crossterm::terminal::{Clear, ClearType};
     // Let the reflow storm settle so we rebuild once, not per event.
     let mut size = crossterm::terminal::size()?;
     loop {
@@ -508,6 +506,18 @@ fn rebuild_after_resize(
         }
         size = now;
     }
+    purge_and_reanchor(terminal, h)?;
+    app.flushed_upto = 0;
+    Ok(())
+}
+
+/// Wipe the screen AND scrollback, then re-anchor a fresh Inline viewport
+/// of height `h` at the top-left. Shared by the resize rebuild and the
+/// /clear / channel-switch screen wipe. Caller must drop any live
+/// `EventStream` first.
+fn purge_and_reanchor(terminal: &mut Terminal<CrosstermBackend<Stdout>>, h: u16) -> Result<()> {
+    use crossterm::cursor::MoveTo;
+    use crossterm::terminal::{Clear, ClearType};
     crossterm::execute!(
         io::stdout(),
         MoveTo(0, 0),
@@ -527,7 +537,6 @@ fn rebuild_after_resize(
         ) {
             Ok(t) => {
                 *terminal = t;
-                app.flushed_upto = 0;
                 return Ok(());
             }
             Err(e) => {
@@ -576,6 +585,17 @@ async fn event_loop(
             }
         }
         app.sync_input_block();
+        // /clear or channel switch: the on-screen transcript no longer
+        // matches the conversation — wipe screen + scrollback and re-anchor
+        // so the fresh state (welcome or replayed channel) renders clean.
+        if app.render_mode == RenderMode::Inline && std::mem::take(&mut app.wants_screen_wipe) {
+            drop(events);
+            let desired = desired_viewport_h(app);
+            if purge_and_reanchor(terminal, desired).is_ok() {
+                viewport_h = desired;
+            }
+            events = EventStream::new();
+        }
         arm_input_debounce(app, StdInstant::now());
         // Flush settled messages into native scrollback BEFORE the draw so
         // the live viewport only ever paints the current streaming tail (or
