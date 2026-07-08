@@ -349,10 +349,14 @@ pub fn proxy_env_for(
     let (Some(net), Some(proxy)) = (entry.network.as_ref(), proxy) else {
         return vec![];
     };
-    if net.mode != mur_common::agent::McpNetMode::Restricted {
-        return vec![];
-    }
-    let token = proxy.register(net.allow_hosts.clone());
+    let broad = match net.mode {
+        mur_common::agent::McpNetMode::Restricted => false,
+        mur_common::agent::McpNetMode::BroadAudited => true,
+        mur_common::agent::McpNetMode::Inherit | mur_common::agent::McpNetMode::Off => {
+            return vec![];
+        }
+    };
+    let token = proxy.register_policy(net.allow_hosts.clone(), net.deny_hosts.clone(), broad);
     let url = format!("http://{token}:x@{}", proxy.addr);
     let no_proxy = "127.0.0.1,localhost,::1".to_string();
     vec![
@@ -387,6 +391,8 @@ mod tests {
         restricted.network = Some(McpServerNetwork {
             mode: McpNetMode::Restricted,
             allow_hosts: vec!["example.com".into()],
+            deny_hosts: vec![],
+            authorization: None,
         });
         assert!(proxy_env_for(&restricted, None).is_empty());
 
@@ -406,6 +412,8 @@ mod tests {
         inherit.network = Some(McpServerNetwork {
             mode: McpNetMode::Inherit,
             allow_hosts: vec![],
+            deny_hosts: vec![],
+            authorization: None,
         });
         assert!(proxy_env_for(&inherit, Some(&handle)).is_empty());
     }
