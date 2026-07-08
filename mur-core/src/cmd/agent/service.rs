@@ -176,6 +176,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn plist_includes_path_env() {
         let plist = darwin_plist(
             "aura",
