@@ -51,8 +51,9 @@ pub enum AgentAction {
     /// upgraded runtime binary. Sends SIGTERM (drains in-flight turn), waits
     /// for exit, then polls for the launchd-respawned process.
     Restart {
-        /// Agent name (mutually exclusive with --all / --stale)
-        name: Option<String>,
+        /// Agent name(s) (mutually exclusive with --all / --stale)
+        #[arg(num_args = 0..)]
+        names: Vec<String>,
         /// Restart all running agents
         #[arg(long)]
         all: bool,
@@ -195,6 +196,12 @@ pub enum AgentAction {
         /// Example: --model ollama_llama3_2_3b
         #[arg(long)]
         model: Option<String>,
+        /// Install as a NEW, distinct agent under this name — a fresh
+        /// profile.id (uuid v7) and a freshly minted, persisted Ed25519
+        /// identity (never the source's private key). Refuses if an agent
+        /// already exists at this name.
+        #[arg(long = "as", value_name = "NAME")]
+        as_name: Option<String>,
     },
     /// Uninstall an agent (data preserved at <home>/data unless --purge)
     Uninstall {
@@ -239,8 +246,13 @@ pub enum AgentAction {
         /// Device fingerprint (see `mur agent devices`) or full pubkey.
         fingerprint: String,
     },
-    /// Run prereq checks for export targets (no build, just diagnostics)
+    /// Run prereq checks for export targets (no build, just diagnostics).
+    /// With NAME, runs per-agent health checks (model_ref, MCP command
+    /// resolution, entitlements) instead.
     Doctor {
+        /// Agent name to run per-agent health checks for. Omit for the
+        /// existing export-prereq checks.
+        name: Option<String>,
         /// What format the doctor should validate prereqs for: "gui" / "bin" / "pkg" / "all"
         #[arg(long, default_value = "all")]
         format: String,
@@ -797,7 +809,9 @@ pub enum AgentMcpAction {
         server_id: String,
         #[arg(long)]
         command: String,
-        #[arg(long = "arg")]
+        /// A single argument for the MCP command (repeatable). Values may
+        /// start with `-`/`--`, e.g. `--arg --engine` or `--arg=--engine`.
+        #[arg(long = "arg", allow_hyphen_values = true)]
         args: Vec<String>,
         /// Skip the y/N install confirmation prompt (B0 rule 6 / M9.2).
         /// Use for scripted / non-interactive installs.
@@ -874,9 +888,22 @@ pub enum AgentMcpAction {
         /// Allowed host (repeatable), e.g. `--allow-host example.com --allow-host '*.api.example.com'`.
         #[arg(long = "allow-host")]
         allow_hosts: Vec<String>,
+        /// Denied host (repeatable). With `--broad-audited`, these are the
+        /// deny-overlay hosts; ignored otherwise.
+        #[arg(long = "deny-host")]
+        deny_hosts: Vec<String>,
         /// Deny this server all outbound network.
         #[arg(long)]
         off: bool,
+        /// Grant allow-ALL-except-`--deny-host` egress, routed through the
+        /// audited proxy. Permission-required: requires operator consent
+        /// (prompts unless `--yes`) and records who authorized it and when.
+        #[arg(long = "broad-audited", conflicts_with = "off")]
+        broad_audited: bool,
+        /// Skip the y/N consent prompt for `--broad-audited`. Use for
+        /// scripted / non-interactive grants.
+        #[arg(long)]
+        yes: bool,
     },
     /// Scan other installed tools (Claude Desktop/Code, Cursor, VS Code,
     /// Windsurf, Antigravity, Gemini CLI, Codex) for MCP servers you can import.
@@ -1085,5 +1112,34 @@ mod tests {
             panic!("expected Mcp::RegistryAdd variant");
         };
         assert!(!force);
+    }
+
+    #[test]
+    fn mcp_add_arg_accepts_hyphen_prefixed_values() {
+        // Regression: `--arg --engine` must be consumed as the value, not
+        // rejected as an unknown flag (allow_hyphen_values).
+        let cli = Cli::try_parse_from([
+            "mur",
+            "agent",
+            "mcp",
+            "add",
+            "t",
+            "x",
+            "--command",
+            "foo",
+            "--arg",
+            "--engine",
+        ])
+        .expect("parse argv");
+        let Commands::Agent {
+            action: AgentAction::Mcp { action },
+        } = cli.command
+        else {
+            panic!("expected Agent::Mcp variant");
+        };
+        let crate::cli::agent::AgentMcpAction::Add { args, .. } = action else {
+            panic!("expected Mcp::Add variant");
+        };
+        assert_eq!(args, vec!["--engine".to_string()]);
     }
 }

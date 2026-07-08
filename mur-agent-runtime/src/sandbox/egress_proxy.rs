@@ -16,9 +16,20 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use super::reqwest_guard::host_allowed;
+use super::reqwest_guard::{host_allowed, host_matches_pattern};
 
-type Registry = Arc<Mutex<HashMap<String, Vec<String>>>>;
+/// A registered per-server policy: either a `Restricted` allowlist, or a
+/// `BroadAudited` allow-all-except-`deny` policy.
+#[derive(Clone, Default)]
+struct PolicyEntry {
+    allow: Vec<String>,
+    deny: Vec<String>,
+    /// `true` for `BroadAudited` (allow-all-except-`deny`); `false` for
+    /// `Restricted` (allow-only-`allow`).
+    broad: bool,
+}
+
+type Registry = Arc<Mutex<HashMap<String, PolicyEntry>>>;
 
 #[derive(Clone)]
 pub struct EgressProxyHandle {
@@ -36,14 +47,31 @@ impl EgressProxyHandle {
         }
     }
 
-    /// Register a per-server allowlist; returns the bearer token to embed in the
-    /// child's `HTTP_PROXY` credentials.
+    /// Register a per-server allowlist (`Restricted`); returns the bearer
+    /// token to embed in the child's `HTTP_PROXY` credentials.
     pub fn register(&self, allow_hosts: Vec<String>) -> String {
+        self.register_policy(allow_hosts, Vec::new(), false)
+    }
+
+    /// Register a per-server policy: `broad = true` is `BroadAudited`
+    /// (allow-all-except-`deny_hosts`); `broad = false` is `Restricted`
+    /// (allow-only-`allow_hosts`). Returns the bearer token to embed in the
+    /// child's `HTTP_PROXY` credentials.
+    pub fn register_policy(
+        &self,
+        allow_hosts: Vec<String>,
+        deny_hosts: Vec<String>,
+        broad: bool,
+    ) -> String {
         let token = uuid::Uuid::now_v7().simple().to_string();
-        self.registry
-            .lock()
-            .unwrap()
-            .insert(token.clone(), allow_hosts);
+        self.registry.lock().unwrap().insert(
+            token.clone(),
+            PolicyEntry {
+                allow: allow_hosts,
+                deny: deny_hosts,
+                broad,
+            },
+        );
         token
     }
 }
@@ -100,18 +128,29 @@ async fn handle_conn(mut client: TcpStream, registry: Registry) -> std::io::Resu
         .and_then(decode_basic_user);
 
     let host = target.rsplit_once(':').map(|(h, _)| h).unwrap_or(target);
-    let allowed = token
+    let entry = token
         .as_deref()
-        .and_then(|t| registry.lock().unwrap().get(t).cloned())
-        .map(|allow| host_allowed(host, &allow))
-        .unwrap_or(false);
+        .and_then(|t| registry.lock().unwrap().get(t).cloned());
+    let allowed = match &entry {
+        Some(e) if e.broad => !e.deny.iter().any(|p| host_matches_pattern(host, p)),
+        Some(e) => host_allowed(host, &e.allow),
+        None => false,
+    };
 
     if !allowed {
-        tracing::info!(host, "egress proxy DENY");
+        tracing::info!(
+            host,
+            broad = entry.as_ref().map(|e| e.broad),
+            "egress proxy CONNECT DENY"
+        );
         client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n").await?;
         return Ok(());
     }
-    tracing::info!(host, "egress proxy ALLOW");
+    tracing::info!(
+        host,
+        broad = entry.as_ref().map(|e| e.broad),
+        "egress proxy CONNECT ALLOW"
+    );
     let mut upstream = TcpStream::connect(target).await?;
     client
         .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
@@ -187,6 +226,32 @@ mod tests {
         assert!(
             bad.starts_with("HTTP/1.1 403"),
             "unknown token is 403: {bad}"
+        );
+    }
+
+    #[tokio::test]
+    async fn broad_audited_allows_all_except_deny() {
+        let up = upstream().await;
+        let proxy = start_egress_proxy().await.unwrap();
+
+        // BroadAudited: deny only "blocked.example"; everything else allowed,
+        // including a host never mentioned in any list.
+        let token = proxy.register_policy(vec![], vec!["blocked.example".to_string()], true);
+
+        // "anything.example" isn't on any list but broad-audited allows it —
+        // dial the real loopback upstream so the CONNECT can complete.
+        let allowed = connect_via(proxy.addr, &token, &up.to_string()).await;
+        assert!(
+            allowed.starts_with("HTTP/1.1 200"),
+            "broad-audited allows a host not on any list: {allowed}"
+        );
+
+        // "blocked.example" is in deny_hosts → 403 even though broad allows
+        // everything else.
+        let denied = connect_via(proxy.addr, &token, "blocked.example:443").await;
+        assert!(
+            denied.starts_with("HTTP/1.1 403"),
+            "broad-audited still denies deny_hosts: {denied}"
         );
     }
 }

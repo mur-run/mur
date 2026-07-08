@@ -1316,11 +1316,11 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         AgentAction::Start { name } => cmd::agent::cmd_start(&name)?,
         AgentAction::Stop { name } => cmd::agent::cmd_stop(&name)?,
         AgentAction::Restart {
-            name,
+            names,
             all,
             stale,
             dry_run,
-        } => cmd::agent::cmd_restart(name.as_deref(), all, stale, dry_run)?,
+        } => cmd::agent::cmd_restart(&names, all, stale, dry_run)?,
         AgentAction::Remove { name, purge, force } => cmd::agent::cmd_remove(&name, purge, force)?,
         AgentAction::Rename { old, new } => cmd::agent::cmd_rename(&old, &new)?,
         AgentAction::Send { name, message } => cmd::agent::cmd_send(&name, &message)?,
@@ -1422,8 +1422,19 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 name,
                 server_id,
                 allow_hosts,
+                deny_hosts,
                 off,
-            } => cmd::agent::cmd_mcp_set_network(&name, &server_id, allow_hosts, off)?,
+                broad_audited,
+                yes,
+            } => cmd::agent::cmd_mcp_set_network(
+                &name,
+                &server_id,
+                allow_hosts,
+                deny_hosts,
+                off,
+                broad_audited,
+                yes,
+            )?,
             AgentMcpAction::Discover => cmd::agent::mcp_discover::cmd_mcp_discover()?,
             AgentMcpAction::Search { query } => {
                 cmd::agent::mcp_registry::cmd_mcp_search(&query).await?
@@ -1659,15 +1670,24 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             });
             cmd::agent::cmd_export(&name, &out, &format)?;
         }
-        AgentAction::Install { path, model } => {
-            cmd::agent::cmd_install(std::path::Path::new(&path), model.as_deref())?
-        }
+        AgentAction::Install {
+            path,
+            model,
+            as_name,
+        } => cmd::agent::cmd_install(
+            std::path::Path::new(&path),
+            model.as_deref(),
+            as_name.as_deref(),
+        )?,
         AgentAction::Uninstall { name, purge } => cmd::agent::cmd_uninstall(&name, purge)?,
         AgentAction::Inspect { path } => cmd::agent::cmd_inspect(std::path::Path::new(&path))?,
         AgentAction::Stats { name } => cmd::agent::cmd_stats(&name)?,
         AgentAction::Logs { name, tail } => cmd::agent::cmd_logs(&name, tail)?,
         AgentAction::Companion(args) => cmd::agent_companion::run(args).await?,
-        AgentAction::Doctor { format, json } => cmd::doctor::run(&format, json)?,
+        AgentAction::Doctor { name, format, json } => match name {
+            Some(name) => cmd::doctor::run_agent(&name, json)?,
+            None => cmd::doctor::run(&format, json)?,
+        },
         AgentAction::RuntimeDoctor { json } => cmd::agent::cmd_doctor(json)?,
         AgentAction::Secret { agent, action } => match action {
             AgentSecretAction::Set { key, value } => {

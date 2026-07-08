@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 
 use crate::AgentProfile;
+use crate::agent::McpNetMode;
 use crate::muragent::MuragentError;
 use crate::muragent::manifest::MuragentManifest;
 use crate::muragent::reader::MuragentArchive;
@@ -55,6 +56,12 @@ pub struct InstallOutcome {
     /// the agent already existed at the slug with matching UUID and the
     /// payload was replaced in place (preserving `data/`).
     pub was_update: bool,
+    /// Names of MCP servers whose `network.mode` was downgraded from
+    /// `BroadAudited` to `Inherit` (with `authorization` cleared) during this
+    /// install. A bundle author's broad-egress grant is tied to a local
+    /// operator (Task 3) and must not travel with the bundle; empty when
+    /// nothing was downgraded.
+    pub downgraded_broad_egress: Vec<String>,
 }
 
 /// Install or update a `.muragent` archive. See module docs for the flow.
@@ -71,6 +78,27 @@ pub fn install(
     mur_home: &Path,
     surface: &str,
 ) -> Result<InstallOutcome, MuragentError> {
+    install_with_name(archive, mur_home, surface, None)
+}
+
+/// Install or update a `.muragent` archive, optionally under an explicit
+/// install name (directory + slug) rather than the manifest's own slug.
+///
+/// When `install_name` is `Some(n)`, the archive is installed at
+/// `<mur_home>/agents/<n>/` regardless of the manifest's slug. This powers
+/// `mur agent install <bundle> --as <name>` clones: a clone is always a
+/// fresh install (never an update-in-place), so this path REFUSES if the
+/// target directory already exists rather than taking the same-UUID update
+/// path that `install` uses.
+///
+/// `install(...)` is a thin wrapper around this function with `None`, so its
+/// behavior is unchanged for existing callers.
+pub fn install_with_name(
+    archive: &MuragentArchive,
+    mur_home: &Path,
+    surface: &str,
+    install_name: Option<&str>,
+) -> Result<InstallOutcome, MuragentError> {
     // Step 1: validation pipeline — fatal on any failure per §7.5
     let result = validator::validate(archive)?;
 
@@ -80,11 +108,20 @@ pub fn install(
     reject_reserved_local_files(archive)?;
 
     // Step 2: slug shape
-    let slug = result.manifest.agent.slug.clone();
+    let manifest_slug = result.manifest.agent.slug.clone();
     let display_name = result.manifest.agent.display_name.clone();
-    crate::validate_agent_name(&slug).map_err(|e| {
-        MuragentError::Other(format!("invalid agent slug '{slug}' in manifest: {e}"))
+    crate::validate_agent_name(&manifest_slug).map_err(|e| {
+        MuragentError::Other(format!(
+            "invalid agent slug '{manifest_slug}' in manifest: {e}"
+        ))
     })?;
+    let slug = if let Some(n) = install_name {
+        crate::validate_agent_name(n)
+            .map_err(|e| MuragentError::Other(format!("invalid install name '{n}': {e}")))?;
+        n.to_string()
+    } else {
+        manifest_slug
+    };
 
     // Step 3: trust store key-change check
     let mut trust_store = TrustStore::load()?;
@@ -119,6 +156,14 @@ pub fn install(
 
     // Step 4-5: detect update vs collision; extract payload
     let agent_dir = mur_home.join("agents").join(&slug);
+    if install_name.is_some() && agent_dir.exists() {
+        // A clone (`--as <name>`) is always a fresh install — never an
+        // update-in-place, even if the UUID happened to match.
+        return Err(MuragentError::Other(format!(
+            "agent '{slug}' already exists at {} — refusing to overwrite",
+            agent_dir.display()
+        )));
+    }
     let was_update = if agent_dir.exists() {
         let existing_profile = agent_dir.join("profile.yaml");
         let mut is_same_agent = false;
@@ -146,6 +191,8 @@ pub fn install(
 
     extract_payload(archive, &agent_dir)?;
 
+    let downgraded_broad_egress = downgrade_profile_egress(&agent_dir)?;
+
     // Step 6: trust upsert
     let fingerprint_hex = trust::short_fingerprint(&result.author_pubkey);
     let fingerprint_words = trust::word_list_fingerprint(&result.author_pubkey);
@@ -164,7 +211,46 @@ pub fn install(
         fingerprint_hex,
         fingerprint_words,
         was_update,
+        downgraded_broad_egress,
     })
+}
+
+/// For every MCP server whose `network.mode == BroadAudited`, resets the mode
+/// to `Inherit` and clears `authorization`. A bundle author's broad-audited
+/// grant is tied to their local operator consent (Task 3); it must not travel
+/// with the bundle, so the importer must explicitly re-grant it. Returns the
+/// names of the downgraded servers, in profile order. Pure / filesystem-free
+/// so it's unit-testable directly.
+fn downgrade_broad_egress(profile: &mut AgentProfile) -> Vec<String> {
+    let mut downgraded = Vec::new();
+    for server in &mut profile.mcp_servers {
+        if let Some(network) = server.network.as_mut()
+            && network.mode == McpNetMode::BroadAudited
+        {
+            network.mode = McpNetMode::Inherit;
+            network.authorization = None;
+            downgraded.push(server.name.clone());
+        }
+    }
+    downgraded
+}
+
+/// Reads the just-extracted `profile.yaml`, downgrades any `BroadAudited` MCP
+/// egress grants, and — only if anything changed — re-serializes it back to
+/// disk. Returns the names of downgraded servers (empty if none).
+fn downgrade_profile_egress(agent_dir: &Path) -> Result<Vec<String>, MuragentError> {
+    let profile_path = agent_dir.join("profile.yaml");
+    let raw = fs::read_to_string(&profile_path).map_err(MuragentError::Io)?;
+    let mut profile: AgentProfile =
+        serde_yaml_ng::from_str(&raw).map_err(|e| MuragentError::Other(e.to_string()))?;
+
+    let downgraded = downgrade_broad_egress(&mut profile);
+    if !downgraded.is_empty() {
+        let out =
+            serde_yaml_ng::to_string(&profile).map_err(|e| MuragentError::Other(e.to_string()))?;
+        fs::write(&profile_path, out).map_err(MuragentError::Io)?;
+    }
+    Ok(downgraded)
 }
 
 /// Refuse a package that carries any [`RESERVED_LOCAL_FILES`] entry at its top
@@ -374,6 +460,50 @@ mod tests {
     use crate::identity::AgentIdentity;
     use crate::muragent::writer::{MuragentWriter, build_manifest_from_profile};
     use tempfile::TempDir;
+
+    #[test]
+    fn downgrade_broad_egress_resets_mode_and_clears_authorization() {
+        use crate::agent::{EgressAuthorization, McpServerEntry, McpServerNetwork};
+
+        let mut profile = AgentProfile::default_for_tests();
+        profile.mcp_servers = vec![
+            McpServerEntry {
+                name: "broad-server".to_string(),
+                command: "true".to_string(),
+                network: Some(McpServerNetwork {
+                    mode: McpNetMode::BroadAudited,
+                    authorization: Some(EgressAuthorization {
+                        authorized_by: "operator".to_string(),
+                        authorized_at_ms: 1,
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            McpServerEntry {
+                name: "restricted-server".to_string(),
+                command: "true".to_string(),
+                network: Some(McpServerNetwork {
+                    mode: McpNetMode::Restricted,
+                    allow_hosts: vec!["example.com".to_string()],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ];
+
+        let downgraded = downgrade_broad_egress(&mut profile);
+
+        assert_eq!(downgraded, vec!["broad-server".to_string()]);
+
+        let broad = &profile.mcp_servers[0].network.as_ref().unwrap();
+        assert_eq!(broad.mode, McpNetMode::Inherit);
+        assert_eq!(broad.authorization, None);
+
+        let restricted = &profile.mcp_servers[1].network.as_ref().unwrap();
+        assert_eq!(restricted.mode, McpNetMode::Restricted);
+        assert_eq!(restricted.allow_hosts, vec!["example.com".to_string()]);
+    }
 
     fn make_test_package(tmp: &TempDir) -> std::path::PathBuf {
         let out = tmp.path().join("test.muragent");
@@ -590,6 +720,41 @@ mod tests {
         );
 
         // Cleanup
+        unsafe {
+            if let Some(p) = prev {
+                std::env::set_var("MUR_HOME", p);
+            } else {
+                std::env::remove_var("MUR_HOME");
+            }
+        }
+    }
+
+    #[test]
+    fn install_with_name_installs_under_override_name_and_refuses_collision() {
+        let _guard = crate::trust::test_env_lock::MUR_HOME_LOCK.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let mur_home = tmp.path().join("mur");
+        let prev = std::env::var_os("MUR_HOME");
+        unsafe { std::env::set_var("MUR_HOME", &mur_home) };
+
+        let pkg = make_test_package(&tmp);
+        let archive = MuragentArchive::read(&pkg).unwrap();
+
+        let outcome = install_with_name(&archive, &mur_home, "test", Some("clone-x")).unwrap();
+        assert!(!outcome.was_update);
+        let clone_dir = mur_home.join("agents").join("clone-x");
+        assert!(clone_dir.join("profile.yaml").exists());
+
+        // Installing again under the same override name must refuse — a
+        // clone is always a fresh install, never an update-in-place.
+        let archive2 = MuragentArchive::read(&pkg).unwrap();
+        let err = install_with_name(&archive2, &mur_home, "test", Some("clone-x")).unwrap_err();
+        assert!(
+            matches!(err, MuragentError::Other(_)),
+            "expected refuse-on-collision error, got: {:?}",
+            err
+        );
+
         unsafe {
             if let Some(p) = prev {
                 std::env::set_var("MUR_HOME", p);

@@ -151,7 +151,11 @@ fn fleet_job_and_roster_round_trip() {
     )
     .unwrap();
 
-    // add member → fleet manifest stays in sync
+    // add member → fleet manifest stays in sync (the member must exist on
+    // disk: `fleet add` validates agent existence, unlike `create`).
+    let qa_dir = home.join("agents").join("qa");
+    std::fs::create_dir_all(&qa_dir).unwrap();
+    std::fs::write(qa_dir.join("profile.yaml"), "name: qa\n").unwrap();
     roster::cmd_fleet_add(home, "dev", vec!["qa".into()]).unwrap();
     assert!(
         store::load_fleet(home, "dev")
