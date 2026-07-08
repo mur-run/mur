@@ -8,6 +8,8 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use mur_common::agent::AgentProfile;
+use mur_common::identity::AgentIdentity;
 use mur_common::muragent::installer::{self, InstallOutcome};
 use mur_common::muragent::manifest::MuragentManifest;
 use mur_common::muragent::reader::MuragentArchive;
@@ -16,40 +18,79 @@ use mur_common::trust;
 
 use super::resolve_mur_home;
 
-pub fn cmd_install(path: &Path, model_ref_override: Option<&str>) -> Result<()> {
+pub fn cmd_install(
+    path: &Path,
+    model_ref_override: Option<&str>,
+    as_name: Option<&str>,
+) -> Result<()> {
     let archive = MuragentArchive::read(path)
         .with_context(|| format!("read .muragent file at {}", path.display()))?;
     let mur_home = resolve_mur_home()?;
-    let outcome: InstallOutcome =
-        installer::install(&archive, &mur_home, "cli").context("install .muragent")?;
+    let outcome: InstallOutcome = installer::install_with_name(&archive, &mur_home, "cli", as_name)
+        .context("install .muragent")?;
 
-    let verb = if outcome.was_update {
-        "Updated"
+    // The install/dispatch name: the clone's name when `--as` was given,
+    // else the manifest's own slug (unchanged from prior behavior).
+    let installed_name: &str = as_name.unwrap_or(&outcome.manifest.agent.slug);
+
+    if let Some(clone_name) = as_name {
+        clone_identity_and_profile(&mur_home, clone_name)?;
+        println!("Cloned agent as '{clone_name}'");
     } else {
-        "Installed"
-    };
-    println!(
-        "{verb} agent '{}' ({})",
-        outcome.manifest.agent.display_name, outcome.manifest.agent.slug
-    );
+        let verb = if outcome.was_update {
+            "Updated"
+        } else {
+            "Installed"
+        };
+        println!(
+            "{verb} agent '{}' ({})",
+            outcome.manifest.agent.display_name, outcome.manifest.agent.slug
+        );
+    }
     println!("  trust:       {:?}", outcome.trust_level);
     println!("  fingerprint: {}", outcome.fingerprint_hex);
     println!("  words:       {}", outcome.fingerprint_words);
 
     if !outcome.downgraded_broad_egress.is_empty() {
         let names = outcome.downgraded_broad_egress.join(", ");
-        let slug = &outcome.manifest.agent.slug;
         println!(
             "⚠ broad-audited egress was reset to inherit for: {names}. \
-             Re-grant locally with: mur agent mcp set-network {slug} <server> --broad-audited"
+             Re-grant locally with: mur agent mcp set-network {installed_name} <server> --broad-audited"
         );
     }
 
     if let Some(model_ref) = model_ref_override {
-        apply_model_ref_override(&mur_home, &outcome.manifest.agent.slug, model_ref)?;
+        apply_model_ref_override(&mur_home, installed_name, model_ref)?;
     } else {
-        maybe_resolve_model(&mur_home, &outcome.manifest.agent.slug, &archive)?;
+        maybe_resolve_model(&mur_home, installed_name, &archive)?;
     }
+    Ok(())
+}
+
+/// After a `--as <name>` clone install, give the clone a new identity: a
+/// fresh UUIDv7 `profile.id`, `profile.name` set to the clone's directory
+/// name, and a freshly minted + persisted Ed25519 identity (never the
+/// source agent's private key — the installer already strips
+/// `identity.key` from any incoming payload).
+fn clone_identity_and_profile(mur_home: &Path, clone_name: &str) -> Result<()> {
+    let agent_dir = mur_home.join("agents").join(clone_name);
+    let profile_path = agent_dir.join("profile.yaml");
+    let mut profile: AgentProfile = serde_yaml_ng::from_str(
+        &std::fs::read_to_string(&profile_path)
+            .with_context(|| format!("read {}", profile_path.display()))?,
+    )
+    .with_context(|| format!("parse {}", profile_path.display()))?;
+
+    profile.name = clone_name.to_string();
+    profile.id = uuid::Uuid::now_v7().to_string();
+
+    std::fs::write(&profile_path, serde_yaml_ng::to_string(&profile)?)
+        .with_context(|| format!("write {}", profile_path.display()))?;
+
+    AgentIdentity::generate()
+        .save(&agent_dir)
+        .map_err(|e| anyhow::anyhow!("save fresh identity for clone '{clone_name}': {e}"))?;
+
     Ok(())
 }
 
@@ -308,5 +349,44 @@ mod tests {
         )
         .unwrap();
         assert_eq!(profile.model_ref.as_deref(), Some("ollama_llama3_2_3b"));
+    }
+
+    #[test]
+    fn cmd_install_as_clones_with_new_id_and_fresh_identity() {
+        use mur_common::agent::AgentProfile as Profile;
+        use mur_common::identity::AgentIdentity as Identity;
+        use mur_common::muragent::writer::{MuragentWriter, build_manifest_from_profile};
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let mur_home = tmp.path().join("mur");
+        unsafe {
+            std::env::set_var("MUR_HOME", &mur_home);
+        }
+
+        // Build a source .muragent bundle with a known source profile id.
+        let mut source_profile = Profile::default_for_tests();
+        source_profile.name = "aura".to_string();
+        let source_id = source_profile.id.clone();
+        let manifest = build_manifest_from_profile(&source_profile, "2.13.0");
+        let profile_yaml = serde_yaml_ng::to_string(&source_profile).unwrap();
+        let writer = MuragentWriter::new(manifest, profile_yaml, Identity::generate());
+        let bundle_path = tmp.path().join("aura.muragent");
+        writer.write(&bundle_path).unwrap();
+
+        cmd_install(&bundle_path, None, Some("clone-x")).unwrap();
+
+        let clone_dir = mur_home.join("agents").join("clone-x");
+        let profile: Profile = serde_yaml_ng::from_str(
+            &std::fs::read_to_string(clone_dir.join("profile.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(profile.name, "clone-x");
+        assert_ne!(profile.id, source_id, "clone must get a new profile.id");
+        assert!(
+            clone_dir.join("identity.key").exists(),
+            "clone must have a freshly minted identity.key"
+        );
+        assert!(clone_dir.join("identity.pub").exists());
     }
 }

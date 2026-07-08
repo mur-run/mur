@@ -195,6 +195,12 @@ pub enum AgentAction {
         /// Example: --model ollama_llama3_2_3b
         #[arg(long)]
         model: Option<String>,
+        /// Install as a NEW, distinct agent under this name — a fresh
+        /// profile.id (uuid v7) and a freshly minted, persisted Ed25519
+        /// identity (never the source's private key). Refuses if an agent
+        /// already exists at this name.
+        #[arg(long = "as", value_name = "NAME")]
+        as_name: Option<String>,
     },
     /// Uninstall an agent (data preserved at <home>/data unless --purge)
     Uninstall {
