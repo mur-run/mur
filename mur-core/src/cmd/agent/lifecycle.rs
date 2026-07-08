@@ -225,17 +225,6 @@ pub fn cmd_create(
     Ok(())
 }
 
-/// Resolve the `model_ref` an agent should carry so the runtime loads real
-/// credentials from `~/.mur/models.yaml`. Cloud providers (anthropic, openai,
-/// …) require a registry entry to supply the secret + proxy base URL; without
-/// one the runtime falls back to StubEcho. Local backends (`ollama`, `local`)
-/// authenticate without a secret, so they stay on the inline `model:` block.
-///
-/// Preference order for cloud providers:
-///   1. Reuse an existing registry entry whose provider+model match (inherits
-///      its secret + base_url — this is how the working agents are wired).
-///   2. Otherwise upsert a new secretless entry keyed by provider+model so the
-///      binding at least exists and the user has a single place to add a secret.
 /// Look up an exact registry key match for a bare `--model` value (e.g.
 /// `claude_sonnet`). Returns the entry's `(provider, model)` when found.
 fn registry_alias_entry(mur_home: &Path, key: &str) -> Result<Option<(String, String)>> {
@@ -250,6 +239,17 @@ fn registry_alias_entry(mur_home: &Path, key: &str) -> Result<Option<(String, St
         .map(|entry| (entry.provider.clone(), entry.model.clone())))
 }
 
+/// Resolve the `model_ref` an agent should carry so the runtime loads real
+/// credentials from `~/.mur/models.yaml`. Cloud providers (anthropic, openai,
+/// …) require a registry entry to supply the secret + proxy base URL; without
+/// one the runtime falls back to StubEcho. Local backends (`ollama`, `local`)
+/// authenticate without a secret, so they stay on the inline `model:` block.
+///
+/// Preference order for cloud providers:
+///   1. Reuse an existing registry entry whose provider+model match (inherits
+///      its secret + base_url — this is how the working agents are wired).
+///   2. Otherwise upsert a new secretless entry keyed by provider+model so the
+///      binding at least exists and the user has a single place to add a secret.
 fn resolve_model_ref_for_create(
     mur_home: &Path,
     provider: Option<&str>,

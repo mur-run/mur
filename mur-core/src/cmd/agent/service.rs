@@ -99,12 +99,11 @@ fn derive_service_path() -> String {
     if let Ok(output) = std::process::Command::new("npm")
         .args(["config", "get", "prefix"])
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !prefix.is_empty() {
-                dirs.push(format!("{prefix}/bin"));
-            }
+        let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !prefix.is_empty() {
+            dirs.push(format!("{prefix}/bin"));
         }
     }
 
