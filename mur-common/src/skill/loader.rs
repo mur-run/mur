@@ -38,6 +38,8 @@ pub struct LoadedSkill {
     pub trust: TrustLevel,
     pub scope: SkillScope,
     pub content_hash: String,
+    /// Absolute install directory of this skill (holds skill.yaml + any bundle).
+    pub dir: std::path::PathBuf,
 }
 
 pub fn load_all(mur_home: &Path, agent_name: &str) -> Vec<LoadedSkill> {
@@ -48,9 +50,12 @@ pub fn load_all(mur_home: &Path, agent_name: &str) -> Vec<LoadedSkill> {
     // Per-agent first (wins on name collision)
     if let Ok(names) = local::list_installed_agent(mur_home, agent_name) {
         for name in names {
-            if let Some(loaded) = load_one(mur_home, &name, SkillScope::Agent, &trust, |m, n| {
-                local::load_installed_agent(m, agent_name, n)
-            }) {
+            if let Some(mut loaded) =
+                load_one(mur_home, &name, SkillScope::Agent, &trust, |m, n| {
+                    local::load_installed_agent(m, agent_name, n)
+                })
+            {
+                loaded.dir = crate::skill::store::agent_skill_dir(mur_home, agent_name).join(&name);
                 seen_names.insert(loaded.name.clone());
                 out.push(loaded);
             }
@@ -61,13 +66,14 @@ pub fn load_all(mur_home: &Path, agent_name: &str) -> Vec<LoadedSkill> {
             if seen_names.contains(&name) {
                 continue;
             }
-            if let Some(loaded) = load_one(
+            if let Some(mut loaded) = load_one(
                 mur_home,
                 &name,
                 SkillScope::Global,
                 &trust,
                 local::load_installed,
             ) {
+                loaded.dir = crate::skill::store::global_skill_dir(mur_home, &name);
                 out.push(loaded);
             }
         }
@@ -129,6 +135,7 @@ where
             trust: pinned.level,
             scope,
             content_hash: hash,
+            dir: std::path::PathBuf::new(), // overwritten by load_all
         })
     } else {
         // Unpinned = first-load Sandboxed.
@@ -138,6 +145,7 @@ where
             trust: TrustLevel::Sandboxed,
             scope,
             content_hash: hash,
+            dir: std::path::PathBuf::new(), // overwritten by load_all
         })
     }
 }
@@ -147,6 +155,18 @@ mod tests {
     use super::*;
     use crate::skill::{parse_canonical, write_to_dir};
     use tempfile::tempdir;
+
+    #[test]
+    fn load_all_sets_agent_skill_dir() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        let sdir = home.join("agents").join("a1").join("skills").join("demo");
+        write_to_dir(&sdir, &make("demo")).unwrap();
+
+        let loaded = load_all(home, "a1");
+        let demo = loaded.iter().find(|s| s.name == "demo").unwrap();
+        assert_eq!(demo.dir, sdir);
+    }
 
     fn make(name: &str) -> SkillManifest {
         parse_canonical(&format!(
