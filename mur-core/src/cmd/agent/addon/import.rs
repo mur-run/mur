@@ -553,6 +553,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn copy_bundle_rejects_symlink_escape() {
         let tmp = tempfile::tempdir().unwrap();
