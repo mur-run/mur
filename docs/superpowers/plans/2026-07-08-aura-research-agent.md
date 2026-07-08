@@ -415,6 +415,41 @@ git commit -m "test(aura): end-to-end acceptance — cited report, ladder, kill-
 
 ---
 
+## Runtime integration gaps (discovered during the 2026-07-08 build)
+
+Task 6's live fleet run proved the orchestration layer (router plans a DAG, splits
+work across workers) but exposed real MUR runtime gaps that block autonomous browser
+research under the enforcing macOS sbpl sandbox. Executors must budget for these:
+
+1. **`install-service` gives the runtime no PATH.** The generated launchd plist has no
+   `EnvironmentVariables.PATH`, so the agent runtime gets `/usr/bin:/bin:...` and can't
+   find a PATH-installed MCP binary (`agent-browser` in npm's global bin). Do NOT fix
+   by putting an absolute path in the profile (breaks portability/export). Fix in the
+   environment: patch the plist `EnvironmentVariables.PATH` (derive npm bin from
+   `npm config get prefix`), then `launchctl unload/load`. Real fix = install-service
+   should propagate the user's PATH.
+2. **sbpl sandbox blocks the browser toolchain by default.** Even with the binary
+   found, the kernel sandbox denies exec (`Operation not permitted`). Grant (low-risk):
+   `mur agent perm allow-read <a> <npm-module-dir>`, `allow-read` the lightpanda binary
+   and `~/.agent-browser`, `allow-write <a> ~/.agent-browser`, `allow-spawn <a>
+   ~/.mur/aura/lightpanda`.
+3. **BLOCKER — no managed network mode for research.** `entitlements.network.outbound`
+   is `restricted` + a STATIC host allowlist (can't express the open web) or
+   `unrestricted` (no control; auto-mode classifier blocks flipping it). A web
+   researcher hits arbitrary result domains, so it can't function under a static
+   allowlist and shouldn't be silently made unrestricted. This is a genuine MUR product
+   gap — there is no *restricted-but-managed* egress mode (audited/logged broad egress,
+   per-MCP-tool scoping, or a revocable time-boxed grant). See
+   `mem:gap_agent_network_entitlement_no_managed_research_mode`. Until MUR adds one,
+   fully autonomous fleet web-research requires an explicit operator decision to set
+   `network.outbound unrestricted` — do not do this without per-run consent.
+
+**Net status:** Tasks 1–5 are complete and shippable; the browser tier is verified at
+the CLI level (lightpanda renders; the MCP server exposes 29 tools). The autonomous
+fleet run (Task 6) is gated on gap #3, which is a MUR limitation, not an AURA defect.
+
+---
+
 ## Self-Review
 
 **Spec coverage:**
