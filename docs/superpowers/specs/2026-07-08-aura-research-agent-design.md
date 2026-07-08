@@ -83,6 +83,10 @@ model_ref:    <a strong-reasoning model alias from ~/.mur/models.yaml>
 
 - **(a) Discovery** — `aura` invokes the existing `deep-research` workflow for
   decomposition, parallel search, adversarial verification, synthesis. No rewrite.
+  This is ALSO the scale layer: large fan-out (100+ parallel research units) happens
+  inside the workflow's **ephemeral subagents** (bounded concurrency ~min(16, cores-2),
+  no per-agent process/sandbox/entitlement), NOT by adding fleet members. A worker that
+  receives a broad slice calls `deep-research` rather than spawning more agents.
 - **(b) Fetch** — existing `WebFetch` / search tools for plain pages.
 - **(c) Full-browser** — new: `agent-browser` wired as an MCP tool, default engine
   `lightpanda` (~24MB, verified) via env `AGENT_BROWSER_ENGINE=lightpanda` +
@@ -120,6 +124,16 @@ Switching tiers is a flag change; fleet orchestration logic is unchanged.
   ceiling per host is left to the implementation plan (open question §6).
 - Safety triad reused unchanged: `MUR_FLEET_AUTORUN` (off by default) + per-fleet
   `budget_usd` + `mur fleet stop` kill-switch. Steps pass `yes:false` (fail-closed).
+
+**Scaling rule — scale the workflow, not the fleet.** The fleet stays a SMALL squad
+(router + a handful of persistent `aura` workers) that owns structure: decomposition,
+routing, synthesis. It does NOT grow to N workers for N research units — each fleet
+member is a launchd `mur-agent-runtime` process with its own sandbox, entitlements,
+and ~512 MB budget, so a fleet of 100 is untenable and multiplies the network/sandbox
+integration cost 100×. Large-scale parallelism belongs to the `deep-research`
+workflow's ephemeral subagents (§4.2a): a worker maps a broad slice over the workflow's
+bounded concurrency pool. Rule of thumb: a few members decompose and merge; the
+workflow does the volume.
 
 ### 4.5 Skills wired to `aura`
 
