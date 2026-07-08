@@ -17,6 +17,23 @@ pub struct UpdateOptions {
 
 pub fn run(opts: UpdateOptions) -> Result<()> {
     let src = source::detect();
+    // Homebrew installs are upgraded through brew itself so the Cellar and
+    // formula bookkeeping stay consistent — run it instead of self-swapping.
+    if src == source::InstallSource::Homebrew {
+        if opts.check_only {
+            println!("Installed via Homebrew. Run: brew upgrade mur");
+            return Ok(());
+        }
+        println!("Installed via Homebrew — running: brew upgrade mur");
+        let status = std::process::Command::new("brew")
+            .args(["upgrade", "mur"])
+            .status()
+            .context("failed to run brew — upgrade manually: brew upgrade mur")?;
+        if !status.success() {
+            anyhow::bail!("brew upgrade mur failed ({status})");
+        }
+        return Ok(());
+    }
     if let Some(hint) = src.upgrade_hint() {
         println!("{hint}");
         return Ok(());
