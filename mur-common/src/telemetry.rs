@@ -68,6 +68,11 @@ pub const METHOD_NOTE_RETRIEVED: &str = "mur.note.retrieved";
 /// Reduced into `SkillStats::curated_at`; opens the A1 provenance gate.
 pub const METHOD_SKILL_CURATED: &str = "mur.skill.curated";
 
+/// Emitted by `mur agent mcp set-network --broad-audited` — an operator
+/// granted a per-server BroadAudited egress policy (advisory-enforced,
+/// audited-CONNECT). Records which agent+server was authorized.
+pub const METHOD_EGRESS_BROAD_AUDITED_ENABLED: &str = "mur.egress.broad_audited.enabled";
+
 pub const MUR_SKILL_NAME: &str = "mur.skill.name";
 pub const MUR_SKILL_VERSION: &str = "mur.skill.version";
 pub const MUR_SKILL_OUTCOME: &str = "mur.skill.outcome";

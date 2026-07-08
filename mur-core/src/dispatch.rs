@@ -1422,8 +1422,19 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 name,
                 server_id,
                 allow_hosts,
+                deny_hosts,
                 off,
-            } => cmd::agent::cmd_mcp_set_network(&name, &server_id, allow_hosts, off)?,
+                broad_audited,
+                yes,
+            } => cmd::agent::cmd_mcp_set_network(
+                &name,
+                &server_id,
+                allow_hosts,
+                deny_hosts,
+                off,
+                broad_audited,
+                yes,
+            )?,
             AgentMcpAction::Discover => cmd::agent::mcp_discover::cmd_mcp_discover()?,
             AgentMcpAction::Search { query } => {
                 cmd::agent::mcp_registry::cmd_mcp_search(&query).await?
