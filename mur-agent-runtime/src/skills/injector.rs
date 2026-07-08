@@ -157,6 +157,7 @@ content:
             trust,
             scope: SkillScope::Global,
             content_hash: String::new(),
+            dir: std::path::PathBuf::new(),
         }
     }
 
@@ -174,6 +175,7 @@ content:
                 trust: TrustLevel::Verified,
                 scope: SkillScope::Global,
                 content_hash: String::new(),
+                dir: std::path::PathBuf::new(),
             }
         };
         let skills = vec![mk("u", ""), mk("p", "scope: project\nproject: /repo\n")];
@@ -233,6 +235,7 @@ content:
                 trust: TrustLevel::Verified,
                 scope: SkillScope::Global,
                 content_hash: String::new(),
+                dir: std::path::PathBuf::new(),
             }
         };
         let skills = vec![mk("u", ""), mk("f", "scope: fleet\nfleet: dev\n")];
@@ -361,6 +364,7 @@ content:
                 trust: TrustLevel::Verified,
                 scope: SkillScope::Global,
                 content_hash: String::new(),
+                dir: std::path::PathBuf::new(),
             }
         };
         let skills = vec![mk("u", ""), mk("ts", "scope: team\nteam: org-x\n")];
@@ -398,6 +402,7 @@ content:
             trust: TrustLevel::Verified,
             scope: SkillScope::Global,
             content_hash: String::new(),
+            dir: std::path::PathBuf::new(),
         };
         let result = inject_layer2(
             &[s],
