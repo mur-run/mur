@@ -116,14 +116,22 @@ Switching tiers is a flag change; fleet orchestration logic is unchanged.
 
 Reusable patterns from the research, authored as `aura`-scoped skills (agent-scope):
 
-1. `research-escalation-ladder` — climb search → fetch → lightpanda → chrome only
+1. `browser-preflight` — before the first browser-tier call, detect whether
+   `agent-browser` and both engines (`lightpanda`, `chrome`) are installed. If any
+   is missing, ask the operator for permission and only then install
+   (`npm i -g agent-browser && agent-browser install`); never auto-install. If the
+   operator declines, degrade to the fetch tier and report what could not be reached.
+2. `research-escalation-ladder` — climb search → fetch → lightpanda → chrome only
    when the cheaper tier fails; never open a browser for a page plain fetch can read.
-2. `source-triangulation` — cross-check each claim across ≥2 independent sources;
+3. `source-triangulation` — cross-check each claim across ≥2 independent sources;
    surface and resolve conflicts rather than picking one silently.
-3. `citation-discipline` — bind every claim to a fetched URL + supporting quote;
+4. `citation-discipline` — bind every claim to a fetched URL + supporting quote;
    an unsourced claim is dropped, not shipped.
-4. `parallel-fanout` — decide when to spin up the fleet vs. run single-agent
+5. `parallel-fanout` — decide when to spin up the fleet vs. run single-agent
    concurrent fetches (broad, decomposable question → fleet; narrow → single).
+
+Install consent is a hard rule: installing software is a permission-required action
+(CLAUDE.md / safety policy). The preflight skill asks; it never installs silently.
 
 ## 5. Component boundaries
 
