@@ -23,8 +23,11 @@ pub fn cmd_fleet_create(
         bail!("fleet '{name}' already exists");
     }
 
-    // Canonicalize member names and router to match the agent runtime's on-disk ids.
-    let members: Vec<String> = members
+    // Comma-split (mirrors `mur fleet add`'s handling of "--members a,b c")
+    // then canonicalize member names and router to match the agent
+    // runtime's on-disk ids. `create` does not validate agent existence
+    // today; this change only adds splitting, not a new failure mode.
+    let members: Vec<String> = super::roster::parse_member_args(&members)
         .into_iter()
         .map(|m| crate::a2a_dial::canonicalize_agent_name(mur_home, &m))
         .collect();
