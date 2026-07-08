@@ -22,6 +22,30 @@ pub struct McpAddPin {
     pub publisher_registry_id: Option<String>,
 }
 
+/// Render a single MCP server entry as a formatted line, with warning for BroadAudited mode.
+fn render_server_line(s: &McpServerEntry) -> String {
+    let base_line = format!("{}\t{} {}", s.name, s.command, s.args.join(" "))
+        .trim_end()
+        .to_string();
+
+    if let Some(net) = &s.network {
+        if net.mode == McpNetMode::BroadAudited {
+            let authorized_by = net
+                .authorization
+                .as_ref()
+                .map(|a| a.authorized_by.as_str())
+                .unwrap_or("unknown");
+            let warning = format!(
+                "\n  ⚠ BROAD EGRESS (audited) — allows any host except deny_hosts; authorized by {}",
+                authorized_by
+            );
+            return base_line + &warning;
+        }
+    }
+
+    base_line
+}
+
 pub fn cmd_mcp_list(name: &str) -> Result<()> {
     let (_path, profile) = load_profile_for_edit(name)?;
     if profile.mcp_servers.is_empty() {
@@ -29,7 +53,7 @@ pub fn cmd_mcp_list(name: &str) -> Result<()> {
         return Ok(());
     }
     for s in &profile.mcp_servers {
-        println!("{}\t{} {}", s.name, s.command, s.args.join(" "));
+        println!("{}", render_server_line(s));
     }
     Ok(())
 }
@@ -601,5 +625,107 @@ mod tests {
         let net = e.network.as_ref().expect("network should be set");
         assert_eq!(net.mode, McpNetMode::Restricted);
         assert_eq!(net.allow_hosts, vec!["mcp.example.com"]);
+    }
+
+    #[test]
+    fn render_server_line_broad_audited_with_authorization() {
+        let server = McpServerEntry {
+            name: "browser".to_string(),
+            command: "firefox".to_string(),
+            args: vec!["--mcp".to_string()],
+            binary_sha256: None,
+            description_hash: None,
+            publisher: None,
+            installed_at: None,
+            timeout_secs: None,
+            network: Some(McpServerNetwork {
+                mode: McpNetMode::BroadAudited,
+                allow_hosts: vec![],
+                deny_hosts: vec!["badhost.com".to_string()],
+                authorization: Some(EgressAuthorization {
+                    authorized_by: "alice".to_string(),
+                    authorized_at_ms: 1_700_000_000_000,
+                }),
+            }),
+            url: None,
+            auth: None,
+        };
+        let output = render_server_line(&server);
+        assert!(output.contains("browser\tfirefox --mcp"));
+        assert!(output.contains("BROAD EGRESS (audited)"));
+        assert!(output.contains("authorized by alice"));
+    }
+
+    #[test]
+    fn render_server_line_broad_audited_without_authorization_fallback() {
+        let server = McpServerEntry {
+            name: "browser".to_string(),
+            command: "firefox".to_string(),
+            args: vec![],
+            binary_sha256: None,
+            description_hash: None,
+            publisher: None,
+            installed_at: None,
+            timeout_secs: None,
+            network: Some(McpServerNetwork {
+                mode: McpNetMode::BroadAudited,
+                allow_hosts: vec![],
+                deny_hosts: vec![],
+                authorization: None,
+            }),
+            url: None,
+            auth: None,
+        };
+        let output = render_server_line(&server);
+        assert!(output.contains("browser\tfirefox"));
+        assert!(output.contains("BROAD EGRESS (audited)"));
+        assert!(output.contains("authorized by unknown"));
+    }
+
+    #[test]
+    fn render_server_line_restricted_no_warning() {
+        let server = McpServerEntry {
+            name: "api".to_string(),
+            command: "mcp-api".to_string(),
+            args: vec![],
+            binary_sha256: None,
+            description_hash: None,
+            publisher: None,
+            installed_at: None,
+            timeout_secs: None,
+            network: Some(McpServerNetwork {
+                mode: McpNetMode::Restricted,
+                allow_hosts: vec!["example.com".to_string()],
+                deny_hosts: vec![],
+                authorization: None,
+            }),
+            url: None,
+            auth: None,
+        };
+        let output = render_server_line(&server);
+        assert!(output.contains("api\tmcp-api"));
+        assert!(!output.contains("BROAD EGRESS"));
+        assert!(!output.contains("authorized by"));
+    }
+
+    #[test]
+    fn render_server_line_no_network_no_warning() {
+        let server = McpServerEntry {
+            name: "local".to_string(),
+            command: "local-mcp".to_string(),
+            args: vec![],
+            binary_sha256: None,
+            description_hash: None,
+            publisher: None,
+            installed_at: None,
+            timeout_secs: None,
+            network: None,
+            url: None,
+            auth: None,
+        };
+        let output = render_server_line(&server);
+        assert!(output.contains("local\tlocal-mcp"));
+        assert!(!output.contains("BROAD EGRESS"));
+        assert!(!output.contains("authorized by"));
     }
 }
