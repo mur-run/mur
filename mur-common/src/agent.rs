@@ -542,19 +542,34 @@ pub struct OutboundNetwork {
     pub mode: NetworkOutboundMode,
     #[serde(default)]
     pub allow_hosts: Vec<String>,
+    #[serde(default)]
+    pub deny_hosts: Vec<String>,
     #[serde(default = "default_protocols")]
     pub protocols: Vec<String>,
     #[serde(default)]
     pub resolve_dns: ResolveDnsConfig,
+    #[serde(default)]
+    pub tool_scope: Option<String>,
+    #[serde(default)]
+    pub authorization: Option<EgressAuthorization>,
 }
 fn default_protocols() -> Vec<String> {
     vec!["tcp".to_string()]
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EgressAuthorization {
+    pub mode: NetworkOutboundMode,
+    pub authorized_by: String,
+    pub authorized_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkOutboundMode {
     Unrestricted,
+    #[serde(rename = "broad-audited")]
+    BroadAudited,
     Restricted,
     Off,
 }
@@ -1444,6 +1459,32 @@ impl AgentProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn broad_audited_serde_roundtrip_and_defaults() {
+        let ob = OutboundNetwork {
+            mode: NetworkOutboundMode::BroadAudited,
+            allow_hosts: vec![],
+            deny_hosts: vec!["evil.example".into()],
+            protocols: default_protocols(),
+            resolve_dns: ResolveDnsConfig::default(),
+            tool_scope: Some("agent-browser".into()),
+            authorization: Some(EgressAuthorization {
+                mode: NetworkOutboundMode::BroadAudited,
+                authorized_by: "david".into(),
+                authorized_at_ms: 1_750_000_000_000,
+            }),
+        };
+        let y = serde_yaml::to_string(&ob).unwrap();
+        assert!(y.contains("broad-audited"));
+        let back: OutboundNetwork = serde_yaml::from_str(&y).unwrap();
+        assert_eq!(back, ob);
+        // legacy profiles without the new fields still parse (serde default)
+        let legacy: OutboundNetwork =
+            serde_yaml::from_str("mode: restricted\nallow_hosts: []\n").unwrap();
+        assert_eq!(legacy.deny_hosts, Vec::<String>::new());
+        assert!(legacy.authorization.is_none());
+    }
 
     #[test]
     fn mcp_entry_network_is_optional_and_round_trips() {
