@@ -32,10 +32,50 @@ pub fn safe_member_name(n: &str) -> Result<()> {
     Ok(())
 }
 
+/// Reject a bundle entry that could let a copy escape its install directory.
+/// Shared by the phase-1 validation walk (atomicity: fail before any write)
+/// and the phase-2 copy walk (TOCTOU: enforce again at the moment of copy).
+fn check_bundle_entry(name_str: &str, ft: &std::fs::FileType) -> anyhow::Result<()> {
+    // Reject `.`, `..`, path separators, absolute-ish names.
+    if name_str == "." || name_str == ".." || name_str.contains('/') {
+        anyhow::bail!("unsafe bundle entry name: {name_str}");
+    }
+    // Reject symlinks outright (escape vector).
+    if ft.is_symlink() {
+        anyhow::bail!("bundle contains a symlink ({name_str}); refusing import");
+    }
+    Ok(())
+}
+
+/// Phase-1 validation: walk the source bundle rejecting symlinks / unsafe names
+/// WITHOUT writing anything. Run before `write_to_dir`, this preserves the
+/// importer's "all checks must pass before a single byte is written" invariant —
+/// a bad bundle fails the whole import instead of orphaning a half-written dir.
+fn validate_bundle(src_dir: &Path) -> anyhow::Result<()> {
+    validate_bundle_inner(src_dir, true)
+}
+
+fn validate_bundle_inner(src: &Path, top: bool) -> anyhow::Result<()> {
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name_str = name.to_str().context("non-UTF8 bundle filename")?;
+        if top && name_str == "SKILL.md" {
+            continue;
+        }
+        let ft = entry.file_type()?;
+        check_bundle_entry(name_str, &ft)?;
+        if ft.is_dir() {
+            validate_bundle_inner(&entry.path(), false)?;
+        }
+    }
+    Ok(())
+}
+
 /// Recursively copy every entry of `src_dir` into `dest_dir`, skipping a
-/// top-level `SKILL.md` (the manifest is written separately). Rejects any
-/// symlink and any entry whose name is unsafe, so a bundle can never write
-/// outside its own install directory.
+/// top-level `SKILL.md` (the manifest is written separately). Re-checks each
+/// entry (TOCTOU) so a symlink planted after phase-1 validation is still
+/// refused before it can escape the install directory.
 fn copy_bundle(src_dir: &Path, dest_dir: &Path) -> anyhow::Result<()> {
     copy_bundle_inner(src_dir, dest_dir, true)
 }
@@ -48,15 +88,8 @@ fn copy_bundle_inner(src: &Path, dest: &Path, top: bool) -> anyhow::Result<()> {
         if top && name_str == "SKILL.md" {
             continue;
         }
-        // Reject `.`, `..`, path separators, absolute-ish names.
-        if name_str == "." || name_str == ".." || name_str.contains('/') {
-            anyhow::bail!("unsafe bundle entry name: {name_str}");
-        }
-        // Reject symlinks outright (escape vector).
         let ft = entry.file_type()?;
-        if ft.is_symlink() {
-            anyhow::bail!("bundle contains a symlink ({name_str}); refusing import");
-        }
+        check_bundle_entry(name_str, &ft)?;
         let src_path = entry.path();
         let dest_path = dest.join(name_str);
         if ft.is_dir() {
@@ -165,6 +198,9 @@ pub fn cmd_addon_import(
             let manifest = skill_md_to_manifest(dir_name, &fs::read_to_string(&md)?, &plugin);
             safe_member_name(&manifest.name)?;
             scan_or_block(&manifest, force)?;
+            // Phase-1 bundle validation: reject symlink/unsafe entries before
+            // any write, so a bad bundle can't orphan a half-written skill dir.
+            validate_bundle(&d)?;
             let dest = agent_skills_dir.join(&manifest.name);
             if dest.exists() {
                 bail!(
@@ -566,6 +602,50 @@ mod tests {
 
         let err = copy_bundle(&src, &dest);
         assert!(err.is_err(), "symlink in bundle must be rejected");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_bundle_rejects_nested_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(src.join("scripts")).unwrap();
+        let secret = tmp.path().join("secret.txt");
+        fs::write(&secret, "s").unwrap();
+        // Symlink one level deep — must still be caught.
+        std::os::unix::fs::symlink(&secret, src.join("scripts/link")).unwrap();
+
+        assert!(
+            validate_bundle(&src).is_err(),
+            "a symlink nested in a subdir must be rejected"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn import_with_symlink_bundle_is_atomic_no_orphan() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        unsafe {
+            std::env::set_var("MUR_HOME", home);
+        }
+        write_agent(home, "alice");
+        let plugin = home.join("sample-plugin");
+        write_plugin(&plugin);
+        // Bundle carries a symlink → import must reject it.
+        fs::create_dir_all(plugin.join("skills/brainstorm/scripts")).unwrap();
+        let secret = home.join("secret.txt");
+        fs::write(&secret, "s").unwrap();
+        std::os::unix::fs::symlink(&secret, plugin.join("skills/brainstorm/scripts/link")).unwrap();
+
+        let res = cmd_addon_import("alice", plugin.to_str().unwrap(), None, false);
+        assert!(res.is_err(), "symlink bundle must fail the import");
+        // Atomicity: no half-written skill dir left behind.
+        assert!(
+            !home.join("agents/alice/skills/brainstorm").exists(),
+            "failed import must not orphan a skill dir"
+        );
     }
 
     #[test]
