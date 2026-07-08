@@ -181,9 +181,10 @@ git add -A && git commit -m "feat(aura): wire agent-browser MCP tool, default en
 
 ---
 
-### Task 4: Author the four AURA-scoped skills
+### Task 4: Author the five AURA-scoped skills
 
 **Files:**
+- Create: `~/.mur/skills/aura-browser-preflight/skill.yaml`
 - Create: `~/.mur/skills/aura-research-escalation-ladder/skill.yaml`
 - Create: `~/.mur/skills/aura-source-triangulation/skill.yaml`
 - Create: `~/.mur/skills/aura-citation-discipline/skill.yaml`
@@ -192,31 +193,47 @@ git add -A && git commit -m "feat(aura): wire agent-browser MCP tool, default en
 
 **Interfaces:**
 - Consumes: nothing (pure knowledge objects).
-- Produces: four skills injected into `aura` sessions; consumed at runtime in Task 6.
+- Produces: five skills injected into `aura` sessions; consumed at runtime in Task 6.
 
-- [ ] **Step 1: Scaffold the four skills**
+- [ ] **Step 1: Scaffold the five skills**
 
 ```bash
+mur skill new aura-browser-preflight
 mur skill new aura-research-escalation-ladder
 mur skill new aura-source-triangulation
 mur skill new aura-citation-discipline
 mur skill new aura-parallel-fanout
 ```
-Expected: four `skill.yaml` files scaffolded under `~/.mur/skills/`.
+Expected: five `skill.yaml` files scaffolded under `~/.mur/skills/`.
 
-- [ ] **Step 2: Fill in the escalation-ladder skill content**
+- [ ] **Step 2: Fill in the browser-preflight skill content**
+
+Edit `~/.mur/skills/aura-browser-preflight/skill.yaml` so `content` teaches: BEFORE the first browser-tier call in a research job, detect the toolchain, and if anything is missing, ask the operator for permission and only then install — never install silently. Triggers: about to use the browser tool, JS/login page needed, start of a research job. The detection + consent procedure to encode:
+
+```bash
+# detect the control layer
+agent-browser --version || MISSING_TOOL=1
+# detect the chrome engine (installed by `agent-browser install`)
+agent-browser --engine chrome open about:blank snapshot >/dev/null 2>&1 || MISSING_CHROME=1
+# detect the lightpanda engine
+agent-browser --engine lightpanda open about:blank snapshot >/dev/null 2>&1 || MISSING_LIGHTPANDA=1
+```
+If `MISSING_TOOL` or an engine is missing: STOP and ask the operator, e.g. "agent-browser / the lightpanda engine isn't installed. May I run `npm i -g agent-browser && agent-browser install`?" Install ONLY on an explicit yes. If the operator declines, degrade to the fetch tier (`WebFetch`) and report which pages could not be rendered. Installing software is a permission-required action (Global Constraints) — the skill asks, it never auto-installs.
+
+- [ ] **Step 3: Fill in the escalation-ladder skill content**
 
 Edit `~/.mur/skills/aura-research-escalation-ladder/skill.yaml` so `content` teaches: try `WebSearch`/`WebFetch` first; escalate to `agent-browser --engine lightpanda` only when a page needs JS; escalate to `--engine chrome` only for anti-bot fingerprint walls, screenshots, or the operator's private logins. Triggers: research, fetch a page, JS-heavy site, login-gated. Never open a browser for a page plain fetch can read. (Content is the spec §4.3 ladder in prose.)
 
-- [ ] **Step 3: Fill in triangulation, citation, fanout skills**
+- [ ] **Step 4: Fill in triangulation, citation, fanout skills**
 
 - `aura-source-triangulation`: cross-check each claim across >=2 independent sources; surface and resolve conflicts explicitly rather than silently picking one. Trigger: verifying a claim.
 - `aura-citation-discipline`: bind every claim to a fetched URL + supporting quote; drop any claim with no source rather than shipping it. Trigger: writing the report.
 - `aura-parallel-fanout`: broad decomposable question -> spin up the fleet; narrow question -> single-agent concurrent fetches. Trigger: deciding how to run a research job.
 
-- [ ] **Step 4: Scope all four to the agent/fleet and verify injection**
+- [ ] **Step 5: Scope all five to the agent/fleet and verify injection**
 
 ```bash
+mur skill scope aura-browser-preflight --fleet
 mur skill scope aura-research-escalation-ladder --fleet
 mur skill scope aura-source-triangulation --fleet
 mur skill scope aura-citation-discipline --fleet
@@ -226,12 +243,12 @@ Expected: each `skill.yaml` `scope:` becomes `Fleet` (see `skill_cmd.rs` scope m
 ```bash
 mur skill list | grep aura-
 ```
-Expected: all four present.
+Expected: all five present.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add -A && git commit -m "feat(aura): author 4 research skills (escalation, triangulation, citation, fanout)"
+git add -A && git commit -m "feat(aura): author 5 research skills (preflight, escalation, triangulation, citation, fanout)"
 ```
 
 ---
@@ -345,7 +362,7 @@ git commit -m "test(aura): end-to-end acceptance — cited report, ladder, kill-
 - §4.2 three-layer flow → Tasks 2–5.
 - §4.3 escalation ladder → Task 3 (engine default) + Task 4 skill + Task 6 Step 3 verification.
 - §4.4 fleet + safety triad → Task 5 + Task 6 Step 4.
-- §4.5 four skills → Task 4.
+- §4.5 five skills (incl. `browser-preflight` install-consent) → Task 4.
 - §6 open questions: #1 integration surface RESOLVED (agent-browser mcp stdio, Task 3); #2 worker ceiling → Task 1 Step 3 + set `max_concurrency` during Task 5 (flagged); #3 model choice → Task 2 Step 1; #4 credential provisioning → deferred (Task 3 uses no-auth pages; vault provisioning is a follow-on, noted below).
 - §7 out of scope respected (no Obscura/ego-lite/remote-cdp/embedding tasks).
 
