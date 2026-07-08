@@ -18,7 +18,7 @@ pub fn cmd_install_service(name: &str, dry_run: bool) -> Result<()> {
 
     #[cfg(target_os = "macos")]
     {
-        let plist = darwin_plist(name, &symlink);
+        let plist = darwin_plist(name, &symlink, &derive_service_path());
         if dry_run {
             print!("{plist}");
             return Ok(());
@@ -46,7 +46,7 @@ pub fn cmd_install_service(name: &str, dry_run: bool) -> Result<()> {
     }
     #[cfg(target_os = "linux")]
     {
-        let unit = linux_unit(name, &symlink);
+        let unit = linux_unit(name, &symlink, &derive_service_path());
         if dry_run {
             print!("{unit}");
             return Ok(());
@@ -82,8 +82,41 @@ pub fn cmd_install_service(name: &str, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
+/// Directories launchd hands every process by default (its minimal PATH),
+/// used as the tail of the derived service PATH.
+const LAUNCHD_DEFAULT_PATH_DIRS: &[&str] = &["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+
+/// Derive a PATH string for the installed service so PATH-installed MCP
+/// binaries (npm/homebrew) resolve when launchd/systemd starts the agent
+/// with its minimal default PATH.
+///
+/// Includes, in order: `<npm global prefix>/bin` (best-effort, skipped
+/// gracefully if npm is absent or fails), `/opt/homebrew/bin`,
+/// `/usr/local/bin`, then the launchd default dirs.
+fn derive_service_path() -> String {
+    let mut dirs: Vec<String> = Vec::new();
+
+    if let Ok(output) = std::process::Command::new("npm")
+        .args(["config", "get", "prefix"])
+        .output()
+    {
+        if output.status.success() {
+            let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !prefix.is_empty() {
+                dirs.push(format!("{prefix}/bin"));
+            }
+        }
+    }
+
+    dirs.push("/opt/homebrew/bin".to_string());
+    dirs.push("/usr/local/bin".to_string());
+    dirs.extend(LAUNCHD_DEFAULT_PATH_DIRS.iter().map(|d| d.to_string()));
+
+    dirs.join(":")
+}
+
 #[cfg(target_os = "macos")]
-fn darwin_plist(name: &str, symlink: &Path) -> String {
+fn darwin_plist(name: &str, symlink: &Path, service_path: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -100,6 +133,11 @@ fn darwin_plist(name: &str, symlink: &Path) -> String {
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{path}</string>
+    </dict>
     <key>StandardErrorPath</key>
     <string>/tmp/mur-agent-{name}.err.log</string>
     <key>StandardOutPath</key>
@@ -108,11 +146,12 @@ fn darwin_plist(name: &str, symlink: &Path) -> String {
 </plist>
 "#,
         sym = symlink.display(),
+        path = service_path,
     )
 }
 
 #[cfg(target_os = "linux")]
-fn linux_unit(name: &str, symlink: &Path) -> String {
+fn linux_unit(name: &str, symlink: &Path, service_path: &str) -> String {
     format!(
         r#"[Unit]
 Description=murmur agent {name}
@@ -120,6 +159,7 @@ After=default.target
 
 [Service]
 Type=simple
+Environment=PATH={path}
 ExecStart={sym} start
 Restart=on-failure
 RestartSec=3
@@ -128,5 +168,31 @@ RestartSec=3
 WantedBy=default.target
 "#,
         sym = symlink.display(),
+        path = service_path,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plist_includes_path_env() {
+        let plist = darwin_plist(
+            "aura",
+            Path::new("/path/to/mur_agent_aura"),
+            "/opt/homebrew/bin:/usr/bin:/bin",
+        );
+        assert!(plist.contains("<key>EnvironmentVariables</key>"));
+        assert!(plist.contains("<key>PATH</key>"));
+        assert!(plist.contains("/opt/homebrew/bin"));
+    }
+
+    #[test]
+    fn derive_service_path_always_has_launchd_defaults() {
+        let path = derive_service_path();
+        for dir in LAUNCHD_DEFAULT_PATH_DIRS {
+            assert!(path.contains(dir), "missing {dir} in {path}");
+        }
+    }
 }
