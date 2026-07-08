@@ -333,6 +333,12 @@ pub enum McpNetMode {
     Inherit,
     /// Allow only `allow_hosts`, routed through the runtime egress proxy.
     Restricted,
+    /// Allow ALL hosts EXCEPT `deny_hosts`, routed through the runtime egress
+    /// proxy, with every CONNECT audited. For trusted-but-broad tools (e.g. a
+    /// web-research browser) that cannot enumerate their destinations. Requires
+    /// explicit operator consent (records `authorization`); downgraded to
+    /// `Inherit` on import (lowest trust). Advisory enforcement (see egress_proxy).
+    BroadAudited,
     /// No outbound for this server at all.
     Off,
 }
@@ -344,6 +350,13 @@ pub struct McpServerNetwork {
     pub mode: McpNetMode,
     #[serde(default)]
     pub allow_hosts: Vec<String>,
+    /// Deny overlay for `BroadAudited` mode: hosts blocked even though all
+    /// others are allowed. Ignored by `Restricted`/`Inherit`/`Off`.
+    #[serde(default)]
+    pub deny_hosts: Vec<String>,
+    /// Who authorized a `BroadAudited` grant, and when. `None` for other modes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorization: Option<EgressAuthorization>,
 }
 
 /// A plugin-group imported by one agent (add-on Phase 2). Self-contained:
@@ -542,24 +555,20 @@ pub struct OutboundNetwork {
     pub mode: NetworkOutboundMode,
     #[serde(default)]
     pub allow_hosts: Vec<String>,
-    #[serde(default)]
-    pub deny_hosts: Vec<String>,
     #[serde(default = "default_protocols")]
     pub protocols: Vec<String>,
     #[serde(default)]
     pub resolve_dns: ResolveDnsConfig,
-    #[serde(default)]
-    pub tool_scope: Option<String>,
-    #[serde(default)]
-    pub authorization: Option<EgressAuthorization>,
 }
 fn default_protocols() -> Vec<String> {
     vec!["tcp".to_string()]
 }
 
+/// Record of who authorized a broad egress grant, and when. Attached to a
+/// per-MCP-server `McpServerNetwork` when its mode is `BroadAudited`, so the
+/// grant is persisted, portable, and re-approvable on import.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EgressAuthorization {
-    pub mode: NetworkOutboundMode,
     pub authorized_by: String,
     pub authorized_at_ms: u64,
 }
@@ -568,8 +577,6 @@ pub struct EgressAuthorization {
 #[serde(rename_all = "lowercase")]
 pub enum NetworkOutboundMode {
     Unrestricted,
-    #[serde(rename = "broad-audited")]
-    BroadAudited,
     Restricted,
     Off,
 }
@@ -1461,26 +1468,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn broad_audited_serde_roundtrip_and_defaults() {
-        let ob = OutboundNetwork {
-            mode: NetworkOutboundMode::BroadAudited,
+    fn broad_audited_mcp_net_serde_roundtrip_and_defaults() {
+        let net = McpServerNetwork {
+            mode: McpNetMode::BroadAudited,
             allow_hosts: vec![],
             deny_hosts: vec!["evil.example".into()],
-            protocols: default_protocols(),
-            resolve_dns: ResolveDnsConfig::default(),
-            tool_scope: Some("agent-browser".into()),
             authorization: Some(EgressAuthorization {
-                mode: NetworkOutboundMode::BroadAudited,
                 authorized_by: "david".into(),
                 authorized_at_ms: 1_750_000_000_000,
             }),
         };
-        let y = serde_yaml::to_string(&ob).unwrap();
-        assert!(y.contains("broad-audited"));
-        let back: OutboundNetwork = serde_yaml::from_str(&y).unwrap();
-        assert_eq!(back, ob);
-        // legacy profiles without the new fields still parse (serde default)
-        let legacy: OutboundNetwork =
+        let y = serde_yaml::to_string(&net).unwrap();
+        assert!(y.contains("broad_audited"));
+        let back: McpServerNetwork = serde_yaml::from_str(&y).unwrap();
+        assert_eq!(back, net);
+        // legacy per-server policy without the new fields still parses (serde default)
+        let legacy: McpServerNetwork =
             serde_yaml::from_str("mode: restricted\nallow_hosts: []\n").unwrap();
         assert_eq!(legacy.deny_hosts, Vec::<String>::new());
         assert!(legacy.authorization.is_none());
