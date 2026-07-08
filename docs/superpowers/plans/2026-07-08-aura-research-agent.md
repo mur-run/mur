@@ -324,22 +324,33 @@ Expected: `~/.mur/fleets/aura-research/fleet.yaml` written; router + channel `fl
 
 - [ ] **Step 2: Add members (aura workers)**
 
-The fleet needs >=2 runnable member agents for parallel fan-out. Create worker clones from the `aura` profile (same model, prompt, browser tool, skills), e.g. `aura-w1`, `aura-w2`, then register them as members. Use `mur fleet show aura-research` to confirm roles (router->Router, members->Delegate).
+The fleet needs >=2 runnable member agents for parallel fan-out. VERIFIED: there is
+NO `mur agent import --as` command (only `install`, which can't rename). Clone by
+repeating Task 2 + Task 3 per worker (create + wire both browser tools):
 ```bash
-# repeat Task 2 + Task 3 wiring for each worker, or export/import the aura profile:
-mur agent export aura --out /tmp/aura.muragent && mur agent import /tmp/aura.muragent --as aura-w1
-mur agent import /tmp/aura.muragent --as aura-w2
-# then add them to the fleet per `mur fleet --help` (create/edit membership)
+for w in aura-w1 aura-w2; do
+  mur agent create "$w" --no-interactive --display-name AURA --model claude-sonnet-5 --provider anthropic
+  # verify model_ref: claude_sonnet in ~/.mur/agents/$w/profile.yaml; add it if the create bug drops it
+  mur agent mcp add "$w" agent-browser --command agent-browser --force \
+    --arg=--engine --arg=lightpanda --arg=--executable-path --arg="$HOME/.mur/aura/lightpanda" \
+    --arg=--args --arg="" --arg=mcp --arg=--tools --arg=core
+  mur agent mcp add "$w" agent-browser-chrome --command agent-browser --force \
+    --arg=--engine --arg=chrome --arg=mcp --arg=--tools --arg=core
+  mur agent set-prompt "$w" ...   # same AURA prompt as Task 2 Step 3 (or `mur agent prompt set`)
+done
+mur fleet add aura-research aura-w1 aura-w2   # SPACE-separated variadic — NOT comma-separated
+mur fleet show aura-research
 ```
-Expected: two members visible in `mur fleet show aura-research`. (If the installed `mur fleet create` takes `--members` directly, prefer that single command — check `mur fleet create --help`.)
+Expected: `mur fleet show aura-research` lists router `mur` (concierge default) + members `aura-w1`, `aura-w2` (Delegate role in the channel yaml). Fleet-scoped skills inject to members via membership — they do NOT need copying. Confirm each worker: `mur agent mcp list <w>` shows both tools and `profile.yaml` has `model_ref: claude_sonnet`.
 
 - [ ] **Step 3: Set the safety guards**
 
 ```bash
 # budget is required for any future auto-run; keep autorun OFF (default)
+mur fleet set-loop aura-research --budget-usd 5.0
 mur fleet show aura-research      # confirm no autorun trigger set
 ```
-Set `loop.budget_usd` in `fleet.yaml` to a small positive ceiling (e.g. a few dollars) so a future `--loop` or auto-run can never exceed it (spec §4.4). Do NOT set `MUR_FLEET_AUTORUN`.
+`mur fleet set-loop --budget-usd` writes `loop.budget_usd` (verified) so a future `--loop` or auto-run can never exceed it (spec §4.4). Confirm `trigger: manual` (not `interval:`/`cron:`) in fleet.yaml and do NOT set `MUR_FLEET_AUTORUN`.
 Expected: `budget_usd > 0`, no `loop.trigger`.
 
 - [ ] **Step 4: Verify one iteration runs (fail-closed)**
