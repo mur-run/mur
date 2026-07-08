@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use mur_common::agent::{AddonRef, McpServerEntry};
 use mur_common::skill::SkillManifest;
@@ -28,6 +28,46 @@ pub fn safe_member_name(n: &str) -> Result<()> {
     if n.is_empty() || n.contains('/') || n.contains('\\') || n.contains("..") || n.starts_with('.')
     {
         bail!("unsafe add-on member name: {n:?}");
+    }
+    Ok(())
+}
+
+/// Recursively copy every entry of `src_dir` into `dest_dir`, skipping a
+/// top-level `SKILL.md` (the manifest is written separately). Rejects any
+/// symlink and any entry whose name is unsafe, so a bundle can never write
+/// outside its own install directory.
+fn copy_bundle(src_dir: &Path, dest_dir: &Path) -> anyhow::Result<()> {
+    copy_bundle_inner(src_dir, dest_dir, true)
+}
+
+fn copy_bundle_inner(src: &Path, dest: &Path, top: bool) -> anyhow::Result<()> {
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name_str = name.to_str().context("non-UTF8 bundle filename")?;
+        if top && name_str == "SKILL.md" {
+            continue;
+        }
+        // Reject `.`, `..`, path separators, absolute-ish names.
+        if name_str == "." || name_str == ".." || name_str.contains('/') {
+            anyhow::bail!("unsafe bundle entry name: {name_str}");
+        }
+        // Reject symlinks outright (escape vector).
+        let ft = entry.file_type()?;
+        if ft.is_symlink() {
+            anyhow::bail!("bundle contains a symlink ({name_str}); refusing import");
+        }
+        let src_path = entry.path();
+        let dest_path = dest.join(name_str);
+        if ft.is_dir() {
+            fs::create_dir_all(&dest_path)?;
+            copy_bundle_inner(&src_path, &dest_path, false)?;
+        } else {
+            if let Some(parent) = dest_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&src_path, &dest_path)?;
+        }
     }
     Ok(())
 }
@@ -107,7 +147,7 @@ pub fn cmd_addon_import(
     // All checks must pass before a single byte is written.
 
     // Pending skills/commands: (dest_path, manifest)
-    let mut pending_skills: Vec<(PathBuf, SkillManifest)> = Vec::new();
+    let mut pending_skills: Vec<(PathBuf, SkillManifest, PathBuf)> = Vec::new();
     let mut pending_cmds: Vec<(PathBuf, SkillManifest)> = Vec::new();
     // Pending MCP entries.
     let mut pending_mcp: Vec<PendingMcp> = Vec::new();
@@ -132,7 +172,7 @@ pub fn cmd_addon_import(
                     manifest.name
                 );
             }
-            pending_skills.push((dest, manifest));
+            pending_skills.push((dest, manifest, d.clone()));
         }
     }
 
@@ -202,10 +242,12 @@ pub fn cmd_addon_import(
 
     // 2a. Write skills.
     let mut skill_members: Vec<String> = Vec::new();
-    for (dest, manifest) in pending_skills {
+    for (dest, manifest, src_dir) in pending_skills {
         let skill_name = manifest.name.clone();
         write_to_dir(&dest, &manifest)
             .map_err(|e| anyhow::anyhow!("write skill {}: {e}", skill_name))?;
+        copy_bundle(&src_dir, &dest)
+            .with_context(|| format!("copying bundle for skill '{skill_name}'"))?;
         skill_members.push(skill_name);
     }
 
@@ -489,6 +531,67 @@ mod tests {
             }
         });
         fs::write(root.join(".mcp.json"), serde_json::to_string(&mcp).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn copy_bundle_preserves_scripts_skips_skill_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dest = tmp.path().join("dest");
+        fs::create_dir_all(src.join("scripts")).unwrap();
+        fs::write(src.join("SKILL.md"), "body").unwrap();
+        fs::write(src.join("scripts/start-server.sh"), "#!/bin/sh\n").unwrap();
+        fs::write(src.join("helper.js"), "x").unwrap();
+
+        copy_bundle(&src, &dest).unwrap();
+
+        assert!(dest.join("scripts/start-server.sh").is_file());
+        assert!(dest.join("helper.js").is_file());
+        assert!(
+            !dest.join("SKILL.md").exists(),
+            "SKILL.md must not be copied"
+        );
+    }
+
+    #[test]
+    fn copy_bundle_rejects_symlink_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dest = tmp.path().join("dest");
+        fs::create_dir_all(&src).unwrap();
+        let secret = tmp.path().join("secret.txt");
+        fs::write(&secret, "s").unwrap();
+        std::os::unix::fs::symlink(&secret, src.join("link")).unwrap();
+
+        let err = copy_bundle(&src, &dest);
+        assert!(err.is_err(), "symlink in bundle must be rejected");
+    }
+
+    #[test]
+    fn import_installs_skill_bundle_scripts() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        unsafe {
+            std::env::set_var("MUR_HOME", home);
+        }
+        write_agent(home, "alice");
+        let plugin = home.join("sample-plugin");
+        write_plugin(&plugin);
+        // Add a bundled script sibling next to SKILL.md.
+        fs::create_dir_all(plugin.join("skills/brainstorm/scripts")).unwrap();
+        fs::write(
+            plugin.join("skills/brainstorm/scripts/run.sh"),
+            "#!/bin/sh\necho hi\n",
+        )
+        .unwrap();
+
+        cmd_addon_import("alice", plugin.to_str().unwrap(), None, false).unwrap();
+
+        assert!(
+            home.join("agents/alice/skills/brainstorm/scripts/run.sh")
+                .is_file()
+        );
     }
 
     #[test]
