@@ -36,17 +36,20 @@ pub(crate) fn kill_wait_secs(stop_timeout_secs: u64) -> u64 {
 /// Return the names of running agents to restart.
 ///
 /// Selection rules (exactly one must be active):
-/// - `name = Some(_)` → that single agent (must have a running.lock)
+/// - `names` non-empty → those agents (each must have a running.lock;
+///   validated before any restart happens — no partial action)
 /// - `all = true` → all agents with a running.lock
 /// - `stale_only = true` → only running agents where `is_stale(lock, on_disk_sha())`
 ///
 /// If none of the three selectors is active an error is returned — bare
 /// `mur agent restart` (no args) must never silently restart everything.
+/// Passing explicit `names` together with `--all`/`--stale` is also an error
+/// (mutually exclusive selectors).
 ///
 /// `home` is the MUR_HOME path (e.g. `~/.mur`). Testable with a temp dir.
 pub(crate) fn select_targets(
     home: &Path,
-    name: Option<&str>,
+    names: &[&str],
     all: bool,
     stale_only: bool,
 ) -> Result<Vec<String>> {
@@ -57,26 +60,36 @@ pub(crate) fn select_targets(
     } else {
         String::new()
     };
-    select_targets_with_on_disk(home, name, all, stale_only, &on_disk)
+    select_targets_with_on_disk(home, names, all, stale_only, &on_disk)
 }
 
 /// Inner implementation that accepts the on-disk sha as a parameter so tests
 /// can inject a synthetic value without needing a real runtime binary.
 pub(crate) fn select_targets_with_on_disk(
     home: &Path,
-    name: Option<&str>,
+    names: &[&str],
     all: bool,
     stale_only: bool,
     on_disk: &str,
 ) -> Result<Vec<String>> {
     let agents_dir = home.join("agents");
 
-    if let Some(n) = name {
-        let lock_path = agents_dir.join(n).join("running.lock");
-        if !lock_path.exists() {
-            bail!("agent '{n}' is not running");
+    if !names.is_empty() {
+        if all || stale_only {
+            bail!("cannot combine an agent name with --all or --stale");
         }
-        return Ok(vec![n.to_string()]);
+        // Validate ALL names before restarting any — no partial action.
+        let mut not_running: Vec<&str> = Vec::new();
+        for n in names {
+            let lock_path = agents_dir.join(n).join("running.lock");
+            if !lock_path.exists() {
+                not_running.push(n);
+            }
+        }
+        if !not_running.is_empty() {
+            bail!("agent(s) not running: {}", not_running.join(", "));
+        }
+        return Ok(names.iter().map(|n| n.to_string()).collect());
     }
 
     // Require an explicit selector — never enumerate implicitly.
@@ -118,13 +131,14 @@ pub(crate) fn select_targets_with_on_disk(
 
 /// Gracefully restart one or more agents.
 ///
-/// - `name` / `all` / `stale`: select targets (mirror `cmd_stop`).
+/// - `names` / `all` / `stale`: select targets (mirror `cmd_stop`).
 /// - `dry_run`: print targets and return without acting.
-pub fn cmd_restart(name: Option<&str>, all: bool, stale: bool, dry_run: bool) -> Result<()> {
+pub fn cmd_restart(names: &[String], all: bool, stale: bool, dry_run: bool) -> Result<()> {
     let mur_home = resolve_mur_home()?;
     let agents_dir = mur_home.join("agents");
 
-    let targets = select_targets(&mur_home, name, all, stale)?;
+    let names_ref: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+    let targets = select_targets(&mur_home, &names_ref, all, stale)?;
 
     if targets.is_empty() {
         println!("No agents to restart.");
@@ -396,7 +410,7 @@ mod tests {
         fs::create_dir_all(&alpha_dir).unwrap();
         write_lock(&alpha_dir.join("running.lock"), 1111, "somesha");
 
-        let result = select_targets_with_on_disk(home, None, false, false, "somesha");
+        let result = select_targets_with_on_disk(home, &[], false, false, "somesha");
         assert!(result.is_err(), "bare restart with no selector must error");
         let msg = result.unwrap_err().to_string();
         assert!(
@@ -423,7 +437,7 @@ mod tests {
         fs::create_dir_all(&beta_dir).unwrap();
         write_lock(&beta_dir.join("running.lock"), 2222, "cur000000000");
 
-        let result = select_targets_with_on_disk(home, None, false, true, "cur000000000").unwrap();
+        let result = select_targets_with_on_disk(home, &[], false, true, "cur000000000").unwrap();
         assert_eq!(
             result,
             vec!["alpha"],
@@ -437,8 +451,52 @@ mod tests {
         let home = tmp.path();
         fs::create_dir_all(home.join("agents").join("ghost")).unwrap();
         // No running.lock
-        let result = select_targets(home, Some("ghost"), false, false);
+        let result = select_targets(home, &["ghost"], false, false);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn select_targets_multiple_names_both_running() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let a_dir = home.join("agents").join("a");
+        let b_dir = home.join("agents").join("b");
+        fs::create_dir_all(&a_dir).unwrap();
+        fs::create_dir_all(&b_dir).unwrap();
+        write_lock(&a_dir.join("running.lock"), 1111, "shaaaaaaaaaa");
+        write_lock(&b_dir.join("running.lock"), 2222, "shabbbbbbbb");
+
+        let mut result = select_targets_with_on_disk(home, &["a", "b"], false, false, "").unwrap();
+        result.sort();
+        assert_eq!(result, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn select_targets_multiple_names_one_not_running_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let a_dir = home.join("agents").join("a");
+        let b_dir = home.join("agents").join("b");
+        fs::create_dir_all(&a_dir).unwrap();
+        fs::create_dir_all(&b_dir).unwrap();
+        write_lock(&a_dir.join("running.lock"), 1111, "shaaaaaaaaaa");
+        // No running.lock for 'b'
+
+        let result = select_targets_with_on_disk(home, &["a", "b"], false, false, "");
+        assert!(
+            result.is_err(),
+            "must fail-closed when any name isn't running"
+        );
+    }
+
+    #[test]
+    fn select_targets_names_and_all_mutually_exclusive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        fs::create_dir_all(home.join("agents")).unwrap();
+
+        let result = select_targets_with_on_disk(home, &["a"], true, false, "");
+        assert!(result.is_err(), "names + --all must be rejected");
     }
 
     #[test]
@@ -446,7 +504,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         fs::create_dir_all(home.join("agents")).unwrap();
-        let result = select_targets(home, None, true, false).unwrap();
+        let result = select_targets(home, &[], true, false).unwrap();
         assert!(result.is_empty());
     }
 
