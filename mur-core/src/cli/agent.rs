@@ -36,6 +36,12 @@ pub enum AgentAction {
         /// Agent name
         name: String,
     },
+    /// Start a stopped agent: via its launchd/systemd service when one is
+    /// installed, else a detached (unsupervised) spawn of its runtime
+    Start {
+        /// Agent name
+        name: String,
+    },
     /// Stop a running agent (SIGTERM, then SIGKILL after timeout)
     Stop {
         /// Agent name

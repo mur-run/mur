@@ -1313,6 +1313,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         } => cmd::agent::cmd_create(&name, no_interactive, display_name, model, provider)?,
         AgentAction::List { json } => cmd::agent::cmd_list(json)?,
         AgentAction::Status { name } => cmd::agent::cmd_status(&name)?,
+        AgentAction::Start { name } => cmd::agent::cmd_start(&name)?,
         AgentAction::Stop { name } => cmd::agent::cmd_stop(&name)?,
         AgentAction::Restart {
             name,
