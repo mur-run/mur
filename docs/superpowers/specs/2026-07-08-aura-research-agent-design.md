@@ -1,16 +1,24 @@
 # AURA — Autonomous Web-Research Agent (Design)
 
 Date: 2026-07-08
-Status: Design approved, pending implementation plan
+Status: Design approved; revised 2026-07-08 (fleet-of-workers → one core, two modes)
 
 ## 1. Goal
 
-Create a MUR agent, internal name `aura` (display name **AURA**), that performs
-end-to-end web research: decompose a question, fan out parallel searches, fetch
-and render sources (including JavaScript-heavy and login-gated pages), verify
+Perform end-to-end web research: decompose a question, fan out parallel searches,
+fetch and render sources (including JavaScript-heavy and login-gated pages), verify
 claims adversarially, and return a synthesized report with citations.
 
-Parallelism runs as a **MUR fleet of `aura` workers** over one signed channel.
+**One research core, two delivery modes** (see §4.4):
+- **Mode 1 — one-shot public research:** no agent. Invoke the existing `deep-research`
+  workflow directly. This is the common case and it sidesteps every per-agent
+  sandbox/entitlement cost.
+- **Mode 2 — persistent orchestrator:** a single MUR agent `aura` (display **AURA**)
+  that wraps Mode 1's core and adds the three things a workflow can't hold —
+  authenticated browser state (login), scheduling, and long-term memory.
+
+Large-scale parallelism belongs to the workflow's ephemeral subagents, NOT to a fleet
+of persistent agents (the earlier "fleet of workers" shape is dropped — see §4.4).
 
 ## 2. Research verdict (what this design is built on)
 
@@ -108,50 +116,57 @@ agent-browser --engine chrome       # full Chrome compatibility (+ stealth args)
 agent-browser -p kernel|browserbase # cloud providers
 ```
 
-Switching tiers is a flag change; fleet orchestration logic is unchanged.
+Switching tiers is a flag change; the escalation logic lives in a skill (§4.5).
 
-### 4.4 Fleet design
+### 4.4 Two delivery modes (no fleet)
 
-- `mur fleet create aura-research`.
-  - Router = one `aura` (decompose → route via DAG plan → merge).
-  - Members = N `aura` clones, each owning a sub-question.
-  - Shared signed channel `fleet-aura-research` (router→Router, members→Delegate).
-- Parallel isolation: each worker runs its own `agent-browser --session <id>`
-  instance (isolated cookies/auth), matching the "per-agent profile isolation to
-  avoid session collisions" finding.
-- Worker density: `--engine lightpanda` workers (~24 MB/instance, verified) let a
-  single box host far more concurrent workers than a Chrome-based fleet. Concrete
-  ceiling per host is left to the implementation plan (open question §6).
-- Safety triad reused unchanged: `MUR_FLEET_AUTORUN` (off by default) + per-fleet
-  `budget_usd` + `mur fleet stop` kill-switch. Steps pass `yes:false` (fail-closed).
+The "fleet of aura workers" is dropped. The `deep-research` workflow already does
+decomposition + parallel fan-out + adversarial verification + synthesis better than a
+router splitting work across a few agents, and its ephemeral subagents avoid the
+per-agent sandbox/entitlement cost entirely (they run as host-level workflow subagents
+using `WebSearch`/`WebFetch`, not launchd `mur-agent-runtime` processes). So parallelism
+= the workflow; the agent, when present, is a thin persistent shell.
 
-**Scaling rule — scale the workflow, not the fleet.** The fleet stays a SMALL squad
-(router + a handful of persistent `aura` workers) that owns structure: decomposition,
-routing, synthesis. It does NOT grow to N workers for N research units — each fleet
-member is a launchd `mur-agent-runtime` process with its own sandbox, entitlements,
-and ~512 MB budget, so a fleet of 100 is untenable and multiplies the network/sandbox
-integration cost 100×. Large-scale parallelism belongs to the `deep-research`
-workflow's ephemeral subagents (§4.2a): a worker maps a broad slice over the workflow's
-bounded concurrency pool. Rule of thumb: a few members decompose and merge; the
-workflow does the volume.
+**Mode 1 — one-shot public research (the common case).**
+- No agent, no fleet. Invoke the `deep-research` workflow with the question.
+- Covers public + `WebFetch`-renderable pages, at whatever scale the workflow's bounded
+  concurrency (~min(16, cores-2)) supports — 100+ sub-questions run as ephemeral
+  subagents, never as persistent agents.
+- **Sidesteps the network-entitlement gap entirely** (§ Runtime gaps): workflow
+  subagents are not per-agent-sandboxed. Ships today.
 
-### 4.5 Skills wired to `aura`
+**Mode 2 — persistent orchestrator `aura` (login / schedule / memory).**
+- ONE agent `aura` (not a squad). Its job is to orchestrate, not to out-parallelize the
+  workflow: it calls `deep-research` for volume (public pages) and uses its own browser
+  tier (§4.3) only for the pages a workflow can't reach — **login-gated / heavy-JS**.
+- Adds exactly what a workflow can't hold: **authenticated browser state** (agent-browser
+  auth vault, persisted across runs), **scheduling** (`mur agent schedule` — nightly /
+  triggered research), and **long-term memory** (accumulate/dedup across sessions).
+- Gap footprint is a single controlled point: only `aura`'s own login-gated fetches
+  touch the per-agent network entitlement — exactly where audited/scoped egress is
+  wanted anyway. Public volume rides the un-sandboxed workflow.
 
-Reusable patterns from the research, authored as `aura`-scoped skills (agent-scope):
+**When a real fleet is justified (long tail, not this design):** heterogeneous
+persistent specialists under cryptographic governance/audit (Commander). Not built here.
+
+### 4.5 Skills (Mode 2)
+
+Reusable patterns from the research, authored as `aura` skills. Since there is no
+fleet, scope them to the **User** (they inject for the `aura` agent's sessions), not
+Fleet:
 
 1. `browser-preflight` — before the first browser-tier call, detect whether
-   `agent-browser` and both engines (`lightpanda`, `chrome`) are installed. If any
-   is missing, ask the operator for permission and only then install
-   (`npm i -g agent-browser && agent-browser install`); never auto-install. If the
-   operator declines, degrade to the fetch tier and report what could not be reached.
+   `agent-browser` and the Lightpanda engine are installed. If missing, ask the
+   operator for permission and only then install; never auto-install. If declined,
+   degrade to the fetch tier and report what could not be reached.
 2. `research-escalation-ladder` — climb search → fetch → lightpanda → chrome only
    when the cheaper tier fails; never open a browser for a page plain fetch can read.
 3. `source-triangulation` — cross-check each claim across ≥2 independent sources;
    surface and resolve conflicts rather than picking one silently.
 4. `citation-discipline` — bind every claim to a fetched URL + supporting quote;
    an unsourced claim is dropped, not shipped.
-5. `parallel-fanout` — decide when to spin up the fleet vs. run single-agent
-   concurrent fetches (broad, decomposable question → fleet; narrow → single).
+5. `research-mode-select` — decide Mode 1 (call `deep-research` for public volume) vs
+   Mode 2 browser tier (login-gated / heavy-JS pages the workflow can't reach).
 
 Install consent is a hard rule: installing software is a permission-required action
 (CLAUDE.md / safety policy). The preflight skill asks; it never installs silently.
@@ -160,30 +175,31 @@ Install consent is a hard rule: installing software is a permission-required act
 
 | Unit | Responsibility | Depends on |
 |------|----------------|------------|
-| `aura` agent profile | Identity, model, entitlements, skill/tool wiring | MUR runtime |
-| `deep-research` workflow | Discovery + verification + synthesis | (existing) |
-| `agent-browser` tool | Full-browser fetch/render/auth | subprocess; Lightpanda/Chrome |
-| `aura-research` fleet | Parallel decomposition + merge | fleet executor, signed channel |
-| `aura` skills (×4) | When/why to escalate, triangulate, cite, fan out | injected at session |
+| `deep-research` workflow | Discovery + parallel fan-out + verification + synthesis (both modes) | (existing) |
+| `aura` agent profile (Mode 2) | Identity, auth vault, schedule, memory, tool/skill wiring | MUR runtime |
+| `agent-browser` tool (Mode 2) | Login-gated / heavy-JS fetch/render | subprocess; Lightpanda/Chrome |
+| `aura` skills (×5) | When/why to escalate, triangulate, cite, pick mode | injected at session |
 
-Each unit is independently testable: the agent boots without the fleet; the fleet
-runs with stubbed members; skills inject without the browser tool present; the
-browser tool is exercised standalone via its CLI.
+Each unit is independently testable: Mode 1 runs with no agent (invoke the workflow);
+the agent boots without the browser tool; skills inject without the browser present;
+the browser tool is exercised standalone via its CLI.
 
 ## 6. Open questions (resolve in the implementation plan)
 
-1. **Integration surface** — does `agent-browser` expose an MCP server, or is it
-   wired as a command/CLI tool? Verify before choosing the wiring mechanism.
-2. **Per-host worker ceiling** — measure real RAM/CPU per `--engine lightpanda`
-   session (and per chrome-fallback session) to size the fleet; set `max_concurrency`.
-3. **Model choice** — which `models.yaml` alias for router vs. member (router may
-   warrant a stronger model than members).
-4. **Credential provisioning** — how operators load site logins into
-   agent-browser's vault without those secrets touching MUR/LLM context.
+1. **Integration surface** — RESOLVED: `agent-browser mcp` is a stdio MCP server
+   (>= 0.28.0); wired via `mur agent mcp add`.
+2. **Mode-1 heavy-JS reach** — the workflow uses `WebFetch` (static). Confirm whether
+   heavy-JS *public* pages need escalation to Mode 2, or whether a browser MCP can be
+   made available inside the workflow.
+3. **Model choice** — RESOLVED for Mode 2: `claude_sonnet` for `aura`.
+4. **Credential provisioning** — how operators load site logins into agent-browser's
+   auth vault without those secrets touching MUR/LLM context (Mode 2, login case).
 
 ## 7. Out of scope (launch)
 
+- **Fleet of persistent worker agents** — dropped; parallelism = the workflow (§4.4).
 - Obscura as an engine (watch-list; revisit at v0.2+/v1).
-- ego-lite integration (interactive, operator-Chrome model; not fleet-shaped).
+- ego-lite integration (interactive, operator-Chrome model).
 - Remote `--cdp wss://` cloud endpoints (agent-browser support still maturing).
 - Any in-process embedding of a browser engine (AGPL red line).
+- Governance/audit multi-agent squads (Commander long tail).
