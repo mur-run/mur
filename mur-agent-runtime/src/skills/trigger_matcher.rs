@@ -130,11 +130,51 @@ pub fn format_layer3(skill_name: &str, trust: TrustLevel, body: &str) -> String 
     )
 }
 
+/// If the skill's install directory holds anything besides `skill.yaml`,
+/// return a one-line hint telling the agent where the bundle lives so paths
+/// like `scripts/start-server.sh` resolve. Returns None for asset-free skills
+/// (and, fail-safe, when the directory can't be read).
+pub fn bundle_hint(dir: &std::path::Path) -> Option<String> {
+    let mut has_bundle = false;
+    for entry in std::fs::read_dir(dir).ok()? {
+        let Ok(entry) = entry else { continue };
+        if entry.file_name() != "skill.yaml" {
+            has_bundle = true;
+            break;
+        }
+    }
+    if !has_bundle {
+        return None;
+    }
+    Some(format!(
+        "\n\nBundled files for this skill are on disk at: {0}\n\
+         (e.g. run a script with the bash tool: `bash {0}/scripts/<file>`)",
+        dir.display()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use mur_common::skill::loader::SkillScope;
     use mur_common::skill::parse_canonical;
+
+    #[test]
+    fn bundle_hint_present_when_extra_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("skill.yaml"), "x").unwrap();
+        std::fs::create_dir_all(tmp.path().join("scripts")).unwrap();
+        let hint = bundle_hint(tmp.path()).unwrap();
+        assert!(hint.contains(&tmp.path().display().to_string()));
+        assert!(hint.contains("scripts"));
+    }
+
+    #[test]
+    fn bundle_hint_absent_when_only_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("skill.yaml"), "x").unwrap();
+        assert!(bundle_hint(tmp.path()).is_none());
+    }
 
     fn sample() -> LoadedSkill {
         let yaml = r#"
@@ -159,6 +199,7 @@ triggers:
             trust: TrustLevel::Verified,
             scope: SkillScope::Global,
             content_hash: String::new(),
+            dir: std::path::PathBuf::new(),
         }
     }
 
@@ -199,6 +240,7 @@ triggers:
             trust: TrustLevel::Sandboxed,
             scope: SkillScope::Global,
             content_hash: String::new(),
+            dir: std::path::PathBuf::new(),
         };
         let triggers = register_from(&[s]);
         assert!(triggers.is_empty());
