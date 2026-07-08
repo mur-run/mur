@@ -44,22 +44,43 @@ pub fn cmd_create(
     let raw_model = model.unwrap_or_else(|| "llama3.2:3b".to_string());
     // E2 fix: support `provider/model` shorthand in --model. Explicit --provider
     // wins. Default provider is `ollama` for backward compatibility.
-    let (resolved_provider, resolved_model) = match provider {
-        Some(p) => (p, raw_model),
-        None => match raw_model.split_once('/') {
-            Some((p, rest)) if !p.is_empty() && !rest.is_empty() && is_known_provider(p) => {
-                (p.to_string(), rest.to_string())
-            }
-            _ => ("ollama".to_string(), raw_model),
-        },
+    //
+    // Bug fix: a bare `--model` value (no `--provider`, no `provider/model`
+    // slash form) that exactly matches an existing `models.yaml` registry key
+    // binds the agent to that entry directly, instead of silently falling
+    // through to the ollama default and leaving `model_ref` unset (StubEcho).
+    let alias_entry = if provider.is_none() {
+        registry_alias_entry(&mur_home, &raw_model)?
+    } else {
+        None
     };
-    // Bind the agent to a models.yaml registry entry so the runtime can
-    // resolve real credentials + base_url via `model_ref` (the path working
-    // agents use). Writing only the inline `model:` block leaves the runtime
-    // with no secret for cloud providers, which silently degrades to StubEcho.
-    // Local backends (ollama/local) need no secret, so we leave them inline.
-    let resolved_model_ref =
-        resolve_model_ref_for_create(&mur_home, &resolved_provider, &resolved_model)?;
+    let (resolved_provider, resolved_model, resolved_model_ref) =
+        if let Some((entry_provider, entry_model)) = alias_entry {
+            (entry_provider, entry_model, Some(raw_model.clone()))
+        } else {
+            let (resolved_provider, resolved_model) = match provider {
+                Some(p) => (p, raw_model),
+                None => match raw_model.split_once('/') {
+                    Some((p, rest))
+                        if !p.is_empty() && !rest.is_empty() && is_known_provider(p) =>
+                    {
+                        (p.to_string(), rest.to_string())
+                    }
+                    _ => ("ollama".to_string(), raw_model),
+                },
+            };
+            // Bind the agent to a models.yaml registry entry so the runtime can
+            // resolve real credentials + base_url via `model_ref` (the path working
+            // agents use). Writing only the inline `model:` block leaves the runtime
+            // with no secret for cloud providers, which silently degrades to StubEcho.
+            // Local backends (ollama/local) need no secret, so we leave them inline.
+            let model_ref = resolve_model_ref_for_create(
+                &mur_home,
+                Some(resolved_provider.as_str()),
+                &resolved_model,
+            )?;
+            (resolved_provider, resolved_model, model_ref)
+        };
 
     let now = chrono::Utc::now().to_rfc3339();
     let id = uuid::Uuid::now_v7().to_string();
@@ -215,12 +236,35 @@ pub fn cmd_create(
 ///      its secret + base_url — this is how the working agents are wired).
 ///   2. Otherwise upsert a new secretless entry keyed by provider+model so the
 ///      binding at least exists and the user has a single place to add a secret.
+/// Look up an exact registry key match for a bare `--model` value (e.g.
+/// `claude_sonnet`). Returns the entry's `(provider, model)` when found.
+fn registry_alias_entry(mur_home: &Path, key: &str) -> Result<Option<(String, String)>> {
+    use mur_common::model::ModelRegistry;
+
+    let reg_path = mur_home.join("models.yaml");
+    let reg = ModelRegistry::load_from(&reg_path)
+        .with_context(|| format!("load model registry {}", reg_path.display()))?;
+    Ok(reg
+        .models
+        .get(key)
+        .map(|entry| (entry.provider.clone(), entry.model.clone())))
+}
+
 fn resolve_model_ref_for_create(
     mur_home: &Path,
-    provider: &str,
+    provider: Option<&str>,
     model: &str,
 ) -> Result<Option<String>> {
     use mur_common::model::{ModelEntry, ModelRegistry};
+
+    // Bare model, no explicit provider: if it's an exact registry key, bind
+    // to that entry directly rather than falling through to the ollama
+    // default (which would silently leave model_ref unset / StubEcho).
+    if provider.is_none() && registry_alias_entry(mur_home, model)?.is_some() {
+        return Ok(Some(model.to_string()));
+    }
+
+    let provider = provider.unwrap_or("ollama");
 
     // Local backends do not need a registry-supplied secret.
     if matches!(provider, "ollama" | "local") {
@@ -849,6 +893,66 @@ fn is_unread(body: &str) -> bool {
         .rev()
         .find_map(|l| l.strip_prefix(marker).map(|v| v.trim() == "<unset>"))
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests_resolve_model_ref_for_create {
+    use super::*;
+    use mur_common::model::{ModelEntry, ModelRegistry};
+    use std::collections::BTreeMap;
+    use tempfile::TempDir;
+
+    fn seed_models_yaml(home: &TempDir, key: &str, provider: &str, model: &str) {
+        let mut models = BTreeMap::new();
+        models.insert(
+            key.to_string(),
+            ModelEntry {
+                provider: provider.to_string(),
+                model: model.to_string(),
+                ..Default::default()
+            },
+        );
+        let reg = ModelRegistry {
+            schema_version: 1,
+            models,
+            roles: BTreeMap::new(),
+        };
+        reg.save_to(&home.path().join("models.yaml")).unwrap();
+    }
+
+    #[test]
+    fn create_with_bare_alias_sets_model_ref() {
+        let home = TempDir::new().unwrap();
+        seed_models_yaml(&home, "claude_sonnet", "anthropic", "claude-sonnet-5");
+
+        let mr = resolve_model_ref_for_create(home.path(), None, "claude_sonnet").unwrap();
+
+        assert_eq!(mr, Some("claude_sonnet".to_string()));
+    }
+
+    #[test]
+    fn create_with_unknown_bare_model_leaves_model_ref_unset() {
+        let home = TempDir::new().unwrap();
+        seed_models_yaml(&home, "claude_sonnet", "anthropic", "claude-sonnet-5");
+
+        // Not a registry key, and provider is None -> caller defaults to
+        // ollama before ever calling this function, so this case should not
+        // be reached with a non-alias bare model; verify no false alias hit.
+        let mr = resolve_model_ref_for_create(home.path(), None, "llama3.2:3b").unwrap();
+
+        assert_eq!(mr, None);
+    }
+
+    #[test]
+    fn explicit_provider_still_matches_registry_entry() {
+        let home = TempDir::new().unwrap();
+        seed_models_yaml(&home, "claude_sonnet", "anthropic", "claude-sonnet-5");
+
+        let mr = resolve_model_ref_for_create(home.path(), Some("anthropic"), "claude-sonnet-5")
+            .unwrap();
+
+        assert_eq!(mr, Some("claude_sonnet".to_string()));
+    }
 }
 
 #[cfg(test)]
