@@ -117,31 +117,52 @@ Expected: `mur model list` shows at least one usable alias; `$AURA_MODEL` is set
 - [ ] **Step 2: Create the agent**
 
 ```bash
-mur agent create aura --display-name AURA --model "$AURA_MODEL"
+mur agent create aura --no-interactive --display-name AURA --model "$AURA_MODEL"
 ```
-Expected: agent `aura` created at `~/.mur/agents/aura/`. (If the installed `mur agent create` flags differ, run `mur agent create --help` and map: internal name `aura`, display `AURA`, model `$AURA_MODEL`.)
+Expected: agent `aura` created at `~/.mur/agents/aura/`.
+
+KNOWN MUR BUG (verified 2026-07-08, aura build): `mur agent create --model <alias>`
+does NOT set `model_ref` — it stores the alias as a literal inline block
+`provider: ollama / name: <alias>`, so the registry alias never resolves and the
+runtime falls back to a nonexistent ollama model (runtime prefers `profile.model_ref`
+— `mur-agent-runtime/src/supervisor.rs:1121`). Fix immediately after create: edit
+`~/.mur/agents/aura/profile.yaml` to add `model_ref: <alias>` and sync the inline
+block to the alias's real resolution from `mur model show <alias>`:
+```yaml
+model:
+  provider: anthropic      # from `mur model show claude_sonnet`
+  name: claude-sonnet-5
+  params: {}
+model_ref: claude_sonnet
+```
+Verify with `mur agent status aura` and `mur agent card aura` (there is NO
+`mur agent doctor <name>` — `doctor` takes no agent arg). This same fix applies to
+every worker clone in Task 5.
 
 - [ ] **Step 3: Set the role/system prompt**
 
 ```bash
-mur agent prompt aura --set "You are AURA, an autonomous web researcher. You decompose questions, fan out parallel searches, fetch and render sources (including JS/login pages via the browser tool), verify each claim against >=2 independent sources, and return a synthesized report where every claim is bound to a source URL and quote. Escalate search -> fetch -> browser only when the cheaper tier fails."
+mur agent prompt set aura "You are AURA, an autonomous web researcher. You decompose questions, fan out parallel searches, fetch and render sources (including JS/login pages via the browser tool), verify each claim against >=2 independent sources, and return a synthesized report where every claim is bound to a source URL and quote. Escalate search -> fetch -> browser only when the cheaper tier fails."
 ```
-Expected: prompt written. (Verify with `mur agent prompt aura --show` or `mur agent card aura`.)
+Expected: prompt written. Verify with `mur agent prompt show aura`.
 
 - [ ] **Step 4: Verify the agent boots**
 
 ```bash
-mur agent doctor aura
+mur agent status aura      # ● aura - custom, Active: stopped
+mur agent card aura        # valid A2A card: name=aura, displayName=AURA
+mur agent list             # aura appears
 ```
-Expected: no fatal errors (model resolves, identity present). Record any warnings.
+Expected: profile loads cleanly, model_ref resolves. NOTE: `mur agent doctor <name>` does NOT exist — `doctor` takes no agent arg (validates export tooling only). Use `status`/`card`.
 
 - [ ] **Step 5: Commit the config snapshot**
 
-Export the profile for review and commit the exported artifact (not secrets):
-```bash
-mur agent export aura --out docs/superpowers/plans/artifacts/aura-profile.txt || true
-git add -A && git commit -m "feat(aura): create AURA research agent profile"
-```
+The agent lives at `~/.mur/agents/aura/` — OUTSIDE the repo. There is nothing to
+commit unless you export an artifact into the repo. `mur agent export` produces a
+non-deterministic signed binary `.muragent` (not worth committing). So this step is
+typically a no-op: confirm `git status --short` is empty and skip the commit rather
+than fake one. (Optionally record a short profile summary by hand into
+`docs/superpowers/plans/artifacts/aura-profile.md` and commit that.)
 
 ---
 
