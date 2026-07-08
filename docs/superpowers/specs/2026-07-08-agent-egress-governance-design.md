@@ -34,33 +34,45 @@ Three planes, deliberately decoupled so each can evolve independently:
 3. **Audit plane (evidence).** Every grant and every egress event appends to an
    immutable log tied to the existing `GovernanceState` and channel signing.
 
-### 2.2 Mode ladder (least-privilege, escalating authority)
+### 2.2 Mode ladder — enforced PER MCP-SERVER (revised after grounding)
 
+> **Grounding correction (2026-07-08):** MUR already has per-MCP-server egress
+> (`McpServerNetwork { mode: McpNetMode, allow_hosts }` on each server; `Restricted`
+> routes the child through a loopback CONNECT egress proxy via `HTTP_PROXY`;
+> `mur-agent-runtime/src/sandbox/egress_proxy.rs` + `supervisor_runner.rs:261` wire it;
+> design doc `2026-06-26-mcp-per-server-egress.md`). So `broad-audited` is NOT an
+> agent-level mode — it is a **new `McpNetMode` variant** on the tool that needs web.
+> This is strictly better: **least-privilege** (only that tool gets the web, the agent's
+> own LLM egress stays `restricted`), and **audit + scoping ride the proxy choke point**
+> that already sees every subprocess destination.
+
+Per-server mode ladder:
 ```
-off  →  allowlist(static hosts)  →  broad-audited  →  unrestricted
+inherit  →  restricted(allow_hosts)  →  broad-audited(all−deny_hosts, audited)  →  (off)
 ```
 
-- Each higher tier requires higher authority to enable: `self < operator-consent <
-  Commander-signed policy`.
-- **`broad-audited` (Phase 1, the research-agent unblock):** permits all outbound, BUT
-  (1) overlays the existing deny-host list, (2) requires explicit operator opt-in,
-  (3) renders a loud `BROAD EGRESS ON` line in `mur agent perm show`, (4) emits a
-  telemetry/`GovernanceState` event on enable and (Phase 2) per egress.
-- `unrestricted` stays as the un-audited escape hatch (unchanged), but is now the top of
-  a labeled ladder rather than the only alternative to `restricted`.
+- **`McpNetMode::BroadAudited` (Phase 1, the research-agent unblock):** the proxy allows
+  every host for that server EXCEPT `deny_hosts`, and audits every CONNECT (host / server
+  / allowed|denied). Requires explicit operator consent, which records an
+  `EgressAuthorization { authorized_by, authorized_at_ms }` on the server's
+  `McpServerNetwork`. Enforcement is **advisory** (a cooperating child honors `HTTP_PROXY`;
+  airtight containment = Phase 3, Linux netns / macOS pre-fork launcher) — documented, not
+  overclaimed.
+- The agent-level `NetworkOutboundMode` (`restricted`/`unrestricted`/`off`) is unchanged
+  and governs only the runtime's own LLM egress. `broad-audited` does not touch it.
 
 ### 2.3 Cross-cutting dimensions
 
-- **Scoping (defense in depth).** Policy binds to `(agent, tool)`: "agent-browser may
-  reach the web; the rest of the agent may not." Enforced fully in Phase 4; the policy
-  schema carries the `tool` binding from Phase 1 so nothing is re-modeled later.
+- **Scoping (defense in depth) — already native.** The proxy is per-server (per-tool
+  token) by construction, so `(agent, tool)` scoping is inherent, not a Phase-4 add-on.
+- **Audit — nearly free.** The proxy is the single choke point for subprocess egress;
+  logging each CONNECT delivers the audit plane in Phase 1, not Phase 2.
 - **Commander integration.** Egress becomes a governed capability alongside `kill` and
-  `budget-ceiling`. A Commander directive can revoke or cap egress network-wide (an
-  exfiltration kill-switch). Governance errors are **fail-closed** (matches the existing
-  loop/daemon pattern).
-- **Portability.** Exported `.muragent` bundles carry egress policy, but **import always
-  re-approves locally and never auto-grants `broad-audited`+** (matches the fleet-import
-  "install at lowest trust" rule).
+  `budget-ceiling`; a directive can revoke a server's `broad-audited` grant network-wide.
+  Governance errors are **fail-closed**.
+- **Portability.** Exported `.muragent` bundles carry the per-server policy, but **import
+  downgrades any `broad-audited` server to `inherit` and clears `authorization`** (lowest
+  trust; re-grant locally).
 
 ### 2.4 Data model (Phase 1 lands the full shape)
 

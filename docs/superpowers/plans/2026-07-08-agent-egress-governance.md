@@ -40,225 +40,70 @@
 
 ---
 
-## Part A — Phase 1: `broad-audited` egress mode
+## Part A — Phase 1: per-server `broad-audited` egress mode
 
-### Task 1: Data model — `BroadAudited` variant + `OutboundNetwork` fields
+> **REVISED to per-server (2026-07-08).** Grounding showed MUR already enforces egress
+> PER MCP-SERVER via `McpNetMode` + the loopback egress proxy (`sandbox/egress_proxy.rs`,
+> wired at `supervisor_runner.rs:261`; design doc `2026-06-26-mcp-per-server-egress.md`).
+> So `broad-audited` is a new **`McpNetMode` variant on the tool that needs web**, NOT an
+> agent-level mode. More least-privilege (only that tool gets the web); audit + scoping
+> come from the proxy choke point. File-map rows referencing `perm.rs`/`policy.rs`/sbpl
+> are superseded by the anchors in each task below.
 
-**Files:**
-- Modify: `mur-common/src/agent.rs` (`NetworkOutboundMode` enum ~line 556; `OutboundNetwork` struct ~line 540)
-- Test: same file `#[cfg(test)] mod tests`
+### Task 1 — DONE (commit `46de8ac8`)
 
-**Interfaces:**
-- Produces: `NetworkOutboundMode::BroadAudited`; `OutboundNetwork { deny_hosts: Vec<String>, tool_scope: Option<String>, authorization: Option<EgressAuthorization> }`; `struct EgressAuthorization { mode: NetworkOutboundMode, authorized_by: String, authorized_at_ms: u64 }`. Consumed by Tasks 2–5.
+`McpNetMode::BroadAudited` (serde `broad_audited`) added to `mur-common/src/agent.rs`;
+`McpServerNetwork` gained `deny_hosts: Vec<String>` + `authorization: Option<EgressAuthorization>`;
+`EgressAuthorization { authorized_by, authorized_at_ms }`. Legacy per-server policies still
+parse. Test `broad_audited_mcp_net_serde_roundtrip_and_defaults` passes; `cargo build -p
+mur-common` clean. The mis-aimed agent-level `NetworkOutboundMode` change was reverted.
 
-- [ ] **Step 1: Write the failing test**
+### Task 2: egress proxy enforces `BroadAudited` = allow-all-except-deny + audit
 
-```rust
-#[test]
-fn broad_audited_serde_roundtrip_and_defaults() {
-    let ob = OutboundNetwork {
-        mode: NetworkOutboundMode::BroadAudited,
-        allow_hosts: vec![],
-        deny_hosts: vec!["evil.example".into()],
-        protocols: default_protocols(),
-        resolve_dns: ResolveDnsConfig::default(),
-        tool_scope: Some("agent-browser".into()),
-        authorization: Some(EgressAuthorization {
-            mode: NetworkOutboundMode::BroadAudited,
-            authorized_by: "david".into(),
-            authorized_at_ms: 1_750_000_000_000,
-        }),
-    };
-    let y = serde_yaml::to_string(&ob).unwrap();
-    assert!(y.contains("broad-audited"));
-    let back: OutboundNetwork = serde_yaml::from_str(&y).unwrap();
-    assert_eq!(back, ob);
-    // legacy profiles without the new fields still parse (serde default)
-    let legacy: OutboundNetwork =
-        serde_yaml::from_str("mode: restricted\nallow_hosts: []\n").unwrap();
-    assert_eq!(legacy.deny_hosts, Vec::<String>::new());
-    assert!(legacy.authorization.is_none());
-}
-```
+**Files:** `mur-agent-runtime/src/sandbox/egress_proxy.rs` (registry currently
+`HashMap<token, Vec<allow_hosts>>` — extend the value to carry mode + `deny_hosts`, e.g.
+`PolicyEntry { allow: Vec<String>, deny: Vec<String>, broad: bool }`);
+`sandbox/reqwest_guard.rs` (reuse `host_allowed`/`host_matches_pattern`);
+`supervisor_runner.rs:261-274` (`needs_egress` + the per-server `register(...)` call).
 
-- [ ] **Step 2: Run — expect fail** `cargo test -p mur-common broad_audited_serde_roundtrip -- --nocapture` → FAIL (variant/fields missing).
+- [ ] Failing test in `egress_proxy.rs`: a `broad` entry with `deny=["blocked.example"]`
+  → allows `"anything.example"`, denies `"blocked.example"`.
+- [ ] Implement: `BroadAudited` allows a host unless it matches a `deny_hosts` pattern
+  (reuse `host_matches_pattern`). Emit a `tracing`/telemetry audit line per CONNECT
+  (host, server, allowed|denied). Extend `needs_egress` to trigger on `BroadAudited` and
+  pass the deny list + broad flag into `register`. Run → pass. Commit.
 
-- [ ] **Step 3: Implement**
+### Task 3: CLI to set a server's `broad-audited` policy (consent + authorization)
 
-Add to the enum:
-```rust
-pub enum NetworkOutboundMode {
-    Unrestricted,
-    #[serde(rename = "broad-audited")]
-    BroadAudited,
-    Restricted,
-    Off,
-}
-```
-Add fields to `OutboundNetwork` (all `#[serde(default)]` for back-compat):
-```rust
-    #[serde(default)]
-    pub deny_hosts: Vec<String>,
-    #[serde(default)]
-    pub tool_scope: Option<String>,
-    #[serde(default)]
-    pub authorization: Option<EgressAuthorization>,
-```
-Add the struct:
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct EgressAuthorization {
-    pub mode: NetworkOutboundMode,
-    pub authorized_by: String,
-    pub authorized_at_ms: u64,
-}
-```
-Update any struct-literal constructors of `OutboundNetwork` in the crate (grep `OutboundNetwork {`) to include the new fields (or switch them to `..Default::default()` if a `Default` exists; if not, add the three fields explicitly).
+**Files:** `mur-core/src/cmd/agent/mcp*.rs`. FIRST check for an existing `mur agent mcp`
+net/egress subcommand (from the per-server-egress feature) and extend it; else add
+`mur agent mcp set-net <agent> <server> <inherit|restricted|broad-audited> [--allow <h>]... [--deny <h>]...`.
 
-- [ ] **Step 4: Run — expect pass.** Also `cargo build -p mur-common` to catch other construction sites.
+- [ ] Failing test: setting `broad-audited` writes `server.network = McpServerNetwork {
+  mode: BroadAudited, deny_hosts, authorization: Some(EgressAuthorization{authorized_by,
+  authorized_at_ms}) }`.
+- [ ] Implement: require explicit consent (permission-required action); source
+  `authorized_by` from operator/`$USER`; stamp `authorized_at_ms`; emit one telemetry
+  event `egress.broad_audited.enabled` (agent+server); clear `authorization` when the mode
+  changes away from `BroadAudited`. Run → pass. Commit.
 
-- [ ] **Step 5: Commit** `git commit -am "feat(egress): add BroadAudited mode + deny_hosts/tool_scope/authorization to OutboundNetwork"`
+### Task 4: `mur agent mcp list` surfaces the broad-egress warning
 
----
+**Files:** `mur-core/src/cmd/agent/mcp.rs` (`list`/`inspect` output).
 
-### Task 2: sbpl enforcement — `BroadAudited` allows all-minus-deny
+- [ ] Failing test/snapshot: a `BroadAudited` server renders `⚠ BROAD EGRESS (audited) —
+  allows any host except deny_hosts; authorized by <by>`.
+- [ ] Implement + run → pass. Commit.
 
-**Files:**
-- Modify: `mur-agent-runtime/src/entitlements.rs` (imports `NetworkOutboundMode`, builds the network policy)
-- Test: same file
+### Task 5: Import downgrades a server's `broad-audited` to `inherit`
 
-**Interfaces:**
-- Consumes: `NetworkOutboundMode::BroadAudited`, `OutboundNetwork.deny_hosts` (Task 1).
-- Produces: sbpl network rules that allow arbitrary hosts except `deny_hosts`.
+**Files:** the agent import/install path (`mur-core/src/cmd/agent/import*.rs`).
 
-- [ ] **Step 1: Read the current network-policy builder.** In `entitlements.rs`, find where `NetworkOutboundMode` is matched (the `UnrestrictedNetwork` capability / restricted host-list branch). Note the exact function that emits sbpl `(allow network* ...)` rules.
-
-- [ ] **Step 2: Write the failing test**
-
-```rust
-#[test]
-fn broad_audited_allows_all_but_denies_listed_hosts() {
-    let ob = OutboundNetwork {
-        mode: NetworkOutboundMode::BroadAudited,
-        allow_hosts: vec![],
-        deny_hosts: vec!["blocked.example".into()],
-        protocols: default_protocols(),
-        resolve_dns: Default::default(),
-        tool_scope: None,
-        authorization: None,
-    };
-    let policy = build_network_sbpl(&ob); // name per the actual builder fn
-    assert!(policy.allows_arbitrary_outbound());     // e.g. contains an allow-all network rule
-    assert!(policy.denies_host("blocked.example"));  // deny overlay present
-}
-```
-(Adapt assertions to the builder's real return type — if it returns an sbpl `String`, assert on the emitted rule text: an unrestricted `(allow network-outbound)` plus a `(deny ... blocked.example)`.)
-
-- [ ] **Step 3: Run — expect fail** `cargo test -p mur-agent-runtime broad_audited_allows_all -- --nocapture`.
-
-- [ ] **Step 4: Implement.** Add a `BroadAudited` match arm alongside `Unrestricted`: emit the same allow-all outbound rules as `Unrestricted`, then append explicit `deny` rules for each `deny_hosts` entry (deny after allow → deny wins in sbpl). Reuse the existing host-matching helper used by `Restricted`/`allow_hosts` to render each deny host.
-
-- [ ] **Step 5: Run — expect pass.** Commit `git commit -am "feat(egress): enforce BroadAudited = allow-all minus deny_hosts in sbpl"`
-
----
-
-### Task 3: `perm set-mode broad-audited` — consent + authorization record + telemetry
-
-**Files:**
-- Modify: `mur-core/src/cmd/agent/perm.rs` (`cmd_perm_set_mode` line 59; add value parse + record)
-- Test: `mur-core` test module for perm
-
-**Interfaces:**
-- Consumes: `EgressAuthorization` (Task 1).
-- Produces: setting mode `broad-audited` writes `outbound.mode = BroadAudited` AND `outbound.authorization = Some(EgressAuthorization{..})`.
-
-- [ ] **Step 1: Write the failing test**
-
-```rust
-#[test]
-fn set_mode_broad_audited_records_authorization() {
-    let dir = tempdir().unwrap();
-    let name = seed_test_agent(&dir);        // helper: writes a minimal profile.yaml
-    cmd_perm_set_mode(name, "network.outbound", "broad-audited").unwrap();
-    let p = load_profile(name).unwrap();
-    assert_eq!(p.entitlements.network.outbound.mode, NetworkOutboundMode::BroadAudited);
-    let auth = p.entitlements.network.outbound.authorization.expect("record");
-    assert_eq!(auth.mode, NetworkOutboundMode::BroadAudited);
-    assert!(!auth.authorized_by.is_empty());
-    assert!(auth.authorized_at_ms > 0);
-}
-```
-
-- [ ] **Step 2: Run — expect fail** (`broad-audited` currently unsupported → error).
-
-- [ ] **Step 3: Implement.** In `cmd_perm_set_mode`, the `"network.outbound"` arm parses `value`: extend it to accept `"broad-audited"` → `NetworkOutboundMode::BroadAudited`. When the new mode is `BroadAudited`, set `outbound.authorization = Some(EgressAuthorization { mode: BroadAudited, authorized_by: current_operator(), authorized_at_ms: now_ms() })`. Use the existing operator/user resolution used elsewhere (grep for how `authorized_by`-like values are sourced; fall back to `$USER`). Emit one telemetry event (reuse the crate's telemetry emit; event name `egress.broad_audited.enabled` with the agent name). When switching AWAY from `BroadAudited`, clear `authorization`.
-
-- [ ] **Step 4: Run — expect pass.** Commit `git commit -am "feat(egress): perm set-mode broad-audited records authorization + emits telemetry"`
-
----
-
-### Task 4: `perm show` prints the BROAD EGRESS warning; `deny-host` persists
-
-**Files:**
-- Modify: `mur-core/src/cmd/agent/perm.rs` (`cmd_perm_show` line 33; `cmd_perm_deny_host` line 116; `cmd_perm_list_hosts` line 129)
-
-**Interfaces:**
-- Consumes: `OutboundNetwork.mode`, `deny_hosts` (Task 1).
-
-- [ ] **Step 1: Write the failing test**
-
-```rust
-#[test]
-fn perm_show_warns_on_broad_audited_and_deny_host_persists() {
-    let dir = tempdir().unwrap();
-    let name = seed_test_agent(&dir);
-    cmd_perm_set_mode(name, "network.outbound", "broad-audited").unwrap();
-    cmd_perm_deny_host(name, "blocked.example").unwrap();
-    let p = load_profile(name).unwrap();
-    assert!(p.entitlements.network.outbound.deny_hosts.iter().any(|h| h == "blocked.example"));
-    let out = capture_stdout(|| cmd_perm_show(name, Some("network")).unwrap());
-    assert!(out.contains("BROAD EGRESS ON"));
-}
-```
-
-- [ ] **Step 2: Run — expect fail.**
-
-- [ ] **Step 3: Implement.** (a) `cmd_perm_deny_host`: push the glob into `outbound.deny_hosts` (verify it currently writes nowhere useful — grep; if it wrote to a phantom list, repoint it) and save; `cmd_perm_list_hosts` prints both allow and deny lists. (b) `cmd_perm_show`: when `outbound.mode == BroadAudited`, print a prominent line, e.g. `⚠ BROAD EGRESS ON — this agent may reach any host except its deny_hosts (authorized by <by> at <ts>)`.
-
-- [ ] **Step 4: Run — expect pass.** Commit `git commit -am "feat(egress): perm show warns on broad-audited; deny-host persists to deny_hosts"`
-
----
-
-### Task 5: Import downgrades `broad-audited`+ to `restricted`
-
-**Files:**
-- Modify: the agent import path (`mur-core/src/cmd/agent/import*.rs` or wherever `.muragent` profiles are installed)
-- Test: same
-
-**Interfaces:**
-- Consumes: `NetworkOutboundMode` (Task 1).
-
-- [ ] **Step 1: Write the failing test**
-
-```rust
-#[test]
-fn import_downgrades_broad_and_unrestricted_to_restricted() {
-    let profile = profile_with_outbound(NetworkOutboundMode::BroadAudited);
-    let installed = sanitize_imported_profile(profile);   // the import hook
-    assert_eq!(installed.entitlements.network.outbound.mode, NetworkOutboundMode::Restricted);
-    assert!(installed.entitlements.network.outbound.authorization.is_none());
-    let u = sanitize_imported_profile(profile_with_outbound(NetworkOutboundMode::Unrestricted));
-    assert_eq!(u.entitlements.network.outbound.mode, NetworkOutboundMode::Restricted);
-}
-```
-
-- [ ] **Step 2: Run — expect fail.**
-
-- [ ] **Step 3: Implement.** In the import/install path, after deserializing the incoming profile, if `outbound.mode` is `BroadAudited` or `Unrestricted`, set it to `Restricted` and clear `authorization`. If no single sanitize function exists, add `fn sanitize_imported_profile(mut p: AgentProfile) -> AgentProfile` and call it at the install boundary. Print a notice: `imported agent's broad egress downgraded to restricted — re-grant locally with 'mur agent perm set-mode'`.
-
-- [ ] **Step 4: Run — expect pass.** Commit `git commit -am "feat(egress): import downgrades broad-audited/unrestricted to restricted (lowest trust)"`
-
----
+- [ ] Failing test: importing a profile whose MCP server has `mode: BroadAudited` yields an
+  installed server with `mode: Inherit` and `authorization: None`.
+- [ ] Implement: in the import sanitize step, for each `mcp_servers[*].network`, if
+  `mode == BroadAudited` set `Inherit` and clear `authorization`; print a re-grant notice.
+  Run → pass. Commit.
 
 ## Part B — CLI hardening
 
