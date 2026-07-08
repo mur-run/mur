@@ -28,19 +28,19 @@ fn render_server_line(s: &McpServerEntry) -> String {
         .trim_end()
         .to_string();
 
-    if let Some(net) = &s.network {
-        if net.mode == McpNetMode::BroadAudited {
-            let authorized_by = net
-                .authorization
-                .as_ref()
-                .map(|a| a.authorized_by.as_str())
-                .unwrap_or("unknown");
-            let warning = format!(
-                "\n  ⚠ BROAD EGRESS (audited) — allows any host except deny_hosts; authorized by {}",
-                authorized_by
-            );
-            return base_line + &warning;
-        }
+    if let Some(net) = &s.network
+        && net.mode == McpNetMode::BroadAudited
+    {
+        let authorized_by = net
+            .authorization
+            .as_ref()
+            .map(|a| a.authorized_by.as_str())
+            .unwrap_or("unknown");
+        let warning = format!(
+            "\n  ⚠ BROAD EGRESS (audited) — allows any host except deny_hosts; authorized by {}",
+            authorized_by
+        );
+        return base_line + &warning;
     }
 
     base_line
