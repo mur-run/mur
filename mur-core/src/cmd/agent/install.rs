@@ -84,8 +84,13 @@ fn clone_identity_and_profile(mur_home: &Path, clone_name: &str) -> Result<()> {
     profile.name = clone_name.to_string();
     profile.id = uuid::Uuid::now_v7().to_string();
 
-    std::fs::write(&profile_path, serde_yaml_ng::to_string(&profile)?)
-        .with_context(|| format!("write {}", profile_path.display()))?;
+    // Atomic write (temp + rename) so a crash mid-write never leaves a
+    // half-written profile.yaml for the clone; matches the repo YAML convention.
+    let tmp = profile_path.with_extension("yaml.tmp");
+    std::fs::write(&tmp, serde_yaml_ng::to_string(&profile)?)
+        .with_context(|| format!("write {}", tmp.display()))?;
+    std::fs::rename(&tmp, &profile_path)
+        .with_context(|| format!("rename {} -> {}", tmp.display(), profile_path.display()))?;
 
     AgentIdentity::generate()
         .save(&agent_dir)
