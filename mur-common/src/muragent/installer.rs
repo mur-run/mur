@@ -248,7 +248,11 @@ fn downgrade_profile_egress(agent_dir: &Path) -> Result<Vec<String>, MuragentErr
     if !downgraded.is_empty() {
         let out =
             serde_yaml_ng::to_string(&profile).map_err(|e| MuragentError::Other(e.to_string()))?;
-        fs::write(&profile_path, out).map_err(MuragentError::Io)?;
+        // Atomic write (temp + rename) so a crash mid-write never leaves a
+        // half-written profile.yaml; matches the repo YAML convention.
+        let tmp = profile_path.with_extension("yaml.tmp");
+        fs::write(&tmp, out).map_err(MuragentError::Io)?;
+        fs::rename(&tmp, &profile_path).map_err(MuragentError::Io)?;
     }
     Ok(downgraded)
 }
