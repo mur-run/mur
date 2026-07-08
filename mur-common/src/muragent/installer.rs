@@ -78,6 +78,27 @@ pub fn install(
     mur_home: &Path,
     surface: &str,
 ) -> Result<InstallOutcome, MuragentError> {
+    install_with_name(archive, mur_home, surface, None)
+}
+
+/// Install or update a `.muragent` archive, optionally under an explicit
+/// install name (directory + slug) rather than the manifest's own slug.
+///
+/// When `install_name` is `Some(n)`, the archive is installed at
+/// `<mur_home>/agents/<n>/` regardless of the manifest's slug. This powers
+/// `mur agent install <bundle> --as <name>` clones: a clone is always a
+/// fresh install (never an update-in-place), so this path REFUSES if the
+/// target directory already exists rather than taking the same-UUID update
+/// path that `install` uses.
+///
+/// `install(...)` is a thin wrapper around this function with `None`, so its
+/// behavior is unchanged for existing callers.
+pub fn install_with_name(
+    archive: &MuragentArchive,
+    mur_home: &Path,
+    surface: &str,
+    install_name: Option<&str>,
+) -> Result<InstallOutcome, MuragentError> {
     // Step 1: validation pipeline — fatal on any failure per §7.5
     let result = validator::validate(archive)?;
 
@@ -87,11 +108,20 @@ pub fn install(
     reject_reserved_local_files(archive)?;
 
     // Step 2: slug shape
-    let slug = result.manifest.agent.slug.clone();
+    let manifest_slug = result.manifest.agent.slug.clone();
     let display_name = result.manifest.agent.display_name.clone();
-    crate::validate_agent_name(&slug).map_err(|e| {
-        MuragentError::Other(format!("invalid agent slug '{slug}' in manifest: {e}"))
+    crate::validate_agent_name(&manifest_slug).map_err(|e| {
+        MuragentError::Other(format!(
+            "invalid agent slug '{manifest_slug}' in manifest: {e}"
+        ))
     })?;
+    let slug = if let Some(n) = install_name {
+        crate::validate_agent_name(n)
+            .map_err(|e| MuragentError::Other(format!("invalid install name '{n}': {e}")))?;
+        n.to_string()
+    } else {
+        manifest_slug
+    };
 
     // Step 3: trust store key-change check
     let mut trust_store = TrustStore::load()?;
@@ -126,6 +156,14 @@ pub fn install(
 
     // Step 4-5: detect update vs collision; extract payload
     let agent_dir = mur_home.join("agents").join(&slug);
+    if install_name.is_some() && agent_dir.exists() {
+        // A clone (`--as <name>`) is always a fresh install — never an
+        // update-in-place, even if the UUID happened to match.
+        return Err(MuragentError::Other(format!(
+            "agent '{slug}' already exists at {} — refusing to overwrite",
+            agent_dir.display()
+        )));
+    }
     let was_update = if agent_dir.exists() {
         let existing_profile = agent_dir.join("profile.yaml");
         let mut is_same_agent = false;
@@ -682,6 +720,41 @@ mod tests {
         );
 
         // Cleanup
+        unsafe {
+            if let Some(p) = prev {
+                std::env::set_var("MUR_HOME", p);
+            } else {
+                std::env::remove_var("MUR_HOME");
+            }
+        }
+    }
+
+    #[test]
+    fn install_with_name_installs_under_override_name_and_refuses_collision() {
+        let _guard = crate::trust::test_env_lock::MUR_HOME_LOCK.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let mur_home = tmp.path().join("mur");
+        let prev = std::env::var_os("MUR_HOME");
+        unsafe { std::env::set_var("MUR_HOME", &mur_home) };
+
+        let pkg = make_test_package(&tmp);
+        let archive = MuragentArchive::read(&pkg).unwrap();
+
+        let outcome = install_with_name(&archive, &mur_home, "test", Some("clone-x")).unwrap();
+        assert!(!outcome.was_update);
+        let clone_dir = mur_home.join("agents").join("clone-x");
+        assert!(clone_dir.join("profile.yaml").exists());
+
+        // Installing again under the same override name must refuse — a
+        // clone is always a fresh install, never an update-in-place.
+        let archive2 = MuragentArchive::read(&pkg).unwrap();
+        let err = install_with_name(&archive2, &mur_home, "test", Some("clone-x")).unwrap_err();
+        assert!(
+            matches!(err, MuragentError::Other(_)),
+            "expected refuse-on-collision error, got: {:?}",
+            err
+        );
+
         unsafe {
             if let Some(p) = prev {
                 std::env::set_var("MUR_HOME", p);
