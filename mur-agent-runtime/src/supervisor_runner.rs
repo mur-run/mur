@@ -259,11 +259,13 @@ pub async fn build_provider_runner(
     // are never spawned and never advertised in tools/list.
     let enabled_mcp = profile.inner.enabled_mcp_servers();
     // Start the per-server egress proxy only if some server declares a
-    // Restricted network policy (opt-in; otherwise no proxy, no change).
+    // Restricted or BroadAudited network policy (opt-in; otherwise no proxy,
+    // no change).
     let needs_egress = enabled_mcp.iter().any(|e| {
         matches!(
             e.network.as_ref().map(|n| n.mode),
             Some(mur_common::agent::McpNetMode::Restricted)
+                | Some(mur_common::agent::McpNetMode::BroadAudited)
         )
     });
     let egress = if needs_egress {

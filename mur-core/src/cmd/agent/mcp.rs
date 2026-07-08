@@ -219,6 +219,8 @@ fn network_policy_from_args(allow_hosts: Vec<String>, off: bool) -> Option<McpSe
         Some(McpServerNetwork {
             mode: McpNetMode::Off,
             allow_hosts: vec![],
+            deny_hosts: vec![],
+            authorization: None,
         })
     } else if allow_hosts.is_empty() {
         None
@@ -226,6 +228,8 @@ fn network_policy_from_args(allow_hosts: Vec<String>, off: bool) -> Option<McpSe
         Some(McpServerNetwork {
             mode: McpNetMode::Restricted,
             allow_hosts,
+            deny_hosts: vec![],
+            authorization: None,
         })
     }
 }
@@ -272,6 +276,8 @@ pub fn cmd_mcp_add_remote(
     let network = egress_host.map(|host| mur_common::agent::McpServerNetwork {
         mode: McpNetMode::Restricted,
         allow_hosts: vec![host.to_string()],
+        deny_hosts: vec![],
+        authorization: None,
     });
     profile.mcp_servers.push(mur_common::agent::McpServerEntry {
         name: name.to_string(),
