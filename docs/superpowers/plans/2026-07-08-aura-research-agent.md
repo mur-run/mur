@@ -180,35 +180,40 @@ than fake one. (Optionally record a short profile summary by hand into
 
 Engine/executable/args are global flags placed BEFORE the `mcp` subcommand (verified:
 they apply to the spawned server). `--args ""` stops the global Chrome stealth args
-from reaching Lightpanda.
+from reaching Lightpanda. IMPORTANT (verified): `mur agent mcp add` uses clap, which
+rejects a `--arg` value that begins with `--`; use the `--arg=<value>` form for those.
+Add `--force` to skip the non-interactive install prompt.
 ```bash
-mur agent mcp add aura agent-browser --command agent-browser \
-  --arg --engine --arg lightpanda \
-  --arg --executable-path --arg "$HOME/.mur/aura/lightpanda" \
-  --arg --args --arg "" \
-  --arg mcp --arg --tools --arg core
+mur agent mcp add aura agent-browser --command agent-browser --force \
+  --arg=--engine --arg=lightpanda \
+  --arg=--executable-path --arg="$HOME/.mur/aura/lightpanda" \
+  --arg=--args --arg="" \
+  --arg=mcp --arg=--tools --arg=core
 mur agent mcp list aura
 ```
-Expected: `agent-browser` listed with the lightpanda flags + `mcp --tools core`, command resolved on PATH and pinned (see `mcp.rs`).
+Expected: `agent-browser` listed as `agent-browser --engine lightpanda --executable-path <path> --args  mcp --tools core` (the empty `--args` shows as a double space; confirm the stored `profile.yaml` args array has a discrete `''` element). Command resolved on PATH and pinned.
 
 - [ ] **Step 2: Add the chrome browser tool (fallback for anti-bot/screenshots)**
 
 The MCP tools don't expose per-call engine switching, so the chrome fallback is a
 second server. It inherits the global stealth args (no `--args ""`).
 ```bash
-mur agent mcp add aura agent-browser-chrome --command agent-browser \
-  --arg --engine --arg chrome \
-  --arg mcp --arg --tools --arg core
+mur agent mcp add aura agent-browser-chrome --command agent-browser --force \
+  --arg=--engine --arg=chrome \
+  --arg=mcp --arg=--tools --arg=core
 mur agent mcp list aura
 ```
-Expected: both `agent-browser` (lightpanda) and `agent-browser-chrome` listed. The `aura-research-escalation-ladder` skill (Task 4) tells the agent to prefer the lightpanda tool and fall back to chrome only for anti-bot/screenshot pages.
+Expected: both `agent-browser` (lightpanda) and `agent-browser-chrome` listed. Both invoke the `agent-browser` binary, so the spawn allowlist has one entry `["agent-browser"]` covering both. The `aura-research-escalation-ladder` skill (Task 4) tells the agent to prefer the lightpanda tool and fall back to chrome only for anti-bot/screenshot pages.
 
 - [ ] **Step 3: Verify both tools are visible to the agent**
 
 ```bash
-mur agent doctor aura
+mur agent mcp list aura      # both servers listed
+mur agent mcp inspect aura   # doctor-like: both should report status CLEAN, exit 0
+mur agent status aura        # profile loads, Active: stopped
+mur agent card aura          # valid A2A card
 ```
-Expected: both MCP servers listed and their commands resolve. No spawn-allowlist violation.
+Expected: both MCP servers `CLEAN`; no spawn-allowlist errors. NOTE: `mur agent doctor aura` does NOT exist (doctor takes no agent arg) — use `mcp inspect` / `status` / `card`.
 
 - [ ] **Step 4: Verify the agent can drive a JS page end-to-end (lightpanda)**
 
