@@ -413,6 +413,10 @@ pub struct App {
     pub pending_suggestions: Vec<super::suggest::Suggestion>,
     /// The single suggestion currently shown as ghost placeholder text, if any.
     pub suggestion_ghost: Option<String>,
+    /// Set when the visible transcript no longer matches the conversation
+    /// (/clear, /channels switch): the event loop wipes screen + scrollback
+    /// and re-anchors a fresh viewport before the next draw.
+    pub wants_screen_wipe: bool,
     /// Sent-message history for shell-style ↑/↓ recall in the composer.
     pub sent_history: Vec<String>,
     /// Current position while browsing `sent_history` (None = not browsing).
@@ -488,6 +492,7 @@ impl App {
             skills: Vec::new(),
             pending_suggestions: Vec::new(),
             suggestion_ghost: None,
+            wants_screen_wipe: false,
             sent_history: Vec::new(),
             hist_idx: None,
             hist_stash: String::new(),
@@ -869,6 +874,7 @@ impl App {
         self.esc_hint = false;
         self.last_ctrl_c_at = None;
         self.ctrl_c_hint = false;
+        self.wants_screen_wipe = true;
         self.push_system("started a new conversation");
     }
 
@@ -886,6 +892,7 @@ impl App {
         self.streaming = false;
         self.hitl = None;
         self.cwd_sent = false;
+        self.wants_screen_wipe = true;
         self.load_history(turns);
         self.refresh_channel();
         Ok(())
