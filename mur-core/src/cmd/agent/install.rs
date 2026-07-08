@@ -36,6 +36,15 @@ pub fn cmd_install(path: &Path, model_ref_override: Option<&str>) -> Result<()> 
     println!("  fingerprint: {}", outcome.fingerprint_hex);
     println!("  words:       {}", outcome.fingerprint_words);
 
+    if !outcome.downgraded_broad_egress.is_empty() {
+        let names = outcome.downgraded_broad_egress.join(", ");
+        let slug = &outcome.manifest.agent.slug;
+        println!(
+            "⚠ broad-audited egress was reset to inherit for: {names}. \
+             Re-grant locally with: mur agent mcp set-network {slug} <server> --broad-audited"
+        );
+    }
+
     if let Some(model_ref) = model_ref_override {
         apply_model_ref_override(&mur_home, &outcome.manifest.agent.slug, model_ref)?;
     } else {
