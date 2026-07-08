@@ -196,6 +196,11 @@ pub(crate) fn set_manifest_scope(
         m.project = None;
         m.team = None;
     } else if let Some(f) = fleet {
+        if f.trim().is_empty() {
+            return Err(anyhow!(
+                "--fleet requires a fleet NAME, e.g. --fleet aura-research; the fleet need not exist yet"
+            ));
+        }
         if !mur_common::fleet::valid_fleet_name(f) {
             return Err(anyhow!(
                 "invalid fleet name '{f}': lowercase letters, digits, '-' or '_'"
@@ -619,12 +624,26 @@ fn category_yaml_value(category: mur_common::skill::Category) -> &'static str {
     }
 }
 
+/// Pure helper: when scaffolding a new skill with neither `--agent` nor
+/// `--dir`, default the output root to `<mur_home>/skills` instead of the
+/// current directory (`resolve_skill_subdir`'s CWD fallback, which `cmd_edit`
+/// still relies on and must keep). Returns `dir` unchanged in all other cases.
+fn new_skill_dir(mur_home: &Path, agent: Option<&str>, dir: Option<&str>) -> Option<String> {
+    if agent.is_none() && dir.is_none() {
+        Some(mur_home.join("skills").to_string_lossy().into_owned())
+    } else {
+        dir.map(str::to_string)
+    }
+}
+
 /// Core scaffold logic for `mur skill new` — returns the written path.
 /// Split out from `cmd_new` so it can be unit-tested without going through CLI
 /// dispatch or touching the real `$MUR_HOME`.
 fn scaffold_skill(opts: NewOptions) -> Result<std::path::PathBuf> {
     let category = parse_authoring_category(&opts.category)?;
-    let subdir = resolve_skill_subdir(&opts.name, opts.agent.as_deref(), opts.dir.as_deref())?;
+    let mur_home = resolve_mur_home()?;
+    let dir = new_skill_dir(&mur_home, opts.agent.as_deref(), opts.dir.as_deref());
+    let subdir = resolve_skill_subdir(&opts.name, opts.agent.as_deref(), dir.as_deref())?;
     let target = subdir.join("skill.yaml");
 
     if target.exists() && !opts.force {
@@ -778,6 +797,31 @@ mod tests {
         assert!(set_manifest_scope(&mut m, None, None, None, false).is_err());
         assert!(set_manifest_scope(&mut m, Some("x"), None, None, true).is_err());
         assert!(set_manifest_scope(&mut m, Some("Bad Name"), None, None, false).is_err());
+    }
+
+    #[test]
+    fn set_manifest_scope_fleet_empty_name_is_actionable() {
+        let yaml = "name: s\nversion: 1.0.0\npublisher: human:t\ndescription: d\n\
+                    category: context\ncontent:\n  abstract: a\n  context: c\n";
+        let mut m = mur_common::skill::parser::parse_canonical(yaml).unwrap();
+        let err = set_manifest_scope(&mut m, Some(""), None, None, false).unwrap_err();
+        assert!(err.to_string().contains("requires a fleet NAME"));
+        let err = set_manifest_scope(&mut m, Some("   "), None, None, false).unwrap_err();
+        assert!(err.to_string().contains("requires a fleet NAME"));
+    }
+
+    #[test]
+    fn new_skill_dir_defaults_to_mur_home_skills() {
+        let home = tempdir().unwrap();
+        assert_eq!(
+            new_skill_dir(home.path(), None, None),
+            Some(home.path().join("skills").to_string_lossy().into_owned())
+        );
+        assert_eq!(
+            new_skill_dir(home.path(), None, Some("/x")),
+            Some("/x".to_string())
+        );
+        assert_eq!(new_skill_dir(home.path(), Some("a"), None), None);
     }
 
     #[test]

@@ -380,6 +380,90 @@ fn check_signing_credentials() -> CheckResult {
     }
 }
 
+/// A single per-agent health-check result. Distinct from [`CheckResult`]
+/// (export-prereq checks) — this is a simpler ok/detail pair suited to
+/// unit testing without the Ok/Missing/Skipped tri-state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Check {
+    pub name: String,
+    pub ok: bool,
+    pub detail: String,
+}
+
+impl Check {
+    fn new(name: impl Into<String>, ok: bool, detail: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ok,
+            detail: detail.into(),
+        }
+    }
+}
+
+/// Per-agent health checks: `model_ref` resolves in `models.yaml`, each
+/// MCP server's `command` resolves on PATH, and entitlements parsed
+/// cleanly (implied by `load_profile_for_edit` succeeding).
+pub fn agent_doctor(mur_home: &std::path::Path, name: &str) -> Result<Vec<Check>> {
+    let (_path, profile) = crate::cmd::agent::load_profile_for_edit(name)?;
+    let mut out = Vec::new();
+
+    match &profile.model_ref {
+        Some(model_ref) => {
+            let reg_path = mur_home.join("models.yaml");
+            let reg = mur_common::model::ModelRegistry::load_from(&reg_path)?;
+            if reg.models.contains_key(model_ref) {
+                out.push(Check::new(
+                    "model_ref",
+                    true,
+                    format!("'{model_ref}' resolves in models.yaml"),
+                ));
+            } else {
+                out.push(Check::new(
+                    "model_ref",
+                    false,
+                    format!("'{model_ref}' missing from models.yaml"),
+                ));
+            }
+        }
+        None => out.push(Check::new("model_ref", true, "inline model (no ref)")),
+    }
+
+    for server in &profile.mcp_servers {
+        let check_name = format!("mcp:{}", server.name);
+        match crate::cmd::agent_mcp_pin::resolve_command(&server.command) {
+            Ok(resolved) => out.push(Check::new(check_name, true, resolved.display().to_string())),
+            Err(e) => out.push(Check::new(check_name, false, e.to_string())),
+        }
+    }
+
+    out.push(Check::new("entitlements", true, "parsed"));
+
+    Ok(out)
+}
+
+/// Public entry point for `mur agent doctor <name>`. Prints a human table
+/// (or JSON with `--json`) and returns a non-zero exit (via `Err`) if any
+/// check failed — mirroring the export-prereq `run()` convention.
+pub fn run_agent(name: &str, json: bool) -> Result<()> {
+    let mur_home = crate::cmd::agent::resolve_mur_home()?;
+    let results = agent_doctor(&mur_home, name)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&results)?);
+    } else {
+        for c in &results {
+            let glyph = if c.ok { "✓" } else { "✗" };
+            println!("{glyph} {} ({})", c.name, c.detail);
+        }
+    }
+
+    let any_failed = results.iter().any(|c| !c.ok);
+    if any_failed {
+        anyhow::bail!("doctor found unhealthy checks for agent '{name}'");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,5 +494,36 @@ mod tests {
             arch.status,
             CheckStatus::Ok | CheckStatus::Skipped
         ));
+    }
+
+    #[test]
+    fn agent_doctor_named_checks_model_ref_and_mcp() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mur_home = tmp.path().to_path_buf();
+        let agent_dir = mur_home.join("agents").join("coach");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        let mut profile = mur_common::AgentProfile::default_for_tests();
+        profile.model_ref = Some("nonexistent_ref".into());
+        std::fs::write(
+            agent_dir.join("profile.yaml"),
+            serde_yaml_ng::to_string(&profile).unwrap(),
+        )
+        .unwrap();
+
+        // Isolate resolve_mur_home()/ModelRegistry::default_path() to the
+        // temp home; empty models.yaml means "nonexistent_ref" won't resolve.
+        unsafe {
+            std::env::set_var("MUR_HOME", &mur_home);
+        }
+        let report = agent_doctor(&mur_home, "coach").unwrap();
+        unsafe {
+            std::env::remove_var("MUR_HOME");
+        }
+
+        assert!(
+            report.iter().any(|c| c.name == "model_ref" && !c.ok),
+            "expected a failing model_ref check, got: {report:?}"
+        );
     }
 }
