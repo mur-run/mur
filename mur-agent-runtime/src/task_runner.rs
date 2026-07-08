@@ -543,9 +543,12 @@ impl TaskRunner {
             let inventory = McpInventory::from_tool_names(
                 self.tools.iter().map(|t| t.name().to_string()).collect(),
             );
-            let Some(body) = layer3_body(&loaded.manifest, &inventory) else {
+            let Some(mut body) = layer3_body(&loaded.manifest, &inventory) else {
                 continue;
             };
+            if let Some(hint) = crate::skills::trigger_matcher::bundle_hint(&loaded.dir) {
+                body.push_str(&hint);
+            }
             layer3.push('\n');
             layer3.push_str(&format_layer3(&loaded.name, loaded.trust, &body));
             suppress_names.insert(loaded.name.as_str());
