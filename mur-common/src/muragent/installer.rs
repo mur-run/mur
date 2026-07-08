@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 
 use crate::AgentProfile;
+use crate::agent::McpNetMode;
 use crate::muragent::MuragentError;
 use crate::muragent::manifest::MuragentManifest;
 use crate::muragent::reader::MuragentArchive;
@@ -55,6 +56,12 @@ pub struct InstallOutcome {
     /// the agent already existed at the slug with matching UUID and the
     /// payload was replaced in place (preserving `data/`).
     pub was_update: bool,
+    /// Names of MCP servers whose `network.mode` was downgraded from
+    /// `BroadAudited` to `Inherit` (with `authorization` cleared) during this
+    /// install. A bundle author's broad-egress grant is tied to a local
+    /// operator (Task 3) and must not travel with the bundle; empty when
+    /// nothing was downgraded.
+    pub downgraded_broad_egress: Vec<String>,
 }
 
 /// Install or update a `.muragent` archive. See module docs for the flow.
@@ -146,6 +153,8 @@ pub fn install(
 
     extract_payload(archive, &agent_dir)?;
 
+    let downgraded_broad_egress = downgrade_profile_egress(&agent_dir)?;
+
     // Step 6: trust upsert
     let fingerprint_hex = trust::short_fingerprint(&result.author_pubkey);
     let fingerprint_words = trust::word_list_fingerprint(&result.author_pubkey);
@@ -164,7 +173,46 @@ pub fn install(
         fingerprint_hex,
         fingerprint_words,
         was_update,
+        downgraded_broad_egress,
     })
+}
+
+/// For every MCP server whose `network.mode == BroadAudited`, resets the mode
+/// to `Inherit` and clears `authorization`. A bundle author's broad-audited
+/// grant is tied to their local operator consent (Task 3); it must not travel
+/// with the bundle, so the importer must explicitly re-grant it. Returns the
+/// names of the downgraded servers, in profile order. Pure / filesystem-free
+/// so it's unit-testable directly.
+fn downgrade_broad_egress(profile: &mut AgentProfile) -> Vec<String> {
+    let mut downgraded = Vec::new();
+    for server in &mut profile.mcp_servers {
+        if let Some(network) = server.network.as_mut()
+            && network.mode == McpNetMode::BroadAudited
+        {
+            network.mode = McpNetMode::Inherit;
+            network.authorization = None;
+            downgraded.push(server.name.clone());
+        }
+    }
+    downgraded
+}
+
+/// Reads the just-extracted `profile.yaml`, downgrades any `BroadAudited` MCP
+/// egress grants, and — only if anything changed — re-serializes it back to
+/// disk. Returns the names of downgraded servers (empty if none).
+fn downgrade_profile_egress(agent_dir: &Path) -> Result<Vec<String>, MuragentError> {
+    let profile_path = agent_dir.join("profile.yaml");
+    let raw = fs::read_to_string(&profile_path).map_err(MuragentError::Io)?;
+    let mut profile: AgentProfile =
+        serde_yaml_ng::from_str(&raw).map_err(|e| MuragentError::Other(e.to_string()))?;
+
+    let downgraded = downgrade_broad_egress(&mut profile);
+    if !downgraded.is_empty() {
+        let out =
+            serde_yaml_ng::to_string(&profile).map_err(|e| MuragentError::Other(e.to_string()))?;
+        fs::write(&profile_path, out).map_err(MuragentError::Io)?;
+    }
+    Ok(downgraded)
 }
 
 /// Refuse a package that carries any [`RESERVED_LOCAL_FILES`] entry at its top
@@ -374,6 +422,50 @@ mod tests {
     use crate::identity::AgentIdentity;
     use crate::muragent::writer::{MuragentWriter, build_manifest_from_profile};
     use tempfile::TempDir;
+
+    #[test]
+    fn downgrade_broad_egress_resets_mode_and_clears_authorization() {
+        use crate::agent::{EgressAuthorization, McpServerEntry, McpServerNetwork};
+
+        let mut profile = AgentProfile::default_for_tests();
+        profile.mcp_servers = vec![
+            McpServerEntry {
+                name: "broad-server".to_string(),
+                command: "true".to_string(),
+                network: Some(McpServerNetwork {
+                    mode: McpNetMode::BroadAudited,
+                    authorization: Some(EgressAuthorization {
+                        authorized_by: "operator".to_string(),
+                        authorized_at_ms: 1,
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            McpServerEntry {
+                name: "restricted-server".to_string(),
+                command: "true".to_string(),
+                network: Some(McpServerNetwork {
+                    mode: McpNetMode::Restricted,
+                    allow_hosts: vec!["example.com".to_string()],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ];
+
+        let downgraded = downgrade_broad_egress(&mut profile);
+
+        assert_eq!(downgraded, vec!["broad-server".to_string()]);
+
+        let broad = &profile.mcp_servers[0].network.as_ref().unwrap();
+        assert_eq!(broad.mode, McpNetMode::Inherit);
+        assert_eq!(broad.authorization, None);
+
+        let restricted = &profile.mcp_servers[1].network.as_ref().unwrap();
+        assert_eq!(restricted.mode, McpNetMode::Restricted);
+        assert_eq!(restricted.allow_hosts, vec!["example.com".to_string()]);
+    }
 
     fn make_test_package(tmp: &TempDir) -> std::path::PathBuf {
         let out = tmp.path().join("test.muragent");
