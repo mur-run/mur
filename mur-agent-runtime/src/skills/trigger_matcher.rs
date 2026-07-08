@@ -130,18 +130,23 @@ pub fn format_layer3(skill_name: &str, trust: TrustLevel, body: &str) -> String 
     )
 }
 
-/// If the skill's install directory holds anything besides `skill.yaml`,
-/// return a one-line hint telling the agent where the bundle lives so paths
-/// like `scripts/start-server.sh` resolve. Returns None for asset-free skills
-/// (and, fail-safe, when the directory can't be read).
+/// If the skill's install directory holds a real bundled file (anything besides
+/// `skill.yaml` and hidden dotfiles like `.DS_Store`), return a one-line hint
+/// telling the agent where the bundle lives so paths like
+/// `scripts/start-server.sh` resolve. Returns None for asset-free skills (and,
+/// fail-safe, when the directory can't be read).
 pub fn bundle_hint(dir: &std::path::Path) -> Option<String> {
     let mut has_bundle = false;
     for entry in std::fs::read_dir(dir).ok()? {
         let Ok(entry) = entry else { continue };
-        if entry.file_name() != "skill.yaml" {
-            has_bundle = true;
-            break;
+        let name = entry.file_name();
+        // Ignore the manifest and OS/editor junk (`.DS_Store`, swap files, …),
+        // which are dotfiles, not shipped bundle content.
+        if name == "skill.yaml" || name.to_string_lossy().starts_with('.') {
+            continue;
         }
+        has_bundle = true;
+        break;
     }
     if !has_bundle {
         return None;
@@ -174,6 +179,17 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("skill.yaml"), "x").unwrap();
         assert!(bundle_hint(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn bundle_hint_ignores_dotfiles() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("skill.yaml"), "x").unwrap();
+        std::fs::write(tmp.path().join(".DS_Store"), "junk").unwrap();
+        assert!(
+            bundle_hint(tmp.path()).is_none(),
+            "a stray .DS_Store must not count as a bundle"
+        );
     }
 
     fn sample() -> LoadedSkill {
