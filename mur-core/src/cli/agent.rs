@@ -51,8 +51,9 @@ pub enum AgentAction {
     /// upgraded runtime binary. Sends SIGTERM (drains in-flight turn), waits
     /// for exit, then polls for the launchd-respawned process.
     Restart {
-        /// Agent name (mutually exclusive with --all / --stale)
-        name: Option<String>,
+        /// Agent name(s) (mutually exclusive with --all / --stale)
+        #[arg(num_args = 0..)]
+        names: Vec<String>,
         /// Restart all running agents
         #[arg(long)]
         all: bool,
