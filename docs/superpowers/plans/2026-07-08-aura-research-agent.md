@@ -249,13 +249,13 @@ git add -A && git commit -m "feat(aura): wire agent-browser MCP tools (lightpand
 - [ ] **Step 1: Scaffold the five skills**
 
 ```bash
-mur skill new aura-browser-preflight
-mur skill new aura-research-escalation-ladder
-mur skill new aura-source-triangulation
-mur skill new aura-citation-discipline
-mur skill new aura-parallel-fanout
+mur skill new aura-browser-preflight --dir ~/.mur/skills
+mur skill new aura-research-escalation-ladder --dir ~/.mur/skills
+mur skill new aura-source-triangulation --dir ~/.mur/skills
+mur skill new aura-citation-discipline --dir ~/.mur/skills
+mur skill new aura-parallel-fanout --dir ~/.mur/skills
 ```
-Expected: five `skill.yaml` files scaffolded under `~/.mur/skills/`.
+Expected: five `skill.yaml` files scaffolded under `~/.mur/skills/`. NOTE (verified): `mur skill new` scaffolds into the CURRENT directory unless you pass `--dir ~/.mur/skills` — without it you pollute the repo root. `mur skill scope <name> --fleet <FLEET>` requires the fleet NAME (`aura-research`), not a bare `--fleet` flag; the fleet need not exist yet (name is only slug-validated).
 
 - [ ] **Step 2: Fill in the browser-preflight skill content**
 
@@ -284,11 +284,11 @@ Edit `~/.mur/skills/aura-research-escalation-ladder/skill.yaml` so `content` tea
 - [ ] **Step 5: Scope all five to the agent/fleet and verify injection**
 
 ```bash
-mur skill scope aura-browser-preflight --fleet
-mur skill scope aura-research-escalation-ladder --fleet
-mur skill scope aura-source-triangulation --fleet
-mur skill scope aura-citation-discipline --fleet
-mur skill scope aura-parallel-fanout --fleet
+mur skill scope aura-browser-preflight --fleet aura-research
+mur skill scope aura-research-escalation-ladder --fleet aura-research
+mur skill scope aura-source-triangulation --fleet aura-research
+mur skill scope aura-citation-discipline --fleet aura-research
+mur skill scope aura-parallel-fanout --fleet aura-research
 ```
 Expected: each `skill.yaml` `scope:` becomes `Fleet` (see `skill_cmd.rs` scope mapping / `SkillScope::Fleet`). Verify they retrieve for a research query:
 ```bash
