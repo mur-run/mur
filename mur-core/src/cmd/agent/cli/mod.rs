@@ -845,6 +845,20 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                     app.input.insert_newline();
                 }
                 KeyCode::Enter => submit(app, tx).await,
+                // Shell-style input history: ↑ on the first composer line
+                // recalls older sent messages; ↓ on the last line walks
+                // newer / restores the stashed draft. Anywhere else the
+                // arrows keep moving the cursor.
+                KeyCode::Up if app.input.cursor().0 == 0 => {
+                    if !app.history_prev() {
+                        app.input.input(key);
+                    }
+                }
+                KeyCode::Down if app.input.cursor().0 + 1 == app.input.lines().len() => {
+                    if !app.history_next() {
+                        app.input.input(key);
+                    }
+                }
                 KeyCode::Esc => {
                     let action =
                         esc_action(app.last_esc_at, app.streaming, app.input_text().is_empty());
@@ -1147,6 +1161,7 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
     if trimmed.is_empty() && app.pending_image.is_none() {
         return;
     }
+    app.history_record(&trimmed);
 
     if let Some(cmd) = parse_slash(&trimmed) {
         // Skills are surfaced in the completion menu as slash commands
