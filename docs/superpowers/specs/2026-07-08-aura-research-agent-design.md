@@ -31,15 +31,17 @@ load-bearing conclusions:
 Tool notes captured during research:
 
 - **Lightpanda** (Zig, V8, no graphics engine): ~24 MB/instance vs Chrome ~2 GB →
-  ~8× more parallel workers per box. Ships its OWN CDP server (`lightpanda serve
-  --port 9222`); install via curl-binary / Docker / `@lightpanda/browser`. Beta.
-  Weak against anti-bot fingerprinting; no screenshots. AGPL-3.0.
+  ~8× more parallel workers per box. Beta. Weak against anti-bot fingerprinting; no
+  screenshots. AGPL-3.0. **Verified working via agent-browser 0.31.1** with two
+  requirements: install the Lightpanda binary separately (agent-browser does not
+  bundle it) and reach it via `--executable-path`/`AGENT_BROWSER_EXECUTABLE_PATH`;
+  and do NOT forward Chrome-only launch args (pass `--args ""` / `AGENT_BROWSER_ARGS=""`).
 - **agent-browser** (vercel-labs, Rust, Apache-2.0): control CLI (`mcp` stdio server
-  since v0.28.0), `--engine chrome` (works), `connect <port|wss>` (CDP), `-p <cloud
-  provider>`, auth vault (`auth save/login`, LLM never sees passwords). **Verified on
-  0.31.1/macOS: the built-in `--engine lightpanda` flag is non-functional (no engine
-  binary ships, no installer); use Lightpanda's own CDP daemon + `agent-browser
-  connect` instead.**
+  since v0.28.0), `--engine chrome|lightpanda` (both verified; lightpanda per above),
+  per-call/env overrides (`AGENT_BROWSER_ENGINE|EXECUTABLE_PATH|ARGS`), `connect
+  <port|wss>` (CDP), `-p <cloud provider>`, auth vault (`auth save/login`, LLM never
+  sees passwords). Runs a persistent daemon (`pkill -f agent-browser` to reset after
+  an upgrade).
 - **Obscura** (h4ckf0r0day/obscura, Rust, Apache-2.0): verified genuine
   (17.9k★, 1.24k forks, 31 contributors, monthly releases) but early (v0.1.x,
   created 2026-04). Watch-list only, not a launch dependency.
@@ -52,8 +54,8 @@ Tool notes captured during research:
 Lightpanda is AGPL-3.0. MUR stays proprietary **only** if Lightpanda is invoked
 **as a separate subprocess over CDP** (arm's-length), never linked in-process.
 
-- Allowed: MUR → `agent-browser` (Apache-2.0) → `lightpanda serve` subprocess (a
-  wholly separate install + process, reached over CDP via `agent-browser connect`).
+- Allowed: MUR → `agent-browser` (Apache-2.0) → `lightpanda` subprocess (a separate
+  binary agent-browser launches via `--executable-path`; still a separate process).
 - Obligations when shipping: ship the unmodified upstream Lightpanda binary (or a
   link to its source) and include AGPL notice/attribution. Do **not** fork/modify
   Lightpanda.
@@ -83,9 +85,10 @@ model_ref:    <a strong-reasoning model alias from ~/.mur/models.yaml>
   decomposition, parallel search, adversarial verification, synthesis. No rewrite.
 - **(b) Fetch** — existing `WebFetch` / search tools for plain pages.
 - **(c) Full-browser** — new: `agent-browser` wired as an MCP tool, default engine
-  `chrome` (works today), for JS/login pages. Optional Lightpanda-via-CDP path for
-  worker density (§4.3). Credentials go through agent-browser's auth vault (never
-  plaintext, never in the LLM context).
+  `lightpanda` (~24MB, verified) via env `AGENT_BROWSER_ENGINE=lightpanda` +
+  `AGENT_BROWSER_EXECUTABLE_PATH=<lightpanda>` + `AGENT_BROWSER_ARGS=""`; chrome as
+  fallback for anti-bot/screenshot pages. Credentials go through agent-browser's
+  auth vault (never plaintext, never in the LLM context).
 
 ### 4.3 Escalation ladder (single control surface)
 
@@ -94,9 +97,9 @@ One tool, engine/provider chosen per page difficulty:
 ```
 WebSearch / WebFetch           # plain text — cheapest
    ↓  (page needs JS)
-agent-browser --engine chrome       # JS rendering — DEFAULT browser tier (works today)
-   ↓  (want 8x worker density — opt-in performance path)
-lightpanda serve --port 922X  +  agent-browser connect ws://127.0.0.1:922X
+agent-browser --engine lightpanda   # JS rendering, ~24MB — DEFAULT browser tier (verified)
+   ↓  (anti-bot fingerprint wall, screenshot, or lightpanda renders wrong)
+agent-browser --engine chrome       # full Chrome compatibility (+ stealth args)
    ↓  (need scale/anti-bot beyond one box — future, no code change)
 agent-browser -p kernel|browserbase # cloud providers
 ```
@@ -112,9 +115,9 @@ Switching tiers is a flag change; fleet orchestration logic is unchanged.
 - Parallel isolation: each worker runs its own `agent-browser --session <id>`
   instance (isolated cookies/auth), matching the "per-agent profile isolation to
   avoid session collisions" finding.
-- Worker density: chrome-engine workers carry a full-Chrome footprint. The optional
-  Lightpanda-via-CDP path (~24 MB/instance) lets a single box host far more concurrent
-  workers. Concrete ceiling per host is left to the implementation plan (open question §6).
+- Worker density: `--engine lightpanda` workers (~24 MB/instance, verified) let a
+  single box host far more concurrent workers than a Chrome-based fleet. Concrete
+  ceiling per host is left to the implementation plan (open question §6).
 - Safety triad reused unchanged: `MUR_FLEET_AUTORUN` (off by default) + per-fleet
   `budget_usd` + `mur fleet stop` kill-switch. Steps pass `yes:false` (fail-closed).
 
@@ -157,8 +160,8 @@ browser tool is exercised standalone via its CLI.
 
 1. **Integration surface** — does `agent-browser` expose an MCP server, or is it
    wired as a command/CLI tool? Verify before choosing the wiring mechanism.
-2. **Per-host worker ceiling** — measure real RAM/CPU per chrome-engine session (and
-   per Lightpanda-CDP session) to size the fleet; set a default `max_concurrency`.
+2. **Per-host worker ceiling** — measure real RAM/CPU per `--engine lightpanda`
+   session (and per chrome-fallback session) to size the fleet; set `max_concurrency`.
 3. **Model choice** — which `models.yaml` alias for router vs. member (router may
    warrant a stronger model than members).
 4. **Credential provisioning** — how operators load site logins into

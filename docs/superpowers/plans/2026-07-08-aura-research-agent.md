@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Stand up `aura`, a MUR agent that runs end-to-end web research as a fleet of parallel workers, using `agent-browser` (chrome engine by default; optional Lightpanda-via-CDP for density) for JS/login pages.
+**Goal:** Stand up `aura`, a MUR agent that runs end-to-end web research as a fleet of parallel workers, using `agent-browser` (default `--engine lightpanda`, ~24MB; chrome fallback) for JS/login pages.
 
 **Architecture:** AURA is composed from existing MUR primitives, not new runtime code: a `mur agent` profile + the `agent-browser` MCP tool + four agent-scoped skills + a `mur fleet`. The discovery/verification layer reuses the existing `deep-research` workflow; the full-browser layer is a swappable `agent-browser` control surface.
 
@@ -12,7 +12,7 @@
 
 - Brand name user-facing is uppercase **AURA**; internal `name` is lowercase `aura` (matches on-disk dir + runtime spoof check). — spec §4.1, CLAUDE.md rule 7.
 - Lightpanda (AGPL-3.0) may only be invoked as a **separate subprocess over CDP** — never linked in-process, never forked/modified. Ship unmodified upstream binary + AGPL attribution. — spec §3.
-- `agent-browser` is the single control surface; engine/provider selection is a flag (`--engine chrome`, `connect <cdp>`, `-p <cloud>`), fleet logic unchanged. Built-in `--engine lightpanda` is non-functional on current agent-browser — use Lightpanda's own CDP daemon + `connect`. — spec §4.3.
+- `agent-browser` is the single control surface; engine/args/executable are set via env (`AGENT_BROWSER_ENGINE`, `AGENT_BROWSER_ARGS`, `AGENT_BROWSER_EXECUTABLE_PATH`) or per-call flags, fleet logic unchanged. `--engine lightpanda` requires the Lightpanda binary installed separately + `AGENT_BROWSER_ARGS=""` (Chrome stealth args must not reach lightpanda). — spec §4.3, verified 0.31.1.
 - Fleet safety triad reused unchanged: `MUR_FLEET_AUTORUN` off by default + per-fleet `budget_usd` + `mur fleet stop` kill-switch; steps pass `yes:false` (fail-closed). — spec §4.4.
 - No hardcoded values: model alias comes from `~/.mur/models.yaml` (operator selects), never hardcoded. — CLAUDE.md rule 1.
 - This plan writes configuration + skill YAML only. It does not add Rust code. If any task appears to need a new MUR runtime feature, STOP and raise it — that is a separate spec.
@@ -28,7 +28,7 @@ Prove the browser layer works in isolation before wiring it into MUR. If this fa
 - Verify: `~/.mur/aura/PREREQS.md` (record installed versions + AGPL attribution note)
 
 **Interfaces:**
-- Produces: a working `agent-browser` binary (>= 0.28.0) on PATH with `agent-browser mcp` stdio server and a functioning `chrome` engine; consumed by Task 3.
+- Produces: a working `agent-browser` binary (>= 0.28.0) on PATH with `agent-browser mcp` stdio server, plus the Lightpanda binary at `~/.mur/aura/lightpanda`; consumed by Task 3.
 
 - [ ] **Step 1: Install agent-browser and its browser assets**
 
@@ -41,22 +41,36 @@ Expected: `agent-browser --version` is **>= 0.28.0** (the `mcp` subcommand lande
 0.28.0; 0.27.x lacks it). Force latest if a stale global copy resolves lower:
 `npm i -g agent-browser@latest`. Verified good on 0.31.1.
 
-- [ ] **Step 2: Verify the chrome engine renders JavaScript (the default tier)**
+- [ ] **Step 2: Install the Lightpanda binary (consent-gated) and verify it renders**
 
-Probe a JS-rendered page and confirm non-empty content comes back:
+agent-browser does NOT bundle Lightpanda. Installing is permission-required (Global
+Constraints) — on explicit operator yes, on macOS Apple Silicon:
+```bash
+mkdir -p ~/.mur/aura
+curl -fL -o ~/.mur/aura/lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-aarch64-macos
+chmod a+x ~/.mur/aura/lightpanda
+~/.mur/aura/lightpanda version    # e.g. 1.0.0-nightly.7813+...
+```
+Then verify the engine renders (note `--args ""` — Chrome stealth args must not reach lightpanda):
+```bash
+agent-browser --engine lightpanda --executable-path ~/.mur/aura/lightpanda --args "" open https://example.com snapshot
+```
+Expected: `✓ Example Domain` + the URL. VERIFIED working on 0.31.1 (2026-07-08). If the
+operator declines the install, the browser tier falls back to `--engine chrome` (Step 2b).
+
+- [ ] **Step 2b: Verify the chrome fallback engine**
+
 ```bash
 agent-browser --engine chrome open https://example.com snapshot
 ```
-Expected: a text/DOM snapshot is printed. NOTE: do NOT rely on `--engine lightpanda`
-— verified non-functional on 0.31.1/macOS (no engine binary ships). The low-footprint
-Lightpanda path is Task 3b (its own CDP daemon), not this flag.
+Expected: a snapshot prints. Chrome is the fallback for anti-bot/screenshot pages and the default if Lightpanda is not installed.
 
-- [ ] **Step 3: Verify concurrent isolated sessions (chrome)**
+- [ ] **Step 3: Verify concurrent isolated sessions**
 
 Launch two named sessions and confirm they are isolated (own cookies/state):
 ```bash
-agent-browser --session s1 open https://example.com snapshot &
-agent-browser --session s2 open https://example.org snapshot &
+agent-browser --engine lightpanda --executable-path ~/.mur/aura/lightpanda --args "" --session s1 open https://example.com snapshot &
+agent-browser --engine lightpanda --executable-path ~/.mur/aura/lightpanda --args "" --session s2 open https://example.org snapshot &
 wait
 agent-browser close --all
 ```
@@ -71,7 +85,7 @@ Expected: a JSON-RPC initialize response on stdout (confirms the stdio server MU
 
 - [ ] **Step 5: Record versions + AGPL attribution, commit**
 
-Write `~/.mur/aura/PREREQS.md` with the `agent-browser --version` output, and (only if Task 3b is done) the Lightpanda binary version + a one-line AGPL-3.0 attribution/notice for Lightpanda (spec §3). Then:
+Write `~/.mur/aura/PREREQS.md` with the `agent-browser --version` output, the Lightpanda binary version, and a one-line AGPL-3.0 attribution/notice for Lightpanda (spec §3). Then:
 ```bash
 git add docs/superpowers/plans/2026-07-08-aura-research-agent.md
 git commit -m "chore(aura): record browser-layer prereqs and AGPL attribution"
@@ -138,97 +152,56 @@ git add -A && git commit -m "feat(aura): create AURA research agent profile"
 - Reference: `mur-core/src/cmd/agent/mcp.rs` (add command + spawn allowlist)
 
 **Interfaces:**
-- Consumes: `agent-browser` binary from Task 1; `aura` agent from Task 2.
-- Produces: `aura` can call the browser tool (chrome engine; optional Lightpanda-via-CDP per Task 3b); consumed by Task 6.
+- Consumes: `agent-browser` + Lightpanda binary from Task 1; `aura` agent from Task 2.
+- Produces: `aura` has two browser tools — `agent-browser` (lightpanda, default) and `agent-browser-chrome` (fallback); consumed by Task 6.
 
-- [ ] **Step 1: Add the MCP server to the agent**
+- [ ] **Step 1: Add the lightpanda browser tool (default, low-footprint)**
 
+Engine/executable/args are global flags placed BEFORE the `mcp` subcommand (verified:
+they apply to the spawned server). `--args ""` stops the global Chrome stealth args
+from reaching Lightpanda.
 ```bash
-mur agent mcp add aura agent-browser --command agent-browser --arg mcp --arg --tools --arg core
-```
-Expected: entry added; command resolved on PATH and pinned (see `mcp.rs` pin logic). Confirm:
-```bash
+mur agent mcp add aura agent-browser --command agent-browser \
+  --arg --engine --arg lightpanda \
+  --arg --executable-path --arg "$HOME/.mur/aura/lightpanda" \
+  --arg --args --arg "" \
+  --arg mcp --arg --tools --arg core
 mur agent mcp list aura
 ```
-Expected: `agent-browser` listed with command `agent-browser mcp --tools core`.
+Expected: `agent-browser` listed with the lightpanda flags + `mcp --tools core`, command resolved on PATH and pinned (see `mcp.rs`).
 
-- [ ] **Step 2: Confirm the default engine is chrome (works today)**
+- [ ] **Step 2: Add the chrome browser tool (fallback for anti-bot/screenshots)**
 
-VERIFIED on agent-browser 0.31.1/macOS: the built-in `--engine lightpanda` flag is
-non-functional (no engine binary ships; it errors `Custom Chrome arguments (--args)
-are not supported with Lightpanda`). Do NOT pass `--engine lightpanda` to the MCP
-server. The default engine is `chrome`, which works — the Step 1 `mur agent mcp add`
-(command `agent-browser mcp --tools core`) is already correct. No change needed here.
-
-The low-footprint Lightpanda path is an OPT-IN performance optimization via
-Lightpanda's own CDP daemon (not agent-browser's engine flag). It is not a launch
-requirement — see Task 3b. Confirm the current wiring:
+The MCP tools don't expose per-call engine switching, so the chrome fallback is a
+second server. It inherits the global stealth args (no `--args ""`).
 ```bash
+mur agent mcp add aura agent-browser-chrome --command agent-browser \
+  --arg --engine --arg chrome \
+  --arg mcp --arg --tools --arg core
 mur agent mcp list aura
 ```
-Expected: `agent-browser mcp --tools core` (no `--engine lightpanda`).
+Expected: both `agent-browser` (lightpanda) and `agent-browser-chrome` listed. The `aura-research-escalation-ladder` skill (Task 4) tells the agent to prefer the lightpanda tool and fall back to chrome only for anti-bot/screenshot pages.
 
-- [ ] **Step 3: Verify the tool is visible to the agent**
+- [ ] **Step 3: Verify both tools are visible to the agent**
 
 ```bash
 mur agent doctor aura
 ```
-Expected: the `agent-browser` MCP server is listed and its command resolves. No spawn-allowlist violation.
+Expected: both MCP servers listed and their commands resolve. No spawn-allowlist violation.
 
-- [ ] **Step 4: Verify the agent can drive a JS page end-to-end**
+- [ ] **Step 4: Verify the agent can drive a JS page end-to-end (lightpanda)**
 
 Use an interactive session to make `aura` fetch a JS-rendered page through the tool:
 ```bash
 mur agent cli aura
 # then prompt: "Use the browser tool to open https://example.com and give me the page's main heading text."
 ```
-Expected: `aura` calls the browser tool and returns the heading. This proves MUR -> agent-browser -> chrome works (spec §4.3). Note: tool-executing turns require `mur agent cli`, NOT `mur agent send` (send has no tool execution and auto-denies HITL headless — see mem:gotcha_mur_agent_send_no_tools).
+Expected: `aura` calls the lightpanda tool and returns the heading. This proves MUR -> agent-browser -> lightpanda works (spec §4.3). Note: tool-executing turns require `mur agent cli`, NOT `mur agent send` (send has no tool execution and auto-denies HITL headless — see mem:gotcha_mur_agent_send_no_tools).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add -A && git commit -m "feat(aura): wire agent-browser MCP tool (chrome engine)"
-```
-
----
-
-### Task 3b (OPTIONAL): Lightpanda low-footprint path via its own CDP daemon
-
-Only do this if you want the ~8× worker-density win. Not a launch requirement; skip to Task 4 to ship on chrome. This path keeps Lightpanda (AGPL-3.0) a wholly separate install + process reached over CDP — the cleanest arm's-length posture (spec §3).
-
-**Files:**
-- Create: none (external binary + runtime connect)
-
-**Interfaces:**
-- Produces: a Lightpanda CDP endpoint `ws://127.0.0.1:922X` that `aura` reaches via the browser tool's `connect` command.
-
-- [ ] **Step 1: Ask operator consent, then install Lightpanda**
-
-Installing software is permission-required (Global Constraints). On explicit yes, on macOS Apple Silicon:
-```bash
-curl -L -o ~/.mur/aura/lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-aarch64-macos
-chmod a+x ~/.mur/aura/lightpanda
-~/.mur/aura/lightpanda --version
-```
-Expected: version prints. (Match arch with `uname -m`; use the Docker image if the binary is blocked.)
-
-- [ ] **Step 2: Start the CDP daemon and verify JS render**
-
-```bash
-~/.mur/aura/lightpanda serve --host 127.0.0.1 --port 9222 &
-agent-browser connect ws://127.0.0.1:9222 && agent-browser open https://example.com snapshot
-```
-Expected: a snapshot comes back through Lightpanda (proves the connect path works where `--engine lightpanda` did not).
-
-- [ ] **Step 3: Document per-worker ports**
-
-For a fleet, each worker needs its own daemon port (isolation). Record the scheme (e.g. worker `i` → port `9222+i`) in `~/.mur/aura/PREREQS.md`; wiring per-worker connect is handled in Task 5 Step 2 when workers are cloned.
-Expected: port scheme recorded.
-
-- [ ] **Step 4: Commit the note**
-
-```bash
-git add -A && git commit -m "docs(aura): optional Lightpanda-via-CDP low-footprint path"
+git add -A && git commit -m "feat(aura): wire agent-browser MCP tools (lightpanda default + chrome fallback)"
 ```
 
 ---
@@ -265,16 +238,16 @@ Edit `~/.mur/skills/aura-browser-preflight/skill.yaml` so `content` teaches: BEF
 ```bash
 # detect the control layer (needs >= 0.28.0 for the mcp server)
 agent-browser --version || MISSING_TOOL=1
-# detect the chrome engine (installed by `agent-browser install`) — the default tier
+# detect the lightpanda binary (the low-footprint default engine)
+[ -x "$HOME/.mur/aura/lightpanda" ] || MISSING_LIGHTPANDA=1
+# detect the chrome fallback engine (installed by `agent-browser install`)
 agent-browser --engine chrome open about:blank snapshot >/dev/null 2>&1 || MISSING_CHROME=1
-# OPTIONAL low-footprint path: a running Lightpanda CDP daemon (Task 3b)
-agent-browser connect ws://127.0.0.1:9222 >/dev/null 2>&1 || LIGHTPANDA_CDP_ABSENT=1
 ```
-If `MISSING_TOOL` or `MISSING_CHROME`: STOP and ask the operator, e.g. "agent-browser / Chrome isn't installed. May I run `npm i -g agent-browser@latest && agent-browser install`?" Install ONLY on an explicit yes. If the operator declines, degrade to the fetch tier (`WebFetch`) and report which pages could not be rendered. `LIGHTPANDA_CDP_ABSENT` is NOT an error — chrome is the working default; only mention Lightpanda if the operator asks for higher worker density. Do NOT probe `--engine lightpanda` (non-functional on current agent-browser). Installing software is a permission-required action (Global Constraints) — the skill asks, it never auto-installs.
+If `MISSING_TOOL`: STOP and ask, e.g. "agent-browser isn't installed. May I run `npm i -g agent-browser@latest && agent-browser install`?" If `MISSING_LIGHTPANDA`: ask, e.g. "the Lightpanda engine (low-footprint default) isn't installed. May I download it to `~/.mur/aura/lightpanda`?" (curl per Task 1 Step 2). Install ONLY on an explicit yes. If both browser engines are unavailable and the operator declines, degrade to the fetch tier (`WebFetch`) and report which pages could not be rendered. If only Lightpanda is missing, chrome is a working fallback. Installing software is a permission-required action (Global Constraints) — the skill asks, it never auto-installs.
 
 - [ ] **Step 3: Fill in the escalation-ladder skill content**
 
-Edit `~/.mur/skills/aura-research-escalation-ladder/skill.yaml` so `content` teaches: try `WebSearch`/`WebFetch` first; escalate to the browser tool (`agent-browser`, chrome engine) only when a page needs JS or a login. For high worker-density runs where a Lightpanda CDP daemon is available (Task 3b), prefer `agent-browser connect ws://127.0.0.1:922X` before falling back to chrome. Triggers: research, fetch a page, JS-heavy site, login-gated. Never open a browser for a page plain fetch can read. (Content is the spec §4.3 ladder in prose.)
+Edit `~/.mur/skills/aura-research-escalation-ladder/skill.yaml` so `content` teaches: try `WebSearch`/`WebFetch` first; escalate to the lightpanda browser tool (`agent-browser`, low-footprint) only when a page needs JS or a login; escalate to the chrome tool (`agent-browser-chrome`) only for anti-bot fingerprint walls, screenshots, or when lightpanda renders the page wrong. Triggers: research, fetch a page, JS-heavy site, login-gated. Never open a browser for a page plain fetch can read. (Content is the spec §4.3 ladder in prose.)
 
 - [ ] **Step 4: Fill in triangulation, citation, fanout skills**
 
@@ -420,6 +393,6 @@ git commit -m "test(aura): end-to-end acceptance — cited report, ladder, kill-
 
 **Placeholder scan:** Model alias and question inputs are operator decisions with concrete listing commands (`mur model list`), not placeholders. CLI flag mismatches are handled with explicit "run `--help` and map" fallbacks rather than guesses (CLAUDE.md rule 2).
 
-**Type consistency:** Names consistent across tasks — agent `aura`, workers `aura-w1/-w2`, fleet `aura-research`, channel `fleet-aura-research`, four skills `aura-*`.
+**Type consistency:** Names consistent across tasks — agent `aura`, workers `aura-w1/-w2`, fleet `aura-research`, channel `fleet-aura-research`, five skills `aura-*`, two browser tools `agent-browser` (lightpanda) + `agent-browser-chrome`.
 
 **Known follow-on (not in this plan):** credential-vault provisioning for login-gated sites (spec §6 #4) — introduce once no-auth E2E passes; it needs a decision on how operators load secrets into agent-browser's vault without touching MUR/LLM context.
