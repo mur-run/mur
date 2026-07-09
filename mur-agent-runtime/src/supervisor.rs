@@ -257,10 +257,35 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             "B1 sandbox: allowing VLC HTTP port + runtime dir for co-watching"
         );
     }
+    // G1: the loopback egress proxy must exist BEFORE the sandbox seals so
+    // its listener port can be carved into the kernel profile. Started
+    // post-seal (the old order), the ephemeral port is unreachable to
+    // sandboxed MCP children and every scoped egress grant is dead on
+    // arrival — proven live 2026-07-09 (deep-research workers: zero
+    // CONNECTs reached the proxy; standalone gateway fetch worked).
+    let egress_proxy =
+        if crate::supervisor_runner::profile_needs_egress(&profile.inner.enabled_mcp_servers()) {
+            match crate::sandbox::egress_proxy::start_egress_proxy().await {
+                Ok(h) => {
+                    tracing::info!(addr = %h.addr, "egress proxy started (pre-sandbox)");
+                    Some(h)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "egress proxy failed to start; scoped MCP servers will be unscoped: {e}"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+    let loopback_ports: Vec<u16> = egress_proxy.iter().map(|h| h.addr.port()).collect();
     match crate::sandbox::apply(
         &profile.inner.entitlements,
         &agent_home,
         &extra_ports,
+        &loopback_ports,
         &extra_write_paths,
     ) {
         Ok(status) => {
@@ -334,6 +359,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         force_echo,
         &agent_home,
         &profile,
+        egress_proxy,
         runtime_skills.clone(),
         skills_cfg.clone(),
         &hook_chain,

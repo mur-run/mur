@@ -39,6 +39,22 @@ pub(crate) const LOCAL_LLM_DEFAULT_BASE_URL: &str = "http://127.0.0.1:50320/v1";
 /// not authenticate. Not a secret.
 pub(crate) const LOCAL_LLM_PLACEHOLDER_KEY: &str = "local-no-key";
 
+/// True when any enabled MCP server declares a scoped network policy
+/// (`Restricted` / `BroadAudited`) — i.e. the loopback egress proxy is
+/// needed. Called by `supervisor::entrypoint()` BEFORE the kernel sandbox
+/// seals, so the proxy's listener port can be carved into the profile
+/// (a post-seal ephemeral port is unreachable to sandboxed children —
+/// the G1 root cause).
+pub(crate) fn profile_needs_egress(entries: &[mur_common::agent::McpServerEntry]) -> bool {
+    entries.iter().any(|e| {
+        matches!(
+            e.network.as_ref().map(|n| n.mode),
+            Some(mur_common::agent::McpNetMode::Restricted)
+                | Some(mur_common::agent::McpNetMode::BroadAudited)
+        )
+    })
+}
+
 /// The external host the agent's configured model talks to, for auto-allowing
 /// it under restricted outbound (so a user never has to `allow-host` their own
 /// provider). `None` for loopback base_urls (handled by `local_llm_port`) and
@@ -183,6 +199,7 @@ pub async fn build_provider_runner(
     force_echo: bool,
     agent_home: &std::path::Path,
     profile: &Profile,
+    egress_proxy: Option<crate::sandbox::egress_proxy::EgressProxyHandle>,
     runtime_skills: Arc<RuntimeSkills>,
     skills_cfg: SkillsConfig,
     hook_chain: &HookChain,
@@ -258,29 +275,10 @@ pub async fn build_provider_runner(
     // Phase-1 enable/disable: drop servers disabled for this agent so they
     // are never spawned and never advertised in tools/list.
     let enabled_mcp = profile.inner.enabled_mcp_servers();
-    // Start the per-server egress proxy only if some server declares a
-    // Restricted or BroadAudited network policy (opt-in; otherwise no proxy,
-    // no change).
-    let needs_egress = enabled_mcp.iter().any(|e| {
-        matches!(
-            e.network.as_ref().map(|n| n.mode),
-            Some(mur_common::agent::McpNetMode::Restricted)
-                | Some(mur_common::agent::McpNetMode::BroadAudited)
-        )
-    });
-    let egress = if needs_egress {
-        match crate::sandbox::egress_proxy::start_egress_proxy().await {
-            Ok(h) => Some(h),
-            Err(e) => {
-                tracing::warn!(
-                    "egress proxy failed to start; Restricted MCP servers will be unscoped: {e}"
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
+    // The egress proxy (if any) was started by supervisor::entrypoint()
+    // BEFORE the kernel sandbox sealed, so its port is carved into the
+    // profile and sandboxed children can dial it. See profile_needs_egress.
+    let egress = egress_proxy;
     let pool = McpPool::new(enabled_mcp.clone(), sandbox_policy, egress);
     let bash_exec: Arc<dyn crate::tools::ToolExecutor> =
         Arc::new(BashTool::new(agent_home.to_path_buf()));
@@ -704,5 +702,30 @@ updated_at: "2026-04-22T10:00:00+08:00"
             std::env::remove_var("ANTHROPIC_BASE_URL");
         }
         assert_eq!(local_llm_port(&profile, mur_home), None);
+    }
+
+    #[test]
+    fn profile_needs_egress_matches_scoped_modes() {
+        use mur_common::agent::{McpNetMode, McpServerEntry, McpServerNetwork};
+        fn entry(mode: Option<McpNetMode>) -> McpServerEntry {
+            let mut e = McpServerEntry {
+                name: "s".into(),
+                command: "cmd".into(),
+                ..Default::default()
+            };
+            e.network = mode.map(|m| McpServerNetwork {
+                mode: m,
+                ..Default::default()
+            });
+            e
+        }
+        assert!(!profile_needs_egress(&[entry(None)]));
+        assert!(!profile_needs_egress(&[entry(Some(McpNetMode::Inherit))]));
+        assert!(!profile_needs_egress(&[entry(Some(McpNetMode::Off))]));
+        assert!(profile_needs_egress(&[entry(Some(McpNetMode::Restricted))]));
+        assert!(profile_needs_egress(&[
+            entry(None),
+            entry(Some(McpNetMode::BroadAudited))
+        ]));
     }
 }
