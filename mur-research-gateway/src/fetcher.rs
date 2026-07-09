@@ -33,6 +33,13 @@ async fn screen_url_blocking(url: &str, deny: &[String]) -> Result<url::Url, Gua
         .unwrap_or(Err(GuardReject::Unresolvable)) // join error (panic) — treat as unresolvable, fail closed
 }
 
+/// True if appending `chunk_len` bytes to a `current_len`-byte buffer would push
+/// the running total past `max`. Extracted so the streaming cap decision is unit
+/// testable without a live oversized HTTP body.
+fn would_exceed(current_len: usize, chunk_len: usize, max: usize) -> bool {
+    current_len.saturating_add(chunk_len) > max
+}
+
 pub async fn fetch_tier1(
     url: &str,
     deny: &[String],
@@ -41,27 +48,47 @@ pub async fn fetch_tier1(
     let screened = screen_url_blocking(url, deny)
         .await
         .map_err(FetchError::Guard)?;
-    // ponytail: reqwest re-resolves internally; screen_url already rejected
-    // private targets. A pinned-IP resolver closes the rebinding window fully —
-    // upgrade to reqwest::dns::Resolve if the advisory window matters.
+    // ADVISORY SSRF enforcement (egress-governance spec): screen_url screens the
+    // IPs resolved AT SCREEN TIME, but reqwest re-resolves the host at connect
+    // time — client.get(screened) does NOT pin to the screened IP — so a
+    // DNS-rebinding window between screen and connect remains open. This is
+    // acceptable per the spec's advisory tier; airtight pin-to-proxy is Phase 3.
+    // TODO(Phase 3): pin the connection to the screened IP via a custom
+    // reqwest::dns::Resolve to close the DNS-rebinding window.
     let client = reqwest::Client::builder()
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::none()) // no auto-redirect: each hop must be re-screened by the worker
         .build()
         .map_err(|e| FetchError::Http(e.to_string()))?;
-    let resp = client
+    let mut resp = client
         .get(screened.clone())
         .send()
         .await
         .map_err(|e| FetchError::Http(e.to_string()))?;
     let status = resp.status().as_u16();
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| FetchError::Http(e.to_string()))?;
-    if body.len() > MAX_BODY_BYTES {
+
+    // Fast-reject on advertised size before reading a single body byte.
+    if let Some(len) = resp.content_length()
+        && len > MAX_BODY_BYTES as u64
+    {
         return Err(FetchError::TooLarge);
     }
+
+    // Stream and enforce the cap incrementally: a lying/absent Content-Length
+    // must never let us buffer an unbounded body (resp.text() would OOM here).
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| FetchError::Http(e.to_string()))?
+    {
+        if would_exceed(buf.len(), chunk.len(), MAX_BODY_BYTES) {
+            return Err(FetchError::TooLarge);
+        }
+        buf.extend_from_slice(&chunk);
+    }
+
+    let body = String::from_utf8_lossy(&buf);
     let title = extract_title(&body);
     Ok(FetchResult {
         url: screened.to_string(),
@@ -117,5 +144,17 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(e, FetchError::Guard(GuardReject::DeniedHost)));
+    }
+
+    #[test]
+    fn body_cap_would_exceed() {
+        // Under the cap: appending stays within budget.
+        assert!(!would_exceed(0, MAX_BODY_BYTES, MAX_BODY_BYTES));
+        assert!(!would_exceed(MAX_BODY_BYTES - 10, 10, MAX_BODY_BYTES));
+        // At/over the cap: one byte past the budget is rejected.
+        assert!(would_exceed(MAX_BODY_BYTES, 1, MAX_BODY_BYTES));
+        assert!(would_exceed(MAX_BODY_BYTES - 10, 11, MAX_BODY_BYTES));
+        // Saturating add: a huge chunk can't wrap around to look small.
+        assert!(would_exceed(1, usize::MAX, MAX_BODY_BYTES));
     }
 }
