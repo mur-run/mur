@@ -532,7 +532,7 @@ mod tests {
         // production "attempt to write a readonly database" report) plus the
         // channel's manifest directory (the mechanism that actually bites in
         // this in-process test — see comment above).
-        let index_dir = mur_home.join("index");
+        let index_dir = mur_home.join("index").join("channels");
         let db = index_dir.join("channels.db");
         std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o444)).unwrap();
         for ext in ["-wal", "-shm"] {
