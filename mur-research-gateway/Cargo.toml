@@ -16,3 +16,5 @@ serde_json = { workspace = true }
 reqwest = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+# Not in [workspace.dependencies]; pinned to match mur-agent-runtime's `url = "2"`.
+url = "2"
