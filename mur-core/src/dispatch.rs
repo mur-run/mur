@@ -445,13 +445,20 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::DeepResearch { action } => {
             let mur_home = crate::paths::mur_root(None);
             match action {
-                DeepResearchAction::Provision { count, prefix } => {
-                    cmd::deep_research::provision::cmd_provision(
-                        &mur_home,
-                        prefix.as_deref(),
-                        count,
-                    )?
-                }
+                DeepResearchAction::Provision {
+                    count,
+                    prefix,
+                    grant_egress,
+                    deny_hosts,
+                    yes,
+                } => cmd::deep_research::provision::cmd_provision(
+                    &mur_home,
+                    prefix.as_deref(),
+                    count,
+                    grant_egress,
+                    &deny_hosts,
+                    yes,
+                )?,
             }
         }
         Commands::Team { action } => match action {
