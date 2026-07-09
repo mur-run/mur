@@ -150,7 +150,10 @@ impl McpServer {
             let mut result =
                 browser::fetch_rendered(&url, deny, cfg, want_chrome, browser_timeout).await;
             let mut tier_label = "fetch (rendered)";
-            if !want_chrome && should_escalate_to_chrome(&result) {
+            // Escalate only when tier 2 actually ran lightpanda: with no
+            // lightpanda configured the first attempt was already chrome
+            // (build_fetch_argv), so retrying chrome would just waste a spawn.
+            if !want_chrome && cfg.lightpanda_path.is_some() && should_escalate_to_chrome(&result) {
                 // lightpanda failed or rendered nothing → retry under chrome.
                 result = browser::fetch_rendered(&url, deny, cfg, true, browser_timeout).await;
                 tier_label = "fetch (tier 3)";
