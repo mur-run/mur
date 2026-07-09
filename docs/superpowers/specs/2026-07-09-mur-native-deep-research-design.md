@@ -189,6 +189,24 @@ must honor it exactly (cross-checked against `2026-07-08-agent-egress-governance
 Net: one gateway choke point means Phase 2 (request-level audit) is partially realized
 here today, and Phase 3 (DLP / pin-to-proxy) later touches exactly one point.
 
+## 7a. Provisioning and Tool Rules
+
+### Headless HITL: gateway tool pre-approval
+
+`provision` stamps one `ToolRule` per worker:
+`{ pattern: mcp__research-gateway__*, policy: allow }`.
+
+Rationale: fleet-delegated turns are headless — the `tool/approval_needed`
+prompt the runtime emits on the default `ask` policy has no answerer, so
+risk-tiered tool calls dead-end in a 300 s timeout → deny → `state: failed`
+(the operator-E2E blocker). The two gateway tools are read-only and fully
+governed downstream (SSRF guard, deny-hosts, audit log), and the rule grants
+no egress by itself: the gateway's outbound stays Inherit/restricted until
+the separate explicit-consent `--grant-egress` step. The consent boundary is
+unchanged; only the redundant per-call prompt (which nothing can answer) is
+removed, and only for this one server's tools. Everything else keeps the
+fail-closed `ask` default.
+
 ## 8. Component boundaries
 
 | Unit | Responsibility | Depends on |
