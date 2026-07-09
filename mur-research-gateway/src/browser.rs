@@ -10,7 +10,6 @@
 // code, BEFORE spawning agent-browser — never delegate that to the proxy.
 
 use crate::fetcher::{self, FetchError, FetchResult};
-use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -26,13 +25,6 @@ pub enum Preflight {
     LightpandaMissing,
     AgentBrowserTooOld(String),
     AgentBrowserMissing,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SearchHit {
-    pub title: String,
-    pub url: String,
-    pub snippet: String,
 }
 
 /// Build the agent-browser argv for a single fetch. Pure → unit-testable.
@@ -218,7 +210,7 @@ pub async fn search(
     deny: &[String],
     cfg: &BrowserCfg,
     timeout: Duration,
-) -> Result<Vec<SearchHit>, FetchError> {
+) -> Result<Vec<crate::fetcher::SearchHit>, FetchError> {
     let mut search_url =
         url::Url::parse("https://html.duckduckgo.com/html/").expect("static URL is valid");
     search_url.query_pairs_mut().append_pair("q", query);
@@ -237,7 +229,7 @@ pub async fn search(
 /// snippet is the next non-empty, non-link line. Good enough for v1 — the
 /// upstream search engine's HTML is not a contract MUR controls (spec §11:
 /// a dedicated search API is out of scope), so don't over-invest here.
-fn parse_search_hits(text: &str, limit: usize) -> Vec<SearchHit> {
+fn parse_search_hits(text: &str, limit: usize) -> Vec<crate::fetcher::SearchHit> {
     let mut hits = Vec::new();
     let mut lines = text.lines().peekable();
     while let Some(line) = lines.next() {
@@ -255,7 +247,7 @@ fn parse_search_hits(text: &str, limit: usize) -> Vec<SearchHit> {
             .filter(|l| !l.trim().is_empty() && parse_markdown_link(l).is_none())
             .map(|l| l.trim().to_string())
             .unwrap_or_default();
-        hits.push(SearchHit {
+        hits.push(crate::fetcher::SearchHit {
             title,
             url,
             snippet,
