@@ -1,36 +1,11 @@
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 
-/// Match a host against an allowlist pattern.
-///
-/// Canonical wildcard syntax is `*.example.com` (matches `api.example.com`
-/// and `example.com`).  For backward compatibility the legacy leading-dot
-/// form `.example.com` is also accepted and treated identically.
-///
-/// Both layers that perform host-allowlist checks (`HostGuard` DNS resolver
-/// and the B0 safety hook) must call this function so they share a single
-/// interpretation of wildcard patterns.
-pub fn host_matches_pattern(host: &str, pattern: &str) -> bool {
-    let host = host.to_ascii_lowercase();
-    let pattern = pattern.to_ascii_lowercase();
-    // Strip leading `*.` (canonical) or leading `.` (legacy) to get the suffix.
-    let suffix = if let Some(s) = pattern.strip_prefix("*.") {
-        s
-    } else if let Some(s) = pattern.strip_prefix('.') {
-        s
-    } else {
-        // Exact match only.
-        return host == pattern;
-    };
-    host == suffix || host.ends_with(&format!(".{suffix}"))
-}
-
-/// True if `host` matches any allowlist pattern. An empty allowlist denies all
-/// (fail-closed). Reuses the same matcher the agent's reqwest guard uses, so
-/// per-MCP-server egress allowlisting behaves identically to agent-level hosts.
-pub fn host_allowed(host: &str, allow: &[String]) -> bool {
-    allow.iter().any(|p| host_matches_pattern(host, p))
-}
+/// Host-pattern matcher, hoisted to `mur-common` as the single source of
+/// truth shared by the egress proxy (this module) and the research
+/// gateway's SSRF guard. Re-exported here so existing callers
+/// (`egress_proxy.rs` et al.) are unchanged.
+pub use mur_common::net::{host_allowed, host_matches_pattern};
 
 /// True for IP ranges an outbound request must never reach: the link-local /
 /// cloud-metadata range (IPv4 169.254.0.0/16 — includes 169.254.169.254 — and
