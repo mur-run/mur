@@ -264,6 +264,14 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
                     "(allow network-outbound (remote tcp \"*:{port}\"))"
                 ));
             }
+            // Loopback-only carve-outs (egress proxy listener): SBPL's
+            // `remote tcp` accepts `localhost` as the host, so this does NOT
+            // widen general egress — only dials to 127.0.0.1/::1 on the port.
+            for port in &policy.net_allow_loopback_ports {
+                lines.push(format!(
+                    "(allow network-outbound (remote tcp \"localhost:{port}\"))"
+                ));
+            }
         }
     }
 
@@ -526,6 +534,24 @@ mod tests {
         assert!(
             sbpl.contains("(allow process-exec* (subpath \"/opt/fake\"))"),
             "missing subpath allow for spawn_allowed_prefixes:\n{sbpl}"
+        );
+    }
+
+    #[test]
+    fn loopback_port_carveout_is_localhost_scoped() {
+        let mut policy = SandboxPolicy {
+            net_allow_ports: Some(vec![80, 443]),
+            ..Default::default()
+        };
+        policy.allow_loopback_ports(&[54321]);
+        let sbpl = build_sbpl_profile(&policy);
+        assert!(
+            sbpl.contains("(allow network-outbound (remote tcp \"localhost:54321\"))"),
+            "proxy port must be loopback-scoped: {sbpl}"
+        );
+        assert!(
+            !sbpl.contains("\"*:54321\""),
+            "proxy port must NOT be wildcard-host: {sbpl}"
         );
     }
 }

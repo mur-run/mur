@@ -49,9 +49,9 @@ pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
     // An empty `ports` list (mode = Off) means no ConnectTcp rules are added,
     // which blocks all outbound TCP (Landlock default-deny for handled accesses).
     if let Some(ports) = &policy.net_allow_ports {
-        for &port in ports {
+        for port in ports.iter().chain(policy.net_allow_loopback_ports.iter()) {
             created = created
-                .add_rule(NetPort::new(port, AccessNet::ConnectTcp))
+                .add_rule(NetPort::new(*port, AccessNet::ConnectTcp))
                 .context("add net port rule")?;
         }
     }
