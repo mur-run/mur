@@ -11,6 +11,8 @@
 
 use crate::fetcher::{self, FetchError, FetchResult};
 use serde::Serialize;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 pub struct BrowserCfg {
     pub agent_browser_bin: String,
@@ -63,16 +65,23 @@ pub fn build_fetch_argv(url: &str, cfg: &BrowserCfg, want_chrome: bool) -> Vec<S
     a
 }
 
-/// Deterministic per-URL session id so concurrent fetches never cross-contaminate
-/// cookie jars. FNV-1a keeps it fast and filesystem-safe (no path chars).
+/// Per-FETCH unique session id so even two concurrent fetches of the SAME url
+/// get distinct cookie jars (Global Constraint: per-fetch isolation). The
+/// URL's FNV-1a hash keeps ids meaningful/greppable; a process-wide atomic
+/// counter guarantees uniqueness across calls (NOT random/time — deterministic
+/// within a run, collision-free). FNV-1a keeps the hash fast and filesystem-safe.
 fn session_id(url: &str) -> String {
     let mut h: u64 = 1469598103934665603;
     for b in url.bytes() {
         h ^= b as u64;
         h = h.wrapping_mul(1099511628211);
     }
-    format!("rg-{h:016x}")
+    let seq = SESSION_SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("rg-{h:016x}-{seq:016x}")
 }
+
+/// Monotonic per-fetch counter mixed into every `session_id` — see its doc.
+static SESSION_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Production preflight: shells out to `agent-browser --version` and combines
 /// the result with `cfg` via `preflight_from_versions`. NOT exercised by unit
@@ -114,10 +123,13 @@ pub fn preflight_from_versions(
     if !ab_present {
         return Preflight::AgentBrowserMissing;
     }
-    if let Some(v) = ab_version
-        && !version_ge(v, 0, 28)
-    {
-        return Preflight::AgentBrowserTooOld(v.into());
+    // ab present but version unparseable → treat as too-old, never fall through
+    // to Full. Silently proceeding as Full on an unknown version is forbidden
+    // (brief: "never silently proceed as Full").
+    match ab_version {
+        Some(v) if !version_ge(v, 0, 28) => return Preflight::AgentBrowserTooOld(v.into()),
+        Some(_) => {}
+        None => return Preflight::AgentBrowserTooOld("unknown".into()),
     }
     if cfg.lightpanda_path.is_none() {
         return Preflight::LightpandaMissing;
@@ -132,30 +144,47 @@ fn version_ge(v: &str, maj: u32, min: u32) -> bool {
     a > maj || (a == maj && b >= min)
 }
 
-/// Fetch a JS-rendered page. Pre-spawn SSRF/deny screen (proxy can't see the
-/// browser's connections — spec §5), then drive agent-browser. `want_chrome`
-/// forces tier 3; otherwise tier 2 (lightpanda) is used when available.
-pub async fn fetch_rendered(
-    url: &str,
-    deny: &[String],
-    cfg: &BrowserCfg,
-    want_chrome: bool,
-) -> Result<FetchResult, FetchError> {
-    let screened = fetcher::screen_url_blocking(url, deny)
+/// Spawn agent-browser with `argv`, bounded by `timeout` (same source tier-1
+/// uses), and return its stdout. Enforces the tier-1 body cap on stdout so a
+/// runaway render can't buffer unbounded. Shared by `fetch_rendered`/`search`.
+async fn run_agent_browser(
+    bin: &str,
+    argv: &[String],
+    timeout: Duration,
+) -> Result<String, FetchError> {
+    let fut = tokio::process::Command::new(bin).args(argv).output();
+    let out = tokio::time::timeout(timeout, fut)
         .await
-        .map_err(FetchError::Guard)?;
-    let argv = build_fetch_argv(screened.as_str(), cfg, want_chrome);
-    let out = tokio::process::Command::new(&cfg.agent_browser_bin)
-        .args(&argv)
-        .output()
-        .await
+        .map_err(|_| FetchError::Http("agent-browser timed out".into()))?
         .map_err(|e| FetchError::Http(format!("spawn agent-browser: {e}")))?;
     if !out.status.success() {
         return Err(FetchError::Http(
             String::from_utf8_lossy(&out.stderr).into(),
         ));
     }
-    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    // TODO(Phase 3): stream stdout to cap before full buffering.
+    if out.stdout.len() > fetcher::MAX_BODY_BYTES {
+        return Err(FetchError::TooLarge);
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// Fetch a JS-rendered page. Pre-spawn SSRF/deny screen (proxy can't see the
+/// browser's connections — spec §5), then drive agent-browser under `timeout`.
+/// `want_chrome` forces tier 3; otherwise tier 2 (lightpanda) is used when
+/// available.
+pub async fn fetch_rendered(
+    url: &str,
+    deny: &[String],
+    cfg: &BrowserCfg,
+    want_chrome: bool,
+    timeout: Duration,
+) -> Result<FetchResult, FetchError> {
+    let screened = fetcher::screen_url_blocking(url, deny)
+        .await
+        .map_err(FetchError::Guard)?;
+    let argv = build_fetch_argv(screened.as_str(), cfg, want_chrome);
+    let text = run_agent_browser(&cfg.agent_browser_bin, &argv, timeout).await?;
     let tier = if want_chrome || cfg.lightpanda_path.is_none() {
         3
     } else {
@@ -172,13 +201,14 @@ pub async fn fetch_rendered(
 
 /// Web search. Drives agent-browser to a search-results page and parses hits.
 /// v1 rides the browser engine — a dedicated search-provider API is out of
-/// scope per spec §11. Same pre-spawn screen as `fetch_rendered`; tier follows
-/// `cfg` (lightpanda when available, else chrome) — never caller-selectable,
-/// since search has no anti-bot escalation path of its own.
+/// scope per spec §11. Same pre-spawn screen and `timeout` as `fetch_rendered`;
+/// tier follows `cfg` (lightpanda when available, else chrome) — never
+/// caller-selectable, since search has no anti-bot escalation path of its own.
 pub async fn search(
     query: &str,
     limit: usize,
     cfg: &BrowserCfg,
+    timeout: Duration,
 ) -> Result<Vec<SearchHit>, FetchError> {
     let mut search_url =
         url::Url::parse("https://html.duckduckgo.com/html/").expect("static URL is valid");
@@ -192,17 +222,7 @@ pub async fn search(
         .map_err(FetchError::Guard)?;
 
     let argv = build_fetch_argv(screened.as_str(), cfg, false);
-    let out = tokio::process::Command::new(&cfg.agent_browser_bin)
-        .args(&argv)
-        .output()
-        .await
-        .map_err(|e| FetchError::Http(format!("spawn agent-browser: {e}")))?;
-    if !out.status.success() {
-        return Err(FetchError::Http(
-            String::from_utf8_lossy(&out.stderr).into(),
-        ));
-    }
-    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let text = run_agent_browser(&cfg.agent_browser_bin, &argv, timeout).await?;
     Ok(parse_search_hits(&text, limit))
 }
 
@@ -344,6 +364,20 @@ mod tests {
         ));
     }
     #[test]
+    fn preflight_unparseable_version_is_not_full() {
+        // agent-browser ran (present) but its version output couldn't be
+        // parsed → must NOT silently proceed as Full even with lightpanda
+        // present; degrade to AgentBrowserTooOld("unknown").
+        let cfg = BrowserCfg {
+            agent_browser_bin: "agent-browser".into(),
+            lightpanda_path: Some("/x/lightpanda".into()),
+            chrome_stealth_args: String::new(),
+        };
+        let pf = preflight_from_versions(true, None, &cfg);
+        assert!(!matches!(pf, Preflight::Full));
+        assert!(matches!(pf, Preflight::AgentBrowserTooOld(v) if v == "unknown"));
+    }
+    #[test]
     fn version_ge_handles_v_prefix_and_bounds() {
         assert!(version_ge("v0.28.0", 0, 28));
         assert!(version_ge("0.31.1", 0, 28));
@@ -351,8 +385,10 @@ mod tests {
         assert!(!version_ge("0.27.9", 0, 28));
     }
     #[test]
-    fn session_id_is_deterministic_and_url_scoped() {
-        assert_eq!(
+    fn session_id_is_unique_per_fetch() {
+        // Per-FETCH uniqueness: even two calls with the SAME url must differ
+        // (distinct cookie jars for concurrent same-url fetches).
+        assert_ne!(
             session_id("https://a.example"),
             session_id("https://a.example")
         );

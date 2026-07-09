@@ -3,7 +3,9 @@ use crate::net_guard::{self, GuardReject};
 use serde::Serialize;
 use std::time::Duration;
 
-const MAX_BODY_BYTES: usize = 5 * 1024 * 1024; // ponytail: 5MB cap; config if a real doc exceeds it
+// pub(crate) so browser.rs (tiers 2/3) enforces the SAME body cap on
+// agent-browser stdout that tier-1 enforces on the HTTP body.
+pub(crate) const MAX_BODY_BYTES: usize = 5 * 1024 * 1024; // ponytail: 5MB cap; config if a real doc exceeds it
 
 #[derive(Debug, Serialize)]
 pub struct FetchResult {

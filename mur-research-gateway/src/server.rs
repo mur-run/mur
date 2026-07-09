@@ -148,6 +148,7 @@ impl McpServer {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let deny = deny_hosts_from_env();
+        let timeout = timeout_from_env();
         if render {
             // Caller may force tier 3 (chrome) directly, e.g. for anti-bot pages
             // known to defeat lightpanda; otherwise tier 2 first, escalating to
@@ -158,13 +159,13 @@ impl McpServer {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             let cfg = browser_cfg_from_env();
-            return match browser::fetch_rendered(&url, &deny, &cfg, want_chrome).await {
+            return match browser::fetch_rendered(&url, &deny, &cfg, want_chrome, timeout).await {
                 Ok(result) => Response::success(
                     id,
                     serde_json::to_value(result).unwrap_or(serde_json::Value::Null),
                 ),
                 Err(FetchError::Http(_)) if !want_chrome => {
-                    match browser::fetch_rendered(&url, &deny, &cfg, true).await {
+                    match browser::fetch_rendered(&url, &deny, &cfg, true, timeout).await {
                         Ok(result) => Response::success(
                             id,
                             serde_json::to_value(result).unwrap_or(serde_json::Value::Null),
@@ -175,7 +176,6 @@ impl McpServer {
                 Err(e) => fetch_error_response(id, "fetch (rendered)", e),
             };
         }
-        let timeout = timeout_from_env();
         match fetcher::fetch_tier1(&url, &deny, timeout).await {
             Ok(result) => Response::success(
                 id,
@@ -200,7 +200,8 @@ impl McpServer {
             .unwrap_or(5)
             .clamp(1, 20) as usize;
         let cfg = browser_cfg_from_env();
-        match browser::search(&query, limit, &cfg).await {
+        let timeout = timeout_from_env();
+        match browser::search(&query, limit, &cfg, timeout).await {
             Ok(hits) => Response::success(
                 id,
                 serde_json::to_value(hits).unwrap_or(serde_json::Value::Null),
