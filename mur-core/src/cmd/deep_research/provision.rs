@@ -34,14 +34,38 @@ const GATEWAY_MCP_NAME: &str = "research-gateway";
 /// `build.sh`, shipped by Tasks 1-6).
 const GATEWAY_MCP_COMMAND: &str = "mur-research-gateway";
 
+/// Upper bound on `--count`: provisioning creates one agent dir + Ed25519
+/// identity + runtime symlink per worker, so an unbounded count is a foot-gun.
+/// Named to avoid an inline literal (mandatory rule 1).
+const MAX_WORKER_COUNT: usize = 64;
+
 /// Create `count` restricted worker agents named `<name_prefix>_1..N`, each
 /// mounting the `research-gateway` MCP server with no egress grant of its
 /// own. Returns the created agent names, in order.
+///
+/// # Concurrency
+///
+/// This function sets the **process-global** `MUR_HOME` env var for its whole
+/// duration (and does NOT restore it), because the reused `cmd_create` /
+/// `cmd_mcp_add` helpers re-derive their home directory from that env var
+/// rather than taking a parameter. It is therefore **CLI-only and NOT
+/// concurrency-safe**: it must not run while another thread/task reads or
+/// writes `MUR_HOME`. Safe for the single-threaded CLI dispatch path today.
+// TODO(follow-up): parameterize cmd_create/cmd_mcp_add with mur_home instead of
+// mutating the global env, before any daemon/async caller uses provision().
 pub fn provision(mur_home: &Path, name_prefix: &str, count: usize) -> Result<Vec<String>> {
+    if count == 0 {
+        anyhow::bail!("count must be at least 1");
+    }
+    if count > MAX_WORKER_COUNT {
+        anyhow::bail!("count {count} exceeds the maximum of {MAX_WORKER_COUNT} workers");
+    }
+
     // `cmd_create` and `cmd_mcp_add` resolve their home directory via the
     // `MUR_HOME` env var (`resolve_mur_home` / `load_profile_for_edit`), so
     // provisioning against an explicit `mur_home` means pointing that env
     // var at it first — the same pattern `cmd::agent::mcp::tests` uses.
+    // See the `# Concurrency` note above: this permanently mutates process env.
     unsafe {
         std::env::set_var("MUR_HOME", mur_home);
     }
@@ -127,5 +151,19 @@ mod tests {
             mur_common::agent::NetworkOutboundMode::Restricted
         );
         assert!(p.entitlements.network.outbound.allow_hosts.is_empty());
+    }
+
+    #[test]
+    fn provision_rejects_zero_and_over_max_count() {
+        // Count validation happens before any env mutation, so no lock/tmp
+        // plumbing is needed — but take the lock anyway for hygiene.
+        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+
+        let zero = provision(tmp.path(), "dr_worker", 0);
+        assert!(zero.is_err(), "count==0 must error");
+
+        let too_many = provision(tmp.path(), "dr_worker", MAX_WORKER_COUNT + 1);
+        assert!(too_many.is_err(), "count > MAX_WORKER_COUNT must error");
     }
 }
