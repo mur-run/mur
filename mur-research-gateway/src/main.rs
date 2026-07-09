@@ -1,6 +1,7 @@
 // mur-research-gateway/src/main.rs
 use tracing_subscriber::EnvFilter;
 
+mod audit;
 mod browser;
 mod fetcher;
 mod jsonrpc;

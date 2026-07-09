@@ -1,9 +1,19 @@
 // mur-research-gateway/src/server.rs
+use crate::audit::{AuditRecord, audit};
 use crate::browser::{self, BrowserCfg};
 use crate::fetcher::{self, FetchError};
 use crate::jsonrpc::{Request, Response};
 use crate::tools;
 use std::time::Duration;
+
+/// `denied` for the SSRF guard rejection, `error` for every other `FetchError`
+/// variant (Http/TooLarge) — the audit's outcome taxonomy per spec §7.2/§7.4.
+fn fetch_outcome(err: &FetchError) -> &'static str {
+    match err {
+        FetchError::Guard(_) => "denied",
+        FetchError::Http(_) | FetchError::TooLarge => "error",
+    }
+}
 
 /// Interim config (Task placeholder): env vars until config.yaml lands (Task 6).
 // TODO(Task 6): read from config.yaml
@@ -160,28 +170,46 @@ impl McpServer {
                 .unwrap_or(false);
             let cfg = browser_cfg_from_env();
             return match browser::fetch_rendered(&url, &deny, &cfg, want_chrome, timeout).await {
-                Ok(result) => Response::success(
-                    id,
-                    serde_json::to_value(result).unwrap_or(serde_json::Value::Null),
-                ),
+                Ok(result) => {
+                    audit(AuditRecord::new("fetch", url, Some(result.tier), "ok"));
+                    Response::success(
+                        id,
+                        serde_json::to_value(result).unwrap_or(serde_json::Value::Null),
+                    )
+                }
                 Err(FetchError::Http(_)) if !want_chrome => {
                     match browser::fetch_rendered(&url, &deny, &cfg, true, timeout).await {
-                        Ok(result) => Response::success(
-                            id,
-                            serde_json::to_value(result).unwrap_or(serde_json::Value::Null),
-                        ),
-                        Err(e) => fetch_error_response(id, "fetch (tier 3)", e),
+                        Ok(result) => {
+                            audit(AuditRecord::new("fetch", url, Some(result.tier), "ok"));
+                            Response::success(
+                                id,
+                                serde_json::to_value(result).unwrap_or(serde_json::Value::Null),
+                            )
+                        }
+                        Err(e) => {
+                            audit(AuditRecord::new("fetch", url, None, fetch_outcome(&e)));
+                            fetch_error_response(id, "fetch (tier 3)", e)
+                        }
                     }
                 }
-                Err(e) => fetch_error_response(id, "fetch (rendered)", e),
+                Err(e) => {
+                    audit(AuditRecord::new("fetch", url, None, fetch_outcome(&e)));
+                    fetch_error_response(id, "fetch (rendered)", e)
+                }
             };
         }
         match fetcher::fetch_tier1(&url, &deny, timeout).await {
-            Ok(result) => Response::success(
-                id,
-                serde_json::to_value(result).unwrap_or(serde_json::Value::Null),
-            ),
-            Err(e) => fetch_error_response(id, "fetch", e),
+            Ok(result) => {
+                audit(AuditRecord::new("fetch", url, Some(result.tier), "ok"));
+                Response::success(
+                    id,
+                    serde_json::to_value(result).unwrap_or(serde_json::Value::Null),
+                )
+            }
+            Err(e) => {
+                audit(AuditRecord::new("fetch", url, None, fetch_outcome(&e)));
+                fetch_error_response(id, "fetch", e)
+            }
         }
     }
 
@@ -202,11 +230,17 @@ impl McpServer {
         let cfg = browser_cfg_from_env();
         let timeout = timeout_from_env();
         match browser::search(&query, limit, &cfg, timeout).await {
-            Ok(hits) => Response::success(
-                id,
-                serde_json::to_value(hits).unwrap_or(serde_json::Value::Null),
-            ),
-            Err(e) => fetch_error_response(id, "search", e),
+            Ok(hits) => {
+                audit(AuditRecord::new("search", query, None, "ok"));
+                Response::success(
+                    id,
+                    serde_json::to_value(hits).unwrap_or(serde_json::Value::Null),
+                )
+            }
+            Err(e) => {
+                audit(AuditRecord::new("search", query, None, fetch_outcome(&e)));
+                fetch_error_response(id, "search", e)
+            }
         }
     }
 }
