@@ -653,6 +653,21 @@ pub enum DeepResearchAction {
         /// (default: DEFAULT_WORKER_PREFIX)
         #[arg(long)]
         prefix: Option<String>,
+        /// After provisioning, also grant each worker's `research-gateway`
+        /// server `BroadAudited` egress (allow-ALL-except-deny-list, routed
+        /// through the audited proxy). A separate, explicit-consent step —
+        /// omit this flag and workers keep NO outbound egress. Prompts
+        /// `[y/N]` per worker unless `--yes`.
+        #[arg(long)]
+        grant_egress: bool,
+        /// Denied host (repeatable) for the `--grant-egress` grant; ignored
+        /// otherwise.
+        #[arg(long = "deny-host")]
+        deny_hosts: Vec<String>,
+        /// Skip the `--grant-egress` consent prompt. Use for scripted /
+        /// non-interactive grants.
+        #[arg(long)]
+        yes: bool,
     },
 }
 

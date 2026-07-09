@@ -18,7 +18,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::cmd::agent::lifecycle::cmd_create;
-use crate::cmd::agent::mcp::{McpAddPin, cmd_mcp_add};
+use crate::cmd::agent::mcp::{McpAddPin, cmd_mcp_add, cmd_mcp_set_network};
 
 /// Default number of workers `mur deep-research provision` creates when
 /// `--count` is omitted.
@@ -89,13 +89,52 @@ pub fn provision(mur_home: &Path, name_prefix: &str, count: usize) -> Result<Vec
     Ok(names)
 }
 
+/// Grant `worker`'s `research-gateway` MCP server `BroadAudited` egress —
+/// the ONE place a deep-research worker actually gains outbound network
+/// access. This is a separate, explicit-consent step: it is never called
+/// from [`provision`] itself and must never be called from fleet creation.
+///
+/// Reuses the shipped consent path verbatim
+/// (`cmd::agent::mcp::cmd_mcp_set_network`, PR #661) rather than
+/// re-implementing BroadAudited-setting or authorization-recording: that
+/// function already prompts for `[y/N]` consent on stdin unless `yes` is
+/// set, records the `EgressAuthorization { authorized_by, authorized_at_ms }`,
+/// emits the `mur.egress.broad_audited.enabled` telemetry event, and clears
+/// any prior authorization when the mode changes away from `BroadAudited`.
+///
+/// Sets the process-global `MUR_HOME` env var for its duration, same
+/// caveat as [`provision`]'s `# Concurrency` note (`cmd_mcp_set_network`
+/// re-derives its home directory from that env var).
+pub fn grant_egress(mur_home: &Path, worker: &str, deny_hosts: &[String], yes: bool) -> Result<()> {
+    unsafe {
+        std::env::set_var("MUR_HOME", mur_home);
+    }
+    cmd_mcp_set_network(
+        worker,
+        GATEWAY_MCP_NAME,
+        vec![],
+        deny_hosts.to_vec(),
+        false,
+        true,
+        yes,
+    )
+}
+
 /// CLI-facing wrapper for `mur deep-research provision`: applies
 /// [`DEFAULT_WORKER_PREFIX`]/[`DEFAULT_WORKER_COUNT`] when the flags are
-/// omitted, provisions the workers, and prints their names.
+/// omitted, provisions the workers, prints their names, and — ONLY when
+/// `grant_egress_flag` is set via the explicit `--grant-egress` CLI flag —
+/// grants each worker's gateway `BroadAudited` egress via [`grant_egress`]
+/// (consent-prompted per worker unless `yes`). Plain `provision` (the
+/// default) never grants egress.
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_provision(
     mur_home: &Path,
     name_prefix: Option<&str>,
     count: Option<usize>,
+    grant_egress_flag: bool,
+    deny_hosts: &[String],
+    yes: bool,
 ) -> Result<()> {
     let prefix = name_prefix.unwrap_or(DEFAULT_WORKER_PREFIX);
     let count = count.unwrap_or(DEFAULT_WORKER_COUNT);
@@ -103,6 +142,11 @@ pub fn cmd_provision(
     println!("Provisioned {} deep-research worker agent(s):", names.len());
     for name in &names {
         println!("  {name}");
+    }
+    if grant_egress_flag {
+        for name in &names {
+            grant_egress(mur_home, name, deny_hosts, yes)?;
+        }
     }
     Ok(())
 }
@@ -151,6 +195,32 @@ mod tests {
             mur_common::agent::NetworkOutboundMode::Restricted
         );
         assert!(p.entitlements.network.outbound.allow_hosts.is_empty());
+    }
+
+    #[test]
+    fn grant_sets_broad_audited_with_authorization() {
+        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        unsafe {
+            std::env::set_var("MUR_AGENT_BIN_DIR", &bin_dir);
+        }
+
+        let names = provision(tmp.path(), "dr_worker", 1).unwrap();
+        grant_egress(tmp.path(), &names[0], &["evil.example".into()], true).unwrap();
+        let p = mur_common::agent::AgentProfile::load(tmp.path(), &names[0]).unwrap();
+        let gw = p
+            .mcp_servers
+            .iter()
+            .find(|s| s.name == "research-gateway")
+            .unwrap();
+        let net = gw.network.as_ref().unwrap();
+        assert!(matches!(
+            net.mode,
+            mur_common::agent::McpNetMode::BroadAudited
+        ));
+        assert!(net.authorization.is_some());
+        assert!(net.deny_hosts.contains(&"evil.example".to_string()));
     }
 
     #[test]
