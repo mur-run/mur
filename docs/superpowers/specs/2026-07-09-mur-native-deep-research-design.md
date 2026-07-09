@@ -128,6 +128,15 @@ that holds egress.
 - **SSRF guard (hard rule, non-configurable)** — refuse any URL resolving to a
   private / link-local / loopback / unique-local address; re-resolve after DNS and
   re-check (DNS-rebinding defense). Applied to every tier.
+- **Where `deny_hosts` + SSRF are enforced (tier-dependent — load-bearing).** The
+  egress proxy only sees tier-1 (`reqwest`) connections; the tier-2/3 browser
+  subprocesses open their own connections the proxy cannot observe. Therefore, for
+  the browser tiers, `deny_hosts` and the SSRF guard are enforced **in gateway code
+  before spawning the browser** (URL pre-filtered; refused URLs never reach
+  agent-browser). Proxy-layer deny/audit is a backstop for tier 1 only; the gateway's
+  own pre-spawn check + URL-level audit is the sole enforcement/evidence for tiers
+  2/3. This is not a dependency on egress-governance Phase 3 — it is the gateway
+  doing its own job; Phase 3 (sbpl pin-to-proxy) later makes it airtight.
 - **URL-level audit** — every call logs `{worker, url, tier, outcome}` to the channel
   and telemetry, giving request-level auditability above the proxy's host-level
   CONNECT log.
@@ -162,7 +171,9 @@ must honor it exactly (cross-checked against `2026-07-08-agent-egress-governance
 2. **Two-layer audit.** Proxy per-CONNECT (host-level) + gateway per-call (URL-level).
    Every report citation reconciles to one gateway audit record.
 3. **SSRF guard** (§5) — broad-audited's "all" must exclude internal networks;
-   non-negotiable, on top of `deny_hosts`.
+   non-negotiable, on top of `deny_hosts`. For the browser tiers, both `deny_hosts`
+   and SSRF are enforced **in gateway code pre-spawn** (§5) — the proxy cannot see
+   browser-subprocess connections, so it is not the enforcement point there.
 4. **Advisory-enforcement honesty.** tier 1 (reqwest) honors the proxy; tier 2/3
    browser subprocesses may not — mitigated by universal gateway URL audit, and
    documented (not overclaimed) as "airtight = Phase 3 sbpl pin-to-proxy, which then
