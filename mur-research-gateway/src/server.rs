@@ -15,6 +15,20 @@ fn fetch_outcome(err: &FetchError) -> &'static str {
     }
 }
 
+/// Escalate a rendered fetch from lightpanda (tier 2) to chrome (tier 3)?
+/// Yes when lightpanda "doesn't work": an `Http` failure (spawn/timeout/
+/// non-zero exit all map here), OR a success that rendered no text (the
+/// engine ran but produced nothing — the exit-0-empty case a plain Http-error
+/// check misses). `Guard`/`TooLarge` are tier-independent — chrome can't fix a
+/// blocked host or an oversized body — so never escalate on those.
+fn should_escalate_to_chrome(result: &Result<fetcher::FetchResult, FetchError>) -> bool {
+    match result {
+        Err(FetchError::Http(_)) => true,
+        Ok(res) => res.text.trim().is_empty(),
+        Err(FetchError::Guard(_)) | Err(FetchError::TooLarge) => false,
+    }
+}
+
 fn fetch_error_response(id: Option<serde_json::Value>, verb: &str, err: FetchError) -> Response {
     match err {
         FetchError::Guard(reject) => Response::error(
@@ -124,18 +138,24 @@ impl McpServer {
         let deny = &self.config.deny_hosts;
         if render {
             // Caller may force tier 3 (chrome) directly, e.g. for anti-bot pages
-            // known to defeat lightpanda; otherwise tier 2 first, escalating to
-            // tier 3 only on an actual fetch failure (Http) — Guard/TooLarge
-            // outcomes are tier-independent, so retrying under chrome can't help.
+            // known to defeat lightpanda; otherwise tier 2 (lightpanda) first,
+            // escalating to tier 3 (chrome) when lightpanda "doesn't work" —
+            // see `should_escalate_to_chrome`.
             let want_chrome = args
                 .get("chrome")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             let cfg = &self.config.browser;
             let browser_timeout = self.config.browser_timeout;
-            return match browser::fetch_rendered(&url, deny, cfg, want_chrome, browser_timeout)
-                .await
-            {
+            let mut result =
+                browser::fetch_rendered(&url, deny, cfg, want_chrome, browser_timeout).await;
+            let mut tier_label = "fetch (rendered)";
+            if !want_chrome && should_escalate_to_chrome(&result) {
+                // lightpanda failed or rendered nothing → retry under chrome.
+                result = browser::fetch_rendered(&url, deny, cfg, true, browser_timeout).await;
+                tier_label = "fetch (tier 3)";
+            }
+            return match result {
                 Ok(result) => {
                     audit(AuditRecord::new("fetch", url, Some(result.tier), "ok"));
                     Response::success(
@@ -143,24 +163,9 @@ impl McpServer {
                         serde_json::to_value(result).unwrap_or(serde_json::Value::Null),
                     )
                 }
-                Err(FetchError::Http(_)) if !want_chrome => {
-                    match browser::fetch_rendered(&url, deny, cfg, true, browser_timeout).await {
-                        Ok(result) => {
-                            audit(AuditRecord::new("fetch", url, Some(result.tier), "ok"));
-                            Response::success(
-                                id,
-                                serde_json::to_value(result).unwrap_or(serde_json::Value::Null),
-                            )
-                        }
-                        Err(e) => {
-                            audit(AuditRecord::new("fetch", url, None, fetch_outcome(&e)));
-                            fetch_error_response(id, "fetch (tier 3)", e)
-                        }
-                    }
-                }
                 Err(e) => {
                     audit(AuditRecord::new("fetch", url, None, fetch_outcome(&e)));
-                    fetch_error_response(id, "fetch (rendered)", e)
+                    fetch_error_response(id, tier_label, e)
                 }
             };
         }
@@ -221,6 +226,37 @@ impl Default for McpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rendered(text: &str, tier: u8) -> Result<fetcher::FetchResult, FetchError> {
+        Ok(fetcher::FetchResult {
+            url: "https://example.com/".into(),
+            status: 200,
+            title: None,
+            text: text.into(),
+            tier,
+        })
+    }
+
+    #[test]
+    fn escalates_to_chrome_on_http_error_or_empty_render() {
+        // Http failure (spawn/timeout/non-zero exit) → escalate.
+        assert!(should_escalate_to_chrome(&Err(FetchError::Http(
+            "spawn agent-browser: fail".into()
+        ))));
+        // lightpanda ran but rendered nothing (exit-0-empty) → escalate.
+        assert!(should_escalate_to_chrome(&rendered("", 2)));
+        assert!(should_escalate_to_chrome(&rendered("   \n  ", 2)));
+        // lightpanda rendered real content → keep tier 2, do NOT escalate.
+        assert!(!should_escalate_to_chrome(&rendered(
+            "Example Domain\nhttps://example.com/",
+            2
+        )));
+        // Tier-independent rejections → never escalate (chrome can't help).
+        assert!(!should_escalate_to_chrome(&Err(FetchError::TooLarge)));
+        assert!(!should_escalate_to_chrome(&Err(FetchError::Guard(
+            crate::net_guard::GuardReject::BadScheme
+        ))));
+    }
 
     fn req(method: &str, params: Option<serde_json::Value>) -> Request {
         Request {
