@@ -174,6 +174,24 @@ impl SandboxPolicy {
             fs_write.push(channels);
         }
 
+        // The channel read-model (`<mur_home>/index`: channels.db + lance
+        // stores) is the same runtime-owned, rebuildable tier as the channel
+        // store above: a delegated agent's self-append refreshes
+        // channels.db's `updated_at` row. Without this grant SQLite maps the
+        // denied write to SQLITE_READONLY and every peer-writes-own append
+        // reports a false failure (G3, live fleet run 2026-07-09). Same
+        // create-before-grant idiom as `channels` (Landlock skips rules on
+        // paths that don't exist at seal time).
+        if let Some(index_dir) = agent_home
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|m| m.join("index"))
+            && !fs_write.contains(&index_dir)
+        {
+            let _ = std::fs::create_dir_all(&index_dir);
+            fs_write.push(index_dir);
+        }
+
         // Standard system read paths: libraries, certs, DNS config.
         let system_read = system_read_paths();
         for p in system_read {
@@ -1129,5 +1147,25 @@ mod tests {
         };
         p_u.allow_loopback_ports(&[54321]);
         assert!(p_u.net_allow_loopback_ports.is_empty());
+    }
+
+    #[test]
+    fn index_dir_is_granted_like_channels() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let agent_home = mur_home.join("agents").join("w1");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let ent = minimal_entitlements();
+        let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
+        assert!(
+            policy.fs_write.contains(&mur_home.join("channels")),
+            "pre-existing channels carve-out must remain"
+        );
+        assert!(
+            policy.fs_write.contains(&mur_home.join("index")),
+            "index read-model dir must be granted alongside channels"
+        );
+        // The grant idiom creates the dir so Landlock rules stick.
+        assert!(mur_home.join("index").is_dir());
     }
 }
