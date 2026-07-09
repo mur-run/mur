@@ -16,7 +16,7 @@
 - **`agent-browser mcp` / driver requires >= 0.28.0.** Preflight must check and degrade explicitly if lower/missing. — verified 2026-07-08.
 - **Workers hold NO egress.** Only the gateway subprocess reaches the web. Worker agent entitlements stay `restricted`. — spec §3.
 - **Egress grant only via the shipped consent path** (`mur agent mcp set-network <agent> research-gateway --broad-audited`). Fleet creation never opens egress implicitly. — spec §7.1.
-- **SSRF guard is non-configurable and stricter than the runtime's local-first guard** — the gateway refuses loopback + RFC1918/ULA private + link-local/metadata + unspecified (the runtime's `is_link_local_or_unspecified` deliberately allows loopback/private for local LLMs; the gateway must NOT). — spec §5, §7.3.
+- **SSRF guard is non-configurable and stricter than the runtime's local-first guard** — the gateway refuses loopback + RFC1918/ULA private + link-local/metadata + unspecified (the runtime's `is_link_local_or_unspecified` deliberately allows loopback/private for local LLMs; the gateway must NOT). The two IP predicates stay separate (different policies); the host-pattern **matcher** is single-sourced in `mur-common::net` (shared by the egress proxy and the gateway — a security boundary must not have two copies that can drift). — spec §5, §7.3.
 - **Brand:** user-facing label is uppercase where surfaced; internal names lowercase. — CLAUDE.md rule 7.
 - **Build env:** `mur-core`/runtime need `ORT_STRATEGY=download` + `MUR_WEB_DIST=$HOME/Projects/mur-web/dist`; rustup toolchain on PATH. The gateway crate itself is light (no ORT). — `mem:env_ort_strategy_download`.
 
@@ -185,22 +185,51 @@ git commit -m "feat(research-gateway): scaffold stdio MCP with search/fetch decl
 
 ---
 
-### Task 2: `net_guard.rs` — strict SSRF predicate + deny-host matcher
+### Task 2: shared host-matching (mur-common) + strict SSRF guard
 
-The security core. A pure module, unit-tested hard, with **no network**. It is deliberately stricter than the runtime's `is_link_local_or_unspecified` (which allows loopback/RFC1918 for local LLMs — wrong threat model for a web researcher).
+The security core. Two phases: (A) hoist the host-pattern matcher to `mur-common`
+so the egress proxy and this gateway share ONE matcher (a security boundary must
+not have two copies that can drift); (B) build the gateway's guard on top. The
+SSRF **IP** predicate is deliberately NOT shared — the runtime's
+`is_link_local_or_unspecified` allows loopback/RFC1918 (local LLMs) while the
+gateway forbids them; these are two different policies, not one duplicated block.
 
 **Files:**
+- Create: `mur-common/src/net.rs` (pure host-pattern matcher, shared)
+- Modify: `mur-common/src/lib.rs` (`pub mod net;`)
+- Modify: `mur-agent-runtime/src/sandbox/reqwest_guard.rs` (delete local `host_matches_pattern`/`host_allowed`; `pub use mur_common::net::{host_matches_pattern, host_allowed};` so existing callers are unchanged)
 - Create: `mur-research-gateway/src/net_guard.rs`
 - Modify: `mur-research-gateway/src/main.rs` (add `mod net_guard;`)
+- Modify: `mur-research-gateway/Cargo.toml` (add `url = { workspace = true }`)
 
 **Interfaces:**
-- Produces:
+- Produces (mur-common):
+  - `pub fn host_matches_pattern(host: &str, pattern: &str) -> bool` — `*.x.com` / legacy `.x.com` match subdomains + apex; else exact. Byte-identical to the current reqwest_guard version.
+  - `pub fn host_allowed(host: &str, allow: &[String]) -> bool` — true if any pattern matches (empty = false).
+- Produces (gateway `net_guard`):
   - `fn is_forbidden_target(ip: std::net::IpAddr) -> bool` — true for loopback, RFC1918/ULA private, link-local/metadata, unspecified (normalizing IPv4-in-IPv6 first).
-  - `fn host_denied(host: &str, deny: &[String]) -> bool` — true if host matches any deny pattern (`*.x.com` / `.x.com` / exact).
-  - `fn screen_url(url: &str, deny: &[String]) -> Result<url::Url, GuardReject>` — parse, reject non-http(s), reject denied host, resolve host and reject if ANY resolved IP is a forbidden target. Returns the parsed URL on pass. (Add `url` to Cargo.toml deps.)
+  - `fn host_denied(host: &str, deny: &[String]) -> bool` — thin wrapper: `mur_common::net::host_allowed(host, deny)` (same matcher; the deny LIST gives it deny semantics).
+  - `fn screen_url(url: &str, deny: &[String]) -> Result<url::Url, GuardReject>` — parse, reject non-http(s), reject denied host, resolve host and reject if ANY resolved IP is a forbidden target. Returns the parsed URL on pass.
   - `enum GuardReject { BadScheme, DeniedHost, PrivateAddress, Unresolvable }`
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Move the matcher to mur-common**
+
+Create `mur-common/src/net.rs` with `host_matches_pattern` + `host_allowed` copied **verbatim** from `mur-agent-runtime/src/sandbox/reqwest_guard.rs` (lines ~12-33), plus a unit test for each. Add `pub mod net;` to `mur-common/src/lib.rs`.
+
+- [ ] **Step 2: Point reqwest_guard at the shared matcher**
+
+In `reqwest_guard.rs`, delete the two local fns and add `pub use mur_common::net::{host_matches_pattern, host_allowed};` at the top (callers in `egress_proxy.rs` import them from here — unchanged). This is behavior-preserving.
+
+- [ ] **Step 3: Verify no egress regression, commit the extraction**
+
+Run: `ORT_STRATEGY=download cargo test -p mur-common net:: && ORT_STRATEGY=download cargo test -p mur-agent-runtime egress_proxy`
+Expected: PASS (matcher moved, egress-proxy allow/deny behavior identical).
+```bash
+git add mur-common/src/net.rs mur-common/src/lib.rs mur-agent-runtime/src/sandbox/reqwest_guard.rs
+git commit -m "refactor(net): hoist host-pattern matcher to mur-common (single source for egress + gateway)"
+```
+
+- [ ] **Step 4: Write the failing gateway-guard tests**
 
 ```rust
 #[cfg(test)]
@@ -236,12 +265,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [ ] **Step 5: Run to verify they fail**
 
 Run: `cargo test -p mur-research-gateway net_guard`
 Expected: FAIL — `net_guard` unresolved.
 
-- [ ] **Step 3: Implement `net_guard.rs`**
+- [ ] **Step 6: Implement `net_guard.rs`**
 
 ```rust
 use std::net::{IpAddr, ToSocketAddrs};
@@ -249,20 +278,11 @@ use std::net::{IpAddr, ToSocketAddrs};
 #[derive(Debug, PartialEq)]
 pub enum GuardReject { BadScheme, DeniedHost, PrivateAddress, Unresolvable }
 
-/// Host-pattern matcher. Mirrors `mur-agent-runtime::sandbox::reqwest_guard::
-/// host_matches_pattern` (kept local to avoid depending on the heavy runtime
-/// crate). `*.x.com` / legacy `.x.com` match subdomains + apex; else exact.
-fn host_matches_pattern(host: &str, pattern: &str) -> bool {
-    let host = host.to_ascii_lowercase();
-    let pattern = pattern.to_ascii_lowercase();
-    let suffix = if let Some(s) = pattern.strip_prefix("*.") { s }
-        else if let Some(s) = pattern.strip_prefix('.') { s }
-        else { return host == pattern };
-    host == suffix || host.ends_with(&format!(".{suffix}"))
-}
-
+/// Deny semantics via the shared matcher (single source of truth with the
+/// egress proxy — `mur_common::net`). Same matcher; the deny LIST is what
+/// makes a match mean "blocked".
 pub fn host_denied(host: &str, deny: &[String]) -> bool {
-    deny.iter().any(|p| host_matches_pattern(host, p))
+    mur_common::net::host_allowed(host, deny)
 }
 
 /// STRICTER than the runtime's local-first guard: a web researcher has no
@@ -306,18 +326,16 @@ pub fn screen_url(raw: &str, deny: &[String]) -> Result<url::Url, GuardReject> {
 }
 ```
 
-Add `url = { workspace = true }` to the crate's Cargo.toml deps (mirror the workspace version).
-
-- [ ] **Step 4: Run to verify they pass**
+- [ ] **Step 7: Run to verify they pass**
 
 Run: `cargo test -p mur-research-gateway net_guard`
 Expected: PASS (all four tests).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add mur-research-gateway/src/net_guard.rs mur-research-gateway/src/main.rs mur-research-gateway/Cargo.toml
-git commit -m "feat(research-gateway): strict SSRF guard + deny-host matcher"
+git commit -m "feat(research-gateway): strict SSRF guard reusing mur-common host matcher"
 ```
 
 ---
