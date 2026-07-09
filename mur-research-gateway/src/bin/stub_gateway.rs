@@ -94,12 +94,13 @@ fn tools_list() -> Value {
         },
         {
             "name": "fetch",
-            "description": "Fetch one URL's readable text. Read-only GET. SSRF-guarded.",
+            "description": "Fixture: fixed corpus, no network, no guard.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "url": {"type": "string"},
-                    "render": {"type": "boolean"}
+                    "render": {"type": "boolean"},
+                    "chrome": {"type": "boolean"}
                 },
                 "required": ["url"]
             }

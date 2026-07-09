@@ -4,7 +4,7 @@
 //! Use `McpClient::connect` to pick the right variant based on the server entry.
 
 use crate::sandbox::SandboxPolicy;
-use mur_common::agent::{McpAuth, McpServerEntry};
+use mur_common::agent::{ENV_MCP_DENY_HOSTS, McpAuth, McpServerEntry};
 use serde_json::{Value, json};
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
@@ -359,14 +359,25 @@ pub fn proxy_env_for(
     let token = proxy.register_policy(net.allow_hosts.clone(), net.deny_hosts.clone(), broad);
     let url = format!("http://{token}:x@{}", proxy.addr);
     let no_proxy = "127.0.0.1,localhost,::1".to_string();
-    vec![
+    let mut env = vec![
         ("HTTP_PROXY".into(), url.clone()),
         ("HTTPS_PROXY".into(), url.clone()),
         ("http_proxy".into(), url.clone()),
         ("https_proxy".into(), url),
         ("NO_PROXY".into(), no_proxy.clone()),
         ("no_proxy".into(), no_proxy),
-    ]
+    ];
+    // Also hand the deny list to the child directly (not just the proxy):
+    // the proxy only sees this child's tier-1 (reqwest-style) connections.
+    // A cooperating child that opens its own connections the proxy can't
+    // observe (e.g. mur-research-gateway's tier-2/3 browser subprocesses —
+    // see its `browser.rs` module doc) reads this env var to self-enforce
+    // the SAME operator deny-hosts overlay. See mur-common's
+    // `ENV_MCP_DENY_HOSTS` doc for the shared-const rationale.
+    if !net.deny_hosts.is_empty() {
+        env.push((ENV_MCP_DENY_HOSTS.to_string(), net.deny_hosts.join(",")));
+    }
+    env
 }
 
 #[cfg(test)]
@@ -416,6 +427,47 @@ mod tests {
             authorization: None,
         });
         assert!(proxy_env_for(&inherit, Some(&handle)).is_empty());
+    }
+
+    /// The operator's `--deny-host` overlay must reach the child directly
+    /// (not just the proxy), so a cooperating child whose own subprocesses
+    /// bypass the proxy (mur-research-gateway's browser tiers) can
+    /// self-enforce it. See mur-common's `ENV_MCP_DENY_HOSTS` doc.
+    #[test]
+    fn proxy_env_includes_deny_hosts_for_cooperating_children() {
+        let base = McpServerEntry {
+            name: "research-gateway".into(),
+            command: "mur-research-gateway".into(),
+            ..Default::default()
+        };
+        let mut broad_audited = base.clone();
+        broad_audited.network = Some(McpServerNetwork {
+            mode: McpNetMode::BroadAudited,
+            allow_hosts: vec![],
+            deny_hosts: vec!["blocked.example".into()],
+            authorization: None,
+        });
+        let handle = crate::sandbox::egress_proxy::EgressProxyHandle::for_test(
+            "127.0.0.1:9".parse().unwrap(),
+        );
+        let env: HashMap<_, _> = proxy_env_for(&broad_audited, Some(&handle))
+            .into_iter()
+            .collect();
+        assert_eq!(
+            env.get(ENV_MCP_DENY_HOSTS).map(String::as_str),
+            Some("blocked.example")
+        );
+
+        // Empty deny_hosts → no env var emitted at all (nothing to enforce).
+        let mut no_deny = base.clone();
+        no_deny.network = Some(McpServerNetwork {
+            mode: McpNetMode::BroadAudited,
+            allow_hosts: vec![],
+            deny_hosts: vec![],
+            authorization: None,
+        });
+        let env: HashMap<_, _> = proxy_env_for(&no_deny, Some(&handle)).into_iter().collect();
+        assert!(!env.contains_key(ENV_MCP_DENY_HOSTS));
     }
 
     /// `McpClient::connect` picks the HTTP variant when the entry has a `url`.
