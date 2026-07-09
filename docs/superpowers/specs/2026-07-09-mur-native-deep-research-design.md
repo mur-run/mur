@@ -118,9 +118,20 @@ that holds egress.
   - tier 1 `reqwest` GET — default; most pages.
   - tier 2 `agent-browser --engine lightpanda --executable-path <cfg> --args "" --session <per-fetch>`
     — JS pages. `--args ""` is mandatory (Chrome stealth args break Lightpanda).
-  - tier 3 `agent-browser --engine chrome` (+stealth args) — anti-bot / screenshot.
-  - Search backend: `agent-browser` (default engine lightpanda) drives a search
-    results page; tier-1 HTML search as the cheap path. No API key required for v1.
+  - tier 3 `agent-browser --engine chrome --args "<stealth,comma-separated>"` — anti-bot /
+    screenshot. Chrome launch flags go through a SINGLE `--args` value, never bare argv:
+    a bare `--no-sandbox` is parsed by agent-browser as a subcommand and errors with
+    "Unknown command" (so the chrome tier silently never launched until fixed 2026-07-09).
+  - **lightpanda → chrome escalation** (rendered `fetch` only): a tier-2 attempt escalates
+    to tier 3 when lightpanda "doesn't work" — an `Http` failure (spawn/timeout/non-zero
+    exit) OR a success that rendered **no text** (the engine ran but produced nothing, an
+    exit-0-empty a plain error check misses). `Guard`/`TooLarge` are tier-independent and
+    never escalate. `chrome:true` forces tier 3 directly.
+  - **Search is tier-1 HTTP, not a browser tier.** `search` GETs DuckDuckGo's server-rendered
+    html endpoint through the same proxy-honoring reqwest path as a tier-1 `fetch` (a
+    browser-like User-Agent is required — DDG returns HTTP 202 without one), so search works
+    under the worker kernel sandbox — `agent-browser` cannot spawn there (`Operation not
+    permitted`). `agent-browser` is used only for `fetch` with `render:true`. No API key for v1.
 - **Per-fetch session isolation** — each fetch uses a unique `--session` id (verified
   isolated, 2026-07-08) so concurrent worker fetches never cross-contaminate state.
 - **Daemon lifecycle** — manage agent-browser's persistent daemon; detect version
