@@ -40,8 +40,16 @@ pub fn build_fetch_argv(url: &str, cfg: &BrowserCfg, want_chrome: bool) -> Vec<S
     if want_chrome || cfg.lightpanda_path.is_none() {
         a.push("--engine".into());
         a.push("chrome".into());
-        for s in cfg.chrome_stealth_args.split(',').filter(|s| !s.is_empty()) {
-            a.push(s.to_string());
+        // Chrome launch flags MUST go through agent-browser's `--args`
+        // (comma/newline separated), NOT as bare argv entries: a bare
+        // `--no-sandbox` is parsed as an agent-browser subcommand and fails
+        // with "Unknown command: --no-sandbox" (see `agent-browser --help`).
+        // `chrome_stealth_args` is already the comma-separated form `--args`
+        // expects, so forward it verbatim as a single value.
+        let stealth = cfg.chrome_stealth_args.trim();
+        if !stealth.is_empty() {
+            a.push("--args".into());
+            a.push(stealth.to_string());
         }
     } else {
         a.push("--engine".into());
@@ -222,14 +230,18 @@ mod tests {
         let cfg = BrowserCfg {
             agent_browser_bin: "agent-browser".into(),
             lightpanda_path: Some("/x/lightpanda".into()),
-            chrome_stealth_args: "--no-sandbox".into(),
+            chrome_stealth_args: "--no-sandbox,--disable-blink-features=AutomationControlled".into(),
         };
         let argv = build_fetch_argv("https://example.com", &cfg, true);
         assert!(
             argv.windows(2)
                 .any(|w| w[0] == "--engine" && w[1] == "chrome")
         );
-        assert!(argv.iter().any(|a| a == "--no-sandbox"));
+        // Stealth flags travel as ONE `--args` value (agent-browser parses a
+        // bare `--no-sandbox` as a subcommand and errors), never as bare argv.
+        assert!(argv.windows(2).any(|w| w[0] == "--args"
+            && w[1] == "--no-sandbox,--disable-blink-features=AutomationControlled"));
+        assert!(!argv.iter().any(|a| a == "--no-sandbox"));
     }
     #[test]
     fn preflight_degrades_when_lightpanda_missing() {
