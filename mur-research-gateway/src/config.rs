@@ -182,7 +182,11 @@ fn default_lightpanda_path(mur_home: &Path) -> Option<String> {
 }
 
 fn env_deny_hosts() -> Option<Vec<String>> {
-    std::env::var(ENV_DENY_HOSTS).ok().map(|v| {
+    // Treat an empty/whitespace-only value as ABSENT (fall through to YAML /
+    // default), same as every other env field via `non_empty_env` — otherwise
+    // `export MUR_RESEARCH_DENY_HOSTS=` would silently wipe the YAML-configured
+    // SSRF blocklist overlay. A non-empty value still overrides.
+    non_empty_env(ENV_DENY_HOSTS).map(|v| {
         v.split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -301,6 +305,26 @@ research_gateway:
             Path::new("/nonexistent"),
         );
         assert_eq!(c.deny_hosts, vec!["a.example", "b.example"]);
+        unsafe {
+            std::env::remove_var(ENV_DENY_HOSTS);
+        }
+    }
+
+    #[test]
+    fn empty_deny_hosts_env_does_not_wipe_yaml_blocklist() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // An empty MUR_RESEARCH_DENY_HOSTS must be treated as ABSENT, not as
+        // "clear the blocklist" — otherwise it would silently wipe the
+        // YAML-configured SSRF overlay (security-relevant).
+        // SAFETY: env mutation guarded by ENV_LOCK above.
+        unsafe {
+            std::env::set_var(ENV_DENY_HOSTS, "");
+        }
+        let c = load_from_yaml(
+            "research_gateway:\n  deny_hosts: [\"blocked.example\"]\n",
+            Path::new("/nonexistent"),
+        );
+        assert_eq!(c.deny_hosts, vec!["blocked.example"]);
         unsafe {
             std::env::remove_var(ENV_DENY_HOSTS);
         }
