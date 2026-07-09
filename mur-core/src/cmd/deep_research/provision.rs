@@ -226,6 +226,10 @@ mod tests {
         reg.save_to(&mur_home.join("models.yaml")).unwrap();
     }
 
+    // Unix-only: provision() -> cmd_create() writes a per-agent runtime symlink
+    // (busybox-style) which requires privileges Windows CI lacks ("os error 2").
+    // The whole agent runtime is Unix-socket based, so the feature is Unix-only.
+    #[cfg(unix)]
     #[test]
     fn provision_creates_restricted_workers_with_gateway() {
         let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -286,6 +290,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)] // provision() writes a Unix runtime symlink; not runnable on Windows CI
     #[test]
     fn provision_threads_explicit_model_alias() {
         let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -301,6 +306,7 @@ mod tests {
         assert_eq!(p.model_ref, Some("claude_sonnet".to_string()));
     }
 
+    #[cfg(unix)] // provision()/grant_egress() write Unix runtime artifacts; not runnable on Windows CI
     #[test]
     fn grant_sets_broad_audited_with_authorization() {
         let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
