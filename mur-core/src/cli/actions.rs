@@ -641,6 +641,22 @@ pub enum CommanderAction {
 }
 
 #[derive(Subcommand)]
+pub enum DeepResearchAction {
+    /// Create restricted worker agents that each mount the
+    /// `research-gateway` MCP server (no egress of their own — the
+    /// per-server egress grant is a separate consent step).
+    Provision {
+        /// Number of worker agents to create (default: DEFAULT_WORKER_COUNT)
+        #[arg(long)]
+        count: Option<usize>,
+        /// Agent name prefix; workers are named `<prefix>_1..N`
+        /// (default: DEFAULT_WORKER_PREFIX)
+        #[arg(long)]
+        prefix: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum TeamAction {
     /// List your teams (or patterns in a specific team)
     List {
