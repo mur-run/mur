@@ -32,7 +32,8 @@ pub fn all_tools() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "url": {"type": "string"},
-                    "render": {"type": "boolean"}
+                    "render": {"type": "boolean"},
+                    "chrome": {"type": "boolean"}
                 },
                 "required": ["url"]
             }),

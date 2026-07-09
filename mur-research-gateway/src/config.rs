@@ -18,6 +18,7 @@
 // `ConversationsConfig` demonstrates for a single section.
 
 use crate::browser::BrowserCfg;
+use mur_common::agent::ENV_MCP_DENY_HOSTS as ENV_DENY_HOSTS;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -61,7 +62,12 @@ pub const DEFAULT_LIGHTPANDA_RELATIVE_PATH: &str = "aura/lightpanda";
 
 // ---- env var names ----
 
-const ENV_DENY_HOSTS: &str = "MUR_RESEARCH_DENY_HOSTS";
+// ENV_DENY_HOSTS (imported above as `ENV_MCP_DENY_HOSTS`) is shared with
+// `mur-agent-runtime`'s `proxy_env_for`, which sets it on this gateway's own
+// child env when the operator grants a `--deny-host` overlay — single
+// definition in mur-common so the two crates can never drift (CLAUDE.md
+// rule 1).
+
 const ENV_FETCH_TIMEOUT_SECS: &str = "MUR_RESEARCH_TIMEOUT_SECS";
 const ENV_BROWSER_TIMEOUT_SECS: &str = "MUR_RESEARCH_BROWSER_TIMEOUT_SECS";
 const ENV_SEARCH_LIMIT: &str = "MUR_RESEARCH_SEARCH_LIMIT";

@@ -125,9 +125,11 @@ that holds egress.
   isolated, 2026-07-08) so concurrent worker fetches never cross-contaminate state.
 - **Daemon lifecycle** — manage agent-browser's persistent daemon; detect version
   mismatch; `pkill -f agent-browser` on staleness.
-- **SSRF guard (hard rule, non-configurable)** — refuse any URL resolving to a
-  private / link-local / loopback / unique-local address; re-resolve after DNS and
-  re-check (DNS-rebinding defense). Applied to every tier.
+- **SSRF guard (hard rule, non-configurable)** — refuse any URL whose resolved IP is
+  private / link-local / loopback / unique-local, checked at screen time on every
+  tier. Connect-time re-resolution (the DNS-rebinding window between screen and
+  connect) is NOT closed yet — same advisory-enforcement framing as §7 item 4:
+  deferred to Phase 3, not rebind-proof today.
 - **Where `deny_hosts` + SSRF are enforced (tier-dependent — load-bearing).** The
   egress proxy only sees tier-1 (`reqwest`) connections; the tier-2/3 browser
   subprocesses open their own connections the proxy cannot observe. Therefore, for
