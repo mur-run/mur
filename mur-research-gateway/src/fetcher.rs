@@ -25,7 +25,13 @@ pub enum FetchError {
 /// `to_socket_addrs()` (synchronous DNS resolution); running it inline on an
 /// async fn would stall the worker for the duration of the resolve. `deny` is
 /// cloned into the blocking task since `spawn_blocking` requires `'static`.
-async fn screen_url_blocking(url: &str, deny: &[String]) -> Result<url::Url, GuardReject> {
+///
+/// `pub(crate)` so `browser.rs` (tiers 2/3) can reuse the same off-thread
+/// pre-spawn screen instead of duplicating the wrapper.
+pub(crate) async fn screen_url_blocking(
+    url: &str,
+    deny: &[String],
+) -> Result<url::Url, GuardReject> {
     let url = url.to_string();
     let deny = deny.to_vec();
     tokio::task::spawn_blocking(move || net_guard::screen_url(&url, &deny))
