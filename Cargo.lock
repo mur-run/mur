@@ -6653,6 +6653,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mur-research-gateway"
+version = "2.44.0"
+dependencies = [
+ "mur-common",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "mur-zfs-agent"
 version = "2.44.0"
 dependencies = [
