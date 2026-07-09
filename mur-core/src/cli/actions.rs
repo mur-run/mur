@@ -669,6 +669,25 @@ pub enum DeepResearchAction {
         #[arg(long)]
         yes: bool,
     },
+    /// Run a deep-research fleet's guarded loop (thin wrapper over
+    /// `mur fleet run --loop` — see `cmd/fleet/loop_run.rs`). This drives
+    /// only the loop's guard rails (iteration cap / deadline / budget /
+    /// kill-switch / marker convergence); it does NOT reimplement or
+    /// bypass anything the plain fleet loop already does.
+    Run {
+        /// Fleet name (as created by `mur fleet create`, typically after
+        /// `mur deep-research provision`)
+        name: String,
+        /// Max iterations (overrides fleet.yaml `loop.max_iterations`)
+        #[arg(long)]
+        max_iterations: Option<u32>,
+        /// Wall-clock deadline, e.g. 30s/5m/2h (overrides fleet.yaml)
+        #[arg(long)]
+        deadline: Option<String>,
+        /// Budget ceiling in USD (overrides fleet.yaml `loop.budget_usd`)
+        #[arg(long)]
+        budget_usd: Option<f64>,
+    },
 }
 
 #[derive(Subcommand)]
