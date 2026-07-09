@@ -195,9 +195,8 @@ impl McpServer {
             .unwrap_or(self.config.search_limit)
             .clamp(config::MIN_SEARCH_LIMIT, config::MAX_SEARCH_LIMIT);
         let deny = &self.config.deny_hosts;
-        let cfg = &self.config.browser;
-        let timeout = self.config.browser_timeout;
-        match browser::search(&query, limit, deny, cfg, timeout).await {
+        let timeout = self.config.timeout;
+        match fetcher::search_tier1(&query, limit, deny, timeout).await {
             Ok(hits) => {
                 audit(AuditRecord::new("search", query, None, "ok"));
                 Response::success(
