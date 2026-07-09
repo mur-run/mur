@@ -1398,6 +1398,20 @@ impl AgentProfile {
             .expect("minimal profile fixture")
     }
 
+    /// Load an agent's profile from `<mur_home>/agents/<name>/profile.yaml`.
+    ///
+    /// Canonical read-path counterpart to the atomic-write path used by
+    /// `mur agent create`/`mur agent mcp add` (`write_atomic` in
+    /// `mur-core::cmd::agent`) — callers that already have `mur_home` in
+    /// hand (e.g. provisioning flows, tests) can load a profile without
+    /// going through the `MUR_HOME`-env-var-based `resolve_mur_home`.
+    pub fn load(mur_home: &std::path::Path, name: &str) -> anyhow::Result<Self> {
+        let path = mur_home.join("agents").join(name).join("profile.yaml");
+        let yaml = std::fs::read_to_string(&path)
+            .map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
+        serde_yaml_ng::from_str(&yaml).map_err(|e| anyhow::anyhow!("parse {}: {e}", path.display()))
+    }
+
     /// The imported add-on group a skill/mcp/command name belongs to.
     pub fn group_of(&self, name: &str) -> Option<&AddonRef> {
         self.addons.iter().find(|g| {

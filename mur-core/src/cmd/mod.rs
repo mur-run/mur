@@ -25,6 +25,7 @@ pub mod compress;
 pub mod context;
 pub(crate) mod conversations_cmd;
 pub mod conversations_cost_report;
+pub mod deep_research;
 pub(crate) mod deploy;
 pub mod doctor;
 pub(crate) mod drafts;

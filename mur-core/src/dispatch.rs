@@ -11,9 +11,9 @@ use crate::cli::{
     AgentPendingAction, AgentPermAction, AgentPromptAction, AgentQueueAction, AgentScheduleAction,
     AgentSecretAction, AgentSkillAction, AgentTrashAction, AgentWebhookAction, AuthAction,
     ChannelAction, ChatAction, Cli, CommanderAction, Commands, ConversationsAction, DaemonAction,
-    DeployAction, DraftsAction, EvalAction, ExchangeAction, FleetAction, HookEvent,
-    InternalsAction, MurmurdAction, ProjectAction, ScheduleAction, SessionAction, SleepAction,
-    SyncAction, TeamAction, VoiceAction, WorkflowAction,
+    DeepResearchAction, DeployAction, DraftsAction, EvalAction, ExchangeAction, FleetAction,
+    HookEvent, InternalsAction, MurmurdAction, ProjectAction, ScheduleAction, SessionAction,
+    SleepAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
 };
 use crate::store::config as store_config;
 use crate::{cmd, dashboard, team, verify};
@@ -438,6 +438,18 @@ pub async fn run(cli: Cli) -> Result<()> {
                     let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
                     cmd::commander::cmd_commander_directive(
                         &mur_home, &fleet, k, budget_usd, now_ms,
+                    )?
+                }
+            }
+        }
+        Commands::DeepResearch { action } => {
+            let mur_home = crate::paths::mur_root(None);
+            match action {
+                DeepResearchAction::Provision { count, prefix } => {
+                    cmd::deep_research::provision::cmd_provision(
+                        &mur_home,
+                        prefix.as_deref(),
+                        count,
                     )?
                 }
             }
