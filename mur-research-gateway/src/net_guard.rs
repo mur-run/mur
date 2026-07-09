@@ -1,10 +1,10 @@
 //! Strict SSRF guard for the research gateway's `fetch` tool.
 //!
-//! Not yet wired into `tools.rs`/`server.rs` — the caller must pin its
-//! connection to an already-screened address (closing the resolve→connect
-//! DNS-rebinding TOCTOU window), which lands in Task 3. `#[allow(dead_code)]`
-//! below is scaffolding until that wiring lands.
-#![allow(dead_code)]
+//! Wired into `fetcher.rs` (Task 3) behind `tokio::task::spawn_blocking`,
+//! since `to_socket_addrs()` below is synchronous DNS resolution. The caller
+//! still does NOT pin its connection to the screened address — reqwest
+//! re-resolves internally, leaving an advisory (not exploited-in-practice)
+//! resolve→connect DNS-rebinding window; see the comment in `fetcher.rs`.
 
 use std::net::{IpAddr, ToSocketAddrs};
 
@@ -62,8 +62,12 @@ pub fn screen_url(raw: &str, deny: &[String]) -> Result<url::Url, GuardReject> {
         return Err(GuardReject::DeniedHost);
     }
     let port = u.port_or_known_default().unwrap_or(80);
+    // url::Url::host_str() returns IPv6 literals WITH brackets (e.g. "[::1]"),
+    // which ToSocketAddrs' IP fast-path can't parse — it would silently fall
+    // through to DNS resolution (and fail) instead of screening the literal.
+    let resolve_host = host.trim_start_matches('[').trim_end_matches(']');
     let mut any = false;
-    for sa in (host, port)
+    for sa in (resolve_host, port)
         .to_socket_addrs()
         .map_err(|_| GuardReject::Unresolvable)?
     {
@@ -127,6 +131,16 @@ mod tests {
         assert!(matches!(
             screen_url("http://blocked.example/", &["blocked.example".into()]),
             Err(GuardReject::DeniedHost)
+        ));
+    }
+    #[test]
+    fn screen_rejects_ipv4_compatible_ipv6_metadata() {
+        // `::169.254.169.254` (no `::ffff:` marker) is the deprecated
+        // IPv4-compatible IPv6 form — a named SSRF bypass distinct from the
+        // IPv4-mapped `::ffff:` form already covered above.
+        assert!(matches!(
+            screen_url("http://[::169.254.169.254]/", &[]),
+            Err(GuardReject::PrivateAddress)
         ));
     }
 }
