@@ -11,9 +11,9 @@ use crate::cli::{
     AgentPendingAction, AgentPermAction, AgentPromptAction, AgentQueueAction, AgentScheduleAction,
     AgentSecretAction, AgentSkillAction, AgentTrashAction, AgentWebhookAction, AuthAction,
     ChannelAction, ChatAction, Cli, CommanderAction, Commands, ConversationsAction, DaemonAction,
-    DeployAction, DraftsAction, EvalAction, ExchangeAction, FleetAction, HookEvent,
-    InternalsAction, MurmurdAction, ProjectAction, ScheduleAction, SessionAction, SleepAction,
-    SyncAction, TeamAction, VoiceAction, WorkflowAction,
+    DeepResearchAction, DeployAction, DraftsAction, EvalAction, ExchangeAction, FleetAction,
+    HookEvent, InternalsAction, MurmurdAction, ProjectAction, ScheduleAction, SessionAction,
+    SleepAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
 };
 use crate::store::config as store_config;
 use crate::{cmd, dashboard, team, verify};
@@ -439,6 +439,42 @@ pub async fn run(cli: Cli) -> Result<()> {
                     cmd::commander::cmd_commander_directive(
                         &mur_home, &fleet, k, budget_usd, now_ms,
                     )?
+                }
+            }
+        }
+        Commands::DeepResearch { action } => {
+            let mur_home = crate::paths::mur_root(None);
+            match action {
+                DeepResearchAction::Provision {
+                    count,
+                    prefix,
+                    model,
+                    grant_egress,
+                    deny_hosts,
+                    yes,
+                } => cmd::deep_research::provision::cmd_provision(
+                    &mur_home,
+                    prefix.as_deref(),
+                    count,
+                    model.as_deref(),
+                    grant_egress,
+                    &deny_hosts,
+                    yes,
+                )?,
+                DeepResearchAction::Run {
+                    name,
+                    max_iterations,
+                    deadline,
+                    budget_usd,
+                } => {
+                    cmd::deep_research::run::cmd_deep_research_run(
+                        &mur_home,
+                        &name,
+                        max_iterations,
+                        deadline,
+                        budget_usd,
+                    )
+                    .await?
                 }
             }
         }

@@ -1,0 +1,58 @@
+name: deep-research-verify
+version: 0.1.0
+publisher: human:mur
+description: "Adversarially refute one claim under a single assigned lens (correctness / source-independence / recency); a claim survives only on a 2-of-3 confirm."
+category: workflow
+scope: fleet
+fleet: deep-research
+content:
+  abstract: |
+    You are a verify worker in the `deep-research` fleet. You are assigned
+    exactly ONE lens on ONE claim; your job is to actively try to REFUTE it
+    under that lens, not to confirm it — a claim only survives into the
+    report when 2 of its 3 lens verdicts are CONFIRM.
+  procedure:
+    steps:
+      - description: |
+          RECEIVE your assignment: one claim (with its cited URL + quote)
+          and exactly ONE lens — correctness, source-independence, or
+          recency. Do not evaluate the claim under any lens other than the
+          one you were assigned; other verify workers cover the other
+          lenses in parallel.
+      - description: |
+          Under LENS = correctness: re-fetch the cited URL yourself and
+          check that the supporting quote actually appears on the page and
+          actually supports the claim as stated (not a stretch, not taken
+          out of context). If the quote is missing, altered, or does not
+          support the claim, that is a REFUTE.
+      - description: |
+          Under LENS = source-independence: check whether the claim's
+          citations are genuinely independent sources — different
+          publishers/domains, not mirrors, syndication, or the same wire
+          copy republished. A claim resting on sources that all trace back
+          to one origin is a REFUTE on this lens even if the quotes check
+          out.
+      - description: |
+          Under LENS = recency: check the cited page's publish/update date
+          against what the claim asserts. A claim presented as current fact
+          but sourced only from stale/superseded material (or dated content
+          contradicted by a more recent source you find) is a REFUTE on this
+          lens.
+      - description: |
+          ADVERSARIAL STANCE: actively look for reasons to refute — try to
+          break the claim under your lens rather than defaulting to
+          agreement. Only emit CONFIRM if you genuinely could not find a
+          problem after actually checking (re-fetching, comparing sources,
+          checking dates), not because it "looks plausible."
+      - description: |
+          REPORT your verdict as CONFIRM or REFUTE for your assigned
+          lens, with a one-line reason, back to the router. The router
+          tallies all three lens verdicts per claim; the claim survives into
+          the synthesized report only on a 2-of-3 CONFIRM — otherwise it is
+          dropped, never shipped as an unverified claim.
+tags: [deep-research, fleet, verify, adversarial, refutation, citation]
+triggers:
+  - type: session_start
+  - type: keyword
+    pattern: "(verify|refute|confirm).*(claim|lens|source)"
+priority: normal

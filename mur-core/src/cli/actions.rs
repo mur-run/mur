@@ -641,6 +641,62 @@ pub enum CommanderAction {
 }
 
 #[derive(Subcommand)]
+pub enum DeepResearchAction {
+    /// Create restricted worker agents that each mount the
+    /// `research-gateway` MCP server (no egress of their own — the
+    /// per-server egress grant is a separate consent step).
+    Provision {
+        /// Number of worker agents to create (default: DEFAULT_WORKER_COUNT)
+        #[arg(long)]
+        count: Option<usize>,
+        /// Agent name prefix; workers are named `<prefix>_1..N`
+        /// (default: DEFAULT_WORKER_PREFIX)
+        #[arg(long)]
+        prefix: Option<String>,
+        /// `models.yaml` registry alias each worker's `model_ref` is bound
+        /// to (default: DEFAULT_WORKER_MODEL, currently `claude_haiku`).
+        /// Without this, workers fall to the `ollama/llama3.2:3b` StubEcho
+        /// default with no real reasoning.
+        #[arg(long)]
+        model: Option<String>,
+        /// After provisioning, also grant each worker's `research-gateway`
+        /// server `BroadAudited` egress (allow-ALL-except-deny-list, routed
+        /// through the audited proxy). A separate, explicit-consent step —
+        /// omit this flag and workers keep NO outbound egress. Prompts
+        /// `[y/N]` per worker unless `--yes`.
+        #[arg(long)]
+        grant_egress: bool,
+        /// Denied host (repeatable) for the `--grant-egress` grant; ignored
+        /// otherwise.
+        #[arg(long = "deny-host")]
+        deny_hosts: Vec<String>,
+        /// Skip the `--grant-egress` consent prompt. Use for scripted /
+        /// non-interactive grants.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Run a deep-research fleet's guarded loop (thin wrapper over
+    /// `mur fleet run --loop` — see `cmd/fleet/loop_run.rs`). This drives
+    /// only the loop's guard rails (iteration cap / deadline / budget /
+    /// kill-switch / marker convergence); it does NOT reimplement or
+    /// bypass anything the plain fleet loop already does.
+    Run {
+        /// Fleet name (as created by `mur fleet create`, typically after
+        /// `mur deep-research provision`)
+        name: String,
+        /// Max iterations (overrides fleet.yaml `loop.max_iterations`)
+        #[arg(long)]
+        max_iterations: Option<u32>,
+        /// Wall-clock deadline, e.g. 30s/5m/2h (overrides fleet.yaml)
+        #[arg(long)]
+        deadline: Option<String>,
+        /// Budget ceiling in USD (overrides fleet.yaml `loop.budget_usd`)
+        #[arg(long)]
+        budget_usd: Option<f64>,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum TeamAction {
     /// List your teams (or patterns in a specific team)
     List {
