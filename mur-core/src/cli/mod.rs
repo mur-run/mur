@@ -422,6 +422,11 @@ see `mur skill <command> --help`.")]
         #[command(subcommand)]
         action: CommanderAction,
     },
+    /// MUR-native deep research: gateway-mounted worker agent provisioning
+    DeepResearch {
+        #[command(subcommand)]
+        action: DeepResearchAction,
+    },
 }
 
 #[cfg(test)]

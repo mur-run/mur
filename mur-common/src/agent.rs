@@ -343,6 +343,16 @@ pub enum McpNetMode {
     Off,
 }
 
+/// Env var name a sandboxed MCP child reads to self-enforce the operator's
+/// `deny_hosts` overlay on connections the egress proxy cannot observe (e.g.
+/// `mur-research-gateway`'s tier-2/3 browser subprocesses — the proxy only
+/// sees tier-1 `reqwest` traffic). `mur-agent-runtime`'s `proxy_env_for` sets
+/// this on the child's env alongside the proxy vars; a cooperating child
+/// (currently `mur-research-gateway`, via `config::load`) reads it to source
+/// its own deny list. Single definition shared by both crates (CLAUDE.md
+/// rule 1: no duplicated literal).
+pub const ENV_MCP_DENY_HOSTS: &str = "MUR_RESEARCH_DENY_HOSTS";
+
 /// Per-MCP-server outbound egress policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct McpServerNetwork {
@@ -1396,6 +1406,20 @@ impl AgentProfile {
     pub fn default_for_tests() -> Self {
         serde_yaml_ng::from_str(include_str!("../tests/fixtures/minimal_profile.yaml"))
             .expect("minimal profile fixture")
+    }
+
+    /// Load an agent's profile from `<mur_home>/agents/<name>/profile.yaml`.
+    ///
+    /// Canonical read-path counterpart to the atomic-write path used by
+    /// `mur agent create`/`mur agent mcp add` (`write_atomic` in
+    /// `mur-core::cmd::agent`) — callers that already have `mur_home` in
+    /// hand (e.g. provisioning flows, tests) can load a profile without
+    /// going through the `MUR_HOME`-env-var-based `resolve_mur_home`.
+    pub fn load(mur_home: &std::path::Path, name: &str) -> anyhow::Result<Self> {
+        let path = mur_home.join("agents").join(name).join("profile.yaml");
+        let yaml = std::fs::read_to_string(&path)
+            .map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
+        serde_yaml_ng::from_str(&yaml).map_err(|e| anyhow::anyhow!("parse {}: {e}", path.display()))
     }
 
     /// The imported add-on group a skill/mcp/command name belongs to.
