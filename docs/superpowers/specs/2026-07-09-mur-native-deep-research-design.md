@@ -164,7 +164,7 @@ becomes **deterministic gateway code** (§5) — a strict upgrade; the skill is 
 ## 7. Egress governance alignment
 
 This fleet is the **first real workload** for the #661 egress governance model, and
-must honor it exactly (cross-checked against `2026-07-08-agent-egress-governance-design.md`):
+must honor it exactly (cross-checked against `2026-07-08-agent-egress-governance-design.md`). A critical ordering constraint was discovered in the 2026-07-09 live fleet run: the loopback egress proxy must start before the B1 kernel sandbox seals, with its listener port carved into the sandbox profile as a loopback-only rule, or sandboxed children cannot dial the proxy their environment points at.
 
 1. **Grant via the shipped consent path only.** Provisioning runs
    `mur agent mcp set-network <agent> research-gateway --broad-audited` per worker —
