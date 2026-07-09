@@ -459,6 +459,21 @@ pub async fn run(cli: Cli) -> Result<()> {
                     &deny_hosts,
                     yes,
                 )?,
+                DeepResearchAction::Run {
+                    name,
+                    max_iterations,
+                    deadline,
+                    budget_usd,
+                } => {
+                    cmd::deep_research::run::cmd_deep_research_run(
+                        &mur_home,
+                        &name,
+                        max_iterations,
+                        deadline,
+                        budget_usd,
+                    )
+                    .await?
+                }
             }
         }
         Commands::Team { action } => match action {

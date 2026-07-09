@@ -8,6 +8,13 @@ license.workspace = true
 name = "mur-research-gateway"
 path = "src/main.rs"
 
+# Deterministic, network-free MCP stdio fixture for Task 10 tests / Task 11's
+# operator E2E — same handshake as the real gateway, fixed corpus, no
+# agent-browser, no net_guard.
+[[bin]]
+name = "stub_gateway"
+path = "src/bin/stub_gateway.rs"
+
 [dependencies]
 mur-common = { path = "../mur-common" }
 tokio = { workspace = true }
