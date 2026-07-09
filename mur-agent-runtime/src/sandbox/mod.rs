@@ -37,11 +37,14 @@ pub fn apply(
     entitlements: &Entitlements,
     agent_home: &Path,
     extra_ports: &[u16],
+    loopback_ports: &[u16],
     extra_write_paths: &[std::path::PathBuf],
 ) -> anyhow::Result<SandboxStatus> {
     let mut policy = SandboxPolicy::from_entitlements(entitlements, agent_home);
     // An agent must always be able to reach its own configured local LLM.
     policy.allow_extra_ports(extra_ports);
+    // …and the pre-seal loopback egress proxy its MCP children dial.
+    policy.allow_loopback_ports(loopback_ports);
     // …and to write the shared runtime media state it owns (co-watching:
     // watch.json + VLC snapshot dir), which lives outside agent_home.
     policy.allow_extra_write_paths(extra_write_paths);

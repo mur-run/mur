@@ -84,7 +84,7 @@ fn sandbox_apply_does_not_panic() {
     let profile = AgentProfile::default_for_tests();
     let agent_home = PathBuf::from("/tmp/b1_test_agent_apply");
     std::fs::create_dir_all(&agent_home).unwrap();
-    let result = sandbox::apply(&profile.entitlements, &agent_home, &[], &[]);
+    let result = sandbox::apply(&profile.entitlements, &agent_home, &[], &[], &[]);
     assert!(result.is_ok(), "sandbox::apply must not error: {result:?}");
 }
 
@@ -174,7 +174,7 @@ fn sandbox_write_deny_subprocess_main() {
     let agent_home = std::path::PathBuf::from("/tmp/b1_test_deny_home");
     std::fs::create_dir_all(&agent_home).unwrap();
 
-    if sandbox::apply(&profile.entitlements, &agent_home, &[], &[]).is_err() {
+    if sandbox::apply(&profile.entitlements, &agent_home, &[], &[], &[]).is_err() {
         // Sandbox apply failed (e.g., no kernel support) — treat as pass.
         std::process::exit(0);
     }
@@ -237,6 +237,7 @@ fn sandbox_write_allow_subprocess_main() {
     if sandbox::apply(
         &profile.entitlements,
         &agent_home,
+        &[],
         &[],
         std::slice::from_ref(&runtime_dir),
     )
