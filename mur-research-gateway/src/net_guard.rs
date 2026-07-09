@@ -49,9 +49,12 @@ pub fn is_forbidden_target(ip: IpAddr) -> bool {
     }
 }
 
-/// Parse + screen a URL. On pass returns the parsed URL; the caller MUST pin
-/// its connection to an already-screened address (see Task 3) to close the
-/// resolve→connect TOCTOU (DNS-rebinding) window.
+/// Parse + screen a URL against the deny list and the resolved IPs. On pass
+/// returns the parsed URL. NOTE: this screens the IPs resolved AT SCREEN TIME
+/// only — it does NOT pin the connection. The caller (`fetcher.rs`) hands the
+/// URL to reqwest, which re-resolves at connect time, so a resolve→connect
+/// DNS-rebinding window remains. This is advisory enforcement per the
+/// egress-governance spec; pin-to-proxy (airtight) is Phase 3.
 pub fn screen_url(raw: &str, deny: &[String]) -> Result<url::Url, GuardReject> {
     let u = url::Url::parse(raw).map_err(|_| GuardReject::BadScheme)?;
     if !matches!(u.scheme(), "http" | "https") {
