@@ -1,4 +1,5 @@
 // mur-research-gateway/src/server.rs
+use crate::browser::{self, BrowserCfg};
 use crate::fetcher::{self, FetchError};
 use crate::jsonrpc::{Request, Response};
 use crate::tools;
@@ -25,6 +26,48 @@ fn timeout_from_env() -> Duration {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(20);
     Duration::from_secs(secs)
+}
+
+/// Default installed Lightpanda path (`~/.mur/aura/lightpanda`, verified
+/// present 2026-07-08 — `gotcha_agent_browser_lightpanda_engine_dead`). Only
+/// used when `MUR_RESEARCH_LIGHTPANDA_PATH` is unset AND the default actually
+/// exists on disk — never claim a path that isn't there.
+// TODO(Task 6): read from config.yaml
+fn default_lightpanda_path() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let path = format!("{home}/.mur/aura/lightpanda");
+    std::path::Path::new(&path).exists().then_some(path)
+}
+
+// TODO(Task 6): read from config.yaml
+pub(crate) fn browser_cfg_from_env() -> BrowserCfg {
+    let agent_browser_bin = std::env::var("MUR_RESEARCH_AGENT_BROWSER_BIN")
+        .unwrap_or_else(|_| "agent-browser".to_string());
+    let lightpanda_path = std::env::var("MUR_RESEARCH_LIGHTPANDA_PATH")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(default_lightpanda_path);
+    let chrome_stealth_args = std::env::var("MUR_RESEARCH_CHROME_STEALTH_ARGS")
+        .unwrap_or_else(|_| "--no-sandbox,--disable-blink-features=AutomationControlled".into());
+    BrowserCfg {
+        agent_browser_bin,
+        lightpanda_path,
+        chrome_stealth_args,
+    }
+}
+
+fn fetch_error_response(id: Option<serde_json::Value>, verb: &str, err: FetchError) -> Response {
+    match err {
+        FetchError::Guard(reject) => Response::error(
+            id,
+            -32000,
+            format!("{verb} blocked by SSRF guard: {:?}", reject),
+        ),
+        FetchError::Http(msg) => Response::error(id, -32001, format!("{verb} failed: {msg}")),
+        FetchError::TooLarge => {
+            Response::error(id, -32002, format!("{verb} response exceeded size cap"))
+        }
+    }
 }
 
 pub struct McpServer;
@@ -86,7 +129,7 @@ impl McpServer {
             .unwrap_or_else(|| serde_json::json!({}));
         match name {
             "fetch" => self.handle_fetch(id, args).await,
-            "search" => Response::error(id, -32601, "search: not implemented yet".to_string()),
+            "search" => self.handle_search(id, args).await,
             _ => Response::error(id, -32602, format!("Unknown tool: {}", name)),
         }
     }
@@ -104,32 +147,65 @@ impl McpServer {
             .get("render")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        if render {
-            // Headless-render tier is a later task; tier-1 handles render=false/absent only.
-            return Response::error(
-                id,
-                -32601,
-                "fetch: render=true (tier-2) not implemented yet".to_string(),
-            );
-        }
         let deny = deny_hosts_from_env();
+        if render {
+            // Caller may force tier 3 (chrome) directly, e.g. for anti-bot pages
+            // known to defeat lightpanda; otherwise tier 2 first, escalating to
+            // tier 3 only on an actual fetch failure (Http) — Guard/TooLarge
+            // outcomes are tier-independent, so retrying under chrome can't help.
+            let want_chrome = args
+                .get("chrome")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let cfg = browser_cfg_from_env();
+            return match browser::fetch_rendered(&url, &deny, &cfg, want_chrome).await {
+                Ok(result) => Response::success(
+                    id,
+                    serde_json::to_value(result).unwrap_or(serde_json::Value::Null),
+                ),
+                Err(FetchError::Http(_)) if !want_chrome => {
+                    match browser::fetch_rendered(&url, &deny, &cfg, true).await {
+                        Ok(result) => Response::success(
+                            id,
+                            serde_json::to_value(result).unwrap_or(serde_json::Value::Null),
+                        ),
+                        Err(e) => fetch_error_response(id, "fetch (tier 3)", e),
+                    }
+                }
+                Err(e) => fetch_error_response(id, "fetch (rendered)", e),
+            };
+        }
         let timeout = timeout_from_env();
         match fetcher::fetch_tier1(&url, &deny, timeout).await {
             Ok(result) => Response::success(
                 id,
                 serde_json::to_value(result).unwrap_or(serde_json::Value::Null),
             ),
-            Err(FetchError::Guard(reject)) => Response::error(
+            Err(e) => fetch_error_response(id, "fetch", e),
+        }
+    }
+
+    async fn handle_search(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: serde_json::Value,
+    ) -> Response {
+        let query = match args.get("query").and_then(|v| v.as_str()) {
+            Some(q) => q.to_string(),
+            None => return Response::error(id, -32602, "search requires 'query'".to_string()),
+        };
+        let limit = args
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(5)
+            .clamp(1, 20) as usize;
+        let cfg = browser_cfg_from_env();
+        match browser::search(&query, limit, &cfg).await {
+            Ok(hits) => Response::success(
                 id,
-                -32000,
-                format!("fetch blocked by SSRF guard: {:?}", reject),
+                serde_json::to_value(hits).unwrap_or(serde_json::Value::Null),
             ),
-            Err(FetchError::Http(msg)) => {
-                Response::error(id, -32001, format!("fetch failed: {}", msg))
-            }
-            Err(FetchError::TooLarge) => {
-                Response::error(id, -32002, "fetch response exceeded size cap".to_string())
-            }
+            Err(e) => fetch_error_response(id, "search", e),
         }
     }
 }

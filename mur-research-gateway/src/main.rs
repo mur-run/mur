@@ -1,6 +1,7 @@
 // mur-research-gateway/src/main.rs
 use tracing_subscriber::EnvFilter;
 
+mod browser;
 mod fetcher;
 mod jsonrpc;
 mod net_guard;
@@ -17,6 +18,19 @@ async fn main() {
         .init();
 
     tracing::info!("mur-research-gateway starting");
+
+    // Preflight the browser toolchain once at startup so a missing/stale
+    // agent-browser or absent Lightpanda is surfaced explicitly (never
+    // silently) — degrade to tier 1 only, not "as if Full" (spec §5).
+    match browser::preflight(&server::browser_cfg_from_env()) {
+        browser::Preflight::Full => {
+            tracing::info!("browser preflight: full — tiers 2/3 (lightpanda/chrome) available")
+        }
+        other => tracing::warn!(
+            "browser preflight degraded: {:?} — render/search fall back to tier 1 only",
+            other
+        ),
+    }
 
     let mut server = server::McpServer::new();
 
