@@ -6,8 +6,8 @@ use rusqlite::Connection;
 
 use crate::store::ChannelStore;
 
-/// SQLite read-model at `<mur_home>/index/channels.db`. Droppable & rebuildable
-/// from the event-log manifests — never the source of truth.
+/// SQLite read-model at `<mur_home>/index/channels/channels.db`. Droppable &
+/// rebuildable from the event-log manifests — never the source of truth.
 pub struct ChannelIndex {
     conn: Connection,
 }
@@ -23,8 +23,26 @@ pub struct ChannelRow {
 
 impl ChannelIndex {
     pub fn open(mur_home: &Path) -> Result<Self> {
-        let dir = mur_home.join("index");
+        let dir = mur_home.join("index").join("channels");
         std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+
+        // One-time best-effort migration from the old `<mur_home>/index/`
+        // location (pre-narrowing) to the new `<mur_home>/index/channels/`
+        // subdir. This is deliberately best-effort: if a sandboxed process
+        // (which can write the new subdir but not the parent `index/` dir)
+        // races this rename, the rename fails silently and the index simply
+        // starts fresh at the new path — it's a droppable/rebuildable
+        // read-model that self-heals per-channel on the next write, so
+        // losing the race here is harmless.
+        let old_dir = mur_home.join("index");
+        for ext in ["", "-wal", "-shm"] {
+            let old = old_dir.join(format!("channels.db{ext}"));
+            let new = dir.join(format!("channels.db{ext}"));
+            if old.exists() && !new.exists() {
+                let _ = std::fs::rename(&old, &new);
+            }
+        }
+
         let conn = Connection::open(dir.join("channels.db")).context("open channels.db")?;
         // Concurrency: the CLI and Hub open independent connections to this DB.
         // WAL allows concurrent readers alongside one writer; busy_timeout makes a
@@ -156,5 +174,27 @@ mod tests {
         let n = idx.rebuild_from(&store).unwrap();
         assert_eq!(n, 2);
         assert_eq!(idx.list(10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn open_migrates_old_layout_db_into_channels_subdir() {
+        let tmp = TempDir::new().unwrap();
+        let old_dir = tmp.path().join("index");
+        std::fs::create_dir_all(&old_dir).unwrap();
+        let old_db = old_dir.join("channels.db");
+        // Empty file: SQLite treats a zero-length file as a valid new,
+        // empty database (no fixed header requirement), so this stands in
+        // for a real old-layout channels.db without depending on the
+        // on-disk SQLite format.
+        std::fs::write(&old_db, b"").unwrap();
+
+        ChannelIndex::open(tmp.path()).unwrap();
+
+        let new_db = old_dir.join("channels").join("channels.db");
+        assert!(new_db.exists(), "db must be migrated to the new subdir");
+        assert!(
+            !old_db.exists(),
+            "old-location file must be gone after migration"
+        );
     }
 }
