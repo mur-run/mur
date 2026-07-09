@@ -1,10 +1,10 @@
 // mur-research-gateway/src/server.rs
 use crate::audit::{AuditRecord, audit};
 use crate::browser::{self, BrowserCfg};
+use crate::config::{self, GatewayConfig};
 use crate::fetcher::{self, FetchError};
 use crate::jsonrpc::{Request, Response};
 use crate::tools;
-use std::time::Duration;
 
 /// `denied` for the SSRF guard rejection, `error` for every other `FetchError`
 /// variant (Http/TooLarge) — the audit's outcome taxonomy per spec §7.2/§7.4.
@@ -12,57 +12,6 @@ fn fetch_outcome(err: &FetchError) -> &'static str {
     match err {
         FetchError::Guard(_) => "denied",
         FetchError::Http(_) | FetchError::TooLarge => "error",
-    }
-}
-
-/// Interim config (Task placeholder): env vars until config.yaml lands (Task 6).
-// TODO(Task 6): read from config.yaml
-fn deny_hosts_from_env() -> Vec<String> {
-    std::env::var("MUR_RESEARCH_DENY_HOSTS")
-        .ok()
-        .map(|v| {
-            v.split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-// TODO(Task 6): read from config.yaml
-fn timeout_from_env() -> Duration {
-    let secs = std::env::var("MUR_RESEARCH_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(20);
-    Duration::from_secs(secs)
-}
-
-/// Default installed Lightpanda path (`~/.mur/aura/lightpanda`, verified
-/// present 2026-07-08 — `gotcha_agent_browser_lightpanda_engine_dead`). Only
-/// used when `MUR_RESEARCH_LIGHTPANDA_PATH` is unset AND the default actually
-/// exists on disk — never claim a path that isn't there.
-// TODO(Task 6): read from config.yaml
-fn default_lightpanda_path() -> Option<String> {
-    let home = std::env::var("HOME").ok()?;
-    let path = format!("{home}/.mur/aura/lightpanda");
-    std::path::Path::new(&path).exists().then_some(path)
-}
-
-// TODO(Task 6): read from config.yaml
-pub(crate) fn browser_cfg_from_env() -> BrowserCfg {
-    let agent_browser_bin = std::env::var("MUR_RESEARCH_AGENT_BROWSER_BIN")
-        .unwrap_or_else(|_| "agent-browser".to_string());
-    let lightpanda_path = std::env::var("MUR_RESEARCH_LIGHTPANDA_PATH")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(default_lightpanda_path);
-    let chrome_stealth_args = std::env::var("MUR_RESEARCH_CHROME_STEALTH_ARGS")
-        .unwrap_or_else(|_| "--no-sandbox,--disable-blink-features=AutomationControlled".into());
-    BrowserCfg {
-        agent_browser_bin,
-        lightpanda_path,
-        chrome_stealth_args,
     }
 }
 
@@ -80,11 +29,26 @@ fn fetch_error_response(id: Option<serde_json::Value>, verb: &str, err: FetchErr
     }
 }
 
-pub struct McpServer;
+pub struct McpServer {
+    config: GatewayConfig,
+}
 
 impl McpServer {
+    /// Loads `GatewayConfig` ONCE (from `~/.mur/config.yaml`'s
+    /// `research_gateway:` block + env overrides) and stores it for the
+    /// lifetime of the server — see `config::load`.
     pub fn new() -> Self {
-        McpServer
+        let mur_home = config::mur_home_dir();
+        McpServer {
+            config: config::load(&mur_home),
+        }
+    }
+
+    /// Exposes the loaded browser config for `main`'s startup preflight, so
+    /// preflight reads the SAME config the server will use — never a second,
+    /// independently-loaded copy.
+    pub(crate) fn browser_cfg(&self) -> &BrowserCfg {
+        &self.config.browser
     }
 
     pub async fn handle(&mut self, request: Request) -> Response {
@@ -157,8 +121,7 @@ impl McpServer {
             .get("render")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let deny = deny_hosts_from_env();
-        let timeout = timeout_from_env();
+        let deny = &self.config.deny_hosts;
         if render {
             // Caller may force tier 3 (chrome) directly, e.g. for anti-bot pages
             // known to defeat lightpanda; otherwise tier 2 first, escalating to
@@ -168,8 +131,11 @@ impl McpServer {
                 .get("chrome")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            let cfg = browser_cfg_from_env();
-            return match browser::fetch_rendered(&url, &deny, &cfg, want_chrome, timeout).await {
+            let cfg = &self.config.browser;
+            let browser_timeout = self.config.browser_timeout;
+            return match browser::fetch_rendered(&url, deny, cfg, want_chrome, browser_timeout)
+                .await
+            {
                 Ok(result) => {
                     audit(AuditRecord::new("fetch", url, Some(result.tier), "ok"));
                     Response::success(
@@ -178,7 +144,7 @@ impl McpServer {
                     )
                 }
                 Err(FetchError::Http(_)) if !want_chrome => {
-                    match browser::fetch_rendered(&url, &deny, &cfg, true, timeout).await {
+                    match browser::fetch_rendered(&url, deny, cfg, true, browser_timeout).await {
                         Ok(result) => {
                             audit(AuditRecord::new("fetch", url, Some(result.tier), "ok"));
                             Response::success(
@@ -198,7 +164,7 @@ impl McpServer {
                 }
             };
         }
-        match fetcher::fetch_tier1(&url, &deny, timeout).await {
+        match fetcher::fetch_tier1(&url, deny, self.config.timeout).await {
             Ok(result) => {
                 audit(AuditRecord::new("fetch", url, Some(result.tier), "ok"));
                 Response::success(
@@ -225,11 +191,12 @@ impl McpServer {
         let limit = args
             .get("limit")
             .and_then(|v| v.as_u64())
-            .unwrap_or(5)
-            .clamp(1, 20) as usize;
-        let cfg = browser_cfg_from_env();
-        let timeout = timeout_from_env();
-        match browser::search(&query, limit, &cfg, timeout).await {
+            .map(|v| v as usize)
+            .unwrap_or(self.config.search_limit)
+            .clamp(config::MIN_SEARCH_LIMIT, config::MAX_SEARCH_LIMIT);
+        let cfg = &self.config.browser;
+        let timeout = self.config.browser_timeout;
+        match browser::search(&query, limit, cfg, timeout).await {
             Ok(hits) => {
                 audit(AuditRecord::new("search", query, None, "ok"));
                 Response::success(
