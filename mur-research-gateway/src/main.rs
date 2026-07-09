@@ -2,6 +2,7 @@
 use tracing_subscriber::EnvFilter;
 
 mod jsonrpc;
+mod net_guard;
 mod server;
 mod tools;
 
