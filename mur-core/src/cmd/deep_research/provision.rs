@@ -120,6 +120,22 @@ pub fn provision(
             .iter()
             .map(|h| h.to_string())
             .collect();
+        // Pre-approve the gateway's OWN tools (read-only search/fetch) so
+        // headless delegated turns don't dead-end on the HITL gate
+        // (`tool/approval_needed` has no answerer under fleet delegation →
+        // 300 s timeout → deny → task failed). Scoped to
+        // `mcp__research-gateway__*` only — every other tool keeps the
+        // fail-closed `Ask` default. This grants no egress by itself: the
+        // gateway's outbound stays Inherit/restricted until the separate
+        // explicit-consent `--grant-egress` step.
+        profile
+            .entitlements
+            .tools
+            .push(mur_common::agent::ToolRule {
+                pattern: mur_common::mcp_naming::tool_pattern(GATEWAY_MCP_NAME),
+                policy: mur_common::agent::ToolPolicy::Allow,
+                risk: None,
+            });
         save_profile(&path, &mut profile)?;
 
         names.push(name);
@@ -183,6 +199,10 @@ pub fn cmd_provision(
     for name in &names {
         println!("  {name}");
     }
+    println!(
+        "  tool policy: {} → allow (gateway search/fetch pre-approved for headless turns)",
+        mur_common::mcp_naming::tool_pattern(GATEWAY_MCP_NAME)
+    );
     if grant_egress_flag {
         for name in &names {
             grant_egress(mur_home, name, deny_hosts, yes)?;
@@ -356,5 +376,52 @@ mod tests {
             DEFAULT_WORKER_MODEL,
         );
         assert!(too_many.is_err(), "count > MAX_WORKER_COUNT must error");
+    }
+
+    // Unix-only: same cmd_create runtime-symlink constraint as the sibling
+    // provision tests (see the comment on
+    // provision_creates_restricted_workers_with_gateway).
+    #[cfg(unix)]
+    #[test]
+    fn provision_stamps_gateway_tool_allow_rule() {
+        use mur_common::agent::{ToolPolicy, resolve_tool_policy};
+
+        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        unsafe {
+            std::env::set_var("MUR_AGENT_BIN_DIR", &bin_dir);
+        }
+        seed_models_yaml(
+            tmp.path(),
+            DEFAULT_WORKER_MODEL,
+            "anthropic",
+            "claude-haiku-4-5",
+        );
+
+        let names = provision(tmp.path(), "dr_tool", 1, DEFAULT_WORKER_MODEL).unwrap();
+        let p = mur_common::agent::AgentProfile::load(tmp.path(), &names[0]).unwrap();
+
+        // The gateway tools resolve to Allow (headless delegated turns skip
+        // the HITL gate for them)…
+        let search = mur_common::mcp_naming::wire_name(
+            &mur_common::mcp_naming::sanitize_server(GATEWAY_MCP_NAME),
+            "research_search",
+        );
+        assert_eq!(
+            resolve_tool_policy(&p.entitlements.tools, &search),
+            ToolPolicy::Allow
+        );
+
+        // …while every other tool keeps the fail-closed default (Ask): the
+        // rule must be gateway-scoped, never a blanket allow.
+        assert_eq!(
+            resolve_tool_policy(&p.entitlements.tools, "bash"),
+            ToolPolicy::Ask
+        );
+        assert_eq!(
+            resolve_tool_policy(&p.entitlements.tools, "mcp__github__merge_pr"),
+            ToolPolicy::Ask
+        );
     }
 }
