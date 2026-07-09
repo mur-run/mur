@@ -3,6 +3,7 @@ use tracing_subscriber::EnvFilter;
 
 mod audit;
 mod browser;
+mod config;
 mod fetcher;
 mod jsonrpc;
 mod net_guard;
@@ -20,10 +21,16 @@ async fn main() {
 
     tracing::info!("mur-research-gateway starting");
 
+    // Config (env + ~/.mur/config.yaml's research_gateway: block) is loaded
+    // ONCE here, inside McpServer::new — see config.rs. Preflight below reads
+    // it back via `browser_cfg()` rather than loading its own copy, so
+    // startup logging always reflects the exact config the server will use.
+    let mut server = server::McpServer::new();
+
     // Preflight the browser toolchain once at startup so a missing/stale
     // agent-browser or absent Lightpanda is surfaced explicitly (never
     // silently) — degrade to tier 1 only, not "as if Full" (spec §5).
-    match browser::preflight(&server::browser_cfg_from_env()) {
+    match browser::preflight(server.browser_cfg()) {
         browser::Preflight::Full => {
             tracing::info!("browser preflight: full — tiers 2/3 (lightpanda/chrome) available")
         }
@@ -32,8 +39,6 @@ async fn main() {
             other
         ),
     }
-
-    let mut server = server::McpServer::new();
 
     while let Some(request) = jsonrpc::read_request() {
         // JSON-RPC notifications (no `id`, e.g. `notifications/initialized`) must
