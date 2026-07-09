@@ -45,6 +45,12 @@ pub struct SandboxPolicy {
     pub spawn_allowed_prefixes: Vec<PathBuf>,
     /// Outbound TCP ports that are allowed. `None` = allow all; `Some([])` = deny all.
     pub net_allow_ports: Option<Vec<u16>>,
+    /// Loopback-only TCP port carve-outs (e.g. the in-runtime egress proxy's
+    /// listener). Emitted as `remote tcp "localhost:{port}"` on macOS SBPL;
+    /// on Linux Landlock (port-only, no host scoping) as a plain
+    /// `NetPort ConnectTcp` rule. Only populated in Restricted mode — see
+    /// `allow_loopback_ports`.
+    pub net_allow_loopback_ports: Vec<u16>,
     /// Outbound hostnames for the reqwest guard layer.
     /// `None` = allow all (Unrestricted). `Some([])` = deny all (Off).
     pub net_allow_hosts: Option<Vec<String>>,
@@ -63,6 +69,7 @@ impl Default for SandboxPolicy {
             spawn_allowed_paths: Vec::new(),
             spawn_allowed_prefixes: Vec::new(),
             net_allow_ports: None,
+            net_allow_loopback_ports: Vec::new(),
             net_allow_hosts: None,
             memory_limit_mb: None,
         }
@@ -350,6 +357,7 @@ impl SandboxPolicy {
             spawn_allowed_paths,
             spawn_allowed_prefixes,
             net_allow_ports,
+            net_allow_loopback_ports: Vec::new(),
             net_allow_hosts,
             memory_limit_mb: Some(ent.limits.memory_mb),
         }
@@ -370,6 +378,25 @@ impl SandboxPolicy {
             for p in extra {
                 if !ports.contains(p) {
                     ports.push(*p);
+                }
+            }
+        }
+    }
+
+    /// Carve out loopback-only TCP ports (e.g. the egress proxy listener,
+    /// which sandboxed MCP children must dial via `HTTPS_PROXY`).
+    ///
+    /// Same fail-closed rule as [`Self::allow_extra_ports`]: only applies in
+    /// *Restricted* mode. `None` (Unrestricted) already allows everything and
+    /// `Some([])` (Off) means the user explicitly denied all outbound TCP —
+    /// we respect that and do not silently re-open it.
+    pub fn allow_loopback_ports(&mut self, extra: &[u16]) {
+        if let Some(ports) = &self.net_allow_ports
+            && !ports.is_empty()
+        {
+            for p in extra {
+                if !self.net_allow_loopback_ports.contains(p) {
+                    self.net_allow_loopback_ports.push(*p);
                 }
             }
         }
@@ -1074,5 +1101,33 @@ mod tests {
             "spawn_allowed_paths must contain the canonical form: {:?}",
             policy.spawn_allowed_paths
         );
+    }
+
+    #[test]
+    fn loopback_ports_respect_off_mode() {
+        // Off = user denied all outbound; the carve-out must not reopen it.
+        let mut p_off = SandboxPolicy {
+            net_allow_ports: Some(vec![]),
+            ..Default::default()
+        };
+        p_off.allow_loopback_ports(&[54321]);
+        assert!(p_off.net_allow_loopback_ports.is_empty());
+
+        // Restricted: carve-out applies, deduplicated.
+        let mut p_r = SandboxPolicy {
+            net_allow_ports: Some(vec![80, 443, 8080, 8443]),
+            ..Default::default()
+        };
+        p_r.allow_loopback_ports(&[54321]);
+        p_r.allow_loopback_ports(&[54321]);
+        assert_eq!(p_r.net_allow_loopback_ports, vec![54321]);
+
+        // Unrestricted (None): (allow default) already covers it; no rule needed.
+        let mut p_u = SandboxPolicy {
+            net_allow_ports: None,
+            ..Default::default()
+        };
+        p_u.allow_loopback_ports(&[54321]);
+        assert!(p_u.net_allow_loopback_ports.is_empty());
     }
 }
