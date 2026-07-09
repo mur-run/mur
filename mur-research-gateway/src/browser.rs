@@ -1,8 +1,10 @@
 // mur-research-gateway/src/browser.rs
 //
 // Escalation tiers 2 (agent-browser --engine lightpanda) and 3 (--engine
-// chrome), plus `search`, plus `preflight`. Drives `agent-browser` as a
-// subprocess — see docs/superpowers/specs/2026-07-09-mur-native-deep-research-design.md §5.
+// chrome), plus `preflight`. Drives `agent-browser` as a subprocess — see
+// docs/superpowers/specs/2026-07-09-mur-native-deep-research-design.md §5.
+// `search` now rides the tier-1 HTTP path (see `fetcher::search_tier1`) — no
+// browser subprocess involved.
 //
 // LOAD-BEARING: the egress proxy only sees tier-1 (reqwest) connections; the
 // browser subprocess opens its own connections the proxy cannot observe.
@@ -191,89 +193,6 @@ pub async fn fetch_rendered(
     })
 }
 
-/// Web search. Drives agent-browser to a search-results page and parses hits.
-/// v1 rides the browser engine — a dedicated search-provider API is out of
-/// scope per spec §11. Same pre-spawn screen and `timeout` as `fetch_rendered`;
-/// tier follows `cfg` (lightpanda when available, else chrome) — never
-/// caller-selectable, since search has no anti-bot escalation path of its own.
-///
-/// `deny` is the SAME operator `deny_hosts` overlay `fetch_rendered` screens
-/// against — passed here too so `mur deep-research provision --deny-host X`
-/// applies uniformly across every gateway tool, not just `fetch`. The fixed
-/// search-engine host itself is never caller-supplied, but an operator can
-/// still deny it (or any other public host reachable from a redirect/hit)
-/// via the same overlay; the always-on private/loopback/link-local rule
-/// applies regardless (net_guard).
-pub async fn search(
-    query: &str,
-    limit: usize,
-    deny: &[String],
-    cfg: &BrowserCfg,
-    timeout: Duration,
-) -> Result<Vec<crate::fetcher::SearchHit>, FetchError> {
-    let mut search_url =
-        url::Url::parse("https://html.duckduckgo.com/html/").expect("static URL is valid");
-    search_url.query_pairs_mut().append_pair("q", query);
-
-    let screened = fetcher::screen_url_blocking(search_url.as_str(), deny)
-        .await
-        .map_err(FetchError::Guard)?;
-
-    let argv = build_fetch_argv(screened.as_str(), cfg, false);
-    let text = run_agent_browser(&cfg.agent_browser_bin, &argv, timeout).await?;
-    Ok(parse_search_hits(&text, limit))
-}
-
-/// Small, deliberately minimal parser: agent-browser's `snapshot` renders
-/// markdown-style links (`[title](url)`); one hit per line that has one,
-/// snippet is the next non-empty, non-link line. Good enough for v1 — the
-/// upstream search engine's HTML is not a contract MUR controls (spec §11:
-/// a dedicated search API is out of scope), so don't over-invest here.
-fn parse_search_hits(text: &str, limit: usize) -> Vec<crate::fetcher::SearchHit> {
-    let mut hits = Vec::new();
-    let mut lines = text.lines().peekable();
-    while let Some(line) = lines.next() {
-        if hits.len() >= limit {
-            break;
-        }
-        let Some((title, url)) = parse_markdown_link(line) else {
-            continue;
-        };
-        if !(url.starts_with("http://") || url.starts_with("https://")) {
-            continue;
-        }
-        let snippet = lines
-            .peek()
-            .filter(|l| !l.trim().is_empty() && parse_markdown_link(l).is_none())
-            .map(|l| l.trim().to_string())
-            .unwrap_or_default();
-        hits.push(crate::fetcher::SearchHit {
-            title,
-            url,
-            snippet,
-        });
-    }
-    hits
-}
-
-/// Extract `(title, url)` from a single `[title](url)` markdown link, if the
-/// line contains exactly that shape. Returns `None` for anything else.
-fn parse_markdown_link(line: &str) -> Option<(String, String)> {
-    let start = line.find('[')?;
-    let close = line[start..].find(']')? + start;
-    if line[close + 1..].starts_with('(') {
-        let open_paren = close + 1;
-        let end = line[open_paren..].find(')')? + open_paren;
-        let title = line[start + 1..close].trim().to_string();
-        let url = line[open_paren + 1..end].trim().to_string();
-        if title.is_empty() || url.is_empty() {
-            return None;
-        }
-        return Some((title, url));
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,28 +314,5 @@ mod tests {
             session_id("https://b.example")
         );
         assert!(session_id("https://a.example").starts_with("rg-"));
-    }
-    #[test]
-    fn parses_markdown_search_hits_with_snippet() {
-        let text = "\
-Intro text\n\
-[Rust Programming Language](https://www.rust-lang.org/)\n\
-A language empowering everyone.\n\
-\n\
-[Another Hit](https://example.com/page)\n\
-Some snippet text.\n\
-[Not a search result](not-a-url)\n";
-        let hits = parse_search_hits(text, 5);
-        assert_eq!(hits.len(), 2);
-        assert_eq!(hits[0].title, "Rust Programming Language");
-        assert_eq!(hits[0].url, "https://www.rust-lang.org/");
-        assert_eq!(hits[0].snippet, "A language empowering everyone.");
-        assert_eq!(hits[1].title, "Another Hit");
-        assert_eq!(hits[1].snippet, "Some snippet text.");
-    }
-    #[test]
-    fn parse_search_hits_respects_limit() {
-        let text = "[A](https://a.example)\n[B](https://b.example)\n[C](https://c.example)\n";
-        assert_eq!(parse_search_hits(text, 2).len(), 2);
     }
 }

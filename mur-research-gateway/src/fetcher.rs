@@ -13,8 +13,6 @@ const SEARCH_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)
      (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
 
 /// DuckDuckGo's server-rendered (no-JS) HTML search endpoint.
-// Unused until server.rs routes the `search` tool to `search_tier1` (Task 2).
-#[allow(dead_code)]
 const DDG_HTML_ENDPOINT: &str = "https://html.duckduckgo.com/html/";
 
 #[derive(Debug, Serialize)]
@@ -160,8 +158,6 @@ fn build_client(timeout: Duration) -> Result<reqwest::Client, FetchError> {
 /// proxy-honoring reqwest path `fetch_tier1` uses (works under the kernel
 /// sandbox; agent-browser does not — G2), then parse result anchors. Screens
 /// the endpoint host via the SSRF guard exactly like a fetch.
-// Unused until server.rs routes the `search` tool to this fn (Task 2).
-#[allow(dead_code)]
 pub async fn search_tier1(
     query: &str,
     limit: usize,
