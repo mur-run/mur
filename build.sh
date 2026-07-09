@@ -81,6 +81,15 @@ if $INSTALL; then
     echo "Installed mur-mcp-server -> /opt/homebrew/bin/mur-mcp-server"
   fi
 
+  # The research gateway (stdio MCP server for tiered web fetch/search).
+  # Agent sandboxes spawn it by name off PATH, so it must land next to `mur`.
+  GATEWAY_BINARY="$SCRIPT_DIR/target/release/mur-research-gateway"
+  if [ -f "$GATEWAY_BINARY" ]; then
+    sudo cp "$GATEWAY_BINARY" /opt/homebrew/bin/mur-research-gateway
+    sudo codesign --force -s "$CODESIGN_IDENTITY" /opt/homebrew/bin/mur-research-gateway || true
+    echo "Installed mur-research-gateway -> /opt/homebrew/bin/mur-research-gateway"
+  fi
+
   # The background daemon. `mur daemon start` looks for `murmurd` alongside
   # `mur`, so install it too — otherwise the daemon (and the Hub/phone voice
   # path that runs through it) is unavailable on a release install.
