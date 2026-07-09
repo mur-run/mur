@@ -39,7 +39,11 @@ session-start hook prints a one-line pending-proposals hint (spec §3.8 tier 1).
 
 `~/.mur/index/channels.db` is a rebuildable SQLite read-model (channel list / "my
 work" inbox). Rebuild with `mur internals reindex`. Import legacy CLI transcripts
-with `mur internals migrate-channels`. Spec: `docs/superpowers/specs/2026-06-15-unified-channel-design.md`.
+with `mur internals migrate-channels`.
+
+**channel/delegate (v3d-2 peer-writes-own):** Sandboxed members get write access to both the channel store (`~/.mur/channels`) and the read-model dir (`~/.mur/index`); independently, a failed manifest/SQLite refresh after a successful append is a warning, not an error — `events.jsonl` is the record and the index is rebuildable.
+
+Spec: `docs/superpowers/specs/2026-06-15-unified-channel-design.md`.
 
 ## Pattern pipeline removal (workflow-engine v2 P1a+P1b, 2026-06-11)
 
