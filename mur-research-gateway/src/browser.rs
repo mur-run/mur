@@ -230,7 +230,8 @@ mod tests {
         let cfg = BrowserCfg {
             agent_browser_bin: "agent-browser".into(),
             lightpanda_path: Some("/x/lightpanda".into()),
-            chrome_stealth_args: "--no-sandbox,--disable-blink-features=AutomationControlled".into(),
+            chrome_stealth_args: "--no-sandbox,--disable-blink-features=AutomationControlled"
+                .into(),
         };
         let argv = build_fetch_argv("https://example.com", &cfg, true);
         assert!(
