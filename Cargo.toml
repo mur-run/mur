@@ -8,6 +8,7 @@ members = [
     "mur-gui-core",
     "mur-agent-launcher",
     "mur-mcp-server",
+    "mur-research-gateway",
     "mur-compress",
     "mur-channel",
     "mur-mobile-sdk",
