@@ -162,8 +162,7 @@ impl ChannelService {
             .append_event(channel_id, actor, kind, payload, None, None, None)?;
         if let Ok(mut ch) = self.store.load_manifest(channel_id) {
             ch.updated_at = ev.ts;
-            self.store.save_manifest(&ch)?;
-            self.index.upsert(&ch)?;
+            self.refresh_read_model(&ch);
         }
         Ok(ev)
     }
@@ -208,8 +207,7 @@ impl ChannelService {
         )?;
         if let Ok(mut ch) = self.store.load_manifest(channel_id) {
             ch.updated_at = ev.ts;
-            self.store.save_manifest(&ch)?;
-            self.index.upsert(&ch)?;
+            self.refresh_read_model(&ch);
         }
         Ok(ev)
     }
@@ -246,8 +244,7 @@ impl ChannelService {
         )?;
         if let Ok(mut ch) = self.store.load_manifest(channel_id) {
             ch.updated_at = ev.ts;
-            self.store.save_manifest(&ch)?;
-            self.index.upsert(&ch)?;
+            self.refresh_read_model(&ch);
         }
         Ok(ev)
     }
@@ -300,8 +297,7 @@ impl ChannelService {
         if let Ok(mut ch) = self.store.load_manifest(channel_id) {
             ch.state = new_state;
             ch.updated_at = ev.ts;
-            self.store.save_manifest(&ch)?;
-            self.index.upsert(&ch)?;
+            self.refresh_read_model(&ch);
         }
         Ok(ev)
     }
@@ -384,6 +380,27 @@ impl ChannelService {
     }
     pub fn index(&self) -> &ChannelIndex {
         &self.index
+    }
+
+    /// Refresh the manifest + SQLite read-model after a successful event
+    /// append. Both are rebuildable projections of `events.jsonl` — a
+    /// refresh failure must not fail an append whose event is already
+    /// durable. Concretely: a sandboxed delegate (peer-writes-own, v3d-2)
+    /// may be able to write the channel store but not the shared index;
+    /// SQLite reports the denied write as "attempt to write a readonly
+    /// database" (G3, live fleet run 2026-07-09).
+    fn refresh_read_model(&self, ch: &Channel) {
+        if let Err(e) = self
+            .store
+            .save_manifest(ch)
+            .and_then(|()| self.index.upsert(ch))
+        {
+            tracing::warn!(
+                channel_id = %ch.id,
+                error = %e,
+                "read-model refresh failed after append (event persisted; index is rebuildable)"
+            );
+        }
     }
 }
 
@@ -468,6 +485,88 @@ mod tests {
             e.sig.as_ref().unwrap(),
             &id.verifying_key_bytes()
         ));
+    }
+
+    // Unix-only: exercises a read-only read-model via fs permission bits.
+    //
+    // Note on mechanism: a plain chmod of `channels.db` to read-only does NOT
+    // reproduce the fault against `ChannelIndex`'s already-open `Connection` —
+    // POSIX permission bits are checked at `open()`, not on every `write()`
+    // through an fd opened before the chmod, so the long-lived SQLite
+    // connection would keep writing regardless (verified empirically). The
+    // manifest side of the read-model doesn't have that problem: every
+    // `save_manifest` call does a *fresh* `fs::rename(tmp, path)`, and
+    // `rename(2)` re-checks the containing directory's write permission on
+    // every call. So this test freezes the channel's manifest directory
+    // (after a warm-up append has already created `events.jsonl` /
+    // `events.lock`, so the durable event log keeps append-writing to
+    // already-open-by-path *existing* files, which needs no directory write
+    // permission) — that reliably fails `save_manifest`, which is what
+    // `refresh_read_model`'s combined `and_then` chain must swallow.
+    #[cfg(unix)]
+    #[test]
+    fn append_survives_readonly_index() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let mur_home = tmp.path();
+        let identity = mur_common::identity::AgentIdentity::generate();
+        let svc = ChannelService::open(mur_home).unwrap();
+        let ch = svc.create_for_workflow("signed").unwrap();
+
+        // Warm-up append so events.jsonl / events.lock already exist before we
+        // freeze the channel directory (their re-opens then need no directory
+        // write permission — only the manifest rename does).
+        svc.append_signed(
+            &ch.id,
+            &identity,
+            1,
+            ChannelActor::Agent { id: "w1".into() },
+            EventKind::Message,
+            serde_json::json!({ "text": "warm-up" }),
+            None,
+        )
+        .unwrap();
+
+        // Freeze the read-model: the SQLite index dir/file (matching the
+        // production "attempt to write a readonly database" report) plus the
+        // channel's manifest directory (the mechanism that actually bites in
+        // this in-process test — see comment above).
+        let index_dir = mur_home.join("index").join("channels");
+        let db = index_dir.join("channels.db");
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o444)).unwrap();
+        for ext in ["-wal", "-shm"] {
+            let p = index_dir.join(format!("channels.db{ext}"));
+            if p.exists() {
+                std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o444)).unwrap();
+            }
+        }
+        std::fs::set_permissions(&index_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let channel_dir = mur_home.join("channels").join(&ch.id);
+        std::fs::set_permissions(&channel_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        // The append must still succeed — the event log is the record.
+        let ev = svc
+            .append_signed(
+                &ch.id,
+                &identity,
+                1,
+                ChannelActor::Agent { id: "w1".into() },
+                EventKind::Message,
+                serde_json::json!({ "text": "hi" }),
+                None,
+            )
+            .expect("append must not fail on a read-only read-model");
+
+        // Restore perms so tempdir cleanup works.
+        std::fs::set_permissions(&channel_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&index_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        // The event is durably in the log; the manifest read-model is frozen
+        // (unwritten) — both expected under a non-fatal refresh.
+        let events = svc.load_events(&ch.id).unwrap();
+        assert!(events.iter().any(|e| e.seq == ev.seq));
     }
 
     #[test]

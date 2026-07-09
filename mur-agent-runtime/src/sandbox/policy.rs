@@ -174,6 +174,31 @@ impl SandboxPolicy {
             fs_write.push(channels);
         }
 
+        // `<mur_home>/index` holds three things with very different trust
+        // requirements: the channels read-model subdir (`index/channels/`,
+        // channels.db + WAL/SHM), the `*.lance` retrieval stores, and
+        // `capabilities.json` (which the daemon injects UNSIGNED into the
+        // operator's Claude session on every SessionStart — a prompt-
+        // injection surface). Only `index/channels/` is granted here: a
+        // delegated agent's self-append refreshes channels.db's
+        // `updated_at` row, and without this grant SQLite maps the denied
+        // write to SQLITE_READONLY, so every peer-writes-own append reports
+        // a false failure (G3, live fleet run 2026-07-09). The rest of
+        // `index/` is deliberately excluded — sandboxed members must not be
+        // able to write capabilities.json (it feeds that unsigned inject)
+        // or the lance stores (they shape retrieval). Same create-before-
+        // grant idiom as `channels` (Landlock skips rules on paths that
+        // don't exist at seal time).
+        if let Some(channel_index_dir) = agent_home
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|m| m.join("index").join("channels"))
+            && !fs_write.contains(&channel_index_dir)
+        {
+            let _ = std::fs::create_dir_all(&channel_index_dir);
+            fs_write.push(channel_index_dir);
+        }
+
         // Standard system read paths: libraries, certs, DNS config.
         let system_read = system_read_paths();
         for p in system_read {
@@ -1129,5 +1154,32 @@ mod tests {
         };
         p_u.allow_loopback_ports(&[54321]);
         assert!(p_u.net_allow_loopback_ports.is_empty());
+    }
+
+    #[test]
+    fn channel_index_subdir_granted_not_whole_index_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let agent_home = mur_home.join("agents").join("w1");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let ent = minimal_entitlements();
+        let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
+        assert!(
+            policy.fs_write.contains(&mur_home.join("channels")),
+            "pre-existing channels carve-out must remain"
+        );
+        assert!(
+            policy
+                .fs_write
+                .contains(&mur_home.join("index").join("channels")),
+            "channels read-model subdir must be granted alongside channels"
+        );
+        assert!(
+            !policy.fs_write.contains(&mur_home.join("index")),
+            "the whole index dir must NOT be granted — capabilities.json and \
+             the lance stores also live there and must stay unwritable"
+        );
+        // The grant idiom creates the dir so Landlock rules stick.
+        assert!(mur_home.join("index").join("channels").is_dir());
     }
 }
