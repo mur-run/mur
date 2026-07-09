@@ -20,6 +20,10 @@ pub enum MediaError {
 
 impl MediaError {
     /// Warm zh-TW message + actionable hint. (zh-TW is the product default brand voice.)
+    // Reached only via `Display`/Plan-B co-watching, both of which are dead in
+    // the `mur` bin target (variants are constructed only by proactive
+    // co-watching) — same rationale as the enum's `#[allow(dead_code)]` above.
+    #[allow(dead_code)]
     pub fn user_message(&self) -> &'static str {
         match self {
             MediaError::VlcNotFound => "我找不到 VLC，請先安裝 VLC.app 再試一次。",
