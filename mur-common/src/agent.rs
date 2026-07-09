@@ -343,6 +343,16 @@ pub enum McpNetMode {
     Off,
 }
 
+/// Env var name a sandboxed MCP child reads to self-enforce the operator's
+/// `deny_hosts` overlay on connections the egress proxy cannot observe (e.g.
+/// `mur-research-gateway`'s tier-2/3 browser subprocesses — the proxy only
+/// sees tier-1 `reqwest` traffic). `mur-agent-runtime`'s `proxy_env_for` sets
+/// this on the child's env alongside the proxy vars; a cooperating child
+/// (currently `mur-research-gateway`, via `config::load`) reads it to source
+/// its own deny list. Single definition shared by both crates (CLAUDE.md
+/// rule 1: no duplicated literal).
+pub const ENV_MCP_DENY_HOSTS: &str = "MUR_RESEARCH_DENY_HOSTS";
+
 /// Per-MCP-server outbound egress policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct McpServerNetwork {

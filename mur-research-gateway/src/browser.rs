@@ -204,9 +204,18 @@ pub async fn fetch_rendered(
 /// scope per spec §11. Same pre-spawn screen and `timeout` as `fetch_rendered`;
 /// tier follows `cfg` (lightpanda when available, else chrome) — never
 /// caller-selectable, since search has no anti-bot escalation path of its own.
+///
+/// `deny` is the SAME operator `deny_hosts` overlay `fetch_rendered` screens
+/// against — passed here too so `mur deep-research provision --deny-host X`
+/// applies uniformly across every gateway tool, not just `fetch`. The fixed
+/// search-engine host itself is never caller-supplied, but an operator can
+/// still deny it (or any other public host reachable from a redirect/hit)
+/// via the same overlay; the always-on private/loopback/link-local rule
+/// applies regardless (net_guard).
 pub async fn search(
     query: &str,
     limit: usize,
+    deny: &[String],
     cfg: &BrowserCfg,
     timeout: Duration,
 ) -> Result<Vec<SearchHit>, FetchError> {
@@ -214,10 +223,7 @@ pub async fn search(
         url::Url::parse("https://html.duckduckgo.com/html/").expect("static URL is valid");
     search_url.query_pairs_mut().append_pair("q", query);
 
-    // No deny_hosts overlay here (search always targets the fixed search-engine
-    // host above, not a caller-supplied URL) — the guard still screens the
-    // resolved IP against loopback/private/link-local per net_guard's hard rule.
-    let screened = fetcher::screen_url_blocking(search_url.as_str(), &[])
+    let screened = fetcher::screen_url_blocking(search_url.as_str(), deny)
         .await
         .map_err(FetchError::Guard)?;
 
