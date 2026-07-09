@@ -19,6 +19,7 @@ use anyhow::Result;
 
 use crate::cmd::agent::lifecycle::cmd_create;
 use crate::cmd::agent::mcp::{McpAddPin, cmd_mcp_add, cmd_mcp_set_network};
+use crate::cmd::agent::{load_profile_for_edit, save_profile};
 
 /// Default number of workers `mur deep-research provision` creates when
 /// `--count` is omitted.
@@ -26,6 +27,21 @@ pub const DEFAULT_WORKER_COUNT: usize = 3;
 
 /// Default agent-name prefix when `--prefix` is omitted.
 pub const DEFAULT_WORKER_PREFIX: &str = "dr_worker";
+
+/// Default `models.yaml` alias each worker's `model_ref` is bound to when
+/// `--model` is omitted from `mur deep-research provision`: cheap enough for
+/// disposable worker fan-out, still capable of real reasoning (never the
+/// `ollama/llama3.2:3b` StubEcho fallback `cmd_create` uses with no model
+/// passed at all).
+pub const DEFAULT_WORKER_MODEL: &str = "claude_haiku";
+
+/// Loopback hosts every worker's agent-level `entitlements.network.outbound`
+/// is seeded with at provision time, so the worker can reach its own LLM
+/// endpoint (local cc-proxy) to reason. This is NOT web-research egress —
+/// that remains exclusively the gateway MCP's separate, explicit-consent
+/// `--grant-egress` step (`grant_egress` below). `mode` stays `restricted`;
+/// this only widens the allow-list off empty.
+const WORKER_LLM_ALLOW_HOSTS: [&str; 2] = ["localhost", "127.0.0.1"];
 
 /// Name of the gateway MCP server entry mounted on every worker.
 const GATEWAY_MCP_NAME: &str = "research-gateway";
@@ -53,7 +69,12 @@ const MAX_WORKER_COUNT: usize = 64;
 /// writes `MUR_HOME`. Safe for the single-threaded CLI dispatch path today.
 // TODO(follow-up): parameterize cmd_create/cmd_mcp_add with mur_home instead of
 // mutating the global env, before any daemon/async caller uses provision().
-pub fn provision(mur_home: &Path, name_prefix: &str, count: usize) -> Result<Vec<String>> {
+pub fn provision(
+    mur_home: &Path,
+    name_prefix: &str,
+    count: usize,
+    model: &str,
+) -> Result<Vec<String>> {
     if count == 0 {
         anyhow::bail!("count must be at least 1");
     }
@@ -73,7 +94,10 @@ pub fn provision(mur_home: &Path, name_prefix: &str, count: usize) -> Result<Vec
     let mut names = Vec::with_capacity(count);
     for i in 1..=count {
         let name = format!("{name_prefix}_{i}");
-        cmd_create(&name, true, None, None, None)?;
+        // Fix 1: bind model_ref to `model` (default DEFAULT_WORKER_MODEL) so
+        // the worker resolves real credentials via the models.yaml registry
+        // instead of falling to the ollama/llama3.2:3b StubEcho default.
+        cmd_create(&name, true, None, Some(model.to_string()), None)?;
         cmd_mcp_add(
             &name,
             GATEWAY_MCP_NAME,
@@ -84,6 +108,20 @@ pub fn provision(mur_home: &Path, name_prefix: &str, count: usize) -> Result<Vec
                 ..Default::default()
             },
         )?;
+
+        // Fix 2: seed the agent-level outbound allow-list with loopback so
+        // the worker can reach its own LLM endpoint (local cc-proxy) to
+        // reason. Stays `restricted` — this only widens the allow-list off
+        // empty, never touches the gateway MCP entry's own `network` block
+        // (that stays `None`/Inherit until the separate `--grant-egress`
+        // step in `grant_egress` below).
+        let (path, mut profile) = load_profile_for_edit(&name)?;
+        profile.entitlements.network.outbound.allow_hosts = WORKER_LLM_ALLOW_HOSTS
+            .iter()
+            .map(|h| h.to_string())
+            .collect();
+        save_profile(&path, &mut profile)?;
+
         names.push(name);
     }
     Ok(names)
@@ -132,13 +170,15 @@ pub fn cmd_provision(
     mur_home: &Path,
     name_prefix: Option<&str>,
     count: Option<usize>,
+    model: Option<&str>,
     grant_egress_flag: bool,
     deny_hosts: &[String],
     yes: bool,
 ) -> Result<()> {
     let prefix = name_prefix.unwrap_or(DEFAULT_WORKER_PREFIX);
     let count = count.unwrap_or(DEFAULT_WORKER_COUNT);
-    let names = provision(mur_home, prefix, count)?;
+    let model = model.unwrap_or(DEFAULT_WORKER_MODEL);
+    let names = provision(mur_home, prefix, count, model)?;
     println!("Provisioned {} deep-research worker agent(s):", names.len());
     for name in &names {
         println!("  {name}");
@@ -154,12 +194,37 @@ pub fn cmd_provision(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use std::sync::Mutex;
 
     /// Serialize tests that mutate the process-wide `MUR_HOME` /
     /// `MUR_AGENT_BIN_DIR` env vars (established pattern, see
     /// `cmd::agent::mcp::tests::MUR_HOME_LOCK`).
     static MUR_HOME_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Seed `<mur_home>/models.yaml` with a registry alias, mirroring
+    /// `cmd::agent::lifecycle::tests::seed_models_yaml` — `cmd_create`
+    /// (PR #661) only binds `model_ref` when the bare `--model` value is an
+    /// exact registry key.
+    fn seed_models_yaml(mur_home: &Path, key: &str, provider: &str, model: &str) {
+        use mur_common::model::{ModelEntry, ModelRegistry};
+
+        let mut models = BTreeMap::new();
+        models.insert(
+            key.to_string(),
+            ModelEntry {
+                provider: provider.to_string(),
+                model: model.to_string(),
+                ..Default::default()
+            },
+        );
+        let reg = ModelRegistry {
+            schema_version: 1,
+            models,
+            roles: BTreeMap::new(),
+        };
+        reg.save_to(&mur_home.join("models.yaml")).unwrap();
+    }
 
     #[test]
     fn provision_creates_restricted_workers_with_gateway() {
@@ -171,8 +236,14 @@ mod tests {
         unsafe {
             std::env::set_var("MUR_AGENT_BIN_DIR", &bin_dir);
         }
+        seed_models_yaml(
+            tmp.path(),
+            DEFAULT_WORKER_MODEL,
+            "anthropic",
+            "claude-haiku-4-5",
+        );
 
-        let names = provision(tmp.path(), "dr_worker", 3).unwrap();
+        let names = provision(tmp.path(), "dr_worker", 3, DEFAULT_WORKER_MODEL).unwrap();
         assert_eq!(names.len(), 3);
         assert_eq!(names, vec!["dr_worker_1", "dr_worker_2", "dr_worker_3"]);
 
@@ -189,12 +260,45 @@ mod tests {
         assert_eq!(gw.command, "mur-research-gateway");
         assert!(gw.args.is_empty());
 
-        // Worker holds no egress of its own either.
+        // Fix 1: model_ref is bound to the (default) worker model alias, not
+        // left unset (which would silently fall to StubEcho).
+        assert_eq!(p.model_ref, Some(DEFAULT_WORKER_MODEL.to_string()));
+
+        // Fix 2: worker keeps `restricted` mode but the allow-list now
+        // includes loopback so it can reach its own LLM endpoint.
         assert_eq!(
             p.entitlements.network.outbound.mode,
             mur_common::agent::NetworkOutboundMode::Restricted
         );
-        assert!(p.entitlements.network.outbound.allow_hosts.is_empty());
+        assert!(
+            p.entitlements
+                .network
+                .outbound
+                .allow_hosts
+                .contains(&"127.0.0.1".to_string())
+        );
+        assert!(
+            p.entitlements
+                .network
+                .outbound
+                .allow_hosts
+                .contains(&"localhost".to_string())
+        );
+    }
+
+    #[test]
+    fn provision_threads_explicit_model_alias() {
+        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        unsafe {
+            std::env::set_var("MUR_AGENT_BIN_DIR", &bin_dir);
+        }
+        seed_models_yaml(tmp.path(), "claude_sonnet", "anthropic", "claude-sonnet-5");
+
+        let names = provision(tmp.path(), "dr_worker", 1, "claude_sonnet").unwrap();
+        let p = mur_common::agent::AgentProfile::load(tmp.path(), &names[0]).unwrap();
+        assert_eq!(p.model_ref, Some("claude_sonnet".to_string()));
     }
 
     #[test]
@@ -205,8 +309,14 @@ mod tests {
         unsafe {
             std::env::set_var("MUR_AGENT_BIN_DIR", &bin_dir);
         }
+        seed_models_yaml(
+            tmp.path(),
+            DEFAULT_WORKER_MODEL,
+            "anthropic",
+            "claude-haiku-4-5",
+        );
 
-        let names = provision(tmp.path(), "dr_worker", 1).unwrap();
+        let names = provision(tmp.path(), "dr_worker", 1, DEFAULT_WORKER_MODEL).unwrap();
         grant_egress(tmp.path(), &names[0], &["evil.example".into()], true).unwrap();
         let p = mur_common::agent::AgentProfile::load(tmp.path(), &names[0]).unwrap();
         let gw = p
@@ -230,10 +340,15 @@ mod tests {
         let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
 
-        let zero = provision(tmp.path(), "dr_worker", 0);
+        let zero = provision(tmp.path(), "dr_worker", 0, DEFAULT_WORKER_MODEL);
         assert!(zero.is_err(), "count==0 must error");
 
-        let too_many = provision(tmp.path(), "dr_worker", MAX_WORKER_COUNT + 1);
+        let too_many = provision(
+            tmp.path(),
+            "dr_worker",
+            MAX_WORKER_COUNT + 1,
+            DEFAULT_WORKER_MODEL,
+        );
         assert!(too_many.is_err(), "count > MAX_WORKER_COUNT must error");
     }
 }

@@ -653,6 +653,12 @@ pub enum DeepResearchAction {
         /// (default: DEFAULT_WORKER_PREFIX)
         #[arg(long)]
         prefix: Option<String>,
+        /// `models.yaml` registry alias each worker's `model_ref` is bound
+        /// to (default: DEFAULT_WORKER_MODEL, currently `claude_haiku`).
+        /// Without this, workers fall to the `ollama/llama3.2:3b` StubEcho
+        /// default with no real reasoning.
+        #[arg(long)]
+        model: Option<String>,
         /// After provisioning, also grant each worker's `research-gateway`
         /// server `BroadAudited` egress (allow-ALL-except-deny-list, routed
         /// through the audited proxy). A separate, explicit-consent step —

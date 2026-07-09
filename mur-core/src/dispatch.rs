@@ -448,6 +448,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 DeepResearchAction::Provision {
                     count,
                     prefix,
+                    model,
                     grant_egress,
                     deny_hosts,
                     yes,
@@ -455,6 +456,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     &mur_home,
                     prefix.as_deref(),
                     count,
+                    model.as_deref(),
                     grant_egress,
                     &deny_hosts,
                     yes,
