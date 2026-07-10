@@ -149,3 +149,44 @@ A short findings note appended to this file (or a sibling
 `…-spike-obscura-render-tier-findings.md`) with the Q1–Q4 evidence and the
 Go/No-Go call. If Go, a separate implementation plan under
 `docs/superpowers/plans/` wires obscura into `browser.rs` as the tier-2 engine.
+
+---
+
+## Findings (2026-07-10) — **GO**
+
+Ran on Darwin arm64 against obscura **v0.1.9** prebuilt (`obscura-aarch64-macos`,
+43MB tar → two Mach-O binaries: `obscura` 69MB + `obscura-worker` 66MB). SBPL
+applied via `sandbox-exec -f <profile>` mirroring the gateway's
+`build_sbpl_profile` shape (`(allow default)` base + the same denies). Sandbox
+enforcement verified with a control probe (`touch $HOME` → `Operation not
+permitted`, exit 1) so every pass below is under a *live* sandbox, not a no-op.
+
+| Q | Result | Evidence |
+|---|--------|----------|
+| **Q1 — V8 render under kernel sandbox** | **YES (decisive)** | Renders + executes JS under `(allow default)` + `(deny file-write* /)` **and** strict `(deny process-exec* /)` with only the obscura dir allowlisted (the `obscura`→`obscura-worker` spawn survives). Under restricted network (`(deny network-outbound)` + loopback/DNS only) the **direct** fetch correctly FAILS (`Network error: error sending request`) — obscura cannot bypass the sandbox's egress control. **SBPL does not block V8's JIT** (no `dynamic-code-generation` deny in our profile); the G2 wall was process-exec/network, not JIT. |
+| **Q2 — `--proxy` through our loopback egress proxy w/ auth** | **YES (governance win)** | Under the restricted-network profile, `--proxy http://127.0.0.1:PORT` routes and renders. With `http://token:@127.0.0.1:PORT` the proxy receives `Proxy-Authorization: Basic c2VrcmV0dG9rZW46` (= `base64("sekrettoken:")`) — **exactly our egress-proxy Basic-auth mechanism.** The render tier can become proxy-governed, closing the advisory-screen gap Lightpanda/Chrome can't. |
+| **Q3 — quality & concurrency (lite)** | **PASS** | Rendered `quotes.toscrape.com/js/` (content exists ONLY after JS runs) under sandbox — the JS-injected quote appeared → genuine dynamic render, not static HTML. `--dump markdown` yields clean structured text (`# Example Domain`, `[Learn more](…)`) — better than the gateway's naive `html_to_text` tag-strip. 4× concurrent (worker fan-out) under sandbox: all exit 0, all correct, no crash/leak. |
+| **Q4 — footprint (partial)** | **YES** | Prebuilt binaries for macOS Intel/ARM + Linux x86/ARM + Windows x86 (every platform the gateway ships on), Apache-2.0. Note: **two** binaries to install + allowlist (`obscura` + `obscura-worker`, ~135MB total vs Lightpanda). |
+
+### Decision: **GO** to an implementation plan.
+
+Q1 (decisive) + Q3 gates pass; Q2 is a bonus that turned out YES, making this a
+**reliability *and* egress-governance upgrade** over Lightpanda/Chrome — the
+render tier can route through the egress proxy instead of the advisory-only
+pre-spawn screen.
+
+### Carry into the implementation plan (remaining before merge, not blockers)
+
+1. **Q3-full** — head-to-head vs a live Lightpanda install on ~10 real research
+   targets + sustained-concurrency memory/perf. (The lite run is a positive
+   signal, not the full measurement.)
+2. **Install story** — fetch both binaries to `~/.mur/aura/obscura{,-worker}`
+   (mirror the Lightpanda install path); process-exec allowlist must cover
+   **both**; decide the ~135MB footprint tradeoff.
+3. **Wire the proxy** — route the render tier through the egress proxy via
+   `--proxy http://<token>:@127.0.0.1:<port>` (Q2 proved it works) → airtight
+   tier-2/3 egress, a strict upgrade. Keep the pre-spawn screen as defense in depth.
+4. **Engine selection** — obscura as tier-2 replacing Lightpanda in
+   `build_fetch_argv`; keep `--dump markdown`. Decide whether it also subsumes
+   the Chrome tier-3 (obscura is CDP-compatible + stealth-featured) or tier-3 stays.
+
