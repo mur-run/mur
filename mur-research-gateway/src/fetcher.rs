@@ -15,6 +15,38 @@ const SEARCH_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)
 /// DuckDuckGo's server-rendered (no-JS) HTML search endpoint.
 const DDG_HTML_ENDPOINT: &str = "https://html.duckduckgo.com/html/";
 
+/// Max `search` attempts against DuckDuckGo before giving up. Under N concurrent
+/// research workers hitting DDG's html endpoint from one IP, DDG rate-limits
+/// with an HTTP 202 challenge page (no results); a short backoff usually clears
+/// it. 3 attempts = the original + 2 retries.
+const SEARCH_MAX_ATTEMPTS: u32 = 3;
+
+/// Base backoff before the first retry; doubles each subsequent attempt.
+const SEARCH_BASE_BACKOFF_MS: u64 = 400;
+
+/// HTTP 202 = DuckDuckGo's anti-bot challenge / rate-limit interstitial (no
+/// results). The only status we retry on — a 200 with genuinely no hits is
+/// accepted as-is.
+const DDG_CHALLENGE_STATUS: u16 = 202;
+
+/// Backoff before `attempt` (1-based retry index) of a search: exponential
+/// (`base * 2^(attempt-1)`) plus a query-derived jitter of up to `base`. The
+/// jitter staggers concurrent workers — each has a distinct sub-question, so a
+/// query-seeded jitter spreads their retries across the window instead of
+/// synchronizing another burst. Pure → unit-testable, no clock/RNG dependency.
+fn search_backoff(attempt: u32, query: &str) -> Duration {
+    let base = SEARCH_BASE_BACKOFF_MS;
+    let exp = base.saturating_mul(1u64 << (attempt.saturating_sub(1)).min(16));
+    // FNV-1a of the query → jitter in [0, base).
+    let mut h: u64 = 1469598103934665603;
+    for b in query.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(1099511628211);
+    }
+    let jitter = h % base.max(1);
+    Duration::from_millis(exp.saturating_add(jitter))
+}
+
 #[derive(Debug, Serialize)]
 pub struct FetchResult {
     pub url: String,
@@ -192,12 +224,47 @@ pub async fn search_tier1(
         .await
         .map_err(FetchError::Guard)?;
 
+    // Retry the DuckDuckGo 202 challenge (rate-limit under concurrent workers)
+    // with exponential backoff + query-seeded jitter. A transport error is also
+    // retried; a 200 (even with no hits) is accepted as the final answer.
+    let mut last_err: Option<FetchError> = None;
+    for attempt in 0..SEARCH_MAX_ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(search_backoff(attempt, query)).await;
+        }
+        match search_attempt(&screened, limit, timeout).await {
+            Ok((DDG_CHALLENGE_STATUS, _)) => continue, // challenged → back off + retry
+            Ok((_, hits)) => return Ok(hits),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    // Exhausted retries: surface the last transport error if any, else return
+    // empty hits (the challenge never cleared) so the worker degrades rather
+    // than the whole turn erroring.
+    match last_err {
+        Some(e) => Err(e),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// One search request: GET the (already-screened) DDG url, enforce the body
+/// cap, and parse. Returns the HTTP status alongside the hits so the caller can
+/// distinguish a 202 challenge (retry) from a real 200 result (accept).
+async fn search_attempt(
+    screened: &url::Url,
+    limit: usize,
+    timeout: Duration,
+) -> Result<(u16, Vec<SearchHit>), FetchError> {
     let client = build_client(timeout)?;
     let mut resp = client
         .get(screened.clone())
         .send()
         .await
         .map_err(|e| FetchError::Http(e.to_string()))?;
+    let status = resp.status().as_u16();
+    if status == DDG_CHALLENGE_STATUS {
+        return Ok((status, Vec::new()));
+    }
     if let Some(len) = resp.content_length()
         && len > MAX_BODY_BYTES as u64
     {
@@ -215,7 +282,7 @@ pub async fn search_tier1(
         buf.extend_from_slice(&chunk);
     }
     let body = String::from_utf8_lossy(&buf);
-    Ok(parse_ddg_hits(&body, limit))
+    Ok((status, parse_ddg_hits(&body, limit)))
 }
 
 /// Parse DuckDuckGo html-endpoint results into hits. Keys on `result__a`
@@ -314,6 +381,31 @@ fn decode_uddg(href: &str) -> Option<String> {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn search_backoff_grows_exponentially_with_bounded_jitter() {
+        let base = SEARCH_BASE_BACKOFF_MS;
+        // Jitter is in [0, base); so attempt N is in [base*2^(N-1), base*2^(N-1) + base).
+        for (attempt, floor) in [(1u32, base), (2, base * 2), (3, base * 4)] {
+            let d = search_backoff(attempt, "some query").as_millis() as u64;
+            assert!(
+                d >= floor && d < floor + base,
+                "attempt {attempt}: {d}ms not in [{floor}, {})",
+                floor + base
+            );
+        }
+    }
+
+    #[test]
+    fn search_backoff_jitter_differs_by_query() {
+        // Distinct sub-questions get distinct jitter → concurrent workers stagger
+        // instead of re-bursting in sync.
+        let a = search_backoff(1, "privacy architecture of ollama");
+        let b = search_backoff(1, "extensibility of lm studio");
+        assert_ne!(a, b, "different queries must produce different backoff");
+        // Same query is deterministic (no clock/RNG).
+        assert_eq!(a, search_backoff(1, "privacy architecture of ollama"));
+    }
 
     #[tokio::test]
     async fn refuses_private_target() {
