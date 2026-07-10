@@ -84,6 +84,28 @@ pub fn build_fetch_argv(url: &str, cfg: &BrowserCfg, want_chrome: bool) -> Vec<S
     a
 }
 
+/// Build the `obscura fetch` argv. `--dump markdown` yields cleaner text than
+/// the tier-1 tag-strip (spike Q3b). `proxy` (the gateway's own HTTP_PROXY
+/// credential, `http://<token>:@host:port`) becomes `--proxy` so obscura's
+/// egress goes through the loopback egress proxy (spike Q2). Pure →
+/// unit-testable, no env/subprocess.
+#[allow(dead_code)]
+fn build_obscura_argv(url: &str, proxy: Option<&str>, timeout: Duration) -> Vec<String> {
+    let mut a = vec![
+        "fetch".to_string(),
+        url.to_string(),
+        "--dump".to_string(),
+        "markdown".to_string(),
+        "--timeout".to_string(),
+        timeout.as_secs().to_string(),
+    ];
+    if let Some(p) = proxy {
+        a.push("--proxy".to_string());
+        a.push(p.to_string());
+    }
+    a
+}
+
 /// Per-FETCH unique session id so even two concurrent fetches of the SAME url
 /// get distinct cookie jars (Global Constraint: per-fetch isolation). The
 /// URL's FNV-1a hash keeps ids meaningful/greppable; a process-wide atomic
@@ -358,5 +380,28 @@ mod tests {
             session_id("https://b.example")
         );
         assert!(session_id("https://a.example").starts_with("rg-"));
+    }
+    #[test]
+    fn obscura_argv_dumps_markdown_and_threads_proxy() {
+        let base = build_obscura_argv("https://example.com", None, Duration::from_secs(20));
+        assert_eq!(base[0], "fetch");
+        assert_eq!(base[1], "https://example.com");
+        assert!(
+            base.windows(2)
+                .any(|w| w[0] == "--dump" && w[1] == "markdown")
+        );
+        assert!(base.windows(2).any(|w| w[0] == "--timeout" && w[1] == "20"));
+        assert!(!base.iter().any(|a| a == "--proxy"));
+
+        let proxied = build_obscura_argv(
+            "https://example.com",
+            Some("http://t:@127.0.0.1:9"),
+            Duration::from_secs(20),
+        );
+        assert!(
+            proxied
+                .windows(2)
+                .any(|w| w[0] == "--proxy" && w[1] == "http://t:@127.0.0.1:9")
+        );
     }
 }
