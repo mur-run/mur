@@ -89,6 +89,19 @@ pub fn build_fetch_argv(url: &str, cfg: &BrowserCfg, want_chrome: bool) -> Vec<S
 /// credential, `http://<token>:@host:port`) becomes `--proxy` so obscura's
 /// egress goes through the loopback egress proxy (spike Q2). Pure →
 /// unit-testable, no env/subprocess.
+/// The proxy URL obscura should route through, read from the gateway's OWN
+/// environment. The runtime sets `HTTP_PROXY=http://<token>:x@127.0.0.1:<port>`
+/// on this child (see mur-agent-runtime `proxy_env_for`); obscura does NOT
+/// honor the env var itself, so we translate it into its `--proxy` flag.
+/// Absent (dev/unsandboxed) → no proxy, direct connect.
+#[allow(dead_code)]
+fn render_proxy_flag() -> Option<String> {
+    std::env::var("HTTP_PROXY")
+        .ok()
+        .or_else(|| std::env::var("HTTPS_PROXY").ok())
+        .filter(|s| !s.is_empty())
+}
+
 #[allow(dead_code)]
 fn build_obscura_argv(url: &str, proxy: Option<&str>, timeout: Duration) -> Vec<String> {
     let mut a = vec![
@@ -243,6 +256,31 @@ pub async fn fetch_rendered(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Process-global env — serialize with the same lock style config.rs tests use.
+    static RENDER_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn render_proxy_flag_reads_http_proxy_env() {
+        let _g = RENDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // SAFETY: guarded by RENDER_ENV_LOCK.
+        unsafe {
+            std::env::remove_var("HTTP_PROXY");
+            std::env::remove_var("HTTPS_PROXY");
+        }
+        assert_eq!(render_proxy_flag(), None);
+        unsafe {
+            std::env::set_var("HTTP_PROXY", "http://tok:@127.0.0.1:5555");
+        }
+        assert_eq!(
+            render_proxy_flag().as_deref(),
+            Some("http://tok:@127.0.0.1:5555")
+        );
+        unsafe {
+            std::env::remove_var("HTTP_PROXY");
+        }
+    }
+
     #[test]
     #[allow(clippy::comparison_to_empty)] // brief's exact assertion form is the contract
     fn lightpanda_command_forces_empty_args() {
