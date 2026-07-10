@@ -86,6 +86,13 @@ fetch(url, render?)    →  {url, status, title, text, tier}
 - **検索の信頼性** — N 並行ワーカー下で DDG は 202 チャレンジでレート制限する。`search` は 202 時に指数バックオフ + **クエリ由来のジッター** で再試行する — 異なるサブ問いが再試行をずらし、同期して再バーストしない。
 - **URL レベル監査** — 各呼び出しは `{worker, url, tier, outcome}` をチャネルとテレメトリへ記録する。レポートの各引用は 1 つのゲートウェイ監査レコードに突き合わせられる。
 
+### レンダーエンジン(実験的、オプトイン)
+
+`MUR_RESEARCH_RENDER_ENGINE` 環境変数(または `~/.mur/config.yaml` の `research_gateway.render_engine:`)で選択する。ここで明示的に値を設定すると常に auto-detect より優先される。自動検出(env/YAML 未設定時):**`obscura` と `obscura-worker` の両バイナリが `~/.mur/aura/` にインストールされていれば `obscura`、そうでなければ `agent-browser`**(2026-07-10 の比較:obscura は JS のみのページを含む実コンテンツをレンダリングし、ワーカーサンドボックス下でも動作する。agent-browser/Lightpanda はタイトルのみのスタブを返し、サンドボックスで拒否される)。
+
+- **`agent-browser`** — 上記の Lightpanda(tier 2)と Chrome(tier 3)。obscura 未インストール時の自動検出フォールバック。
+- **`obscura`** — 組み込み V8、自己完結型。インストール:プラットフォーム tarball を `~/.mur/aura/` に展開し、`obscura` と `obscura-worker` の両バイナリを保持する — 自動検出が自動的にそれを選ぶ。単一のレンダリング経路で、tier-2/3 へのエスカレーションはない。**利点:** egress が **proxy-governed** — tier 1 のループバックプロキシを経由する(`obscura fetch <url> … --proxy http://<token>:@127.0.0.1:<port>`)ため、ブラウザ tier の egress 統治の隙間がなくなる。
+
 ---
 
 ## §5 · セキュリティモデル — サンドボックス、同意、ツールポリシー
@@ -102,7 +109,7 @@ fetch(url, render?)    →  {url, status, title, text, tier}
 | **プロヴェナンス** | 各ワーカーは自身の返信を `Agent{self}` イベントとして書き込み、Ed25519 署名(v3d-2 peer-writes-own)、fold 時にアクターごとに検証。 | ルーターはもうワーカーの代わりに署名しない — 帰属はワーカー自身の鍵。 |
 | **エクスポート安全性** | `.fleet` インポートは broad-audited を `inherit` へ降格し、承認をクリアする。 | 共有された deep-research フリートは、ローカルで再付与するまで egress ゼロ。 |
 
-**アドバイザリ強制の正直さ。** Tier 1 はプロキシを尊重する。tier 2/3 のブラウザ子プロセスは尊重しないかもしれない — 全域のゲートウェイ URL 監査で緩和し、誇張せず文書化している。完全な封じ込め = 将来の Phase-3 sbpl pin-to-proxy であり、その時ピン留めするのはこの 1 ゲートウェイのみ。
+**アドバイザリ強制の正直さ。** Tier 1 はプロキシを尊重する。tier 2/3 のブラウザ子プロセスは尊重しないかもしれない — 全域のゲートウェイ URL 監査で緩和し、誇張せず文書化している。オプトインの `render_engine: obscura` を使うと、この隙間は閉じる: obscura は tier 1 が使うのと同じループバックプロキシを通してすべての egress を送るため(ゲートウェイの認証情報を添えた `--proxy` 経由)、レンダー tier も tier 1 と同様に proxy-governed になる。完全な封じ込め = 将来の Phase-3 sbpl pin-to-proxy であり、その時ピン留めするのはこの 1 ゲートウェイのみ。
 
 ---
 

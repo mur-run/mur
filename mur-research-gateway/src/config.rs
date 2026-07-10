@@ -70,6 +70,10 @@ pub const DEFAULT_LIGHTPANDA_RELATIVE_PATH: &str = "aura/lightpanda";
 /// `aura/` install location).
 pub const DEFAULT_OBSCURA_RELATIVE_PATH: &str = "aura/obscura";
 
+/// obscura's sibling worker binary, relative to `mur_home`. Both it and
+/// `DEFAULT_OBSCURA_RELATIVE_PATH` must exist for auto-detect to pick obscura.
+pub const DEFAULT_OBSCURA_WORKER_RELATIVE_PATH: &str = "aura/obscura-worker";
+
 // ---- env var names ----
 
 // ENV_DENY_HOSTS (imported above as `ENV_MCP_DENY_HOSTS`) is shared with
@@ -213,7 +217,7 @@ pub fn load_from_yaml(yaml: &str, mur_home: &Path) -> GatewayConfig {
                 crate::browser::RenderEngine::AgentBrowser
             }
         })
-        .unwrap_or_default();
+        .unwrap_or_else(|| auto_detect_render_engine(mur_home));
 
     let obscura_path = non_empty_env(ENV_OBSCURA_PATH)
         .or_else(|| raw.obscura_path.filter(|s| !s.is_empty()))
@@ -249,6 +253,20 @@ fn default_lightpanda_path(mur_home: &Path) -> Option<String> {
 fn default_obscura_path(mur_home: &Path) -> Option<String> {
     let path = mur_home.join(DEFAULT_OBSCURA_RELATIVE_PATH);
     path.exists().then(|| path.to_string_lossy().to_string())
+}
+
+/// Auto-detect the render engine when nothing is explicitly configured:
+/// prefer obscura IF both its binaries are installed at the default aura
+/// paths (they render real content + run under the sandbox — head-to-head
+/// 2026-07-10), else agent-browser. Never picks obscura it can't run.
+fn auto_detect_render_engine(mur_home: &Path) -> crate::browser::RenderEngine {
+    let obscura = mur_home.join(DEFAULT_OBSCURA_RELATIVE_PATH);
+    let worker = mur_home.join(DEFAULT_OBSCURA_WORKER_RELATIVE_PATH);
+    if obscura.exists() && worker.exists() {
+        crate::browser::RenderEngine::Obscura
+    } else {
+        crate::browser::RenderEngine::AgentBrowser
+    }
 }
 
 fn env_deny_hosts() -> Option<Vec<String>> {
@@ -486,5 +504,90 @@ research_gateway:
         unsafe {
             std::env::remove_var(ENV_RENDER_ENGINE);
         }
+    }
+
+    /// Creates a fresh scratch dir under the OS temp dir for a single test,
+    /// suffixed with `label` for readability + isolation across parallel runs.
+    fn scratch_dir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "mur_research_gateway_test_{}_{}",
+            label,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    #[test]
+    fn auto_detect_picks_obscura_when_binaries_present() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mur_home = scratch_dir("obscura_both");
+        let aura = mur_home.join("aura");
+        std::fs::create_dir_all(&aura).expect("create aura dir");
+        std::fs::write(aura.join("obscura"), b"").expect("write obscura stub");
+        std::fs::write(aura.join("obscura-worker"), b"").expect("write obscura-worker stub");
+
+        let c = load_from_yaml("", &mur_home);
+        assert_eq!(
+            c.browser.render_engine,
+            crate::browser::RenderEngine::Obscura
+        );
+
+        let _ = std::fs::remove_dir_all(&mur_home);
+    }
+
+    #[test]
+    fn auto_detect_requires_both_obscura_binaries() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        // Only the main binary present -> AgentBrowser.
+        let mur_home = scratch_dir("obscura_main_only");
+        let aura = mur_home.join("aura");
+        std::fs::create_dir_all(&aura).expect("create aura dir");
+        std::fs::write(aura.join("obscura"), b"").expect("write obscura stub");
+        let c = load_from_yaml("", &mur_home);
+        assert_eq!(
+            c.browser.render_engine,
+            crate::browser::RenderEngine::AgentBrowser
+        );
+        let _ = std::fs::remove_dir_all(&mur_home);
+
+        // Only the worker present -> AgentBrowser.
+        let mur_home = scratch_dir("obscura_worker_only");
+        let aura = mur_home.join("aura");
+        std::fs::create_dir_all(&aura).expect("create aura dir");
+        std::fs::write(aura.join("obscura-worker"), b"").expect("write obscura-worker stub");
+        let c = load_from_yaml("", &mur_home);
+        assert_eq!(
+            c.browser.render_engine,
+            crate::browser::RenderEngine::AgentBrowser
+        );
+        let _ = std::fs::remove_dir_all(&mur_home);
+    }
+
+    #[test]
+    fn render_engine_env_override_wins_even_when_obscura_installed() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mur_home = scratch_dir("obscura_env_override");
+        let aura = mur_home.join("aura");
+        std::fs::create_dir_all(&aura).expect("create aura dir");
+        std::fs::write(aura.join("obscura"), b"").expect("write obscura stub");
+        std::fs::write(aura.join("obscura-worker"), b"").expect("write obscura-worker stub");
+
+        // SAFETY: env mutation guarded by ENV_LOCK above.
+        unsafe {
+            std::env::set_var(ENV_RENDER_ENGINE, "agent-browser");
+        }
+        let c = load_from_yaml("", &mur_home);
+        assert_eq!(
+            c.browser.render_engine,
+            crate::browser::RenderEngine::AgentBrowser
+        );
+        unsafe {
+            std::env::remove_var(ENV_RENDER_ENGINE);
+        }
+
+        let _ = std::fs::remove_dir_all(&mur_home);
     }
 }
