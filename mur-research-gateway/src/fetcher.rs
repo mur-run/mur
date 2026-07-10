@@ -267,14 +267,20 @@ async fn search_brave(
         .map_err(|e| FetchError::Http(e.to_string()))?;
     let status = resp.status();
     if !status.is_success() {
-        return Err(FetchError::Http(format!("brave api status {}", status.as_u16())));
+        return Err(FetchError::Http(format!(
+            "brave api status {}",
+            status.as_u16()
+        )));
     }
     if let Some(len) = resp.content_length()
         && len > MAX_BODY_BYTES as u64
     {
         return Err(FetchError::TooLarge);
     }
-    let body = resp.text().await.map_err(|e| FetchError::Http(e.to_string()))?;
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| FetchError::Http(e.to_string()))?;
     parse_brave_hits(&body, limit).map_err(FetchError::Http)
 }
 
@@ -630,7 +636,11 @@ mod tests {
     #[test]
     fn parse_brave_hits_missing_web_block_is_empty_not_error() {
         // Brave omits `web` when there are zero web results — valid, not a parse error.
-        assert!(parse_brave_hits(r#"{"query":{"original":"x"}}"#, 8).unwrap().is_empty());
+        assert!(
+            parse_brave_hits(r#"{"query":{"original":"x"}}"#, 8)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
