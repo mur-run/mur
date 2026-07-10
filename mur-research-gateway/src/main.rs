@@ -34,6 +34,9 @@ async fn main() {
         browser::Preflight::Full => {
             let engine_desc = match server.browser_cfg().render_engine {
                 browser::RenderEngine::Obscura => "full — obscura render engine available",
+                browser::RenderEngine::Lightpanda => {
+                    "full — native lightpanda render engine available"
+                }
                 browser::RenderEngine::AgentBrowser => {
                     "full — tiers 2/3 (lightpanda/chrome) available"
                 }
