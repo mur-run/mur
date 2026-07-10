@@ -208,7 +208,8 @@ impl McpServer {
             .clamp(config::MIN_SEARCH_LIMIT, config::MAX_SEARCH_LIMIT);
         let deny = &self.config.deny_hosts;
         let timeout = self.config.timeout;
-        match fetcher::search_tier1(&query, limit, deny, timeout).await {
+        let brave_key = self.config.brave_api_key.as_deref();
+        match fetcher::search(&query, limit, brave_key, deny, timeout).await {
             Ok(hits) => {
                 audit(AuditRecord::new("search", query, None, "ok"));
                 Response::success(
