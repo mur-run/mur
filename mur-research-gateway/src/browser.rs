@@ -1,8 +1,10 @@
 // mur-research-gateway/src/browser.rs
 //
 // Escalation tiers 2 (agent-browser --engine lightpanda) and 3 (--engine
-// chrome), plus `search`, plus `preflight`. Drives `agent-browser` as a
-// subprocess — see docs/superpowers/specs/2026-07-09-mur-native-deep-research-design.md §5.
+// chrome), plus `preflight`. Drives `agent-browser` as a subprocess — see
+// docs/superpowers/specs/2026-07-09-mur-native-deep-research-design.md §5.
+// `search` now rides the tier-1 HTTP path (see `fetcher::search_tier1`) — no
+// browser subprocess involved.
 //
 // LOAD-BEARING: the egress proxy only sees tier-1 (reqwest) connections; the
 // browser subprocess opens its own connections the proxy cannot observe.
@@ -10,7 +12,6 @@
 // code, BEFORE spawning agent-browser — never delegate that to the proxy.
 
 use crate::fetcher::{self, FetchError, FetchResult};
-use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -28,13 +29,6 @@ pub enum Preflight {
     AgentBrowserMissing,
 }
 
-#[derive(Debug, Serialize)]
-pub struct SearchHit {
-    pub title: String,
-    pub url: String,
-    pub snippet: String,
-}
-
 /// Build the agent-browser argv for a single fetch. Pure → unit-testable.
 ///
 /// lightpanda tier: `--engine lightpanda --executable-path PATH --args ""`
@@ -46,8 +40,16 @@ pub fn build_fetch_argv(url: &str, cfg: &BrowserCfg, want_chrome: bool) -> Vec<S
     if want_chrome || cfg.lightpanda_path.is_none() {
         a.push("--engine".into());
         a.push("chrome".into());
-        for s in cfg.chrome_stealth_args.split(',').filter(|s| !s.is_empty()) {
-            a.push(s.to_string());
+        // Chrome launch flags MUST go through agent-browser's `--args`
+        // (comma/newline separated), NOT as bare argv entries: a bare
+        // `--no-sandbox` is parsed as an agent-browser subcommand and fails
+        // with "Unknown command: --no-sandbox" (see `agent-browser --help`).
+        // `chrome_stealth_args` is already the comma-separated form `--args`
+        // expects, so forward it verbatim as a single value.
+        let stealth = cfg.chrome_stealth_args.trim();
+        if !stealth.is_empty() {
+            a.push("--args".into());
+            a.push(stealth.to_string());
         }
     } else {
         a.push("--engine".into());
@@ -199,89 +201,6 @@ pub async fn fetch_rendered(
     })
 }
 
-/// Web search. Drives agent-browser to a search-results page and parses hits.
-/// v1 rides the browser engine — a dedicated search-provider API is out of
-/// scope per spec §11. Same pre-spawn screen and `timeout` as `fetch_rendered`;
-/// tier follows `cfg` (lightpanda when available, else chrome) — never
-/// caller-selectable, since search has no anti-bot escalation path of its own.
-///
-/// `deny` is the SAME operator `deny_hosts` overlay `fetch_rendered` screens
-/// against — passed here too so `mur deep-research provision --deny-host X`
-/// applies uniformly across every gateway tool, not just `fetch`. The fixed
-/// search-engine host itself is never caller-supplied, but an operator can
-/// still deny it (or any other public host reachable from a redirect/hit)
-/// via the same overlay; the always-on private/loopback/link-local rule
-/// applies regardless (net_guard).
-pub async fn search(
-    query: &str,
-    limit: usize,
-    deny: &[String],
-    cfg: &BrowserCfg,
-    timeout: Duration,
-) -> Result<Vec<SearchHit>, FetchError> {
-    let mut search_url =
-        url::Url::parse("https://html.duckduckgo.com/html/").expect("static URL is valid");
-    search_url.query_pairs_mut().append_pair("q", query);
-
-    let screened = fetcher::screen_url_blocking(search_url.as_str(), deny)
-        .await
-        .map_err(FetchError::Guard)?;
-
-    let argv = build_fetch_argv(screened.as_str(), cfg, false);
-    let text = run_agent_browser(&cfg.agent_browser_bin, &argv, timeout).await?;
-    Ok(parse_search_hits(&text, limit))
-}
-
-/// Small, deliberately minimal parser: agent-browser's `snapshot` renders
-/// markdown-style links (`[title](url)`); one hit per line that has one,
-/// snippet is the next non-empty, non-link line. Good enough for v1 — the
-/// upstream search engine's HTML is not a contract MUR controls (spec §11:
-/// a dedicated search API is out of scope), so don't over-invest here.
-fn parse_search_hits(text: &str, limit: usize) -> Vec<SearchHit> {
-    let mut hits = Vec::new();
-    let mut lines = text.lines().peekable();
-    while let Some(line) = lines.next() {
-        if hits.len() >= limit {
-            break;
-        }
-        let Some((title, url)) = parse_markdown_link(line) else {
-            continue;
-        };
-        if !(url.starts_with("http://") || url.starts_with("https://")) {
-            continue;
-        }
-        let snippet = lines
-            .peek()
-            .filter(|l| !l.trim().is_empty() && parse_markdown_link(l).is_none())
-            .map(|l| l.trim().to_string())
-            .unwrap_or_default();
-        hits.push(SearchHit {
-            title,
-            url,
-            snippet,
-        });
-    }
-    hits
-}
-
-/// Extract `(title, url)` from a single `[title](url)` markdown link, if the
-/// line contains exactly that shape. Returns `None` for anything else.
-fn parse_markdown_link(line: &str) -> Option<(String, String)> {
-    let start = line.find('[')?;
-    let close = line[start..].find(']')? + start;
-    if line[close + 1..].starts_with('(') {
-        let open_paren = close + 1;
-        let end = line[open_paren..].find(')')? + open_paren;
-        let title = line[start + 1..close].trim().to_string();
-        let url = line[open_paren + 1..end].trim().to_string();
-        if title.is_empty() || url.is_empty() {
-            return None;
-        }
-        return Some((title, url));
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,14 +230,19 @@ mod tests {
         let cfg = BrowserCfg {
             agent_browser_bin: "agent-browser".into(),
             lightpanda_path: Some("/x/lightpanda".into()),
-            chrome_stealth_args: "--no-sandbox".into(),
+            chrome_stealth_args: "--no-sandbox,--disable-blink-features=AutomationControlled"
+                .into(),
         };
         let argv = build_fetch_argv("https://example.com", &cfg, true);
         assert!(
             argv.windows(2)
                 .any(|w| w[0] == "--engine" && w[1] == "chrome")
         );
-        assert!(argv.iter().any(|a| a == "--no-sandbox"));
+        // Stealth flags travel as ONE `--args` value (agent-browser parses a
+        // bare `--no-sandbox` as a subcommand and errors), never as bare argv.
+        assert!(argv.windows(2).any(|w| w[0] == "--args"
+            && w[1] == "--no-sandbox,--disable-blink-features=AutomationControlled"));
+        assert!(!argv.iter().any(|a| a == "--no-sandbox"));
     }
     #[test]
     fn preflight_degrades_when_lightpanda_missing() {
@@ -403,28 +327,5 @@ mod tests {
             session_id("https://b.example")
         );
         assert!(session_id("https://a.example").starts_with("rg-"));
-    }
-    #[test]
-    fn parses_markdown_search_hits_with_snippet() {
-        let text = "\
-Intro text\n\
-[Rust Programming Language](https://www.rust-lang.org/)\n\
-A language empowering everyone.\n\
-\n\
-[Another Hit](https://example.com/page)\n\
-Some snippet text.\n\
-[Not a search result](not-a-url)\n";
-        let hits = parse_search_hits(text, 5);
-        assert_eq!(hits.len(), 2);
-        assert_eq!(hits[0].title, "Rust Programming Language");
-        assert_eq!(hits[0].url, "https://www.rust-lang.org/");
-        assert_eq!(hits[0].snippet, "A language empowering everyone.");
-        assert_eq!(hits[1].title, "Another Hit");
-        assert_eq!(hits[1].snippet, "Some snippet text.");
-    }
-    #[test]
-    fn parse_search_hits_respects_limit() {
-        let text = "[A](https://a.example)\n[B](https://b.example)\n[C](https://c.example)\n";
-        assert_eq!(parse_search_hits(text, 2).len(), 2);
     }
 }

@@ -666,7 +666,7 @@ async fn cmd_out_execute(action: &str, force: bool) -> anyhow::Result<()> {
                         .join(".mur")
                         .join("session")
                         .join("recordings")
-                        .join(format!("{}.jsonl", &r.id));
+                        .join(format!("{}.jsonl", r.id));
 
                     // Check if session is worth analyzing
                     if !force {

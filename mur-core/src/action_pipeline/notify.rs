@@ -96,7 +96,7 @@ impl Aggregator {
         } else {
             format!(
                 "{} and {} more",
-                &file_names[..3].join(", "),
+                file_names[..3].join(", "),
                 file_names.len() - 3
             )
         };
