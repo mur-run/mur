@@ -43,6 +43,18 @@ pub const DEFAULT_WORKER_MODEL: &str = "claude_haiku";
 /// this only widens the allow-list off empty.
 const WORKER_LLM_ALLOW_HOSTS: [&str; 2] = ["localhost", "127.0.0.1"];
 
+/// Built-in tools DENIED for a research worker. A worker's job is
+/// search + fetch + reason + report-in-text; it has no business running a
+/// shell or touching the filesystem. Left at the default `Ask` policy these
+/// gate on the HITL approval prompt — which has no answerer in a headless
+/// fleet-delegated turn, so the prompt times out (`hitl_denied`) and FAILS
+/// the whole turn (root-caused live 2026-07-10: a research turn hit
+/// `tool call denied: timed out` after the model reached for a built-in).
+/// Denying them drops the tools from the advertised set entirely
+/// (`tools::registry` skips `Deny`), so the model never calls them and the
+/// turn can complete on the gateway tools alone.
+const WORKER_DENIED_BUILTIN_TOOLS: [&str; 4] = ["bash", "read_file", "write_file", "edit_file"];
+
 /// Name of the gateway MCP server entry mounted on every worker.
 const GATEWAY_MCP_NAME: &str = "research-gateway";
 
@@ -124,8 +136,7 @@ pub fn provision(
         // headless delegated turns don't dead-end on the HITL gate
         // (`tool/approval_needed` has no answerer under fleet delegation →
         // 300 s timeout → deny → task failed). Scoped to
-        // `mcp__research-gateway__*` only — every other tool keeps the
-        // fail-closed `Ask` default. This grants no egress by itself: the
+        // `mcp__research-gateway__*` only. This grants no egress by itself: the
         // gateway's outbound stays Inherit/restricted until the separate
         // explicit-consent `--grant-egress` step.
         profile
@@ -136,6 +147,20 @@ pub fn provision(
                 policy: mur_common::agent::ToolPolicy::Allow,
                 risk: None,
             });
+        // Deny the built-in tools (see WORKER_DENIED_BUILTIN_TOOLS): left at the
+        // default `Ask`, a research turn that reaches for `bash`/`write_file`/…
+        // dead-ends on the unanswerable headless HITL gate and FAILS the turn.
+        // Denied → not advertised → the model never calls them.
+        for tool in WORKER_DENIED_BUILTIN_TOOLS {
+            profile
+                .entitlements
+                .tools
+                .push(mur_common::agent::ToolRule {
+                    pattern: tool.to_string(),
+                    policy: mur_common::agent::ToolPolicy::Deny,
+                    risk: None,
+                });
+        }
         save_profile(&path, &mut profile)?;
 
         names.push(name);
@@ -202,6 +227,10 @@ pub fn cmd_provision(
     println!(
         "  tool policy: {} → allow (gateway search/fetch pre-approved for headless turns)",
         mur_common::mcp_naming::tool_pattern(GATEWAY_MCP_NAME)
+    );
+    println!(
+        "  tool policy: {} → deny (built-ins off so a research turn can't dead-end on the HITL gate)",
+        WORKER_DENIED_BUILTIN_TOOLS.join(", ")
     );
     if grant_egress_flag {
         for name in &names {
@@ -413,12 +442,17 @@ mod tests {
             ToolPolicy::Allow
         );
 
-        // …while every other tool keeps the fail-closed default (Ask): the
-        // rule must be gateway-scoped, never a blanket allow.
-        assert_eq!(
-            resolve_tool_policy(&p.entitlements.tools, "bash"),
-            ToolPolicy::Ask
-        );
+        // …the built-in tools are DENIED (else a headless research turn that
+        // reaches for one dead-ends on the unanswerable HITL gate and fails).
+        for tool in ["bash", "read_file", "write_file", "edit_file"] {
+            assert_eq!(
+                resolve_tool_policy(&p.entitlements.tools, tool),
+                ToolPolicy::Deny,
+                "built-in `{tool}` must be denied for a research worker"
+            );
+        }
+        // …and an unrelated MCP tool keeps the fail-closed default (Ask): the
+        // allow is gateway-scoped, never a blanket allow.
         assert_eq!(
             resolve_tool_policy(&p.entitlements.tools, "mcp__github__merge_pr"),
             ToolPolicy::Ask
