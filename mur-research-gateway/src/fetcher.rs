@@ -141,6 +141,27 @@ fn html_to_text(html: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Cap `text` to at most `max_chars` characters for the tool result the worker
+/// feeds into its LLM context — a full page can otherwise overflow the model
+/// (deep-research turns died with anthropic 400 "prompt is too long"). Counts
+/// CHARACTERS (not bytes) and cuts on a codepoint boundary. `max_chars == 0`
+/// disables the cap (operator opt-out). On truncation, appends a marker naming
+/// how many chars were dropped so the model knows the text was cut.
+pub(crate) fn cap_text(text: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return text.to_string();
+    }
+    // char_indices()nth gives the byte offset of the (max_chars)-th char, i.e.
+    // a guaranteed codepoint boundary; None means the text is already shorter.
+    match text.char_indices().nth(max_chars) {
+        None => text.to_string(),
+        Some((byte_idx, _)) => {
+            let dropped = text.chars().count() - max_chars;
+            format!("{}\n…[truncated {dropped} chars]", &text[..byte_idx])
+        }
+    }
+}
+
 /// Shared tier-1 reqwest client: env-proxy honoring (so the runtime's
 /// `HTTPS_PROXY` reaches it — the G1 path), per-request timeout, a
 /// browser-like UA (some hosts, incl. DDG's html endpoint, 202/deny without
@@ -362,5 +383,27 @@ mod tests {
             block("https%3A%2F%2Fc.test%2F")
         );
         assert_eq!(parse_ddg_hits(&html, 2).len(), 2);
+    }
+
+    #[test]
+    fn cap_text_under_limit_is_unchanged() {
+        assert_eq!(cap_text("hello world", 50_000), "hello world");
+    }
+
+    #[test]
+    fn cap_text_zero_means_no_cap() {
+        let big = "x".repeat(10_000);
+        assert_eq!(cap_text(&big, 0), big);
+    }
+
+    #[test]
+    fn cap_text_truncates_with_marker_on_char_boundary() {
+        // 10 multibyte chars (é = 2 bytes each); cap at 4 chars.
+        let s = "é".repeat(10);
+        let out = cap_text(&s, 4);
+        assert!(out.starts_with(&"é".repeat(4)));
+        assert!(out.contains("[truncated 6 chars]"));
+        // Never split a codepoint: the kept prefix is valid UTF-8 of 4 'é's.
+        assert_eq!(out.chars().take_while(|&c| c == 'é').count(), 4);
     }
 }
