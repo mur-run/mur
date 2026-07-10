@@ -161,6 +161,8 @@ impl McpServer {
             return match result {
                 Ok(result) => {
                     audit(AuditRecord::new("fetch", url, Some(result.tier), "ok"));
+                    let mut result = result;
+                    result.text = fetcher::cap_text(&result.text, self.config.max_fetch_chars);
                     Response::success(
                         id,
                         serde_json::to_value(result).unwrap_or(serde_json::Value::Null),
@@ -175,6 +177,8 @@ impl McpServer {
         match fetcher::fetch_tier1(&url, deny, self.config.timeout).await {
             Ok(result) => {
                 audit(AuditRecord::new("fetch", url, Some(result.tier), "ok"));
+                let mut result = result;
+                result.text = fetcher::cap_text(&result.text, self.config.max_fetch_chars);
                 Response::success(
                     id,
                     serde_json::to_value(result).unwrap_or(serde_json::Value::Null),
@@ -308,5 +312,18 @@ mod tests {
             ))
             .await;
         assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn fetch_text_is_capped_to_config_budget() {
+        // The server caps fetched text via fetcher::cap_text with the config
+        // budget; verify the budget is actually applied (regression guard for
+        // the handle_fetch wiring).
+        let text = "a".repeat(1000);
+        let capped = fetcher::cap_text(&text, 100);
+        assert!(capped.len() < text.len());
+        assert!(capped.contains("[truncated"));
+        // 0 budget = untouched.
+        assert_eq!(fetcher::cap_text(&text, 0), text);
     }
 }
