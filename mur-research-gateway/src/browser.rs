@@ -42,6 +42,10 @@ pub enum Preflight {
     LightpandaMissing,
     AgentBrowserTooOld(String),
     AgentBrowserMissing,
+    /// `render_engine == Obscura` but `obscura_path` is unset, doesn't exist,
+    /// or its sibling `obscura-worker` binary is missing from the same
+    /// directory. Both binaries are required (spike Layer-2).
+    ObscuraMissing,
 }
 
 /// Build the agent-browser argv for a single fetch. Pure → unit-testable.
@@ -138,6 +142,12 @@ static SESSION_SEQ: AtomicU64 = AtomicU64::new(0);
 /// tests (those call `preflight_from_versions` directly with fixed inputs) —
 /// this is the only function in the module that touches a real subprocess.
 pub fn preflight(cfg: &BrowserCfg) -> Preflight {
+    // obscura is a different binary from agent-browser; short-circuit before
+    // the agent-browser --version probe so the obscura engine never invokes
+    // (or requires) agent-browser at all.
+    if cfg.render_engine == RenderEngine::Obscura {
+        return obscura_preflight(cfg);
+    }
     let output = std::process::Command::new(&cfg.agent_browser_bin)
         .arg("--version")
         .output();
@@ -151,6 +161,26 @@ pub fn preflight(cfg: &BrowserCfg) -> Preflight {
         // old rather than silently Full.
         Ok(_) => Preflight::AgentBrowserTooOld("unknown".into()),
         Err(_) => Preflight::AgentBrowserMissing,
+    }
+}
+
+/// Pure, unit-testable check for the obscura engine: both `obscura_path` and
+/// its sibling `obscura-worker` (same directory) must exist on disk. Spike
+/// Layer-2 found BOTH binaries are required at runtime, so a missing worker
+/// is treated the same as a missing obscura binary — fail closed.
+fn obscura_preflight(cfg: &BrowserCfg) -> Preflight {
+    let Some(path) = cfg.obscura_path.as_deref() else {
+        return Preflight::ObscuraMissing;
+    };
+    let obscura = std::path::Path::new(path);
+    let Some(parent) = obscura.parent() else {
+        return Preflight::ObscuraMissing;
+    };
+    let worker = parent.join("obscura-worker");
+    if obscura.exists() && worker.exists() {
+        Preflight::Full
+    } else {
+        Preflight::ObscuraMissing
     }
 }
 
@@ -398,6 +428,17 @@ mod tests {
             preflight_from_versions(true, Some("0.27.0"), &cfg),
             Preflight::AgentBrowserTooOld(v) if v == "0.27.0"
         ));
+    }
+    #[test]
+    fn preflight_flags_missing_obscura() {
+        let cfg = BrowserCfg {
+            agent_browser_bin: "agent-browser".into(),
+            lightpanda_path: None,
+            chrome_stealth_args: String::new(),
+            render_engine: RenderEngine::Obscura,
+            obscura_path: Some("/nonexistent/obscura".into()),
+        };
+        assert_eq!(preflight(&cfg), Preflight::ObscuraMissing);
     }
     #[test]
     fn preflight_missing_when_absent() {
