@@ -132,6 +132,12 @@ that holds egress.
     browser-like User-Agent is required — DDG returns HTTP 202 without one), so search works
     under the worker kernel sandbox — `agent-browser` cannot spawn there (`Operation not
     permitted`). `agent-browser` is used only for `fetch` with `render:true`. No API key for v1.
+- **Fetch content budget.** `fetch` caps the page text it returns to the worker at
+  `max_fetch_chars` (default 50 000 chars; env `MUR_RESEARCH_MAX_FETCH_CHARS`, YAML
+  `research_gateway.max_fetch_chars`; `0` disables). Without this a single large page overflowed
+  the worker's LLM context (`anthropic 400: "prompt is too long"`), failing the turn before it
+  could reply. The 5 MB body cap (`MAX_BODY_BYTES`) bounds transfer/memory; `max_fetch_chars`
+  bounds context. `search` results (short title/url/snippet) are not capped.
 - **Per-fetch session isolation** — each fetch uses a unique `--session` id (verified
   isolated, 2026-07-08) so concurrent worker fetches never cross-contaminate state.
 - **Daemon lifecycle** — manage agent-browser's persistent daemon; detect version
