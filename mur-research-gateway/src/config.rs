@@ -66,6 +66,10 @@ pub const DEFAULT_CHROME_STEALTH_ARGS: &str =
 /// path that isn't there.
 pub const DEFAULT_LIGHTPANDA_RELATIVE_PATH: &str = "aura/lightpanda";
 
+/// Default obscura install path, relative to `mur_home` (mirrors Lightpanda's
+/// `aura/` install location).
+pub const DEFAULT_OBSCURA_RELATIVE_PATH: &str = "aura/obscura";
+
 // ---- env var names ----
 
 // ENV_DENY_HOSTS (imported above as `ENV_MCP_DENY_HOSTS`) is shared with
@@ -87,6 +91,8 @@ const ENV_MAX_FETCH_CHARS: &str = "MUR_RESEARCH_MAX_FETCH_CHARS";
 const ENV_AGENT_BROWSER_BIN: &str = "MUR_RESEARCH_AGENT_BROWSER_BIN";
 const ENV_LIGHTPANDA_PATH: &str = "MUR_RESEARCH_LIGHTPANDA_PATH";
 const ENV_CHROME_STEALTH_ARGS: &str = "MUR_RESEARCH_CHROME_STEALTH_ARGS";
+const ENV_RENDER_ENGINE: &str = "MUR_RESEARCH_RENDER_ENGINE";
+const ENV_OBSCURA_PATH: &str = "MUR_RESEARCH_OBSCURA_PATH";
 
 /// Fully-resolved gateway configuration — YAML defaults merged with env
 /// overrides, ready to use for the lifetime of the process.
@@ -121,6 +127,8 @@ struct GatewayConfigYaml {
     agent_browser_bin: Option<String>,
     lightpanda_path: Option<String>,
     chrome_stealth_args: Option<String>,
+    render_engine: Option<String>,
+    obscura_path: Option<String>,
 }
 
 /// Resolve `~/.mur` (or `$MUR_HOME` if set). Mirrors the `MUR_HOME`
@@ -192,6 +200,25 @@ pub fn load_from_yaml(yaml: &str, mur_home: &Path) -> GatewayConfig {
         .or(raw.chrome_stealth_args)
         .unwrap_or_else(|| DEFAULT_CHROME_STEALTH_ARGS.to_string());
 
+    let render_engine = non_empty_env(ENV_RENDER_ENGINE)
+        .or(raw.render_engine)
+        .map(|s| match s.trim().to_ascii_lowercase().as_str() {
+            "obscura" => crate::browser::RenderEngine::Obscura,
+            "agent-browser" => crate::browser::RenderEngine::AgentBrowser,
+            unrecognized => {
+                tracing::warn!(
+                    "unrecognized render_engine '{}'; falling back to agent-browser",
+                    unrecognized
+                );
+                crate::browser::RenderEngine::AgentBrowser
+            }
+        })
+        .unwrap_or_default();
+
+    let obscura_path = non_empty_env(ENV_OBSCURA_PATH)
+        .or_else(|| raw.obscura_path.filter(|s| !s.is_empty()))
+        .or_else(|| default_obscura_path(mur_home));
+
     GatewayConfig {
         deny_hosts,
         timeout: Duration::from_secs(timeout_secs),
@@ -200,6 +227,8 @@ pub fn load_from_yaml(yaml: &str, mur_home: &Path) -> GatewayConfig {
             agent_browser_bin,
             lightpanda_path,
             chrome_stealth_args,
+            render_engine,
+            obscura_path,
         },
         search_limit,
         max_fetch_chars,
@@ -212,6 +241,13 @@ pub fn load_from_yaml(yaml: &str, mur_home: &Path) -> GatewayConfig {
 /// that isn't there (matches the pre-Task-6 behavior in `server.rs`).
 fn default_lightpanda_path(mur_home: &Path) -> Option<String> {
     let path = mur_home.join(DEFAULT_LIGHTPANDA_RELATIVE_PATH);
+    path.exists().then(|| path.to_string_lossy().to_string())
+}
+
+/// Default obscura path — only when it actually exists on disk (never claim a
+/// path that isn't there), matching `default_lightpanda_path`.
+fn default_obscura_path(mur_home: &Path) -> Option<String> {
+    let path = mur_home.join(DEFAULT_OBSCURA_RELATIVE_PATH);
     path.exists().then(|| path.to_string_lossy().to_string())
 }
 
@@ -427,6 +463,28 @@ research_gateway:
         assert_eq!(cfg.max_fetch_chars, 42);
         unsafe {
             std::env::remove_var("MUR_RESEARCH_MAX_FETCH_CHARS");
+        }
+    }
+
+    #[test]
+    fn render_engine_defaults_agentbrowser_env_overrides_obscura() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let c = load_from_yaml("", Path::new("/nonexistent"));
+        assert!(matches!(
+            c.browser.render_engine,
+            crate::browser::RenderEngine::AgentBrowser
+        ));
+        // SAFETY: env mutation guarded by ENV_LOCK.
+        unsafe {
+            std::env::set_var(ENV_RENDER_ENGINE, "obscura");
+        }
+        let c = load_from_yaml("", Path::new("/nonexistent"));
+        assert!(matches!(
+            c.browser.render_engine,
+            crate::browser::RenderEngine::Obscura
+        ));
+        unsafe {
+            std::env::remove_var(ENV_RENDER_ENGINE);
         }
     }
 }

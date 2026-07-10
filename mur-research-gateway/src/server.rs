@@ -29,6 +29,14 @@ fn should_escalate_to_chrome(result: &Result<fetcher::FetchResult, FetchError>) 
     }
 }
 
+/// Tier-3 (Chrome) escalation only makes sense for the agent-browser engine —
+/// obscura is a single embedded engine, so re-rendering with `want_chrome:
+/// true` would just run obscura again (a wasted subprocess spawn). Gate the
+/// escalation on this.
+pub(crate) fn render_can_escalate(cfg: &BrowserCfg) -> bool {
+    matches!(cfg.render_engine, browser::RenderEngine::AgentBrowser)
+}
+
 fn fetch_error_response(id: Option<serde_json::Value>, verb: &str, err: FetchError) -> Response {
     match err {
         FetchError::Guard(reject) => Response::error(
@@ -153,7 +161,11 @@ impl McpServer {
             // Escalate only when tier 2 actually ran lightpanda: with no
             // lightpanda configured the first attempt was already chrome
             // (build_fetch_argv), so retrying chrome would just waste a spawn.
-            if !want_chrome && cfg.lightpanda_path.is_some() && should_escalate_to_chrome(&result) {
+            if !want_chrome
+                && cfg.lightpanda_path.is_some()
+                && render_can_escalate(cfg)
+                && should_escalate_to_chrome(&result)
+            {
                 // lightpanda failed or rendered nothing → retry under chrome.
                 result = browser::fetch_rendered(&url, deny, cfg, true, browser_timeout).await;
                 tier_label = "fetch (tier 3)";
@@ -264,6 +276,26 @@ mod tests {
         assert!(!should_escalate_to_chrome(&Err(FetchError::Guard(
             crate::net_guard::GuardReject::BadScheme
         ))));
+    }
+
+    fn browser_cfg(render_engine: crate::browser::RenderEngine) -> crate::browser::BrowserCfg {
+        crate::browser::BrowserCfg {
+            agent_browser_bin: "agent-browser".into(),
+            lightpanda_path: None,
+            chrome_stealth_args: String::new(),
+            render_engine,
+            obscura_path: None,
+        }
+    }
+
+    #[test]
+    fn obscura_engine_does_not_escalate_to_chrome() {
+        // plan_render for obscura always yields tier 2; the server must gate the
+        // tier-3 re-call on the engine being AgentBrowser.
+        let ob = browser_cfg(crate::browser::RenderEngine::Obscura);
+        assert!(!render_can_escalate(&ob));
+        let ab = browser_cfg(crate::browser::RenderEngine::AgentBrowser);
+        assert!(render_can_escalate(&ab));
     }
 
     fn req(method: &str, params: Option<serde_json::Value>) -> Request {

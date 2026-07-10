@@ -32,7 +32,13 @@ async fn main() {
     // silently) — degrade to tier 1 only, not "as if Full" (spec §5).
     match browser::preflight(server.browser_cfg()) {
         browser::Preflight::Full => {
-            tracing::info!("browser preflight: full — tiers 2/3 (lightpanda/chrome) available")
+            let engine_desc = match server.browser_cfg().render_engine {
+                browser::RenderEngine::Obscura => "full — obscura render engine available",
+                browser::RenderEngine::AgentBrowser => {
+                    "full — tiers 2/3 (lightpanda/chrome) available"
+                }
+            };
+            tracing::info!("browser preflight: {}", engine_desc)
         }
         other => tracing::warn!(
             "browser preflight degraded: {:?} — render/search fall back to tier 1 only",
