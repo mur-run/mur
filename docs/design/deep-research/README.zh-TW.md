@@ -86,6 +86,13 @@ fetch(url, render?)    →  {url, status, title, text, tier}
 - **搜尋可靠度** — N 個併發 worker 時 DDG 以 202 挑戰頁限流。`search` 在 202 時 retry,採指數 backoff + **query 衍生 jitter**——不同子問題錯開重試,不再同步再爆一次。
 - **URL 級 audit** — 每次呼叫把 `{worker, url, tier, outcome}` 記錄到 channel 與 telemetry。報告的每個引用都能對到一筆 gateway audit 記錄。
 
+### 渲染引擎(實驗性,opt-in)
+
+透過 `MUR_RESEARCH_RENDER_ENGINE` 環境變數選擇(或 `~/.mur/config.yaml` 中的 `research_gateway.render_engine:`);此處明確設定的值永遠覆蓋 auto-detect。自動偵測(未設定 env/YAML 時):**當 `obscura` 與 `obscura-worker` 兩個執行檔都安裝在 `~/.mur/aura/` 時用 `obscura`,否則用 `agent-browser`**(2026-07-10 正面比較:obscura 能渲染真實內容,包含純 JS 頁面,且能在 worker sandbox 下運作;agent-browser/Lightpanda 只回傳 title-only 的空殼,且被 sandbox 拒絕)。
+
+- **`agent-browser`** — 如上述的 Lightpanda(tier 2)與 Chrome(tier 3)。obscura 未安裝時的自動偵測 fallback。
+- **`obscura`** — 內嵌 V8、自成一體。安裝方式:把平台 tarball 解壓到 `~/.mur/aura/`,保留 `obscura` 與 `obscura-worker` 兩個執行檔——自動偵測就會自動選中它。單一渲染路徑;沒有 tier-2/3 升級。**優勢:** egress 是 **proxy-governed**——透過 tier 1 的 loopback proxy 走(`obscura fetch <url> … --proxy http://<token>:@127.0.0.1:<port>`),消除瀏覽器 tier 的 egress 治理缺口。
+
 ---
 
 ## §5 · 安全模型——sandbox、同意、工具政策
@@ -102,7 +109,7 @@ Gateway 在強制 kernel sandbox 下執行,預設無 egress。存取權透過恰
 | **Provenance** | 每個 worker 把自己的回覆以 `Agent{self}` 事件寫入,Ed25519 簽名(v3d-2 peer-writes-own),fold 時逐 actor 驗證。 | Router 不再代 worker 簽名——歸屬是 worker 自己的金鑰。 |
 | **Export 安全** | `.fleet` import 把 broad-audited 降級為 `inherit` 並清除授權。 | 分享的 deep-research fleet 在本地重新授權前零 egress。 |
 
-**Advisory-enforcement 的誠實。** Tier 1 honor proxy;tier 2/3 瀏覽器子行程可能不——以全域 gateway URL audit 緩解,且如實記錄而非過度宣稱。滴水不漏的封裝 = 未來 Phase-3 sbpl pin-to-proxy,屆時只 pin 這一個 gateway。
+**Advisory-enforcement 的誠實。** Tier 1 honor proxy;tier 2/3 瀏覽器子行程可能不——以全域 gateway URL audit 緩解,且如實記錄而非過度宣稱。透過 opt-in 的 `render_engine: obscura`,這個缺口會被補上:obscura 把所有 egress 都透過 tier 1 用的同一條 loopback proxy 走(以 `--proxy` 帶上 gateway 的憑證),讓 render tier 像 tier 1 一樣 proxy-governed。滴水不漏的封裝 = 未來 Phase-3 sbpl pin-to-proxy,屆時只 pin 這一個 gateway。
 
 ---
 
