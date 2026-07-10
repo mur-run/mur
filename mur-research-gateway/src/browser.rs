@@ -15,10 +15,27 @@ use crate::fetcher::{self, FetchError, FetchResult};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+/// Which subprocess renders JS pages for tier-2/3 `fetch`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum RenderEngine {
+    /// `agent-browser` (Lightpanda tier-2 / Chrome tier-3) — current default.
+    #[default]
+    AgentBrowser,
+    /// `obscura` — self-contained embedded-V8 engine; renders under the kernel
+    /// sandbox and routes egress through `--proxy` (spike 2026-07-10).
+    Obscura,
+}
+
 pub struct BrowserCfg {
     pub agent_browser_bin: String,
     pub lightpanda_path: Option<String>,
     pub chrome_stealth_args: String, // comma-separated; empty = none
+    #[allow(dead_code)]
+    pub render_engine: RenderEngine,
+    /// Path to the `obscura` binary; the sibling `obscura-worker` must live
+    /// beside it. Only consulted when `render_engine == Obscura`.
+    #[allow(dead_code)]
+    pub obscura_path: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -211,6 +228,8 @@ mod tests {
             agent_browser_bin: "agent-browser".into(),
             lightpanda_path: Some("/x/lightpanda".into()),
             chrome_stealth_args: "--no-sandbox".into(),
+            render_engine: crate::browser::RenderEngine::AgentBrowser,
+            obscura_path: None,
         };
         let argv = build_fetch_argv("https://example.com", &cfg, false);
         // lightpanda tier MUST pass --args "" and --executable-path, and MUST NOT carry stealth args
@@ -232,6 +251,8 @@ mod tests {
             lightpanda_path: Some("/x/lightpanda".into()),
             chrome_stealth_args: "--no-sandbox,--disable-blink-features=AutomationControlled"
                 .into(),
+            render_engine: crate::browser::RenderEngine::AgentBrowser,
+            obscura_path: None,
         };
         let argv = build_fetch_argv("https://example.com", &cfg, true);
         assert!(
@@ -250,6 +271,8 @@ mod tests {
             agent_browser_bin: "agent-browser".into(),
             lightpanda_path: None,
             chrome_stealth_args: String::new(),
+            render_engine: crate::browser::RenderEngine::AgentBrowser,
+            obscura_path: None,
         };
         // With no lightpanda path, preflight must not claim Full.
         assert!(!matches!(
@@ -263,6 +286,8 @@ mod tests {
             agent_browser_bin: "agent-browser".into(),
             lightpanda_path: Some("/x/lightpanda".into()),
             chrome_stealth_args: String::new(),
+            render_engine: crate::browser::RenderEngine::AgentBrowser,
+            obscura_path: None,
         };
         assert!(matches!(
             preflight_from_versions(true, Some("0.31.1"), &cfg),
@@ -275,6 +300,8 @@ mod tests {
             agent_browser_bin: "agent-browser".into(),
             lightpanda_path: Some("/x/lightpanda".into()),
             chrome_stealth_args: String::new(),
+            render_engine: crate::browser::RenderEngine::AgentBrowser,
+            obscura_path: None,
         };
         assert!(matches!(
             preflight_from_versions(true, Some("0.27.0"), &cfg),
@@ -287,6 +314,8 @@ mod tests {
             agent_browser_bin: "agent-browser".into(),
             lightpanda_path: Some("/x/lightpanda".into()),
             chrome_stealth_args: String::new(),
+            render_engine: crate::browser::RenderEngine::AgentBrowser,
+            obscura_path: None,
         };
         assert!(matches!(
             preflight_from_versions(false, None, &cfg),
@@ -302,6 +331,8 @@ mod tests {
             agent_browser_bin: "agent-browser".into(),
             lightpanda_path: Some("/x/lightpanda".into()),
             chrome_stealth_args: String::new(),
+            render_engine: crate::browser::RenderEngine::AgentBrowser,
+            obscura_path: None,
         };
         let pf = preflight_from_versions(true, None, &cfg);
         assert!(!matches!(pf, Preflight::Full));
