@@ -88,10 +88,10 @@ fetch(url, render?)    →  {url, status, title, text, tier}
 
 ### Render engine (experimental, opt-in)
 
-Select via `MUR_RESEARCH_RENDER_ENGINE` env (or `research_gateway.render_engine:` in `~/.mur/config.yaml`):
+Select via `MUR_RESEARCH_RENDER_ENGINE` env (or `research_gateway.render_engine:` in `~/.mur/config.yaml`); an explicit value here always overrides auto-detect. Auto-detect (no env/YAML set): **`obscura` when its `obscura` + `obscura-worker` binaries are both installed at `~/.mur/aura/`, else `agent-browser`** (head-to-head 2026-07-10: obscura renders real content incl. JS-only pages and runs under the worker sandbox; agent-browser/Lightpanda returns title-only stubs and is sandbox-denied).
 
-- **`agent-browser` (default)** — Lightpanda (tier 2) and Chrome (tier 3) as above.
-- **`obscura` (experimental, opt-in)** — Embedded-V8, self-contained. Install: extract platform tarball to `~/.mur/aura/`, keep both `obscura` and `obscura-worker` binaries. Single render path; no tier-2/3 escalation. **Advantage:** egress is **proxy-governed** — routes through the tier-1 loopback proxy (`obscura fetch <url> … --proxy http://<token>:@127.0.0.1:<port>`), eliminating the browser-tier egress-governance gap. Experimental, not yet default; head-to-head evaluation vs Lightpanda gates default flip.
+- **`agent-browser`** — Lightpanda (tier 2) and Chrome (tier 3) as above. Auto-detect fallback when obscura isn't installed.
+- **`obscura`** — Embedded-V8, self-contained. Install: extract platform tarball to `~/.mur/aura/`, keep both `obscura` and `obscura-worker` binaries — auto-detect then picks it automatically. Single render path; no tier-2/3 escalation. **Advantage:** egress is **proxy-governed** — routes through the tier-1 loopback proxy (`obscura fetch <url> … --proxy http://<token>:@127.0.0.1:<port>`), eliminating the browser-tier egress-governance gap.
 
 ---
 
