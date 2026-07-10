@@ -86,6 +86,13 @@ fetch(url, render?)    →  {url, status, title, text, tier}
 - **검색 신뢰성** — N 동시 워커에서 DDG 는 202 챌린지로 레이트 리밋한다. `search` 는 202 시 지수 백오프 + **쿼리 기반 지터** 로 재시도한다 — 서로 다른 하위 질문이 재시도를 어긋나게 하여 동기적으로 다시 폭주하지 않는다.
 - **URL 수준 감사** — 각 호출은 `{worker, url, tier, outcome}` 을 채널과 텔레메트리에 기록한다. 보고서의 각 인용은 하나의 게이트웨이 감사 레코드에 대응된다.
 
+### 렌더 엔진(실험적, 옵트인)
+
+`MUR_RESEARCH_RENDER_ENGINE` 환경 변수(또는 `~/.mur/config.yaml` 의 `research_gateway.render_engine:`)로 선택한다. 여기서 명시적으로 값을 설정하면 항상 auto-detect 보다 우선한다. 자동 감지(env/YAML 미설정 시): **`obscura` 와 `obscura-worker` 두 바이너리가 모두 `~/.mur/aura/` 에 설치되어 있으면 `obscura`, 아니면 `agent-browser`**(2026-07-10 정면 비교: obscura 는 JS 전용 페이지를 포함한 실제 콘텐츠를 렌더링하고 워커 샌드박스 아래에서도 동작한다; agent-browser/Lightpanda 는 title-only 스텁을 반환하고 샌드박스에서 거부된다).
+
+- **`agent-browser`** — 위의 Lightpanda(tier 2)와 Chrome(tier 3). obscura 가 설치되지 않았을 때의 자동 감지 폴백.
+- **`obscura`** — 임베디드 V8, 자체 완결형. 설치: 플랫폼 tarball 을 `~/.mur/aura/` 에 압축 해제하고 `obscura` 와 `obscura-worker` 두 바이너리를 모두 유지한다 — 자동 감지가 그러면 자동으로 선택한다. 단일 렌더 경로이며 tier-2/3 에스컬레이션이 없다. **장점:** egress 가 **proxy-governed** — tier 1 의 루프백 프록시를 경유한다(`obscura fetch <url> … --proxy http://<token>:@127.0.0.1:<port>`), 브라우저 tier 의 egress 거버넌스 공백을 없앤다.
+
 ---
 
 ## §5 · 보안 모델 — 샌드박스, 동의, 도구 정책
@@ -102,7 +109,7 @@ fetch(url, render?)    →  {url, status, title, text, tier}
 | **프로비넌스** | 각 워커는 자신의 응답을 `Agent{self}` 이벤트로 기록하고 Ed25519 서명(v3d-2 peer-writes-own)하며, fold 시 액터별로 검증한다. | 라우터는 더 이상 워커를 대신해 서명하지 않는다 — 귀속은 워커 자신의 키다. |
 | **내보내기 안전성** | `.fleet` 임포트는 broad-audited 를 `inherit` 로 강등하고 승인을 지운다. | 공유된 deep-research 플릿은 로컬에서 재부여하기 전까지 egress 가 0 이다. |
 
-**어드바이저리 강제의 정직함.** Tier 1 은 프록시를 존중한다. tier 2/3 의 브라우저 자식 프로세스는 그러지 않을 수 있다 — 전역 게이트웨이 URL 감사로 완화하고, 과장 없이 문서화한다. 완전한 봉쇄 = 향후 Phase-3 sbpl pin-to-proxy 이며, 그때 핀 고정하는 것은 바로 이 하나의 게이트웨이뿐이다.
+**어드바이저리 강제의 정직함.** Tier 1 은 프록시를 존중한다. tier 2/3 의 브라우저 자식 프로세스는 그러지 않을 수 있다 — 전역 게이트웨이 URL 감사로 완화하고, 과장 없이 문서화한다. 옵트인 `render_engine: obscura` 를 쓰면 이 공백이 닫힌다: obscura 는 tier 1 이 쓰는 것과 같은 루프백 프록시를 통해 모든 egress 를 보내(게이트웨이의 자격 증명을 실은 `--proxy` 경유) render tier 도 tier 1 처럼 proxy-governed 하게 만든다. 완전한 봉쇄 = 향후 Phase-3 sbpl pin-to-proxy 이며, 그때 핀 고정하는 것은 바로 이 하나의 게이트웨이뿐이다.
 
 ---
 
