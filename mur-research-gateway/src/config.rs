@@ -204,7 +204,14 @@ pub fn load_from_yaml(yaml: &str, mur_home: &Path) -> GatewayConfig {
         .or(raw.render_engine)
         .map(|s| match s.trim().to_ascii_lowercase().as_str() {
             "obscura" => crate::browser::RenderEngine::Obscura,
-            _ => crate::browser::RenderEngine::AgentBrowser,
+            "agent-browser" => crate::browser::RenderEngine::AgentBrowser,
+            unrecognized => {
+                tracing::warn!(
+                    "unrecognized render_engine '{}'; falling back to agent-browser",
+                    unrecognized
+                );
+                crate::browser::RenderEngine::AgentBrowser
+            }
         })
         .unwrap_or_default();
 
