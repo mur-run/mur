@@ -298,6 +298,14 @@ mod tests {
         assert!(render_can_escalate(&ab));
     }
 
+    #[test]
+    fn lightpanda_engine_does_not_escalate_to_chrome() {
+        // Native lightpanda is a single engine (tier 2), same as obscura — no
+        // chrome tier-3 re-call.
+        let lp = browser_cfg(crate::browser::RenderEngine::Lightpanda);
+        assert!(!render_can_escalate(&lp));
+    }
+
     fn req(method: &str, params: Option<serde_json::Value>) -> Request {
         Request {
             jsonrpc: "2.0".into(),

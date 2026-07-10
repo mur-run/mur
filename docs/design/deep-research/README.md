@@ -88,10 +88,13 @@ fetch(url, render?)    →  {url, status, title, text, tier}
 
 ### Render engine (experimental, opt-in)
 
-Select via `MUR_RESEARCH_RENDER_ENGINE` env (or `research_gateway.render_engine:` in `~/.mur/config.yaml`); an explicit value here always overrides auto-detect. Auto-detect (no env/YAML set): **`obscura` when its `obscura` + `obscura-worker` binaries are both installed at `~/.mur/aura/`, else `agent-browser`** (head-to-head 2026-07-10: obscura renders real content incl. JS-only pages and runs under the worker sandbox; agent-browser/Lightpanda returns title-only stubs and is sandbox-denied).
+Select via `MUR_RESEARCH_RENDER_ENGINE` env (or `research_gateway.render_engine:` in `~/.mur/config.yaml`); an explicit value here always overrides auto-detect. Auto-detect (no env/YAML set): **`obscura` when its `obscura` + `obscura-worker` binaries are both installed at `~/.mur/aura/`, else `agent-browser`**.
 
-- **`agent-browser`** — Lightpanda (tier 2) and Chrome (tier 3) as above. Auto-detect fallback when obscura isn't installed.
-- **`obscura`** — Embedded-V8, self-contained. Install: extract platform tarball to `~/.mur/aura/`, keep both `obscura` and `obscura-worker` binaries — auto-detect then picks it automatically. Single render path; no tier-2/3 escalation. **Advantage:** egress is **proxy-governed** — routes through the tier-1 loopback proxy (`obscura fetch <url> … --proxy http://<token>:@127.0.0.1:<port>`), eliminating the browser-tier egress-governance gap.
+Three engines:
+
+- **`agent-browser`** — drives Lightpanda (tier 2) / Chrome (tier 3) via Vercel's `agent-browser` CLI. Auto-detect fallback. The `agent-browser` wrapper returns title-only stubs under the sandbox and its lightpanda tier is sandbox-denied — prefer `lightpanda` or `obscura`.
+- **`obscura`** — Embedded-V8, self-contained. Install: extract platform tarball to `~/.mur/aura/`, keep both `obscura` and `obscura-worker`. Single render path; no tier-2/3 escalation. Egress **proxy-governed** via `--proxy http://<token>:@127.0.0.1:<port>` (Basic auth on CONNECT).
+- **`lightpanda`** — native Lightpanda (`~/.mur/aura/lightpanda`), driven directly (`lightpanda fetch <url> --dump markdown --http-timeout <ms> --http-proxy <proxy>`), NOT via `agent-browser`. A 2026-07-11 head-to-head found native Lightpanda renders real content on 8/8 targets (incl. JS-only pages), **faster than obscura and with more extracted content**, runs under the sandbox, and is egress-governed (its `--http-proxy` userinfo sends the same Basic auth on CONNECT our egress proxy accepts). **Caveat:** Lightpanda phones home to `telemetry.lightpanda.io` — that CONNECT goes through the egress proxy (audited) and should be blocked with `--deny-host telemetry.lightpanda.io` for a clean egress. (The earlier "Lightpanda = title-only stubs" result was an artifact of the `agent-browser` wrapper, not Lightpanda itself.)
 
 ---
 

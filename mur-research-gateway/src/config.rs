@@ -209,6 +209,7 @@ pub fn load_from_yaml(yaml: &str, mur_home: &Path) -> GatewayConfig {
         .map(|s| match s.trim().to_ascii_lowercase().as_str() {
             "obscura" => crate::browser::RenderEngine::Obscura,
             "agent-browser" => crate::browser::RenderEngine::AgentBrowser,
+            "lightpanda" => crate::browser::RenderEngine::Lightpanda,
             unrecognized => {
                 tracing::warn!(
                     "unrecognized render_engine '{}'; falling back to agent-browser",
@@ -500,6 +501,23 @@ research_gateway:
         assert!(matches!(
             c.browser.render_engine,
             crate::browser::RenderEngine::Obscura
+        ));
+        unsafe {
+            std::env::remove_var(ENV_RENDER_ENGINE);
+        }
+    }
+
+    #[test]
+    fn render_engine_env_lightpanda_resolves() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // SAFETY: env mutation guarded by ENV_LOCK.
+        unsafe {
+            std::env::set_var(ENV_RENDER_ENGINE, "lightpanda");
+        }
+        let c = load_from_yaml("", Path::new("/nonexistent"));
+        assert!(matches!(
+            c.browser.render_engine,
+            crate::browser::RenderEngine::Lightpanda
         ));
         unsafe {
             std::env::remove_var(ENV_RENDER_ENGINE);
