@@ -674,6 +674,11 @@ pub enum DeepResearchAction {
         /// non-interactive grants.
         #[arg(long)]
         yes: bool,
+        /// Render engine for the worker's gateway `fetch` (tier 2/3). `obscura`
+        /// grants exec for the obscura binaries at `~/.mur/aura/` and prints how
+        /// to enable it in the gateway config. Default: `agent-browser` (unchanged).
+        #[arg(long)]
+        render_engine: Option<String>,
     },
     /// Run a deep-research fleet's guarded loop (thin wrapper over
     /// `mur fleet run --loop` — see `cmd/fleet/loop_run.rs`). This drives
