@@ -86,6 +86,13 @@ fetch(url, render?)    →  {url, status, title, text, tier}
 - **Search reliability** — under N concurrent workers DDG rate-limits with a 202 challenge. `search` retries on 202 with exponential backoff + a **query-seeded jitter** — distinct sub-questions stagger their retries instead of re-bursting in sync.
 - **URL-level audit** — every call logs `{worker, url, tier, outcome}` to the channel and telemetry. Every report citation reconciles to one gateway audit record.
 
+### Render engine (experimental, opt-in)
+
+Select via `MUR_RESEARCH_RENDER_ENGINE` env (or `research_gateway.render_engine:` in `~/.mur/config.yaml`):
+
+- **`agent-browser` (default)** — Lightpanda (tier 2) and Chrome (tier 3) as above.
+- **`obscura` (experimental, opt-in)** — Embedded-V8, self-contained. Install: extract platform tarball to `~/.mur/aura/`, keep both `obscura` and `obscura-worker` binaries. Single render path; no tier-2/3 escalation. **Advantage:** egress is **proxy-governed** — routes through the tier-1 loopback proxy (`obscura fetch <url> … --proxy http://<token>:@127.0.0.1:<port>`), eliminating the browser-tier egress-governance gap. Experimental, not yet default; head-to-head evaluation vs Lightpanda gates default flip.
+
 ---
 
 ## §5 · Security model — sandbox, consent, and the tool policy
@@ -102,7 +109,7 @@ The gateway runs under an enforced kernel sandbox with no default egress. Access
 | **Provenance** | Each worker appends its own reply as an `Agent{self}` event, Ed25519-signed (v3d-2 peer-writes-own), verified per-actor on fold. | The router no longer signs on a worker's behalf — attribution is the worker's own key. |
 | **Export safety** | `.fleet` import downgrades broad-audited → `inherit` and clears authorization. | A shared deep-research fleet has zero egress until re-granted locally. |
 
-**Advisory-enforcement honesty.** Tier 1 honors the proxy; the tier 2/3 browser subprocesses may not — mitigated by universal gateway URL audit, and documented rather than overclaimed. Airtight containment = a future Phase-3 sbpl pin-to-proxy, which then pins exactly this one gateway.
+**Advisory-enforcement honesty.** Tier 1 honors the proxy; the tier 2/3 browser subprocesses may not — mitigated by universal gateway URL audit, and documented rather than overclaimed. With the opt-in `render_engine: obscura`, this gap closes: obscura routes all egress through the loopback proxy tier 1 uses (via `--proxy` with the gateway's credential), making the render tier proxy-governed like tier 1. Airtight containment = a future Phase-3 sbpl pin-to-proxy, which then pins exactly this one gateway.
 
 ---
 
