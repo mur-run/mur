@@ -452,6 +452,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     grant_egress,
                     deny_hosts,
                     yes,
+                    render_engine,
                 } => cmd::deep_research::provision::cmd_provision(
                     &mur_home,
                     prefix.as_deref(),
@@ -460,6 +461,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     grant_egress,
                     &deny_hosts,
                     yes,
+                    render_engine.as_deref(),
                 )?,
                 DeepResearchAction::Run {
                     name,
