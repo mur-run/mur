@@ -124,7 +124,7 @@ async fn handle_conn(mut client: TcpStream, registry: Registry) -> std::io::Resu
         return Ok(());
     };
     let token = lines
-        .find_map(|l| l.strip_prefix("Proxy-Authorization: Basic "))
+        .find_map(parse_proxy_auth_token)
         .and_then(decode_basic_user);
 
     let host = target.rsplit_once(':').map(|(h, _)| h).unwrap_or(target);
@@ -170,12 +170,58 @@ fn decode_basic_user(b64: &str) -> Option<String> {
     Some(s.split_once(':').map(|(u, _)| u).unwrap_or(&s).to_string())
 }
 
+/// Extract the base64 credential from a `Proxy-Authorization: Basic <b64>`
+/// request-head line. HTTP header names and the auth scheme token are
+/// case-insensitive (RFC 7230/7235), and hyper/reqwest emit the header name
+/// **lowercase** — a case-sensitive `strip_prefix("Proxy-Authorization: Basic ")`
+/// silently dropped the token, so every CONNECT resolved to `entry = None` and
+/// was DENIED. Match name + scheme case-insensitively; the base64 value itself
+/// stays case-sensitive.
+fn parse_proxy_auth_token(line: &str) -> Option<&str> {
+    let (name, value) = line.split_once(':')?;
+    if !name.trim().eq_ignore_ascii_case("proxy-authorization") {
+        return None;
+    }
+    let value = value.trim_start();
+    let scheme = "basic ";
+    match value.get(..scheme.len()) {
+        Some(prefix) if prefix.eq_ignore_ascii_case(scheme) => Some(&value[scheme.len()..]),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use base64::Engine;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
+
+    #[test]
+    fn proxy_auth_token_is_header_case_insensitive() {
+        let b64 = base64::engine::general_purpose::STANDARD.encode("mytoken:x");
+        // hyper/reqwest emit the header name (and may vary the scheme) in
+        // lowercase — all of these must yield the same base64 credential.
+        for line in [
+            format!("Proxy-Authorization: Basic {b64}"),
+            format!("proxy-authorization: Basic {b64}"),
+            format!("proxy-authorization: basic {b64}"),
+            format!("PROXY-AUTHORIZATION: BASIC {b64}"),
+        ] {
+            assert_eq!(
+                parse_proxy_auth_token(&line),
+                Some(b64.as_str()),
+                "failed to parse: {line}"
+            );
+            assert_eq!(
+                decode_basic_user(parse_proxy_auth_token(&line).unwrap()).as_deref(),
+                Some("mytoken")
+            );
+        }
+        // Non-matching lines yield None.
+        assert_eq!(parse_proxy_auth_token("Host: example.com:443"), None);
+        assert_eq!(parse_proxy_auth_token("proxy-authorization: Bearer xyz"), None);
+    }
 
     /// A trivial upstream that accepts one connection (so an allowed CONNECT can
     /// complete its TCP handshake to it).
