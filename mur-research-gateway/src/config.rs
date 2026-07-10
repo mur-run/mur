@@ -74,6 +74,12 @@ pub const DEFAULT_LIGHTPANDA_RELATIVE_PATH: &str = "aura/lightpanda";
 // definition in mur-common so the two crates can never drift (CLAUDE.md
 // rule 1).
 
+/// Brave Search API subscription token. When present (env or YAML), `search`
+/// uses Brave's first-class web-search API instead of scraping DuckDuckGo's
+/// HTML endpoint; absent, it falls back to DDG (zero-config, keyless). Brave's
+/// free tier (2k queries/mo) covers a personal deep-research user at $0 — the
+/// key is a reliability upgrade, never a hard requirement.
+const ENV_BRAVE_KEY: &str = "MUR_RESEARCH_BRAVE_KEY";
 const ENV_FETCH_TIMEOUT_SECS: &str = "MUR_RESEARCH_TIMEOUT_SECS";
 const ENV_BROWSER_TIMEOUT_SECS: &str = "MUR_RESEARCH_BROWSER_TIMEOUT_SECS";
 const ENV_SEARCH_LIMIT: &str = "MUR_RESEARCH_SEARCH_LIMIT";
@@ -95,6 +101,8 @@ pub struct GatewayConfig {
     pub search_limit: usize,
     /// Max characters of `fetch` page text returned to the worker; `0` = no cap.
     pub max_fetch_chars: usize,
+    /// Brave Search API token; `Some` → `search` uses Brave, `None` → DDG.
+    pub brave_api_key: Option<String>,
 }
 
 /// Raw `research_gateway:` YAML shape. Every field is optional/defaulted so
@@ -109,6 +117,7 @@ struct GatewayConfigYaml {
     browser_timeout_secs: Option<u64>,
     search_limit: Option<usize>,
     max_fetch_chars: Option<usize>,
+    brave_api_key: Option<String>,
     agent_browser_bin: Option<String>,
     lightpanda_path: Option<String>,
     chrome_stealth_args: Option<String>,
@@ -168,6 +177,9 @@ pub fn load_from_yaml(yaml: &str, mur_home: &Path) -> GatewayConfig {
         .or(raw.max_fetch_chars)
         .unwrap_or(DEFAULT_MAX_FETCH_CHARS);
 
+    let brave_api_key =
+        non_empty_env(ENV_BRAVE_KEY).or_else(|| raw.brave_api_key.filter(|s| !s.is_empty()));
+
     let agent_browser_bin = non_empty_env(ENV_AGENT_BROWSER_BIN)
         .or(raw.agent_browser_bin)
         .unwrap_or_else(|| DEFAULT_AGENT_BROWSER_BIN.to_string());
@@ -191,6 +203,7 @@ pub fn load_from_yaml(yaml: &str, mur_home: &Path) -> GatewayConfig {
         },
         search_limit,
         max_fetch_chars,
+        brave_api_key,
     }
 }
 
