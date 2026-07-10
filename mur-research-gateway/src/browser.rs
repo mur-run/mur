@@ -91,18 +91,6 @@ pub fn build_fetch_argv(url: &str, cfg: &BrowserCfg, want_chrome: bool) -> Vec<S
 /// credential, `http://<token>:@host:port`) becomes `--proxy` so obscura's
 /// egress goes through the loopback egress proxy (spike Q2). Pure →
 /// unit-testable, no env/subprocess.
-/// The proxy URL obscura should route through, read from the gateway's OWN
-/// environment. The runtime sets `HTTP_PROXY=http://<token>:x@127.0.0.1:<port>`
-/// on this child (see mur-agent-runtime `proxy_env_for`); obscura does NOT
-/// honor the env var itself, so we translate it into its `--proxy` flag.
-/// Absent (dev/unsandboxed) → no proxy, direct connect.
-fn render_proxy_flag() -> Option<String> {
-    std::env::var("HTTP_PROXY")
-        .ok()
-        .or_else(|| std::env::var("HTTPS_PROXY").ok())
-        .filter(|s| !s.is_empty())
-}
-
 fn build_obscura_argv(url: &str, proxy: Option<&str>, timeout: Duration) -> Vec<String> {
     let mut a = vec![
         "fetch".to_string(),
@@ -117,6 +105,19 @@ fn build_obscura_argv(url: &str, proxy: Option<&str>, timeout: Duration) -> Vec<
         a.push(p.to_string());
     }
     a
+}
+
+/// Read the gateway's own HTTP_PROXY or HTTPS_PROXY environment variable and
+/// forward it to obscura's `--proxy` flag. The runtime sets
+/// `HTTP_PROXY=http://<token>:x@127.0.0.1:<port>` on this child (see
+/// mur-agent-runtime `proxy_env_for`); obscura does NOT honor the env var
+/// itself, so we translate it into its `--proxy` flag. Absent (dev/unsandboxed)
+/// → no proxy, direct connect.
+fn render_proxy_flag() -> Option<String> {
+    std::env::var("HTTP_PROXY")
+        .ok()
+        .or_else(|| std::env::var("HTTPS_PROXY").ok())
+        .filter(|s| !s.is_empty())
 }
 
 /// Per-FETCH unique session id so even two concurrent fetches of the SAME url
