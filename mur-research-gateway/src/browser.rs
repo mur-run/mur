@@ -30,11 +30,9 @@ pub struct BrowserCfg {
     pub agent_browser_bin: String,
     pub lightpanda_path: Option<String>,
     pub chrome_stealth_args: String, // comma-separated; empty = none
-    #[allow(dead_code)]
     pub render_engine: RenderEngine,
     /// Path to the `obscura` binary; the sibling `obscura-worker` must live
     /// beside it. Only consulted when `render_engine == Obscura`.
-    #[allow(dead_code)]
     pub obscura_path: Option<String>,
 }
 
@@ -94,7 +92,6 @@ pub fn build_fetch_argv(url: &str, cfg: &BrowserCfg, want_chrome: bool) -> Vec<S
 /// on this child (see mur-agent-runtime `proxy_env_for`); obscura does NOT
 /// honor the env var itself, so we translate it into its `--proxy` flag.
 /// Absent (dev/unsandboxed) → no proxy, direct connect.
-#[allow(dead_code)]
 fn render_proxy_flag() -> Option<String> {
     std::env::var("HTTP_PROXY")
         .ok()
@@ -102,7 +99,6 @@ fn render_proxy_flag() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-#[allow(dead_code)]
 fn build_obscura_argv(url: &str, proxy: Option<&str>, timeout: Duration) -> Vec<String> {
     let mut a = vec![
         "fetch".to_string(),
@@ -223,10 +219,43 @@ async fn run_agent_browser(
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// Decide (binary, argv, tier) for a render, dispatching on the engine. Pure
+/// (proxy passed in) → unit-testable without spawning. obscura is a single
+/// engine covering JS render, so `want_chrome` is ignored and the tier is 2;
+/// the agent-browser path keeps the lightpanda(2)/chrome(3) split.
+fn plan_render(
+    url: &str,
+    cfg: &BrowserCfg,
+    want_chrome: bool,
+    proxy: Option<&str>,
+    timeout: Duration,
+) -> (String, Vec<String>, u8) {
+    match cfg.render_engine {
+        RenderEngine::Obscura => {
+            let bin = cfg
+                .obscura_path
+                .clone()
+                .unwrap_or_else(|| "obscura".to_string());
+            (bin, build_obscura_argv(url, proxy, timeout), 2)
+        }
+        RenderEngine::AgentBrowser => {
+            let tier = if want_chrome || cfg.lightpanda_path.is_none() {
+                3
+            } else {
+                2
+            };
+            (
+                cfg.agent_browser_bin.clone(),
+                build_fetch_argv(url, cfg, want_chrome),
+                tier,
+            )
+        }
+    }
+}
+
 /// Fetch a JS-rendered page. Pre-spawn SSRF/deny screen (proxy can't see the
-/// browser's connections — spec §5), then drive agent-browser under `timeout`.
-/// `want_chrome` forces tier 3; otherwise tier 2 (lightpanda) is used when
-/// available.
+/// browser's connections — spec §5), then drive the configured render engine
+/// (agent-browser or obscura, see `plan_render`) under `timeout`.
 pub async fn fetch_rendered(
     url: &str,
     deny: &[String],
@@ -237,13 +266,15 @@ pub async fn fetch_rendered(
     let screened = fetcher::screen_url_blocking(url, deny)
         .await
         .map_err(FetchError::Guard)?;
-    let argv = build_fetch_argv(screened.as_str(), cfg, want_chrome);
-    let text = run_agent_browser(&cfg.agent_browser_bin, &argv, timeout).await?;
-    let tier = if want_chrome || cfg.lightpanda_path.is_none() {
-        3
-    } else {
-        2
-    };
+    let proxy = render_proxy_flag();
+    let (bin, argv, tier) = plan_render(
+        screened.as_str(),
+        cfg,
+        want_chrome,
+        proxy.as_deref(),
+        timeout,
+    );
+    let text = run_agent_browser(&bin, &argv, timeout).await?;
     Ok(FetchResult {
         url: screened.to_string(),
         status: 200,
@@ -441,5 +472,46 @@ mod tests {
                 .windows(2)
                 .any(|w| w[0] == "--proxy" && w[1] == "http://t:@127.0.0.1:9")
         );
+    }
+
+    #[test]
+    fn plan_render_dispatches_on_engine() {
+        let ab = BrowserCfg {
+            agent_browser_bin: "agent-browser".into(),
+            lightpanda_path: Some("/x/lightpanda".into()),
+            chrome_stealth_args: "--no-sandbox".into(),
+            render_engine: RenderEngine::AgentBrowser,
+            obscura_path: None,
+        };
+        let (bin, _argv, tier) = plan_render(
+            "https://example.com",
+            &ab,
+            false,
+            None,
+            Duration::from_secs(20),
+        );
+        assert_eq!(bin, "agent-browser");
+        assert_eq!(tier, 2); // lightpanda present, not chrome
+
+        let ob = BrowserCfg {
+            render_engine: RenderEngine::Obscura,
+            obscura_path: Some("/opt/obscura".into()),
+            ..ab
+        };
+        let (bin, argv, tier) = plan_render(
+            "https://example.com",
+            &ob,
+            true, /*ignored*/
+            Some("http://t:@127.0.0.1:9"),
+            Duration::from_secs(20),
+        );
+        assert_eq!(bin, "/opt/obscura");
+        assert_eq!(tier, 2); // obscura is one engine; want_chrome ignored
+        assert_eq!(argv[0], "fetch");
+        assert!(
+            argv.windows(2)
+                .any(|w| w[0] == "--proxy" && w[1] == "http://t:@127.0.0.1:9")
+        );
+        assert!(argv.windows(2).any(|w| w[0] == "--timeout" && w[1] == "20"));
     }
 }
