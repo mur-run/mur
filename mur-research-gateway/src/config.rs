@@ -94,7 +94,6 @@ pub struct GatewayConfig {
     pub browser: BrowserCfg,
     pub search_limit: usize,
     /// Max characters of `fetch` page text returned to the worker; `0` = no cap.
-    #[allow(dead_code)]
     pub max_fetch_chars: usize,
 }
 
@@ -393,7 +392,9 @@ research_gateway:
     fn max_fetch_chars_default_env_yaml_precedence() {
         let _g = ENV_LOCK.lock().unwrap();
         // Default when nothing set.
-        unsafe { std::env::remove_var("MUR_RESEARCH_MAX_FETCH_CHARS"); }
+        unsafe {
+            std::env::remove_var("MUR_RESEARCH_MAX_FETCH_CHARS");
+        }
         let cfg = load_from_yaml("", std::path::Path::new("/tmp"));
         assert_eq!(cfg.max_fetch_chars, DEFAULT_MAX_FETCH_CHARS);
         // YAML sets it.
@@ -403,12 +404,16 @@ research_gateway:
         );
         assert_eq!(cfg.max_fetch_chars, 1234);
         // Env overrides YAML.
-        unsafe { std::env::set_var("MUR_RESEARCH_MAX_FETCH_CHARS", "42"); }
+        unsafe {
+            std::env::set_var("MUR_RESEARCH_MAX_FETCH_CHARS", "42");
+        }
         let cfg = load_from_yaml(
             "research_gateway:\n  max_fetch_chars: 1234\n",
             std::path::Path::new("/tmp"),
         );
         assert_eq!(cfg.max_fetch_chars, 42);
-        unsafe { std::env::remove_var("MUR_RESEARCH_MAX_FETCH_CHARS"); }
+        unsafe {
+            std::env::remove_var("MUR_RESEARCH_MAX_FETCH_CHARS");
+        }
     }
 }

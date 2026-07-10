@@ -147,7 +147,6 @@ fn html_to_text(html: &str) -> String {
 /// CHARACTERS (not bytes) and cuts on a codepoint boundary. `max_chars == 0`
 /// disables the cap (operator opt-out). On truncation, appends a marker naming
 /// how many chars were dropped so the model knows the text was cut.
-#[allow(dead_code)]
 pub(crate) fn cap_text(text: &str, max_chars: usize) -> String {
     if max_chars == 0 {
         return text.to_string();
