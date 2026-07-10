@@ -220,7 +220,10 @@ mod tests {
         }
         // Non-matching lines yield None.
         assert_eq!(parse_proxy_auth_token("Host: example.com:443"), None);
-        assert_eq!(parse_proxy_auth_token("proxy-authorization: Bearer xyz"), None);
+        assert_eq!(
+            parse_proxy_auth_token("proxy-authorization: Bearer xyz"),
+            None
+        );
     }
 
     /// A trivial upstream that accepts one connection (so an allowed CONNECT can
