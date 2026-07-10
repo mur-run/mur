@@ -50,6 +50,17 @@ pub fn load_all(mur_home: &Path, agent_name: &str) -> Vec<LoadedSkill> {
     // Per-agent first (wins on name collision)
     if let Ok(names) = local::list_installed_agent(mur_home, agent_name) {
         for name in names {
+            // Skip non-skill dirs (e.g. a fleet run-ledger `fleet:<name>/`
+            // written under skills/ by the DAG executor's record_run — it holds
+            // events.jsonl, not skill.yaml). Without this, its colon name trips
+            // is_valid_skill_name in load_one and spams a warning every load.
+            if !crate::skill::store::agent_skill_dir(mur_home, agent_name)
+                .join(&name)
+                .join("skill.yaml")
+                .is_file()
+            {
+                continue;
+            }
             if let Some(mut loaded) =
                 load_one(mur_home, &name, SkillScope::Agent, &trust, |m, n| {
                     local::load_installed_agent(m, agent_name, n)
@@ -64,6 +75,14 @@ pub fn load_all(mur_home: &Path, agent_name: &str) -> Vec<LoadedSkill> {
     if let Ok(names) = local::list_installed(mur_home) {
         for name in names {
             if seen_names.contains(&name) {
+                continue;
+            }
+            // Skip non-skill dirs (see the agent loop above) — a manifest-less
+            // dir is a ledger/data dir, not a skill.
+            if !crate::skill::store::global_skill_dir(mur_home, &name)
+                .join("skill.yaml")
+                .is_file()
+            {
                 continue;
             }
             if let Some(mut loaded) = load_one(
@@ -188,6 +207,30 @@ content:
         let dir = tempdir().unwrap();
         let loaded = load_all(dir.path(), "alice");
         assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn load_all_skips_non_skill_dirs() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        // A real global skill (has skill.yaml)…
+        write_to_dir(&home.join("skills").join("real"), &make("real")).unwrap();
+        // …and a non-skill dir under skills/ (only events.jsonl, no skill.yaml) —
+        // e.g. a fleet run-ledger. Uses a portable name here: the real ledger id
+        // is `fleet:<name>`, but a colon is an illegal filename on Windows, so
+        // the test fixture would fail to even create it. The skip logic keys on
+        // the absent skill.yaml, not the name.
+        let ledger = home.join("skills").join("not-a-skill");
+        std::fs::create_dir_all(&ledger).unwrap();
+        std::fs::write(ledger.join("events.jsonl"), "{}\n").unwrap();
+
+        let loaded = load_all(home, "a1");
+        let names: Vec<_> = loaded.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["real"],
+            "ledger dir must not be loaded as a skill"
+        );
     }
 
     #[test]
