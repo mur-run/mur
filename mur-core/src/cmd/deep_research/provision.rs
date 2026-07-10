@@ -67,6 +67,17 @@ const GATEWAY_MCP_COMMAND: &str = "mur-research-gateway";
 /// Named to avoid an inline literal (mandatory rule 1).
 const MAX_WORKER_COUNT: usize = 64;
 
+/// obscura render-engine binaries, relative to `mur_home` — must match
+/// `mur-research-gateway`'s `DEFAULT_OBSCURA_RELATIVE_PATH` (`aura/obscura`).
+/// Both the engine and its sibling worker must be exec-granted (spike Q1 Layer-2).
+const OBSCURA_RELATIVE: &str = "aura/obscura";
+const OBSCURA_WORKER_RELATIVE: &str = "aura/obscura-worker";
+
+/// Value of `--render-engine` that opts a worker into the obscura render
+/// engine. Any other value (or the flag omitted) leaves today's default
+/// (`agent-browser`) path byte-for-byte unchanged.
+const RENDER_ENGINE_OBSCURA: &str = "obscura";
+
 /// Create `count` restricted worker agents named `<name_prefix>_1..N`, each
 /// mounting the `research-gateway` MCP server with no egress grant of its
 /// own. Returns the created agent names, in order.
@@ -86,6 +97,7 @@ pub fn provision(
     name_prefix: &str,
     count: usize,
     model: &str,
+    render_engine: Option<&str>,
 ) -> Result<Vec<String>> {
     if count == 0 {
         anyhow::bail!("count must be at least 1");
@@ -161,6 +173,22 @@ pub fn provision(
                     risk: None,
                 });
         }
+        // Opt-in obscura render engine (Task 8a): the gateway runs under
+        // `spawn_sandboxed` with this profile's `SandboxPolicy`, whose exec
+        // allowlist is searched over dirs that EXCLUDE `~/.mur/aura/` — so
+        // grant the two absolute paths directly. `from_entitlements` keeps an
+        // absolute `spawn.allowed` entry (path separator present) as-is when
+        // it resolves to an executable file, with no directory search. Any
+        // value other than `RENDER_ENGINE_OBSCURA` (including `None`) leaves
+        // the default `agent-browser` path byte-for-byte unchanged.
+        if render_engine == Some(RENDER_ENGINE_OBSCURA) {
+            for rel in [OBSCURA_RELATIVE, OBSCURA_WORKER_RELATIVE] {
+                let abs = mur_home.join(rel).to_string_lossy().to_string();
+                if !profile.entitlements.processes.spawn.allowed.contains(&abs) {
+                    profile.entitlements.processes.spawn.allowed.push(abs);
+                }
+            }
+        }
         save_profile(&path, &mut profile)?;
 
         names.push(name);
@@ -206,6 +234,13 @@ pub fn grant_egress(mur_home: &Path, worker: &str, deny_hosts: &[String], yes: b
 /// grants each worker's gateway `BroadAudited` egress via [`grant_egress`]
 /// (consent-prompted per worker unless `yes`). Plain `provision` (the
 /// default) never grants egress.
+///
+/// `render_engine`: when `Some("obscura")`, verifies both obscura binaries
+/// exist under `<mur_home>/aura/` BEFORE provisioning (fail fast with a
+/// clear install hint rather than silently creating workers that can't exec
+/// the engine), then threads the opt-in through to [`provision`] and prints
+/// the exec-grant + gateway-config hint. Any other value (or `None`) is a
+/// no-op — output is byte-for-byte identical to today.
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_provision(
     mur_home: &Path,
@@ -215,11 +250,30 @@ pub fn cmd_provision(
     grant_egress_flag: bool,
     deny_hosts: &[String],
     yes: bool,
+    render_engine: Option<&str>,
 ) -> Result<()> {
     let prefix = name_prefix.unwrap_or(DEFAULT_WORKER_PREFIX);
     let count = count.unwrap_or(DEFAULT_WORKER_COUNT);
     let model = model.unwrap_or(DEFAULT_WORKER_MODEL);
-    let names = provision(mur_home, prefix, count, model)?;
+
+    let obscura_paths = if render_engine == Some(RENDER_ENGINE_OBSCURA) {
+        let engine = mur_home.join(OBSCURA_RELATIVE);
+        let worker_bin = mur_home.join(OBSCURA_WORKER_RELATIVE);
+        if !engine.is_file() || !worker_bin.is_file() {
+            anyhow::bail!(
+                "obscura render engine not found — expected both\n  {}\n  {}\n\
+                 Install obscura to ~/.mur/aura/ (both `obscura` and \
+                 `obscura-worker`) before running `--render-engine obscura`.",
+                engine.display(),
+                worker_bin.display(),
+            );
+        }
+        Some((engine, worker_bin))
+    } else {
+        None
+    };
+
+    let names = provision(mur_home, prefix, count, model, render_engine)?;
     println!("Provisioned {} deep-research worker agent(s):", names.len());
     for name in &names {
         println!("  {name}");
@@ -232,6 +286,17 @@ pub fn cmd_provision(
         "  tool policy: {} → deny (built-ins off so a research turn can't dead-end on the HITL gate)",
         WORKER_DENIED_BUILTIN_TOOLS.join(", ")
     );
+    if let Some((engine, worker_bin)) = &obscura_paths {
+        println!(
+            "  render engine: obscura — exec granted for {}, {}",
+            engine.display(),
+            worker_bin.display()
+        );
+        println!(
+            "  NOTE: set `research_gateway.render_engine: obscura` in ~/.mur/config.yaml \
+             (or export MUR_RESEARCH_RENDER_ENGINE=obscura) so the gateway uses it."
+        );
+    }
     if grant_egress_flag {
         for name in &names {
             grant_egress(mur_home, name, deny_hosts, yes)?;
@@ -296,7 +361,7 @@ mod tests {
             "claude-haiku-4-5",
         );
 
-        let names = provision(tmp.path(), "dr_worker", 3, DEFAULT_WORKER_MODEL).unwrap();
+        let names = provision(tmp.path(), "dr_worker", 3, DEFAULT_WORKER_MODEL, None).unwrap();
         assert_eq!(names.len(), 3);
         assert_eq!(names, vec!["dr_worker_1", "dr_worker_2", "dr_worker_3"]);
 
@@ -350,7 +415,7 @@ mod tests {
         }
         seed_models_yaml(tmp.path(), "claude_sonnet", "anthropic", "claude-sonnet-5");
 
-        let names = provision(tmp.path(), "dr_worker", 1, "claude_sonnet").unwrap();
+        let names = provision(tmp.path(), "dr_worker", 1, "claude_sonnet", None).unwrap();
         let p = mur_common::agent::AgentProfile::load(tmp.path(), &names[0]).unwrap();
         assert_eq!(p.model_ref, Some("claude_sonnet".to_string()));
     }
@@ -371,7 +436,7 @@ mod tests {
             "claude-haiku-4-5",
         );
 
-        let names = provision(tmp.path(), "dr_worker", 1, DEFAULT_WORKER_MODEL).unwrap();
+        let names = provision(tmp.path(), "dr_worker", 1, DEFAULT_WORKER_MODEL, None).unwrap();
         grant_egress(tmp.path(), &names[0], &["evil.example".into()], true).unwrap();
         let p = mur_common::agent::AgentProfile::load(tmp.path(), &names[0]).unwrap();
         let gw = p
@@ -395,7 +460,7 @@ mod tests {
         let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
 
-        let zero = provision(tmp.path(), "dr_worker", 0, DEFAULT_WORKER_MODEL);
+        let zero = provision(tmp.path(), "dr_worker", 0, DEFAULT_WORKER_MODEL, None);
         assert!(zero.is_err(), "count==0 must error");
 
         let too_many = provision(
@@ -403,6 +468,7 @@ mod tests {
             "dr_worker",
             MAX_WORKER_COUNT + 1,
             DEFAULT_WORKER_MODEL,
+            None,
         );
         assert!(too_many.is_err(), "count > MAX_WORKER_COUNT must error");
     }
@@ -428,7 +494,7 @@ mod tests {
             "claude-haiku-4-5",
         );
 
-        let names = provision(tmp.path(), "dr_tool", 1, DEFAULT_WORKER_MODEL).unwrap();
+        let names = provision(tmp.path(), "dr_tool", 1, DEFAULT_WORKER_MODEL, None).unwrap();
         let p = mur_common::agent::AgentProfile::load(tmp.path(), &names[0]).unwrap();
 
         // The gateway tools resolve to Allow (headless delegated turns skip
@@ -457,5 +523,97 @@ mod tests {
             resolve_tool_policy(&p.entitlements.tools, "mcp__github__merge_pr"),
             ToolPolicy::Ask
         );
+    }
+
+    /// `--render-engine obscura` grants exec for both obscura binaries
+    /// (absolute paths, since the sandbox's exec-allowlist directory search
+    /// excludes `~/.mur/aura/` — see the module doc comment).
+    #[cfg(unix)]
+    #[test]
+    fn provision_obscura_grants_exec_paths() {
+        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        unsafe {
+            std::env::set_var("MUR_AGENT_BIN_DIR", &bin_dir);
+        }
+        seed_models_yaml(
+            tmp.path(),
+            DEFAULT_WORKER_MODEL,
+            "anthropic",
+            "claude-haiku-4-5",
+        );
+
+        let aura_dir = tmp.path().join("aura");
+        std::fs::create_dir_all(&aura_dir).unwrap();
+        std::fs::write(aura_dir.join("obscura"), b"#!/bin/sh\n").unwrap();
+        std::fs::write(aura_dir.join("obscura-worker"), b"#!/bin/sh\n").unwrap();
+
+        let names = provision(
+            tmp.path(),
+            "dr_obscura",
+            1,
+            DEFAULT_WORKER_MODEL,
+            Some("obscura"),
+        )
+        .unwrap();
+        let p = mur_common::agent::AgentProfile::load(tmp.path(), &names[0]).unwrap();
+
+        let engine = tmp
+            .path()
+            .join(OBSCURA_RELATIVE)
+            .to_string_lossy()
+            .to_string();
+        let worker_bin = tmp
+            .path()
+            .join(OBSCURA_WORKER_RELATIVE)
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            p.entitlements.processes.spawn.allowed.contains(&engine),
+            "spawn.allowed missing obscura engine path: {:?}",
+            p.entitlements.processes.spawn.allowed
+        );
+        assert!(
+            p.entitlements.processes.spawn.allowed.contains(&worker_bin),
+            "spawn.allowed missing obscura-worker path: {:?}",
+            p.entitlements.processes.spawn.allowed
+        );
+    }
+
+    /// Default render engine (flag omitted, i.e. `None`) grants nothing
+    /// extra — the exec allowlist stays exactly as today's `agent-browser`
+    /// path leaves it.
+    #[cfg(unix)]
+    #[test]
+    fn provision_default_engine_grants_nothing_extra() {
+        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        unsafe {
+            std::env::set_var("MUR_AGENT_BIN_DIR", &bin_dir);
+        }
+        seed_models_yaml(
+            tmp.path(),
+            DEFAULT_WORKER_MODEL,
+            "anthropic",
+            "claude-haiku-4-5",
+        );
+
+        let names = provision(tmp.path(), "dr_default", 1, DEFAULT_WORKER_MODEL, None).unwrap();
+        let p = mur_common::agent::AgentProfile::load(tmp.path(), &names[0]).unwrap();
+
+        let engine = tmp
+            .path()
+            .join(OBSCURA_RELATIVE)
+            .to_string_lossy()
+            .to_string();
+        let worker_bin = tmp
+            .path()
+            .join(OBSCURA_WORKER_RELATIVE)
+            .to_string_lossy()
+            .to_string();
+        assert!(!p.entitlements.processes.spawn.allowed.contains(&engine));
+        assert!(!p.entitlements.processes.spawn.allowed.contains(&worker_bin));
     }
 }
