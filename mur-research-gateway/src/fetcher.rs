@@ -207,6 +207,120 @@ fn build_client(timeout: Duration) -> Result<reqwest::Client, FetchError> {
         .map_err(|e| FetchError::Http(e.to_string()))
 }
 
+/// Brave Search API web-search endpoint. First-class (real index, JSON, no
+/// scraping) — used when a subscription token is configured.
+const BRAVE_ENDPOINT: &str = "https://api.search.brave.com/res/v1/web/search";
+
+/// Pluggable web search: `brave_key.is_some()` → Brave's first-class API;
+/// `None` → scrape DuckDuckGo's HTML endpoint (keyless, zero-config). If Brave
+/// is configured but errors (bad key, quota, transport), degrade to DDG rather
+/// than fail the search — a misconfigured key must never black out research.
+pub async fn search(
+    query: &str,
+    limit: usize,
+    brave_key: Option<&str>,
+    deny: &[String],
+    timeout: Duration,
+) -> Result<Vec<SearchHit>, FetchError> {
+    match brave_key {
+        Some(key) => match search_brave(query, limit, key, deny, timeout).await {
+            Ok(hits) => Ok(hits),
+            Err(e) => {
+                tracing::warn!(
+                    target: "research_gateway",
+                    "brave search failed ({}), falling back to DuckDuckGo",
+                    fetch_err_brief(&e)
+                );
+                search_tier1(query, limit, deny, timeout).await
+            }
+        },
+        None => search_tier1(query, limit, deny, timeout).await,
+    }
+}
+
+/// Brave web search: GET the Brave API through the same proxy-honoring reqwest
+/// path, authenticated with `X-Subscription-Token`. Screens the endpoint host
+/// via the SSRF guard exactly like a fetch. Brave returns real URLs directly
+/// (no `uddg` redirect to decode) as structured JSON.
+async fn search_brave(
+    query: &str,
+    limit: usize,
+    key: &str,
+    deny: &[String],
+    timeout: Duration,
+) -> Result<Vec<SearchHit>, FetchError> {
+    let mut url = url::Url::parse(BRAVE_ENDPOINT).expect("static URL is valid");
+    url.query_pairs_mut()
+        .append_pair("q", query)
+        .append_pair("count", &limit.to_string());
+    let screened = screen_url_blocking(url.as_str(), deny)
+        .await
+        .map_err(FetchError::Guard)?;
+
+    let client = build_client(timeout)?;
+    let resp = client
+        .get(screened.clone())
+        .header("X-Subscription-Token", key)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .await
+        .map_err(|e| FetchError::Http(e.to_string()))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(FetchError::Http(format!("brave api status {}", status.as_u16())));
+    }
+    if let Some(len) = resp.content_length()
+        && len > MAX_BODY_BYTES as u64
+    {
+        return Err(FetchError::TooLarge);
+    }
+    let body = resp.text().await.map_err(|e| FetchError::Http(e.to_string()))?;
+    parse_brave_hits(&body, limit).map_err(FetchError::Http)
+}
+
+/// Parse Brave's `web.results[]` JSON into hits. A missing `web` block (Brave
+/// returns none when there are zero web results) is a valid empty result, not
+/// an error; malformed JSON is an error so the caller falls back to DDG.
+fn parse_brave_hits(json: &str, limit: usize) -> Result<Vec<SearchHit>, String> {
+    #[derive(serde::Deserialize)]
+    struct BraveResp {
+        web: Option<BraveWeb>,
+    }
+    #[derive(serde::Deserialize)]
+    struct BraveWeb {
+        results: Vec<BraveResult>,
+    }
+    #[derive(serde::Deserialize)]
+    struct BraveResult {
+        title: String,
+        url: String,
+        #[serde(default)]
+        description: String,
+    }
+    let resp: BraveResp = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    Ok(resp
+        .web
+        .map(|w| w.results)
+        .unwrap_or_default()
+        .into_iter()
+        .take(limit)
+        .map(|r| SearchHit {
+            title: r.title,
+            url: r.url,
+            snippet: r.description,
+        })
+        .collect())
+}
+
+/// Short human label for a `FetchError` used in the Brave→DDG fallback log.
+fn fetch_err_brief(e: &FetchError) -> String {
+    match e {
+        FetchError::Guard(_) => "ssrf-guard".to_string(),
+        FetchError::Http(m) => m.clone(),
+        FetchError::TooLarge => "response too large".to_string(),
+    }
+}
+
 /// Tier-1 web search: GET DuckDuckGo's html endpoint through the same
 /// proxy-honoring reqwest path `fetch_tier1` uses (works under the kernel
 /// sandbox; agent-browser does not — G2), then parse result anchors. Screens
@@ -497,5 +611,31 @@ mod tests {
         assert!(out.contains("[truncated 6 chars]"));
         // Never split a codepoint: the kept prefix is valid UTF-8 of 4 'é's.
         assert_eq!(out.chars().take_while(|&c| c == 'é').count(), 4);
+    }
+
+    #[test]
+    fn parse_brave_hits_extracts_results_and_respects_limit() {
+        // Trimmed real Brave web-search JSON shape.
+        let json = r#"{"web":{"results":[
+            {"title":"First","url":"https://a.example","description":"snippet a"},
+            {"title":"Second","url":"https://b.example","description":"snippet b"},
+            {"title":"Third","url":"https://c.example"}
+        ]}}"#;
+        let hits = parse_brave_hits(json, 2).unwrap();
+        assert_eq!(hits.len(), 2); // limit respected
+        assert_eq!(hits[0].url, "https://a.example");
+        assert_eq!(hits[0].snippet, "snippet a");
+    }
+
+    #[test]
+    fn parse_brave_hits_missing_web_block_is_empty_not_error() {
+        // Brave omits `web` when there are zero web results — valid, not a parse error.
+        assert!(parse_brave_hits(r#"{"query":{"original":"x"}}"#, 8).unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_brave_hits_malformed_json_is_error() {
+        // Malformed → Err so the dispatcher falls back to DDG.
+        assert!(parse_brave_hits("not json", 8).is_err());
     }
 }
