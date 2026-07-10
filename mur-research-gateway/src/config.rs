@@ -38,6 +38,12 @@ pub const DEFAULT_BROWSER_TIMEOUT_SECS: u64 = 60;
 /// `limit`.
 pub const DEFAULT_SEARCH_LIMIT: usize = 8;
 
+/// Default cap on the CHARACTERS of `fetch` page text returned to the worker.
+/// A full page can otherwise overflow the model's context (deep-research turns
+/// died with anthropic 400 "prompt is too long"). ~12–15k tokens/fetch; ~10
+/// fetches fit a 200k window with reasoning room. `0` disables the cap.
+pub const DEFAULT_MAX_FETCH_CHARS: usize = 50_000;
+
 /// Hard floor/ceiling `search`'s effective `limit` (caller-supplied or
 /// default) is clamped to.
 pub const MIN_SEARCH_LIMIT: usize = 1;
@@ -71,6 +77,7 @@ pub const DEFAULT_LIGHTPANDA_RELATIVE_PATH: &str = "aura/lightpanda";
 const ENV_FETCH_TIMEOUT_SECS: &str = "MUR_RESEARCH_TIMEOUT_SECS";
 const ENV_BROWSER_TIMEOUT_SECS: &str = "MUR_RESEARCH_BROWSER_TIMEOUT_SECS";
 const ENV_SEARCH_LIMIT: &str = "MUR_RESEARCH_SEARCH_LIMIT";
+const ENV_MAX_FETCH_CHARS: &str = "MUR_RESEARCH_MAX_FETCH_CHARS";
 const ENV_AGENT_BROWSER_BIN: &str = "MUR_RESEARCH_AGENT_BROWSER_BIN";
 const ENV_LIGHTPANDA_PATH: &str = "MUR_RESEARCH_LIGHTPANDA_PATH";
 const ENV_CHROME_STEALTH_ARGS: &str = "MUR_RESEARCH_CHROME_STEALTH_ARGS";
@@ -86,6 +93,9 @@ pub struct GatewayConfig {
     pub browser_timeout: Duration,
     pub browser: BrowserCfg,
     pub search_limit: usize,
+    /// Max characters of `fetch` page text returned to the worker; `0` = no cap.
+    #[allow(dead_code)]
+    pub max_fetch_chars: usize,
 }
 
 /// Raw `research_gateway:` YAML shape. Every field is optional/defaulted so
@@ -99,6 +109,7 @@ struct GatewayConfigYaml {
     timeout_secs: Option<u64>,
     browser_timeout_secs: Option<u64>,
     search_limit: Option<usize>,
+    max_fetch_chars: Option<usize>,
     agent_browser_bin: Option<String>,
     lightpanda_path: Option<String>,
     chrome_stealth_args: Option<String>,
@@ -154,6 +165,10 @@ pub fn load_from_yaml(yaml: &str, mur_home: &Path) -> GatewayConfig {
         .unwrap_or(DEFAULT_SEARCH_LIMIT)
         .clamp(MIN_SEARCH_LIMIT, MAX_SEARCH_LIMIT);
 
+    let max_fetch_chars = env_usize(ENV_MAX_FETCH_CHARS)
+        .or(raw.max_fetch_chars)
+        .unwrap_or(DEFAULT_MAX_FETCH_CHARS);
+
     let agent_browser_bin = non_empty_env(ENV_AGENT_BROWSER_BIN)
         .or(raw.agent_browser_bin)
         .unwrap_or_else(|| DEFAULT_AGENT_BROWSER_BIN.to_string());
@@ -176,6 +191,7 @@ pub fn load_from_yaml(yaml: &str, mur_home: &Path) -> GatewayConfig {
             chrome_stealth_args,
         },
         search_limit,
+        max_fetch_chars,
     }
 }
 
@@ -371,5 +387,28 @@ research_gateway:
         unsafe {
             std::env::remove_var("MUR_HOME");
         }
+    }
+
+    #[test]
+    fn max_fetch_chars_default_env_yaml_precedence() {
+        let _g = ENV_LOCK.lock().unwrap();
+        // Default when nothing set.
+        unsafe { std::env::remove_var("MUR_RESEARCH_MAX_FETCH_CHARS"); }
+        let cfg = load_from_yaml("", std::path::Path::new("/tmp"));
+        assert_eq!(cfg.max_fetch_chars, DEFAULT_MAX_FETCH_CHARS);
+        // YAML sets it.
+        let cfg = load_from_yaml(
+            "research_gateway:\n  max_fetch_chars: 1234\n",
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(cfg.max_fetch_chars, 1234);
+        // Env overrides YAML.
+        unsafe { std::env::set_var("MUR_RESEARCH_MAX_FETCH_CHARS", "42"); }
+        let cfg = load_from_yaml(
+            "research_gateway:\n  max_fetch_chars: 1234\n",
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(cfg.max_fetch_chars, 42);
+        unsafe { std::env::remove_var("MUR_RESEARCH_MAX_FETCH_CHARS"); }
     }
 }
