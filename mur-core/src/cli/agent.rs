@@ -268,6 +268,18 @@ pub enum AgentAction {
         #[arg(long)]
         json: bool,
     },
+    /// Install missing curated program dependencies for this agent (consent-gated)
+    #[command(name = "install-deps")]
+    InstallDeps {
+        /// Agent name
+        name: String,
+        /// Only install this one program (by name)
+        #[arg(long)]
+        program: Option<String>,
+        /// Skip the per-item confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
     /// Manage an agent's keychain-backed secrets (set/list/delete)
     Secret {
         /// Agent name
