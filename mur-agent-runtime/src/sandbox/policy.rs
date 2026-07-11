@@ -467,6 +467,23 @@ impl SandboxPolicy {
     }
 }
 
+/// The set of TCP ports that should receive a Landlock `ConnectTcp` rule:
+/// the general allow-list (when outbound is restricted) plus the loopback
+/// carve-outs. Returns empty for Unrestricted (`None`, Landlock installs no
+/// net rules at all) and for Off (empty general + empty loopback). This is
+/// the single source of truth the Linux builder iterates; macOS keeps the two
+/// lists separate (it distinguishes `*:port` from `localhost:port`).
+pub(crate) fn connect_tcp_ports(policy: &SandboxPolicy) -> Vec<u16> {
+    match &policy.net_allow_ports {
+        Some(ports) => ports
+            .iter()
+            .chain(policy.net_allow_loopback_ports.iter())
+            .copied()
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
 /// Resolve a bare binary name (e.g. `"jq"`) to an absolute path by
 /// searching `PATH` env dirs followed by the sandbox's own `fs_exec`
 /// directories, returning the first candidate that exists and has at
@@ -1248,6 +1265,33 @@ mod tests {
         };
         p_u.allow_loopback_ports(&[54321]);
         assert!(p_u.net_allow_loopback_ports.is_empty());
+    }
+
+    #[test]
+    fn connect_tcp_ports_proxy_only_is_loopback_only() {
+        // ProxyOnly: empty general list + loopback ports → only the loopback ports
+        // get ConnectTcp rules (general egress e.g. 443 is default-denied).
+        let mut policy = SandboxPolicy::default();
+        policy.net_allow_ports = Some(Vec::new());
+        policy.net_allow_loopback_ports = vec![8088, 54321];
+        assert_eq!(connect_tcp_ports(&policy), vec![8088u16, 54321]);
+    }
+
+    #[test]
+    fn connect_tcp_ports_restricted_is_general_plus_loopback() {
+        let mut policy = SandboxPolicy::default();
+        policy.net_allow_ports = Some(vec![80, 443]);
+        policy.net_allow_loopback_ports = vec![54321];
+        assert_eq!(connect_tcp_ports(&policy), vec![80u16, 443, 54321]);
+    }
+
+    #[test]
+    fn connect_tcp_ports_off_and_unrestricted_are_empty() {
+        let mut off = SandboxPolicy::default();
+        off.net_allow_ports = Some(Vec::new()); // Off: empty general + empty loopback
+        assert!(connect_tcp_ports(&off).is_empty());
+        let unr = SandboxPolicy::default(); // Unrestricted: net_allow_ports = None
+        assert!(connect_tcp_ports(&unr).is_empty());
     }
 
     #[test]
