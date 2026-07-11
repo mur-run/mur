@@ -2,6 +2,7 @@
 //! mur-agent-runtime and mur-core.
 
 use crate::companion::{Formality, Relationship};
+use crate::deps::ProgramDep;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -141,6 +142,11 @@ pub struct AgentProfile {
     /// A2 + A3: action pipeline configuration (deletion safety + queue limits).
     #[serde(default)]
     pub action_pipeline: crate::action::ActionPipelineConfig,
+
+    /// External programs this artifact needs at runtime (portable-deps spec).
+    /// Absent → empty; resolved by `mur agent/fleet doctor` + `install-deps`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_programs: Vec<ProgramDep>,
 }
 
 fn default_algorithm() -> String {
@@ -295,6 +301,11 @@ pub struct McpServerEntry {
     /// `None` = no auth (or stdio transport).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<McpAuth>,
+
+    /// External programs this artifact needs at runtime (portable-deps spec).
+    /// Absent → empty; resolved by `mur agent/fleet doctor` + `install-deps`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_programs: Vec<ProgramDep>,
 }
 
 /// Authentication scheme for a remote (HTTP) MCP server.
@@ -2239,5 +2250,29 @@ mod remote_mcp_tests {
             serde_yaml_ng::from_str("name: fs\ncommand: npx\nargs: [\"-y\",\"fs\"]\n").unwrap();
         assert!(legacy.url.is_none());
         assert!(legacy.auth.is_none());
+    }
+}
+
+#[cfg(test)]
+mod requires_programs_tests {
+    #[test]
+    fn mcp_entry_parses_requires_programs_and_defaults_empty() {
+        let with = r#"
+name: research-gateway
+command: mur-research-gateway
+requires_programs:
+  - name: lightpanda
+    detect: { file: "~/.mur/aura/lightpanda" }
+    reason: "render tier"
+    registry: lightpanda
+"#;
+        let e: crate::agent::McpServerEntry = serde_yaml::from_str(with).unwrap();
+        assert_eq!(e.requires_programs.len(), 1);
+        assert_eq!(e.requires_programs[0].name, "lightpanda");
+
+        // Absent block → empty (back-compat).
+        let without = "name: x\ncommand: y\n";
+        let e2: crate::agent::McpServerEntry = serde_yaml::from_str(without).unwrap();
+        assert!(e2.requires_programs.is_empty());
     }
 }
