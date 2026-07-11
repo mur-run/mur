@@ -107,6 +107,7 @@ mod tests {
                 reason: "render".into(),
                 hint: Some("http://x".into()),
                 registry: registry.map(|s| s.into()),
+                recipe: None,
             },
             sources: vec!["mcp:gw".into()],
         }

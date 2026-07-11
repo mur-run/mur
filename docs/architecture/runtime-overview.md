@@ -445,7 +445,9 @@ Shared artifacts — agents, fleets, skills, and MCP server entries — can decl
 - `lightpanda` (v0.3.4) — native HTML/JavaScript renderer for tier-2 research fetches
 - `obscura` (v0.1.9) — embedded-V8 JavaScript engine alternative
 
-Unknown-source programs are detect-and-guide only (the trust gradient's safe default); trusted-publisher auto-install is a future Phase 2.
+**Trusted-publisher recipes (Phase 2):** A signed bundle (fleet `.fleet` or agent `.muragent`) from a **trusted** publisher (elevated in `~/.mur/trust/publishers.yaml`) may carry author-declared `recipe` blocks on `ProgramDep` entries — per-platform `{ url, sha256, install_to, executable }` or `archive` declarations. Integrity flows from the bundle's **existing Ed25519 signature** (no separate recipe signature). At import (fleet import or `mur agent install <.muragent>`), after signature verification, MUR classifies the publisher via `PublisherKeyring`: **Trusted** → offers per-item consent prompts to install each missing, non-curated recipe (showing publisher fingerprint, URL, and SHA-256), reusing the Phase 1 installer; **Unknown** → skips, prints a `mur agent skill signer-trust <fp>` hint; **Revoked** → refused. Trust is anchored at import only (the moment the signature is present). `install-deps` remains curated-only. Curated keys always supersede author recipes of the same name. Installation is non-blocking — declined or failed installs never fail the import.
+
+**Unknown-source programs** are detect-and-guide only (the trust gradient's safe default).
 
 **Graceful degradation:** Missing dependencies are **non-blocking**. Imports succeed, agents start, and fleets run — but artifacts degrade. Example: a deep-research fleet without a render engine (`lightpanda` or `obscura`) falls back to tier-1 HTTP fetch, losing JavaScript rendering but preserving correctness.
 

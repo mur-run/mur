@@ -120,23 +120,34 @@ fn confirm(prompt: &str, yes: bool) -> Result<bool> {
     ))
 }
 
-pub fn cmd_fleet_import(mur_home: &Path, file: &Path, opts: ImportOpts) -> Result<()> {
+pub fn cmd_fleet_import(
+    mur_home: &Path,
+    file: &Path,
+    opts: ImportOpts,
+) -> Result<(String, String, bool)> {
     // 1. Read + unpack. I4 size/count caps enforced inside unpack_bundle.
     let bytes = std::fs::read(file).with_context(|| format!("read bundle {}", file.display()))?;
     let (manifest, files) = unpack_bundle(&bytes)?;
 
     // 2. Verify signature (fail-closed). Unsigned → refuse unless --force.
+    // C1 — `signature_verified` is true ONLY on the branch where a real signature
+    // was present AND cryptographically verified; the unsigned-`--force` path
+    // leaves it false so callers can gate trusted-recipe install on it (a spoofed
+    // `signer_pubkey` in an unsigned bundle must never be treated as attested).
     let (_, pk) = multibase::decode(&manifest.signer_pubkey).context("decode signer pubkey")?;
     let pk: [u8; 32] = pk
         .try_into()
         .map_err(|_| anyhow::anyhow!("signer pubkey is not 32 bytes"))?;
-    if manifest.sig.is_none() {
+    let signature_verified = if manifest.sig.is_none() {
         if !opts.force {
             bail!("bundle is UNSIGNED; re-run with --force to import as untrusted");
         }
+        false
     } else if !verify_manifest_sig(&manifest, &pk) {
         bail!("bundle signature verification FAILED — refusing import");
-    }
+    } else {
+        true
+    };
 
     // 3. Verify every entry's hash against the unpacked bytes (fail-closed).
     for e in &manifest.entries {
@@ -360,7 +371,11 @@ pub fn cmd_fleet_import(mur_home: &Path, file: &Path, opts: ImportOpts) -> Resul
         Ok(())
     })();
 
-    Ok(())
+    Ok((
+        manifest.fleet_name.clone(),
+        derived_fp.clone(),
+        signature_verified,
+    ))
 }
 
 /// Install each bundled member profile. Skips members that already exist locally
@@ -516,6 +531,88 @@ mod tests {
         assert_eq!(
             mur_common::skill::local::get_trust_level(home, "triage").unwrap(),
             TrustLevel::Sandboxed
+        );
+    }
+
+    #[test]
+    fn import_signed_bundle_reports_signature_verified() {
+        // C1 (positive case): a normally signed bundle must report
+        // signature_verified == true so the caller's trusted-recipe install
+        // hook is allowed to run.
+        let src = tempfile::tempdir().unwrap();
+        let bundle = export_fixture(src.path());
+
+        let dst = tempfile::tempdir().unwrap();
+        let (_fleet_name, _fp, signature_verified) = cmd_fleet_import(
+            dst.path(),
+            &bundle,
+            ImportOpts {
+                force: false,
+                no_members: false,
+                yes: true,
+            },
+        )
+        .unwrap();
+        assert!(
+            signature_verified,
+            "a normally-signed bundle must report signature_verified == true"
+        );
+    }
+
+    #[test]
+    fn import_unsigned_force_reports_signature_not_verified() {
+        // C1: an unsigned bundle imported under --force must report
+        // signature_verified == false. The caller (dispatch.rs) gates the
+        // trusted-recipe install hook on this flag — a spoofed
+        // `signer_pubkey` in an unsigned bundle must never be treated as an
+        // attested publisher fingerprint.
+        use mur_common::fleet_bundle::{BundleEntry, BundleManifest, FLEET_BUNDLE_FORMAT};
+        use mur_common::identity::AgentIdentity;
+
+        let signer_pubkey = AgentIdentity::generate().public_key_multibase();
+        let fleet_yaml = "name: dev\ndisplay_name: ''\ngoal: g\nrouter: ~\nmembers: []\nchannel_id: fleet-dev\nrules: []\nskills: []\n";
+        let files: Vec<(String, Vec<u8>)> =
+            vec![("fleet.yaml".to_string(), fleet_yaml.as_bytes().to_vec())];
+        let entries: Vec<BundleEntry> = files
+            .iter()
+            .map(|(p, b)| BundleEntry {
+                path: p.clone(),
+                sha256: mur_common::fleet_bundle::content_hash(b),
+            })
+            .collect();
+        let manifest = BundleManifest {
+            format_version: FLEET_BUNDLE_FORMAT,
+            fleet_name: "dev".into(),
+            created_at: "2026-06-20T00:00:00Z".into(),
+            signer_fingerprint: mur_common::fleet_bundle::signer_fingerprint(&signer_pubkey),
+            signer_pubkey, // attacker-controlled; bundle below is left UNSIGNED
+            includes_members: false,
+            members: vec![],
+            entries,
+            sig: None,
+        };
+        let bundle_bytes = build_evil_bundle(&manifest, &files);
+        let bundle_path =
+            std::env::temp_dir().join(format!("murunsigned_{}_{}.fleet", std::process::id(), "c1"));
+        std::fs::write(&bundle_path, &bundle_bytes).unwrap();
+
+        let dst = tempfile::tempdir().unwrap();
+        let result = cmd_fleet_import(
+            dst.path(),
+            &bundle_path,
+            ImportOpts {
+                force: true,
+                no_members: false,
+                yes: true,
+            },
+        );
+        std::fs::remove_file(&bundle_path).ok();
+        let (fleet_name, _fp, signature_verified) =
+            result.expect("unsigned bundle under --force must still import");
+        assert_eq!(fleet_name, "dev");
+        assert!(
+            !signature_verified,
+            "unsigned --force import must report signature_verified == false"
         );
     }
 

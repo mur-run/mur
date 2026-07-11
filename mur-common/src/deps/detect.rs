@@ -131,6 +131,7 @@ mod tests {
             reason: "r".into(),
             hint: None,
             registry: None,
+            recipe: None,
         }
     }
 
