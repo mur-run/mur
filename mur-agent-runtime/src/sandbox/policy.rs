@@ -51,6 +51,13 @@ pub struct SandboxPolicy {
     /// `NetPort ConnectTcp` rule. Only populated in Restricted mode — see
     /// `allow_loopback_ports`.
     pub net_allow_loopback_ports: Vec<u16>,
+    /// True when the posture permits loopback carve-outs (Restricted +
+    /// ProxyOnly) but NOT Off/Unrestricted. This is the signal that
+    /// distinguishes a ProxyOnly `net_allow_ports = Some([])` (deny general TCP,
+    /// allow the loopback proxies) from an Off `Some([])` (deny everything) —
+    /// the two are identical in `net_allow_ports`. Set by `from_entitlements`;
+    /// consulted by `allow_extra_ports` / `allow_loopback_ports`.
+    pub net_loopback_allowed: bool,
     /// Outbound hostnames for the reqwest guard layer.
     /// `None` = allow all (Unrestricted). `Some([])` = deny all (Off).
     pub net_allow_hosts: Option<Vec<String>>,
@@ -70,6 +77,7 @@ impl Default for SandboxPolicy {
             spawn_allowed_prefixes: Vec::new(),
             net_allow_ports: None,
             net_allow_loopback_ports: Vec::new(),
+            net_loopback_allowed: false,
             net_allow_hosts: None,
             memory_limit_mb: None,
         }
@@ -363,22 +371,28 @@ impl SandboxPolicy {
             }
         }
 
-        let (net_allow_ports, net_allow_hosts) = match ent.network.outbound.mode {
-            NetworkOutboundMode::Unrestricted => (None, None),
-            NetworkOutboundMode::Restricted => {
-                let ports = Some(vec![80u16, 443, 8080, 8443]);
-                let hosts = Some(ent.network.outbound.allow_hosts.clone());
-                (ports, hosts)
-            }
-            NetworkOutboundMode::ProxyOnly => {
-                // Deny general TCP (empty-but-present list), keep the host
-                // allowlist so the runtime's own client can resolve its
-                // loopback LLM endpoint. Loopback carve-outs are added by the
-                // port-assembly helpers.
-                (Some(vec![]), Some(ent.network.outbound.allow_hosts.clone()))
-            }
-            NetworkOutboundMode::Off => (Some(vec![]), Some(vec![])),
-        };
+        let (net_allow_ports, net_allow_hosts, net_loopback_allowed) =
+            match ent.network.outbound.mode {
+                NetworkOutboundMode::Unrestricted => (None, None, false),
+                NetworkOutboundMode::Restricted => {
+                    let ports = Some(vec![80u16, 443, 8080, 8443]);
+                    let hosts = Some(ent.network.outbound.allow_hosts.clone());
+                    (ports, hosts, true)
+                }
+                NetworkOutboundMode::ProxyOnly => {
+                    // Deny general TCP (empty-but-present list), keep the host
+                    // allowlist so the runtime's own client can resolve its
+                    // loopback LLM endpoint. Loopback carve-outs are added by the
+                    // port-assembly helpers; net_loopback_allowed = true is what
+                    // lets them fire despite the empty general list.
+                    (
+                        Some(vec![]),
+                        Some(ent.network.outbound.allow_hosts.clone()),
+                        true,
+                    )
+                }
+                NetworkOutboundMode::Off => (Some(vec![]), Some(vec![]), false),
+            };
 
         SandboxPolicy {
             fs_read,
@@ -390,42 +404,48 @@ impl SandboxPolicy {
             spawn_allowed_prefixes,
             net_allow_ports,
             net_allow_loopback_ports: Vec::new(),
+            net_loopback_allowed,
             net_allow_hosts,
             memory_limit_mb: Some(ent.limits.memory_mb),
         }
     }
 
-    /// Grant outbound access to extra TCP ports — used to ensure an agent can
-    /// always reach its own configured local LLM endpoint (e.g. ollama on
-    /// 11434, the bundled MLX server on 50320), which is core function rather
-    /// than arbitrary egress.
-    ///
-    /// Only applies in *Restricted* mode: `None` (Unrestricted) already allows
-    /// everything, and `Some([])` (Off) means the user explicitly denied all
-    /// outbound TCP — we respect that and do not silently re-open it.
+    /// Grant outbound to `extra` TCP ports for the agent's own LLM endpoint.
+    /// Under Restricted (non-empty general list) they join the general list
+    /// (`*:port`). Under ProxyOnly (general list present-but-empty AND
+    /// `net_loopback_allowed`) the LLM is a loopback cc-proxy, so route its port
+    /// to the loopback carve-out instead of opening a general `*:port`. No-op
+    /// under Off (empty list, flag false) and Unrestricted (`None`).
     pub fn allow_extra_ports(&mut self, extra: &[u16]) {
-        if let Some(ports) = &mut self.net_allow_ports
-            && !ports.is_empty()
-        {
-            for p in extra {
-                if !ports.contains(p) {
-                    ports.push(*p);
+        match self.net_allow_ports.as_ref().map(|p| p.is_empty()) {
+            Some(false) => {
+                if let Some(ports) = &mut self.net_allow_ports {
+                    for p in extra {
+                        if !ports.contains(p) {
+                            ports.push(*p);
+                        }
+                    }
                 }
             }
+            Some(true) if self.net_loopback_allowed => {
+                for p in extra {
+                    if !self.net_allow_loopback_ports.contains(p) {
+                        self.net_allow_loopback_ports.push(*p);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
-    /// Carve out loopback-only TCP ports (e.g. the egress proxy listener,
-    /// which sandboxed MCP children must dial via `HTTPS_PROXY`).
-    ///
-    /// Same fail-closed rule as [`Self::allow_extra_ports`]: only applies in
-    /// *Restricted* mode. `None` (Unrestricted) already allows everything and
-    /// `Some([])` (Off) means the user explicitly denied all outbound TCP —
-    /// we respect that and do not silently re-open it.
+    /// Grant loopback-only access to `extra` TCP ports (the egress proxy, and —
+    /// under ProxyOnly — the LLM cc-proxy). Fires for Restricted (non-empty
+    /// general list) and ProxyOnly (`net_loopback_allowed`); a no-op under Off
+    /// (empty list, flag false) and Unrestricted (`None`).
     pub fn allow_loopback_ports(&mut self, extra: &[u16]) {
-        if let Some(ports) = &self.net_allow_ports
-            && !ports.is_empty()
-        {
+        let permitted =
+            matches!(&self.net_allow_ports, Some(p) if !p.is_empty()) || self.net_loopback_allowed;
+        if permitted {
             for p in extra {
                 if !self.net_allow_loopback_ports.contains(p) {
                     self.net_allow_loopback_ports.push(*p);
@@ -756,6 +776,57 @@ mod tests {
         let mut p_unr = SandboxPolicy::from_entitlements(&unr, &PathBuf::from("/tmp/a"));
         p_unr.allow_extra_ports(&[11434]);
         assert_eq!(p_unr.net_allow_ports, None);
+    }
+
+    #[test]
+    fn proxy_only_port_assembly_routes_llm_and_egress_to_loopback() {
+        let mut policy = SandboxPolicy::default();
+        policy.net_allow_ports = Some(Vec::new()); // ProxyOnly: deny general TCP
+        policy.net_loopback_allowed = true; // …but loopback carve-outs permitted
+        // LLM port (cc-proxy) must land in LOOPBACK, not general ports.
+        policy.allow_extra_ports(&[8088]);
+        // Egress proxy port must be accepted even though general list is empty.
+        policy.allow_loopback_ports(&[54321]);
+        assert_eq!(
+            policy.net_allow_ports,
+            Some(vec![]),
+            "general TCP stays denied"
+        );
+        assert!(
+            policy.net_allow_loopback_ports.contains(&8088),
+            "LLM port routed to loopback"
+        );
+        assert!(
+            policy.net_allow_loopback_ports.contains(&54321),
+            "egress proxy port accepted"
+        );
+    }
+
+    #[test]
+    fn off_mode_port_assembly_stays_empty() {
+        // Off is ALSO net_allow_ports = Some([]), but net_loopback_allowed = false
+        // (the default) — neither helper may re-open loopback. This is the guard the
+        // flag exists for.
+        let mut policy = SandboxPolicy::default();
+        policy.net_allow_ports = Some(Vec::new());
+        // net_loopback_allowed left false
+        policy.allow_extra_ports(&[8088]);
+        policy.allow_loopback_ports(&[54321]);
+        assert!(
+            policy.net_allow_loopback_ports.is_empty(),
+            "Off adds no loopback carve-outs"
+        );
+    }
+
+    #[test]
+    fn restricted_port_assembly_unchanged() {
+        // Non-empty general list = generic Restricted: LLM port still goes to
+        // net_allow_ports (unchanged behavior).
+        let mut policy = SandboxPolicy::default();
+        policy.net_allow_ports = Some(vec![80, 443]);
+        policy.allow_extra_ports(&[8088]);
+        assert!(policy.net_allow_ports.as_ref().unwrap().contains(&8088));
+        assert!(!policy.net_allow_loopback_ports.contains(&8088));
     }
 
     #[test]
