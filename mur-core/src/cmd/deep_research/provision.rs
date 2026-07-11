@@ -144,6 +144,13 @@ pub fn provision(
             .iter()
             .map(|h| h.to_string())
             .collect();
+        // ProxyOnly: deny all general outbound TCP; the worker's egress is
+        // entirely loopback (cc-proxy LLM + the audited egress proxy), so the
+        // OS profile forces every fetch through the proxy — no direct `*:443`
+        // escape. (allow_hosts above keeps HostGuard governing the loopback
+        // LLM hostname.)
+        profile.entitlements.network.outbound.mode =
+            mur_common::agent::NetworkOutboundMode::ProxyOnly;
         // Pre-approve the gateway's OWN tools (read-only search/fetch) so
         // headless delegated turns don't dead-end on the HITL gate
         // (`tool/approval_needed` has no answerer under fleet delegation →
@@ -382,11 +389,13 @@ mod tests {
         // left unset (which would silently fall to StubEcho).
         assert_eq!(p.model_ref, Some(DEFAULT_WORKER_MODEL.to_string()));
 
-        // Fix 2: worker keeps `restricted` mode but the allow-list now
-        // includes loopback so it can reach its own LLM endpoint.
+        // Fix 2 (+ Task 5): worker is `ProxyOnly` — all general outbound TCP
+        // denied, egress forced entirely through the loopback egress proxy —
+        // but the allow-list still includes loopback so it can reach its own
+        // LLM endpoint.
         assert_eq!(
             p.entitlements.network.outbound.mode,
-            mur_common::agent::NetworkOutboundMode::Restricted
+            mur_common::agent::NetworkOutboundMode::ProxyOnly
         );
         assert!(
             p.entitlements
