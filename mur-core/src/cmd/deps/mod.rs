@@ -3,6 +3,7 @@ pub mod installer;
 
 pub mod doctor;
 pub mod install;
+pub mod trust_gate;
 
 use anyhow::{Context, Result};
 use mur_common::deps::{DetectMethod, ProgramDep};
