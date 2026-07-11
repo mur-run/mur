@@ -45,15 +45,14 @@ pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
         created = created.add_rules(exec_rules).context("add fs_exec rules")?;
     }
 
-    // Network port rules — only when the mode restricts outbound TCP.
-    // An empty `ports` list (mode = Off) means no ConnectTcp rules are added,
-    // which blocks all outbound TCP (Landlock default-deny for handled accesses).
-    if let Some(ports) = &policy.net_allow_ports {
-        for port in ports.iter().chain(policy.net_allow_loopback_ports.iter()) {
-            created = created
-                .add_rule(NetPort::new(*port, AccessNet::ConnectTcp))
-                .context("add net port rule")?;
-        }
+    // Network port rules — only when the mode restricts outbound TCP. The
+    // helper merges the general allow-list with the loopback carve-outs
+    // (see policy::connect_tcp_ports). Off/Unrestricted → empty → no rules
+    // (Landlock default-deny for handled accesses).
+    for port in super::policy::connect_tcp_ports(policy) {
+        created = created
+            .add_rule(NetPort::new(port, AccessNet::ConnectTcp))
+            .context("add net port rule")?;
     }
 
     let status = created.restrict_self().context("restrict_self")?;
