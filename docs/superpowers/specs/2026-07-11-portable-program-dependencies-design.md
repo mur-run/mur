@@ -152,6 +152,8 @@ machinery; the recipe signature provides integrity + attribution, and the
 user's trust-tier decision provides authorization. Per-install consent shows the
 publisher, the URL, the checksum, and the install target before anything runs.
 
+**Status:** Implemented (Phase 2). See implementation spec `2026-07-11-portable-program-dependencies-phase2-design.md`.
+
 ### §7.3 Unknown / untrusted — detect and guide only
 
 Any declared program that is neither a curated key nor a trusted-publisher recipe
