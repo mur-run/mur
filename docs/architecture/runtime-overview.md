@@ -439,7 +439,7 @@ Shared artifacts — agents, fleets, skills, and MCP server entries — can decl
 
 **Detection and reporting:** `mur agent doctor <name>` and `mur fleet doctor <name>` probe the system and report what's present and missing, cross-platform: file-path detection (e.g., `/usr/bin/lightpanda`), PATH command lookup, and version-string extraction (via `<name> --version`). Missing deps are tagged `[curated]` (available in the MUR registry) or `[manual]` (hint-only).
 
-**Installation:** `mur agent install-deps <name>` and `mur fleet install-deps <name> [--program X] [--yes]` install all missing **curated** dependencies: download from pinned MUR-owned URL → verify SHA-256 → atomic write → chmod +x (consent-gated per item, or skip with `--yes`). Manual-only deps print their hint but never auto-install. Installation gracefully handles network errors and partial state.
+**Installation:** `mur agent install-deps <name>` and `mur fleet install-deps <name> [--program X] [--yes]` install all missing **curated** dependencies: download from pinned MUR-owned URL → verify SHA-256 → atomic write → chmod +x (consent-gated with a per-item `[y/N]` prompt, or auto-approve every item with `--yes`). Manual-only deps print their hint but never auto-install. Installation gracefully handles network errors and partial state.
 
 **Curated registry:** MUR maintains a registry of trusted programs with pinned checksums and platform-specific URLs. Initial seeding includes:
 - `lightpanda` (v0.3.4) — native HTML/JavaScript renderer for tier-2 research fetches
