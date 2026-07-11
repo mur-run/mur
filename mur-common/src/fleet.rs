@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::deps::ProgramDep;
 use crate::parallel::ParallelConfig;
 
 pub const CONCIERGE_AGENT: &str = "mur";
@@ -31,6 +32,10 @@ pub struct Fleet {
     pub loop_cfg: Option<FleetLoop>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parallel: Option<ParallelConfig>,
+    /// External programs this artifact needs at runtime (portable-deps spec).
+    /// Absent → empty; resolved by `mur agent/fleet doctor` + `install-deps`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_programs: Vec<ProgramDep>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -211,6 +216,7 @@ mod tests {
             skills: vec![],
             loop_cfg: None,
             parallel: None,
+            requires_programs: vec![],
         };
         assert_eq!(f.router_or_concierge(), CONCIERGE_AGENT);
         let yaml = serde_yaml::to_string(&f).unwrap();

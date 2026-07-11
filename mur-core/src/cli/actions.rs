@@ -618,6 +618,23 @@ pub enum FleetAction {
         #[arg(long)]
         target: Option<std::path::PathBuf>,
     },
+    /// Report on the fleet's declared external program dependencies
+    Doctor {
+        /// Fleet name
+        name: String,
+    },
+    /// Install missing curated program dependencies for this fleet (consent-gated)
+    #[command(name = "install-deps")]
+    InstallDeps {
+        /// Fleet name
+        name: String,
+        /// Only install this one program (by name)
+        #[arg(long)]
+        program: Option<String>,
+        /// Skip the per-item confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(clap::Subcommand)]

@@ -3,6 +3,7 @@
 use super::evolution::EvolutionEvent;
 use super::mcp::McpRequirement;
 use super::types::{Category, ContentMode, HostId, Priority, Provenance, TriggerKind, TrustLevel};
+use crate::deps::ProgramDep;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -211,6 +212,11 @@ pub struct SkillManifest {
     /// on deserialization if absent (for backwards compat with unsigned skills).
     #[serde(default)]
     pub updated_at: DateTime<Utc>,
+
+    /// External programs this artifact needs at runtime (portable-deps spec).
+    /// Absent → empty; resolved by `mur agent/fleet doctor` + `install-deps`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_programs: Vec<ProgramDep>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]

@@ -86,6 +86,7 @@ fn base_manifest(
         transfer_chain: Vec::new(),
         mcp_requirements: Vec::new(),
         updated_at: chrono::Utc::now(),
+        requires_programs: Vec::new(),
     }
 }
 

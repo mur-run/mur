@@ -427,6 +427,30 @@ M7c preserves the M7a read-only invariant — propagation never mutates peer age
 
 Execution-time enforcement of these requirements (resolving globs, checking tool availability, applying fallbacks) is deferred to M6b.
 
+## Portable program dependencies
+
+Shared artifacts — agents, fleets, skills, and MCP server entries — can declare external program dependencies via a `requires_programs` list. Each entry specifies the program `name`, a `detect` method (one of `file`, `command`, or `version`), a `reason` (why it's needed), and optional `hint` (user guidance for manual installation).
+
+**Declaration sites:** four locations can declare dependencies:
+- Agent `profile.yaml` — agent-level requirements
+- Fleet `fleet.yaml` — fleet-level requirements
+- Skill manifests — workflow-scoped dependencies
+- MCP server entry — a server's `command` is auto-detected; declare additional dependencies via `requires_programs`
+
+**Detection and reporting:** `mur agent doctor <name>` and `mur fleet doctor <name>` probe the system and report what's present and missing, cross-platform: file-path detection (e.g., `/usr/bin/lightpanda`), PATH command lookup, and version-string extraction (via `<name> --version`). Missing deps are tagged `[curated]` (available in the MUR registry) or `[manual]` (hint-only).
+
+**Installation:** `mur agent install-deps <name>` and `mur fleet install-deps <name> [--program X] [--yes]` install all missing **curated** dependencies: download from pinned MUR-owned URL → verify SHA-256 → atomic write → chmod +x (consent-gated with a per-item `[y/N]` prompt, or auto-approve every item with `--yes`). Manual-only deps print their hint but never auto-install. Installation gracefully handles network errors and partial state.
+
+**Curated registry:** MUR maintains a registry of trusted programs with pinned checksums and platform-specific URLs. Initial seeding includes:
+- `lightpanda` (v0.3.4) — native HTML/JavaScript renderer for tier-2 research fetches
+- `obscura` (v0.1.9) — embedded-V8 JavaScript engine alternative
+
+Unknown-source programs are detect-and-guide only (the trust gradient's safe default); trusted-publisher auto-install is a future Phase 2.
+
+**Graceful degradation:** Missing dependencies are **non-blocking**. Imports succeed, agents start, and fleets run — but artifacts degrade. Example: a deep-research fleet without a render engine (`lightpanda` or `obscura`) falls back to tier-1 HTTP fetch, losing JavaScript rendering but preserving correctness.
+
+**Phase 1 limitation:** Skills aggregation is deferred (skill→agent binding is dynamic). Dependencies currently aggregate from agent `profile.yaml` + MCP server entries + fleet members' profiles. A future phase will unify skill-level deps into the same reporting and installation flow.
+
 ## Repo-ops agent roles: model and spawn-allowlist guidance
 
 Field notes from supervised fleet operation (issue #596):

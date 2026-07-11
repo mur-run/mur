@@ -13,6 +13,7 @@ pub mod companion;
 pub mod config;
 pub mod conversation;
 pub mod coordination;
+pub mod deps;
 pub mod error;
 /// B0 M11 — JSONL output schema for the eval harness.
 pub mod eval;
