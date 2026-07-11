@@ -246,6 +246,20 @@ pub async fn cmd_fleet_run(
     if fleet.members.is_empty() {
         bail!("fleet '{name}' has no members");
     }
+
+    // Best-effort program-deps preflight — informational only, never blocks
+    // the run. A load/aggregate error is swallowed.
+    let _ = (|| -> Result<()> {
+        let deps = crate::cmd::deps::aggregate_fleet(mur_home, name)?;
+        let report = crate::cmd::deps::doctor::build_report(&deps, mur_home);
+        if crate::cmd::deps::doctor::missing_count(&report) > 0 {
+            eprintln!(
+                "warning: fleet '{name}' has missing program dependencies — run `mur fleet doctor {name}` for details or `mur fleet install-deps {name}` to install them."
+            );
+        }
+        Ok(())
+    })();
+
     if super::control::is_stopped(mur_home, name) {
         bail!(
             "fleet '{name}' is stopped (kill-switch). Run `mur fleet start {name}` to re-enable."

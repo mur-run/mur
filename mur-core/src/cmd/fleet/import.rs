@@ -341,6 +341,25 @@ pub fn cmd_fleet_import(mur_home: &Path, file: &Path, opts: ImportOpts) -> Resul
             missing.join(", ")
         );
     }
+
+    // Best-effort program-deps preflight — informational only, never fails
+    // the import (the fleet + skills are already installed above).
+    let _ = (|| -> Result<()> {
+        let deps = crate::cmd::deps::aggregate_fleet(mur_home, &fleet.name)?;
+        let report = crate::cmd::deps::doctor::build_report(&deps, mur_home);
+        crate::cmd::deps::doctor::print_report(
+            &report,
+            &format!("mur fleet install-deps {}", fleet.name),
+        );
+        if crate::cmd::deps::doctor::missing_count(&report) > 0 {
+            println!(
+                "Run `mur fleet install-deps {}` to install them.",
+                fleet.name
+            );
+        }
+        Ok(())
+    })();
+
     Ok(())
 }
 
