@@ -355,12 +355,16 @@ Change the empty-ports arm (currently `Some(ports) if ports.is_empty() => { line
         }
 ```
 
-**Interface note:** `MDNSRESPONDER_SOCKET`, `sbpl_escape`, `unix_socket_allow_paths()` are all already used by the `Some(non-empty)` arm in the same fn — reuse them exactly (copy the emission lines from that arm, dropping the `*:{port}` loop).
+**Interface note:** `sbpl_escape`, `unix_socket_allow_paths()` and the `MDNSRESPONDER_SOCKET` string are all already used by the `Some(non-empty)` arm in the same fn — reuse them (copy the emission lines from that arm, dropping the `*:{port}` loop). `MDNSRESPONDER_SOCKET` is currently a `const` declared INSIDE the `Some(non-empty)` arm — hoist it to just above the `match` so both arms can reference it (or redeclare it locally in the empty arm; hoisting is cleaner).
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cargo test -p mur-agent-runtime proxy_only_sbpl_allows_loopback` then `cargo test -p mur-agent-runtime macos` (existing SBPL tests, incl. the Off-mode `deny network-outbound` test and the `restricted_loopback_only_policy_has_no_wildcard_tcp_allow` guard from #689, still pass — note: that #689 guard uses `net_allow_loopback_ports = vec![58999]` with empty net_allow_ports and asserted NO localhost line; it will now SEE a localhost line → UPDATE that guard test to reflect the new correct behavior: with loopback ports present, `localhost:58999` IS now emitted, and the invariant becomes "no `*:` wildcard" only. Adjust that assertion.).
-Expected: PASS (with the #689 guard test's localhost assertion updated).
+Run: `cargo test -p mur-agent-runtime proxy_only_sbpl_allows_loopback` then `cargo test -p mur-agent-runtime macos` (full SBPL test set).
+Expected: ALL PASS with NO edits to existing tests. Specifically confirm these pass UNCHANGED — do NOT touch them:
+- `off_mode_denies_network` + `off_mode_still_blocks_dns`: both construct Off with `net_allow_ports = Some([])` and EMPTY loopback ports → the emission is guarded on `net_allow_loopback_ports` being non-empty, so Off still emits ONLY `(deny network-outbound)` and no `(allow ...` / no mDNS. (This is the correctness boundary — if your guard is on the flag or on `is_empty()` of the general list instead of on the loopback list being non-empty, Off breaks. Guard on `!policy.net_allow_loopback_ports.is_empty()`.)
+- `restricted_loopback_only_policy_has_no_wildcard_tcp_allow` (#689 guard): constructs `net_allow_ports = Some([])` + `net_allow_loopback_ports = vec![58999]`; it asserts `(deny network-outbound)` present AND no `(remote tcp "*:` wildcard. After your change it ALSO emits `(remote tcp "localhost:58999")` — which is NOT a `*:` match — so BOTH its assertions still hold. It passes unchanged; do NOT edit it.
+
+If any existing test actually fails, STOP and report — do not edit a test to make it pass without escalating.
 
 - [ ] **Step 5: Commit**
 
@@ -504,4 +508,4 @@ git commit -m "feat(deep-research): provision workers ProxyOnly (loopback-only e
 
 **Type consistency:** `NetworkOutboundMode::ProxyOnly` (T1) consumed by `from_entitlements`/HostGuard (T1) + provision (T5). `net_allow_ports: Option<Vec<u16>>` / `net_allow_loopback_ports: Vec<u16>` used consistently in T2/T3/T4. `from_entitlements` ProxyOnly → `(Some(vec![]), Some(allow_hosts))` matches T2's assembly assumption (`Some([])` triggers loopback routing) and T3's SBPL branch (`Some(ports) if ports.is_empty()`).
 
-**Cross-task landmine flagged:** T3 must UPDATE the #689 guard test (`restricted_loopback_only_policy_has_no_wildcard_tcp_allow`) — it asserted NO `localhost:` line, which is now (correctly) emitted; the surviving invariant is "no `*:` wildcard." Called out inline in T3 Step 4.
+**Cross-task note (resolved):** T3's empty-ports branch emits carve-outs only when `net_allow_loopback_ports` is non-empty, so Off (empty loopback) still emits deny-only and the `off_mode_*` tests pass unchanged. The #689 guard test (`restricted_loopback_only_policy_has_no_wildcard_tcp_allow`) only asserts "no `*:` wildcard" (NOT "no `localhost:` line"), so it also passes unchanged after the new `localhost:58999` carve-out. No existing test needs editing — verified against the real test bodies. Called out inline in T3 Step 4.
