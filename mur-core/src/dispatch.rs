@@ -354,15 +354,31 @@ pub async fn run(cli: Cli) -> Result<()> {
                     force,
                     no_members,
                     yes,
-                } => cmd::fleet::import::cmd_fleet_import(
-                    &mur_home,
-                    &file,
-                    cmd::fleet::import::ImportOpts {
-                        force,
-                        no_members,
-                        yes,
-                    },
-                )?,
+                } => {
+                    let (fleet_name, signer_fp, signature_verified) =
+                        cmd::fleet::import::cmd_fleet_import(
+                            &mur_home,
+                            &file,
+                            cmd::fleet::import::ImportOpts {
+                                force,
+                                no_members,
+                                yes,
+                            },
+                        )?;
+                    // C1: the trusted-recipe install hook must run ONLY when the
+                    // bundle's signature was actually present AND verified — an
+                    // unsigned `--force` import must never reach the trust gate,
+                    // since its `signer_pubkey`/derived fp is attacker-controlled.
+                    if signature_verified {
+                        // Phase 2: trusted-publisher recipe install (best-effort, non-blocking).
+                        if let Ok(deps) = cmd::deps::aggregate_fleet(&mur_home, &fleet_name) {
+                            cmd::deps::install_trusted_recipes_at_import(
+                                &mur_home, &deps, &signer_fp, &signer_fp, yes,
+                            )
+                            .await;
+                        }
+                    }
+                }
                 FleetAction::Delete { name, yes } => {
                     cmd::fleet::delete::cmd_fleet_delete(&mur_home, &name, yes)?
                 }
@@ -1731,11 +1747,28 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             path,
             model,
             as_name,
-        } => cmd::agent::cmd_install(
-            std::path::Path::new(&path),
-            model.as_deref(),
-            as_name.as_deref(),
-        )?,
+        } => {
+            let (installed_name, fingerprint_hex) = cmd::agent::cmd_install(
+                std::path::Path::new(&path),
+                model.as_deref(),
+                as_name.as_deref(),
+            )?;
+            // Symmetric with the fleet-import hook: best-effort, non-blocking
+            // trusted-recipe install gated on the agent's signer being trusted
+            // in the PublisherKeyring (not the bundle's own TOFU TrustStore).
+            if let Ok(mur_home) = cmd::agent::resolve_mur_home()
+                && let Ok(deps) = cmd::deps::aggregate_agent(&mur_home, &installed_name)
+            {
+                cmd::deps::install_trusted_recipes_at_import(
+                    &mur_home,
+                    &deps,
+                    &fingerprint_hex,
+                    &fingerprint_hex,
+                    false,
+                )
+                .await;
+            }
+        }
         AgentAction::Uninstall { name, purge } => cmd::agent::cmd_uninstall(&name, purge)?,
         AgentAction::Inspect { path } => cmd::agent::cmd_inspect(std::path::Path::new(&path))?,
         AgentAction::Stats { name } => cmd::agent::cmd_stats(&name)?,

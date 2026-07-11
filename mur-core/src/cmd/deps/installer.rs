@@ -6,13 +6,36 @@ use anyhow::{Context, Result, bail};
 use mur_common::deps::registry::CuratedRecipe;
 use sha2::{Digest, Sha256};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 #[allow(dead_code)]
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
     hex::encode(h.finalize())
+}
+
+/// I2 — fail-closed join: rejects a relative install target that is absolute
+/// or escapes `mur_home` via `..`/root/prefix components. In Phase 1 only
+/// MUR-owned recipes set `install_to`; Phase 2 feeds AUTHOR-declared
+/// `install_to` from a signed bundle here, so a malicious
+/// `"../../.zshrc"` or an absolute path must never be allowed to write
+/// outside `~/.mur`.
+#[allow(dead_code)]
+fn safe_join(mur_home: &Path, rel: &str) -> Result<PathBuf> {
+    let rel_path = Path::new(rel);
+    if rel_path.is_absolute() {
+        bail!("unsafe install target: {rel}");
+    }
+    for comp in rel_path.components() {
+        match comp {
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                bail!("unsafe install target: {rel}");
+            }
+            Component::CurDir | Component::Normal(_) => {}
+        }
+    }
+    Ok(mur_home.join(rel_path))
 }
 
 /// Verify `bytes` against `recipe.sha256`, then place file(s) under `mur_home`.
@@ -33,7 +56,7 @@ pub fn verify_and_place(
                 .install_to
                 .as_ref()
                 .context("bare recipe missing install_to")?;
-            let dst = mur_home.join(rel);
+            let dst = safe_join(mur_home, rel)?;
             place_file(&dst, bytes, recipe.executable)?;
             Ok(vec![dst])
         }
@@ -69,11 +92,19 @@ pub fn verify_and_place(
                     wanted.keys().collect::<Vec<_>>()
                 );
             }
-            // All members present; now place them on disk.
-            let mut placed = Vec::new();
+            // I2 — resolve + validate every member's install target BEFORE
+            // writing anything, so a bad target anywhere in the archive
+            // aborts the whole install with nothing written (preserves the
+            // existing all-or-nothing guarantee).
+            let mut resolved = Vec::with_capacity(buffered.len());
             for (member, buf) in buffered {
-                let dst = mur_home.join(&member.install_to);
-                place_file(&dst, &buf, member.executable)?;
+                let dst = safe_join(mur_home, &member.install_to)?;
+                resolved.push((dst, buf, member.executable));
+            }
+            // All members present and targets safe; now place them on disk.
+            let mut placed = Vec::new();
+            for (dst, buf, executable) in resolved {
+                place_file(&dst, &buf, executable)?;
                 placed.push(dst);
             }
             Ok(placed)
@@ -242,6 +273,120 @@ mod tests {
         assert!(
             !tmp.join("aura/obscura-worker").exists(),
             "obscura-worker must not exist on error"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // I2 — author-controlled `install_to` must never escape `mur_home`.
+
+    #[test]
+    fn bare_install_to_parent_traversal_rejected() {
+        let tmp = std::env::temp_dir().join(format!("muri2trav_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let bytes = b"payload";
+        let recipe = CuratedRecipe {
+            description: "t".into(),
+            url: "u".into(),
+            sha256: sha_hex(bytes),
+            install_to: Some("../escape".into()),
+            executable: false,
+            archive: None,
+        };
+        let r = verify_and_place(bytes, &recipe, &tmp);
+        assert!(r.is_err(), "parent-dir traversal must be rejected");
+        assert!(
+            !tmp.parent().unwrap().join("escape").exists(),
+            "no file must be written outside mur_home"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn bare_install_to_absolute_path_rejected() {
+        let tmp = std::env::temp_dir().join(format!("muri2abs_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let target = std::env::temp_dir().join("mur_escape_test");
+        std::fs::remove_file(&target).ok();
+        let bytes = b"payload";
+        let recipe = CuratedRecipe {
+            description: "t".into(),
+            url: "u".into(),
+            sha256: sha_hex(bytes),
+            install_to: Some(target.to_string_lossy().into_owned()),
+            executable: false,
+            archive: None,
+        };
+        let r = verify_and_place(bytes, &recipe, &tmp);
+        assert!(r.is_err(), "absolute install target must be rejected");
+        assert!(
+            !target.exists(),
+            "no file must be written at the absolute target"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn archive_member_install_to_traversal_rejected_nothing_written() {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+        use mur_common::deps::registry::RecipeMember;
+
+        let tmp = std::env::temp_dir().join(format!("muri2arch_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Build a tar containing both members so the sha + completeness
+        // checks pass — the traversal guard on `install_to` is what must
+        // trigger the failure.
+        let mut tar_buf = Vec::new();
+        {
+            let gz = GzEncoder::new(&mut tar_buf, Compression::default());
+            let mut tar = tar::Builder::new(gz);
+            let mut h1 = tar::Header::new_gnu();
+            h1.set_size(7);
+            tar.append_data(&mut h1, "obscura", &b"content"[..])
+                .unwrap();
+            let mut h2 = tar::Header::new_gnu();
+            h2.set_size(6);
+            tar.append_data(&mut h2, "obscura-worker", &b"other!"[..])
+                .unwrap();
+            tar.finish().unwrap();
+        }
+
+        let archive_members = vec![
+            RecipeMember {
+                path_in_archive: "obscura".into(),
+                install_to: "aura/obscura".into(),
+                executable: false,
+            },
+            RecipeMember {
+                path_in_archive: "obscura-worker".into(),
+                install_to: "../escape-worker".into(), // traversal
+                executable: true,
+            },
+        ];
+        let recipe = CuratedRecipe {
+            description: "test".into(),
+            url: "unused".into(),
+            sha256: sha_hex(&tar_buf),
+            install_to: None,
+            executable: false,
+            archive: Some(mur_common::deps::registry::ArchiveSpec {
+                members: archive_members,
+            }),
+        };
+
+        let r = verify_and_place(&tar_buf, &recipe, &tmp);
+        assert!(
+            r.is_err(),
+            "traversal in a member install_to must be rejected"
+        );
+        assert!(
+            !tmp.join("aura/obscura").exists(),
+            "first (safe) member must not be written when a later member is unsafe"
+        );
+        assert!(
+            !tmp.parent().unwrap().join("escape-worker").exists(),
+            "no file must be written outside mur_home"
         );
         std::fs::remove_dir_all(&tmp).ok();
     }
