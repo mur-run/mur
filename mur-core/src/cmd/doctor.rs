@@ -457,6 +457,21 @@ pub fn run_agent(name: &str, json: bool) -> Result<()> {
         }
     }
 
+    // Best-effort program-deps preflight — never blocks or fails the doctor
+    // command. A load/aggregate error is swallowed (this section is purely
+    // informational); text mode only, so JSON output stays machine-parseable.
+    if !json {
+        let _ = (|| -> Result<()> {
+            let deps = crate::cmd::deps::aggregate_agent(&mur_home, name)?;
+            let report = crate::cmd::deps::doctor::build_report(&deps, &mur_home);
+            crate::cmd::deps::doctor::print_report(
+                &report,
+                &format!("mur agent install-deps {name}"),
+            );
+            Ok(())
+        })();
+    }
+
     let any_failed = results.iter().any(|c| !c.ok);
     if any_failed {
         anyhow::bail!("doctor found unhealthy checks for agent '{name}'");
