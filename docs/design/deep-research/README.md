@@ -96,6 +96,8 @@ Three engines:
 - **`obscura`** — Embedded-V8, self-contained. Install: extract platform tarball to `~/.mur/aura/`, keep both `obscura` and `obscura-worker`. Single render path; no tier-2/3 escalation. Egress **proxy-governed** via `--proxy http://<token>:@127.0.0.1:<port>` (Basic auth on CONNECT).
 - **`lightpanda`** — native Lightpanda (`~/.mur/aura/lightpanda`), driven directly (`lightpanda fetch <url> --dump markdown --http-timeout <ms> --http-proxy <proxy>`), NOT via `agent-browser`. A 2026-07-11 head-to-head found native Lightpanda renders real content on 8/8 targets (incl. JS-only pages), **faster than obscura and with more extracted content**, runs under the sandbox, and is egress-governed (its `--http-proxy` userinfo sends the same Basic auth on CONNECT our egress proxy accepts). **Caveat:** Lightpanda phones home to `telemetry.lightpanda.io` — that CONNECT goes through the egress proxy (audited) and should be blocked with `--deny-host telemetry.lightpanda.io` for a clean egress. (The earlier "Lightpanda = title-only stubs" result was an artifact of the `agent-browser` wrapper, not Lightpanda itself.)
 
+**Curated installation:** `mur fleet install-deps deep-research` is the one-command path to download and verify the pinned render engine for your platform (lightpanda v0.3.4 or obscura v0.1.9, depending on what's configured). Alternatively, extract platform tarballs manually to `~/.mur/aura/` as described above.
+
 ---
 
 ## §5 · Security model — sandbox, consent, and the tool policy

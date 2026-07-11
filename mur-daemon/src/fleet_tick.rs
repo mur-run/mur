@@ -222,6 +222,7 @@ mod tests {
             }),
             team_id: None,
             parallel: None,
+            requires_programs: vec![],
         }
     }
 

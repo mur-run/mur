@@ -197,6 +197,7 @@ pub fn cmd_create(
         hitl: mur_common::HitlConfig::default(),
         created_at: now.clone(),
         updated_at: now,
+        requires_programs: Vec::new(),
     };
 
     let yaml = serde_yaml_ng::to_string(&profile).context("serialize profile.yaml")?;

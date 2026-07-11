@@ -286,6 +286,20 @@ pub async fn run_guarded(
     if fleet.members.is_empty() {
         anyhow::bail!("fleet '{name}' has no members");
     }
+
+    // Best-effort program-deps preflight — informational only, never blocks
+    // the loop. A load/aggregate error is swallowed.
+    let _ = (|| -> Result<()> {
+        let deps = crate::cmd::deps::aggregate_fleet(mur_home, name)?;
+        let report = crate::cmd::deps::doctor::build_report(&deps, mur_home);
+        if crate::cmd::deps::doctor::missing_count(&report) > 0 {
+            eprintln!(
+                "warning: fleet '{name}' has missing program dependencies — run `mur fleet doctor {name}` for details or `mur fleet install-deps {name}` to install them."
+            );
+        }
+        Ok(())
+    })();
+
     let max_iter = effective_max_iterations(max_iterations, &fleet);
     let deadline = effective_deadline(deadline.as_deref(), &fleet);
     let budget = effective_budget(budget_usd, &fleet);
@@ -721,6 +735,7 @@ mod tests {
             skills: vec![],
             loop_cfg: None,
             parallel: None,
+            requires_programs: vec![],
         };
         // default when nothing set
         assert_eq!(effective_max_iterations(None, &f), DEFAULT_MAX_ITERATIONS);
@@ -799,6 +814,7 @@ mod tests {
             skills: vec![],
             loop_cfg: None,
             parallel: None,
+            requires_programs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
@@ -846,6 +862,7 @@ mod tests {
             skills: vec![],
             loop_cfg: None,
             parallel: None,
+            requires_programs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)

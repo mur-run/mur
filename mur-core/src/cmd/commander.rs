@@ -241,6 +241,7 @@ mod tests {
             skills: vec![],
             loop_cfg: None,
             parallel: None,
+            requires_programs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         let svc = mur_channel::ChannelService::open(home).unwrap();

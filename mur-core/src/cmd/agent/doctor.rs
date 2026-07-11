@@ -103,6 +103,20 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
             } else {
                 println!("{}: running, current", r.name);
             }
+
+            // Best-effort program-deps preflight — never blocks or fails the
+            // doctor. A load/aggregate error is swallowed; the runtime-doctor
+            // report is unrelated to whether this agent's declared programs
+            // are present, so it must never gate on it.
+            let _ = (|| -> Result<()> {
+                let deps = crate::cmd::deps::aggregate_agent(&mur_home, &r.name)?;
+                let report = crate::cmd::deps::doctor::build_report(&deps, &mur_home);
+                crate::cmd::deps::doctor::print_report(
+                    &report,
+                    &format!("mur agent install-deps {}", r.name),
+                );
+                Ok(())
+            })();
         }
     }
 

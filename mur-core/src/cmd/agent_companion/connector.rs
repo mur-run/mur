@@ -647,6 +647,7 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
         hitl: mur_common::HitlConfig::default(),
         created_at: now.clone(),
         updated_at: now,
+        requires_programs: Vec::new(),
     };
     std::fs::write(
         dir.join("profile.yaml"),

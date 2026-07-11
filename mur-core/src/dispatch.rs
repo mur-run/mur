@@ -415,6 +415,25 @@ pub async fn run(cli: Cli) -> Result<()> {
                     promote,
                     target.as_deref(),
                 )?,
+                FleetAction::Doctor { name } => {
+                    let deps = cmd::deps::aggregate_fleet(&mur_home, &name)?;
+                    let lines = cmd::deps::doctor::build_report(&deps, &mur_home);
+                    cmd::deps::doctor::print_report(
+                        &lines,
+                        &format!("mur fleet install-deps {name}"),
+                    );
+                }
+                FleetAction::InstallDeps { name, program, yes } => {
+                    let deps = cmd::deps::aggregate_fleet(&mur_home, &name)?;
+                    let lines = cmd::deps::doctor::build_report(&deps, &mur_home);
+                    cmd::deps::install::cmd_install_deps(
+                        &mur_home,
+                        &lines,
+                        program.as_deref(),
+                        yes,
+                    )
+                    .await?;
+                }
             }
         }
         Commands::Commander { action } => {
@@ -1727,6 +1746,13 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             None => cmd::doctor::run(&format, json)?,
         },
         AgentAction::RuntimeDoctor { json } => cmd::agent::cmd_doctor(json)?,
+        AgentAction::InstallDeps { name, program, yes } => {
+            let mur_home = cmd::agent::resolve_mur_home()?;
+            let deps = cmd::deps::aggregate_agent(&mur_home, &name)?;
+            let lines = cmd::deps::doctor::build_report(&deps, &mur_home);
+            cmd::deps::install::cmd_install_deps(&mur_home, &lines, program.as_deref(), yes)
+                .await?;
+        }
         AgentAction::Secret { agent, action } => match action {
             AgentSecretAction::Set { key, value } => {
                 cmd::agent::cmd_secret_set(&agent, &key, value.as_deref()).await?
