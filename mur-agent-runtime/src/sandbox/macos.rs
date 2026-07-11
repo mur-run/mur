@@ -230,22 +230,44 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
     // hard parse error that fails sandbox_init for the WHOLE profile (silent
     // fail-open). So we restrict by PORT here (host `*`) and delegate hostname
     // allowlisting to the HostGuard reqwest layer.
+    //
+    // macOS resolves hostnames by talking to mDNSResponder over this UNIX
+    // socket, which is itself a `network-outbound` op. Under a blanket deny it
+    // must be re-allowed or ALL name resolution fails — every external host
+    // errors with "Could not resolve host", so only loopback IPs (which need
+    // no DNS) are reachable. HostGuard still gates which hostnames the
+    // runtime client resolves; this restores resolution only, not arbitrary
+    // egress (TCP stays port-gated). Hoisted so both the empty-ports
+    // (ProxyOnly/Off) and non-empty arms below can reference it.
+    const MDNSRESPONDER_SOCKET: &str = "/private/var/run/mDNSResponder";
     match &policy.net_allow_ports {
         None => { /* Unrestricted: (allow default) covers outbound. */ }
         Some(ports) if ports.is_empty() => {
-            // Off: deny all outbound TCP.
             lines.push("(deny network-outbound)".to_string());
+            // ProxyOnly / loopback-only: no general `*:port`, but still allow
+            // name resolution + the loopback carve-outs (cc-proxy LLM + egress
+            // proxy) so the worker can reach its proxies. Mirrors the loopback
+            // part of the `Some(non-empty)` arm below. When there are no
+            // loopback ports either, this is true Off: deny all outbound TCP.
+            if !policy.net_allow_loopback_ports.is_empty() {
+                lines.push(format!(
+                    "(allow network-outbound (remote unix-socket (path-literal \"{MDNSRESPONDER_SOCKET}\")))"
+                ));
+                for p in unix_socket_allow_paths() {
+                    let p = sbpl_escape(&p.to_string_lossy());
+                    lines.push(format!(
+                        "(allow network-outbound (remote unix-socket (subpath \"{p}\")))"
+                    ));
+                }
+                for port in &policy.net_allow_loopback_ports {
+                    lines.push(format!(
+                        "(allow network-outbound (remote tcp \"localhost:{port}\"))"
+                    ));
+                }
+            }
         }
         Some(ports) => {
             lines.push("(deny network-outbound)".to_string());
-            // macOS resolves hostnames by talking to mDNSResponder over this
-            // UNIX socket, which is itself a `network-outbound` op. Under the
-            // blanket deny it must be re-allowed or ALL name resolution fails —
-            // every external host errors with "Could not resolve host", so only
-            // loopback IPs (which need no DNS) are reachable. HostGuard still
-            // gates which hostnames the runtime client resolves; this restores
-            // resolution only, not arbitrary egress (TCP stays port-gated).
-            const MDNSRESPONDER_SOCKET: &str = "/private/var/run/mDNSResponder";
             lines.push(format!(
                 "(allow network-outbound (remote unix-socket (path-literal \"{MDNSRESPONDER_SOCKET}\")))"
             ));
@@ -571,6 +593,26 @@ mod tests {
         assert!(
             !sbpl.contains("(remote tcp \"*:"),
             "restricted worker must not emit a wildcard-host tcp allow:\n{sbpl}"
+        );
+    }
+
+    #[test]
+    fn proxy_only_sbpl_allows_loopback_and_dns_but_no_wildcard() {
+        let mut policy = SandboxPolicy::default();
+        policy.net_allow_ports = Some(Vec::new()); // deny general TCP
+        policy.net_allow_loopback_ports = vec![8088, 54321]; // cc-proxy + egress proxy
+        let sbpl = build_sbpl_profile(&policy);
+
+        assert!(sbpl.contains("(deny network-outbound)"));
+        // loopback carve-outs present…
+        assert!(sbpl.contains("(remote tcp \"localhost:8088\")"));
+        assert!(sbpl.contains("(remote tcp \"localhost:54321\")"));
+        // …name resolution restored (loopback host resolution)…
+        assert!(sbpl.contains("/private/var/run/mDNSResponder"));
+        // …and NO wildcard-host tcp allow (the escape hatch).
+        assert!(
+            !sbpl.contains("(remote tcp \"*:"),
+            "no wildcard tcp allow:\n{sbpl}"
         );
     }
 }
