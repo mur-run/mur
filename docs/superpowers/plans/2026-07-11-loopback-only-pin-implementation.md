@@ -383,44 +383,112 @@ git commit -m "feat(sandbox): SBPL empty-ports branch emits loopback+mDNS (Proxy
 **Interfaces:**
 - Consumes: the existing `if let Some(ports) = &policy.net_allow_ports { for port in ports.iter().chain(net_allow_loopback_ports.iter()) { NetPort::new(port, ConnectTcp) } }`.
 
-- [ ] **Step 1: Write the test** (Landlock's `NetPort` is port-only — no host distinction — so an empty general list + loopback ports already yields ConnectTcp rules ONLY for the loopback ports; confirm the code path)
+### Task 4: Extract testable port-selection helper; Linux uses it
+
+**Files:**
+- Modify: `mur-agent-runtime/src/sandbox/policy.rs` (add pure helper `connect_tcp_ports` + test)
+- Modify: `mur-agent-runtime/src/sandbox/linux.rs` (call the helper)
+
+> **Why this shape:** `mod linux` is `#[cfg(target_os = "linux")]`, so it does NOT
+> compile on the macOS dev box — a test inside `linux.rs` can neither be TDD'd nor
+> run here, and a test that re-implements the `ports.chain(loopback)` logic in the
+> test body only asserts against its own copy (tautological). Instead we lift the
+> port selection into a platform-independent pure function in `policy.rs` (compiles
+> and tests on every OS), and have `linux.rs` call it — so the test guards the
+> EXACT code the Landlock builder runs, and it also DRYs the logic. macOS is left
+> as-is: its SBPL builder needs the general (`*:port`) and loopback (`localhost:port`)
+> lists kept SEPARATE, so it does not use this merged helper.
+
+**Interfaces:**
+- Produces: `pub(crate) fn connect_tcp_ports(policy: &SandboxPolicy) -> Vec<u16>` in `policy.rs` — returns the ports that should get a Landlock `ConnectTcp` rule: `net_allow_ports` (when `Some`) chained with `net_allow_loopback_ports`, else empty. Consumed by `linux.rs`.
+
+- [ ] **Step 1: Write the failing test** (in `policy.rs` test module, runs on macOS)
 
 ```rust
 #[test]
-fn proxy_only_linux_gates_to_loopback_ports_only() {
-    // Landlock NetPort is port-scoped (no host); with an empty general list and
-    // loopback ports set, the ConnectTcp rules cover ONLY those ports — general
-    // egress (e.g. 443) is default-denied. This test documents+guards that the
-    // empty-general-list + loopback path is handled (the `Some(ports)` arm fires
-    // for Some([]) and chains the loopback ports).
+fn connect_tcp_ports_proxy_only_is_loopback_only() {
+    // ProxyOnly: empty general list + loopback ports → only the loopback ports
+    // get ConnectTcp rules (general egress e.g. 443 is default-denied).
     let mut policy = SandboxPolicy::default();
     policy.net_allow_ports = Some(Vec::new());
     policy.net_allow_loopback_ports = vec![8088, 54321];
-    // The port set the Landlock builder would gate on = ports ∪ loopback:
-    let gated: Vec<u16> = policy
-        .net_allow_ports
-        .as_ref()
-        .unwrap()
-        .iter()
-        .chain(policy.net_allow_loopback_ports.iter())
-        .copied()
-        .collect();
-    assert_eq!(gated, vec![8088u16, 54321], "only loopback ports gated, no 443");
+    assert_eq!(connect_tcp_ports(&policy), vec![8088u16, 54321]);
+}
+
+#[test]
+fn connect_tcp_ports_restricted_is_general_plus_loopback() {
+    let mut policy = SandboxPolicy::default();
+    policy.net_allow_ports = Some(vec![80, 443]);
+    policy.net_allow_loopback_ports = vec![54321];
+    assert_eq!(connect_tcp_ports(&policy), vec![80u16, 443, 54321]);
+}
+
+#[test]
+fn connect_tcp_ports_off_and_unrestricted_are_empty() {
+    let mut off = SandboxPolicy::default();
+    off.net_allow_ports = Some(Vec::new()); // Off: empty general + empty loopback
+    assert!(connect_tcp_ports(&off).is_empty());
+    let unr = SandboxPolicy::default(); // Unrestricted: net_allow_ports = None
+    assert!(connect_tcp_ports(&unr).is_empty());
 }
 ```
 
-(If `build`/`apply` on Linux isn't callable in a unit test off-Linux, keep this as a pure assertion over the port-set logic the builder uses — it documents the invariant without needing Landlock. If a Linux-only integration path is testable, prefer it under `#[cfg(target_os = "linux")]`.)
+- [ ] **Step 2: Run to verify it fails**
 
-- [ ] **Step 2: Run**
+Run: `cargo test -p mur-agent-runtime connect_tcp_ports`
+Expected: FAIL (`connect_tcp_ports` not defined).
 
-Run: `cargo test -p mur-agent-runtime proxy_only_linux_gates`
-Expected: PASS (this codifies existing behavior — Linux already handles it; the test is a guard).
+- [ ] **Step 3: Add the helper in `policy.rs`**
 
-- [ ] **Step 3: Commit**
+Add as a free function (or `impl SandboxPolicy` method — free fn is fine) in `policy.rs`, near the other network helpers:
+
+```rust
+/// The set of TCP ports that should receive a Landlock `ConnectTcp` rule:
+/// the general allow-list (when outbound is restricted) plus the loopback
+/// carve-outs. Returns empty for Unrestricted (`None`, Landlock installs no
+/// net rules at all) and for Off (empty general + empty loopback). This is
+/// the single source of truth the Linux builder iterates; macOS keeps the two
+/// lists separate (it distinguishes `*:port` from `localhost:port`).
+pub(crate) fn connect_tcp_ports(policy: &SandboxPolicy) -> Vec<u16> {
+    match &policy.net_allow_ports {
+        Some(ports) => ports
+            .iter()
+            .chain(policy.net_allow_loopback_ports.iter())
+            .copied()
+            .collect(),
+        None => Vec::new(),
+    }
+}
+```
+
+- [ ] **Step 4: Point `linux.rs` at the helper**
+
+In `apply_linux` (`linux.rs` ~lines 48-57), replace the `if let Some(ports) = &policy.net_allow_ports { for port in ports.iter().chain(...) { ... } }` block with an iteration over the helper. Note the helper yields owned `u16`, so the rule uses `port` not `*port`:
+
+```rust
+    // Network port rules — only when the mode restricts outbound TCP. The
+    // helper merges the general allow-list with the loopback carve-outs
+    // (see policy::connect_tcp_ports). Off/Unrestricted → empty → no rules
+    // (Landlock default-deny for handled accesses).
+    for port in super::policy::connect_tcp_ports(policy) {
+        created = created
+            .add_rule(NetPort::new(port, AccessNet::ConnectTcp))
+            .context("add net port rule")?;
+    }
+```
+
+(The surrounding `handle_access(AccessNet::from_all(abi))` guard on `net_allow_ports.is_some()` at ~line 19 is UNCHANGED — that's what installs the deny-all baseline; the helper only supplies the allow rules on top.)
+
+- [ ] **Step 5: Run to verify it passes**
+
+Run: `cargo test -p mur-agent-runtime connect_tcp_ports` then `cargo test -p mur-agent-runtime` (full suite; policy tests included).
+Expected: PASS. (Note: `linux.rs` itself is `#[cfg(target_os = "linux")]` and does not compile on macOS — its one-line call-site change is covered by Linux CI. The helper + tests run here on macOS.)
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add mur-agent-runtime/src/sandbox/linux.rs
-git commit -m "test(sandbox): guard Linux gates to loopback ports only under ProxyOnly"
+git add mur-agent-runtime/src/sandbox/policy.rs mur-agent-runtime/src/sandbox/linux.rs
+git commit -m "refactor(sandbox): connect_tcp_ports helper (testable); Linux uses it for ProxyOnly loopback"
 ```
 
 ---
