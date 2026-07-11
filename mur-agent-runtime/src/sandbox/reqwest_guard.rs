@@ -15,7 +15,7 @@ pub use mur_common::net::{host_allowed, host_matches_pattern};
 /// NOT blocked: this is a local-first platform that legitimately talks to local
 /// (127.0.0.1 Ollama) and LAN LLM endpoints. Blocking those would break core
 /// functionality; the metadata endpoint is the genuine SSRF target.
-fn is_link_local_or_unspecified(ip: IpAddr) -> bool {
+pub(crate) fn is_link_local_or_unspecified(ip: IpAddr) -> bool {
     // Normalize IPv4-in-IPv6 forms down to their embedded IPv4 first. Both the
     // mapped form (`::ffff:a.b.c.d`) and the compatible form (`::a.b.c.d`) have
     // `segments()[0] == 0`, so without this they slip past the IPv6 checks below
@@ -30,6 +30,19 @@ fn is_link_local_or_unspecified(ip: IpAddr) -> bool {
         // IPv6 link-local is fe80::/10; no stable std helper, so mask manually.
         IpAddr::V6(v6) => v6.is_unspecified() || (v6.segments()[0] & 0xffc0) == 0xfe80,
     }
+}
+
+/// Resolve `target` (`host:port`, or an IP-literal:port) via the OS resolver and
+/// return only the socket addresses that pass the SSRF screen — link-local and
+/// unspecified addresses (the genuine metadata/SSRF targets) are dropped.
+/// Loopback and private-LAN are intentionally KEPT (local-first platform).
+/// An empty result means every resolved address was screened out → the caller
+/// must refuse the connection (fail-closed).
+pub(crate) fn screened_socket_addrs(target: &str) -> std::io::Result<Vec<SocketAddr>> {
+    Ok(target
+        .to_socket_addrs()?
+        .filter(|sa| !is_link_local_or_unspecified(sa.ip()))
+        .collect())
 }
 
 /// reqwest DNS resolver guard. Rejects hostnames not in the allowlist
@@ -248,5 +261,24 @@ mod tests {
     fn off_denies_all_unrestricted_allows_all() {
         assert!(!HostGuard::off().is_allowed("anything.com"));
         assert!(HostGuard::unrestricted().is_allowed("anything.com"));
+    }
+
+    #[test]
+    fn screened_socket_addrs_drops_link_local_keeps_public() {
+        // Loopback is a legitimate local-first target and must be KEPT.
+        let lo = screened_socket_addrs("127.0.0.1:443").unwrap();
+        assert!(lo.iter().all(|sa| sa.ip().to_string() == "127.0.0.1"));
+        assert_eq!(lo.len(), 1);
+
+        // A link-local IP literal (cloud-metadata) must be dropped → empty.
+        let meta = screened_socket_addrs("169.254.169.254:80").unwrap();
+        assert!(
+            meta.is_empty(),
+            "link-local metadata IP must be screened out"
+        );
+
+        // Unspecified dropped too.
+        let unspec = screened_socket_addrs("0.0.0.0:80").unwrap();
+        assert!(unspec.is_empty());
     }
 }
