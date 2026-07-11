@@ -1740,11 +1740,28 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             path,
             model,
             as_name,
-        } => cmd::agent::cmd_install(
-            std::path::Path::new(&path),
-            model.as_deref(),
-            as_name.as_deref(),
-        )?,
+        } => {
+            let (installed_name, fingerprint_hex) = cmd::agent::cmd_install(
+                std::path::Path::new(&path),
+                model.as_deref(),
+                as_name.as_deref(),
+            )?;
+            // Symmetric with the fleet-import hook: best-effort, non-blocking
+            // trusted-recipe install gated on the agent's signer being trusted
+            // in the PublisherKeyring (not the bundle's own TOFU TrustStore).
+            if let Ok(mur_home) = cmd::agent::resolve_mur_home()
+                && let Ok(deps) = cmd::deps::aggregate_agent(&mur_home, &installed_name)
+            {
+                cmd::deps::install_trusted_recipes_at_import(
+                    &mur_home,
+                    &deps,
+                    &fingerprint_hex,
+                    &fingerprint_hex,
+                    false,
+                )
+                .await;
+            }
+        }
         AgentAction::Uninstall { name, purge } => cmd::agent::cmd_uninstall(&name, purge)?,
         AgentAction::Inspect { path } => cmd::agent::cmd_inspect(std::path::Path::new(&path))?,
         AgentAction::Stats { name } => cmd::agent::cmd_stats(&name)?,

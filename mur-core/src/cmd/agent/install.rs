@@ -18,11 +18,15 @@ use mur_common::trust;
 
 use super::resolve_mur_home;
 
+/// Installs a `.muragent` bundle. Returns `(installed_name, signer_fingerprint_hex)`
+/// so the dispatch layer can fire the best-effort trusted-recipe install hook
+/// (async; mirrors the fleet-import wiring) without making this function async
+/// itself — it has synchronous test callers.
 pub fn cmd_install(
     path: &Path,
     model_ref_override: Option<&str>,
     as_name: Option<&str>,
-) -> Result<()> {
+) -> Result<(String, String)> {
     let archive = MuragentArchive::read(path)
         .with_context(|| format!("read .muragent file at {}", path.display()))?;
     let mur_home = resolve_mur_home()?;
@@ -64,7 +68,7 @@ pub fn cmd_install(
     } else {
         maybe_resolve_model(&mur_home, installed_name, &archive)?;
     }
-    Ok(())
+    Ok((installed_name.to_string(), outcome.fingerprint_hex.clone()))
 }
 
 /// After a `--as <name>` clone install, give the clone a new identity: a
