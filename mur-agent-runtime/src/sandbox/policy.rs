@@ -752,6 +752,9 @@ mod tests {
             policy.net_allow_hosts,
             Some(vec!["localhost".to_string(), "127.0.0.1".to_string()])
         );
+        // Flag set so the port helpers add loopback carve-outs (distinguishes
+        // ProxyOnly's Some([]) from Off's Some([]), which leaves this false).
+        assert!(policy.net_loopback_allowed);
     }
 
     #[test]
