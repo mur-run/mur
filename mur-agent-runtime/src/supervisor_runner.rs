@@ -262,6 +262,18 @@ pub async fn build_provider_runner(
             }
             HostGuard::restricted(hosts)
         }
+        NetworkOutboundMode::ProxyOnly => {
+            // Same host governance as Restricted (allow_hosts drives HostGuard),
+            // including the auto-allowed provider host — ProxyOnly still needs
+            // to resolve its own LLM endpoint, it just loses general TCP egress.
+            let mut hosts = outbound.allow_hosts.clone();
+            if let Some(h) = provider_host(&entry)
+                && !hosts.iter().any(|x| x == &h)
+            {
+                hosts.push(h);
+            }
+            HostGuard::restricted(hosts)
+        }
         NetworkOutboundMode::Off => HostGuard::off(),
     };
     let guarded_http = reqwest::ClientBuilder::new()

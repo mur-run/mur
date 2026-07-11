@@ -370,6 +370,13 @@ impl SandboxPolicy {
                 let hosts = Some(ent.network.outbound.allow_hosts.clone());
                 (ports, hosts)
             }
+            NetworkOutboundMode::ProxyOnly => {
+                // Deny general TCP (empty-but-present list), keep the host
+                // allowlist so the runtime's own client can resolve its
+                // loopback LLM endpoint. Loopback carve-outs are added by the
+                // port-assembly helpers.
+                (Some(vec![]), Some(ent.network.outbound.allow_hosts.clone()))
+            }
             NetworkOutboundMode::Off => (Some(vec![]), Some(vec![])),
         };
 
@@ -692,6 +699,22 @@ mod tests {
         let home = PathBuf::from("/tmp/agent_home");
         let policy = SandboxPolicy::from_entitlements(&ent, &home);
         assert_eq!(policy.net_allow_hosts, Some(vec![]));
+    }
+
+    #[test]
+    fn proxy_only_denies_general_tcp_but_keeps_host_allowlist() {
+        let mut ent = minimal_entitlements();
+        ent.network.outbound.mode = NetworkOutboundMode::ProxyOnly;
+        ent.network.outbound.allow_hosts = vec!["localhost".into(), "127.0.0.1".into()];
+        let home = PathBuf::from("/tmp/agent_home");
+        let policy = SandboxPolicy::from_entitlements(&ent, &home);
+        // General TCP denied (empty port list, but PRESENT — not None/unrestricted).
+        assert_eq!(policy.net_allow_ports, Some(vec![]));
+        // Host allowlist retained (NOT emptied like Off) so the LLM host resolves.
+        assert_eq!(
+            policy.net_allow_hosts,
+            Some(vec!["localhost".to_string(), "127.0.0.1".to_string()])
+        );
     }
 
     #[test]
