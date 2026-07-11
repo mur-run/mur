@@ -70,8 +70,9 @@ trust-gated consent model.
 
 ## §5 · Declaration schema — `requires_programs`
 
-A new optional list, declarable in `skill.yaml`, an `McpServerEntry`, and
-`fleet.yaml`. Each entry:
+A new optional list, declarable in `skill.yaml`, an `McpServerEntry`, an
+agent's `profile.yaml` (agent-level deps not tied to a specific skill/MCP),
+and `fleet.yaml`. Each entry:
 
 ```yaml
 requires_programs:
@@ -215,8 +216,9 @@ Each unit has one responsibility and a defined interface:
   extract. No knowledge of *which* deps to install — the caller (doctor/
   install-deps) decides.
 - **`deps::aggregate`** (`mur-core`) — collect `ProgramDep`s across an agent's
-  skills + MCP entries (incl. synthesized MCP-command deps), or a fleet's
-  members. One place, so agent and fleet share it.
+  own `profile.yaml` + its skills + its MCP entries (incl. synthesized
+  MCP-command deps), or a fleet's own `fleet.yaml` + its members. One place, so
+  agent and fleet share it; dedup by `name`.
 - **`doctor` / `install-deps` commands** (`mur-core/src/cmd`) — thin CLI over
   aggregate + detect + installer.
 - **Phase 2:** `publisher_recipe` verify path reusing `publisher_trust.rs`.
@@ -243,7 +245,7 @@ Each unit has one responsibility and a defined interface:
 
 **Phase 1 (this spec's implementation plan):**
 1. `ProgramDep` + `DetectMethod` types + serde on `requires_programs`
-   (skill.yaml, `McpServerEntry`, `fleet.yaml`).
+   (skill.yaml, `McpServerEntry`, agent `profile.yaml`, `fleet.yaml`).
 2. Cross-platform `detect`.
 3. Curated registry manifest + accessor; seed `lightpanda` + `obscura`.
 4. `installer` (download + SHA-256 + atomic write + chmod + archive extract).
