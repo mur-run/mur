@@ -354,15 +354,24 @@ pub async fn run(cli: Cli) -> Result<()> {
                     force,
                     no_members,
                     yes,
-                } => cmd::fleet::import::cmd_fleet_import(
-                    &mur_home,
-                    &file,
-                    cmd::fleet::import::ImportOpts {
-                        force,
-                        no_members,
-                        yes,
-                    },
-                )?,
+                } => {
+                    let (fleet_name, signer_fp) = cmd::fleet::import::cmd_fleet_import(
+                        &mur_home,
+                        &file,
+                        cmd::fleet::import::ImportOpts {
+                            force,
+                            no_members,
+                            yes,
+                        },
+                    )?;
+                    // Phase 2: trusted-publisher recipe install (best-effort, non-blocking).
+                    if let Ok(deps) = cmd::deps::aggregate_fleet(&mur_home, &fleet_name) {
+                        cmd::deps::install_trusted_recipes_at_import(
+                            &mur_home, &deps, &signer_fp, &signer_fp, yes,
+                        )
+                        .await;
+                    }
+                }
                 FleetAction::Delete { name, yes } => {
                     cmd::fleet::delete::cmd_fleet_delete(&mur_home, &name, yes)?
                 }

@@ -7,6 +7,7 @@ pub mod trust_gate;
 
 use anyhow::{Context, Result};
 use mur_common::deps::{DetectMethod, ProgramDep};
+use mur_common::skill::publisher_trust::PublisherKeyring;
 use std::path::Path;
 
 /// A declared dependency plus which parts of the artifact declared it.
@@ -144,6 +145,101 @@ mod agg_tests {
         assert_eq!(out.len(), 2);
         let lp = out.iter().find(|a| a.dep.name == "lightpanda").unwrap();
         assert_eq!(lp.sources.len(), 2);
+    }
+}
+
+/// One-line guidance for a recipe from an untrusted publisher.
+pub fn untrusted_skip_line(name: &str, signer_fp: &str, hint: Option<&str>) -> String {
+    let tail = hint
+        .map(|h| format!("; or install manually: {h}"))
+        .unwrap_or_default();
+    format!(
+        "{name}: recipe from an untrusted publisher — run `mur agent skill signer-trust {signer_fp}` to trust it{tail}"
+    )
+}
+
+/// Local y/N (mirrors fleet/import.rs `confirm`).
+fn confirm(prompt: &str, yes: bool) -> Result<bool> {
+    if yes {
+        return Ok(true);
+    }
+    use std::io::Write;
+    print!("{prompt} [y/N] ");
+    std::io::stdout().flush().ok();
+    let mut answer = String::new();
+    std::io::stdin()
+        .read_line(&mut answer)
+        .context("read stdin")?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
+/// At import of a signed bundle: for each missing, non-curated dep with an
+/// author recipe for the current platform, gate on the publisher's trust and
+/// (if Trusted) prompt+install via the Phase 1 installer. Best-effort — never
+/// returns Err into the import path.
+pub async fn install_trusted_recipes_at_import(
+    mur_home: &Path,
+    deps: &[AggregatedDep],
+    signer_fp: &str,
+    publisher_label: &str,
+    yes: bool,
+) {
+    let keyring = match PublisherKeyring::load_or_seed(mur_home) {
+        Ok(k) => k,
+        Err(_) => return,
+    };
+    let trust = keyring.classify(signer_fp);
+    let platform = mur_common::deps::current_platform();
+    for a in deps {
+        let status = mur_common::deps::detect::detect(&a.dep, mur_home);
+        match crate::cmd::deps::trust_gate::decide(&a.dep, trust, status, &platform) {
+            crate::cmd::deps::trust_gate::GateDecision::Offer(recipe) => {
+                let prompt = format!(
+                    "Install {} from {} (signed by {publisher_label}, sha256 {}) ?",
+                    a.dep.name, recipe.url, recipe.sha256
+                );
+                match confirm(&prompt, yes) {
+                    Ok(true) => match crate::cmd::deps::installer::install(&recipe, mur_home).await
+                    {
+                        Ok(paths) => println!("  installed {} -> {:?}", a.dep.name, paths),
+                        Err(e) => println!("  FAILED {}: {e}", a.dep.name),
+                    },
+                    Ok(false) => println!("  skipped {}.", a.dep.name),
+                    Err(_) => {}
+                }
+            }
+            crate::cmd::deps::trust_gate::GateDecision::SkipUntrusted => {
+                println!(
+                    "  {}",
+                    untrusted_skip_line(&a.dep.name, signer_fp, a.dep.hint.as_deref())
+                );
+            }
+            crate::cmd::deps::trust_gate::GateDecision::SkipRevoked => {
+                println!(
+                    "  {}: publisher {signer_fp} is REVOKED — not installing.",
+                    a.dep.name
+                );
+            }
+            // Present / curated / no-recipe / no-platform → silent (Phase 1 doctor covers them).
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod import_hook_tests {
+    use super::*;
+
+    #[test]
+    fn untrusted_hint_names_publisher_and_signer_trust_cmd() {
+        let msg = untrusted_skip_line("some-tool", "abcd1234", Some("https://x/tool"));
+        assert!(msg.contains("some-tool"));
+        assert!(msg.contains("abcd1234"));
+        assert!(msg.contains("signer-trust"));
+        assert!(msg.contains("https://x/tool"));
     }
 }
 
