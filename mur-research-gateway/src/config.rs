@@ -257,17 +257,24 @@ fn default_obscura_path(mur_home: &Path) -> Option<String> {
 }
 
 /// Auto-detect the render engine when nothing is explicitly configured:
-/// prefer obscura IF both its binaries are installed at the default aura
-/// paths (they render real content + run under the sandbox — head-to-head
-/// 2026-07-10), else agent-browser. Never picks obscura it can't run.
+/// Prefer native lightpanda when present (fastest, usually pre-installed,
+/// egress-governed), else obscura IF both its binaries are installed at the
+/// default aura paths (real content + sandbox), else agent-browser. Never
+/// picks engines it can't run. Explicit env/YAML still override.
 fn auto_detect_render_engine(mur_home: &Path) -> crate::browser::RenderEngine {
+    // 1. Prefer NATIVE lightpanda — fastest, usually already installed at
+    //    aura/lightpanda, and egress-governed (head-to-head 2026-07-11).
+    if mur_home.join(DEFAULT_LIGHTPANDA_RELATIVE_PATH).exists() {
+        return crate::browser::RenderEngine::Lightpanda;
+    }
+    // 2. else obscura when both its binaries are present.
     let obscura = mur_home.join(DEFAULT_OBSCURA_RELATIVE_PATH);
     let worker = mur_home.join(DEFAULT_OBSCURA_WORKER_RELATIVE_PATH);
     if obscura.exists() && worker.exists() {
-        crate::browser::RenderEngine::Obscura
-    } else {
-        crate::browser::RenderEngine::AgentBrowser
+        return crate::browser::RenderEngine::Obscura;
     }
+    // 3. else the agent-browser wrapper.
+    crate::browser::RenderEngine::AgentBrowser
 }
 
 fn env_deny_hosts() -> Option<Vec<String>> {
@@ -535,6 +542,42 @@ research_gateway:
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create scratch dir");
         dir
+    }
+
+    #[test]
+    fn auto_detect_prefers_lightpanda_when_present() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mur_home = scratch_dir("lightpanda_only");
+        let aura = mur_home.join("aura");
+        std::fs::create_dir_all(&aura).expect("create aura dir");
+        std::fs::write(aura.join("lightpanda"), b"").expect("write lightpanda stub");
+
+        let c = load_from_yaml("", &mur_home);
+        assert_eq!(
+            c.browser.render_engine,
+            crate::browser::RenderEngine::Lightpanda
+        );
+
+        let _ = std::fs::remove_dir_all(&mur_home);
+    }
+
+    #[test]
+    fn auto_detect_lightpanda_wins_over_obscura() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mur_home = scratch_dir("lightpanda_vs_obscura");
+        let aura = mur_home.join("aura");
+        std::fs::create_dir_all(&aura).expect("create aura dir");
+        std::fs::write(aura.join("lightpanda"), b"").expect("write lightpanda stub");
+        std::fs::write(aura.join("obscura"), b"").expect("write obscura stub");
+        std::fs::write(aura.join("obscura-worker"), b"").expect("write obscura-worker stub");
+
+        let c = load_from_yaml("", &mur_home);
+        assert_eq!(
+            c.browser.render_engine,
+            crate::browser::RenderEngine::Lightpanda
+        );
+
+        let _ = std::fs::remove_dir_all(&mur_home);
     }
 
     #[test]
