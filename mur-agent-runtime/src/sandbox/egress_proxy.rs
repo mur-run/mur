@@ -156,7 +156,21 @@ async fn handle_conn(mut client: TcpStream, registry: Registry) -> std::io::Resu
     // (no re-resolution → no DNS-rebinding window). Loopback/LAN intentionally
     // kept (local-first). Backstops the hostname allow/deny list for
     // browser-rendered sub-resource CONNECTs the gateway never screened.
-    let safe_addrs = super::reqwest_guard::screened_socket_addrs(target).unwrap_or_default();
+    // Resolve + SSRF-screen off the async worker thread: to_socket_addrs() is a
+    // blocking DNS call and this one proxy serves every sandboxed child, so an
+    // inline blocking resolve could starve tokio workers under concurrent slow
+    // DNS. (Mirrors the gateway's spawn_blocking screen.)
+    let target_owned = target.to_string();
+    let safe_addrs = tokio::task::spawn_blocking(move || {
+        super::reqwest_guard::screened_socket_addrs(&target_owned)
+    })
+    .await
+    .ok()
+    .and_then(|r| r.ok())
+    .unwrap_or_default();
+    // Pin the first screened address. (Trade-off: a multi-A-record/dual-stack
+    // host loses std's automatic try-all-addresses fallback — accepted for the
+    // no-rebinding guarantee.)
     let Some(pinned) = safe_addrs.into_iter().next() else {
         tracing::info!(host, reason = "ssrf", "egress proxy CONNECT DENY");
         client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n").await?;
