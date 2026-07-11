@@ -1,12 +1,12 @@
 //! MUR-curated program registry. URLs + pinned SHA-256 are MUR-owned, so a
 //! shared bundle can only *reference* a key — it cannot substitute the source.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 const MANIFEST: &str = include_str!("registry_manifest.yaml");
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CuratedRecipe {
     #[serde(default)]
     pub description: String,
@@ -22,12 +22,12 @@ pub struct CuratedRecipe {
     pub archive: Option<ArchiveSpec>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArchiveSpec {
     pub members: Vec<RecipeMember>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecipeMember {
     pub path_in_archive: String,
     pub install_to: String,

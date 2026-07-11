@@ -3,6 +3,7 @@
 //! See docs/superpowers/specs/2026-07-11-portable-program-dependencies-design.md
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 pub mod detect;
 pub mod registry;
@@ -60,6 +61,45 @@ pub fn current_platform() -> String {
     format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
 }
 
+/// Author-declared, per-platform install recipe carried on a `ProgramDep`
+/// inside a SIGNED bundle. Its integrity flows from the bundle signature; its
+/// authorization from the publisher's trust classification at import.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProgramRecipe {
+    /// `<arch>-<os>` → recipe. Only the current platform's entry is installed.
+    pub platforms: BTreeMap<String, PlatformRecipe>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlatformRecipe {
+    pub url: String,
+    pub sha256: String,
+    /// Bare-binary install target (relative to mur_home); `None` when `archive`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_to: Option<String>,
+    #[serde(default)]
+    pub executable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive: Option<registry::ArchiveSpec>,
+}
+
+impl ProgramRecipe {
+    /// Convert this recipe's entry for `platform` into the Phase 1
+    /// `CuratedRecipe` the installer consumes. `None` if no entry for the
+    /// platform. `description` is a fixed author-provenance label.
+    pub fn for_platform(&self, platform: &str) -> Option<registry::CuratedRecipe> {
+        let p = self.platforms.get(platform)?;
+        Some(registry::CuratedRecipe {
+            description: "author-declared recipe".to_string(),
+            url: p.url.clone(),
+            sha256: p.sha256.clone(),
+            install_to: p.install_to.clone(),
+            executable: p.executable,
+            archive: p.archive.clone(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,5 +140,26 @@ mod tests {
         // arch and os are non-empty
         let (arch, os) = p.split_once('-').unwrap();
         assert!(!arch.is_empty() && !os.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod recipe_tests {
+    use super::*;
+
+    #[test]
+    fn program_recipe_for_platform_converts_to_curated() {
+        let y = r#"
+platforms:
+  aarch64-macos: { url: "https://x/tool", sha256: "abc123", install_to: "aura/tool", executable: true }
+"#;
+        let r: ProgramRecipe = serde_yaml::from_str(y).unwrap();
+        let cur = r.for_platform("aarch64-macos").expect("platform present");
+        assert_eq!(cur.url, "https://x/tool");
+        assert_eq!(cur.sha256, "abc123");
+        assert_eq!(cur.install_to.as_deref(), Some("aura/tool"));
+        assert!(cur.executable);
+        assert!(cur.archive.is_none());
+        assert!(r.for_platform("sparc-solaris").is_none());
     }
 }
