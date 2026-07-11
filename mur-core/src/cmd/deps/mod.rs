@@ -83,6 +83,7 @@ pub fn aggregate_agent(mur_home: &Path, agent: &str) -> Result<Vec<AggregatedDep
                     reason: format!("MCP server {}", mcp.name),
                     hint: None,
                     registry: None,
+                    recipe: None,
                 },
                 format!("mcp-cmd:{}", mcp.name),
             ));
@@ -127,6 +128,7 @@ mod agg_tests {
             reason: "r".into(),
             hint: None,
             registry: None,
+            recipe: None,
         }
     }
 

@@ -22,12 +22,12 @@ pub struct CuratedRecipe {
     pub archive: Option<ArchiveSpec>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ArchiveSpec {
     pub members: Vec<RecipeMember>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RecipeMember {
     pub path_in_archive: String,
     pub install_to: String,
