@@ -9,7 +9,7 @@ pub mod registry;
 
 /// One external-program requirement declared by a skill / MCP entry / agent
 /// profile / fleet. Data only — no I/O.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ProgramDep {
     /// Stable lowercase identifier (also the registry key when `registry` is None).
     pub name: String,
@@ -26,7 +26,7 @@ pub struct ProgramDep {
 }
 
 /// Exactly one detection method (serde picks the arm by which field is present).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum DetectMethod {
     /// A file exists at this (tilde/`$MUR_HOME`-expanded) path.
@@ -37,7 +37,7 @@ pub enum DetectMethod {
     Version { version: VersionCheck },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct VersionCheck {
     /// Full command line to run, e.g. "node --version".
     pub command: String,

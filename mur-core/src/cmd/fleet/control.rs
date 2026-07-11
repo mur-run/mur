@@ -61,6 +61,7 @@ mod tests {
                 skills: vec![],
                 loop_cfg: None,
                 parallel: None,
+                requires_programs: vec![],
             },
         )
         .unwrap();

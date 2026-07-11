@@ -168,6 +168,7 @@ mod tests {
                 network: None,
                 url: None,
                 auth: None,
+                requires_programs: Vec::new(),
             });
         }
 

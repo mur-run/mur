@@ -289,6 +289,7 @@ mod tests {
             mcp_requirements: vec![],
             provenance: Default::default(),
             updated_at: Utc::now(),
+            requires_programs: vec![],
         };
         let mut stats = SkillStats::new(name, "1.0.0", "", Utc::now() - Duration::days(2));
         stats.usage_count = 4;
@@ -608,6 +609,7 @@ mod tests {
             mcp_requirements: vec![],
             provenance: Default::default(),
             updated_at: Utc::now(),
+            requires_programs: vec![],
         };
 
         let yaml = serde_yaml::to_string(&manifest).unwrap();
@@ -672,6 +674,7 @@ mod tests {
             mcp_requirements: vec![],
             provenance: Default::default(),
             updated_at: Utc::now(),
+            requires_programs: vec![],
         };
 
         let yaml = serde_yaml::to_string(&manifest).unwrap();

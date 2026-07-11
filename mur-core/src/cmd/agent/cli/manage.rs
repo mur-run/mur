@@ -82,6 +82,7 @@ pub fn mcp_add(agent: &str, server_id: &str, command: &str, args: &[String]) -> 
         network: None,
         url: None,
         auth: None,
+        requires_programs: Vec::new(),
     });
     if !profile
         .entitlements
