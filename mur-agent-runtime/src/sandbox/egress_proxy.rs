@@ -151,7 +151,18 @@ async fn handle_conn(mut client: TcpStream, registry: Registry) -> std::io::Resu
         broad = entry.as_ref().map(|e| e.broad),
         "egress proxy CONNECT ALLOW"
     );
-    let mut upstream = TcpStream::connect(target).await?;
+    // SSRF screen + IP-pin: resolve the CONNECT target once, drop link-local /
+    // unspecified (cloud-metadata) addresses, connect to the pinned SocketAddr
+    // (no re-resolution → no DNS-rebinding window). Loopback/LAN intentionally
+    // kept (local-first). Backstops the hostname allow/deny list for
+    // browser-rendered sub-resource CONNECTs the gateway never screened.
+    let safe_addrs = super::reqwest_guard::screened_socket_addrs(target).unwrap_or_default();
+    let Some(pinned) = safe_addrs.into_iter().next() else {
+        tracing::info!(host, reason = "ssrf", "egress proxy CONNECT DENY");
+        client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n").await?;
+        return Ok(());
+    };
+    let mut upstream = TcpStream::connect(pinned).await?;
     client
         .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         .await?;
@@ -301,6 +312,20 @@ mod tests {
         assert!(
             denied.starts_with("HTTP/1.1 403"),
             "broad-audited still denies deny_hosts: {denied}"
+        );
+    }
+
+    #[tokio::test]
+    async fn broad_audited_link_local_target_is_ssrf_denied() {
+        // A broad-audited grant (allow-all-except-deny) must STILL refuse a CONNECT
+        // to a link-local / cloud-metadata IP — the SSRF screen backstops the
+        // hostname allow/deny list.
+        let proxy = start_egress_proxy().await.unwrap();
+        let token = proxy.register_policy(vec![], vec![], true); // broad, empty deny
+        let resp = connect_via(proxy.addr, &token, "169.254.169.254:80").await;
+        assert!(
+            resp.starts_with("HTTP/1.1 403"),
+            "link-local CONNECT must be 403 (SSRF screen), got: {resp}"
         );
     }
 }
