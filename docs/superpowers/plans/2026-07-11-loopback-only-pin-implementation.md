@@ -112,22 +112,78 @@ git commit -m "feat(sandbox): NetworkOutboundMode::ProxyOnly (deny general TCP, 
 
 ---
 
-### Task 2: Route loopback ports (guard relax + LLM→loopback)
+### Task 2: Route loopback ports (explicit posture flag + LLM→loopback)
 
 **Files:**
-- Modify: `mur-agent-runtime/src/sandbox/policy.rs` (`allow_loopback_ports`, `allow_extra_ports`)
+- Modify: `mur-agent-runtime/src/sandbox/policy.rs` (struct field, `Default`, `from_entitlements`, `allow_loopback_ports`, `allow_extra_ports`)
+
+> **Design note (why a flag, not `Some([])` inference):** `Off` and `ProxyOnly`
+> BOTH map to `net_allow_ports = Some(vec![])` — indistinguishable by that field
+> alone. Inferring "allow loopback" from an empty-but-present list would wrongly
+> re-open loopback under `Off` (the existing `loopback_ports_respect_off_mode`
+> test forbids exactly this). So we add an explicit `net_loopback_allowed: bool`
+> (Restricted + ProxyOnly → true; Off + Unrestricted → false). The guards fire on
+> `Some(non-empty)` **OR** the flag — which keeps the existing Restricted test
+> (relies on non-empty) AND the existing Off test (manual construction defaults
+> the flag to `false`) passing UNCHANGED, while enabling ProxyOnly's
+> `Some([]) + flag` case.
 
 **Interfaces:**
 - Consumes: `net_allow_ports: Option<Vec<u16>>`, `net_allow_loopback_ports: Vec<u16>`.
-- Produces: `allow_loopback_ports` accepts ports when `net_allow_ports.is_some()` (incl. `Some([])`); `allow_extra_ports` routes to `net_allow_loopback_ports` when `net_allow_ports == Some([])`.
+- Produces: new public field `net_loopback_allowed: bool` on `SandboxPolicy` (set by `from_entitlements`); `allow_loopback_ports` accepts ports when `Some(non-empty)` OR `net_loopback_allowed`; `allow_extra_ports` routes the LLM port to `net_allow_loopback_ports` when general list is empty AND `net_loopback_allowed` (ProxyOnly), else to the general list (Restricted), else no-op.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Add the struct field + Default + from_entitlements mapping**
+
+In `SandboxPolicy` (after the `net_allow_loopback_ports` field, ~line 53):
+
+```rust
+    /// True when the posture permits loopback carve-outs (Restricted +
+    /// ProxyOnly) but NOT Off/Unrestricted. This is the signal that
+    /// distinguishes a ProxyOnly `net_allow_ports = Some([])` (deny general TCP,
+    /// allow the loopback proxies) from an Off `Some([])` (deny everything) —
+    /// the two are identical in `net_allow_ports`. Set by `from_entitlements`;
+    /// consulted by `allow_extra_ports` / `allow_loopback_ports`.
+    pub net_loopback_allowed: bool,
+```
+
+In `Default for SandboxPolicy` (alongside `net_allow_loopback_ports: Vec::new(),`, ~line 72) add:
+
+```rust
+            net_loopback_allowed: false,
+```
+
+In `from_entitlements`, change the tuple binding to also yield the flag (~line 366):
+
+```rust
+        let (net_allow_ports, net_allow_hosts, net_loopback_allowed) = match ent.network.outbound.mode {
+            NetworkOutboundMode::Unrestricted => (None, None, false),
+            NetworkOutboundMode::Restricted => {
+                let ports = Some(vec![80u16, 443, 8080, 8443]);
+                let hosts = Some(ent.network.outbound.allow_hosts.clone());
+                (ports, hosts, true)
+            }
+            NetworkOutboundMode::ProxyOnly => {
+                // Deny general TCP (empty-but-present list), keep the host
+                // allowlist so the runtime's own client can resolve its
+                // loopback LLM endpoint. Loopback carve-outs are added by the
+                // port-assembly helpers; net_loopback_allowed = true is what
+                // lets them fire despite the empty general list.
+                (Some(vec![]), Some(ent.network.outbound.allow_hosts.clone()), true)
+            }
+            NetworkOutboundMode::Off => (Some(vec![]), Some(vec![]), false),
+        };
+```
+
+And add `net_loopback_allowed,` to the returned `SandboxPolicy { ... }` struct literal (next to `net_allow_loopback_ports: Vec::new(),`, ~line 392).
+
+- [ ] **Step 2: Write the failing tests**
 
 ```rust
 #[test]
 fn proxy_only_port_assembly_routes_llm_and_egress_to_loopback() {
     let mut policy = SandboxPolicy::default();
     policy.net_allow_ports = Some(Vec::new()); // ProxyOnly: deny general TCP
+    policy.net_loopback_allowed = true;        // …but loopback carve-outs permitted
     // LLM port (cc-proxy) must land in LOOPBACK, not general ports.
     policy.allow_extra_ports(&[8088]);
     // Egress proxy port must be accepted even though general list is empty.
@@ -135,6 +191,19 @@ fn proxy_only_port_assembly_routes_llm_and_egress_to_loopback() {
     assert_eq!(policy.net_allow_ports, Some(vec![]), "general TCP stays denied");
     assert!(policy.net_allow_loopback_ports.contains(&8088), "LLM port routed to loopback");
     assert!(policy.net_allow_loopback_ports.contains(&54321), "egress proxy port accepted");
+}
+
+#[test]
+fn off_mode_port_assembly_stays_empty() {
+    // Off is ALSO net_allow_ports = Some([]), but net_loopback_allowed = false
+    // (the default) — neither helper may re-open loopback. This is the guard the
+    // flag exists for.
+    let mut policy = SandboxPolicy::default();
+    policy.net_allow_ports = Some(Vec::new());
+    // net_loopback_allowed left false
+    policy.allow_extra_ports(&[8088]);
+    policy.allow_loopback_ports(&[54321]);
+    assert!(policy.net_allow_loopback_ports.is_empty(), "Off adds no loopback carve-outs");
 }
 
 #[test]
@@ -149,22 +218,24 @@ fn restricted_port_assembly_unchanged() {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [ ] **Step 3: Run to verify they fail**
 
-Run: `cargo test -p mur-agent-runtime proxy_only_port_assembly`
-Expected: FAIL (LLM port not routed to loopback; egress port rejected by the guard).
+Run: `cargo test -p mur-agent-runtime proxy_only_port_assembly off_mode_port_assembly`
+Expected: FAIL to compile first (`net_loopback_allowed` doesn't exist until Step 1 is done — if you did Step 1 already, the ProxyOnly test FAILS because the helpers don't yet consult the flag).
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 4: Implement the two helpers**
 
-Replace `allow_loopback_ports` (relaxed guard — accept any `Some`, i.e. `Some([])` or `Some(non-empty)`; still no-op under `None`/unrestricted):
+Replace `allow_loopback_ports` (fire on non-empty general list OR the flag; still no-op under `None`/unrestricted and under `Off`):
 
 ```rust
     /// Grant loopback-only access to `extra` TCP ports (the egress proxy, and —
-    /// under ProxyOnly — the LLM cc-proxy). Accepted whenever outbound is
-    /// restricted at all (`Some(_)`), including the ProxyOnly empty-general-list
-    /// case; a no-op under `None` (unrestricted needs no carve-out).
+    /// under ProxyOnly — the LLM cc-proxy). Fires for Restricted (non-empty
+    /// general list) and ProxyOnly (`net_loopback_allowed`); a no-op under Off
+    /// (empty list, flag false) and Unrestricted (`None`).
     pub fn allow_loopback_ports(&mut self, extra: &[u16]) {
-        if self.net_allow_ports.is_some() {
+        let permitted = matches!(&self.net_allow_ports, Some(p) if !p.is_empty())
+            || self.net_loopback_allowed;
+        if permitted {
             for p in extra {
                 if !self.net_allow_loopback_ports.contains(p) {
                     self.net_allow_loopback_ports.push(*p);
@@ -174,14 +245,15 @@ Replace `allow_loopback_ports` (relaxed guard — accept any `Some`, i.e. `Some(
     }
 ```
 
-Replace `allow_extra_ports` (route to loopback when general list is empty = ProxyOnly):
+Replace `allow_extra_ports` (Restricted → general list; ProxyOnly → loopback; Off/Unrestricted → no-op):
 
 ```rust
     /// Grant outbound to `extra` TCP ports for the agent's own LLM endpoint.
-    /// Under a general-port posture (Restricted) they join the general list
-    /// (`*:port`). Under ProxyOnly (general list present-but-empty) the LLM is a
-    /// loopback endpoint (cc-proxy on 127.0.0.1), so route it to the loopback
-    /// carve-out instead of opening a general `*:port`. No-op under `None`.
+    /// Under Restricted (non-empty general list) they join the general list
+    /// (`*:port`). Under ProxyOnly (general list present-but-empty AND
+    /// `net_loopback_allowed`) the LLM is a loopback cc-proxy, so route its port
+    /// to the loopback carve-out instead of opening a general `*:port`. No-op
+    /// under Off (empty list, flag false) and Unrestricted (`None`).
     pub fn allow_extra_ports(&mut self, extra: &[u16]) {
         match self.net_allow_ports.as_ref().map(|p| p.is_empty()) {
             Some(false) => {
@@ -193,28 +265,28 @@ Replace `allow_extra_ports` (route to loopback when general list is empty = Prox
                     }
                 }
             }
-            Some(true) => {
+            Some(true) if self.net_loopback_allowed => {
                 for p in extra {
                     if !self.net_allow_loopback_ports.contains(p) {
                         self.net_allow_loopback_ports.push(*p);
                     }
                 }
             }
-            None => {}
+            _ => {}
         }
     }
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [ ] **Step 5: Run to verify all pass**
 
-Run: `cargo test -p mur-agent-runtime proxy_only_port_assembly restricted_port_assembly_unchanged` then `cargo test -p mur-agent-runtime policy::` (existing port tests, incl. `allow_extra_ports_adds_llm_port_in_restricted_mode` and the Off-mode loopback-guard test at ~1138, must still pass).
+Run: `cargo test -p mur-agent-runtime proxy_only_port_assembly off_mode_port_assembly restricted_port_assembly_unchanged` then `cargo test -p mur-agent-runtime sandbox::policy::` (existing port + loopback-guard tests, incl. `allow_extra_ports_adds_llm_port_in_restricted_mode` and `loopback_ports_respect_off_mode` — ALL must still pass UNCHANGED; do NOT edit any existing test).
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add mur-agent-runtime/src/sandbox/policy.rs
-git commit -m "feat(sandbox): route LLM+egress ports to loopback under ProxyOnly"
+git commit -m "feat(sandbox): route LLM+egress ports to loopback under ProxyOnly (net_loopback_allowed flag)"
 ```
 
 ---
