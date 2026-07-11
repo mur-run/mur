@@ -46,7 +46,8 @@ pub fn verify_and_place(
                 .iter()
                 .map(|m| (m.path_in_archive.as_str(), m))
                 .collect();
-            let mut placed = Vec::new();
+            // Buffer members during scan; verify completeness BEFORE writing to disk.
+            let mut buffered = Vec::new();
             for entry in tar.entries().context("read tar")? {
                 let mut entry = entry.context("tar entry")?;
                 let path = entry
@@ -58,16 +59,22 @@ pub fn verify_and_place(
                 if let Some(member) = wanted.remove(base) {
                     let mut buf = Vec::new();
                     entry.read_to_end(&mut buf).context("read member")?;
-                    let dst = mur_home.join(&member.install_to);
-                    place_file(&dst, &buf, member.executable)?;
-                    placed.push(dst);
+                    buffered.push((member, buf));
                 }
             }
+            // Verify all declared members are present before writing anything.
             if !wanted.is_empty() {
                 bail!(
                     "archive missing members: {:?}",
                     wanted.keys().collect::<Vec<_>>()
                 );
+            }
+            // All members present; now place them on disk.
+            let mut placed = Vec::new();
+            for (member, buf) in buffered {
+                let dst = mur_home.join(&member.install_to);
+                place_file(&dst, &buf, member.executable)?;
+                placed.push(dst);
             }
             Ok(placed)
         }
@@ -87,10 +94,16 @@ fn place_file(dst: &Path, bytes: &[u8], executable: bool) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         let mut perm = std::fs::metadata(&tmp)?.permissions();
         perm.set_mode(0o755);
-        std::fs::set_permissions(&tmp, perm)?;
+        if let Err(e) = std::fs::set_permissions(&tmp, perm) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e).context("chmod +x");
+        }
     }
     let _ = executable; // silence unused on non-unix
-    std::fs::rename(&tmp, dst).with_context(|| format!("rename to {}", dst.display()))?;
+    if let Err(e) = std::fs::rename(&tmp, dst) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("rename to {}", dst.display()));
+    }
     Ok(())
 }
 
@@ -169,6 +182,67 @@ mod tests {
         let r = verify_and_place(b"payload", &recipe, &tmp);
         assert!(r.is_err(), "mismatch must error");
         assert!(!tmp.join("aura/x").exists(), "no file on mismatch");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn archive_missing_member_writes_nothing() {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+        use mur_common::deps::registry::RecipeMember;
+
+        let tmp = std::env::temp_dir().join(format!("murimiss_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Build a tar containing only "obscura", not "obscura-worker".
+        let mut tar_buf = Vec::new();
+        {
+            let gz = GzEncoder::new(&mut tar_buf, Compression::default());
+            let mut tar = tar::Builder::new(gz);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(7);
+            tar.append_data(&mut header, "obscura", &b"content"[..])
+                .unwrap();
+            tar.finish().unwrap();
+        }
+
+        // Create a recipe declaring BOTH members.
+        let archive_members = vec![
+            RecipeMember {
+                path_in_archive: "obscura".into(),
+                install_to: "aura/obscura".into(),
+                executable: false,
+            },
+            RecipeMember {
+                path_in_archive: "obscura-worker".into(),
+                install_to: "aura/obscura-worker".into(),
+                executable: true,
+            },
+        ];
+        let recipe = CuratedRecipe {
+            description: "test".into(),
+            url: "unused".into(),
+            sha256: sha_hex(&tar_buf),
+            install_to: None,
+            executable: false,
+            archive: Some(mur_common::deps::registry::ArchiveSpec {
+                members: archive_members,
+            }),
+        };
+
+        // Verify that extraction fails (missing member).
+        let r = verify_and_place(&tar_buf, &recipe, &tmp);
+        assert!(r.is_err(), "missing member must error");
+
+        // Verify that no files were written.
+        assert!(
+            !tmp.join("aura/obscura").exists(),
+            "obscura must not exist on error"
+        );
+        assert!(
+            !tmp.join("aura/obscura-worker").exists(),
+            "obscura-worker must not exist on error"
+        );
         std::fs::remove_dir_all(&tmp).ok();
     }
 }
