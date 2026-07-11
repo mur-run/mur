@@ -120,7 +120,11 @@ fn confirm(prompt: &str, yes: bool) -> Result<bool> {
     ))
 }
 
-pub fn cmd_fleet_import(mur_home: &Path, file: &Path, opts: ImportOpts) -> Result<()> {
+pub fn cmd_fleet_import(
+    mur_home: &Path,
+    file: &Path,
+    opts: ImportOpts,
+) -> Result<(String, String)> {
     // 1. Read + unpack. I4 size/count caps enforced inside unpack_bundle.
     let bytes = std::fs::read(file).with_context(|| format!("read bundle {}", file.display()))?;
     let (manifest, files) = unpack_bundle(&bytes)?;
@@ -360,7 +364,7 @@ pub fn cmd_fleet_import(mur_home: &Path, file: &Path, opts: ImportOpts) -> Resul
         Ok(())
     })();
 
-    Ok(())
+    Ok((manifest.fleet_name.clone(), derived_fp.clone()))
 }
 
 /// Install each bundled member profile. Skips members that already exist locally
