@@ -160,6 +160,7 @@ pub fn cmd_mcp_add(
         network: None,
         url: None,
         auth: None,
+        requires_programs: Vec::new(),
     });
     // Sync spawn allowlist so the supervisor is permitted to launch this MCP.
     if !profile
@@ -649,6 +650,7 @@ mod tests {
             }),
             url: None,
             auth: None,
+            requires_programs: Vec::new(),
         };
         let output = render_server_line(&server);
         assert!(output.contains("browser\tfirefox --mcp"));
@@ -675,6 +677,7 @@ mod tests {
             }),
             url: None,
             auth: None,
+            requires_programs: Vec::new(),
         };
         let output = render_server_line(&server);
         assert!(output.contains("browser\tfirefox"));
@@ -701,6 +704,7 @@ mod tests {
             }),
             url: None,
             auth: None,
+            requires_programs: Vec::new(),
         };
         let output = render_server_line(&server);
         assert!(output.contains("api\tmcp-api"));
@@ -722,6 +726,7 @@ mod tests {
             network: None,
             url: None,
             auth: None,
+            requires_programs: Vec::new(),
         };
         let output = render_server_line(&server);
         assert!(output.contains("local\tlocal-mcp"));

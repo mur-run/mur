@@ -24,6 +24,19 @@ pub fn cmd_start(name: &str) -> Result<()> {
         bail!("agent '{name}' not found under {}", mur_home.display());
     }
 
+    // Best-effort program-deps preflight — informational only, never blocks
+    // the start. A load/aggregate error is swallowed.
+    let _ = (|| -> Result<()> {
+        let deps = crate::cmd::deps::aggregate_agent(&mur_home, name)?;
+        let report = crate::cmd::deps::doctor::build_report(&deps, &mur_home);
+        if crate::cmd::deps::doctor::missing_count(&report) > 0 {
+            eprintln!(
+                "warning: agent '{name}' has missing program dependencies — run `mur agent doctor {name}` for details or `mur agent install-deps {name}` to install them."
+            );
+        }
+        Ok(())
+    })();
+
     // 1. Already running?
     let lock_path = agent_home.join("running.lock");
     if let Ok(bytes) = fs::read(&lock_path)

@@ -1,0 +1,18 @@
+# MUR-curated program registry. URLs + pinned SHA-256 are MUR-owned.
+# Checksums fetched + verified by the controller 2026-07-11 (curl -sL <url> | shasum -a 256).
+# lightpanda 0.3.4 (stable) — verified it has `fetch --dump markdown --http-proxy`.
+# obscura v0.1.9 — tar.gz shipping two binaries (obscura + obscura-worker).
+lightpanda:
+  description: "Lightpanda native headless browser (render tier)"
+  platforms:
+    aarch64-macos:  { url: "https://github.com/lightpanda-io/browser/releases/download/0.3.4/lightpanda-aarch64-macos",  sha256: "8f275307d377c82c14c827886ec166f9a340b49c6d1732439e6a9f3baab5f22d", install_to: "aura/lightpanda", executable: true }
+    x86_64-macos:   { url: "https://github.com/lightpanda-io/browser/releases/download/0.3.4/lightpanda-x86_64-macos",   sha256: "00ea1495aa0631d88f30556c2970d623961e3704d7dcfa76221970e2af048d20", install_to: "aura/lightpanda", executable: true }
+    aarch64-linux:  { url: "https://github.com/lightpanda-io/browser/releases/download/0.3.4/lightpanda-aarch64-linux",  sha256: "0349e0f95b8c13b98c0ed3ace176bbcecaecec4674a9a2cfaedd53794f426094", install_to: "aura/lightpanda", executable: true }
+    x86_64-linux:   { url: "https://github.com/lightpanda-io/browser/releases/download/0.3.4/lightpanda-x86_64-linux",   sha256: "bbcf15b651de46c78d1b3f564895e72beb8d9d81c5a7f9b0bd00049c2b311f6e", install_to: "aura/lightpanda", executable: true }
+obscura:
+  description: "Obscura embedded-V8 browser (render tier); ships two binaries"
+  platforms:
+    aarch64-macos:  { url: "https://github.com/h4ckf0r0day/obscura/releases/download/v0.1.9/obscura-aarch64-macos.tar.gz", sha256: "e470007e7d0be4f96f15ba00b21ea0e90dd26df03b3bea4bb547f406072fef5e", archive: { members: [ { path_in_archive: "obscura", install_to: "aura/obscura", executable: true }, { path_in_archive: "obscura-worker", install_to: "aura/obscura-worker", executable: true } ] } }
+    x86_64-macos:   { url: "https://github.com/h4ckf0r0day/obscura/releases/download/v0.1.9/obscura-x86_64-macos.tar.gz",  sha256: "16163ad8a1635f8f551d4643bf1ad5948bb1af2f4d7ae4b049f387e028114751", archive: { members: [ { path_in_archive: "obscura", install_to: "aura/obscura", executable: true }, { path_in_archive: "obscura-worker", install_to: "aura/obscura-worker", executable: true } ] } }
+    aarch64-linux:  { url: "https://github.com/h4ckf0r0day/obscura/releases/download/v0.1.9/obscura-aarch64-linux.tar.gz", sha256: "10d99b1bbfd5756fe5b8e67775ce88e495b6a81e38c5bdb2faa449f9ab559813", archive: { members: [ { path_in_archive: "obscura", install_to: "aura/obscura", executable: true }, { path_in_archive: "obscura-worker", install_to: "aura/obscura-worker", executable: true } ] } }
+    x86_64-linux:   { url: "https://github.com/h4ckf0r0day/obscura/releases/download/v0.1.9/obscura-x86_64-linux.tar.gz",  sha256: "8158f7f630760a629062ec87239e6f65c13bf3897bd732da64e8ac075ab4101f", archive: { members: [ { path_in_archive: "obscura", install_to: "aura/obscura", executable: true }, { path_in_archive: "obscura-worker", install_to: "aura/obscura-worker", executable: true } ] } }
