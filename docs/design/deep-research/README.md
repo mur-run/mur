@@ -88,7 +88,7 @@ fetch(url, render?)    →  {url, status, title, text, tier}
 
 ### Render engine (experimental, opt-in)
 
-Select via `MUR_RESEARCH_RENDER_ENGINE` env (or `research_gateway.render_engine:` in `~/.mur/config.yaml`); an explicit value here always overrides auto-detect. Auto-detect (no env/YAML set): **`obscura` when its `obscura` + `obscura-worker` binaries are both installed at `~/.mur/aura/`, else `agent-browser`**.
+Select via `MUR_RESEARCH_RENDER_ENGINE` env (or `research_gateway.render_engine:` in `~/.mur/config.yaml`); an explicit value here always overrides auto-detect. Auto-detect (no env/YAML set): **native `lightpanda` when `~/.mur/aura/lightpanda` is present, else `obscura` when both its binaries are installed at `~/.mur/aura/`, else `agent-browser`**.
 
 Three engines:
 
