@@ -355,21 +355,28 @@ pub async fn run(cli: Cli) -> Result<()> {
                     no_members,
                     yes,
                 } => {
-                    let (fleet_name, signer_fp) = cmd::fleet::import::cmd_fleet_import(
-                        &mur_home,
-                        &file,
-                        cmd::fleet::import::ImportOpts {
-                            force,
-                            no_members,
-                            yes,
-                        },
-                    )?;
-                    // Phase 2: trusted-publisher recipe install (best-effort, non-blocking).
-                    if let Ok(deps) = cmd::deps::aggregate_fleet(&mur_home, &fleet_name) {
-                        cmd::deps::install_trusted_recipes_at_import(
-                            &mur_home, &deps, &signer_fp, &signer_fp, yes,
-                        )
-                        .await;
+                    let (fleet_name, signer_fp, signature_verified) =
+                        cmd::fleet::import::cmd_fleet_import(
+                            &mur_home,
+                            &file,
+                            cmd::fleet::import::ImportOpts {
+                                force,
+                                no_members,
+                                yes,
+                            },
+                        )?;
+                    // C1: the trusted-recipe install hook must run ONLY when the
+                    // bundle's signature was actually present AND verified — an
+                    // unsigned `--force` import must never reach the trust gate,
+                    // since its `signer_pubkey`/derived fp is attacker-controlled.
+                    if signature_verified {
+                        // Phase 2: trusted-publisher recipe install (best-effort, non-blocking).
+                        if let Ok(deps) = cmd::deps::aggregate_fleet(&mur_home, &fleet_name) {
+                            cmd::deps::install_trusted_recipes_at_import(
+                                &mur_home, &deps, &signer_fp, &signer_fp, yes,
+                            )
+                            .await;
+                        }
                     }
                 }
                 FleetAction::Delete { name, yes } => {

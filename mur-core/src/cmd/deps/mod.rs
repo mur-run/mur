@@ -180,6 +180,27 @@ fn confirm(prompt: &str, yes: bool) -> Result<bool> {
 /// author recipe for the current platform, gate on the publisher's trust and
 /// (if Trusted) prompt+install via the Phase 1 installer. Best-effort — never
 /// returns Err into the import path.
+/// I1 — human-readable install target(s) for the consent prompt. A bare
+/// recipe shows its single `install_to`; an archive shows every member's
+/// `install_to` so the operator sees everywhere the bundle will write before
+/// approving.
+fn install_target_display(recipe: &mur_common::deps::registry::CuratedRecipe) -> String {
+    if let Some(archive) = &recipe.archive {
+        archive
+            .members
+            .iter()
+            .map(|m| m.install_to.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    } else {
+        recipe
+            .install_to
+            .as_deref()
+            .unwrap_or("<unspecified>")
+            .to_string()
+    }
+}
+
 pub async fn install_trusted_recipes_at_import(
     mur_home: &Path,
     deps: &[AggregatedDep],
@@ -198,8 +219,11 @@ pub async fn install_trusted_recipes_at_import(
         match crate::cmd::deps::trust_gate::decide(&a.dep, trust, status, &platform) {
             crate::cmd::deps::trust_gate::GateDecision::Offer(recipe) => {
                 let prompt = format!(
-                    "Install {} from {} (signed by {publisher_label}, sha256 {}) ?",
-                    a.dep.name, recipe.url, recipe.sha256
+                    "Install {} from {} (signed by {publisher_label}, sha256 {}) -> {} ?",
+                    a.dep.name,
+                    recipe.url,
+                    recipe.sha256,
+                    install_target_display(&recipe)
                 );
                 match confirm(&prompt, yes) {
                     Ok(true) => match crate::cmd::deps::installer::install(&recipe, mur_home).await
@@ -240,6 +264,47 @@ mod import_hook_tests {
         assert!(msg.contains("abcd1234"));
         assert!(msg.contains("signer-trust"));
         assert!(msg.contains("https://x/tool"));
+    }
+
+    #[test]
+    fn install_target_display_shows_bare_install_to() {
+        let recipe = mur_common::deps::registry::CuratedRecipe {
+            description: "t".into(),
+            url: "u".into(),
+            sha256: "0".repeat(64),
+            install_to: Some("aura/lightpanda".into()),
+            executable: true,
+            archive: None,
+        };
+        assert_eq!(install_target_display(&recipe), "aura/lightpanda");
+    }
+
+    #[test]
+    fn install_target_display_lists_archive_members() {
+        let recipe = mur_common::deps::registry::CuratedRecipe {
+            description: "t".into(),
+            url: "u".into(),
+            sha256: "0".repeat(64),
+            install_to: None,
+            executable: false,
+            archive: Some(mur_common::deps::registry::ArchiveSpec {
+                members: vec![
+                    mur_common::deps::registry::RecipeMember {
+                        path_in_archive: "obscura".into(),
+                        install_to: "aura/obscura".into(),
+                        executable: false,
+                    },
+                    mur_common::deps::registry::RecipeMember {
+                        path_in_archive: "obscura-worker".into(),
+                        install_to: "aura/obscura-worker".into(),
+                        executable: true,
+                    },
+                ],
+            }),
+        };
+        let out = install_target_display(&recipe);
+        assert!(out.contains("aura/obscura"));
+        assert!(out.contains("aura/obscura-worker"));
     }
 }
 
