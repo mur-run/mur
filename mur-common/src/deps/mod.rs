@@ -24,6 +24,10 @@ pub struct ProgramDep {
     /// Optional key into MUR's curated registry (enables auto-install).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry: Option<String>,
+    /// Author-declared install recipe (Phase 2). Present only in signed
+    /// bundles; auto-installed at import ONLY from a trusted publisher.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipe: Option<ProgramRecipe>,
 }
 
 /// Exactly one detection method (serde picks the arm by which field is present).
@@ -64,13 +68,13 @@ pub fn current_platform() -> String {
 /// Author-declared, per-platform install recipe carried on a `ProgramDep`
 /// inside a SIGNED bundle. Its integrity flows from the bundle signature; its
 /// authorization from the publisher's trust classification at import.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ProgramRecipe {
     /// `<arch>-<os>` → recipe. Only the current platform's entry is installed.
     pub platforms: BTreeMap<String, PlatformRecipe>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PlatformRecipe {
     pub url: String,
     pub sha256: String,
@@ -140,6 +144,26 @@ mod tests {
         // arch and os are non-empty
         let (arch, os) = p.split_once('-').unwrap();
         assert!(!arch.is_empty() && !os.is_empty());
+    }
+
+    #[test]
+    fn program_dep_parses_optional_recipe_and_defaults_none() {
+        let with = r#"
+name: some-tool
+detect: { command: some-tool }
+reason: "x"
+recipe:
+  platforms:
+    aarch64-macos: { url: "u", sha256: "s", install_to: "aura/some-tool", executable: true }
+"#;
+        let d: ProgramDep = serde_yaml::from_str(with).unwrap();
+        assert!(d.recipe.is_some());
+        assert!(d.recipe.unwrap().for_platform("aarch64-macos").is_some());
+
+        // Phase 1 dep without recipe → None (back-compat).
+        let without = "name: x\ndetect: { command: x }\nreason: r\n";
+        let d2: ProgramDep = serde_yaml::from_str(without).unwrap();
+        assert!(d2.recipe.is_none());
     }
 }
 
