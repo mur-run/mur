@@ -202,6 +202,7 @@ pub fn build_pinned_entry(
         network: None,
         url: None,
         auth: None,
+        requires_programs: Vec::new(),
     }
 }
 

@@ -573,6 +573,7 @@ async fn accept_proposal_as_skill(
         transfer_chain: vec![],
         mcp_requirements: vec![],
         updated_at: chrono::Utc::now(),
+        requires_programs: vec![],
     };
 
     std::fs::create_dir_all(&skill_dir)?;

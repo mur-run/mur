@@ -82,6 +82,7 @@ mod tests {
             mcp_requirements: vec![],
             provenance: Default::default(),
             updated_at: chrono::Utc::now(),
+            requires_programs: vec![],
         }
     }
 

@@ -96,6 +96,7 @@ mod tests {
                 done_when: "marker:RESEARCH_COMPLETE".into(),
             }),
             parallel: None,
+            requires_programs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
