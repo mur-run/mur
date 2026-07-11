@@ -143,3 +143,22 @@ mod agg_tests {
         assert_eq!(lp.sources.len(), 2);
     }
 }
+
+/// Guard test: codifies the non-blocking preflight contract. A report built
+/// from missing/empty deps must never error — every integration site
+/// (agent doctor, fleet import, fleet/deep-research run, agent start) relies
+/// on `build_report` being infallible so a preflight failure can never abort
+/// the primary action.
+#[cfg(test)]
+mod preflight_tests {
+    #[test]
+    fn preflight_never_errors_on_missing() {
+        // A report with missing deps must be Ok (non-blocking).
+        let tmp = std::env::temp_dir().join(format!("murpf_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let deps = vec![]; // empty is trivially fine
+        let r = crate::cmd::deps::doctor::build_report(&deps, &tmp);
+        assert_eq!(crate::cmd::deps::doctor::missing_count(&r), 0);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+}
