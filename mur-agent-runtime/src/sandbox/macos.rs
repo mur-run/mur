@@ -554,4 +554,23 @@ mod tests {
             "proxy port must NOT be wildcard-host: {sbpl}"
         );
     }
+
+    #[test]
+    fn restricted_loopback_only_policy_has_no_wildcard_tcp_allow() {
+        // A worker whose egress is ONLY via loopback proxy: deny all general TCP outbound
+        // and rely on loopback-only access. The airtight guarantee assumes no general
+        // `(remote tcp "*:PORT")` allow exists (that would be a direct-egress escape hatch).
+        let mut policy = SandboxPolicy::default();
+        policy.net_allow_ports = Some(Vec::new()); // deny all general TCP outbound
+        policy.net_allow_loopback_ports = vec![58999];
+        let sbpl = build_sbpl_profile(&policy);
+
+        // When all general TCP is denied, the deny network-outbound is present.
+        assert!(sbpl.contains("(deny network-outbound)"));
+        // The critical invariant: NO wildcard-host TCP allow (the escape hatch).
+        assert!(
+            !sbpl.contains("(remote tcp \"*:"),
+            "restricted worker must not emit a wildcard-host tcp allow:\n{sbpl}"
+        );
+    }
 }
