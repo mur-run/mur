@@ -528,7 +528,12 @@ impl Hook for B0SafetyHook {
                         reason: "outbound network is disabled by entitlements (mode=off)".into(),
                     });
                 }
-                mur_common::agent::NetworkOutboundMode::Restricted => {
+                // ProxyOnly shares Restricted's host-governance here (gate on
+                // allow_hosts via the GrantStore): it only differs from
+                // Restricted at the SBPL/port layer (general TCP denied),
+                // which this per-tool HITL gate doesn't touch.
+                mur_common::agent::NetworkOutboundMode::Restricted
+                | mur_common::agent::NetworkOutboundMode::ProxyOnly => {
                     let host = host.unwrap_or_default();
                     if !crate::hooks::b0_helpers::host_is_allowlisted(&host, &outbound.allow_hosts)
                     {
