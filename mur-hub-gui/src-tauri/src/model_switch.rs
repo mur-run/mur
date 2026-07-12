@@ -55,6 +55,35 @@ pub fn model_switch_set(next: ModelSwitchConfig) -> Result<ModelSwitchConfig, St
     model_switch_set_impl(&crate::mur_home_path(), next)
 }
 
+pub(crate) fn agent_get_fallback_impl(home: &Path, name: &str) -> Result<Vec<String>, String> {
+    let path = home.join("agents").join(name).join("profile.yaml");
+    let profile: mur_common::AgentProfile = serde_yaml_ng::from_str(
+        &std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?,
+    )
+    .map_err(|e| format!("parse profile: {e}"))?;
+    Ok(profile.fallback_chain)
+}
+
+pub(crate) fn agent_set_fallback_impl(
+    home: &Path,
+    name: &str,
+    refs: &[String],
+) -> Result<Vec<String>, String> {
+    mur_core::cmd::agent::model_resolve::cmd_agent_set_fallback(home, name, refs)
+        .map_err(|e| format!("{e}"))?;
+    agent_get_fallback_impl(home, name)
+}
+
+#[tauri::command]
+pub fn agent_get_fallback(name: String) -> Result<Vec<String>, String> {
+    agent_get_fallback_impl(&crate::mur_home_path(), &name)
+}
+
+#[tauri::command]
+pub fn agent_set_fallback(name: String, refs: Vec<String>) -> Result<Vec<String>, String> {
+    agent_set_fallback_impl(&crate::mur_home_path(), &name, &refs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,5 +152,31 @@ mod tests {
             threshold_input_tokens: Some(1000),
         };
         assert!(model_switch_set_impl(&home, cfg).is_err());
+    }
+
+    #[test]
+    fn agent_fallback_get_set_roundtrips_and_validates() {
+        use std::fs;
+        let (_d, home) = seed_home();
+        // Seed a minimal agent profile at <home>/agents/coach/profile.yaml.
+        let agent_dir = home.join("agents").join("coach");
+        fs::create_dir_all(&agent_dir).unwrap();
+        let p = mur_common::AgentProfile::default_for_tests();
+        fs::write(
+            agent_dir.join("profile.yaml"),
+            serde_yaml_ng::to_string(&p).unwrap(),
+        )
+        .unwrap();
+
+        // Empty initially.
+        assert!(agent_get_fallback_impl(&home, "coach").unwrap().is_empty());
+        // Unknown ref rejected, nothing written.
+        assert!(agent_set_fallback_impl(&home, "coach", &["nope".into()]).is_err());
+        // Valid ref persists.
+        agent_set_fallback_impl(&home, "coach", &["claude_sonnet".into()]).unwrap();
+        assert_eq!(
+            agent_get_fallback_impl(&home, "coach").unwrap(),
+            vec!["claude_sonnet".to_string()]
+        );
     }
 }
