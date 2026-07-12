@@ -2,24 +2,20 @@
 
 use std::sync::Arc;
 
-use anyhow::Context;
 use tracing::{error, warn};
 
 use crate::companion::clock::SystemClock;
 use crate::hitl::HitlApprovals;
 use crate::hooks::{HookChain, HookCtx, TelemetryEmitter};
 use crate::llm::LlmClient;
-use crate::llm::{anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient};
 use crate::mcp::pool::McpPool;
 use crate::profile::Profile;
 use crate::sandbox::SandboxPolicy;
-use crate::sandbox::reqwest_guard::HostGuard;
 use crate::skills::RuntimeSkills;
 use crate::task_runner::TaskRunner;
 use crate::telemetry_writer::{TelemetryWriter, WriterTelemetryEmitter};
 use crate::tools::bash::BashTool;
 use crate::tools::registry::build_tools;
-use mur_common::agent::NetworkOutboundMode;
 use mur_common::config::SkillsConfig;
 use mur_common::model::ModelEntry;
 use mur_common::skill::aggregator::{StatsAggregator, StatsEvent};
@@ -27,7 +23,7 @@ use mur_common::telemetry::{
     METHOD_SKILL_EXECUTED, MUR_SKILL_DURATION_MS, MUR_SKILL_MANIFEST_DIGEST, MUR_SKILL_NAME,
     MUR_SKILL_OUTCOME, MUR_SKILL_VERSION,
 };
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
 /// Fallback base URL when neither the registry entry, the env var, nor the
@@ -59,7 +55,7 @@ pub(crate) fn profile_needs_egress(entries: &[mur_common::agent::McpServerEntry]
 /// it under restricted outbound (so a user never has to `allow-host` their own
 /// provider). `None` for loopback base_urls (handled by `local_llm_port`) and
 /// for entries without a base_url.
-fn provider_host(entry: &ModelEntry) -> Option<String> {
+pub(crate) fn provider_host(entry: &ModelEntry) -> Option<String> {
     let base = entry.base_url.as_deref()?;
     let host = base.parse::<reqwest::Url>().ok()?.host_str()?.to_string();
     match host.as_str() {
@@ -325,53 +321,69 @@ pub async fn build_provider_runner(
         // Nothing configured (no chain, no routing) → today's exact single-model
         // path on the SAME `entry` resolved above via `resolve_model_entry`, no
         // FallbackLlmClient wrapper.
-        return Ok(match build_client_from_entry(&entry, profile, &mur_home) {
-            Ok(client) => build(client),
-            Err(e) => match entry.provider.as_str() {
-                "anthropic" => {
-                    warn!(error = %e, "anthropic client unavailable; falling back to echo");
-                    (
-                        Arc::new(TaskRunner::new_stub_echo()),
-                        None,
-                        Some(pool.clone()),
-                    )
-                }
-                "openai" => {
-                    warn!(error = %e, "openai client unavailable; falling back to echo");
-                    (
-                        Arc::new(TaskRunner::new_stub_echo()),
-                        None,
-                        Some(pool.clone()),
-                    )
-                }
-                "echo" => {
-                    // Intentional fallback: model resolution failed or the agent has no
-                    // model configured. Degrade to echo (warned at resolution time).
-                    (
-                        Arc::new(TaskRunner::new_stub_echo()),
-                        None,
-                        Some(pool.clone()),
-                    )
-                }
-                other => {
-                    // A real provider was configured but this runtime ships no client for
-                    // it (e.g. `deepseek`). Do NOT silently echo — that looks alive but
-                    // parrots input. Surface the misconfiguration in the logs AND in every
-                    // chat reply so the user sees exactly what to change.
-                    let msg = format!(
-                        "⚠️ This agent's model provider '{other}' is not supported by the \
+        return Ok(
+            match crate::llm::client_builder::build_client_from_entry(&entry, profile, &mur_home) {
+                Ok(client) => build(client),
+                Err(e) => {
+                    // A `guarded_http` build failure is a real error unrelated to
+                    // provider support — pre-Task-7 this was a hard `?` straight
+                    // out of this function, before the provider dispatch even
+                    // ran. `local`/`ollama` have no arm below, so without this
+                    // check such a failure would fall through to `other` and get
+                    // mislabeled "unsupported model provider". Propagate it
+                    // directly instead, restoring the original semantic.
+                    if e.downcast_ref::<crate::llm::client_builder::GuardedHttpBuildError>()
+                        .is_some()
+                    {
+                        return Err(e);
+                    }
+                    match entry.provider.as_str() {
+                        "anthropic" => {
+                            warn!(error = %e, "anthropic client unavailable; falling back to echo");
+                            (
+                                Arc::new(TaskRunner::new_stub_echo()),
+                                None,
+                                Some(pool.clone()),
+                            )
+                        }
+                        "openai" => {
+                            warn!(error = %e, "openai client unavailable; falling back to echo");
+                            (
+                                Arc::new(TaskRunner::new_stub_echo()),
+                                None,
+                                Some(pool.clone()),
+                            )
+                        }
+                        "echo" => {
+                            // Intentional fallback: model resolution failed or the agent has no
+                            // model configured. Degrade to echo (warned at resolution time).
+                            (
+                                Arc::new(TaskRunner::new_stub_echo()),
+                                None,
+                                Some(pool.clone()),
+                            )
+                        }
+                        other => {
+                            // A real provider was configured but this runtime ships no client for
+                            // it (e.g. `deepseek`). Do NOT silently echo — that looks alive but
+                            // parrots input. Surface the misconfiguration in the logs AND in every
+                            // chat reply so the user sees exactly what to change.
+                            let msg = format!(
+                                "⚠️ This agent's model provider '{other}' is not supported by the \
                          MUR runtime (supported: local, ollama, anthropic, openai). \
                          Update the agent's model to a supported provider in ~/.mur/models.yaml."
-                    );
-                    error!(provider = %other, "unsupported model provider — replying with misconfiguration notice instead of echo");
-                    (
-                        Arc::new(TaskRunner::new_stub_misconfigured(msg)),
-                        None,
-                        Some(pool.clone()),
-                    )
+                            );
+                            error!(provider = %other, "unsupported model provider — replying with misconfiguration notice instead of echo");
+                            (
+                                Arc::new(TaskRunner::new_stub_misconfigured(msg)),
+                                None,
+                                Some(pool.clone()),
+                            )
+                        }
+                    }
                 }
             },
-        });
+        );
     }
 
     // Chain and/or routing configured → routing-aware fallback client.
@@ -391,7 +403,11 @@ pub async fn build_provider_runner(
             .get(model_ref)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("model_ref {model_ref:?} not in registry"))?;
-        build_client_from_entry(&candidate_entry, &profile_for_chain, &mur_home_for_chain)
+        crate::llm::client_builder::build_client_from_entry(
+            &candidate_entry,
+            &profile_for_chain,
+            &mur_home_for_chain,
+        )
     };
     let fallback_client: Arc<dyn LlmClient> =
         Arc::new(crate::llm::fallback::FallbackLlmClient::new_routed(
@@ -401,140 +417,6 @@ pub async fn build_provider_runner(
             switch_cfg.retry.clone(),
         ));
     Ok(build(fallback_client))
-}
-
-/// Build the `Arc<dyn LlmClient>` for a single resolved model entry: secret
-/// resolution + guarded HTTP client + provider dispatch. Pure and synchronous
-/// (uses `SecretRef::resolve_blocking` / the `block_on` helper below instead
-/// of `.await`) so it can double as a `ClientFactory` for fallback-chain
-/// candidates, which are built from inside a synchronous closure. `Err`
-/// covers "echo" (deliberate placeholder — never has a real client) and
-/// unsupported providers; callers reconstruct the differentiated stub/log
-/// behaviour for those on `Err` (see `build_provider_runner` above).
-fn build_client_from_entry(
-    entry: &ModelEntry,
-    profile: &Profile,
-    mur_home: &Path,
-) -> anyhow::Result<Arc<dyn LlmClient>> {
-    let secret_value: Option<secrecy::SecretString> = match &entry.secret {
-        Some(s) => match s.resolve_blocking() {
-            Ok(v) => Some(v),
-            Err(e) => {
-                warn!(error = %e, "secret resolution failed; falling back to echo");
-                None
-            }
-        },
-        None => None,
-    };
-
-    let outbound = &profile.inner.entitlements.network.outbound;
-    let host_guard = match outbound.mode {
-        NetworkOutboundMode::Unrestricted => HostGuard::unrestricted(),
-        NetworkOutboundMode::Restricted | NetworkOutboundMode::ProxyOnly => {
-            // Auto-allow the agent's configured LLM provider host: choosing a
-            // provider implies permission to reach it, so the user never has to
-            // `mur agent perm allow-host` their own model endpoint. Mirrors the
-            // loopback-port auto-grant for local models (`local_llm_port`).
-            // ProxyOnly shares this host governance with Restricted — it still
-            // needs to resolve its own LLM endpoint; it just loses general TCP
-            // egress at the OS sandbox layer.
-            let mut hosts = outbound.allow_hosts.clone();
-            if let Some(h) = provider_host(entry)
-                && !hosts.iter().any(|x| x == &h)
-            {
-                hosts.push(h);
-            }
-            HostGuard::restricted(hosts)
-        }
-        NetworkOutboundMode::Off => HostGuard::off(),
-    };
-    let guarded_http = reqwest::ClientBuilder::new()
-        .dns_resolver(std::sync::Arc::new(host_guard))
-        .build()
-        .context("failed to build guarded HTTP client")?;
-
-    match entry.provider.as_str() {
-        "local" => {
-            let base = resolve_local_base_url(
-                entry.base_url.as_deref(),
-                std::env::var("MUR_LOCAL_LLM_BASE_URL").ok(),
-                mur_home,
-            );
-            let key = secrecy::SecretString::from(LOCAL_LLM_PLACEHOLDER_KEY.to_string());
-            Ok(Arc::new(OpenAiClient::from_secret_string_with_http(
-                &key,
-                entry.model.clone(),
-                Some(base),
-                guarded_http,
-            )))
-        }
-        "ollama" => {
-            let base = entry.base_url.clone().unwrap_or_else(|| {
-                std::env::var("OLLAMA_BASE_URL")
-                    .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string())
-            });
-            Ok(Arc::new(OllamaClient::with_http_client(
-                base,
-                entry.model.clone(),
-                guarded_http,
-            )))
-        }
-        "anthropic" => {
-            if let Some(key) = secret_value.as_ref() {
-                Ok(Arc::new(AnthropicClient::from_secret_string_with_http(
-                    key,
-                    entry.model.clone(),
-                    entry.base_url.clone(),
-                    guarded_http,
-                )))
-            } else {
-                block_on(AnthropicClient::from_agent_credentials_with_http(
-                    &profile.inner.name,
-                    entry.model.clone(),
-                    guarded_http,
-                ))
-                .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
-                .map_err(anyhow::Error::from)
-            }
-        }
-        "openai" => {
-            if let Some(key) = secret_value.as_ref() {
-                Ok(Arc::new(OpenAiClient::from_secret_string_with_http(
-                    key,
-                    entry.model.clone(),
-                    entry.base_url.clone(),
-                    guarded_http,
-                )))
-            } else {
-                block_on(OpenAiClient::from_agent_credentials_with_http(
-                    &profile.inner.name,
-                    entry.model.clone(),
-                    guarded_http,
-                ))
-                .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
-                .map_err(anyhow::Error::from)
-            }
-        }
-        "echo" => Err(anyhow::anyhow!("no model configured (echo placeholder)")),
-        other => Err(anyhow::anyhow!("unsupported model provider {other:?}")),
-    }
-}
-
-/// Block the current thread on a future from a synchronous context — needed
-/// because `ClientFactory` (the fallback chain's per-candidate builder type)
-/// is synchronous but credential resolution here is async. Mirrors
-/// `SecretRef::resolve_blocking`'s pattern: `block_in_place` under the
-/// current runtime handle (this crate's `#[tokio::main]` is multi-thread, see
-/// `main.rs`), else a scratch current-thread runtime.
-fn block_on<F: std::future::Future>(fut: F) -> F::Output {
-    match tokio::runtime::Handle::try_current() {
-        Ok(h) => tokio::task::block_in_place(|| h.block_on(fut)),
-        Err(_) => tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("failed to build scratch runtime")
-            .block_on(fut),
-    }
 }
 
 /// Telemetry writer + notification routing + hook chain + skills loaded once at boot.
