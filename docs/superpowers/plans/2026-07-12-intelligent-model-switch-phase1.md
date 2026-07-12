@@ -846,43 +846,141 @@ Find the block in `build_provider_runner` that, given a `ModelEntry` + resolved 
 
 **Note:** the exact secret-resolution + guarded-HTTP-client + provider-match currently lives inline in `build_provider_runner`. Extract it into a `fn build_client_from_entry(entry: &ModelEntry, mur_home: &Path) -> anyhow::Result<Arc<dyn LlmClient>>` (pure move of the existing lines 260-418 logic — no behaviour change), then both the single-client path and `build_one` call it. Do the extraction as the first, behaviour-preserving edit and run the existing runtime tests to confirm no regression before wiring fallback.
 
-- [ ] **Step 2: Compute candidates and choose single vs fallback client**
+- [ ] **Step 2: Add per-request candidate selection (with routing) to `FallbackLlmClient`**
 
-After extracting, add:
+Per the execution-time decision, difficulty routing is delivered fully in this task (still opt-in, `enabled: false` by default). Rather than pre-compute a fixed candidate list, give the adapter a per-request source so it can apply the routing heuristic to each request. In `mur-agent-runtime/src/llm/fallback.rs`, add a `CandidateSource` and a routed constructor — WITHOUT changing the existing `new(candidates, factory, retry)` (Task 6's tests rely on it):
+
+```rust
+use mur_common::agent::AgentProfile;
+use mur_common::config::ModelSwitchConfig;
+use mur_common::model::{choose_by_difficulty, resolve_model_refs};
+
+/// How the adapter decides the ordered candidate list for a request.
+enum CandidateSource {
+    /// Fixed list (unit tests / simple wiring).
+    Static(Vec<String>),
+    /// Recomputed per request: applies opt-in difficulty routing (which needs
+    /// the request's token estimate) then `resolve_model_refs` (priority
+    /// per-agent → global). Reuses the pure, tested mur-common fns.
+    PerRequest { profile: Box<AgentProfile>, cfg: Box<ModelSwitchConfig> },
+}
+```
+
+Change the `candidates: Vec<String>` field to `source: CandidateSource`, keep `new` building `Static`, and add:
+
+```rust
+impl FallbackLlmClient {
+    /// Routing-aware constructor: candidates are computed per request so the
+    /// difficulty heuristic can see the request size.
+    pub fn new_routed(profile: AgentProfile, cfg: ModelSwitchConfig, factory: ClientFactory, retry: RetryConfig) -> Self {
+        // primary_name for model_name(): the non-routed primary (model_ref/default).
+        let primary_name = resolve_model_refs(&profile, &cfg, None).first().cloned().unwrap_or_default();
+        Self {
+            source: CandidateSource::PerRequest { profile: Box::new(profile), cfg: Box::new(cfg) },
+            factory, retry, cooldown: CooldownMap::new(), primary_name,
+        }
+    }
+
+    /// The ordered candidate refs for this request.
+    fn candidates_for(&self, req: &LlmRequest) -> Vec<String> {
+        match &self.source {
+            CandidateSource::Static(v) => v.clone(),
+            CandidateSource::PerRequest { profile, cfg } => {
+                // Per-agent routing overrides global; disabled → None → normal
+                // model_ref/default primary.
+                let routing = profile.routing.clone().unwrap_or_else(|| cfg.routing.clone());
+                let routed = if routing.enabled {
+                    choose_by_difficulty(estimate_input_tokens(req), &routing)
+                } else {
+                    None
+                };
+                resolve_model_refs(profile, cfg, routed)
+            }
+        }
+    }
+}
+```
+
+In `generate`, replace the `for model_ref in &self.candidates` header with:
+
+```rust
+        let candidates = self.candidates_for(&req);
+        // ... then iterate `for model_ref in &candidates` (rest of the loop unchanged) ...
+```
+
+Add unit tests (append to `fallback.rs` tests):
+
+```rust
+    #[tokio::test]
+    async fn routed_generate_picks_frontier_for_large_request() {
+        use mur_common::agent::AgentProfile;
+        use mur_common::config::{ModelSwitchConfig, RoutingConfig};
+        let mut cfg = ModelSwitchConfig::default();
+        cfg.routing = RoutingConfig {
+            enabled: true,
+            cheap: Some("cheap".into()),
+            frontier: Some("frontier".into()),
+            threshold_input_tokens: Some(5),
+        };
+        let mut scripts = std::collections::HashMap::new();
+        scripts.insert("frontier".to_string(), vec![Ok(())]);
+        scripts.insert("cheap".to_string(), vec![Ok(())]);
+        let fb = FallbackLlmClient::new_routed(
+            AgentProfile::default_for_tests(), cfg, factory_for(scripts), retry0(),
+        );
+        // A big request (> threshold=5 tokens) routes to frontier.
+        let big = LlmRequest {
+            messages: vec![RichMessage::Text { role: "user".into(), content: "x".repeat(400) }],
+            temperature: None, max_tokens: None, tools: vec![],
+        };
+        assert_eq!(fb.generate(big).await.unwrap().text, "frontier");
+        // A tiny request routes to cheap.
+        let small = LlmRequest {
+            messages: vec![RichMessage::Text { role: "user".into(), content: "x".into() }],
+            temperature: None, max_tokens: None, tools: vec![],
+        };
+        assert_eq!(fb.generate(small).await.unwrap().text, "cheap");
+    }
+```
+
+**Interface note:** `RichMessage` + `LlmRequest` are already imported in the test module (Task 5/6). `AgentProfile::default_for_tests()` is the codebase's public test constructor (do NOT use `::default()` — there is no `Default` impl). `estimate_input_tokens` is `chars/4`, so `"x".repeat(400)` ≈ 100 tokens (> 5 → frontier) and `"x"` ≈ 0 (≤ 5 → cheap).
+
+- [ ] **Step 3: Wire `build_provider_runner` to use the routed client**
+
+Load the global config, then decide single-client vs routed fallback:
 
 ```rust
     let switch_cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).models;
-    // Difficulty routing (opt-in) picks the primary per-agent → global.
-    let routing = profile.inner.routing.clone().unwrap_or(switch_cfg.routing.clone());
-    // Note: routing needs the request; Phase 1 applies it per-call inside the
-    // FallbackLlmClient only when enabled. For candidate assembly here we pass
-    // None (model_ref/global default primary); see Step 3 for the routing path.
+    let routing = profile.inner.routing.clone().unwrap_or_else(|| switch_cfg.routing.clone());
     let refs = mur_common::model::resolve_model_refs(&profile.inner, &switch_cfg, None);
 
     let client: Arc<dyn LlmClient> = if refs.len() <= 1 && !routing.enabled {
-        // Preserve today's single-model behaviour exactly.
+        // Nothing configured (no chain, no routing) → today's exact single-model
+        // path, no wrapper. Preserves existing behaviour byte-for-byte.
         build_client_from_entry(&entry, &mur_home)?
     } else {
-        Arc::new(mur_agent_runtime_fallback_new(refs, Box::new(build_one), switch_cfg.retry.clone()))
+        // Chain and/or routing configured → routing-aware fallback client.
+        Arc::new(crate::llm::fallback::FallbackLlmClient::new_routed(
+            profile.inner.clone(),
+            switch_cfg.clone(),
+            Box::new(build_one),
+            switch_cfg.retry.clone(),
+        ))
     };
 ```
 
-Replace `mur_agent_runtime_fallback_new(...)` with the real path `crate::llm::fallback::FallbackLlmClient::new(...)`. Keep the existing `entry` (from `resolve_model_entry`) for the single-model path so nothing changes when nothing is configured.
+Keep the existing `entry` (from `resolve_model_entry`) for the single-model path so nothing changes when nothing is configured. Ensure `build_one` (Step 1) and the `FallbackLlmClient` construction satisfy the `ClientFactory` type (`Box<dyn Fn(&str) -> anyhow::Result<Arc<dyn LlmClient>> + Send + Sync>`) — `build_one` must be `Send + Sync` (it captures `mur_home`, a `PathBuf`, which is fine).
 
-- [ ] **Step 3: (Routing, opt-in) apply difficulty pick inside the client**
+- [ ] **Step 4: Verify no regression + routing + build**
 
-Because routing needs the request, the simplest correct Phase-1 wiring is: when `routing.enabled`, prepend the routed primary at generate time. Extend `FallbackLlmClient::new` call to also pass the `RoutingConfig` and the resolver, OR — simpler — keep routing OUT of the runtime path in Phase 1 and document it: since routing is `enabled: false` by default and the heuristic + `resolve_model_refs(routed_primary=Some)` are already unit-tested (Task 3), ship the wiring with routing applied at candidate-assembly using a fixed estimate is NOT possible (no req yet). **Decision:** In Phase 1, wire fallback fully; gate routing behind a follow-up (documented in the spec's non-goals note is inaccurate — instead add a one-line log `tracing::info!("model routing enabled but per-request routing lands in Phase 1b")` when `routing.enabled`). This keeps Task 7 shippable and honest; the pure routing fn is already tested and ready for the per-request hook.
-
-- [ ] **Step 4: Verify no regression + build**
-
-Run: `cargo build -p mur-agent-runtime` then `cargo test -p mur-agent-runtime`
-Expected: builds; existing runtime tests pass; with no `models:` config and no per-agent chain, `refs.len() <= 1` so the single-client path runs (unchanged behaviour).
+Run: `cargo build -p mur-agent-runtime` then `cargo test -p mur-agent-runtime fallback:: llm::`
+Expected: builds; Task 6's static tests + the new `routed_generate_picks_frontier_for_large_request` pass; existing runtime tests pass. With no `models:` config and no per-agent chain/routing, `refs.len() <= 1 && !routing.enabled` so the single-client path runs (unchanged behaviour).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add mur-agent-runtime/src/supervisor_runner.rs
-git commit -m "feat(runtime): build FallbackLlmClient from resolved candidates (single-model path unchanged)"
+git add mur-agent-runtime/src/supervisor_runner.rs mur-agent-runtime/src/llm/fallback.rs
+git commit -m "feat(runtime): routing-aware FallbackLlmClient wired into build_provider_runner (single-model path unchanged)"
 ```
 
 ---
@@ -982,12 +1080,12 @@ git commit -m "feat(cli): mur model default/fallback + per-agent --fallback (ref
 - Per-agent settings + priority per-agent→global → Task 2, 3. ✓
 - Fallback chain + retry/backoff/cooldown → Task 5, 6. ✓
 - Error classification (429/5xx/timeout/402 retryable; 400/401/malformed fatal) → Task 4. ✓
-- Opt-in difficulty heuristic → Task 3 (pure fn). Runtime per-request wiring is explicitly deferred to Phase 1b in Task 7 Step 3 (routing is off by default; the fn is tested and ready) — **flagged as a scoping decision for the reviewer/user**, not silently dropped. ✓
+- Opt-in difficulty heuristic → Task 3 (pure fn) + Task 7 Step 2 (per-request application inside `FallbackLlmClient::new_routed`, off by default). Fully functional this phase. ✓
 - CLI (`mur model default/fallback`, per-agent `--fallback`, ref validation) → Task 8. ✓
 - Rollout additive/off-by-default → Task 7 (single-model path unchanged when nothing configured). ✓
 - Hub GUI → correctly EXCLUDED (Phase 2). ✓
 
-**Gap flagged honestly:** the difficulty-routing *runtime* application (per-request primary pick) is deferred to Phase 1b in Task 7 Step 3, because it needs the request object at call time and doing it right is a small follow-up on top of the already-tested pure fn. This is a deliberate narrowing of the opt-in, off-by-default feature — confirm with the user during execution whether to fold the per-request routing into Task 7 instead of deferring.
+**Routing decision (resolved during execution):** per the user's execution-time choice, per-request difficulty routing is folded into Task 7 Step 2 (`FallbackLlmClient::new_routed` applies `choose_by_difficulty(estimate_input_tokens(req), routing)` per call), not deferred. It stays opt-in and `enabled: false` by default.
 
 **Placeholder scan:** No TBD/TODO. The two "Interface note" items (Task 5 `LlmMessage` field name, Task 6 `LlmRequest: Clone`) are explicit verification instructions with the fallback action stated, not placeholders. Task 7 Step 1 names the exact lines to extract and mandates a behaviour-preserving move first.
 
