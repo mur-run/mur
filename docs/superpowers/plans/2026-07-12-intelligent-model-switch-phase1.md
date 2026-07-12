@@ -999,9 +999,19 @@ git commit -m "feat(runtime): routing-aware FallbackLlmClient wired into build_p
 ```rust
 #[test]
 fn set_default_validates_ref_exists() {
-    // Uses a temp MUR_HOME with a seeded models.yaml (mirror existing model.rs
-    // tests' harness). Setting an unknown ref errors; a known ref persists.
-    let home = /* temp mur home with models.yaml containing `claude_sonnet` */;
+    use mur_common::model::{ModelEntry, ModelRegistry};
+    // Temp home with a seeded models.yaml containing `claude_sonnet`.
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().to_path_buf();
+    let mut reg = ModelRegistry::default();
+    reg.models.insert("claude_sonnet".into(), ModelEntry {
+        provider: "anthropic".into(),
+        model: "claude-sonnet-5".into(),
+        ..Default::default()
+    });
+    reg.save_to(&home.join("models.yaml")).unwrap();
+
+    // Unknown ref → error (fail-closed); known ref → persisted to config.yaml.
     assert!(cmd_model_default(&home, "does_not_exist").is_err());
     cmd_model_default(&home, "claude_sonnet").unwrap();
     let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
@@ -1055,9 +1065,29 @@ pub fn cmd_model_fallback(home: &Path, refs: &[String]) -> anyhow::Result<()> {
 }
 ```
 
-**Note:** use whatever save function the codebase exposes — grep `fn save_config`. The Hub uses `mur_core::store::config::save_config`; if it saves to the default home only, add/reuse a `save_config_at(path, cfg)` (or set `MUR_HOME`). Wire both handlers into the `ModelCmd` dispatch (`match cmd { ModelCmd::Default{..} => .., ModelCmd::Fallback{..} => .. }`).
+**Note (config save):** `store/config.rs` currently exposes `save_config(config)` which writes to the default/`MUR_HOME` path via `config_path()`. Add a path-taking variant so the handlers are testable with an explicit temp home: refactor `save_config` to delegate —
 
-For per-agent, add a `--fallback <ref>...` option to the existing agent model-setting path in `model_resolve.rs` that writes `profile.fallback_chain` (validating each ref), mirroring how it sets `profile.model_ref` (~line 94). If there is no standalone agent model-set command, expose `pub fn cmd_agent_set_fallback(name: &str, refs: &[String]) -> Result<()>` that loads the profile, validates refs, sets `fallback_chain`, saves.
+```rust
+// mur-core/src/store/config.rs
+pub fn save_config(config: &Config) -> Result<()> {
+    save_config_at(&config_path(), config)
+}
+
+/// Save config to an explicit path (same YAML + header as save_config).
+pub fn save_config_at(path: &Path, config: &Config) -> Result<()> {
+    // (move the existing save_config body here, using `path` instead of config_path())
+    ...
+}
+```
+
+Wire both handlers into the `ModelCmd` dispatch in `mur-core/src/cmd/model.rs` (the existing `match cmd { ModelCmd::Add{..} => .., ... }`), resolving the home via the existing `crate::cmd::agent::resolve_mur_home()?`:
+
+```rust
+        ModelCmd::Default { model_ref } => cmd_model_default(&crate::cmd::agent::resolve_mur_home()?, &model_ref)?,
+        ModelCmd::Fallback { model_refs } => cmd_model_fallback(&crate::cmd::agent::resolve_mur_home()?, &model_refs)?,
+```
+
+For per-agent, expose `pub fn cmd_agent_set_fallback(home: &Path, name: &str, refs: &[String]) -> Result<()>` in `model_resolve.rs`: load the profile (mirroring how `model_resolve.rs:94` sets `profile.model_ref`), validate each ref against `home.join("models.yaml")` (fail-closed via the same `ensure_ref_exists` helper), set `profile.fallback_chain = refs.to_vec()`, save the profile. Wire a `--fallback <ref>...` CLI option to it. (If a dedicated agent subcommand enum is used, add the variant there and dispatch with `resolve_mur_home()`.)
 
 - [ ] **Step 4: Run to verify it passes**
 
