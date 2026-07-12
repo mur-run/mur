@@ -32,3 +32,27 @@ export function sanitizeChain(chain: string[]): string[] {
 export function isChainValid(chain: string[], known: Set<string>): boolean {
   return chain.every((r) => known.has(r));
 }
+
+/**
+ * Normalize a raw `model_switch_get` payload into a fully-populated view.
+ * The Rust `ModelSwitchConfig` omits `default`, `fallback_chain`, and the
+ * routing `cheap`/`frontier`/`threshold_input_tokens` fields when they are
+ * unset/empty (`skip_serializing_if`), so they arrive `undefined` over the
+ * Tauri boundary. Fill them so the UI never dereferences `undefined`
+ * (e.g. `fallback_chain.length`). `retry` and `routing.enabled` are always
+ * serialized, so they pass through untouched.
+ */
+export function normalizeMs(raw: ModelSwitchView): ModelSwitchView {
+  return {
+    ...raw,
+    default: raw.default ?? null,
+    fallback_chain: raw.fallback_chain ?? [],
+    routing: {
+      ...raw.routing,
+      cheap: raw.routing?.cheap ?? null,
+      frontier: raw.routing?.frontier ?? null,
+      threshold_input_tokens: raw.routing?.threshold_input_tokens ?? null,
+    },
+  };
+}
+

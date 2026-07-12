@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { type ModelSwitchView, sanitizeChain, isChainValid } from "./modelSwitch";
+import { type ModelSwitchView, sanitizeChain, isChainValid, normalizeMs } from "./modelSwitch";
 
 describe("modelSwitch helpers", () => {
   it("sanitizeChain drops blanks and de-dupes preserving order", () => {
@@ -9,6 +9,20 @@ describe("modelSwitch helpers", () => {
     const known = new Set(["a", "b"]);
     expect(isChainValid(["a", "b"], known)).toBe(true);
     expect(isChainValid(["a", "x"], known)).toBe(false);
+  });
+  it("normalizeMs fills fields the Rust config omits when empty/unset", () => {
+    // A default config serializes without default/fallback_chain/routing options
+    // (skip_serializing_if). normalizeMs must fill them so the UI never reads
+    // `undefined.length`.
+    const raw = { retry: { max_retries: 1, backoff_base_ms: 500, cooldown_secs: 60 }, routing: { enabled: false } } as unknown as ModelSwitchView;
+    const ms = normalizeMs(raw);
+    expect(ms.fallback_chain).toEqual([]);
+    expect(ms.default).toBeNull();
+    expect(ms.routing.cheap).toBeNull();
+    expect(ms.routing.frontier).toBeNull();
+    expect(ms.routing.threshold_input_tokens).toBeNull();
+    expect(ms.routing.enabled).toBe(false);
+    expect(ms.retry.cooldown_secs).toBe(60); // passthrough preserved
   });
 });
 
