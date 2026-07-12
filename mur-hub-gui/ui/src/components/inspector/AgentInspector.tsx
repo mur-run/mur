@@ -16,6 +16,9 @@ import { useAgents } from "../../context/AgentContext";
 import { CompanionInbox } from "../CompanionInbox";
 import { ModelCombobox } from "../ModelCombobox";
 import { ModelLibrary } from "../ModelLibrary";
+import { FallbackChainEditor } from "../settings/FallbackChainEditor";
+import { sanitizeChain } from "../settings/modelSwitch";
+import type { ModelOption } from "../modelPicker";
 import { MobileTab } from "../MobileTab";
 import { MemoryTab } from "../MemoryTab";
 import { useT } from "../../i18n";
@@ -71,6 +74,9 @@ export function AgentInspector({ agentName, agents, runtime, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<DetailTab>("persona");
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
+  const [agentChain, setAgentChain] = useState<string[]>([]);
+  const [chainErr, setChainErr] = useState<string | null>(null);
 
   useEffect(() => {
     setError(null);
@@ -79,6 +85,31 @@ export function AgentInspector({ agentName, agents, runtime, onClose }: Props) {
       .then(setDetail)
       .catch((e) => setError(String(e)));
   }, [agentName]);
+
+  // Per-agent fallback-chain override (empty = inherits the global chain set
+  // in Settings → Models). Independent of `detail` — has its own Tauri pair.
+  useEffect(() => {
+    setChainErr(null);
+    invoke<string[]>("agent_get_fallback", { name: agentName })
+      .then(setAgentChain)
+      .catch(() => setAgentChain([]));
+  }, [agentName]);
+
+  useEffect(() => {
+    invoke<ModelOption[]>("list_models")
+      .then(setModelOptions)
+      .catch(() => setModelOptions([]));
+  }, []);
+
+  function saveAgentChain(next: string[]) {
+    const refs = sanitizeChain(next);
+    invoke<string[]>("agent_set_fallback", { name: agentName, refs })
+      .then((saved) => {
+        setAgentChain(saved);
+        setChainErr(null);
+      })
+      .catch((e) => setChainErr(String(e)));
+  }
 
   // Honor a requested deep-link tab (e.g. 🎨 on an agent card → Style), then
   // clear it so it fires once. Runs after the per-agent reset above, so it wins.
@@ -236,6 +267,20 @@ export function AgentInspector({ agentName, agents, runtime, onClose }: Props) {
               onSaved={handleSaved}
               onManage={() => setLibraryOpen(true)}
             />
+            <div className="tab-form" style={{ marginBottom: 18 }}>
+              <label className="field-label">{t("detail.fallbackChain")}</label>
+              <FallbackChainEditor
+                chain={agentChain}
+                options={modelOptions}
+                onChange={saveAgentChain}
+                emptyHintKey="detail.fallbackChainInherits"
+              />
+              {chainErr && (
+                <p className="settings-hint slot-error">
+                  {t("detail.fallbackChainError", { error: chainErr })}
+                </p>
+              )}
+            </div>
             <ModelLibrary open={libraryOpen} onClose={() => setLibraryOpen(false)} />
             <PersonaTab detail={detail} onSaved={handleSaved} />
           </>

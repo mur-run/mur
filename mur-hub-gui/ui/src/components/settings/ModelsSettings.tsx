@@ -7,7 +7,8 @@ import type { ModelOption } from "../modelPicker";
 import type { DetectedLocalView } from "../ModelLibraryPanels";
 import { buildSlotGroups, decodeSel, encodeSel, type SlotOptionGroup } from "../modelSlots";
 import { ModelRefSelect } from "./ModelRefSelect";
-import { sanitizeChain, type ModelSwitchView } from "./modelSwitch";
+import { FallbackChainEditor } from "./FallbackChainEditor";
+import { type ModelSwitchView } from "./modelSwitch";
 
 interface SlotView {
   provider: string;
@@ -132,34 +133,6 @@ export function ModelsSettings() {
     </div>
   );
 
-  const addChainRow = () => {
-    if (!ms) return;
-    const pick =
-      modelOptions.find((o) => !ms.fallback_chain.includes(o.ref_name))?.ref_name ?? modelOptions[0]?.ref_name;
-    if (!pick) return;
-    saveMs({ ...ms, fallback_chain: sanitizeChain([...ms.fallback_chain, pick]) });
-  };
-
-  const removeChainRow = (i: number) => {
-    if (!ms) return;
-    saveMs({ ...ms, fallback_chain: ms.fallback_chain.filter((_, idx) => idx !== i) });
-  };
-
-  const updateChainRow = (i: number, val: string | null) => {
-    if (!ms || !val) return;
-    const next = ms.fallback_chain.map((r, idx) => (idx === i ? val : r));
-    saveMs({ ...ms, fallback_chain: sanitizeChain(next) });
-  };
-
-  const moveChain = (i: number, dir: -1 | 1) => {
-    if (!ms) return;
-    const j = i + dir;
-    if (j < 0 || j >= ms.fallback_chain.length) return;
-    const next = [...ms.fallback_chain];
-    [next[i], next[j]] = [next[j], next[i]];
-    saveMs({ ...ms, fallback_chain: next });
-  };
-
   const setRouting = (patch: Partial<ModelSwitchView["routing"]>) => {
     if (!ms) return;
     saveMs({ ...ms, routing: { ...ms.routing, ...patch } });
@@ -217,51 +190,12 @@ export function ModelsSettings() {
         </div>
         <p className="settings-hint">{t("settings.modelSwitch.defaultHint")}</p>
 
-        <div className="settings-row">
-          <span className="settings-row__label">{t("settings.modelSwitch.chain")}</span>
-          <button className="toolbar-btn" onClick={addChainRow} disabled={modelOptions.length === 0}>
-            {t("settings.modelSwitch.chainAdd")}
-          </button>
-        </div>
         <p className="settings-hint">{t("settings.modelSwitch.chainHint")}</p>
-        {ms.fallback_chain.length === 0 ? (
-          <p className="settings-hint">{t("settings.modelSwitch.chainEmpty")}</p>
-        ) : (
-          ms.fallback_chain.map((ref, i) => (
-            <div className="settings-row" key={`${ref}-${i}`}>
-              <span className="settings-row__label">{i + 1}.</span>
-              <ModelRefSelect
-                value={ref}
-                options={modelOptions}
-                ariaLabel={`${t("settings.modelSwitch.chain")} ${i + 1}`}
-                onChange={(v) => updateChainRow(i, v)}
-              />
-              <button
-                className="toolbar-btn"
-                onClick={() => moveChain(i, -1)}
-                disabled={i === 0}
-                aria-label={t("settings.modelSwitch.chainUp")}
-              >
-                ↑
-              </button>
-              <button
-                className="toolbar-btn"
-                onClick={() => moveChain(i, 1)}
-                disabled={i === ms.fallback_chain.length - 1}
-                aria-label={t("settings.modelSwitch.chainDown")}
-              >
-                ↓
-              </button>
-              <button
-                className="toolbar-btn"
-                onClick={() => removeChainRow(i)}
-                aria-label={t("settings.modelSwitch.chainRemove")}
-              >
-                ✕
-              </button>
-            </div>
-          ))
-        )}
+        <FallbackChainEditor
+          chain={ms.fallback_chain}
+          options={modelOptions}
+          onChange={(next) => saveMs({ ...ms, fallback_chain: next })}
+        />
 
         <div className="settings-row">
           <label className="settings-row__label" htmlFor="ms-routing-enable">
