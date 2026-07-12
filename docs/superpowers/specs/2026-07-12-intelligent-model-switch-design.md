@@ -51,7 +51,7 @@ Two units, both feeding the single existing resolution point `resolve_model_entr
 ```
 
 - **`ModelResolver`** — pure function: `(profile, global_config) → Vec<ModelCandidate>`. Testable in isolation.
-- **`FallbackExecutor`** — wraps the LLM call site; owns the in-memory cooldown map. Because `LlmClient` is not dyn-compatible (RPITIT — known constraint), the executor builds a fresh client per candidate via the existing `resolve_model_entry`-style lookup and loops; no `Arc<dyn>`.
+- **`FallbackExecutor`** — a `FallbackLlmClient` that itself implements the runtime's `LlmClient` trait (`#[async_trait]`, used as `Arc<dyn LlmClient>`, so object-safe). It holds the ordered candidates + a client factory + the in-memory cooldown map, and its `generate` loops over candidates. Because it *is* an `LlmClient`, it drops into the existing `Arc<dyn LlmClient>` slot with no agent-loop changes.
 - **Difficulty heuristic** — pure function `(estimated_input_tokens, routing_config) → model_ref`.
 
 ## Data Model
