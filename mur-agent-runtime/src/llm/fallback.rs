@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use mur_common::config::RetryConfig;
+use mur_common::agent::AgentProfile;
+use mur_common::config::{ModelSwitchConfig, RetryConfig};
+use mur_common::model::{choose_by_difficulty, resolve_model_refs};
 
 use super::{LlmClient, LlmError, LlmRequest, LlmResponse, Retryability, RichMessage, classify};
 
@@ -14,12 +16,25 @@ use super::{LlmClient, LlmError, LlmRequest, LlmResponse, Retryability, RichMess
 /// `FallbackLlmClient` doesn't need a generic parameter per candidate type.
 pub type ClientFactory = Box<dyn Fn(&str) -> anyhow::Result<Arc<dyn LlmClient>> + Send + Sync>;
 
+/// How the adapter decides the ordered candidate list for a request.
+enum CandidateSource {
+    /// Fixed list (unit tests / simple wiring).
+    Static(Vec<String>),
+    /// Recomputed per request: applies opt-in difficulty routing (which needs
+    /// the request's token estimate) then `resolve_model_refs` (priority
+    /// per-agent → global). Reuses the pure, tested mur-common fns.
+    PerRequest {
+        profile: Box<AgentProfile>,
+        cfg: Box<ModelSwitchConfig>,
+    },
+}
+
 /// An `LlmClient` that tries an ordered list of model_refs, advancing on
 /// retryable failures (per-candidate backoff retries first), skipping models in
 /// cooldown, and returning a fatal error immediately. Drops into the existing
 /// `Arc<dyn LlmClient>` slot with no agent-loop change.
 pub struct FallbackLlmClient {
-    candidates: Vec<String>,
+    source: CandidateSource,
     factory: ClientFactory,
     retry: RetryConfig,
     cooldown: CooldownMap,
@@ -30,11 +45,57 @@ impl FallbackLlmClient {
     pub fn new(candidates: Vec<String>, factory: ClientFactory, retry: RetryConfig) -> Self {
         let primary_name = candidates.first().cloned().unwrap_or_default();
         Self {
-            candidates,
+            source: CandidateSource::Static(candidates),
             factory,
             retry,
             cooldown: CooldownMap::new(),
             primary_name,
+        }
+    }
+
+    /// Routing-aware constructor: candidates are computed per request so the
+    /// difficulty heuristic can see the request size.
+    pub fn new_routed(
+        profile: AgentProfile,
+        cfg: ModelSwitchConfig,
+        factory: ClientFactory,
+        retry: RetryConfig,
+    ) -> Self {
+        // primary_name for model_name(): the non-routed primary (model_ref/default).
+        let primary_name = resolve_model_refs(&profile, &cfg, None)
+            .first()
+            .cloned()
+            .unwrap_or_default();
+        Self {
+            source: CandidateSource::PerRequest {
+                profile: Box::new(profile),
+                cfg: Box::new(cfg),
+            },
+            factory,
+            retry,
+            cooldown: CooldownMap::new(),
+            primary_name,
+        }
+    }
+
+    /// The ordered candidate refs for this request.
+    fn candidates_for(&self, req: &LlmRequest) -> Vec<String> {
+        match &self.source {
+            CandidateSource::Static(v) => v.clone(),
+            CandidateSource::PerRequest { profile, cfg } => {
+                // Per-agent routing overrides global; disabled → None → normal
+                // model_ref/default primary.
+                let routing = profile
+                    .routing
+                    .clone()
+                    .unwrap_or_else(|| cfg.routing.clone());
+                let routed = if routing.enabled {
+                    choose_by_difficulty(estimate_input_tokens(req), &routing)
+                } else {
+                    None
+                };
+                resolve_model_refs(profile, cfg, routed)
+            }
         }
     }
 }
@@ -44,7 +105,8 @@ impl LlmClient for FallbackLlmClient {
     async fn generate(&self, req: LlmRequest) -> Result<LlmResponse, LlmError> {
         let now = Instant::now();
         let mut last: Option<LlmError> = None;
-        for model_ref in &self.candidates {
+        let candidates = self.candidates_for(&req);
+        for model_ref in &candidates {
             if self.cooldown.is_cooling(model_ref, now) {
                 continue;
             }
@@ -285,5 +347,49 @@ mod tests {
         let fb = FallbackLlmClient::new(vec!["a".into(), "b".into()], factory_for(s), retry0());
         let err = fb.generate(LlmRequest::default()).await.unwrap_err();
         assert!(matches!(err, LlmError::ServerError(503))); // last candidate's error
+    }
+
+    #[tokio::test]
+    async fn routed_generate_picks_frontier_for_large_request() {
+        use mur_common::agent::AgentProfile;
+        use mur_common::config::{ModelSwitchConfig, RoutingConfig};
+        let mut cfg = ModelSwitchConfig::default();
+        cfg.routing = RoutingConfig {
+            enabled: true,
+            cheap: Some("cheap".into()),
+            frontier: Some("frontier".into()),
+            threshold_input_tokens: Some(5),
+        };
+        let mut scripts = std::collections::HashMap::new();
+        scripts.insert("frontier".to_string(), vec![Ok(())]);
+        scripts.insert("cheap".to_string(), vec![Ok(())]);
+        let fb = FallbackLlmClient::new_routed(
+            AgentProfile::default_for_tests(),
+            cfg,
+            factory_for(scripts),
+            retry0(),
+        );
+        // A big request (> threshold=5 tokens) routes to frontier.
+        let big = LlmRequest {
+            messages: vec![RichMessage::Text {
+                role: "user".into(),
+                content: "x".repeat(400),
+            }],
+            temperature: None,
+            max_tokens: None,
+            tools: vec![],
+        };
+        assert_eq!(fb.generate(big).await.unwrap().text, "frontier");
+        // A tiny request routes to cheap.
+        let small = LlmRequest {
+            messages: vec![RichMessage::Text {
+                role: "user".into(),
+                content: "x".into(),
+            }],
+            temperature: None,
+            max_tokens: None,
+            tools: vec![],
+        };
+        assert_eq!(fb.generate(small).await.unwrap().text, "cheap");
     }
 }
