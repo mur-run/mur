@@ -567,7 +567,7 @@ mod switch_tests {
     use crate::config::{ModelSwitchConfig, RoutingConfig};
 
     fn profile(model_ref: Option<&str>, chain: &[&str]) -> AgentProfile {
-        let mut p = AgentProfile::default();
+        let mut p = AgentProfile::default_for_tests();
         p.model_ref = model_ref.map(|s| s.to_string());
         p.fallback_chain = chain.iter().map(|s| s.to_string()).collect();
         p

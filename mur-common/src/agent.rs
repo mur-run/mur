@@ -1419,12 +1419,6 @@ pub struct FederationConfig {
     pub evidence_flush_interval_minutes: u32,
 }
 
-impl Default for AgentProfile {
-    fn default() -> Self {
-        Self::default_for_tests()
-    }
-}
-
 impl AgentProfile {
     /// Minimal valid profile for tests — no voice, no MCP, no skills.
     ///
