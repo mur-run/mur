@@ -82,6 +82,18 @@ pub enum AgentAction {
         /// New name
         new: String,
     },
+    /// Set this agent's fallback chain of model_refs, tried in order after
+    /// the primary model fails. Overrides the global `models.fallback_chain`
+    /// (`mur model fallback`) when non-empty. Pass no refs to clear it.
+    /// Each ref must already exist in `~/.mur/models.yaml`.
+    Fallback {
+        /// Agent name
+        name: String,
+        /// Ordered registry keys, tried after the primary fails. Omit to
+        /// clear the chain.
+        #[arg(num_args = 0..)]
+        model_refs: Vec<String>,
+    },
     /// Dial an agent's Unix socket and issue A2A `message/send`
     Send {
         /// Agent name

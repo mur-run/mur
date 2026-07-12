@@ -129,6 +129,8 @@ pub fn cmd_create(
             params: BTreeMap::new(),
         },
         model_ref: resolved_model_ref,
+        fallback_chain: Vec::new(),
+        routing: None,
         mcp_servers: vec![],
         skills: vec![],
         transport: TransportConfig {

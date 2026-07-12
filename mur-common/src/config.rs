@@ -9,6 +9,69 @@ pub const DEFAULT_LOCAL_LLM_MODEL: &str = "qwen3.5:4b";
 /// behavioural constant baked into logic.
 pub const DEFAULT_BUNDLED_MODEL_ID: &str = "Qwen3.5-2B-MLX-4bit";
 
+pub const DEFAULT_MAX_RETRIES: u32 = 1;
+pub const DEFAULT_BACKOFF_BASE_MS: u64 = 500;
+pub const DEFAULT_COOLDOWN_SECS: u64 = 60;
+pub const DEFAULT_ROUTING_THRESHOLD: u32 = 2000;
+
+fn default_max_retries() -> u32 {
+    DEFAULT_MAX_RETRIES
+}
+fn default_backoff_base_ms() -> u64 {
+    DEFAULT_BACKOFF_BASE_MS
+}
+fn default_cooldown_secs() -> u64 {
+    DEFAULT_COOLDOWN_SECS
+}
+
+/// Config-layered model selection + failure fallback. See
+/// docs/superpowers/specs/2026-07-12-intelligent-model-switch-design.md.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ModelSwitchConfig {
+    /// Global default model_ref when an agent has no `model_ref`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+    /// Global fallback chain (ordered model_refs).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_chain: Vec<String>,
+    #[serde(default)]
+    pub retry: RetryConfig,
+    #[serde(default)]
+    pub routing: RoutingConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryConfig {
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+    #[serde(default = "default_backoff_base_ms")]
+    pub backoff_base_ms: u64,
+    #[serde(default = "default_cooldown_secs")]
+    pub cooldown_secs: u64,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: DEFAULT_MAX_RETRIES,
+            backoff_base_ms: DEFAULT_BACKOFF_BASE_MS,
+            cooldown_secs: DEFAULT_COOLDOWN_SECS,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct RoutingConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cheap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frontier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold_input_tokens: Option<u32>,
+}
+
 /// Global MUR configuration (~/.mur/config.yaml)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -17,6 +80,9 @@ pub struct Config {
 
     #[serde(default)]
     pub llm: LlmConfig,
+
+    #[serde(default)]
+    pub models: ModelSwitchConfig,
 
     #[serde(default)]
     pub retrieval: RetrievalConfig,
@@ -2113,5 +2179,33 @@ mod cc_proxy_cfg_tests {
         let cfg: Config = serde_yaml_ng::from_str("cc_proxy:\n  enabled: false\n").unwrap();
         assert_eq!(cfg.cc_proxy.url, "http://127.0.0.1:8088");
         assert!(!cfg.cc_proxy.enabled);
+    }
+}
+
+#[cfg(test)]
+mod model_switch_config_tests {
+    use super::*;
+
+    #[test]
+    fn model_switch_config_defaults_and_omitted_block() {
+        // Omitted `models:` block deserializes to defaults.
+        let cfg: Config = serde_yaml::from_str("{}").unwrap();
+        assert_eq!(cfg.models.default, None);
+        assert!(cfg.models.fallback_chain.is_empty());
+        assert_eq!(cfg.models.retry.max_retries, DEFAULT_MAX_RETRIES);
+        assert_eq!(cfg.models.retry.backoff_base_ms, DEFAULT_BACKOFF_BASE_MS);
+        assert_eq!(cfg.models.retry.cooldown_secs, DEFAULT_COOLDOWN_SECS);
+        assert!(!cfg.models.routing.enabled);
+
+        // A populated block round-trips.
+        let yaml = "models:\n  default: claude_sonnet\n  fallback_chain: [claude_sonnet, deepseek_v4_pro]\n  routing:\n    enabled: true\n    cheap: deepseek_v4_flash\n    frontier: claude_opus\n    threshold_input_tokens: 1500\n";
+        let cfg: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.models.default.as_deref(), Some("claude_sonnet"));
+        assert_eq!(
+            cfg.models.fallback_chain,
+            vec!["claude_sonnet", "deepseek_v4_pro"]
+        );
+        assert!(cfg.models.routing.enabled);
+        assert_eq!(cfg.models.routing.threshold_input_tokens, Some(1500));
     }
 }
