@@ -14,9 +14,15 @@ pub const DEFAULT_BACKOFF_BASE_MS: u64 = 500;
 pub const DEFAULT_COOLDOWN_SECS: u64 = 60;
 pub const DEFAULT_ROUTING_THRESHOLD: u32 = 2000;
 
-fn default_max_retries() -> u32 { DEFAULT_MAX_RETRIES }
-fn default_backoff_base_ms() -> u64 { DEFAULT_BACKOFF_BASE_MS }
-fn default_cooldown_secs() -> u64 { DEFAULT_COOLDOWN_SECS }
+fn default_max_retries() -> u32 {
+    DEFAULT_MAX_RETRIES
+}
+fn default_backoff_base_ms() -> u64 {
+    DEFAULT_BACKOFF_BASE_MS
+}
+fn default_cooldown_secs() -> u64 {
+    DEFAULT_COOLDOWN_SECS
+}
 
 /// Config-layered model selection + failure fallback. See
 /// docs/superpowers/specs/2026-07-12-intelligent-model-switch-design.md.
@@ -2195,7 +2201,10 @@ mod model_switch_config_tests {
         let yaml = "models:\n  default: claude_sonnet\n  fallback_chain: [claude_sonnet, deepseek_v4_pro]\n  routing:\n    enabled: true\n    cheap: deepseek_v4_flash\n    frontier: claude_opus\n    threshold_input_tokens: 1500\n";
         let cfg: Config = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(cfg.models.default.as_deref(), Some("claude_sonnet"));
-        assert_eq!(cfg.models.fallback_chain, vec!["claude_sonnet", "deepseek_v4_pro"]);
+        assert_eq!(
+            cfg.models.fallback_chain,
+            vec!["claude_sonnet", "deepseek_v4_pro"]
+        );
         assert!(cfg.models.routing.enabled);
         assert_eq!(cfg.models.routing.threshold_input_tokens, Some(1500));
     }
