@@ -64,6 +64,14 @@ pub struct AgentProfile {
     /// prefers the registry entry over the inline `model:` block.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_ref: Option<String>,
+    /// Per-agent fallback chain (ordered model_refs). Overrides the global
+    /// `models.fallback_chain` when non-empty. See the model-switch spec.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_chain: Vec<String>,
+    /// Per-agent difficulty-routing override. Inherits the global
+    /// `models.routing` when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<crate::config::RoutingConfig>,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerEntry>,
     #[serde(default)]
@@ -1620,6 +1628,45 @@ mod model_ref_tests {
         assert!(s.contains("model_ref: anthropic_opus_4_7"), "yaml: {s}");
         let p2: AgentProfile = serde_yaml_ng::from_str(&s).unwrap();
         assert_eq!(p2.model_ref.as_deref(), Some("anthropic_opus_4_7"));
+    }
+
+    #[test]
+    fn per_agent_fallback_and_routing_optional_and_legacy_safe() {
+        // Load fixture (no fallback_chain / routing) — legacy safe.
+        let yaml = include_str!("../tests/fixtures/profile_p0a_minimal.yaml");
+        let p: AgentProfile = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(
+            p.fallback_chain.is_empty(),
+            "legacy profile must have empty fallback_chain"
+        );
+        assert!(
+            p.routing.is_none(),
+            "legacy profile must have no routing override"
+        );
+
+        // Round-trip with fallback_chain and routing.
+        let mut p = p.clone();
+        p.fallback_chain = vec!["claude_opus".into(), "claude_sonnet".into()];
+        p.routing = Some(crate::config::RoutingConfig {
+            enabled: true,
+            ..Default::default()
+        });
+        let s = serde_yaml_ng::to_string(&p).unwrap();
+        assert!(
+            s.contains("fallback_chain:"),
+            "yaml must contain fallback_chain"
+        );
+        assert!(s.contains("routing:"), "yaml must contain routing");
+        let p2: AgentProfile = serde_yaml_ng::from_str(&s).unwrap();
+        assert_eq!(
+            p2.fallback_chain,
+            vec!["claude_opus", "claude_sonnet"],
+            "fallback_chain must round-trip"
+        );
+        assert!(
+            p2.routing.as_ref().unwrap().enabled,
+            "routing.enabled must round-trip"
+        );
     }
 }
 
