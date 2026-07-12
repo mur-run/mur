@@ -8,7 +8,7 @@ import type { DetectedLocalView } from "../ModelLibraryPanels";
 import { buildSlotGroups, decodeSel, encodeSel, type SlotOptionGroup } from "../modelSlots";
 import { ModelRefSelect } from "./ModelRefSelect";
 import { FallbackChainEditor } from "./FallbackChainEditor";
-import { type ModelSwitchView } from "./modelSwitch";
+import { type ModelSwitchView, normalizeMs } from "./modelSwitch";
 
 interface SlotView {
   provider: string;
@@ -48,7 +48,7 @@ export function ModelsSettings() {
       .then(setSlots)
       .catch(() => {});
     invoke<ModelSwitchView>("model_switch_get")
-      .then(setMs)
+      .then((raw) => setMs(normalizeMs(raw)))
       .catch((e) => setMsErr(String(e)));
     Promise.all([
       invoke<ModelOption[]>("list_models").catch(() => [] as ModelOption[]),
@@ -62,7 +62,7 @@ export function ModelsSettings() {
   const saveMs = useCallback((next: ModelSwitchView) => {
     invoke<ModelSwitchView>("model_switch_set", { next })
       .then((saved) => {
-        setMs(saved);
+        setMs(normalizeMs(saved));
         setMsErr(null);
       })
       .catch((e) => setMsErr(String(e)));
