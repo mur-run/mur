@@ -99,6 +99,48 @@ pub fn apply_model_choice(mur_home: &Path, slug: &str, choice: &ModelChoice) -> 
     Ok(key)
 }
 
+/// Fail-closed guard shared with the global `mur model default`/`fallback`
+/// setters (`cmd/model.rs`): reject any model_ref that isn't already
+/// registered in `<home>/models.yaml`.
+fn ensure_ref_exists(home: &Path, r: &str) -> Result<()> {
+    let reg = ModelRegistry::load_from(&home.join("models.yaml"))?;
+    anyhow::ensure!(
+        reg.models.contains_key(r),
+        "model_ref {r:?} not in models.yaml"
+    );
+    Ok(())
+}
+
+/// Set an agent's per-agent fallback chain (`profile.fallback_chain`),
+/// which takes priority over the global `models.fallback_chain` when
+/// non-empty (see `mur_common::model::resolve_model_refs`). Each ref is
+/// validated against `<home>/models.yaml` before the profile is written
+/// (fail-closed — an unknown ref leaves the profile untouched).
+pub fn cmd_agent_set_fallback(home: &Path, name: &str, refs: &[String]) -> Result<()> {
+    for r in refs {
+        ensure_ref_exists(home, r)?;
+    }
+
+    let profile_path = home.join("agents").join(name).join("profile.yaml");
+    if !profile_path.exists() {
+        bail!("agent '{name}' not installed at {}", profile_path.display());
+    }
+    let mut profile: mur_common::AgentProfile =
+        serde_yaml_ng::from_str(&std::fs::read_to_string(&profile_path)?)
+            .with_context(|| format!("parse {}", profile_path.display()))?;
+    profile.fallback_chain = refs.to_vec();
+    let yaml = serde_yaml_ng::to_string(&profile)?;
+    std::fs::write(&profile_path, yaml)
+        .with_context(|| format!("write {}", profile_path.display()))?;
+
+    if refs.is_empty() {
+        println!("agent '{name}' fallback chain cleared");
+    } else {
+        println!("agent '{name}' fallback chain = {}", refs.join(", "));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,5 +192,44 @@ mod tests {
             serde_yaml_ng::from_str(&std::fs::read_to_string(home.join("profile.yaml")).unwrap())
                 .unwrap();
         assert_eq!(reloaded.model_ref.as_deref(), Some("ollama_llama3_2_3b"));
+    }
+
+    #[test]
+    fn set_fallback_validates_refs_and_persists_to_profile() {
+        use mur_common::model::ModelEntry;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mur_home = tmp.path().to_path_buf();
+        let agent_home = mur_home.join("agents").join("coach");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let p = mur_common::AgentProfile::default_for_tests();
+        std::fs::write(
+            agent_home.join("profile.yaml"),
+            serde_yaml_ng::to_string(&p).unwrap(),
+        )
+        .unwrap();
+
+        let mut reg = ModelRegistry::default();
+        reg.models.insert(
+            "claude_sonnet".into(),
+            ModelEntry {
+                provider: "anthropic".into(),
+                model: "claude-sonnet-5".into(),
+                ..Default::default()
+            },
+        );
+        reg.save_to(&mur_home.join("models.yaml")).unwrap();
+
+        // Unknown ref → fail-closed, profile untouched.
+        assert!(
+            cmd_agent_set_fallback(&mur_home, "coach", &["does_not_exist".to_string()]).is_err()
+        );
+
+        cmd_agent_set_fallback(&mur_home, "coach", &["claude_sonnet".to_string()]).unwrap();
+        let reloaded: mur_common::AgentProfile = serde_yaml_ng::from_str(
+            &std::fs::read_to_string(agent_home.join("profile.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(reloaded.fallback_chain, vec!["claude_sonnet".to_string()]);
     }
 }

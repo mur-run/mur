@@ -543,6 +543,8 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
             params: std::collections::BTreeMap::new(),
         },
         model_ref: None,
+        fallback_chain: Vec::new(),
+        routing: None,
         mcp_servers: vec![],
         skills: vec![],
         transport: TransportConfig {

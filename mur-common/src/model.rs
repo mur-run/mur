@@ -156,6 +156,55 @@ impl ModelRegistry {
     }
 }
 
+use crate::agent::AgentProfile;
+use crate::config::{DEFAULT_ROUTING_THRESHOLD, ModelSwitchConfig, RoutingConfig};
+
+/// Build the ordered list of model_refs to try: `[primary, ...fallback]`.
+/// Priority per-agent → global. The primary is de-duplicated out of the chain
+/// (no point retrying the same ref back-to-back). Returns empty when nothing is
+/// configured, so the caller keeps today's single-inline-model behaviour.
+pub fn resolve_model_refs(
+    profile: &AgentProfile,
+    cfg: &ModelSwitchConfig,
+    routed_primary: Option<String>,
+) -> Vec<String> {
+    let primary = routed_primary
+        .or_else(|| profile.model_ref.clone())
+        .or_else(|| cfg.default.clone());
+    let chain = if !profile.fallback_chain.is_empty() {
+        profile.fallback_chain.clone()
+    } else {
+        cfg.fallback_chain.clone()
+    };
+    let mut out: Vec<String> = Vec::new();
+    if let Some(p) = primary {
+        out.push(p);
+    }
+    for r in chain {
+        if !out.contains(&r) {
+            out.push(r);
+        }
+    }
+    out
+}
+
+/// Opt-in difficulty heuristic: pick `frontier` when the estimated input token
+/// count exceeds the threshold, else `cheap`. `None` when misconfigured (caller
+/// falls through to model_ref/global default).
+pub fn choose_by_difficulty(est_input_tokens: u32, r: &RoutingConfig) -> Option<String> {
+    let threshold = r
+        .threshold_input_tokens
+        .unwrap_or(DEFAULT_ROUTING_THRESHOLD);
+    match (r.cheap.as_ref(), r.frontier.as_ref()) {
+        (Some(cheap), Some(frontier)) => Some(if est_input_tokens > threshold {
+            frontier.clone()
+        } else {
+            cheap.clone()
+        }),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -508,5 +557,89 @@ mod io_tests {
         ModelRegistry::default().save_to(&p).unwrap();
         let temp = dir.path().join("models.yaml.tmp");
         assert!(!temp.exists(), "atomic temp left behind");
+    }
+}
+
+#[cfg(test)]
+mod switch_tests {
+    use super::*;
+    use crate::agent::AgentProfile;
+    use crate::config::{ModelSwitchConfig, RoutingConfig};
+
+    fn profile(model_ref: Option<&str>, chain: &[&str]) -> AgentProfile {
+        let mut p = AgentProfile::default_for_tests();
+        p.model_ref = model_ref.map(|s| s.to_string());
+        p.fallback_chain = chain.iter().map(|s| s.to_string()).collect();
+        p
+    }
+
+    #[test]
+    fn per_agent_primary_and_chain_win_over_global() {
+        let cfg = ModelSwitchConfig {
+            default: Some("global_default".into()),
+            fallback_chain: vec!["g1".into(), "g2".into()],
+            ..Default::default()
+        };
+        let p = profile(Some("agent_primary"), &["agent_primary", "agent_fb"]);
+        // per-agent model_ref is primary; per-agent chain used; primary de-duped.
+        assert_eq!(
+            resolve_model_refs(&p, &cfg, None),
+            vec!["agent_primary", "agent_fb"]
+        );
+    }
+
+    #[test]
+    fn falls_back_to_global_default_and_chain() {
+        let cfg = ModelSwitchConfig {
+            default: Some("global_default".into()),
+            fallback_chain: vec!["g1".into(), "global_default".into()],
+            ..Default::default()
+        };
+        let p = profile(None, &[]); // no per-agent model_ref or chain
+        // primary = global default; global chain used; primary de-duped out.
+        assert_eq!(
+            resolve_model_refs(&p, &cfg, None),
+            vec!["global_default", "g1"]
+        );
+    }
+
+    #[test]
+    fn routed_primary_overrides_model_ref() {
+        let cfg = ModelSwitchConfig {
+            fallback_chain: vec!["g1".into()],
+            ..Default::default()
+        };
+        let p = profile(Some("agent_primary"), &[]);
+        assert_eq!(
+            resolve_model_refs(&p, &cfg, Some("frontier".into())),
+            vec!["frontier", "g1"]
+        );
+    }
+
+    #[test]
+    fn no_config_no_agent_yields_empty() {
+        // Nothing configured → empty vec (caller falls back to inline model).
+        let cfg = ModelSwitchConfig::default();
+        assert!(resolve_model_refs(&profile(None, &[]), &cfg, None).is_empty());
+    }
+
+    #[test]
+    fn difficulty_picks_frontier_over_threshold() {
+        let r = RoutingConfig {
+            enabled: true,
+            cheap: Some("cheap".into()),
+            frontier: Some("frontier".into()),
+            threshold_input_tokens: Some(1000),
+        };
+        assert_eq!(choose_by_difficulty(1500, &r), Some("frontier".into()));
+        assert_eq!(choose_by_difficulty(500, &r), Some("cheap".into()));
+        // Misconfigured (missing frontier) → None (fall through).
+        let bad = RoutingConfig {
+            enabled: true,
+            cheap: Some("c".into()),
+            frontier: None,
+            threshold_input_tokens: None,
+        };
+        assert_eq!(choose_by_difficulty(9999, &bad), None);
     }
 }

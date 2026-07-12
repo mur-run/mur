@@ -2,24 +2,20 @@
 
 use std::sync::Arc;
 
-use anyhow::Context;
 use tracing::{error, warn};
 
 use crate::companion::clock::SystemClock;
 use crate::hitl::HitlApprovals;
 use crate::hooks::{HookChain, HookCtx, TelemetryEmitter};
 use crate::llm::LlmClient;
-use crate::llm::{anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient};
 use crate::mcp::pool::McpPool;
 use crate::profile::Profile;
 use crate::sandbox::SandboxPolicy;
-use crate::sandbox::reqwest_guard::HostGuard;
 use crate::skills::RuntimeSkills;
 use crate::task_runner::TaskRunner;
 use crate::telemetry_writer::{TelemetryWriter, WriterTelemetryEmitter};
 use crate::tools::bash::BashTool;
 use crate::tools::registry::build_tools;
-use mur_common::agent::NetworkOutboundMode;
 use mur_common::config::SkillsConfig;
 use mur_common::model::ModelEntry;
 use mur_common::skill::aggregator::{StatsAggregator, StatsEvent};
@@ -59,7 +55,7 @@ pub(crate) fn profile_needs_egress(entries: &[mur_common::agent::McpServerEntry]
 /// it under restricted outbound (so a user never has to `allow-host` their own
 /// provider). `None` for loopback base_urls (handled by `local_llm_port`) and
 /// for entries without a base_url.
-fn provider_host(entry: &ModelEntry) -> Option<String> {
+pub(crate) fn provider_host(entry: &ModelEntry) -> Option<String> {
     let base = entry.base_url.as_deref()?;
     let host = base.parse::<reqwest::Url>().ok()?.host_str()?.to_string();
     match host.as_str() {
@@ -235,43 +231,6 @@ pub async fn build_provider_runner(
         ..Default::default()
     });
 
-    let secret_value: Option<secrecy::SecretString> = match &entry.secret {
-        Some(s) => match s.resolve().await {
-            Ok(v) => Some(v),
-            Err(e) => {
-                warn!(error = %e, "secret resolution failed; falling back to echo");
-                None
-            }
-        },
-        None => None,
-    };
-
-    let outbound = &profile.inner.entitlements.network.outbound;
-    let host_guard = match outbound.mode {
-        NetworkOutboundMode::Unrestricted => HostGuard::unrestricted(),
-        NetworkOutboundMode::Restricted | NetworkOutboundMode::ProxyOnly => {
-            // Auto-allow the agent's configured LLM provider host: choosing a
-            // provider implies permission to reach it, so the user never has to
-            // `mur agent perm allow-host` their own model endpoint. Mirrors the
-            // loopback-port auto-grant for local models (`local_llm_port`).
-            // ProxyOnly shares this host governance with Restricted — it still
-            // needs to resolve its own LLM endpoint; it just loses general TCP
-            // egress at the OS sandbox layer.
-            let mut hosts = outbound.allow_hosts.clone();
-            if let Some(h) = provider_host(&entry)
-                && !hosts.iter().any(|x| x == &h)
-            {
-                hosts.push(h);
-            }
-            HostGuard::restricted(hosts)
-        }
-        NetworkOutboundMode::Off => HostGuard::off(),
-    };
-    let guarded_http = reqwest::ClientBuilder::new()
-        .dns_resolver(std::sync::Arc::new(host_guard))
-        .build()
-        .context("failed to build guarded HTTP client")?;
-
     // Build MCP pool from the agent profile's configured servers, then discover
     // and filter tools concurrently before constructing the runner.
     let sandbox_policy = SandboxPolicy::from_entitlements(&profile.inner.entitlements, agent_home);
@@ -337,122 +296,127 @@ pub async fn build_provider_runner(
         (r, Some(client), Some(pool.clone()))
     };
 
-    Ok(match entry.provider.as_str() {
-        "local" => {
-            let mur_home = dirs::home_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join(".mur");
-            let base = resolve_local_base_url(
-                entry.base_url.as_deref(),
-                std::env::var("MUR_LOCAL_LLM_BASE_URL").ok(),
-                &mur_home,
-            );
-            let key = secrecy::SecretString::from(LOCAL_LLM_PLACEHOLDER_KEY.to_string());
-            let client = Arc::new(OpenAiClient::from_secret_string_with_http(
-                &key,
-                entry.model.clone(),
-                Some(base),
-                guarded_http,
-            ));
-            build(client)
-        }
-        "ollama" => {
-            let base = entry.base_url.clone().unwrap_or_else(|| {
-                std::env::var("OLLAMA_BASE_URL")
-                    .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string())
-            });
-            let client = Arc::new(OllamaClient::with_http_client(
-                base,
-                entry.model,
-                guarded_http,
-            ));
-            build(client)
-        }
-        "anthropic" => {
-            let built: Result<Arc<dyn LlmClient>, _> = if let Some(key) = secret_value.as_ref() {
-                Ok(Arc::new(AnthropicClient::from_secret_string_with_http(
-                    key,
-                    entry.model.clone(),
-                    entry.base_url.clone(),
-                    guarded_http,
-                )))
-            } else {
-                AnthropicClient::from_agent_credentials_with_http(
-                    &profile.inner.name,
-                    entry.model.clone(),
-                    guarded_http,
-                )
-                .await
-                .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
-            };
-            match built {
+    // MUR_HOME-aware home dir — same expression as `prepare_runtime`/`supervisor.rs`
+    // (the old inline "local"-arm recompute below ignored MUR_HOME; unifying on
+    // this shared value is a disclosed, intentional bug-fix — see task-7-report.md).
+    let mur_home = std::env::var_os("MUR_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
+
+    // Model-switch: load the global config, resolve the ordered candidate refs
+    // (per-agent overrides global) and decide single-client vs routing-aware
+    // fallback chain. With no `models:` config and no per-agent chain/routing,
+    // `refs.len() <= 1 && !routing.enabled` — the exact single-model path below
+    // runs unchanged (byte-for-byte with the pre-Task-7 behaviour).
+    let switch_cfg =
+        mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).models;
+    let routing = profile
+        .inner
+        .routing
+        .clone()
+        .unwrap_or_else(|| switch_cfg.routing.clone());
+    let refs = mur_common::model::resolve_model_refs(&profile.inner, &switch_cfg, None);
+
+    if refs.len() <= 1 && !routing.enabled {
+        // Nothing configured (no chain, no routing) → today's exact single-model
+        // path on the SAME `entry` resolved above via `resolve_model_entry`, no
+        // FallbackLlmClient wrapper.
+        return Ok(
+            match crate::llm::client_builder::build_client_from_entry(&entry, profile, &mur_home) {
                 Ok(client) => build(client),
                 Err(e) => {
-                    warn!(error = %e, "anthropic client unavailable; falling back to echo");
-                    (
-                        Arc::new(TaskRunner::new_stub_echo()),
-                        None,
-                        Some(pool.clone()),
-                    )
+                    // A `guarded_http` build failure is a real error unrelated to
+                    // provider support — pre-Task-7 this was a hard `?` straight
+                    // out of this function, before the provider dispatch even
+                    // ran. `local`/`ollama` have no arm below, so without this
+                    // check such a failure would fall through to `other` and get
+                    // mislabeled "unsupported model provider". Propagate it
+                    // directly instead, restoring the original semantic.
+                    if e.downcast_ref::<crate::llm::client_builder::GuardedHttpBuildError>()
+                        .is_some()
+                    {
+                        return Err(e);
+                    }
+                    match entry.provider.as_str() {
+                        "anthropic" => {
+                            warn!(error = %e, "anthropic client unavailable; falling back to echo");
+                            (
+                                Arc::new(TaskRunner::new_stub_echo()),
+                                None,
+                                Some(pool.clone()),
+                            )
+                        }
+                        "openai" => {
+                            warn!(error = %e, "openai client unavailable; falling back to echo");
+                            (
+                                Arc::new(TaskRunner::new_stub_echo()),
+                                None,
+                                Some(pool.clone()),
+                            )
+                        }
+                        "echo" => {
+                            // Intentional fallback: model resolution failed or the agent has no
+                            // model configured. Degrade to echo (warned at resolution time).
+                            (
+                                Arc::new(TaskRunner::new_stub_echo()),
+                                None,
+                                Some(pool.clone()),
+                            )
+                        }
+                        other => {
+                            // A real provider was configured but this runtime ships no client for
+                            // it (e.g. `deepseek`). Do NOT silently echo — that looks alive but
+                            // parrots input. Surface the misconfiguration in the logs AND in every
+                            // chat reply so the user sees exactly what to change.
+                            let msg = format!(
+                                "⚠️ This agent's model provider '{other}' is not supported by the \
+                         MUR runtime (supported: local, ollama, anthropic, openai). \
+                         Update the agent's model to a supported provider in ~/.mur/models.yaml."
+                            );
+                            error!(provider = %other, "unsupported model provider — replying with misconfiguration notice instead of echo");
+                            (
+                                Arc::new(TaskRunner::new_stub_misconfigured(msg)),
+                                None,
+                                Some(pool.clone()),
+                            )
+                        }
+                    }
                 }
-            }
-        }
-        "openai" => {
-            let built: Result<Arc<dyn LlmClient>, _> = if let Some(key) = secret_value.as_ref() {
-                Ok(Arc::new(OpenAiClient::from_secret_string_with_http(
-                    key,
-                    entry.model.clone(),
-                    entry.base_url.clone(),
-                    guarded_http,
-                )))
-            } else {
-                OpenAiClient::from_agent_credentials_with_http(
-                    &profile.inner.name,
-                    entry.model.clone(),
-                    guarded_http,
-                )
-                .await
-                .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
-            };
-            match built {
-                Ok(client) => build(client),
-                Err(e) => {
-                    warn!(error = %e, "openai client unavailable; falling back to echo");
-                    (
-                        Arc::new(TaskRunner::new_stub_echo()),
-                        None,
-                        Some(pool.clone()),
-                    )
-                }
-            }
-        }
-        "echo" => {
-            // Intentional fallback: model resolution failed or the agent has no
-            // model configured. Degrade to echo (warned at resolution time).
-            (
-                Arc::new(TaskRunner::new_stub_echo()),
-                None,
-                Some(pool.clone()),
-            )
-        }
-        other => {
-            // A real provider was configured but this runtime ships no client for
-            // it (e.g. `deepseek`). Do NOT silently echo — that looks alive but
-            // parrots input. Surface the misconfiguration in the logs AND in every
-            // chat reply so the user sees exactly what to change.
-            let msg = format!(
-                "⚠️ This agent's model provider '{other}' is not supported by the \
-                 MUR runtime (supported: local, ollama, anthropic, openai). \
-                 Update the agent's model to a supported provider in ~/.mur/models.yaml."
-            );
-            error!(provider = %other, "unsupported model provider — replying with misconfiguration notice instead of echo");
-            (
-                Arc::new(TaskRunner::new_stub_misconfigured(msg)),
-                None,
-                Some(pool.clone()),
-            )
-        }
-    })
+            },
+        );
+    }
+
+    // Chain and/or routing configured → routing-aware fallback client.
+    // Reusable per-ref client builder: model_ref -> Arc<dyn LlmClient>.
+    // Reuses a fresh registry lookup (resolve_model_entry keys off
+    // profile.model_ref; here we resolve an explicit candidate ref) +
+    // build_client_from_entry (Step 1). Send + Sync: captures only a cloned
+    // Profile and a cloned PathBuf.
+    let profile_for_chain = profile.clone();
+    let mur_home_for_chain = mur_home.clone();
+    let build_one = move |model_ref: &str| -> anyhow::Result<Arc<dyn LlmClient>> {
+        let reg = mur_common::model::ModelRegistry::load_from(
+            &mur_common::model::ModelRegistry::default_path()?,
+        )?;
+        let candidate_entry = reg
+            .models
+            .get(model_ref)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("model_ref {model_ref:?} not in registry"))?;
+        crate::llm::client_builder::build_client_from_entry(
+            &candidate_entry,
+            &profile_for_chain,
+            &mur_home_for_chain,
+        )
+    };
+    let fallback_client: Arc<dyn LlmClient> =
+        Arc::new(crate::llm::fallback::FallbackLlmClient::new_routed(
+            profile.inner.clone(),
+            switch_cfg.clone(),
+            Box::new(build_one),
+            switch_cfg.retry.clone(),
+        ));
+    Ok(build(fallback_client))
 }
 
 /// Telemetry writer + notification routing + hook chain + skills loaded once at boot.

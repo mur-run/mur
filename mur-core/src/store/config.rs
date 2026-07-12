@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use mur_common::config::Config;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Load config from ~/.mur/config.yaml, creating defaults if not exists.
 pub fn load_config() -> Result<Config> {
@@ -25,7 +25,14 @@ pub fn load_config() -> Result<Config> {
 
 /// Save config to ~/.mur/config.yaml with helpful comments.
 pub fn save_config(config: &Config) -> Result<()> {
-    let path = config_path();
+    save_config_at(&config_path(), config)
+}
+
+/// Save config to an explicit path (same YAML + header as [`save_config`]).
+/// Exists so callers with an explicit `MUR_HOME` (tests, per-agent CLI
+/// handlers) can persist config without going through the process-global
+/// `MUR_HOME` env var / `dirs::home_dir()` resolution.
+pub fn save_config_at(path: &Path, config: &Config) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -64,7 +71,7 @@ pub fn save_config(config: &Config) -> Result<()> {
 #   To save cost, switch to Sonnet: llm.model: claude-sonnet-4-6
 
 "#;
-    fs::write(&path, format!("{}{}", header, yaml))?;
+    fs::write(path, format!("{}{}", header, yaml))?;
     Ok(())
 }
 
