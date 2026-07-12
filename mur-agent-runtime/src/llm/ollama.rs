@@ -87,8 +87,10 @@ impl LlmClient for OllamaClient {
                 LlmError::Http(e.to_string())
             }
         })?;
-        if resp.status() == 429 {
-            return Err(LlmError::RateLimit);
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(LlmError::from_status(status.as_u16(), body_text));
         }
         let v: serde_json::Value = resp.json().await.map_err(|e| {
             if e.is_timeout() {
@@ -139,8 +141,10 @@ impl LlmClient for OllamaClient {
                 LlmError::Http(e.to_string())
             }
         })?;
-        if resp.status() == 429 {
-            return Err(LlmError::RateLimit);
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(LlmError::from_status(status.as_u16(), body_text));
         }
 
         // Ollama streams newline-delimited JSON objects. Read incrementally

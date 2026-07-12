@@ -129,6 +129,42 @@ pub enum LlmError {
     Timeout,
     #[error("invalid response: {0}")]
     InvalidResponse(String),
+    #[error("server error: {0}")]
+    ServerError(u16),
+    #[error("insufficient credit")]
+    InsufficientCredit,
+}
+
+impl LlmError {
+    /// Map a non-success HTTP status into a typed error. Centralises what was
+    /// previously scattered `status == 429` checks + a lumped `Http(String)`.
+    pub fn from_status(status: u16, body: String) -> LlmError {
+        match status {
+            429 => LlmError::RateLimit,
+            402 => LlmError::InsufficientCredit,
+            500..=599 => LlmError::ServerError(status),
+            _ => LlmError::Http(format!("status {status}: {body}")),
+        }
+    }
+}
+
+/// Whether a failed call should advance the fallback chain (Retryable) or
+/// return immediately (Fatal — auth/bad-request/malformed, where switching
+/// models would only hide the real problem).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Retryability {
+    Retryable,
+    Fatal,
+}
+
+pub fn classify(e: &LlmError) -> Retryability {
+    match e {
+        LlmError::RateLimit
+        | LlmError::Timeout
+        | LlmError::ServerError(_)
+        | LlmError::InsufficientCredit => Retryability::Retryable,
+        LlmError::Http(_) | LlmError::InvalidResponse(_) => Retryability::Fatal,
+    }
 }
 
 /// One streamed chunk: either part of the model's hidden reasoning
@@ -212,6 +248,44 @@ mod tests {
         };
         assert!(r.tool_calls.is_empty());
         assert_eq!(r.stop_reason, StopReason::EndTurn);
+    }
+
+    #[test]
+    fn from_status_maps_http_codes() {
+        assert!(matches!(
+            LlmError::from_status(429, "x".into()),
+            LlmError::RateLimit
+        ));
+        assert!(matches!(
+            LlmError::from_status(402, "x".into()),
+            LlmError::InsufficientCredit
+        ));
+        assert!(matches!(
+            LlmError::from_status(503, "x".into()),
+            LlmError::ServerError(503)
+        ));
+        assert!(matches!(
+            LlmError::from_status(400, "x".into()),
+            LlmError::Http(_)
+        ));
+        assert!(matches!(
+            LlmError::from_status(401, "x".into()),
+            LlmError::Http(_)
+        ));
+    }
+
+    #[test]
+    fn classify_retryable_vs_fatal() {
+        use Retryability::*;
+        assert!(matches!(classify(&LlmError::RateLimit), Retryable));
+        assert!(matches!(classify(&LlmError::Timeout), Retryable));
+        assert!(matches!(classify(&LlmError::ServerError(500)), Retryable));
+        assert!(matches!(classify(&LlmError::InsufficientCredit), Retryable));
+        assert!(matches!(classify(&LlmError::Http("400".into())), Fatal));
+        assert!(matches!(
+            classify(&LlmError::InvalidResponse("x".into())),
+            Fatal
+        ));
     }
 }
 

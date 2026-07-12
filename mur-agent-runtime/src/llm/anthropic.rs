@@ -555,10 +555,7 @@ impl LlmClient for AnthropicClient {
         })?;
         if !status.is_success() {
             tracing::warn!(status = %status, body = %body_text, "anthropic non-2xx");
-            if status == 429 {
-                return Err(LlmError::RateLimit);
-            }
-            return Err(LlmError::Http(format!("status {status}: {body_text}")));
+            return Err(LlmError::from_status(status.as_u16(), body_text));
         }
         let v: serde_json::Value = serde_json::from_str(&body_text)
             .map_err(|e| LlmError::Http(format!("parse response: {e}")))?;
@@ -632,11 +629,8 @@ impl LlmClient for AnthropicClient {
             })?;
         let status = resp.status();
         if !status.is_success() {
-            if status == 429 {
-                return Err(LlmError::RateLimit);
-            }
             let body_text = resp.text().await.unwrap_or_default();
-            return Err(LlmError::Http(format!("status {status}: {body_text}")));
+            return Err(LlmError::from_status(status.as_u16(), body_text));
         }
 
         // Anthropic streams SSE: `event: <type>` + `data: {json}`. Each data

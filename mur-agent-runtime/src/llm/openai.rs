@@ -293,8 +293,9 @@ impl LlmClient for OpenAiClient {
             })?;
 
         let status = resp.status();
-        if status == 429 {
-            return Err(LlmError::RateLimit);
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(LlmError::from_status(status.as_u16(), body_text));
         }
         let v: serde_json::Value = resp.json().await.map_err(|e| {
             if e.is_timeout() {
@@ -303,10 +304,6 @@ impl LlmClient for OpenAiClient {
                 LlmError::Http(e.to_string())
             }
         })?;
-        if !status.is_success() {
-            let msg = v["error"]["message"].as_str().unwrap_or("unknown");
-            return Err(LlmError::Http(format!("status {status}: {msg}")));
-        }
 
         let (text, tool_calls, stop_reason) = parse_response_body(&v)?;
         let input_tokens = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
@@ -376,15 +373,10 @@ impl LlmClient for OpenAiClient {
                 }
             })?;
         let status = resp.status();
-        if status == 429 {
-            return Err(LlmError::RateLimit);
-        }
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(LlmError::Http(format!(
-                "status {status}: {}",
-                body.chars().take(200).collect::<String>()
-            )));
+            let truncated: String = body.chars().take(200).collect();
+            return Err(LlmError::from_status(status.as_u16(), truncated));
         }
 
         // OpenAI streams Server-Sent Events: `data: {json}\n\n`, ending with
