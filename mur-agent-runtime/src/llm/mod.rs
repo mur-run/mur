@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use mur_common::{AgentProfile, LlmMode};
 
 pub mod anthropic;
+pub mod fallback;
 pub mod ollama;
 pub mod openai;
 pub mod stub;
