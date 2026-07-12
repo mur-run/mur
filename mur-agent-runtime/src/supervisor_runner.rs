@@ -249,11 +249,14 @@ pub async fn build_provider_runner(
     let outbound = &profile.inner.entitlements.network.outbound;
     let host_guard = match outbound.mode {
         NetworkOutboundMode::Unrestricted => HostGuard::unrestricted(),
-        NetworkOutboundMode::Restricted => {
+        NetworkOutboundMode::Restricted | NetworkOutboundMode::ProxyOnly => {
             // Auto-allow the agent's configured LLM provider host: choosing a
             // provider implies permission to reach it, so the user never has to
             // `mur agent perm allow-host` their own model endpoint. Mirrors the
             // loopback-port auto-grant for local models (`local_llm_port`).
+            // ProxyOnly shares this host governance with Restricted — it still
+            // needs to resolve its own LLM endpoint; it just loses general TCP
+            // egress at the OS sandbox layer.
             let mut hosts = outbound.allow_hosts.clone();
             if let Some(h) = provider_host(&entry)
                 && !hosts.iter().any(|x| x == &h)

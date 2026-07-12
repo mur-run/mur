@@ -599,6 +599,10 @@ pub struct EgressAuthorization {
 pub enum NetworkOutboundMode {
     Unrestricted,
     Restricted,
+    /// Deny all general outbound TCP; egress is ONLY via loopback proxies
+    /// (the agent's cc-proxy LLM port + the egress proxy). Hostnames are still
+    /// governed by `allow_hosts` (HostGuard) — unlike `Off`, which blocks all.
+    ProxyOnly,
     Off,
 }
 
