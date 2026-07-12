@@ -1396,6 +1396,13 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         } => cmd::agent::cmd_restart(&names, all, stale, dry_run)?,
         AgentAction::Remove { name, purge, force } => cmd::agent::cmd_remove(&name, purge, force)?,
         AgentAction::Rename { old, new } => cmd::agent::cmd_rename(&old, &new)?,
+        AgentAction::Fallback { name, model_refs } => {
+            cmd::agent::model_resolve::cmd_agent_set_fallback(
+                &cmd::agent::resolve_mur_home()?,
+                &name,
+                &model_refs,
+            )?
+        }
         AgentAction::Send { name, message } => cmd::agent::cmd_send(&name, &message)?,
         AgentAction::Card { name } => cmd::agent::cmd_card(&name)?,
         AgentAction::Cli {

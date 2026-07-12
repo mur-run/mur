@@ -1,5 +1,7 @@
 //! `mur model` subcommands — manage entries in `~/.mur/models.yaml`.
 
+use std::path::Path;
+
 use anyhow::Context;
 use chrono::Utc;
 use clap::{Args, Subcommand};
@@ -80,6 +82,22 @@ pub enum ModelCmd {
     Prices {
         #[command(subcommand)]
         sub: PricesSubCmd,
+    },
+    /// Set the global default model_ref (config.yaml `models.default`).
+    /// Used when a profile has no `model_ref`/`model` set. The ref must
+    /// already exist in `~/.mur/models.yaml` (fail-closed).
+    Default {
+        /// Registry key from `~/.mur/models.yaml` (e.g. claude_sonnet)
+        model_ref: String,
+    },
+    /// Set the global fallback chain (config.yaml `models.fallback_chain`),
+    /// tried in order after the primary model fails. Pass no refs to clear
+    /// the chain. Each ref must already exist in `~/.mur/models.yaml`.
+    Fallback {
+        /// Ordered registry keys, tried after the primary fails. Omit to
+        /// clear the chain.
+        #[arg(num_args = 0..)]
+        model_refs: Vec<String>,
     },
 }
 
@@ -291,6 +309,12 @@ pub fn run(args: ModelArgs) -> anyhow::Result<()> {
         ModelCmd::Prices { sub } => {
             let mur_home = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
             cmd_prices(sub, &mur_home, &reg)?;
+        }
+        ModelCmd::Default { model_ref } => {
+            cmd_model_default(&crate::cmd::agent::resolve_mur_home()?, &model_ref)?
+        }
+        ModelCmd::Fallback { model_refs } => {
+            cmd_model_fallback(&crate::cmd::agent::resolve_mur_home()?, &model_refs)?
         }
     }
     Ok(())
@@ -588,5 +612,114 @@ fn parse_route_policy(raw: &str) -> anyhow::Result<RoutePolicy> {
             "invalid route policy: {other}. Valid: auto, prefer-local, force-local, \
              force-frontier:<model-id>"
         ),
+    }
+}
+
+/// Fail-closed guard: reject any model_ref that isn't already registered in
+/// `<home>/models.yaml`. Used by both the global (`mur model default` /
+/// `fallback`) and per-agent (`mur agent fallback`) setters so a typo'd ref
+/// can never be silently persisted.
+fn ensure_ref_exists(home: &Path, r: &str) -> anyhow::Result<()> {
+    let reg = ModelRegistry::load_from(&home.join("models.yaml"))?;
+    anyhow::ensure!(
+        reg.models.contains_key(r),
+        "model_ref {r:?} not in models.yaml"
+    );
+    Ok(())
+}
+
+/// Set the global default model_ref (`config.yaml` `models.default`).
+pub fn cmd_model_default(home: &Path, model_ref: &str) -> anyhow::Result<()> {
+    ensure_ref_exists(home, model_ref)?;
+    let mut cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
+    cfg.models.default = Some(model_ref.to_string());
+    crate::store::config::save_config_at(&home.join("config.yaml"), &cfg)?;
+    println!("global default model = {model_ref}");
+    Ok(())
+}
+
+/// Set the global fallback chain (`config.yaml` `models.fallback_chain`).
+/// An empty slice clears the chain.
+pub fn cmd_model_fallback(home: &Path, refs: &[String]) -> anyhow::Result<()> {
+    for r in refs {
+        ensure_ref_exists(home, r)?;
+    }
+    let mut cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
+    cfg.models.fallback_chain = refs.to_vec();
+    crate::store::config::save_config_at(&home.join("config.yaml"), &cfg)?;
+    println!("global fallback chain = {}", refs.join(", "));
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_default_validates_ref_exists() {
+        use mur_common::model::{ModelEntry, ModelRegistry};
+        // Temp home with a seeded models.yaml containing `claude_sonnet`.
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().to_path_buf();
+        let mut reg = ModelRegistry::default();
+        reg.models.insert(
+            "claude_sonnet".into(),
+            ModelEntry {
+                provider: "anthropic".into(),
+                model: "claude-sonnet-5".into(),
+                ..Default::default()
+            },
+        );
+        reg.save_to(&home.join("models.yaml")).unwrap();
+
+        // Unknown ref → error (fail-closed); known ref → persisted to config.yaml.
+        assert!(cmd_model_default(&home, "does_not_exist").is_err());
+        cmd_model_default(&home, "claude_sonnet").unwrap();
+        let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
+        assert_eq!(cfg.models.default.as_deref(), Some("claude_sonnet"));
+    }
+
+    #[test]
+    fn set_fallback_validates_all_refs_and_clears_on_empty() {
+        use mur_common::model::{ModelEntry, ModelRegistry};
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().to_path_buf();
+        let mut reg = ModelRegistry::default();
+        for key in ["claude_sonnet", "deepseek_v4_pro"] {
+            reg.models.insert(
+                key.into(),
+                ModelEntry {
+                    provider: "anthropic".into(),
+                    model: key.into(),
+                    ..Default::default()
+                },
+            );
+        }
+        reg.save_to(&home.join("models.yaml")).unwrap();
+
+        // One unknown ref in the chain → whole call fails, nothing persisted.
+        assert!(
+            cmd_model_fallback(
+                &home,
+                &["claude_sonnet".to_string(), "does_not_exist".to_string()]
+            )
+            .is_err()
+        );
+
+        cmd_model_fallback(
+            &home,
+            &["claude_sonnet".to_string(), "deepseek_v4_pro".to_string()],
+        )
+        .unwrap();
+        let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
+        assert_eq!(
+            cfg.models.fallback_chain,
+            vec!["claude_sonnet", "deepseek_v4_pro"]
+        );
+
+        // Empty slice clears the chain.
+        cmd_model_fallback(&home, &[]).unwrap();
+        let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
+        assert!(cfg.models.fallback_chain.is_empty());
     }
 }
