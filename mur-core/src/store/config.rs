@@ -71,7 +71,7 @@ pub fn save_config_at(path: &Path, config: &Config) -> Result<()> {
 #   To save cost, switch to Sonnet: llm.model: claude-sonnet-4-6
 
 "#;
-    fs::write(&path, format!("{}{}", header, yaml))?;
+    fs::write(path, format!("{}{}", header, yaml))?;
     Ok(())
 }
 
