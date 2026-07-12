@@ -575,14 +575,50 @@ pub fn backoff_delay(attempt: u32, base_ms: u64) -> Duration {
 }
 
 /// Coarse input-token estimate (chars/4) over the request's message texts —
-/// enough for a routing heuristic, not billing.
+/// enough for a routing heuristic, not billing. `LlmRequest.messages` is a
+/// `Vec<RichMessage>` (an enum), so match the text-bearing variants.
 pub fn estimate_input_tokens(req: &LlmRequest) -> u32 {
-    let chars: usize = req.messages.iter().map(|m| m.content.len()).sum();
+    let chars: usize = req
+        .messages
+        .iter()
+        .map(|m| match m {
+            RichMessage::Text { content, .. } => content.len(),
+            RichMessage::ImageText { text, .. } => text.len(),
+            RichMessage::ToolUse { text, .. } => text.as_deref().map_or(0, str::len),
+            RichMessage::ToolResults { .. } => 0,
+        })
+        .sum();
     (chars / 4).min(u32::MAX as usize) as u32
 }
 ```
 
-**Interface note:** confirm the `LlmMessage` field name for text — the spec's runtime `LlmMessage` (llm/mod.rs ~line 44). If the text field is not `content`, use the actual field in `estimate_input_tokens` (grep `struct LlmMessage`). Confirm `rand` is already a dependency of `mur-agent-runtime` (it is used elsewhere in the runtime); if not, add `rand` to its `Cargo.toml`.
+Add its import at the top of `fallback.rs`: `use super::RichMessage;` (alongside the `use super::LlmRequest;`).
+
+Add a test for it (in `fallback.rs` tests):
+
+```rust
+    #[test]
+    fn estimate_tokens_sums_text_over_rich_messages() {
+        use super::super::{LlmRequest, RichMessage};
+        let req = LlmRequest {
+            messages: vec![
+                RichMessage::Text { role: "user".into(), content: "a".repeat(40) },
+                RichMessage::ImageText {
+                    role: "user".into(),
+                    media_type: "image/png".into(),
+                    data: String::new(),
+                    text: "b".repeat(40),
+                },
+            ],
+            temperature: None,
+            max_tokens: None,
+            tools: vec![],
+        };
+        assert_eq!(estimate_input_tokens(&req), 20); // 80 chars / 4
+    }
+```
+
+**Verified facts (do not re-derive):** `RichMessage` is an enum with variants `Text { role, content }`, `ToolUse { text: Option<String>, calls }`, `ToolResults { results }`, `ImageText { role, media_type, data, text }` (llm/mod.rs ~line 78). `LlmRequest { messages: Vec<RichMessage>, temperature: Option<f32>, max_tokens: Option<u32>, tools: Vec<ToolDef> }`. `rand = { workspace = true }` is already a dependency of `mur-agent-runtime`.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -610,10 +646,23 @@ git commit -m "feat(llm): cooldown map + backoff + token estimate for fallback"
 - [ ] **Step 1: Write the failing test** (append to `fallback.rs` tests)
 
 ```rust
-    use super::super::{LlmClient, LlmError, LlmRequest, LlmResponse};
+    use super::super::{LlmClient, LlmError, LlmRequest, LlmResponse, StopReason};
     use async_trait::async_trait;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // LlmResponse has no Default (StopReason has no default variant), so build
+    // one explicitly.
+    fn mk_resp(text: &str) -> LlmResponse {
+        LlmResponse {
+            text: text.to_string(),
+            input_tokens: 0,
+            output_tokens: 0,
+            model: text.to_string(),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
+        }
+    }
 
     // Mock client whose Nth generate() outcome is scripted.
     struct ScriptClient { name: String, outcomes: Vec<Result<(), LlmError>>, idx: AtomicUsize }
@@ -622,7 +671,7 @@ git commit -m "feat(llm): cooldown map + backoff + token estimate for fallback"
         async fn generate(&self, _req: LlmRequest) -> Result<LlmResponse, LlmError> {
             let i = self.idx.fetch_add(1, Ordering::SeqCst).min(self.outcomes.len()-1);
             match &self.outcomes[i] {
-                Ok(()) => Ok(LlmResponse { text: self.name.clone(), ..Default::default() }),
+                Ok(()) => Ok(mk_resp(&self.name)),
                 Err(e) => Err(e.clone()),
             }
         }
@@ -746,7 +795,7 @@ impl LlmClient for FallbackLlmClient {
 }
 ```
 
-**Interface note:** `req.clone()` requires `LlmRequest: Clone` — confirm it derives `Clone` (grep `struct LlmRequest`); it should, but if not, add `#[derive(Clone)]`. `LlmResponse::default()` is used by the test mock — confirm `LlmResponse: Default` (the existing `llm_response_defaults` test implies it does).
+**Interface note:** `req.clone()` requires `LlmRequest: Clone` — verified: `LlmRequest` derives `#[derive(Debug, Clone)]`. `LlmResponse` does NOT derive `Default` (its `stop_reason: StopReason` has no default variant — StopReason is `{EndTurn, ToolUse, MaxTokens}`), so the test mock builds it explicitly via `mk_resp` (shown in Step 1), constructing all six fields with `stop_reason: StopReason::EndTurn`. Do NOT add `Default` to `LlmResponse`.
 
 - [ ] **Step 4: Run to verify it passes**
 
