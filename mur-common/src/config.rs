@@ -60,7 +60,7 @@ impl Default for RetryConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct RoutingConfig {
     #[serde(default)]
     pub enabled: bool,
