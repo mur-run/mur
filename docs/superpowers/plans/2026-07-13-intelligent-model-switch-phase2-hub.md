@@ -361,7 +361,11 @@ Expected: PASS.
 
 - [ ] **Step 5: Wire the section into `ModelsSettings.tsx`**
 
-Add a "Model switching" section to the existing `ModelsSettings` component. Load on mount and save on change through the new commands. Reuse the existing `ModelCombobox` (from `../ModelCombobox`) for the Default / cheap / frontier pickers, populated from the existing `list_models` invoke that the file already uses for slots. Concretely:
+Add a "Model switching" section to the existing `ModelsSettings` component. Load on mount and save on change through the new commands.
+
+> **Picker correction (verified):** `ModelCombobox` is NOT a generic value/onChange picker — its Props are `{ detail: AgentDetail, onSaved, onManage }` (agent-bound). Do NOT reuse it here. For the Default / cheap / frontier selectors use a **plain `<select>`** populated from `invoke<ModelOptionView[]>("list_models")`, where each option's value is `ModelOptionView.ref_name` (the registry key) and the label is e.g. `` `${ref_name} (${provider}/${model})` ``. `ModelOptionView` fields: `ref_name, provider, model, tier?, input_cost?, output_cost?, context_window?, capabilities[]`. Build a small local `ModelRefSelect({ value, options, onChange, allowEmpty })` presentational component (a styled `<select>`) and reuse it for all three single-model pickers and each fallback-chain row — this is the DRY unit shared with Task 4.
+
+Concretely:
 
 ```tsx
 // near the other useState hooks in ModelsSettings():
@@ -380,9 +384,9 @@ const saveMs = useCallback((next: ModelSwitchView) => {
 ```
 
 Render (inside the component's JSX, a new section — use the file's existing class/i18n conventions, `useT()` for labels):
-- **Default model**: a `ModelCombobox` bound to `ms.default`; on change → `saveMs({ ...ms, default: value })`.
-- **Fallback chain**: an ordered list of `ModelCombobox` rows with add/remove/reorder (↑/↓) buttons; on any change → `saveMs({ ...ms, fallback_chain: sanitizeChain(rows) })`.
-- **Difficulty routing**: an enable checkbox bound to `ms.routing.enabled`; when enabled, cheap/frontier `ModelCombobox`es + a numeric threshold input; on change → `saveMs({ ...ms, routing: { ...ms.routing, … } })`.
+- **Default model**: a `ModelRefSelect` bound to `ms.default` (allowEmpty); on change → `saveMs({ ...ms, default: value })`.
+- **Fallback chain**: an ordered list of `ModelRefSelect` rows with add/remove/reorder (↑/↓) buttons; on any change → `saveMs({ ...ms, fallback_chain: sanitizeChain(rows) })`.
+- **Difficulty routing**: an enable checkbox bound to `ms.routing.enabled`; when enabled, cheap/frontier `ModelRefSelect`s + a numeric threshold input; on change → `saveMs({ ...ms, routing: { ...ms.routing, … } })`.
 - Show `msErr` inline (e.g. an unknown-ref rejection from the backend).
 
 Keep the JSX under the 800-line file limit; if `ModelsSettings.tsx` would exceed it, extract the new section into `ModelSwitchSection.tsx` and render `<ModelSwitchSection />`.
@@ -412,7 +416,7 @@ Run: `grep -rn "apply_agent_model\|set_concierge_model_ref\|ModelPickerModal" mu
 
 - [ ] **Step 2: Add the per-agent fallback editor**
 
-Below the existing primary-model picker for the selected agent, render a "Fallback chain (overrides global)" editor — the same ordered-list-of-`ModelCombobox` control as Task 3's global chain, but bound to the agent:
+Below the existing primary-model picker for the selected agent, render a "Fallback chain (overrides global)" editor — the same ordered-list-of-`ModelRefSelect` control as Task 3's global chain, but bound to the agent:
 
 ```tsx
 const [agentChain, setAgentChain] = useState<string[]>([]);
