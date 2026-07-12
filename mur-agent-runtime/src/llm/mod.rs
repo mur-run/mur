@@ -102,7 +102,7 @@ pub enum RichMessage {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LlmRequest {
     pub messages: Vec<RichMessage>,
     pub temperature: Option<f32>,
@@ -120,7 +120,7 @@ pub struct LlmResponse {
     pub stop_reason: StopReason,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum LlmError {
     #[error("http: {0}")]
     Http(String),
