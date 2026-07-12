@@ -2,7 +2,7 @@
 
 > **Date**: 2026-07-12
 > **Status**: Ready for review
-> **Scope**: A minimal, config-layered model-selection + failure-fallback layer for MUR agents (global + per-agent settings, priority per-agent → global). Opt-in difficulty routing. Does NOT implement the learned/RouteLLM router — that stays cost-router Phase 3.
+> **Scope**: A minimal, config-layered model-selection + failure-fallback layer for MUR agents (global + per-agent settings, priority per-agent → global), managed from both the CLI and the MUR Hub GUI. Opt-in difficulty routing. Does NOT implement the learned/RouteLLM router — that stays cost-router Phase 3.
 
 ## Overview
 
@@ -211,6 +211,23 @@ fn choose_by_difficulty(est_input_tokens: u32, r: &RoutingConfig) -> Option<Stri
 - Per-agent `fallback_chain` is written by extending the existing per-agent model-binding path (`mur-core/src/cmd/agent/model_resolve.rs`), e.g. a `--fallback <ref>...` companion to the existing model_ref setter. Difficulty routing is config-only in v1 (no dedicated CLI); users edit `config.yaml`.
 
 All CLI writes validate that each `<ref>` exists in `models.yaml` and error otherwise (fail-closed).
+
+## Hub GUI Management (Phase 2)
+
+The feature must be manageable from the MUR Hub, not only the CLI. Both surfaces already exist in `mur-hub-gui`, so this is thin wiring over the same core logic — **not** a new subsystem. It depends on Phase 1 (core + CLI) landing first; the Hub commands are wrappers over the same `store::config` read/write and resolver used by the CLI.
+
+**Global scope — Settings → Models tab** (`ui/src/components/settings/ModelsSettings.tsx`; the Hub already reads/writes `config.yaml` via `mur_core::store::config::{load_config,save_config}`, as the fleet-settings commands do):
+- A **Default model** combobox (reuses the existing `ModelCombobox`, populated from `list_models`).
+- A **Fallback chain** ordered list editor (add/remove/reorder model refs from the registry).
+- A **Difficulty routing** section: an enable toggle + cheap/frontier comboboxes + threshold input, defaulting to disabled.
+- New Tauri commands `model_switch_get() -> ModelSwitchView` and `model_switch_set(patch)` wrapping `load_config`/`save_config`, mirroring the existing `agent_get_notif_config`/`agent_set_notif_config` pattern in `notif.rs`. Each ref is validated against `models.yaml` (fail-closed) before save.
+
+**Per-agent scope — agent detail model section** (the existing per-agent picker: `ModelPickerModal.tsx` / `ModelCombobox.tsx`, backed by `apply_agent_model` / `set_concierge_model_ref`):
+- Below the existing primary-model picker, add a **per-agent fallback chain** editor and an optional **routing override** (inherits global when unset).
+- Extend the existing per-agent model command (or add `agent_set_fallback_chain(name, refs)`) to write the profile's `fallback_chain` / `routing` fields.
+- Empty per-agent settings inherit the global defaults — the UI shows the effective (inherited) value greyed until overridden, matching the resolution priority (per-agent → global).
+
+**Phasing:** Phase 1 ships core + CLI (testable headless). Phase 2 adds the Hub commands + UI. Because mur-hub-gui is workspace-excluded (Tauri) and built separately, splitting it keeps Phase 1 shippable and CI-verifiable without the GUI toolchain. Phase 2 is a separate implementation plan.
 
 ## Error Handling & Observability
 
