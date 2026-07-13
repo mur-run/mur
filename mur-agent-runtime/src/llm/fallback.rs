@@ -139,7 +139,31 @@ impl LlmClient for FallbackLlmClient {
         let now = Instant::now();
         let mut last: Option<LlmError> = None;
         let candidates = self.candidates_for(&req);
-        for model_ref in &candidates {
+
+        // Structural-failure escalation (cascade) is allowed ONLY for
+        // Background+Smart turns — Interactive InvalidResponse must stay
+        // Fatal (Phase-1 security boundary: a malformed response on the
+        // user's chosen model must surface, never silently switch models).
+        let max_esc: u32 = match &self.source {
+            CandidateSource::PerRequest { profile, cfg }
+                if matches!(req.intent, RequestIntent::Background(_)) =>
+            {
+                let smart = profile
+                    .routing
+                    .as_ref()
+                    .and_then(|r| r.smart.clone())
+                    .unwrap_or_else(|| cfg.smart.clone());
+                if smart.enabled {
+                    smart.max_escalations
+                } else {
+                    0
+                }
+            }
+            _ => 0,
+        };
+        let mut escalations = 0u32;
+
+        'candidates: for model_ref in &candidates {
             if self.cooldown.is_cooling(model_ref, now) {
                 continue;
             }
@@ -154,7 +178,23 @@ impl LlmClient for FallbackLlmClient {
                 match client.generate(req.clone()).await {
                     Ok(resp) => return Ok(resp),
                     Err(e) => match classify(&e) {
-                        Retryability::Fatal => return Err(e),
+                        Retryability::Fatal => {
+                            // Structural failure is escalatable ONLY under
+                            // Background+Smart, within the per-call cap.
+                            let structural = matches!(e, LlmError::InvalidResponse(_));
+                            if structural && escalations < max_esc {
+                                escalations += 1;
+                                tracing::info!(
+                                    model_ref,
+                                    escalations,
+                                    "smart cascade: structural fail, escalating"
+                                );
+                                last = Some(e);
+                                continue 'candidates; // advance to next candidate (the better model)
+                            }
+                            // Interactive / over-cap / non-structural Fatal → surface (Phase-1 boundary).
+                            return Err(e);
+                        }
                         Retryability::Retryable => {
                             tracing::info!(model_ref, attempt, error = %e, "llm fallback: retryable failure");
                             if attempt < self.retry.max_retries {
@@ -485,5 +525,88 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(fb.generate(small).await.unwrap().text, "cheap");
+    }
+
+    #[tokio::test]
+    async fn cascade_escalates_structural_fail_under_background_smart() {
+        use mur_common::agent::AgentProfile;
+        use mur_common::config::{ModelSwitchConfig, SmartConfig};
+        // cheap returns InvalidResponse (structural), then primary succeeds.
+        let mut scripts = std::collections::HashMap::new();
+        scripts.insert(
+            "cheap".to_string(),
+            vec![Err(LlmError::InvalidResponse("empty".into()))],
+        );
+        scripts.insert("primary".to_string(), vec![Ok(())]);
+
+        let mut cfg = ModelSwitchConfig::default();
+        cfg.default = Some("primary".into());
+        cfg.smart = SmartConfig {
+            enabled: true,
+            cheap: Some("cheap".into()),
+            max_escalations: 1,
+        };
+        let fb = FallbackLlmClient::new_routed(
+            AgentProfile::default_for_tests(),
+            cfg,
+            factory_for(scripts),
+            retry0(),
+        );
+
+        let mut bg = LlmRequest::default();
+        bg.intent = RequestIntent::Background(BackgroundKind::Scheduled);
+        assert_eq!(fb.generate(bg).await.unwrap().text, "primary");
+    }
+
+    #[tokio::test]
+    async fn interactive_invalid_response_stays_fatal() {
+        let mut scripts = std::collections::HashMap::new();
+        scripts.insert(
+            "a".to_string(),
+            vec![Err(LlmError::InvalidResponse("x".into()))],
+        );
+        scripts.insert("b".to_string(), vec![Ok(())]);
+        let fb =
+            FallbackLlmClient::new(vec!["a".into(), "b".into()], factory_for(scripts), retry0());
+        // Interactive: InvalidResponse is Fatal → returns the error, never tries b.
+        let err = fb.generate(LlmRequest::default()).await.unwrap_err();
+        assert!(matches!(err, LlmError::InvalidResponse(_)));
+    }
+
+    #[tokio::test]
+    async fn cascade_respects_max_escalations() {
+        use mur_common::agent::AgentProfile;
+        use mur_common::config::{ModelSwitchConfig, SmartConfig};
+        // Both cheap AND primary return InvalidResponse; max_escalations=1
+        // means only one escalation is allowed, so the second structural
+        // failure (on primary) must surface instead of looping past the cap.
+        let mut scripts = std::collections::HashMap::new();
+        scripts.insert(
+            "cheap".to_string(),
+            vec![Err(LlmError::InvalidResponse("empty".into()))],
+        );
+        scripts.insert(
+            "primary".to_string(),
+            vec![Err(LlmError::InvalidResponse("still empty".into()))],
+        );
+
+        let mut cfg = ModelSwitchConfig::default();
+        cfg.default = Some("primary".into());
+        cfg.smart = SmartConfig {
+            enabled: true,
+            cheap: Some("cheap".into()),
+            max_escalations: 1,
+        };
+        let fb = FallbackLlmClient::new_routed(
+            AgentProfile::default_for_tests(),
+            cfg,
+            factory_for(scripts),
+            retry0(),
+        );
+
+        let mut bg = LlmRequest::default();
+        bg.intent = RequestIntent::Background(BackgroundKind::Scheduled);
+        let err = fb.generate(bg).await.unwrap_err();
+        assert!(matches!(err, LlmError::InvalidResponse(_)));
     }
 }
