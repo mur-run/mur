@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use crate::companion::linter;
 use crate::companion::picker::TemplateId;
 use crate::companion::telemetry::OutboxEvent;
-use crate::llm::{LlmError, LlmRequest, RichMessage};
+use crate::llm::{BackgroundKind, LlmError, LlmRequest, RequestIntent, RichMessage};
 
 use super::Outbox;
 
@@ -17,6 +17,30 @@ pub(super) enum GenerateResult {
     Ok(String),
     RateLimit,
     LinterPersistent,
+}
+
+/// Build the generate request for one outbox attempt. Extracted so the
+/// `Background(Companion)` tagging can be asserted in a unit test without
+/// driving the whole tick loop — outbox generation is a proactive/reactive
+/// notifier step, never a live chat turn a user is watching synchronously.
+fn build_generate_request(voice_md: &str, user_prompt: String) -> LlmRequest {
+    LlmRequest {
+        messages: vec![
+            RichMessage::Text {
+                role: "system".to_string(),
+                content: voice_md.to_string(),
+            },
+            RichMessage::Text {
+                role: "user".to_string(),
+                content: user_prompt,
+            },
+        ],
+        temperature: None,
+        max_tokens: None,
+        tools: vec![],
+        intent: RequestIntent::Background(BackgroundKind::Companion),
+        ..Default::default()
+    }
 }
 
 impl<R: RngCore + Send> Outbox<R> {
@@ -81,22 +105,7 @@ impl<R: RngCore + Send> Outbox<R> {
                 format!("{base_prompt}\n[regenerate]")
             };
 
-            let req = LlmRequest {
-                messages: vec![
-                    RichMessage::Text {
-                        role: "system".to_string(),
-                        content: self.voice_md.clone(),
-                    },
-                    RichMessage::Text {
-                        role: "user".to_string(),
-                        content: user_prompt,
-                    },
-                ],
-                temperature: None,
-                max_tokens: None,
-                tools: vec![],
-                ..Default::default()
-            };
+            let req = build_generate_request(&self.voice_md, user_prompt);
 
             let text = match self.llm.generate(req).await {
                 Ok(resp) => resp.text,
@@ -144,5 +153,22 @@ impl<R: RngCore + Send> Outbox<R> {
 
         // Unreachable, but satisfies the compiler.
         GenerateResult::LinterPersistent
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_request_is_tagged_background_companion() {
+        let req = build_generate_request("voice", "compose something".to_string());
+        assert_eq!(
+            req.intent,
+            RequestIntent::Background(BackgroundKind::Companion),
+            "companion outbox messages are proactive/reactive notifier turns, \
+             never a live chat reply — must be eligible for Smart cheap-model \
+             background routing"
+        );
     }
 }

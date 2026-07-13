@@ -6,6 +6,7 @@
 //! sleep → inject → repeat. All loops are children of `CronScheduler::spawn`,
 //! which returns a single `JoinHandle` aborted on SIGTERM by the supervisor.
 
+use crate::llm::{BackgroundKind, RequestIntent};
 use crate::task_runner::{TaskOutcome, TaskRunner, TaskSpec};
 use anyhow::{Context, Result};
 use chrono::Local;
@@ -16,6 +17,26 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
+
+/// Build the `TaskSpec` for a cron-fired injection. Extracted so the
+/// `Background(Scheduled)` tagging can be asserted in a unit test without
+/// driving the full async cron loop — nobody is synchronously waiting on a
+/// cron trigger, so this is an unambiguous background call site.
+fn scheduled_task_spec(message: &str) -> TaskSpec {
+    TaskSpec {
+        input: Message {
+            role: "user".into(),
+            parts: vec![MessagePart::Text {
+                text: message.to_string(),
+            }],
+        },
+        context_task_id: None,
+        task_id: None,
+        active_fleet: None,
+        active_team: None,
+        intent: RequestIntent::Background(BackgroundKind::Scheduled),
+    }
+}
 
 pub struct CronScheduler {
     entries: Vec<ScheduleEntry>,
@@ -94,21 +115,7 @@ async fn run_entry(entry: ScheduleEntry, runner: Arc<TaskRunner>, cancel: Cancel
             );
         }
 
-        let input = Message {
-            role: "user".into(),
-            parts: vec![MessagePart::Text {
-                text: entry.message.clone(),
-            }],
-        };
-        let outcome = runner
-            .run_sync(TaskSpec {
-                input,
-                context_task_id: None,
-                task_id: None,
-                active_fleet: None,
-                active_team: None,
-            })
-            .await;
+        let outcome = runner.run_sync(scheduled_task_spec(&entry.message)).await;
 
         // M2: surface LLM failures in supervisor logs
         if let TaskOutcome::Failed(ref t) = outcome {
@@ -143,4 +150,21 @@ pub fn next_fire_after(
 ) -> Option<chrono::DateTime<Local>> {
     let expr = format!("0 {cron_expr}");
     Schedule::from_str(&expr).ok()?.after(&after).next()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scheduled_task_spec_is_tagged_background_scheduled() {
+        let spec = scheduled_task_spec("do the thing");
+        assert_eq!(
+            spec.intent,
+            RequestIntent::Background(BackgroundKind::Scheduled),
+            "cron-fired turns are unambiguously runtime-initiated — nobody is \
+             synchronously waiting on them, so they must route through Smart \
+             background candidates rather than the interactive default"
+        );
+    }
 }
