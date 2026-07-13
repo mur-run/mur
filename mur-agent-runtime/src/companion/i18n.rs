@@ -67,6 +67,7 @@ pub async fn ensure_locale(
         temperature: Some(0.2),
         max_tokens: Some(400),
         tools: vec![],
+        ..Default::default()
     };
 
     match llm.generate(req).await {

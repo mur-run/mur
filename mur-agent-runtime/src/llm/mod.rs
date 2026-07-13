@@ -103,12 +103,36 @@ pub enum RichMessage {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundKind {
+    Scheduled,
+    Companion,
+    Maintenance,
+}
+
+/// Why this LLM call is being made. Interactive = user-facing (chat, A2A send,
+/// fleet delegate); Background = runtime-initiated, nobody watching live —
+/// eligible for Smart cheap-model routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RequestIntent {
+    #[default]
+    Interactive,
+    Background(BackgroundKind),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct LlmRequest {
     pub messages: Vec<RichMessage>,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
     pub tools: Vec<ToolDef>,
+    /// Routing context; defaults to Interactive (see RequestIntent).
+    pub intent: RequestIntent,
+    /// Force exactly this model_ref (user "re-run on smart model"); bypasses
+    /// Smart/fallback candidate assembly. None = normal resolution.
+    pub pin_model_ref: Option<String>,
+    /// Owning task id, threaded for telemetry correlation. None outside tasks.
+    pub task_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -234,8 +258,17 @@ mod tests {
             temperature: None,
             max_tokens: None,
             tools: vec![],
+            ..Default::default()
         };
         assert!(req.tools.is_empty());
+    }
+
+    #[test]
+    fn llm_request_intent_defaults_interactive() {
+        let r = LlmRequest::default();
+        assert_eq!(r.intent, RequestIntent::Interactive);
+        assert!(r.pin_model_ref.is_none());
+        assert!(r.task_id.is_none());
     }
 
     #[test]
