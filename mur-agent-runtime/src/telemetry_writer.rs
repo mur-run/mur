@@ -121,6 +121,31 @@ pub enum Event {
         picked_tool: Option<String>,
         source: String,
     },
+    /// Emitted once per routed turn by `FallbackLlmClient::generate` after the
+    /// fallback/cascade loop resolves (Ok or final Err). Best-effort — never
+    /// blocks or fails the turn. Training-data feed for the future memory
+    /// router (Intelligent Switching Phase B).
+    Routing {
+        agent: String,
+        task_id: Option<String>,
+        /// e.g. "interactive" / "background/scheduled" (see `intent_label`).
+        intent: String,
+        /// The model_ref that ultimately served (or was last attempted on
+        /// final failure).
+        model_ref: String,
+        /// Which mechanism chose the candidate list, e.g.
+        /// "smart-background" / "explicit" / "fallback-advance".
+        reason: String,
+        /// "ok" | "escalated" | "structural_fail" | "error".
+        outcome: String,
+        attempts: u32,
+        escalations: u32,
+        input_tokens: u64,
+        output_tokens: u64,
+        /// First user message text, truncated (see `ROUTING_SUMMARY_MAX` in
+        /// `llm::fallback`).
+        task_summary: String,
+    },
 }
 
 pub struct TelemetryWriter {
@@ -388,6 +413,34 @@ fn event_to_notification(ev: &Event, name: &str, uuid: &str) -> Value {
             params["source"] = json!(source);
             METHOD_SKILL_STEP_RESOLVED
         }
+        Event::Routing {
+            agent,
+            task_id,
+            intent,
+            model_ref,
+            reason,
+            outcome,
+            attempts,
+            escalations,
+            input_tokens,
+            output_tokens,
+            task_summary,
+        } => {
+            params["agent"] = json!(agent);
+            if let Some(t) = task_id {
+                params[MUR_TASK_ID] = json!(t);
+            }
+            params["intent"] = json!(intent);
+            params["model_ref"] = json!(model_ref);
+            params["reason"] = json!(reason);
+            params["outcome"] = json!(outcome);
+            params["attempts"] = json!(attempts);
+            params["escalations"] = json!(escalations);
+            params[GEN_AI_USAGE_INPUT_TOKENS] = json!(input_tokens);
+            params[GEN_AI_USAGE_OUTPUT_TOKENS] = json!(output_tokens);
+            params["task_summary"] = json!(task_summary);
+            METHOD_ROUTING
+        }
     };
     params[MUR_EVENT_TYPE] = json!(method);
     json!({"jsonrpc": "2.0", "method": method, "params": params})
@@ -521,5 +574,38 @@ mod redact_envelope_tests {
         let s = v.as_str().unwrap();
         assert!(s.contains("[REDACTED:env_assignment]"), "got {s:?}");
         assert!(s.contains("~/.env"), "got {s:?}");
+    }
+}
+
+#[cfg(test)]
+mod routing_event_tests {
+    use super::*;
+
+    #[test]
+    fn routing_event_serializes_fields() {
+        let ev = Event::Routing {
+            agent: "coach".into(),
+            task_id: Some("t1".into()),
+            intent: "background/scheduled".into(),
+            model_ref: "cheap".into(),
+            reason: "smart-background".into(),
+            outcome: "escalated".into(),
+            attempts: 2,
+            escalations: 1,
+            input_tokens: 10,
+            output_tokens: 5,
+            task_summary: "do the thing".into(),
+        };
+        let notif = event_to_notification(&ev, "coach", "uuid-1");
+        let line = notif.to_string();
+        assert!(line.contains("mur.routing"), "got {line}");
+        assert!(line.contains("smart-background"), "got {line}");
+        assert!(line.contains("\"outcome\":\"escalated\""), "got {line}");
+        assert!(line.contains("\"model_ref\":\"cheap\""), "got {line}");
+        assert!(
+            line.contains("\"task_summary\":\"do the thing\""),
+            "got {line}"
+        );
+        assert_eq!(notif["method"], "mur.routing");
     }
 }

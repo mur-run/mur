@@ -206,6 +206,11 @@ pub async fn build_provider_runner(
     hitl_timeout_secs: u32,
     max_iterations: Option<u32>,
     max_tokens: Option<u64>,
+    // Routing telemetry sink (Phase B, Task 5) — `Some(writer.sender())` from
+    // the caller's already-constructed `TelemetryWriter`. Only the routed
+    // (`FallbackLlmClient`) path below records `Event::Routing`; the
+    // single-model path has nothing to route between, so it's left alone.
+    telemetry: Option<tokio::sync::mpsc::Sender<crate::telemetry_writer::Event>>,
 ) -> anyhow::Result<(
     Arc<TaskRunner>,
     Option<Arc<dyn LlmClient>>,
@@ -409,13 +414,18 @@ pub async fn build_provider_runner(
             &mur_home_for_chain,
         )
     };
-    let fallback_client: Arc<dyn LlmClient> =
-        Arc::new(crate::llm::fallback::FallbackLlmClient::new_routed(
+    let fallback_client: Arc<dyn LlmClient> = {
+        let mut fb = crate::llm::fallback::FallbackLlmClient::new_routed(
             profile.inner.clone(),
             switch_cfg.clone(),
             Box::new(build_one),
             switch_cfg.retry.clone(),
-        ));
+        );
+        if let Some(tx) = telemetry {
+            fb = fb.with_telemetry(tx, profile.inner.name.clone());
+        }
+        Arc::new(fb)
+    };
     Ok(build(fallback_client))
 }
 
