@@ -23,6 +23,7 @@ pub mod mlx_sidecar;
 pub mod mobile;
 pub mod model_download;
 pub mod model_slots;
+mod model_switch;
 pub mod models_admin;
 pub mod notif;
 pub mod onboarding;
@@ -620,6 +621,10 @@ pub fn run() {
             model_slots::model_setup_status,
             model_slots::model_setup_preview,
             model_slots::model_setup_apply_recommended,
+            model_switch::model_switch_get,
+            model_switch::model_switch_set,
+            model_switch::agent_get_fallback,
+            model_switch::agent_set_fallback,
             pet::pet_spawn_at,
             pet::pet_close,
             pet::pet_return_to_hub,
