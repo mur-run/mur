@@ -238,7 +238,9 @@ mod tests {
     #[test]
     fn yaml_without_new_sections_still_loads() {
         // Simulates an existing user compress.yaml predating these fields.
-        let cfg: CompressConfig = serde_yaml::from_str("enabled: true\n").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("compress.yaml"), "enabled: true\n").unwrap();
+        let cfg = CompressConfig::load(dir.path());
         assert_eq!(cfg.json.max_string_tokens, 200);
         assert!((cfg.fallback.min_save_ratio - 0.05).abs() < f32::EPSILON);
     }
