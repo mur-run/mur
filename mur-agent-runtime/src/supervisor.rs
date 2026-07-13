@@ -370,6 +370,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         hitl_timeout_secs,
         max_iterations,
         max_tokens,
+        Some(writer.sender()),
     )
     .await?;
     let dispatcher = Arc::new(build_dispatcher(

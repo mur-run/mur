@@ -30,6 +30,7 @@ async fn ollama_generate_returns_text_and_usage() {
             temperature: Some(0.2),
             max_tokens: Some(100),
             tools: vec![],
+            ..Default::default()
         })
         .await
         .unwrap();

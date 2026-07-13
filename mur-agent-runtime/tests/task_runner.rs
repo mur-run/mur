@@ -1,3 +1,4 @@
+use mur_agent_runtime::llm::RequestIntent;
 use mur_agent_runtime::task_runner::{TaskOutcome, TaskRunner, TaskSpec};
 use mur_common::a2a::{Message, MessagePart, TaskState};
 
@@ -15,6 +16,7 @@ async fn sync_task_reaches_completed_state() {
         task_id: None,
         active_fleet: None,
         active_team: None,
+        intent: RequestIntent::Interactive,
     };
     let outcome = runner.run_sync(spec).await;
     match outcome {
@@ -40,6 +42,7 @@ async fn cancellation_transitions_to_cancelled() {
         task_id: None,
         active_fleet: None,
         active_team: None,
+        intent: RequestIntent::Interactive,
     };
     let handle = runner.start_async(spec);
     let task_id = handle.task_id().to_string();

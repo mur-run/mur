@@ -9,6 +9,7 @@
 //! When all gates pass the trigger message is injected into the `TaskRunner`.
 
 use crate::companion::schedule::active_window_end_for_today;
+use crate::llm::{BackgroundKind, RequestIntent};
 use crate::task_runner::{TaskRunner, TaskSpec};
 use chrono::Local;
 use mur_common::a2a::{Message, MessagePart};
@@ -140,6 +141,9 @@ async fn run_idle_loop(scheduler: IdleScheduler, cancel: CancellationToken) {
                         task_id: None,
                         active_fleet: None,
                         active_team: None,
+                        // Idle triggers are runtime-initiated maintenance nudges —
+                        // no live user is watching this turn.
+                        intent: RequestIntent::Background(BackgroundKind::Maintenance),
                     })
                     .await;
 

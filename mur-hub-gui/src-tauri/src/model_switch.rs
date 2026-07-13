@@ -21,6 +21,9 @@ fn validate_refs(home: &Path, cfg: &ModelSwitchConfig) -> Result<(), String> {
     if let Some(f) = &cfg.routing.frontier {
         refs.push(f);
     }
+    if let Some(c) = &cfg.smart.cheap {
+        refs.push(c);
+    }
     for r in refs {
         if !reg.models.contains_key(r) {
             return Err(format!("model_ref {r:?} not in models.yaml"));
@@ -150,8 +153,25 @@ mod tests {
             cheap: Some("claude_sonnet".into()),
             frontier: Some("nope".into()), // unknown → reject
             threshold_input_tokens: Some(1000),
+            smart: None,
         };
         assert!(model_switch_set_impl(&home, cfg).is_err());
+    }
+
+    #[test]
+    fn set_validates_smart_cheap_ref() {
+        let (_d, home) = seed_home();
+        let mut cfg = ModelSwitchConfig::default();
+        cfg.smart.cheap = Some("nope".into()); // unknown → reject
+        assert!(model_switch_set_impl(&home, cfg).is_err());
+        // Nothing persisted.
+        assert_eq!(model_switch_get_impl(&home).unwrap().smart.cheap, None);
+
+        // A known ref is accepted and persists.
+        let mut good = ModelSwitchConfig::default();
+        good.smart.cheap = Some("claude_sonnet".into());
+        let saved = model_switch_set_impl(&home, good).unwrap();
+        assert_eq!(saved.smart.cheap.as_deref(), Some("claude_sonnet"));
     }
 
     #[test]

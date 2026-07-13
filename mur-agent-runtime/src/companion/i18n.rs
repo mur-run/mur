@@ -3,7 +3,7 @@
 //!
 //! Spec §3.6 / §4.4 / §6.2.
 
-use crate::llm::{LlmClient, LlmError, LlmRequest, RichMessage};
+use crate::llm::{BackgroundKind, LlmClient, LlmError, LlmRequest, RequestIntent, RichMessage};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // EnsureLocaleOutcome
@@ -30,6 +30,35 @@ pub enum EnsureLocaleOutcome {
 // ensure_locale
 // ──────────────────────────────────────────────────────────────────────────────
 
+/// Build the translate request. Extracted so the `Background(Companion)`
+/// tagging can be asserted in a unit test directly, without needing a stub
+/// LLM to capture what it was called with.
+fn build_translate_request(text: &str, target_locale: &str) -> LlmRequest {
+    LlmRequest {
+        messages: vec![
+            RichMessage::Text {
+                role: "system".to_string(),
+                content: format!(
+                    "Translate the following message into {target_locale} while preserving \
+                     tone and brevity. Reply ONLY with the translated message, no preamble."
+                ),
+            },
+            RichMessage::Text {
+                role: "user".to_string(),
+                content: text.to_string(),
+            },
+        ],
+        temperature: Some(0.2),
+        max_tokens: Some(400),
+        tools: vec![],
+        // ensure_locale is called only from the outbox tick loop's i18n step
+        // (companion/outbox/i18n.rs::handle_i18n) — a background notifier
+        // pass, never a live chat turn.
+        intent: RequestIntent::Background(BackgroundKind::Companion),
+        ..Default::default()
+    }
+}
+
 /// Verify (or translate) `text` into `target_locale`.
 ///
 /// 1. If `heuristic_matches(text, target_locale)` → return [`EnsureLocaleOutcome::Original`].
@@ -50,24 +79,7 @@ pub async fn ensure_locale(
         return EnsureLocaleOutcome::Original;
     }
 
-    let req = LlmRequest {
-        messages: vec![
-            RichMessage::Text {
-                role: "system".to_string(),
-                content: format!(
-                    "Translate the following message into {target_locale} while preserving \
-                     tone and brevity. Reply ONLY with the translated message, no preamble."
-                ),
-            },
-            RichMessage::Text {
-                role: "user".to_string(),
-                content: text.to_string(),
-            },
-        ],
-        temperature: Some(0.2),
-        max_tokens: Some(400),
-        tools: vec![],
-    };
+    let req = build_translate_request(text, target_locale);
 
     match llm.generate(req).await {
         Ok(resp) => {
@@ -196,6 +208,18 @@ mod tests {
 
     fn en_body() -> &'static str {
         "Good morning! What small thing will you start with today?"
+    }
+
+    #[test]
+    fn translate_request_is_tagged_background_companion() {
+        let req = build_translate_request("hello", "zh-TW");
+        assert_eq!(
+            req.intent,
+            RequestIntent::Background(BackgroundKind::Companion),
+            "the translate fallback is only ever driven from the outbox tick \
+             loop, never a live chat turn — must route through Smart \
+             background candidates"
+        );
     }
 
     // ── Test 1: body is already zh-TW → Original, no LLM call ────────────────

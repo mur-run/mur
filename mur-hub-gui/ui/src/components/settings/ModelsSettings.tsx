@@ -138,6 +138,11 @@ export function ModelsSettings() {
     saveMs({ ...ms, routing: { ...ms.routing, ...patch } });
   };
 
+  const setSmart = (patch: Partial<ModelSwitchView["smart"]>) => {
+    if (!ms) return;
+    saveMs({ ...ms, smart: { ...ms.smart, ...patch } });
+  };
+
   return (
     <>
     <section className="settings-section">
@@ -250,6 +255,33 @@ export function ModelsSettings() {
             </div>
             <p className="settings-hint">{t("settings.modelSwitch.thresholdHint")}</p>
           </>
+        )}
+
+        <div className="settings-row">
+          <label className="settings-row__label" htmlFor="ms-smart-enable">
+            {t("settings.modelSwitch.smartEnable")}
+          </label>
+          <input
+            id="ms-smart-enable"
+            type="checkbox"
+            checked={ms.smart.enabled}
+            onChange={(e) => setSmart({ enabled: e.target.checked })}
+          />
+        </div>
+        <p className="settings-hint">{t("settings.modelSwitch.smartHint")}</p>
+
+        {ms.smart.enabled && (
+          <div className="settings-row">
+            <span className="settings-row__label">{t("settings.modelSwitch.smartCheap")}</span>
+            <ModelRefSelect
+              value={ms.smart.cheap}
+              options={modelOptions}
+              allowEmpty
+              emptyLabel={t("settings.modelSwitch.smartCheapAuto")}
+              ariaLabel={t("settings.modelSwitch.smartCheap")}
+              onChange={(v) => setSmart({ cheap: v })}
+            />
+          </div>
         )}
 
         {msErr && <p className="settings-hint slot-error">{msErr}</p>}

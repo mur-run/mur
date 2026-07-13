@@ -141,11 +141,13 @@ mod tests {
         // be re-checked first.
         let allowed: &[&str] = &[
             // LlmClient surface
+            "BackgroundKind",
             "LlmClient",
             "LlmError",
             "LlmMessage",
             "LlmRequest",
             "LlmResponse",
+            "RequestIntent",
             "RichMessage",
             "StopReason",
             "ToolCallResult",

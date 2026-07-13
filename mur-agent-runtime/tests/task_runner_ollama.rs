@@ -1,4 +1,5 @@
 use httpmock::prelude::*;
+use mur_agent_runtime::llm::RequestIntent;
 use mur_agent_runtime::llm::ollama::OllamaClient;
 use mur_agent_runtime::task_runner::{TaskOutcome, TaskRunner, TaskSpec};
 use mur_agent_runtime::telemetry_writer::Event;
@@ -33,6 +34,7 @@ async fn runner_with_llm_generates_and_emits_telemetry() {
         task_id: None,
         active_fleet: None,
         active_team: None,
+        intent: RequestIntent::Interactive,
     };
     let outcome = runner.run_sync(spec).await;
     let task = match outcome {
