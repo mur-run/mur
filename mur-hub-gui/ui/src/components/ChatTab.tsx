@@ -17,6 +17,36 @@ interface ChatMsg {
   text: string;
   /** True when this agent reply was committed early by a Stop action. */
   stopped?: boolean;
+  /** Model that produced this reply (Task 6 usage passthrough). */
+  modelRef?: string;
+  /** Why routing picked it: "interactive" | "smart-background" | "fallback-advance". */
+  routeReason?: string;
+}
+
+/** Turn usage the runtime attaches to each reply (Task 6). */
+interface TurnUsage {
+  model_ref?: string | null;
+  route_reason?: string | null;
+}
+
+/** Human label for a route decision; empty for plain interactive turns. */
+export function routeLabel(
+  reason: string | undefined,
+  t: (k: "chat.route.smart" | "chat.route.fallback") => string,
+): string {
+  switch (reason) {
+    case "smart-background":
+      return t("chat.route.smart");
+    case "fallback-advance":
+      return t("chat.route.fallback");
+    default:
+      return "";
+  }
+}
+
+function usageFields(usage: TurnUsage | undefined | null): Pick<ChatMsg, "modelRef" | "routeReason"> {
+  if (!usage?.model_ref) return {};
+  return { modelRef: usage.model_ref, routeReason: usage.route_reason ?? undefined };
 }
 
 /** Fresh per-turn task id, sent with each message so a Stop can cancel by it. */
@@ -35,6 +65,7 @@ interface ChatReply {
   reply: string;
   task_id: string;
   streamed: boolean;
+  usage?: TurnUsage;
 }
 
 interface ChatDelta {
@@ -58,7 +89,7 @@ interface ChannelEvent {
     | { kind: "agent"; id?: string }
     | { kind: "system" };
   kind: string;
-  payload: { text?: string; task_id?: string };
+  payload: { text?: string; task_id?: string; usage?: TurnUsage };
   idempotency_key?: string | null;
 }
 
@@ -73,7 +104,7 @@ function channelEventsToMessages(events: ChannelEvent[]): ChatMsg[] {
     const text = ev.payload?.text ?? "";
     switch (ev.actor.kind) {
       case "agent":
-        out.push({ role: "agent", text });
+        out.push({ role: "agent", text, ...usageFields(ev.payload?.usage) });
         break;
       case "human":
         out.push({ role: "user", text });
@@ -233,7 +264,7 @@ export function ChatTab({ agentName, displayName, aboveCompose }: Props) {
       taskIdRef.current = res.task_id || taskIdRef.current;
       // If Stop already committed the partial reply, don't append again.
       if (!stoppedRef.current) {
-        setMessages((m) => [...m, { role: "agent", text: res.reply }]);
+        setMessages((m) => [...m, { role: "agent", text: res.reply, ...usageFields(res.usage) }]);
       }
     } catch (e) {
       // A stopped turn resolves as a Cancelled result, sometimes via the error
@@ -323,6 +354,12 @@ export function ChatTab({ agentName, displayName, aboveCompose }: Props) {
           >
             {m.role === "agent" ? <Markdown>{m.text}</Markdown> : m.text}
             {m.stopped && <span className="chat__stopped-tag"> · {t("chat.stopped")}</span>}
+            {m.role === "agent" && m.modelRef && (
+              <div className="chat__route" title={t("chat.route.tip")}>
+                ⚡ {m.modelRef}
+                {routeLabel(m.routeReason, t) && ` · ${routeLabel(m.routeReason, t)}`}
+              </div>
+            )}
           </div>
         ))}
         {thinking !== null && thinking.length > 0 && (
