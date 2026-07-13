@@ -547,6 +547,12 @@ pub fn cmd_setup(mur_home: &Path) -> Result<()> {
 
 Implementer notes (verify, adapt mechanically, keep semantics):
 - `Fleet`'s loop field name: check `grep -n "r#loop\|pub loop_" mur-common/src/fleet.rs` — use the real field path for `budget_usd`.
+- **Re-run reconcile (idempotent setup):** do NOT call `cmd_provision` blindly — its inner `cmd_create` errors on an existing agent. Instead reconcile per worker `dr_worker_1..=count`:
+  - profile exists → update `model_ref` in place via the existing `load_profile_for_edit(&name)` pattern (see `provision.rs` Fix 1/Fix 2 block) and save;
+  - profile missing → create it through the same per-worker provision steps (`cmd_create` + `cmd_mcp_add` + entitlement/tool-policy stamping) — extract provision's per-worker body into a `pub(crate) fn provision_one(mur_home, name, model, render_engine) -> Result<()>` helper and call it from both `provision()` and the wizard so the logic stays single-sourced;
+  - workers ABOVE the new count that exist on disk (e.g. count 5→3 leaves `dr_worker_4/5`) → **stop them** (reuse the agent stop path — find it with `grep -rn "pub fn cmd_stop" mur-core/src/cmd/agent/`) and remove them from the fleet `members`; never delete profiles (removal stays a manual `mur agent remove`). Print what was stopped/kept.
+  - after reconcile, set fleet `members` to exactly `dr_worker_1..=count` (fleet updated in place — the channel and its history are preserved; the fleet is never recreated).
+  - egress: when the wizard answer is `yes`, call `grant_egress` only for workers whose gateway entry is not already `BroadAudited` (use `status::collect_status`'s `egress_granted`); already-granted workers are skipped silently. When the answer is not `yes`, grants are left exactly as they are (never revoked).
 - If `cmd_provision` hard-fails when a worker already exists, wrap it: when ALL `dr_worker_1..count` profiles already exist, print "workers already provisioned — updating budget/fleet only" and skip the provision call (that is the idempotent re-run path from the spec).
 - `IsTerminal` is std (Rust ≥1.70) — no new dependency.
 
@@ -788,7 +794,7 @@ never touches grants.
 Checklist for the operator run (record results in the PR body):
 1. Fresh `MUR_HOME` (or `--purge` old workers): `mur deep-research` → prints "not set up".
 2. `mur deep-research setup` → wizard completes; typing `y` at egress does NOT grant.
-3. Re-run `setup` → idempotent (no duplicate workers).
+3. Re-run `setup` → idempotent (no duplicate workers); change model → existing workers' `model_ref` updated; lower the count → extra workers stopped and dropped from fleet members (profiles kept); raise it back → workers re-created/re-added.
 4. `mur deep-research "Compare Ollama and LM Studio in three cited paragraphs"` → workers auto-start, run converges, report reachable.
 5. `mur fleet stop deep-research` mid-run → loop bails (kill-switch intact).
 

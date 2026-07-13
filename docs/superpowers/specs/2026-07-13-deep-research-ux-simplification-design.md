@@ -36,8 +36,13 @@ Terminal Q&A, one question at a time:
 Then call the existing `cmd_provision(...)` + fleet creation with the collected
 answers. Answers persist in existing homes: model → worker profiles' `model_ref`,
 budget → the fleet's `loop.budget_usd`, worker count → the provisioned set. No new
-config file. Idempotent: existing workers are skipped/updated, not duplicated. If stdin
-is not a TTY, error out pointing at the flag-based `provision` path.
+config file. Idempotent re-run reconciles per worker: existing workers get the new
+`model_ref` in place; a raised count creates the missing workers; a lowered count
+STOPS the extra workers and drops them from the fleet members (profiles are never
+deleted — removal stays a manual `mur agent remove`); egress is granted only to
+workers that lack it and only on a literal `yes` (never revoked). The fleet itself
+is updated in place (budget/members), never recreated — channel history persists.
+If stdin is not a TTY, error out pointing at the flag-based `provision` path.
 
 ### Bare command + smart run
 
