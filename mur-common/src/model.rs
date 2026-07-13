@@ -205,6 +205,20 @@ pub fn choose_by_difficulty(est_input_tokens: u32, r: &RoutingConfig) -> Option<
     }
 }
 
+/// Pick the cheapest chat-capable model_ref for Smart background routing,
+/// excluding `exclude` (the agent's own primary). Chat-capable = capabilities
+/// contains "chat" OR is empty (legacy entries assumed chat). None when no
+/// qualifying entry exists → caller keeps normal candidates (fail-expensive).
+pub fn pick_cheap_model(reg: &ModelRegistry, exclude: Option<&str>) -> Option<String> {
+    reg.models
+        .iter()
+        .filter(|(k, _)| exclude != Some(k.as_str()))
+        .filter(|(_, e)| e.capabilities.is_empty() || e.capabilities.iter().any(|c| c == "chat"))
+        .filter_map(|(k, e)| e.cost_per_1k_tokens.map(|c| (c, k.clone())))
+        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(_, k)| k)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -630,6 +644,7 @@ mod switch_tests {
             cheap: Some("cheap".into()),
             frontier: Some("frontier".into()),
             threshold_input_tokens: Some(1000),
+            ..Default::default()
         };
         assert_eq!(choose_by_difficulty(1500, &r), Some("frontier".into()));
         assert_eq!(choose_by_difficulty(500, &r), Some("cheap".into()));
@@ -639,7 +654,34 @@ mod switch_tests {
             cheap: Some("c".into()),
             frontier: None,
             threshold_input_tokens: None,
+            ..Default::default()
         };
         assert_eq!(choose_by_difficulty(9999, &bad), None);
+    }
+
+    #[test]
+    fn pick_cheap_model_lowest_cost_chat_excluding_primary() {
+        let mut reg = ModelRegistry::default();
+        let mk = |cost: f64, caps: &[&str]| ModelEntry {
+            provider: "x".into(),
+            model: "m".into(),
+            capabilities: caps.iter().map(|s| s.to_string()).collect(),
+            cost_per_1k_tokens: Some(cost),
+            ..Default::default()
+        };
+        reg.models.insert("frontier".into(), mk(0.01, &["chat"]));
+        reg.models.insert("cheap".into(), mk(0.0001, &["chat"]));
+        reg.models
+            .insert("embed".into(), mk(0.00001, &["embedding"])); // not chat → skip
+        // cheapest chat-capable, excluding the agent's own primary:
+        assert_eq!(
+            pick_cheap_model(&reg, Some("cheap")),
+            Some("frontier".into())
+        ); // cheap excluded
+        assert_eq!(pick_cheap_model(&reg, None), Some("cheap".into()));
+        // no chat entries → None (Smart inert)
+        let mut empty = ModelRegistry::default();
+        empty.models.insert("e".into(), mk(0.0, &["embedding"]));
+        assert_eq!(pick_cheap_model(&empty, None), None);
     }
 }
