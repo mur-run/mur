@@ -9,4 +9,5 @@
 pub mod panel;
 pub mod provision;
 pub mod run;
+pub mod setup;
 pub mod status;
