@@ -12,6 +12,7 @@ fn req(text: &str) -> LlmRequest {
         temperature: None,
         max_tokens: None,
         tools: vec![],
+        ..Default::default()
     }
 }
 

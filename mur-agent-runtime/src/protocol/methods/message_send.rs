@@ -1,5 +1,6 @@
 //! message/send handler.
 
+use crate::llm::RequestIntent;
 use crate::protocol::a2a_server::{HandlerError, MethodHandler, RequestContext};
 use crate::task_runner::{TaskOutcome, TaskRunner, TaskSpec};
 use crate::telemetry_writer::Event;
@@ -96,6 +97,9 @@ impl MethodHandler for MessageSendHandler {
             // does, so fleet-scoped skills stay hidden on this path (fail-closed).
             active_fleet: None,
             active_team: None,
+            // A live client is synchronously waiting on this reply — always
+            // Interactive, never eligible for Smart cheap-model downgrade.
+            intent: RequestIntent::Interactive,
         };
 
         self.emit_progress("pending", "llm_reasoning", None).await;
