@@ -10,12 +10,18 @@ export interface RetryView {
   backoff_base_ms: number;
   cooldown_secs: number;
 }
+export interface SmartView {
+  enabled: boolean;
+  cheap: string | null;
+  max_escalations: number;
+}
 // Mirrors mur_common::config::ModelSwitchConfig over the Tauri boundary.
 export interface ModelSwitchView {
   default: string | null;
   fallback_chain: string[];
   retry: RetryView;
   routing: RoutingView;
+  smart: SmartView;
 }
 
 /** Drop blank/whitespace refs and de-duplicate, preserving first-seen order. */
@@ -40,7 +46,10 @@ export function isChainValid(chain: string[], known: Set<string>): boolean {
  * unset/empty (`skip_serializing_if`), so they arrive `undefined` over the
  * Tauri boundary. Fill them so the UI never dereferences `undefined`
  * (e.g. `fallback_chain.length`). `retry` and `routing.enabled` are always
- * serialized, so they pass through untouched.
+ * serialized, so they pass through untouched. `smart.cheap` is likewise
+ * omitted when unset; `smart.enabled`/`smart.max_escalations` are always
+ * serialized by the Rust side, but the whole `smart` object is guarded too
+ * in case an older config predates the field entirely.
  */
 export function normalizeMs(raw: ModelSwitchView): ModelSwitchView {
   return {
@@ -52,6 +61,12 @@ export function normalizeMs(raw: ModelSwitchView): ModelSwitchView {
       cheap: raw.routing?.cheap ?? null,
       frontier: raw.routing?.frontier ?? null,
       threshold_input_tokens: raw.routing?.threshold_input_tokens ?? null,
+    },
+    smart: {
+      ...raw.smart,
+      enabled: raw.smart?.enabled ?? true,
+      cheap: raw.smart?.cheap ?? null,
+      max_escalations: raw.smart?.max_escalations ?? 1,
     },
   };
 }
