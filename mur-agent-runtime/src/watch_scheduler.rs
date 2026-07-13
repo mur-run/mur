@@ -151,6 +151,7 @@ mod hash_tests {
     }
 }
 
+use crate::llm::{BackgroundKind, RequestIntent};
 use crate::task_runner::{TaskRunner, TaskSpec};
 use chrono::{Local, Timelike};
 use mur_common::a2a::{Message, MessagePart};
@@ -259,6 +260,9 @@ fn inject(runner: &Arc<TaskRunner>, text: &str) {
                 task_id: None,
                 active_fleet: None,
                 active_team: None,
+                // Co-watching narration is a runtime-initiated proactive nudge —
+                // no live user turn is waiting on it.
+                intent: RequestIntent::Background(BackgroundKind::Maintenance),
             })
             .await;
     });
