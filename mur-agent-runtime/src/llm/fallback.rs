@@ -10,7 +10,10 @@ use mur_common::agent::AgentProfile;
 use mur_common::config::{ModelSwitchConfig, RetryConfig};
 use mur_common::model::{choose_by_difficulty, resolve_model_refs};
 
-use super::{LlmClient, LlmError, LlmRequest, LlmResponse, Retryability, RichMessage, classify};
+use super::{
+    LlmClient, LlmError, LlmRequest, LlmResponse, RequestIntent, Retryability, RichMessage,
+    classify,
+};
 
 /// Factory that builds a concrete `LlmClient` for a given model_ref. Boxed so
 /// `FallbackLlmClient` doesn't need a generic parameter per candidate type.
@@ -80,6 +83,11 @@ impl FallbackLlmClient {
 
     /// The ordered candidate refs for this request.
     fn candidates_for(&self, req: &LlmRequest) -> Vec<String> {
+        // Explicit pin (user re-run) wins over everything: bypasses routing,
+        // Smart, and fallback candidate assembly entirely.
+        if let Some(p) = &req.pin_model_ref {
+            return vec![p.clone()];
+        }
         match &self.source {
             CandidateSource::Static(v) => v.clone(),
             CandidateSource::PerRequest { profile, cfg } => {
@@ -94,7 +102,32 @@ impl FallbackLlmClient {
                 } else {
                     None
                 };
-                resolve_model_refs(profile, cfg, routed)
+                let base = resolve_model_refs(profile, cfg, routed);
+
+                // Smart background: cheap model first, base (primary + chain)
+                // behind it (cascade). Per-agent Smart config overrides global.
+                let smart = profile
+                    .routing
+                    .as_ref()
+                    .and_then(|r| r.smart.clone())
+                    .unwrap_or_else(|| cfg.smart.clone());
+                if matches!(req.intent, RequestIntent::Background(_)) && smart.enabled {
+                    let primary = base.first().cloned();
+                    let cheap = smart
+                        .cheap
+                        .clone()
+                        .or_else(|| autopick_cheap(primary.as_deref()));
+                    if let Some(c) = cheap {
+                        let mut out = vec![c];
+                        for r in base {
+                            if !out.contains(&r) {
+                                out.push(r);
+                            }
+                        }
+                        return out;
+                    }
+                }
+                base
             }
         }
     }
@@ -151,6 +184,16 @@ impl LlmClient for FallbackLlmClient {
     fn model_name(&self) -> &str {
         &self.primary_name
     }
+}
+
+/// Auto-pick a cheap model from the on-disk registry, excluding `primary`.
+/// Any failure (no registry path, load error, empty registry) yields `None`
+/// so the caller falls through to Phase-1 `base` candidates (fail-expensive,
+/// never fail-hard).
+fn autopick_cheap(primary: Option<&str>) -> Option<String> {
+    let path = mur_common::model::ModelRegistry::default_path().ok()?;
+    let reg = mur_common::model::ModelRegistry::load_from(&path).ok()?;
+    mur_common::model::pick_cheap_model(&reg, primary)
 }
 
 /// In-memory per-model cooldown (circuit-breaker). Process-local; a restart
@@ -212,6 +255,7 @@ pub fn estimate_input_tokens(req: &LlmRequest) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::BackgroundKind;
     use super::*;
 
     #[test]
@@ -350,6 +394,52 @@ mod tests {
         assert!(matches!(err, LlmError::ServerError(503))); // last candidate's error
     }
 
+    #[test]
+    fn candidates_pin_overrides_everything() {
+        // A pinned ref returns exactly [pinned] regardless of source.
+        let fb = FallbackLlmClient::new(
+            vec!["a".into(), "b".into()],
+            factory_for(Default::default()),
+            retry0(),
+        );
+        let mut req = LlmRequest::default();
+        req.pin_model_ref = Some("frontier".into());
+        assert_eq!(fb.candidates_for(&req), vec!["frontier".to_string()]);
+    }
+
+    #[test]
+    fn candidates_smart_background_prepends_cheap() {
+        use mur_common::agent::AgentProfile;
+        use mur_common::config::{ModelSwitchConfig, SmartConfig};
+        let mut cfg = ModelSwitchConfig::default();
+        cfg.default = Some("primary".into());
+        cfg.fallback_chain = vec!["primary".into(), "mid".into()];
+        cfg.smart = SmartConfig {
+            enabled: true,
+            cheap: Some("cheap".into()),
+            max_escalations: 1,
+        };
+        let fb = FallbackLlmClient::new_routed(
+            AgentProfile::default_for_tests(),
+            cfg,
+            factory_for(Default::default()),
+            retry0(),
+        );
+        // Background + smart → cheap first, then phase-1 candidates, deduped.
+        let mut bg = LlmRequest::default();
+        bg.intent = RequestIntent::Background(BackgroundKind::Scheduled);
+        assert_eq!(
+            fb.candidates_for(&bg),
+            vec!["cheap".to_string(), "primary".into(), "mid".into()]
+        );
+        // Interactive → unchanged (no cheap prepend).
+        let inter = LlmRequest::default();
+        assert_eq!(
+            fb.candidates_for(&inter),
+            vec!["primary".to_string(), "mid".into()]
+        );
+    }
+
     #[tokio::test]
     async fn routed_generate_picks_frontier_for_large_request() {
         use mur_common::agent::AgentProfile;
@@ -360,6 +450,7 @@ mod tests {
             cheap: Some("cheap".into()),
             frontier: Some("frontier".into()),
             threshold_input_tokens: Some(5),
+            smart: None,
         };
         let mut scripts = std::collections::HashMap::new();
         scripts.insert("frontier".to_string(), vec![Ok(())]);
