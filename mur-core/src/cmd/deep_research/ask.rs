@@ -74,7 +74,10 @@ pub async fn cmd_ask(mur_home: &Path, question: &str) -> Result<()> {
     // members) workers left over from a setup count-shrink, and a stray
     // non-member `dr_worker_*` agent provisioned without egress would make
     // every smart run bail forever.
-    let fleet = crate::cmd::fleet::store::load_fleet(mur_home, DEFAULT_FLEET_NAME)?;
+    let fleet =
+        crate::cmd::fleet::store::load_fleet(mur_home, DEFAULT_FLEET_NAME).map_err(|_| {
+            anyhow::anyhow!("deep research is not set up yet — run `mur deep-research setup` first")
+        })?;
     let status = scope_to_members(collect_status(mur_home, DEFAULT_FLEET_NAME), &fleet.members);
     let mut started: Vec<String> = Vec::new();
     for action in plan_preflight(&status)? {
