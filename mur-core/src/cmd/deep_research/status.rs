@@ -1,8 +1,6 @@
 //! Read-only status/preflight model for the deep-research UX shell.
 //! Pure data collection — no repairs, no side effects.
 
-#![allow(dead_code)]
-
 use std::path::Path;
 
 use mur_common::agent::{AgentProfile, McpNetMode};

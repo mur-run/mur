@@ -477,18 +477,21 @@ pub async fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
-        Commands::DeepResearch { action } => {
+        Commands::DeepResearch { action, question } => {
             let mur_home = crate::paths::mur_root(None);
-            match action {
-                DeepResearchAction::Provision {
-                    count,
-                    prefix,
-                    model,
-                    grant_egress,
-                    deny_hosts,
-                    yes,
-                    render_engine,
-                } => cmd::deep_research::provision::cmd_provision(
+            match (action, question) {
+                (
+                    Some(DeepResearchAction::Provision {
+                        count,
+                        prefix,
+                        model,
+                        grant_egress,
+                        deny_hosts,
+                        yes,
+                        render_engine,
+                    }),
+                    _,
+                ) => cmd::deep_research::provision::cmd_provision(
                     &mur_home,
                     prefix.as_deref(),
                     count,
@@ -498,12 +501,15 @@ pub async fn run(cli: Cli) -> Result<()> {
                     yes,
                     render_engine.as_deref(),
                 )?,
-                DeepResearchAction::Run {
-                    name,
-                    max_iterations,
-                    deadline,
-                    budget_usd,
-                } => {
+                (
+                    Some(DeepResearchAction::Run {
+                        name,
+                        max_iterations,
+                        deadline,
+                        budget_usd,
+                    }),
+                    _,
+                ) => {
                     cmd::deep_research::run::cmd_deep_research_run(
                         &mur_home,
                         &name,
@@ -513,6 +519,11 @@ pub async fn run(cli: Cli) -> Result<()> {
                     )
                     .await?
                 }
+                (None, Some(q)) => {
+                    // Task 4 lands cmd_ask; until then print a stub error:
+                    anyhow::bail!("smart run not wired yet: {q}");
+                }
+                (None, None) => cmd::deep_research::panel::cmd_panel(&mur_home)?,
             }
         }
         Commands::Team { action } => match action {
