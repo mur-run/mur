@@ -125,8 +125,10 @@ pub fn compress(
     // user's own text to the hash). Guard by refusing to collapse at all when the
     // sentinel is already present in the input — degrade to plain minify, which is
     // always safe, rather than invent a new escaping scheme for a vanishingly rare
-    // adversarial/coincidental case.
-    if content.contains(HASH_SENTINEL) {
+    // adversarial/coincidental case. Checked against `minified` (the canonical
+    // serde re-serialization), not the raw input, so unicode-escaped encodings of
+    // the sentinel (e.g. _ escapes) can't slip past the guard.
+    if minified.contains(HASH_SENTINEL) {
         return Ok(CompressOutput {
             compressed: minified,
             hash: None,
