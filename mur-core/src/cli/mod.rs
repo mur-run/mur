@@ -422,10 +422,13 @@ see `mur skill <command> --help`.")]
         #[command(subcommand)]
         action: CommanderAction,
     },
-    /// MUR-native deep research: gateway-mounted worker agent provisioning
+    /// MUR-native deep research (wizard: `setup`; status: bare; run: pass a question)
+    #[command(args_conflicts_with_subcommands = true)]
     DeepResearch {
         #[command(subcommand)]
-        action: DeepResearchAction,
+        action: Option<DeepResearchAction>,
+        /// Research question — runs the deep-research fleet directly
+        question: Option<String>,
     },
 }
 

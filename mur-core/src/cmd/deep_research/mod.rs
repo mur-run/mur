@@ -6,6 +6,7 @@
 //! their own — only the gateway process does — and the per-server MCP
 //! egress grant is a separate, explicit-consent step (Task 8).
 
+pub mod panel;
 pub mod provision;
 pub mod run;
 pub mod status;
