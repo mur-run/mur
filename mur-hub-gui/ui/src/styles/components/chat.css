@@ -81,6 +81,15 @@
   border-bottom-left-radius: var(--radius-sm, 6px);
 }
 
+/* Routing decision caption under an agent reply (Task 8). */
+.chat__route {
+  margin-top: 4px;
+  font-size: var(--text-xs, 11px);
+  color: var(--text-tertiary, var(--text-secondary));
+  opacity: 0.85;
+  user-select: none;
+}
+
 .chat__msg--error {
   align-self: flex-start;
   background: var(--coral-soft, #fde8e6);
