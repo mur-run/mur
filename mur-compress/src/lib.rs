@@ -117,6 +117,18 @@ impl CompressEngine {
             return Self::passthrough(content, before, ct);
         }
 
+        // Generic early-skip: the fallback's savings are exactly computable
+        // in one scan. Below the configured floor, don't run the compressor
+        // at all — record a skip (not a compression) and pass through.
+        if ct == ContentType::Generic
+            && fallback::saving_ratio(content) < self.config.fallback.min_save_ratio
+        {
+            self.stats.record_skip(ct.as_str());
+            let mut r = Self::passthrough(content, before, ct);
+            r.transforms = vec!["skipped".to_string()];
+            return r;
+        }
+
         let ctx = CompressCtx {
             query,
             config: &self.config,
@@ -296,5 +308,30 @@ mod tests {
         assert_eq!(res.tokens_saved, 0);
         assert!(res.compressed_tokens <= res.original_tokens);
         assert_eq!(eng.stats_snapshot().compressions, 0);
+    }
+
+    #[test]
+    fn generic_low_savings_is_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = CompressEngine::new(dir.path(), CompressConfig::default()).unwrap();
+        // Prose with nothing to strip: predicted savings 0 < 5% → skip.
+        let content = "plain prose line\n".repeat(200);
+        let r = engine.compress(&content, None);
+        assert_eq!(r.tokens_saved, 0);
+        assert!(r.transforms.iter().any(|t| t == "skipped"));
+        let snap = engine.stats_snapshot();
+        assert_eq!(snap.skipped, 1);
+        assert_eq!(snap.compressions, 0);
+    }
+
+    #[test]
+    fn generic_high_savings_still_compresses() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = CompressEngine::new(dir.path(), CompressConfig::default()).unwrap();
+        // Heavy trailing whitespace: well above 5% → real compression.
+        let content = "x                                                            \n".repeat(300);
+        let r = engine.compress(&content, None);
+        assert!(r.tokens_saved > 0);
+        assert!(r.transforms.iter().any(|t| t == "fallback.whitespace"));
     }
 }
