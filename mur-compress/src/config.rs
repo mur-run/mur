@@ -73,7 +73,9 @@ pub struct JsonCfg {
 
 impl Default for JsonCfg {
     fn default() -> Self {
-        Self { max_string_tokens: 200 }
+        Self {
+            max_string_tokens: 200,
+        }
     }
 }
 
@@ -88,7 +90,9 @@ pub struct FallbackCfg {
 
 impl Default for FallbackCfg {
     fn default() -> Self {
-        Self { min_save_ratio: 0.05 }
+        Self {
+            min_save_ratio: 0.05,
+        }
     }
 }
 
