@@ -501,6 +501,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                     yes,
                     render_engine.as_deref(),
                 )?,
+                (Some(DeepResearchAction::Setup), _) => {
+                    cmd::deep_research::setup::cmd_setup(&mur_home)?
+                }
                 (
                     Some(DeepResearchAction::Run {
                         name,
