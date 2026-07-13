@@ -27,19 +27,30 @@ pub(crate) fn spawn(
             return;
         };
         let pid = sess.pid;
-        if senders.lock().unwrap().contains_key(&pid) {
-            return; // scan/watcher overlap
+        // Atomic check+reserve under one lock: the scan and the watcher can
+        // both spawn for the same record (FSEvents replays creates from just
+        // before the watch started). The old check-then-connect-then-insert
+        // left a window where both tasks connected and the later insert
+        // overwrote the earlier sender — closing the earlier task's channel,
+        // dropping its live stream (peer sees BrokenPipe), and its cleanup
+        // then removed the winner's entry too.
+        let (out_tx, mut out_rx) = mpsc::channel::<HubFrame>(16);
+        {
+            let mut guard = senders.lock().unwrap();
+            if guard.contains_key(&pid) {
+                return; // scan/watcher overlap
+            }
+            guard.insert(pid, out_tx.clone());
         }
         let Ok(stream) = UnixStream::connect(&sess.sock).await else {
             // Socket gone but record present: crashed murmur. Reap.
+            senders.lock().unwrap().remove(&pid);
             tracing::debug!("panel_bridge: reaping dead session pid={pid}");
             let _ = std::fs::remove_file(&json_path);
             let _ = std::fs::remove_file(&sess.sock);
             return;
         };
         tracing::info!("panel_bridge: connected to murmur session pid={pid}");
-        let (out_tx, mut out_rx) = mpsc::channel::<HubFrame>(16);
-        senders.lock().unwrap().insert(pid, out_tx);
         let (r, mut w) = stream.into_split();
         let mut lines = BufReader::new(r).lines();
 
@@ -65,7 +76,14 @@ pub(crate) fn spawn(
                 },
             }
         }
-        senders.lock().unwrap().remove(&pid);
+        // Remove only OUR entry: with atomic reservation no duplicate should
+        // exist, but guard against removing a newer session's sender anyway.
+        {
+            let mut guard = senders.lock().unwrap();
+            if guard.get(&pid).is_some_and(|s| s.same_channel(&out_tx)) {
+                guard.remove(&pid);
+            }
+        }
         let _ = tx.send(PanelEvent::SessionDown { pid }).await;
     });
 }
