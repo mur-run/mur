@@ -697,6 +697,8 @@ pub enum DeepResearchAction {
         #[arg(long)]
         render_engine: Option<String>,
     },
+    /// Interactive first-time setup: model, worker count, budget, egress consent
+    Setup,
     /// Run a deep-research fleet's guarded loop (thin wrapper over
     /// `mur fleet run --loop` — see `cmd/fleet/loop_run.rs`). This drives
     /// only the loop's guard rails (iteration cap / deadline / budget /
