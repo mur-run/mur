@@ -36,6 +36,10 @@ pub struct CompressConfig {
     pub stats: StatsCfg,
     #[serde(default)]
     pub auto: AutoCfg,
+    #[serde(default)]
+    pub json: JsonCfg,
+    #[serde(default)]
+    pub fallback: FallbackCfg,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +62,36 @@ pub struct StatsCfg {
     pub cost_per_mtok_usd: f64,
 }
 
+/// `json:` section — knobs for the JSON deep-collapse compressor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct JsonCfg {
+    /// String leaves whose token count is at/above this get elided
+    /// (head kept, remainder offloaded).
+    pub max_string_tokens: usize,
+}
+
+impl Default for JsonCfg {
+    fn default() -> Self {
+        Self { max_string_tokens: 200 }
+    }
+}
+
+/// `fallback:` section — knobs for the Generic path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FallbackCfg {
+    /// Generic inputs whose exactly-computable savings ratio is below this
+    /// are skipped (passthrough) instead of compressed.
+    pub min_save_ratio: f32,
+}
+
+impl Default for FallbackCfg {
+    fn default() -> Self {
+        Self { min_save_ratio: 0.05 }
+    }
+}
+
 impl Default for CompressConfig {
     fn default() -> Self {
         Self {
@@ -73,6 +107,8 @@ impl Default for CompressConfig {
             store: StoreCfg::default(),
             stats: StatsCfg::default(),
             auto: AutoCfg::default(),
+            json: JsonCfg::default(),
+            fallback: FallbackCfg::default(),
         }
     }
 }
@@ -190,5 +226,20 @@ mod tests {
         std::fs::write(dir.path().join("compress.yaml"), "this: [is: not: valid").unwrap();
         let c = CompressConfig::load(dir.path());
         assert_eq!(c.protect_head_lines, 20);
+    }
+
+    #[test]
+    fn new_sections_default() {
+        let cfg = CompressConfig::default();
+        assert_eq!(cfg.json.max_string_tokens, 200);
+        assert!((cfg.fallback.min_save_ratio - 0.05).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn yaml_without_new_sections_still_loads() {
+        // Simulates an existing user compress.yaml predating these fields.
+        let cfg: CompressConfig = serde_yaml::from_str("enabled: true\n").unwrap();
+        assert_eq!(cfg.json.max_string_tokens, 200);
+        assert!((cfg.fallback.min_save_ratio - 0.05).abs() < f32::EPSILON);
     }
 }
