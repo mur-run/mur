@@ -147,6 +147,20 @@ Manage the companion subsystem for an agent (Phase 1.1):
 
 ---
 
+## Deep research (MUR-native web search, Phase 1)
+
+**Simplified three-command UX:**
+
+```
+mur deep-research setup        # one-time wizard: model, workers, budget, egress consent
+mur deep-research              # status panel
+mur deep-research "question"   # preflight (start workers, re-pin gateway) + guarded run
+```
+
+`provision` / `run` remain as the flag-based advanced path. Egress is only ever granted in `setup`/`provision --grant-egress` (explicit consent); the smart run never touches grants.
+
+---
+
 ## GUI Export (`mur agent export --format gui`)
 
 The third format. Produces a click-to-launch desktop app (`MyAgent.app` / `MyAgent.AppImage` / `MyAgent.exe`) bundling a single agent. Built on Tauri 2 + React 18 + Vite + Tailwind 4. The `mur-agent-gui` crate is **workspace-EXCLUDED** in the root `Cargo.toml` so default `cargo build --workspace` doesn't pull WebKitGTK / Cocoa / WebView2 toolchains.

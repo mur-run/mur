@@ -56,7 +56,7 @@ const WORKER_LLM_ALLOW_HOSTS: [&str; 2] = ["localhost", "127.0.0.1"];
 const WORKER_DENIED_BUILTIN_TOOLS: [&str; 4] = ["bash", "read_file", "write_file", "edit_file"];
 
 /// Name of the gateway MCP server entry mounted on every worker.
-const GATEWAY_MCP_NAME: &str = "research-gateway";
+pub const GATEWAY_MCP_NAME: &str = "research-gateway";
 
 /// Binary invoked for the gateway MCP server (installed on PATH by
 /// `build.sh`, shipped by Tasks 1-6).
@@ -118,89 +118,102 @@ pub fn provision(
     let mut names = Vec::with_capacity(count);
     for i in 1..=count {
         let name = format!("{name_prefix}_{i}");
-        // Fix 1: bind model_ref to `model` (default DEFAULT_WORKER_MODEL) so
-        // the worker resolves real credentials via the models.yaml registry
-        // instead of falling to the ollama/llama3.2:3b StubEcho default.
-        cmd_create(&name, true, None, Some(model.to_string()), None)?;
-        cmd_mcp_add(
-            &name,
-            GATEWAY_MCP_NAME,
-            GATEWAY_MCP_COMMAND,
-            &[],
-            McpAddPin {
-                force: true,
-                ..Default::default()
-            },
-        )?;
+        provision_one(mur_home, &name, model, render_engine)?;
+        names.push(name);
+    }
+    Ok(names)
+}
 
-        // Fix 2: seed the agent-level outbound allow-list with loopback so
-        // the worker can reach its own LLM endpoint (local cc-proxy) to
-        // reason. Stays `restricted` — this only widens the allow-list off
-        // empty, never touches the gateway MCP entry's own `network` block
-        // (that stays `None`/Inherit until the separate `--grant-egress`
-        // step in `grant_egress` below).
-        let (path, mut profile) = load_profile_for_edit(&name)?;
-        profile.entitlements.network.outbound.allow_hosts = WORKER_LLM_ALLOW_HOSTS
-            .iter()
-            .map(|h| h.to_string())
-            .collect();
-        // ProxyOnly: deny all general outbound TCP; the worker's egress is
-        // entirely loopback (cc-proxy LLM + the audited egress proxy), so the
-        // OS profile forces every fetch through the proxy — no direct `*:443`
-        // escape. (allow_hosts above keeps HostGuard governing the loopback
-        // LLM hostname.)
-        profile.entitlements.network.outbound.mode =
-            mur_common::agent::NetworkOutboundMode::ProxyOnly;
-        // Pre-approve the gateway's OWN tools (read-only search/fetch) so
-        // headless delegated turns don't dead-end on the HITL gate
-        // (`tool/approval_needed` has no answerer under fleet delegation →
-        // 300 s timeout → deny → task failed). Scoped to
-        // `mcp__research-gateway__*` only. This grants no egress by itself: the
-        // gateway's outbound stays Inherit/restricted until the separate
-        // explicit-consent `--grant-egress` step.
+/// Single-worker provisioning body, single-sourced so both [`provision`]
+/// (fresh-provision path) and the `setup` wizard's re-run reconcile
+/// (which only calls this for MISSING workers, never for existing ones)
+/// share the exact same profile construction. See the module doc comment
+/// for the full rationale behind each step.
+pub(crate) fn provision_one(
+    mur_home: &Path,
+    name: &str,
+    model: &str,
+    render_engine: Option<&str>,
+) -> Result<()> {
+    // Fix 1: bind model_ref to `model` (default DEFAULT_WORKER_MODEL) so
+    // the worker resolves real credentials via the models.yaml registry
+    // instead of falling to the ollama/llama3.2:3b StubEcho default.
+    cmd_create(name, true, None, Some(model.to_string()), None)?;
+    cmd_mcp_add(
+        name,
+        GATEWAY_MCP_NAME,
+        GATEWAY_MCP_COMMAND,
+        &[],
+        McpAddPin {
+            force: true,
+            ..Default::default()
+        },
+    )?;
+
+    // Fix 2: seed the agent-level outbound allow-list with loopback so
+    // the worker can reach its own LLM endpoint (local cc-proxy) to
+    // reason. Stays `restricted` — this only widens the allow-list off
+    // empty, never touches the gateway MCP entry's own `network` block
+    // (that stays `None`/Inherit until the separate `--grant-egress`
+    // step in `grant_egress` below).
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    profile.entitlements.network.outbound.allow_hosts = WORKER_LLM_ALLOW_HOSTS
+        .iter()
+        .map(|h| h.to_string())
+        .collect();
+    // ProxyOnly: deny all general outbound TCP; the worker's egress is
+    // entirely loopback (cc-proxy LLM + the audited egress proxy), so the
+    // OS profile forces every fetch through the proxy — no direct `*:443`
+    // escape. (allow_hosts above keeps HostGuard governing the loopback
+    // LLM hostname.)
+    profile.entitlements.network.outbound.mode = mur_common::agent::NetworkOutboundMode::ProxyOnly;
+    // Pre-approve the gateway's OWN tools (read-only search/fetch) so
+    // headless delegated turns don't dead-end on the HITL gate
+    // (`tool/approval_needed` has no answerer under fleet delegation →
+    // 300 s timeout → deny → task failed). Scoped to
+    // `mcp__research-gateway__*` only. This grants no egress by itself: the
+    // gateway's outbound stays Inherit/restricted until the separate
+    // explicit-consent `--grant-egress` step.
+    profile
+        .entitlements
+        .tools
+        .push(mur_common::agent::ToolRule {
+            pattern: mur_common::mcp_naming::tool_pattern(GATEWAY_MCP_NAME),
+            policy: mur_common::agent::ToolPolicy::Allow,
+            risk: None,
+        });
+    // Deny the built-in tools (see WORKER_DENIED_BUILTIN_TOOLS): left at the
+    // default `Ask`, a research turn that reaches for `bash`/`write_file`/…
+    // dead-ends on the unanswerable headless HITL gate and FAILS the turn.
+    // Denied → not advertised → the model never calls them.
+    for tool in WORKER_DENIED_BUILTIN_TOOLS {
         profile
             .entitlements
             .tools
             .push(mur_common::agent::ToolRule {
-                pattern: mur_common::mcp_naming::tool_pattern(GATEWAY_MCP_NAME),
-                policy: mur_common::agent::ToolPolicy::Allow,
+                pattern: tool.to_string(),
+                policy: mur_common::agent::ToolPolicy::Deny,
                 risk: None,
             });
-        // Deny the built-in tools (see WORKER_DENIED_BUILTIN_TOOLS): left at the
-        // default `Ask`, a research turn that reaches for `bash`/`write_file`/…
-        // dead-ends on the unanswerable headless HITL gate and FAILS the turn.
-        // Denied → not advertised → the model never calls them.
-        for tool in WORKER_DENIED_BUILTIN_TOOLS {
-            profile
-                .entitlements
-                .tools
-                .push(mur_common::agent::ToolRule {
-                    pattern: tool.to_string(),
-                    policy: mur_common::agent::ToolPolicy::Deny,
-                    risk: None,
-                });
-        }
-        // Opt-in obscura render engine (Task 8a): the gateway runs under
-        // `spawn_sandboxed` with this profile's `SandboxPolicy`, whose exec
-        // allowlist is searched over dirs that EXCLUDE `~/.mur/aura/` — so
-        // grant the two absolute paths directly. `from_entitlements` keeps an
-        // absolute `spawn.allowed` entry (path separator present) as-is when
-        // it resolves to an executable file, with no directory search. Any
-        // value other than `RENDER_ENGINE_OBSCURA` (including `None`) leaves
-        // the default `agent-browser` path byte-for-byte unchanged.
-        if render_engine == Some(RENDER_ENGINE_OBSCURA) {
-            for rel in [OBSCURA_RELATIVE, OBSCURA_WORKER_RELATIVE] {
-                let abs = mur_home.join(rel).to_string_lossy().to_string();
-                if !profile.entitlements.processes.spawn.allowed.contains(&abs) {
-                    profile.entitlements.processes.spawn.allowed.push(abs);
-                }
+    }
+    // Opt-in obscura render engine (Task 8a): the gateway runs under
+    // `spawn_sandboxed` with this profile's `SandboxPolicy`, whose exec
+    // allowlist is searched over dirs that EXCLUDE `~/.mur/aura/` — so
+    // grant the two absolute paths directly. `from_entitlements` keeps an
+    // absolute `spawn.allowed` entry (path separator present) as-is when
+    // it resolves to an executable file, with no directory search. Any
+    // value other than `RENDER_ENGINE_OBSCURA` (including `None`) leaves
+    // the default `agent-browser` path byte-for-byte unchanged.
+    if render_engine == Some(RENDER_ENGINE_OBSCURA) {
+        for rel in [OBSCURA_RELATIVE, OBSCURA_WORKER_RELATIVE] {
+            let abs = mur_home.join(rel).to_string_lossy().to_string();
+            if !profile.entitlements.processes.spawn.allowed.contains(&abs) {
+                profile.entitlements.processes.spawn.allowed.push(abs);
             }
         }
-        save_profile(&path, &mut profile)?;
-
-        names.push(name);
     }
-    Ok(names)
+    save_profile(&path, &mut profile)?;
+    Ok(())
 }
 
 /// Grant `worker`'s `research-gateway` MCP server `BroadAudited` egress —
