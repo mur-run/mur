@@ -13,6 +13,7 @@ pub const DEFAULT_MAX_RETRIES: u32 = 1;
 pub const DEFAULT_BACKOFF_BASE_MS: u64 = 500;
 pub const DEFAULT_COOLDOWN_SECS: u64 = 60;
 pub const DEFAULT_ROUTING_THRESHOLD: u32 = 2000;
+pub const DEFAULT_SMART_MAX_ESCALATIONS: u32 = 1;
 
 fn default_max_retries() -> u32 {
     DEFAULT_MAX_RETRIES
@@ -22,6 +23,33 @@ fn default_backoff_base_ms() -> u64 {
 }
 fn default_cooldown_secs() -> u64 {
     DEFAULT_COOLDOWN_SECS
+}
+fn default_smart_max_escalations() -> u32 {
+    DEFAULT_SMART_MAX_ESCALATIONS
+}
+
+/// Smart background routing: auto-pick a cheap model for low-stakes/background
+/// requests instead of always dialing the agent's primary model_ref. Defaults
+/// ON with `cheap: None` (auto-pick the cheapest chat-capable registry entry
+/// via `mur_common::model::pick_cheap_model`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SmartConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cheap: Option<String>,
+    #[serde(default = "default_smart_max_escalations")]
+    pub max_escalations: u32,
+}
+
+impl Default for SmartConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            cheap: None,
+            max_escalations: DEFAULT_SMART_MAX_ESCALATIONS,
+        }
+    }
 }
 
 /// Config-layered model selection + failure fallback. See
@@ -38,6 +66,8 @@ pub struct ModelSwitchConfig {
     pub retry: RetryConfig,
     #[serde(default)]
     pub routing: RoutingConfig,
+    #[serde(default)]
+    pub smart: SmartConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +100,8 @@ pub struct RoutingConfig {
     pub frontier: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub threshold_input_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smart: Option<SmartConfig>,
 }
 
 /// Global MUR configuration (~/.mur/config.yaml)
@@ -2207,5 +2239,16 @@ mod model_switch_config_tests {
         );
         assert!(cfg.models.routing.enabled);
         assert_eq!(cfg.models.routing.threshold_input_tokens, Some(1500));
+    }
+
+    #[test]
+    fn smart_config_defaults_on_with_autopick() {
+        let cfg: Config = serde_yaml::from_str("{}").unwrap();
+        assert!(cfg.models.smart.enabled); // default ON
+        assert_eq!(cfg.models.smart.cheap, None); // auto-pick
+        assert_eq!(
+            cfg.models.smart.max_escalations,
+            DEFAULT_SMART_MAX_ESCALATIONS
+        );
     }
 }

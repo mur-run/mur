@@ -3,7 +3,7 @@
 
 use crate::hitl::HitlApprovals;
 use crate::hooks::{HookChain, HookCtx, PromptView, ToolCall, ToolResult};
-use crate::llm::{LlmClient, LlmError, LlmRequest};
+use crate::llm::{LlmClient, LlmError, LlmRequest, RequestIntent};
 use crate::skills::RuntimeSkills;
 use crate::skills::injector::inject_layer2;
 use crate::skills::trigger_matcher::{format_layer3, layer3_body, match_prompt};
@@ -35,6 +35,15 @@ pub struct TaskSpec {
     /// by the `channel/delegate` handler. Drives team-scoped skill injection;
     /// `None` for non-fleet turns or fleets without a team (fail-closed).
     pub active_team: Option<String>,
+    /// Why this turn is being run (see `RequestIntent`). Deliberately NOT
+    /// `Default`-derived on `TaskSpec` — every construction site must state
+    /// its intent explicitly so an interactive (user-facing) call site can
+    /// never silently fall through to `Background` (which would make it
+    /// eligible for Smart cheap-model routing). Runtime-initiated call
+    /// sites (cron scheduler, idle scheduler, watch scheduler) tag
+    /// `Background`; chat / A2A `message/send` / `channel/delegate` tag
+    /// `Interactive`.
+    pub intent: RequestIntent,
 }
 
 #[derive(Debug)]
@@ -142,6 +151,14 @@ pub struct TaskRunner {
     /// `token_usage` closure to populate `context_tokens` in per-turn usage JSON
     /// so the CLI glass-box bar can show a live context gauge.
     last_input_tokens: AtomicU64,
+    /// `model_ref` of the most recent successful LLM response, read by the
+    /// `token_usage` closure to populate `Task.usage.model_ref`. Reset to
+    /// `None` at the start of each `run_sync_inner` turn so a stub/misconfigured
+    /// backend (which never calls a real model) reports no model rather than a
+    /// stale one from a previous turn. Same runner-lifetime concurrency caveat
+    /// as `cumulative_input_tokens`: overlapping turns on one runner can race
+    /// this value; acceptable for a best-effort telemetry field.
+    last_model_ref: Mutex<Option<String>>,
     hook_chain: Option<Arc<HookChain>>,
     hook_ctx: Option<HookCtx>,
     hook_cancel: Option<CancellationToken>,
@@ -262,6 +279,7 @@ impl TaskRunner {
             cumulative_input_tokens: AtomicU64::new(0),
             cumulative_output_tokens: AtomicU64::new(0),
             last_input_tokens: AtomicU64::new(0),
+            last_model_ref: Mutex::new(None),
             hook_chain: None,
             hook_ctx: None,
             hook_cancel: None,
@@ -664,6 +682,12 @@ impl TaskRunner {
         // already uses; fine for the serial-delegate fleet path.
         let tok_in0 = self.cumulative_input_tokens.load(Ordering::Relaxed);
         let tok_out0 = self.cumulative_output_tokens.load(Ordering::Relaxed);
+        // Clear the previous turn's model_ref so a stub/misconfigured backend
+        // (which never calls a real model) reports none rather than stale data.
+        *self
+            .last_model_ref
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
 
         let generation = async {
             match &self.backend {
@@ -691,6 +715,7 @@ impl TaskRunner {
                             spec.context_task_id.as_deref(),
                             sink,
                             steer_rx,
+                            spec.intent,
                         )
                         .await
                     } else {
@@ -702,6 +727,7 @@ impl TaskRunner {
                             spec.active_fleet.as_deref(),
                             spec.active_team.as_deref(),
                             sink,
+                            spec.intent,
                         )
                         .await
                         .map(|m| (m, None))
@@ -740,10 +766,31 @@ impl TaskRunner {
                 .cumulative_output_tokens
                 .load(Ordering::Relaxed)
                 .saturating_sub(tok_out0);
+            // `model_ref` = the winning model of the most recent successful LLM
+            // call this turn (None for stub/misconfigured backends). `route_reason`
+            // is a best-effort label derived from `spec.intent` alone — NOT the
+            // real per-call `FallbackLlmClient::selection_reason` outcome (that
+            // lives behind the `LlmClient` trait object and isn't threaded back
+            // through `LlmResponse`; wiring it through would mean growing the
+            // trait's return type across every provider, a bigger refactor than
+            // this field is worth). "smart-background" here means "this request
+            // was tagged Background and therefore eligible for Smart routing",
+            // not "Smart definitely picked the cheap model".
+            let model_ref = self
+                .last_model_ref
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let route_reason = match spec.intent {
+                RequestIntent::Interactive => "interactive",
+                RequestIntent::Background(_) => "smart-background",
+            };
             serde_json::json!({
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "context_tokens": self.last_input_tokens.load(Ordering::Relaxed),
+                "model_ref": model_ref,
+                "route_reason": route_reason,
             })
         };
 
@@ -943,6 +990,7 @@ impl TaskRunner {
         active_fleet: Option<&str>,
         active_team: Option<&str>,
         sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
+        intent: RequestIntent,
     ) -> Result<Message, TaskError> {
         let prompt = text_of(input);
 
@@ -988,6 +1036,9 @@ impl TaskRunner {
             temperature: None,
             max_tokens: None,
             tools: vec![],
+            intent,
+            task_id: Some(task_id.to_string()),
+            ..Default::default()
         };
         let start = std::time::Instant::now();
         let llm_result = match sink {
@@ -997,6 +1048,10 @@ impl TaskRunner {
         match llm_result {
             Ok(resp) => {
                 let latency_ms = start.elapsed().as_millis() as u64;
+                *self
+                    .last_model_ref
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(resp.model.clone());
                 let _prev = self
                     .cumulative_input_tokens
                     .fetch_add(resp.input_tokens, Ordering::Relaxed);
@@ -1337,6 +1392,7 @@ impl TaskRunner {
         context_task_id: Option<&str>,
         sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
         mut steer_rx: Option<tokio::sync::mpsc::Receiver<String>>,
+        intent: RequestIntent,
     ) -> Result<(Message, Option<LoopExit>), TaskError> {
         use crate::llm::{LlmRequest, RichMessage, StopReason};
 
@@ -1395,6 +1451,9 @@ impl TaskRunner {
                 temperature: None,
                 max_tokens: None,
                 tools: tool_defs.clone(),
+                intent,
+                task_id: Some(task_id.to_string()),
+                ..Default::default()
             };
             // Bounded retry for a transient empty-stream hiccup: an
             // `InvalidResponse` carrying "empty streamed response" is usually a
@@ -1445,6 +1504,10 @@ impl TaskRunner {
                 .store(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
             self.cumulative_output_tokens
                 .fetch_add(resp.output_tokens, std::sync::atomic::Ordering::Relaxed);
+            *self
+                .last_model_ref
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(resp.model.clone());
 
             // Truncation guard: a turn that hit the output-token ceiling AND
             // carries tool_calls was cut off MID-tool_use — the tool_use
@@ -1620,6 +1683,7 @@ impl TaskRunner {
             temperature: None,
             max_tokens: None,
             tools: vec![], // tools disabled: force a textual summary
+            ..Default::default()
         };
         let mut text = match client.generate(req).await {
             Ok(resp) => {
@@ -1951,6 +2015,7 @@ mod tests {
             },
             context_task_id: None,
             task_id: None,
+            intent: RequestIntent::Interactive,
             active_fleet: None,
             active_team: None,
         }
@@ -1999,6 +2064,7 @@ mod tests {
             },
             context_task_id: None,
             task_id: Some("task-fixed-1".to_string()),
+            intent: RequestIntent::Interactive,
             active_fleet: None,
             active_team: None,
         };
@@ -2015,6 +2081,7 @@ mod tests {
             },
             context_task_id: None,
             task_id: Some("task-supplied-9".to_string()),
+            intent: RequestIntent::Interactive,
             active_fleet: None,
             active_team: None,
         };
@@ -2033,6 +2100,7 @@ mod tests {
             },
             context_task_id: ctx.map(str::to_string),
             task_id: Some(task_id.to_string()),
+            intent: RequestIntent::Interactive,
             active_fleet: None,
             active_team: None,
         }
@@ -2109,6 +2177,7 @@ mod tests {
             },
             context_task_id: None,
             task_id: Some("task-cancelme".to_string()),
+            intent: RequestIntent::Interactive,
             active_fleet: None,
             active_team: None,
         };
@@ -2432,6 +2501,7 @@ mod tests {
             },
             context_task_id: None,
             task_id: None,
+            intent: RequestIntent::Interactive,
             active_fleet: None,
             active_team: None,
         };
@@ -2478,6 +2548,7 @@ mod tests {
             },
             context_task_id: None,
             task_id: None,
+            intent: RequestIntent::Interactive,
             active_fleet: None,
             active_team: None,
         };
@@ -2619,6 +2690,7 @@ mod tests {
             },
             context_task_id: None,
             task_id: None,
+            intent: RequestIntent::Interactive,
             active_fleet: None,
             active_team: None,
         }

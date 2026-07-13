@@ -11,6 +11,7 @@ use mur_common::channel::{ChannelActor, EventKind};
 use mur_common::identity::AgentIdentity;
 use serde_json::Value;
 
+use crate::llm::RequestIntent;
 use crate::protocol::a2a_server::{HandlerError, MethodHandler, RequestContext};
 use crate::task_runner::{TaskOutcome, TaskRunner, TaskSpec};
 
@@ -169,6 +170,9 @@ impl MethodHandler for ChannelDelegateHandler {
             // Derive the team id from the fleet record (if any) so team-scoped
             // skills inject for fleet members belonging to that team (fail-closed).
             active_team: verified_active_team(&self.mur_home, &channel_id),
+            // A fleet router/member is synchronously dialing this delegate and
+            // waiting on the reply — Interactive, same as message/send.
+            intent: RequestIntent::Interactive,
         };
 
         // Run the turn (non-streaming path; v3d-2 does not need per-delta

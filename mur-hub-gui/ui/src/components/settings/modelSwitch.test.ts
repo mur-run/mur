@@ -23,6 +23,21 @@ describe("modelSwitch helpers", () => {
     expect(ms.routing.threshold_input_tokens).toBeNull();
     expect(ms.routing.enabled).toBe(false);
     expect(ms.retry.cooldown_secs).toBe(60); // passthrough preserved
+    // smart defaults on and auto-picks when the Rust payload omits it entirely.
+    expect(ms.smart.enabled).toBe(true);
+    expect(ms.smart.cheap).toBeNull();
+    expect(ms.smart.max_escalations).toBe(1);
+  });
+  it("normalizeMs fills smart.cheap when smart is present but missing cheap", () => {
+    const raw = {
+      retry: { max_retries: 1, backoff_base_ms: 500, cooldown_secs: 60 },
+      routing: { enabled: false },
+      smart: { enabled: false, max_escalations: 3 },
+    } as unknown as ModelSwitchView;
+    const ms = normalizeMs(raw);
+    expect(ms.smart.enabled).toBe(false); // passthrough preserved
+    expect(ms.smart.cheap).toBeNull();
+    expect(ms.smart.max_escalations).toBe(3); // passthrough preserved
   });
 });
 
@@ -32,5 +47,6 @@ const _typeCheck: ModelSwitchView = {
   fallback_chain: [],
   retry: { max_retries: 0, backoff_base_ms: 0, cooldown_secs: 0 },
   routing: { enabled: false, cheap: null, frontier: null, threshold_input_tokens: null },
+  smart: { enabled: true, cheap: null, max_escalations: 1 },
 };
 void _typeCheck;
