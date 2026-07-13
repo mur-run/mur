@@ -118,6 +118,22 @@ pub fn compress(
     let minified = serde_json::to_string(&val).map_err(|e| CompressError::Parse(e.to_string()))?;
     let transforms = vec!["json.minify".to_string()];
 
+    // Collapse notes and elided-string markers embed HASH_SENTINEL as a placeholder
+    // that gets string-replaced with the real content hash after serialization. If
+    // the ORIGINAL document already contains that literal string in surviving user
+    // data, the final blind `.replace()` would silently corrupt it (rewriting the
+    // user's own text to the hash). Guard by refusing to collapse at all when the
+    // sentinel is already present in the input — degrade to plain minify, which is
+    // always safe, rather than invent a new escaping scheme for a vanishingly rare
+    // adversarial/coincidental case.
+    if content.contains(HASH_SENTINEL) {
+        return Ok(CompressOutput {
+            compressed: minified,
+            hash: None,
+            transforms,
+        });
+    }
+
     let mut walk = Walk {
         ctx,
         tok,
@@ -287,6 +303,33 @@ mod tests {
         }
         let out = compress(&s, &ctx, &store, &HeuristicCounter).unwrap();
         assert!(out.hash.is_none());
+    }
+
+    #[test]
+    fn sentinel_in_user_data_degrades_to_minify() {
+        let cfg = CompressConfig {
+            protect_head_lines: 2,
+            ..Default::default()
+        };
+        let (_d, store) = store_and_ctx(&cfg);
+        let ctx = CompressCtx {
+            query: None,
+            config: &cfg,
+        };
+        let mut rows: Vec<serde_json::Value> =
+            (0..10).map(|i| serde_json::json!({"id": i})).collect();
+        rows.push(serde_json::json!({"id": 99, "note": "__MUR_HASH__"}));
+        let input = serde_json::Value::Array(rows).to_string();
+        let out = compress(&input, &ctx, &store, &HeuristicCounter).unwrap();
+        assert!(
+            out.hash.is_none(),
+            "sentinel collision in user data must degrade to plain minify"
+        );
+        assert!(
+            out.compressed.contains("__MUR_HASH__"),
+            "user's literal sentinel text must survive untouched"
+        );
+        assert_eq!(out.transforms, vec!["json.minify".to_string()]);
     }
 
     #[test]
