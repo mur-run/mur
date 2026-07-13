@@ -347,7 +347,7 @@ mur dashboard        # terminal TUI dashboard
 ```
 
 <details>
-<summary><b>Full command tree</b> (24 top-level commands)</summary>
+<summary><b>Full command tree</b> (25 top-level commands)</summary>
 
 ```
 mur
@@ -355,6 +355,7 @@ mur
 ├── agent        create · cli · send · card · export · install · companion · voice ·
 │                pair · schedule · perm · secret · trash · queue · rollback … (40+)
 ├── fleet        create · list · show · run   (squads of agents over a shared channel)
+├── deep-research  setup · status · ask   (web research with wizard UX)
 ├── skill        install · search · show · generate · suggest · evolve · recombine ·
 │                publish · audit · trust · exchange · drafts · eval …
 ├── notes        create · search · list · show
@@ -375,6 +376,16 @@ mur
 ```
 
 </details>
+
+### Deep research, simplified
+
+```
+mur deep-research setup        # one-time wizard: model, workers, budget, egress consent
+mur deep-research              # status panel
+mur deep-research "question"   # preflight (start workers, re-pin gateway) + guarded run
+```
+
+`provision` / `run` remain as the flag-based advanced path. Egress is only ever granted in `setup`/`provision --grant-egress` (explicit consent); the smart run never touches grants.
 
 ---
 
