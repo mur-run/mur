@@ -339,6 +339,7 @@ async fn generate_preview(
         max_tokens: Some(400),
         temperature: Some(0.7),
         tools: vec![],
+        ..Default::default()
     };
     let resp = llm
         .generate(req)
