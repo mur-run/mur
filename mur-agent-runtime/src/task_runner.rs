@@ -988,6 +988,7 @@ impl TaskRunner {
             temperature: None,
             max_tokens: None,
             tools: vec![],
+            ..Default::default()
         };
         let start = std::time::Instant::now();
         let llm_result = match sink {
@@ -1395,6 +1396,7 @@ impl TaskRunner {
                 temperature: None,
                 max_tokens: None,
                 tools: tool_defs.clone(),
+                ..Default::default()
             };
             // Bounded retry for a transient empty-stream hiccup: an
             // `InvalidResponse` carrying "empty streamed response" is usually a
@@ -1620,6 +1622,7 @@ impl TaskRunner {
             temperature: None,
             max_tokens: None,
             tools: vec![], // tools disabled: force a textual summary
+            ..Default::default()
         };
         let mut text = match client.generate(req).await {
             Ok(resp) => {
