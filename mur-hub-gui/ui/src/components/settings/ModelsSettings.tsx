@@ -6,6 +6,9 @@ import { ModelLibrary } from "../ModelLibrary";
 import type { ModelOption } from "../modelPicker";
 import type { DetectedLocalView } from "../ModelLibraryPanels";
 import { buildSlotGroups, decodeSel, encodeSel, type SlotOptionGroup } from "../modelSlots";
+import { ModelRefSelect } from "./ModelRefSelect";
+import { FallbackChainEditor } from "./FallbackChainEditor";
+import { type ModelSwitchView, normalizeMs } from "./modelSwitch";
 
 interface SlotView {
   provider: string;
@@ -33,6 +36,9 @@ export function ModelsSettings() {
   const [groups, setGroups] = useState<SlotOptionGroup[]>([]);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
+  const [ms, setMs] = useState<ModelSwitchView | null>(null);
+  const [msErr, setMsErr] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     invoke<[boolean, string | null]>("nudge_status")
@@ -41,10 +47,25 @@ export function ModelsSettings() {
     invoke<ModelSlotsView>("model_slots_get")
       .then(setSlots)
       .catch(() => {});
+    invoke<ModelSwitchView>("model_switch_get")
+      .then((raw) => setMs(normalizeMs(raw)))
+      .catch((e) => setMsErr(String(e)));
     Promise.all([
       invoke<ModelOption[]>("list_models").catch(() => [] as ModelOption[]),
       invoke<DetectedLocalView[]>("probe_local_providers").catch(() => [] as DetectedLocalView[]),
-    ]).then(([reg, local]) => setGroups(buildSlotGroups(reg, local)));
+    ]).then(([reg, local]) => {
+      setModelOptions(reg);
+      setGroups(buildSlotGroups(reg, local));
+    });
+  }, []);
+
+  const saveMs = useCallback((next: ModelSwitchView) => {
+    invoke<ModelSwitchView>("model_switch_set", { next })
+      .then((saved) => {
+        setMs(normalizeMs(saved));
+        setMsErr(null);
+      })
+      .catch((e) => setMsErr(String(e)));
   }, []);
 
   useEffect(refresh, [refresh]);
@@ -112,7 +133,13 @@ export function ModelsSettings() {
     </div>
   );
 
+  const setRouting = (patch: Partial<ModelSwitchView["routing"]>) => {
+    if (!ms) return;
+    saveMs({ ...ms, routing: { ...ms.routing, ...patch } });
+  };
+
   return (
+    <>
     <section className="settings-section">
       <h3 className="settings-section__title">{t("settings.nav.models")}</h3>
       {slots && (
@@ -146,5 +173,88 @@ export function ModelsSettings() {
       <p className="settings-hint">{t("settings.modelsHint")}</p>
       <ModelLibrary open={libraryOpen} onClose={() => setLibraryOpen(false)} />
     </section>
+
+    {ms && (
+      <section className="settings-section">
+        <h3 className="settings-section__title">{t("settings.modelSwitch.title")}</h3>
+
+        <div className="settings-row">
+          <span className="settings-row__label">{t("settings.modelSwitch.default")}</span>
+          <ModelRefSelect
+            value={ms.default}
+            options={modelOptions}
+            allowEmpty
+            ariaLabel={t("settings.modelSwitch.default")}
+            onChange={(v) => saveMs({ ...ms, default: v })}
+          />
+        </div>
+        <p className="settings-hint">{t("settings.modelSwitch.defaultHint")}</p>
+
+        <p className="settings-hint">{t("settings.modelSwitch.chainHint")}</p>
+        <FallbackChainEditor
+          chain={ms.fallback_chain}
+          options={modelOptions}
+          onChange={(next) => saveMs({ ...ms, fallback_chain: next })}
+        />
+
+        <div className="settings-row">
+          <label className="settings-row__label" htmlFor="ms-routing-enable">
+            {t("settings.modelSwitch.routingEnable")}
+          </label>
+          <input
+            id="ms-routing-enable"
+            type="checkbox"
+            checked={ms.routing.enabled}
+            onChange={(e) => setRouting({ enabled: e.target.checked })}
+          />
+        </div>
+        <p className="settings-hint">{t("settings.modelSwitch.routingHint")}</p>
+
+        {ms.routing.enabled && (
+          <>
+            <div className="settings-row">
+              <span className="settings-row__label">{t("settings.modelSwitch.cheap")}</span>
+              <ModelRefSelect
+                value={ms.routing.cheap}
+                options={modelOptions}
+                allowEmpty
+                ariaLabel={t("settings.modelSwitch.cheap")}
+                onChange={(v) => setRouting({ cheap: v })}
+              />
+            </div>
+            <div className="settings-row">
+              <span className="settings-row__label">{t("settings.modelSwitch.frontier")}</span>
+              <ModelRefSelect
+                value={ms.routing.frontier}
+                options={modelOptions}
+                allowEmpty
+                ariaLabel={t("settings.modelSwitch.frontier")}
+                onChange={(v) => setRouting({ frontier: v })}
+              />
+            </div>
+            <div className="settings-row">
+              <label className="settings-row__label" htmlFor="ms-routing-threshold">
+                {t("settings.modelSwitch.threshold")}
+              </label>
+              <input
+                id="ms-routing-threshold"
+                className="input"
+                type="number"
+                min={0}
+                value={ms.routing.threshold_input_tokens ?? ""}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  setRouting({ threshold_input_tokens: raw === "" ? null : Number(raw) });
+                }}
+              />
+            </div>
+            <p className="settings-hint">{t("settings.modelSwitch.thresholdHint")}</p>
+          </>
+        )}
+
+        {msErr && <p className="settings-hint slot-error">{msErr}</p>}
+      </section>
+    )}
+    </>
   );
 }
