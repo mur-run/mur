@@ -798,6 +798,9 @@
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary, #F1F5F9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .mc-opt__sub {
   font-size: 11px;
@@ -811,7 +814,10 @@
 .mc-badges {
   display: flex;
   gap: 5px;
+  /* flex:none sized this to max-content so flex-wrap never fired and the
+     badges crushed .mc-opt__body to ~0 width (name painted over badges). */
   flex: none;
+  max-width: 55%;
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
