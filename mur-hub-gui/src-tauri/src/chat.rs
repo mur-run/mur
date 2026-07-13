@@ -67,6 +67,12 @@ pub struct ChatReply {
     pub task_id: String,
     /// Whether the reply was streamed token-by-token (vs a one-shot fallback).
     pub streamed: bool,
+    /// Raw `Task.usage` JSON from the runtime (Task 6: `model_ref` +
+    /// `route_reason`, among other fields), passed through verbatim so the Hub
+    /// chat's decision caption (Task 8) can render without a re-hydrate.
+    /// `None` for stub/misconfigured backends or older runtimes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Value>,
 }
 
 /// Send `text` to agent `name` and return its reply, streaming token deltas as
@@ -174,6 +180,11 @@ pub async fn agent_chat_send(
     if reply.is_empty() {
         return Err("the agent returned no reply".into());
     }
+    // Task 6: the runtime attaches `model_ref`/`route_reason` (plus token
+    // counts) to `Task.usage`. Pass it through verbatim — both back to the
+    // caller (so the just-sent bubble can render the caption immediately) and
+    // into the persisted channel event (so it survives a reload).
+    let usage = task.get("usage").cloned();
     // Persist the whole exchange atomically into ONE channel (best-effort).
     // `task_id` here is the response task id; the user turn keeps its request id.
     persist_exchange(
@@ -183,11 +194,13 @@ pub async fn agent_chat_send(
         Some(&user_task_id),
         &reply,
         Some(&task_id),
+        usage.clone(),
     );
     Ok(ChatReply {
         reply,
         task_id,
         streamed,
+        usage,
     })
 }
 
@@ -255,6 +268,7 @@ fn extract_text(message: &Value) -> String {
 /// newer channel appears mid-turn). Best-effort: failures are logged, never
 /// surfaced to the chat. The channel is created here on the first real exchange,
 /// so a failed/empty turn writes nothing (no orphaned user message).
+#[allow(clippy::too_many_arguments)]
 fn persist_exchange(
     home: &std::path::Path,
     agent: &str,
@@ -262,6 +276,7 @@ fn persist_exchange(
     user_task_id: Option<&str>,
     agent_text: &str,
     agent_task_id: Option<&str>,
+    agent_usage: Option<Value>,
 ) {
     let res = (|| -> anyhow::Result<()> {
         let svc = ChannelService::open(home)?;
@@ -276,14 +291,25 @@ fn persist_exchange(
             user_text,
             user_task_id,
         )?;
-        svc.append_message(
+        // Build the agent payload by hand (rather than `append_message`) so we
+        // can attach the turn's usage (Task 6: `model_ref`/`route_reason`) when
+        // present — the Hub chat decision caption (Task 8) reads it back on
+        // reload via `channel_load`.
+        let mut agent_payload = serde_json::json!({ "text": agent_text });
+        if let Some(t) = agent_task_id {
+            agent_payload["task_id"] = serde_json::Value::String(t.to_string());
+        }
+        if let Some(u) = agent_usage {
+            agent_payload["usage"] = u;
+        }
+        svc.append(
             &id,
             ChannelActor::Agent {
                 id: agent.to_string(),
             },
             EventKind::Message,
-            agent_text,
-            agent_task_id,
+            agent_payload,
+            None,
         )?;
         Ok(())
     })();
@@ -340,6 +366,7 @@ mod channel_tests {
             Some("u-1"),
             "the answer",
             Some("a-1"),
+            Some(serde_json::json!({"model_ref": "haiku", "route_reason": "smart-background"})),
         );
         let svc = ChannelService::open(tmp.path()).unwrap();
         let id = svc.latest_for_agent("qa").unwrap().expect("channel");
@@ -348,8 +375,13 @@ mod channel_tests {
         assert_eq!(evs.len(), 2);
         assert_eq!(evs[0].payload["text"], "the question");
         assert_eq!(evs[1].payload["text"], "the answer");
+        // Usage (Task 6/8: model_ref + route_reason) rides along on the agent
+        // half only — the caption reads it back via `channel_load`.
+        assert_eq!(evs[1].payload["usage"]["model_ref"], "haiku");
+        assert_eq!(evs[1].payload["usage"]["route_reason"], "smart-background");
+        assert!(evs[0].payload.get("usage").is_none());
         // A second exchange appends to the SAME channel, not a new one.
-        persist_exchange(tmp.path(), "qa", "q2", None, "a2", None);
+        persist_exchange(tmp.path(), "qa", "q2", None, "a2", None, None);
         assert_eq!(svc.list(10).unwrap().len(), 1);
         assert_eq!(svc.load_events(&id).unwrap().len(), 4);
     }
