@@ -16,6 +16,23 @@ pub enum PreflightAction {
     RepinGateway(String),
 }
 
+/// Filter a full prefix-scanned status down to just the fleet's current
+/// members. Setup's own use of `collect_status` (skip-if-granted + surplus
+/// detection) must see the FULL prefix scan — this filtering only happens
+/// at the `cmd_ask` call site, so `plan_preflight` itself stays pure over
+/// whatever status it's handed.
+pub fn scope_to_members(s: DeepResearchStatus, members: &[String]) -> DeepResearchStatus {
+    DeepResearchStatus {
+        workers: s
+            .workers
+            .into_iter()
+            .filter(|w| members.iter().any(|m| m == &w.name))
+            .collect(),
+        fleet_exists: s.fleet_exists,
+        model: s.model,
+    }
+}
+
 pub fn plan_preflight(s: &DeepResearchStatus) -> Result<Vec<PreflightAction>> {
     if s.workers.is_empty() {
         bail!("no deep-research workers found — run `mur deep-research setup` first");
@@ -44,12 +61,21 @@ pub fn plan_preflight(s: &DeepResearchStatus) -> Result<Vec<PreflightAction>> {
 
 pub async fn cmd_ask(mur_home: &Path, question: &str) -> Result<()> {
     // `cmd_start`/`cmd_mcp_pin` resolve their home via the `MUR_HOME` env
-    // var (same caveat as `provision.rs`'s `grant_egress`).
+    // var (same caveat as `provision.rs`'s `grant_egress`). Process-lifetime
+    // set_var is intentional here: `mur deep-research "<question>"` is a
+    // single-shot CLI invocation, not a long-lived multi-threaded process
+    // (mirrors provision.rs's `# Concurrency` note).
     unsafe {
         std::env::set_var("MUR_HOME", mur_home);
     }
 
-    let status = collect_status(mur_home, DEFAULT_FLEET_NAME);
+    // Load the fleet FIRST and scope the preflight to its current members —
+    // a prefix scan alone would restart surplus (stopped, dropped-from-
+    // members) workers left over from a setup count-shrink, and a stray
+    // non-member `dr_worker_*` agent provisioned without egress would make
+    // every smart run bail forever.
+    let fleet = crate::cmd::fleet::store::load_fleet(mur_home, DEFAULT_FLEET_NAME)?;
+    let status = scope_to_members(collect_status(mur_home, DEFAULT_FLEET_NAME), &fleet.members);
     let mut started: Vec<String> = Vec::new();
     for action in plan_preflight(&status)? {
         match action {
@@ -161,6 +187,31 @@ mod tests {
                 .filter(|a| matches!(a, PreflightAction::RepinGateway(_)))
                 .count(),
             2
+        );
+    }
+
+    #[test]
+    fn non_member_prefix_matched_worker_is_excluded_and_never_bails() {
+        // A stray `dr_worker_extra` (stopped, no egress) prefix-matches but
+        // is NOT a fleet member — it must be filtered out before
+        // `plan_preflight` runs, so it neither gets a StartWorker/RepinGateway
+        // plan entry nor causes the missing-egress bail.
+        let s = DeepResearchStatus {
+            workers: vec![
+                worker("dr_worker_1", true, true),
+                worker("dr_worker_extra", false, false),
+            ],
+            fleet_exists: true,
+            model: Some("m".into()),
+        };
+        let members = vec!["dr_worker_1".to_string()];
+        let scoped = scope_to_members(s, &members);
+        assert_eq!(scoped.workers.len(), 1);
+        let plan = plan_preflight(&scoped).unwrap();
+        assert!(
+            !plan
+                .iter()
+                .any(|a| matches!(a, PreflightAction::StartWorker(n) | PreflightAction::RepinGateway(n) if n == "dr_worker_extra"))
         );
     }
 }

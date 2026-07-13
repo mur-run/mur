@@ -64,8 +64,15 @@ pub fn run_wizard(
             .get(n.checked_sub(1).context("model number must be >= 1")?)
             .with_context(|| format!("no model #{n}"))?
             .clone()
-    } else {
+    } else if model_choices.is_empty() || model_choices.iter().any(|m| m == &ans) {
+        // Empty registry (fresh machine, nothing added yet) is an
+        // intentional escape hatch — allow any typed name in that case.
         ans
+    } else {
+        bail!(
+            "unknown model '{ans}' — not in the registry (run `mur model add` first, \
+             or pick one of the listed choices)"
+        );
     };
 
     // Q2: worker count
@@ -151,22 +158,16 @@ pub fn cmd_setup(mur_home: &Path) -> Result<()> {
         .collect();
 
     if target_names.iter().all(|n| existing.contains(n)) {
-        println!("workers already provisioned — updating budget/fleet only");
-        for name in &target_names {
+        println!("workers already provisioned — updating model/budget/fleet only");
+    }
+    for name in &target_names {
+        if existing.contains(name) {
             let (path, mut profile) = crate::cmd::agent::load_profile_for_edit(name)?;
             profile.model_ref = Some(a.model.clone());
             crate::cmd::agent::save_profile(&path, &mut profile)?;
-        }
-    } else {
-        for name in &target_names {
-            if existing.contains(name) {
-                let (path, mut profile) = crate::cmd::agent::load_profile_for_edit(name)?;
-                profile.model_ref = Some(a.model.clone());
-                crate::cmd::agent::save_profile(&path, &mut profile)?;
-            } else {
-                super::provision::provision_one(mur_home, name, &a.model, None)?;
-                println!("provisioned {name}");
-            }
+        } else {
+            super::provision::provision_one(mur_home, name, &a.model, None)?;
+            println!("provisioned {name}");
         }
     }
 
@@ -273,5 +274,14 @@ mod tests {
     #[test]
     fn bad_budget_rejected() {
         assert!(answers("\n\nnot-a-number\nyes\n", &["claude_haiku"]).is_err());
+    }
+
+    #[test]
+    fn unknown_typed_model_rejected() {
+        let err = match answers("nonexistent_model\n\n\nno\n", &["claude_haiku"]) {
+            Ok(_) => panic!("expected an error for an unknown model name"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("nonexistent_model"));
     }
 }
