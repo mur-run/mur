@@ -6,16 +6,18 @@ export interface ModelRefSelectProps {
   options: ModelOption[];
   onChange: (next: string | null) => void;
   allowEmpty?: boolean;
+  /** Overrides the default "pick a model" text for the empty option (e.g. an "auto" hint). */
+  emptyLabel?: string;
   ariaLabel?: string;
   disabled?: boolean;
 }
 
 /**
  * Presentational value/onChange picker over a flat `ref_name` — NOT agent-bound
- * (unlike `ModelCombobox`). Shared by the default/cheap/frontier pickers and
- * each fallback-chain row.
+ * (unlike `ModelCombobox`). Shared by the default/cheap/frontier/smart pickers
+ * and each fallback-chain row.
  */
-export function ModelRefSelect({ value, options, onChange, allowEmpty, ariaLabel, disabled }: ModelRefSelectProps) {
+export function ModelRefSelect({ value, options, onChange, allowEmpty, emptyLabel, ariaLabel, disabled }: ModelRefSelectProps) {
   const { t } = useT();
   return (
     <select
@@ -25,7 +27,7 @@ export function ModelRefSelect({ value, options, onChange, allowEmpty, ariaLabel
       aria-label={ariaLabel}
       onChange={(e) => onChange(e.target.value || null)}
     >
-      {allowEmpty && <option value="">{t("settings.slots.pick")}</option>}
+      {allowEmpty && <option value="">{emptyLabel ?? t("settings.slots.pick")}</option>}
       {options.map((o) => (
         <option key={o.ref_name} value={o.ref_name}>
           {`${o.ref_name} (${o.provider}/${o.model})`}
