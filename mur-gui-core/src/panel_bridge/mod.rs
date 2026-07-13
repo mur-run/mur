@@ -213,4 +213,48 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(500)).await;
         assert!(!json.exists());
     }
+
+    /// Regression: the scan and the watcher can both spawn a client for the
+    /// same session record. The duplicate must lose at the atomic reservation
+    /// — never overwrite the winner's sender (which closed its channel,
+    /// dropped its live stream mid-use, and broke the peer with EPIPE).
+    #[tokio::test]
+    async fn duplicate_spawn_keeps_first_connection_alive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (listener, json) = fake_murmur(tmp.path(), 7003).await;
+        let senders: Senders = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, mut rx) = mpsc::channel(16);
+        let rt = tokio::runtime::Handle::current();
+        client::spawn(rt.clone(), json.clone(), senders.clone(), tx.clone());
+        client::spawn(rt, json, senders.clone(), tx);
+
+        let (stream, _) = timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        // Let both tasks settle: exactly one owns the pid.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(senders.lock().unwrap().len(), 1);
+
+        // The accepted connection must still be writable end-to-end.
+        let (_r, mut w) = stream.into_split();
+        let frame_line = serde_json::to_string(&PanelFrame::Panel {
+            focus: mur_common::panel::PanelTab::Information,
+        })
+        .unwrap();
+        w.write_all(format!("{frame_line}\n").as_bytes())
+            .await
+            .expect("first connection must not be broken by the duplicate spawn");
+        let ev = timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            ev,
+            PanelEvent::Frame {
+                pid: 7003,
+                frame: PanelFrame::Panel { .. }
+            }
+        ));
+    }
 }
