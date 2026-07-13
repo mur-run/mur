@@ -56,7 +56,7 @@ const WORKER_LLM_ALLOW_HOSTS: [&str; 2] = ["localhost", "127.0.0.1"];
 const WORKER_DENIED_BUILTIN_TOOLS: [&str; 4] = ["bash", "read_file", "write_file", "edit_file"];
 
 /// Name of the gateway MCP server entry mounted on every worker.
-const GATEWAY_MCP_NAME: &str = "research-gateway";
+pub const GATEWAY_MCP_NAME: &str = "research-gateway";
 
 /// Binary invoked for the gateway MCP server (installed on PATH by
 /// `build.sh`, shipped by Tasks 1-6).
