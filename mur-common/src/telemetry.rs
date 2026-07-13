@@ -60,6 +60,12 @@ pub const METHOD_SKILL_EXECUTED: &str = "mur.skill.executed";
 pub const METHOD_SKILL_INDEXED: &str = "mur.skill.indexed";
 pub const METHOD_SKILL_STEP_RESOLVED: &str = "mur.skill.step_resolved";
 
+/// Emitted by `FallbackLlmClient::generate` after the fallback/cascade loop
+/// resolves (Ok or final Err) — one event per routed turn. This is the
+/// training-data feed for the future memory router (Phase B): agent, intent,
+/// which model was chosen and why, and how the turn actually went.
+pub const METHOD_ROUTING: &str = "mur.routing";
+
 /// A `category: note` skill was surfaced to the user by a query. Counted by
 /// `reindex_stats` as a usage + success so retrieval drives the note lifecycle.
 pub const METHOD_NOTE_RETRIEVED: &str = "mur.note.retrieved";
