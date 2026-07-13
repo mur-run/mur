@@ -257,6 +257,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             tools: vec![],
+            ..Default::default()
         };
         assert_eq!(estimate_input_tokens(&req), 20); // 80 chars / 4
     }
@@ -378,6 +379,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             tools: vec![],
+            ..Default::default()
         };
         assert_eq!(fb.generate(big).await.unwrap().text, "frontier");
         // A tiny request routes to cheap.
@@ -389,6 +391,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             tools: vec![],
+            ..Default::default()
         };
         assert_eq!(fb.generate(small).await.unwrap().text, "cheap");
     }

@@ -95,6 +95,7 @@ impl<R: RngCore + Send> Outbox<R> {
                 temperature: None,
                 max_tokens: None,
                 tools: vec![],
+                ..Default::default()
             };
 
             let text = match self.llm.generate(req).await {

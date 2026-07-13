@@ -52,6 +52,7 @@ fn user_msg(text: &str) -> LlmRequest {
         temperature: None,
         max_tokens: Some(16),
         tools: vec![],
+        ..Default::default()
     }
 }
 
