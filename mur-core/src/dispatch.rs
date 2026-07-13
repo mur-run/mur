@@ -522,10 +522,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     )
                     .await?
                 }
-                (None, Some(q)) => {
-                    // Task 4 lands cmd_ask; until then print a stub error:
-                    anyhow::bail!("smart run not wired yet: {q}");
-                }
+                (None, Some(q)) => cmd::deep_research::ask::cmd_ask(&mur_home, &q).await?,
                 (None, None) => cmd::deep_research::panel::cmd_panel(&mur_home)?,
             }
         }
