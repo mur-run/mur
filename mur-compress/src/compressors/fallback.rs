@@ -36,11 +36,44 @@ pub fn compress(
     })
 }
 
+/// Exact fraction of bytes the whitespace fallback would remove.
+/// This is a precise pre-computation, not a heuristic: the fallback only
+/// ever strips trailing whitespace and blank runs beyond the first line.
+pub fn saving_ratio(content: &str) -> f32 {
+    if content.is_empty() {
+        return 0.0;
+    }
+    let mut saved = 0usize;
+    let mut blank_run = 0usize;
+    for line in content.lines() {
+        let trimmed = line.trim_end();
+        saved += line.len() - trimmed.len();
+        if trimmed.is_empty() {
+            blank_run += 1;
+            if blank_run > 1 {
+                saved += 1; // the '\n' of a dropped blank line
+            }
+        } else {
+            blank_run = 0;
+        }
+    }
+    saved as f32 / content.len() as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::CompressConfig;
     use crate::tokenizer::HeuristicCounter;
+
+    #[test]
+    fn saving_ratio_exact() {
+        // "abc   \n\n\n\nxyz\n": 3 trailing ws + 2 excess blank lines = 5 of 14 bytes
+        let s = "abc   \n\n\n\nxyz\n";
+        let expect = 5.0 / s.len() as f32;
+        assert!((saving_ratio(s) - expect).abs() < 1e-6);
+        assert_eq!(saving_ratio("clean\ntext\n"), 0.0);
+    }
 
     #[test]
     fn collapses_blank_runs_and_trailing_ws() {

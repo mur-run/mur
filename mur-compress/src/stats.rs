@@ -36,6 +36,8 @@ struct StatsData {
     total_input_tokens: u64,
     total_output_tokens: u64,
     total_tokens_saved: u64,
+    #[serde(default)]
+    skipped: u64,
 
     /// Per-version, per-day segmentation: `mur_version -> "YYYY-MM-DD"
     /// (local date) -> counts for that version on that day`. Absent for any
@@ -61,6 +63,8 @@ pub struct TypeStats {
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub total_tokens_saved: u64,
+    #[serde(default)]
+    pub skipped: u64,
 }
 
 /// Counts for one `(mur_version, day)` bucket. Mirrors the shape of the
@@ -73,6 +77,8 @@ pub struct BucketData {
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub total_tokens_saved: u64,
+    #[serde(default)]
+    pub skipped: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +88,7 @@ pub struct StatsSnapshot {
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub total_tokens_saved: u64,
+    pub skipped: u64,
     pub savings_percent: f32,
     pub estimated_cost_saved_usd: f64,
     pub store_entries: usize,
@@ -208,6 +215,26 @@ impl StatsTracker {
         });
     }
 
+    /// Record a deliberate skip (early-skip gate): the input was inspected
+    /// and passed through untouched. Counted separately from compressions
+    /// so by_type ratios reflect real compression work.
+    pub fn record_skip(&self, content_type: &str) {
+        let day = today_key();
+        self.update(|d| {
+            d.skipped += 1;
+            d.buckets
+                .entry(current_version().to_string())
+                .or_default()
+                .entry(day)
+                .or_default()
+                .skipped += 1;
+            d.by_type
+                .entry(content_type.to_string())
+                .or_default()
+                .skipped += 1;
+        });
+    }
+
     pub fn snapshot(
         &self,
         cost_per_mtok_usd: f64,
@@ -231,6 +258,7 @@ impl StatsTracker {
             total_input_tokens: d.total_input_tokens,
             total_output_tokens: d.total_output_tokens,
             total_tokens_saved: d.total_tokens_saved,
+            skipped: d.skipped,
             savings_percent: pct,
             estimated_cost_saved_usd: cost,
             store_entries,
@@ -366,5 +394,31 @@ mod tests {
         assert_eq!(json.compressions, 2);
         assert_eq!(json.total_input_tokens, 1500);
         assert_eq!(json.total_tokens_saved, 1350);
+    }
+
+    #[test]
+    fn record_skip_counts_separately() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = StatsTracker::new(dir.path().join("stats.json"));
+        t.record_compression("generic", 100, 50);
+        t.record_skip("generic");
+        t.record_skip("generic");
+        let snap = t.snapshot(3.0, 0, 0);
+        assert_eq!(snap.compressions, 1);
+        assert_eq!(snap.skipped, 2);
+        assert_eq!(snap.by_type.get("generic").unwrap().skipped, 2);
+        // compressions untouched by skips
+        assert_eq!(snap.by_type.get("generic").unwrap().compressions, 1);
+    }
+
+    #[test]
+    fn old_stats_json_without_skipped_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("stats.json");
+        std::fs::write(&p, r#"{"compressions":5,"retrievals":1,"total_input_tokens":10,"total_output_tokens":5,"total_tokens_saved":5}"#).unwrap();
+        let t = StatsTracker::new(p);
+        let snap = t.snapshot(3.0, 0, 0);
+        assert_eq!(snap.compressions, 5);
+        assert_eq!(snap.skipped, 0);
     }
 }
