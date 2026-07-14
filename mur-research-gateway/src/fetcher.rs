@@ -358,13 +358,32 @@ pub async fn search_tier1(
             Err(e) => last_err = Some(e),
         }
     }
-    // Exhausted retries: surface the last transport error if any, else return
-    // empty hits (the challenge never cleared) so the worker degrades rather
-    // than the whole turn erroring.
+    // Exhausted retries: surface the last transport error if any. A challenge
+    // that never cleared is reported as an explicit, actionable error — NOT an
+    // empty hit list. An empty Ok is indistinguishable from "no results", so
+    // workers kept re-querying a permanently blocked endpoint (live: two full
+    // deep-research runs burned 9–15 queries each against a persistent
+    // IP-level 202 block, 2026-07-14/15). Tool errors surface to the worker as
+    // a readable message (server.rs -32001), which workers already handle by
+    // pivoting to direct `fetch` — degrading with a reason beats degrading
+    // silently.
     match last_err {
         Some(e) => Err(e),
-        None => Ok(Vec::new()),
+        None => Err(search_blocked_error()),
     }
+}
+
+/// The explicit error returned when DDG's anti-bot challenge never clears.
+/// Names both the worker-side workaround (direct `fetch`) and the operator
+/// fix (Brave key) so the message is actionable at both levels.
+fn search_blocked_error() -> FetchError {
+    FetchError::Http(format!(
+        "DuckDuckGo returned its anti-bot challenge (HTTP {DDG_CHALLENGE_STATUS}) on all \
+         {SEARCH_MAX_ATTEMPTS} attempts — this host's IP appears persistently blocked, \
+         retrying will not help. Use direct `fetch` of known URLs instead. Operator fix: \
+         configure a free Brave Search API key (research_gateway.brave_api_key in \
+         ~/.mur/config.yaml, or MUR_RESEARCH_BRAVE_KEY) to switch search off DuckDuckGo."
+    ))
 }
 
 /// One search request: GET the (already-screened) DDG url, enforce the body
@@ -501,6 +520,19 @@ fn decode_uddg(href: &str) -> Option<String> {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn search_blocked_error_names_workaround_and_operator_fix() {
+        // Pin the actionable pointers so they can't silently rot: the worker
+        // pivot (`fetch`) and both operator config paths for the Brave key.
+        let FetchError::Http(msg) = search_blocked_error() else {
+            panic!("blocked error must be FetchError::Http");
+        };
+        assert!(msg.contains("fetch"));
+        assert!(msg.contains("MUR_RESEARCH_BRAVE_KEY"));
+        assert!(msg.contains("research_gateway.brave_api_key"));
+        assert!(msg.contains("202"));
+    }
 
     #[test]
     fn search_backoff_grows_exponentially_with_bounded_jitter() {
