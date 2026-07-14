@@ -14,6 +14,7 @@ pub mod list;
 pub mod loop_run;
 pub mod partition_cmd;
 pub mod plan;
+pub mod progress;
 pub mod roster;
 pub mod run;
 pub mod settings;
