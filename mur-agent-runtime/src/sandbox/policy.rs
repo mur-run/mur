@@ -3,6 +3,13 @@ use mur_common::agent::{Entitlements, NetworkOutboundMode, SpawnMode};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+/// General TCP ports a `Restricted` profile opens (`*:port`; hostnames still
+/// gated by the app-layer HostGuard). Also the set the runtime SELF profile
+/// regains under ProxyOnly when it hosts the in-process egress proxy — the
+/// proxy's upstream dials are the one legitimate general egress of the
+/// runtime process (see `SandboxPolicy::allow_in_process_proxy_upstream`).
+pub const RESTRICTED_GENERAL_PORTS: [u16; 4] = [80, 443, 8080, 8443];
+
 /// Resolved, OS-ready sandbox policy derived from agent entitlements.
 /// All paths are absolute (tilde expanded). All fields are ready to
 /// feed directly to Landlock / SBPL / Job Object APIs.
@@ -375,7 +382,7 @@ impl SandboxPolicy {
             match ent.network.outbound.mode {
                 NetworkOutboundMode::Unrestricted => (None, None, false),
                 NetworkOutboundMode::Restricted => {
-                    let ports = Some(vec![80u16, 443, 8080, 8443]);
+                    let ports = Some(RESTRICTED_GENERAL_PORTS.to_vec());
                     let hosts = Some(ent.network.outbound.allow_hosts.clone());
                     (ports, hosts, true)
                 }
@@ -451,6 +458,23 @@ impl SandboxPolicy {
                     self.net_allow_loopback_ports.push(*p);
                 }
             }
+        }
+    }
+
+    /// Reopen the Restricted general-port set on the RUNTIME's own (self)
+    /// profile when it hosts the in-process egress proxy. Under ProxyOnly the
+    /// worker's entitlements deny all general TCP — but the egress proxy runs
+    /// inside the runtime process, so that deny also killed the proxy's
+    /// UPSTREAM dials (`TcpStream::connect` → EPERM, os error 1) and every
+    /// sandboxed child's granted egress died after `CONNECT ALLOW`. The child
+    /// profiles are built separately (`sandbox::child::spawn_sandboxed`) and
+    /// keep the strict ProxyOnly deny, so the choke point for untrusted MCP
+    /// children is unchanged; the runtime's own LLM client remains
+    /// HostGuard-gated exactly as under Restricted. No-op for Off (air-gapped
+    /// stays air-gapped), Restricted, and Unrestricted.
+    pub fn allow_in_process_proxy_upstream(&mut self) {
+        if matches!(&self.net_allow_ports, Some(p) if p.is_empty()) && self.net_loopback_allowed {
+            self.net_allow_ports = Some(RESTRICTED_GENERAL_PORTS.to_vec());
         }
     }
 
@@ -755,6 +779,51 @@ mod tests {
         // Flag set so the port helpers add loopback carve-outs (distinguishes
         // ProxyOnly's Some([]) from Off's Some([]), which leaves this false).
         assert!(policy.net_loopback_allowed);
+    }
+
+    #[test]
+    fn proxy_only_self_profile_widens_for_in_process_proxy_upstream() {
+        let mut ent = minimal_entitlements();
+        ent.network.outbound.mode = NetworkOutboundMode::ProxyOnly;
+        let home = PathBuf::from("/tmp/agent_home");
+        let mut policy = SandboxPolicy::from_entitlements(&ent, &home);
+        policy.allow_in_process_proxy_upstream();
+        // The runtime SELF profile regains the Restricted general-port set so
+        // the in-process egress proxy can dial upstream (os error 1 fix);
+        // child profiles are built separately and stay ProxyOnly-strict.
+        assert_eq!(
+            policy.net_allow_ports,
+            Some(RESTRICTED_GENERAL_PORTS.to_vec())
+        );
+    }
+
+    #[test]
+    fn off_mode_is_never_widened_by_proxy_upstream() {
+        let mut ent = minimal_entitlements();
+        ent.network.outbound.mode = NetworkOutboundMode::Off;
+        let home = PathBuf::from("/tmp/agent_home");
+        let mut policy = SandboxPolicy::from_entitlements(&ent, &home);
+        policy.allow_in_process_proxy_upstream();
+        // Off is air-gapped: no proxy carve-out may reopen it.
+        assert_eq!(policy.net_allow_ports, Some(vec![]));
+    }
+
+    #[test]
+    fn restricted_and_unrestricted_unchanged_by_proxy_upstream() {
+        let mut ent = minimal_entitlements();
+        ent.network.outbound.mode = NetworkOutboundMode::Restricted;
+        let home = PathBuf::from("/tmp/agent_home");
+        let mut policy = SandboxPolicy::from_entitlements(&ent, &home);
+        policy.allow_in_process_proxy_upstream();
+        assert_eq!(
+            policy.net_allow_ports,
+            Some(RESTRICTED_GENERAL_PORTS.to_vec())
+        );
+
+        ent.network.outbound.mode = NetworkOutboundMode::Unrestricted;
+        let mut policy = SandboxPolicy::from_entitlements(&ent, &home);
+        policy.allow_in_process_proxy_upstream();
+        assert_eq!(policy.net_allow_ports, None);
     }
 
     #[test]

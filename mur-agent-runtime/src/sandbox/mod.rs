@@ -45,6 +45,13 @@ pub fn apply(
     policy.allow_extra_ports(extra_ports);
     // …and the pre-seal loopback egress proxy its MCP children dial.
     policy.allow_loopback_ports(loopback_ports);
+    // The proxy lives IN this process: when it exists, the self profile must
+    // keep general TCP open for its upstream dials or every granted child
+    // egress dies with EPERM after CONNECT ALLOW (ProxyOnly regression).
+    // Child profiles are built separately and stay strict.
+    if !loopback_ports.is_empty() {
+        policy.allow_in_process_proxy_upstream();
+    }
     // …and to write the shared runtime media state it owns (co-watching:
     // watch.json + VLC snapshot dir), which lives outside agent_home.
     policy.allow_extra_write_paths(extra_write_paths);
