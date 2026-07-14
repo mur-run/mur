@@ -23,6 +23,19 @@ pub enum Phase {
     Other,
 }
 
+impl Phase {
+    /// Short lower-case label for log/panel rendering (matches the serde name).
+    pub fn label(self) -> &'static str {
+        match self {
+            Phase::Probe => "probe",
+            Phase::Research => "research",
+            Phase::Verify => "verify",
+            Phase::Synthesize => "synthesize",
+            Phase::Other => "other",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StepState {

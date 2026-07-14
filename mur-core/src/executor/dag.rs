@@ -91,13 +91,14 @@ pub enum StepEventKind {
 
 /// Display-only step lifecycle event for progress observers. The callback
 /// runs on executor worker tasks: it MUST be cheap and MUST NOT panic.
-// TODO(T3): fields read by the loop_run on_step closure; allow until then.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct StepEvent {
     pub id: String,
     /// The delegate target agent, when this step is a delegation. `None`
-    /// otherwise.
+    /// otherwise. ponytail: currently redundant with the progress step's
+    /// `worker` (both come from `step.delegate_to`); kept as part of the
+    /// generic observer contract. Drop it if no consumer ever reads it.
+    #[allow(dead_code)]
     pub agent: Option<String>,
     pub kind: StepEventKind,
     /// Per-step delegate token usage (0 for non-delegate or unknown).
