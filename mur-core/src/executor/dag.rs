@@ -55,6 +55,13 @@ pub struct DagExecOptions<'a> {
     /// concurrency, not just cost, or parallel delegations cascade past API
     /// rate limits.
     pub max_concurrency: Option<usize>,
+    /// Optional display-only step-lifecycle observer (run-progress UI, Task 3).
+    /// Fired `Started` before a step executes and `Done`/`Failed` where its
+    /// `StepResult` is recorded. Runs synchronously on executor worker tasks
+    /// (ranks execute concurrently via `tokio::spawn`, hence `Send + Sync`):
+    /// it MUST be cheap and MUST NOT panic. Purely observational — never
+    /// affects control flow. `None` = zero behavior change.
+    pub on_step: Option<std::sync::Arc<dyn Fn(StepEvent) + Send + Sync>>,
 }
 
 impl<'a> Default for DagExecOptions<'a> {
@@ -69,8 +76,32 @@ impl<'a> Default for DagExecOptions<'a> {
             channel_id: None,
             run_id: String::new(),
             max_concurrency: None,
+            on_step: None,
         }
     }
+}
+
+/// Step-lifecycle event kind for `DagExecOptions.on_step`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum StepEventKind {
+    Started,
+    Done,
+    Failed,
+}
+
+/// Display-only step lifecycle event for progress observers. The callback
+/// runs on executor worker tasks: it MUST be cheap and MUST NOT panic.
+// TODO(T3): fields read by the loop_run on_step closure; allow until then.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct StepEvent {
+    pub id: String,
+    /// The delegate target agent, when this step is a delegation. `None`
+    /// otherwise.
+    pub agent: Option<String>,
+    pub kind: StepEventKind,
+    /// Per-step delegate token usage (0 for non-delegate or unknown).
+    pub tokens_used: u64,
 }
 
 /// Deterministic idempotency key for a channel event: stable across a
@@ -439,6 +470,20 @@ async fn execute_step(
 ) -> StepResult {
     let start = std::time::Instant::now();
     let sid = step.id.clone().unwrap_or_else(|| step_index.to_string());
+    let observer_agent = step.delegate_to.clone();
+    // Display-only step lifecycle emit: MUST be cheap and MUST NOT panic
+    // (plain Fn, never `?`'d — see `DagExecOptions.on_step` doc).
+    let emit = |kind: StepEventKind, tokens_used: u64| {
+        if let Some(cb) = &opts.on_step {
+            cb(StepEvent {
+                id: sid.clone(),
+                agent: observer_agent.clone(),
+                kind,
+                tokens_used,
+            });
+        }
+    };
+    emit(StepEventKind::Started, 0);
     // Retries reuse (run_id, step_id); without an attempt discriminator a
     // succeeding retry's events collide with the failed attempt's idem keys and
     // are dropped by the dedup-aware writer. attempt 0 keeps the original keys
@@ -463,6 +508,7 @@ async fn execute_step(
             })
         {
             eprintln!("  Step {sid}: already completed (resume) — skipping");
+            emit(StepEventKind::Done, 0);
             return StepResult {
                 exit_code: 0,
                 output_text: String::new(),
@@ -571,6 +617,14 @@ async fn execute_step(
                 }
             }
         };
+        emit(
+            if result.success {
+                StepEventKind::Done
+            } else {
+                StepEventKind::Failed
+            },
+            result.tokens_used,
+        );
         return result;
     }
 
@@ -607,6 +661,7 @@ async fn execute_step(
             });
         if !decision.allow {
             eprintln!("  Step {sid}: gate denied ({})", decision.reason);
+            emit(StepEventKind::Failed, 0);
             return StepResult {
                 exit_code: 1,
                 output_text: format!("hitl: {}", decision.reason),
@@ -620,6 +675,7 @@ async fn execute_step(
         let now_hash = crate::hitl::pin::action_hash("sh", &input, cid, &sid, "mur");
         if !decision.action_hash.is_empty() && now_hash != decision.action_hash {
             eprintln!("  Step {sid}: hitl_drift at execute boundary — refusing");
+            emit(StepEventKind::Failed, 0);
             return StepResult {
                 exit_code: 1,
                 output_text: "hitl_drift".into(),
@@ -651,6 +707,7 @@ async fn execute_step(
             eprintln!(
                 "  Step {sid}: needs_approval, skipped (yields true) — use `--yes` to auto-approve"
             );
+            emit(StepEventKind::Done, 0);
             return StepResult {
                 exit_code: 0,
                 output_text: String::new(),
@@ -704,6 +761,15 @@ async fn execute_step(
             )
         });
     }
+
+    emit(
+        if result.success {
+            StepEventKind::Done
+        } else {
+            StepEventKind::Failed
+        },
+        result.tokens_used,
+    );
 
     result
 }
@@ -789,6 +855,7 @@ pub async fn execute_dag(
         let opt_trigger = opts.trigger.to_string();
         let opt_chan_id = opts.channel_id.clone();
         let opt_run_id = opts.run_id.clone();
+        let opt_on_step = opts.on_step.clone();
         let mut handles = Vec::new();
         for &i in &indices {
             let step = graph.nodes[i].step.clone();
@@ -799,6 +866,7 @@ pub async fn execute_dag(
             let tr = opt_trigger.clone();
             let chan_id = opt_chan_id.clone();
             let run_id = opt_run_id.clone();
+            let on_step = opt_on_step.clone();
             let sem = sem.clone();
             let mh = mur_home.to_path_buf();
             handles.push(tokio::task::spawn(async move {
@@ -817,6 +885,7 @@ pub async fn execute_dag(
                     channel_id: chan_id,
                     run_id,
                     max_concurrency: None,
+                    on_step,
                 };
                 execute_step(&step, &opts_clone, i, 0, &mh).await
             }));
@@ -1118,6 +1187,33 @@ mod tests {
 
     // channel_run_refuses_needs_approval removed: v3c gates via hitl::gate instead
     // of refusing. See high_risk_step_gates_and_runs_when_preapproved below.
+
+    #[tokio::test]
+    async fn on_step_observer_sees_start_and_done() {
+        use std::sync::{Arc, Mutex};
+
+        let proc = Procedure {
+            variables: vec![],
+            steps: vec![
+                step("s1", &[], Some("echo one")),
+                step("s2", &[], Some("echo two")),
+            ],
+        };
+        let seen: Arc<Mutex<Vec<(String, StepEventKind)>>> = Arc::new(Mutex::new(vec![]));
+        let sink = seen.clone();
+        let opts = DagExecOptions {
+            on_step: Some(Arc::new(move |e: StepEvent| {
+                sink.lock().unwrap().push((e.id, e.kind));
+            })),
+            ..Default::default()
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let _ = execute_dag(tmp.path(), "test", &proc, &opts).await.unwrap();
+        let seen = seen.lock().unwrap();
+        assert!(seen.contains(&("s1".into(), StepEventKind::Started)));
+        assert!(seen.contains(&("s1".into(), StepEventKind::Done)));
+        assert!(seen.contains(&("s2".into(), StepEventKind::Done)));
+    }
 
     #[tokio::test]
     async fn resume_skips_a_step_already_completed() {
