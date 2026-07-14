@@ -14,9 +14,6 @@ pub mod list;
 pub mod loop_run;
 pub mod partition_cmd;
 pub mod plan;
-// TODO(T2-T4): remove once loop_run/panel wire this in — pure data + persistence
-// module with no consumer yet in this task.
-#[allow(dead_code)]
 pub mod progress;
 pub mod roster;
 pub mod run;
