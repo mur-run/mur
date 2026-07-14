@@ -387,6 +387,13 @@ mur deep-research "question"   # preflight (start workers, re-pin gateway) + gua
 
 `provision` / `run` remain as the flag-based advanced path. Egress is only ever granted in `setup`/`provision --grant-egress` (explicit consent); the smart run never touches grants.
 
+Runs report progress: each step prints `✓ s2 research dr_worker_2 $0.08 42s` as it
+completes, every iteration ends with a summary (`iteration 2 done: 3✓ 0✗ 2 pending ·
+spend $0.31/$2.00 · model claude_haiku`), and the bare `mur deep-research` panel shows
+the in-flight run (per-phase counts, running steps, spend vs budget) or the last run's
+outcome. Progress lives in `~/.mur/fleets/deep-research/.run_progress.json` (best-effort;
+never affects the run).
+
 ---
 
 ## 🔨 Build from source

@@ -5,6 +5,7 @@
 //! the pure guard helpers below are unit-tested.
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -12,8 +13,12 @@ use mur_common::channel::{ChannelActor, ChannelEvent};
 use mur_common::fleet::{Fleet, Job, JobStatus};
 use sha2::{Digest, Sha256};
 
+use super::progress::{
+    RunProgress, StepProgress, StepState, classify_phase, iteration_summary_line,
+};
 use super::run::build_fleet_procedure;
 use super::store;
+use crate::executor::dag::{StepEvent, StepEventKind};
 
 /// Iterations with no new agent activity before the loop gives up.
 const STUCK_LIMIT: u32 = 2;
@@ -272,6 +277,26 @@ fn emit_governance_audit(
     }
 }
 
+/// Poison-safe lock for the run-progress mutex. The progress data is
+/// display-only, so a panicked holder never invalidates it — recover the
+/// guard rather than propagating the panic into the loop.
+fn lock_progress(p: &Mutex<RunProgress>) -> std::sync::MutexGuard<'_, RunProgress> {
+    p.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Map the loop's stop reason to the progress file's `outcome` string.
+fn outcome_label(stop: LoopStop) -> &'static str {
+    match stop {
+        LoopStop::Converged => "converged",
+        LoopStop::MaxIterations => "max-iterations",
+        LoopStop::Deadline => "deadline",
+        LoopStop::Stuck => "stuck",
+        LoopStop::Budget => "budget",
+        LoopStop::Stopped => "stopped",
+        LoopStop::CommanderKilled => "commander-killed",
+    }
+}
+
 /// Inner guarded loop: runs iterations until a stop reason fires. Returns
 /// `(stop, iterations_completed, spent_usd)`. Extracted so tests can call it
 /// directly and inspect the `LoopStop` without going through the print layer.
@@ -326,6 +351,28 @@ pub async fn run_guarded(
     // Load commander keys once; empty = governance inert.
     let commander_keys = crate::cmd::commander::accepted_pubkeys(mur_home);
     let governed = !commander_keys.is_empty();
+
+    // ── Run progress (deep-research UX): one best-effort JSON the run output +
+    // `mur deep-research` panel render from. Every write is best-effort — a
+    // failure must never fail, slow, or change the loop (see RunProgress::save).
+    let progress = Arc::new(Mutex::new(RunProgress {
+        schema_version: 1,
+        run_id: uuid::Uuid::now_v7().to_string(),
+        question: fleet.goal.clone(),
+        started_at: chrono::Utc::now().to_rfc3339(),
+        finished_at: None,
+        outcome: None,
+        iteration: 0,
+        model: fleet
+            .members
+            .first()
+            .and_then(|m| mur_common::agent::AgentProfile::load(mur_home, m).ok())
+            .and_then(|p| p.model_ref),
+        budget_usd: budget,
+        spend_usd: 0.0,
+        steps: vec![],
+    }));
+    lock_progress(&progress).save(mur_home, name);
 
     let stop = loop {
         // Commander governance (highest priority). Fail-closed: a channel read
@@ -410,6 +457,78 @@ pub async fn run_guarded(
                 build_fleet_procedure(&iter_goal, &fleet.members, fleet.parallel.as_ref())
                     .expect("members validated by caller guard")
             });
+        // Record this iteration's planned steps as Pending (makes "N pending"
+        // real) — replacing the prior iteration's so counts reflect the run now.
+        {
+            let mut g = lock_progress(&progress);
+            g.iteration = iteration + 1;
+            g.steps = proc
+                .steps
+                .iter()
+                .enumerate()
+                .map(|(i, s)| StepProgress {
+                    id: s.id.clone().unwrap_or_else(|| i.to_string()),
+                    worker: s.delegate_to.clone(),
+                    phase: classify_phase(&s.description),
+                    desc: s.description.chars().take(120).collect(),
+                    state: StepState::Pending,
+                    cost_usd: None,
+                    started_at: None,
+                    ended_at: None,
+                })
+                .collect();
+            g.save(mur_home, name);
+        }
+        // Display-only step observer: mutate the shared progress + print one log
+        // line per completed step. Best-effort throughout — the closure never
+        // panics (poison-safe lock) and never affects execution.
+        let step_progress = progress.clone();
+        let step_home = mur_home.to_path_buf();
+        let step_fleet = name.to_string();
+        let on_step: Arc<dyn Fn(StepEvent) + Send + Sync> = Arc::new(move |e: StepEvent| {
+            let mut g = step_progress.lock().unwrap_or_else(|x| x.into_inner());
+            let Some(sp) = g.steps.iter_mut().find(|s| s.id == e.id) else {
+                return;
+            };
+            let now = chrono::Utc::now().to_rfc3339();
+            match e.kind {
+                StepEventKind::Started => {
+                    sp.state = StepState::Running;
+                    sp.started_at = Some(now);
+                }
+                StepEventKind::Done | StepEventKind::Failed => {
+                    let done = e.kind == StepEventKind::Done;
+                    sp.state = if done {
+                        StepState::Done
+                    } else {
+                        StepState::Failed
+                    };
+                    if e.tokens_used > 0 {
+                        sp.cost_usd = Some(iteration_cost_usd(e.tokens_used, price_per_1k));
+                    }
+                    // `✓ s2 research dr_worker_2 $0.08 42s`
+                    let mark = if done { '✓' } else { '✗' };
+                    let phase = sp.phase.label();
+                    let worker = sp.worker.clone().unwrap_or_default();
+                    let cost = sp.cost_usd.map(|c| format!(" ${c:.2}")).unwrap_or_default();
+                    let elapsed = sp
+                        .started_at
+                        .as_deref()
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .and_then(|st| {
+                            chrono::DateTime::parse_from_rfc3339(&now)
+                                .ok()
+                                .map(|en| (en - st).num_seconds())
+                        })
+                        .filter(|s| *s >= 0)
+                        .map(|s| format!(" {s}s"))
+                        .unwrap_or_default();
+                    sp.ended_at = Some(now);
+                    println!("  {mark} {} {phase} {worker}{cost}{elapsed}", e.id);
+                }
+            }
+            g.save(&step_home, &step_fleet);
+        });
         let opts = crate::executor::dag::DagExecOptions {
             // Fail-closed on the unattended loop path: never blanket-approve.
             // (No risk tier on fan-out steps today; this guards future
@@ -419,6 +538,7 @@ pub async fn run_guarded(
             // uuid nonce so concurrent `--loop` runs don't collide on the
             // channel's idempotency-key dedup (the iteration stays for readability).
             run_id: format!("loop-{}-{}-{}", name, uuid::Uuid::now_v7(), iteration),
+            on_step: Some(on_step),
             ..Default::default()
         };
         let out =
@@ -441,6 +561,13 @@ pub async fn run_guarded(
         } else {
             projection
         };
+        // Roll cumulative spend into the progress file and print the summary.
+        {
+            let mut g = lock_progress(&progress);
+            g.spend_usd = spent;
+            g.save(mur_home, name);
+            println!("{}", iteration_summary_line(&g));
+        }
 
         // Stuck-detection: did this iteration add any new agent-authored event?
         let events = svc.load_events(&fleet.channel_id)?;
@@ -473,6 +600,16 @@ pub async fn run_guarded(
         }
     };
 
+    // Stamp the terminal state onto the progress file — kept as the last-run
+    // record (overwritten by the next run). Best-effort.
+    {
+        let mut g = lock_progress(&progress);
+        g.finished_at = Some(chrono::Utc::now().to_rfc3339());
+        g.outcome = Some(outcome_label(stop).to_string());
+        g.iteration = iteration;
+        g.spend_usd = spent;
+        g.save(mur_home, name);
+    }
     Ok((stop, iteration, spent))
 }
 
@@ -789,6 +926,43 @@ mod tests {
             .await
             .map(|(stop, _, _)| stop)
             .unwrap_or(LoopStop::MaxIterations)
+    }
+
+    #[tokio::test]
+    async fn progress_file_written_with_outcome_on_guard_stop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let fleet = Fleet {
+            name: "dev".into(),
+            display_name: String::new(),
+            goal: "research question".into(),
+            router: None,
+            members: vec!["pm".into()],
+            team_id: None,
+            channel_id: "fleet-dev".into(),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: None,
+            parallel: None,
+            requires_programs: vec![],
+        };
+        crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
+        mur_channel::ChannelService::open(home)
+            .unwrap()
+            .create_for_fleet("dev", "mur", &["pm".into()])
+            .unwrap();
+        // Kill-switch: the loop stops before any delegation, so no live agent
+        // is needed — but the before-loop and exit progress writes still run.
+        crate::cmd::fleet::control::cmd_fleet_stop(home, "dev").unwrap();
+
+        let stop = run_loop_for_test(home).await;
+        assert_eq!(stop, LoopStop::Stopped);
+
+        let (p, _) = crate::cmd::fleet::progress::load(home, "dev").expect("progress file written");
+        assert_eq!(p.schema_version, 1);
+        assert_eq!(p.question, "research question");
+        assert!(p.finished_at.is_some());
+        assert_eq!(p.outcome.as_deref(), Some("stopped"));
     }
 
     #[tokio::test]
