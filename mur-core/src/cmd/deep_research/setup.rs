@@ -160,15 +160,31 @@ pub fn cmd_setup(mur_home: &Path) -> Result<()> {
     if target_names.iter().all(|n| existing.contains(n)) {
         println!("workers already provisioned — updating model/budget/fleet only");
     }
+    let mut restart_needed: Vec<String> = Vec::new();
     for name in &target_names {
         if existing.contains(name) {
             let (path, mut profile) = crate::cmd::agent::load_profile_for_edit(name)?;
+            let model_changed = profile.model_ref.as_deref() != Some(a.model.as_str());
             profile.model_ref = Some(a.model.clone());
             crate::cmd::agent::save_profile(&path, &mut profile)?;
+            // The runtime loads its profile once at startup — a running worker
+            // keeps the OLD model until restarted (we never auto-restart: it
+            // could kill an in-flight conversation).
+            if model_changed && super::status::is_agent_running(mur_home, name) {
+                restart_needed.push(name.clone());
+            }
         } else {
             super::provision::provision_one(mur_home, name, &a.model, None)?;
             println!("provisioned {name}");
         }
+    }
+    if !restart_needed.is_empty() {
+        println!(
+            "⚠ {} running with the previous model — restart to apply {}:\n  mur agent stop {}  # then start them again",
+            restart_needed.join(", "),
+            a.model,
+            restart_needed.join(" ")
+        );
     }
 
     // Workers above the new count (count shrunk on a re-run): stop them,
