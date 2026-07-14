@@ -91,7 +91,7 @@ pub async fn start_egress_proxy() -> std::io::Result<EgressProxyHandle> {
             let reg = reg.clone();
             tokio::spawn(async move {
                 if let Err(e) = handle_conn(sock, reg).await {
-                    tracing::debug!("egress proxy conn ended: {e}");
+                    tracing::warn!("egress proxy conn ended: {e}");
                 }
             });
         }
