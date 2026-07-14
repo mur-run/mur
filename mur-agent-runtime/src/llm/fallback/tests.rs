@@ -118,6 +118,22 @@ async fn advances_chain_on_retryable_then_succeeds() {
 }
 
 #[tokio::test]
+async fn connect_error_advances_chain() {
+    // Transport failure (endpoint unreachable — e.g. a dead local proxy) must
+    // advance the chain: the server rendered no verdict, so this is not the
+    // auth/misconfig class that stays Fatal.
+    let mut s = HashMap::new();
+    s.insert(
+        "a".into(),
+        vec![Err(LlmError::Connect("connection refused".into()))],
+    );
+    s.insert("b".into(), vec![Ok(())]);
+    let fb = FallbackLlmClient::new(vec!["a".into(), "b".into()], factory_for(s), retry0());
+    let resp = fb.generate(LlmRequest::default()).await.unwrap();
+    assert_eq!(resp.text, "b");
+}
+
+#[tokio::test]
 async fn fatal_error_does_not_advance() {
     let mut s = HashMap::new();
     s.insert("a".into(), vec![Err(LlmError::Http("401".into()))]); // fatal
