@@ -149,6 +149,12 @@ pub struct LlmResponse {
 pub enum LlmError {
     #[error("http: {0}")]
     Http(String),
+    /// Transport-level failure — the request never got an HTTP status back
+    /// (connect refused, DNS, TLS, connection reset). The server rendered no
+    /// verdict, so unlike `Http` this is Retryable: switching models can't
+    /// mask an auth/config error the server never reported.
+    #[error("connect: {0}")]
+    Connect(String),
     #[error("rate limit")]
     RateLimit,
     #[error("timeout")]
@@ -168,8 +174,24 @@ impl LlmError {
         match status {
             429 => LlmError::RateLimit,
             402 => LlmError::InsufficientCredit,
+            408 => LlmError::Timeout,
             500..=599 => LlmError::ServerError(status),
             _ => LlmError::Http(format!("status {status}: {body}")),
+        }
+    }
+
+    /// Map a reqwest transport error into a typed error. Central rule: an
+    /// error without an HTTP status is a transport failure (`Connect`,
+    /// Retryable) — the server never rendered a verdict, so it can't be the
+    /// auth/bad-request class that `Http` reserves Fatal for. Request-builder
+    /// errors (malformed URL/body) stay `Http`: retrying can't fix them.
+    pub fn from_reqwest(e: &reqwest::Error) -> LlmError {
+        if e.is_timeout() {
+            LlmError::Timeout
+        } else if e.is_builder() {
+            LlmError::Http(e.to_string())
+        } else {
+            LlmError::Connect(e.to_string())
         }
     }
 }
@@ -187,6 +209,7 @@ pub fn classify(e: &LlmError) -> Retryability {
     match e {
         LlmError::RateLimit
         | LlmError::Timeout
+        | LlmError::Connect(_)
         | LlmError::ServerError(_)
         | LlmError::InsufficientCredit => Retryability::Retryable,
         LlmError::Http(_) | LlmError::InvalidResponse(_) => Retryability::Fatal,
@@ -316,11 +339,27 @@ mod tests {
         assert!(matches!(classify(&LlmError::Timeout), Retryable));
         assert!(matches!(classify(&LlmError::ServerError(500)), Retryable));
         assert!(matches!(classify(&LlmError::InsufficientCredit), Retryable));
+        assert!(matches!(
+            classify(&LlmError::Connect("connection refused".into())),
+            Retryable
+        ));
         assert!(matches!(classify(&LlmError::Http("400".into())), Fatal));
         assert!(matches!(
             classify(&LlmError::InvalidResponse("x".into())),
             Fatal
         ));
+    }
+
+    #[test]
+    fn from_status_maps_408_to_timeout() {
+        assert!(matches!(
+            LlmError::from_status(408, String::new()),
+            LlmError::Timeout
+        ));
+        // 401 stays Http → Fatal: auth errors must never advance the chain.
+        let e = LlmError::from_status(401, "unauthorized".into());
+        assert!(matches!(e, LlmError::Http(_)));
+        assert!(matches!(classify(&e), Retryability::Fatal));
     }
 }
 
