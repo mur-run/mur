@@ -45,9 +45,9 @@ pub fn render_panel(s: &DeepResearchStatus, progress: Option<(RunProgress, u64)>
 /// `(progress, file-mtime-age-secs)`; `age` only drives the staleness warning.
 pub fn render_progress(p: &RunProgress, mtime_age_secs: u64) -> String {
     // Finished run → one recap line.
-    if p.finished_at.is_some() {
+    if let Some(ended) = &p.finished_at {
         return format!(
-            "\nlast run: {} · ${:.2} · {} iteration{}\n",
+            "\nlast run: {} · ${:.2} · {} iteration{} · {ended}\n",
             p.outcome.as_deref().unwrap_or("?"),
             p.spend_usd,
             p.iteration,
@@ -102,6 +102,11 @@ pub fn render_progress(p: &RunProgress, mtime_age_secs: u64) -> String {
             .unwrap_or_default(),
     ));
 
+    // Total elapsed since the run started (best-effort; omitted if unparseable).
+    if let Some(n) = elapsed_secs(Some(&p.started_at)) {
+        out.push_str(&format!("  elapsed {}\n", fmt_elapsed(n)));
+    }
+
     if mtime_age_secs > STALE_AFTER_SECS {
         out.push_str(&format!(
             "  ⚠ no update for {} min — run may have crashed (mur fleet stop/start {DEFAULT_FLEET_NAME})\n",
@@ -117,6 +122,15 @@ fn elapsed_secs(started: Option<&str>) -> Option<i64> {
     let start = chrono::DateTime::parse_from_rfc3339(started?).ok()?;
     let secs = (chrono::Utc::now() - start.with_timezone(&chrono::Utc)).num_seconds();
     (secs >= 0).then_some(secs)
+}
+
+/// Compact `Nm Ns` / `Ns` elapsed label.
+fn fmt_elapsed(secs: i64) -> String {
+    if secs >= 60 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{secs}s")
+    }
 }
 
 pub fn cmd_panel(mur_home: &Path) -> anyhow::Result<()> {
@@ -220,6 +234,7 @@ mod tests {
         assert!(out.contains("iteration 2"));
         assert!(out.contains("$0.31"));
         assert!(out.contains("⏳ s2 research dr_worker_2"));
+        assert!(out.contains("elapsed "));
         assert!(!out.contains("crashed"));
     }
 
@@ -236,6 +251,7 @@ mod tests {
         let out = render_progress(&p, 10_000);
         assert!(out.contains("last run: converged"));
         assert!(out.contains("2 iterations"));
+        assert!(out.contains("2026-07-14T01:00:00Z"));
         assert!(!out.contains("crashed"));
         assert!(!out.contains("Run in progress"));
     }
