@@ -284,26 +284,14 @@ impl LlmClient for OpenAiClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    LlmError::Timeout
-                } else {
-                    LlmError::Http(e.to_string())
-                }
-            })?;
+            .map_err(|e| LlmError::from_reqwest(&e))?;
 
         let status = resp.status();
         if !status.is_success() {
             let body_text = resp.text().await.unwrap_or_default();
             return Err(LlmError::from_status(status.as_u16(), body_text));
         }
-        let v: serde_json::Value = resp.json().await.map_err(|e| {
-            if e.is_timeout() {
-                LlmError::Timeout
-            } else {
-                LlmError::Http(e.to_string())
-            }
-        })?;
+        let v: serde_json::Value = resp.json().await.map_err(|e| LlmError::from_reqwest(&e))?;
 
         let (text, tool_calls, stop_reason) = parse_response_body(&v)?;
         let input_tokens = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
@@ -365,13 +353,7 @@ impl LlmClient for OpenAiClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    LlmError::Timeout
-                } else {
-                    LlmError::Http(e.to_string())
-                }
-            })?;
+            .map_err(|e| LlmError::from_reqwest(&e))?;
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
@@ -386,13 +368,7 @@ impl LlmClient for OpenAiClient {
         let mut text = String::new();
         let mut input_tokens = 0u64;
         let mut output_tokens = 0u64;
-        while let Some(chunk) = resp.chunk().await.map_err(|e| {
-            if e.is_timeout() {
-                LlmError::Timeout
-            } else {
-                LlmError::Http(e.to_string())
-            }
-        })? {
+        while let Some(chunk) = resp.chunk().await.map_err(|e| LlmError::from_reqwest(&e))? {
             buf.extend_from_slice(&chunk);
             while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
                 let raw: Vec<u8> = buf.drain(..=nl).collect();

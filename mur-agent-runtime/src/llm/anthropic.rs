@@ -537,22 +537,10 @@ impl LlmClient for AnthropicClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    LlmError::Timeout
-                } else {
-                    LlmError::Http(e.to_string())
-                }
-            })?;
+            .map_err(|e| LlmError::from_reqwest(&e))?;
 
         let status = resp.status();
-        let body_text = resp.text().await.map_err(|e| {
-            if e.is_timeout() {
-                LlmError::Timeout
-            } else {
-                LlmError::Http(e.to_string())
-            }
-        })?;
+        let body_text = resp.text().await.map_err(|e| LlmError::from_reqwest(&e))?;
         if !status.is_success() {
             tracing::warn!(status = %status, body = %body_text, "anthropic non-2xx");
             return Err(LlmError::from_status(status.as_u16(), body_text));
@@ -620,13 +608,7 @@ impl LlmClient for AnthropicClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    LlmError::Timeout
-                } else {
-                    LlmError::Http(e.to_string())
-                }
-            })?;
+            .map_err(|e| LlmError::from_reqwest(&e))?;
         let status = resp.status();
         if !status.is_success() {
             let body_text = resp.text().await.unwrap_or_default();
@@ -640,13 +622,7 @@ impl LlmClient for AnthropicClient {
         // chunks to forward to the sink.
         let mut buf: Vec<u8> = Vec::new();
         let mut acc = StreamAccum::default();
-        while let Some(chunk) = resp.chunk().await.map_err(|e| {
-            if e.is_timeout() {
-                LlmError::Timeout
-            } else {
-                LlmError::Http(e.to_string())
-            }
-        })? {
+        while let Some(chunk) = resp.chunk().await.map_err(|e| LlmError::from_reqwest(&e))? {
             buf.extend_from_slice(&chunk);
             while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
                 let raw: Vec<u8> = buf.drain(..=nl).collect();

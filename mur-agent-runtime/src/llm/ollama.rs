@@ -80,25 +80,19 @@ impl LlmClient for OllamaClient {
         {
             return Err(LlmError::Http(e));
         }
-        let resp = self.http.post(url).json(&body).send().await.map_err(|e| {
-            if e.is_timeout() {
-                LlmError::Timeout
-            } else {
-                LlmError::Http(e.to_string())
-            }
-        })?;
+        let resp = self
+            .http
+            .post(url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| LlmError::from_reqwest(&e))?;
         let status = resp.status();
         if !status.is_success() {
             let body_text = resp.text().await.unwrap_or_default();
             return Err(LlmError::from_status(status.as_u16(), body_text));
         }
-        let v: serde_json::Value = resp.json().await.map_err(|e| {
-            if e.is_timeout() {
-                LlmError::Timeout
-            } else {
-                LlmError::Http(e.to_string())
-            }
-        })?;
+        let v: serde_json::Value = resp.json().await.map_err(|e| LlmError::from_reqwest(&e))?;
         let text = v["message"]["content"]
             .as_str()
             .ok_or_else(|| LlmError::InvalidResponse("missing message.content".into()))?
@@ -134,13 +128,13 @@ impl LlmClient for OllamaClient {
         {
             return Err(LlmError::Http(e));
         }
-        let mut resp = self.http.post(url).json(&body).send().await.map_err(|e| {
-            if e.is_timeout() {
-                LlmError::Timeout
-            } else {
-                LlmError::Http(e.to_string())
-            }
-        })?;
+        let mut resp = self
+            .http
+            .post(url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| LlmError::from_reqwest(&e))?;
         let status = resp.status();
         if !status.is_success() {
             let body_text = resp.text().await.unwrap_or_default();
@@ -154,13 +148,7 @@ impl LlmClient for OllamaClient {
         let mut text = String::new();
         let mut input_tokens = 0u64;
         let mut output_tokens = 0u64;
-        while let Some(chunk) = resp.chunk().await.map_err(|e| {
-            if e.is_timeout() {
-                LlmError::Timeout
-            } else {
-                LlmError::Http(e.to_string())
-            }
-        })? {
+        while let Some(chunk) = resp.chunk().await.map_err(|e| LlmError::from_reqwest(&e))? {
             buf.extend_from_slice(&chunk);
             while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
                 let line: Vec<u8> = buf.drain(..=nl).collect();
