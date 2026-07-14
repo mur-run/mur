@@ -159,6 +159,13 @@ mur deep-research "question"   # preflight (start workers, re-pin gateway) + gua
 
 `provision` / `run` remain as the flag-based advanced path. Egress is only ever granted in `setup`/`provision --grant-egress` (explicit consent); the smart run never touches grants.
 
+**Run progress.** The fleet loop writes a single best-effort `~/.mur/fleets/deep-research/.run_progress.json` (`schema_version: 1`, atomic temp+rename, kept as the last-run record). Every write is best-effort — a progress-file error never fails, slows, or changes the run. Two views render it:
+
+- Run output (log style): one line per completed step (`✓ s2 research dr_worker_2 $0.08 42s`, `✗` for failed) plus a per-iteration summary (`iteration 2 done: 3✓ 0✗ 2 pending · spend $0.31/$2.00 · model claude_haiku`). Existing loop lines are unchanged; these are additions.
+- Bare `mur deep-research` panel: the in-flight run (question, iteration, per-phase done/total, running steps with elapsed, spend vs budget) — labeled stale if the file's mtime is older than `STALE_AFTER_SECS` (10 min) — or the last run's `last run: <outcome> · $<spend> · <n> iterations`. No file → panel unchanged.
+
+Phase (`Probe | Research | Verify | Synthesize | Other`) is a display-only keyword heuristic over the router's assignment text; it never gates the run. The murmur TUI Panel is a Phase-2 consumer of the same file. Spec: `docs/superpowers/specs/2026-07-14-deep-research-run-progress-design.md`.
+
 ---
 
 ## GUI Export (`mur agent export --format gui`)
