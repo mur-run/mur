@@ -27,6 +27,59 @@ use tokio::time::{Duration, sleep, timeout as tokio_timeout};
 /// instead of silent (issue #595).
 pub const DELEGATE_REPLY_CONTRACT: &str = "\n\n---\nReply contract: end with a 'Completion:' checklist naming EVERY requested item as done / skipped / blocked. If you run low on turns, deliver partial work and declare the shortfall — never report clean completion over partial execution.";
 
+/// Per-dependency cap on the output text threaded into a dependent step's
+/// delegated sub-goal (see `execute_dag`'s dispatch loop). Generous enough to
+/// carry a full research/verify reply; bounded so a runaway output can't blow
+/// the delegate's context.
+const DEP_OUTPUT_EXCERPT_MAX: usize = 24_000;
+
+/// Char-boundary-safe head excerpt of a dependency output.
+fn dep_output_excerpt(s: &str) -> String {
+    if s.len() <= DEP_OUTPUT_EXCERPT_MAX {
+        return s.to_string();
+    }
+    let mut end = DEP_OUTPUT_EXCERPT_MAX;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n…[truncated]", &s[..end])
+}
+
+/// Thread completed dependency outputs into a delegated step's sub-goal.
+///
+/// `depends_on` edges previously only sequenced execution — a delegated step
+/// never saw its dependencies' outputs (the worker receives ONLY the message
+/// text; channel history is not injected on `channel/delegate`). Appending
+/// them to `intent` means e.g. a synthesize step actually receives the
+/// research/verify results it depends on. No-op for non-delegated steps,
+/// steps without dependencies, or when no dependency has produced output.
+fn thread_dep_outputs(
+    step: &mut mur_common::skill::manifest::ProcedureStep,
+    completed_outputs: &HashMap<String, String>,
+) {
+    if step.delegate_to.is_none() || step.depends_on.is_empty() {
+        return;
+    }
+    let mut ctx = String::new();
+    for dep in &step.depends_on {
+        if let Some(out) = completed_outputs.get(dep.as_str()) {
+            ctx.push_str(&format!(
+                "\n--- output of dependency step {dep} ---\n{}\n",
+                dep_output_excerpt(out)
+            ));
+        }
+    }
+    if !ctx.is_empty() {
+        let base = step
+            .intent
+            .clone()
+            .unwrap_or_else(|| step.description.clone());
+        step.intent = Some(format!(
+            "{base}\n\n[Outputs from completed dependency steps]{ctx}"
+        ));
+    }
+}
+
 /// Options for a single DAG execution.
 pub struct DagExecOptions<'a> {
     /// Piped input from a previous pipeline stage (for `{{input}}` substitution).
@@ -790,7 +843,7 @@ pub async fn execute_dag(
 ) -> Result<PipelineOutput> {
     let start = std::time::Instant::now();
 
-    let graph = build_dag(&procedure.steps)?;
+    let mut graph = build_dag(&procedure.steps)?;
 
     // Emit start StateChange (Working) if running over a channel.
     if let Some(cid) = opts.channel_id.as_deref() {
@@ -837,6 +890,10 @@ pub async fn execute_dag(
         .max_concurrency
         .map(|n| std::sync::Arc::new(tokio::sync::Semaphore::new(n.max(1))));
 
+    // step id → output_text of successfully completed steps, so later ranks
+    // can thread dependency outputs into their delegated sub-goals.
+    let mut completed_outputs: HashMap<String, String> = HashMap::new();
+
     for rank in 0..=max_rank {
         let indices: Vec<usize> = (0..graph.nodes.len())
             .filter(|i| graph.nodes[*i].rank == rank)
@@ -859,6 +916,9 @@ pub async fn execute_dag(
         let opt_on_step = opts.on_step.clone();
         let mut handles = Vec::new();
         for &i in &indices {
+            // Mutating the graph node (not the local clone) keeps retries
+            // consistent with the augmented sub-goal.
+            thread_dep_outputs(&mut graph.nodes[i].step, &completed_outputs);
             let step = graph.nodes[i].step.clone();
             let env_override = opt_env_override.clone();
             let dev_id = opt_dev_id.clone();
@@ -1017,6 +1077,16 @@ pub async fn execute_dag(
                     }
                 }
             }
+
+            // Record the step's final output (post-retry) so later ranks can
+            // thread it into dependent delegated sub-goals.
+            let final_result = &results[ri];
+            if final_result.success
+                && !final_result.output_text.is_empty()
+                && let Some(id) = step.id.as_deref()
+            {
+                completed_outputs.insert(id.to_string(), final_result.output_text.clone());
+            }
         }
     }
 
@@ -1079,6 +1149,49 @@ mod tests {
         let text = p["message"]["parts"][0]["text"].as_str().unwrap();
         assert!(text.starts_with("find the bug"));
         assert!(text.contains("Completion:"));
+    }
+
+    #[test]
+    fn thread_dep_outputs_appends_completed_dependency_outputs() {
+        let mut s = step("s3", &["s1", "s2"], None);
+        s.delegate_to = Some("dr_worker_3".into());
+        s.intent = Some("synthesize the brief".into());
+        let outputs: HashMap<String, String> = [
+            ("s1".to_string(), "claims + citations".to_string()),
+            ("s2".to_string(), "CONFIRM x3".to_string()),
+        ]
+        .into();
+        thread_dep_outputs(&mut s, &outputs);
+        let intent = s.intent.unwrap();
+        assert!(intent.starts_with("synthesize the brief"));
+        assert!(intent.contains("[Outputs from completed dependency steps]"));
+        assert!(intent.contains("--- output of dependency step s1 ---\nclaims + citations"));
+        assert!(intent.contains("--- output of dependency step s2 ---\nCONFIRM x3"));
+    }
+
+    #[test]
+    fn thread_dep_outputs_noop_without_delegate_or_deps_or_outputs() {
+        // Non-delegated step: untouched even with completed deps.
+        let mut cmd_step = step("s1", &["s0"], Some("echo hi"));
+        let outputs: HashMap<String, String> = [("s0".to_string(), "out".to_string())].into();
+        thread_dep_outputs(&mut cmd_step, &outputs);
+        assert!(cmd_step.intent.is_none());
+        // Delegated step whose deps produced nothing: intent unchanged.
+        let mut d = step("s2", &["s9"], None);
+        d.delegate_to = Some("w".into());
+        d.intent = Some("go".into());
+        thread_dep_outputs(&mut d, &outputs);
+        assert_eq!(d.intent.as_deref(), Some("go"));
+    }
+
+    #[test]
+    fn dep_output_excerpt_truncates_on_char_boundary() {
+        let s = "研".repeat(DEP_OUTPUT_EXCERPT_MAX); // 3 bytes per char
+        let e = dep_output_excerpt(&s);
+        assert!(e.len() <= DEP_OUTPUT_EXCERPT_MAX + "\n…[truncated]".len());
+        assert!(e.ends_with("…[truncated]"));
+        // Short input passes through untouched.
+        assert_eq!(dep_output_excerpt("ok"), "ok");
     }
 
     #[test]
