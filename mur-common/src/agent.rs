@@ -724,9 +724,17 @@ pub struct ToolRule {
 ///
 /// Precedence: exact-name match > longest-prefix glob (trailing `*`) > default (`Ask`).
 pub fn resolve_tool_policy(rules: &[ToolRule], tool_name: &str) -> ToolPolicy {
+    resolve_tool_policy_opt(rules, tool_name).unwrap_or_default()
+}
+
+/// Like [`resolve_tool_policy`] but distinguishes "no rule matched" (`None`)
+/// from an explicit rule — for tools whose registration is already gated
+/// elsewhere (e.g. `fleet_run`'s config allowlist) and that therefore want a
+/// different default than `Ask` while still honoring explicit rules.
+pub fn resolve_tool_policy_opt(rules: &[ToolRule], tool_name: &str) -> Option<ToolPolicy> {
     for rule in rules {
         if rule.pattern == tool_name {
-            return rule.policy;
+            return Some(rule.policy);
         }
     }
     let mut best: Option<(&ToolRule, usize)> = None;
@@ -740,10 +748,7 @@ pub fn resolve_tool_policy(rules: &[ToolRule], tool_name: &str) -> ToolPolicy {
             }
         }
     }
-    if let Some((rule, _)) = best {
-        return rule.policy;
-    }
-    ToolPolicy::default()
+    best.map(|(rule, _)| rule.policy)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

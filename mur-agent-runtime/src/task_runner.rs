@@ -1160,11 +1160,24 @@ impl TaskRunner {
 
         // 1b. Policy gate: check before executing.
         {
-            use mur_common::agent::{ToolPolicy, resolve_tool_policy};
+            use mur_common::agent::{ToolPolicy, resolve_tool_policy_opt};
             let policy = if crate::tools::suggest::suggest_replies_allowed(&call.tool_name) {
                 ToolPolicy::Allow
             } else {
-                resolve_tool_policy(&self.tools_policy, &call.tool_name)
+                match resolve_tool_policy_opt(&self.tools_policy, &call.tool_name) {
+                    Some(p) => p,
+                    // fleet_run's authorization is the out-of-model config
+                    // allowlist that gated its registration (plus the fleet's
+                    // own budget + kill-switch). With no explicit rule it
+                    // defaults to Allow: the HITL gate here is execute-THEN-
+                    // approve, so `Ask` adds no spend protection — it only
+                    // creates the pay-then-discard failure mode when the
+                    // approval window times out mid-run.
+                    None if call.tool_name == crate::tools::fleet_run::FLEET_RUN => {
+                        ToolPolicy::Allow
+                    }
+                    None => ToolPolicy::default(),
+                }
             };
             match policy {
                 ToolPolicy::Deny => {
@@ -2325,6 +2338,112 @@ mod tests {
             self.calls.fetch_add(1, Ordering::Relaxed);
             Ok("ran".into())
         }
+    }
+
+    /// A counting stub registered under the `fleet_run` wire name, for the
+    /// default-Allow policy-gate tests below.
+    struct CountingFleetRunTool {
+        calls: Arc<AtomicU64>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::tools::ToolExecutor for CountingFleetRunTool {
+        fn name(&self) -> &str {
+            crate::tools::fleet_run::FLEET_RUN
+        }
+        fn def(&self) -> crate::llm::ToolDef {
+            crate::llm::ToolDef {
+                name: crate::tools::fleet_run::FLEET_RUN.into(),
+                description: "stub fleet_run".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+        ) -> Result<String, crate::tools::ToolError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok("fleet ran".into())
+        }
+    }
+
+    fn fleet_run_call_response(call_id: &str) -> crate::llm::LlmResponse {
+        crate::llm::LlmResponse {
+            text: String::new(),
+            input_tokens: 5,
+            output_tokens: 5,
+            model: "test".into(),
+            tool_calls: vec![crate::llm::ToolCallResult {
+                call_id: call_id.into(),
+                tool_name: crate::tools::fleet_run::FLEET_RUN.into(),
+                input: serde_json::json!({"fleet": "deep-research"}),
+            }],
+            stop_reason: crate::llm::StopReason::ToolUse,
+        }
+    }
+
+    /// fleet_run with NO explicit rule defaults to Allow (its authorization is
+    /// the config allowlist that gated registration; the execute-then-approve
+    /// HITL gate adds no spend protection). With a 1s HITL timeout, an `Ask`
+    /// default would auto-deny the result — completion with the tool's real
+    /// output proves the Allow path ran.
+    #[tokio::test]
+    async fn fleet_run_without_rule_defaults_to_allow() {
+        use crate::llm::stub::SequenceLlm;
+        let responses: Vec<crate::llm::LlmResponse> = vec![
+            fleet_run_call_response("fr-0"),
+            end_turn_response("REPORT DELIVERED"),
+        ];
+        let calls = Arc::new(AtomicU64::new(0));
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_tools(vec![Arc::new(CountingFleetRunTool {
+                    calls: calls.clone(),
+                })])
+                .with_tools_policy(vec![]) // no rules at all
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                .with_max_iterations(5),
+        );
+        let outcome = runner.run_sync(loop_spec("fleet-run-default")).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed, got {outcome:?}");
+        };
+        assert_eq!(calls.load(Ordering::Relaxed), 1, "tool must have executed");
+        let reply_text = task.messages.last().map(text_of).unwrap_or_default();
+        assert!(reply_text.contains("REPORT DELIVERED"), "{reply_text}");
+    }
+
+    /// An EXPLICIT Deny rule on fleet_run still wins over the built-in
+    /// Allow default — the call is refused without executing.
+    #[tokio::test]
+    async fn fleet_run_explicit_deny_still_wins() {
+        use crate::llm::stub::SequenceLlm;
+        let responses: Vec<crate::llm::LlmResponse> =
+            vec![fleet_run_call_response("fr-0"), end_turn_response("OK")];
+        let calls = Arc::new(AtomicU64::new(0));
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_tools(vec![Arc::new(CountingFleetRunTool {
+                    calls: calls.clone(),
+                })])
+                .with_tools_policy(vec![mur_common::agent::ToolRule {
+                    pattern: crate::tools::fleet_run::FLEET_RUN.into(),
+                    policy: mur_common::agent::ToolPolicy::Deny,
+                    risk: None,
+                }])
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                .with_max_iterations(5),
+        );
+        let _ = runner.run_sync(loop_spec("fleet-run-deny")).await;
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            0,
+            "explicitly denied fleet_run must never execute"
+        );
     }
 
     /// Fix B — truncation is self-correcting, not a silent loop. When a turn

@@ -121,11 +121,96 @@ pub async fn cmd_ask(mur_home: &Path, question: &str) -> Result<()> {
     fleet.goal = question.to_string();
     crate::cmd::fleet::store::save_fleet(mur_home, &fleet)?;
 
+    // Baseline seq so only THIS run's events are considered for the report.
+    let svc = mur_channel::ChannelService::open(mur_home)?;
+    let baseline_seq = svc
+        .load_events(&fleet.channel_id)
+        .ok()
+        .and_then(|evs| evs.last().map(|e| e.seq))
+        .unwrap_or(0);
+
     // Budget comes from fleet.yaml loop.budget_usd (set by setup); pass None
     // overrides so the existing precedence applies unchanged.
     super::run::cmd_deep_research_run(mur_home, DEFAULT_FLEET_NAME, None, None, None).await?;
 
+    // Persist the synthesized report so the answer outlives the console
+    // scrollback — and so a sandboxed caller (fleet_run tool) gets a file
+    // path in the output instead of needing its own filesystem write grants.
+    // Best-effort: a run that produced no report (guard-stopped) saves nothing.
+    if let Ok(events) = svc.load_events(&fleet.channel_id)
+        && let Some(report) = extract_report(&events, &fleet, baseline_seq)
+        && let Ok(path) = save_report(mur_home, question, &report)
+    {
+        println!("Report: {}", path.display());
+    }
+
     Ok(())
+}
+
+/// Pull the report text out of this run's channel events: the last
+/// Agent-authored event containing the convergence marker as an own-line
+/// sentinel (matching `channel_has_marker` semantics), falling back to the
+/// last Agent-authored text of the run. Marker lines are stripped from the
+/// saved text.
+fn extract_report(
+    events: &[mur_common::channel::ChannelEvent],
+    fleet: &mur_common::fleet::Fleet,
+    baseline_seq: u64,
+) -> Option<String> {
+    use mur_common::channel::ChannelActor;
+    let marker = fleet
+        .loop_cfg
+        .as_ref()
+        .and_then(|l| crate::cmd::fleet::loop_run::done_marker(&l.done_when));
+    let agent_texts = events
+        .iter()
+        .filter(|e| e.seq > baseline_seq && matches!(e.actor, ChannelActor::Agent { .. }));
+    let mut best: Option<&str> = None;
+    let mut last: Option<&str> = None;
+    for e in agent_texts {
+        if let Some(t) = e.payload.get("text").and_then(|t| t.as_str()) {
+            last = Some(t);
+            if let Some(m) = marker
+                && t.lines().any(|line| line.trim() == m)
+            {
+                best = Some(t);
+            }
+        }
+    }
+    let text = best.or(last)?;
+    let cleaned: String = match marker {
+        Some(m) => text
+            .lines()
+            .filter(|line| line.trim() != m)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        None => text.to_string(),
+    };
+    let cleaned = cleaned.trim();
+    (!cleaned.is_empty()).then(|| cleaned.to_string())
+}
+
+/// Write the report under `<mur_home>/artifacts/deep-research/` as
+/// `<utc-timestamp>-<question-slug>.md` and return the path.
+fn save_report(mur_home: &Path, question: &str, report: &str) -> Result<std::path::PathBuf> {
+    let dir = mur_home.join("artifacts").join("deep-research");
+    std::fs::create_dir_all(&dir)?;
+    let slug: String = question
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+        .chars()
+        .take(48)
+        .collect();
+    let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    let path = dir.join(format!("{ts}-{slug}.md"));
+    std::fs::write(&path, format!("# {question}\n\n{report}\n"))?;
+    Ok(path)
 }
 
 #[cfg(test)]
