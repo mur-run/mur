@@ -53,7 +53,8 @@ fn fail_safe_passthrough_on_generic_prose() {
     let eng = engine(dir.path());
     let input = "This is ordinary prose that should not be aggressively compressed.";
     let res = eng.compress(input, None);
-    // generic -> fallback, no offload, no data loss of words
+    // Generic compressor tries to offload, but the bloat guard rejects it
+    // (marker overhead > original for short text). Result: passthrough.
     assert!(res.hash.is_none());
     assert!(res.compressed.contains("ordinary prose"));
 }
