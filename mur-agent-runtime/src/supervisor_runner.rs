@@ -269,7 +269,7 @@ pub async fn build_provider_runner(
         ));
     let edit_file_def = edit_file_exec.def();
     let tools_policy = profile.inner.entitlements.tools.clone();
-    let (_defs, tool_map) = build_tools(
+    let (_defs, mut tool_map) = build_tools(
         Some((bash_def, bash_exec)),
         Some((read_file_def, read_file_exec)),
         Some((write_file_def, write_file_exec)),
@@ -279,6 +279,32 @@ pub async fn build_provider_runner(
         pool.clone(),
     )
     .await;
+
+    // MUR_HOME-aware home dir — same expression as `prepare_runtime`/`supervisor.rs`
+    // (the old inline "local"-arm recompute below ignored MUR_HOME; unifying on
+    // this shared value is a disclosed, intentional bug-fix — see task-7-report.md).
+    let mur_home = std::env::var_os("MUR_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
+
+    // Built-in fleet_run: registered ONLY for agents allowlisted in the global
+    // config (`fleet_run.agents`, deny-by-default) — unauthorized agents never
+    // see the tool. An explicit Deny rule in the profile still wins.
+    {
+        use crate::tools::fleet_run::{FLEET_RUN, FleetRunTool, agent_enabled};
+        use mur_common::agent::{ToolPolicy, resolve_tool_policy};
+        if agent_enabled(&mur_home, &profile.inner.name)
+            && resolve_tool_policy(&tools_policy, FLEET_RUN) != ToolPolicy::Deny
+        {
+            tool_map.insert(
+                FLEET_RUN.to_string(),
+                Arc::new(FleetRunTool {
+                    mur_home: mur_home.clone(),
+                    agent_name: profile.inner.name.clone(),
+                }),
+            );
+        }
+    }
     let tools: Vec<Arc<dyn crate::tools::ToolExecutor>> = tool_map.into_values().collect();
 
     let build = |client: Arc<dyn LlmClient>| {
@@ -300,13 +326,6 @@ pub async fn build_provider_runner(
         );
         (r, Some(client), Some(pool.clone()))
     };
-
-    // MUR_HOME-aware home dir — same expression as `prepare_runtime`/`supervisor.rs`
-    // (the old inline "local"-arm recompute below ignored MUR_HOME; unifying on
-    // this shared value is a disclosed, intentional bug-fix — see task-7-report.md).
-    let mur_home = std::env::var_os("MUR_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
 
     // Model-switch: load the global config, resolve the ordered candidate refs
     // (per-agent overrides global) and decide single-client vs routing-aware

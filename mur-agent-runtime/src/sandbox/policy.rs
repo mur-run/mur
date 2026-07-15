@@ -214,6 +214,36 @@ impl SandboxPolicy {
             fs_write.push(channel_index_dir);
         }
 
+        // fleet_run carve-ins (config-gated, deny-by-default): when THIS agent
+        // is allowlisted in `~/.mur/config.yaml` `fleet_run.agents`, the
+        // spawned `mur fleet run` / `mur deep-research` child (which inherits
+        // this sandbox) needs the fleet-runner state dirs writable and the
+        // `mur` binary spawnable. Gate lives in the global config — writable
+        // by no agent — so a prompt-injected agent cannot widen it. Same
+        // create-before-grant idiom as `channels` above. Reads need no grant
+        // here (macOS reads are allow-default; the narrow read set for
+        // Landlock is added to fs_read below alongside system paths).
+        let mut fleet_run_enabled = false;
+        if let (Some(mur_home), Some(agent_name)) = (
+            agent_home.parent().and_then(|p| p.parent()),
+            agent_home.file_name().and_then(|n| n.to_str()),
+        ) && crate::tools::fleet_run::agent_enabled(mur_home, agent_name)
+        {
+            fleet_run_enabled = true;
+            for dir in ["fleets", "commander", "conversations"] {
+                let d = mur_home.join(dir);
+                if !fs_write.contains(&d) {
+                    let _ = std::fs::create_dir_all(&d);
+                    fs_write.push(d);
+                }
+            }
+            for p in [mur_home.join("models.yaml"), mur_home.join("cache")] {
+                if std::fs::metadata(&p).is_ok() && !fs_read.contains(&p) {
+                    fs_read.push(p);
+                }
+            }
+        }
+
         // Standard system read paths: libraries, certs, DNS config.
         let system_read = system_read_paths();
         for p in system_read {
@@ -279,7 +309,13 @@ impl SandboxPolicy {
         // (Issue 16 discipline: never emit an unresolvable grant).
         let spawn_mode = ent.processes.spawn.mode;
         let mut spawn_allowed_paths: Vec<PathBuf> = Vec::new();
-        for name in &ent.processes.spawn.allowed {
+        // fleet_run: the child is the `mur` binary itself — chain it into the
+        // allowlist resolution below (same resolve/canonicalize/dedup path).
+        let mut spawn_names: Vec<String> = ent.processes.spawn.allowed.clone();
+        if fleet_run_enabled && !spawn_names.iter().any(|n| n == "mur") {
+            spawn_names.push("mur".to_string());
+        }
+        for name in &spawn_names {
             let mut matched_any = false;
             if name.contains(std::path::MAIN_SEPARATOR) {
                 let candidate = Path::new(name);
@@ -698,6 +734,36 @@ mod tests {
                 .fs_write
                 .contains(&PathBuf::from("/tmp/mur/channels"))
         );
+    }
+
+    #[test]
+    fn fleet_run_carveins_are_config_gated() {
+        // Not allowlisted (no config.yaml) → no fleets/commander/conversations grants.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mur_home = tmp.path();
+        let agent_home = mur_home.join("agents").join("mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+        assert!(!policy.fs_write.contains(&mur_home.join("fleets")));
+
+        // Allowlisted in config.yaml → the three dirs are carved in.
+        std::fs::write(
+            mur_home.join("config.yaml"),
+            "fleet_run:\n  agents: [mur]\n  fleets: [deep-research]\n",
+        )
+        .unwrap();
+        let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+        for dir in ["fleets", "commander", "conversations"] {
+            assert!(
+                policy.fs_write.contains(&mur_home.join(dir)),
+                "{dir} should be carved in for an allowlisted agent"
+            );
+        }
+        // A different (non-allowlisted) agent stays denied.
+        let other_home = mur_home.join("agents").join("dr_worker_1");
+        std::fs::create_dir_all(&other_home).unwrap();
+        let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &other_home);
+        assert!(!policy.fs_write.contains(&mur_home.join("fleets")));
     }
 
     #[test]
