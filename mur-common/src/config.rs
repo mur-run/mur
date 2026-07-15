@@ -184,6 +184,10 @@ pub struct Config {
     #[serde(default)]
     pub parallel_jobs: ParallelJobsConfig,
 
+    // --- fleet_run runtime built-in tool ---
+    #[serde(default)]
+    pub fleet_run: FleetRunConfig,
+
     // --- Hub Fleet Manager redesign ---
     #[serde(default)]
     pub fleet: FleetConfig,
@@ -200,6 +204,23 @@ pub struct ParallelJobsConfig {
     /// Empty = deny all.
     #[serde(default)]
     pub targets: Vec<String>,
+}
+
+/// Authorization gate for the runtime's built-in `fleet_run` tool. Stored under
+/// `fleet_run:` in `~/.mur/config.yaml`. Deny-by-default on BOTH axes: an agent
+/// not named in `agents` never even sees the tool, and a fleet not named in
+/// `fleets` cannot be run. Lives in the global config (not the agent profile)
+/// because the profile is writable by the concierge itself — this gate must be
+/// out of reach of a prompt-injected agent (same rationale as
+/// [`ParallelJobsConfig`]).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct FleetRunConfig {
+    /// Canonical agent names allowed to call `fleet_run`. Empty = deny all.
+    #[serde(default)]
+    pub agents: Vec<String>,
+    /// Fleet names those agents may run. Empty = deny all.
+    #[serde(default)]
+    pub fleets: Vec<String>,
 }
 
 /// Daemon-wide gate for unattended fleet auto-run (`mur-daemon`'s `fleet_tick`).
@@ -229,6 +250,20 @@ mod fleet_config_tests {
         // `fleet:` key entirely absent → defaults to off
         let cfg2: Config = serde_yaml_ng::from_str("{}").unwrap();
         assert!(!cfg2.fleet.autorun);
+    }
+
+    #[test]
+    fn fleet_run_config_defaults_deny_all_and_roundtrips() {
+        // Absent section → both allowlists empty → deny all.
+        let cfg: Config = serde_yaml_ng::from_str("{}").unwrap();
+        assert!(cfg.fleet_run.agents.is_empty());
+        assert!(cfg.fleet_run.fleets.is_empty());
+
+        let cfg2: Config =
+            serde_yaml_ng::from_str("fleet_run:\n  agents: [mur]\n  fleets: [deep-research]\n")
+                .unwrap();
+        assert_eq!(cfg2.fleet_run.agents, vec!["mur"]);
+        assert_eq!(cfg2.fleet_run.fleets, vec!["deep-research"]);
     }
 }
 
