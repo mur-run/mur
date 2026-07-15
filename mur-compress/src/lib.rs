@@ -117,18 +117,6 @@ impl CompressEngine {
             return Self::passthrough(content, before, ct);
         }
 
-        // Generic early-skip: the fallback's savings are exactly computable
-        // in one scan. Below the configured floor, don't run the compressor
-        // at all — record a skip (not a compression) and pass through.
-        if ct == ContentType::Generic
-            && fallback::saving_ratio(content) < self.config.fallback.min_save_ratio
-        {
-            self.stats.record_skip(ct.as_str());
-            let mut r = Self::passthrough(content, before, ct);
-            r.transforms = vec!["skipped".to_string()];
-            return r;
-        }
-
         let ctx = CompressCtx {
             query,
             config: &self.config,
@@ -245,13 +233,12 @@ mod tests {
     }
 
     #[test]
-    fn archive_stores_generic_content_compress_would_skip() {
+    fn archive_and_compress_both_store_generic_content() {
         let dir = tempfile::tempdir().unwrap();
         let eng = engine(dir.path(), CompressConfig::default());
         let prose = "fn main() {\n    println!(\"hi\");\n}\n".repeat(50);
-        // compress() on plain code/prose (Generic) never offloads.
-        assert!(eng.compress(&prose, None).hash.is_none());
-        let hash = eng.archive(&prose).expect("archive should store");
+        // compress() on plain code/prose (Generic) now offloads via fallback.
+        let hash = eng.compress(&prose, None).hash.expect("generic must offload");
         match eng.retrieve(&hash, None) {
             RetrieveResult::Full {
                 original_content, ..
@@ -311,27 +298,28 @@ mod tests {
     }
 
     #[test]
-    fn generic_low_savings_is_skipped() {
+    fn generic_prose_now_offloads_instead_of_skipping() {
         let dir = tempfile::tempdir().unwrap();
         let engine = CompressEngine::new(dir.path(), CompressConfig::default()).unwrap();
-        // Prose with nothing to strip: predicted savings 0 < 5% → skip.
+        // Prose with nothing to strip: previously skipped, now offloads.
         let content = "plain prose line\n".repeat(200);
         let r = engine.compress(&content, None);
-        assert_eq!(r.tokens_saved, 0);
-        assert!(r.transforms.iter().any(|t| t == "skipped"));
+        assert!(r.tokens_saved > 0);
+        assert!(r.hash.is_some(), "generic prose must offload");
+        assert!(r.transforms.iter().any(|t| t == "fallback.offload"));
         let snap = engine.stats_snapshot();
-        assert_eq!(snap.skipped, 1);
-        assert_eq!(snap.compressions, 0);
+        assert_eq!(snap.compressions, 1);
     }
 
     #[test]
-    fn generic_high_savings_still_compresses() {
+    fn generic_heavy_whitespace_offloads() {
         let dir = tempfile::tempdir().unwrap();
         let engine = CompressEngine::new(dir.path(), CompressConfig::default()).unwrap();
-        // Heavy trailing whitespace: well above 5% → real compression.
+        // Heavy trailing whitespace: offload fires and hash is present.
         let content = "x                                                            \n".repeat(300);
         let r = engine.compress(&content, None);
         assert!(r.tokens_saved > 0);
-        assert!(r.transforms.iter().any(|t| t == "fallback.whitespace"));
+        assert!(r.hash.is_some(), "generic with whitespace must offload");
+        assert!(r.transforms.iter().any(|t| t == "fallback.offload"));
     }
 }
