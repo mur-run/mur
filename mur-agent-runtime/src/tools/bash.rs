@@ -25,7 +25,7 @@ const MAX_TIMEOUT_SECS: u64 = 600;
 /// agents hit `bash: mur: command not found` / `npx: command not found` for
 /// tools installed via Homebrew, Cargo, or user-local pip/npm, even though
 /// those binaries are on the *interactive* user's `PATH` (dogfood issue 1).
-fn augmented_path(current_path: Option<&str>) -> String {
+pub(crate) fn augmented_path(current_path: Option<&str>) -> String {
     let mut components: Vec<PathBuf> = current_path
         .map(|p| std::env::split_paths(p).collect())
         .unwrap_or_default();
