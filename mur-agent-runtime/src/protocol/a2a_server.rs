@@ -52,6 +52,8 @@ pub enum HandlerError {
     UnsupportedCapability(String),
     #[error("communication denied: {0}")]
     CommunicationDenied(String),
+    #[error("approval expired: {0}")]
+    ApprovalExpired(String),
 }
 
 impl HandlerError {
@@ -66,6 +68,7 @@ impl HandlerError {
             Self::TaskCancelled(_) => -32002,
             Self::UnsupportedCapability(_) => -32010,
             Self::CommunicationDenied(_) => -32011,
+            Self::ApprovalExpired(_) => -32012,
         }
     }
 }
