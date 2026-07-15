@@ -381,7 +381,8 @@ fn search_blocked_error() -> FetchError {
         "DuckDuckGo returned its anti-bot challenge (HTTP {DDG_CHALLENGE_STATUS}) on all \
          {SEARCH_MAX_ATTEMPTS} attempts — this host's IP appears persistently blocked, \
          retrying will not help. Use direct `fetch` of known URLs instead. Operator fix: \
-         configure a free Brave Search API key (research_gateway.brave_api_key in \
+         configure a free Brave Search API key (research_gateway.brave_api_key — or \
+         brave_api_key_ref, e.g. keychain:mur/brave — in \
          ~/.mur/config.yaml, or MUR_RESEARCH_BRAVE_KEY) to switch search off DuckDuckGo."
     ))
 }

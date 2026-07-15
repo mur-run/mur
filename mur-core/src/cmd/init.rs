@@ -1,5 +1,7 @@
 use anyhow::Result;
+use std::fs;
 use std::io::{self, Write};
+use std::path::Path;
 
 /// Drive an async future from a sync caller that's already inside the
 /// `mur-main` multi-threaded tokio runtime (see `main.rs::main`).
@@ -78,7 +80,16 @@ pub(crate) fn cmd_init(hooks_flag: bool, refresh_discovery: bool) -> Result<()> 
     // ─── Step E: Write default config.yaml if not exists ─────────
     let config_path = mur_dir.join("config.yaml");
     if !config_path.exists() {
-        crate::store::config::save_config(&mur_common::config::Config::default())?;
+        let cfg = mur_common::config::Config {
+            fleet_run: starter_fleet_run(),
+            ..Default::default()
+        };
+        crate::store::config::save_config(&cfg)?;
+    } else {
+        // Re-running init on an existing install: append the fleet_run
+        // starter textually. NEVER load-modify-save here — the typed Config
+        // drops foreign blocks other binaries own (e.g. `research_gateway:`).
+        append_fleet_run_if_absent(&config_path)?;
     }
 
     // ─── Determine whether to install hooks ──────────────────────
@@ -895,9 +906,81 @@ Run `mur learn` to extract new patterns from recent sessions.
     Ok(())
 }
 
+/// Starter `fleet_run` authorization seeded by `mur init`: the concierge may
+/// trigger the deep-research fleet. Still inert until that fleet exists AND
+/// has a positive `loop.budget_usd` (the tool refuses otherwise), so seeding
+/// it costs nothing on a fresh install but saves the "why can't murmur run
+/// deep-research" round-trip later.
+fn starter_fleet_run() -> mur_common::config::FleetRunConfig {
+    mur_common::config::FleetRunConfig {
+        agents: vec![mur_common::fleet::CONCIERGE_AGENT.to_string()],
+        fleets: vec![crate::cmd::deep_research::status::DEFAULT_FLEET_NAME.to_string()],
+    }
+}
+
+/// Append the starter `fleet_run:` block to an existing config.yaml, unless a
+/// `fleet_run:` key is already present (user-authored settings are never
+/// touched). Textual append on purpose: round-tripping through the typed
+/// `Config` would drop foreign top-level blocks owned by other binaries
+/// (e.g. `research_gateway:`).
+fn append_fleet_run_if_absent(config_path: &Path) -> Result<()> {
+    let text = fs::read_to_string(config_path)?;
+    if text
+        .lines()
+        .any(|l| l.trim_start().starts_with("fleet_run:"))
+    {
+        return Ok(());
+    }
+    let starter = starter_fleet_run();
+    let mut out = text;
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&format!(
+        "\n# fleet_run built-in tool authorization (deny-by-default allowlists;\n\
+         # lets the listed agents trigger the listed fleets from inside their sandbox)\n\
+         fleet_run:\n  agents: [{}]\n  fleets: [{}]\n",
+        starter.agents.join(", "),
+        starter.fleets.join(", ")
+    ));
+    fs::write(config_path, out)?;
+    println!("  ✓ Added starter fleet_run authorization to config.yaml");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn starter_fleet_run_seeds_concierge_deep_research() {
+        let s = starter_fleet_run();
+        assert_eq!(s.agents, vec!["mur"]);
+        assert_eq!(s.fleets, vec!["deep-research"]);
+    }
+
+    #[test]
+    fn append_fleet_run_respects_existing_key_and_foreign_blocks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("config.yaml");
+
+        // Absent → appended, foreign block preserved.
+        std::fs::write(&p, "research_gateway:\n  brave_api_key: \"x\"").unwrap();
+        append_fleet_run_if_absent(&p).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(text.contains("research_gateway:"), "foreign block kept");
+        assert!(text.contains("fleet_run:"));
+        let cfg: mur_common::config::Config = serde_yaml_ng::from_str(&text).unwrap();
+        assert_eq!(cfg.fleet_run.agents, vec!["mur"]);
+        assert_eq!(cfg.fleet_run.fleets, vec!["deep-research"]);
+
+        // Present (user-authored) → untouched.
+        std::fs::write(&p, "fleet_run:\n  agents: [custom]\n  fleets: []\n").unwrap();
+        append_fleet_run_if_absent(&p).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(text.matches("fleet_run:").count(), 1);
+        assert!(text.contains("custom"));
+    }
 
     #[test]
     fn hook_scripts_use_unified_entry() {
