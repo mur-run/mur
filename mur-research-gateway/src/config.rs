@@ -128,11 +128,45 @@ struct GatewayConfigYaml {
     search_limit: Option<usize>,
     max_fetch_chars: Option<usize>,
     brave_api_key: Option<String>,
+    brave_api_key_ref: Option<String>,
     agent_browser_bin: Option<String>,
     lightpanda_path: Option<String>,
     chrome_stealth_args: Option<String>,
     render_engine: Option<String>,
     obscura_path: Option<String>,
+}
+
+/// Resolve `research_gateway.brave_api_key_ref` — a mur-common `SecretRef`
+/// string (`keychain:mur/brave`, `env:BRAVE_KEY`, `file:...`, `cmd:...`) —
+/// to the actual key, so the secret never has to sit in config.yaml as
+/// plaintext. Precedence sits between the `MUR_RESEARCH_BRAVE_KEY` env
+/// override and the legacy plaintext `brave_api_key` field. An unparseable
+/// or unresolvable ref warns and falls through to plaintext rather than
+/// silently disabling Brave search.
+fn resolve_brave_key_ref(raw_ref: Option<&str>) -> Option<String> {
+    let raw_ref = raw_ref.filter(|s| !s.trim().is_empty())?;
+    match raw_ref.parse::<mur_common::secret::SecretRef>() {
+        Ok(sref) => {
+            let resolved = sref.resolve_to_string_blocking().filter(|s| !s.is_empty());
+            if resolved.is_none() {
+                tracing::warn!(
+                    r#ref = raw_ref,
+                    "brave_api_key_ref did not resolve to a secret; \
+                     falling back to plaintext brave_api_key (if any)"
+                );
+            }
+            resolved
+        }
+        Err(e) => {
+            tracing::warn!(
+                r#ref = raw_ref,
+                error = %e,
+                "brave_api_key_ref is not a valid SecretRef; \
+                 falling back to plaintext brave_api_key (if any)"
+            );
+            None
+        }
+    }
 }
 
 /// Resolve `~/.mur` (or `$MUR_HOME` if set). Mirrors the `MUR_HOME`
@@ -189,8 +223,9 @@ pub fn load_from_yaml(yaml: &str, mur_home: &Path) -> GatewayConfig {
         .or(raw.max_fetch_chars)
         .unwrap_or(DEFAULT_MAX_FETCH_CHARS);
 
-    let brave_api_key =
-        non_empty_env(ENV_BRAVE_KEY).or_else(|| raw.brave_api_key.filter(|s| !s.is_empty()));
+    let brave_api_key = non_empty_env(ENV_BRAVE_KEY)
+        .or_else(|| resolve_brave_key_ref(raw.brave_api_key_ref.as_deref()))
+        .or_else(|| raw.brave_api_key.filter(|s| !s.is_empty()));
 
     let agent_browser_bin = non_empty_env(ENV_AGENT_BROWSER_BIN)
         .or(raw.agent_browser_bin)
@@ -312,6 +347,32 @@ mod tests {
     // env var serializes on this lock — mirrors
     // `mur-agent-runtime/tests/model_resolution.rs::HOME_LOCK`.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn brave_key_ref_resolves_and_beats_plaintext() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // SAFETY: env mutation guarded by ENV_LOCK above.
+        unsafe {
+            std::env::remove_var(ENV_BRAVE_KEY);
+            std::env::set_var("TEST_BRAVE_REF_KEY", "from-ref");
+        }
+        let yaml = "research_gateway:\n  brave_api_key: \"plain\"\n  brave_api_key_ref: \"env:TEST_BRAVE_REF_KEY\"\n";
+        let c = load_from_yaml(yaml, Path::new("/nonexistent"));
+        assert_eq!(c.brave_api_key.as_deref(), Some("from-ref"));
+
+        // Unresolvable ref falls through to plaintext instead of disabling Brave.
+        unsafe {
+            std::env::remove_var("TEST_BRAVE_REF_KEY");
+        }
+        let c = load_from_yaml(yaml, Path::new("/nonexistent"));
+        assert_eq!(c.brave_api_key.as_deref(), Some("plain"));
+
+        // Invalid ref string also falls through.
+        let yaml_bad =
+            "research_gateway:\n  brave_api_key: \"plain\"\n  brave_api_key_ref: \"bogus\"\n";
+        let c = load_from_yaml(yaml_bad, Path::new("/nonexistent"));
+        assert_eq!(c.brave_api_key.as_deref(), Some("plain"));
+    }
 
     // Brief's exact Step-1 failing test.
     #[test]
