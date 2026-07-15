@@ -1,5 +1,6 @@
 pub mod bash;
 pub mod edit_file;
+pub mod fleet_run;
 pub(crate) mod fs_policy;
 pub mod mcp;
 pub mod naming;
