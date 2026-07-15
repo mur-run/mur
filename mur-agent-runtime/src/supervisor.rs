@@ -768,7 +768,16 @@ impl crate::protocol::a2a_server::MethodHandler for HitlRespondHandler {
             .await
             .remove(&hitl_id)
             .ok_or_else(|| {
-                crate::protocol::a2a_server::HandlerError::TaskNotFound(hitl_id.clone())
+                // Not-found here means the approval window already closed: the
+                // gate timed out (and auto-denied) before the decision arrived,
+                // or a decision was already delivered. A generic TaskNotFound
+                // read as a cryptic JSON-RPC blob in murmur; say what actually
+                // happened and what to do about it.
+                crate::protocol::a2a_server::HandlerError::ApprovalExpired(
+                    "this approval window already closed — the tool call was auto-denied \
+                     at timeout (or the decision was already delivered); re-run the request"
+                        .to_string(),
+                )
             })?;
         let _ = tx.send(crate::hitl::HitlDecision { allow, reason });
         Ok(serde_json::json!({}))
@@ -1206,6 +1215,29 @@ mod hitl_tests {
         let decision = rx.await.expect("sender dropped");
         assert!(decision.allow);
         assert_eq!(decision.reason.as_deref(), Some("looks good"));
+    }
+
+    #[tokio::test]
+    async fn hitl_respond_after_timeout_reports_approval_expired() {
+        // A decision arriving after the gate timed out (entry removed) must
+        // surface as a clear "approval expired" error with its own code —
+        // NOT the cryptic generic TaskNotFound (-32000) it used to be.
+        let pending: Arc<Mutex<HashMap<String, oneshot::Sender<HitlDecision>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let handler = HitlRespondHandler {
+            pending_approvals: pending.clone(),
+        };
+        let err = handler
+            .handle(
+                Some(json!({"hitl_id": "long-gone", "allow": true})),
+                &crate::protocol::a2a_server::RequestContext::none(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), -32012);
+        let msg = err.to_string();
+        assert!(msg.contains("approval expired"), "{msg}");
+        assert!(msg.contains("auto-denied at timeout"), "{msg}");
     }
 
     #[tokio::test]

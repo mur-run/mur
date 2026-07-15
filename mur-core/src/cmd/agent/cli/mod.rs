@@ -1157,11 +1157,19 @@ fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: boo
         let t = tx.clone();
         tokio::spawn(async move {
             if let Err(e) = respond_hitl(h, a, id, allow).await {
-                let _ = t
-                    .send(StreamMsg::Note(format!(
-                        "failed to deliver decision for `{tool}`: {e:#}"
-                    )))
-                    .await;
+                let msg = format!("{e:#}");
+                // "approval expired" (new runtimes) / "task not found" (older
+                // runtimes) on this method both mean the same thing: the gate
+                // timed out and auto-denied before the decision landed.
+                let note = if msg.contains("approval expired") || msg.contains("task not found") {
+                    format!(
+                        "approval for `{tool}` arrived too late — the call was already \
+                         auto-denied at timeout; re-run the request"
+                    )
+                } else {
+                    format!("failed to deliver decision for `{tool}`: {msg}")
+                };
+                let _ = t.send(StreamMsg::Note(note)).await;
             }
         });
         match (allow, auto) {
