@@ -238,7 +238,10 @@ mod tests {
         let eng = engine(dir.path(), CompressConfig::default());
         let prose = "fn main() {\n    println!(\"hi\");\n}\n".repeat(50);
         // compress() on plain code/prose (Generic) now offloads via fallback.
-        let hash = eng.compress(&prose, None).hash.expect("generic must offload");
+        let hash = eng
+            .compress(&prose, None)
+            .hash
+            .expect("generic must offload");
         match eng.retrieve(&hash, None) {
             RetrieveResult::Full {
                 original_content, ..
