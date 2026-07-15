@@ -89,7 +89,9 @@ pub(crate) fn cmd_init(hooks_flag: bool, refresh_discovery: bool) -> Result<()> 
         // Re-running init on an existing install: append the fleet_run
         // starter textually. NEVER load-modify-save here — the typed Config
         // drops foreign blocks other binaries own (e.g. `research_gateway:`).
-        append_fleet_run_if_absent(&config_path)?;
+        if append_fleet_run_if_absent(&config_path)? {
+            println!("  ✓ Added starter fleet_run authorization to config.yaml");
+        }
     }
 
     // ─── Determine whether to install hooks ──────────────────────
@@ -920,16 +922,17 @@ fn starter_fleet_run() -> mur_common::config::FleetRunConfig {
 
 /// Append the starter `fleet_run:` block to an existing config.yaml, unless a
 /// `fleet_run:` key is already present (user-authored settings are never
-/// touched). Textual append on purpose: round-tripping through the typed
-/// `Config` would drop foreign top-level blocks owned by other binaries
-/// (e.g. `research_gateway:`).
-fn append_fleet_run_if_absent(config_path: &Path) -> Result<()> {
+/// touched). Returns whether the block was appended. Textual append on
+/// purpose: round-tripping through the typed `Config` would drop foreign
+/// top-level blocks owned by other binaries (e.g. `research_gateway:`).
+/// Also called by `mur deep-research setup` (the other consent moment).
+pub(crate) fn append_fleet_run_if_absent(config_path: &Path) -> Result<bool> {
     let text = fs::read_to_string(config_path)?;
     if text
         .lines()
         .any(|l| l.trim_start().starts_with("fleet_run:"))
     {
-        return Ok(());
+        return Ok(false);
     }
     let starter = starter_fleet_run();
     let mut out = text;
@@ -944,8 +947,7 @@ fn append_fleet_run_if_absent(config_path: &Path) -> Result<()> {
         starter.fleets.join(", ")
     ));
     fs::write(config_path, out)?;
-    println!("  ✓ Added starter fleet_run authorization to config.yaml");
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -966,7 +968,7 @@ mod tests {
 
         // Absent → appended, foreign block preserved.
         std::fs::write(&p, "research_gateway:\n  brave_api_key: \"x\"").unwrap();
-        append_fleet_run_if_absent(&p).unwrap();
+        assert!(append_fleet_run_if_absent(&p).unwrap());
         let text = std::fs::read_to_string(&p).unwrap();
         assert!(text.contains("research_gateway:"), "foreign block kept");
         assert!(text.contains("fleet_run:"));
@@ -976,7 +978,7 @@ mod tests {
 
         // Present (user-authored) → untouched.
         std::fs::write(&p, "fleet_run:\n  agents: [custom]\n  fleets: []\n").unwrap();
-        append_fleet_run_if_absent(&p).unwrap();
+        assert!(!append_fleet_run_if_absent(&p).unwrap());
         let text = std::fs::read_to_string(&p).unwrap();
         assert_eq!(text.matches("fleet_run:").count(), 1);
         assert!(text.contains("custom"));

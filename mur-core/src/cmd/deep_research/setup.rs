@@ -249,6 +249,18 @@ pub fn cmd_setup(mur_home: &Path) -> Result<()> {
         }
     }
 
+    // Seed the fleet_run authorization so the concierge can trigger THIS
+    // fleet from inside murmur (the setup wizard is the user's explicit
+    // consent moment — same starter block `mur init` seeds on fresh
+    // installs). Appends only if no fleet_run key exists; user-authored
+    // settings are never touched. Requires a concierge restart to apply.
+    if crate::cmd::init::append_fleet_run_if_absent(&mur_home.join("config.yaml"))? {
+        println!(
+            "✓ Authorized the concierge to run deep-research from murmur \
+             (config.yaml fleet_run) — restart the `mur` agent to apply"
+        );
+    }
+
     println!("\nSetup complete. Run: mur deep-research \"<your question>\"");
     Ok(())
 }
