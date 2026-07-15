@@ -230,7 +230,7 @@ impl SandboxPolicy {
         ) && crate::tools::fleet_run::agent_enabled(mur_home, agent_name)
         {
             fleet_run_enabled = true;
-            for dir in ["fleets", "commander", "conversations"] {
+            for dir in ["fleets", "commander", "conversations", "artifacts"] {
                 let d = mur_home.join(dir);
                 if !fs_write.contains(&d) {
                     let _ = std::fs::create_dir_all(&d);
