@@ -93,8 +93,17 @@ impl Session {
     }
 
     /// Append one turn, creating the channel on first write. `role` ∈
-    /// {"user","agent","shell"}.
-    pub fn append(&mut self, role: &str, text: &str, task_id: Option<&str>) -> Result<()> {
+    /// {"user","agent","shell"}. For agent turns, `suggested` carries the
+    /// quick-reply options offered alongside the reply (#716): they are
+    /// persisted into the event payload as an additive `suggested_replies`
+    /// field so channel history is not lossy about what was offered.
+    pub fn append(
+        &mut self,
+        role: &str,
+        text: &str,
+        task_id: Option<&str>,
+        suggested: &[super::suggest::Suggestion],
+    ) -> Result<()> {
         let (actor, kind) = match role {
             "agent" => (
                 ChannelActor::Agent {
@@ -119,6 +128,12 @@ impl Session {
         if let Some(t) = task_id {
             payload["task_id"] = serde_json::Value::String(t.to_string());
         }
+        // Additive field only — absent when no options were offered, so
+        // existing events and readers are untouched (new events sign whatever
+        // payload they carry; no fold/verify change).
+        if role == "agent" && !suggested.is_empty() {
+            payload["suggested_replies"] = suggestions_to_json(suggested);
+        }
         crate::channel_writer::append_as_writer(
             &self.svc,
             &self.home,
@@ -131,6 +146,21 @@ impl Session {
         )?;
         Ok(())
     }
+}
+
+/// Serialize offered quick-reply options for the channel payload: a bare
+/// string when there is no description, else `{text, description}` —
+/// mirroring the tool-call shape so nothing offered is lost.
+fn suggestions_to_json(suggested: &[super::suggest::Suggestion]) -> serde_json::Value {
+    serde_json::Value::Array(
+        suggested
+            .iter()
+            .map(|s| match &s.desc {
+                Some(d) => serde_json::json!({ "text": s.text, "description": d }),
+                None => serde_json::Value::String(s.text.clone()),
+            })
+            .collect(),
+    )
 }
 
 fn event_to_turn(ev: &ChannelEvent) -> TurnRecord {
@@ -226,11 +256,71 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let mut s = Session::create(tmp.path(), "qa").unwrap();
         assert!(s.current().is_none(), "no channel before first append");
-        s.append("user", "hi", None).unwrap();
+        s.append("user", "hi", None, &[]).unwrap();
         let meta = s.current().expect("channel exists after first append");
         assert!(!meta.id.is_empty());
         assert!(!meta.state.is_empty());
         // state must not contain JSON quotes — must be bare kebab
         assert!(!meta.state.contains('"'));
+    }
+
+    /// #716: options offered via `suggest_replies` must land in the agent
+    /// event's payload (`suggested_replies`) so channel history is not lossy;
+    /// turns without options must not carry the field.
+    #[test]
+    fn agent_append_persists_offered_suggestions() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = Session::create(tmp.path(), "qa").unwrap();
+        s.append("user", "run the fleet?", None, &[]).unwrap();
+        let offered = vec![
+            crate::cmd::agent::cli::suggest::Suggestion {
+                text: "取消".into(),
+                desc: None,
+            },
+            crate::cmd::agent::cli::suggest::Suggestion {
+                text: "還是執行".into(),
+                desc: Some("硬跑".into()),
+            },
+        ];
+        s.append(
+            "agent",
+            "fleet 目標不符：Rust fleet、Next.js job。要取消還是硬跑？",
+            Some("task-1"),
+            &offered,
+        )
+        .unwrap();
+        s.append("agent", "no options this turn", None, &[])
+            .unwrap();
+
+        let id = s.channel_id().unwrap().to_string();
+        let evs = ChannelService::open(tmp.path())
+            .unwrap()
+            .load_events(&id)
+            .unwrap();
+        let agent_evs: Vec<_> = evs
+            .iter()
+            .filter(|e| matches!(e.actor, ChannelActor::Agent { .. }))
+            .collect();
+        assert_eq!(agent_evs.len(), 2);
+
+        let sugg = agent_evs[0]
+            .payload
+            .get("suggested_replies")
+            .expect("agent event carries the offered options");
+        assert_eq!(sugg[0], serde_json::json!("取消"));
+        assert_eq!(
+            sugg[1],
+            serde_json::json!({ "text": "還是執行", "description": "硬跑" })
+        );
+        // Existing payload fields are untouched.
+        assert_eq!(agent_evs[0].payload["task_id"], "task-1");
+        assert!(
+            agent_evs[0].payload["text"]
+                .as_str()
+                .unwrap()
+                .contains("目標不符")
+        );
+        // No options offered → field absent (additive, never an empty array).
+        assert!(agent_evs[1].payload.get("suggested_replies").is_none());
     }
 }
