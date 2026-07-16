@@ -179,16 +179,30 @@ fn rich_messages_to_openai(msgs: &[RichMessage]) -> Vec<serde_json::Value> {
                     }));
                 }
             }
-            // ponytail: OpenAI vision not wired — keep the caption, drop the
-            // image. Emit image_url content blocks here if an OpenAI-backed
-            // vision agent ever needs to see pasted screenshots.
-            RichMessage::ImageText { role, text, .. } => {
+            // OpenAI vision: emit the image as a data-URL `image_url` content
+            // block (the OpenAI-compatible multimodal shape deepseek / LM Studio
+            // / Ollama's OpenAI endpoint all accept), plus the caption when
+            // present. A non-vision backend now errors loudly instead of the
+            // image being silently dropped.
+            RichMessage::ImageText {
+                role,
+                media_type,
+                data,
+                text,
+            } => {
                 let r = if role == "agent" {
                     "assistant"
                 } else {
                     role.as_str()
                 };
-                result.push(json!({"role": r, "content": text}));
+                let mut parts = vec![json!({
+                    "type": "image_url",
+                    "image_url": { "url": format!("data:{media_type};base64,{data}") },
+                })];
+                if !text.is_empty() {
+                    parts.push(json!({"type": "text", "text": text}));
+                }
+                result.push(json!({"role": r, "content": parts}));
             }
         }
     }
@@ -453,6 +467,44 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0]["role"], "system");
         assert_eq!(result[1]["role"], "user");
+    }
+
+    #[test]
+    fn rich_messages_image_text_becomes_image_url_block() {
+        let msgs = vec![RichMessage::ImageText {
+            role: "user".into(),
+            media_type: "image/png".into(),
+            data: "QkFTRTY0".into(),
+            text: "what color?".into(),
+        }];
+        let out = rich_messages_to_openai(&msgs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["role"], "user");
+        let content = out[0]["content"].as_array().expect("multimodal array");
+        assert_eq!(content[0]["type"], "image_url");
+        assert_eq!(
+            content[0]["image_url"]["url"],
+            "data:image/png;base64,QkFTRTY0"
+        );
+        assert_eq!(content[1]["type"], "text");
+        assert_eq!(content[1]["text"], "what color?");
+    }
+
+    #[test]
+    fn rich_messages_image_only_omits_empty_text_block() {
+        let msgs = vec![RichMessage::ImageText {
+            role: "user".into(),
+            media_type: "image/jpeg".into(),
+            data: "QQ==".into(),
+            text: String::new(),
+        }];
+        let out = rich_messages_to_openai(&msgs);
+        let content = out[0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 1, "no empty text block");
+        assert_eq!(
+            content[0]["image_url"]["url"],
+            "data:image/jpeg;base64,QQ=="
+        );
     }
 
     #[test]

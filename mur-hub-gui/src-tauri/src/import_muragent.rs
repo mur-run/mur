@@ -117,8 +117,14 @@ pub fn inspect_muragent_file(path: String) -> Result<MuragentInspection, String>
 /// Perform the actual install. UI must only call this after the user has
 /// consented to the dialog (and, on first-time-author, after the 5s delay).
 #[tauri::command]
-pub fn install_muragent_file(path: String) -> Result<InstallReceipt, String> {
-    install_inner(Path::new(&path)).map_err(|e| e.to_string())
+pub fn install_muragent_file(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<InstallReceipt, String> {
+    // Hub version from the Tauri context (tauri.conf.json, CI-stamped) — not
+    // env!("CARGO_PKG_VERSION"), which is stuck at 0.1.0 (workspace-excluded).
+    let hub_version = app.package_info().version.to_string();
+    install_inner(Path::new(&path), &hub_version).map_err(|e| e.to_string())
 }
 
 fn inspect_inner(path: &Path) -> anyhow::Result<MuragentInspection> {
@@ -147,7 +153,7 @@ fn inspect_inner(path: &Path) -> anyhow::Result<MuragentInspection> {
     }
 }
 
-fn install_inner(path: &Path) -> anyhow::Result<InstallReceipt> {
+fn install_inner(path: &Path, hub_version: &str) -> anyhow::Result<InstallReceipt> {
     let archive =
         MuragentArchive::read(path).map_err(|e| anyhow::anyhow!("read .muragent: {e}"))?;
     let mur_home = trust::mur_home();
@@ -169,7 +175,7 @@ fn install_inner(path: &Path) -> anyhow::Result<InstallReceipt> {
         &outcome.manifest.agent.bundle_id,
         &outcome.manifest.agent.url_scheme,
         icon_icns.as_deref(),
-        env!("CARGO_PKG_VERSION"),
+        hub_version,
         &mur_home,
     ) {
         Ok(info) => info.path.to_string_lossy().into_owned(),
