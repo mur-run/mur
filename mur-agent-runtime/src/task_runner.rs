@@ -159,6 +159,12 @@ pub struct TaskRunner {
     /// as `cumulative_input_tokens`: overlapping turns on one runner can race
     /// this value; acceptable for a best-effort telemetry field.
     last_model_ref: Mutex<Option<String>>,
+    /// True when the most recent LLM response of the current turn was cut off
+    /// at the provider's max_tokens ceiling (`StopReason::MaxTokens`). Read by
+    /// the `token_usage` closure to add `"truncated": true` to `Task.usage`;
+    /// reset alongside `last_model_ref` at the start of each `run_sync_inner`
+    /// turn. Same runner-lifetime concurrency caveat as `last_model_ref`.
+    last_turn_truncated: AtomicBool,
     hook_chain: Option<Arc<HookChain>>,
     hook_ctx: Option<HookCtx>,
     hook_cancel: Option<CancellationToken>,
@@ -280,6 +286,7 @@ impl TaskRunner {
             cumulative_output_tokens: AtomicU64::new(0),
             last_input_tokens: AtomicU64::new(0),
             last_model_ref: Mutex::new(None),
+            last_turn_truncated: AtomicBool::new(false),
             hook_chain: None,
             hook_ctx: None,
             hook_cancel: None,
@@ -688,6 +695,8 @@ impl TaskRunner {
             .last_model_ref
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = None;
+        // Same for the truncation flag: it describes THIS turn only.
+        self.last_turn_truncated.store(false, Ordering::Relaxed);
 
         let generation = async {
             match &self.backend {
@@ -785,13 +794,20 @@ impl TaskRunner {
                 RequestIntent::Interactive => "interactive",
                 RequestIntent::Background(_) => "smart-background",
             };
-            serde_json::json!({
+            let mut usage = serde_json::json!({
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "context_tokens": self.last_input_tokens.load(Ordering::Relaxed),
                 "model_ref": model_ref,
                 "route_reason": route_reason,
-            })
+            });
+            // Additive: present (true) only when the final generation was cut
+            // off at the max_tokens ceiling, so existing consumers of the
+            // usage JSON are unaffected (#715).
+            if self.last_turn_truncated.load(Ordering::Relaxed) {
+                usage["truncated"] = true.into();
+            }
+            usage
         };
 
         let now = chrono::Utc::now().to_rfc3339();
@@ -1041,12 +1057,23 @@ impl TaskRunner {
             ..Default::default()
         };
         let start = std::time::Instant::now();
-        let llm_result = match sink {
-            Some(sink) => client.generate_stream(req, sink).await,
+        let llm_result = match &sink {
+            Some(s) => client.generate_stream(req, s.clone()).await,
             None => client.generate(req).await,
         };
         match llm_result {
-            Ok(resp) => {
+            Ok(mut resp) => {
+                if resp.truncated_by_max_tokens() {
+                    self.mark_max_tokens_truncation(task_id, &mut resp);
+                    if let Some(s) = &sink {
+                        let _ = s
+                            .send(crate::llm::StreamDelta {
+                                text: crate::llm::MAX_TOKENS_TRUNCATION_MARKER.to_string(),
+                                thinking: false,
+                            })
+                            .await;
+                    }
+                }
                 let latency_ms = start.elapsed().as_millis() as u64;
                 *self
                     .last_model_ref
@@ -1110,6 +1137,29 @@ impl TaskRunner {
 
     fn tools_for_loop(&self) -> &[Arc<dyn crate::tools::ToolExecutor>] {
         &self.tools
+    }
+
+    /// Handle a final answer the provider cut off at the max_tokens ceiling:
+    /// warn loudly, flag the turn for `Task.usage` (`"truncated": true`), and
+    /// append the visible truncation marker so every downstream consumer —
+    /// user, delegating agent, channel history — can see the cut instead of a
+    /// silent mid-word seam (#715). The effective ceiling is the provider
+    /// default (requests leave `max_tokens` unset), so the warning reports the
+    /// actual `output_tokens`, which equals the cap at truncation.
+    fn mark_max_tokens_truncation(&self, task_id: &str, resp: &mut crate::llm::LlmResponse) {
+        self.last_turn_truncated.store(true, Ordering::Relaxed);
+        tracing::warn!(
+            agent = self
+                .hook_ctx
+                .as_ref()
+                .map(|c| c.agent_name.as_str())
+                .unwrap_or("<unknown>"),
+            task_id,
+            model = %resp.model,
+            output_tokens = resp.output_tokens,
+            "llm generation hit the max_tokens ceiling; reply is truncated (visible marker appended)"
+        );
+        resp.text.push_str(crate::llm::MAX_TOKENS_TRUNCATION_MARKER);
     }
 
     async fn prepare_system_prompt(
@@ -1553,6 +1603,25 @@ impl TaskRunner {
                 });
                 iteration += 1;
                 continue;
+            }
+
+            // A max_tokens stop that reaches this point carries usable text
+            // and no tool calls (both other combinations were handled above):
+            // the FINAL answer itself was cut off mid-generation. Mark it
+            // visibly — in the returned reply, the streamed output, and the
+            // persisted history — instead of passing truncated text off as a
+            // complete answer (#715).
+            let mut resp = resp;
+            if resp.truncated_by_max_tokens() {
+                self.mark_max_tokens_truncation(task_id, &mut resp);
+                if let Some(s) = &sink {
+                    let _ = s
+                        .send(crate::llm::StreamDelta {
+                            text: crate::llm::MAX_TOKENS_TRUNCATION_MARKER.to_string(),
+                            thinking: false,
+                        })
+                        .await;
+                }
             }
 
             history.push(RichMessage::ToolUse {
@@ -2313,6 +2382,20 @@ mod tests {
         }
     }
 
+    /// A response truncated in the middle of the FINAL answer: `stop_reason ==
+    /// MaxTokens` with usable text and no tool_calls — the silent-corruption
+    /// case from #715 (a delegated spec cut mid-word at exactly the cap).
+    fn truncated_text_response(text: &str) -> crate::llm::LlmResponse {
+        crate::llm::LlmResponse {
+            text: text.into(),
+            input_tokens: 5,
+            output_tokens: 16384,
+            model: "test".into(),
+            tool_calls: vec![],
+            stop_reason: crate::llm::StopReason::MaxTokens,
+        }
+    }
+
     /// Counting `bash` tool: records how many times it executes so a test can
     /// assert a (truncated) tool call was NOT run.
     struct CountingBashTool {
@@ -2534,6 +2617,93 @@ mod tests {
         assert!(
             reply_text.contains("RECOVERED"),
             "expected the recovery turn's reply, got: {reply_text}"
+        );
+    }
+
+    /// Fix A (#715): a turn whose FINAL answer stops at `MaxTokens` (text
+    /// present, no tool_calls) must not be passed off as complete — the reply
+    /// gets the visible truncation marker appended and `Task.usage` carries
+    /// `"truncated": true`.
+    #[tokio::test]
+    async fn max_tokens_final_answer_gets_marker_and_usage_flag() {
+        use crate::llm::stub::SequenceLlm;
+        let responses = vec![truncated_text_response("A long spec cut mid-wo")];
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                .with_max_iterations(5),
+        );
+        let outcome = runner.run_sync(loop_spec("truncate-final-answer")).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed, got {outcome:?}");
+        };
+        let reply_text = task.messages.last().map(text_of).unwrap_or_default();
+        assert!(
+            reply_text.starts_with("A long spec cut mid-wo"),
+            "truncated text must be preserved, got: {reply_text}"
+        );
+        assert!(
+            reply_text.ends_with(crate::llm::MAX_TOKENS_TRUNCATION_MARKER),
+            "reply must end with the visible truncation marker, got: {reply_text}"
+        );
+        let usage = task.usage.expect("usage is always populated");
+        assert_eq!(
+            usage["truncated"], true,
+            "usage must flag the truncation; usage={usage:?}"
+        );
+    }
+
+    /// Counterpart to the marker test: a clean end_turn must carry neither the
+    /// marker nor the `truncated` usage key (the flag is additive-only).
+    #[tokio::test]
+    async fn clean_end_turn_has_no_truncation_marker_or_flag() {
+        use crate::llm::stub::SequenceLlm;
+        let responses = vec![end_turn_response("complete answer")];
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                .with_max_iterations(5),
+        );
+        let outcome = runner.run_sync(loop_spec("clean-end-turn")).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed, got {outcome:?}");
+        };
+        let reply_text = task.messages.last().map(text_of).unwrap_or_default();
+        assert!(
+            !reply_text.contains(crate::llm::MAX_TOKENS_TRUNCATION_MARKER),
+            "clean turn must not carry the marker, got: {reply_text}"
+        );
+        let usage = task.usage.expect("usage is always populated");
+        assert!(
+            usage.get("truncated").is_none(),
+            "clean turn must not populate the truncated flag; usage={usage:?}"
+        );
+    }
+
+    /// Same marker + flag behavior on the non-agentic `run_llm` path (runner
+    /// built without pending approvals — e.g. companion / plain generate).
+    #[tokio::test]
+    async fn run_llm_path_marks_max_tokens_truncation() {
+        use crate::llm::stub::SequenceLlm;
+        let responses = vec![truncated_text_response("plain reply cut mid-wo")];
+        let runner = TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)));
+        let outcome = runner.run_sync(loop_spec("truncate-run-llm")).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed, got {outcome:?}");
+        };
+        let reply_text = task.messages.last().map(text_of).unwrap_or_default();
+        assert!(
+            reply_text.ends_with(crate::llm::MAX_TOKENS_TRUNCATION_MARKER),
+            "run_llm reply must end with the truncation marker, got: {reply_text}"
+        );
+        let usage = task.usage.expect("usage is always populated");
+        assert_eq!(
+            usage["truncated"], true,
+            "usage must flag the truncation; usage={usage:?}"
         );
     }
 
