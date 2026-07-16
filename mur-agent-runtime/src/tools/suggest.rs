@@ -22,16 +22,22 @@ impl ToolExecutor for SuggestRepliesTool {
             name: SUGGEST_REPLIES.into(),
             description: "Offer the user 1-5 short quick-reply options when they \
                 would likely pick from a small set — e.g. after you ask a question \
-                or propose a choice. Each option is a complete message the user \
-                could send verbatim, with an optional one-line description of the \
-                trade-off. The options appear as a chooser in the user's input. \
-                You decide what happens next: if you genuinely need their answer \
-                before proceeding, end your turn after offering the options and \
-                wait for their reply; if you already know the next step (e.g. a \
-                plan they've approved), just take it — don't offer a chooser in \
-                place of acting. Do NOT number the options yourself (no \"A:\" / \
-                \"1.\" prefixes) — the UI marks and spaces them. Skip it on \
-                open-ended turns with no natural shortlist."
+                or propose a choice. Each option is a short candidate USER reply \
+                (imperative, under ~60 characters) derived from your final message, \
+                with an optional one-line description of the trade-off. Options are \
+                ephemeral UI chrome, NOT an information channel: they MUST NOT \
+                contain findings, analysis, or any information not already stated \
+                in your final message text. Your final message must be \
+                self-contained — state what you found first, then ask; a reader \
+                who never sees the options must lose nothing. The options appear \
+                as a chooser in the user's input. You decide what happens next: \
+                if you genuinely need their answer before proceeding, end your \
+                turn after offering the options and wait for their reply; if you \
+                already know the next step (e.g. a plan they've approved), just \
+                take it — don't offer a chooser in place of acting. Do NOT number \
+                the options yourself (no \"A:\" / \"1.\" prefixes) — the UI marks \
+                and spaces them. Skip it on open-ended turns with no natural \
+                shortlist."
                 .into(),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -43,7 +49,7 @@ impl ToolExecutor for SuggestRepliesTool {
                             "oneOf": [
                                 {
                                     "type": "string",
-                                    "description": "A complete message the user could send."
+                                    "description": "A short candidate user reply (imperative, under ~60 chars), sent verbatim if picked. No new information."
                                 },
                                 {
                                     "type": "object",
@@ -51,11 +57,11 @@ impl ToolExecutor for SuggestRepliesTool {
                                     "properties": {
                                         "text": {
                                             "type": "string",
-                                            "description": "The message the user sends if they pick this option."
+                                            "description": "The short reply the user sends if they pick this option (imperative, under ~60 chars)."
                                         },
                                         "description": {
                                             "type": "string",
-                                            "description": "Optional one-line rationale / trade-off shown under the option."
+                                            "description": "Optional one-line trade-off shown under the option. May only restate information already in your final message — never new findings."
                                         }
                                     },
                                     "required": ["text"]
@@ -108,6 +114,27 @@ mod tests {
         let d = SuggestRepliesTool.def();
         assert_eq!(d.name, "suggest_replies");
         assert_eq!(d.input_schema["properties"]["replies"]["type"], "array");
+    }
+
+    /// #716: the description must forbid using options as the information
+    /// channel and require a self-contained final message, so the model can't
+    /// bury its findings in ephemeral TUI chrome.
+    #[test]
+    fn def_constrains_options_to_final_message_content() {
+        let d = SuggestRepliesTool.def();
+        assert!(
+            d.description
+                .contains("MUST NOT contain findings, analysis, or any information"),
+            "description must forbid findings/analysis in options"
+        );
+        assert!(
+            d.description.contains("self-contained"),
+            "description must require a self-contained final message"
+        );
+        assert!(
+            d.description.contains("candidate USER reply"),
+            "description must frame options as candidate user replies"
+        );
     }
 
     #[test]

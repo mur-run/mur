@@ -12,7 +12,7 @@ fn cli_write_is_visible_to_a_second_reader() {
 
     // CLI side writes.
     let mut sess = Session::create(home, "qa").unwrap();
-    sess.append("user", "shared message", None).unwrap();
+    sess.append("user", "shared message", None, &[]).unwrap();
     let cid = sess.channel_id().unwrap().to_string();
 
     // Hub side reads the same on-disk store.
@@ -34,7 +34,7 @@ fn index_is_rebuildable_from_logs() {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path();
     let mut sess = Session::create(home, "qa").unwrap();
-    sess.append("user", "x", None).unwrap();
+    sess.append("user", "x", None, &[]).unwrap();
 
     // Close the session's open SQLite connection before deleting the index.
     // On Windows an open file cannot be removed (sharing violation); dropping

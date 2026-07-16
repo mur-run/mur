@@ -550,8 +550,16 @@ impl App {
     }
 
     /// Append a turn to the session log, surfacing a write failure once.
-    fn persist_turn(&mut self, role: &str, text: &str, task_id: Option<&str>) {
-        match self.session.append(role, text, task_id) {
+    /// `suggested` carries the quick-reply options offered this turn (agent
+    /// turns only) so they persist with the reply (#716).
+    fn persist_turn(
+        &mut self,
+        role: &str,
+        text: &str,
+        task_id: Option<&str>,
+        suggested: &[super::suggest::Suggestion],
+    ) {
+        match self.session.append(role, text, task_id, suggested) {
             Ok(()) => self.channel = self.session.current(),
             Err(e) => {
                 if !self.persist_warned {
@@ -661,7 +669,7 @@ impl App {
     /// the request.
     pub fn begin_user_turn(&mut self, text: &str) -> String {
         self.messages.push(ChatMsg::new(Role::User, text));
-        self.persist_turn("user", text, None);
+        self.persist_turn("user", text, None, &[]);
         // A fresh client-side task id per turn (used for cancellation).
         let task_id = uuid::Uuid::now_v7().to_string();
         self.current_task_id = Some(task_id.clone());
@@ -752,7 +760,12 @@ impl App {
             if let Some(tid) = &task_id {
                 self.context_task_id = Some(tid.clone());
             }
-            self.persist_turn("agent", &b, task_id.as_deref());
+            // Persist the quick-reply options offered this turn alongside the
+            // reply so channel history is not lossy about what was offered
+            // (#716). Read (not taken) here: `reveal_suggestions` still runs
+            // after this to surface them in the composer.
+            let offered = self.pending_suggestions.clone();
+            self.persist_turn("agent", &b, task_id.as_deref(), &offered);
         }
         self.streaming = false;
         self.current_task_id = None;
@@ -964,7 +977,7 @@ impl App {
             format!("$ {cmd}\n{output}")
         };
         self.messages.push(ChatMsg::new(Role::Shell, text.clone()));
-        self.persist_turn("shell", &text, None);
+        self.persist_turn("shell", &text, None, &[]);
         self.pending_shell.push(text);
         self.scroll_back = 0;
     }
