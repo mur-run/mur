@@ -69,6 +69,14 @@ pub enum StopReason {
     MaxTokens,
 }
 
+/// Visible marker appended to assistant text when the provider cut the
+/// generation off at the output-token ceiling (Anthropic
+/// `stop_reason == "max_tokens"`, OpenAI `finish_reason == "length"`, Ollama
+/// `done_reason == "length"`). A truncated reply must never look complete —
+/// users, delegating agents, and channel history all read this text, and a
+/// silent mid-word cut is how issue #715's corrupted artifact happened.
+pub const MAX_TOKENS_TRUNCATION_MARKER: &str = "\n\n[output truncated: max_tokens reached]";
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolResultEntry {
     pub call_id: String,
@@ -143,6 +151,14 @@ pub struct LlmResponse {
     pub model: String,
     pub tool_calls: Vec<ToolCallResult>,
     pub stop_reason: StopReason,
+}
+
+impl LlmResponse {
+    /// True when the provider stopped this generation because it hit the
+    /// output-token ceiling — i.e. the text is truncated, not complete.
+    pub fn truncated_by_max_tokens(&self) -> bool {
+        self.stop_reason == StopReason::MaxTokens
+    }
 }
 
 #[derive(Debug, Clone, thiserror::Error)]

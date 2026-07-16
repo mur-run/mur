@@ -382,6 +382,7 @@ impl LlmClient for OpenAiClient {
         let mut text = String::new();
         let mut input_tokens = 0u64;
         let mut output_tokens = 0u64;
+        let mut stop_reason = StopReason::EndTurn;
         while let Some(chunk) = resp.chunk().await.map_err(|e| LlmError::from_reqwest(&e))? {
             buf.extend_from_slice(&chunk);
             while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
@@ -423,6 +424,16 @@ impl LlmClient for OpenAiClient {
                         })
                         .await;
                 }
+                // The final content chunk carries `finish_reason`; surface a
+                // max_tokens cut (`"length"`) so the caller can mark the reply
+                // as truncated instead of passing it off as complete.
+                if let Some(fr) = v["choices"][0]["finish_reason"].as_str() {
+                    stop_reason = match fr {
+                        "length" => StopReason::MaxTokens,
+                        "tool_calls" => StopReason::ToolUse,
+                        _ => StopReason::EndTurn,
+                    };
+                }
                 if v["usage"].is_object() {
                     input_tokens = v["usage"]["prompt_tokens"].as_u64().unwrap_or(input_tokens);
                     output_tokens = v["usage"]["completion_tokens"]
@@ -440,7 +451,7 @@ impl LlmClient for OpenAiClient {
             output_tokens,
             model: self.model.clone(),
             tool_calls: vec![],
-            stop_reason: StopReason::EndTurn,
+            stop_reason,
         })
     }
 }
