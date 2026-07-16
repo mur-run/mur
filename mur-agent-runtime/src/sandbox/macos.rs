@@ -158,13 +158,6 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
         "(deny file-write* (subpath \"/\"))".to_string(),
     ];
 
-    // Deny reads (and keep an explicit write-deny) on sensitive paths.
-    for path in &policy.fs_deny {
-        let p = sbpl_escape(&path.to_string_lossy());
-        lines.push(format!("(deny file-read* (subpath \"{p}\"))"));
-        lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
-    }
-
     // Re-allow writes for the standard macOS system-write locations so the
     // runtime (dyld, temp, stdio) keeps working under the deny baseline.
     for p in MACOS_SYSTEM_WRITE_PATHS {
@@ -172,10 +165,22 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
     }
 
     // Re-allow writes to the policy's explicitly allowed write paths. These
-    // come last so they win the last-match-wins evaluation over the baseline.
+    // come after the baseline so they win the last-match-wins evaluation.
     for path in &policy.fs_write {
         let p = sbpl_escape(&path.to_string_lossy());
         lines.push(format!("(allow file-write* (subpath \"{p}\"))"));
+    }
+
+    // Deny reads (and keep an explicit write-deny) on sensitive paths.
+    // Emitted AFTER the write allows: SBPL is last-match-wins, so a denied
+    // path nested inside a granted write subtree (e.g. the agent's own
+    // profile.yaml under agent_home — issue #712) only stays denied if the
+    // deny comes later. fs_deny overriding fs_read/fs_write is the field's
+    // documented contract (see `SandboxPolicy::fs_deny`).
+    for path in &policy.fs_deny {
+        let p = sbpl_escape(&path.to_string_lossy());
+        lines.push(format!("(deny file-read* (subpath \"{p}\"))"));
+        lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
     }
 
     // Process-exec restrictions. Under `(allow default)` any binary is
@@ -353,6 +358,27 @@ mod tests {
         assert!(
             allow > baseline,
             "allow must follow the deny baseline (last-match-wins)"
+        );
+    }
+
+    #[test]
+    fn deny_path_wins_over_overlapping_write_grant() {
+        // Issue #712: a denied file nested inside a granted write subtree
+        // (e.g. the agent's own profile.yaml under agent_home) must be
+        // emitted AFTER the allow so it wins the last-match-wins evaluation.
+        let sbpl = build_sbpl_profile(&policy_with(
+            vec![PathBuf::from("/data/agent")],
+            vec![PathBuf::from("/data/agent/profile.yaml")],
+        ));
+        let allow = sbpl
+            .find("(allow file-write* (subpath \"/data/agent\"))")
+            .expect("write grant must be emitted");
+        let deny = sbpl
+            .find("(deny file-write* (subpath \"/data/agent/profile.yaml\"))")
+            .expect("deny must be emitted");
+        assert!(
+            deny > allow,
+            "deny must follow the overlapping allow (last-match-wins):\n{sbpl}"
         );
     }
 
