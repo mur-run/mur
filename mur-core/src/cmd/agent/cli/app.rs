@@ -921,6 +921,7 @@ impl App {
             "shell",
             "[message not delivered: the agent runtime never received the message above]",
             None,
+            &[],
         );
     }
 

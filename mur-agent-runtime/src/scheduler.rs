@@ -35,6 +35,7 @@ fn scheduled_task_spec(message: &str) -> TaskSpec {
         active_fleet: None,
         active_team: None,
         intent: RequestIntent::Background(BackgroundKind::Scheduled),
+        output_artifact_path: None,
     }
 }
 
