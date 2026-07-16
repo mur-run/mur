@@ -82,6 +82,11 @@ export interface SkillView {
   path: string;
   /** Whether the backing file still parses + validates as a skill manifest. */
   loadable: boolean;
+  /**
+   * Why: "missing" = the file was never installed (dangling profile.yaml ref),
+   * "malformed" = the file exists but no longer parses (#717).
+   */
+  status: "ok" | "missing" | "malformed";
 }
 
 export interface InstalledAddonView {

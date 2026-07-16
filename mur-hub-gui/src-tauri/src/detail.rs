@@ -90,35 +90,34 @@ pub struct SkillView {
     /// manifest (canonical YAML or markdown). Legacy `.md` paths that no
     /// longer parse are surfaced as `false` so the UI can flag them as dead.
     pub loadable: bool,
+    /// Why a skill is (or isn't) loadable, so the UI can distinguish a ref
+    /// whose file was never installed from a file that no longer parses
+    /// (#717).
+    pub status: SkillRefStatusView,
 }
 
-/// Best-effort check that a legacy per-agent skill path points at a file that
-/// the runtime can still load. Resolves `rel_path` under the agent home, then
-/// parses the file by extension and validates the resulting manifest. Any
-/// failure (missing file, unparseable, invalid) yields `false`.
-fn skill_path_is_loadable(agent_home: &std::path::Path, rel_path: &str) -> bool {
-    let mut file = agent_home.join(rel_path);
-    // Modern per-agent skills are stored as `skills/<name>/skill.yaml`, so the
-    // id in `profile.skills` points at the *directory*. Resolve to the manifest
-    // inside it; legacy ids that already point at a file pass through unchanged.
-    if file.is_dir() {
-        file = file.join("skill.yaml");
+/// UI-facing skill-ref status. `Missing` = the resolved manifest file does
+/// not exist (profile.yaml references a skill that was never installed);
+/// `Malformed` = the file exists but no longer parses/validates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SkillRefStatusView {
+    Ok,
+    Missing,
+    Malformed,
+}
+
+/// Classify a legacy per-agent skill path via the shared resolver the runtime
+/// loader uses (`mur_common::skill::loader::skill_ref_status`): resolves
+/// `rel_path` under the agent home (`skills/<name>` dirs resolve to their
+/// `skill.yaml`), then parses + validates the manifest.
+fn skill_ref_view(agent_home: &std::path::Path, rel_path: &str) -> SkillRefStatusView {
+    use mur_common::skill::loader::SkillRefStatus;
+    match mur_common::skill::loader::skill_ref_status(agent_home, rel_path) {
+        SkillRefStatus::Loadable => SkillRefStatusView::Ok,
+        SkillRefStatus::Missing { .. } => SkillRefStatusView::Missing,
+        SkillRefStatus::Malformed { .. } => SkillRefStatusView::Malformed,
     }
-    let Ok(text) = std::fs::read_to_string(&file) else {
-        return false;
-    };
-    let ext = file
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let parsed = match ext.as_str() {
-        "yaml" | "yml" => mur_common::skill::parse_canonical(&text),
-        "md" | "markdown" => mur_common::skill::parse_markdown(&text)
-            .or_else(|_| mur_common::skill::parse_legacy_markdown(&text)),
-        _ => return false,
-    };
-    matches!(parsed, Ok(ref m) if mur_common::skill::validate(m).is_ok())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -207,12 +206,15 @@ pub fn build_agent_detail(
             .skills
             .iter()
             .map(|path| {
-                let loadable = agent_home
-                    .map(|home| skill_path_is_loadable(home, path))
-                    .unwrap_or(false);
+                // No agent home (test construction) → report Missing, which
+                // is also the fail-safe reading: nothing resolvable on disk.
+                let status = agent_home
+                    .map(|home| skill_ref_view(home, path))
+                    .unwrap_or(SkillRefStatusView::Missing);
                 SkillView {
                     path: path.clone(),
-                    loadable,
+                    loadable: status == SkillRefStatusView::Ok,
+                    status,
                 }
             })
             .collect(),
@@ -356,7 +358,7 @@ pub fn update_agent_detail(name: String, patch: DetailPatch) -> Result<AgentDeta
 
 #[cfg(test)]
 mod tests {
-    use super::skill_path_is_loadable;
+    use super::{SkillRefStatusView, skill_ref_view};
 
     // Regression: per-agent skill ids are directories (`skills/<name>`) holding
     // a `skill.yaml`. The loadable check must resolve into the dir, not try to
@@ -375,8 +377,33 @@ mod tests {
         )
         .unwrap();
 
-        assert!(skill_path_is_loadable(home.path(), "skills/demo"));
-        assert!(!skill_path_is_loadable(home.path(), "skills/missing"));
+        assert_eq!(
+            skill_ref_view(home.path(), "skills/demo"),
+            SkillRefStatusView::Ok
+        );
+    }
+
+    // #717: a ref written into profile.yaml without installing the backing
+    // files must surface as Missing (file not found), not as a parse failure.
+    #[test]
+    fn absent_ref_is_missing_not_malformed() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(
+            skill_ref_view(home.path(), "skills/executing-plans"),
+            SkillRefStatusView::Missing
+        );
+    }
+
+    #[test]
+    fn garbage_manifest_is_malformed_not_missing() {
+        let home = tempfile::tempdir().unwrap();
+        let skill_dir = home.path().join("skills").join("broken");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("skill.yaml"), "{{{ not yaml at all").unwrap();
+        assert_eq!(
+            skill_ref_view(home.path(), "skills/broken"),
+            SkillRefStatusView::Malformed
+        );
     }
 }
 

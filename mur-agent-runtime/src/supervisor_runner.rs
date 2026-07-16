@@ -559,6 +559,28 @@ pub(crate) async fn prepare_runtime(
 
     let skills_cfg = mur_common::config::Config::load_or_default(&mur_home).skills;
     let loaded = mur_common::skill::loader::load_all(&mur_home, &profile.inner.name);
+    // #717: surface profile.yaml skill refs that don't resolve, distinguishing
+    // missing (ref written but files never installed) from malformed (files
+    // exist but no longer parse) so the log names the actual root cause.
+    for r in &profile.inner.skills {
+        use mur_common::skill::loader::SkillRefStatus;
+        match mur_common::skill::loader::skill_ref_status(agent_home, r) {
+            SkillRefStatus::Loadable => {}
+            SkillRefStatus::Missing { path } => tracing::warn!(
+                skill_ref = %r,
+                path = %path.display(),
+                "profile.yaml references a skill that is not installed (file not found); \
+                 install it with `mur agent skill add` or remove the ref"
+            ),
+            SkillRefStatus::Malformed { path, error } => tracing::warn!(
+                skill_ref = %r,
+                path = %path.display(),
+                error = %error,
+                "profile.yaml references a skill whose file exists but no longer parses \
+                 as a valid skill; re-install or remove it"
+            ),
+        }
+    }
     let loaded: Vec<_> = loaded
         .into_iter()
         .filter(|s| profile.inner.skill_enabled(&s.name))

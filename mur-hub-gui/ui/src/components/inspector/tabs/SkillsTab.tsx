@@ -226,12 +226,18 @@ export function SkillsTab({
                 <div>
                   <code style={{ fontSize: 11 }}>{s.path}</code>
                   <span className={s.loadable ? "badge-loadable" : "badge-dead"}>
-                    {s.loadable ? t("detail.skillLoadable") : t("detail.skillDead")}
+                    {s.loadable
+                      ? t("detail.skillLoadable")
+                      : s.status === "missing"
+                        ? t("detail.skillMissing")
+                        : t("detail.skillDead")}
                   </span>
                 </div>
                 {!s.loadable && (
                   <div className="item-card-desc field-muted" style={{ fontSize: 11 }}>
-                    {t("detail.skillDeadHint")}
+                    {s.status === "missing"
+                      ? t("detail.skillMissingHint", { path: s.path })
+                      : t("detail.skillDeadHint")}
                   </div>
                 )}
               </li>
