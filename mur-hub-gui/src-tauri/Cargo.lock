@@ -6600,7 +6600,7 @@ dependencies = [
 
 [[package]]
 name = "mur-channel"
-version = "2.51.0"
+version = "2.51.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6619,7 +6619,7 @@ dependencies = [
 
 [[package]]
 name = "mur-common"
-version = "2.51.0"
+version = "2.51.1"
 dependencies = [
  "age",
  "anyhow",
@@ -6668,7 +6668,7 @@ dependencies = [
 
 [[package]]
 name = "mur-compress"
-version = "2.51.0"
+version = "2.51.1"
 dependencies = [
  "blake3",
  "chrono",
@@ -6694,7 +6694,7 @@ dependencies = [
 
 [[package]]
 name = "mur-core"
-version = "2.51.0"
+version = "2.51.1"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -6781,7 +6781,7 @@ dependencies = [
 
 [[package]]
 name = "mur-gui-core"
-version = "2.51.0"
+version = "2.51.1"
 dependencies = [
  "anyhow",
  "async-trait",
