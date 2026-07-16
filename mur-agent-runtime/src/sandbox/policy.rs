@@ -10,6 +10,18 @@ use std::path::{Path, PathBuf};
 /// runtime process (see `SandboxPolicy::allow_in_process_proxy_upstream`).
 pub const RESTRICTED_GENERAL_PORTS: [u16; 4] = [80, 443, 8080, 8443];
 
+/// Files under the agent's own home dir that are ALWAYS denied, regardless
+/// of what the entitlements grant (issue #712, fail-closed): `profile.yaml`
+/// is the agent's own entitlements source and `identity.key` its signing
+/// identity — an agent that can rewrite either and self-restart escalates
+/// past every other control (observed live, 2026-07-16). Only these two
+/// files are denied; the rest of agent_home stays writable (running.lock,
+/// running.sentinel, stderr.log). The runtime itself reads both once at
+/// startup, BEFORE the sandbox seals, so the deny costs it nothing. Shared
+/// with the tool-level entitlement gate (`tools::fs_policy`) so the kernel
+/// profile and the file tools deny the same set.
+pub const SELF_PROTECTED_AGENT_FILES: [&str; 2] = ["profile.yaml", "identity.key"];
+
 /// Resolved, OS-ready sandbox policy derived from agent entitlements.
 /// All paths are absolute (tilde expanded). All fields are ready to
 /// feed directly to Landlock / SBPL / Job Object APIs.
@@ -160,7 +172,24 @@ impl SandboxPolicy {
         // appears (mount, create, restore) the agent would silently regain
         // access we meant to permanently deny. Deny-side dead paths are
         // harmless (confirmed: no hang mechanism triggers off `fs_deny`).
-        let fs_deny: Vec<PathBuf> = ent.filesystem.deny.iter().map(|s| expand(s)).collect();
+        let mut fs_deny: Vec<PathBuf> = ent.filesystem.deny.iter().map(|s| expand(s)).collect();
+
+        // Self-protection (issue #712): unconditionally deny the agent's own
+        // profile.yaml + identity.key, even when a write grant covers them
+        // (e.g. a broad grant on the agents root, or agent_home itself which
+        // is force-granted just below). Without this, an agent can rewrite
+        // its own entitlements and self-restart to apply them — the seal is
+        // generated FROM the profile, so profile self-write defeats it. On
+        // macOS the SBPL builder emits fs_deny after the write allows
+        // (last-match-wins) so this beats any overlapping grant; Landlock
+        // cannot express deny-within-allow, so the same paths are also
+        // injected into the tool-level gate (`tools::fs_policy::self_protected`).
+        for f in SELF_PROTECTED_AGENT_FILES {
+            let p = agent_home.join(f);
+            if !fs_deny.contains(&p) {
+                fs_deny.push(p);
+            }
+        }
 
         // agent_home is always read+write — runtime cannot function without it.
         // (Its existence is a precondition of the runtime starting at all —
@@ -721,6 +750,33 @@ mod tests {
         let home = PathBuf::from("/tmp/agent_home");
         let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &home);
         assert!(policy.fs_write.contains(&home));
+    }
+
+    #[test]
+    fn own_profile_and_identity_key_always_denied() {
+        // Issue #712: even a broad write grant covering the agents root (or
+        // the agent's own dir) must not make the agent's profile.yaml /
+        // identity.key writable — the self-escalation loop (self-edit +
+        // self-restart) stays closed regardless of entitlements.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mur_home = tmp.path();
+        let agent_home = mur_home.join("agents").join("mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let mut ent = minimal_entitlements();
+        ent.filesystem.write = vec![
+            mur_home.join("agents").to_string_lossy().into_owned(),
+            agent_home.to_string_lossy().into_owned(),
+        ];
+        let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
+        for f in SELF_PROTECTED_AGENT_FILES {
+            assert!(
+                policy.fs_deny.contains(&agent_home.join(f)),
+                "{f} must always be in fs_deny"
+            );
+        }
+        // Only those two files are denied — the rest of agent_home
+        // (running.lock, running.sentinel, stderr.log) stays writable.
+        assert!(policy.fs_write.contains(&agent_home));
     }
 
     #[test]

@@ -28,6 +28,26 @@ pub(crate) fn resolve_path(working_dir: &Path, raw: &str) -> PathBuf {
     }
 }
 
+/// Harden an agent's filesystem entitlement for the file tools: append the
+/// self-protected files (issue #712 — the agent's own `profile.yaml` and
+/// `identity.key`) to the deny list, so the tool-level gate refuses reads
+/// and writes on them even when a write grant covers the whole agent dir.
+/// On Linux this gate is the enforcement point (Landlock cannot express
+/// deny-within-allow); on macOS it fronts the SBPL kernel deny with a clear
+/// error instead of a raw EPERM.
+pub(crate) fn self_protected(
+    mut fs: FilesystemEntitlement,
+    agent_home: &Path,
+) -> FilesystemEntitlement {
+    for f in crate::sandbox::policy::SELF_PROTECTED_AGENT_FILES {
+        let p = agent_home.join(f).to_string_lossy().into_owned();
+        if !fs.deny.contains(&p) {
+            fs.deny.push(p);
+        }
+    }
+    fs
+}
+
 pub(crate) fn check_write_entitlement(
     fs: &FilesystemEntitlement,
     canonical: &Path,
@@ -67,5 +87,33 @@ mod tests {
         assert_eq!(resolve_path(wd, "rel/x"), wd.join("rel/x"));
         // `~user` form is not expanded — treated as a relative name.
         assert_eq!(resolve_path(wd, "~other/x"), wd.join("~other/x"));
+    }
+
+    #[test]
+    fn self_protected_denies_own_profile_despite_write_grant() {
+        // Issue #712: a write grant covering the whole agent dir must not
+        // let the file tools write the agent's own profile.yaml/identity.key.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let agent_home = tmp.path().join("agents").join("mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        std::fs::write(agent_home.join("profile.yaml"), "name: mur\n").unwrap();
+        std::fs::write(agent_home.join("identity.key"), "KEY").unwrap();
+        let fs = self_protected(
+            FilesystemEntitlement {
+                read: vec![],
+                write: vec![agent_home.to_string_lossy().into_owned()],
+                deny: vec![],
+            },
+            &agent_home,
+        );
+        let canonical_home = std::fs::canonicalize(&agent_home).unwrap();
+        for f in ["profile.yaml", "identity.key"] {
+            assert!(
+                check_write_entitlement(&fs, &canonical_home.join(f)).is_err(),
+                "{f} must be write-denied despite the agent-dir grant"
+            );
+        }
+        // The rest of the agent dir stays writable (running.lock etc.).
+        assert!(check_write_entitlement(&fs, &canonical_home.join("running.lock")).is_ok());
     }
 }
