@@ -211,6 +211,8 @@ export const en = {
   "detail.skillLoadable": "loadable",
   "detail.skillDead": "unloadable",
   "detail.skillDeadHint": "This legacy file no longer parses as a valid skill — remove and re-install it.",
+  "detail.skillMissing": "missing",
+  "detail.skillMissingHint": "File not found: {path} — profile.yaml references this skill but it was never installed. Install it (mur agent skill add) or remove the entry.",
   "detail.remove": "Remove",
   "detail.addMcp": "Add MCP server",
   "detail.discoverMcp": "Discover from other tools",
