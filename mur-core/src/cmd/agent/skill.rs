@@ -260,8 +260,11 @@ content:
         assert!(err.contains("does not load as a skill"), "got: {err}");
 
         // Loadable: properly installed skill passes.
-        mur_common::skill::write_to_dir(&home.path().join("skills").join("ok"), &valid_manifest("ok"))
-            .unwrap();
+        mur_common::skill::write_to_dir(
+            &home.path().join("skills").join("ok"),
+            &valid_manifest("ok"),
+        )
+        .unwrap();
         validate_skill_refs(home.path(), &["skills/ok".into()]).unwrap();
     }
 
