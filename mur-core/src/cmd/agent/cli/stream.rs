@@ -41,6 +41,15 @@ pub enum StreamMsg {
     /// An out-of-band notice not tied to a turn (e.g. a failed HITL/cancel
     /// dial). Always shown regardless of the active turn.
     Note(String),
+    /// The in-flight turn no longer exists on the runtime (it restarted and
+    /// tasks live in memory only, or it stopped). The UI must drop the dead
+    /// task binding; `resend` carries user text (a failed steer) to replay as
+    /// a fresh `message/send` on the same channel so it is not lost.
+    TurnLost {
+        task_id: String,
+        note: String,
+        resend: Option<String>,
+    },
     /// A local `!command` finished. Turn-independent like `Note`.
     ShellDone { cmd: String, output: String },
     /// A tool call started running (name + args).
@@ -71,6 +80,7 @@ impl StreamMsg {
             | StreamMsg::Hitl { task_id, .. }
             | StreamMsg::Done { task_id, .. }
             | StreamMsg::Err { task_id, .. }
+            | StreamMsg::TurnLost { task_id, .. }
             | StreamMsg::StepStarted { task_id, .. }
             | StreamMsg::StepCompleted { task_id, .. } => Some(task_id),
             StreamMsg::Note(_) | StreamMsg::ShellDone { .. } => None,
