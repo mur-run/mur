@@ -89,6 +89,10 @@ impl MethodHandler for MessageSendHandler {
         // `spec` consumes the originals below.
         let turn_task_id = task_id.clone();
         let turn_context_id = context_task_id.clone();
+        let output_artifact_path = p
+            .get("output_artifact_path")
+            .and_then(|v| v.as_str())
+            .map(std::path::PathBuf::from);
         let spec = TaskSpec {
             input: message,
             context_task_id,
@@ -100,6 +104,7 @@ impl MethodHandler for MessageSendHandler {
             // A live client is synchronously waiting on this reply — always
             // Interactive, never eligible for Smart cheap-model downgrade.
             intent: RequestIntent::Interactive,
+            output_artifact_path,
         };
 
         self.emit_progress("pending", "llm_reasoning", None).await;

@@ -173,6 +173,10 @@ impl MethodHandler for ChannelDelegateHandler {
             // A fleet router/member is synchronously dialing this delegate and
             // waiting on the reply — Interactive, same as message/send.
             intent: RequestIntent::Interactive,
+            // channel/delegate does NOT support output_artifact_path (fleets
+            // use the channel itself as the artifact transport). Future: wire
+            // through if a caller needs a file alongside the channel event.
+            output_artifact_path: None,
         };
 
         // Run the turn (non-streaming path; v3d-2 does not need per-delta

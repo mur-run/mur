@@ -7,8 +7,8 @@ fn cli_turns_persist_to_channel_and_resume() {
     let home = tmp.path();
 
     let mut sess = Session::create(home, "qa").unwrap();
-    sess.append("user", "find the bug", None).unwrap();
-    sess.append("agent", "found it", Some("t-1")).unwrap();
+    sess.append("user", "find the bug", None, &[]).unwrap();
+    sess.append("agent", "found it", Some("t-1"), &[]).unwrap();
     let cid = sess
         .channel_id()
         .expect("channel created on append")
@@ -37,7 +37,7 @@ fn empty_session_creates_no_channel_and_resume_skips_it() {
 
     // A real conversation, then an empty session afterwards (e.g. /clear).
     let mut real = Session::create(home, "qa").unwrap();
-    real.append("user", "hello", None).unwrap();
+    real.append("user", "hello", None, &[]).unwrap();
     let real_id = real.channel_id().unwrap().to_string();
     drop(real);
     let _empty = Session::create(home, "qa").unwrap(); // never appended
