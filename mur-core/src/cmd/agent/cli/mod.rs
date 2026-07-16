@@ -1172,19 +1172,15 @@ fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: boo
                     // The runtime is gone: the whole in-memory task died with
                     // it, so the stale binding must be dropped too or every
                     // subsequent input steers a dead task (#713).
-                    recover::HitlFailure::AgentGone if task_id.is_some() => {
-                        StreamMsg::TurnLost {
-                            task_id: task_id.unwrap_or_default(),
-                            note: format!(
-                                "failed to deliver decision for `{tool}`: {msg} — \
+                    recover::HitlFailure::AgentGone if task_id.is_some() => StreamMsg::TurnLost {
+                        task_id: task_id.unwrap_or_default(),
+                        note: format!(
+                            "failed to deliver decision for `{tool}`: {msg} — \
                                  your next message will start a fresh turn"
-                            ),
-                            resend: None,
-                        }
-                    }
-                    _ => StreamMsg::Note(format!(
-                        "failed to deliver decision for `{tool}`: {msg}"
-                    )),
+                        ),
+                        resend: None,
+                    },
+                    _ => StreamMsg::Note(format!("failed to deliver decision for `{tool}`: {msg}")),
                 };
                 let _ = t.send(out).await;
             }

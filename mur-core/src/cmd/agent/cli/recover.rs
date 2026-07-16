@@ -43,9 +43,7 @@ fn jsonrpc_error_message(err: &str) -> Option<String> {
     let start = err.find('{')?;
     let mut stream = serde_json::Deserializer::from_str(&err[start..]).into_iter::<Value>();
     let v = stream.next()?.ok()?;
-    v.get("message")
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    v.get("message").and_then(Value::as_str).map(str::to_string)
 }
 
 /// True when a dial error means the target agent has no `running.lock`
