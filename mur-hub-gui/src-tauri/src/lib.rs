@@ -173,8 +173,16 @@ fn spawn_runtime_watcher(
 
 pub fn run() {
     init_tracing();
+    // Single source of truth for the Hub's version: the Tauri context
+    // (tauri.conf.json, which CI stamps to the release tag). NEVER use
+    // env!("CARGO_PKG_VERSION") here — this crate is workspace-excluded, its
+    // Cargo.toml is never bumped, so that macro is stuck at 0.1.0 and made
+    // `mur update` nag "Hub out of date" against a freshly updated Hub.
+    let context = tauri::generate_context!();
+    let hub_version = context.package_info().version.to_string();
     tracing::info!(
-        version = mur_gui_core::CRATE_VERSION,
+        version = %hub_version,
+        core = mur_gui_core::CRATE_VERSION,
         "starting mur-hub-gui"
     );
 
@@ -197,7 +205,7 @@ pub fn run() {
             &bundle_id,
             &url_scheme,
             icon_icns.as_deref(),
-            env!("CARGO_PKG_VERSION"),
+            &hub_version,
             &mur_home,
         ) {
             tracing::error!("--regenerate-stub failed for {slug}: {e}");
@@ -209,7 +217,7 @@ pub fn run() {
     let mur_home = mur_home_path();
     // Write ~/.mur/host_path so mur-agent-launcher stubs can find the Hub binary
     // and detect version mismatches for self-update (spec §5.2, §5.4).
-    if let Err(e) = write_host_path(env!("CARGO_PKG_VERSION"), &mur_home) {
+    if let Err(e) = write_host_path(&hub_version, &mur_home) {
         tracing::warn!("failed to write host_path: {e}");
     }
     // `run()` is a plain fn, so Tauri's async runtime is not yet entered here.
@@ -345,7 +353,10 @@ pub fn run() {
             }
 
             // Scan for stale OS stubs and regenerate in a background task (§5.4).
-            stub::scan_and_regenerate_stale(env!("CARGO_PKG_VERSION").into(), mur_home.clone());
+            stub::scan_and_regenerate_stale(
+                app.package_info().version.to_string(),
+                mur_home.clone(),
+            );
 
             // Register global shortcut CmdOrCtrl+Shift+M → toggle_popover.
             let handle = app.handle().clone();
@@ -720,7 +731,7 @@ pub fn run() {
             mcp_skills::mcp_installed,
             mcp_skills::addons_installed,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|_app, _event| {
             #[cfg(target_os = "macos")]
