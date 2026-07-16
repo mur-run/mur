@@ -99,13 +99,20 @@ impl LlmClient for OllamaClient {
             .to_string();
         let input_tokens = v["prompt_eval_count"].as_u64().unwrap_or(0);
         let output_tokens = v["eval_count"].as_u64().unwrap_or(0);
+        // Ollama reports `done_reason: "length"` when `num_predict` cut the
+        // generation off — surface it so the caller can mark the truncation.
+        let stop_reason = if v["done_reason"].as_str() == Some("length") {
+            StopReason::MaxTokens
+        } else {
+            StopReason::EndTurn
+        };
         Ok(LlmResponse {
             text,
             input_tokens,
             output_tokens,
             model: self.model.clone(),
             tool_calls: vec![],
-            stop_reason: StopReason::EndTurn,
+            stop_reason,
         })
     }
 
@@ -148,6 +155,7 @@ impl LlmClient for OllamaClient {
         let mut text = String::new();
         let mut input_tokens = 0u64;
         let mut output_tokens = 0u64;
+        let mut stop_reason = StopReason::EndTurn;
         while let Some(chunk) = resp.chunk().await.map_err(|e| LlmError::from_reqwest(&e))? {
             buf.extend_from_slice(&chunk);
             while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
@@ -186,6 +194,11 @@ impl LlmClient for OllamaClient {
                 if v["done"].as_bool() == Some(true) {
                     input_tokens = v["prompt_eval_count"].as_u64().unwrap_or(input_tokens);
                     output_tokens = v["eval_count"].as_u64().unwrap_or(output_tokens);
+                    // `done_reason: "length"` = the `num_predict` ceiling cut
+                    // the generation off mid-answer.
+                    if v["done_reason"].as_str() == Some("length") {
+                        stop_reason = StopReason::MaxTokens;
+                    }
                 }
             }
         }
@@ -198,7 +211,7 @@ impl LlmClient for OllamaClient {
             output_tokens,
             model: self.model.clone(),
             tool_calls: vec![],
-            stop_reason: StopReason::EndTurn,
+            stop_reason,
         })
     }
 }
