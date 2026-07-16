@@ -263,6 +263,7 @@ fn inject(runner: &Arc<TaskRunner>, text: &str) {
                 // Co-watching narration is a runtime-initiated proactive nudge —
                 // no live user turn is waiting on it.
                 intent: RequestIntent::Background(BackgroundKind::Maintenance),
+                output_artifact_path: None,
             })
             .await;
     });

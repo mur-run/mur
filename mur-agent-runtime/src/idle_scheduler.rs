@@ -144,6 +144,7 @@ async fn run_idle_loop(scheduler: IdleScheduler, cancel: CancellationToken) {
                         // Idle triggers are runtime-initiated maintenance nudges —
                         // no live user is watching this turn.
                         intent: RequestIntent::Background(BackgroundKind::Maintenance),
+                        output_artifact_path: None,
                     })
                     .await;
 

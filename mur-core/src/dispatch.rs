@@ -1414,7 +1414,11 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 &model_refs,
             )?
         }
-        AgentAction::Send { name, message } => cmd::agent::cmd_send(&name, &message)?,
+        AgentAction::Send {
+            name,
+            message,
+            output_artifact_path,
+        } => cmd::agent::cmd_send(&name, &message, output_artifact_path.as_deref())?,
         AgentAction::Card { name } => cmd::agent::cmd_card(&name)?,
         AgentAction::Cli {
             names,

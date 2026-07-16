@@ -12,6 +12,7 @@ use mur_common::a2a::{Message, MessagePart, Task, TaskError, TaskState};
 use mur_common::config::SkillsConfig;
 use mur_common::skill::McpInventory;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
@@ -44,6 +45,14 @@ pub struct TaskSpec {
     /// `Background`; chat / A2A `message/send` / `channel/delegate` tag
     /// `Interactive`.
     pub intent: RequestIntent,
+    /// When set, the LLM is instructed to write its complete output to this
+    /// file path and return only the path in its reply. After the task
+    /// completes, the runtime verifies the file exists, computes its hash,
+    /// populates `Task.artifacts`, and replaces the assistant reply with a
+    /// short `[File: path]` reference. Callers then read the file
+    /// byte-by-byte instead of re-typing content through another LLM
+    /// (issue #715 Part B).
+    pub output_artifact_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug)]
@@ -86,6 +95,16 @@ When you produce files, put them where MUR can read them — never write them in
 - Knowledge objects (workflows, skills, notes): register with the real command so they land in ~/.mur and show up in MUR and the Hub — `mur skill install <path>` for a skill, `mur workflow new` for a workflow. Never leave the definition in the working directory.\n\
 - Run artifacts (reports, quarantined files, scratch output): write to ~/.mur/artifacts/<your-agent-name>/<run>/, where <run> is a short timestamp or task label. Never the working directory.\n\
 - The only reason to write into the working directory is to edit an existing file in a repository you have been granted access to.";
+
+/// Injected into the system prompt when `TaskSpec.output_artifact_path` is
+/// set. Tells the agent to write its full output to the designated file and
+/// return only the path — the runtime then verifies the file and replaces the
+/// reply with a short artifact reference, so callers never re-type content
+/// through another LLM (issue #715 Part B).
+const ARTIFACT_RULE: &str = "\n\n## Artifact output path\n\
+Your complete final output for this turn must be written to `{path}` using write_file.\n\
+In your reply, state ONLY the file path and a one-line summary of what was written.\n\
+Do NOT include the file content in your reply — the caller will read the file directly.";
 
 /// In-memory multi-turn chat memory. The CLI and Hub thread `context.task_id` =
 /// the prior reply's id on every send, so we key stored history by the id of the
@@ -658,6 +677,7 @@ impl TaskRunner {
                     true,
                 )),
                 usage: None,
+                artifacts: None,
             });
         }
         // Record real inbound activity so idle triggers measure genuine
@@ -698,6 +718,7 @@ impl TaskRunner {
         // Same for the truncation flag: it describes THIS turn only.
         self.last_turn_truncated.store(false, Ordering::Relaxed);
 
+        let output_artifact_path = spec.output_artifact_path.clone();
         let generation = async {
             match &self.backend {
                 RunnerBackend::StubEcho => Ok((echo_response(&spec.input), None)),
@@ -708,7 +729,7 @@ impl TaskRunner {
                 RunnerBackend::Misconfigured(message) => Ok((text_response(message), None)),
                 RunnerBackend::Llm(client) => {
                     if self.pending_approvals.is_some() {
-                        let system = self
+                        let mut system = self
                             .prepare_system_prompt(
                                 &spec.input,
                                 spec.active_fleet.as_deref(),
@@ -716,6 +737,14 @@ impl TaskRunner {
                             )
                             .await
                             .unwrap_or_default();
+                        // Append the artifact-output rule when the caller set an
+                        // output path — tells the agent to write the file and
+                        // return ONLY the path, never the content (avoiding
+                        // re-typing corruption, #715 Part B).
+                        if let Some(ref path) = output_artifact_path {
+                            let rule = ARTIFACT_RULE.replace("{path}", &path.to_string_lossy());
+                            system.push_str(&rule);
+                        }
                         self.run_agentic_loop(
                             &id,
                             client.as_ref(),
@@ -735,6 +764,7 @@ impl TaskRunner {
                             spec.context_task_id.as_deref(),
                             spec.active_fleet.as_deref(),
                             spec.active_team.as_deref(),
+                            output_artifact_path.as_deref(),
                             sink,
                             spec.intent,
                         )
@@ -821,6 +851,7 @@ impl TaskRunner {
                     created_at: now.clone(),
                     completed_at: Some(now),
                     error: None,
+                    artifacts: None,
                     usage: Some(token_usage()),
                 });
             }
@@ -834,6 +865,25 @@ impl TaskRunner {
                 // success — a failed/cancelled turn must not leave a dangling
                 // user message with no assistant reply.
                 self.remember_turn(&id, spec.context_task_id.as_deref(), &spec.input, &reply);
+                // Artifact detection (#715 Part B): when the caller set an
+                // output_artifact_path and the agent wrote to it, replace the
+                // reply with a short path reference and populate Task.artifacts
+                // so callers read the file byte-by-byte instead of re-typing
+                // content through another LLM.
+                let artifacts = output_artifact_path.and_then(|p| detect_artifact(&p));
+                let reply = if let Some(ref arts) = artifacts {
+                    Message {
+                        role: reply.role.clone(),
+                        parts: vec![MessagePart::Text {
+                            text: format!(
+                                "[Artifact: {} ({} bytes)]",
+                                arts[0].path, arts[0].size_bytes
+                            ),
+                        }],
+                    }
+                } else {
+                    reply
+                };
                 // Report this turn's real token usage (delta of the lifetime
                 // counters) so callers — notably the fleet budget guard — can
                 // account actual spend instead of a projection. When a budget
@@ -846,7 +896,14 @@ impl TaskRunner {
                     usage_obj["stop_reason"] = exit.reason.as_str().into();
                     usage_obj["iterations"] = exit.iterations.into();
                 }
-                let usage = Some(usage_obj);
+                let mut usage = Some(usage_obj);
+                // Attach artifacts to the task result so callers find them in
+                // the same JSON as the reply (additive: absent on non-artifact
+                // turns, so existing consumers are unaffected).
+                if let Some(ref arts) = artifacts {
+                    let u = usage.get_or_insert_with(|| serde_json::json!({}));
+                    u["artifacts"] = serde_json::to_value(arts).unwrap_or_default();
+                }
                 TaskOutcome::Completed(Task {
                     id,
                     state: TaskState::Completed,
@@ -855,6 +912,7 @@ impl TaskRunner {
                     completed_at: Some(now),
                     error: None,
                     usage,
+                    artifacts,
                 })
             }
             Err(err) => {
@@ -871,6 +929,7 @@ impl TaskRunner {
                     completed_at: Some(now),
                     error: Some(err),
                     // Account tokens already burned before the failure (a long
+                    artifacts: None,
                     // agentic turn can error after real spend) — never drop it.
                     usage: Some(token_usage()),
                 })
@@ -901,6 +960,7 @@ impl TaskRunner {
                     true,
                 )),
                 usage: None,
+                artifacts: None,
             }));
             return AsyncTaskHandle { id, done: rx_done };
         }
@@ -925,6 +985,7 @@ impl TaskRunner {
                         id: id_clone.clone(),
                         state: TaskState::Completed,
                         messages: vec![spec.input, reply],
+                artifacts: None,
                         created_at: chrono::Utc::now().to_rfc3339(),
                         completed_at: Some(chrono::Utc::now().to_rfc3339()),
                         error: None,
@@ -936,6 +997,7 @@ impl TaskRunner {
                     let _ = tx_done.send(TaskOutcome::Cancelled(Task {
                         id: id_clone.clone(),
                         state: TaskState::Cancelled,
+                artifacts: None,
                         messages: vec![spec.input],
                         created_at: chrono::Utc::now().to_rfc3339(),
                         completed_at: Some(chrono::Utc::now().to_rfc3339()),
@@ -1005,12 +1067,17 @@ impl TaskRunner {
         context_task_id: Option<&str>,
         active_fleet: Option<&str>,
         active_team: Option<&str>,
+        output_artifact_path: Option<&std::path::Path>,
         sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
         intent: RequestIntent,
     ) -> Result<Message, TaskError> {
         let prompt = text_of(input);
 
-        let (system, fired) = self.assemble_system_prompt(&prompt, active_fleet, active_team);
+        let (mut system, fired) = self.assemble_system_prompt(&prompt, active_fleet, active_team);
+        if let Some(path) = output_artifact_path {
+            let rule = ARTIFACT_RULE.replace("{path}", &path.to_string_lossy());
+            system.push_str(&rule);
+        }
 
         // Apply hook chain on_prompt_submit if wired.
         let system = if let (Some(chain), Some(ctx), Some(cancel)) =
@@ -1865,6 +1932,53 @@ fn sanitize_dangling_tool_uses(
 
 /// Best-effort recovery of the most recent assistant-authored text from the
 /// loop history (the inline reasoning attached to a tool-use turn).
+/// Read `path` from disk, return `ArtifactInfo` with SHA-256 hash and size
+/// when the file exists and is readable. `None` on any error (absent/missing
+/// permissions/empty) — the task falls back to the inline reply without
+/// swallowing errors (callers still get the full LLM text).
+fn detect_artifact(path: &std::path::Path) -> Option<Vec<mur_common::a2a::ArtifactInfo>> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() == 0 {
+        return None;
+    }
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buf = Vec::with_capacity(meta.len().min(256 * 1024) as usize);
+    file.read_to_end(&mut buf).ok()?;
+    use sha2::Digest;
+    let hash = hex::encode(sha2::Sha256::digest(&buf));
+    Some(vec![mur_common::a2a::ArtifactInfo {
+        path: path.to_string_lossy().into_owned(),
+        mime_type: guess_mime_type(path).unwrap_or_else(|| "application/octet-stream".to_string()),
+        sha256: Some(hash),
+        size_bytes: meta.len(),
+    }])
+}
+
+/// Simple extension-based MIME guess. Not exhaustive — the artifact metadata
+/// is advisory and callers who need precise MIME should probe the content.
+fn guess_mime_type(path: &std::path::Path) -> Option<String> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    Some(
+        match ext.as_str() {
+            "md" | "markdown" => "text/markdown",
+            "txt" => "text/plain",
+            "json" => "application/json",
+            "yaml" | "yml" => "application/x-yaml",
+            "html" | "htm" => "text/html",
+            "csv" => "text/csv",
+            "toml" => "application/toml",
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "svg" => "image/svg+xml",
+            "pdf" => "application/pdf",
+            "rs" => "text/x-rust",
+            "ts" | "tsx" => "text/typescript",
+            _ => "application/octet-stream",
+        }
+        .into(),
+    )
+}
+
 fn last_assistant_text(history: &[crate::llm::RichMessage]) -> Option<String> {
     use crate::llm::RichMessage;
     history.iter().rev().find_map(|m| match m {
@@ -1952,6 +2066,7 @@ impl AsyncTaskHandle {
         self.done.await.unwrap_or_else(|_| {
             TaskOutcome::Failed(Task {
                 id: self.id,
+                artifacts: None,
                 state: TaskState::Failed,
                 messages: vec![],
                 created_at: chrono::Utc::now().to_rfc3339(),
@@ -2098,6 +2213,7 @@ mod tests {
             context_task_id: None,
             task_id: None,
             intent: RequestIntent::Interactive,
+            output_artifact_path: None,
             active_fleet: None,
             active_team: None,
         }
@@ -2147,6 +2263,7 @@ mod tests {
             context_task_id: None,
             task_id: Some("task-fixed-1".to_string()),
             intent: RequestIntent::Interactive,
+            output_artifact_path: None,
             active_fleet: None,
             active_team: None,
         };
@@ -2164,6 +2281,7 @@ mod tests {
             context_task_id: None,
             task_id: Some("task-supplied-9".to_string()),
             intent: RequestIntent::Interactive,
+            output_artifact_path: None,
             active_fleet: None,
             active_team: None,
         };
@@ -2183,6 +2301,7 @@ mod tests {
             context_task_id: ctx.map(str::to_string),
             task_id: Some(task_id.to_string()),
             intent: RequestIntent::Interactive,
+            output_artifact_path: None,
             active_fleet: None,
             active_team: None,
         }
@@ -2260,6 +2379,7 @@ mod tests {
             context_task_id: None,
             task_id: Some("task-cancelme".to_string()),
             intent: RequestIntent::Interactive,
+            output_artifact_path: None,
             active_fleet: None,
             active_team: None,
         };
@@ -2791,6 +2911,7 @@ mod tests {
             context_task_id: None,
             task_id: None,
             intent: RequestIntent::Interactive,
+            output_artifact_path: None,
             active_fleet: None,
             active_team: None,
         };
@@ -2838,6 +2959,7 @@ mod tests {
             context_task_id: None,
             task_id: None,
             intent: RequestIntent::Interactive,
+            output_artifact_path: None,
             active_fleet: None,
             active_team: None,
         };
@@ -2980,6 +3102,7 @@ mod tests {
             context_task_id: None,
             task_id: None,
             intent: RequestIntent::Interactive,
+            output_artifact_path: None,
             active_fleet: None,
             active_team: None,
         }
