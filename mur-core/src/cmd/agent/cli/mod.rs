@@ -19,6 +19,7 @@ mod multiplex;
 mod panel;
 mod paste;
 pub mod persist;
+mod recover;
 mod render_card;
 mod step;
 mod stream;
@@ -1154,22 +1155,38 @@ fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: boo
         }
         let (h, a) = (app.home.clone(), app.agent.clone());
         let (id, tool) = (req.hitl_id.clone(), req.tool_name.clone());
+        let task_id = app.current_task_id.clone();
         let t = tx.clone();
         tokio::spawn(async move {
             if let Err(e) = respond_hitl(h, a, id, allow).await {
                 let msg = format!("{e:#}");
-                // "approval expired" (new runtimes) / "task not found" (older
-                // runtimes) on this method both mean the same thing: the gate
-                // timed out and auto-denied before the decision landed.
-                let note = if msg.contains("approval expired") || msg.contains("task not found") {
-                    format!(
+                let out = match recover::classify_hitl_failure(&msg) {
+                    // "approval expired" (new runtimes) / "task not found"
+                    // (older runtimes) on this method both mean the same
+                    // thing: the gate timed out and auto-denied before the
+                    // decision landed. The turn itself is still alive.
+                    recover::HitlFailure::Expired => StreamMsg::Note(format!(
                         "approval for `{tool}` arrived too late — the call was already \
                          auto-denied at timeout; re-run the request"
-                    )
-                } else {
-                    format!("failed to deliver decision for `{tool}`: {msg}")
+                    )),
+                    // The runtime is gone: the whole in-memory task died with
+                    // it, so the stale binding must be dropped too or every
+                    // subsequent input steers a dead task (#713).
+                    recover::HitlFailure::AgentGone if task_id.is_some() => {
+                        StreamMsg::TurnLost {
+                            task_id: task_id.unwrap_or_default(),
+                            note: format!(
+                                "failed to deliver decision for `{tool}`: {msg} — \
+                                 your next message will start a fresh turn"
+                            ),
+                            resend: None,
+                        }
+                    }
+                    _ => StreamMsg::Note(format!(
+                        "failed to deliver decision for `{tool}`: {msg}"
+                    )),
                 };
-                let _ = t.send(StreamMsg::Note(note)).await;
+                let _ = t.send(out).await;
             }
         });
         match (allow, auto) {
@@ -1235,10 +1252,23 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
             app.push_system(format!("↗ steering: {trimmed}"));
             app.clear_input();
             tokio::spawn(async move {
-                if let Err(e) = stream::steer_turn(h, a, task_id, msg).await {
-                    let _ = t
-                        .send(StreamMsg::Note(format!("steer failed: {e:#}")))
-                        .await;
+                if let Err(e) = stream::steer_turn(h, a, task_id.clone(), msg.clone()).await {
+                    let err = format!("{e:#}");
+                    let out = match recover::classify_steer_failure(&err) {
+                        // The runtime restarted (tasks live in memory only):
+                        // the steered task is gone. Drop the dead binding and
+                        // replay the user's text as a fresh turn on the same
+                        // channel so it is not lost (#713).
+                        recover::SteerFailure::TaskGone => StreamMsg::TurnLost {
+                            task_id,
+                            note: "agent restarted — continuing in this conversation".to_string(),
+                            resend: Some(msg),
+                        },
+                        recover::SteerFailure::Other => {
+                            StreamMsg::Note(format!("steer failed: {err}"))
+                        }
+                    };
+                    let _ = t.send(out).await;
                 }
             });
         } else {
@@ -1262,7 +1292,15 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
 
     app.last_sent = Some(trimmed.clone());
     app.clear_input();
+    start_turn(app, trimmed, tx);
+}
 
+/// Start a fresh `message/send` turn: record + persist the user text, build
+/// the params, and spawn the streaming worker. The params are kept on `app`
+/// so a dial that dies before the runtime starts the turn can be replayed
+/// once — by then the user's message is already persisted to the channel and
+/// must not be dropped silently (#714).
+fn start_turn(app: &mut App, trimmed: String, tx: &mpsc::Sender<StreamMsg>) {
     let task_id = app.begin_user_turn(&trimmed);
     // On the first send of each session, prepend the user's working directory
     // so the agent knows which project they're in.
@@ -1294,6 +1332,7 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
             .map(|(m, b)| (m.as_str(), b.as_str())),
     );
     app.pending_image = None;
+    app.inflight_params = Some(params.clone());
     spawn_stream(
         app.home.clone(),
         app.agent.clone(),
@@ -1468,6 +1507,23 @@ where
     }
 }
 
+/// Replay the current turn's `message/send` after a dial failure, under a
+/// fresh client task id: the runtime keys tasks by it, and the old id may be
+/// half-registered on the peer that just died.
+fn retry_send(app: &mut App, mut params: Value, tx: &mpsc::Sender<StreamMsg>) {
+    let task_id = uuid::Uuid::now_v7().to_string();
+    params["task_id"] = Value::String(task_id.clone());
+    app.current_task_id = Some(task_id.clone());
+    app.inflight_params = Some(params.clone());
+    spawn_stream(
+        app.home.clone(),
+        app.agent.clone(),
+        params,
+        task_id,
+        tx.clone(),
+    );
+}
+
 fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
     // Drop events from a turn that is no longer current (cancelled, cleared, or
     // already finished) so a still-running worker can't splice its tokens/reply
@@ -1476,6 +1532,18 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
         && app.current_task_id.as_deref() != Some(tid)
     {
         return;
+    }
+    // Any runtime-originated event means the turn started on the peer; from
+    // here a failed dial is never replayed (the agent may have done
+    // side-effectful work already).
+    if matches!(
+        msg,
+        StreamMsg::Delta { .. }
+            | StreamMsg::Hitl { .. }
+            | StreamMsg::StepStarted { .. }
+            | StreamMsg::StepCompleted { .. }
+    ) {
+        app.turn_produced_output = true;
     }
     match msg {
         StreamMsg::Delta { text, thinking, .. } => app.append_delta(&text, thinking),
@@ -1525,12 +1593,36 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
             app.reveal_suggestions();
         }
         StreamMsg::Err { error, .. } => {
+            // A dial that died before the runtime produced anything for this
+            // turn means the user's message never became a task — yet it is
+            // already persisted in the channel. Replay it once; on a second
+            // failure say loudly (and persist) that it was not delivered,
+            // never drop it silently (#714).
+            if recover::should_retry_send(app.turn_produced_output, app.send_retried)
+                && let Some(params) = app.inflight_params.clone()
+            {
+                app.send_retried = true;
+                app.push_warn(format!("turn failed to start ({error}) — retrying once…"));
+                retry_send(app, params, tx);
+                return;
+            }
             if !app.focused {
                 notify_unfocused(&app.agent, "Turn failed");
             }
+            let failed_to_start = !app.turn_produced_output;
             app.fail_turn(&error);
+            if failed_to_start {
+                app.mark_undelivered();
+            }
         }
         StreamMsg::Note(text) => app.push_system(text),
+        StreamMsg::TurnLost { note, resend, .. } => {
+            app.drop_dead_turn();
+            app.push_system(note);
+            if let Some(text) = resend {
+                start_turn(app, text, tx);
+            }
+        }
         StreamMsg::ShellDone { cmd, output } => app.push_shell(&cmd, &output),
         StreamMsg::StepStarted {
             step_id,
