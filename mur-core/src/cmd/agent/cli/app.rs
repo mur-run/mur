@@ -288,6 +288,16 @@ pub struct App {
     pub input: TextArea<'static>,
     pub context_task_id: Option<String>,
     pub current_task_id: Option<String>,
+    /// Params of the in-flight `message/send`, kept so a dial that dies
+    /// before the turn starts can be replayed once (the user's message is
+    /// already persisted to the channel by then). Refreshed on each (re)send.
+    pub inflight_params: Option<serde_json::Value>,
+    /// True once the current turn's send has been replayed (one retry max).
+    pub send_retried: bool,
+    /// True once the runtime produced anything for the current turn (delta,
+    /// step, or HITL event) — after that a failed dial is never replayed,
+    /// since the agent may already have done side-effectful work.
+    pub turn_produced_output: bool,
     pub streaming: bool,
     pub hitl: Option<HitlRequest>,
     pub session: Session,
@@ -439,6 +449,9 @@ impl App {
             input: new_input(),
             context_task_id: None,
             current_task_id: None,
+            inflight_params: None,
+            send_retried: false,
+            turn_produced_output: false,
             streaming: false,
             hitl: None,
             session,
@@ -652,6 +665,9 @@ impl App {
         // A fresh client-side task id per turn (used for cancellation).
         let task_id = uuid::Uuid::now_v7().to_string();
         self.current_task_id = Some(task_id.clone());
+        self.inflight_params = None;
+        self.send_retried = false;
+        self.turn_produced_output = false;
         self.streaming = true;
         self.turn_started = Some(std::time::Instant::now());
         self.turn_in = 0;
@@ -854,6 +870,45 @@ impl App {
         self.streaming = false;
         self.current_task_id = None;
         self.turn_started = None;
+    }
+
+    /// Drop the binding to a turn that no longer exists on the runtime (it
+    /// restarted; tasks live in memory only). Removes an empty streaming
+    /// placeholder, freezes any partial text already streamed, and clears the
+    /// in-flight state so the next input starts a fresh `message/send`
+    /// instead of steering a dead task.
+    pub fn drop_dead_turn(&mut self) {
+        if let Some(i) = self
+            .messages
+            .iter()
+            .rposition(|m| m.role == Role::Agent && m.streaming)
+        {
+            if self.messages[i].text.is_empty() {
+                self.messages.remove(i);
+            } else {
+                self.messages[i].streaming = false;
+            }
+        }
+        self.streaming = false;
+        self.current_task_id = None;
+        self.turn_started = None;
+        self.inflight_params = None;
+    }
+
+    /// Surface — and persist into the channel — that the last user message
+    /// never reached the runtime. The human event is already durably in the
+    /// channel by send time, so without this marker the history would claim
+    /// the agent saw a message that never became a task.
+    pub fn mark_undelivered(&mut self) {
+        self.push_error(
+            "message NOT delivered — the agent never received it; \
+             check the agent is running, then resend",
+        );
+        self.persist_turn(
+            "shell",
+            "[message not delivered: the agent runtime never received the message above]",
+            None,
+        );
     }
 
     /// Reset to a brand-new conversation (drops server-side context). Any
