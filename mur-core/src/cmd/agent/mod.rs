@@ -227,6 +227,26 @@ pub(crate) fn load_profile_for_edit(name: &str) -> Result<(PathBuf, _AgentProfil
 }
 
 pub(crate) fn save_profile(path: &Path, profile: &mut _AgentProfile) -> Result<()> {
+    // Fail-closed guard (#717): a profile save must never *introduce* a skill
+    // ref that does not resolve to an installed skill under the agent dir.
+    // Only newly-added refs (relative to the profile currently on disk) are
+    // validated, so unrelated edits to a profile that already carries a
+    // legacy dangling ref still save.
+    if let Some(agent_dir) = path.parent() {
+        let prior: std::collections::HashSet<String> = fs::read_to_string(path)
+            .ok()
+            .and_then(|y| serde_yaml_ng::from_str::<_AgentProfile>(&y).ok())
+            .map(|p| p.skills.into_iter().collect())
+            .unwrap_or_default();
+        let added: Vec<String> = profile
+            .skills
+            .iter()
+            .filter(|s| !prior.contains(s.as_str()))
+            .cloned()
+            .collect();
+        skill::validate_skill_refs(agent_dir, &added)?;
+    }
+
     profile.updated_at = chrono::Utc::now().to_rfc3339();
     let yaml = serde_yaml_ng::to_string(profile).context("serialize profile.yaml")?;
     write_atomic(path, yaml.as_bytes())?;

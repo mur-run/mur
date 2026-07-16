@@ -213,6 +213,8 @@ export const zhTW: Table = {
   "detail.skillLoadable": "可載入",
   "detail.skillDead": "無法載入",
   "detail.skillDeadHint": "這個舊版檔案已無法解析為有效技能——請移除後重新安裝。",
+  "detail.skillMissing": "檔案不存在",
+  "detail.skillMissingHint": "找不到檔案:{path} — profile.yaml 引用了這個技能,但從未安裝。請安裝(mur agent skill add)或移除此項目。",
   "detail.remove": "移除",
   "detail.addMcp": "新增 MCP 伺服器",
   "detail.discoverMcp": "從其他工具探索",

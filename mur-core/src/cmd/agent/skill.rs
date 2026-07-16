@@ -34,6 +34,43 @@ fn resolve_skill_id<'a>(profile: &'a _AgentProfile, query: &str) -> Option<&'a S
     None
 }
 
+/// Fail-closed validation for `profile.yaml` skill refs (#717).
+///
+/// Every ref must resolve to an installed, parseable skill under the agent's
+/// home directory (resolution reuses the runtime loader's rules via
+/// `mur_common::skill::loader::skill_ref_status`). Returns a single error
+/// listing every bad ref, distinguishing *missing* (never installed) from
+/// *malformed* (installed but no longer parses), so a `skills:` entry written
+/// without installing the backing files can never be saved silently.
+pub fn validate_skill_refs(agent_home: &Path, refs: &[String]) -> Result<()> {
+    use mur_common::skill::loader::{SkillRefStatus, skill_ref_status};
+
+    let bad: Vec<String> = refs
+        .iter()
+        .filter_map(|r| match skill_ref_status(agent_home, r) {
+            SkillRefStatus::Loadable => None,
+            SkillRefStatus::Missing { path } => Some(format!(
+                "{r}: file not found at {} (referenced by profile.yaml but never installed)",
+                path.display()
+            )),
+            SkillRefStatus::Malformed { path, error } => Some(format!(
+                "{r}: {} exists but does not load as a skill ({error})",
+                path.display()
+            )),
+        })
+        .collect();
+    if bad.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "refusing to write dangling skill ref(s) into profile.yaml:\n  - {}\n\
+         Install each skill onto the agent first (`mur agent skill add <agent> <path>`, \
+         `mur agent skill registry-add`, or `mur agent skill install-pack`), \
+         or remove the ref.",
+        bad.join("\n  - ")
+    );
+}
+
 pub fn cmd_skill_list(name: &str) -> Result<()> {
     let (_path, profile) = load_profile_for_edit(name)?;
     if profile.skills.is_empty() {
@@ -181,4 +218,97 @@ pub fn cmd_skill_set_enabled(name: &str, skill_id: &str, enabled: bool) -> Resul
         if enabled { "Enabled" } else { "Disabled" }
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod skill_ref_validation_tests {
+    use super::*;
+
+    fn valid_manifest(name: &str) -> mur_common::skill::SkillManifest {
+        mur_common::skill::parse_canonical(&format!(
+            r#"name: {name}
+version: 1.0.0
+publisher: human:t
+description: test skill for ref validation
+category: context
+content:
+  abstract: hi
+  context: body
+"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn validate_skill_refs_distinguishes_missing_from_malformed() {
+        let home = tempfile::tempdir().unwrap();
+
+        // Missing: nothing installed at the ref.
+        let err = validate_skill_refs(home.path(), &["skills/executing-plans".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("file not found"), "got: {err}");
+        assert!(err.contains("skills/executing-plans"), "got: {err}");
+
+        // Malformed: file exists but is garbage.
+        let bad = home.path().join("skills").join("broken");
+        fs::create_dir_all(&bad).unwrap();
+        fs::write(bad.join("skill.yaml"), "{{{ not yaml").unwrap();
+        let err = validate_skill_refs(home.path(), &["skills/broken".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("does not load as a skill"), "got: {err}");
+
+        // Loadable: properly installed skill passes.
+        mur_common::skill::write_to_dir(&home.path().join("skills").join("ok"), &valid_manifest("ok"))
+            .unwrap();
+        validate_skill_refs(home.path(), &["skills/ok".into()]).unwrap();
+    }
+
+    #[test]
+    fn save_profile_rejects_newly_added_dangling_ref() {
+        let agent_dir = tempfile::tempdir().unwrap();
+        let path = agent_dir.path().join("profile.yaml");
+        let mut profile = mur_common::AgentProfile::default_for_tests();
+
+        // Baseline save with no skill refs succeeds.
+        save_profile(&path, &mut profile).unwrap();
+
+        // Adding a ref with no installed files must fail-closed (#717) …
+        profile.skills.push("skills/ghost".into());
+        let err = save_profile(&path, &mut profile).unwrap_err().to_string();
+        assert!(err.contains("skills/ghost"), "got: {err}");
+        assert!(err.contains("file not found"), "got: {err}");
+        // … and the dangling ref must not have been persisted.
+        let on_disk: mur_common::AgentProfile =
+            serde_yaml_ng::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(on_disk.skills.is_empty());
+
+        // Installing the files first makes the same save succeed.
+        mur_common::skill::write_to_dir(
+            &agent_dir.path().join("skills").join("ghost"),
+            &valid_manifest("ghost"),
+        )
+        .unwrap();
+        save_profile(&path, &mut profile).unwrap();
+        let on_disk: mur_common::AgentProfile =
+            serde_yaml_ng::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(on_disk.skills, vec!["skills/ghost".to_string()]);
+    }
+
+    #[test]
+    fn save_profile_tolerates_preexisting_dangling_ref_on_unrelated_edit() {
+        let agent_dir = tempfile::tempdir().unwrap();
+        let path = agent_dir.path().join("profile.yaml");
+
+        // Simulate the incident: a profile already on disk with a dangling
+        // ref (written by an external tool, bypassing save_profile).
+        let mut profile = mur_common::AgentProfile::default_for_tests();
+        profile.skills.push("skills/executing-plans".into());
+        fs::write(&path, serde_yaml_ng::to_string(&profile).unwrap()).unwrap();
+
+        // An unrelated edit must still save — only *newly added* refs gate.
+        profile.display_name = "Renamed".into();
+        save_profile(&path, &mut profile).unwrap();
+    }
 }
