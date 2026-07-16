@@ -100,6 +100,11 @@ pub enum AgentAction {
         name: String,
         /// A2A message JSON: {"role":"user","parts":[...]}
         message: String,
+        /// When set, the agent writes its complete output to this path and
+        /// the runtime returns a file artifact reference instead of inline
+        /// content (issue #715 Part B).
+        #[arg(long)]
+        output_artifact_path: Option<String>,
     },
     /// Dial an agent's Unix socket and print its A2A Agent Card
     Card {

@@ -43,6 +43,31 @@ pub struct Task {
     pub error: Option<TaskError>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<serde_json::Value>,
+    /// Zero or more file artifacts produced by this task. Present when the
+    /// task completed with an `output_artifact_path` — the consumer reads
+    /// these files byte-by-byte instead of re-typing inline content through
+    /// another LLM (#715 Part B).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifacts: Option<Vec<ArtifactInfo>>,
+}
+
+/// Metadata for an artifact produced by a task — a file the agent wrote to
+/// a known path so callers can read it byte-by-byte instead of re-typing the
+/// content through another LLM (issue #715 Part B).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactInfo {
+    /// Absolute path the artifact was written to.
+    pub path: String,
+    /// MIME type (e.g. "text/markdown", "application/json").
+    #[serde(rename = "mimeType")]
+    pub mime_type: String,
+    /// SHA-256 hex digest of the file content, for integrity checking by the
+    /// consumer before they use it. Always present when the runtime verified
+    /// the file post-completion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    /// File size in bytes.
+    pub size_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

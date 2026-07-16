@@ -7,11 +7,14 @@ use crate::a2a_dial::{DialMode, dial_method};
 
 use super::resolve_mur_home;
 
-pub fn cmd_send(name: &str, message_json: &str) -> Result<()> {
+pub fn cmd_send(name: &str, message_json: &str, output_artifact_path: Option<&str>) -> Result<()> {
     let msg: serde_json::Value =
         serde_json::from_str(message_json).context("parse --message JSON")?;
     let home = resolve_mur_home()?;
-    let params = serde_json::json!({"message": msg});
+    let mut params = serde_json::json!({"message": msg});
+    if let Some(path) = output_artifact_path {
+        params["output_artifact_path"] = serde_json::json!(path);
+    }
     // `message/send` to an ephemeral runtime is meaningless — the task
     // would die with the process. Require the agent be running.
     let result = dial_method(
