@@ -109,6 +109,13 @@ ulid = { workspace = true }  # cmd::agent_companion::card::import inbox id
 # Markdown rendering reuses the existing `pulldown-cmark` dep — no new crate.
 # `unstable-rendered-line-info` exposes `Paragraph::line_count`, used to anchor
 # the transcript to the bottom (newest message) accounting for wrapping.
+# NOTE: do NOT enable the `scrolling-regions` feature: ratatui 0.29's
+# `scroll_region_up(0..1, _)` emits `CSI 1;1r` — a top==bottom DECSTBM that
+# tmux/xterm reject as invalid — so the following `CSI S` scrolls the WHOLE
+# screen and the Inline viewport drifts one row per inserted line (stale
+# frames merge into scrollback). The non-region fallback is only safe while
+# the viewport never fills the whole terminal; desired_viewport_h clamps for
+# that.
 ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
 crossterm = { version = "0.28", features = ["event-stream"] }
 tui-textarea = "0.7"
