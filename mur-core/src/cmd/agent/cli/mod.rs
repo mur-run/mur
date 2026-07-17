@@ -308,10 +308,17 @@ async fn run_tui(
     // needs a live cursor-position query that hangs under this app's async
     // `EventStream`, so the viewport size is a constant for the process's
     // whole life instead — see `RenderMode` for the full explanation.
+    // Clamped below the terminal height (like desired_viewport_h) so the
+    // viewport never fills the whole screen — see desired_viewport_h.
+    let initial_h = crossterm::terminal::size()
+        .map(|(_, rows)| rows.saturating_sub(1))
+        .unwrap_or(INLINE_VIEWPORT_HEIGHT)
+        .max(5)
+        .min(INLINE_VIEWPORT_HEIGHT);
     let mut terminal = Terminal::with_options(
         CrosstermBackend::new(io::stdout()),
         ratatui::TerminalOptions {
-            viewport: ratatui::Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
+            viewport: ratatui::Viewport::Inline(initial_h),
         },
     )
     .context("init terminal")?;
@@ -430,6 +437,17 @@ fn leave_fullscreen(app: &mut App) {
 /// idle UI hugs the transcript instead of reserving a mostly-blank preview
 /// area (the "why so much blank space" complaint).
 fn desired_viewport_h(app: &App) -> u16 {
+    // Never fill the whole terminal: a viewport as tall as the screen forces
+    // `insert_before` through its degenerate whole-screen path (draw over the
+    // top / borrow-a-line + full scroll + clear + repaint), which leaks stale
+    // frame copies into scrollback and bleeds old glyphs through the status
+    // row on short windows. One spare row keeps the healthy region-scroll
+    // paths in play.
+    let max_h = crossterm::terminal::size()
+        .map(|(_, rows)| rows.saturating_sub(1))
+        .unwrap_or(INLINE_VIEWPORT_HEIGHT)
+        .max(5)
+        .min(INLINE_VIEWPORT_HEIGHT);
     let chooser_open = app
         .completion
         .as_ref()
@@ -437,12 +455,12 @@ fn desired_viewport_h(app: &App) -> u16 {
     // An empty transcript renders the welcome screen inside the transcript
     // band — keep the full viewport so it fits.
     if app.streaming || app.hitl.is_some() || chooser_open || app.messages.is_empty() {
-        return INLINE_VIEWPORT_HEIGHT;
+        return max_h;
     }
     let input_h = (app.input.lines().len() as u16 + 2).clamp(3, 8);
     // 3 = the transcript band's layout minimum (Constraint::Min(3) in
     // ui::render); +1 = status line.
-    (3 + input_h + 1).min(INLINE_VIEWPORT_HEIGHT)
+    (3 + input_h + 1).min(max_h)
 }
 
 /// Re-anchor a fresh Inline viewport of height `h` at the current
@@ -496,7 +514,7 @@ fn rebuild_after_resize(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
     h: u16,
-) -> Result<()> {
+) -> Result<u16> {
     // Let the reflow storm settle so we rebuild once, not per event.
     let mut size = crossterm::terminal::size()?;
     loop {
@@ -507,9 +525,14 @@ fn rebuild_after_resize(
         }
         size = now;
     }
+    // Re-clamp against the SETTLED size: re-anchoring with the pre-resize
+    // height on a now-shorter terminal would let the viewport fill the whole
+    // screen, which sends `insert_before` through its degenerate
+    // draw-over-the-top path (lost/garbled scrollback rows).
+    let h = h.min(size.1.saturating_sub(1).max(5));
     purge_and_reanchor(terminal, h)?;
     app.flushed_upto = 0;
-    Ok(())
+    Ok(h)
 }
 
 /// Wipe the screen AND scrollback, then re-anchor a fresh Inline viewport
@@ -559,8 +582,9 @@ async fn event_loop(
     let mut spinner = tokio::time::interval(Duration::from_millis(SPINNER_MS));
     let mut last_size = terminal.backend().size()?;
     // Dynamic Inline-viewport height: compact when idle, full while a turn
-    // is active. Tracks the height the live terminal actually has.
-    let mut viewport_h = INLINE_VIEWPORT_HEIGHT;
+    // is active. Tracks the height the live terminal actually has (run()
+    // creates the terminal with this same clamped height).
+    let mut viewport_h = INLINE_VIEWPORT_HEIGHT.min(last_size.height.saturating_sub(1).max(5));
     let mut prev_active = false;
 
     loop {
@@ -580,7 +604,9 @@ async fn event_loop(
                 // Fail-open: if the rebuild can't read the cursor position,
                 // keep the old terminal — ratatui's autoresize will leak a
                 // stale viewport copy (cosmetic), which beats exiting.
-                let _ = rebuild_after_resize(terminal, app, viewport_h);
+                if let Ok(h) = rebuild_after_resize(terminal, app, viewport_h) {
+                    viewport_h = h;
+                }
                 events = EventStream::new();
                 last_size = terminal.backend().size()?;
             }
