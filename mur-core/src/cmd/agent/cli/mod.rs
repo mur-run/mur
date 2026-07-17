@@ -313,8 +313,7 @@ async fn run_tui(
     let initial_h = crossterm::terminal::size()
         .map(|(_, rows)| rows.saturating_sub(1))
         .unwrap_or(INLINE_VIEWPORT_HEIGHT)
-        .max(5)
-        .min(INLINE_VIEWPORT_HEIGHT);
+        .clamp(5, INLINE_VIEWPORT_HEIGHT);
     let mut terminal = Terminal::with_options(
         CrosstermBackend::new(io::stdout()),
         ratatui::TerminalOptions {
@@ -446,8 +445,7 @@ fn desired_viewport_h(app: &App) -> u16 {
     let max_h = crossterm::terminal::size()
         .map(|(_, rows)| rows.saturating_sub(1))
         .unwrap_or(INLINE_VIEWPORT_HEIGHT)
-        .max(5)
-        .min(INLINE_VIEWPORT_HEIGHT);
+        .clamp(5, INLINE_VIEWPORT_HEIGHT);
     let chooser_open = app
         .completion
         .as_ref()
