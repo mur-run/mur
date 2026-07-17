@@ -1,7 +1,21 @@
 # rust-analyzer Memory Reduction — Design
 
 **Date:** 2026-07-17
-**Status:** Approved
+**Status:** Implemented (2026-07-17)
+
+## Implementation record
+
+- `~/.claude/settings.json`: `"rust-analyzer-lsp@claude-plugins-official": false`
+  (more targeted than the spec's `CLAUDE_CODE_DISABLE_LSP=1` — swift-lsp/php-lsp
+  stay enabled).
+- `~/.config/rust-analyzer/rust-analyzer.toml`: written as specced.
+- `~/Library/LaunchAgents/com.david.rust-analyzer-reaper.plist` +
+  `~/.local/bin/rust-analyzer-reaper.sh`: loaded via `launchctl bootstrap`;
+  match logic verified against live processes (no false positives).
+- Pre-existing instances keep the old settings until their sessions end; new
+  sessions get one lean rust-analyzer (Serena's) only.
+- First symbol query per session is now slow (seconds) by design — cache
+  priming is off, not a hang.
 
 ## Problem
 
