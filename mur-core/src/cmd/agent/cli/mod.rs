@@ -534,15 +534,25 @@ fn rebuild_after_resize(
 }
 
 /// Wipe the screen AND scrollback, then re-anchor a fresh Inline viewport
-/// of height `h` at the top-left. Shared by the resize rebuild and the
-/// /clear / channel-switch screen wipe. Caller must drop any live
-/// `EventStream` first.
+/// of height `h` anchored at the BOTTOM of the screen. Shared by the resize
+/// rebuild and the /clear / channel-switch screen wipe. Caller must drop any
+/// live `EventStream` first.
+///
+/// Bottom-anchored on purpose: `with_options` anchors the viewport at the
+/// cursor, and a viewport at row 0 has no headroom above it, so the next
+/// transcript replay's `insert_before` must draw THROUGH the viewport rows
+/// and scroll the whole screen — any row overwritten before its scroll never
+/// reaches scrollback intact (bodies went missing right after a resize).
+/// Anchoring at the bottom leaves the headroom `insert_before` needs to lay
+/// replayed rows down above the viewport, which is also the steady state the
+/// UI migrates to anyway.
 fn purge_and_reanchor(terminal: &mut Terminal<CrosstermBackend<Stdout>>, h: u16) -> Result<()> {
     use crossterm::cursor::MoveTo;
     use crossterm::terminal::{Clear, ClearType};
+    let rows = crossterm::terminal::size()?.1;
     crossterm::execute!(
         io::stdout(),
-        MoveTo(0, 0),
+        MoveTo(0, rows.saturating_sub(h)),
         Clear(ClearType::All),
         Clear(ClearType::Purge),
     )?;
