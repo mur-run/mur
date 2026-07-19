@@ -50,6 +50,11 @@ pub enum StreamMsg {
         note: String,
         resend: Option<String>,
     },
+    /// An approval decision arrived after the gate had already auto-denied at
+    /// timeout (#8). Turn-independent like `Note`. `retry` carries the user's
+    /// last message so the composer can offer a one-key re-run of the request
+    /// that stranded the expired call.
+    Expired { tool: String, retry: Option<String> },
     /// A local `!command` finished. Turn-independent like `Note`.
     ShellDone { cmd: String, output: String },
     /// A tool call started running (name + args).
@@ -83,7 +88,7 @@ impl StreamMsg {
             | StreamMsg::TurnLost { task_id, .. }
             | StreamMsg::StepStarted { task_id, .. }
             | StreamMsg::StepCompleted { task_id, .. } => Some(task_id),
-            StreamMsg::Note(_) | StreamMsg::ShellDone { .. } => None,
+            StreamMsg::Note(_) | StreamMsg::Expired { .. } | StreamMsg::ShellDone { .. } => None,
         }
     }
 }
