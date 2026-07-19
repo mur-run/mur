@@ -49,6 +49,7 @@ pub mod pattern;
 pub mod permissions;
 pub mod pipeline;
 pub mod project;
+pub mod removable_volume;
 pub mod route;
 pub mod schedule;
 pub mod schedule_claim;
@@ -67,6 +68,7 @@ pub use actor::{Actor, ActorSource};
 pub use conversation::{CONVERSATION_SCHEMA_VERSION, Content, Message, Role, Source};
 pub use hooks_config::HooksConfig;
 pub use pattern::Pattern;
+pub use removable_volume::REMOVABLE_VOLUME_EPERM_HINT;
 pub use scope::Scope;
 pub use signal::{
     SIGNAL_SCHEMA_VERSION, Signal, SignalBatch, SignalBatchResponse, SignalKind, SignalTarget,
