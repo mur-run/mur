@@ -442,23 +442,38 @@ fn desired_viewport_h(app: &App) -> u16 {
     // frame copies into scrollback and bleeds old glyphs through the status
     // row on short windows. One spare row keeps the healthy region-scroll
     // paths in play.
-    let max_h = crossterm::terminal::size()
-        .map(|(_, rows)| rows.saturating_sub(1))
-        .unwrap_or(INLINE_VIEWPORT_HEIGHT)
-        .clamp(5, INLINE_VIEWPORT_HEIGHT);
+    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, INLINE_VIEWPORT_HEIGHT));
+    let max_h = rows.saturating_sub(1).clamp(5, INLINE_VIEWPORT_HEIGHT);
     let chooser_open = app
         .completion
         .as_ref()
         .is_some_and(|c| c.spaced && !c.items.is_empty());
     // An empty transcript renders the welcome screen inside the transcript
     // band — keep the full viewport so it fits.
-    if app.streaming || app.hitl.is_some() || chooser_open || app.messages.is_empty() {
+    if app.messages.is_empty() {
         return max_h;
     }
     let input_h = (app.input.lines().len() as u16 + 2).clamp(3, 8);
     // 3 = the transcript band's layout minimum (Constraint::Min(3) in
     // ui::render); +1 = status line.
-    (3 + input_h + 1).min(max_h)
+    let overhead = input_h + 1;
+    // Size the viewport to the live region's ACTUAL wrapped height, not to the
+    // whole screen. A full-height viewport makes `insert_before` flush the
+    // unused rows as blank lines into scrollback — the gap that grew ~13 → 30
+    // rows per turn (#728). Measuring the streaming tail here keeps the
+    // viewport hugging real content, so no blank "slack" is ever committed to
+    // history, while HITL / chooser bands still get room to render.
+    let tail = ui::live_tail_rows(app, cols);
+    if app.hitl.is_some() || chooser_open {
+        // Interactive bands render inside the viewport and need the old full
+        // reserve to lay out; keep the pre-#728 full-height viewport for them.
+        return max_h;
+    }
+    // 3 = the transcript band's layout minimum (Constraint::Min(3)); a live
+    // tail shorter than that still gets the floor so a one-line reply doesn't
+    // collapse the pane.
+    let content = tail.max(3);
+    (content + overhead).min(max_h)
 }
 
 /// Re-anchor a fresh Inline viewport of height `new_h`, keeping its BOTTOM
@@ -470,15 +485,13 @@ fn desired_viewport_h(app: &App) -> u16 {
 /// scrollback above is untouched and `append_lines` scrolls scrollback up to
 /// make room.
 ///
-/// When SHRINKING (`new_h < old_h`) that top-anchor is the bug: the shorter
-/// viewport stays pinned to the old (high) top row, and the `old_h - new_h`
-/// rows it no longer covers are left blank BELOW it — a half-screen gap
-/// between the transcript and the composer (the "why so much blank space"
-/// complaint). Fix: before re-anchoring, print `old_h - new_h` newlines to
-/// push the cursor DOWN by that many rows. Those newlines scroll the freed
-/// rows UP into scrollback, and the fresh short viewport anchors lower, so
-/// its BOTTOM lands where the old viewport's bottom was — flush above the
-/// composer, no gap.
+/// When SHRINKING (`new_h < old_h`) we rebuild a shorter Inline viewport in
+/// place. We do NOT scroll the freed rows into scrollback (the earlier #728
+/// fix did, and it committed blank rows to history that accumulated ~13 → 30
+/// rows per turn). Instead `desired_viewport_h` now sizes the viewport to the
+/// live tail's real wrapped height, so a shrink has no unused rows to leak:
+/// `clear` + `with_options` bottom-anchor the short viewport against the
+/// composer with a clean transcript above.
 ///
 /// Caller must drop any live `EventStream` first: `with_options` reads the
 /// terminal's cursor-position response from stdin.
@@ -487,20 +500,16 @@ fn reanchor_inline(
     old_h: u16,
     new_h: u16,
 ) -> Result<()> {
+    let _ = old_h;
     terminal.clear().context("clear old viewport")?;
-    // Shrinking: consume the freed rows ABOVE the new viewport (into
-    // scrollback) instead of leaving them blank below it. `clear` left the
-    // cursor at the old viewport's top-left; walking it down `old_h - new_h`
-    // rows scrolls those rows up and re-anchors the short viewport so its
-    // bottom stays put against the composer.
-    if new_h < old_h {
-        let drop_rows = old_h - new_h;
-        crossterm::execute!(
-            io::stdout(),
-            crossterm::style::Print("\n".repeat(drop_rows as usize))
-        )
-        .context("scroll freed rows into scrollback")?;
-    }
+    // NOTE (#728 follow-up): we deliberately do NOT scroll freed rows into
+    // scrollback when shrinking. The old `Print("\n" * (old_h - new_h))` here
+    // committed BLANK rows to history that never got reclaimed — the gap that
+    // accumulated ~13 → 30 rows per turn. The real fix is upstream:
+    // `desired_viewport_h` now sizes the viewport to the live tail's actual
+    // wrapped height, so a shrink just rebuilds a shorter Inline viewport in
+    // place (bottom-anchored against the composer by `clear` + `with_options`)
+    // with no unused rows to leak.
     // The cursor-position query inside `with_options` needs crossterm's
     // internal event reader; a just-dropped EventStream's background thread
     // can hold that lock for a beat longer. Retry briefly.
