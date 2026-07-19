@@ -461,17 +461,46 @@ fn desired_viewport_h(app: &App) -> u16 {
     (3 + input_h + 1).min(max_h)
 }
 
-/// Re-anchor a fresh Inline viewport of height `h` at the current
-/// viewport's top row. `Terminal::clear` on an Inline viewport moves the
-/// cursor to the viewport's top-left and clears down, so `with_options`
-/// rebuilds in place: scrollback above is untouched, growth makes room via
-/// `append_lines` (scrolling scrollback up properly), and shrinking leaves
-/// the freed rows blank BELOW the viewport (bottom of the screen — natural,
-/// like a shell mid-screen) rather than between transcript and composer.
+/// Re-anchor a fresh Inline viewport of height `new_h`, keeping its BOTTOM
+/// edge pinned to where the old viewport's bottom was.
+///
+/// `Terminal::clear` on an Inline viewport moves the cursor to the
+/// viewport's top-left and clears down, so `with_options` rebuilds anchored
+/// at that top row. When GROWING (`new_h >= old_h`) that is exactly right:
+/// scrollback above is untouched and `append_lines` scrolls scrollback up to
+/// make room.
+///
+/// When SHRINKING (`new_h < old_h`) that top-anchor is the bug: the shorter
+/// viewport stays pinned to the old (high) top row, and the `old_h - new_h`
+/// rows it no longer covers are left blank BELOW it — a half-screen gap
+/// between the transcript and the composer (the "why so much blank space"
+/// complaint). Fix: before re-anchoring, print `old_h - new_h` newlines to
+/// push the cursor DOWN by that many rows. Those newlines scroll the freed
+/// rows UP into scrollback, and the fresh short viewport anchors lower, so
+/// its BOTTOM lands where the old viewport's bottom was — flush above the
+/// composer, no gap.
+///
 /// Caller must drop any live `EventStream` first: `with_options` reads the
 /// terminal's cursor-position response from stdin.
-fn reanchor_inline(terminal: &mut Terminal<CrosstermBackend<Stdout>>, h: u16) -> Result<()> {
+fn reanchor_inline(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    old_h: u16,
+    new_h: u16,
+) -> Result<()> {
     terminal.clear().context("clear old viewport")?;
+    // Shrinking: consume the freed rows ABOVE the new viewport (into
+    // scrollback) instead of leaving them blank below it. `clear` left the
+    // cursor at the old viewport's top-left; walking it down `old_h - new_h`
+    // rows scrolls those rows up and re-anchors the short viewport so its
+    // bottom stays put against the composer.
+    if new_h < old_h {
+        let drop_rows = old_h - new_h;
+        crossterm::execute!(
+            io::stdout(),
+            crossterm::style::Print("\n".repeat(drop_rows as usize))
+        )
+        .context("scroll freed rows into scrollback")?;
+    }
     // The cursor-position query inside `with_options` needs crossterm's
     // internal event reader; a just-dropped EventStream's background thread
     // can hold that lock for a beat longer. Retry briefly.
@@ -480,7 +509,7 @@ fn reanchor_inline(terminal: &mut Terminal<CrosstermBackend<Stdout>>, h: u16) ->
         match Terminal::with_options(
             CrosstermBackend::new(io::stdout()),
             ratatui::TerminalOptions {
-                viewport: ratatui::Viewport::Inline(h),
+                viewport: ratatui::Viewport::Inline(new_h),
             },
         ) {
             Ok(t) => {
@@ -655,7 +684,7 @@ async fn event_loop(
                 drop(events);
                 // Fail-open: on error keep the old (possibly taller)
                 // viewport — cosmetic — and leave viewport_h untouched.
-                if reanchor_inline(terminal, desired).is_ok() {
+                if reanchor_inline(terminal, viewport_h, desired).is_ok() {
                     viewport_h = desired;
                 }
                 events = EventStream::new();
@@ -929,7 +958,16 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                         }
                         EscAction::CancelAndRestore => {
                             cancel_in_flight(app, tx);
-                            if let Some(text) = app.last_sent.clone() {
+                            // Only repopulate the composer from `last_sent`
+                            // when it is empty. If the user typed a steer
+                            // draft mid-turn and then double-ESC'd, that draft
+                            // is what they want back — overwriting it with an
+                            // older `last_sent` stranded stale text in the box
+                            // that no later turn cleared (the "leftover
+                            // steering line" bug).
+                            if app.input_text().is_empty()
+                                && let Some(text) = app.last_sent.clone()
+                            {
                                 app.set_input(&text);
                             }
                             app.push_system("cancelled — message restored");
