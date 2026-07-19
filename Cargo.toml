@@ -28,7 +28,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "2.51.4"
+version = "2.52.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/mur-run/mur"
