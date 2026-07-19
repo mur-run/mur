@@ -393,7 +393,10 @@ fn apply_auto_compress(
     }
     // args["query"] (when present) makes search-style tools query-aware (BM25-retrievable).
     let query = arguments.get("query").and_then(|v| v.as_str());
-    match mur_compress::auto_compress_value(engine, &out, query, auto.min_tokens) {
+    // Guarded variant: even on this success surface, scan for embedded error
+    // signals so an error-bearing payload is passed through (not offloaded) and
+    // any residual bulk offload is annotated with its error count.
+    match mur_compress::auto_compress_value_guarded(engine, &out, query, auto.min_tokens, false) {
         Some(replacement) => replacement,
         None => out,
     }
