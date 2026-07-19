@@ -16,15 +16,19 @@ use crate::tools::{ToolError, ToolExecutor};
 const MAX_RETURN_BYTES: usize = 512 * 1024;
 
 pub struct ReadFileTool {
-    /// Base for resolving relative paths (the agent home / working dir).
-    pub working_dir: PathBuf,
+    /// Session cwd shared with `bash`; relative paths resolve against its
+    /// current snapshot so `read_file rel/x` matches where `bash` last ran.
+    pub session_cwd: crate::tools::fs_policy::SessionCwd,
     /// Filesystem grants from the agent profile; checked before every read.
     pub fs: FilesystemEntitlement,
 }
 
 impl ReadFileTool {
-    pub fn new(working_dir: PathBuf, fs: FilesystemEntitlement) -> Self {
-        Self { working_dir, fs }
+    pub fn new(
+        session_cwd: crate::tools::fs_policy::SessionCwd,
+        fs: FilesystemEntitlement,
+    ) -> Self {
+        Self { session_cwd, fs }
     }
 
     /// Prefix-match `path` against the entitlement lists after
@@ -63,7 +67,7 @@ impl ToolExecutor for ReadFileTool {
         ToolDef {
             name: "read_file".into(),
             description: "Read a UTF-8 text file. Optional 1-indexed `offset`/`limit` select a line window. \
-Paths resolve relative to the agent working directory; reads are checked against the agent's filesystem entitlements."
+Relative paths resolve against the shared session working directory (the same base the `bash` tool uses, moved only by passing `bash` an explicit `cwd`); reads are checked against the agent's filesystem entitlements."
                 .into(),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -81,9 +85,15 @@ Paths resolve relative to the agent working directory; reads are checked against
         let raw = input["path"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("missing 'path' field".into()))?;
-        let joined = crate::tools::fs_policy::resolve_path(&self.working_dir, raw);
-        let canonical = std::fs::canonicalize(&joined)
-            .map_err(|e| ToolError::Execution(format!("cannot read {}: {e}", joined.display())))?;
+        let base = self.session_cwd.current();
+        let joined = crate::tools::fs_policy::resolve_path(&base, raw);
+        let canonical = std::fs::canonicalize(&joined).map_err(|e| {
+            ToolError::Execution(format!(
+                "cannot read {}: {e} (relative to session cwd {})",
+                joined.display(),
+                base.display()
+            ))
+        })?;
         self.check_entitlement(&canonical)?;
 
         let bytes = std::fs::read(&canonical).map_err(|e| {
@@ -135,10 +145,78 @@ mod tests {
         p
     }
 
+    // runtime-file-tools-cwd: a shared SessionCwd handle means the bash tool's
+    // explicit `cwd` moves the base that the file tools resolve against.
+    #[tokio::test]
+    async fn shared_cwd_bash_set_moves_read_file_base() {
+        use crate::tools::bash::BashTool;
+        use crate::tools::fs_policy::SessionCwd;
+
+        let home = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        // Seed the SAME relative filename in both dirs with distinct contents.
+        write_tmp(home.path(), "spec.md", "HOME");
+        write_tmp(other.path(), "spec.md", "OTHER");
+
+        let shared = SessionCwd::new(home.path().into());
+        let bash = BashTool::new(home.path().into(), shared.clone());
+        let reader = ReadFileTool::new(
+            shared.clone(),
+            fs_ent(
+                &[
+                    home.path().to_str().unwrap(),
+                    other.path().to_str().unwrap(),
+                ],
+                &[],
+                &[],
+            ),
+        );
+
+        // Before: relative read resolves against home.
+        let before = reader
+            .execute(serde_json::json!({"path": "spec.md"}))
+            .await
+            .unwrap();
+        assert!(before.contains("HOME"), "expected HOME, got {before}");
+
+        // bash with explicit cwd moves the shared base to `other`.
+        bash.execute(serde_json::json!({"command": "true", "cwd": other.path().to_str().unwrap()}))
+            .await
+            .unwrap();
+
+        // After: the SAME relative read now resolves against `other`.
+        let after = reader
+            .execute(serde_json::json!({"path": "spec.md"}))
+            .await
+            .unwrap();
+        assert!(
+            after.contains("OTHER"),
+            "expected OTHER after bash cwd, got {after}"
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_file_error_names_session_cwd() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().to_str().unwrap();
+        let t = ReadFileTool::new(
+            crate::tools::fs_policy::SessionCwd::new(td.path().into()),
+            fs_ent(&[root], &[], &[]),
+        );
+        let err = t
+            .execute(serde_json::json!({"path": "nope.txt"}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("relative to session cwd"));
+    }
+
     #[tokio::test]
     async fn missing_path_is_invalid_input() {
         let td = tempfile::tempdir().unwrap();
-        let t = ReadFileTool::new(td.path().into(), fs_ent(&[], &[], &[]));
+        let t = ReadFileTool::new(
+            crate::tools::fs_policy::SessionCwd::new(td.path().into()),
+            fs_ent(&[], &[], &[]),
+        );
         let err = t.execute(serde_json::json!({})).await.unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput(_)));
     }
@@ -148,7 +226,10 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         write_tmp(td.path(), "f.txt", "l1\nl2\nl3\nl4");
         let root = td.path().to_str().unwrap();
-        let t = ReadFileTool::new(td.path().into(), fs_ent(&[root], &[], &[]));
+        let t = ReadFileTool::new(
+            crate::tools::fs_policy::SessionCwd::new(td.path().into()),
+            fs_ent(&[root], &[], &[]),
+        );
         let out = t
             .execute(serde_json::json!({"path": "f.txt", "offset": 2, "limit": 2}))
             .await
@@ -161,7 +242,10 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         write_tmp(td.path(), "f.txt", "hi");
         let root = td.path().to_str().unwrap();
-        let t = ReadFileTool::new(td.path().into(), fs_ent(&[], &[root], &[]));
+        let t = ReadFileTool::new(
+            crate::tools::fs_policy::SessionCwd::new(td.path().into()),
+            fs_ent(&[], &[root], &[]),
+        );
         assert_eq!(
             t.execute(serde_json::json!({"path": "f.txt"}))
                 .await
@@ -175,7 +259,10 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         write_tmp(td.path(), "f.txt", "secret");
         let root = td.path().to_str().unwrap();
-        let t = ReadFileTool::new(td.path().into(), fs_ent(&[root], &[], &[root]));
+        let t = ReadFileTool::new(
+            crate::tools::fs_policy::SessionCwd::new(td.path().into()),
+            fs_ent(&[root], &[], &[root]),
+        );
         let err = t
             .execute(serde_json::json!({"path": "f.txt"}))
             .await
@@ -187,7 +274,10 @@ mod tests {
     async fn unentitled_path_is_rejected() {
         let td = tempfile::tempdir().unwrap();
         write_tmp(td.path(), "f.txt", "hi");
-        let t = ReadFileTool::new(td.path().into(), fs_ent(&["/nonexistent-grant"], &[], &[]));
+        let t = ReadFileTool::new(
+            crate::tools::fs_policy::SessionCwd::new(td.path().into()),
+            fs_ent(&["/nonexistent-grant"], &[], &[]),
+        );
         let err = t
             .execute(serde_json::json!({"path": "f.txt"}))
             .await
@@ -199,7 +289,10 @@ mod tests {
     async fn nonexistent_file_is_execution_error() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().to_str().unwrap();
-        let t = ReadFileTool::new(td.path().into(), fs_ent(&[root], &[], &[]));
+        let t = ReadFileTool::new(
+            crate::tools::fs_policy::SessionCwd::new(td.path().into()),
+            fs_ent(&[root], &[], &[]),
+        );
         let err = t
             .execute(serde_json::json!({"path": "nope.txt"}))
             .await

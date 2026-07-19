@@ -42,7 +42,12 @@ pub(crate) fn augmented_path(current_path: Option<&str>) -> String {
 }
 
 pub struct BashTool {
+    /// Fallback base when no explicit `cwd` is supplied and the session base
+    /// has not been overridden.
     pub working_dir: PathBuf,
+    /// Session cwd shared with the file tools. An explicit `cwd` argument
+    /// updates it; otherwise its current snapshot is used as the base.
+    pub session_cwd: crate::tools::fs_policy::SessionCwd,
 }
 
 /// Resolve the effective timeout (in seconds) from the tool input's optional
@@ -58,8 +63,11 @@ fn resolve_timeout_secs(requested: Option<i64>) -> u64 {
 }
 
 impl BashTool {
-    pub fn new(working_dir: PathBuf) -> Self {
-        Self { working_dir }
+    pub fn new(working_dir: PathBuf, session_cwd: crate::tools::fs_policy::SessionCwd) -> Self {
+        Self {
+            working_dir,
+            session_cwd,
+        }
     }
 }
 
@@ -86,7 +94,7 @@ Commands are killed after `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {
                     },
                     "cwd": {
                         "type": "string",
-                        "description": "Working directory for the command. Defaults to the agent home directory."
+                        "description": "Working directory for the command. Defaults to the shared session working directory (starts at the agent home). Passing cwd also moves that shared directory, so a later read_file/write_file/edit_file resolves relative paths against it. NOTE: a `cd` inside the command itself is NOT retained across calls — use this cwd argument instead."
                     },
                     "timeout_secs": {
                         "type": "integer",
@@ -107,10 +115,19 @@ Commands are killed after `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {
             .ok_or_else(|| ToolError::InvalidInput("missing 'command' field".into()))?
             .to_string();
 
-        let working_dir = input["cwd"]
-            .as_str()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| self.working_dir.clone());
+        let working_dir = match input["cwd"].as_str() {
+            // Explicit cwd: use it AND update the shared session base so a
+            // subsequent read_file/write_file/edit_file resolves relative
+            // paths against the same directory.
+            Some(cwd) => {
+                let dir = PathBuf::from(cwd);
+                self.session_cwd.set(dir.clone());
+                dir
+            }
+            // No explicit cwd: fall back to the current session base (which
+            // starts at the agent home and only moves on an explicit cwd).
+            None => self.session_cwd.current(),
+        };
 
         let timeout_secs = resolve_timeout_secs(input["timeout_secs"].as_i64());
 
@@ -177,7 +194,8 @@ mod tests {
     use crate::tools::ToolExecutor;
 
     fn make_tool() -> BashTool {
-        BashTool::new(std::env::temp_dir())
+        let base = std::env::temp_dir();
+        BashTool::new(base.clone(), crate::tools::fs_policy::SessionCwd::new(base))
     }
 
     #[test]
