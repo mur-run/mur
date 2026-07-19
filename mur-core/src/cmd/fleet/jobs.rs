@@ -5,9 +5,15 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use mur_common::channel::{ChannelEvent, EventKind};
 use mur_common::fleet::{Job, JobStatus, valid_fleet_name};
 
 use super::store;
+
+/// A `running` job with no live run is a zombie (#10: `019f69d8` sat `running`
+/// for four days). If neither the channel nor anything else ever terminates it,
+/// reconcile it to `failed` this long after `started_at` so it stops lying.
+const RUNNING_GRACE_SECS: i64 = 6 * 60 * 60; // 6h
 
 pub(crate) fn jobs_dir(mur_home: &Path, fleet: &str) -> PathBuf {
     store::fleet_dir(mur_home, fleet).join("jobs")
@@ -50,7 +56,110 @@ pub fn save_job(mur_home: &Path, fleet: &str, job: &Job) -> Result<()> {
     Ok(())
 }
 
+/// The channel's terminal outcome for a run, read from its event log (#10):
+/// the last `StateChange` event whose `to` is terminal, mapped to a job status.
+/// `None` if the channel has no terminal StateChange yet (still working).
+fn channel_terminal_status(events: &[ChannelEvent]) -> Option<JobStatus> {
+    events
+        .iter()
+        .filter(|e| e.kind == EventKind::StateChange)
+        .filter_map(|e| e.payload.get("to").and_then(|v| v.as_str()))
+        .rev()
+        .find_map(|to| match to {
+            "completed" => Some(JobStatus::Done),
+            "failed" => Some(JobStatus::Failed),
+            "canceled" | "rejected" => Some(JobStatus::Canceled),
+            _ => None,
+        })
+}
+
+/// Decide the reconciled terminal status of a **running** job (#10), pure so it
+/// is testable without touching the filesystem. Returns `Some((status, reason))`
+/// when the job should be moved to a terminal state, `None` to leave it running.
+///
+/// Priority:
+///  1. **Channel truth** — if the job's run drove a channel to a terminal
+///     StateChange, adopt it (this is what `mur fleet run` also does, so a job
+///     whose run crashed *after* the channel finished but *before* it stamped
+///     the yaml still ends up correct).
+///  2. **Orphan staleness** — a job still `running` `RUNNING_GRACE_SECS` after
+///     `started_at`, with no terminal channel signal, has no live run: its
+///     process died (the four-day `019f69d8`). Mark `failed(orphaned)`.
+fn reconcile_running(
+    job: &Job,
+    channel: Option<JobStatus>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<(JobStatus, String)> {
+    if job.status != JobStatus::Running {
+        return None;
+    }
+    if let Some(term) = channel {
+        // Only adopt channel truth for a job that actually drove a run.
+        if job.run_id.is_some() {
+            let reason = match term {
+                JobStatus::Failed => "run ended in channel state `failed`",
+                JobStatus::Canceled => "run was canceled/rejected in channel",
+                _ => "channel run completed",
+            };
+            return Some((term, reason.to_string()));
+        }
+    }
+    // No terminal channel signal → orphan check against the grace window.
+    let started = job
+        .started_at
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+    if let Some(started) = started
+        && (now - started).num_seconds() >= RUNNING_GRACE_SECS
+    {
+        return Some((
+            JobStatus::Failed,
+            format!(
+                "orphaned: still `running` with no live run {}h after start (state machine reconcile)",
+                RUNNING_GRACE_SECS / 3600
+            ),
+        ));
+    }
+    None
+}
+
+/// Sweep a fleet's jobs and converge any zombie `running` records to their true
+/// terminal state (#10). Called lazily by [`list_jobs`], so `mur fleet show`
+/// and `mur fleet jobs` always report truth, and orphaned runs (crash/kill)
+/// self-heal on the next read. Best-effort: channel-read/save failures leave the
+/// job untouched rather than aborting the listing.
+fn reconcile_jobs(mur_home: &Path, fleet: &str, jobs: &mut [Job]) {
+    let running = jobs.iter().any(|j| j.status == JobStatus::Running);
+    if !running {
+        return;
+    }
+    // Resolve the fleet's channel once; skip channel-truth if unavailable.
+    let channel_status = store::load_fleet(mur_home, fleet).ok().and_then(|f| {
+        mur_channel::ChannelService::open(mur_home)
+            .and_then(|svc| svc.load_events(&f.channel_id))
+            .ok()
+            .and_then(|evs| channel_terminal_status(&evs))
+    });
+    let now = chrono::Utc::now();
+    for job in jobs.iter_mut() {
+        if let Some((status, reason)) = reconcile_running(job, channel_status, now) {
+            job.status = status;
+            if status == JobStatus::Failed || status == JobStatus::Canceled {
+                job.error.get_or_insert(reason);
+            }
+            if job.finished_at.is_none() {
+                job.finished_at = Some(now.to_rfc3339());
+            }
+            let _ = save_job(mur_home, fleet, job);
+        }
+    }
+}
+
 /// All jobs sorted oldest-first (UUIDv7 lexical sort == time order).
+///
+/// Reconciles zombie `running` jobs against the channel/orphan rules (#10)
+/// before returning, so every caller (`fleet show`, `fleet jobs`) sees truth.
 pub fn list_jobs(mur_home: &Path, fleet: &str) -> Result<Vec<Job>> {
     if !valid_fleet_name(fleet) {
         bail!("invalid fleet name '{fleet}': use lowercase letters, digits, '-' or '_'");
@@ -74,6 +183,8 @@ pub fn list_jobs(mur_home: &Path, fleet: &str) -> Result<Vec<Job>> {
     }
     // Sort by id (UUIDv7 = time order)
     jobs.sort_by(|a, b| a.id.cmp(&b.id));
+    // #10: converge zombie `running` records to their true terminal state.
+    reconcile_jobs(mur_home, fleet, &mut jobs);
     Ok(jobs)
 }
 
