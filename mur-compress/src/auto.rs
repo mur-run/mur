@@ -127,10 +127,10 @@ pub fn tool_error_count(value: &Value) -> usize {
             if map.get("ok") == Some(&Value::Bool(false)) {
                 n += 1;
             }
-            if let Some(e) = map.get("error") {
-                if !e.is_null() {
-                    n += 1;
-                }
+            if let Some(e) = map.get("error")
+                && !e.is_null()
+            {
+                n += 1;
             }
             // Recurse into values so a wrapper like {stdout: "tool error: ..."}
             // or an array of results is still counted; skip the flag keys we
@@ -295,28 +295,27 @@ fn annotate_offload_errors(mut replacement: Value, original: &Value, query: Opti
     }
     // Top-level offload envelope.
     if let Some(obj) = replacement.as_object_mut() {
-        if obj.get("compressed") == Some(&Value::Bool(true)) {
-            if let Some(h) = obj.get("hash").and_then(|h| h.as_str()).map(String::from) {
-                obj.insert(
-                    "note".into(),
-                    Value::String(retrieval_note_with_errors(Some(&h), query, n)),
-                );
-                obj.insert("tool_errors".into(), Value::from(n));
-                return replacement;
-            }
+        if obj.get("compressed") == Some(&Value::Bool(true))
+            && let Some(h) = obj.get("hash").and_then(|h| h.as_str()).map(String::from)
+        {
+            obj.insert(
+                "note".into(),
+                Value::String(retrieval_note_with_errors(Some(&h), query, n)),
+            );
+            obj.insert("tool_errors".into(), Value::from(n));
+            return replacement;
         }
         // Object whose largest field was replaced with an envelope.
         for (_k, v) in obj.iter_mut() {
-            if let Some(inner) = v.as_object_mut() {
-                if inner.get("compressed") == Some(&Value::Bool(true)) {
-                    if let Some(h) = inner.get("hash").and_then(|h| h.as_str()).map(String::from) {
-                        inner.insert(
-                            "note".into(),
-                            Value::String(retrieval_note_with_errors(Some(&h), query, n)),
-                        );
-                        inner.insert("tool_errors".into(), Value::from(n));
-                    }
-                }
+            if let Some(inner) = v.as_object_mut()
+                && inner.get("compressed") == Some(&Value::Bool(true))
+                && let Some(h) = inner.get("hash").and_then(|h| h.as_str()).map(String::from)
+            {
+                inner.insert(
+                    "note".into(),
+                    Value::String(retrieval_note_with_errors(Some(&h), query, n)),
+                );
+                inner.insert("tool_errors".into(), Value::from(n));
             }
         }
     }
