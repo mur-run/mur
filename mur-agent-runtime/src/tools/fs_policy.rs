@@ -21,22 +21,22 @@ use crate::tools::ToolError;
 /// descriptions). Readers take a cheap snapshot (`current()`), never holding
 /// the lock across an `.await`.
 #[derive(Clone)]
-pub(crate) struct SessionCwd(Arc<RwLock<PathBuf>>);
+pub struct SessionCwd(Arc<RwLock<PathBuf>>);
 
 impl SessionCwd {
     /// Create a session cwd seeded with the agent home (the historical base).
-    pub(crate) fn new(initial: PathBuf) -> Self {
+    pub fn new(initial: PathBuf) -> Self {
         Self(Arc::new(RwLock::new(initial)))
     }
 
     /// Snapshot the current base. Clones the `PathBuf` and releases the read
     /// lock immediately, so callers never hold a guard across `.await`.
-    pub(crate) fn current(&self) -> PathBuf {
+    pub fn current(&self) -> PathBuf {
         self.0.read().expect("session cwd lock poisoned").clone()
     }
 
     /// Update the session base (called by `bash` when given explicit `cwd`).
-    pub(crate) fn set(&self, dir: PathBuf) {
+    pub fn set(&self, dir: PathBuf) {
         *self.0.write().expect("session cwd lock poisoned") = dir;
     }
 }
