@@ -60,19 +60,15 @@ impl ToolExecutor for EditFileTool {
         let base = self.session_cwd.current();
         let joined = crate::tools::fs_policy::resolve_path(&base, raw);
         let canonical = std::fs::canonicalize(&joined).map_err(|e| {
-            ToolError::Execution(format!(
-                "cannot edit {}: {e} (relative to session cwd {})",
-                joined.display(),
-                base.display()
+            ToolError::Execution(crate::tools::fs_policy::format_io_error(
+                "edit", &joined, &base, &e,
             ))
         })?;
         check_write_entitlement(&self.fs, &canonical)?;
 
         let text = std::fs::read_to_string(&canonical).map_err(|e| {
-            ToolError::Execution(format!(
-                "cannot read {}: {e} (relative to session cwd {})",
-                canonical.display(),
-                base.display()
+            ToolError::Execution(crate::tools::fs_policy::format_io_error(
+                "read", &canonical, &base, &e,
             ))
         })?;
         let found = text.match_indices(old).count();
@@ -95,10 +91,8 @@ impl ToolExecutor for EditFileTool {
         }
         let updated = text.replace(old, new);
         std::fs::write(&canonical, &updated).map_err(|e| {
-            ToolError::Execution(format!(
-                "cannot write {}: {e} (relative to session cwd {})",
-                canonical.display(),
-                base.display()
+            ToolError::Execution(crate::tools::fs_policy::format_io_error(
+                "write", &canonical, &base, &e,
             ))
         })?;
         Ok(format!(

@@ -31,6 +31,31 @@ pub fn build_row(name: &str, lock: &LockFile, disk_sha: &str) -> AgentRow {
     }
 }
 
+/// Probe `/Volumes` for the macOS Full-Disk-Access EPERM (`os error 1`) that
+/// blocks access to removable/external volumes, and return the shared guidance
+/// string when — and only when — that exact failure is observed (issue #1).
+///
+/// Returns `None` when `/Volumes` is readable, absent, or fails for any other
+/// reason (we must not hijack unrelated errors). Split out as a pure-ish
+/// function taking the probe closure so it is cheap to unit-test without
+/// touching the real filesystem.
+pub fn removable_volume_hint<F>(probe: F) -> Option<&'static str>
+where
+    F: Fn(&std::path::Path) -> std::io::Result<()>,
+{
+    let volumes = std::path::Path::new("/Volumes");
+    match probe(volumes) {
+        Err(e) if e.raw_os_error() == Some(1) => Some(mur_common::REMOVABLE_VOLUME_EPERM_HINT),
+        _ => None,
+    }
+}
+
+/// Real filesystem probe: attempt to enumerate `/Volumes`. A metadata/read
+/// attempt that trips macOS EPERM surfaces `os error 1`.
+fn probe_volumes(path: &std::path::Path) -> std::io::Result<()> {
+    std::fs::read_dir(path).map(|_| ())
+}
+
 /// `mur agent runtime-doctor [--json]`
 ///
 /// Enumerates all agents that have a `running.lock`, compares each one's
@@ -120,6 +145,14 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
         }
     }
 
+    // ── Removable-volume Full-Disk-Access preflight (issue #1) ──────────────
+    // Independent of the stale check: if `/Volumes` is blocked by macOS EPERM,
+    // emit the shared guidance. Printed to stderr so it never pollutes the
+    // `--json` stdout payload.
+    if let Some(hint) = removable_volume_hint(probe_volumes) {
+        eprintln!("\n{hint}");
+    }
+
     if any_stale {
         std::process::exit(1);
     }
@@ -183,5 +216,30 @@ mod tests {
         let lock = make_lock("unknown");
         let row = build_row("myagent", &lock, "unknown");
         assert!(!row.stale);
+    }
+
+    #[test]
+    fn removable_hint_shown_on_eperm() {
+        // Probe reports EPERM (os error 1) against /Volumes → guidance shown,
+        // and it is the exact shared mur-common string (no drift).
+        let hint = removable_volume_hint(|_p| Err(std::io::Error::from_raw_os_error(1)));
+        assert_eq!(hint, Some(mur_common::REMOVABLE_VOLUME_EPERM_HINT));
+    }
+
+    #[test]
+    fn removable_hint_absent_when_readable() {
+        // /Volumes readable → no guidance.
+        let hint = removable_volume_hint(|_p| Ok(()));
+        assert!(hint.is_none());
+    }
+
+    #[test]
+    fn removable_hint_ignores_non_eperm_errors() {
+        // ENOENT (no /Volumes at all) or any non-EPERM error must NOT trigger
+        // the removable-volume guidance.
+        let enoent = removable_volume_hint(|_p| Err(std::io::Error::from_raw_os_error(2)));
+        assert!(enoent.is_none());
+        let eacces = removable_volume_hint(|_p| Err(std::io::Error::from_raw_os_error(13)));
+        assert!(eacces.is_none());
     }
 }
