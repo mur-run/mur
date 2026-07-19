@@ -13,7 +13,9 @@ pub mod tokenizer;
 pub mod types;
 
 pub use auto::{
-    AutoCfg, AutoOutcome, auto_compress, auto_compress_value, retrieval_envelope, retrieval_note,
+    AutoCfg, AutoOutcome, auto_compress, auto_compress_value, auto_compress_value_guarded,
+    has_tool_error, retrieval_envelope, retrieval_note, retrieval_note_with_errors,
+    tool_error_count,
 };
 pub use bm25::bm25_rank;
 pub use ccr::{CcrStore, CompressedEntry};
