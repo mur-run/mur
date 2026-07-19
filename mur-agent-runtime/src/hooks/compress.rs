@@ -45,11 +45,17 @@ impl Hook for CompressHook {
             Ok(e) => e,
             Err(_) => return Ok(PostToolUsePatch::default()),
         };
-        match mur_compress::auto_compress_value(
+        // A failed tool result (`ok == false`) must NEVER be offloaded to a
+        // hash placeholder — doing so hides the `"tool error: ..."` behind a
+        // retrieval hop and lets it be mistaken for success. Pass the error
+        // signal to the guarded compressor, which passes such results through
+        // unchanged and annotates any residual bulk offload with an error count.
+        match mur_compress::auto_compress_value_guarded(
             &engine,
             &result.output,
             None,
             self.cfg.auto.min_tokens,
+            !result.ok,
         ) {
             Some(replacement) => Ok(PostToolUsePatch {
                 replace_output: Some(replacement),

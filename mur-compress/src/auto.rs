@@ -99,6 +99,78 @@ pub fn auto_compress(
     }
 }
 
+/// Scan a tool-output JSON `value` for embedded error signals and return how
+/// many were found. Recognises the three shapes a failed tool result can take
+/// as it flows to an LLM-facing surface:
+/// - an object with `"is_error": true` or `"ok": false`,
+/// - an object whose `"error"` field is a non-null value,
+/// - any string (top-level, array element, or object field) beginning with the
+///   runtime's `"tool error:"` prefix (case-insensitive, leading ws tolerated).
+///
+/// Used to (a) refuse to offload error-bearing results and (b) annotate the
+/// placeholder when a bulk offload is otherwise unavoidable, so a compressed
+/// result is never mistaken for success before `mur_retrieve`.
+pub fn tool_error_count(value: &Value) -> usize {
+    fn str_is_tool_error(s: &str) -> bool {
+        s.trim_start()
+            .to_ascii_lowercase()
+            .starts_with("tool error:")
+    }
+    match value {
+        Value::String(s) => usize::from(str_is_tool_error(s)),
+        Value::Array(items) => items.iter().map(tool_error_count).sum(),
+        Value::Object(map) => {
+            let mut n = 0;
+            if map.get("is_error") == Some(&Value::Bool(true)) {
+                n += 1;
+            }
+            if map.get("ok") == Some(&Value::Bool(false)) {
+                n += 1;
+            }
+            if let Some(e) = map.get("error")
+                && !e.is_null()
+            {
+                n += 1;
+            }
+            // Recurse into values so a wrapper like {stdout: "tool error: ..."}
+            // or an array of results is still counted; skip the flag keys we
+            // already scored to avoid double counting.
+            for (k, v) in map {
+                if k == "is_error" || k == "ok" || k == "error" {
+                    continue;
+                }
+                n += tool_error_count(v);
+            }
+            n
+        }
+        _ => 0,
+    }
+}
+
+/// True iff `value` carries any error signal (see [`tool_error_count`]).
+pub fn has_tool_error(value: &Value) -> bool {
+    tool_error_count(value) > 0
+}
+
+/// Model-readable hint describing how to recover the full content. When
+/// `error_count > 0` the note leads with a hard warning so the offloaded
+/// result is never read as success before retrieval.
+pub fn retrieval_note_with_errors(
+    hash: Option<&str>,
+    query: Option<&str>,
+    error_count: usize,
+) -> String {
+    let base = retrieval_note(hash, query);
+    if error_count > 0 {
+        format!(
+            "WARNING: this offloaded result contains {error_count} tool error(s); \
+             do NOT treat it as success — call mur_retrieve to inspect. {base}"
+        )
+    } else {
+        base
+    }
+}
+
 /// Model-readable hint describing how to recover the full content.
 pub fn retrieval_note(hash: Option<&str>, query: Option<&str>) -> String {
     match hash {
@@ -179,6 +251,75 @@ pub fn auto_compress_value(
         }
         _ => None,
     }
+}
+
+/// Error-aware wrapper over [`auto_compress_value`]. This is the entry point
+/// LLM-facing surfaces (agent-runtime `post_tool_use`, MCP) should use for
+/// *tool results*, because offloading a failed result to a hash placeholder
+/// hides the failure until `mur_retrieve` — the exact bug where an offloaded
+/// `"tool error: ..."` gets mistaken for success.
+///
+/// Contract:
+/// 1. If `is_error` is true (caller's own signal, e.g. `ToolResult.ok == false`)
+///    OR the value carries any embedded error signal ([`has_tool_error`]), the
+///    result is **passed through unchanged** (`None`) — never offloaded,
+///    regardless of size.
+/// 2. Otherwise it compresses as normal; if a bulk offload still bundles an
+///    error string the caller couldn't split out, the placeholder note is
+///    annotated with the error count via [`retrieval_note_with_errors`].
+pub fn auto_compress_value_guarded(
+    engine: &CompressEngine,
+    value: &Value,
+    query: Option<&str>,
+    min_tokens: usize,
+    is_error: bool,
+) -> Option<Value> {
+    // (1) Never offload an error-bearing result.
+    if is_error || has_tool_error(value) {
+        return None;
+    }
+    let replacement = auto_compress_value(engine, value, query, min_tokens)?;
+    // (2) Belt-and-braces: if the compressed replacement offloaded to a hash and
+    // still embeds an error signal (e.g. an error string buried in an otherwise
+    // large, non-flagged field), re-annotate its note so it can't read as success.
+    Some(annotate_offload_errors(replacement, value, query))
+}
+
+/// If `replacement` is an offloaded envelope (`compressed:true` + `hash`) and the
+/// original `value` carried error signals, rewrite the envelope `note` to lead
+/// with the error-count warning. Otherwise return `replacement` unchanged.
+fn annotate_offload_errors(mut replacement: Value, original: &Value, query: Option<&str>) -> Value {
+    let n = tool_error_count(original);
+    if n == 0 {
+        return replacement;
+    }
+    // Top-level offload envelope.
+    if let Some(obj) = replacement.as_object_mut() {
+        if obj.get("compressed") == Some(&Value::Bool(true))
+            && let Some(h) = obj.get("hash").and_then(|h| h.as_str()).map(String::from)
+        {
+            obj.insert(
+                "note".into(),
+                Value::String(retrieval_note_with_errors(Some(&h), query, n)),
+            );
+            obj.insert("tool_errors".into(), Value::from(n));
+            return replacement;
+        }
+        // Object whose largest field was replaced with an envelope.
+        for (_k, v) in obj.iter_mut() {
+            if let Some(inner) = v.as_object_mut()
+                && inner.get("compressed") == Some(&Value::Bool(true))
+                && let Some(h) = inner.get("hash").and_then(|h| h.as_str()).map(String::from)
+            {
+                inner.insert(
+                    "note".into(),
+                    Value::String(retrieval_note_with_errors(Some(&h), query, n)),
+                );
+                inner.insert("tool_errors".into(), Value::from(n));
+            }
+        }
+    }
+    replacement
 }
 
 /// Replacement value for a fired outcome: the retrieval envelope when offloaded,
@@ -336,5 +477,138 @@ mod tests {
             "interrupted": false,
         });
         assert!(auto_compress_value(&eng, &v, None, 1500).is_none());
+    }
+
+    // --- tool_error_count: every shape a failed tool result can take ---
+
+    #[test]
+    fn tool_error_count_flags_is_error_true() {
+        let v = serde_json::json!({"is_error": true, "content": "boom"});
+        assert_eq!(tool_error_count(&v), 1);
+        assert!(has_tool_error(&v));
+    }
+
+    #[test]
+    fn tool_error_count_flags_ok_false() {
+        let v = serde_json::json!({"ok": false, "output": "nope"});
+        assert_eq!(tool_error_count(&v), 1);
+    }
+
+    #[test]
+    fn tool_error_count_flags_non_null_error_field() {
+        let v = serde_json::json!({"error": "old_string not found"});
+        assert_eq!(tool_error_count(&v), 1);
+        // A null error field is not an error.
+        let ok = serde_json::json!({"error": Value::Null, "output": "fine"});
+        assert_eq!(tool_error_count(&ok), 0);
+    }
+
+    #[test]
+    fn tool_error_count_flags_tool_error_prefix_string() {
+        // The exact bug: edit_file returns "tool error: ..." as a plain string.
+        let v = serde_json::json!("tool error: invalid input: old_string not found");
+        assert_eq!(tool_error_count(&v), 1);
+        // Case- and leading-whitespace-insensitive.
+        let v2 = serde_json::json!("  TOOL ERROR: boom");
+        assert_eq!(tool_error_count(&v2), 1);
+    }
+
+    #[test]
+    fn tool_error_count_finds_nested_tool_error_in_stdout() {
+        // Wrapper object like a Bash tool_response burying the failure.
+        let v = serde_json::json!({
+            "stdout": "tool error: old_string not found",
+            "stderr": "",
+            "interrupted": false,
+        });
+        assert_eq!(tool_error_count(&v), 1);
+    }
+
+    #[test]
+    fn tool_error_count_sums_array_of_results() {
+        let v = serde_json::json!([
+            {"ok": true, "output": "fine"},
+            {"is_error": true},
+            "tool error: second failure",
+        ]);
+        assert_eq!(tool_error_count(&v), 2);
+    }
+
+    #[test]
+    fn tool_error_count_clean_result_is_zero() {
+        let v = serde_json::json!({"ok": true, "output": "all good", "error": Value::Null});
+        assert_eq!(tool_error_count(&v), 0);
+        assert!(!has_tool_error(&v));
+    }
+
+    // --- auto_compress_value_guarded: errors never offload; placeholders warn ---
+
+    #[test]
+    fn guarded_passes_through_when_caller_flags_error() {
+        let (_dir, eng) = engine();
+        // A large, otherwise-compressible payload — but the caller says it failed.
+        let v = Value::String(big_json_array());
+        assert!(
+            auto_compress_value_guarded(&eng, &v, None, 100, true).is_none(),
+            "is_error=true must never offload, regardless of size"
+        );
+    }
+
+    #[test]
+    fn guarded_passes_through_when_payload_embeds_tool_error() {
+        let (_dir, eng) = engine();
+        // Big enough to normally offload, but stdout carries a tool error.
+        let mut buried = big_json_array();
+        buried.push_str("\ntool error: old_string not found");
+        let v = serde_json::json!({"stdout": buried, "stderr": "", "interrupted": false});
+        assert!(
+            auto_compress_value_guarded(&eng, &v, None, 100, false).is_none(),
+            "embedded tool error must never offload even if caller flag is false"
+        );
+    }
+
+    #[test]
+    fn guarded_offloads_clean_large_payload_normally() {
+        let (_dir, eng) = engine();
+        let v = Value::String(big_json_array());
+        let out = auto_compress_value_guarded(&eng, &v, None, 100, false)
+            .expect("clean large payload should still compress");
+        assert_eq!(out["compressed"], serde_json::json!(true));
+        assert!(out["hash"].as_str().is_some());
+        // No error annotation on a clean result.
+        assert!(out.get("tool_errors").is_none());
+        assert!(!out["note"].as_str().unwrap().contains("WARNING"));
+    }
+
+    #[test]
+    fn guarded_annotates_offload_that_still_bundles_an_error() {
+        let (_dir, eng) = engine();
+        // Object whose largest field is a clean big array (so it offloads),
+        // while a sibling scalar carries the error signal the caller couldn't
+        // split out. has_tool_error would gate the whole thing — so exercise
+        // annotate_offload_errors directly on a produced envelope + error origin.
+        let clean = serde_json::json!({"results": (0..3000).map(|i| serde_json::json!({"id": i})).collect::<Vec<_>>()});
+        let replacement = auto_compress_value(&eng, &clean, None, 50).expect("should fire");
+        let with_err = serde_json::json!({"is_error": true, "results": clean["results"].clone()});
+        let annotated = annotate_offload_errors(replacement, &with_err, None);
+        let env = &annotated["results"];
+        assert_eq!(env["compressed"], serde_json::json!(true));
+        assert_eq!(env["tool_errors"], serde_json::json!(1));
+        assert!(
+            env["note"].as_str().unwrap().contains("WARNING"),
+            "annotated note must warn against treating as success"
+        );
+        assert!(env["note"].as_str().unwrap().contains("do NOT treat"));
+    }
+
+    #[test]
+    fn retrieval_note_with_errors_leads_with_warning() {
+        let note = retrieval_note_with_errors(Some("abc123"), Some("q"), 3);
+        assert!(note.contains("3 tool error"));
+        assert!(note.contains("do NOT treat"));
+        assert!(note.contains("mur_retrieve"));
+        // Zero errors → plain note, no warning.
+        let plain = retrieval_note_with_errors(Some("abc123"), None, 0);
+        assert!(!plain.contains("WARNING"));
     }
 }
