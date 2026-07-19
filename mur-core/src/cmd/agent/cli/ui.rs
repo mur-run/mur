@@ -444,6 +444,42 @@ fn blank_wide_char_continuations(buf: &mut ratatui::buffer::Buffer) {
     }
 }
 
+/// Wrapped (physical) row count of the *live* region — the still-unflushed
+/// transcript tail (`app.messages[flushed_upto..]`), soft-wrapped at the
+/// transcript pane's inner width. Same accounting as `render_transcript` and
+/// `flush_finished` (`Paragraph::line_count`, not `lines.len()`), so the
+/// dynamic viewport height in the event loop stays in lock-step with what the
+/// live region actually paints. `outer_width` is the full transcript pane
+/// width (before the TOP/BOTTOM border block trims it to inner width).
+///
+/// Returns 0 when there is nothing live to paint (all settled + flushed).
+/// The empty-transcript welcome screen is intentionally NOT measured here:
+/// `desired_viewport_h` keeps the full viewport in that case.
+pub fn live_tail_rows(app: &App, outer_width: u16) -> u16 {
+    let theme = app.theme;
+    let start = app.flushed_upto.min(app.messages.len());
+    if start >= app.messages.len() {
+        return 0;
+    }
+    let mut lines: Vec<Line> = Vec::new();
+    for m in &app.messages[start..] {
+        push_message(&mut lines, m, app.spinner, theme, app.cards_expanded);
+    }
+    if lines.is_empty() {
+        return 0;
+    }
+    // Reproduce render_transcript's block exactly so the wrapped row count
+    // matches the painted region: horizontal padding trims the same columns,
+    // and `line_count` folds in wrap + padding at the inner width.
+    let block = Block::default()
+        .borders(Borders::TOP | Borders::BOTTOM)
+        .padding(Padding::horizontal(theme.inner_padding as u16));
+    let inner_width = block.inner(Rect::new(0, 0, outer_width.max(1), 1)).width;
+    Paragraph::new(Text::from(lines))
+        .wrap(Wrap { trim: false })
+        .line_count(inner_width.max(1)) as u16
+}
+
 /// Draws the *live* region only: everything at index `< app.flushed_upto` has
 /// already been flushed into the terminal's own scrollback (see
 /// `flush_finished`), so this is at most the one currently-streaming message
