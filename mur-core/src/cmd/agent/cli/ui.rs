@@ -667,7 +667,7 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
             .saturating_sub(req.created_at.elapsed().as_secs());
         (
             format!(
-                "tool approval needed (auto-deny in {remaining}s) — [y] approve · [a] always (session) · [n] deny"
+                "tool approval needed (auto-deny in {remaining}s) — [y] approve · [a] always (session) · [A] all (session) · [n] deny"
             ),
             Color::Yellow,
         )
@@ -692,12 +692,38 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         ),
         Span::raw("  "),
     ];
+    // Auto-approval visibility (#8 / proposal 2). All three auto-approval
+    // paths now show a badge, not just the global `auto_approve`:
+    //   - `auto_approve`               → ` AUTO `   (every tool, session)
+    //   - `session_tool_allow` (N>0)   → ` AUTO:N ` (N tools muted via [a])
+    //   - `auto_reads`                 → ` READS `  (read_file auto-approved)
+    // Pure display; no behaviour change. Fixes the "AUTO badge vanished in a
+    // new session" illusion where `[a]`-muted tools left no visible trace.
     if app.auto_approve {
         spans.push(Span::styled(
             " AUTO ",
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw("  "));
+    } else if !app.session_tool_allow.is_empty() {
+        spans.push(Span::styled(
+            format!(" AUTO:{} ", app.session_tool_allow.len()),
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw("  "));
+    }
+    if app.auto_reads {
+        spans.push(Span::styled(
+            " READS ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::raw("  "));

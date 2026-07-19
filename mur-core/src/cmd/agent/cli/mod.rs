@@ -788,10 +788,20 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                     KeyCode::Char('d') if ctrl => request_quit(app, tx),
                     KeyCode::Char('c') if ctrl => decide_hitl(app, tx, false),
                     KeyCode::Char('y') | KeyCode::Char('Y') => decide_hitl(app, tx, true),
-                    KeyCode::Char('a') | KeyCode::Char('A') => {
+                    // [a] — always allow THIS tool name for the session
+                    // (per-tool-name grain; each distinct tool still asks once).
+                    KeyCode::Char('a') => {
                         if let Some(req) = &app.hitl {
                             app.session_tool_allow.insert(req.tool_name.clone());
                         }
+                        decide_hitl(app, tx, true);
+                    }
+                    // [A] — always allow ALL tools for the session (#7 grain
+                    // fix / proposal 1a): flip the global `auto_approve` so the
+                    // user need not press [a] once per distinct tool name. Same
+                    // session lifetime as `[a]`; cleared by `/auto off`.
+                    KeyCode::Char('A') => {
+                        app.auto_approve = true;
                         decide_hitl(app, tx, true);
                     }
                     KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
@@ -926,6 +936,17 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                 }
                 KeyCode::Char('o') if ctrl => {
                     scrollback_dump(app);
+                }
+                // Ctrl+R — re-run the request whose approval expired (#8):
+                // refill the composer from the stashed `expired_retry` so the
+                // user can resend with one key. Only when something is stashed
+                // and the composer is empty, so it never clobbers a draft.
+                KeyCode::Char('r') if ctrl => {
+                    if app.input_text().is_empty()
+                        && let Some(text) = app.expired_retry.take()
+                    {
+                        app.set_input(&text);
+                    }
                 }
                 KeyCode::PageUp => {
                     app.scroll_back = app.scroll_back.saturating_add(app.scroll_page.max(1))
@@ -1237,6 +1258,9 @@ fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: boo
         let (h, a) = (app.home.clone(), app.agent.clone());
         let (id, tool) = (req.hitl_id.clone(), req.tool_name.clone());
         let task_id = app.current_task_id.clone();
+        // Capture the user's last message before the spawn so an expired
+        // approval (#8) can offer a one-key re-run of the stranded request.
+        let retry = app.last_sent.clone();
         let t = tx.clone();
         tokio::spawn(async move {
             if let Err(e) = respond_hitl(h, a, id, allow).await {
@@ -1246,10 +1270,10 @@ fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: boo
                     // (older runtimes) on this method both mean the same
                     // thing: the gate timed out and auto-denied before the
                     // decision landed. The turn itself is still alive.
-                    recover::HitlFailure::Expired => StreamMsg::Note(format!(
-                        "approval for `{tool}` arrived too late — the call was already \
-                         auto-denied at timeout; re-run the request"
-                    )),
+                    recover::HitlFailure::Expired => StreamMsg::Expired {
+                        tool: tool.clone(),
+                        retry: retry.clone(),
+                    },
                     // The runtime is gone: the whole in-memory task died with
                     // it, so the stale binding must be dropped too or every
                     // subsequent input steers a dead task (#713).
@@ -1368,6 +1392,8 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
     }
 
     app.last_sent = Some(trimmed.clone());
+    // A fresh send supersedes any expired-approval retry offer (#8).
+    app.expired_retry = None;
     app.clear_input();
     start_turn(app, trimmed, tx);
 }
@@ -1693,6 +1719,22 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
             }
         }
         StreamMsg::Note(text) => app.push_system(text),
+        StreamMsg::Expired { tool, retry } => {
+            // The gate auto-denied `tool` at timeout before this approval
+            // landed (#8). Stash the user's last message so [Ctrl+R] can
+            // refill the composer for a one-key re-run, and hint that path
+            // instead of the old dead-end "re-run the request" note.
+            app.expired_retry = retry;
+            let hint = if app.expired_retry.is_some() {
+                " — press Ctrl+R to re-run the request"
+            } else {
+                " — re-run the request"
+            };
+            app.push_system(format!(
+                "approval for `{tool}` arrived too late — the call was already \
+                 auto-denied at timeout{hint}"
+            ));
+        }
         StreamMsg::TurnLost { note, resend, .. } => {
             app.drop_dead_turn();
             app.push_system(note);
