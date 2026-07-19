@@ -1281,20 +1281,14 @@ impl TaskRunner {
             let policy = if crate::tools::suggest::suggest_replies_allowed(&call.tool_name) {
                 ToolPolicy::Allow
             } else {
-                match resolve_tool_policy_opt(&self.tools_policy, &call.tool_name) {
-                    Some(p) => p,
-                    // fleet_run's authorization is the out-of-model config
-                    // allowlist that gated its registration (plus the fleet's
-                    // own budget + kill-switch). With no explicit rule it
-                    // defaults to Allow: the HITL gate here is execute-THEN-
-                    // approve, so `Ask` adds no spend protection — it only
-                    // creates the pay-then-discard failure mode when the
-                    // approval window times out mid-run.
-                    None if call.tool_name == crate::tools::fleet_run::FLEET_RUN => {
-                        ToolPolicy::Allow
-                    }
-                    None => ToolPolicy::default(),
-                }
+                // issue #3: dispatch/spend tools (parallel_jobs, fleet_run,
+                // delegate_to) must ask BEFORE executing. The HITL gate below
+                // is now a pre-execution gate (execute happens only after an
+                // Allow decision), so `Ask` provides real spend protection and
+                // fleet_run no longer needs its old `None => Allow` special
+                // case. Unknown tools fall through to `ToolPolicy::default()`,
+                // which is `Ask` — fail-closed.
+                resolve_tool_policy_opt(&self.tools_policy, &call.tool_name).unwrap_or_default()
             };
             match policy {
                 ToolPolicy::Deny => {
@@ -1354,7 +1348,66 @@ impl TaskRunner {
                         is_error,
                     });
                 }
-                ToolPolicy::Ask => {}
+                ToolPolicy::Ask => {
+                    // issue #3: PRE-EXECUTION approval gate. The tool is NOT
+                    // executed until an Allow decision arrives. Route the
+                    // prompt to the connection that issued this turn; never
+                    // broadcast. fail-closed: with no approval sink wired
+                    // (pending_approvals or notifier missing) the decision is
+                    // DENY, so dispatch/spend tools cannot run unattended.
+                    let routed = self.client_notifiers.lock().await.get(task_id).cloned();
+                    let effective_notifier = routed.as_ref().or(self.notifier.as_ref());
+                    let decision = if let (Some(pa), Some(notifier)) =
+                        (&self.pending_approvals, effective_notifier)
+                    {
+                        let hitl_id = uuid::Uuid::now_v7().to_string();
+                        let (tx, rx) = tokio::sync::oneshot::channel::<crate::hitl::HitlDecision>();
+                        pa.lock().await.insert(hitl_id.clone(), tx);
+                        let notification = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "method": "tool/approval_needed",
+                            "params": {
+                                "step_id": step_id,
+                                "hitl_id": hitl_id,
+                                "task_id": task_id,
+                                "tool_name": call.tool_name,
+                                "tool_input": call.input,
+                                "timeout_ms": (self.hitl_timeout_secs as u64) * 1000,
+                            }
+                        });
+                        let _ = notifier.send(notification).await;
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(self.hitl_timeout_secs as u64),
+                            rx,
+                        )
+                        .await
+                        {
+                            Ok(Ok(d)) => d,
+                            _ => {
+                                pa.lock().await.remove(&hitl_id);
+                                crate::hitl::HitlDecision {
+                                    allow: false,
+                                    reason: Some("timed out".into()),
+                                }
+                            }
+                        }
+                    } else {
+                        // fail-closed: no approval sink => deny.
+                        crate::hitl::HitlDecision {
+                            allow: false,
+                            reason: Some("no approval channel available".into()),
+                        }
+                    };
+                    if !decision.allow {
+                        let reason_str = decision.reason.as_deref().unwrap_or("denied");
+                        return Err(task_error(
+                            "hitl_denied",
+                            format!("tool call denied: {reason_str}"),
+                            false,
+                        ));
+                    }
+                    // Approved: fall through to execute below.
+                }
             }
         }
 
@@ -1402,62 +1455,9 @@ impl TaskRunner {
                 .await;
         }
 
-        // 3. HITL gate (only after tool execution). Route the approval prompt to
-        // the connection that issued this turn (looked up by task id), falling
-        // back to the baked notifier — never broadcast to other clients.
-        let routed = self.client_notifiers.lock().await.get(task_id).cloned();
-        let effective_notifier = routed.as_ref().or(self.notifier.as_ref());
-        let decision =
-            if let (Some(pa), Some(notifier)) = (&self.pending_approvals, effective_notifier) {
-                let hitl_id = uuid::Uuid::now_v7().to_string();
-                let (tx, rx) = tokio::sync::oneshot::channel::<crate::hitl::HitlDecision>();
-                pa.lock().await.insert(hitl_id.clone(), tx);
-                let notification = serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": "tool/approval_needed",
-                    "params": {
-                        "step_id": step_id,
-                        "hitl_id": hitl_id,
-                        "task_id": task_id,
-                        "tool_name": call.tool_name,
-                        "tool_input": call.input,
-                        "output": output,
-                        "is_error": is_error,
-                        "timeout_ms": (self.hitl_timeout_secs as u64) * 1000,
-                    }
-                });
-                let _ = notifier.send(notification).await;
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(self.hitl_timeout_secs as u64),
-                    rx,
-                )
-                .await
-                {
-                    Ok(Ok(d)) => d,
-                    _ => {
-                        pa.lock().await.remove(&hitl_id);
-                        crate::hitl::HitlDecision {
-                            allow: false,
-                            reason: Some("timed out".into()),
-                        }
-                    }
-                }
-            } else {
-                crate::hitl::HitlDecision {
-                    allow: true,
-                    reason: None,
-                }
-            };
-
-        if !decision.allow {
-            let reason_str = decision.reason.as_deref().unwrap_or("denied");
-            return Err(task_error(
-                "hitl_denied",
-                format!("tool call denied: {reason_str}"),
-                false,
-            ));
-        }
-
+        // The HITL approval gate now runs PRE-execution in the `Ask` policy
+        // arm above (issue #3), so by the time we reach here the tool has been
+        // approved and executed. Return its output.
         Ok(ToolResultEntry {
             call_id: call.call_id.clone(),
             content: output,
@@ -2585,17 +2585,17 @@ mod tests {
         }
     }
 
-    /// fleet_run with NO explicit rule defaults to Allow (its authorization is
-    /// the config allowlist that gated registration; the execute-then-approve
-    /// HITL gate adds no spend protection). With a 1s HITL timeout, an `Ask`
-    /// default would auto-deny the result — completion with the tool's real
-    /// output proves the Allow path ran.
+    /// issue #3: fleet_run with NO explicit rule now defaults to `Ask` (the
+    /// `None => Allow` special case is gone). With an approval sink present but
+    /// no responder, the 1s HITL timeout auto-denies PRE-execution — the spy's
+    /// execute count MUST stay 0. This is the core issue #3 regression guard:
+    /// dispatch/spend tools never run before approval.
     #[tokio::test]
-    async fn fleet_run_without_rule_defaults_to_allow() {
+    async fn fleet_run_without_rule_defaults_to_ask_and_denies_before_exec() {
         use crate::llm::stub::SequenceLlm;
         let responses: Vec<crate::llm::LlmResponse> = vec![
             fleet_run_call_response("fr-0"),
-            end_turn_response("REPORT DELIVERED"),
+            end_turn_response("SHOULD NOT REACH"),
         ];
         let calls = Arc::new(AtomicU64::new(0));
         let runner = Arc::new(
@@ -2603,17 +2603,98 @@ mod tests {
                 .with_tools(vec![Arc::new(CountingFleetRunTool {
                     calls: calls.clone(),
                 })])
-                .with_tools_policy(vec![]) // no rules at all
+                .with_tools_policy(vec![]) // no rules => default Ask
                 .with_pending_approvals(empty_pending_approvals())
                 .with_notifier(tokio::sync::mpsc::channel(16).0)
                 .with_hitl_timeout_secs(1)
                 .with_max_iterations(5),
         );
-        let outcome = runner.run_sync(loop_spec("fleet-run-default")).await;
+        let _ = runner.run_sync(loop_spec("fleet-run-default-ask")).await;
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            0,
+            "unapproved fleet_run must NOT execute (pre-exec deny)"
+        );
+    }
+
+    /// issue #3: fail-closed. With NO approval sink wired at all
+    /// (`pending_approvals`/`notifier` absent), an `Ask` tool must be DENIED
+    /// pre-execution, never silently allowed. Spy execute count stays 0.
+    #[tokio::test]
+    async fn ask_tool_denies_when_no_approval_sink() {
+        use crate::llm::stub::SequenceLlm;
+        let responses: Vec<crate::llm::LlmResponse> =
+            vec![fleet_run_call_response("fr-0"), end_turn_response("NOPE")];
+        let calls = Arc::new(AtomicU64::new(0));
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_tools(vec![Arc::new(CountingFleetRunTool {
+                    calls: calls.clone(),
+                })])
+                .with_tools_policy(vec![]) // default Ask
+                // NB: no with_pending_approvals / no with_notifier => no sink
+                .with_hitl_timeout_secs(1)
+                .with_max_iterations(5),
+        );
+        let _ = runner.run_sync(loop_spec("fleet-run-no-sink")).await;
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            0,
+            "with no approval sink, Ask must fail-closed (deny), never execute"
+        );
+    }
+
+    /// issue #3: happy path — an explicit approval arriving on the pending
+    /// channel lets the tool execute exactly once. A background poller pulls
+    /// the sender out of `pending_approvals` and answers `allow: true`.
+    #[tokio::test]
+    async fn ask_tool_executes_after_approval() {
+        use crate::llm::stub::SequenceLlm;
+        let responses: Vec<crate::llm::LlmResponse> = vec![
+            fleet_run_call_response("fr-0"),
+            end_turn_response("REPORT DELIVERED"),
+        ];
+        let calls = Arc::new(AtomicU64::new(0));
+        let pa = empty_pending_approvals();
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_tools(vec![Arc::new(CountingFleetRunTool {
+                    calls: calls.clone(),
+                })])
+                .with_tools_policy(vec![]) // default Ask
+                .with_pending_approvals(pa.clone())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(5)
+                .with_max_iterations(5),
+        );
+        // Background approver: as soon as a pending approval appears, answer allow.
+        let pa2 = pa.clone();
+        let approver = tokio::spawn(async move {
+            for _ in 0..200 {
+                let sender = {
+                    let mut guard = pa2.lock().await;
+                    guard.keys().next().cloned().and_then(|k| guard.remove(&k))
+                };
+                if let Some(tx) = sender {
+                    let _ = tx.send(crate::hitl::HitlDecision {
+                        allow: true,
+                        reason: None,
+                    });
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        });
+        let outcome = runner.run_sync(loop_spec("fleet-run-approved")).await;
+        let _ = approver.await;
         let TaskOutcome::Completed(task) = outcome else {
             panic!("expected Completed, got {outcome:?}");
         };
-        assert_eq!(calls.load(Ordering::Relaxed), 1, "tool must have executed");
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "approved fleet_run must execute exactly once"
+        );
         let reply_text = task.messages.last().map(text_of).unwrap_or_default();
         assert!(reply_text.contains("REPORT DELIVERED"), "{reply_text}");
     }
