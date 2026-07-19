@@ -141,6 +141,7 @@ mod tests {
         use crate::tools::bash::BashTool;
         let bash_exec: Arc<dyn ToolExecutor> = Arc::new(BashTool {
             working_dir: std::path::PathBuf::from("/tmp"),
+            session_cwd: crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
         });
         let bash_def = bash_exec.def();
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
@@ -172,6 +173,7 @@ mod tests {
         use crate::tools::bash::BashTool;
         let bash_exec: Arc<dyn ToolExecutor> = Arc::new(BashTool {
             working_dir: std::path::PathBuf::from("/tmp"),
+            session_cwd: crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
         });
         let bash_def = bash_exec.def();
         let rules = vec![ToolRule {
@@ -200,7 +202,7 @@ mod tests {
     async fn read_file_tool_included_when_allowed() {
         use crate::tools::read_file::ReadFileTool;
         let read_file_exec: Arc<dyn ToolExecutor> = Arc::new(ReadFileTool::new(
-            std::path::PathBuf::from("/tmp"),
+            crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
             mur_common::agent::FilesystemEntitlement::default(),
         ));
         let read_file_def = read_file_exec.def();
@@ -224,7 +226,7 @@ mod tests {
     async fn read_file_tool_excluded_when_denied() {
         use crate::tools::read_file::ReadFileTool;
         let read_file_exec: Arc<dyn ToolExecutor> = Arc::new(ReadFileTool::new(
-            std::path::PathBuf::from("/tmp"),
+            crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
             mur_common::agent::FilesystemEntitlement::default(),
         ));
         let read_file_def = read_file_exec.def();
@@ -254,7 +256,7 @@ mod tests {
     async fn write_file_tool_included_when_allowed() {
         use crate::tools::write_file::WriteFileTool;
         let write_file_exec: Arc<dyn ToolExecutor> = Arc::new(WriteFileTool::new(
-            std::path::PathBuf::from("/tmp"),
+            crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
             mur_common::agent::FilesystemEntitlement::default(),
         ));
         let write_file_def = write_file_exec.def();
@@ -278,7 +280,7 @@ mod tests {
     async fn write_file_tool_excluded_when_denied() {
         use crate::tools::write_file::WriteFileTool;
         let write_file_exec: Arc<dyn ToolExecutor> = Arc::new(WriteFileTool::new(
-            std::path::PathBuf::from("/tmp"),
+            crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
             mur_common::agent::FilesystemEntitlement::default(),
         ));
         let write_file_def = write_file_exec.def();
@@ -308,7 +310,7 @@ mod tests {
     async fn edit_file_tool_included_when_allowed() {
         use crate::tools::edit_file::EditFileTool;
         let edit_file_exec: Arc<dyn ToolExecutor> = Arc::new(EditFileTool::new(
-            std::path::PathBuf::from("/tmp"),
+            crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
             mur_common::agent::FilesystemEntitlement::default(),
         ));
         let edit_file_def = edit_file_exec.def();
@@ -332,7 +334,7 @@ mod tests {
     async fn edit_file_tool_excluded_when_denied() {
         use crate::tools::edit_file::EditFileTool;
         let edit_file_exec: Arc<dyn ToolExecutor> = Arc::new(EditFileTool::new(
-            std::path::PathBuf::from("/tmp"),
+            crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
             mur_common::agent::FilesystemEntitlement::default(),
         ));
         let edit_file_def = edit_file_exec.def();
