@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use mur_common::channel::ChannelActor;
+use mur_common::channel::{ChannelActor, EventKind};
 use mur_common::fleet::{Job, JobStatus};
 use mur_common::parallel::{ParallelConfig, ParallelMode};
 use mur_common::skill::manifest::{Procedure, ProcedureStep};
@@ -17,6 +17,41 @@ use crate::parallel::semantic::{SupportedLanguage, extract_units};
 use crate::parallel::track::{TrackSet, worktree};
 
 use super::store;
+
+/// Map a fleet run's **channel outcome** to a terminal [`JobStatus`] (#10).
+///
+/// Reads the last `StateChange` event emitted by THIS run (`seq > since`) and
+/// maps its `to` state — this is the authoritative source of a job's terminal
+/// status, replacing the old behaviour of trusting the yaml's declared
+/// `status:`. Returns `None` when the run recorded no terminal StateChange
+/// (e.g. an empty DAG, a run with no channel routing, or a crash before the
+/// executor's `emit_final`), in which case the caller falls back to the raw
+/// `exec_result`.
+///
+/// Mapping (channel `ChannelState` → `JobStatus`):
+/// - `completed` → `Done`
+/// - `failed`    → `Failed`
+/// - `canceled` / `rejected` → `Canceled`
+///
+/// Non-terminal states (`working`, `submitted`, `input-required`, `stale`) are
+/// ignored: they are never a run's *final* word, so we keep scanning and, if
+/// nothing terminal is found, return `None`.
+fn job_status_from_channel(
+    events: &[mur_common::channel::ChannelEvent],
+    since: u64,
+) -> Option<JobStatus> {
+    events
+        .iter()
+        .filter(|e| e.seq > since && e.kind == EventKind::StateChange)
+        .filter_map(|e| e.payload.get("to").and_then(|v| v.as_str()))
+        .rev()
+        .find_map(|to| match to {
+            "completed" => Some(JobStatus::Done),
+            "failed" => Some(JobStatus::Failed),
+            "canceled" | "rejected" => Some(JobStatus::Canceled),
+            _ => None,
+        })
+}
 
 /// Phase 1 "plan": one parallel delegate-step per member (or per track if parallel config present),
 /// each handed the goal (with approach injection for tracks).
@@ -357,15 +392,55 @@ pub async fn cmd_fleet_run(
         crate::executor::dag::execute_dag(mur_home, &format!("fleet:{}", fleet.name), &proc, &opts)
             .await;
     // Stamp job terminal before surfacing any error.
+    //
+    // #10 truth fix: the job's terminal status MUST reflect the RUN's actual
+    // outcome, not the yaml's declared `status:`. The authoritative source is
+    // the channel's last `StateChange` event emitted by THIS run (seq > since):
+    // the DAG executor transitions the channel to Completed/Failed at the end.
+    // A DAG can return `Ok` while the channel ended `failed` (a member step
+    // failed but was tolerated) — that is exactly the decoupling that lied to
+    // the user ("done" while the channel said working→failed). We read the
+    // channel state-change back and let it decide; `exec_result` only supplies
+    // the error text and is the fallback when no StateChange was recorded.
     if let Some(job) = active_job.as_mut() {
         job.run_id = Some(run_id);
         job.finished_at = Some(chrono::Utc::now().to_rfc3339());
-        match &exec_result {
-            Ok(out) => {
+
+        // Authoritative: last StateChange `to` from this run's events.
+        let channel_terminal = svc
+            .load_events(&fleet.channel_id)
+            .ok()
+            .and_then(|evs| job_status_from_channel(&evs, since));
+
+        match (&channel_terminal, &exec_result) {
+            // Channel spoke: it is the source of truth for the terminal state.
+            (Some(JobStatus::Done), _) => {
+                job.status = JobStatus::Done;
+                job.result = exec_result
+                    .as_ref()
+                    .ok()
+                    .and_then(|o| o.output_text.clone())
+                    .filter(|t| !t.is_empty());
+            }
+            (Some(JobStatus::Failed), _) => {
+                job.status = JobStatus::Failed;
+                // Prefer the concrete exec error; else say the channel failed.
+                job.error = Some(match &exec_result {
+                    Err(e) => format!("{e:#}"),
+                    Ok(_) => "run ended in channel state `failed`".to_string(),
+                });
+            }
+            (Some(JobStatus::Canceled), _) => {
+                job.status = JobStatus::Canceled;
+                job.error = Some("run was canceled/rejected".to_string());
+            }
+            // Channel said nothing terminal (empty DAG, no channel routing, or a
+            // hard crash before emit): fall back to the exec_result.
+            (_, Ok(out)) => {
                 job.status = JobStatus::Done;
                 job.result = out.output_text.clone().filter(|t| !t.is_empty());
             }
-            Err(e) => {
+            (_, Err(e)) => {
                 job.status = JobStatus::Failed;
                 job.error = Some(format!("{e:#}"));
             }
