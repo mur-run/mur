@@ -48,7 +48,14 @@ impl ChannelIndex {
         // WAL allows concurrent readers alongside one writer; busy_timeout makes a
         // contended writer wait briefly instead of failing immediately with
         // SQLITE_BUSY (which would drop a turn under normal Hub+CLI use).
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
+        //
+        // Order matters: set busy_timeout BEFORE journal_mode=WAL. Switching the
+        // journal mode takes a lock on the database, and when several processes
+        // open the DB concurrently (e.g. parallel_jobs fanning out) that lock is
+        // contended — without a busy_timeout already in effect the WAL switch
+        // itself fails immediately with SQLITE_BUSY. Setting the timeout first
+        // makes the contended connection wait and retry instead of dropping.
+        conn.execute_batch("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;")
             .context("configure channels.db concurrency pragmas")?;
         let me = Self { conn };
         me.migrate()?;
