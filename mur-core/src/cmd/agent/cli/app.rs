@@ -368,6 +368,14 @@ pub struct App {
     pub last_ctrl_c_at: Option<std::time::Instant>,
     pub ctrl_c_hint: bool,
     pub last_sent: Option<String>,
+    /// #8 / proposal 3a: the user request whose tool approval auto-denied at
+    /// timeout. A pre-execution timeout deny has NO side effects (the tool
+    /// never ran), so replaying is safe. Holds the `last_sent` snapshot so the
+    /// modal's `[r]` can one-shot re-run the request that hit the wall, instead
+    /// of the old "arrived too late — re-run the request" dead end. `None`
+    /// unless an expired-at-timeout deny is pending a retry; cleared once
+    /// consumed by `[r]` or superseded by the next sent turn.
+    pub expired_retry: Option<String>,
     /// `(mime, base64)` of an image staged for the next message — either a
     /// clipboard screenshot (Ctrl+V) or an image file the terminal pasted as a
     /// path (Cmd+V / drag-drop). Sent as an inline image part, cleared on send.
@@ -480,6 +488,7 @@ impl App {
             last_ctrl_c_at: None,
             ctrl_c_hint: false,
             last_sent: None,
+            expired_retry: None,
             pending_image: None,
             blink: Blink::new(),
             // Resolve color/animation once: env + TTY don't change mid-session.
