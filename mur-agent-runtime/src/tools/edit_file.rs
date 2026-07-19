@@ -1,22 +1,20 @@
 //! First-party exact-literal edit tool (issue #591, PR2). No regex —
 //! ambiguity fails closed instead of guessing.
 
-use std::path::PathBuf;
-
 use mur_common::agent::FilesystemEntitlement;
 
 use crate::llm::ToolDef;
-use crate::tools::fs_policy::check_write_entitlement;
+use crate::tools::fs_policy::{SessionCwd, check_write_entitlement};
 use crate::tools::{ToolError, ToolExecutor};
 
 pub struct EditFileTool {
-    pub working_dir: PathBuf,
+    pub session_cwd: SessionCwd,
     pub fs: FilesystemEntitlement,
 }
 
 impl EditFileTool {
-    pub fn new(working_dir: PathBuf, fs: FilesystemEntitlement) -> Self {
-        Self { working_dir, fs }
+    pub fn new(session_cwd: SessionCwd, fs: FilesystemEntitlement) -> Self {
+        Self { session_cwd, fs }
     }
 }
 
@@ -29,12 +27,12 @@ impl ToolExecutor for EditFileTool {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "edit_file".into(),
-            description: "Replace an exact literal substring in a UTF-8 text file (no regex). By default the old_string must match exactly once — pass expected_count to replace N known occurrences. Edits are checked against the agent's filesystem write entitlements."
+            description: "Replace an exact literal substring in a UTF-8 text file (no regex). By default the old_string must match exactly once — pass expected_count to replace N known occurrences. Relative paths resolve against the shared session cwd (set by the bash tool's `cwd`); a `cd` inside a bash subprocess is NOT retained. Edits are checked against the agent's filesystem write entitlements."
                 .into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "File to edit (absolute, or relative to the agent working dir)" },
+                    "path": { "type": "string", "description": "File to edit (absolute, or relative to the session cwd)" },
                     "old_string": { "type": "string", "description": "Exact literal text to replace" },
                     "new_string": { "type": "string", "description": "Replacement text" },
                     "expected_count": { "type": "integer", "description": "Exact number of occurrences to replace; omit to require exactly one" }
@@ -59,13 +57,23 @@ impl ToolExecutor for EditFileTool {
                 "'old_string' must be non-empty".into(),
             ));
         }
-        let joined = crate::tools::fs_policy::resolve_path(&self.working_dir, raw);
-        let canonical = std::fs::canonicalize(&joined)
-            .map_err(|e| ToolError::Execution(format!("cannot edit {}: {e}", joined.display())))?;
+        let base = self.session_cwd.current();
+        let joined = crate::tools::fs_policy::resolve_path(&base, raw);
+        let canonical = std::fs::canonicalize(&joined).map_err(|e| {
+            ToolError::Execution(format!(
+                "cannot edit {}: {e} (relative to session cwd {})",
+                joined.display(),
+                base.display()
+            ))
+        })?;
         check_write_entitlement(&self.fs, &canonical)?;
 
         let text = std::fs::read_to_string(&canonical).map_err(|e| {
-            ToolError::Execution(format!("cannot read {}: {e}", canonical.display()))
+            ToolError::Execution(format!(
+                "cannot read {}: {e} (relative to session cwd {})",
+                canonical.display(),
+                base.display()
+            ))
         })?;
         let found = text.match_indices(old).count();
         let expected = input["expected_count"].as_i64().filter(|v| *v >= 1);
@@ -87,7 +95,11 @@ impl ToolExecutor for EditFileTool {
         }
         let updated = text.replace(old, new);
         std::fs::write(&canonical, &updated).map_err(|e| {
-            ToolError::Execution(format!("cannot write {}: {e}", canonical.display()))
+            ToolError::Execution(format!(
+                "cannot write {}: {e} (relative to session cwd {})",
+                canonical.display(),
+                base.display()
+            ))
         })?;
         Ok(format!(
             "replaced {found} occurrence(s) in {}",
@@ -103,7 +115,7 @@ mod tests {
     fn tool(td: &tempfile::TempDir) -> EditFileTool {
         let root = td.path().to_str().unwrap();
         EditFileTool::new(
-            td.path().into(),
+            SessionCwd::new(td.path().into()),
             FilesystemEntitlement {
                 read: vec![],
                 write: vec![root.to_string()],
@@ -140,6 +152,17 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput(_)));
+    }
+
+    #[tokio::test]
+    async fn missing_file_error_names_session_cwd() {
+        let td = tempfile::tempdir().unwrap();
+        let err = tool(&td)
+            .execute(serde_json::json!({"path": "nope.txt", "old_string": "X", "new_string": "Y"}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("cannot edit"));
+        assert!(err.to_string().contains("session cwd"));
     }
 
     #[tokio::test]

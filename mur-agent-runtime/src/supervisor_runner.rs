@@ -247,8 +247,13 @@ pub async fn build_provider_runner(
     // profile and sandboxed children can dial it. See profile_needs_egress.
     let egress = egress_proxy;
     let pool = McpPool::new(enabled_mcp.clone(), sandbox_policy, egress);
+    // Issue #591 / runtime-file-tools-cwd: bash and the three file tools share
+    // ONE session cwd (initial value = agent_home). The bash tool's `cwd`
+    // parameter updates it; file tools resolve relative paths against the
+    // current snapshot. A `cd` inside a bash subprocess is NOT retained.
+    let session_cwd = crate::tools::fs_policy::SessionCwd::new(agent_home.to_path_buf());
     let bash_exec: Arc<dyn crate::tools::ToolExecutor> =
-        Arc::new(BashTool::new(agent_home.to_path_buf()));
+        Arc::new(BashTool::new(agent_home.to_path_buf(), session_cwd.clone()));
     let bash_def = bash_exec.def();
     // Issue #712: the file tools must never touch the agent's own
     // profile.yaml / identity.key, whatever the profile grants.
@@ -257,15 +262,15 @@ pub async fn build_provider_runner(
         agent_home,
     );
     let read_file_exec: Arc<dyn crate::tools::ToolExecutor> = Arc::new(
-        crate::tools::read_file::ReadFileTool::new(agent_home.to_path_buf(), tool_fs.clone()),
+        crate::tools::read_file::ReadFileTool::new(session_cwd.clone(), tool_fs.clone()),
     );
     let read_file_def = read_file_exec.def();
     let write_file_exec: Arc<dyn crate::tools::ToolExecutor> = Arc::new(
-        crate::tools::write_file::WriteFileTool::new(agent_home.to_path_buf(), tool_fs.clone()),
+        crate::tools::write_file::WriteFileTool::new(session_cwd.clone(), tool_fs.clone()),
     );
     let write_file_def = write_file_exec.def();
     let edit_file_exec: Arc<dyn crate::tools::ToolExecutor> = Arc::new(
-        crate::tools::edit_file::EditFileTool::new(agent_home.to_path_buf(), tool_fs),
+        crate::tools::edit_file::EditFileTool::new(session_cwd, tool_fs),
     );
     let edit_file_def = edit_file_exec.def();
     let tools_policy = profile.inner.entitlements.tools.clone();

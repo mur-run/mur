@@ -3,10 +3,43 @@
 //! read_file keeps its own equivalent check — dedup is a follow-up.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 use mur_common::agent::FilesystemEntitlement;
 
 use crate::tools::ToolError;
+
+/// Session-wide current working directory shared by the `bash` tool and the
+/// file tools (`read_file`/`write_file`/`edit_file`), so a relative path
+/// resolves against the same base no matter which tool the agent reached for.
+///
+/// Dogfood bug: `bash pwd` showed one directory while `read_file rel/path`
+/// resolved against `agent_home`, because the two tools never shared a base.
+/// The `bash` tool updates this only when it is given an explicit `cwd`
+/// argument; a `cd` *inside* a spawned subprocess cannot be observed by the
+/// parent and is deliberately NOT tracked (that's called out in both tools'
+/// descriptions). Readers take a cheap snapshot (`current()`), never holding
+/// the lock across an `.await`.
+#[derive(Clone)]
+pub(crate) struct SessionCwd(Arc<RwLock<PathBuf>>);
+
+impl SessionCwd {
+    /// Create a session cwd seeded with the agent home (the historical base).
+    pub(crate) fn new(initial: PathBuf) -> Self {
+        Self(Arc::new(RwLock::new(initial)))
+    }
+
+    /// Snapshot the current base. Clones the `PathBuf` and releases the read
+    /// lock immediately, so callers never hold a guard across `.await`.
+    pub(crate) fn current(&self) -> PathBuf {
+        self.0.read().expect("session cwd lock poisoned").clone()
+    }
+
+    /// Update the session base (called by `bash` when given explicit `cwd`).
+    pub(crate) fn set(&self, dir: PathBuf) {
+        *self.0.write().expect("session cwd lock poisoned") = dir;
+    }
+}
 
 /// Resolve a tool-supplied path: expand a leading `~`/`~/` to the user's
 /// home, keep absolute paths as-is, and join relative paths onto
