@@ -61,6 +61,37 @@ pub(crate) fn resolve_path(working_dir: &Path, raw: &str) -> PathBuf {
     }
 }
 
+/// Re-export of the canonical guidance string, which now lives in
+/// `mur-common` so `mur agent doctor` and the runtime tools share one source
+/// of truth (issue #1). Do NOT inline the wording here — keep it a re-export.
+pub use mur_common::REMOVABLE_VOLUME_EPERM_HINT;
+
+/// True when `err` is an EPERM ("Operation not permitted", raw `os error 1`)
+/// against a path under `/Volumes/*`. This is the exact macOS Full-Disk-Access
+/// failure mode on removable/external volumes — distinct from a plain
+/// `PermissionDenied` (EACCES) so we don't hijack ordinary permission errors.
+pub fn is_removable_volume_eperm(path: &Path, err: &std::io::Error) -> bool {
+    let is_eperm = err.raw_os_error() == Some(1);
+    is_eperm && path.starts_with("/Volumes/")
+}
+
+/// Format an I/O error message, appending [`REMOVABLE_VOLUME_EPERM_HINT`] when
+/// the failure is the macOS Full-Disk-Access EPERM on a `/Volumes/*` path.
+/// `base` (the resolution base) is preserved verbatim so existing "relative to
+/// session cwd" diagnostics stay intact. Used by every file tool's error path.
+pub fn format_io_error(verb: &str, path: &Path, base: &Path, err: &std::io::Error) -> String {
+    let mut msg = format!(
+        "cannot {verb} {}: {err} (relative to session cwd {})",
+        path.display(),
+        base.display()
+    );
+    if is_removable_volume_eperm(path, err) {
+        msg.push_str("\n\n");
+        msg.push_str(REMOVABLE_VOLUME_EPERM_HINT);
+    }
+    msg
+}
+
 /// Harden an agent's filesystem entitlement for the file tools: append the
 /// self-protected files (issue #712 — the agent's own `profile.yaml` and
 /// `identity.key`) to the deny list, so the tool-level gate refuses reads
@@ -109,6 +140,59 @@ pub(crate) fn check_write_entitlement(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn eperm() -> std::io::Error {
+        std::io::Error::from_raw_os_error(1) // EPERM, "Operation not permitted"
+    }
+
+    #[test]
+    fn removable_eperm_matches_only_volumes_path() {
+        assert!(is_removable_volume_eperm(
+            Path::new("/Volumes/Ext/spec.md"),
+            &eperm()
+        ));
+        // Same EPERM but NOT under /Volumes → not our case.
+        assert!(!is_removable_volume_eperm(
+            Path::new("/Users/me/spec.md"),
+            &eperm()
+        ));
+    }
+
+    #[test]
+    fn removable_eperm_ignores_eacces() {
+        // Plain PermissionDenied (EACCES = os error 13) under /Volumes must
+        // NOT be hijacked — only the exact EPERM (os error 1) qualifies.
+        let eacces = std::io::Error::from_raw_os_error(13);
+        assert!(!is_removable_volume_eperm(
+            Path::new("/Volumes/Ext/spec.md"),
+            &eacces
+        ));
+    }
+
+    #[test]
+    fn format_io_error_appends_hint_on_volumes_eperm() {
+        let msg = format_io_error(
+            "read",
+            Path::new("/Volumes/Ext/spec.md"),
+            Path::new("/Volumes/Ext"),
+            &eperm(),
+        );
+        assert!(msg.contains("relative to session cwd /Volumes/Ext"));
+        assert!(msg.contains(REMOVABLE_VOLUME_EPERM_HINT));
+    }
+
+    #[test]
+    fn format_io_error_plain_error_has_no_hint() {
+        let not_found = std::io::Error::from_raw_os_error(2); // ENOENT
+        let msg = format_io_error(
+            "read",
+            Path::new("/Users/me/spec.md"),
+            Path::new("/Users/me"),
+            &not_found,
+        );
+        assert!(msg.contains("relative to session cwd /Users/me"));
+        assert!(!msg.contains(REMOVABLE_VOLUME_EPERM_HINT));
+    }
 
     #[test]
     fn resolve_path_expands_tilde() {
