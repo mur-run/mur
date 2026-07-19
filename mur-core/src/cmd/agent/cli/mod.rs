@@ -495,8 +495,11 @@ fn reanchor_inline(
     // bottom stays put against the composer.
     if new_h < old_h {
         let drop_rows = old_h - new_h;
-        crossterm::execute!(io::stdout(), crossterm::style::Print("\n".repeat(drop_rows as usize)))
-            .context("scroll freed rows into scrollback")?;
+        crossterm::execute!(
+            io::stdout(),
+            crossterm::style::Print("\n".repeat(drop_rows as usize))
+        )
+        .context("scroll freed rows into scrollback")?;
     }
     // The cursor-position query inside `with_options` needs crossterm's
     // internal event reader; a just-dropped EventStream's background thread
