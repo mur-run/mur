@@ -88,16 +88,16 @@ Relative paths resolve against the shared session working directory (the same ba
         let base = self.session_cwd.current();
         let joined = crate::tools::fs_policy::resolve_path(&base, raw);
         let canonical = std::fs::canonicalize(&joined).map_err(|e| {
-            ToolError::Execution(format!(
-                "cannot read {}: {e} (relative to session cwd {})",
-                joined.display(),
-                base.display()
+            ToolError::Execution(crate::tools::fs_policy::format_io_error(
+                "read", &joined, &base, &e,
             ))
         })?;
         self.check_entitlement(&canonical)?;
 
         let bytes = std::fs::read(&canonical).map_err(|e| {
-            ToolError::Execution(format!("cannot read {}: {e}", canonical.display()))
+            ToolError::Execution(crate::tools::fs_policy::format_io_error(
+                "read", &canonical, &base, &e,
+            ))
         })?;
         let text = String::from_utf8_lossy(&bytes);
 
