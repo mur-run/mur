@@ -57,6 +57,20 @@ fn compress_tool_response(
     if !(cfg.enabled && cfg.claude_hook) {
         return None;
     }
+    // MUR's own compress tools must never be re-compressed: mur_retrieve's
+    // whole purpose is returning the large original, so gating it would loop
+    // (retrieve → compress → retrieve → …) and make big entries unrecoverable.
+    if raw
+        .get("tool_name")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|n| {
+            n.ends_with("mur_retrieve")
+                || n.ends_with("mur_compress")
+                || n.ends_with("mur_compress_stats")
+        })
+    {
+        return None;
+    }
     let tool_response = raw.get("tool_response")?;
     if tool_response.is_null() || is_compressed_envelope(tool_response) {
         return None;
@@ -601,5 +615,25 @@ mod compress_tool_response_tests {
         });
 
         assert!(compress_tool_response(&raw, &cfg, &eng).is_none());
+    }
+
+    #[test]
+    fn mur_own_compress_tools_are_exempt() {
+        let (_dir, eng) = engine();
+        let cfg = auto_cfg();
+        let big: Vec<_> = (0..2000)
+            .map(|i| json!({"idx": i, "data": "x".repeat(40)}))
+            .collect();
+        for name in [
+            "mcp__mur__mur_retrieve",
+            "mcp__mur__mur_compress",
+            "mcp__mur__mur_compress_stats",
+        ] {
+            let raw = json!({"tool_name": name, "tool_response": big});
+            assert!(
+                compress_tool_response(&raw, &cfg, &eng).is_none(),
+                "{name} must never be re-compressed"
+            );
+        }
     }
 }
