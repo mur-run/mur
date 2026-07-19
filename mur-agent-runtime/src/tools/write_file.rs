@@ -64,10 +64,8 @@ impl ToolExecutor for WriteFileTool {
         let target = canonical_parent.join(file_name);
         check_write_entitlement(&self.fs, &target)?;
         std::fs::write(&target, content).map_err(|e| {
-            ToolError::Execution(format!(
-                "cannot write {}: {e} (relative to session cwd {})",
-                target.display(),
-                base.display()
+            ToolError::Execution(crate::tools::fs_policy::format_io_error(
+                "write", &target, &base, &e,
             ))
         })?;
         Ok(format!(
