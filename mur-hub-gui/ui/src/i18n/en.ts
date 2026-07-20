@@ -255,6 +255,8 @@ export const en = {
   "detail.livelyDesc": "Proactive suggestions, pet animations, chatty.",
   "detail.installedSkills": "Installed Skills ({count})",
   "detail.legacySkillPaths": "Legacy Skill Paths ({count})",
+  "detail.convertSkill": "Convert",
+  "detail.convertSkillHint": "Migrate this into Installed Skills — moves the profile pointer; the skill.yaml stays put.",
   "detail.skillInstallHint": "Use mur skill install to add skills to this agent.",
   "detail.mcpAddHint": "Use mur agent mcp add to connect tools to this agent.",
   "detail.mcpServersCount": "MCP Servers ({count})",

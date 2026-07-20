@@ -257,6 +257,8 @@ export const zhTW: Table = {
   "detail.livelyDesc": "主動提供建議、寵物動畫、健談。",
   "detail.installedSkills": "已安裝技能（{count}）",
   "detail.legacySkillPaths": "舊版技能路徑（{count}）",
+  "detail.convertSkill": "轉換",
+  "detail.convertSkillHint": "轉為「已安裝技能」——只搬移設定檔指標,skill.yaml 原地不動。",
   "detail.skillInstallHint": "使用 mur skill install 為此 agent 新增技能。",
   "detail.mcpAddHint": "使用 mur agent mcp add 為此 agent 連接工具。",
   "detail.mcpServersCount": "MCP 伺服器（{count}）",
