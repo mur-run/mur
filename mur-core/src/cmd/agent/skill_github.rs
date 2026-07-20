@@ -87,8 +87,6 @@ fn scan_scripts_inner(root: &Path, dir: &Path, out: &mut Vec<String>) {
     }
 }
 
-/// Scan bundled scripts under `dir` for suspicious content. Returns finding
-/// lines (empty = clean). Never executes anything.
 use super::addon::parse::{PluginJson, skill_md_to_manifest};
 use super::skill_remote::SkillPreview;
 
@@ -314,6 +312,8 @@ pub async fn install_github_dir(
     Ok(installed)
 }
 
+/// Scan bundled scripts under `dir` for suspicious content. Returns finding
+/// lines (empty = clean). Never executes anything.
 pub(crate) fn scan_scripts(dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
     scan_scripts_inner(dir, dir, &mut out);
