@@ -33,8 +33,9 @@ pub struct MuragentManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_hint: Option<ModelHint>,
     /// `Some("official")` for agents published from the official catalog.
-    /// Covered by the in-toto subject hash of `manifest.yaml`, so stripping
-    /// it invalidates the package signature.
+    /// Tamper-evident via `predicate.manifest_sha256` in the DSSE-signed
+    /// statement (the canonical JSON derived from `manifest.yaml`), so
+    /// stripping it invalidates the package signature.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distribution: Option<String>,
 }
