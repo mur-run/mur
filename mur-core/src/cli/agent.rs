@@ -752,6 +752,11 @@ pub enum AgentSkillAction {
     /// `skill_id` may be the full id (`skills/foo`), the basename (`foo`),
     /// or the basename without extension.
     Remove { name: String, skill_id: String },
+    /// Migrate a legacy path-style skill ref (`profile.skills`) into a
+    /// structured `installed_skills` card, in place. The backing `skill.yaml`
+    /// already lives in the loadable layout, so nothing moves on disk — only
+    /// the profile pointer. `skill_id` may be the full id or the basename.
+    Convert { name: String, skill_id: String },
     /// Print the canonical contents of an installed skill.
     /// `skill_id` may be the full id (`skills/foo`), the basename (`foo`),
     /// or the basename without extension.

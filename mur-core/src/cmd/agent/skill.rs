@@ -145,6 +145,70 @@ pub fn cmd_skill_add(name: &str, source: &str) -> Result<()> {
     save_profile(&path, &mut profile)
 }
 
+/// Convert a legacy path-style skill ref (`profile.skills`) into a structured
+/// `installed_skills` card in place. The on-disk `skills/<name>/skill.yaml` is
+/// already the loadable source of truth — installed skills read from the same
+/// layout — so nothing moves on disk; only the profile pointer migrates.
+pub fn cmd_skill_convert(name: &str, query: &str) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    let resolved = resolve_skill_id(&profile, query)
+        .ok_or_else(|| anyhow!("legacy skill '{query}' not found on '{name}'"))?
+        .clone();
+    let agent_home = path.parent().unwrap_or(Path::new(""));
+    convert_ref_in_profile(agent_home, &mut profile, &resolved)?;
+    save_profile(&path, &mut profile)
+}
+
+/// Pure core of the legacy→installed migration: read the backing manifest and
+/// move the ref from `profile.skills` into `profile.installed_skills`.
+fn convert_ref_in_profile(
+    agent_home: &Path,
+    profile: &mut _AgentProfile,
+    resolved: &str,
+) -> Result<()> {
+    use mur_common::agent::{SkillCardEntry, SkillCardTrigger};
+
+    let backing = agent_home.join(resolved);
+    if !backing.is_dir() {
+        bail!("'{resolved}' is not a loadable skill dir — cannot convert (remove + re-install instead)");
+    }
+    let m = mur_common::skill::read_from_dir(&backing)
+        .map_err(|e| anyhow!("read skill {}: {e}", backing.display()))?;
+
+    let entry = SkillCardEntry {
+        name: m.name.clone(),
+        version: m.version.clone(),
+        publisher: m.publisher.clone(),
+        category: serde_yaml_ng::to_string(&m.category)
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        description: m.description.clone(),
+        tags: m.tags.clone(),
+        triggers: m
+            .triggers
+            .iter()
+            .map(|t| SkillCardTrigger {
+                kind: serde_yaml_ng::to_string(&t.kind)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
+                pattern: t.pattern.clone().unwrap_or_default(),
+            })
+            .collect(),
+        abstract_text: m.content.r#abstract.clone(),
+        transfer_chain: m.transfer_chain.clone(),
+    };
+
+    if let Some(slot) = profile.installed_skills.iter_mut().find(|e| e.name == m.name) {
+        *slot = entry;
+    } else {
+        profile.installed_skills.push(entry);
+    }
+    profile.skills.retain(|s| s != resolved);
+    Ok(())
+}
+
 pub fn cmd_skill_remove(name: &str, query: &str) -> Result<()> {
     let (path, mut profile) = load_profile_for_edit(name)?;
     let resolved = resolve_skill_id(&profile, query)
@@ -313,5 +377,38 @@ content:
         // An unrelated edit must still save — only *newly added* refs gate.
         profile.display_name = "Renamed".into();
         save_profile(&path, &mut profile).unwrap();
+    }
+
+    #[test]
+    fn convert_moves_ref_from_legacy_to_installed() {
+        let home = tempfile::tempdir().unwrap();
+        mur_common::skill::write_to_dir(
+            &home.path().join("skills").join("ok"),
+            &valid_manifest("ok"),
+        )
+        .unwrap();
+
+        let mut profile = mur_common::AgentProfile::default_for_tests();
+        profile.skills = vec!["skills/ok".into()];
+        assert!(profile.installed_skills.is_empty());
+
+        convert_ref_in_profile(home.path(), &mut profile, "skills/ok").unwrap();
+
+        assert!(profile.skills.is_empty(), "legacy ref should be removed");
+        assert_eq!(profile.installed_skills.len(), 1);
+        assert_eq!(profile.installed_skills[0].name, "ok");
+
+        // Idempotent: converting again upserts, never duplicates.
+        profile.skills = vec!["skills/ok".into()];
+        convert_ref_in_profile(home.path(), &mut profile, "skills/ok").unwrap();
+        assert_eq!(profile.installed_skills.len(), 1);
+    }
+
+    #[test]
+    fn convert_rejects_missing_backing_dir() {
+        let home = tempfile::tempdir().unwrap();
+        let mut profile = mur_common::AgentProfile::default_for_tests();
+        profile.skills = vec!["skills/ghost".into()];
+        assert!(convert_ref_in_profile(home.path(), &mut profile, "skills/ghost").is_err());
     }
 }

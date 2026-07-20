@@ -679,6 +679,7 @@ pub fn run() {
             model_download::download_local_model,
             mcp_skills::agent_skill_install,
             mcp_skills::agent_skill_uninstall,
+            mcp_skills::agent_skill_convert,
             mcp_skills::agent_mcp_add,
             mcp_skills::agent_mcp_remove,
             mcp_skills::agent_skill_toggle,
