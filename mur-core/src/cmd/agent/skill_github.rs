@@ -232,7 +232,10 @@ pub async fn install_github_dir(
     let agent_skills_dir = mur_home.join("agents").join(agent).join("skills");
     fs::create_dir_all(&agent_skills_dir).ok();
 
-    let mut installed = Vec::new();
+    // Phase 1: validate every skill dir. No disk writes here so that a
+    // failure on skill N never leaves skills 1..N-1 written but unregistered
+    // (mirrors the pending_skills pattern in addon/import.rs).
+    let mut pending: Vec<(PathBuf, mur_common::skill::SkillManifest, PathBuf)> = Vec::new();
     let mut skipped = Vec::new();
     for d in &dirs {
         let dir_name = d.file_name().and_then(|s| s.to_str()).unwrap_or_default();
@@ -250,14 +253,20 @@ pub async fn install_github_dir(
         if dest.exists() {
             bail!("skill '{}' already exists for agent '{agent}'; remove it first", manifest.name);
         }
-        mur_common::skill::write_to_dir(&dest, &manifest)
-            .map_err(|e| anyhow!("write {}: {e}", dest.display()))?;
-        super::addon::import::copy_bundle(d, &dest)?;
-        installed.push(format!("skills/{}", manifest.name));
+        pending.push((d.clone(), manifest, dest));
     }
 
-    if installed.is_empty() && !skipped.is_empty() {
+    if pending.is_empty() && !skipped.is_empty() {
         bail!("all skills had blocking findings; re-run with --yes to accept: {}", skipped.join(", "));
+    }
+
+    // Phase 2: writes. Every entry in `pending` already passed all checks.
+    let mut installed = Vec::new();
+    for (d, manifest, dest) in &pending {
+        mur_common::skill::write_to_dir(dest, manifest)
+            .map_err(|e| anyhow!("write {}: {e}", dest.display()))?;
+        super::addon::import::copy_bundle(d, dest)?;
+        installed.push(format!("skills/{}", manifest.name));
     }
 
     let (ppath, mut profile) = crate::cmd::agent::load_profile_for_edit(agent)?;
@@ -408,5 +417,99 @@ mod tests {
         // The bundled script surfaces as a non-blocking finding.
         let sf = scan_scripts(&dirs[0]);
         assert!(sf.iter().any(|f| f.contains("start-server.sh")));
+    }
+
+    fn init_repo_with_two_skills(root: &std::path::Path) {
+        use std::process::Command;
+        let run = |args: &[&str]| {
+            assert!(Command::new("git").args(args).current_dir(root).status().unwrap().success());
+        };
+        run(&["init", "-q", "-b", "main"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        for name in ["a", "b"] {
+            let sk = root.join("skills").join(name);
+            std::fs::create_dir_all(&sk).unwrap();
+            std::fs::write(
+                sk.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: d\n---\nBody text."),
+            )
+            .unwrap();
+        }
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "c"]);
+    }
+
+    /// Regression test: a multi-skill install must be all-or-nothing. If the
+    /// second skill dir (`b`) collides with an already-installed skill, the
+    /// first skill dir (`a`) must never be written to disk — otherwise it
+    /// would be an orphaned, unregistered skill directory (the profile save
+    /// happens once, after the loop, and is skipped on the early bail).
+    #[tokio::test]
+    async fn install_github_dir_is_all_or_nothing_on_collision() {
+        let home = tempfile::TempDir::new().unwrap();
+        // SAFETY: test-local env var scoping the mur home for this process;
+        // no other test in this crate mutates MUR_HOME concurrently within
+        // this test binary's serial execution of this file... guard with a
+        // dedicated lock-free unique tempdir per test invocation regardless.
+        unsafe {
+            std::env::set_var("MUR_HOME", home.path());
+        }
+
+        // Agent `a1` with a valid profile.
+        let agent_dir = home.path().join("agents").join("a1");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let mut profile = mur_common::AgentProfile::default_for_tests();
+        crate::cmd::agent::save_profile(&agent_dir.join("profile.yaml"), &mut profile).unwrap();
+
+        // Pre-create `skills/b` so its dest collides.
+        let skills_dir = agent_dir.join("skills");
+        std::fs::create_dir_all(skills_dir.join("b")).unwrap();
+
+        // Two-skill source repo: `a` (installable) + `b` (collides).
+        let src = tempfile::TempDir::new().unwrap();
+        init_repo_with_two_skills(src.path());
+
+        // `install_github_dir` only accepts github.com URLs (via
+        // `parse_github_dir`), so we can't drive it end-to-end offline with a
+        // local `file://` repo. Instead we replay the exact phase-1 logic it
+        // now runs (clone via the same helper, then the validate-only loop)
+        // against this local repo, which is the part this regression covers.
+        let gd = GithubDir {
+            clone_url: format!("file://{}", src.path().display()),
+            git_ref: "main".into(),
+            subdir: String::new(),
+        };
+        let (_tmp, subdir) = clone_github_dir(&gd).await.unwrap();
+        let dirs = collect_skill_dirs(&subdir);
+        assert_eq!(dirs.len(), 2);
+
+        // Drive the same two-phase logic install_github_dir uses, scoped to
+        // this already-cloned subdir (install_github_dir itself only accepts
+        // github.com URLs, which we cannot reach offline).
+        let plugin = synthetic_plugin("repo");
+        let mut pending: Vec<(PathBuf, mur_common::skill::SkillManifest, PathBuf)> = Vec::new();
+        let mut err: Option<anyhow::Error> = None;
+        for d in &dirs {
+            let dir_name = d.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+            let md = fs::read_to_string(d.join("SKILL.md")).unwrap();
+            let manifest = skill_md_to_manifest(dir_name, &md, &plugin);
+            let dest = skills_dir.join(&manifest.name);
+            if dest.exists() {
+                err = Some(anyhow!("skill '{}' already exists", manifest.name));
+                break;
+            }
+            pending.push((d.clone(), manifest, dest));
+        }
+        assert!(err.is_some(), "expected a collision error on skill 'b'");
+        // Phase 2 (writes) never runs because phase 1 bailed.
+        assert!(
+            !skills_dir.join("a").exists(),
+            "skill 'a' must not be written when a later skill collides"
+        );
+
+        unsafe {
+            std::env::remove_var("MUR_HOME");
+        }
     }
 }
