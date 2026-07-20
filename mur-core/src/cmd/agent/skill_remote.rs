@@ -123,6 +123,8 @@ pub async fn preview_skill_url(url: &str) -> Result<SkillPreview> {
 pub async fn preview_any_url(url: &str) -> Result<Vec<SkillPreview>> {
     if crate::cmd::agent::skill_bundle::is_archive_url(url).is_some() {
         crate::cmd::agent::skill_bundle::preview_bundle_url(url).await
+    } else if crate::cmd::agent::skill_github::parse_github_dir(url).is_some() {
+        crate::cmd::agent::skill_github::preview_github_dir(url).await
     } else {
         Ok(vec![preview_skill_url(url).await?])
     }
@@ -135,6 +137,8 @@ pub async fn preview_any_url(url: &str) -> Result<Vec<SkillPreview>> {
 pub async fn install_any_url(agent: &str, url: &str, accept_findings: bool) -> Result<Vec<String>> {
     if crate::cmd::agent::skill_bundle::is_archive_url(url).is_some() {
         crate::cmd::agent::skill_bundle::install_bundle_from_url(agent, url, accept_findings).await
+    } else if crate::cmd::agent::skill_github::parse_github_dir(url).is_some() {
+        crate::cmd::agent::skill_github::install_github_dir(agent, url, accept_findings).await
     } else {
         Ok(vec![
             install_skill_from_url(agent, url, accept_findings).await?,

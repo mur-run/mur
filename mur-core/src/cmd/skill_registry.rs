@@ -59,6 +59,27 @@ pub fn git_clone_or_pull(url: &str, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Shallow-clone a single ref (branch or tag) of `url` into `dest`.
+/// `--branch` accepts branch and tag names; arbitrary commit SHAs are not
+/// supported (GitHub `tree` URLs use branch/tag names).
+pub fn git_clone_ref(url: &str, git_ref: &str, dest: &Path) -> Result<()> {
+    let status = Command::new("git")
+        .args([
+            "clone",
+            "--depth=1",
+            "--branch",
+            git_ref,
+            url,
+            &*dest.to_string_lossy(),
+        ])
+        .status()
+        .map_err(|e| anyhow::anyhow!("git clone: {e}"))?;
+    if !status.success() {
+        anyhow::bail!("git clone {url} (ref {git_ref}) failed");
+    }
+    Ok(())
+}
+
 pub fn load_index(registry_dir: &Path) -> Result<RegistryIndex> {
     let p = registry_dir.join("index.yaml");
     let text = std::fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
@@ -153,6 +174,34 @@ mod tests {
         // Second call hits the pull branch and still succeeds.
         git_clone_or_pull(&src.to_string_lossy(), &dest).unwrap();
         assert!(dest.join("plugin.json").exists());
+    }
+
+    #[test]
+    fn git_clone_ref_checks_out_named_branch() {
+        use std::process::Command;
+        let src = tempfile::TempDir::new().unwrap();
+        let run = |args: &[&str], cwd: &std::path::Path| {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(cwd)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        run(&["init", "-q", "-b", "main"], src.path());
+        run(&["config", "user.email", "t@t"], src.path());
+        run(&["config", "user.name", "t"], src.path());
+        std::fs::write(src.path().join("f.txt"), "hi").unwrap();
+        run(&["add", "."], src.path());
+        run(&["commit", "-q", "-m", "c"], src.path());
+
+        let dest = tempfile::TempDir::new().unwrap();
+        let target = dest.path().join("clone");
+        let url = format!("file://{}", src.path().display());
+        super::git_clone_ref(&url, "main", &target).unwrap();
+        assert!(target.join("f.txt").is_file());
     }
 
     #[test]

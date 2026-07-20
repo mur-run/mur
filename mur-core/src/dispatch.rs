@@ -1571,10 +1571,11 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 // A URL source is what `add-url` handles — route it there
                 // instead of failing on a nonexistent local path.
                 if source.starts_with("http://") || source.starts_with("https://") {
-                    let id =
-                        cmd::agent::skill_remote::install_skill_from_url(&name, &source, false)
-                            .await?;
-                    println!("Installed {id} onto '{name}'. Restart the agent to load it.");
+                    let ids =
+                        cmd::agent::skill_remote::install_any_url(&name, &source, false).await?;
+                    for id in &ids {
+                        println!("Installed {id} onto '{name}'. Restart the agent to load it.");
+                    }
                 } else {
                     cmd::agent::cmd_skill_add(&name, &source)?
                 }
@@ -1595,8 +1596,10 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 cmd::agent::cmd_skill_set_enabled(&name, &skill_id, false)?
             }
             AgentSkillAction::AddUrl { name, url, yes } => {
-                let id = cmd::agent::skill_remote::install_skill_from_url(&name, &url, yes).await?;
-                println!("Installed {id} onto '{name}'. Restart the agent to load it.");
+                let ids = cmd::agent::skill_remote::install_any_url(&name, &url, yes).await?;
+                for id in &ids {
+                    println!("Installed {id} onto '{name}'. Restart the agent to load it.");
+                }
             }
             AgentSkillAction::RegistryAdd {
                 name,

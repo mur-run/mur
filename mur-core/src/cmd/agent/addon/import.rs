@@ -51,7 +51,7 @@ fn check_bundle_entry(name_str: &str, ft: &std::fs::FileType) -> anyhow::Result<
 /// WITHOUT writing anything. Run before `write_to_dir`, this preserves the
 /// importer's "all checks must pass before a single byte is written" invariant —
 /// a bad bundle fails the whole import instead of orphaning a half-written dir.
-fn validate_bundle(src_dir: &Path) -> anyhow::Result<()> {
+pub(crate) fn validate_bundle(src_dir: &Path) -> anyhow::Result<()> {
     validate_bundle_inner(src_dir, true)
 }
 
@@ -76,7 +76,7 @@ fn validate_bundle_inner(src: &Path, top: bool) -> anyhow::Result<()> {
 /// top-level `SKILL.md` (the manifest is written separately). Re-checks each
 /// entry (TOCTOU) so a symlink planted after phase-1 validation is still
 /// refused before it can escape the install directory.
-fn copy_bundle(src_dir: &Path, dest_dir: &Path) -> anyhow::Result<()> {
+pub(crate) fn copy_bundle(src_dir: &Path, dest_dir: &Path) -> anyhow::Result<()> {
     copy_bundle_inner(src_dir, dest_dir, true)
 }
 

@@ -53,6 +53,7 @@ mod secret;
 mod service;
 pub mod skill;
 pub mod skill_bundle;
+pub mod skill_github;
 pub mod skill_install_pack;
 pub mod skill_registry_add;
 pub mod skill_remote;
