@@ -590,6 +590,7 @@ mod tests {
             members: vec![],
             entries,
             sig: None,
+            distribution: None,
         };
         let bundle_bytes = build_evil_bundle(&manifest, &files);
         let bundle_path =
@@ -899,6 +900,7 @@ mod tests {
             members: vec![],
             entries,
             sig: None,
+            distribution: None,
         };
         let input = manifest_sign_input(&manifest);
         manifest.sig = Some(multibase::encode(
@@ -983,6 +985,7 @@ mod tests {
             members: vec![],
             entries,
             sig: None,
+            distribution: None,
         };
         let input = manifest_sign_input(&manifest);
         manifest.sig = Some(multibase::encode(
@@ -1062,6 +1065,7 @@ mod tests {
             members: vec![],
             entries,
             sig: None,
+            distribution: None,
         };
         let input = manifest_sign_input(&manifest);
         manifest.sig = Some(multibase::encode(
@@ -1140,6 +1144,7 @@ mod tests {
             members: vec![],
             entries,
             sig: None,
+            distribution: None,
         };
         // Sign correctly so the sig check passes — the fingerprint mismatch must still fire.
         let input = manifest_sign_input(&manifest);
@@ -1210,6 +1215,7 @@ mod tests {
             members: vec![],
             entries,
             sig: None,
+            distribution: None,
         };
         // Sign correctly so the sig check passes — the empty fingerprint must still be rejected.
         let input = manifest_sign_input(&manifest);
@@ -1286,6 +1292,7 @@ mod tests {
             members: vec![],
             entries,
             sig: None,
+            distribution: None,
         };
         let input = manifest_sign_input(&manifest);
         manifest.sig = Some(multibase::encode(
