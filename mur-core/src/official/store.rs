@@ -1,8 +1,8 @@
 //! On-disk store for official catalog licenses (`~/.mur/licenses/`).
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
-use mur_common::official::{check_license, LicenseCheck, OfficialLicense};
+use anyhow::{Context, Result, bail};
+use mur_common::official::{LicenseCheck, OfficialLicense, check_license};
 use mur_common::skill::publisher_trust::MUR_OFFICIAL_PUBLISHER_KEY_FP;
 
 #[allow(dead_code)]
