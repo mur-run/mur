@@ -113,9 +113,18 @@ needs a brand-new recursive fetcher and hits API rate limits, violating the reus
 - `scan_scripts`: fixture skill dir with a malicious `.sh` → finding is emitted AND install is
   **not** blocked (accept path still reachable).
 - End-to-end: install from a localhost git repo (reuse the existing addon-import test harness).
+- CLI gating: with findings present, `mur skill install <url>` refuses without `--yes` and
+  proceeds with it.
 
 ## Surface
 
-- Primary: Hub GUI "Install from URL" box (routes through the extended `skill_remote.rs`).
-- Because the machinery is CLI-callable, the same routing is reachable from
-  `mur skill install <github-dir-url>` at no extra cost; wire it if trivial, otherwise defer.
+Both surfaces are in scope and share the one routing path in `skill_remote.rs`:
+
+- **Hub GUI** "Install from URL" box → `agent_skill_preview_url` / `agent_skill_install_url`.
+- **CLI** `mur skill install <github-dir-url>` → the same classify → clone → import path. The
+  consent step is the terminal equivalent of the GUI preview: print the manifest + script
+  findings, then require `--yes` (or an interactive confirm) to proceed when findings exist,
+  mirroring the GUI's `acceptFindings`.
+
+A shared `install_any_url` entry point keeps both callers on identical classification, scanning,
+and gating so behavior can't drift between them.
