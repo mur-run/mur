@@ -6,7 +6,9 @@
 
 use crate::detail::{AgentDetail, get_agent_detail};
 use mur_core::cmd::agent::mcp::{McpAddPin, cmd_mcp_add, cmd_mcp_remove, cmd_mcp_set_enabled};
-use mur_core::cmd::agent::skill::{cmd_skill_add, cmd_skill_remove, cmd_skill_set_enabled};
+use mur_core::cmd::agent::skill::{
+    cmd_skill_add, cmd_skill_convert, cmd_skill_remove, cmd_skill_set_enabled,
+};
 use mur_core::cmd::agent::skill_remote::{SkillPreview, install_any_url, preview_any_url};
 use serde::Serialize;
 
@@ -43,6 +45,15 @@ pub fn agent_skill_install(
 #[tauri::command]
 pub fn agent_skill_uninstall(name: String, skill_id: String) -> Result<AgentDetail, String> {
     cmd_skill_remove(&name, &skill_id).map_err(|e| format!("{e:#}"))?;
+    get_agent_detail(name)
+}
+
+/// Migrate a legacy path-style skill ref into a structured `installed_skills`
+/// card, in place. The backing `skill.yaml` already lives in the loadable
+/// layout, so nothing moves on disk — only the profile pointer.
+#[tauri::command]
+pub fn agent_skill_convert(name: String, skill_id: String) -> Result<AgentDetail, String> {
+    cmd_skill_convert(&name, &skill_id).map_err(|e| format!("{e:#}"))?;
     get_agent_detail(name)
 }
 

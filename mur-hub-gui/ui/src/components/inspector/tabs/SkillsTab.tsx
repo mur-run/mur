@@ -76,6 +76,22 @@ export function SkillsTab({
     }
   }
 
+  async function convertSkill(id: string) {
+    setError(null);
+    setBusy(true);
+    try {
+      const updated = await invoke<AgentDetail>("agent_skill_convert", {
+        name: detail.agent_name,
+        skillId: id,
+      });
+      onSaved(updated);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function toggleSkill(id: string, enabled: boolean) {
     setError(null);
     setBusy(true);
@@ -232,6 +248,17 @@ export function SkillsTab({
                         ? t("detail.skillMissing")
                         : t("detail.skillDead")}
                   </span>
+                  {s.loadable && (
+                    <button
+                      className="btn btn--sm btn--secondary"
+                      title={t("detail.convertSkillHint")}
+                      disabled={busy}
+                      onClick={() => convertSkill(s.path)}
+                      style={{ marginLeft: 6 }}
+                    >
+                      {t("detail.convertSkill")}
+                    </button>
+                  )}
                 </div>
                 {!s.loadable && (
                   <div className="item-card-desc field-muted" style={{ fontSize: 11 }}>
