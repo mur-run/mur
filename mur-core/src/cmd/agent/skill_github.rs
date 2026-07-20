@@ -35,7 +35,9 @@ fn is_script_file(path: &Path) -> bool {
     }
     // Extensionless: sniff a shebang.
     path.extension().is_none()
-        && fs::read(path).map(|b| b.starts_with(b"#!")).unwrap_or(false)
+        && fs::read(path)
+            .map(|b| b.starts_with(b"#!"))
+            .unwrap_or(false)
 }
 
 fn scan_scripts_inner(root: &Path, dir: &Path, out: &mut Vec<String>) {
@@ -62,7 +64,9 @@ fn scan_scripts_inner(root: &Path, dir: &Path, out: &mut Vec<String>) {
             Err(_) => continue,
         };
         if bytes.len() > SKILL_MAX_BYTES {
-            out.push(format!("script {rel}: skipped (over {SKILL_MAX_BYTES} bytes)"));
+            out.push(format!(
+                "script {rel}: skipped (over {SKILL_MAX_BYTES} bytes)"
+            ));
             continue;
         }
         let text = match String::from_utf8(bytes) {
@@ -188,7 +192,14 @@ pub async fn preview_github_dir(url: &str) -> Result<Vec<SkillPreview>> {
     let (_tmp, subdir) = clone_github_dir(&gd).await?;
     let dirs = collect_skill_dirs(&subdir);
     if dirs.is_empty() {
-        bail!("no SKILL.md found under {}", if gd.subdir.is_empty() { "the repository" } else { &gd.subdir });
+        bail!(
+            "no SKILL.md found under {}",
+            if gd.subdir.is_empty() {
+                "the repository"
+            } else {
+                &gd.subdir
+            }
+        );
     }
     let plugin = synthetic_plugin(&repo_name(&gd.clone_url));
     let mut previews = Vec::new();
@@ -224,7 +235,14 @@ pub async fn install_github_dir(
     let (_tmp, subdir) = clone_github_dir(&gd).await?;
     let dirs = collect_skill_dirs(&subdir);
     if dirs.is_empty() {
-        bail!("no SKILL.md found under {}", if gd.subdir.is_empty() { "the repository" } else { &gd.subdir });
+        bail!(
+            "no SKILL.md found under {}",
+            if gd.subdir.is_empty() {
+                "the repository"
+            } else {
+                &gd.subdir
+            }
+        );
     }
     let plugin = synthetic_plugin(&repo_name(&gd.clone_url));
 
@@ -251,13 +269,19 @@ pub async fn install_github_dir(
         super::addon::import::validate_bundle(d)?;
         let dest = agent_skills_dir.join(&manifest.name);
         if dest.exists() {
-            bail!("skill '{}' already exists for agent '{agent}'; remove it first", manifest.name);
+            bail!(
+                "skill '{}' already exists for agent '{agent}'; remove it first",
+                manifest.name
+            );
         }
         pending.push((d.clone(), manifest, dest));
     }
 
     if pending.is_empty() && !skipped.is_empty() {
-        bail!("all skills had blocking findings; re-run with --yes to accept: {}", skipped.join(", "));
+        bail!(
+            "all skills had blocking findings; re-run with --yes to accept: {}",
+            skipped.join(", ")
+        );
     }
 
     // Phase 2: writes. Every entry in `pending` already passed all checks.
@@ -332,7 +356,11 @@ pub fn parse_github_dir(url: &str) -> Option<GithubDir> {
     let repo = segs[1].trim_end_matches(".git");
     let clone_url = format!("https://github.com/{owner}/{repo}.git");
     if segs.len() == 2 {
-        return Some(GithubDir { clone_url, git_ref: String::new(), subdir: String::new() });
+        return Some(GithubDir {
+            clone_url,
+            git_ref: String::new(),
+            subdir: String::new(),
+        });
     }
     if segs.len() >= 4 && segs[2] == "tree" {
         return Some(GithubDir {
@@ -360,7 +388,11 @@ mod tests {
         std::fs::write(dir.path().join("SKILL.md"), "---\nname: ok\n---\nbody").unwrap();
 
         let findings = scan_scripts(dir.path());
-        assert!(findings.iter().any(|f| f.contains("start-server.sh") && f.contains("| sh")));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.contains("start-server.sh") && f.contains("| sh"))
+        );
         assert!(findings.iter().any(|f| f.contains("rm -rf")));
     }
 
@@ -379,10 +411,9 @@ mod tests {
 
     #[test]
     fn parse_github_dir_forms() {
-        let tree = parse_github_dir(
-            "https://github.com/obra/superpowers/tree/main/skills/brainstorming",
-        )
-        .unwrap();
+        let tree =
+            parse_github_dir("https://github.com/obra/superpowers/tree/main/skills/brainstorming")
+                .unwrap();
         assert_eq!(tree.clone_url, "https://github.com/obra/superpowers.git");
         assert_eq!(tree.git_ref, "main");
         assert_eq!(tree.subdir, "skills/brainstorming");
@@ -399,16 +430,31 @@ mod tests {
     fn init_repo_with_skill(root: &std::path::Path) {
         use std::process::Command;
         let run = |args: &[&str]| {
-            assert!(Command::new("git").args(args).current_dir(root).status().unwrap().success());
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(root)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
         };
         run(&["init", "-q", "-b", "main"]);
         run(&["config", "user.email", "t@t"]);
         run(&["config", "user.name", "t"]);
         let sk = root.join("skills/brainstorming");
         std::fs::create_dir_all(sk.join("scripts")).unwrap();
-        std::fs::write(sk.join("SKILL.md"), "---\nname: brainstorming\ndescription: d\n---\nBody text.").unwrap();
+        std::fs::write(
+            sk.join("SKILL.md"),
+            "---\nname: brainstorming\ndescription: d\n---\nBody text.",
+        )
+        .unwrap();
         std::fs::write(sk.join("visual-companion.md"), "companion").unwrap();
-        std::fs::write(sk.join("scripts/start-server.sh"), "#!/bin/sh\ncurl x | sh\n").unwrap();
+        std::fs::write(
+            sk.join("scripts/start-server.sh"),
+            "#!/bin/sh\ncurl x | sh\n",
+        )
+        .unwrap();
         run(&["add", "."]);
         run(&["commit", "-q", "-m", "c"]);
     }
@@ -433,7 +479,14 @@ mod tests {
     fn init_repo_with_two_skills(root: &std::path::Path) {
         use std::process::Command;
         let run = |args: &[&str]| {
-            assert!(Command::new("git").args(args).current_dir(root).status().unwrap().success());
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(root)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
         };
         run(&["init", "-q", "-b", "main"]);
         run(&["config", "user.email", "t@t"]);
