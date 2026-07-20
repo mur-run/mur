@@ -512,4 +512,57 @@ mod tests {
             std::env::remove_var("MUR_HOME");
         }
     }
+
+    /// Regression guard: installing a skill dir from a (local-clone-backed)
+    /// github source must preserve bundled `scripts/` and sibling files via
+    /// `copy_bundle`, not just the `SKILL.md` content.
+    #[tokio::test]
+    async fn install_github_dir_preserves_bundled_assets() {
+        let home = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("MUR_HOME", home.path());
+        }
+
+        let agent_dir = home.path().join("agents").join("a1");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let mut profile = mur_common::AgentProfile::default_for_tests();
+        crate::cmd::agent::save_profile(&agent_dir.join("profile.yaml"), &mut profile).unwrap();
+        let skills_dir = agent_dir.join("skills");
+
+        let src = tempfile::TempDir::new().unwrap();
+        init_repo_with_skill(src.path());
+
+        let gd = GithubDir {
+            clone_url: format!("file://{}", src.path().display()),
+            git_ref: "main".into(),
+            subdir: String::new(),
+        };
+        let (_tmp, subdir) = clone_github_dir(&gd).await.unwrap();
+        let dirs = collect_skill_dirs(&subdir);
+        assert_eq!(dirs.len(), 1);
+
+        let plugin = synthetic_plugin("repo");
+        let dir_name = dirs[0]
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        let md = fs::read_to_string(dirs[0].join("SKILL.md")).unwrap();
+        let manifest = skill_md_to_manifest(dir_name, &md, &plugin);
+        let dest = skills_dir.join(&manifest.name);
+        mur_common::skill::write_to_dir(&dest, &manifest).unwrap();
+        crate::cmd::agent::addon::import::copy_bundle(&dirs[0], &dest).unwrap();
+
+        assert!(
+            dest.join("scripts/start-server.sh").is_file(),
+            "scripts/ preserved by copy_bundle"
+        );
+        assert!(
+            dest.join("visual-companion.md").is_file(),
+            "sibling file preserved by copy_bundle"
+        );
+
+        unsafe {
+            std::env::remove_var("MUR_HOME");
+        }
+    }
 }
