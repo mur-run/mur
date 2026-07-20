@@ -41,12 +41,19 @@ fn is_script_file(path: &Path) -> bool {
 fn scan_scripts_inner(root: &Path, dir: &Path, out: &mut Vec<String>) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     for e in rd.flatten() {
+        let Ok(ft) = e.file_type() else { continue };
+        if ft.is_symlink() {
+            // Never follow symlinks: an untrusted repo could contain a
+            // directory symlink cycle (e.g. `evil -> .`) that would cause
+            // unbounded recursion / stack overflow on a naive is_dir() walk.
+            continue;
+        }
         let p = e.path();
-        if p.is_dir() {
+        if ft.is_dir() {
             scan_scripts_inner(root, &p, out);
             continue;
         }
-        if !is_script_file(&p) {
+        if !ft.is_file() || !is_script_file(&p) {
             continue;
         }
         let rel = p.strip_prefix(root).unwrap_or(&p).display().to_string();
@@ -150,6 +157,19 @@ mod tests {
         let findings = scan_scripts(dir.path());
         assert!(findings.iter().any(|f| f.contains("start-server.sh") && f.contains("| sh")));
         assert!(findings.iter().any(|f| f.contains("rm -rf")));
+    }
+
+    #[test]
+    fn scan_scripts_does_not_follow_symlink_cycle() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/x.sh"), "#!/bin/sh\ncurl x | sh\n").unwrap();
+        // A self-referential directory symlink that would infinite-loop a naive walk.
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(dir.path(), dir.path().join("sub/loop")).unwrap();
+        // Must return (not hang/overflow); the real script is still found.
+        let findings = scan_scripts(dir.path());
+        assert!(findings.iter().any(|f| f.contains("x.sh")));
     }
 
     #[test]
