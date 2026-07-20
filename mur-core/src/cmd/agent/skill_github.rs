@@ -267,6 +267,17 @@ pub async fn install_github_dir(
             .map_err(|e| anyhow!("write {}: {e}", dest.display()))?;
         super::addon::import::copy_bundle(d, dest)?;
         installed.push(format!("skills/{}", manifest.name));
+
+        let script_findings = scan_scripts(d);
+        if !script_findings.is_empty() {
+            eprintln!(
+                "⚠ {}: bundled scripts flagged (scanned, NOT executed) — review before trusting",
+                manifest.name
+            );
+            for line in &script_findings {
+                eprintln!("    {line}");
+            }
+        }
     }
 
     let (ppath, mut profile) = crate::cmd::agent::load_profile_for_edit(agent)?;
@@ -506,6 +517,67 @@ mod tests {
         assert!(
             !skills_dir.join("a").exists(),
             "skill 'a' must not be written when a later skill collides"
+        );
+
+        unsafe {
+            std::env::remove_var("MUR_HOME");
+        }
+    }
+
+    /// Regression guard: a skill whose bundled `scripts/` trips the security
+    /// scanner (see `init_repo_with_skill`) must still install successfully —
+    /// script findings are informational (surfaced on STDERR per Surface
+    /// spec), never blocking.
+    #[tokio::test]
+    async fn install_github_dir_flagged_scripts_are_non_blocking() {
+        let home = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("MUR_HOME", home.path());
+        }
+
+        let agent_dir = home.path().join("agents").join("a1");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let mut profile = mur_common::AgentProfile::default_for_tests();
+        crate::cmd::agent::save_profile(&agent_dir.join("profile.yaml"), &mut profile).unwrap();
+        let skills_dir = agent_dir.join("skills");
+
+        let src = tempfile::TempDir::new().unwrap();
+        init_repo_with_skill(src.path());
+
+        let gd = GithubDir {
+            clone_url: format!("file://{}", src.path().display()),
+            git_ref: "main".into(),
+            subdir: String::new(),
+        };
+        let (_tmp, subdir) = clone_github_dir(&gd).await.unwrap();
+        let dirs = collect_skill_dirs(&subdir);
+        assert_eq!(dirs.len(), 1);
+
+        // Confirm the fixture actually trips the scanner (else this test
+        // wouldn't cover anything).
+        let findings = scan_scripts(&dirs[0]);
+        assert!(
+            !findings.is_empty(),
+            "fixture must have a flagged script for this test to be meaningful"
+        );
+
+        let plugin = synthetic_plugin("repo");
+        let dir_name = dirs[0]
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        let md = fs::read_to_string(dirs[0].join("SKILL.md")).unwrap();
+        let manifest = skill_md_to_manifest(dir_name, &md, &plugin);
+        let dest = skills_dir.join(&manifest.name);
+
+        // Same phase-1/phase-2 logic install_github_dir runs, driven directly
+        // since it only accepts github.com URLs (see sibling tests' rationale).
+        mur_common::skill::write_to_dir(&dest, &manifest).unwrap();
+        crate::cmd::agent::addon::import::copy_bundle(&dirs[0], &dest).unwrap();
+
+        assert!(
+            dest.join("skill.yaml").is_file(),
+            "skill must be installed on disk despite flagged bundled script"
         );
 
         unsafe {
