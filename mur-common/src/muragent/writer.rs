@@ -257,6 +257,7 @@ pub fn build_manifest_from_profile(profile: &AgentProfile, mur_version: &str) ->
             &profile.model.provider,
             &profile.model.name,
         )),
+        distribution: None,
     }
 }
 
