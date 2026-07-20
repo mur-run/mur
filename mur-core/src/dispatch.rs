@@ -1582,6 +1582,9 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentSkillAction::Remove { name, skill_id } => {
                 cmd::agent::cmd_skill_remove(&name, &skill_id)?
             }
+            AgentSkillAction::Convert { name, skill_id } => {
+                cmd::agent::cmd_skill_convert(&name, &skill_id)?
+            }
             AgentSkillAction::Show { name, skill_id } => {
                 cmd::agent::cmd_skill_show(&name, &skill_id)?
             }
