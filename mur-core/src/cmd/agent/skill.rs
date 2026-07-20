@@ -170,7 +170,9 @@ fn convert_ref_in_profile(
 
     let backing = agent_home.join(resolved);
     if !backing.is_dir() {
-        bail!("'{resolved}' is not a loadable skill dir — cannot convert (remove + re-install instead)");
+        bail!(
+            "'{resolved}' is not a loadable skill dir — cannot convert (remove + re-install instead)"
+        );
     }
     let m = mur_common::skill::read_from_dir(&backing)
         .map_err(|e| anyhow!("read skill {}: {e}", backing.display()))?;
@@ -200,7 +202,11 @@ fn convert_ref_in_profile(
         transfer_chain: m.transfer_chain.clone(),
     };
 
-    if let Some(slot) = profile.installed_skills.iter_mut().find(|e| e.name == m.name) {
+    if let Some(slot) = profile
+        .installed_skills
+        .iter_mut()
+        .find(|e| e.name == m.name)
+    {
         *slot = entry;
     } else {
         profile.installed_skills.push(entry);
