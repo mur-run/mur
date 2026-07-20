@@ -109,7 +109,8 @@ pub use secret::{cmd_secret_delete, cmd_secret_list, cmd_secret_set};
 pub use service::cmd_install_service;
 #[allow(unused_imports)]
 pub use skill::{
-    cmd_skill_add, cmd_skill_list, cmd_skill_remove, cmd_skill_set_enabled, cmd_skill_show,
+    cmd_skill_add, cmd_skill_convert, cmd_skill_list, cmd_skill_remove, cmd_skill_set_enabled,
+    cmd_skill_show,
 };
 #[allow(unused_imports)]
 pub use snapshot::{cmd_snapshot_pull, cmd_snapshot_show};
