@@ -32,6 +32,11 @@ pub struct MuragentManifest {
     /// Model backend hint for the recipient's first-run resolution (§7.1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_hint: Option<ModelHint>,
+    /// `Some("official")` for agents published from the official catalog.
+    /// Covered by the in-toto subject hash of `manifest.yaml`, so stripping
+    /// it invalidates the package signature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distribution: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,5 +243,29 @@ icon: {}
         let back: ModelHint = serde_yaml_ng::from_str(&s).unwrap();
         assert_eq!(hint, back);
         assert!(s.contains("tier: small"));
+    }
+}
+
+#[cfg(test)]
+mod distribution_marker_tests {
+    use super::*;
+
+    #[test]
+    fn distribution_marker_roundtrips_and_defaults_none() {
+        let yaml = "\
+schema: mur-agent/2
+exported_at: '2026-05-29T00:00:00Z'
+exporter: { mur_version: 1.0.0, tool: mur }
+agent: { slug: coach, display_name: Coach, bundle_id: run.mur.agent.coach, url_scheme: muragent-coach, original_uuid: u1 }
+required_surfaces: [hub]
+icon: {}
+";
+        let m: MuragentManifest = serde_yaml_ng::from_str(yaml).expect("legacy yaml parses");
+        assert!(m.distribution.is_none());
+        let mut m2 = m.clone();
+        m2.distribution = Some("official".into());
+        let round: MuragentManifest =
+            serde_yaml_ng::from_str(&serde_yaml_ng::to_string(&m2).unwrap()).unwrap();
+        assert_eq!(round.distribution.as_deref(), Some("official"));
     }
 }
