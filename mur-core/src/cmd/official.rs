@@ -1,7 +1,7 @@
 //! `mur official` — browse + install from the official MUR catalog.
 use anyhow::{Context, Result, bail};
 use mur_common::official::{LicenseCheck, check_license};
-use mur_common::skill::publisher_trust::MUR_OFFICIAL_PUBLISHER_KEY_FP;
+use mur_common::skill::publisher_trust::MUR_OFFICIAL_LICENSE_KEY_FP;
 
 use crate::official::client::{download_item, fetch_catalog};
 use crate::official::store::save_license;
@@ -40,7 +40,7 @@ pub(crate) async fn cmd_official_install(id: &str) -> Result<()> {
     let (bytes, license) = download_item(&client, &base, &tokens.access_token, id).await?;
 
     // 3. Verify the license fail-closed BEFORE anything touches disk state.
-    match check_license(&license, id, &user_id, MUR_OFFICIAL_PUBLISHER_KEY_FP) {
+    match check_license(&license, id, &user_id, MUR_OFFICIAL_LICENSE_KEY_FP) {
         LicenseCheck::Ok => {}
         other => bail!("server returned an invalid license ({other:?}) — refusing install"),
     }
