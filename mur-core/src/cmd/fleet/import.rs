@@ -16,6 +16,7 @@ use mur_common::skill::types::TrustLevel;
 
 use super::store;
 
+#[derive(Default)]
 pub struct ImportOpts {
     pub force: bool,
     pub no_members: bool,
