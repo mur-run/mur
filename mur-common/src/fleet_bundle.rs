@@ -38,6 +38,12 @@ pub struct BundleManifest {
     /// with `sig=None`). `None` only while building, before signing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sig: Option<String>,
+    /// `Some("official")` for bundles published from the official catalog.
+    /// Inside the signed payload: stripping it invalidates the signature.
+    /// Absent on user-created bundles (and skipped in serialization, so
+    /// pre-existing signed bundles keep verifying byte-for-byte).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distribution: Option<String>,
 }
 
 /// Lowercase hex SHA-256 of `bytes`.
@@ -89,6 +95,7 @@ mod tests {
                 sha256: content_hash(b"name: devteam\n"),
             }],
             sig: None,
+            distribution: None,
         }
     }
 
@@ -143,5 +150,56 @@ mod tests {
         let fp = signer_fingerprint("zSomePubKey");
         assert_eq!(fp, signer_fingerprint("zSomePubKey"));
         assert!(fp.len() <= 12 && !fp.is_empty());
+    }
+
+    #[test]
+    fn manifest_without_distribution_keeps_legacy_sign_input() {
+        // A manifest with distribution=None must produce byte-identical sign
+        // input to one that predates the field (skip_serializing_if).
+        let m = BundleManifest {
+            format_version: FLEET_BUNDLE_FORMAT,
+            fleet_name: "f".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            signer_pubkey: "z".into(),
+            signer_fingerprint: "aa11-bb22".into(),
+            includes_members: false,
+            members: vec![],
+            entries: vec![],
+            sig: None,
+            distribution: None,
+        };
+        let json = String::from_utf8(manifest_sign_input(&m)).unwrap();
+        assert!(!json.contains("distribution"));
+    }
+
+    #[test]
+    fn stripping_distribution_breaks_signature() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let key = SigningKey::from_bytes(&[9u8; 32]);
+        let mut m = BundleManifest {
+            format_version: FLEET_BUNDLE_FORMAT,
+            fleet_name: "f".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            signer_pubkey: multibase::encode(
+                multibase::Base::Base58Btc,
+                key.verifying_key().as_bytes(),
+            ),
+            signer_fingerprint: "aa11-bb22".into(),
+            includes_members: false,
+            members: vec![],
+            entries: vec![],
+            sig: None,
+            distribution: Some(crate::official::DISTRIBUTION_OFFICIAL.into()),
+        };
+        let sig = key.sign(&manifest_sign_input(&m));
+        m.sig = Some(multibase::encode(
+            multibase::Base::Base58Btc,
+            sig.to_bytes(),
+        ));
+        let pk = key.verifying_key().to_bytes();
+        assert!(verify_manifest_sig(&m, &pk));
+        // Strip the marker → signature must fail.
+        m.distribution = None;
+        assert!(!verify_manifest_sig(&m, &pk));
     }
 }

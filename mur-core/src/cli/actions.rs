@@ -1162,3 +1162,15 @@ pub enum ProjectAction {
         path: Option<String>,
     },
 }
+
+/// Official MUR catalog actions.
+#[derive(Subcommand, Debug)]
+pub enum OfficialAction {
+    /// List official agents and fleets from app.mur.run
+    List,
+    /// Download, verify, and install an official item (requires `mur login`)
+    Install {
+        /// Catalog id, e.g. agents/researcher or fleets/deep-research
+        id: String,
+    },
+}

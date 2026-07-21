@@ -119,7 +119,7 @@ pub fn verify(envelope: &DsseEnvelope, expected_payload_type: &str) -> Result<()
 }
 
 /// Derive keyid from the first 8 hex chars of SHA-256(pubkey).
-fn keyid_from_pubkey(pubkey: &[u8; 32]) -> String {
+pub fn keyid_from_pubkey(pubkey: &[u8; 32]) -> String {
     use sha2::Digest;
     let hash = sha2::Sha256::digest(pubkey);
     let hex = format!("{:x}", hash);

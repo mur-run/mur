@@ -110,6 +110,7 @@ pub fn cmd_fleet_export(
         members: fleet.members.clone(),
         entries,
         sig: None,
+        distribution: None,
     };
     let input = manifest_sign_input(&manifest);
     manifest.sig = Some(multibase::encode(

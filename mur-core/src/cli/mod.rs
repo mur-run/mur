@@ -430,6 +430,11 @@ see `mur skill <command> --help`.")]
         /// Research question — runs the deep-research fleet directly
         question: Option<String>,
     },
+    /// Official MUR catalog: browse and install official agents/fleets
+    Official {
+        #[command(subcommand)]
+        action: OfficialAction,
+    },
 }
 
 #[cfg(test)]
@@ -465,6 +470,19 @@ mod tests {
                 assert_eq!(goal.as_deref(), Some("ship"));
             }
             _ => panic!("expected fleet create"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_official_install() {
+        use clap::Parser;
+        let cli =
+            Cli::try_parse_from(["mur", "official", "install", "fleets/deep-research"]).unwrap();
+        match cli.command {
+            Commands::Official {
+                action: crate::cli::actions::OfficialAction::Install { id },
+            } => assert_eq!(id, "fleets/deep-research"),
+            _ => panic!("expected official install"),
         }
     }
 }

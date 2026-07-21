@@ -42,6 +42,7 @@ pub mod model_resolve;
 pub mod multimodal;
 pub mod muragent;
 pub mod net;
+pub mod official;
 pub mod panel;
 pub mod parallel;
 pub mod parameterize;

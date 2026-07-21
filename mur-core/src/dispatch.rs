@@ -12,8 +12,8 @@ use crate::cli::{
     AgentSecretAction, AgentSkillAction, AgentTrashAction, AgentWebhookAction, AuthAction,
     ChannelAction, ChatAction, Cli, CommanderAction, Commands, ConversationsAction, DaemonAction,
     DeepResearchAction, DeployAction, DraftsAction, EvalAction, ExchangeAction, FleetAction,
-    HookEvent, InternalsAction, MurmurdAction, ProjectAction, ScheduleAction, SessionAction,
-    SleepAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
+    HookEvent, InternalsAction, MurmurdAction, OfficialAction, ProjectAction, ScheduleAction,
+    SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
 };
 use crate::store::config as store_config;
 use crate::{cmd, dashboard, team, verify};
@@ -526,6 +526,10 @@ pub async fn run(cli: Cli) -> Result<()> {
                 (None, None) => cmd::deep_research::panel::cmd_panel(&mur_home)?,
             }
         }
+        Commands::Official { action } => match action {
+            OfficialAction::List => cmd::official::cmd_official_list().await?,
+            OfficialAction::Install { id } => cmd::official::cmd_official_install(&id).await?,
+        },
         Commands::Team { action } => match action {
             TeamAction::List { team } => match team {
                 Some(t) => {
