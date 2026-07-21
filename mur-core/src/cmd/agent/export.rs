@@ -191,6 +191,52 @@ fn sanitize_profile_for_export(profile: &mut AgentProfile) -> Vec<String> {
         removed.push("model_ref".to_string());
         profile.model_ref = None;
     }
+
+    // Machine-specific / privacy-sensitive paths. A shared or published profile
+    // must not leak the exporter's home dir, project layout, or local install
+    // paths (e.g. filesystem grants list personal project directories). The
+    // recipient re-grants filesystem/process access at install time.
+    if !profile.entitlements.filesystem.read.is_empty()
+        || !profile.entitlements.filesystem.write.is_empty()
+    {
+        profile.entitlements.filesystem.read.clear();
+        profile.entitlements.filesystem.write.clear();
+        removed.push("entitlements.filesystem.{read,write}".to_string());
+    }
+    // Keep bare binary names (yt-dlp, deno, ffmpeg); drop absolute/home paths.
+    let spawn_before = profile.entitlements.processes.spawn.allowed.len();
+    profile
+        .entitlements
+        .processes
+        .spawn
+        .allowed
+        .retain(|p| !p.starts_with('/') && !p.starts_with('~'));
+    if profile.entitlements.processes.spawn.allowed.len() != spawn_before {
+        removed.push("entitlements.processes.spawn.allowed[path]".to_string());
+    }
+    // MCP command → basename (the manifest already carries the basename); drop
+    // the machine-local binary hash.
+    for m in &mut profile.mcp_servers {
+        if let Some(base) = std::path::Path::new(&m.command).file_name() {
+            let base = base.to_string_lossy().into_owned();
+            if base != m.command {
+                m.command = base;
+                removed.push("mcp_servers[].command[path]".to_string());
+            }
+        }
+        if m.binary_sha256.take().is_some() {
+            removed.push("mcp_servers[].binary_sha256".to_string());
+        }
+    }
+    // Appearance: local render directory + machine-specific render timestamp.
+    if profile.appearance.expressions_dir != std::path::PathBuf::from("expressions") {
+        profile.appearance.expressions_dir = std::path::PathBuf::from("expressions");
+        removed.push("appearance.expressions_dir".to_string());
+    }
+    if profile.appearance.last_rendered_at.take().is_some() {
+        removed.push("appearance.last_rendered_at".to_string());
+    }
+
     removed
 }
 
@@ -232,6 +278,42 @@ mod sanitize_tests {
             removed.iter().any(|r| r == "model_ref"),
             "removed list must record model_ref, got {removed:?}"
         );
+    }
+
+    #[test]
+    fn sanitize_strips_machine_specific_paths() {
+        let mut p = AgentProfile::default_for_tests();
+        p.entitlements.filesystem.read = vec!["/Users/alice/Projects/secret".into()];
+        p.entitlements.filesystem.write = vec!["/Users/alice/Projects/secret".into()];
+        p.entitlements.processes.spawn.allowed =
+            vec!["yt-dlp".into(), "/Users/alice/.mur/mcp-servers/x".into()];
+        p.mcp_servers = vec![mur_common::agent::McpServerEntry {
+            name: "media".into(),
+            command: "/Users/alice/.mur/mcp-servers/mur-mcp-server".into(),
+            binary_sha256: Some("deadbeef".into()),
+            ..Default::default()
+        }];
+        p.appearance.expressions_dir = "/Users/alice/.mur/agents/x/expressions".into();
+        p.appearance.last_rendered_at = Some(chrono::Utc::now());
+
+        let _ = sanitize_profile_for_export(&mut p);
+
+        assert!(p.entitlements.filesystem.read.is_empty());
+        assert!(p.entitlements.filesystem.write.is_empty());
+        assert_eq!(
+            p.entitlements.processes.spawn.allowed,
+            vec!["yt-dlp".to_string()]
+        );
+        assert_eq!(p.mcp_servers[0].command, "mur-mcp-server");
+        assert!(p.mcp_servers[0].binary_sha256.is_none());
+        assert_eq!(
+            p.appearance.expressions_dir,
+            std::path::PathBuf::from("expressions")
+        );
+        assert!(p.appearance.last_rendered_at.is_none());
+        // No exporter home path may survive anywhere in the serialized profile.
+        let yaml = serde_yaml_ng::to_string(&p).unwrap();
+        assert!(!yaml.contains("/Users/alice"), "leaked path: {yaml}");
     }
 
     #[test]
