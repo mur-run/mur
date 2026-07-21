@@ -1,7 +1,7 @@
 name: mur-native-tools
 version: 1.0.0
 publisher: human:mur-official
-description: 'How MUR should reach for its own tools when doing real work: prefer semantic project search over ad-hoc ls/grep for concept queries, check for an existing saved workflow before building from scratch, and offer quick replies as structured {text, description} options. Fires when the agent is about to search a codebase, look something up, plan a task, or offer the user choices.'
+description: 'How MUR reaches for its own tools when searching a codebase, planning a task, or offering the user choices.'
 category: context
 provenance: human
 content:

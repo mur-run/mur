@@ -1700,6 +1700,11 @@ mod builtin_skill_tests {
                 include_str!("../skills/parallel_code.yaml"),
                 false,
             ),
+            (
+                "mur-native-tools",
+                include_str!("../skills/mur_native_tools.yaml"),
+                false,
+            ),
         ];
         use mur_common::skill::manifest::Visibility;
         for (name, yaml, on_demand) in cases {
