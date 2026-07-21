@@ -13,6 +13,12 @@ use std::path::{Path, PathBuf};
 /// No other values are hardcoded — all trust decisions flow through the keyring.
 pub const MUR_OFFICIAL_PUBLISHER_KEY_FP: &str = "ed25519-861d2acb";
 
+/// Pinned MUR official **license** key fingerprint (trust anchor for
+/// `OfficialLicense` signatures — a SEPARATE key from the bundle publisher key
+/// above, so the online license-signing key on the server can never sign
+/// official bundles). Same derivation: SHA-256(raw 32-byte pubkey), first 8 hex.
+pub const MUR_OFFICIAL_LICENSE_KEY_FP: &str = "ed25519-71594984";
+
 /// Trust classification for a signer fingerprint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PublisherTrust {
