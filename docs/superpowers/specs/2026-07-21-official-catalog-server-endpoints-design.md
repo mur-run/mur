@@ -14,6 +14,7 @@ Serve the official catalog to the `mur` client: a public `GET /api/v1/core/catal
 |---|---|
 | License signing key | **Separate online license key** — the root bundle-signing key (`ed25519-861d2acb`) stays CI-only/offline and NEVER touches the server. A distinct license keypair signs licenses; the client pins its fingerprint as a new `MUR_OFFICIAL_LICENSE_KEY_FP` and verifies licenses against it. A server compromise can forge only licenses (bounded), never official code bundles. |
 | Catalog data source | **Live-fetch `index.json`** from the private repo (GitHub API) with a 60 s in-memory cache; degrade to last-cached on GitHub outage. No DB table, no sync job. |
+| GitHub access | **GitHub App** (not a PAT) — the server mints short-lived (1 h) installation tokens from the App's private key, auto-refreshed, so there is no annual PAT rotation. App has `Contents: Read` on `mur-run/official-catalog`. |
 | License key custody (server) | Env secret `OFFICIAL_LICENSE_SIGNING_KEY` (base64 32-byte Ed25519 secret) for v1; KMS/HSM is a hardening follow-up (blast radius already bounded by the key split). |
 | Entitlement | Reuse `BillingService.GetSubscription(userID)`; pro allowed when `Status ∈ {Active, PastDue}`. `expires_at` = subscription `CurrentPeriodEnd` + 30-day grace; free items get a long-lived license too (uniform flow). |
 
@@ -25,7 +26,7 @@ Serve the official catalog to the `mur` client: a public `GET /api/v1/core/catal
 ## 4. `GET /api/v1/core/catalog` (public)
 
 - Mounted in the existing `/api/v1/core` chi route group, **no auth** (powers web browsing + the Hub store + `mur official list`).
-- Handler fetches `index.json` from `mur-run/official-catalog` via the GitHub API (raw content of the repo's `index.json` on `main`), authenticated with `GITHUB_CATALOG_TOKEN`. Result cached in-memory 60 s (TTL). On GitHub error, serve the last good cache; if no cache yet, `503`.
+- Handler fetches `index.json` from `mur-run/official-catalog` via the GitHub API (raw content of the repo's `index.json` on `main`), authenticated with a GitHub App installation token (minted from the App private key, cached ~55 min). Result cached in-memory 60 s (TTL). On GitHub error, serve the last good cache; if no cache yet, `503`.
 - Translate each `index.json` item → the client's fixed `CatalogItem` shape: `{id, tier, version, description}` (drop `storage_key`/`sha256`/`size` — server-internal). Response: `{"items":[...]}`.
 
 ## 5. `GET /api/v1/core/catalog/{id}/download` (authenticated)
@@ -34,8 +35,8 @@ Serve the official catalog to the `mur` client: a public `GET /api/v1/core/catal
 - Flow (fail-closed at each step):
   1. Resolve the item from the cached `index.json`; `404` if unknown.
   2. If `tier == "pro"`: `BillingService.GetSubscription(userID)`; allow iff `Status ∈ {Active, PastDue}`, else `403` with a "requires an active MUR Pro subscription" body. Free items skip this.
-  3. Fetch the release asset bytes: GitHub API on `mur-run/official-catalog`, release tag `official/<id>/<version>` (e.g. `official/agents/researcher/1.0.0` — exactly the tag the CI publish job creates, where `id` already carries the `agents/` or `fleets/` prefix), download the `.muragent`/`.fleet` asset with `GITHUB_CATALOG_TOKEN`.
-  4. Build `OfficialLicense { format_version, user_id: <caller>, item: id, version, expires_at, signer_pubkey: <license pubkey multibase>, sig: None }`, then sign with the license key (`sign_license`); `expires_at` = pro → `CurrentPeriodEnd + 30d`; free → a far-future/long TTL.
+  3. Fetch the release asset bytes: GitHub API on `mur-run/official-catalog`, release tag `official/<id>/<version>` (e.g. `official/agents/researcher/1.0.0` — exactly the tag the CI publish job creates, where `id` already carries the `agents/` or `fleets/` prefix), download the `.muragent`/`.fleet` asset with the App installation token.
+  4. Build `OfficialLicense { format_version, user_id: <caller>, item: id, version, expires_at, signer_pubkey: <license pubkey base64>, sig: None }`, then sign with the license key (`sign_license`); `expires_at` = pro → `CurrentPeriodEnd + 30d`; free → a far-future/long TTL.
   5. Respond `{"license": <OfficialLicense JSON>, "bundle_base64": <base64 asset>}` — the exact shape the shipped client (#738) parses.
 - The bundle bytes are proxied inline (never a public URL), so the private release asset stays private and pro bytes are never freely fetchable.
 
@@ -51,7 +52,7 @@ Serve the official catalog to the `mur` client: a public `GET /api/v1/core/catal
 ## 7. Config / secrets (mur-server)
 
 - `OFFICIAL_LICENSE_SIGNING_KEY` — base64 32-byte Ed25519 secret (the license private key). Its fp must equal the client's `MUR_OFFICIAL_LICENSE_KEY_FP`.
-- `GITHUB_CATALOG_TOKEN` — a token (fine-grained PAT or GitHub App installation token) with read access to `mur-run/official-catalog` contents + releases.
+- **GitHub App** (auto-refreshing access, no PAT rotation): `GITHUB_APP_ID` (numeric), `GITHUB_APP_INSTALLATION_ID` (the installation on `mur-run/official-catalog`), `GITHUB_APP_PRIVATE_KEY` (the App's RSA private key PEM — a secret). The server mints a short JWT (RS256, signed with the PEM) → exchanges it for a 1 h installation token at `POST /app/installations/{id}/access_tokens`, cached until ~5 min before expiry. Uses the existing `golang-jwt/jwt/v5` dep.
 - `OFFICIAL_CATALOG_REPO` — `mur-run/official-catalog` (configurable).
 - Added via the existing `getEnv` config pattern (`internal/config/config.go`).
 

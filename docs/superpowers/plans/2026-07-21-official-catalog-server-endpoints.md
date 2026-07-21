@@ -147,13 +147,33 @@ git commit -m "feat(official): OfficialLicense Go signer byte-compatible with Ru
 - Modify: `internal/config/config.go`
 
 **Interfaces:**
-- Produces: config fields `OfficialLicenseSigningKey string` (base64 32-byte Ed25519 secret), `GitHubCatalogToken string`, `OfficialCatalogRepo string` (default `mur-run/official-catalog`), loaded via the existing `getEnv` pattern. A helper `func (c *Config) OfficialLicensePrivateKey() (ed25519.PrivateKey, error)` that base64-decodes the secret and validates it's 32 bytes (ed25519 seed → `ed25519.NewKeyFromSeed`).
+- Produces: config fields `OfficialLicenseSigningKey string` (base64 32-byte Ed25519 secret), `GitHubAppID string`, `GitHubAppInstallationID string`, `GitHubAppPrivateKey string` (RSA PEM), `OfficialCatalogRepo string` (default `mur-run/official-catalog`), loaded via the existing `getEnv` pattern. Two helpers: `func (c *Config) OfficialLicensePrivateKey() (ed25519.PrivateKey, error)` (base64-decode → validate 32 bytes → `ed25519.NewKeyFromSeed`); `func (c *Config) GitHubAppRSAKey() (*rsa.PrivateKey, error)` (parse the PEM via `jwt.ParseRSAPrivateKeyFromPEM`).
 
-- [ ] **Step 1: Failing test** — `config_test.go`: set the env var to a base64 32-byte seed, load config, assert `OfficialLicensePrivateKey()` returns a usable key whose public half round-trips.
-- [ ] **Step 2: Run — fails (fields/method missing).**
-- [ ] **Step 3: Implement** — add the three `getEnv(...)` lines in the config builder (mirror existing lines like `BitLDMGBaseURL`), and the `OfficialLicensePrivateKey` helper using `crypto/ed25519` + `encoding/base64`. Default `OfficialCatalogRepo` = `"mur-run/official-catalog"`.
+- [ ] **Step 1: Failing test** — `config_test.go`: set the license-key env to a base64 32-byte seed and the App-key env to a test RSA PEM; load config; assert `OfficialLicensePrivateKey()` returns a usable key and `GitHubAppRSAKey()` parses.
+- [ ] **Step 2: Run — fails (fields/methods missing).**
+- [ ] **Step 3: Implement** — add the `getEnv(...)` lines for `OFFICIAL_LICENSE_SIGNING_KEY`, `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY`, `OFFICIAL_CATALOG_REPO` (default `"mur-run/official-catalog"`), mirroring existing lines like `BitLDMGBaseURL`. Add the `OfficialLicensePrivateKey` helper (`crypto/ed25519` + `encoding/base64`) and `GitHubAppRSAKey` helper (`jwt.ParseRSAPrivateKeyFromPEM` from `github.com/golang-jwt/jwt/v5`). Also add the three new keys to `.env.example`.
 - [ ] **Step 4: Run — pass.**
-- [ ] **Step 5: Commit** `feat(official): config for license key + catalog repo/token`.
+- [ ] **Step 5: Commit** `feat(official): config for license key + GitHub App catalog access`.
+
+---
+
+### Task 2b: GitHub App installation-token minter
+
+**Files:**
+- Create: `internal/services/officialcatalog/githubapp.go`
+- Test: `internal/services/officialcatalog/githubapp_test.go`
+
+**Interfaces:**
+- Produces:
+  - `type InstallationTokenSource struct {...}` + `func NewInstallationTokenSource(httpClient *http.Client, appID, installationID string, rsaKey *rsa.PrivateKey) *InstallationTokenSource`.
+  - `func (s *InstallationTokenSource) Token(ctx context.Context) (string, error)` — returns a valid installation token, minting a new one when the cached token is within 5 min of expiry.
+- Mechanism: build a JWT (`jwt.NewWithClaims(jwt.SigningMethodRS256, claims)` with `iss = appID`, `iat = now-60s`, `exp = now+9min`), sign with `rsaKey`; `POST https://api.github.com/app/installations/<installationID>/access_tokens` with `Authorization: Bearer <jwt>`, `Accept: application/vnd.github+json`; parse `{"token","expires_at"}`; cache under a mutex until `expires_at - 5min`.
+
+- [ ] **Step 1: Failing test** — `httptest` server asserts the incoming `Authorization: Bearer <jwt>` parses+verifies against the test RSA public key with `iss==appID`, and returns `{"token":"ghs_test","expires_at":"<now+1h>"}`. Assert `Token()` returns `ghs_test`, and a second call within the window does not re-hit the server (cached). Inject the API base URL for tests.
+- [ ] **Step 2: Run — fails.**
+- [ ] **Step 3: Implement** — the JWT mint + exchange + mutex-guarded cache (`token string`, `exp time.Time`), base URL field defaulting to `https://api.github.com`.
+- [ ] **Step 4: Run — pass.**
+- [ ] **Step 5: Commit** `feat(official): GitHub App installation-token minter`.
 
 ---
 
@@ -166,8 +186,8 @@ git commit -m "feat(official): OfficialLicense Go signer byte-compatible with Ru
 **Interfaces:**
 - Produces:
   - `type IndexItem struct { ID, Kind, Name, Version, Tier, Description, StorageKey, Sha256 string; Size int64 }` (json tags matching the CI-produced `index.json`).
-  - `type CatalogService struct {...}` with `func NewCatalogService(httpClient *http.Client, repo, token string) *CatalogService`.
-  - `func (s *CatalogService) Index(ctx context.Context) ([]IndexItem, error)` — GETs `https://api.github.com/repos/<repo>/contents/index.json` (Accept `application/vnd.github.raw`, `Authorization: Bearer <token>`), parses the JSON array, caches the parsed slice for 60 s. On fetch error with a warm cache, returns the cache; with no cache, returns the error.
+  - `type CatalogService struct {...}` with `func NewCatalogService(httpClient *http.Client, repo string, tokens *InstallationTokenSource) *CatalogService` (holds the Task 2b token source for auth).
+  - `func (s *CatalogService) Index(ctx context.Context) ([]IndexItem, error)` — GETs `https://api.github.com/repos/<repo>/contents/index.json` (Accept `application/vnd.github.raw`, `Authorization: Bearer <tokens.Token(ctx)>`), parses the JSON array, caches the parsed slice for 60 s. On fetch error with a warm cache, returns the cache; with no cache, returns the error.
 
 - [ ] **Step 1: Failing test** — `httptest` server returns a fixed `index.json` array; assert `Index` parses it and a second call within the TTL does not re-hit the server (count requests). Add a case: server errors after a warm cache → `Index` returns the cached slice.
 - [ ] **Step 2: Run — fails.**
@@ -200,7 +220,7 @@ git commit -m "feat(official): OfficialLicense Go signer byte-compatible with Ru
 - Test: same package test
 
 **Interfaces:**
-- Produces: `func (s *CatalogService) FetchAsset(ctx context.Context, item IndexItem) ([]byte, error)` — resolves the release by tag `official/<item.ID>/<item.Version>` (`GET /repos/<repo>/releases/tags/<tag>`), finds the asset whose name ends in `.muragent`/`.fleet`, and downloads it (`GET .../releases/assets/<id>` with `Accept: application/octet-stream`). Returns raw bytes.
+- Produces: `func (s *CatalogService) FetchAsset(ctx context.Context, item IndexItem) ([]byte, error)` — resolves the release by tag `official/<item.ID>/<item.Version>` (`GET /repos/<repo>/releases/tags/<tag>`), finds the asset whose name ends in `.muragent`/`.fleet`, and downloads it (`GET .../releases/assets/<id>` with `Accept: application/octet-stream`). All calls authenticate with `Authorization: Bearer <s.tokens.Token(ctx)>` (the Task 2b installation token). Returns raw bytes.
 
 - [ ] **Step 1: Failing test** — httptest mock serving the release JSON (with an asset) + the asset bytes; assert `FetchAsset` returns the exact bytes. Add a `404`-release case → error.
 - [ ] **Step 2–4: red → implement → green.**
@@ -250,8 +270,12 @@ Flow: `id` from `chi.URLParam(r, "*")` (the id contains a slash — mount the ro
 - Modify: `internal/api/server.go` (construct the services/handlers, register routes)
 - Modify: `CLAUDE.md` (mur-server) or the docs page note
 
-- [ ] **Step 1:** In `server.go`, construct `officialcatalog.NewCatalogService(...)` from config, the two handlers, and register inside the `/api/v1/core` group:
+- [ ] **Step 1:** In `server.go`, construct the token source + catalog service from config, the two handlers, and register inside the `/api/v1/core` group:
   ```go
+  rsaKey, _ := cfg.GitHubAppRSAKey()
+  tokens := officialcatalog.NewInstallationTokenSource(httpClient, cfg.GitHubAppID, cfg.GitHubAppInstallationID, rsaKey)
+  catSvc := officialcatalog.NewCatalogService(httpClient, cfg.OfficialCatalogRepo, tokens)
+  // construct officialCatalogHandler + officialDownloadHandler over catSvc + the license key, then:
   r.Get("/catalog", officialCatalogHandler.List)                 // public
   r.Route("/catalog", func(r chi.Router) {
       r.Group(func(r chi.Router) {
@@ -262,7 +286,7 @@ Flow: `id` from `chi.URLParam(r, "*")` (the id contains a slash — mount the ro
   ```
   > NOTE: `{id}` must capture `agents/researcher` (contains a slash). chi needs a wildcard route (`/{id}/download` won't match a slashed id) — use `r.Get("/catalog/*", ...)` and parse `strings.TrimSuffix(chi.URLParam(r,"*"), "/download")`, or register `/catalog/{kind}/{name}/download` and reassemble `id = kind+"/"+name`. Pick the one that keeps the public `List` route unambiguous; verify with a routing test.
 - [ ] **Step 2:** `go build ./...` + `go test ./internal/...` — all green.
-- [ ] **Step 3:** Add a one-paragraph note to the server docs describing the two endpoints + the required env (`OFFICIAL_LICENSE_SIGNING_KEY`, `GITHUB_CATALOG_TOKEN`).
+- [ ] **Step 3:** Add a one-paragraph note to the server docs describing the two endpoints + the required env (`OFFICIAL_LICENSE_SIGNING_KEY`, `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY`).
 - [ ] **Step 4: Commit** `feat(official): wire /catalog + /download routes`.
 
 ---
