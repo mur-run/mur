@@ -32,7 +32,7 @@ mod comm;
 mod doctor;
 pub mod export;
 mod hub;
-mod install;
+pub(crate) mod install;
 pub mod lifecycle;
 pub mod mcp;
 pub mod mcp_discover;
