@@ -5,13 +5,11 @@ use anyhow::{Context, Result, bail};
 use mur_common::official::{LicenseCheck, OfficialLicense, check_license};
 use mur_common::skill::publisher_trust::MUR_OFFICIAL_PUBLISHER_KEY_FP;
 
-#[allow(dead_code)]
 pub fn licenses_dir(mur_home: &Path) -> PathBuf {
     mur_home.join("licenses")
 }
 
 /// One file per item; `/` flattened so the dir stays flat: `agents__researcher.yaml`.
-#[allow(dead_code)]
 pub fn license_path(mur_home: &Path, item: &str) -> PathBuf {
     licenses_dir(mur_home).join(format!("{}.yaml", item.replace('/', "__")))
 }
@@ -29,7 +27,6 @@ pub fn save_license(mur_home: &Path, l: &OfficialLicense) -> Result<PathBuf> {
     Ok(path)
 }
 
-#[allow(dead_code)]
 pub fn load_license(mur_home: &Path, item: &str) -> Result<Option<OfficialLicense>> {
     let path = license_path(mur_home, item);
     if !path.exists() {
@@ -46,10 +43,22 @@ pub fn load_license(mur_home: &Path, item: &str) -> Result<Option<OfficialLicens
 /// a lapsed subscription never disables what the user already obtained.
 #[allow(dead_code)]
 pub fn require_license(mur_home: &Path, item: &str, user_id: &str) -> Result<()> {
+    require_license_against(mur_home, item, user_id, MUR_OFFICIAL_PUBLISHER_KEY_FP)
+}
+
+/// Test seam: `require_license` with an explicit official fingerprint, so
+/// tests can pin against a locally-generated signing key instead of the real
+/// `MUR_OFFICIAL_PUBLISHER_KEY_FP` (which test keys can never match).
+pub fn require_license_against(
+    mur_home: &Path,
+    item: &str,
+    user_id: &str,
+    official_fp: &str,
+) -> Result<()> {
     let Some(l) = load_license(mur_home, item)? else {
         bail!("no license for {item} on this machine");
     };
-    match check_license(&l, item, user_id, MUR_OFFICIAL_PUBLISHER_KEY_FP) {
+    match check_license(&l, item, user_id, official_fp) {
         LicenseCheck::Ok => Ok(()),
         LicenseCheck::BadSignature => bail!("license for {item} has an invalid signature"),
         LicenseCheck::NotOfficialKey => {
