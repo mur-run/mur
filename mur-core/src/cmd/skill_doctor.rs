@@ -148,6 +148,7 @@ pub fn cmd_doctor(
         "mcp-capability-available",
         "intent-resolvable",
         "disclosure",
+        "shadow-drift",
     ];
     let active_checks: Vec<&str> = if checks.is_empty() {
         all_checks.to_vec()
@@ -209,6 +210,10 @@ pub fn cmd_doctor(
                 _ => {}
             }
         }
+    }
+
+    if active_checks.contains(&"shadow-drift") {
+        findings.extend(run_shadow_drift(&ctx));
     }
 
     // ── Repair (M5b) ──
@@ -1255,6 +1260,76 @@ fn exit_code(findings: &[Finding], strict: bool) -> i32 {
     i32::from(any_fail || (strict && any_warn))
 }
 
+/// Whole-store scan: detect agent-local skills that shadow a same-name skill
+/// in the global store (builtin or registry). A vendored copy identical to
+/// the global one is redundant (Ok — safe to de-pin); a diverged copy is a
+/// shadow that silently pins a stale snapshot and never receives upstream
+/// updates (Warn). Only names present in the global store can shadow, so
+/// genuinely agent-specific skills are never flagged.
+fn run_shadow_drift(ctx: &DoctorCtx) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let Ok(agents) = std::fs::read_dir(ctx.home.join("agents")) else {
+        return findings;
+    };
+    for agent in agents.flatten() {
+        if !agent.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let agent_name = agent.file_name().to_string_lossy().into_owned();
+        let Ok(skills) = std::fs::read_dir(agent.path().join("skills")) else {
+            continue;
+        };
+        for skill in skills.flatten() {
+            let name = skill.file_name().to_string_lossy().into_owned();
+            if !ctx.installed_skills.contains(&name) {
+                continue; // no global twin → legitimately agent-specific
+            }
+            let Ok(local_raw) = std::fs::read_to_string(skill.path().join("skill.yaml")) else {
+                continue;
+            };
+            let (Ok(local), Some(global)) = (
+                mur_common::skill::parse_canonical(&local_raw),
+                load_manifest(&ctx.home, &name),
+            ) else {
+                continue;
+            };
+            let (Ok(local_hash), Ok(global_hash)) = (
+                mur_common::skill::content_hash_for_origin(&local),
+                mur_common::skill::content_hash_for_origin(&global),
+            ) else {
+                continue;
+            };
+            let remediation = Some(format!("mur agent skill remove {agent_name} skills/{name}"));
+            if local_hash == global_hash {
+                findings.push(Finding {
+                    check_id: "shadow-drift".into(),
+                    category: "shadow".into(),
+                    severity: Severity::Ok,
+                    skill_name: name.clone(),
+                    message: format!(
+                        "Agent '{agent_name}' vendors '{name}', identical to the global copy — redundant. De-pin so the global (builtin/registry) copy owns it."
+                    ),
+                    remediation,
+                    fixable: false,
+                });
+            } else {
+                findings.push(Finding {
+                    check_id: "shadow-drift".into(),
+                    category: "shadow".into(),
+                    severity: Severity::Warn,
+                    skill_name: name.clone(),
+                    message: format!(
+                        "Agent '{agent_name}' vendors '{name}', diverged from the global copy — this shadow pins a stale snapshot and never receives upstream MUR updates."
+                    ),
+                    remediation,
+                    fixable: false,
+                });
+            }
+        }
+    }
+    findings
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1287,6 +1362,80 @@ mod tests {
             llm_enabled: false,
             llm_ctx: None,
         }
+    }
+
+    fn write_shadow_skill(dir: &std::path::Path, name: &str, abstract_text: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        let yaml = format!(
+            "name: {name}\nversion: 1.0.0\npublisher: human:test\ndescription: 'test skill {name}'\ncategory: context\ncontent:\n  abstract: '{abstract_text}'\n  context: 'body'\n"
+        );
+        std::fs::write(dir.join("skill.yaml"), yaml).unwrap();
+    }
+
+    #[test]
+    fn shadow_drift_flags_diverged_agent_copy_as_warn() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_path_buf();
+        write_shadow_skill(&home.join("skills/foo"), "foo", "global version");
+        write_shadow_skill(
+            &home.join("agents/a1/skills/foo"),
+            "foo",
+            "agent-diverged version",
+        );
+
+        let mut ctx = doctor_ctx(&tmp);
+        ctx.installed_skills.insert("foo".to_string());
+
+        let findings = run_shadow_drift(&ctx);
+        let f = findings
+            .iter()
+            .find(|f| f.skill_name == "foo")
+            .expect("expected a shadow finding for foo");
+        assert_eq!(f.check_id, "shadow-drift");
+        assert_eq!(f.severity, Severity::Warn);
+        assert!(
+            f.remediation
+                .as_deref()
+                .unwrap()
+                .contains("mur agent skill remove a1 skills/foo")
+        );
+    }
+
+    #[test]
+    fn shadow_drift_flags_identical_agent_copy_as_ok() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_path_buf();
+        write_shadow_skill(&home.join("skills/foo"), "foo", "same version");
+        write_shadow_skill(&home.join("agents/a1/skills/foo"), "foo", "same version");
+
+        let mut ctx = doctor_ctx(&tmp);
+        ctx.installed_skills.insert("foo".to_string());
+
+        let findings = run_shadow_drift(&ctx);
+        let f = findings
+            .iter()
+            .find(|f| f.skill_name == "foo")
+            .expect("expected a shadow finding for foo");
+        assert_eq!(f.severity, Severity::Ok);
+    }
+
+    #[test]
+    fn shadow_drift_ignores_agent_only_skill() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_path_buf();
+        // agent-local skill with NO global twin — legitimate, must not be flagged
+        write_shadow_skill(
+            &home.join("agents/a1/skills/private"),
+            "private",
+            "agent only",
+        );
+
+        let ctx = doctor_ctx(&tmp); // installed_skills empty
+        let findings = run_shadow_drift(&ctx);
+        assert!(
+            findings.is_empty(),
+            "agent-only skills must not be flagged as shadows"
+        );
     }
 
     #[test]
