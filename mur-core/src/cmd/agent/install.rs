@@ -49,6 +49,7 @@ pub fn cmd_install(
             true,
             logged_in_user.as_deref(),
             mur_common::skill::publisher_trust::MUR_OFFICIAL_PUBLISHER_KEY_FP,
+            mur_common::skill::publisher_trust::MUR_OFFICIAL_LICENSE_KEY_FP,
         )?;
     }
 
@@ -95,26 +96,28 @@ pub fn cmd_install(
 
 /// Official-distribution gate for `.muragent` installs. Mirrors the fleet
 /// import gate (`cmd/fleet/import.rs::official_gate`): marker present ⇒ (1)
-/// the package must be signed by `official_fp` (a self-signed package
+/// the package must be signed by `publisher_fp` (a self-signed package
 /// claiming `distribution: official` is a spoof), and (2) a matching local
-/// license must exist for `agents/<agent_slug>` + the logged-in user.
-/// `signer_pk` is the raw verified Ed25519 public key; `official_fp` is an
-/// `ed25519-<8hex>` fingerprint. The caller is
-/// responsible for only invoking this when the manifest carries the marker.
+/// license (signed by the SEPARATE `license_fp` key) must exist for
+/// `agents/<agent_slug>` + the logged-in user. `signer_pk` is the raw verified
+/// Ed25519 public key; both fps are `ed25519-<8hex>`. Bundle trust and license
+/// trust use different keys. The caller only invokes this when the manifest
+/// carries the marker.
 fn official_gate_agent(
     mur_home: &Path,
     agent_slug: &str,
     signer_pk: &[u8; 32],
     signature_verified: bool,
     logged_in_user: Option<&str>,
-    official_fp: &str,
+    publisher_fp: &str,
+    license_fp: &str,
 ) -> Result<()> {
     use mur_common::muragent::dsse::keyid_from_pubkey;
     // Derive the fingerprint from the *verified* signing key, never from the
     // envelope's self-asserted `keyid` string (which is outside the signed
     // payload and thus attacker-settable — an attacker could stamp the
     // official fp onto a bundle signed with their own key).
-    if !signature_verified || keyid_from_pubkey(signer_pk) != official_fp {
+    if !signature_verified || keyid_from_pubkey(signer_pk) != publisher_fp {
         bail!(
             "package claims official distribution but is not signed by the MUR official key — refusing install"
         );
@@ -125,7 +128,7 @@ fn official_gate_agent(
         );
     };
     let item = format!("agents/{agent_slug}");
-    crate::official::store::require_license_against(mur_home, &item, user, official_fp).map_err(
+    crate::official::store::require_license_against(mur_home, &item, user, license_fp).map_err(
         |e| {
             anyhow::anyhow!(
                 "{e} — official MUR content can't be shared between accounts; get it from app.mur.run via `mur official install`"
@@ -470,8 +473,8 @@ mod tests {
         let pk = key.verifying_key().to_bytes();
         let fp = mur_common::muragent::dsse::keyid_from_pubkey(&pk);
         // no license → refused
-        let err =
-            official_gate_agent(home.path(), "researcher", &pk, true, Some("u1"), &fp).unwrap_err();
+        let err = official_gate_agent(home.path(), "researcher", &pk, true, Some("u1"), &fp, &fp)
+            .unwrap_err();
         assert!(err.to_string().contains("app.mur.run"), "{err}");
         // matching license → passes
         let mut l = mur_common::official::OfficialLicense {
@@ -485,15 +488,23 @@ mod tests {
         };
         mur_common::official::sign_license(&mut l, &key);
         crate::official::store::save_license(home.path(), &l).unwrap();
-        official_gate_agent(home.path(), "researcher", &pk, true, Some("u1"), &fp).unwrap();
+        official_gate_agent(home.path(), "researcher", &pk, true, Some("u1"), &fp, &fp).unwrap();
         // wrong signer key on the package → refused even with license. Deriving
         // the fp from the verified pubkey (not a self-asserted string) is what
         // makes this un-spoofable.
         let wrong_pk = ed25519_dalek::SigningKey::from_bytes(&[8u8; 32])
             .verifying_key()
             .to_bytes();
-        let err = official_gate_agent(home.path(), "researcher", &wrong_pk, true, Some("u1"), &fp)
-            .unwrap_err();
+        let err = official_gate_agent(
+            home.path(),
+            "researcher",
+            &wrong_pk,
+            true,
+            Some("u1"),
+            &fp,
+            &fp,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("official key"), "{err}");
     }
 
@@ -503,7 +514,7 @@ mod tests {
         let key = ed25519_dalek::SigningKey::from_bytes(&[1u8; 32]);
         let pk = key.verifying_key().to_bytes();
         let fp = mur_common::muragent::dsse::keyid_from_pubkey(&pk);
-        let err = official_gate_agent(home.path(), "researcher", &pk, false, Some("u1"), &fp)
+        let err = official_gate_agent(home.path(), "researcher", &pk, false, Some("u1"), &fp, &fp)
             .unwrap_err();
         assert!(err.to_string().contains("official key"), "{err}");
     }
@@ -514,7 +525,8 @@ mod tests {
         let key = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]);
         let pk = key.verifying_key().to_bytes();
         let fp = mur_common::muragent::dsse::keyid_from_pubkey(&pk);
-        let err = official_gate_agent(home.path(), "researcher", &pk, true, None, &fp).unwrap_err();
+        let err =
+            official_gate_agent(home.path(), "researcher", &pk, true, None, &fp, &fp).unwrap_err();
         assert!(err.to_string().contains("app.mur.run"), "{err}");
     }
 
@@ -536,8 +548,8 @@ mod tests {
         mur_common::official::sign_license(&mut l, &key);
         crate::official::store::save_license(home.path(), &l).unwrap();
 
-        let err =
-            official_gate_agent(home.path(), "researcher", &pk, true, Some("u2"), &fp).unwrap_err();
+        let err = official_gate_agent(home.path(), "researcher", &pk, true, Some("u2"), &fp, &fp)
+            .unwrap_err();
         assert!(err.to_string().contains("different account"), "{err}");
     }
 

@@ -122,23 +122,25 @@ fn confirm(prompt: &str, yes: bool) -> Result<bool> {
 }
 
 /// Official-distribution gate. Marker present ⇒ (1) bundle must be signed by
-/// `official_fp` (a self-signed bundle claiming `distribution: official` is a
-/// spoof — a real license would let it impersonate official content), and
-/// (2) a matching local license must exist for this item + logged-in user.
+/// `publisher_fp` (a self-signed bundle claiming `distribution: official` is a
+/// spoof), and (2) a matching local license (signed by the SEPARATE
+/// `license_fp` key) must exist for this item + logged-in user. Bundle trust and
+/// license trust use different keys so the online license key never signs bundles.
 fn official_gate(
     mur_home: &Path,
     manifest: &BundleManifest,
     signer_pk: &[u8; 32],
     signature_verified: bool,
     logged_in_user: Option<&str>,
-    official_fp: &str,
+    publisher_fp: &str,
+    license_fp: &str,
 ) -> Result<()> {
     use mur_common::muragent::dsse::keyid_from_pubkey;
     use mur_common::official::DISTRIBUTION_OFFICIAL;
     if manifest.distribution.as_deref() != Some(DISTRIBUTION_OFFICIAL) {
         return Ok(());
     }
-    if !signature_verified || keyid_from_pubkey(signer_pk) != official_fp {
+    if !signature_verified || keyid_from_pubkey(signer_pk) != publisher_fp {
         bail!(
             "bundle claims official distribution but is not signed by the MUR official key — refusing import"
         );
@@ -149,7 +151,7 @@ fn official_gate(
         );
     };
     let item = format!("fleets/{}", manifest.fleet_name);
-    crate::official::store::require_license_against(mur_home, &item, user, official_fp).map_err(
+    crate::official::store::require_license_against(mur_home, &item, user, license_fp).map_err(
         |e| {
             anyhow::anyhow!(
                 "{e} — official MUR content can't be shared between accounts; get it from app.mur.run via `mur official install`"
@@ -196,6 +198,7 @@ pub fn cmd_fleet_import(
         signature_verified,
         logged_in_user.as_deref(),
         mur_common::skill::publisher_trust::MUR_OFFICIAL_PUBLISHER_KEY_FP,
+        mur_common::skill::publisher_trust::MUR_OFFICIAL_LICENSE_KEY_FP,
     )?;
 
     // 3. Verify every entry's hash against the unpacked bytes (fail-closed).
@@ -1643,6 +1646,7 @@ mod tests {
             false,
             None,
             "ed25519-deadbeef",
+            "ed25519-deadbeef",
         )
         .unwrap();
     }
@@ -1656,15 +1660,23 @@ mod tests {
         let pk = key.verifying_key().to_bytes();
 
         // signature_verified == false
-        let err =
-            official_gate(home.path(), &manifest, &pk, false, Some("user-1"), &fp).unwrap_err();
+        let err = official_gate(home.path(), &manifest, &pk, false, Some("user-1"), &fp, &fp)
+            .unwrap_err();
         assert!(err.to_string().contains("refusing import"), "{err}");
 
         // signature_verified == true but signer key doesn't match official_fp
         let other_key = ed25519_dalek::SigningKey::from_bytes(&[2u8; 32]);
         let other_pk = other_key.verifying_key().to_bytes();
-        let err = official_gate(home.path(), &manifest, &other_pk, true, Some("user-1"), &fp)
-            .unwrap_err();
+        let err = official_gate(
+            home.path(),
+            &manifest,
+            &other_pk,
+            true,
+            Some("user-1"),
+            &fp,
+            &fp,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("refusing import"), "{err}");
     }
 
@@ -1676,7 +1688,7 @@ mod tests {
         let fp = official_fp_for(&key);
         let pk = key.verifying_key().to_bytes();
 
-        let err = official_gate(home.path(), &manifest, &pk, true, None, &fp).unwrap_err();
+        let err = official_gate(home.path(), &manifest, &pk, true, None, &fp, &fp).unwrap_err();
         assert!(err.to_string().contains("app.mur.run"), "{err}");
     }
 
@@ -1690,7 +1702,7 @@ mod tests {
 
         // logged in, but no license saved for this item.
         let err =
-            official_gate(home.path(), &manifest, &pk, true, Some("user-1"), &fp).unwrap_err();
+            official_gate(home.path(), &manifest, &pk, true, Some("user-1"), &fp, &fp).unwrap_err();
         assert!(err.to_string().contains("app.mur.run"), "{err}");
     }
 
@@ -1705,7 +1717,7 @@ mod tests {
         save_test_license(home.path(), "fleets/dev", "user-1", &key);
 
         let err =
-            official_gate(home.path(), &manifest, &pk, true, Some("user-2"), &fp).unwrap_err();
+            official_gate(home.path(), &manifest, &pk, true, Some("user-2"), &fp, &fp).unwrap_err();
         assert!(err.to_string().contains("different account"), "{err}");
     }
 
@@ -1719,7 +1731,7 @@ mod tests {
 
         save_test_license(home.path(), "fleets/dev", "user-1", &key);
 
-        official_gate(home.path(), &manifest, &pk, true, Some("user-1"), &fp).unwrap();
+        official_gate(home.path(), &manifest, &pk, true, Some("user-1"), &fp, &fp).unwrap();
     }
 
     /// End-to-end wiring proof via `cmd_fleet_import`. Production pins the
