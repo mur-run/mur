@@ -9,7 +9,6 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 use crate::muragent::dsse::keyid_from_pubkey;
-use crate::skill::publisher_trust::MUR_OFFICIAL_PUBLISHER_KEY_FP;
 
 /// License wire-format version. Bump on any breaking change.
 pub const OFFICIAL_LICENSE_FORMAT: u32 = 1;
@@ -81,11 +80,6 @@ pub fn license_key_fp(l: &OfficialLicense) -> Option<String> {
     let pk = B64.decode(&l.signer_pubkey).ok()?;
     let arr = <[u8; 32]>::try_from(pk.as_slice()).ok()?;
     Some(keyid_from_pubkey(&arr))
-}
-
-/// Whether `fp` is the pinned MUR-official publisher key fingerprint.
-pub fn is_official_key_fp(fp: &str) -> bool {
-    fp == MUR_OFFICIAL_PUBLISHER_KEY_FP
 }
 
 /// Outcome of a full license check. Order of checks: signature → signer
