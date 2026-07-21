@@ -3,13 +3,12 @@ use anyhow::{Context, Result, bail};
 use mur_common::official::OfficialLicense;
 use serde::Deserialize;
 
+/// Catalog item as returned by `GET /api/v1/core/catalog`. Only the fields the
+/// client acts on are captured; any additional server fields (e.g. `kind`,
+/// `name`) are ignored by serde.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CatalogItem {
     pub id: String,
-    #[serde(default)]
-    pub kind: String,
-    #[serde(default)]
-    pub name: String,
     #[serde(default)]
     pub tier: String,
     #[serde(default)]
