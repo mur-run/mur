@@ -15,7 +15,6 @@ pub fn license_path(mur_home: &Path, item: &str) -> PathBuf {
 }
 
 /// Atomic write: temp file in the same dir + rename (same pattern as store/yaml.rs).
-#[allow(dead_code)]
 pub fn save_license(mur_home: &Path, l: &OfficialLicense) -> Result<PathBuf> {
     let dir = licenses_dir(mur_home);
     std::fs::create_dir_all(&dir).context("create licenses dir")?;
