@@ -229,7 +229,7 @@ fn sanitize_profile_for_export(profile: &mut AgentProfile) -> Vec<String> {
         }
     }
     // Appearance: local render directory + machine-specific render timestamp.
-    if profile.appearance.expressions_dir != std::path::PathBuf::from("expressions") {
+    if profile.appearance.expressions_dir.as_path() != std::path::Path::new("expressions") {
         profile.appearance.expressions_dir = std::path::PathBuf::from("expressions");
         removed.push("appearance.expressions_dir".to_string());
     }
