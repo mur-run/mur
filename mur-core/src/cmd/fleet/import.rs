@@ -16,6 +16,7 @@ use mur_common::skill::types::TrustLevel;
 
 use super::store;
 
+#[derive(Default)]
 pub struct ImportOpts {
     pub force: bool,
     pub no_members: bool,
@@ -120,6 +121,43 @@ fn confirm(prompt: &str, yes: bool) -> Result<bool> {
     ))
 }
 
+/// Official-distribution gate. Marker present ⇒ (1) bundle must be signed by
+/// `official_fp` (a self-signed bundle claiming `distribution: official` is a
+/// spoof — a real license would let it impersonate official content), and
+/// (2) a matching local license must exist for this item + logged-in user.
+fn official_gate(
+    mur_home: &Path,
+    manifest: &BundleManifest,
+    signer_pk: &[u8; 32],
+    signature_verified: bool,
+    logged_in_user: Option<&str>,
+    official_fp: &str,
+) -> Result<()> {
+    use mur_common::muragent::dsse::keyid_from_pubkey;
+    use mur_common::official::DISTRIBUTION_OFFICIAL;
+    if manifest.distribution.as_deref() != Some(DISTRIBUTION_OFFICIAL) {
+        return Ok(());
+    }
+    if !signature_verified || keyid_from_pubkey(signer_pk) != official_fp {
+        bail!(
+            "bundle claims official distribution but is not signed by the MUR official key — refusing import"
+        );
+    }
+    let Some(user) = logged_in_user else {
+        bail!(
+            "this is official MUR content — log in (`mur login`) and get it from app.mur.run via `mur official install`"
+        );
+    };
+    let item = format!("fleets/{}", manifest.fleet_name);
+    crate::official::store::require_license_against(mur_home, &item, user, official_fp).map_err(
+        |e| {
+            anyhow::anyhow!(
+                "{e} — official MUR content can't be shared between accounts; get it from app.mur.run via `mur official install`"
+            )
+        },
+    )
+}
+
 pub fn cmd_fleet_import(
     mur_home: &Path,
     file: &Path,
@@ -148,6 +186,17 @@ pub fn cmd_fleet_import(
     } else {
         true
     };
+
+    // 2b. Official-distribution gate (fail-closed; see official_gate docs).
+    let logged_in_user = crate::auth::load_tokens().and_then(|t| t.user_id);
+    official_gate(
+        mur_home,
+        &manifest,
+        &pk,
+        signature_verified,
+        logged_in_user.as_deref(),
+        mur_common::skill::publisher_trust::MUR_OFFICIAL_PUBLISHER_KEY_FP,
+    )?;
 
     // 3. Verify every entry's hash against the unpacked bytes (fail-closed).
     for e in &manifest.entries {
@@ -590,6 +639,7 @@ mod tests {
             members: vec![],
             entries,
             sig: None,
+            distribution: None,
         };
         let bundle_bytes = build_evil_bundle(&manifest, &files);
         let bundle_path =
@@ -899,6 +949,7 @@ mod tests {
             members: vec![],
             entries,
             sig: None,
+            distribution: None,
         };
         let input = manifest_sign_input(&manifest);
         manifest.sig = Some(multibase::encode(
@@ -983,6 +1034,7 @@ mod tests {
             members: vec![],
             entries,
             sig: None,
+            distribution: None,
         };
         let input = manifest_sign_input(&manifest);
         manifest.sig = Some(multibase::encode(
@@ -1062,6 +1114,7 @@ mod tests {
             members: vec![],
             entries,
             sig: None,
+            distribution: None,
         };
         let input = manifest_sign_input(&manifest);
         manifest.sig = Some(multibase::encode(
@@ -1140,6 +1193,7 @@ mod tests {
             members: vec![],
             entries,
             sig: None,
+            distribution: None,
         };
         // Sign correctly so the sig check passes — the fingerprint mismatch must still fire.
         let input = manifest_sign_input(&manifest);
@@ -1210,6 +1264,7 @@ mod tests {
             members: vec![],
             entries,
             sig: None,
+            distribution: None,
         };
         // Sign correctly so the sig check passes — the empty fingerprint must still be rejected.
         let input = manifest_sign_input(&manifest);
@@ -1286,6 +1341,7 @@ mod tests {
             members: vec![],
             entries,
             sig: None,
+            distribution: None,
         };
         let input = manifest_sign_input(&manifest);
         manifest.sig = Some(multibase::encode(
@@ -1529,6 +1585,222 @@ mod tests {
         assert!(
             !home.join("agents").join("pm").join("profile.yaml").exists(),
             "malformed member must not be installed"
+        );
+    }
+
+    // ── Task 5: official-distribution import gate ──────────────────────────
+
+    fn official_test_manifest(fleet_name: &str) -> mur_common::fleet_bundle::BundleManifest {
+        use mur_common::fleet_bundle::{BundleManifest, FLEET_BUNDLE_FORMAT};
+        BundleManifest {
+            format_version: FLEET_BUNDLE_FORMAT,
+            fleet_name: fleet_name.into(),
+            created_at: "2026-06-20T00:00:00Z".into(),
+            signer_pubkey: String::new(),
+            signer_fingerprint: String::new(),
+            includes_members: false,
+            members: vec![],
+            entries: vec![],
+            sig: None,
+            distribution: Some(mur_common::official::DISTRIBUTION_OFFICIAL.into()),
+        }
+    }
+
+    fn official_fp_for(key: &ed25519_dalek::SigningKey) -> String {
+        mur_common::muragent::dsse::keyid_from_pubkey(&key.verifying_key().to_bytes())
+    }
+
+    fn save_test_license(
+        home: &std::path::Path,
+        item: &str,
+        user: &str,
+        key: &ed25519_dalek::SigningKey,
+    ) {
+        let mut l = mur_common::official::OfficialLicense {
+            format_version: mur_common::official::OFFICIAL_LICENSE_FORMAT,
+            user_id: user.into(),
+            item: item.into(),
+            version: "1.0.0".into(),
+            expires_at: "2027-01-01T00:00:00Z".into(),
+            signer_pubkey: String::new(),
+            sig: None,
+        };
+        mur_common::official::sign_license(&mut l, key);
+        crate::official::store::save_license(home, &l).unwrap();
+    }
+
+    #[test]
+    fn official_gate_no_marker_is_noop() {
+        let home = tempfile::tempdir().unwrap();
+        let mut manifest = official_test_manifest("dev");
+        manifest.distribution = None;
+        // Even with signature_verified=false and no user, non-official
+        // manifests must pass through untouched.
+        official_gate(
+            home.path(),
+            &manifest,
+            &[0u8; 32],
+            false,
+            None,
+            "ed25519-deadbeef",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn official_gate_unsigned_or_wrong_signer_refused() {
+        let home = tempfile::tempdir().unwrap();
+        let manifest = official_test_manifest("dev");
+        let key = ed25519_dalek::SigningKey::from_bytes(&[1u8; 32]);
+        let fp = official_fp_for(&key);
+        let pk = key.verifying_key().to_bytes();
+
+        // signature_verified == false
+        let err =
+            official_gate(home.path(), &manifest, &pk, false, Some("user-1"), &fp).unwrap_err();
+        assert!(err.to_string().contains("refusing import"), "{err}");
+
+        // signature_verified == true but signer key doesn't match official_fp
+        let other_key = ed25519_dalek::SigningKey::from_bytes(&[2u8; 32]);
+        let other_pk = other_key.verifying_key().to_bytes();
+        let err = official_gate(home.path(), &manifest, &other_pk, true, Some("user-1"), &fp)
+            .unwrap_err();
+        assert!(err.to_string().contains("refusing import"), "{err}");
+    }
+
+    #[test]
+    fn official_gate_no_login_refused_with_app_mur_run() {
+        let home = tempfile::tempdir().unwrap();
+        let manifest = official_test_manifest("dev");
+        let key = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]);
+        let fp = official_fp_for(&key);
+        let pk = key.verifying_key().to_bytes();
+
+        let err = official_gate(home.path(), &manifest, &pk, true, None, &fp).unwrap_err();
+        assert!(err.to_string().contains("app.mur.run"), "{err}");
+    }
+
+    #[test]
+    fn official_gate_no_license_refused_with_app_mur_run() {
+        let home = tempfile::tempdir().unwrap();
+        let manifest = official_test_manifest("dev");
+        let key = ed25519_dalek::SigningKey::from_bytes(&[4u8; 32]);
+        let fp = official_fp_for(&key);
+        let pk = key.verifying_key().to_bytes();
+
+        // logged in, but no license saved for this item.
+        let err =
+            official_gate(home.path(), &manifest, &pk, true, Some("user-1"), &fp).unwrap_err();
+        assert!(err.to_string().contains("app.mur.run"), "{err}");
+    }
+
+    #[test]
+    fn official_gate_wrong_user_license_refused() {
+        let home = tempfile::tempdir().unwrap();
+        let manifest = official_test_manifest("dev");
+        let key = ed25519_dalek::SigningKey::from_bytes(&[5u8; 32]);
+        let fp = official_fp_for(&key);
+        let pk = key.verifying_key().to_bytes();
+
+        save_test_license(home.path(), "fleets/dev", "user-1", &key);
+
+        let err =
+            official_gate(home.path(), &manifest, &pk, true, Some("user-2"), &fp).unwrap_err();
+        assert!(err.to_string().contains("different account"), "{err}");
+    }
+
+    #[test]
+    fn official_gate_matching_license_ok() {
+        let home = tempfile::tempdir().unwrap();
+        let manifest = official_test_manifest("dev");
+        let key = ed25519_dalek::SigningKey::from_bytes(&[6u8; 32]);
+        let fp = official_fp_for(&key);
+        let pk = key.verifying_key().to_bytes();
+
+        save_test_license(home.path(), "fleets/dev", "user-1", &key);
+
+        official_gate(home.path(), &manifest, &pk, true, Some("user-1"), &fp).unwrap();
+    }
+
+    /// End-to-end wiring proof via `cmd_fleet_import`. Production pins the
+    /// REAL `MUR_OFFICIAL_PUBLISHER_KEY_FP`, which no test-generated signing
+    /// key can ever match (the private key isn't available to the client) —
+    /// so this test can only reach the gate's signer-mismatch branch, not the
+    /// login/license branches (those are covered directly against
+    /// `official_gate` above, with an injectable `official_fp`). This still
+    /// proves the gate is wired into `cmd_fleet_import` and fails closed.
+    #[test]
+    fn import_official_marked_bundle_is_refused() {
+        use mur_common::fleet_bundle::{
+            BundleEntry, BundleManifest, FLEET_BUNDLE_FORMAT, content_hash, manifest_sign_input,
+            signer_fingerprint,
+        };
+        use mur_common::identity::AgentIdentity;
+
+        let src = tempfile::tempdir().unwrap();
+        let s = src.path();
+        let id_dir = s.join("agents").join("mur");
+        std::fs::create_dir_all(&id_dir).unwrap();
+        let id = AgentIdentity::generate();
+        id.save(&id_dir).unwrap();
+        let signer_pubkey = id.public_key_multibase();
+
+        let fleet_yaml = "name: dev\ndisplay_name: \"\"\ngoal: g\nrouter: ~\nmembers: []\nchannel_id: fleet-dev\nrules: []\nskills: []\nloop_cfg: ~\n";
+        let files: Vec<(String, Vec<u8>)> =
+            vec![("fleet.yaml".into(), fleet_yaml.as_bytes().to_vec())];
+        let entries: Vec<BundleEntry> = files
+            .iter()
+            .map(|(p, b)| BundleEntry {
+                path: p.clone(),
+                sha256: content_hash(b),
+            })
+            .collect();
+        let mut manifest = BundleManifest {
+            format_version: FLEET_BUNDLE_FORMAT,
+            fleet_name: "dev".into(),
+            created_at: "2026-06-20T00:00:00Z".into(),
+            signer_fingerprint: signer_fingerprint(&signer_pubkey),
+            signer_pubkey,
+            includes_members: false,
+            members: vec![],
+            entries,
+            sig: None,
+            distribution: Some(mur_common::official::DISTRIBUTION_OFFICIAL.into()),
+        };
+        let input = manifest_sign_input(&manifest);
+        manifest.sig = Some(multibase::encode(
+            multibase::Base::Base58Btc,
+            id.sign_bytes(&input),
+        ));
+        let bundle_bytes = build_evil_bundle(&manifest, &files);
+        let bundle_path = s.join("official.fleet");
+        std::fs::write(&bundle_path, &bundle_bytes).unwrap();
+
+        let dst = tempfile::tempdir().unwrap();
+        let home = dst.path();
+        let err = cmd_fleet_import(
+            home,
+            &bundle_path,
+            ImportOpts {
+                force: false,
+                no_members: false,
+                yes: true,
+            },
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("refusing import"),
+            "expected official-distribution gate refusal, got: {msg}"
+        );
+        assert!(
+            !home.join("fleets").exists()
+                || home
+                    .join("fleets")
+                    .read_dir()
+                    .map(|mut d| d.next().is_none())
+                    .unwrap_or(true),
+            "fleet must not be written when the official gate refuses import"
         );
     }
 
