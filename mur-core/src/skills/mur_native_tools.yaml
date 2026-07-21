@@ -1,0 +1,69 @@
+name: mur-native-tools
+version: 1.0.0
+publisher: human:mur-official
+description: 'How MUR reaches for its own tools when searching a codebase, planning a task, or offering the user choices.'
+category: context
+provenance: human
+content:
+  abstract: 'Tool-selection and interaction discipline for MUR when it acts as a working agent (not just the concierge greeter): use the right search tool for the query, reuse saved workflows, and format suggested replies the way the CLI renders them.'
+  context: |
+    ## Searching and looking things up
+
+    - For a **concept / intent / "where is X handled"** query, call
+      `mur_project_search` (semantic). Check `mur_project_status` first; if the
+      project isn't indexed, say so instead of falling back to blind `ls`.
+      *Why: semantic search finds code by meaning; `ls`/`grep` only find exact
+      strings you already know, so starting with `ls -la` wastes a turn.*
+    - Use **`grep`/`rg`** only for an **exact string or symbol** you already
+      know (an error message, a function name).
+      *Why: exact-match tools are precise but blind to synonyms — the opposite
+      trade-off from semantic search.*
+    - `mur_notes_search` is for the user's **saved notes/patterns**, not source
+      code. Don't reach for it to answer a code question.
+      *Why: it searches a different corpus and will return 0 results for code,
+      which reads as "nothing found" when you simply asked the wrong index.*
+
+    ## Reuse before you build
+
+    - Before authoring a multi-step task from scratch, run `mur workflow list`
+      (and `mur workflow show <name> --md`) to see if a saved workflow already
+      covers it.
+      *Why: MUR harvests reusable workflows; rebuilding one by hand throws away
+      that memory and risks diverging from a known-good sequence.*
+
+    ## Suggested replies (the chooser)
+
+    - When you offer the user a small set of choices, call `suggest_replies`
+      with structured options: each `{ text, description }` — `text` is the
+      message they'd send, `description` is a one-line trade-off.
+      *Why: the CLI renders the description under each option; a bare string
+      leaves the user picking blind.*
+    - Do **not** number the options yourself ("A:", "1.") — the UI marks and
+      spaces them.
+      *Why: hand-numbering double-labels every row and fights the UI's own
+      selection caret.*
+    - Use `suggest_replies` when you genuinely need the user to choose before
+      you can continue — then end your turn and wait for their pick. But when
+      you already know the next step (they've approved a plan, the path is
+      clear), just take it — delegate the approved design to the `pm` agent,
+      run the workflow, write the file. Prefer acting over asking; don't offer
+      a chooser in place of an action, and after an approval act instead of
+      re-asking.
+      *Why: the chooser is for real decisions, not a reflex. If every step ends
+      in another chooser, the work never happens (e.g. the pm hand-off is
+      dropped). Choose the path that moves the task forward.*
+
+    Sources: MUR MCP tool set (mur_project_search / mur_notes_search /
+    mur_project_status); suggest_replies structured-option schema.
+tags:
+- tooling
+- search
+- workflow
+- interaction
+triggers:
+- type: keyword
+  pattern: search|find|look up|where is|workflow|建立|尋找|查詢|搜尋|工作流
+- type: session_start
+- type: manual
+priority: normal
+updated_at: 1970-01-01T00:00:00Z

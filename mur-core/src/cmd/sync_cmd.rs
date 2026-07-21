@@ -1075,6 +1075,10 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path, mur_root: &std::path::Pat
         ("mur-out", include_str!("../skills/mur_out.yaml")),
         ("mur-run", include_str!("../skills/mur_run.yaml")),
         (
+            "mur-native-tools",
+            include_str!("../skills/mur_native_tools.yaml"),
+        ),
+        (
             "mur-agent-manage",
             include_str!("../skills/mur_agent_manage.yaml"),
         ),
@@ -1565,6 +1569,7 @@ mod sync_status_tests {
 
 #[cfg(test)]
 mod sync_skill_tests {
+
     #[test]
     fn installs_project_search_skill() {
         let home = std::env::temp_dir().join(format!(
@@ -1591,6 +1596,26 @@ mod sync_skill_tests {
         assert!(body.contains("name: mur-project-search"));
 
         std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn ensure_mur_skill_ships_mur_native_tools() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let root = tmp.path().join("root");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+
+        super::ensure_mur_skill(&home, &root).unwrap();
+
+        let path = root.join("skills/mur-native-tools/skill.yaml");
+        assert!(
+            path.exists(),
+            "mur-native-tools must be written to the global store by ensure_mur_skill"
+        );
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let m = mur_common::skill::parse_canonical(&raw).unwrap();
+        assert_eq!(m.name, "mur-native-tools");
     }
 }
 
@@ -1673,6 +1698,11 @@ mod builtin_skill_tests {
             (
                 "parallel-code",
                 include_str!("../skills/parallel_code.yaml"),
+                false,
+            ),
+            (
+                "mur-native-tools",
+                include_str!("../skills/mur_native_tools.yaml"),
                 false,
             ),
         ];
