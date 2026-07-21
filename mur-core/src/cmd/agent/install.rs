@@ -30,6 +30,28 @@ pub fn cmd_install(
     let archive = MuragentArchive::read(path)
         .with_context(|| format!("read .muragent file at {}", path.display()))?;
     let mur_home = resolve_mur_home()?;
+
+    // Official-distribution gate: must run BEFORE any install side effects.
+    // `installer::install_with_name` extracts the payload to disk as part of
+    // its own validate+install pipeline, so the gate needs a prior, separate
+    // validation pass here. `validator::validate` is pure (archive-only, no
+    // I/O beyond reading the in-memory archive), so validating twice has no
+    // side effects — it just costs a little extra CPU.
+    let validation = validator::validate(&archive).context("validate .muragent")?;
+    if validation.manifest.distribution.as_deref()
+        == Some(mur_common::official::DISTRIBUTION_OFFICIAL)
+    {
+        let logged_in_user = crate::auth::load_tokens().and_then(|t| t.user_id);
+        official_gate_agent(
+            &mur_home,
+            &validation.manifest.agent.slug,
+            &validation.author_pubkey,
+            true,
+            logged_in_user.as_deref(),
+            mur_common::skill::publisher_trust::MUR_OFFICIAL_PUBLISHER_KEY_FP,
+        )?;
+    }
+
     let outcome: InstallOutcome = installer::install_with_name(&archive, &mur_home, "cli", as_name)
         .context("install .muragent")?;
 
@@ -69,6 +91,47 @@ pub fn cmd_install(
         maybe_resolve_model(&mur_home, installed_name, &archive)?;
     }
     Ok((installed_name.to_string(), outcome.fingerprint_hex.clone()))
+}
+
+/// Official-distribution gate for `.muragent` installs. Mirrors the fleet
+/// import gate (`cmd/fleet/import.rs::official_gate`): marker present ⇒ (1)
+/// the package must be signed by `official_fp` (a self-signed package
+/// claiming `distribution: official` is a spoof), and (2) a matching local
+/// license must exist for `agents/<agent_slug>` + the logged-in user.
+/// `signer_pk` is the raw verified Ed25519 public key; `official_fp` is an
+/// `ed25519-<8hex>` fingerprint. The caller is
+/// responsible for only invoking this when the manifest carries the marker.
+fn official_gate_agent(
+    mur_home: &Path,
+    agent_slug: &str,
+    signer_pk: &[u8; 32],
+    signature_verified: bool,
+    logged_in_user: Option<&str>,
+    official_fp: &str,
+) -> Result<()> {
+    use mur_common::muragent::dsse::keyid_from_pubkey;
+    // Derive the fingerprint from the *verified* signing key, never from the
+    // envelope's self-asserted `keyid` string (which is outside the signed
+    // payload and thus attacker-settable — an attacker could stamp the
+    // official fp onto a bundle signed with their own key).
+    if !signature_verified || keyid_from_pubkey(signer_pk) != official_fp {
+        bail!(
+            "package claims official distribution but is not signed by the MUR official key — refusing install"
+        );
+    }
+    let Some(user) = logged_in_user else {
+        bail!(
+            "this is official MUR content — log in (`mur login`) and get it from app.mur.run via `mur official install`"
+        );
+    };
+    let item = format!("agents/{agent_slug}");
+    crate::official::store::require_license_against(mur_home, &item, user, official_fp).map_err(
+        |e| {
+            anyhow::anyhow!(
+                "{e} — official MUR content can't be shared between accounts; get it from app.mur.run via `mur official install`"
+            )
+        },
+    )
 }
 
 /// After a `--as <name>` clone install, give the clone a new identity: a
@@ -397,5 +460,161 @@ mod tests {
             "clone must have a freshly minted identity.key"
         );
         assert!(clone_dir.join("identity.pub").exists());
+    }
+
+    #[test]
+    fn official_agent_gate_refuses_without_license_and_passes_with() {
+        let home = tempfile::tempdir().unwrap();
+        // signer key used for both the "bundle" signature and the license
+        let key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+        let pk = key.verifying_key().to_bytes();
+        let fp = mur_common::muragent::dsse::keyid_from_pubkey(&pk);
+        // no license → refused
+        let err =
+            official_gate_agent(home.path(), "researcher", &pk, true, Some("u1"), &fp).unwrap_err();
+        assert!(err.to_string().contains("app.mur.run"), "{err}");
+        // matching license → passes
+        let mut l = mur_common::official::OfficialLicense {
+            format_version: mur_common::official::OFFICIAL_LICENSE_FORMAT,
+            user_id: "u1".into(),
+            item: "agents/researcher".into(),
+            version: "1.0.0".into(),
+            expires_at: "2027-01-01T00:00:00Z".into(),
+            signer_pubkey: String::new(),
+            sig: None,
+        };
+        mur_common::official::sign_license(&mut l, &key);
+        crate::official::store::save_license(home.path(), &l).unwrap();
+        official_gate_agent(home.path(), "researcher", &pk, true, Some("u1"), &fp).unwrap();
+        // wrong signer key on the package → refused even with license. Deriving
+        // the fp from the verified pubkey (not a self-asserted string) is what
+        // makes this un-spoofable.
+        let wrong_pk = ed25519_dalek::SigningKey::from_bytes(&[8u8; 32])
+            .verifying_key()
+            .to_bytes();
+        let err = official_gate_agent(home.path(), "researcher", &wrong_pk, true, Some("u1"), &fp)
+            .unwrap_err();
+        assert!(err.to_string().contains("official key"), "{err}");
+    }
+
+    #[test]
+    fn official_gate_agent_unverified_signature_refused() {
+        let home = tempfile::tempdir().unwrap();
+        let key = ed25519_dalek::SigningKey::from_bytes(&[1u8; 32]);
+        let pk = key.verifying_key().to_bytes();
+        let fp = mur_common::muragent::dsse::keyid_from_pubkey(&pk);
+        let err = official_gate_agent(home.path(), "researcher", &pk, false, Some("u1"), &fp)
+            .unwrap_err();
+        assert!(err.to_string().contains("official key"), "{err}");
+    }
+
+    #[test]
+    fn official_gate_agent_no_login_refused_with_app_mur_run() {
+        let home = tempfile::tempdir().unwrap();
+        let key = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]);
+        let pk = key.verifying_key().to_bytes();
+        let fp = mur_common::muragent::dsse::keyid_from_pubkey(&pk);
+        let err = official_gate_agent(home.path(), "researcher", &pk, true, None, &fp).unwrap_err();
+        assert!(err.to_string().contains("app.mur.run"), "{err}");
+    }
+
+    #[test]
+    fn official_gate_agent_wrong_user_license_refused() {
+        let home = tempfile::tempdir().unwrap();
+        let key = ed25519_dalek::SigningKey::from_bytes(&[5u8; 32]);
+        let pk = key.verifying_key().to_bytes();
+        let fp = mur_common::muragent::dsse::keyid_from_pubkey(&pk);
+        let mut l = mur_common::official::OfficialLicense {
+            format_version: mur_common::official::OFFICIAL_LICENSE_FORMAT,
+            user_id: "u1".into(),
+            item: "agents/researcher".into(),
+            version: "1.0.0".into(),
+            expires_at: "2027-01-01T00:00:00Z".into(),
+            signer_pubkey: String::new(),
+            sig: None,
+        };
+        mur_common::official::sign_license(&mut l, &key);
+        crate::official::store::save_license(home.path(), &l).unwrap();
+
+        let err =
+            official_gate_agent(home.path(), "researcher", &pk, true, Some("u2"), &fp).unwrap_err();
+        assert!(err.to_string().contains("different account"), "{err}");
+    }
+
+    /// No `distribution` marker on the manifest ⇒ the gate is never invoked
+    /// and install proceeds exactly as before (mirrors the fleet-import
+    /// `official_gate_no_marker_is_noop` coverage, at the `cmd_install`
+    /// wiring level since `official_gate_agent` itself takes no manifest).
+    #[test]
+    fn cmd_install_no_marker_is_unaffected() {
+        use mur_common::agent::AgentProfile as Profile;
+        use mur_common::identity::AgentIdentity as Identity;
+        use mur_common::muragent::writer::{MuragentWriter, build_manifest_from_profile};
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let mur_home = tmp.path().join("mur");
+        unsafe {
+            std::env::set_var("MUR_HOME", &mur_home);
+        }
+
+        let mut source_profile = Profile::default_for_tests();
+        source_profile.name = "plain".to_string();
+        let manifest = build_manifest_from_profile(&source_profile, "2.13.0");
+        assert!(manifest.distribution.is_none(), "sanity: unmarked manifest");
+        let profile_yaml = serde_yaml_ng::to_string(&source_profile).unwrap();
+        let writer = MuragentWriter::new(manifest, profile_yaml, Identity::generate());
+        let bundle_path = tmp.path().join("plain.muragent");
+        writer.write(&bundle_path).unwrap();
+
+        cmd_install(&bundle_path, None, None).unwrap();
+        assert!(
+            mur_home
+                .join("agents")
+                .join("plain")
+                .join("profile.yaml")
+                .exists()
+        );
+    }
+
+    /// End-to-end wiring proof via `cmd_install`. Production pins the REAL
+    /// `MUR_OFFICIAL_PUBLISHER_KEY_FP`, which no test-generated signing key
+    /// can ever match (the private key isn't available to the client) — so
+    /// this test can only reach the gate's signer-mismatch branch, not the
+    /// login/license branches (those are covered directly against
+    /// `official_gate_agent` above). This still proves the gate is wired
+    /// into `cmd_install` and fails closed before anything is written.
+    #[test]
+    fn cmd_install_official_marked_agent_is_refused() {
+        use mur_common::agent::AgentProfile as Profile;
+        use mur_common::identity::AgentIdentity as Identity;
+        use mur_common::muragent::writer::{MuragentWriter, build_manifest_from_profile};
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let mur_home = tmp.path().join("mur");
+        unsafe {
+            std::env::set_var("MUR_HOME", &mur_home);
+        }
+
+        let mut source_profile = Profile::default_for_tests();
+        source_profile.name = "official-agent".to_string();
+        let mut manifest = build_manifest_from_profile(&source_profile, "2.13.0");
+        manifest.distribution = Some(mur_common::official::DISTRIBUTION_OFFICIAL.to_string());
+        let profile_yaml = serde_yaml_ng::to_string(&source_profile).unwrap();
+        let writer = MuragentWriter::new(manifest, profile_yaml, Identity::generate());
+        let bundle_path = tmp.path().join("official-agent.muragent");
+        writer.write(&bundle_path).unwrap();
+
+        let err = cmd_install(&bundle_path, None, None).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("official key"),
+            "expected official-distribution gate refusal, got: {msg}"
+        );
+        assert!(
+            !mur_home.join("agents").join("official-agent").exists(),
+            "agent must not be written when the official gate refuses install"
+        );
     }
 }
