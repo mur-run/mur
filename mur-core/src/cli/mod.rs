@@ -417,6 +417,11 @@ see `mur skill <command> --help`.")]
         #[command(subcommand)]
         action: FleetAction,
     },
+    /// Manage capabilities — installable bundles of MCP + skills + programs
+    Capability {
+        #[command(subcommand)]
+        action: CapabilityAction,
+    },
     /// Commander governance: pin the operator key + issue/inspect directives
     Commander {
         #[command(subcommand)]
