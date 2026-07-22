@@ -21,14 +21,20 @@ pub fn cmd_addon_list(name: &str) -> Result<()> {
         return Ok(());
     }
     for g in &profile.addons {
+        let pin = g
+            .content_hash
+            .as_deref()
+            .map(|h| format!(" pin:{}", &h[..h.len().min(12)]))
+            .unwrap_or_default();
         println!(
-            "{} {} [{}] (skills:{} mcp:{} commands:{})",
+            "{} {} [{}] (skills:{} mcp:{} commands:{}){}",
             if g.enabled { "on " } else { "off" },
             g.id,
             g.source,
             g.skills.len(),
             g.mcp.len(),
             g.commands.len(),
+            pin,
         );
     }
     Ok(())
