@@ -215,25 +215,59 @@ fn convert_ref_in_profile(
     Ok(())
 }
 
-pub fn cmd_skill_remove(name: &str, query: &str) -> Result<()> {
-    let (path, mut profile) = load_profile_for_edit(name)?;
-    let resolved = resolve_skill_id(&profile, query)
-        .ok_or_else(|| anyhow!("skill '{query}' not found on '{name}'"))?
-        .clone();
-    profile.skills.retain(|s| s != &resolved);
-    save_profile(&path, &mut profile)?;
+/// Remove a skill from every place it can live on an agent: the `skills:`
+/// reference list, the `installed_skills:` card list, and the on-disk
+/// `skills/<name>/` dir under `home`. Returns whether it was present anywhere.
+/// Takes an explicit `home` so the doctor repair can operate on any store.
+pub(crate) fn depin_skill(home: &Path, agent: &str, skill: &str) -> Result<bool> {
+    let path = home.join("agents").join(agent).join("profile.yaml");
+    if !path.exists() {
+        bail!("agent '{agent}' not found");
+    }
+    let yaml = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let mut profile: _AgentProfile =
+        serde_yaml_ng::from_str(&yaml).with_context(|| format!("parse {}", path.display()))?;
 
-    // Delete the backing artifact if no other skill entry references it.
-    // Modern skills are per-skill subdirectories (`skills/<name>/skill.yaml`);
-    // legacy entries may still be a flat file (`skills/<name>.md`).
-    let agent_home = resolve_mur_home()?.join("agents").join(name);
-    let backing = agent_home.join(&resolved);
-    if backing.exists() && !profile.skills.iter().any(|s| s == &resolved) {
-        if backing.is_dir() {
-            let _ = fs::remove_dir_all(&backing);
-        } else {
-            let _ = fs::remove_file(&backing);
-        }
+    // Bare skill name, accepting `skills/foo`, `foo.yaml`, or `foo`.
+    let base = Path::new(skill)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(skill)
+        .to_string();
+
+    let mut removed = false;
+
+    // 1. skills: ref (any resolvable form)
+    if let Some(resolved) = resolve_skill_id(&profile, skill).cloned() {
+        profile.skills.retain(|s| s != &resolved);
+        removed = true;
+    }
+    // 2. installed_skills: card by name
+    let before = profile.installed_skills.len();
+    profile.installed_skills.retain(|c| c.name != base);
+    if profile.installed_skills.len() != before {
+        removed = true;
+    }
+    if removed {
+        save_profile(&path, &mut profile)?;
+    }
+    // 3. on-disk vendored dir (only if no surviving ref still points at it)
+    let dir = home.join("agents").join(agent).join("skills").join(&base);
+    let still_referenced = profile
+        .skills
+        .iter()
+        .any(|s| Path::new(s).file_stem().and_then(|f| f.to_str()) == Some(base.as_str()));
+    if dir.is_dir() && !still_referenced {
+        let _ = fs::remove_dir_all(&dir);
+        removed = true;
+    }
+    Ok(removed)
+}
+
+pub fn cmd_skill_remove(name: &str, query: &str) -> Result<()> {
+    let home = resolve_mur_home()?;
+    if !depin_skill(&home, name, query)? {
+        bail!("skill '{query}' not found on '{name}'");
     }
     Ok(())
 }
@@ -416,5 +450,114 @@ content:
         let mut profile = mur_common::AgentProfile::default_for_tests();
         profile.skills = vec!["skills/ghost".into()];
         assert!(convert_ref_in_profile(home.path(), &mut profile, "skills/ghost").is_err());
+    }
+
+    fn write_profile(home: &std::path::Path, agent: &str, body: &str) -> std::path::PathBuf {
+        let dir = home.join("agents").join(agent);
+        std::fs::create_dir_all(dir.join("skills")).unwrap();
+        let path = dir.join("profile.yaml");
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    fn write_agent_skill_dir(home: &std::path::Path, agent: &str, name: &str) {
+        let d = home.join("agents").join(agent).join("skills").join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("skill.yaml"),
+            format!(
+                "name: {name}\nversion: 1.0.0\npublisher: human:t\ndescription: d\ncategory: context\ncontent:\n  abstract: a\n  context: b\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    // A minimal profile carrying `name` as an installed_skills card + on-disk dir,
+    // but NOT as a skills: ref (the exact concierge shadow shape).
+    const CARD_ONLY_PROFILE: &str = "\
+schema: 1
+id: 0192f5a1-28ab-7111-8000-000000000099
+name: mur
+display_name: MUR
+version: \"0.1.0\"
+persona:
+  category: research
+  description: test profile for depin_skill tests
+  traits: { tone: concise, risk: cautious, verbosity: low }
+sys_prompt_file: \"sys_prompt.md\"
+model: { provider: ollama, name: \"m\", params: {} }
+mcp_servers: []
+skills:
+  - skills/concierge
+installed_skills:
+- name: mur-compress
+  version: 1.0.0
+  publisher: human:mur
+  description: d
+  category: context
+  abstract: a
+transport: { stdio: true, socket: { enabled: true, bind: \"unix:///tmp/a.sock\" } }
+communication: { accepts_from: [\"*\"], sends_to: [] }
+capabilities: [\"a2a.message.send\",\"a2a.tasks\"]
+entitlements:
+  network:
+    inbound: { ports: [] }
+    outbound: { mode: restricted, allow_hosts: [], protocols: [\"tcp\"], resolve_dns: { mode: system } }
+  filesystem: { read: [], write: [], deny: [\"~/.ssh\"] }
+  processes: { spawn: { mode: allowlist, allowed: [] } }
+  syscalls: { mode: default }
+  limits: { memory_mb: 512, file_descriptors: 1024, processes: 32 }
+notifications: { on_task_complete: [], on_error: [], on_shutdown: [] }
+retry:
+  llm: { max_retries: 3, backoff: exponential, initial_delay_ms: 1000, max_delay_ms: 30000, retry_on: [\"rate_limit\"] }
+  tool: { max_retries: 1, backoff: fixed, initial_delay_ms: 500 }
+lifecycle: { restart: on_failure, max_restarts: 3, restart_window_secs: 600, stop_timeout_secs: 15, mcp_required: true }
+created_at: \"2026-04-22T10:00:00+08:00\"
+updated_at: \"2026-04-22T10:00:00+08:00\"
+";
+
+    #[test]
+    fn depin_removes_card_and_dir_when_not_a_ref() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        write_profile(home, "mur", CARD_ONLY_PROFILE);
+        write_agent_skill_dir(home, "mur", "mur-compress");
+        write_agent_skill_dir(home, "mur", "concierge");
+
+        let removed = depin_skill(home, "mur", "mur-compress").unwrap();
+        assert!(removed, "should report removal");
+
+        // card gone
+        let yaml = std::fs::read_to_string(home.join("agents/mur/profile.yaml")).unwrap();
+        let p: _AgentProfile = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert!(p.installed_skills.iter().all(|c| c.name != "mur-compress"));
+        // dir gone
+        assert!(!home.join("agents/mur/skills/mur-compress").exists());
+        // untouched skill dir preserved
+        assert!(home.join("agents/mur/skills/concierge").exists());
+    }
+
+    #[test]
+    fn depin_returns_false_when_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        write_profile(home, "mur", CARD_ONLY_PROFILE);
+        let removed = depin_skill(home, "mur", "does-not-exist").unwrap();
+        assert!(!removed);
+    }
+
+    #[test]
+    fn depin_removes_ref_form_too() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        // concierge is a skills: ref + on-disk dir
+        write_profile(home, "mur", CARD_ONLY_PROFILE);
+        write_agent_skill_dir(home, "mur", "concierge");
+        let removed = depin_skill(home, "mur", "concierge").unwrap();
+        assert!(removed);
+        let yaml = std::fs::read_to_string(home.join("agents/mur/profile.yaml")).unwrap();
+        let p: _AgentProfile = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert!(!p.skills.iter().any(|s| s == "skills/concierge"));
+        assert!(!home.join("agents/mur/skills/concierge").exists());
     }
 }
