@@ -9,6 +9,7 @@ pub mod agent_admin;
 pub mod agent_wizard;
 pub mod auth;
 pub mod bridge_keychain;
+pub mod capabilities;
 pub mod capture;
 pub mod channel_verify;
 pub mod channel_writer;

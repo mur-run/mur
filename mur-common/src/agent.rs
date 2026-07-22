@@ -155,6 +155,11 @@ pub struct AgentProfile {
     /// Absent → empty; resolved by `mur agent/fleet doctor` + `install-deps`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires_programs: Vec<ProgramDep>,
+
+    /// Capability refs installed into this agent (Pack S3). Absent → empty;
+    /// resolved against the local capability registry / bundle store.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_capabilities: Vec<String>,
 }
 
 fn default_algorithm() -> String {
@@ -1607,6 +1612,16 @@ updated_at: "2026-04-22T10:00:00+08:00"
         let reserialized = serde_yaml_ng::to_string(&profile).expect("emit");
         let round_tripped: AgentProfile = serde_yaml_ng::from_str(&reserialized).expect("re-parse");
         assert_eq!(profile.id, round_tripped.id);
+    }
+
+    #[test]
+    fn requires_capabilities_defaults_empty_and_round_trips() {
+        let base = include_str!("../tests/fixtures/profile_p0a_minimal.yaml");
+        let p: AgentProfile = serde_yaml_ng::from_str(base).unwrap();
+        assert!(p.requires_capabilities.is_empty());
+        let with = format!("{base}\nrequires_capabilities:\n  - media\n");
+        let p2: AgentProfile = serde_yaml_ng::from_str(&with).unwrap();
+        assert_eq!(p2.requires_capabilities, vec!["media"]);
     }
 }
 
