@@ -291,6 +291,11 @@ files.
 - **Auditability** — every action lands in an append-only JSONL ledger;
   **MUR Commander** (companion crate) adds an Ed25519-signed constitution and a
   hash-chained audit log for cross-network fleets.
+- **Governed distribution** — agents, fleets, and **capabilities** (bundled MCP
+  servers + skills + program requirements, `mur capability install`) carry pinned
+  provenance under a strict *never-shadow* rule: an imported plugin or bundled
+  skill can never silently override a builtin. `mur skill doctor` flags drift and
+  de-pins stale vendored copies; imported add-ons re-verify on `mur agent addon reimport`.
 
 ### 🔌 Power the tools you already pay for
 
@@ -347,16 +352,18 @@ mur dashboard        # terminal TUI dashboard
 ```
 
 <details>
-<summary><b>Full command tree</b> (25 top-level commands)</summary>
+<summary><b>Full command tree</b> (27 top-level commands)</summary>
 
 ```
 mur
 ├── init / doctor / update / stats / verify
-├── agent        create · cli · send · card · export · install · companion · voice ·
-│                pair · schedule · perm · secret · trash · queue · rollback … (40+)
+├── agent        create · cli · send · card · export · install · addon · companion ·
+│                voice · pair · schedule · perm · secret · trash · rollback … (40+)
+├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · run   (squads of agents over a shared channel)
+├── official     list · install   (official agents/fleets from the app.mur.run catalog)
 ├── deep-research  setup · status · ask   (web research with wizard UX)
-├── skill        install · search · show · generate · suggest · evolve · recombine ·
+├── skill        install · search · show · doctor · generate · suggest · evolve · recombine ·
 │                publish · audit · trust · exchange · drafts · eval …
 ├── notes        create · search · list · show
 ├── workflow     run · suggest · list · schedule · show · search · new · publish · install
