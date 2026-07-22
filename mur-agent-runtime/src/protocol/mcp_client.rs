@@ -207,7 +207,20 @@ impl StdioMcpClient {
         policy: &SandboxPolicy,
         proxy: Option<&crate::sandbox::egress_proxy::EgressProxyHandle>,
     ) -> Result<Self, McpError> {
-        let mut std_cmd = std::process::Command::new(&entry.command);
+        // Resolve a bare `mur-mcp-server` command to the bundled absolute path
+        // (ensured under ~/.mur/mcp-servers by the supervisor's self-heal) so it
+        // launches on installs where only `mur` is on PATH. Falls back to the
+        // command as-written when there is no bundled copy to point at.
+        let bundled = mur_common::exec::bundled_mcp_server_path();
+        let resolved: std::borrow::Cow<'_, str> =
+            if std::path::Path::new(&entry.command).file_name() == bundled.file_name()
+                && bundled.is_file()
+            {
+                bundled.to_string_lossy().into_owned().into()
+            } else {
+                std::borrow::Cow::Borrowed(entry.command.as_str())
+            };
+        let mut std_cmd = std::process::Command::new(resolved.as_ref());
         std_cmd
             .args(&entry.args)
             .stdin(Stdio::piped())

@@ -198,11 +198,13 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     //     it entirely, and a failure leaves any existing copy in place.
     {
         let bundled = mur_common::exec::bundled_mcp_server_path();
-        let uses_bundled = profile
-            .inner
-            .enabled_mcp_servers()
-            .iter()
-            .any(|e| std::path::Path::new(&e.command) == bundled);
+        let uses_bundled = profile.inner.enabled_mcp_servers().iter().any(|e| {
+            let c = std::path::Path::new(&e.command);
+            // The command may be the absolute bundled path OR the bare binary
+            // name (`mur-mcp-server`, e.g. from a capability install) — both
+            // resolve to the bundled copy, so both should trigger the refresh.
+            c == bundled || c.file_name() == bundled.file_name()
+        });
         if uses_bundled {
             match mur_common::exec::ensure_bundled_mcp_server() {
                 Ok(p) => info!(path = %p.display(), "ensured bundled mcp-server"),
