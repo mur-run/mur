@@ -123,6 +123,7 @@ pub fn cmd_addon_import(
     force: bool,
 ) -> Result<()> {
     let requested = plugin_dir; // original user input, for messages
+    let plugin_selector = plugin; // save before `plugin` is shadowed by the parsed PluginJson below
     let (profile_path, mut profile) = load_profile_for_edit(name)?;
     let mur_home = crate::cmd::resolve_mur_home()?;
     let agent_skills_dir = mur_home.join("agents").join(name).join("skills");
@@ -274,6 +275,44 @@ pub fn cmd_addon_import(
         }
     }
 
+    // ── Never-shadow gate: drop skills/commands whose name collides with a
+    // global-store (builtin/registry) skill, so an import can never shadow a
+    // MUR-shipped skill. The agent uses MUR's copy via store-wide injection.
+    let global: std::collections::HashSet<String> =
+        mur_common::skill::local::list_installed(&mur_home)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+    let retain_non_shadow = |name: &str| -> bool {
+        if global.contains(name) {
+            eprintln!(
+                "skill '{name}' is already provided by MUR — skipping the plugin's copy to avoid shadowing"
+            );
+            false
+        } else {
+            true
+        }
+    };
+    pending_skills.retain(|(_, m, _)| retain_non_shadow(&m.name));
+    pending_cmds.retain(|(_, m)| retain_non_shadow(&m.name));
+
+    // Content-hash pin over the installed skill + command manifests. Computed
+    // here (before Phase 2 consumes `pending_skills`/`pending_cmds` by value).
+    let mut member_hashes: Vec<String> = pending_skills
+        .iter()
+        .map(|(_, m, _)| m)
+        .chain(pending_cmds.iter().map(|(_, m)| m))
+        .filter_map(|m| mur_common::skill::content_hash_for_origin(m).ok())
+        .collect();
+    member_hashes.sort();
+    let content_hash = if member_hashes.is_empty() {
+        None
+    } else {
+        Some(mur_common::skill::sha256_hex(
+            member_hashes.join(",").as_bytes(),
+        ))
+    };
+
     // ── Phase 2: Commit (writes only after all checks passed) ─────────────────
 
     // 2a. Write skills.
@@ -330,6 +369,9 @@ pub fn cmd_addon_import(
         skills: skill_members,
         mcp: mcp_members,
         commands: cmd_members,
+        content_hash,
+        fetch_ref: Some(requested.to_string()),
+        fetch_plugin: plugin_selector.map(str::to_string),
     });
     save_profile(&profile_path, &mut profile)?;
 
@@ -816,6 +858,89 @@ mod tests {
         assert_eq!(
             original_content, after_content,
             "skill file was modified despite collision bail"
+        );
+    }
+
+    #[test]
+    fn import_skips_skill_that_shadows_the_global_store() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        unsafe {
+            std::env::set_var("MUR_HOME", home);
+        }
+        write_agent(home, "eve");
+
+        // Seed a global-store skill named "brainstorm" (~/.mur/skills/brainstorm/skill.yaml).
+        let global_skill = mur_common::skill::parse_canonical(
+            r#"
+name: brainstorm
+version: 1.0.0
+publisher: human:t
+description: d
+category: context
+content:
+  abstract: a
+  context: body
+"#,
+        )
+        .unwrap();
+        mur_common::skill::write_to_dir(&home.join("skills").join("brainstorm"), &global_skill)
+            .unwrap();
+
+        // Plugin bundles two skills: "brainstorm" (collides with the global
+        // store) and "unique" (does not).
+        let plugin = home.join("shadow-plugin");
+        fs::create_dir_all(plugin.join("skills/brainstorm")).unwrap();
+        fs::create_dir_all(plugin.join("skills/unique")).unwrap();
+        fs::write(
+            plugin.join("plugin.json"),
+            r#"{"name":"shadow","version":"1.0.0","description":"d","author":"Acme"}"#,
+        )
+        .unwrap();
+        fs::write(
+            plugin.join("skills/brainstorm/SKILL.md"),
+            "---\nname: brainstorm\ndescription: think\n---\nbody\n",
+        )
+        .unwrap();
+        fs::write(
+            plugin.join("skills/unique/SKILL.md"),
+            "---\nname: unique\ndescription: distinct\n---\nbody\n",
+        )
+        .unwrap();
+
+        let plugin_dir_arg = plugin.to_str().unwrap().to_string();
+        cmd_addon_import("eve", &plugin_dir_arg, None, false).unwrap();
+
+        // The colliding skill must never be written under the agent.
+        assert!(
+            !home.join("agents/eve/skills/brainstorm").exists(),
+            "shadowing skill must not be installed for the agent"
+        );
+        // The non-colliding skill must be installed.
+        assert!(
+            home.join("agents/eve/skills/unique").exists(),
+            "non-colliding skill must still be installed"
+        );
+
+        let (_p, eve) = crate::cmd::agent::load_profile_for_edit("eve").unwrap();
+        let g = eve.addons.iter().find(|g| g.id == "shadow").unwrap();
+        assert!(
+            g.skills.contains(&"unique".to_string()),
+            "AddonRef.skills must contain the non-colliding skill"
+        );
+        assert!(
+            !g.skills.contains(&"brainstorm".to_string()),
+            "AddonRef.skills must NOT contain the shadowing skill"
+        );
+        assert!(
+            g.content_hash.as_deref().is_some_and(|h| !h.is_empty()),
+            "content_hash must be Some(non-empty)"
+        );
+        assert_eq!(
+            g.fetch_ref.as_deref(),
+            Some(plugin_dir_arg.as_str()),
+            "fetch_ref must record the original plugin_dir argument"
         );
     }
 }

@@ -1726,6 +1726,11 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentAddonAction::DisableAll { name } => {
                 cmd::agent::addon::cmd_addon_disable_all(&name)?
             }
+            AgentAddonAction::Reimport {
+                name,
+                addon_id,
+                from,
+            } => cmd::agent::addon::cmd_addon_reimport(&name, &addon_id, from.as_deref())?,
         },
         AgentAction::Perm { action } => match action {
             AgentPermAction::Show { name, section } => {
