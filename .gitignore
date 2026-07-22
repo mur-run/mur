@@ -4,7 +4,8 @@ CLAUDE.md
 openspec/
 research/
 .augment/
-.claude/
+.claude/*
+!.claude/skills/
 .serena/
 .github/
 .worktrees/
