@@ -1028,6 +1028,16 @@ pub enum AgentAddonAction {
         /// Agent name
         name: String,
     },
+    /// Re-fetch and re-apply an add-on from its recorded source
+    Reimport {
+        /// Agent name
+        name: String,
+        /// Add-on id (from `mur agent addon list`)
+        addon_id: String,
+        /// Override the fetch source (a path or owner/repo)
+        #[arg(long)]
+        from: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

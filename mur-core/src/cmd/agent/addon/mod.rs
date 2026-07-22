@@ -5,8 +5,9 @@ pub mod marketplace;
 pub mod parse;
 
 use std::fs;
+use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::cmd::agent::{load_profile_for_edit, save_profile};
 use crate::conversations::audit::{Audit, AuditAction};
@@ -77,6 +78,173 @@ pub fn cmd_addon_remove(name: &str, addon_id: &str) -> Result<()> {
     save_profile(&path, &mut profile)?;
     audit_toggle(name, addon_id, false);
     println!("Removed add-on '{addon_id}' from '{name}'.");
+    Ok(())
+}
+
+/// Re-fetch an add-on from its recorded `fetch_ref` (or `source_override`),
+/// re-apply it (re-running the never-shadow gate + security scan), and
+/// preserve the prior `enabled` state.
+///
+/// Non-destructive: the old skill dirs + `AddonRef` (+ its MCP entries) are
+/// backed up before the old copy is removed. If either the removal step
+/// itself fails (e.g. its `save_profile` after skill dirs are already
+/// deleted) or the re-import fails for any reason (network flake, source
+/// gone, never-shadow filter drops every member, security scan block,
+/// marketplace ambiguity), the backup is restored so the agent ends up
+/// exactly as it was before the reimport was attempted — never with neither
+/// the old copy nor the new one. The backup is left on disk (and its path
+/// surfaced in the returned error) on every failure path as a manual-recovery
+/// fallback in case restore itself also fails; it is only deleted on full
+/// success.
+pub fn cmd_addon_reimport(name: &str, addon_id: &str, source_override: Option<&str>) -> Result<()> {
+    let (_, profile) = crate::cmd::agent::load_profile_for_edit(name)?;
+    let existing = profile
+        .addons
+        .iter()
+        .find(|a| a.id == addon_id)
+        .ok_or_else(|| anyhow::anyhow!("add-on '{addon_id}' not found on '{name}'"))?;
+    let old_ref = existing.clone();
+    let was_enabled = old_ref.enabled;
+    let fetch = source_override
+        .map(str::to_string)
+        .or_else(|| old_ref.fetch_ref.clone())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "add-on '{addon_id}' has no recorded fetch source — pass one explicitly"
+            )
+        })?;
+    // The marketplace `--plugin <name>` selector recorded at the original
+    // import, if any (Bug A) — without this a marketplace source bails
+    // "specify --plugin" on reimport, after the old copy is already gone.
+    let fetch_plugin = old_ref.fetch_plugin.clone();
+    let old_mcp_entries: Vec<mur_common::agent::McpServerEntry> = profile
+        .mcp_servers
+        .iter()
+        .filter(|m| old_ref.mcp.contains(&m.name))
+        .cloned()
+        .collect();
+
+    let mur_home = crate::cmd::resolve_mur_home()?;
+    let agent_skills_dir = mur_home.join("agents").join(name).join("skills");
+    let backup_root = mur_home.join("agents").join(name).join(format!(
+        ".reimport-backup-{addon_id}-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let member_names: Vec<String> = old_ref
+        .skills
+        .iter()
+        .chain(old_ref.commands.iter())
+        .cloned()
+        .collect();
+
+    for member in &member_names {
+        let src = agent_skills_dir.join(member);
+        if src.exists() {
+            copy_dir_all(&src, &backup_root.join(member)).map_err(|e| {
+                anyhow::anyhow!("back up skill dir '{member}' before reimport: {e}")
+            })?;
+        }
+    }
+
+    // Shared restore path: copy the backed-up skill dirs back, then re-add
+    // the old AddonRef + its MCP entries so the profile matches what it was
+    // before this reimport attempt. Best-effort — a restore failure is
+    // reported alongside the original error rather than silently swallowed,
+    // but the original error always wins as the returned cause. Invoked from
+    // BOTH possible failure points below (the `cmd_addon_remove` step and the
+    // `cmd_addon_import` step) so a remove-step failure — e.g. the removal's
+    // own `save_profile` failing after skill dirs were already deleted — is
+    // restored exactly like an import failure, instead of bypassing restore
+    // via a bare `?`. The backup at `backup_root` is deliberately left on
+    // disk on every error path (only the full-success path below cleans it
+    // up), and its path is always surfaced in the returned error context so
+    // the user has a manual-recovery fallback if restore itself also fails
+    // (e.g. persistent disk-full).
+    let restore = |original_err: anyhow::Error| -> anyhow::Error {
+        let mut restore_errs = Vec::new();
+        for member in &member_names {
+            let backup_src = backup_root.join(member);
+            if backup_src.exists()
+                && let Err(re) = copy_dir_all(&backup_src, &agent_skills_dir.join(member))
+            {
+                restore_errs.push(format!("restore skill dir '{member}': {re}"));
+            }
+        }
+        match load_profile_for_edit(name) {
+            Ok((path, mut profile)) => {
+                if !profile.addons.iter().any(|a| a.id == addon_id) {
+                    profile.addons.push(old_ref.clone());
+                }
+                for m in &old_mcp_entries {
+                    if !profile.mcp_servers.iter().any(|e| e.name == m.name) {
+                        profile.mcp_servers.push(m.clone());
+                    }
+                }
+                if let Err(se) = save_profile(&path, &mut profile) {
+                    restore_errs.push(format!("restore add-on record: {se}"));
+                }
+            }
+            Err(le) => restore_errs.push(format!("reload profile for restore: {le}")),
+        }
+        if restore_errs.is_empty() {
+            original_err.context(format!(
+                "reimport of '{addon_id}' failed; original add-on was restored (backup was at {})",
+                backup_root.display()
+            ))
+        } else {
+            original_err.context(format!(
+                "reimport of '{addon_id}' failed AND restore encountered errors ({}); \
+                 the agent may be left inconsistent — a backup of the previous add-on is \
+                 at {}; check '{addon_id}' manually",
+                restore_errs.join("; "),
+                backup_root.display()
+            ))
+        }
+    };
+
+    // Remove the old copy, then re-import fresh (records a new fail-closed ref
+    // + content_hash). A failure of the remove step itself (e.g. its
+    // `save_profile` after skill dirs are already gone) is restored via the
+    // same tested path as an import failure below — see
+    // `reimport_restores_addon_on_import_failure`.
+    if let Err(e) = cmd_addon_remove(name, addon_id) {
+        return Err(restore(e));
+    }
+    let import_result = import::cmd_addon_import(name, &fetch, fetch_plugin.as_deref(), false);
+
+    match import_result {
+        Ok(()) => {
+            let _ = fs::remove_dir_all(&backup_root);
+            if was_enabled {
+                cmd_addon_set_enabled(name, addon_id, true)?;
+            }
+            Ok(())
+        }
+        Err(e) => Err(restore(e)),
+    }
+}
+
+/// Recursively copy an entire directory tree from `src` to `dest`, creating
+/// `dest` (and parents) as needed. Used to back up / restore an add-on's
+/// skill dirs around a reimport. Unlike `import::copy_bundle` this does NOT
+/// skip `SKILL.md` — a backup must round-trip byte-for-byte. Symlinks are
+/// skipped rather than followed/copied (backups are of our own
+/// already-validated on-disk content, which shouldn't contain any).
+fn copy_dir_all(src: &Path, dest: &Path) -> Result<()> {
+    fs::create_dir_all(dest).with_context(|| format!("create backup dir {}", dest.display()))?;
+    for entry in fs::read_dir(src).with_context(|| format!("read dir {}", src.display()))? {
+        let entry = entry?;
+        let ft = entry.file_type()?;
+        let src_path = entry.path();
+        let dest_path = dest.join(entry.file_name());
+        if ft.is_dir() {
+            copy_dir_all(&src_path, &dest_path)?;
+        } else if ft.is_file() {
+            fs::copy(&src_path, &dest_path).with_context(|| {
+                format!("copy {} -> {}", src_path.display(), dest_path.display())
+            })?;
+        }
+    }
     Ok(())
 }
 
@@ -152,6 +320,9 @@ mod tests {
             skills: skill_names.iter().map(|s| s.to_string()).collect(),
             mcp: mcp_names.iter().map(|s| s.to_string()).collect(),
             commands: Vec::new(),
+            content_hash: None,
+            fetch_ref: None,
+            fetch_plugin: None,
         });
 
         // Add a stub MCP entry for each mcp_name.
@@ -255,6 +426,9 @@ mod tests {
             skills: vec!["skill-a".to_string()],
             mcp: Vec::new(),
             commands: vec!["cmd-review".to_string()],
+            content_hash: None,
+            fetch_ref: None,
+            fetch_plugin: None,
         });
         let new_yaml = serde_yaml_ng::to_string(&profile).unwrap();
         fs::write(&profile_path, new_yaml).unwrap();
@@ -335,5 +509,207 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("not found"));
+    }
+
+    #[test]
+    fn reimport_replaces_and_preserves_enabled() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        unsafe {
+            std::env::set_var("MUR_HOME", home);
+        }
+        write_agent(home, "reimp");
+
+        // A minimal plugin dir: plugin.json + one skill, so import() records
+        // a non-empty content_hash.
+        let plugin = home.join("myplugin-src");
+        fs::create_dir_all(plugin.join("skills/mytool")).unwrap();
+        fs::write(
+            plugin.join("plugin.json"),
+            r#"{"name":"myplugin","version":"1.0.0","description":"d","author":"Acme"}"#,
+        )
+        .unwrap();
+        fs::write(
+            plugin.join("skills/mytool/SKILL.md"),
+            "---\nname: mytool\ndescription: does a thing\n---\nbody\n",
+        )
+        .unwrap();
+
+        let src = plugin.to_str().unwrap();
+        import::cmd_addon_import("reimp", src, None, false).unwrap();
+        cmd_addon_set_enabled("reimp", "myplugin", true).unwrap();
+
+        cmd_addon_reimport("reimp", "myplugin", None).unwrap();
+
+        let (_p, profile) = crate::cmd::agent::load_profile_for_edit("reimp").unwrap();
+        let g = profile
+            .addons
+            .iter()
+            .find(|g| g.id == "myplugin")
+            .expect("addon must still exist after reimport");
+        assert!(g.enabled, "enabled state must be preserved across reimport");
+        assert!(
+            g.content_hash.as_deref().is_some_and(|h| !h.is_empty()),
+            "content_hash must be refreshed (Some) after reimport"
+        );
+
+        let err = cmd_addon_reimport("reimp", "nope", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not found"));
+    }
+
+    /// Bug A: the marketplace `--plugin <name>` selector used at import time
+    /// must be recorded on the `AddonRef` and replayed on reimport — without
+    /// it, `resolve_marketplace` bails "specify --plugin" on reimport, after
+    /// `cmd_addon_remove` has already deleted the old copy.
+    #[test]
+    fn reimport_marketplace_uses_stored_plugin_selector() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        unsafe {
+            std::env::set_var("MUR_HOME", home);
+        }
+        write_agent(home, "mkt");
+
+        // A minimal marketplace indexing one plugin by relative path.
+        let market = home.join("market-src");
+        fs::create_dir_all(market.join(".claude-plugin")).unwrap();
+        fs::write(
+            market.join(".claude-plugin/marketplace.json"),
+            r#"{"plugins":[{"name":"mytool","description":"d","source":"./plugins/mytool"}]}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(market.join("plugins/mytool/skills/mytool")).unwrap();
+        fs::write(
+            market.join("plugins/mytool/plugin.json"),
+            r#"{"name":"mytool","version":"1.0.0","description":"d","author":"Acme"}"#,
+        )
+        .unwrap();
+        fs::write(
+            market.join("plugins/mytool/skills/mytool/SKILL.md"),
+            "---\nname: mytool\ndescription: does a thing\n---\nbody\n",
+        )
+        .unwrap();
+
+        let src = market.to_str().unwrap();
+        import::cmd_addon_import("mkt", src, Some("mytool"), false).unwrap();
+
+        // The selector must be recorded on the ref (independent of reimport
+        // working — this is the minimum bar even if the marketplace layout
+        // above turns out to need adjusting).
+        let (_p, profile) = crate::cmd::agent::load_profile_for_edit("mkt").unwrap();
+        let g = profile
+            .addons
+            .iter()
+            .find(|g| g.id == "mytool")
+            .expect("addon must be present after import");
+        assert_eq!(
+            g.fetch_plugin.as_deref(),
+            Some("mytool"),
+            "fetch_plugin must record the --plugin selector used at import"
+        );
+        assert_eq!(g.fetch_ref.as_deref(), Some(src));
+        drop(profile);
+
+        // Reimport with NO explicit plugin selector must still succeed by
+        // replaying the stored one.
+        cmd_addon_reimport("mkt", "mytool", None)
+            .expect("reimport must succeed using the stored fetch_plugin selector");
+
+        let (_p2, profile2) = crate::cmd::agent::load_profile_for_edit("mkt").unwrap();
+        assert!(
+            profile2.addons.iter().any(|g| g.id == "mytool"),
+            "addon must still exist after marketplace reimport"
+        );
+    }
+
+    /// Bug B: a reimport that fails partway (here: the recorded fetch source
+    /// no longer resolving) must leave the original add-on fully intact —
+    /// both its on-disk skill dirs and its `AddonRef` (with `enabled`
+    /// unchanged) — never neither-old-nor-new.
+    #[test]
+    fn reimport_restores_addon_on_import_failure() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        unsafe {
+            std::env::set_var("MUR_HOME", home);
+        }
+        write_agent(home, "restoreme");
+
+        let plugin = home.join("myplugin2-src");
+        fs::create_dir_all(plugin.join("skills/mytool2")).unwrap();
+        fs::write(
+            plugin.join("plugin.json"),
+            r#"{"name":"myplugin2","version":"1.0.0","description":"d","author":"Acme"}"#,
+        )
+        .unwrap();
+        fs::write(
+            plugin.join("skills/mytool2/SKILL.md"),
+            "---\nname: mytool2\ndescription: does a thing\n---\nbody\n",
+        )
+        .unwrap();
+
+        let src = plugin.to_str().unwrap();
+        import::cmd_addon_import("restoreme", src, None, false).unwrap();
+        cmd_addon_set_enabled("restoreme", "myplugin2", true).unwrap();
+
+        let (_p, profile_before) = crate::cmd::agent::load_profile_for_edit("restoreme").unwrap();
+        let before = profile_before
+            .addons
+            .iter()
+            .find(|g| g.id == "myplugin2")
+            .cloned()
+            .expect("addon must exist before reimport");
+        assert!(before.enabled);
+        drop(profile_before);
+
+        let skills_dir = home.join("agents/restoreme/skills");
+        for member in before.skills.iter().chain(before.commands.iter()) {
+            assert!(
+                skills_dir.join(member).exists(),
+                "precondition: skill dir '{member}' must exist before reimport"
+            );
+        }
+
+        // Point reimport at a source that cannot possibly resolve, forcing
+        // the import half of reimport to fail after the old copy is removed.
+        let err = cmd_addon_reimport(
+            "restoreme",
+            "myplugin2",
+            Some("/nonexistent/does-not-exist"),
+        )
+        .expect_err("reimport must fail when the source cannot be resolved");
+        assert!(
+            err.to_string().contains("myplugin2")
+                || err.chain().any(|c| c.to_string().contains("myplugin2")),
+            "error should mention the addon being restored: {err:#}"
+        );
+
+        // The original add-on must be restored: same AddonRef (enabled
+        // unchanged) and its skill dirs back on disk.
+        let (_p2, profile_after) = crate::cmd::agent::load_profile_for_edit("restoreme").unwrap();
+        let after = profile_after
+            .addons
+            .iter()
+            .find(|g| g.id == "myplugin2")
+            .expect("addon must still be present after a failed reimport (restored)");
+        assert_eq!(
+            after.enabled, before.enabled,
+            "enabled state must be unchanged"
+        );
+        assert_eq!(after.skills, before.skills);
+        assert_eq!(after.commands, before.commands);
+        assert_eq!(after.fetch_ref, before.fetch_ref);
+
+        for member in before.skills.iter().chain(before.commands.iter()) {
+            assert!(
+                skills_dir.join(member).exists(),
+                "skill dir '{member}' must be restored on disk after a failed reimport"
+            );
+        }
     }
 }
