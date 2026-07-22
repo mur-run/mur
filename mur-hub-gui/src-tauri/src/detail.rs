@@ -425,6 +425,9 @@ mod addon_detail_tests {
             skills: vec!["g_skill".into()],
             mcp: vec![],
             commands: vec![],
+            content_hash: None,
+            fetch_ref: None,
+            fetch_plugin: None,
         });
 
         let detail = build_agent_detail(p, None);
