@@ -123,6 +123,7 @@ pub fn cmd_addon_import(
     force: bool,
 ) -> Result<()> {
     let requested = plugin_dir; // original user input, for messages
+    let plugin_selector = plugin; // save before `plugin` is shadowed by the parsed PluginJson below
     let (profile_path, mut profile) = load_profile_for_edit(name)?;
     let mur_home = crate::cmd::resolve_mur_home()?;
     let agent_skills_dir = mur_home.join("agents").join(name).join("skills");
@@ -370,6 +371,7 @@ pub fn cmd_addon_import(
         commands: cmd_members,
         content_hash,
         fetch_ref: Some(requested.to_string()),
+        fetch_plugin: plugin_selector.map(str::to_string),
     });
     save_profile(&profile_path, &mut profile)?;
 

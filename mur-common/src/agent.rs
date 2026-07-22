@@ -424,6 +424,12 @@ pub struct AddonRef {
     /// `None` on legacy refs. Used by `reimport`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fetch_ref: Option<String>,
+    /// The `--plugin <name>` selector used at import time to pick one plugin
+    /// out of a multi-plugin marketplace `fetch_ref`. `None` when the source
+    /// was a single-plugin dir/repo, or on legacy refs. Used by `reimport` so
+    /// a marketplace add-on can be re-fetched without re-specifying it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetch_plugin: Option<String>,
 }
 
 /// Display-only publisher metadata captured at install time. None of
@@ -2245,6 +2251,7 @@ mod tool_policy_tests {
             commands: vec!["g_cmd".into()],
             content_hash: None,
             fetch_ref: None,
+            fetch_plugin: None,
         });
 
         // 1. standalone item, no entry anywhere => enabled (back-compat)
