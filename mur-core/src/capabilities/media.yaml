@@ -1,0 +1,26 @@
+name: media
+version: 1.0.0
+description: 'Watch and analyze video with MUR: control VLC, co-watch, and summarize videos via the local multimodal model.'
+mcp_servers:
+- name: media
+  command: mur-mcp-server
+  timeout_secs: 300
+skills:
+- video-analyze
+- watch-together
+- scene-explain
+- vlc-control
+requires_programs:
+- name: vlc
+  detect:
+    file: /Applications/VLC.app/Contents/MacOS/VLC
+  reason: VLC is required to open and control video playback.
+  hint: Install VLC from https://www.videolan.org/vlc/ (or `brew install --cask vlc`).
+- name: yt-dlp
+  detect:
+    command: yt-dlp
+  reason: yt-dlp fetches captions/streams for YouTube analysis.
+  hint: '`brew install yt-dlp` or see https://github.com/yt-dlp/yt-dlp'
+entitlements:
+  network_hosts:
+  - 127.0.0.1

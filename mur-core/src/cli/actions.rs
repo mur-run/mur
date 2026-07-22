@@ -637,6 +637,31 @@ pub enum FleetAction {
     },
 }
 
+#[derive(Debug, Subcommand)]
+pub enum CapabilityAction {
+    /// List available capabilities
+    List {
+        #[arg(long)]
+        agent: Option<String>,
+    },
+    /// Show a capability's contents
+    Show { name: String },
+    /// Install a capability onto an agent
+    Install {
+        name: String,
+        #[arg(long)]
+        agent: String,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Remove a capability from an agent
+    Remove {
+        name: String,
+        #[arg(long)]
+        agent: String,
+    },
+}
+
 #[derive(clap::Subcommand)]
 pub enum CommanderAction {
     /// Pin the commander public key (multibase). Refuses overwrite without --force.

@@ -10,10 +10,11 @@ use crate::cli::{
     AgentAction, AgentAddonAction, AgentEvalAction, AgentHooksAction, AgentMcpAction,
     AgentPendingAction, AgentPermAction, AgentPromptAction, AgentQueueAction, AgentScheduleAction,
     AgentSecretAction, AgentSkillAction, AgentTrashAction, AgentWebhookAction, AuthAction,
-    ChannelAction, ChatAction, Cli, CommanderAction, Commands, ConversationsAction, DaemonAction,
-    DeepResearchAction, DeployAction, DraftsAction, EvalAction, ExchangeAction, FleetAction,
-    HookEvent, InternalsAction, MurmurdAction, OfficialAction, ProjectAction, ScheduleAction,
-    SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
+    CapabilityAction, ChannelAction, ChatAction, Cli, CommanderAction, Commands,
+    ConversationsAction, DaemonAction, DeepResearchAction, DeployAction, DraftsAction, EvalAction,
+    ExchangeAction, FleetAction, HookEvent, InternalsAction, MurmurdAction, OfficialAction,
+    ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction,
+    WorkflowAction,
 };
 use crate::store::config as store_config;
 use crate::{cmd, dashboard, team, verify};
@@ -452,6 +453,18 @@ pub async fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
+        Commands::Capability { action } => match action {
+            CapabilityAction::List { agent } => {
+                cmd::capability::cmd_capability_list(agent.as_deref())?
+            }
+            CapabilityAction::Show { name } => cmd::capability::cmd_capability_show(&name)?,
+            CapabilityAction::Install { name, agent, yes } => {
+                cmd::capability::cmd_capability_install(&name, &agent, yes)?
+            }
+            CapabilityAction::Remove { name, agent } => {
+                cmd::capability::cmd_capability_remove(&name, &agent)?
+            }
+        },
         Commands::Commander { action } => {
             let mur_home = crate::paths::mur_root(None);
             match action {

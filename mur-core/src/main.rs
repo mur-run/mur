@@ -6,6 +6,7 @@ mod a2a_dial;
 mod agent_wizard;
 mod auth;
 mod bridge_keychain;
+mod capabilities;
 mod capture;
 mod channel_verify;
 mod channel_writer;
