@@ -415,6 +415,15 @@ pub struct AddonRef {
     pub mcp: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<String>,
+    /// Content-hash pin over the imported skill/command manifests, recorded
+    /// at import. `None` on legacy refs. Enables drift detection + refresh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+    /// The re-fetchable source (the original `import` argument: a local path
+    /// or `owner/repo`), distinct from the free-text provenance `source`.
+    /// `None` on legacy refs. Used by `reimport`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetch_ref: Option<String>,
 }
 
 /// Display-only publisher metadata captured at install time. None of
@@ -2234,6 +2243,8 @@ mod tool_policy_tests {
             skills: vec!["g_skill".into()],
             mcp: vec!["g_mcp".into()],
             commands: vec!["g_cmd".into()],
+            content_hash: None,
+            fetch_ref: None,
         });
 
         // 1. standalone item, no entry anywhere => enabled (back-compat)
@@ -2274,6 +2285,24 @@ mod tool_policy_tests {
         // clearing the individual deny fully restores g_skill too
         p.set_skill_enabled("g_skill", true);
         assert!(p.skill_enabled("g_skill"));
+    }
+
+    #[test]
+    fn addon_ref_content_hash_and_fetch_ref_default_none_and_round_trip() {
+        // legacy AddonRef (no new fields) → None
+        let legacy = "id: a\nsource: claude-local:a@1\nenabled: false\n";
+        let r: AddonRef = serde_yaml_ng::from_str(legacy).unwrap();
+        assert_eq!(r.content_hash, None);
+        assert_eq!(r.fetch_ref, None);
+
+        // with the new fields → round-trips
+        let full = "id: a\nsource: claude-local:a@1\nenabled: true\ncontent_hash: abc123\nfetch_ref: owner/repo\n";
+        let r2: AddonRef = serde_yaml_ng::from_str(full).unwrap();
+        assert_eq!(r2.content_hash.as_deref(), Some("abc123"));
+        assert_eq!(r2.fetch_ref.as_deref(), Some("owner/repo"));
+        let back = serde_yaml_ng::to_string(&r2).unwrap();
+        let r3: AddonRef = serde_yaml_ng::from_str(&back).unwrap();
+        assert_eq!(r2, r3);
     }
 }
 
