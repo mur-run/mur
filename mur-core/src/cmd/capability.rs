@@ -27,9 +27,25 @@ fn union_extend(dst: &mut Vec<String>, src: &[String]) {
 pub(crate) fn install_capability(home: &Path, agent: &str, cap: &Capability) -> Result<bool> {
     let (path, mut profile) = load(home, agent)?;
     // 1. MCP servers: upsert by name + allow the command to be spawned.
+    //    Preserve a user's pin / security metadata (binary_sha256,
+    //    description_hash, publisher, installed_at — set by `mur agent mcp
+    //    pin`) across a re-install, so re-installing a capability never strips
+    //    a pin the user added.
     for entry in &cap.mcp_servers {
+        let prior = profile
+            .mcp_servers
+            .iter()
+            .find(|s| s.name == entry.name)
+            .cloned();
         profile.mcp_servers.retain(|s| s.name != entry.name);
-        profile.mcp_servers.push(entry.clone());
+        let mut new_entry = entry.clone();
+        if let Some(p) = prior {
+            new_entry.binary_sha256 = new_entry.binary_sha256.or(p.binary_sha256);
+            new_entry.description_hash = new_entry.description_hash.or(p.description_hash);
+            new_entry.publisher = new_entry.publisher.or(p.publisher);
+            new_entry.installed_at = new_entry.installed_at.or(p.installed_at);
+        }
+        profile.mcp_servers.push(new_entry);
         if !profile
             .entitlements
             .processes
@@ -78,12 +94,14 @@ pub(crate) fn install_capability(home: &Path, agent: &str, cap: &Capability) -> 
 pub(crate) fn remove_capability(home: &Path, agent: &str, cap: &Capability) -> Result<bool> {
     let (path, mut profile) = load(home, agent)?;
     // Remove only an MCP server that STILL matches the capability's definition
-    // (install materialized a clone, so an unmodified entry compares equal). A
-    // same-named entry the user has since modified is left in place + warned,
-    // so `remove` never clobbers a user's edits.
+    // by SEMANTIC identity (command/args/network/…, ignoring pin metadata — see
+    // `mcp_semantically_matches`). A same-named entry the user has modified is
+    // left in place + warned, so `remove` never clobbers a user's edits.
     for def in &cap.mcp_servers {
         let before = profile.mcp_servers.len();
-        profile.mcp_servers.retain(|s| s != def);
+        profile
+            .mcp_servers
+            .retain(|s| !mcp_semantically_matches(s, def));
         if profile.mcp_servers.len() == before
             && profile.mcp_servers.iter().any(|s| s.name == def.name)
         {
@@ -96,6 +114,26 @@ pub(crate) fn remove_capability(home: &Path, agent: &str, cap: &Capability) -> R
     profile.requires_capabilities.retain(|c| c != &cap.name);
     crate::cmd::agent::save_profile(&path, &mut profile)?;
     Ok(true)
+}
+
+/// Whether an installed MCP entry still matches the capability's definition by
+/// its SEMANTIC identity — name/command/args/network/timeout/url/auth/programs.
+/// Ignores install/security metadata (`binary_sha256`, `description_hash`,
+/// `publisher`, `installed_at`) that `mur agent mcp pin` sets, so a pinned but
+/// otherwise-unmodified entry is still removable, while a real edit to what the
+/// server IS (command/args/network/…) is treated as user-modified and kept.
+fn mcp_semantically_matches(
+    entry: &mur_common::agent::McpServerEntry,
+    def: &mur_common::agent::McpServerEntry,
+) -> bool {
+    entry.name == def.name
+        && entry.command == def.command
+        && entry.args == def.args
+        && entry.network == def.network
+        && entry.timeout_secs == def.timeout_secs
+        && entry.url == def.url
+        && entry.auth == def.auth
+        && entry.requires_programs == def.requires_programs
 }
 
 /// `mur capability list [--agent X]`
@@ -332,5 +370,49 @@ updated_at: \"2026-04-22T10:00:00+08:00\"
         );
         // …but requires_capabilities is still dropped.
         assert!(!p2.requires_capabilities.iter().any(|c| c == "media"));
+    }
+
+    #[test]
+    fn reinstall_preserves_pin_and_remove_still_removes_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        seed_agent(home, "a");
+        install_capability(home, "a", &media()).unwrap();
+
+        // User pins the media MCP binary (sets binary_sha256); semantics unchanged.
+        let path = home.join("agents/a/profile.yaml");
+        let mut p: _AgentProfile =
+            serde_yaml_ng::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        p.mcp_servers
+            .iter_mut()
+            .find(|s| s.name == "media")
+            .unwrap()
+            .binary_sha256 = Some("deadbeef".into());
+        crate::cmd::agent::save_profile(&path, &mut p).unwrap();
+
+        // Re-install must NOT strip the pin.
+        install_capability(home, "a", &media()).unwrap();
+        let p2: _AgentProfile =
+            serde_yaml_ng::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            p2.mcp_servers
+                .iter()
+                .find(|s| s.name == "media")
+                .unwrap()
+                .binary_sha256
+                .as_deref(),
+            Some("deadbeef"),
+            "re-install must preserve a user's pin"
+        );
+
+        // Remove: a pinned-but-otherwise-unmodified entry is still removed
+        // (the pin is ignored by the semantic match).
+        remove_capability(home, "a", &media()).unwrap();
+        let p3: _AgentProfile =
+            serde_yaml_ng::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(
+            !p3.mcp_servers.iter().any(|s| s.name == "media"),
+            "a pinned-but-unmodified MCP entry must still be removable"
+        );
     }
 }
