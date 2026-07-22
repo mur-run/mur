@@ -2,6 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Revision (post-merge, per revised spec §4.4):** `remove_capability` now removes an MCP server ONLY if it still equals the capability definition (`s == def`); a same-named entry the user has modified is kept + warned, so remove never clobbers user edits. `cmd_capability_remove` also lists the entitlements it kept and points at `mur agent perm` to revoke them. Agent-side resolution of `requires_capabilities` (auto-installing missing capabilities on agent install) is explicitly out of scope — S3 only writes/reads the field. Shipped in a follow-up commit after PR #743; Task 3's code block below reflects the original name-match implementation.
+
+
 **Goal:** Add a standalone, installable **capability** — MCP server(s) + skill refs + `requires_programs` + suggested entitlements — that an agent can also declare as a dependency, and ship the **media** capability as the first instance.
 
 **Architecture:** Three tasks. (1) `mur-common`: a `Capability` type + `CapabilityEntitlements` + a `requires_capabilities` field on `AgentProfile`. (2) `mur-core`: a compiled-in `media` capability (`include_str!`) + a `builtin_capabilities()` accessor. (3) `mur-core`: `mur capability {list|show|install|remove}` — install materializes the capability into an agent's profile (MCP upsert + `requires_programs` merge + entitlement union behind consent + `requires_capabilities`), remove reverses the MCP wiring. CLI-only; reuses `McpServerEntry`, `ProgramDep`, `Entitlements`.
