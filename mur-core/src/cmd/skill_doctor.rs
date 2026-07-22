@@ -1299,7 +1299,7 @@ fn run_shadow_drift(ctx: &DoctorCtx) -> Vec<Finding> {
             ) else {
                 continue;
             };
-            let remediation = Some(format!("mur agent skill remove {agent_name} skills/{name}"));
+            let remediation = Some(format!("mur agent skill remove {agent_name} {name}"));
             if local_hash == global_hash {
                 findings.push(Finding {
                     check_id: "shadow-drift".into(),
@@ -1310,7 +1310,7 @@ fn run_shadow_drift(ctx: &DoctorCtx) -> Vec<Finding> {
                         "Agent '{agent_name}' vendors '{name}', identical to the global copy — redundant. De-pin so the global (builtin/registry) copy owns it."
                     ),
                     remediation,
-                    fixable: false,
+                    fixable: true,
                 });
             } else {
                 findings.push(Finding {
@@ -1393,12 +1393,12 @@ mod tests {
             .expect("expected a shadow finding for foo");
         assert_eq!(f.check_id, "shadow-drift");
         assert_eq!(f.severity, Severity::Warn);
-        assert!(
-            f.remediation
-                .as_deref()
-                .unwrap()
-                .contains("mur agent skill remove a1 skills/foo")
+        assert_eq!(
+            f.remediation.as_deref().unwrap(),
+            "mur agent skill remove a1 foo",
+            "remediation must be the basename form"
         );
+        assert!(!f.fixable, "diverged shadow must NOT be auto-fixable");
     }
 
     #[test]
@@ -1417,6 +1417,12 @@ mod tests {
             .find(|f| f.skill_name == "foo")
             .expect("expected a shadow finding for foo");
         assert_eq!(f.severity, Severity::Ok);
+        assert!(f.fixable, "identical shadow must be auto-fixable");
+        assert_eq!(
+            f.remediation.as_deref().unwrap(),
+            "mur agent skill remove a1 foo",
+            "remediation must be the basename form depin_skill resolves"
+        );
     }
 
     #[test]
