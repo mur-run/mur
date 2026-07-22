@@ -152,7 +152,7 @@ For detailed agent / companion / GUI export / runtime internals, read `docs/arch
 
 ## Documentation Checklist
 
-When making changes, check whether these need updating:
+When making changes, check whether these need updating. For the full how-to (mechanics of each location + publish gotchas), use the **`update-docs`** skill (`.claude/skills/update-docs/`).
 
 1. **`README.md`** — `/Volumes/Firecuda4tb/Projects/mur/README.md`
 2. **Documents page** — https://app.mur.run/docs/core
