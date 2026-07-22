@@ -86,11 +86,16 @@ pub fn cmd_addon_remove(name: &str, addon_id: &str) -> Result<()> {
 /// preserve the prior `enabled` state.
 ///
 /// Non-destructive: the old skill dirs + `AddonRef` (+ its MCP entries) are
-/// backed up before the old copy is removed. If the re-import fails for any
-/// reason (network flake, source gone, never-shadow filter drops every
-/// member, security scan block, marketplace ambiguity), the backup is
-/// restored so the agent ends up exactly as it was before the reimport was
-/// attempted — never with neither the old copy nor the new one.
+/// backed up before the old copy is removed. If either the removal step
+/// itself fails (e.g. its `save_profile` after skill dirs are already
+/// deleted) or the re-import fails for any reason (network flake, source
+/// gone, never-shadow filter drops every member, security scan block,
+/// marketplace ambiguity), the backup is restored so the agent ends up
+/// exactly as it was before the reimport was attempted — never with neither
+/// the old copy nor the new one. The backup is left on disk (and its path
+/// surfaced in the returned error) on every failure path as a manual-recovery
+/// fallback in case restore itself also fails; it is only deleted on full
+/// success.
 pub fn cmd_addon_reimport(name: &str, addon_id: &str, source_override: Option<&str>) -> Result<()> {
     let (_, profile) = crate::cmd::agent::load_profile_for_edit(name)?;
     let existing = profile
@@ -141,9 +146,70 @@ pub fn cmd_addon_reimport(name: &str, addon_id: &str, source_override: Option<&s
         }
     }
 
+    // Shared restore path: copy the backed-up skill dirs back, then re-add
+    // the old AddonRef + its MCP entries so the profile matches what it was
+    // before this reimport attempt. Best-effort — a restore failure is
+    // reported alongside the original error rather than silently swallowed,
+    // but the original error always wins as the returned cause. Invoked from
+    // BOTH possible failure points below (the `cmd_addon_remove` step and the
+    // `cmd_addon_import` step) so a remove-step failure — e.g. the removal's
+    // own `save_profile` failing after skill dirs were already deleted — is
+    // restored exactly like an import failure, instead of bypassing restore
+    // via a bare `?`. The backup at `backup_root` is deliberately left on
+    // disk on every error path (only the full-success path below cleans it
+    // up), and its path is always surfaced in the returned error context so
+    // the user has a manual-recovery fallback if restore itself also fails
+    // (e.g. persistent disk-full).
+    let restore = |original_err: anyhow::Error| -> anyhow::Error {
+        let mut restore_errs = Vec::new();
+        for member in &member_names {
+            let backup_src = backup_root.join(member);
+            if backup_src.exists()
+                && let Err(re) = copy_dir_all(&backup_src, &agent_skills_dir.join(member))
+            {
+                restore_errs.push(format!("restore skill dir '{member}': {re}"));
+            }
+        }
+        match load_profile_for_edit(name) {
+            Ok((path, mut profile)) => {
+                if !profile.addons.iter().any(|a| a.id == addon_id) {
+                    profile.addons.push(old_ref.clone());
+                }
+                for m in &old_mcp_entries {
+                    if !profile.mcp_servers.iter().any(|e| e.name == m.name) {
+                        profile.mcp_servers.push(m.clone());
+                    }
+                }
+                if let Err(se) = save_profile(&path, &mut profile) {
+                    restore_errs.push(format!("restore add-on record: {se}"));
+                }
+            }
+            Err(le) => restore_errs.push(format!("reload profile for restore: {le}")),
+        }
+        if restore_errs.is_empty() {
+            original_err.context(format!(
+                "reimport of '{addon_id}' failed; original add-on was restored (backup was at {})",
+                backup_root.display()
+            ))
+        } else {
+            original_err.context(format!(
+                "reimport of '{addon_id}' failed AND restore encountered errors ({}); \
+                 the agent may be left inconsistent — a backup of the previous add-on is \
+                 at {}; check '{addon_id}' manually",
+                restore_errs.join("; "),
+                backup_root.display()
+            ))
+        }
+    };
+
     // Remove the old copy, then re-import fresh (records a new fail-closed ref
-    // + content_hash).
-    cmd_addon_remove(name, addon_id)?;
+    // + content_hash). A failure of the remove step itself (e.g. its
+    // `save_profile` after skill dirs are already gone) is restored via the
+    // same tested path as an import failure below — see
+    // `reimport_restores_addon_on_import_failure`.
+    if let Err(e) = cmd_addon_remove(name, addon_id) {
+        return Err(restore(e));
+    }
     let import_result = import::cmd_addon_import(name, &fetch, fetch_plugin.as_deref(), false);
 
     match import_result {
@@ -154,51 +220,7 @@ pub fn cmd_addon_reimport(name: &str, addon_id: &str, source_override: Option<&s
             }
             Ok(())
         }
-        Err(e) => {
-            // Restore: copy the backed-up skill dirs back, then re-add the
-            // old AddonRef + its MCP entries so the profile matches what it
-            // was before this reimport attempt. Best-effort — a restore
-            // failure is reported alongside the original error rather than
-            // silently swallowed, but the original error always wins as the
-            // returned cause.
-            let mut restore_errs = Vec::new();
-            for member in &member_names {
-                let backup_src = backup_root.join(member);
-                if backup_src.exists()
-                    && let Err(re) = copy_dir_all(&backup_src, &agent_skills_dir.join(member))
-                {
-                    restore_errs.push(format!("restore skill dir '{member}': {re}"));
-                }
-            }
-            match load_profile_for_edit(name) {
-                Ok((path, mut profile)) => {
-                    if !profile.addons.iter().any(|a| a.id == addon_id) {
-                        profile.addons.push(old_ref.clone());
-                    }
-                    for m in &old_mcp_entries {
-                        if !profile.mcp_servers.iter().any(|e| e.name == m.name) {
-                            profile.mcp_servers.push(m.clone());
-                        }
-                    }
-                    if let Err(se) = save_profile(&path, &mut profile) {
-                        restore_errs.push(format!("restore add-on record: {se}"));
-                    }
-                }
-                Err(le) => restore_errs.push(format!("reload profile for restore: {le}")),
-            }
-            let _ = fs::remove_dir_all(&backup_root);
-            if restore_errs.is_empty() {
-                Err(e.context(format!(
-                    "reimport of '{addon_id}' failed; original add-on was restored"
-                )))
-            } else {
-                Err(e.context(format!(
-                    "reimport of '{addon_id}' failed AND restore encountered errors ({}); \
-                     the agent may be left inconsistent — check '{addon_id}' manually",
-                    restore_errs.join("; ")
-                )))
-            }
-        }
+        Err(e) => Err(restore(e)),
     }
 }
 
