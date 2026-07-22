@@ -22,11 +22,19 @@ mod tests {
     fn media_capability_parses_and_bundles_the_media_pieces() {
         let media = find_builtin("media").expect("media capability present");
         assert_eq!(media.name, "media");
-        for s in ["video-analyze", "watch-together", "scene-explain", "vlc-control"] {
+        for s in [
+            "video-analyze",
+            "watch-together",
+            "scene-explain",
+            "vlc-control",
+        ] {
             assert!(media.skills.iter().any(|x| x == s), "missing skill {s}");
         }
         for p in ["vlc", "yt-dlp"] {
-            assert!(media.requires_programs.iter().any(|d| d.name == p), "missing dep {p}");
+            assert!(
+                media.requires_programs.iter().any(|d| d.name == p),
+                "missing dep {p}"
+            );
         }
         assert_eq!(media.mcp_servers.len(), 1);
         assert_eq!(media.mcp_servers[0].command, "mur-mcp-server");
