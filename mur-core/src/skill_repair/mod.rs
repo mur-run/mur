@@ -9,6 +9,7 @@ use std::path::Path;
 use crate::cmd::skill_doctor::Finding;
 
 pub mod dep_freshness;
+pub mod shadow_depin;
 pub mod stats_sidecar;
 pub mod tool_availability;
 
