@@ -152,6 +152,8 @@ mod tests {
             skills: skill_names.iter().map(|s| s.to_string()).collect(),
             mcp: mcp_names.iter().map(|s| s.to_string()).collect(),
             commands: Vec::new(),
+            content_hash: None,
+            fetch_ref: None,
         });
 
         // Add a stub MCP entry for each mcp_name.
@@ -255,6 +257,8 @@ mod tests {
             skills: vec!["skill-a".to_string()],
             mcp: Vec::new(),
             commands: vec!["cmd-review".to_string()],
+            content_hash: None,
+            fetch_ref: None,
         });
         let new_yaml = serde_yaml_ng::to_string(&profile).unwrap();
         fs::write(&profile_path, new_yaml).unwrap();
