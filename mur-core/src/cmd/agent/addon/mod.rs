@@ -80,6 +80,36 @@ pub fn cmd_addon_remove(name: &str, addon_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Re-fetch an add-on from its recorded `fetch_ref` (or `source_override`),
+/// re-apply it (re-running the never-shadow gate + security scan), and
+/// preserve the prior `enabled` state.
+pub fn cmd_addon_reimport(name: &str, addon_id: &str, source_override: Option<&str>) -> Result<()> {
+    let (_, profile) = crate::cmd::agent::load_profile_for_edit(name)?;
+    let existing = profile
+        .addons
+        .iter()
+        .find(|a| a.id == addon_id)
+        .ok_or_else(|| anyhow::anyhow!("add-on '{addon_id}' not found on '{name}'"))?;
+    let was_enabled = existing.enabled;
+    let fetch = source_override
+        .map(str::to_string)
+        .or_else(|| existing.fetch_ref.clone())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "add-on '{addon_id}' has no recorded fetch source — pass one explicitly"
+            )
+        })?;
+
+    // Remove the old copy, then re-import fresh (records a new fail-closed ref
+    // + content_hash), then restore the prior enabled state.
+    cmd_addon_remove(name, addon_id)?;
+    import::cmd_addon_import(name, &fetch, None, false)?;
+    if was_enabled {
+        cmd_addon_set_enabled(name, addon_id, true)?;
+    }
+    Ok(())
+}
+
 pub fn cmd_addon_disable_all(name: &str) -> Result<()> {
     let (path, mut profile) = load_profile_for_edit(name)?;
     profile.disable_all_addons();
@@ -336,6 +366,55 @@ mod tests {
         }
         write_agent(home, "noop");
         let err = cmd_addon_set_enabled("noop", "nonexistent", true)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not found"));
+    }
+
+    #[test]
+    fn reimport_replaces_and_preserves_enabled() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        unsafe {
+            std::env::set_var("MUR_HOME", home);
+        }
+        write_agent(home, "reimp");
+
+        // A minimal plugin dir: plugin.json + one skill, so import() records
+        // a non-empty content_hash.
+        let plugin = home.join("myplugin-src");
+        fs::create_dir_all(plugin.join("skills/mytool")).unwrap();
+        fs::write(
+            plugin.join("plugin.json"),
+            r#"{"name":"myplugin","version":"1.0.0","description":"d","author":"Acme"}"#,
+        )
+        .unwrap();
+        fs::write(
+            plugin.join("skills/mytool/SKILL.md"),
+            "---\nname: mytool\ndescription: does a thing\n---\nbody\n",
+        )
+        .unwrap();
+
+        let src = plugin.to_str().unwrap();
+        import::cmd_addon_import("reimp", src, None, false).unwrap();
+        cmd_addon_set_enabled("reimp", "myplugin", true).unwrap();
+
+        cmd_addon_reimport("reimp", "myplugin", None).unwrap();
+
+        let (_p, profile) = crate::cmd::agent::load_profile_for_edit("reimp").unwrap();
+        let g = profile
+            .addons
+            .iter()
+            .find(|g| g.id == "myplugin")
+            .expect("addon must still exist after reimport");
+        assert!(g.enabled, "enabled state must be preserved across reimport");
+        assert!(
+            g.content_hash.as_deref().is_some_and(|h| !h.is_empty()),
+            "content_hash must be refreshed (Some) after reimport"
+        );
+
+        let err = cmd_addon_reimport("reimp", "nope", None)
             .unwrap_err()
             .to_string();
         assert!(err.contains("not found"));
