@@ -7,9 +7,9 @@ hosts: [all]
 content:
   abstract: |
     When the user wants to watch together (not just control playback), call watch_start.
-    During a session, MuR may inject a short prompt when the scene changes — explain the
+    During a session, MUR may inject a short prompt when the scene changes — explain the
     frame briefly with scene_explain. If the user says "噓"/"安靜"/"stop talking", call
-    watch_mute. watch_stop ends the session. Proactive comments only happen when MuR runs
+    watch_mute. watch_stop ends the session. Proactive comments only happen when MUR runs
     as a background agent runtime.
   context: |
     # watch-together — be a gentle watch buddy
