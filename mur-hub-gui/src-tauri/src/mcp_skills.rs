@@ -749,6 +749,9 @@ mod tests {
             skills: vec!["s1".to_string()],
             mcp: vec!["m1".to_string(), "m2".to_string()],
             commands: vec![],
+            content_hash: None,
+            fetch_ref: None,
+            fetch_plugin: None,
         }
     }
 
