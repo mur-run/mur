@@ -77,10 +77,22 @@ pub(crate) fn install_capability(home: &Path, agent: &str, cap: &Capability) -> 
 /// Keeps entitlements + `requires_programs` (may be shared).
 pub(crate) fn remove_capability(home: &Path, agent: &str, cap: &Capability) -> Result<bool> {
     let (path, mut profile) = load(home, agent)?;
-    let names: Vec<&str> = cap.mcp_servers.iter().map(|s| s.name.as_str()).collect();
-    profile
-        .mcp_servers
-        .retain(|s| !names.contains(&s.name.as_str()));
+    // Remove only an MCP server that STILL matches the capability's definition
+    // (install materialized a clone, so an unmodified entry compares equal). A
+    // same-named entry the user has since modified is left in place + warned,
+    // so `remove` never clobbers a user's edits.
+    for def in &cap.mcp_servers {
+        let before = profile.mcp_servers.len();
+        profile.mcp_servers.retain(|s| s != def);
+        if profile.mcp_servers.len() == before
+            && profile.mcp_servers.iter().any(|s| s.name == def.name)
+        {
+            eprintln!(
+                "MCP server '{}' was modified since install — leaving it in place (remove it manually if intended)",
+                def.name
+            );
+        }
+    }
     profile.requires_capabilities.retain(|c| c != &cap.name);
     crate::cmd::agent::save_profile(&path, &mut profile)?;
     Ok(true)
@@ -135,8 +147,27 @@ pub fn cmd_capability_remove(name: &str, agent: &str) -> Result<()> {
     let home = crate::cmd::agent::resolve_mur_home()?;
     remove_capability(&home, agent, &cap)?;
     println!(
-        "Removed capability '{name}' from '{agent}' (MCP + requires_capabilities). Entitlements and program requirements kept. Restart the agent to apply."
+        "Removed capability '{name}' from '{agent}' (MCP servers matching the definition + requires_capabilities). Restart the agent to apply."
     );
+    let ent = &cap.entitlements;
+    if !ent.network_hosts.is_empty()
+        || !ent.spawn_programs.is_empty()
+        || !ent.filesystem_read.is_empty()
+    {
+        println!(
+            "Entitlements this capability had requested were KEPT (another capability or manual config may rely on them):"
+        );
+        if !ent.network_hosts.is_empty() {
+            println!("  network hosts: {}", ent.network_hosts.join(", "));
+        }
+        if !ent.spawn_programs.is_empty() {
+            println!("  spawn programs: {}", ent.spawn_programs.join(", "));
+        }
+        if !ent.filesystem_read.is_empty() {
+            println!("  filesystem read: {}", ent.filesystem_read.join(", "));
+        }
+        println!("  To revoke manually, use `mur agent perm` (see `mur agent perm --help`).");
+    }
     Ok(())
 }
 
@@ -267,5 +298,39 @@ updated_at: \"2026-04-22T10:00:00+08:00\"
         assert!(!p.mcp_servers.iter().any(|s| s.name == "media"));
         assert!(!p.requires_capabilities.iter().any(|c| c == "media"));
         assert!(p.requires_programs.iter().any(|d| d.name == "vlc"));
+    }
+
+    #[test]
+    fn remove_keeps_a_user_modified_mcp_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        seed_agent(home, "a");
+        install_capability(home, "a", &media()).unwrap();
+
+        // User edits the installed media MCP entry (changes the timeout).
+        let path = home.join("agents/a/profile.yaml");
+        let mut p: _AgentProfile =
+            serde_yaml_ng::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let e = p
+            .mcp_servers
+            .iter_mut()
+            .find(|s| s.name == "media")
+            .unwrap();
+        e.timeout_secs = Some(999);
+        crate::cmd::agent::save_profile(&path, &mut p).unwrap();
+
+        remove_capability(home, "a", &media()).unwrap();
+
+        let p2: _AgentProfile =
+            serde_yaml_ng::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        // The modified entry is KEPT (not clobbered)…
+        assert!(
+            p2.mcp_servers
+                .iter()
+                .any(|s| s.name == "media" && s.timeout_secs == Some(999)),
+            "a user-modified MCP entry must be kept, not removed"
+        );
+        // …but requires_capabilities is still dropped.
+        assert!(!p2.requires_capabilities.iter().any(|c| c == "media"));
     }
 }
