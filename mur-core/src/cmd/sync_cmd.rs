@@ -1226,6 +1226,7 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path, mur_root: &std::path::Pat
             "deep-research-verify",
             include_str!("../skills/deep_research_verify.yaml"),
         ),
+        ("mur-dev", include_str!("../skills/mur_dev.yaml")),
     ];
 
     let mur_skills_dir = mur_root.join("skills");
@@ -1759,6 +1760,7 @@ mod builtin_skill_tests {
                 include_str!("../skills/mur_native_tools.yaml"),
                 false,
             ),
+            ("mur-dev", include_str!("../skills/mur_dev.yaml"), false),
         ];
         use mur_common::skill::manifest::Visibility;
         for (name, yaml, on_demand) in cases {
@@ -1789,6 +1791,26 @@ mod builtin_skill_tests {
                 body_lines <= 150,
                 "{name}: body {body_lines} lines (budget 150)"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod dev_skill_trigger_tests {
+    /// Every dev-discipline keyword trigger must be a valid regex — the
+    /// runtime trigger matcher compiles them with `regex::Regex::new`.
+    #[test]
+    fn dev_skill_keyword_triggers_compile() {
+        let yamls: &[&str] = &[include_str!("../skills/mur_dev.yaml")];
+        for y in yamls {
+            let m = mur_common::skill::parse_canonical(y).expect("parse");
+            for t in &m.triggers {
+                if let Some(p) = &t.pattern {
+                    regex::Regex::new(p).unwrap_or_else(|e| {
+                        panic!("{}: trigger regex fails to compile: {e}", m.name)
+                    });
+                }
+            }
         }
     }
 }
