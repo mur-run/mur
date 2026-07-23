@@ -39,6 +39,15 @@ content:
     8. Ask the user to review the written spec. On approval, hand off to
        `mur-writing-plans`.
 
+    ## Spec-writer delegation
+
+    If a dedicated spec-writer agent is observably available (e.g.
+    `mur agent list` shows one whose role is authoring specs/plans), delegate
+    the approved design summary to it at step 6 instead of writing the spec
+    yourself, and tell the user where its spec will land. Otherwise the
+    default above applies. Same ladder as everywhere else: in-context by
+    default, delegation only on an observable predicate.
+
     ## Notes
 
     - New vocabulary or a landed decision mid-design → `mur-domain-modeling`.
