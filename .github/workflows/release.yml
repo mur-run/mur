@@ -46,6 +46,11 @@ jobs:
     name: Build (${{ matrix.target }})
     needs: validate-version
     runs-on: ${{ matrix.os }}
+    # sccache: compile-level cache that survives the per-release Cargo.lock
+    # version bump (which invalidates rust-cache's exact key every time).
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
     strategy:
       fail-fast: false
       matrix:
@@ -90,6 +95,8 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+      - name: Run sccache
+        uses: mozilla/sccache-action@v0.0.9
 
       - name: Install protobuf (Linux)
         if: runner.os == 'Linux'
@@ -311,6 +318,11 @@ jobs:
       # plain install recompiles it from source (~10 min) every release. Pin the
       # version and cache the compiled binary; bump this to upgrade the CLI.
       TAURI_CLI_VERSION: "2.11.3"
+      # sccache: compile-level cache that survives the per-release Cargo.lock
+      # version bump. Covers both the sidecar build and the tauri (hub-gui)
+      # build below.
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@v6
 
@@ -355,6 +367,9 @@ jobs:
             mur-hub-gui/src-tauri -> target
           key: hub-macos-${{ hashFiles('Cargo.lock', 'mur-hub-gui/src-tauri/Cargo.lock') }}
           restore-keys: hub-macos-
+
+      - name: Run sccache
+        uses: mozilla/sccache-action@v0.0.9
 
       - name: Install build tools
         run: HOMEBREW_NO_AUTO_UPDATE=1 brew install protobuf
