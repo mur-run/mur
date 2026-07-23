@@ -44,6 +44,16 @@ content:
     two sequential passes. Each axis stays under 400 words and is reported
     under its own heading — never merged, never cross-ranked.
 
+    ## Requesting a review — when and how
+
+    - Mandatory: after each delegated task, after completing a major feature,
+      and before merging. Valuable: when stuck, before a refactor, after a
+      gnarly bug fix. Review early, review often.
+    - Fresh-context reviewer: brief with the pinned diff range (base/head
+      SHAs), a short description of what was built, and the spec source —
+      never your session history. The reviewer judges the work product, not
+      your thought process.
+
     ## Output contract (per axis)
 
     1. Strengths first — accurate praise builds trust in the criticism.
