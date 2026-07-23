@@ -1065,6 +1065,48 @@ fn is_index_dirty(home: &std::path::Path) -> bool {
     false
 }
 
+/// Dev-discipline builtin names (spec 2026-07-23). Installation never
+/// overwrites a same-named skill the user authored themselves.
+const NEW_DEV_SKILL_NAMES: &[&str] = &[
+    "mur-dev",
+    "mur-grilling",
+    "mur-brainstorm",
+    "mur-domain-modeling",
+    "mur-writing-plans",
+    "mur-tickets",
+    "mur-executing-plans",
+    "mur-delegate-dev",
+    "mur-worktree",
+    "mur-tdd",
+    "mur-debugging",
+    "mur-code-review",
+    "mur-receiving-review",
+    "mur-verification",
+    "mur-finishing-branch",
+    "mur-merge-conflicts",
+    "mur-skill-authoring",
+];
+
+/// Publishers whose on-disk copies we own and may update in place.
+const MUR_OFFICIAL_PUBLISHERS: &[&str] = &["human:mur-official", "human:mur"];
+
+/// Never-shadow (spec 2026-07-23 §6): true when `name` is a dev-discipline
+/// builtin AND `dir/skill.yaml` exists but was not published by MUR.
+/// ponytail: publisher-based check; origin_hash edit detection if users
+/// report clobbered local edits.
+fn dev_skill_shadowed_by_user(dir: &std::path::Path, name: &str) -> bool {
+    if !NEW_DEV_SKILL_NAMES.contains(&name) {
+        return false;
+    }
+    let Ok(existing) = std::fs::read_to_string(dir.join("skill.yaml")) else {
+        return false;
+    };
+    match mur_common::skill::parse_canonical(&existing) {
+        Ok(m) => !MUR_OFFICIAL_PUBLISHERS.contains(&m.publisher.as_str()),
+        Err(_) => true,
+    }
+}
+
 /// Install/update the MUR skill for AI tools that support skills.
 /// Writes canonical copies to ~/.mur/skills/ and symlinks from tool dirs.
 /// Returns true if any skill was written.
@@ -1184,6 +1226,59 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path, mur_root: &std::path::Pat
             "deep-research-verify",
             include_str!("../skills/deep_research_verify.yaml"),
         ),
+        ("mur-dev", include_str!("../skills/mur_dev.yaml")),
+        ("mur-grilling", include_str!("../skills/mur_grilling.yaml")),
+        (
+            "mur-brainstorm",
+            include_str!("../skills/mur_brainstorm.yaml"),
+        ),
+        (
+            "mur-domain-modeling",
+            include_str!("../skills/mur_domain_modeling.yaml"),
+        ),
+        (
+            "mur-writing-plans",
+            include_str!("../skills/mur_writing_plans.yaml"),
+        ),
+        ("mur-tickets", include_str!("../skills/mur_tickets.yaml")),
+        (
+            "mur-executing-plans",
+            include_str!("../skills/mur_executing_plans.yaml"),
+        ),
+        (
+            "mur-delegate-dev",
+            include_str!("../skills/mur_delegate_dev.yaml"),
+        ),
+        ("mur-worktree", include_str!("../skills/mur_worktree.yaml")),
+        ("mur-tdd", include_str!("../skills/mur_tdd.yaml")),
+        (
+            "mur-debugging",
+            include_str!("../skills/mur_debugging.yaml"),
+        ),
+        (
+            "mur-code-review",
+            include_str!("../skills/mur_code_review.yaml"),
+        ),
+        (
+            "mur-receiving-review",
+            include_str!("../skills/mur_receiving_review.yaml"),
+        ),
+        (
+            "mur-verification",
+            include_str!("../skills/mur_verification.yaml"),
+        ),
+        (
+            "mur-finishing-branch",
+            include_str!("../skills/mur_finishing_branch.yaml"),
+        ),
+        (
+            "mur-merge-conflicts",
+            include_str!("../skills/mur_merge_conflicts.yaml"),
+        ),
+        (
+            "mur-skill-authoring",
+            include_str!("../skills/mur_skill_authoring.yaml"),
+        ),
     ];
 
     let mur_skills_dir = mur_root.join("skills");
@@ -1207,8 +1302,17 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path, mur_root: &std::path::Pat
 
     // Write canonical YAML to ~/.mur/skills/<name>/skill.yaml
     // and render markdown to ~/.mur/skills/<name>/SKILL.md for AI tool compat.
+    let mut shadowed: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for (name, content) in skills {
         let dir = mur_skills_dir.join(name);
+        if dev_skill_shadowed_by_user(&dir, name) {
+            tracing::info!(
+                skill = name,
+                "skipping builtin install: user-authored skill of the same name exists (never-shadow)"
+            );
+            shadowed.insert(name);
+            continue;
+        }
         std::fs::create_dir_all(&dir)?;
         // Canonical YAML — consumed by M2 SkillLoader
         std::fs::write(dir.join("skill.yaml"), content)?;
@@ -1230,6 +1334,9 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path, mur_root: &std::path::Pat
         std::fs::create_dir_all(&tool_skills)?;
 
         for (name, _) in skills {
+            if shadowed.contains(name) {
+                continue;
+            }
             let canonical = mur_skills_dir.join(name);
             let link = tool_skills.join(name);
             symlink_skill_dir(&canonical, &link)?;
@@ -1705,6 +1812,83 @@ mod builtin_skill_tests {
                 include_str!("../skills/mur_native_tools.yaml"),
                 false,
             ),
+            ("mur-dev", include_str!("../skills/mur_dev.yaml"), false),
+            (
+                "mur-grilling",
+                include_str!("../skills/mur_grilling.yaml"),
+                true,
+            ),
+            (
+                "mur-brainstorm",
+                include_str!("../skills/mur_brainstorm.yaml"),
+                true,
+            ),
+            (
+                "mur-domain-modeling",
+                include_str!("../skills/mur_domain_modeling.yaml"),
+                true,
+            ),
+            (
+                "mur-writing-plans",
+                include_str!("../skills/mur_writing_plans.yaml"),
+                true,
+            ),
+            (
+                "mur-tickets",
+                include_str!("../skills/mur_tickets.yaml"),
+                true,
+            ),
+            (
+                "mur-executing-plans",
+                include_str!("../skills/mur_executing_plans.yaml"),
+                true,
+            ),
+            (
+                "mur-delegate-dev",
+                include_str!("../skills/mur_delegate_dev.yaml"),
+                true,
+            ),
+            (
+                "mur-worktree",
+                include_str!("../skills/mur_worktree.yaml"),
+                true,
+            ),
+            ("mur-tdd", include_str!("../skills/mur_tdd.yaml"), true),
+            (
+                "mur-debugging",
+                include_str!("../skills/mur_debugging.yaml"),
+                true,
+            ),
+            (
+                "mur-code-review",
+                include_str!("../skills/mur_code_review.yaml"),
+                true,
+            ),
+            (
+                "mur-receiving-review",
+                include_str!("../skills/mur_receiving_review.yaml"),
+                true,
+            ),
+            (
+                "mur-verification",
+                include_str!("../skills/mur_verification.yaml"),
+                true,
+            ),
+            (
+                "mur-finishing-branch",
+                include_str!("../skills/mur_finishing_branch.yaml"),
+                true,
+            ),
+            (
+                "mur-merge-conflicts",
+                include_str!("../skills/mur_merge_conflicts.yaml"),
+                true,
+            ),
+            (
+                "mur-skill-authoring",
+                include_str!("../skills/mur_skill_authoring.yaml"),
+                true,
+            ),
         ];
         use mur_common::skill::manifest::Visibility;
         for (name, yaml, on_demand) in cases {
@@ -1735,6 +1919,44 @@ mod builtin_skill_tests {
                 body_lines <= 150,
                 "{name}: body {body_lines} lines (budget 150)"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod dev_skill_trigger_tests {
+    /// Every dev-discipline keyword trigger must be a valid regex — the
+    /// runtime trigger matcher compiles them with `regex::Regex::new`.
+    #[test]
+    fn dev_skill_keyword_triggers_compile() {
+        let yamls: &[&str] = &[
+            include_str!("../skills/mur_dev.yaml"),
+            include_str!("../skills/mur_grilling.yaml"),
+            include_str!("../skills/mur_brainstorm.yaml"),
+            include_str!("../skills/mur_domain_modeling.yaml"),
+            include_str!("../skills/mur_writing_plans.yaml"),
+            include_str!("../skills/mur_tickets.yaml"),
+            include_str!("../skills/mur_executing_plans.yaml"),
+            include_str!("../skills/mur_delegate_dev.yaml"),
+            include_str!("../skills/mur_worktree.yaml"),
+            include_str!("../skills/mur_tdd.yaml"),
+            include_str!("../skills/mur_debugging.yaml"),
+            include_str!("../skills/mur_code_review.yaml"),
+            include_str!("../skills/mur_receiving_review.yaml"),
+            include_str!("../skills/mur_verification.yaml"),
+            include_str!("../skills/mur_finishing_branch.yaml"),
+            include_str!("../skills/mur_merge_conflicts.yaml"),
+            include_str!("../skills/mur_skill_authoring.yaml"),
+        ];
+        for y in yamls {
+            let m = mur_common::skill::parse_canonical(y).expect("parse");
+            for t in &m.triggers {
+                if let Some(p) = &t.pattern {
+                    regex::Regex::new(p).unwrap_or_else(|e| {
+                        panic!("{}: trigger regex fails to compile: {e}", m.name)
+                    });
+                }
+            }
         }
     }
 }
@@ -1817,5 +2039,62 @@ mod deep_research_skill_tests {
                 .any(|l| l.trim() == "RESEARCH_COMPLETE" || l.trim() == "`RESEARCH_COMPLETE`"),
             "router skill must instruct emitting RESEARCH_COMPLETE alone on its own line"
         );
+    }
+}
+
+#[cfg(test)]
+mod never_shadow_tests {
+    /// A user-authored skill occupying a dev-discipline name must survive
+    /// `ensure_mur_skill` untouched (spec 2026-07-23 §6 never-shadow).
+    #[test]
+    fn user_skill_with_dev_name_is_not_overwritten() {
+        let home = tempfile::tempdir().unwrap();
+        let mur_root = home.path().join(".mur");
+        let dir = mur_root.join("skills").join("mur-tdd");
+        std::fs::create_dir_all(&dir).unwrap();
+        let user_yaml = "name: mur-tdd\nversion: 0.0.1\npublisher: human:alice\n\
+                         description: my own tdd notes\ncategory: workflow\n\
+                         content:\n  abstract: mine\n  context: keep me\n";
+        std::fs::write(dir.join("skill.yaml"), user_yaml).unwrap();
+
+        super::ensure_mur_skill(home.path(), &mur_root).unwrap();
+
+        let after = std::fs::read_to_string(dir.join("skill.yaml")).unwrap();
+        assert_eq!(
+            after, user_yaml,
+            "user-authored skill must not be clobbered"
+        );
+    }
+
+    /// Unparseable existing YAML is treated as user-authored (fail-safe skip).
+    #[test]
+    fn unparseable_existing_dev_skill_is_skipped() {
+        let home = tempfile::tempdir().unwrap();
+        let mur_root = home.path().join(".mur");
+        let dir = mur_root.join("skills").join("mur-tdd");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("skill.yaml"), ": not yaml {{{{").unwrap();
+
+        super::ensure_mur_skill(home.path(), &mur_root).unwrap();
+
+        let after = std::fs::read_to_string(dir.join("skill.yaml")).unwrap();
+        assert_eq!(after, ": not yaml {{{{");
+    }
+
+    #[test]
+    fn shadow_predicate_publisher_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("skill.yaml");
+        // Foreign publisher → shadowed (skip).
+        std::fs::write(&f, "name: mur-tdd\nversion: 0.0.1\npublisher: human:alice\ndescription: d\ncategory: workflow\ncontent:\n  abstract: a\n  context: c\n").unwrap();
+        assert!(super::dev_skill_shadowed_by_user(dir.path(), "mur-tdd"));
+        // MUR publisher → not shadowed (update as usual).
+        std::fs::write(&f, "name: mur-tdd\nversion: 0.0.1\npublisher: human:mur-official\ndescription: d\ncategory: workflow\ncontent:\n  abstract: a\n  context: c\n").unwrap();
+        assert!(!super::dev_skill_shadowed_by_user(dir.path(), "mur-tdd"));
+        // Non-dev names never shadow (existing builtin semantics unchanged).
+        assert!(!super::dev_skill_shadowed_by_user(dir.path(), "mur-run"));
+        // No file on disk → nothing to shadow.
+        std::fs::remove_file(&f).unwrap();
+        assert!(!super::dev_skill_shadowed_by_user(dir.path(), "mur-tdd"));
     }
 }

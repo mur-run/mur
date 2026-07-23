@@ -1587,6 +1587,22 @@ timeout_secs: 60
 /// Configuration for the daemon-side sleep cycle (idle background learning).
 ///
 /// Skill injection configuration (M2 — runtime injection).
+///
+/// Whether the `mur-dev` discipline hub appears in the session-start learning
+/// index on the AI-tool (CLI hook) surface. Runtime injection for MUR agents
+/// is never affected by this setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DevDisciplineIndex {
+    /// Suppress the hub when a superpowers plugin install is detected (default).
+    #[default]
+    Auto,
+    /// Always list the hub, even when superpowers is installed.
+    Always,
+    /// Never list the hub on the CLI surface.
+    Never,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SkillsConfig {
@@ -1613,6 +1629,10 @@ pub struct SkillsConfig {
     /// Defaults to `true`.
     #[serde(default = "default_auto_upgrade")]
     pub auto_upgrade: bool,
+
+    /// See [`DevDisciplineIndex`]. Key: `skills.dev_discipline_index`.
+    #[serde(default)]
+    pub dev_discipline_index: DevDisciplineIndex,
 }
 
 fn default_require_human_curation() -> bool {
@@ -1633,6 +1653,7 @@ impl Default for SkillsConfig {
             require_human_curation_before_stable: default_require_human_curation(),
             lifecycle: SkillLifecycleConfig::default(),
             auto_upgrade: default_auto_upgrade(),
+            dev_discipline_index: DevDisciplineIndex::default(),
         }
     }
 }
@@ -2187,6 +2208,19 @@ mod skills_config_tests {
     fn load_or_default_missing_file_returns_default() {
         let cfg = Config::load_or_default(std::path::Path::new("/nonexistent/config.yaml"));
         assert_eq!(cfg.skills.max_skills_in_prompt, 5);
+    }
+
+    #[test]
+    fn dev_discipline_index_defaults_auto_and_parses() {
+        use crate::config::DevDisciplineIndex;
+        let cfg: Config = serde_yaml_ng::from_str("").unwrap_or_default();
+        assert_eq!(cfg.skills.dev_discipline_index, DevDisciplineIndex::Auto);
+        let cfg: Config =
+            serde_yaml_ng::from_str("skills:\n  dev_discipline_index: never\n").unwrap();
+        assert_eq!(cfg.skills.dev_discipline_index, DevDisciplineIndex::Never);
+        let cfg: Config =
+            serde_yaml_ng::from_str("skills:\n  dev_discipline_index: always\n").unwrap();
+        assert_eq!(cfg.skills.dev_discipline_index, DevDisciplineIndex::Always);
     }
 }
 

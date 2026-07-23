@@ -1,0 +1,35 @@
+name: mur-executing-plans
+version: 1.0.0
+publisher: human:mur-official
+description: 'Execute a written plan in-context, task by task, stopping on blockers. Default when no MUR delegation exists.'
+category: workflow
+visibility: on_demand
+content:
+  abstract: |
+    Read the plan critically and raise concerns first; isolate via
+    mur-worktree; execute tasks exactly as written, tick checkboxes in the
+    plan file, run each task's verifications, stop and ask on any blocker;
+    finish with mur-finishing-branch.
+  context: |
+    # Executing plans — in-context mode
+
+    1. Read the whole plan. Review critically; raise concerns with the user
+       BEFORE starting, not mid-way.
+    2. Isolate first: `mur-worktree`. Never implement on main/master without
+       explicit consent.
+    3. Per task, in order: follow the steps exactly as written → run the
+       task's stated verifications → tick the `- [ ]` checkboxes in the plan
+       file itself.
+       *Why: the plan file is the durable ledger; it survives context
+       compaction, your recollection does not.*
+    4. STOP immediately and ask when: blocked, the plan has a critical gap, an
+       instruction is unclear, or a verification fails twice. Never guess,
+       never force through, never silently deviate.
+    5. The user updated the plan mid-run → re-read it before continuing.
+    6. All tasks done → `mur-finishing-branch`.
+tags:
+- execution
+triggers:
+- type: keyword
+  pattern: 'execute (the )?plan|run the plan|follow the plan|執行計畫|照計畫'
+- type: manual

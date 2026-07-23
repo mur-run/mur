@@ -1,0 +1,76 @@
+name: mur-tdd
+version: 1.0.0
+publisher: human:mur-official
+description: 'Red-green-refactor with pre-agreed seams. Use before writing any implementation code or fixing any bug.'
+category: workflow
+visibility: on_demand
+content:
+  abstract: |
+    NO production code without a failing test first — watch it fail, minimal
+    code to green, refactor only on green. Agree test seams with the user
+    first, work vertical slices, mock only true boundaries, never test mock
+    behavior.
+  context: |
+    # TDD — the iron law
+
+    ```
+    NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
+    ```
+
+    Violating the letter of the rule is violating the rule. Wrote code before
+    its test? Delete it and start over. Delete means delete: not commented
+    out, not kept as reference, not "adapted".
+
+    ## Seams first
+
+    Before writing any test, name the public seams you will test at and
+    confirm them with the user. Test ONLY at agreed seams — through public
+    interfaces, as a caller would. Wanting to test past the interface means
+    the interface is the wrong shape.
+
+    ## The loop (one vertical slice at a time)
+
+    1. RED: one minimal test for ONE behavior, named for the behavior. Run
+       it. WATCH it fail, for the expected reason (feature missing, not a
+       typo). Passes immediately? You are testing existing behavior — fix the
+       test.
+    2. GREEN: the simplest code that passes. YAGNI: no options, no hooks, no
+       speculative parameters. Run it. Watch it pass with the WHOLE suite
+       green and output pristine (no new warnings).
+    3. REFACTOR only on green: duplication, names. No new behavior.
+
+    Repeat test by test. Never write all tests first: batched tests verify
+    imagined behavior; each cycle must respond to what the last one taught.
+
+    ## Anti-patterns (auto-reject)
+
+    - Implementation-coupled test: mocks internal collaborators, touches
+      private methods, verifies through a side channel (queries the DB
+      instead of the interface). Tell: breaks on refactor without behavior
+      change.
+    - Tautological test: the assertion recomputes the expected value the way
+      the code does — it passes by construction. Expected values come from an
+      independent source (known-good literal, worked example, spec).
+    - Mocking what you own: mock ONLY true boundaries (external APIs, clock,
+      randomness). Never your own classes. Mock setup bigger than the test is
+      a smell.
+    - Test-only methods on production types → move them to test utilities.
+
+    ## Bug fixes
+
+    Failing reproduction test FIRST, always. No repro test = the bug is not
+    fixed, it is hidden.
+
+    | Excuse | Reality |
+    |---|---|
+    | "Too simple to test" | Simple code breaks; the test costs two minutes. |
+    | "I'll add tests after" | Tests-after pass immediately and prove nothing. |
+    | "It's just a refactor" | Refactors change behavior more often than you think. |
+    | "Deadline pressure" | Debugging untested code is slower than TDD. |
+tags:
+- testing
+- tdd
+triggers:
+- type: keyword
+  pattern: 'tdd|test.?first|red.?green|failing test|先寫測試|測試驅動'
+- type: manual
