@@ -1,0 +1,56 @@
+name: mur-verification
+version: 1.0.0
+publisher: human:mur-official
+description: 'Evidence before completion claims. Use before saying done, fixed, or passing, or trusting a delegate report.'
+category: workflow
+visibility: on_demand
+content:
+  abstract: |
+    No completion claims without fresh verification evidence in the same
+    message: identify the proving command, run it, read the output, then
+    claim with evidence attached. Delegate and fleet reports are claims —
+    verify the diff, never the self-report.
+  context: |
+    # Verification — evidence or it didn't happen
+
+    ```
+    NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE
+    ```
+
+    If the proving command did not run in THIS message, you cannot claim it
+    passes.
+
+    ## The gate
+
+    1. IDENTIFY the command that proves the claim.
+    2. RUN it, fresh and in full.
+    3. READ the whole output: exit code, failure count, warnings.
+    4. VERIFY the output actually supports the claim.
+    5. Only then claim — WITH the evidence shown.
+
+    Skipping any step is lying, not verifying.
+
+    ## Claim → required evidence
+
+    | Claim | Evidence |
+    |---|---|
+    | Tests pass | Fresh full run, 0 failures — not a previous run |
+    | Build works | Build exit code 0 — a green linter proves nothing |
+    | Bug fixed | The ORIGINAL symptom re-tested and gone |
+    | Regression test works | Red-green proven: revert fix → test FAILS → restore → passes |
+    | Delegate/agent finished | The VCS diff or channel evidence — NEVER the agent's own report |
+    | Requirements met | Line-by-line checklist against the spec |
+
+    A fleet member emitting its done_when marker or replying DONE is a claim,
+    not evidence. Check the diff.
+
+    ## Red flags
+
+    "should work", "probably", "seems to", any satisfaction ("Done!",
+    "Perfect!") before the evidence, trusting a sub-report, "just this once".
+tags:
+- verification
+triggers:
+- type: keyword
+  pattern: 'verify|evidence|double.?check|really (done|fixed|works)|驗證|確認(完成|修好)|真的(好|修好)了'
+- type: manual

@@ -201,6 +201,28 @@ mur sync                                      # write learned patterns into each
 mur notes search "how we handle auth errors"  # query your accumulated memory
 ```
 
+### Dev-discipline skills (built-in)
+
+MUR ships a curated engineering-discipline pack — internalized from the
+MIT-licensed [obra/superpowers](https://github.com/obra/superpowers) and
+[mattpocock/skills](https://github.com/mattpocock/skills) (see
+`docs/ATTRIBUTIONS.md`), merged and adapted to MUR's runtime (no sub-agents
+required; delegation-aware). One hub routes; sixteen on-demand leaves carry
+the method:
+
+`mur-dev` (hub) · `mur-grilling` · `mur-brainstorm` · `mur-domain-modeling` ·
+`mur-writing-plans` · `mur-tickets` · `mur-executing-plans` ·
+`mur-delegate-dev` · `mur-worktree` · `mur-tdd` · `mur-debugging` ·
+`mur-code-review` · `mur-receiving-review` · `mur-verification` ·
+`mur-finishing-branch` · `mur-merge-conflicts` · `mur-skill-authoring`
+
+- Zero token cost until used: only the hub appears in the session-start
+  learning index; leaves load on demand (`mur skill show mur-tdd`).
+- Never-shadow: with the superpowers plugin installed, the hub hides itself
+  on the CLI surface (`skills.dev_discipline_index: auto|always|never` in
+  `~/.mur/config.yaml`); a user-authored skill with the same name is never
+  overwritten.
+
 ---
 
 ## ✨ What can a MUR agent do?

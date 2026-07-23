@@ -1,0 +1,70 @@
+name: mur-delegate-dev
+version: 1.0.0
+publisher: human:mur-official
+description: 'Execute a plan by delegating tasks to MUR agents with briefs, a status protocol, reviews, and a ledger.'
+category: workflow
+visibility: on_demand
+content:
+  abstract: |
+    When a MUR delegation surface exists, a router farms plan tasks to fresh
+    delegates: curated brief files (paths, never pasted content),
+    DONE/NEEDS_CONTEXT/BLOCKED status protocol, two-stage review per task, one
+    fix pass after the final review, ledger on disk.
+  context: |
+    # Delegate development — MUR's subagent-driven mode
+
+    ## Precondition (observable)
+
+    A delegation surface is available: `mur agent list` shows a running agent,
+    you are in a murmur session, or parallel_jobs / workflow delegate is
+    wired. None available → use `mur-executing-plans` instead.
+
+    ## Roles
+
+    - Router (you): coordination only. Never implements, never pastes history.
+    - Delegate: fresh context per task; receives a brief FILE path plus a
+      report contract.
+
+    ## Per task
+
+    1. Extract the task into a brief file: the task text, cross-task
+       Interfaces, ambiguity resolutions, and "write your report to <path>".
+    2. Dispatch with file paths over A2A, never inline content.
+       *Why: pasted context bloats every hop and diverges from the file of
+       record.*
+    3. The delegate replies with a status line:
+       DONE / DONE_WITH_CONCERNS / NEEDS_CONTEXT: <what> / BLOCKED: <why>.
+       Handling: CONCERNS → read the report, judge; NEEDS_CONTEXT → answer in
+       the brief, re-dispatch; BLOCKED → resolve or escalate to the user.
+       Never re-send an unchanged brief to a stuck delegate.
+    4. Two-stage review before the next task: spec compliance, then code
+       quality (`mur-code-review` rubric; a second delegate when available,
+       a self-review pass otherwise). Critical/Important findings are fixed
+       now; Minor go to the ledger.
+    5. Append to the ledger file (progress.md next to the plan):
+       "Task N: complete (commits X..Y, review clean)".
+
+    ## Finish
+
+    Final whole-branch review → collect ALL findings → ONE fix pass with the
+    complete list.
+    *Why: per-finding fix dispatches cost more than all tasks combined.*
+
+    ## Hard rules
+
+    - After compaction, trust the ledger and git log over memory; NEVER
+      re-dispatch a task the ledger marks complete.
+    - Verify delegate claims per `mur-verification`: check the diff, not the
+      reply.
+    - Never pre-judge findings in a reviewer brief ("don't flag X" = rigging
+      the review).
+    - Model tiering via the model registry (`mur model role`): cheap tier for
+      transcription-grade tasks (the plan contains the code), capable tier
+      for reviews and architecture.
+tags:
+- execution
+- delegation
+triggers:
+- type: keyword
+  pattern: 'delegate (the )?(plan|tasks|work)|sdd|subagent|委派|派工'
+- type: manual

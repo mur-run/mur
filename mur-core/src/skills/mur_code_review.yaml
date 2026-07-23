@@ -1,0 +1,63 @@
+name: mur-code-review
+version: 1.0.0
+publisher: human:mur-official
+description: 'Two-axis diff review: Standards (repo rules + Fowler smells) and Spec faithfulness, with explicit verdicts.'
+category: workflow
+visibility: on_demand
+content:
+  abstract: |
+    Pin the diff range first. Review two independent axes — Standards
+    (repo-documented rules plus the Fowler smell baseline as judgement calls)
+    and Spec (faithfulness to the originating spec) — never merged, 400 words
+    max each, strengths first, explicit verdict.
+  context: |
+    # Code review — two axes, one verdict each
+
+    ## Setup
+
+    - Pin the fixed point (ask if unspecified). Diff = git diff
+      <fixed>...HEAD (three-dot, merge-base) plus git log <fixed>..HEAD
+      --oneline. Validate the ref resolves and the diff is non-empty before
+      reviewing anything.
+    - Find the spec source: issue refs in commits → a user-provided path → a
+      spec under docs/ matching the branch → ask. No spec → the Spec axis
+      reports "no spec available", visibly, and is skipped.
+    - The reviewer is read-only: never mutate tree, index, or HEAD.
+
+    ## Axis 1 — Standards
+
+    Repo-documented standards (CONTRIBUTING, style docs) PLUS the Fowler
+    smell baseline as NAMED judgement-call heuristics: Mysterious Name,
+    Duplicated Code, Feature Envy, Data Clumps, Primitive Obsession, Repeated
+    Switches, Shotgun Surgery, Divergent Change, Speculative Generality,
+    Message Chains, Middle Man, Refused Bequest. The repo overrides the
+    baseline; skip anything tooling already enforces.
+
+    ## Axis 2 — Spec
+
+    Missing or partial requirements, scope creep, implemented-but-wrong.
+    Quote the spec line for every finding.
+
+    ## Execution
+
+    Two delegate turns when a MUR delegation surface is available; otherwise
+    two sequential passes. Each axis stays under 400 words and is reported
+    under its own heading — never merged, never cross-ranked.
+
+    ## Output contract (per axis)
+
+    1. Strengths first — accurate praise builds trust in the criticism.
+    2. Findings: Critical (bugs, security, data loss) / Important
+       (architecture, missing features, test gaps) / Minor (style, docs) —
+       each with file:line, what, why, how.
+    3. Verdict: Ready to merge — Yes / No / With fixes, plus one sentence.
+
+    Calibration: not everything is Critical; plan deviations get flagged for
+    intent confirmation; plan bugs are plan bugs. Never pre-judge findings
+    when briefing a reviewer.
+tags:
+- review
+triggers:
+- type: keyword
+  pattern: 'code review|review (this|the|my) (diff|branch|pr|code)|審查|幫我 review'
+- type: manual

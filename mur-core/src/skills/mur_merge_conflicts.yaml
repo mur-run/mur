@@ -1,0 +1,34 @@
+name: mur-merge-conflicts
+version: 1.0.0
+publisher: human:mur-official
+description: 'Resolve an in-progress merge or rebase hunk by hunk from primary sources. Never abort, never invent.'
+category: workflow
+visibility: on_demand
+content:
+  abstract: |
+    For each conflicting hunk, find why both sides changed (commits, PRs,
+    tickets), preserve both intents where possible, pick the merge-goal side
+    when incompatible and note the trade-off. Never invent new behavior,
+    never abort. Run checks, then finish.
+  context: |
+    # Merge conflicts — resolve by intent
+
+    1. See the state: `git status`, the conflicting files, and both sides'
+       history around them.
+    2. Per hunk, find PRIMARY sources for both sides' intent: commit
+       messages, PRs, linked tickets.
+       *Why: the hunk shows WHAT changed; only the sources say WHY.*
+    3. Resolve: preserve both intents where possible. Incompatible → pick the
+       side matching the merge's stated goal and note the trade-off in the
+       commit message. NEVER invent behavior neither side had. NEVER
+       `--abort` — resolve.
+    4. Run the project's checks: typecheck → tests → format. Fix what the
+       merge broke.
+    5. Finish: stage and commit; if rebasing, continue until every commit is
+       replayed.
+tags:
+- git
+triggers:
+- type: keyword
+  pattern: 'merge conflict|rebase conflict|conflict(ed|ing) (file|hunk)|衝突|解衝突'
+- type: manual

@@ -140,6 +140,62 @@ fn should_trigger_index(tool_input: &serde_json::Value) -> bool {
         .any(|trigger| command_lower.contains(trigger))
 }
 
+// ── Dev-discipline hub suppression (spec 2026-07-23) ──────────────────────────
+
+/// Skill name of the dev-discipline hub.
+pub(crate) const MUR_DEV_HUB_NAME: &str = "mur-dev";
+
+/// Directory-name marker identifying a superpowers plugin install.
+const SUPERPOWERS_MARKER: &str = "superpowers";
+
+/// True if a Claude-Code superpowers plugin install exists under
+/// `<user_home>/.claude/plugins/{cache,repos,marketplaces}` (dir whose name
+/// contains "superpowers", checked one and two levels deep).
+fn superpowers_plugin_present(user_home: &std::path::Path) -> bool {
+    let has_marker = |p: &std::path::Path| {
+        p.file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s.to_ascii_lowercase().contains(SUPERPOWERS_MARKER))
+    };
+    for sub in ["plugins/cache", "plugins/repos", "plugins/marketplaces"] {
+        let base = user_home.join(".claude").join(sub);
+        let Ok(level1) = std::fs::read_dir(&base) else {
+            continue;
+        };
+        for entry in level1.flatten() {
+            let p = entry.path();
+            if has_marker(&p) {
+                return true;
+            }
+            if p.is_dir()
+                && let Ok(level2) = std::fs::read_dir(&p)
+            {
+                for e2 in level2.flatten() {
+                    if has_marker(&e2.path()) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Whether the `mur-dev` hub must be dropped from the CLI learning index.
+/// Never affects runtime (agent) injection — this is only called on the
+/// session-start hook path.
+fn dev_hub_suppressed(
+    idx_cfg: mur_common::config::DevDisciplineIndex,
+    user_home: &std::path::Path,
+) -> bool {
+    use mur_common::config::DevDisciplineIndex as D;
+    match idx_cfg {
+        D::Always => false,
+        D::Never => true,
+        D::Auto => superpowers_plugin_present(user_home),
+    }
+}
+
 fn spawn_background_index() {
     let mur_bin = std::env::current_exe()
         .ok()
@@ -380,9 +436,21 @@ pub(crate) async fn cmd_hook_session_start(tool: &str) -> Result<()> {
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
 
-    let index = crate::inject::index::build_from_skills(&candidates, project_label.as_deref());
+    let mut index = crate::inject::index::build_from_skills(&candidates, project_label.as_deref());
     if let Err(e) = crate::inject::index::save(&index) {
         tracing::warn!("capability index save failed (non-fatal): {e}");
+    }
+
+    // Drop the mur-dev hub from the CLI index when superpowers is present (or
+    // config forces it). Applies only to printed output — the saved index above
+    // keeps every entry, and runtime (agent) injection is unaffected.
+    let idx_cfg = crate::store::config::load_config()
+        .map(|c| c.skills.dev_discipline_index)
+        .unwrap_or_default();
+    if let Some(user_home) = dirs::home_dir()
+        && dev_hub_suppressed(idx_cfg, &user_home)
+    {
+        index.entries.retain(|e| e.name != MUR_DEV_HUB_NAME);
     }
 
     let output = crate::inject::index::format_l0(&index, crate::inject::index::L0_BUDGET_CHARS);
@@ -525,6 +593,28 @@ mod tests {
     fn extract_query_missing_returns_none() {
         let raw = json!({"tool_name": "Edit"});
         assert!(extract_query(&raw).is_none());
+    }
+
+    #[test]
+    fn superpowers_detection_and_suppression_matrix() {
+        use mur_common::config::DevDisciplineIndex as D;
+        let home = tempfile::tempdir().unwrap();
+        // No plugin dirs at all → not present.
+        assert!(!super::superpowers_plugin_present(home.path()));
+        assert!(!super::dev_hub_suppressed(D::Auto, home.path()));
+        // Marker dir two levels under plugins/cache → present.
+        let plug = home
+            .path()
+            .join(".claude/plugins/cache/claude-plugins-official/superpowers");
+        std::fs::create_dir_all(&plug).unwrap();
+        assert!(super::superpowers_plugin_present(home.path()));
+        assert!(super::dev_hub_suppressed(D::Auto, home.path()));
+        // Config overrides beat detection.
+        assert!(!super::dev_hub_suppressed(D::Always, home.path()));
+        assert!(super::dev_hub_suppressed(D::Never, home.path()));
+        // `Never` suppresses even without a plugin present.
+        let empty = tempfile::tempdir().unwrap();
+        assert!(super::dev_hub_suppressed(D::Never, empty.path()));
     }
 }
 

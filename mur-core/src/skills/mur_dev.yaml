@@ -1,0 +1,66 @@
+name: mur-dev
+version: 1.0.0
+publisher: human:mur-official
+description: 'Dev-discipline hub: routes coding tasks to the right mur-* skill before any code is written.'
+category: meta
+content:
+  abstract: |
+    Before any dev action, check this routing map: if a discipline skill below
+    might apply, load it with `mur skill show <name>` FIRST and follow it.
+    Building something new: mur-brainstorm. Fixing anything: mur-debugging.
+    Announce which skill you are using.
+  context: |
+    # Dev discipline — the routing rule
+
+    If there is even a small chance one of these skills applies, load it BEFORE
+    acting — before clarifying questions, before exploration, before code.
+    Announce it: "Using mur-tdd to ...". User instructions always beat skills.
+
+    ## Route by situation
+
+    - Build or change something → `mur-brainstorm` (design gate) →
+      `mur-writing-plans` → execute (`mur-delegate-dev` when MUR delegation is
+      available, else `mur-executing-plans`) → `mur-finishing-branch`.
+    - Any bug, test failure, unexpected behavior → `mur-debugging`. Never fix
+      before root cause.
+    - Writing or changing code → `mur-tdd`. Failing test first, always.
+    - About to claim done/fixed/passing → `mur-verification`. Evidence first.
+    - Reviewing a diff → `mur-code-review`. Feedback arrived → `mur-receiving-review`.
+    - Sharpening an idea or decision → `mur-grilling`. Vocabulary drifting →
+      `mur-domain-modeling`.
+    - Slicing a plan into dispatchable pieces → `mur-tickets`.
+    - Merge/rebase conflict → `mur-merge-conflicts`.
+    - Starting feature work in a shared checkout → `mur-worktree` first.
+    - Writing or editing a MUR skill → `mur-skill-authoring`.
+    - Parallel fan-out topology questions belong to `parallel-decompose` /
+      `parallel-topology-guide`; `mur-delegate-dev` executes ONE plan via
+      delegation. Different jobs.
+
+    ## Execution backends (no sub-agents here)
+
+    MUR agents cannot spawn sub-agents. Where a methodology says "dispatch a
+    subagent": run it in-context sequentially by default; upgrade to MUR
+    delegation (fleet member, parallel_jobs, workflow delegate) only when one is
+    observably available (e.g. `mur agent list` shows a running agent). Track
+    progress with checkboxes in the plan/ticket file on disk, never in memory.
+    *Why: files survive context compaction; recollection does not.*
+
+    ## Red flags — you are rationalizing
+
+    | Thought | Reality |
+    |---|---|
+    | "Just a simple question/task" | Simple tasks are where assumptions bite. Check the map. |
+    | "I need context first" | The skill tells you HOW to gather context. Load it first. |
+    | "The skill is overkill" | Overkill is cheaper than rework. Use it. |
+    | "I remember what it says" | Skills evolve. Load the current version. |
+    | "I'll just do this one thing first" | Check BEFORE doing anything. |
+    | "No time for process right now" | Discipline is faster than thrashing. Especially now. |
+tags:
+- dev
+- discipline
+- hub
+triggers:
+- type: session_start
+- type: keyword
+  pattern: 'implement|build|fix|bug|refactor|feature|test|review|debug|實作|開發|修復|除錯|重構|測試|審查'
+- type: manual

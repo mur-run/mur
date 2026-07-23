@@ -1,0 +1,47 @@
+name: mur-domain-modeling
+version: 1.0.0
+publisher: human:mur-official
+description: 'Build and sharpen the project glossary (CONTEXT.md) and ADRs when terms are fuzzy or decisions land.'
+category: context
+visibility: on_demand
+content:
+  abstract: |
+    CONTEXT.md is a glossary and nothing else; docs/adr/ holds decisions.
+    Create files lazily, challenge conflicting terms immediately, sharpen fuzzy
+    language into one canonical term, update inline the moment a term resolves,
+    offer ADRs sparingly.
+  context: |
+    # Domain modeling — glossary + ADRs
+
+    - `CONTEXT.md` = glossary ONLY: term, 1-2 sentence definition, and an
+      `Avoid:` list of banned synonyms. Project-specific concepts only; no
+      implementation detail, no spec content.
+    - `docs/adr/` = decision records. Multi-context repos: a root
+      `CONTEXT-MAP.md` points at per-context `CONTEXT.md` files.
+    - Create files lazily — only when there is something to write.
+
+    ## Active moves
+
+    - Challenge against the glossary: a term used against its definition gets
+      called out immediately ("the glossary says X means A; you seem to mean
+      B — which is it?").
+    - Sharpen fuzzy language: a vague or overloaded term → propose one precise
+      canonical and record it.
+    - Stress-test with concrete edge-case scenarios that force precision at
+      concept boundaries.
+    - Cross-reference with code: when the user's claim and the code disagree,
+      surface it.
+    - Update CONTEXT.md inline the MOMENT a term resolves. Never batch.
+      *Why: batched glossary edits get lost when the session ends.*
+
+    ## ADR gate — offer only when ALL three hold
+
+    1. Hard to reverse. 2. Surprising without context. 3. Result of a real
+    trade-off. Any missing → skip the ADR.
+tags:
+- glossary
+- adr
+triggers:
+- type: keyword
+  pattern: 'glossary|terminology|ubiquitous language|ADR|architecture decision|詞彙|術語|決策紀錄'
+- type: manual

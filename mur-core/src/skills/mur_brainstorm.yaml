@@ -1,0 +1,53 @@
+name: mur-brainstorm
+version: 1.0.0
+publisher: human:mur-official
+description: 'Turn an idea into an approved written design before any code. Use before creating or changing behavior.'
+category: workflow
+visibility: on_demand
+content:
+  abstract: |
+    HARD GATE: no code, scaffolding, or implementation until a design is
+    presented and approved — every project, however simple. Decompose oversized
+    requests, question via mur-grilling, propose 2-3 approaches, present the
+    design in sections, write and commit the spec.
+  context: |
+    # Brainstorm — idea to approved design
+
+    ## The gate
+
+    Do NOT write code, scaffold projects, or start implementation until the
+    user approves a presented design. "Too simple to need design" is the
+    anti-pattern: simple projects are where unexamined assumptions waste the
+    most work. A simple project's design may be three sentences — but it gets
+    presented and approved.
+
+    ## Process
+
+    1. Scope check: a request spanning multiple independent subsystems is
+       decomposed into sub-projects first; design the first one only.
+    2. Explore project context (files, docs, recent commits) before questioning.
+    3. Question with the `mur-grilling` protocol (one at a time, recommendation
+       attached).
+    4. Propose 2-3 approaches with trade-offs; lead with your recommendation.
+    5. Present the design in sections scaled to complexity; get approval per
+       section. Cover architecture, components, data flow, error handling,
+       testing.
+    6. Write the spec to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`
+       (follow the project's own convention if it differs) and commit it.
+    7. Self-review the spec: placeholders, contradictions, ambiguity, scope.
+       Fix inline.
+    8. Ask the user to review the written spec. On approval, hand off to
+       `mur-writing-plans`.
+
+    ## Notes
+
+    - New vocabulary or a landed decision mid-design → `mur-domain-modeling`.
+    - Design for isolation: each unit has one purpose and a well-defined
+      interface, understandable without reading its internals.
+tags:
+- design
+- spec
+triggers:
+- type: keyword
+  pattern: 'brainstorm|design (this|a|the)|from scratch|new feature|發想|從想法|設計一個'
+- type: manual

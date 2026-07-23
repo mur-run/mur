@@ -1,0 +1,46 @@
+name: mur-worktree
+version: 1.0.0
+publisher: human:mur-official
+description: 'Isolate feature work in a git worktree before starting. Use when beginning work in a shared checkout.'
+category: workflow
+visibility: on_demand
+content:
+  abstract: |
+    Detect existing isolation first; prefer the harness's native worktree
+    tool; otherwise git worktree add under .worktrees/ after a git
+    check-ignore gate. Auto-detect setup, and require a green test baseline
+    before any work starts.
+  context: |
+    # Worktree — isolate before you build
+
+    Failure this prevents: two agents (or you and the user) mutating one
+    checkout.
+
+    1. Detect existing isolation: `git rev-parse --git-dir` differs from
+       `git rev-parse --git-common-dir` (and no superproject) → already in a
+       worktree; skip creation.
+    2. Prefer the harness's native worktree tool when one exists (never fight
+       the harness). Otherwise:
+    3. `git worktree add`, directory priority: explicit instruction >
+       existing `.worktrees/` > existing `worktrees/` > create `.worktrees/`.
+       GATE: `git check-ignore .worktrees` must pass BEFORE creating;
+       otherwise add it to `.gitignore` and commit that first.
+       *Why: an unignored worktree dir turns every status/diff into noise and
+       can get committed.*
+       (`.worktrees/` is MUR's fleet-track convention; the reconcilers own it.)
+    4. Setup by detection: Cargo.toml → cargo check; package.json → install
+       deps; pyproject/requirements → venv + install; go.mod → go build ./...
+    5. Baseline: run the test suite. It must be GREEN before work starts;
+       red → report and ask.
+       *Why: on a red baseline, new bugs and pre-existing bugs are
+       indistinguishable.*
+
+    Red flags: nested worktrees; skipping the ignore gate; building on a red
+    baseline. Paired cleanup: `mur-finishing-branch`.
+tags:
+- git
+- isolation
+triggers:
+- type: keyword
+  pattern: 'worktree|isolated (checkout|workspace)|隔離(開發|環境)'
+- type: manual

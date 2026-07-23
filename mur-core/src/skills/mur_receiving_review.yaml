@@ -1,0 +1,48 @@
+name: mur-receiving-review
+version: 1.0.0
+publisher: human:mur-official
+description: 'Process inbound review feedback with verification, not performative agreement. Use when feedback arrives.'
+category: workflow
+visibility: on_demand
+content:
+  abstract: |
+    Read everything, restate to confirm understanding, verify each claim
+    against the codebase, evaluate fit, then respond — technical
+    acknowledgment or reasoned pushback. Unclear items stop everything.
+    Implement one item at a time, testing each.
+  context: |
+    # Receiving review — evaluate, don't obey
+
+    Pattern: READ all → UNDERSTAND (restate or ask) → VERIFY against the
+    codebase → EVALUATE for THIS codebase → RESPOND → IMPLEMENT one item at a
+    time, testing each.
+
+    ## Forbidden responses
+
+    "You're absolutely right!", "Great point!", gratitude, any performative
+    agreement. Actions over words: state the fix ("Fixed — <what changed>")
+    or show the code.
+    *Why: sycophancy destroys the reviewer's trust in every future reply.*
+
+    ## Rules
+
+    - ANY unclear item → stop entirely. Do not implement even the understood
+      subset; items may be related, and partial understanding produces wrong
+      code.
+    - External reviewers = suggestions to evaluate, not orders: is it correct
+      for this codebase? does it break anything? why is the current code the
+      way it is?
+    - Human partner = trusted; implement after understanding — still no
+      sycophancy.
+    - YAGNI check on "implement X properly": grep actual usage first; unused →
+      propose removal instead.
+    - Push back with technical reasoning when feedback is wrong here (breaks
+      behavior, missing context, conflicts with the architecture). Pushed back
+      wrongly? Factual correction, no apology spiral.
+    - Order: clarify everything → blocking items → simple → complex.
+tags:
+- review
+triggers:
+- type: keyword
+  pattern: 'review feedback|reviewer (said|says|asked)|address (the )?(review|feedback|comments)|回覆審查|處理意見'
+- type: manual
