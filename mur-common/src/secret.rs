@@ -146,15 +146,33 @@ impl SecretRef {
 
     /// Synchronous resolve for callers outside an async context (CLI
     /// factories, config loaders). Inside a multi-thread tokio runtime it
-    /// uses block_in_place; otherwise it spins a current-thread runtime.
+    /// uses block_in_place; inside a current-thread runtime (where
+    /// block_in_place panics) it hops to a fresh thread; otherwise it spins
+    /// a current-thread runtime.
     pub fn resolve_blocking(&self) -> Result<SecretString, SecretError> {
-        match tokio::runtime::Handle::try_current() {
-            Ok(h) => tokio::task::block_in_place(|| h.block_on(self.resolve())),
-            Err(_) => tokio::runtime::Builder::new_current_thread()
+        fn fresh_runtime_resolve(r: &SecretRef) -> Result<SecretString, SecretError> {
+            tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .map_err(|e| SecretError::KeychainBackend(format!("runtime: {e}")))?
-                .block_on(self.resolve()),
+                .block_on(r.resolve())
+        }
+        match tokio::runtime::Handle::try_current() {
+            Ok(h) if h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| h.block_on(self.resolve()))
+            }
+            // Current-thread runtime (e.g. #[tokio::test]): block_in_place
+            // would panic — resolve on a fresh OS thread instead.
+            Ok(_) => std::thread::scope(|s| {
+                s.spawn(|| fresh_runtime_resolve(self))
+                    .join()
+                    .unwrap_or_else(|_| {
+                        Err(SecretError::KeychainBackend(
+                            "resolver thread panicked".into(),
+                        ))
+                    })
+            }),
+            Err(_) => fresh_runtime_resolve(self),
         }
     }
 
@@ -734,5 +752,17 @@ mod resolve_blocking_tests {
         assert_eq!(r.resolve_to_string_blocking().as_deref(), Some("s3cret"));
         unsafe { std::env::remove_var("MUR_TEST_SECRET_BLOCKING") };
         assert!(r.resolve_blocking().is_err());
+    }
+
+    /// `#[tokio::test]` runs on a current-thread runtime, where
+    /// `block_in_place` panics. `resolve_blocking` must detect the flavor and
+    /// hop to a fresh thread instead (the crash behind the flaky rollup
+    /// tests on machines whose config carries secret refs).
+    #[tokio::test]
+    async fn resolve_blocking_inside_current_thread_runtime_does_not_panic() {
+        unsafe { std::env::set_var("MUR_TEST_SECRET_CT_RT", "s3cret") };
+        let r: SecretRef = "env:MUR_TEST_SECRET_CT_RT".parse().unwrap();
+        assert_eq!(r.resolve_to_string_blocking().as_deref(), Some("s3cret"));
+        unsafe { std::env::remove_var("MUR_TEST_SECRET_CT_RT") };
     }
 }

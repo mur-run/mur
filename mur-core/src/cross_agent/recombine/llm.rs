@@ -34,9 +34,9 @@ pub async fn llm_recombine(
     b: &SkillManifest,
     output_name: &str,
 ) -> Result<SkillManifest, LlmRecombineError> {
-    // Resolve model
-    let registry = ModelRegistry::load_from(&ModelRegistry::default_path().unwrap_or_default())
-        .unwrap_or_default();
+    // Resolve model — from the caller's mur root, so tests and alternate
+    // roots never leak in the user's real ~/.mur/models.yaml.
+    let registry = ModelRegistry::load_from(&home.join("models.yaml")).unwrap_or_default();
     let model = resolve_maintenance_model(&registry, None).ok_or(LlmRecombineError::NoModel)?;
 
     // Build prompt
