@@ -1,0 +1,52 @@
+name: mur-writing-plans
+version: 1.0.0
+publisher: human:mur-official
+description: 'Write an implementation plan a zero-context engineer can execute mechanically. Use after a spec exists.'
+category: workflow
+visibility: on_demand
+content:
+  abstract: |
+    Plans assume a skilled engineer with zero codebase knowledge and poor test
+    taste: exact paths, complete code in steps, exact commands with expected
+    output, Interfaces blocks between tasks, Global Constraints copied
+    verbatim, no placeholders anywhere.
+  context: |
+    # Writing plans — spec to mechanical execution
+
+    Audience model: skilled developer, zero project context, questionable
+    taste. If they could do it wrong, the plan must make wrong impossible.
+
+    ## Structure
+
+    - Header: Goal (one sentence), Architecture (2-3 sentences), Tech stack,
+      and **Global Constraints** — spec-wide requirements copied verbatim, one
+      line each; every task implicitly includes them. Add a banner naming the
+      execution skill (`mur-delegate-dev` or `mur-executing-plans`).
+    - File-structure section BEFORE tasks: every file created/modified, one
+      responsibility each. Decomposition is locked in here.
+    - A task is the smallest unit with its own test cycle, worth a fresh review
+      gate. Steps are 2-5 minutes each, checkbox syntax: write failing test /
+      watch it fail / minimal code / watch it pass / commit.
+    - Per-task **Interfaces** block: Consumes (from earlier tasks) and Produces
+      (what later tasks rely on) with exact names and signatures. An
+      implementer sees only their own task; this block is how neighboring
+      types stay consistent. When a plan becomes a MUR workflow DAG, this
+      block is the depends_on output threading.
+
+    ## No placeholders — these are plan failures
+
+    "TBD", "add appropriate error handling", "write tests for the above",
+    "similar to Task N" (repeat the code instead), steps that describe without
+    showing, references to types no task defines.
+
+    ## Self-review before handoff
+
+    Spec-coverage walk (every requirement points at a task), placeholder scan,
+    cross-task type-consistency check (clearLayers() in Task 3 vs
+    clearFullLayers() in Task 7 is a bug).
+tags:
+- planning
+triggers:
+- type: keyword
+  pattern: 'implementation plan|write (the|a|an) plan|實作計畫|寫計畫'
+- type: manual

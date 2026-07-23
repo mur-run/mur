@@ -1236,6 +1236,49 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path, mur_root: &std::path::Pat
             "mur-domain-modeling",
             include_str!("../skills/mur_domain_modeling.yaml"),
         ),
+        (
+            "mur-writing-plans",
+            include_str!("../skills/mur_writing_plans.yaml"),
+        ),
+        ("mur-tickets", include_str!("../skills/mur_tickets.yaml")),
+        (
+            "mur-executing-plans",
+            include_str!("../skills/mur_executing_plans.yaml"),
+        ),
+        (
+            "mur-delegate-dev",
+            include_str!("../skills/mur_delegate_dev.yaml"),
+        ),
+        ("mur-worktree", include_str!("../skills/mur_worktree.yaml")),
+        ("mur-tdd", include_str!("../skills/mur_tdd.yaml")),
+        (
+            "mur-debugging",
+            include_str!("../skills/mur_debugging.yaml"),
+        ),
+        (
+            "mur-code-review",
+            include_str!("../skills/mur_code_review.yaml"),
+        ),
+        (
+            "mur-receiving-review",
+            include_str!("../skills/mur_receiving_review.yaml"),
+        ),
+        (
+            "mur-verification",
+            include_str!("../skills/mur_verification.yaml"),
+        ),
+        (
+            "mur-finishing-branch",
+            include_str!("../skills/mur_finishing_branch.yaml"),
+        ),
+        (
+            "mur-merge-conflicts",
+            include_str!("../skills/mur_merge_conflicts.yaml"),
+        ),
+        (
+            "mur-skill-authoring",
+            include_str!("../skills/mur_skill_authoring.yaml"),
+        ),
     ];
 
     let mur_skills_dir = mur_root.join("skills");
@@ -1785,6 +1828,67 @@ mod builtin_skill_tests {
                 include_str!("../skills/mur_domain_modeling.yaml"),
                 true,
             ),
+            (
+                "mur-writing-plans",
+                include_str!("../skills/mur_writing_plans.yaml"),
+                true,
+            ),
+            (
+                "mur-tickets",
+                include_str!("../skills/mur_tickets.yaml"),
+                true,
+            ),
+            (
+                "mur-executing-plans",
+                include_str!("../skills/mur_executing_plans.yaml"),
+                true,
+            ),
+            (
+                "mur-delegate-dev",
+                include_str!("../skills/mur_delegate_dev.yaml"),
+                true,
+            ),
+            (
+                "mur-worktree",
+                include_str!("../skills/mur_worktree.yaml"),
+                true,
+            ),
+            ("mur-tdd", include_str!("../skills/mur_tdd.yaml"), true),
+            (
+                "mur-debugging",
+                include_str!("../skills/mur_debugging.yaml"),
+                true,
+            ),
+            (
+                "mur-code-review",
+                include_str!("../skills/mur_code_review.yaml"),
+                true,
+            ),
+            (
+                "mur-receiving-review",
+                include_str!("../skills/mur_receiving_review.yaml"),
+                true,
+            ),
+            (
+                "mur-verification",
+                include_str!("../skills/mur_verification.yaml"),
+                true,
+            ),
+            (
+                "mur-finishing-branch",
+                include_str!("../skills/mur_finishing_branch.yaml"),
+                true,
+            ),
+            (
+                "mur-merge-conflicts",
+                include_str!("../skills/mur_merge_conflicts.yaml"),
+                true,
+            ),
+            (
+                "mur-skill-authoring",
+                include_str!("../skills/mur_skill_authoring.yaml"),
+                true,
+            ),
         ];
         use mur_common::skill::manifest::Visibility;
         for (name, yaml, on_demand) in cases {
@@ -1830,6 +1934,19 @@ mod dev_skill_trigger_tests {
             include_str!("../skills/mur_grilling.yaml"),
             include_str!("../skills/mur_brainstorm.yaml"),
             include_str!("../skills/mur_domain_modeling.yaml"),
+            include_str!("../skills/mur_writing_plans.yaml"),
+            include_str!("../skills/mur_tickets.yaml"),
+            include_str!("../skills/mur_executing_plans.yaml"),
+            include_str!("../skills/mur_delegate_dev.yaml"),
+            include_str!("../skills/mur_worktree.yaml"),
+            include_str!("../skills/mur_tdd.yaml"),
+            include_str!("../skills/mur_debugging.yaml"),
+            include_str!("../skills/mur_code_review.yaml"),
+            include_str!("../skills/mur_receiving_review.yaml"),
+            include_str!("../skills/mur_verification.yaml"),
+            include_str!("../skills/mur_finishing_branch.yaml"),
+            include_str!("../skills/mur_merge_conflicts.yaml"),
+            include_str!("../skills/mur_skill_authoring.yaml"),
         ];
         for y in yamls {
             let m = mur_common::skill::parse_canonical(y).expect("parse");
@@ -1943,7 +2060,10 @@ mod never_shadow_tests {
         super::ensure_mur_skill(home.path(), &mur_root).unwrap();
 
         let after = std::fs::read_to_string(dir.join("skill.yaml")).unwrap();
-        assert_eq!(after, user_yaml, "user-authored skill must not be clobbered");
+        assert_eq!(
+            after, user_yaml,
+            "user-authored skill must not be clobbered"
+        );
     }
 
     /// Unparseable existing YAML is treated as user-authored (fail-safe skip).

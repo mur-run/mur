@@ -1,0 +1,52 @@
+name: mur-tickets
+version: 1.0.0
+publisher: human:mur-official
+description: 'Slice a spec or plan into tracer-bullet tickets with blocking edges, each sized to one context window.'
+category: workflow
+visibility: on_demand
+content:
+  abstract: |
+    Vertical slices only: each ticket cuts a narrow complete path through
+    every layer, demoable alone, sized to a single fresh context window.
+    Declare blocking edges, work the frontier, use expand-contract for wide
+    refactors, quiz the user before publishing.
+  context: |
+    # Tickets — tracer bullets with edges
+
+    ## Slice rules
+
+    - Vertical, never horizontal: a narrow but COMPLETE path through every
+      layer (schema, logic, interface, tests), demoable on its own.
+    - Sized to ONE fresh context window.
+      *Why: each ticket is executed by a fresh agent session; oversized
+      tickets die mid-context.*
+    - Prefactoring first: make the change easy, then make the easy change.
+    - Every ticket declares its blocking edges. No blockers = the frontier =
+      startable now.
+
+    ## Wide-refactor exception — expand-contract
+
+    One mechanical change with codebase-wide blast radius: an expand ticket
+    (new form beside old) → migration-batch tickets (each blocked by expand,
+    CI green throughout) → a contract ticket (delete the old form; blocked by
+    every batch). Batches that cannot stay green alone share an integration
+    branch, all blocking one final integrate-and-verify ticket.
+
+    ## Publishing
+
+    - Quiz the user first: numbered list of Title / Blocked-by / What it
+      delivers; ask about granularity, edges, merge/split. Iterate to approval.
+    - Default backend: one file per ticket `docs/tickets/<slug>/NN-<slug>.md`
+      with `Status:` and `Blocked-by:` header lines. Repos that live on GitHub
+      issues: one issue each with native blocking links.
+    - Ticket body: end-to-end behavior from the user's perspective plus
+      acceptance checkboxes. No file paths, no code snippets (they go stale) —
+      except prototype-sourced snippets that encode a decision.
+    - MUR tie-in: ticket files are valid fleet job specs (spec-file dispatch).
+tags:
+- planning
+- tickets
+triggers:
+- type: keyword
+  pattern: 'ticket|vertical slice|split (the|this) (plan|spec)|切票|拆票|工單'
+- type: manual
