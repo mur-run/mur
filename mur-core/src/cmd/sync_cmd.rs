@@ -1065,6 +1065,48 @@ fn is_index_dirty(home: &std::path::Path) -> bool {
     false
 }
 
+/// Dev-discipline builtin names (spec 2026-07-23). Installation never
+/// overwrites a same-named skill the user authored themselves.
+const NEW_DEV_SKILL_NAMES: &[&str] = &[
+    "mur-dev",
+    "mur-grilling",
+    "mur-brainstorm",
+    "mur-domain-modeling",
+    "mur-writing-plans",
+    "mur-tickets",
+    "mur-executing-plans",
+    "mur-delegate-dev",
+    "mur-worktree",
+    "mur-tdd",
+    "mur-debugging",
+    "mur-code-review",
+    "mur-receiving-review",
+    "mur-verification",
+    "mur-finishing-branch",
+    "mur-merge-conflicts",
+    "mur-skill-authoring",
+];
+
+/// Publishers whose on-disk copies we own and may update in place.
+const MUR_OFFICIAL_PUBLISHERS: &[&str] = &["human:mur-official", "human:mur"];
+
+/// Never-shadow (spec 2026-07-23 §6): true when `name` is a dev-discipline
+/// builtin AND `dir/skill.yaml` exists but was not published by MUR.
+/// ponytail: publisher-based check; origin_hash edit detection if users
+/// report clobbered local edits.
+fn dev_skill_shadowed_by_user(dir: &std::path::Path, name: &str) -> bool {
+    if !NEW_DEV_SKILL_NAMES.contains(&name) {
+        return false;
+    }
+    let Ok(existing) = std::fs::read_to_string(dir.join("skill.yaml")) else {
+        return false;
+    };
+    match mur_common::skill::parse_canonical(&existing) {
+        Ok(m) => !MUR_OFFICIAL_PUBLISHERS.contains(&m.publisher.as_str()),
+        Err(_) => true,
+    }
+}
+
 /// Install/update the MUR skill for AI tools that support skills.
 /// Writes canonical copies to ~/.mur/skills/ and symlinks from tool dirs.
 /// Returns true if any skill was written.
@@ -1207,8 +1249,17 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path, mur_root: &std::path::Pat
 
     // Write canonical YAML to ~/.mur/skills/<name>/skill.yaml
     // and render markdown to ~/.mur/skills/<name>/SKILL.md for AI tool compat.
+    let mut shadowed: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for (name, content) in skills {
         let dir = mur_skills_dir.join(name);
+        if dev_skill_shadowed_by_user(&dir, name) {
+            tracing::info!(
+                skill = name,
+                "skipping builtin install: user-authored skill of the same name exists (never-shadow)"
+            );
+            shadowed.insert(name);
+            continue;
+        }
         std::fs::create_dir_all(&dir)?;
         // Canonical YAML — consumed by M2 SkillLoader
         std::fs::write(dir.join("skill.yaml"), content)?;
@@ -1230,6 +1281,9 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path, mur_root: &std::path::Pat
         std::fs::create_dir_all(&tool_skills)?;
 
         for (name, _) in skills {
+            if shadowed.contains(name) {
+                continue;
+            }
             let canonical = mur_skills_dir.join(name);
             let link = tool_skills.join(name);
             symlink_skill_dir(&canonical, &link)?;
@@ -1817,5 +1871,59 @@ mod deep_research_skill_tests {
                 .any(|l| l.trim() == "RESEARCH_COMPLETE" || l.trim() == "`RESEARCH_COMPLETE`"),
             "router skill must instruct emitting RESEARCH_COMPLETE alone on its own line"
         );
+    }
+}
+
+#[cfg(test)]
+mod never_shadow_tests {
+    /// A user-authored skill occupying a dev-discipline name must survive
+    /// `ensure_mur_skill` untouched (spec 2026-07-23 §6 never-shadow).
+    #[test]
+    fn user_skill_with_dev_name_is_not_overwritten() {
+        let home = tempfile::tempdir().unwrap();
+        let mur_root = home.path().join(".mur");
+        let dir = mur_root.join("skills").join("mur-tdd");
+        std::fs::create_dir_all(&dir).unwrap();
+        let user_yaml = "name: mur-tdd\nversion: 0.0.1\npublisher: human:alice\n\
+                         description: my own tdd notes\ncategory: workflow\n\
+                         content:\n  abstract: mine\n  context: keep me\n";
+        std::fs::write(dir.join("skill.yaml"), user_yaml).unwrap();
+
+        super::ensure_mur_skill(home.path(), &mur_root).unwrap();
+
+        let after = std::fs::read_to_string(dir.join("skill.yaml")).unwrap();
+        assert_eq!(after, user_yaml, "user-authored skill must not be clobbered");
+    }
+
+    /// Unparseable existing YAML is treated as user-authored (fail-safe skip).
+    #[test]
+    fn unparseable_existing_dev_skill_is_skipped() {
+        let home = tempfile::tempdir().unwrap();
+        let mur_root = home.path().join(".mur");
+        let dir = mur_root.join("skills").join("mur-tdd");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("skill.yaml"), ": not yaml {{{{").unwrap();
+
+        super::ensure_mur_skill(home.path(), &mur_root).unwrap();
+
+        let after = std::fs::read_to_string(dir.join("skill.yaml")).unwrap();
+        assert_eq!(after, ": not yaml {{{{");
+    }
+
+    #[test]
+    fn shadow_predicate_publisher_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("skill.yaml");
+        // Foreign publisher → shadowed (skip).
+        std::fs::write(&f, "name: mur-tdd\nversion: 0.0.1\npublisher: human:alice\ndescription: d\ncategory: workflow\ncontent:\n  abstract: a\n  context: c\n").unwrap();
+        assert!(super::dev_skill_shadowed_by_user(dir.path(), "mur-tdd"));
+        // MUR publisher → not shadowed (update as usual).
+        std::fs::write(&f, "name: mur-tdd\nversion: 0.0.1\npublisher: human:mur-official\ndescription: d\ncategory: workflow\ncontent:\n  abstract: a\n  context: c\n").unwrap();
+        assert!(!super::dev_skill_shadowed_by_user(dir.path(), "mur-tdd"));
+        // Non-dev names never shadow (existing builtin semantics unchanged).
+        assert!(!super::dev_skill_shadowed_by_user(dir.path(), "mur-run"));
+        // No file on disk → nothing to shadow.
+        std::fs::remove_file(&f).unwrap();
+        assert!(!super::dev_skill_shadowed_by_user(dir.path(), "mur-tdd"));
     }
 }
