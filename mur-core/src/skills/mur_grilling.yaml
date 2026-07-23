@@ -1,0 +1,42 @@
+name: mur-grilling
+version: 1.0.0
+publisher: human:mur-official
+description: 'Interview the user one question at a time, each with a recommended answer, until the plan is sharp.'
+category: workflow
+visibility: on_demand
+content:
+  abstract: |
+    Relentless interview protocol: one question per turn, ship a recommended
+    answer with each, look up facts yourself and ask only decisions, resolve
+    decision dependencies in order, stop when the user confirms shared
+    understanding.
+  context: |
+    # Grilling — sharpen thinking by interview
+
+    - ONE question at a time; wait for the answer.
+      *Why: multiple questions at once is bewildering, and the answers arrive
+      shallow.*
+    - Every question ships with your recommended answer, so the user can accept
+      it in a word or push back.
+    - Fact/decision split: anything discoverable from the environment
+      (filesystem, git, tools, docs) is a fact — look it up, never ask.
+      Decisions are always the user's.
+    - Walk the decision tree in dependency order: a question whose answer
+      depends on an unsettled one waits its turn.
+    - No question cap. The user steers with natural language ("wrap up",
+      "summarise what we have").
+    - Do not act until the user confirms shared understanding.
+
+    ## Surfaces
+
+    - murmur / agent runtime: present choices via `suggest_replies` structured
+      options `{text, description}`; never hand-number options.
+    - CLI or plain chat: one short message = the single question + your
+      recommendation.
+tags:
+- questioning
+- design
+triggers:
+- type: keyword
+  pattern: 'grill|stress.?test (my|this|the)|challenge my|烤問|質問|盤問|挑戰我'
+- type: manual

@@ -1227,6 +1227,15 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path, mur_root: &std::path::Pat
             include_str!("../skills/deep_research_verify.yaml"),
         ),
         ("mur-dev", include_str!("../skills/mur_dev.yaml")),
+        ("mur-grilling", include_str!("../skills/mur_grilling.yaml")),
+        (
+            "mur-brainstorm",
+            include_str!("../skills/mur_brainstorm.yaml"),
+        ),
+        (
+            "mur-domain-modeling",
+            include_str!("../skills/mur_domain_modeling.yaml"),
+        ),
     ];
 
     let mur_skills_dir = mur_root.join("skills");
@@ -1761,6 +1770,21 @@ mod builtin_skill_tests {
                 false,
             ),
             ("mur-dev", include_str!("../skills/mur_dev.yaml"), false),
+            (
+                "mur-grilling",
+                include_str!("../skills/mur_grilling.yaml"),
+                true,
+            ),
+            (
+                "mur-brainstorm",
+                include_str!("../skills/mur_brainstorm.yaml"),
+                true,
+            ),
+            (
+                "mur-domain-modeling",
+                include_str!("../skills/mur_domain_modeling.yaml"),
+                true,
+            ),
         ];
         use mur_common::skill::manifest::Visibility;
         for (name, yaml, on_demand) in cases {
@@ -1801,7 +1825,12 @@ mod dev_skill_trigger_tests {
     /// runtime trigger matcher compiles them with `regex::Regex::new`.
     #[test]
     fn dev_skill_keyword_triggers_compile() {
-        let yamls: &[&str] = &[include_str!("../skills/mur_dev.yaml")];
+        let yamls: &[&str] = &[
+            include_str!("../skills/mur_dev.yaml"),
+            include_str!("../skills/mur_grilling.yaml"),
+            include_str!("../skills/mur_brainstorm.yaml"),
+            include_str!("../skills/mur_domain_modeling.yaml"),
+        ];
         for y in yamls {
             let m = mur_common::skill::parse_canonical(y).expect("parse");
             for t in &m.triggers {
