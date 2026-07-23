@@ -1,0 +1,75 @@
+name: mur-skill-authoring
+version: 1.0.0
+publisher: human:mur-official
+description: 'Author or edit MUR skills that agents actually follow: trigger-only descriptions, budgets, matched forms.'
+category: meta
+visibility: on_demand
+content:
+  abstract: |
+    Skills are engineered against observed failures: descriptions carry
+    triggers only, form matches the failure mode, iron laws pair with
+    rationalization tables, leading words recruit priors, every line must
+    beat the no-guidance default, budgets force curation.
+  context: |
+    # Skill authoring — write skills agents follow
+
+    ## When to write one
+
+    A non-obvious, cross-project technique. NOT one-off fixes, NOT anything a
+    linter or hook can enforce (automate those instead), NOT project
+    conventions.
+
+    ## MUR budgets (test-enforced)
+
+    description 120 chars max; abstract 50 words max; body 150 lines max.
+    Over budget → split into a hub plus on-demand leaves
+    (`visibility: on_demand`).
+
+    ## Description = triggers ONLY
+
+    "Use when <symptoms/keywords>". NEVER summarize the workflow in the
+    description — agents execute the summary and skip the body (an observed,
+    tested regression). Cover symptoms, error text, synonyms. Bilingual
+    (English + zh-TW) keyword regexes are house style.
+
+    ## Match the form to the failure
+
+    - Rule skipped under pressure → prohibition + iron law + rationalization
+      table (real excuses verbatim, each with its counter) + red-flag list.
+    - Wrong-shaped output → positive recipe or contract.
+      *Why: prohibitions measurably backfire on output shaping.*
+    - Omitted element → a REQUIRED structural slot in a template.
+    - Conditional behavior → a condition on an OBSERVABLE predicate ("when
+      `mur agent list` shows a running agent"), never "unless it matters".
+    No nuance clauses; no exemption clauses — they reopen negotiation.
+
+    ## Compliance toolkit
+
+    Iron law in a code fence; "violating the letter is violating the
+    spirit"; delete-means-delete loophole enumeration; an announce-usage
+    requirement.
+
+    ## Language
+
+    Leading words — compact, prior-recruiting concepts (tight, red, tracer
+    bullet, frontier) used consistently. Prune no-ops sentence by sentence:
+    "be thorough" changes nothing; the fix is a stronger word, not more
+    prose.
+
+    ## Test before ship
+
+    Fresh-context micro-test with a NO-GUIDANCE control (if the control does
+    not fail, do not write the guidance); read every flagged match manually;
+    high variance across runs = the wording is not binding.
+
+    ## MUR tie-in
+
+    Harvested proposals (`mur session out`) are curated to this standard;
+    LLM-provenance skills stay gated until a human curates them.
+tags:
+- meta
+- authoring
+triggers:
+- type: keyword
+  pattern: '(write|create|edit|improve) (a |the |this )?skill|skill (yaml|manifest)|寫技能|建技能|技能'
+- type: manual

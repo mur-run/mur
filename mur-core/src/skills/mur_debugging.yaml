@@ -1,0 +1,83 @@
+name: mur-debugging
+version: 1.0.0
+publisher: human:mur-official
+description: 'Feedback-loop-first debugging. Use on any bug, failure, or regression before proposing a fix.'
+category: workflow
+visibility: on_demand
+content:
+  abstract: |
+    No fixes without root cause. Phase 1 builds a tight red-capable feedback
+    loop — that IS the skill; then minimise, rank 3-5 falsifiable hypotheses,
+    probe one variable at a time, regression-test before fixing, stop after
+    three failed fixes.
+  context: |
+    # Debugging — loop first, hypotheses second
+
+    ```
+    NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST
+    ```
+
+    Especially under time pressure: systematic is faster than thrashing.
+
+    ## Phase 1 — build a feedback loop (this IS the skill)
+
+    A tight signal that goes red on THIS bug: fast (seconds), sharp (asserts
+    the exact symptom, not "didn't crash"), deterministic (pin time, seed
+    RNG, isolate fs/network). Tactic ladder — first that fits:
+    failing test at a reachable seam → curl/HTTP script → CLI run diffed
+    against known-good output → replay a captured trace → throwaway harness
+    (minimal subset, one call) → git bisect run → differential run (old vs
+    new, diff outputs) → a script driving the human, as last resort.
+    Flaky bug? Raise the reproduction rate first (loop 100x, stress, inject
+    sleeps). Cannot build a loop → STOP: say so, list attempts, ask for an
+    artifact (log dump, trace, recording) or access. Do NOT hypothesize
+    without a loop.
+
+    ## Phase 2 — confirm and minimise
+
+    Run red; confirm it is the USER'S exact failure mode (wrong bug = wrong
+    fix). Cut inputs/config/callers one at a time, re-running each cut, until
+    every remaining element is load-bearing. Read the full error text; check
+    recent diffs; in multi-layer systems instrument every boundary once to
+    find the failing layer.
+
+    ## Phase 3 — hypotheses
+
+    Write 3-5 ranked, falsifiable hypotheses BEFORE testing any: "if X is the
+    cause, changing Y makes it disappear." No prediction = a vibe — discard
+    it. Show the ranking to the user when present.
+
+    ## Phase 4 — probe
+
+    One variable at a time. Prefer a debugger/REPL over logs; logs only at
+    hypothesis-distinguishing boundaries, each tagged [DEBUG-<id>] so cleanup
+    is one grep. Never "log everything and grep".
+
+    ## Phase 5 — lock it down, then fix
+
+    Regression test BEFORE the fix, at a correct seam. No correct seam
+    exists? That is itself a finding — the architecture prevents locking this
+    bug down; flag it. Then: watch the test fail → fix → watch it pass →
+    re-run the Phase-1 loop on the original scenario.
+
+    ## Phase 6 — clean up
+
+    Original repro dead; regression test in; every [DEBUG- tag removed
+    (grep); the winning hypothesis stated in the commit message.
+
+    ## 3-strike rule
+
+    Three failed fix attempts → STOP. The problem is architectural; question
+    the pattern with the user before any fourth attempt.
+
+    | Excuse | Reality |
+    |---|---|
+    | "Just try changing X" | Guessing burns hours; the loop takes minutes. |
+    | "It's obviously X" | Obvious causes are wrong half the time. Prove it. |
+    | "No time for process" | 30 systematic minutes beat 3 thrashing hours. |
+tags:
+- debugging
+triggers:
+- type: keyword
+  pattern: 'debug|diagnose|root cause|why (is|does|did) (it|this|the).{0,30}(fail|break|crash)|除錯|診斷|壞掉'
+- type: manual

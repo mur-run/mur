@@ -1,0 +1,49 @@
+name: mur-finishing-branch
+version: 1.0.0
+publisher: human:mur-official
+description: 'Finish a development branch: test gate, then exactly four options — merge, PR, keep, or discard.'
+category: workflow
+visibility: on_demand
+content:
+  abstract: |
+    The full test suite gates everything. Then detect the environment,
+    determine the base branch, and present exactly four options: merge
+    locally, push and PR, keep as-is, discard. Merge re-runs tests on the
+    merged result; cleanup only touches .worktrees/-owned trees.
+  context: |
+    # Finishing a branch
+
+    1. Run the FULL test suite. Failures block the menu entirely — no
+       merge/PR talk until green.
+    2. Detect the environment: normal checkout / linked worktree / detached
+       HEAD (`git rev-parse --git-dir` vs `--git-common-dir`).
+    3. Determine the base branch (`git merge-base HEAD main`, or ask).
+    4. Present EXACTLY these options, no editorializing:
+       1. Merge back into <base> locally
+       2. Push and create a PR
+       3. Keep the branch as-is (user handles it)
+       4. Discard this work
+       (Detached HEAD: drop option 1.)
+
+    ## Option mechanics
+
+    - Merge: checkout base → pull → merge → RE-RUN the suite on the merged
+      result → only then clean up the worktree → delete the branch. That
+      order: the branch cannot be deleted while its worktree exists.
+    - PR: push -u. NEVER remove the worktree — it is needed to iterate on
+      review feedback.
+    - Discard: require the user to type "discard"; list the branch, commit
+      count, and worktree that will be destroyed.
+
+    ## Worktree cleanup provenance
+
+    Only remove worktrees under `.worktrees/` or `worktrees/`. cd OUT of the
+    worktree before `git worktree remove`; run `git worktree prune` after.
+    Never force-push unless explicitly asked.
+tags:
+- git
+- finishing
+triggers:
+- type: keyword
+  pattern: 'finish(ing)? (the |this )?(branch|work)|wrap up|merge (this|the) branch|收尾|合併分支|開 PR'
+- type: manual
