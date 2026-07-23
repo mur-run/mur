@@ -141,7 +141,69 @@ pub(crate) fn cmd_doctor() -> Result<()> {
         );
     }
 
+    // Check embedding provider (semantic search silently degrades without it)
+    let emb = &config.embedding;
+    match embedding_probe_addr(emb) {
+        Some(addr) => {
+            let reachable = addr
+                .parse()
+                .ok()
+                .and_then(|a| {
+                    std::net::TcpStream::connect_timeout(&a, std::time::Duration::from_secs(2)).ok()
+                })
+                .is_some();
+            if reachable {
+                println!(
+                    "✅ Embedding: {} ({}) reachable at {addr}",
+                    emb.provider, emb.model
+                );
+            } else {
+                println!(
+                    "❌ Embedding: {} ({}) NOT reachable at {addr} — semantic search is degraded.",
+                    emb.provider, emb.model
+                );
+                if emb.provider == "ollama" {
+                    println!(
+                        "  ⚠ Install/start Ollama and run `ollama pull {}`.",
+                        emb.model
+                    );
+                } else {
+                    println!(
+                        "  ⚠ Start the {} server, then run `mur internals reindex`.",
+                        emb.provider
+                    );
+                }
+            }
+        }
+        None => println!(
+            "✅ Embedding: {} ({}) — remote provider, not probed",
+            emb.provider, emb.model
+        ),
+    }
+
     Ok(())
+}
+
+/// host:port to TCP-probe for a LOCAL embedding provider; None for remote
+/// providers (cloud APIs are auth-gated and shouldn't be probed blindly).
+fn embedding_probe_addr(emb: &mur_common::config::EmbeddingConfig) -> Option<String> {
+    let url = match emb.provider.as_str() {
+        "ollama" => emb.ollama_endpoint.clone(),
+        _ => emb.openai_url.clone()?,
+    };
+    let rest = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))?;
+    let hostport = rest.split('/').next()?;
+    let (host, port) = match hostport.rsplit_once(':') {
+        Some((h, p)) => (h, p.parse::<u16>().ok()?),
+        None => (hostport, if url.starts_with("https") { 443 } else { 80 }),
+    };
+    if host == "localhost" || host == "127.0.0.1" {
+        Some(format!("127.0.0.1:{port}"))
+    } else {
+        None
+    }
 }
 
 pub(crate) fn cmd_exchange_import(file: &str) -> Result<()> {
@@ -206,4 +268,28 @@ pub(crate) fn cmd_logout() -> Result<()> {
     crate::auth::clear_tokens()?;
     println!("Logged out. Auth tokens removed.");
     Ok(())
+}
+
+#[cfg(test)]
+mod doctor_tests {
+    use super::embedding_probe_addr;
+    use mur_common::config::EmbeddingConfig;
+
+    #[test]
+    fn probe_addr_local_remote_and_default_port() {
+        let mut e = EmbeddingConfig::default(); // ollama @ localhost:11434
+        assert_eq!(embedding_probe_addr(&e).as_deref(), Some("127.0.0.1:11434"));
+
+        e.provider = "omlx".into();
+        e.openai_url = Some("http://127.0.0.1:8000/v1".into());
+        assert_eq!(embedding_probe_addr(&e).as_deref(), Some("127.0.0.1:8000"));
+
+        // Remote providers are never probed.
+        e.openai_url = Some("https://api.openai.com/v1".into());
+        assert_eq!(embedding_probe_addr(&e), None);
+
+        // openai-style provider without a URL → nothing to probe.
+        e.openai_url = None;
+        assert_eq!(embedding_probe_addr(&e), None);
+    }
 }
