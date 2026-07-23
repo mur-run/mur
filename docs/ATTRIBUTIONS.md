@@ -19,7 +19,7 @@ notices are reproduced here as required by the MIT license.
 | mur-worktree | obra/superpowers `using-git-worktrees` |
 | mur-tdd | obra/superpowers `test-driven-development`, `testing-anti-patterns` + mattpocock/skills `tdd` |
 | mur-debugging | mattpocock/skills `diagnosing-bugs` + obra/superpowers `systematic-debugging` |
-| mur-code-review | mattpocock/skills `code-review` + obra/superpowers `code-reviewer` rubric |
+| mur-code-review | mattpocock/skills `code-review` + obra/superpowers `code-reviewer` rubric, `requesting-code-review` (cadence + fresh-context briefing) |
 | mur-receiving-review | obra/superpowers `receiving-code-review` |
 | mur-verification | obra/superpowers `verification-before-completion` |
 | mur-finishing-branch | obra/superpowers `finishing-a-development-branch` |
