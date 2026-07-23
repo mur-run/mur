@@ -299,7 +299,7 @@ jobs:
             mur-aarch64-apple-darwin.dmg
 
   hub-macos:
-    name: Build MuR Hub (macOS arm64)
+    name: Build MUR Hub (macOS arm64)
     needs: validate-version
     # macos-latest (not macos-14): the macos-14 image's current toolchain makes
     # ggml's CMake CPU detection fail and fall back to `-mcpu=native`, which its
