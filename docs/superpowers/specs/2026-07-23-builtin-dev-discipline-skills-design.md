@@ -276,6 +276,8 @@ Merged from: superpowers `using-git-worktrees`.
 - `ask-matt`, `setup-matt-pocock-skills` — router role absorbed by the hub; config-seam pattern noted for Phase 2.
 - `personal/*`, `in-progress/*`, `deprecated/*` — out of scope.
 
+**Post-spec roster drift (audited 2026-07-23):** upstream superpowers `requesting-code-review` was initially missed — its cadence + fresh-context-briefing content now lives in `mur-code-review`. mattpocock `implement`, `research`, `triage`, `codebase-design` were not evaluated in this spec's curation pass; they join the Phase 2 triage list below.
+
 **Phase 2 candidates:** `wayfinder` (decision-ticket maps; needs a tracker seam), `prototype` (LOGIC branch), `handoff`, `teach`, `improve-codebase-architecture`, an `engineering` capability bundle, a behavioral eval harness for skills.
 
 ## 9. Risks and mitigations

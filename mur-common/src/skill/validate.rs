@@ -170,6 +170,9 @@ fn mode_matches_category(cat: Category, mode: ContentMode) -> bool {
     matches!(
         (cat, mode),
         (Category::Workflow, ContentMode::Workflow)
+            // Dev-discipline builtins are workflow-category skills whose body
+            // is method prose (`context`), not executable steps.
+            | (Category::Workflow, ContentMode::Context)
             | (Category::Command, ContentMode::Command)
             | (Category::Context, ContentMode::Context)
             | (Category::Meta, ContentMode::Context)
@@ -199,6 +202,14 @@ content:
     #[test]
     fn valid_manifest_passes() {
         let m = parse_canonical(VALID).unwrap();
+        validate(&m).unwrap();
+    }
+
+    /// Workflow-category skills may carry a `context` body (dev-discipline
+    /// builtin convention: method prose, not executable steps).
+    #[test]
+    fn workflow_category_accepts_context_mode() {
+        let m = parse_canonical(&VALID.replace("category: context", "category: workflow")).unwrap();
         validate(&m).unwrap();
     }
 
@@ -236,7 +247,7 @@ name: demo
 version: 1.0.0
 publisher: human:test
 description: d
-category: workflow
+category: note
 content:
   abstract: hi
   context: oops
