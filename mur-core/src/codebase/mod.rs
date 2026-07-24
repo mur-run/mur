@@ -65,6 +65,12 @@ pub struct IndexMetadata {
     /// legacy metadata, which is therefore never auto-pruned.
     #[serde(default)]
     pub repo_root: String,
+    /// Vector width the index was built at. `None` on legacy metadata (built
+    /// before dims were recorded) — stamped on the next save without forcing
+    /// a rebuild. ponytail: legacy None can't detect an old-dims table; a
+    /// lance schema probe would close that, add it if users hit it.
+    #[serde(default)]
+    pub dimensions: Option<usize>,
     pub files: HashMap<String, FileMeta>,
     pub last_indexed: String,
 }
@@ -139,6 +145,12 @@ impl CodebaseIndex {
         serde_json::from_str(&data).ok()
     }
 
+    /// Vector width recorded at build time (`None` for legacy indexes). Used
+    /// by `mur project status` to flag stale-dims indexes (#757).
+    pub fn recorded_dimensions(&self) -> Option<usize> {
+        self.load_meta()?.dimensions
+    }
+
     fn save_meta(&self, meta: &IndexMetadata) -> Result<()> {
         let path = self.meta_path();
         if let Some(parent) = path.parent() {
@@ -192,7 +204,16 @@ impl CodebaseIndex {
         let path = self.lock_path();
         let _ = std::fs::remove_file(&path);
     }
+}
 
+/// Whether a recorded index width forces a full rebuild against the
+/// configured one (#757). Legacy metadata (`None`) never forces a rebuild —
+/// it is stamped with the current dims on the next save instead.
+fn dims_require_rebuild(recorded: Option<usize>, configured: usize) -> bool {
+    matches!(recorded, Some(d) if d != configured)
+}
+
+impl CodebaseIndex {
     /// Write progress for `mur project status` to read.
     pub fn write_progress(&self, progress: &IndexProgress) -> Result<()> {
         let path = self.progress_path();
@@ -239,7 +260,23 @@ impl CodebaseIndex {
     {
         let start = Instant::now();
 
-        let old_meta = if rebuild { None } else { self.load_meta() };
+        let mut old_meta = if rebuild { None } else { self.load_meta() };
+
+        // Auto-rebuild on embedding-dims change (#757): a recorded width that
+        // differs from the configured one means the lance table's vectors are
+        // the wrong size — append/reuse would fail (or worse, hang). Drop the
+        // stale table and start fresh; the index is always rebuildable.
+        if let Some(meta) = &old_meta
+            && dims_require_rebuild(meta.dimensions, embed_config.dimensions)
+        {
+            tracing::info!(
+                old = ?meta.dimensions,
+                new = embed_config.dimensions,
+                "embedding dimensions changed; rebuilding index"
+            );
+            let _ = std::fs::remove_dir_all(&self.lance_path);
+            old_meta = None;
+        }
 
         let files = scan_project(&self.project_path);
         let files_indexed = files.len();
@@ -301,7 +338,10 @@ impl CodebaseIndex {
 
         let chunks_created = all_chunks.len();
         if chunks_created == 0 {
-            self.save_meta(&IndexMetadata::default())?;
+            self.save_meta(&IndexMetadata {
+                dimensions: Some(embed_config.dimensions),
+                ..IndexMetadata::default()
+            })?;
             return Ok(IndexStats {
                 files_indexed,
                 chunks_created: 0,
@@ -496,6 +536,7 @@ impl CodebaseIndex {
             repo_root: scanner::main_repo_root(&self.project_path)
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
+            dimensions: Some(embed_config.dimensions),
             files: HashMap::new(),
             last_indexed: chrono::Utc::now().to_rfc3339(),
         };
@@ -942,5 +983,34 @@ mod git_hook_tests {
         // No .git/hooks dir → ensure_git_hook returns Ok(false).
         assert!(!ensure_git_hook(&base, true).unwrap());
         fs::remove_dir_all(&base).ok();
+    }
+}
+
+#[cfg(test)]
+mod dims_rebuild_tests {
+    use super::*;
+
+    #[test]
+    fn dims_mismatch_forces_rebuild_legacy_does_not() {
+        assert!(dims_require_rebuild(Some(2560), 1024));
+        assert!(!dims_require_rebuild(Some(1024), 1024));
+        // Legacy metadata without recorded dims: stamp, don't rebuild.
+        assert!(!dims_require_rebuild(None, 1024));
+    }
+
+    /// Legacy meta.json (no `dimensions` key) must parse to None.
+    #[test]
+    fn legacy_meta_json_parses_dimensions_none() {
+        let legacy = r#"{"project_path":"/p","files":{},"last_indexed":"2026-01-01T00:00:00Z"}"#;
+        let meta: IndexMetadata = serde_json::from_str(legacy).unwrap();
+        assert_eq!(meta.dimensions, None);
+        // And a stamped one round-trips.
+        let stamped = IndexMetadata {
+            dimensions: Some(1024),
+            ..IndexMetadata::default()
+        };
+        let json = serde_json::to_string(&stamped).unwrap();
+        let back: IndexMetadata = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.dimensions, Some(1024));
     }
 }
