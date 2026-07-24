@@ -51,6 +51,10 @@ pub struct ProjectStatusInfo {
     pub last_indexed: Option<String>,
     pub indexing_in_progress: bool,
     pub progress: Option<IndexProgressInfo>,
+    /// Set when the index was built at a different vector width than the
+    /// current config: (recorded, configured). Next `mur project index`
+    /// rebuilds it automatically (#757).
+    pub stale_dims: Option<(usize, usize)>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -182,7 +186,18 @@ pub fn do_project_status(path: Option<&str>) -> Result<ProjectStatusInfo> {
         last_indexed: None,
         indexing_in_progress: false,
         progress: None,
+        stale_dims: None,
     };
+
+    // Stale-dims flag (#757): index built at a different vector width than
+    // the current embedding config.
+    if has_db
+        && let Some(recorded) = index.recorded_dimensions()
+        && let Ok(cfg) = crate::store::config::load_config()
+        && recorded != cfg.embedding.dimensions
+    {
+        info.stale_dims = Some((recorded, cfg.embedding.dimensions));
+    }
 
     // Check lock for background indexing
     let lock_path = index.lock_path();
@@ -225,6 +240,7 @@ pub fn do_project_list() -> Result<Vec<ProjectStatusInfo>> {
                 last_indexed: idx.last_indexed,
                 indexing_in_progress: false,
                 progress: None,
+                stale_dims: None, // not computed for the list view
             })
         })
         .collect()
@@ -442,6 +458,11 @@ pub fn cmd_project_status(path: Option<String>) -> Result<()> {
     println!("  Indexed: {}", if info.indexed { "yes" } else { "no" });
     if let Some(chunks) = info.chunks {
         println!("  Chunks: {}", chunks);
+    }
+    if let Some((recorded, configured)) = info.stale_dims {
+        println!(
+            "  ⚠ Index built at {recorded} dims but config is {configured} — run `mur project index` to rebuild."
+        );
     }
 
     Ok(())
