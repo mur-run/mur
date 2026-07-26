@@ -600,7 +600,7 @@ function ModelResolutionStep({
   const [model, setModel] = useState(
     view.recommendation === "local"
       ? (view.hint?.local_capable ? view.hint.name : "llama3.2:3b")
-      : (view.hint?.name ?? "claude-sonnet-4-6")
+      : (view.hint?.name ?? "claude-sonnet-5")
   );
   const [secret, setSecret] = useState("");
 

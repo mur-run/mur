@@ -678,7 +678,7 @@ fn default_llm_provider() -> String {
     "anthropic".to_string()
 }
 fn default_llm_model() -> String {
-    "claude-opus-4-6".to_string()
+    "claude-opus-5".to_string()
 }
 fn default_max_patterns() -> usize {
     5
@@ -1554,10 +1554,10 @@ timeout_secs: 60
 
     #[test]
     fn deserializes_partial_fills_defaults() {
-        let yaml = "provider: anthropic\nmodel: claude-sonnet-4-6\n";
+        let yaml = "provider: anthropic\nmodel: claude-sonnet-5\n";
         let cfg: BackendConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(cfg.provider, "anthropic");
-        assert_eq!(cfg.model, "claude-sonnet-4-6");
+        assert_eq!(cfg.model, "claude-sonnet-5");
         assert_eq!(cfg.api_key_env, None);
         assert_eq!(cfg.timeout_secs, None);
     }
@@ -2037,7 +2037,7 @@ abstractive_model: qwen3:14b
         let yaml = "\
 backend:
   provider: anthropic
-  model: claude-sonnet-4-6
+  model: claude-sonnet-5
   api_key_env: ANTHROPIC_API_KEY
 rewriter_backend:
   provider: ollama
@@ -2085,7 +2085,7 @@ ollama_endpoint: http://192.168.1.10:11434
         let yaml = "\
 backend:
   provider: anthropic
-  model: claude-sonnet-4-6
+  model: claude-sonnet-5
   api_key_env: ANTHROPIC_API_KEY
 ";
         let cfg: AskConfig = serde_yaml::from_str(yaml).unwrap();

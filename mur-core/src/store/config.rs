@@ -45,8 +45,8 @@ pub fn save_config_at(path: &Path, config: &Config) -> Result<()> {
 # LLM Model Recommendations:
 #
 #   Anthropic (provider: anthropic):
-#     Best quality:  claude-opus-4-6               ($15/$75 per 1M tokens)
-#     Best value:    claude-sonnet-4-6             ($3/$15 per 1M tokens)
+#     Best quality:  claude-opus-5                 ($5/$25 per 1M tokens)
+#     Best value:    claude-sonnet-5               ($3/$15 per 1M tokens)
 #     Budget:        claude-haiku-4-5-20251001     ($0.80/$4 per 1M tokens)
 #
 #   OpenAI (provider: openai):
@@ -54,12 +54,12 @@ pub fn save_config_at(path: &Path, config: &Config) -> Result<()> {
 #     Best value:    gpt-4o-mini                   ($0.15/$0.60 per 1M tokens)
 #
 #   Gemini (provider: gemini):
-#     Best quality:  gemini-2.5-pro                ($1.25/$10 per 1M tokens)
-#     Best value:    gemini-2.5-flash              ($0.15/$0.60 per 1M tokens)
+#     Best quality:  gemini-3.5-pro                ($1.25/$10 per 1M tokens)
+#     Best value:    gemini-3.6-flash              ($0.15/$0.60 per 1M tokens)
 #
 #   OpenRouter (provider: openai, set openai_url to https://openrouter.ai/api/v1):
 #     Best quality:  anthropic/claude-sonnet-4     ($3/$15 per 1M tokens)
-#     Best value:    google/gemini-2.5-flash       ($0.15/$0.60 per 1M tokens)
+#     Best value:    google/gemini-3.6-flash       ($0.15/$0.60 per 1M tokens)
 #
 #   Ollama (provider: ollama):
 #     Best quality:  gemma4:31b                    (free, needs 24GB+ RAM)
@@ -68,7 +68,7 @@ pub fn save_config_at(path: &Path, config: &Config) -> Result<()> {
 #   Copy the exact model name into llm.model below.
 #
 #   Default is Opus for best extraction quality (used only a few times/day).
-#   To save cost, switch to Sonnet: llm.model: claude-sonnet-4-6
+#   To save cost, switch to Sonnet: llm.model: claude-sonnet-5
 
 "#;
     fs::write(path, format!("{}{}", header, yaml))?;

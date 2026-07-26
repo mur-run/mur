@@ -79,6 +79,37 @@ struct ApiErrorBody {
     message: String,
 }
 
+/// The `temperature` to send for `model`, dropping it on models that reject
+/// sampling parameters with a 400.
+///
+/// Sampling params (`temperature` / `top_p` / `top_k`) were removed from Opus
+/// 4.7 onward and from the Fable/Sonnet-5 line. The previous check was
+/// `starts_with("claude-opus-4-7")` — a single hardcoded model, which went
+/// stale the moment a newer model became the default and would have started
+/// 400ing every request that carries a temperature. Keeping the list in one
+/// named place makes the next model addition a one-line edit in an obvious
+/// spot rather than a silent outage.
+fn sampling_temperature(model: &str, requested: Option<f32>) -> Option<f32> {
+    const REJECTS_SAMPLING: &[&str] = &[
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-sonnet-5",
+        "claude-fable-5",
+        "claude-mythos-5",
+    ];
+    if REJECTS_SAMPLING.iter().any(|m| model.starts_with(m)) {
+        if requested.is_some() {
+            tracing::debug!(
+                model,
+                "dropping temperature — sampling params 400 on this model"
+            );
+        }
+        return None;
+    }
+    requested
+}
+
 // ── Trait impl ──────────────────────────────────────────────────────────────
 
 #[async_trait]
@@ -86,19 +117,7 @@ impl ChatBackend for AnthropicBackend {
     async fn generate(&self, req: ChatRequest<'_>) -> Result<ChatResponse> {
         let url = format!("{}/v1/messages", self.endpoint);
 
-        // Sampling param removal on Opus 4.7 per claude-api skill —
-        // sending temperature on Opus 4.7 returns 400.
-        let temperature = if req.model.starts_with("claude-opus-4-7") {
-            if req.temperature.is_some() {
-                tracing::debug!(
-                    model = req.model,
-                    "dropping temperature for Opus 4.7 (sampling params 400 on this model)"
-                );
-            }
-            None
-        } else {
-            req.temperature
-        };
+        let temperature = sampling_temperature(req.model, req.temperature);
 
         let body = build_request_body(&req, temperature, false /* stream */);
 
@@ -152,11 +171,7 @@ impl ChatBackend for AnthropicBackend {
         use futures::stream::StreamExt;
         let url = format!("{}/v1/messages", self.endpoint);
 
-        let temperature = if req.model.starts_with("claude-opus-4-7") {
-            None
-        } else {
-            req.temperature
-        };
+        let temperature = sampling_temperature(req.model, req.temperature);
         let body = build_request_body(&req, temperature, true /* stream */);
 
         let resp = self
@@ -475,6 +490,38 @@ mod tests {
     use super::*;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn sampling_temperature_dropped_on_models_that_reject_it() {
+        // These 400 if `temperature` is present. The guard used to name only
+        // Opus 4.7, so making a newer model the default silently armed a 400
+        // on every request carrying a temperature.
+        for m in [
+            "claude-opus-5",
+            "claude-opus-4-8",
+            "claude-opus-4-7",
+            "claude-sonnet-5",
+            "claude-fable-5",
+        ] {
+            assert_eq!(sampling_temperature(m, Some(0.5)), None, "{m}");
+        }
+        // Prefix match, so a dated or suffixed variant is covered too.
+        assert_eq!(
+            sampling_temperature("claude-opus-5-preview", Some(0.5)),
+            None
+        );
+        // Models that still accept it keep the caller's value.
+        assert_eq!(
+            sampling_temperature("claude-haiku-4-5", Some(0.5)),
+            Some(0.5)
+        );
+        assert_eq!(
+            sampling_temperature("claude-opus-4-6", Some(0.5)),
+            Some(0.5)
+        );
+        // Absent stays absent.
+        assert_eq!(sampling_temperature("claude-haiku-4-5", None), None);
+    }
 
     fn req<'a>(model: &'a str, user: &'a str) -> ChatRequest<'a> {
         ChatRequest {
