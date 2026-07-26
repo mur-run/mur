@@ -448,7 +448,7 @@ export const zhTW: Table = {
   "modal.import.model.provider": "供應商",
   "modal.import.model.providerPlaceholder": "ollama / anthropic / openai",
   "modal.import.model.model": "模型",
-  "modal.import.model.modelPlaceholder": "llama3.2:3b / claude-sonnet-4-6",
+  "modal.import.model.modelPlaceholder": "llama3.2:3b / claude-sonnet-5",
   "modal.import.model.apiKey": "API 金鑰（儲存在你的密鑰庫中）",
   "modal.import.model.apiKeyPlaceholder": "sk-… 或 env:ANTHROPIC_API_KEY",
   "modal.import.model.skip": "暫時略過",

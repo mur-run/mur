@@ -48,14 +48,14 @@ pub fn is_reasoning_model(model: &str) -> bool {
         return true;
     }
     if m.contains("gemini") && m.contains("pro") {
-        if let Some(pos) = m.find("pro") {
-            let after = &m[pos + 3..];
-            let version_str: String = after
-                .chars()
-                .skip_while(|c| !c.is_ascii_digit())
-                .take_while(|c| c.is_ascii_digit())
-                .collect();
-            if let Ok(v) = version_str.parse::<u32>()
+        // The version may follow ("gemini-pro-3.5") or precede ("gemini-3.5-pro")
+        // the tier, so take the major version from the first number in the name.
+        if let Some(start) = m.find(|c: char| c.is_ascii_digit()) {
+            let tail = &m[start..];
+            let end = tail
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(tail.len());
+            if let Ok(v) = tail[..end].parse::<u32>()
                 && v >= 3
             {
                 return true;
@@ -75,7 +75,7 @@ mod tests {
     #[test]
     fn test_is_reasoning_model() {
         // Anthropic opus models
-        assert!(is_reasoning_model("claude-opus-4-6"));
+        assert!(is_reasoning_model("claude-opus-5"));
         assert!(is_reasoning_model("claude-opus-4-20250514"));
 
         // OpenAI reasoning models
@@ -84,9 +84,11 @@ mod tests {
         assert!(is_reasoning_model("o3-mini"));
         assert!(is_reasoning_model("o4-preview"));
 
-        // Gemini pro >= 3
+        // Gemini pro >= 3 (version before or after the tier)
         assert!(is_reasoning_model("gemini-pro-3.5"));
         assert!(is_reasoning_model("gemini-pro-3"));
+        assert!(is_reasoning_model("gemini-3.5-pro"));
+        assert!(!is_reasoning_model("gemini-2.5-pro"));
         assert!(!is_reasoning_model("gemini-pro-2"));
         assert!(!is_reasoning_model("gemini-pro-1.5"));
 

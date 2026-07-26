@@ -81,6 +81,8 @@ pub fn aggregate(records: impl Iterator<Item = LlmCallRecord>) -> Vec<StageTotal
 fn price_table(model: &str) -> Option<(f64, f64, f64, f64)> {
     match model {
         m if m.starts_with("claude-haiku-4-5") => Some((1.00, 5.00, 1.25, 0.10)),
+        m if m.starts_with("claude-opus-5") => Some((5.00, 25.00, 6.25, 0.50)),
+        m if m.starts_with("claude-sonnet-5") => Some((3.00, 15.00, 3.75, 0.30)),
         m if m.starts_with("claude-sonnet-4-6") => Some((3.00, 15.00, 3.75, 0.30)),
         m if m.starts_with("claude-opus-4-7") => Some((15.00, 75.00, 18.75, 1.50)),
         m if m.starts_with("claude-opus-4-6") => Some((15.00, 75.00, 18.75, 1.50)),
@@ -92,6 +94,8 @@ fn price_table(model: &str) -> Option<(f64, f64, f64, f64)> {
         m if m.starts_with("gpt-5") => Some((1.25, 10.00, 0.0, 0.0)),
         m if m.starts_with("o3-mini") => Some((1.10, 4.40, 0.0, 0.0)),
         m if m.starts_with("o3") => Some((2.00, 8.00, 0.0, 0.0)),
+        m if m.starts_with("gemini-3.6-flash") => Some((0.30, 2.50, 0.0, 0.0)),
+        m if m.starts_with("gemini-3.5-pro") => Some((1.25, 10.00, 0.0, 0.0)),
         m if m.starts_with("gemini-2.5-flash") => Some((0.30, 2.50, 0.0, 0.0)),
         m if m.starts_with("gemini-2.5-pro") => Some((1.25, 10.00, 0.0, 0.0)),
         m if m.starts_with("gemini-pro-3") => Some((1.25, 10.00, 0.0, 0.0)),
@@ -266,6 +270,30 @@ mod tests {
     #[test]
     fn parse_since_rejects_bad_unit() {
         assert!(parse_since("7x").is_err());
+    }
+
+    #[test]
+    fn price_table_uses_published_per_mtok_rates() {
+        // A wrong rate here is silent — the report still renders, just with the
+        // wrong number — so the money path gets an explicit check.
+        // Claude Opus 5 ships at the Opus 4.8 rate ($5/$25), NOT the $15/$75
+        // the older Opus entries carry; cache write is 1.25x input, read 0.1x.
+        assert_eq!(
+            price_table("claude-opus-5"),
+            Some((5.00, 25.00, 6.25, 0.50))
+        );
+        assert_eq!(
+            price_table("claude-sonnet-5"),
+            Some((3.00, 15.00, 3.75, 0.30))
+        );
+        // Prefix match, so a dated or suffixed variant resolves to the same row.
+        assert_eq!(price_table("claude-opus-5"), price_table("claude-opus-5-x"));
+        // Old IDs keep their own rates so historical records still price right.
+        assert_eq!(
+            price_table("claude-sonnet-4-6"),
+            Some((3.00, 15.00, 3.75, 0.30))
+        );
+        assert_eq!(price_table("no-such-model"), None);
     }
 
     #[test]

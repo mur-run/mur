@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildSlotGroups, decodeSel, encodeSel } from "./modelSlots";
 
 const reg = [
-  { ref_name: "anthropic_opus", provider: "anthropic", model: "claude-opus-4-6", tier: null, input_cost: null, output_cost: null, context_window: null, capabilities: [] },
+  { ref_name: "anthropic_opus", provider: "anthropic", model: "claude-opus-5", tier: null, input_cost: null, output_cost: null, context_window: null, capabilities: [] },
 ];
 const local = [
   { key: "ollama", name: "Ollama", base_url: "http://localhost:11434", models: [{ model: "qwen3.5:4b", alias: "ollama_qwen35_4b", input_cost: null, output_cost: null, context_window: null }] },
