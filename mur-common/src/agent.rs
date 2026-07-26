@@ -52,8 +52,11 @@ pub struct AgentProfile {
     pub display_name: String,
     /// Coarse human-facing role for grouping/filtering (e.g. "Engineer").
     /// A free label, not a registry — bundled defaults are UI suggestions and
-    /// users can type their own. Discovery/job-routing stays on the A2A card's
-    /// skills/tags; this is purely organizational.
+    /// users can type their own. Also the SOFT signal in the dispatch index
+    /// (`agent_facts`), where it explains and ranks candidates but never
+    /// filters them: what an agent may actually do is decided by
+    /// `entitlements`, which the kernel enforces and a stale label cannot
+    /// overstate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     pub version: String,

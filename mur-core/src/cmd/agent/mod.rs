@@ -39,6 +39,7 @@ pub mod mcp_discover;
 pub mod mcp_login;
 pub mod mcp_registry;
 pub mod start;
+mod who;
 // Items exported for the Hub GUI (mur-hub-gui crate) — not used from the
 // mur binary itself, so suppress dead_code for the binary target.
 #[allow(dead_code)]
@@ -118,6 +119,7 @@ pub use snapshot::{cmd_snapshot_pull, cmd_snapshot_show};
 pub use start::cmd_start;
 #[allow(unused_imports)]
 pub use stats::{cmd_logs, cmd_stats};
+pub use who::cmd_who;
 mod pending;
 mod queue_cmd;
 pub mod wizard;

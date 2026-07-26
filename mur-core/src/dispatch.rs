@@ -1437,6 +1437,11 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             output_artifact_path,
         } => cmd::agent::cmd_send(&name, &message, output_artifact_path.as_deref())?,
         AgentAction::Card { name } => cmd::agent::cmd_card(&name)?,
+        AgentAction::Who {
+            can,
+            skill,
+            as_agent,
+        } => cmd::agent::cmd_who(can, skill, as_agent)?,
         AgentAction::Cli {
             names,
             resume,
