@@ -314,6 +314,23 @@ pub async fn build_provider_runner(
             );
         }
     }
+    // Built-in open_item: available to every agent, unlike fleet_run. Writing
+    // a line into a log the user reads is not a capability worth gating, and
+    // the display already marks everything it produces as unverified. An
+    // explicit Deny in the profile still wins.
+    {
+        use crate::tools::open_item::{OPEN_ITEM, OpenItemTool};
+        use mur_common::agent::{ToolPolicy, resolve_tool_policy};
+        if resolve_tool_policy(&tools_policy, OPEN_ITEM) != ToolPolicy::Deny {
+            tool_map.insert(
+                OPEN_ITEM.to_string(),
+                Arc::new(OpenItemTool {
+                    mur_home: mur_home.clone(),
+                    agent_name: profile.inner.name.clone(),
+                }),
+            );
+        }
+    }
     let tools: Vec<Arc<dyn crate::tools::ToolExecutor>> = tool_map.into_values().collect();
 
     let build = |client: Arc<dyn LlmClient>| {
