@@ -10,6 +10,18 @@ use serde::Serialize;
 
 use crate::conversations::backend::telemetry::LlmCallRecord;
 
+/// Where a rate came from. Four sources used to look identical at the call
+/// site, which is how a $0.000435 rate stood in for a $0.025 one — an estimate
+/// you cannot attribute is an estimate you cannot audit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RateSource {
+    /// The user's own `models.yaml` entry.
+    Registry,
+    /// The built-in seed table — correct on the day it was written.
+    Builtin,
+}
+
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct StageTotals {
     pub stage: String,
@@ -21,6 +33,9 @@ pub struct StageTotals {
     pub cache_read_input_tokens: u64,
     pub cache_creation_input_tokens: u64,
     pub estimated_usd: Option<f64>,
+    /// Absent when no rate was found at all (`estimated_usd` is then `None`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_source: Option<RateSource>,
 }
 
 #[derive(Debug, Serialize)]
@@ -74,7 +89,7 @@ pub fn aggregate(
     }
     let mut stages: Vec<StageTotals> = buckets.into_values().collect();
     for s in &mut stages {
-        s.estimated_usd = estimate_cost(
+        let priced = estimate_cost(
             &s.model,
             registry,
             s.input_tokens,
@@ -82,6 +97,8 @@ pub fn aggregate(
             s.cache_read_input_tokens,
             s.cache_creation_input_tokens,
         );
+        s.estimated_usd = priced.map(|(usd, _)| usd);
+        s.rate_source = priced.map(|(_, src)| src);
     }
     stages
 }
@@ -167,7 +184,7 @@ pub(crate) fn price_table(model: &str) -> Option<(f64, f64, f64, f64)> {
 pub(crate) fn resolve_rates(
     model: &str,
     registry: Option<&ModelRegistry>,
-) -> Option<(f64, f64, f64, f64)> {
+) -> Option<((f64, f64, f64, f64), RateSource)> {
     if let Some(reg) = registry
         && let Some(entry) = reg
             .models
@@ -181,10 +198,10 @@ pub(crate) fn resolve_rates(
         // not "free" — fall through rather than report a confident $0.
         if let (Some(i), Some(o)) = (input, output) {
             let (i, o) = (i * 1000.0, o * 1000.0);
-            return Some((i, o, i, i));
+            return Some(((i, o, i, i), RateSource::Registry));
         }
     }
-    price_table(model)
+    price_table(model).map(|r| (r, RateSource::Builtin))
 }
 
 fn estimate_cost(
@@ -194,14 +211,15 @@ fn estimate_cost(
     out_tok: u64,
     cache_r: u64,
     cache_w: u64,
-) -> Option<f64> {
-    let (pi, po, pcw, pcr) = resolve_rates(model, registry)?;
-    Some(
+) -> Option<(f64, RateSource)> {
+    let ((pi, po, pcw, pcr), source) = resolve_rates(model, registry)?;
+    Some((
         (in_tok as f64 / 1_000_000.0) * pi
             + (out_tok as f64 / 1_000_000.0) * po
             + (cache_w as f64 / 1_000_000.0) * pcw
             + (cache_r as f64 / 1_000_000.0) * pcr,
-    )
+        source,
+    ))
 }
 
 pub fn read_records_since(
@@ -291,6 +309,20 @@ pub async fn cmd_cost_report(since: &str, json: bool, root_override: Option<&str
     println!("  {}", "─".repeat(115));
     println!("  TOTAL{:>110}\n", format!("${:.3}", report.total_usd));
     println!("(ollama calls are local — no cost shown)");
+    // Naming the source is the difference between "the bill looks wrong" and
+    // "the bill looks wrong AND here is which number to go check".
+    let builtin = report
+        .stages
+        .iter()
+        .filter(|s| s.rate_source == Some(RateSource::Builtin))
+        .count();
+    if builtin > 0 {
+        println!(
+            "({builtin} of {} rows priced from built-in rates, not your models.yaml — \
+             `mur model add` records a rate MUR will prefer)",
+            report.stages.len()
+        );
+    }
     Ok(())
 }
 
@@ -481,21 +513,23 @@ mod tests {
 
     #[test]
     fn estimate_cost_haiku_matches_table() {
-        let cost = estimate_cost("claude-haiku-4-5", None, 1_000_000, 1_000_000, 0, 0).unwrap();
+        let (cost, _) =
+            estimate_cost("claude-haiku-4-5", None, 1_000_000, 1_000_000, 0, 0).unwrap();
         assert!((cost - 6.0).abs() < 0.001);
     }
 
     #[test]
     fn estimate_cost_openai_gpt4o_mini_matches_table() {
         // 1M in @ $0.15 + 1M out @ $0.60 = $0.75
-        let cost = estimate_cost("gpt-4o-mini", None, 1_000_000, 1_000_000, 0, 0).unwrap();
+        let (cost, _) = estimate_cost("gpt-4o-mini", None, 1_000_000, 1_000_000, 0, 0).unwrap();
         assert!((cost - 0.75).abs() < 0.001);
     }
 
     #[test]
     fn estimate_cost_gemini_25_flash_matches_table() {
         // 1M in @ $0.30 + 1M out @ $2.50 = $2.80
-        let cost = estimate_cost("gemini-2.5-flash", None, 1_000_000, 1_000_000, 0, 0).unwrap();
+        let (cost, _) =
+            estimate_cost("gemini-2.5-flash", None, 1_000_000, 1_000_000, 0, 0).unwrap();
         assert!((cost - 2.80).abs() < 0.001);
     }
 
@@ -530,14 +564,15 @@ mod tests {
                 ..Default::default()
             },
         );
-        let (i, o, ..) = resolve_rates("vendor-x-large", Some(&reg)).unwrap();
+        let ((i, o, ..), src) = resolve_rates("vendor-x-large", Some(&reg)).unwrap();
         assert_eq!((i, o), (2.0, 8.0));
+        assert_eq!(src, RateSource::Registry);
         // Telemetry may carry the alias instead of the wire id.
-        assert_eq!(resolve_rates("house_model", Some(&reg)).unwrap().0, 2.0);
+        assert_eq!(resolve_rates("house_model", Some(&reg)).unwrap().0.0, 2.0);
         // A model the registry has never heard of still falls back to the table.
         assert_eq!(
             resolve_rates("claude-opus-5", Some(&reg)),
-            price_table("claude-opus-5")
+            price_table("claude-opus-5").map(|r| (r, RateSource::Builtin))
         );
         // A registry rate overrides the built-in one rather than merging.
         let over = reg_with(
@@ -549,7 +584,8 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(resolve_rates("claude-opus-5", Some(&over)).unwrap().0, 9.0);
+        let ((i, ..), src) = resolve_rates("claude-opus-5", Some(&over)).unwrap();
+        assert_eq!((i, src), (9.0, RateSource::Registry));
     }
 
     /// An entry with no rates means "we don't know", not "it is free" — a
@@ -578,8 +614,41 @@ mod tests {
                 ..Default::default()
             },
         );
-        let (input, _, cache_w, cache_r) = resolve_rates("vendor-x", Some(&reg)).unwrap();
+        let ((input, _, cache_w, cache_r), _) = resolve_rates("vendor-x", Some(&reg)).unwrap();
         assert_eq!((cache_w, cache_r), (input, input));
+    }
+
+    /// A number you cannot attribute is a number you cannot audit: the report
+    /// has to say which rows leaned on the built-in table rather than on rates
+    /// the user actually recorded.
+    #[test]
+    fn stage_totals_carry_the_rate_source() {
+        let reg = reg_with(
+            "house",
+            "vendor-x",
+            mur_common::model::ModelEntry {
+                input_cost_per_1k: Some(0.002),
+                output_cost_per_1k: Some(0.008),
+                ..Default::default()
+            },
+        );
+        let recs = vec![
+            rec("extract", "x", "vendor-x", 10, 10, 0, 0),
+            rec("extract", "anthropic", "claude-opus-5", 10, 10, 0, 0),
+            rec("extract", "ollama", "llama-nope", 10, 10, 0, 0),
+        ];
+        let stages = aggregate(recs.into_iter(), Some(&reg));
+        let src = |model: &str| {
+            stages
+                .iter()
+                .find(|s| s.model == model)
+                .unwrap()
+                .rate_source
+        };
+        assert_eq!(src("vendor-x"), Some(RateSource::Registry));
+        assert_eq!(src("claude-opus-5"), Some(RateSource::Builtin));
+        // Unpriced stays unattributed rather than claiming a source.
+        assert_eq!(src("llama-nope"), None);
     }
 
     #[test]
