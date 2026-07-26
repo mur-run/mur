@@ -388,7 +388,7 @@ mur dashboard        # terminal TUI dashboard
 ```
 
 <details>
-<summary><b>Full command tree</b> (27 top-level commands)</summary>
+<summary><b>Full command tree</b> (28 top-level commands)</summary>
 
 ```
 mur
@@ -404,6 +404,7 @@ mur
 ├── notes        create · search · list · show
 ├── workflow     run · suggest · list · schedule · show · search · new · publish · install
 ├── session      start · stop · record · status · list · review · show · export · push
+├── open         add · done   (what is still outstanding, by whether MUR saw it)
 ├── sync         (16+ AI tools) · status · fleet pull/push/both
 ├── hook         unified hook entry for AI tools (prompt / tool / stop / session-start)
 ├── chat         conversations archive + ask
