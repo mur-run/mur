@@ -1138,6 +1138,10 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path, mur_root: &std::path::Pat
         ),
         ("mur-compress", include_str!("../skills/mur_compress.yaml")),
         (
+            "mur-settlement",
+            include_str!("../skills/mur_settlement.yaml"),
+        ),
+        (
             "mur-session-remove",
             include_str!("../skills/mur_session_remove.yaml"),
         ),
@@ -1703,6 +1707,32 @@ mod sync_skill_tests {
         assert!(body.contains("name: mur-project-search"));
 
         std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn ensure_mur_skill_ships_mur_settlement_and_it_loads_at_session_start() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let root = tmp.path().join("root");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+
+        super::ensure_mur_skill(&home, &root).unwrap();
+
+        let path = root.join("skills/mur-settlement/skill.yaml");
+        assert!(
+            path.exists(),
+            "mur-settlement must be written by ensure_mur_skill"
+        );
+
+        // A reporting rule has to be in context when the turn ends, so the
+        // trigger is load-bearing: shipped with only `manual` it would never
+        // fire and the skill would be dead weight nobody notices.
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            body.contains("session_start"),
+            "mur-settlement must load at session start, got: {body}"
+        );
     }
 
     #[test]
