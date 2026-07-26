@@ -78,7 +78,7 @@ pub fn aggregate(records: impl Iterator<Item = LlmCallRecord>) -> Vec<StageTotal
     stages
 }
 
-fn price_table(model: &str) -> Option<(f64, f64, f64, f64)> {
+pub(crate) fn price_table(model: &str) -> Option<(f64, f64, f64, f64)> {
     match model {
         m if m.starts_with("claude-haiku-4-5") => Some((1.00, 5.00, 1.25, 0.10)),
         m if m.starts_with("claude-opus-5") => Some((5.00, 25.00, 6.25, 0.50)),
@@ -91,6 +91,24 @@ fn price_table(model: &str) -> Option<(f64, f64, f64, f64)> {
         m if m.starts_with("claude-opus-4-8") => Some((5.00, 25.00, 6.25, 0.50)),
         m if m.starts_with("claude-opus-4-7") => Some((5.00, 25.00, 6.25, 0.50)),
         m if m.starts_with("claude-opus-4-6") => Some((5.00, 25.00, 6.25, 0.50)),
+        // Current lineup first: `gpt-5` is a prefix of every `gpt-5.x` id, so
+        // anything below this block would otherwise be priced as plain gpt-5 —
+        // a 6x undercount on sol, 24x on the pro tiers. Within a family the
+        // bare id goes last for the same reason. Cache columns are
+        // (write, read): writes are free, reads are 1/10 of input.
+        m if m.starts_with("gpt-5.6-sol") => Some((5.00, 30.00, 0.0, 0.50)),
+        m if m.starts_with("gpt-5.6-terra") => Some((2.50, 15.00, 0.0, 0.25)),
+        m if m.starts_with("gpt-5.6-luna") => Some((1.00, 6.00, 0.0, 0.10)),
+        m if m.starts_with("gpt-5.5-pro") => Some((30.00, 180.00, 0.0, 0.0)),
+        m if m.starts_with("gpt-5.5") => Some((5.00, 30.00, 0.0, 0.50)),
+        m if m.starts_with("gpt-5.4-pro") => Some((30.00, 180.00, 0.0, 0.0)),
+        m if m.starts_with("gpt-5.4-mini") => Some((0.75, 4.50, 0.0, 0.075)),
+        m if m.starts_with("gpt-5.4-nano") => Some((0.20, 1.25, 0.0, 0.02)),
+        m if m.starts_with("gpt-5.4") => Some((2.50, 15.00, 0.0, 0.25)),
+        m if m.starts_with("gpt-5.3-codex") => Some((1.75, 14.00, 0.0, 0.175)),
+        m if m.starts_with("chat-latest") => Some((5.00, 30.00, 0.0, 0.50)),
+        // Retired generations, kept so historical telemetry still costs out.
+        // Their cached-input rates are no longer published, hence 0.
         m if m.starts_with("gpt-4o-mini") => Some((0.15, 0.60, 0.0, 0.0)),
         m if m.starts_with("gpt-4o") => Some((2.50, 10.00, 0.0, 0.0)),
         m if m.starts_with("gpt-4.1-mini") => Some((0.40, 1.60, 0.0, 0.0)),
@@ -99,11 +117,23 @@ fn price_table(model: &str) -> Option<(f64, f64, f64, f64)> {
         m if m.starts_with("gpt-5") => Some((1.25, 10.00, 0.0, 0.0)),
         m if m.starts_with("o3-mini") => Some((1.10, 4.40, 0.0, 0.0)),
         m if m.starts_with("o3") => Some((2.00, 8.00, 0.0, 0.0)),
-        m if m.starts_with("gemini-3.6-flash") => Some((0.30, 2.50, 0.0, 0.0)),
-        m if m.starts_with("gemini-3.5-pro") => Some((1.25, 10.00, 0.0, 0.0)),
-        m if m.starts_with("gemini-2.5-flash") => Some((0.30, 2.50, 0.0, 0.0)),
-        m if m.starts_with("gemini-2.5-pro") => Some((1.25, 10.00, 0.0, 0.0)),
-        m if m.starts_with("gemini-pro-3") => Some((1.25, 10.00, 0.0, 0.0)),
+        // Gemini cache columns are (write, read): writes are billed per
+        // storage-hour rather than per token, so that slot stays 0 and cannot
+        // be expressed here; reads are ~1/10 the input rate. Pro rows use the
+        // <=200k-prompt rate — long-context doubles it, which this flat table
+        // does not model. Each `-lite` precedes its base id, which is a prefix
+        // of it.
+        m if m.starts_with("gemini-3.6-flash") => Some((1.50, 7.50, 0.0, 0.15)),
+        m if m.starts_with("gemini-3.5-flash-lite") => Some((0.30, 2.50, 0.0, 0.03)),
+        m if m.starts_with("gemini-3.5-flash") => Some((1.50, 9.00, 0.0, 0.15)),
+        m if m.starts_with("gemini-3.1-flash-lite") => Some((0.25, 1.50, 0.0, 0.025)),
+        m if m.starts_with("gemini-3.1-pro") => Some((2.00, 12.00, 0.0, 0.20)),
+        m if m.starts_with("gemini-3-flash") => Some((0.50, 3.00, 0.0, 0.05)),
+        m if m.starts_with("gemini-2.5-flash-lite") => Some((0.10, 0.40, 0.0, 0.01)),
+        m if m.starts_with("gemini-2.5-flash") => Some((0.30, 2.50, 0.0, 0.03)),
+        m if m.starts_with("gemini-2.5-pro") => Some((1.25, 10.00, 0.0, 0.125)),
+        // Alias form ("gemini-pro-3.1"): same 3-series Pro rate as above.
+        m if m.starts_with("gemini-pro-3") => Some((2.00, 12.00, 0.0, 0.20)),
         _ => None,
     }
 }
@@ -318,6 +348,37 @@ mod tests {
             assert!((cr - inp * 0.10).abs() < 1e-9, "{m} cache-read");
         }
         assert_eq!(price_table("no-such-model"), None);
+        // A newer model in an existing family gets its own rate, never the
+        // older sibling's: 3.6-flash is $1.50/$7.50, 2.5-flash $0.30/$2.50.
+        assert_eq!(
+            price_table("gemini-3.6-flash"),
+            Some((1.50, 7.50, 0.0, 0.15))
+        );
+        assert_ne!(
+            price_table("gemini-3.6-flash"),
+            price_table("gemini-2.5-flash")
+        );
+    }
+
+    /// Every id here is a strict prefix of the one before it, so a row placed
+    /// in the wrong order silently prices the longer id at the shorter one's
+    /// rate — off by 6x for gpt-5.6-sol and 24x for the pro tiers.
+    #[test]
+    fn longer_ids_are_not_swallowed_by_shorter_prefixes() {
+        for (specific, generic) in [
+            ("gpt-5.6-sol", "gpt-5"),
+            ("gpt-5.5-pro", "gpt-5.5"),
+            ("gpt-5.4-nano", "gpt-5.4"),
+            ("gemini-3.5-flash-lite", "gemini-3.5-flash"),
+            ("gemini-2.5-flash-lite", "gemini-2.5-flash"),
+        ] {
+            assert!(specific.starts_with(generic), "{specific} vs {generic}");
+            assert_ne!(
+                price_table(specific),
+                price_table(generic),
+                "{specific} is being priced as {generic}"
+            );
+        }
     }
 
     #[test]
