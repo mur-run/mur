@@ -307,6 +307,14 @@ files.
   Object (Windows) — plus a DNS-resolver guard that filters network egress.
 - **Human-in-the-loop** — tool calls pause for your approval in Hub and in
   `mur agent cli` (opt out per session with `--auto`).
+- **Settlement** — a turn that changed anything ends with a card the runtime
+  draws from its own tool records, not from the model's summary: what was
+  **verified** (a command ran and passed), what was **changed** (files edited,
+  nothing run), what was **blocked**, and whether the turn stopped early. The
+  verified row is printed even when it's empty — `✔ verified (nothing ran — no
+  evidence this works)` — so "all fixed" over an empty column reads as the
+  contradiction it is. The same ledger rides along as JSON, so `mur agent send`,
+  fleet steps and Hub get the accounting without scraping prose.
 - **Capability routing** — an agent blocked by the sandbox doesn't hand the job
   back to you: the denial names the fleets that actually hold that binary, and
   the agent delegates. `mur agent who --can cargo` shows the same picture,
