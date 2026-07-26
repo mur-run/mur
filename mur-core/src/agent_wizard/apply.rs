@@ -50,7 +50,7 @@ pub fn apply_draft(draft: &WizardDraft) -> Result<WizardOutcome> {
         name,
         true, // no_interactive
         Some(draft.role.display_name.clone()),
-        Some("anthropic/claude-sonnet-4-6".to_string()),
+        Some("anthropic/claude-sonnet-5".to_string()),
         None, // provider parsed from "anthropic/model" shorthand in cmd_create
     )?;
 

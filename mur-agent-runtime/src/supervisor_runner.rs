@@ -707,7 +707,7 @@ updated_at: "2026-04-22T10:00:00+08:00"
     /// for its full duration and clears it before exercising the negative cases.
     #[test]
     fn anthropic_via_local_bridge_grants_loopback_port() {
-        let profile = inline_profile("anthropic", "claude-sonnet-4-6");
+        let profile = inline_profile("anthropic", "claude-sonnet-5");
         let mur_home = std::path::Path::new("/nonexistent");
 
         // Local bridge → port is granted.

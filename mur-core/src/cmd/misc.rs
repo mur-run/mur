@@ -137,7 +137,7 @@ pub(crate) fn cmd_doctor() -> Result<()> {
         println!("✅ LLM model: {model} (recommended for session analysis)");
     } else {
         println!(
-            "⚠️  LLM model: {model} (not ideal for session analysis — consider claude-opus-4-6, chatgpt-5.4, gemini-pro-3.5)"
+            "⚠️  LLM model: {model} (not ideal for session analysis — consider claude-opus-5, chatgpt-5.4, gemini-pro-3.5)"
         );
     }
 

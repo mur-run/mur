@@ -446,7 +446,7 @@ export const en = {
   "modal.import.model.provider": "Provider",
   "modal.import.model.providerPlaceholder": "ollama / anthropic / openai",
   "modal.import.model.model": "Model",
-  "modal.import.model.modelPlaceholder": "llama3.2:3b / claude-sonnet-4-6",
+  "modal.import.model.modelPlaceholder": "llama3.2:3b / claude-sonnet-5",
   "modal.import.model.apiKey": "API key (stored in your secret store)",
   "modal.import.model.apiKeyPlaceholder": "sk-… or env:ANTHROPIC_API_KEY",
   "modal.import.model.skip": "Skip for now",
