@@ -1673,8 +1673,13 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
         SlashCmd::Panel(args) => panel::handle_panel_command(app, &args),
         SlashCmd::Open => {
             let items = crate::open_items::collect(&app.home);
-            app.open_items_fp = Some(crate::open_items::fingerprint(&items));
-            app.push_system(crate::open_items::render(&items, &[]).trim().to_string());
+            let (visible, muted) = crate::open_items::partition(items, &app.muted_origins());
+            app.open_items_fp = Some(crate::open_items::fingerprint(&visible));
+            app.push_system(
+                crate::open_items::render(&visible, &muted)
+                    .trim()
+                    .to_string(),
+            );
         }
         SlashCmd::Unknown(c) => app.push_system(format!("unknown command: /{c} — try /help")),
     }
