@@ -28,6 +28,31 @@ pub fn save_config(config: &Config) -> Result<()> {
     save_config_at(&config_path(), config)
 }
 
+/// Serialise `config`, then restore any top-level block the typed `Config`
+/// has no field for.
+///
+/// `Config` cannot round-trip what it cannot parse, so serialising the struct
+/// alone silently deletes user blocks — `research_gateway` was measurably lost
+/// on every `mur sleep` (#778). Typed fields win; only keys absent from the
+/// new document are carried over from the old one.
+fn merge_over_existing(path: &Path, config: &Config) -> Result<String> {
+    let mut out = serde_yaml::to_value(config)?;
+    let existing: Option<serde_yaml::Value> = fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_yaml::from_str(&s).ok());
+
+    if let (Some(serde_yaml::Value::Mapping(old)), serde_yaml::Value::Mapping(new)) =
+        (existing, &mut out)
+    {
+        for (k, v) in old {
+            if !new.contains_key(&k) {
+                new.insert(k, v);
+            }
+        }
+    }
+    Ok(serde_yaml::to_string(&out)?)
+}
+
 /// Save config to an explicit path (same YAML + header as [`save_config`]).
 /// Exists so callers with an explicit `MUR_HOME` (tests, per-agent CLI
 /// handlers) can persist config without going through the process-global
@@ -38,7 +63,7 @@ pub fn save_config_at(path: &Path, config: &Config) -> Result<()> {
     }
 
     // Serialize to YAML, then prepend a header with model recommendations
-    let yaml = serde_yaml::to_string(config)?;
+    let yaml = merge_over_existing(path, config)?;
     let header = r#"# MUR Configuration
 # Docs: https://github.com/mur-run/mur
 #
@@ -92,4 +117,51 @@ fn config_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("~"))
         .join(".mur")
         .join("config.yaml")
+}
+
+#[cfg(test)]
+mod save_roundtrip_tests {
+    use super::*;
+    use mur_common::config::Config;
+
+    /// `Config` cannot round-trip a block it has no field for, so serialising
+    /// the struct alone deletes it. Measured on a real config: a hand-written
+    /// `research_gateway` block vanished on the next `mur sleep`.
+    #[test]
+    fn save_preserves_blocks_the_typed_config_does_not_know() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        std::fs::write(
+            &path,
+            "research_gateway:\n  brave_api_key_ref: keychain:mur/brave\n",
+        )
+        .unwrap();
+
+        let cfg = Config::load_or_default(&path);
+        save_config_at(&path, &cfg).unwrap();
+
+        let back = std::fs::read_to_string(&path).unwrap();
+        assert!(back.contains("research_gateway"), "block dropped:\n{back}");
+        assert!(
+            back.contains("keychain:mur/brave"),
+            "value dropped:\n{back}"
+        );
+    }
+
+    /// The typed fields must still win — an unknown-block merge that also
+    /// resurrected stale known values would be a different bug.
+    #[test]
+    fn typed_fields_still_overwrite_the_old_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        std::fs::write(&path, "session:\n  retention_days: 3\nkeep_me: yes\n").unwrap();
+
+        let mut cfg = Config::load_or_default(&path);
+        cfg.session.retention_days = 99;
+        save_config_at(&path, &cfg).unwrap();
+
+        let back = std::fs::read_to_string(&path).unwrap();
+        assert!(back.contains("99"), "typed field not written:\n{back}");
+        assert!(back.contains("keep_me"), "unknown key dropped:\n{back}");
+    }
 }
