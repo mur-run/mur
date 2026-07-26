@@ -3,6 +3,8 @@ name = "mur-agent-runtime"
 version = "0.1.0"
 edition = "2024"
 build = "build.rs"
+# Internal to the workspace: consumed only via path deps, never from crates.io.
+publish = false
 
 [features]
 # Bundle an agent profile into the binary at compile time; set
