@@ -205,19 +205,32 @@ fn dearest_output_rate(reg: &mur_common::model::ModelRegistry) -> Option<f64> {
     (max > 0.0).then_some(max)
 }
 
-fn fleet_price_per_1k(mur_home: &Path) -> f64 {
+/// Where the guard's flat rate came from. A budget enforced on a guess is
+/// still worth enforcing, but the user has to be told it is a guess: a run
+/// that stops early and a run that stops on target look identical otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuardRate {
+    /// `MUR_FLEET_COST_PER_1K`.
+    Env,
+    /// Dearest output rate in `models.yaml`.
+    Registry,
+    /// `DEFAULT_PRICE_PER_1K` — nothing in the registry carries a rate.
+    Default,
+}
+
+fn fleet_price_per_1k(mur_home: &Path) -> (f64, GuardRate) {
     if let Ok(v) = std::env::var("MUR_FLEET_COST_PER_1K")
         && let Ok(p) = v.parse::<f64>()
         && p > 0.0
     {
-        return p;
+        return (p, GuardRate::Env);
     }
     if let Ok(reg) = mur_common::model::ModelRegistry::load_from(&mur_home.join("models.yaml"))
         && let Some(rate) = dearest_output_rate(&reg)
     {
-        return rate;
+        return (rate, GuardRate::Registry);
     }
-    DEFAULT_PRICE_PER_1K
+    (DEFAULT_PRICE_PER_1K, GuardRate::Default)
 }
 
 /// Resolve this iteration's goal: oldest queued job (marking it Running) beats
@@ -340,6 +353,18 @@ pub async fn run_guarded(
     let deadline = effective_deadline(deadline.as_deref(), &fleet);
     let budget = effective_budget(budget_usd, &fleet);
     let price_per_1k = fleet_price_per_1k(mur_home);
+    if let (rate, GuardRate::Default) = price_per_1k
+        && budget.is_some()
+    {
+        // Enforcing on a guess is better than not enforcing, but silently
+        // enforcing on one turns "stopped on budget" into a number the user
+        // has no way to reconcile against a real bill.
+        println!(
+            "  ⚠ budget enforced at the default ${rate}/1k — no model in models.yaml \
+             carries a rate, so spend is a guess. `mur model add` records a real one."
+        );
+    }
+    let price_per_1k = price_per_1k.0;
     // Forward estimate before any real data (and the fail-safe fallback when an
     // iteration reports no token usage), so spend can never silently under-count.
     let projection = estimate_iteration_cost_usd(fleet.members.len(), price_per_1k);
@@ -863,10 +888,14 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         // env override wins (nextest isolates per-process, so this is safe)
         unsafe { std::env::set_var("MUR_FLEET_COST_PER_1K", "0.123") };
-        assert!((fleet_price_per_1k(tmp.path()) - 0.123).abs() < 1e-9);
-        // no env + no models.yaml → documented default
+        let (rate, src) = fleet_price_per_1k(tmp.path());
+        assert!((rate - 0.123).abs() < 1e-9);
+        assert_eq!(src, GuardRate::Env);
+        // no env + no models.yaml → documented default, and it says so
         unsafe { std::env::remove_var("MUR_FLEET_COST_PER_1K") };
-        assert!((fleet_price_per_1k(tmp.path()) - DEFAULT_PRICE_PER_1K).abs() < 1e-9);
+        let (rate, src) = fleet_price_per_1k(tmp.path());
+        assert!((rate - DEFAULT_PRICE_PER_1K).abs() < 1e-9);
+        assert_eq!(src, GuardRate::Default);
     }
 
     /// The budget guard bills one flat rate against an iteration's whole token
