@@ -211,6 +211,26 @@ pub fn apply_fetched_prices(mut entry: ModelEntry, fetched: Option<PriceInfo>) -
     }
     entry
 }
+/// Human-readable age of an entry's recorded rates.
+///
+/// Unstamped entries say "unknown" rather than borrowing today's date — the
+/// whole point of the field is to distinguish a rate someone checked from one
+/// that has been sitting there since a vendor's last price change.
+fn price_age_label(entry: &ModelEntry) -> String {
+    match entry.price_age(chrono::Utc::now()) {
+        None => "unknown (predates price stamping, or hand-written)".into(),
+        Some(age) => {
+            let days = age.num_days();
+            match days {
+                d if d < 0 => "just now".into(),
+                0 => "today".into(),
+                1 => "yesterday".into(),
+                d if d < 60 => format!("{d} days ago"),
+                d => format!("{} months ago — re-check with `mur model add`", d / 30),
+            }
+        }
+    }
+}
 
 pub fn run(args: ModelArgs) -> anyhow::Result<()> {
     let path = ModelRegistry::default_path()?;
@@ -255,7 +275,7 @@ pub fn run(args: ModelArgs) -> anyhow::Result<()> {
                 cost_per_1k,
             );
             let is_local = matches!(tier, Some(RouteTier::Local));
-            let entry = if no_fetch {
+            let mut entry = if no_fetch {
                 entry
             } else {
                 let mur_home = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
@@ -266,6 +286,9 @@ pub fn run(args: ModelArgs) -> anyhow::Result<()> {
                 }
                 e
             };
+            // One stamp point for every source of a rate — flags, catalog, or
+            // both — so no path can record a price without dating it.
+            entry.stamp_priced_at(chrono::Utc::now());
             reg.models.insert(name.clone(), entry);
             reg.save_to(&path)?;
             println!("Added model {name} → {}", path.display());
@@ -350,6 +373,7 @@ fn cmd_prices(
                     if let Some(ctx) = p.context_window {
                         println!("  context: {ctx} tokens");
                     }
+                    println!("  recorded: {}", price_age_label(entry));
                 }
                 None => {
                     println!(
