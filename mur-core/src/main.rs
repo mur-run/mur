@@ -52,6 +52,7 @@ mod interactive;
 #[allow(dead_code, unused_imports)]
 mod nudge;
 mod official;
+mod open_items;
 mod parallel;
 mod paths;
 // wired via dispatch in the lib crate; this bin re-declaration is unused.

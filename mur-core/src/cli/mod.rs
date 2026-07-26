@@ -275,6 +275,15 @@ see `mur skill <command> --help`.")]
         #[arg(long)]
         force: bool,
     },
+    /// Show what is still outstanding, labelled by whether MUR observed it or
+    /// an agent merely reported it
+    Open {
+        #[command(subcommand)]
+        action: Option<OpenAction>,
+        /// Machine-readable output
+        #[arg(long)]
+        json: bool,
+    },
     /// Push pending signals from the outbox to the server
     Push {
         /// Preview what would be pushed without sending
