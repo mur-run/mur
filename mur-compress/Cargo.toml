@@ -2,6 +2,8 @@
 name = "mur-compress"
 version.workspace = true
 edition.workspace = true
+# Internal to the workspace: consumed only via path deps, never from crates.io.
+publish = false
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
