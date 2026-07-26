@@ -322,6 +322,17 @@ pub enum OpenAction {
         /// Item id from `mur open`
         id: String,
     },
+    /// Stop showing a source. Exact `origin` match — `fleet` never matches
+    /// `fleet:acme`.
+    Mute {
+        /// Origin as shown in brackets, e.g. `inbox` or `fleet:acme`
+        origin: String,
+    },
+    /// Show a muted source again
+    Unmute {
+        /// Origin as shown in brackets, e.g. `inbox` or `fleet:acme`
+        origin: String,
+    },
 }
 
 #[derive(Subcommand)]
