@@ -36,19 +36,21 @@ cargo run -- <command>          # e.g. cargo run -- search "swift testing"
 
 ## Architecture
 
-Cargo workspace with five crates plus two workspace-excluded Tauri apps:
+Cargo workspace of small crates plus two workspace-excluded Tauri apps. The load-bearing ones:
 
-- **`mur-common`** — Shared types only. No logic, no I/O. `Pattern`, `KnowledgeBase`, `Workflow`, `Config`, `MurEvent`, plus `AgentProfile`/`LockFile`/A2A envelopes/telemetry constants.
+- **`mur-common`** — Shared types, plus the small persisted files those types own (`Config`, `AgentProfile`, `ModelRegistry`, `LockFile`, ledger). It does do file I/O; what it does not hold is pipeline or CLI logic.
 - **`mur-core`** — All CLI logic and the `mur` binary. Modules map to the four-stage pipeline. Hosts `mur agent ...` user-facing subcommands.
 - **`mur-agent-runtime`** — Per-agent A2A v0.3 supervisor (P0a). One binary, one BusyBox-style symlink per agent (`mur_agent_<name>` → `mur-agent-runtime`). Crate README has the walkthrough.
 - **`mur-daemon`** — Long-running background daemon binary.
 - **`mur-mcp-server`** — MCP server binary (stdio JSON-RPC). Exposes interactive lookup tools so AI tools can call MUR mid-conversation. Read-only; mutations go through hooks.
 - **`mur-gui-core`** — Shared GUI library (sidecar supervisor, companion bridge, A2A client). Consumed by `mur-hub-gui` and during migration also by `mur-agent-gui`. See `docs/superpowers/specs/2026-05-11-mur-hub-companion-design.md` §3.1.
 
+**Shared state with its own file format gets its own crate** — `mur-channel`, `mur-compress`, `mur-open-items`. The rule exists because `mur-agent-runtime` must not depend on `mur-core` (that pulls LanceDB + Arrow into every agent process), so anything both of them read or write has to live below both. Reach for this before adding I/O to `mur-common`.
+
 Workspace-excluded Tauri 2 GUI apps (built via their own manifests so `cargo build --workspace` does not pull WebKitGTK / Cocoa / WebView2):
 
 - **`mur-agent-gui`** — Per-agent `.app` shell (legacy; deprecated in M-h8).
-- **`mur-hub-gui`** — MuR Hub cross-agent desktop app (in development; replaces `mur-agent-gui` in v1).
+- **`mur-hub-gui`** — MUR Hub cross-agent desktop app (in development; replaces `mur-agent-gui` in v1).
 
 ### Agent Platform
 
