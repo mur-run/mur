@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
+use mur_common::model::ModelRegistry;
 use serde::Serialize;
 
 use crate::conversations::backend::telemetry::LlmCallRecord;
@@ -49,7 +50,13 @@ pub fn parse_since(since: &str) -> Result<DateTime<Utc>> {
     Ok(Utc::now() - dur)
 }
 
-pub fn aggregate(records: impl Iterator<Item = LlmCallRecord>) -> Vec<StageTotals> {
+/// Aggregate per stage/provider/model. `registry` is the user's `models.yaml`;
+/// its rates win over the built-in table, which only seeds the models MUR
+/// ships with. Pass `None` to price purely from the built-in table.
+pub fn aggregate(
+    records: impl Iterator<Item = LlmCallRecord>,
+    registry: Option<&ModelRegistry>,
+) -> Vec<StageTotals> {
     let mut buckets: BTreeMap<(String, String, String), StageTotals> = BTreeMap::new();
     for rec in records {
         let key = (rec.stage.clone(), rec.provider.clone(), rec.model.clone());
@@ -69,6 +76,7 @@ pub fn aggregate(records: impl Iterator<Item = LlmCallRecord>) -> Vec<StageTotal
     for s in &mut stages {
         s.estimated_usd = estimate_cost(
             &s.model,
+            registry,
             s.input_tokens,
             s.output_tokens,
             s.cache_read_input_tokens,
@@ -78,7 +86,7 @@ pub fn aggregate(records: impl Iterator<Item = LlmCallRecord>) -> Vec<StageTotal
     stages
 }
 
-fn price_table(model: &str) -> Option<(f64, f64, f64, f64)> {
+pub(crate) fn price_table(model: &str) -> Option<(f64, f64, f64, f64)> {
     match model {
         m if m.starts_with("claude-haiku-4-5") => Some((1.00, 5.00, 1.25, 0.10)),
         m if m.starts_with("claude-opus-5") => Some((5.00, 25.00, 6.25, 0.50)),
@@ -91,6 +99,24 @@ fn price_table(model: &str) -> Option<(f64, f64, f64, f64)> {
         m if m.starts_with("claude-opus-4-8") => Some((5.00, 25.00, 6.25, 0.50)),
         m if m.starts_with("claude-opus-4-7") => Some((5.00, 25.00, 6.25, 0.50)),
         m if m.starts_with("claude-opus-4-6") => Some((5.00, 25.00, 6.25, 0.50)),
+        // Current lineup first: `gpt-5` is a prefix of every `gpt-5.x` id, so
+        // anything below this block would otherwise be priced as plain gpt-5 —
+        // a 6x undercount on sol, 24x on the pro tiers. Within a family the
+        // bare id goes last for the same reason. Cache columns are
+        // (write, read): writes are free, reads are 1/10 of input.
+        m if m.starts_with("gpt-5.6-sol") => Some((5.00, 30.00, 0.0, 0.50)),
+        m if m.starts_with("gpt-5.6-terra") => Some((2.50, 15.00, 0.0, 0.25)),
+        m if m.starts_with("gpt-5.6-luna") => Some((1.00, 6.00, 0.0, 0.10)),
+        m if m.starts_with("gpt-5.5-pro") => Some((30.00, 180.00, 0.0, 0.0)),
+        m if m.starts_with("gpt-5.5") => Some((5.00, 30.00, 0.0, 0.50)),
+        m if m.starts_with("gpt-5.4-pro") => Some((30.00, 180.00, 0.0, 0.0)),
+        m if m.starts_with("gpt-5.4-mini") => Some((0.75, 4.50, 0.0, 0.075)),
+        m if m.starts_with("gpt-5.4-nano") => Some((0.20, 1.25, 0.0, 0.02)),
+        m if m.starts_with("gpt-5.4") => Some((2.50, 15.00, 0.0, 0.25)),
+        m if m.starts_with("gpt-5.3-codex") => Some((1.75, 14.00, 0.0, 0.175)),
+        m if m.starts_with("chat-latest") => Some((5.00, 30.00, 0.0, 0.50)),
+        // Retired generations, kept so historical telemetry still costs out.
+        // Their cached-input rates are no longer published, hence 0.
         m if m.starts_with("gpt-4o-mini") => Some((0.15, 0.60, 0.0, 0.0)),
         m if m.starts_with("gpt-4o") => Some((2.50, 10.00, 0.0, 0.0)),
         m if m.starts_with("gpt-4.1-mini") => Some((0.40, 1.60, 0.0, 0.0)),
@@ -99,23 +125,77 @@ fn price_table(model: &str) -> Option<(f64, f64, f64, f64)> {
         m if m.starts_with("gpt-5") => Some((1.25, 10.00, 0.0, 0.0)),
         m if m.starts_with("o3-mini") => Some((1.10, 4.40, 0.0, 0.0)),
         m if m.starts_with("o3") => Some((2.00, 8.00, 0.0, 0.0)),
-        m if m.starts_with("gemini-3.6-flash") => Some((0.30, 2.50, 0.0, 0.0)),
-        m if m.starts_with("gemini-3.5-pro") => Some((1.25, 10.00, 0.0, 0.0)),
-        m if m.starts_with("gemini-2.5-flash") => Some((0.30, 2.50, 0.0, 0.0)),
-        m if m.starts_with("gemini-2.5-pro") => Some((1.25, 10.00, 0.0, 0.0)),
-        m if m.starts_with("gemini-pro-3") => Some((1.25, 10.00, 0.0, 0.0)),
+        // Gemini cache columns are (write, read): writes are billed per
+        // storage-hour rather than per token, so that slot stays 0 and cannot
+        // be expressed here; reads are ~1/10 the input rate. Pro rows use the
+        // <=200k-prompt rate — long-context doubles it, which this flat table
+        // does not model. Each `-lite` precedes its base id, which is a prefix
+        // of it.
+        m if m.starts_with("gemini-3.6-flash") => Some((1.50, 7.50, 0.0, 0.15)),
+        m if m.starts_with("gemini-3.5-flash-lite") => Some((0.30, 2.50, 0.0, 0.03)),
+        m if m.starts_with("gemini-3.5-flash") => Some((1.50, 9.00, 0.0, 0.15)),
+        m if m.starts_with("gemini-3.1-flash-lite") => Some((0.25, 1.50, 0.0, 0.025)),
+        m if m.starts_with("gemini-3.1-pro") => Some((2.00, 12.00, 0.0, 0.20)),
+        m if m.starts_with("gemini-3-flash") => Some((0.50, 3.00, 0.0, 0.05)),
+        m if m.starts_with("gemini-2.5-flash-lite") => Some((0.10, 0.40, 0.0, 0.01)),
+        m if m.starts_with("gemini-2.5-flash") => Some((0.30, 2.50, 0.0, 0.03)),
+        m if m.starts_with("gemini-2.5-pro") => Some((1.25, 10.00, 0.0, 0.125)),
+        // Alias form ("gemini-pro-3.1"): same 3-series Pro rate as above.
+        m if m.starts_with("gemini-pro-3") => Some((2.00, 12.00, 0.0, 0.20)),
+        // DeepSeek (OpenAI-compatible endpoint): input is the cache-MISS rate,
+        // cache read the cache-HIT rate — a 50x spread, far steeper than the
+        // 10x elsewhere. That column only fills if the response carries
+        // `prompt_tokens_details.cached_tokens`, which is what our OpenAI
+        // backend reads.
+        m if m.starts_with("deepseek-v4-flash") => Some((0.14, 0.28, 0.0, 0.0028)),
+        m if m.starts_with("deepseek-v4-pro") => Some((0.435, 0.87, 0.0, 0.003625)),
         _ => None,
     }
 }
 
+/// Rates for `model` as `(input, output, cache_write, cache_read)` per 1M
+/// tokens, registry first.
+///
+/// A user can add any model they like, and `mur model add` fills its rates
+/// from the models.dev catalog — so their entry is the better answer whenever
+/// one exists. The built-in table is the offline seed for ids that never made
+/// it into the registry (raw model strings in old telemetry, deleted entries).
+///
+/// Registry entries carry no cache rates, and an unknown discount is priced at
+/// the full input rate rather than at zero: over-charging a cached token is
+/// visible in a report, under-charging one silently overspends a budget.
+pub(crate) fn resolve_rates(
+    model: &str,
+    registry: Option<&ModelRegistry>,
+) -> Option<(f64, f64, f64, f64)> {
+    if let Some(reg) = registry
+        && let Some(entry) = reg
+            .models
+            .iter()
+            .find(|(alias, e)| e.model == model || alias.as_str() == model)
+            .map(|(_, e)| e)
+    {
+        // Registry rates are per 1k, this table is per 1M.
+        let (input, output) = entry.effective_costs();
+        // An entry with no rates at all (a local runtime, say) is "unknown",
+        // not "free" — fall through rather than report a confident $0.
+        if let (Some(i), Some(o)) = (input, output) {
+            let (i, o) = (i * 1000.0, o * 1000.0);
+            return Some((i, o, i, i));
+        }
+    }
+    price_table(model)
+}
+
 fn estimate_cost(
     model: &str,
+    registry: Option<&ModelRegistry>,
     in_tok: u64,
     out_tok: u64,
     cache_r: u64,
     cache_w: u64,
 ) -> Option<f64> {
-    let (pi, po, pcw, pcr) = price_table(model)?;
+    let (pi, po, pcw, pcr) = resolve_rates(model, registry)?;
     Some(
         (in_tok as f64 / 1_000_000.0) * pi
             + (out_tok as f64 / 1_000_000.0) * po
@@ -159,7 +239,11 @@ pub fn read_records_since(
 pub async fn cmd_cost_report(since: &str, json: bool, root_override: Option<&str>) -> Result<()> {
     let since_ts = parse_since(since)?;
     let records = read_records_since(since_ts, root_override)?;
-    let stages = aggregate(records.into_iter());
+    // Missing or unreadable registry is not fatal — the built-in table still
+    // prices what it knows, and unknown models simply show no estimate.
+    let registry =
+        ModelRegistry::load_from(&crate::paths::mur_root(root_override).join("models.yaml")).ok();
+    let stages = aggregate(records.into_iter(), registry.as_ref());
     // Note: f64::sum() of an empty iter returns -0.0, which renders as "$-0.000".
     // Coerce to +0.0 by adding 0.0.
     let total_usd: f64 = stages.iter().filter_map(|s| s.estimated_usd).sum::<f64>() + 0.0;
@@ -318,6 +402,37 @@ mod tests {
             assert!((cr - inp * 0.10).abs() < 1e-9, "{m} cache-read");
         }
         assert_eq!(price_table("no-such-model"), None);
+        // A newer model in an existing family gets its own rate, never the
+        // older sibling's: 3.6-flash is $1.50/$7.50, 2.5-flash $0.30/$2.50.
+        assert_eq!(
+            price_table("gemini-3.6-flash"),
+            Some((1.50, 7.50, 0.0, 0.15))
+        );
+        assert_ne!(
+            price_table("gemini-3.6-flash"),
+            price_table("gemini-2.5-flash")
+        );
+    }
+
+    /// Every id here is a strict prefix of the one before it, so a row placed
+    /// in the wrong order silently prices the longer id at the shorter one's
+    /// rate — off by 6x for gpt-5.6-sol and 24x for the pro tiers.
+    #[test]
+    fn longer_ids_are_not_swallowed_by_shorter_prefixes() {
+        for (specific, generic) in [
+            ("gpt-5.6-sol", "gpt-5"),
+            ("gpt-5.5-pro", "gpt-5.5"),
+            ("gpt-5.4-nano", "gpt-5.4"),
+            ("gemini-3.5-flash-lite", "gemini-3.5-flash"),
+            ("gemini-2.5-flash-lite", "gemini-2.5-flash"),
+        ] {
+            assert!(specific.starts_with(generic), "{specific} vs {generic}");
+            assert_ne!(
+                price_table(specific),
+                price_table(generic),
+                "{specific} is being priced as {generic}"
+            );
+        }
     }
 
     #[test]
@@ -344,7 +459,7 @@ mod tests {
             ),
             rec("ask.generate", "ollama", "qwen3:14b", 0, 0, 0, 0),
         ];
-        let stages = aggregate(records.into_iter());
+        let stages = aggregate(records.into_iter(), None);
         assert_eq!(stages.len(), 3);
         let extr = stages.iter().find(|s| s.stage == "extractive").unwrap();
         assert_eq!(extr.calls, 2);
@@ -356,7 +471,7 @@ mod tests {
     #[test]
     fn aggregate_sets_none_estimated_usd_for_ollama() {
         let records = vec![rec("rewriter", "ollama", "llama3.2:3b", 100, 50, 0, 0)];
-        let stages = aggregate(records.into_iter());
+        let stages = aggregate(records.into_iter(), None);
         assert_eq!(stages.len(), 1);
         assert!(
             stages[0].estimated_usd.is_none(),
@@ -366,27 +481,105 @@ mod tests {
 
     #[test]
     fn estimate_cost_haiku_matches_table() {
-        let cost = estimate_cost("claude-haiku-4-5", 1_000_000, 1_000_000, 0, 0).unwrap();
+        let cost = estimate_cost("claude-haiku-4-5", None, 1_000_000, 1_000_000, 0, 0).unwrap();
         assert!((cost - 6.0).abs() < 0.001);
     }
 
     #[test]
     fn estimate_cost_openai_gpt4o_mini_matches_table() {
         // 1M in @ $0.15 + 1M out @ $0.60 = $0.75
-        let cost = estimate_cost("gpt-4o-mini", 1_000_000, 1_000_000, 0, 0).unwrap();
+        let cost = estimate_cost("gpt-4o-mini", None, 1_000_000, 1_000_000, 0, 0).unwrap();
         assert!((cost - 0.75).abs() < 0.001);
     }
 
     #[test]
     fn estimate_cost_gemini_25_flash_matches_table() {
         // 1M in @ $0.30 + 1M out @ $2.50 = $2.80
-        let cost = estimate_cost("gemini-2.5-flash", 1_000_000, 1_000_000, 0, 0).unwrap();
+        let cost = estimate_cost("gemini-2.5-flash", None, 1_000_000, 1_000_000, 0, 0).unwrap();
         assert!((cost - 2.80).abs() < 0.001);
     }
 
     #[test]
     fn estimate_cost_unknown_model_returns_none() {
-        assert!(estimate_cost("some-unknown-model-vNext", 1, 1, 0, 0).is_none());
+        assert!(estimate_cost("some-unknown-model-vNext", None, 1, 1, 0, 0).is_none());
+    }
+
+    fn reg_with(alias: &str, model: &str, entry: mur_common::model::ModelEntry) -> ModelRegistry {
+        let mut reg = ModelRegistry::default();
+        reg.models.insert(
+            alias.into(),
+            mur_common::model::ModelEntry {
+                provider: "x".into(),
+                model: model.into(),
+                ..entry
+            },
+        );
+        reg
+    }
+
+    /// The registry stores per-1k rates and this table is per-1M. Getting the
+    /// conversion backwards is a 1000x error that no eyeball catches.
+    #[test]
+    fn registry_rates_win_and_convert_per_1k_to_per_1m() {
+        let reg = reg_with(
+            "house_model",
+            "vendor-x-large",
+            mur_common::model::ModelEntry {
+                input_cost_per_1k: Some(0.002),
+                output_cost_per_1k: Some(0.008),
+                ..Default::default()
+            },
+        );
+        let (i, o, ..) = resolve_rates("vendor-x-large", Some(&reg)).unwrap();
+        assert_eq!((i, o), (2.0, 8.0));
+        // Telemetry may carry the alias instead of the wire id.
+        assert_eq!(resolve_rates("house_model", Some(&reg)).unwrap().0, 2.0);
+        // A model the registry has never heard of still falls back to the table.
+        assert_eq!(
+            resolve_rates("claude-opus-5", Some(&reg)),
+            price_table("claude-opus-5")
+        );
+        // A registry rate overrides the built-in one rather than merging.
+        let over = reg_with(
+            "opus",
+            "claude-opus-5",
+            mur_common::model::ModelEntry {
+                input_cost_per_1k: Some(0.009),
+                output_cost_per_1k: Some(0.09),
+                ..Default::default()
+            },
+        );
+        assert_eq!(resolve_rates("claude-opus-5", Some(&over)).unwrap().0, 9.0);
+    }
+
+    /// An entry with no rates means "we don't know", not "it is free" — a
+    /// confident $0 is exactly how a budget guard stops guarding.
+    #[test]
+    fn priceless_registry_entry_falls_through_instead_of_reporting_zero() {
+        let reg = reg_with(
+            "local",
+            "Qwen3.5-4B-MLX-4bit",
+            mur_common::model::ModelEntry::default(),
+        );
+        assert_eq!(resolve_rates("Qwen3.5-4B-MLX-4bit", Some(&reg)), None);
+    }
+
+    /// Registry entries carry no cache rates. Pricing an unknown discount at
+    /// zero under-charges; pricing it at the input rate over-charges. Only one
+    /// of those can silently blow a budget.
+    #[test]
+    fn unknown_cache_rates_round_up_to_the_input_rate() {
+        let reg = reg_with(
+            "m",
+            "vendor-x",
+            mur_common::model::ModelEntry {
+                input_cost_per_1k: Some(0.002),
+                output_cost_per_1k: Some(0.008),
+                ..Default::default()
+            },
+        );
+        let (input, _, cache_w, cache_r) = resolve_rates("vendor-x", Some(&reg)).unwrap();
+        assert_eq!((cache_w, cache_r), (input, input));
     }
 
     #[test]
