@@ -1674,7 +1674,7 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
         SlashCmd::Open => {
             let items = crate::open_items::collect(&app.home);
             app.open_items_fp = Some(crate::open_items::fingerprint(&items));
-            app.push_system(crate::open_items::render(&items).trim().to_string());
+            app.push_system(crate::open_items::render(&items, &[]).trim().to_string());
         }
         SlashCmd::Unknown(c) => app.push_system(format!("unknown command: /{c} — try /help")),
     }

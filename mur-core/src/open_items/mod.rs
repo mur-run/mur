@@ -113,29 +113,43 @@ pub fn fingerprint(items: &[OpenItem]) -> u64 {
 
 /// Render for a terminal. Groups by source with the marker legend, because an
 /// unlabelled mixed list is the thing this module exists to avoid.
-pub fn render(items: &[OpenItem]) -> String {
-    if items.is_empty() {
-        return "No open items.\n".into();
-    }
-    let mut out = String::new();
-    let mut last: Option<ItemSource> = None;
-    for it in items {
-        if last != Some(it.source) {
-            let caveat = match it.source {
-                ItemSource::Observed => "from MUR's own state",
-                ItemSource::Reported => "an agent said so, unverified",
-            };
-            out.push_str(&format!(
-                "\n{} {} — {caveat}\n",
-                it.source.marker(),
-                it.source.label()
-            ));
-            last = Some(it.source);
+pub fn render(items: &[OpenItem], muted: &[String]) -> String {
+    let mut out = if items.is_empty() {
+        "No open items.\n".to_string()
+    } else {
+        let mut s = String::new();
+        let mut last: Option<ItemSource> = None;
+        for it in items {
+            if last != Some(it.source) {
+                let caveat = match it.source {
+                    ItemSource::Observed => "from MUR's own state",
+                    ItemSource::Reported => "an agent said so, unverified",
+                };
+                s.push_str(&format!(
+                    "\n{} {} — {caveat}\n",
+                    it.source.marker(),
+                    it.source.label()
+                ));
+                last = Some(it.source);
+            }
+            s.push_str(&format!("  {} [{}]\n", it.title, it.origin));
+            if let Some(next) = &it.next {
+                s.push_str(&format!("      → {next}\n"));
+            }
         }
-        out.push_str(&format!("  {} [{}]\n", it.title, it.origin));
-        if let Some(next) = &it.next {
-            out.push_str(&format!("      → {next}\n"));
-        }
+        s
+    };
+
+    // Collapsed, never hidden. This one line is what makes a permanent mute
+    // safe: the reader never has to wonder whether something is missing, so
+    // the real trade is one line versus N — not show versus hide.
+    if !muted.is_empty() {
+        out.push_str(&format!(
+            "\n{} source{} muted ({}) — mur open --all\n",
+            muted.len(),
+            if muted.len() == 1 { "" } else { "s" },
+            muted.join(", ")
+        ));
     }
     out
 }
@@ -173,10 +187,13 @@ mod tests {
     /// which without being told twice.
     #[test]
     fn render_labels_both_sources() {
-        let out = render(&[
-            item(ItemSource::Observed, "a", Utc::now()),
-            item(ItemSource::Reported, "b", Utc::now()),
-        ]);
+        let out = render(
+            &[
+                item(ItemSource::Observed, "a", Utc::now()),
+                item(ItemSource::Reported, "b", Utc::now()),
+            ],
+            &[],
+        );
         assert!(out.contains("observed"), "{out}");
         assert!(out.contains("reported"), "{out}");
         assert!(out.contains("unverified"), "{out}");
@@ -184,7 +201,36 @@ mod tests {
 
     #[test]
     fn empty_says_so_rather_than_printing_a_bare_header() {
-        assert_eq!(render(&[]), "No open items.\n");
+        assert_eq!(render(&[], &[]), "No open items.\n");
+    }
+
+    /// A permanent mute is only safe if the list always says something is
+    /// muted. The reader must never have to wonder whether anything is hidden.
+    #[test]
+    fn footer_names_muted_sources() {
+        let out = render(
+            &[item(ItemSource::Observed, "visible", Utc::now())],
+            &["inbox".to_string(), "fleet:old".to_string()],
+        );
+        assert!(out.contains("2 sources muted"), "{out}");
+        assert!(out.contains("inbox"), "{out}");
+        assert!(out.contains("fleet:old"), "{out}");
+        assert!(out.contains("mur open --all"), "{out}");
+    }
+
+    #[test]
+    fn no_footer_when_nothing_is_muted() {
+        let out = render(&[item(ItemSource::Observed, "a", Utc::now())], &[]);
+        assert!(!out.contains("muted"), "{out}");
+    }
+
+    /// Everything muted is not the same as nothing outstanding, and the
+    /// difference has to be visible.
+    #[test]
+    fn everything_muted_still_shows_the_footer() {
+        let out = render(&[], &["inbox".to_string()]);
+        assert!(out.contains("1 source muted"), "{out}");
+        assert!(out.contains("No open items"), "{out}");
     }
 
     /// Nothing open must produce no line at all. "0 open items" after every
