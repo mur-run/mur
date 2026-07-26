@@ -35,21 +35,51 @@ pub fn save_config(config: &Config) -> Result<()> {
 /// alone silently deletes user blocks — `research_gateway` was measurably lost
 /// on every `mur sleep` (#778). Typed fields win; only keys absent from the
 /// new document are carried over from the old one.
+///
+/// A file that exists but fails to parse is refused outright (`Err`, nothing
+/// written) rather than silently treated as "no existing config" — that
+/// would replace the user's entire file with defaults instead of merely
+/// skipping the merge (residual gap found in review of #778). A missing
+/// file is first-run and must still succeed; a file that parses to
+/// something other than a mapping (e.g. an empty file parses to `null`) is
+/// not a parse failure and also keeps
+/// today's skip-the-merge-and-write behaviour.
 fn merge_over_existing(path: &Path, config: &Config) -> Result<String> {
     let mut out = serde_yaml::to_value(config)?;
-    let existing: Option<serde_yaml::Value> = fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_yaml::from_str(&s).ok());
 
-    if let (Some(serde_yaml::Value::Mapping(old)), serde_yaml::Value::Mapping(new)) =
-        (existing, &mut out)
-    {
-        for (k, v) in old {
-            if !new.contains_key(&k) {
-                new.insert(k, v);
+    match fs::read_to_string(path) {
+        Ok(content) => {
+            let existing: serde_yaml::Value = serde_yaml::from_str(&content).map_err(|e| {
+                anyhow::anyhow!(
+                    "config at {} is not valid YAML and was left untouched \
+                     (fix the syntax and try again): {e}",
+                    path.display()
+                )
+            })?;
+
+            if let (serde_yaml::Value::Mapping(old), serde_yaml::Value::Mapping(new)) =
+                (existing, &mut out)
+            {
+                for (k, v) in old {
+                    if !new.contains_key(&k) {
+                        new.insert(k, v);
+                    }
+                }
             }
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // First run: nothing to merge over.
+        }
+        Err(e) => {
+            return Err(e).with_context(|| {
+                format!(
+                    "could not read existing config at {} (left untouched)",
+                    path.display()
+                )
+            });
+        }
     }
+
     Ok(serde_yaml::to_string(&out)?)
 }
 
@@ -163,5 +193,64 @@ mod save_roundtrip_tests {
         let back = std::fs::read_to_string(&path).unwrap();
         assert!(back.contains("99"), "typed field not written:\n{back}");
         assert!(back.contains("keep_me"), "unknown key dropped:\n{back}");
+    }
+
+    /// A file that exists but fails to parse must never be silently replaced
+    /// with defaults — that would wipe every user setting, not just the
+    /// unknown blocks `merge_over_existing` is meant to protect. The fix
+    /// must refuse the write and leave the corrupt file exactly as it was.
+    #[test]
+    fn save_errors_on_corrupt_existing_file_and_leaves_it_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        let corrupt = "session:\n  retention_days: [1, 2\nother: true\n";
+        std::fs::write(&path, corrupt).unwrap();
+
+        let cfg = Config::default();
+        let result = save_config_at(&path, &cfg);
+
+        assert!(
+            result.is_err(),
+            "corrupt existing config must not be silently overwritten"
+        );
+
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            after, corrupt,
+            "corrupt file must be left byte-for-byte untouched:\n{after}"
+        );
+    }
+
+    /// First run: no config file yet. This must keep working — it is not
+    /// the "corrupt file" case.
+    #[test]
+    fn save_succeeds_when_file_does_not_exist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        assert!(!path.exists());
+
+        let cfg = Config::default();
+        let result = save_config_at(&path, &cfg);
+
+        assert!(result.is_ok(), "first-run save must succeed: {result:?}");
+        assert!(path.exists());
+    }
+
+    /// An empty file parses to `Value::Null`, not a mapping — that is a
+    /// valid (if trivial) document, not a parse failure, so it must not be
+    /// treated as corrupt.
+    #[test]
+    fn save_succeeds_when_existing_file_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        std::fs::write(&path, "").unwrap();
+
+        let cfg = Config::default();
+        let result = save_config_at(&path, &cfg);
+
+        assert!(
+            result.is_ok(),
+            "empty existing file must still allow save: {result:?}"
+        );
     }
 }
