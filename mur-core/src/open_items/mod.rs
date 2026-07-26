@@ -40,6 +40,31 @@ pub fn collect(mur_home: &Path) -> Vec<OpenItem> {
     items
 }
 
+/// Split `items` by the mute list.
+///
+/// Returns the items to show, and the muted origins that actually matched
+/// something — the footer names what the reader would otherwise have seen,
+/// not what the config happens to contain, so a stale mute stays quiet.
+pub fn partition(items: Vec<OpenItem>, muted: &[String]) -> (Vec<OpenItem>, Vec<String>) {
+    let mut hidden: Vec<String> = Vec::new();
+    let visible: Vec<OpenItem> = items
+        .into_iter()
+        .filter(|it| {
+            // Exact match, never prefix: `fleet` must not swallow `fleet:acme`.
+            if muted.iter().any(|m| m == &it.origin) {
+                if !hidden.contains(&it.origin) {
+                    hidden.push(it.origin.clone());
+                }
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
+    hidden.sort();
+    (visible, hidden)
+}
+
 /// One line for a place that cannot afford a panel — a TUI turn boundary.
 ///
 /// `None` when there is nothing open, because the alternative is telling the
@@ -209,5 +234,62 @@ mod tests {
         // Same title, different source = a different claim about the world.
         let reported = vec![item(ItemSource::Reported, "one", Utc::now())];
         assert_ne!(fingerprint(&base), fingerprint(&reported));
+    }
+
+    #[test]
+    fn partition_hides_muted_origins_and_names_them() {
+        let items = vec![
+            OpenItem {
+                origin: "inbox".into(),
+                ..item(ItemSource::Observed, "a", Utc::now())
+            },
+            OpenItem {
+                origin: "fleet:x".into(),
+                ..item(ItemSource::Observed, "b", Utc::now())
+            },
+        ];
+        let (visible, muted) = partition(items, &["inbox".to_string()]);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].origin, "fleet:x");
+        assert_eq!(muted, vec!["inbox".to_string()]);
+    }
+
+    /// `fleet` must not swallow `fleet:acme`. Prefix matching is the one
+    /// outcome a mute must never produce by accident.
+    #[test]
+    fn mute_matching_is_exact_not_prefix() {
+        let items = vec![OpenItem {
+            origin: "fleet:acme".into(),
+            ..item(ItemSource::Observed, "a", Utc::now())
+        }];
+        let (visible, muted) = partition(items, &["fleet".to_string()]);
+        assert_eq!(visible.len(), 1, "prefix must not match");
+        assert!(muted.is_empty());
+    }
+
+    /// A configured mute that matched nothing is not named — the footer
+    /// reports what the reader would otherwise have seen, not the config.
+    #[test]
+    fn a_mute_that_matched_nothing_is_not_reported() {
+        let items = vec![OpenItem {
+            origin: "inbox".into(),
+            ..item(ItemSource::Observed, "a", Utc::now())
+        }];
+        let (_, muted) = partition(items, &["fleet:gone".to_string()]);
+        assert!(muted.is_empty());
+    }
+
+    /// Muting a noisy source has to silence the turn notice too, or the mute
+    /// does nothing where it matters most.
+    #[test]
+    fn fingerprint_over_visible_ignores_muted_churn() {
+        let mk = |n: usize| OpenItem {
+            title: format!("{n} proposals"),
+            origin: "inbox".into(),
+            ..item(ItemSource::Observed, "x", Utc::now())
+        };
+        let (v1, _) = partition(vec![mk(246)], &["inbox".to_string()]);
+        let (v2, _) = partition(vec![mk(300)], &["inbox".to_string()]);
+        assert_eq!(fingerprint(&v1), fingerprint(&v2));
     }
 }

@@ -188,6 +188,10 @@ pub struct Config {
     #[serde(default)]
     pub fleet_run: FleetRunConfig,
 
+    // --- `mur open` display policy ---
+    #[serde(default)]
+    pub open_items: OpenItemsConfig,
+
     // --- Hub Fleet Manager redesign ---
     #[serde(default)]
     pub fleet: FleetConfig,
@@ -221,6 +225,20 @@ pub struct FleetRunConfig {
     /// Fleet names those agents may run. Empty = deny all.
     #[serde(default)]
     pub fleets: Vec<String>,
+}
+
+/// Display policy for `mur open`.
+///
+/// Lives in `config.yaml` rather than in `open-items.jsonl` because that log
+/// is append-only and agent-writable via the `open_item` tool. A user's
+/// decision to stop looking at a source must not be overturnable by an agent
+/// appending a record. Same reasoning as `fleet_run.agents`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct OpenItemsConfig {
+    /// Exact `origin` strings to collapse out of `mur open`. Exact match
+    /// only — `fleet` never matches `fleet:acme`.
+    #[serde(default)]
+    pub muted: Vec<String>,
 }
 
 /// Daemon-wide gate for unattended fleet auto-run (`mur-daemon`'s `fleet_tick`).
@@ -1519,6 +1537,33 @@ embedding:
             l3.to_backend_config().api_key_ref.as_deref(),
             Some("keychain:mur/anthropic")
         );
+    }
+
+    #[test]
+    fn open_items_muted_parses_and_defaults_empty() {
+        let c: Config = serde_yaml::from_str("open_items:\n  muted:\n    - inbox\n").unwrap();
+        assert_eq!(c.open_items.muted, vec!["inbox".to_string()]);
+
+        let d: Config = serde_yaml::from_str("llm:\n  model: x\n").unwrap();
+        assert!(d.open_items.muted.is_empty(), "must default to no mutes");
+    }
+
+    /// Fail toward showing. A config that will not parse must yield an empty
+    /// mute set, never a quiet, confident, incomplete list.
+    #[test]
+    fn unreadable_config_yields_no_mutes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        std::fs::write(&path, "this: is: not: valid: yaml: [[[\n").unwrap();
+        let cfg = Config::load_or_default(&path);
+        assert!(
+            cfg.open_items.muted.is_empty(),
+            "a broken config must hide nothing"
+        );
+
+        // Same for a config that is simply absent.
+        let missing = Config::load_or_default(&tmp.path().join("nope.yaml"));
+        assert!(missing.open_items.muted.is_empty());
     }
 }
 
