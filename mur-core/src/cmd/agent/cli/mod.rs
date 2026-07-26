@@ -12,6 +12,7 @@ mod bash_class;
 mod complete;
 mod diff;
 mod dump;
+mod follow;
 mod footer;
 mod manage;
 mod markdown;
@@ -104,7 +105,7 @@ const SPINNER_MS: u64 = 90;
 /// Max chars of an arg hint shown on a step line in `--plain` mode.
 const PLAIN_STEP_HINT_MAX: usize = 120;
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /mcp  /skill  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
+const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /mcp  /skill  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
 pub async fn cmd_cli(
@@ -724,6 +725,15 @@ async fn event_loop(
             .map(TokioInstant::from_std)
             .unwrap_or_else(|| TokioInstant::from_std(StdInstant::now()));
         let input_armed = app.panel_input_deadline.is_some();
+        // A followed channel is polled on its own deadline (not a per-iteration
+        // `sleep`, which every keypress would reset — during a busy turn the
+        // tail would never fire).
+        let follow_armed = app.follow.is_some();
+        let follow_at = app
+            .follow
+            .as_ref()
+            .map(|f| TokioInstant::from_std(f.next_poll))
+            .unwrap_or_else(|| TokioInstant::from_std(StdInstant::now()));
         tokio::select! {
             maybe = events.next() => match maybe {
                 Some(Ok(ev)) => handle_event(app, ev, &tx).await,
@@ -739,6 +749,9 @@ async fn event_loop(
             // Wake at the blink deadline; the loop redraws at the top of the
             // next iteration, advancing the eye frame. No state change needed.
             _ = tokio::time::sleep_until(blink_at), if blink_live => {}
+            _ = tokio::time::sleep_until(follow_at), if follow_armed => {
+                app.poll_follow(StdInstant::now());
+            }
             _ = tokio::time::sleep_until(input_due), if input_armed => {
                 if let Some(raw) = take_due_input(app, StdInstant::now())
                     && let Some(p) = &app.panel
@@ -1476,7 +1489,44 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
             Ok(_) => app.push_system("no saved conversations yet"),
             Err(e) => app.push_system(format!("could not list sessions: {e}")),
         },
-        SlashCmd::Channels(n) => {
+        SlashCmd::Channels { n, follow } => {
+            // `--follow` never touches the current conversation: it tails
+            // ANOTHER channel while this pane keeps chatting, so an in-flight
+            // turn must not be cancelled for it.
+            if follow {
+                let recent = match persist::list_recent(&app.home, &app.agent, RECENT_LIMIT) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        app.push_system(format!("could not list channels: {e}"));
+                        return;
+                    }
+                };
+                match n {
+                    None => {
+                        match app.follow.take() {
+                            Some(f) => app.push_system(format!("stopped following {}", f.tag())),
+                            None => app.push_system(
+                                "not following anything — /channels N --follow to start",
+                            ),
+                        }
+                        return;
+                    }
+                    Some(n) => match recent.get(n.wrapping_sub(1)) {
+                        Some(s) => {
+                            let id = s.id.clone();
+                            match app.start_follow(&id, StdInstant::now()) {
+                                Ok(()) => app.push_system(format!(
+                                    "following {} — new events appear here; /channels --follow to stop",
+                                    &id[..id.len().min(8)]
+                                )),
+                                Err(e) => app.push_system(format!("could not follow: {e:#}")),
+                            }
+                        }
+                        None => app.push_system(format!("no channel {n}")),
+                    },
+                }
+                return;
+            }
             // Cancel any in-flight stream before we potentially switch channels.
             if app.streaming {
                 if let Some(tid) = app.current_task_id.clone() {
@@ -1513,7 +1563,9 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
                     if recent.is_empty() {
                         app.push_system("no channels yet");
                     } else {
-                        let mut out = String::from("channels (type /channels N to switch):\n");
+                        let mut out = String::from(
+                            "channels (/channels N to switch · N --follow to tail):\n",
+                        );
                         for (i, s) in recent.iter().enumerate() {
                             out.push_str(&format!(
                                 "  {} · {} turns · {}\n",
