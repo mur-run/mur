@@ -524,6 +524,7 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
         name: name.to_string(),
         display_name: name.to_string(),
         role: None,
+        effort: None,
         version: "0.1.0".to_string(),
         persona: Persona {
             category: PersonaCategory::Custom,

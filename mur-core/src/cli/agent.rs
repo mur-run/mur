@@ -111,6 +111,17 @@ pub enum AgentAction {
         /// Agent name
         name: String,
     },
+    /// Set, show, or clear an agent's per-turn effort
+    /// (low | medium | high | xhigh | max). Unset means the API default, high.
+    Effort {
+        /// Agent name
+        name: String,
+        /// Level to set; omit to print the current setting
+        level: Option<String>,
+        /// Unset the level, restoring the API default
+        #[arg(long)]
+        clear: bool,
+    },
     /// Who can do what — the dispatch index, derived from what the sandbox
     /// actually enforces. With no filter, prints the whole roster.
     Who {

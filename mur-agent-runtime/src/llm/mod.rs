@@ -141,6 +141,15 @@ pub struct LlmRequest {
     pub pin_model_ref: Option<String>,
     /// Owning task id, threaded for telemetry correlation. None outside tasks.
     pub task_id: Option<String>,
+    /// How hard the model should work on THIS call. `None` leaves the field
+    /// off, which is the API default (`high`) — not "no effort".
+    ///
+    /// Set it at the call site that knows what the call is for: a mechanical
+    /// request (write a summary, emit a small structured plan) has no use for
+    /// the depth an open-ended coding turn needs, and pays for it anyway when
+    /// this is left unset. Narrowed to what the resolved model accepts by
+    /// `mur_common::llm::supported_effort` at the client boundary.
+    pub effort: Option<mur_common::llm::Effort>,
 }
 
 #[derive(Debug, Clone)]

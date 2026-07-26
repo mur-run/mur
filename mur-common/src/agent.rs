@@ -59,6 +59,17 @@ pub struct AgentProfile {
     /// overstate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    /// How hard this agent's model should work per turn
+    /// (`low`/`medium`/`high`/`xhigh`/`max`). `None` leaves the field off,
+    /// which is the API default (`high`) — not "no effort".
+    ///
+    /// Set it where the agent's JOB is known: a single-purpose build
+    /// specialist earns `xhigh`, a fan-out research worker `medium`, a
+    /// classifier `low`. Narrowed to what the resolved model accepts at the
+    /// client boundary, so an agent pinned to an older model degrades rather
+    /// than 400s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<crate::llm::Effort>,
     pub version: String,
     pub persona: Persona,
     pub sys_prompt_file: String,

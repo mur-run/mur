@@ -1437,6 +1437,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             output_artifact_path,
         } => cmd::agent::cmd_send(&name, &message, output_artifact_path.as_deref())?,
         AgentAction::Card { name } => cmd::agent::cmd_card(&name)?,
+        AgentAction::Effort { name, level, clear } => cmd::agent::cmd_effort(&name, level, clear)?,
         AgentAction::Who {
             can,
             skill,

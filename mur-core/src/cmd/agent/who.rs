@@ -54,6 +54,13 @@ fn print_agent(f: &AgentFacts) {
         },
         f.net
     );
+    println!(
+        "      effort {}",
+        match f.effort {
+            Some(e) => e.as_str(),
+            None => "— (unset: the API default is high)",
+        }
+    );
     if !f.skills.is_empty() {
         println!("      skills {}", f.skills.join(", "));
     }

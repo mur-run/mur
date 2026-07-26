@@ -15,6 +15,7 @@
 use super::{LlmClient, LlmError, LlmRequest, LlmResponse, RichMessage, StopReason};
 use async_trait::async_trait;
 use mur_common::llm::anthropic_base_url;
+use mur_common::llm::supported_effort;
 use serde_json::json;
 
 const DEFAULT_VERSION: &str = "2023-06-01";
@@ -523,6 +524,11 @@ impl LlmClient for AnthropicClient {
         if let Some(t) = req.temperature {
             body["temperature"] = json!(t);
         }
+        // Effort is per-call, narrowed to what this model actually accepts —
+        // an unsupported level is a 400. Absent = the API default (`high`).
+        if let Some(e) = req.effort.and_then(|e| supported_effort(&self.model, e)) {
+            body["output_config"] = json!({ "effort": e.as_str() });
+        }
         if !req.tools.is_empty() {
             body["tools"] = serde_json::json!(
                 req.tools
@@ -594,6 +600,11 @@ impl LlmClient for AnthropicClient {
         }
         if let Some(t) = req.temperature {
             body["temperature"] = json!(t);
+        }
+        // Effort is per-call, narrowed to what this model actually accepts —
+        // an unsupported level is a 400. Absent = the API default (`high`).
+        if let Some(e) = req.effort.and_then(|e| supported_effort(&self.model, e)) {
+            body["output_config"] = json!({ "effort": e.as_str() });
         }
         if !req.tools.is_empty() {
             body["tools"] = serde_json::json!(
@@ -674,6 +685,27 @@ mod tests {
             "test-key".into(),
             "claude-3-5-sonnet-20241022".into(),
         )
+    }
+
+    #[test]
+    fn effort_is_narrowed_against_the_client_model() {
+        // The client's own model decides what may be sent. The fixture client
+        // above runs a model with no effort parameter, so a request asking for
+        // one must produce no `output_config` at all rather than a 400.
+        assert_eq!(
+            supported_effort(&make_client().model, mur_common::llm::Effort::Low),
+            None
+        );
+        // A current model takes the level as-is.
+        let c = AnthropicClient::new(
+            "http://localhost".into(),
+            "k".into(),
+            "claude-opus-5".into(),
+        );
+        assert_eq!(
+            supported_effort(&c.model, mur_common::llm::Effort::Xhigh),
+            Some(mur_common::llm::Effort::Xhigh)
+        );
     }
 
     #[test]

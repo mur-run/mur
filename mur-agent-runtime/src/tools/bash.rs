@@ -540,6 +540,7 @@ mod tests {
             net: NetworkOutboundMode::Restricted,
             skills: vec![],
             model_ref: String::new(),
+            effort: None,
             running: true,
             drift: false,
         };

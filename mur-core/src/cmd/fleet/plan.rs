@@ -367,6 +367,7 @@ mod tests {
             net: mur_common::agent::NetworkOutboundMode::Restricted,
             skills: skills.iter().map(|s| s.to_string()).collect(),
             model_ref: String::new(),
+            effort: None,
             running: true,
             drift: false,
         }

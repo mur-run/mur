@@ -206,6 +206,10 @@ pub struct TaskRunner {
     max_token_budget: u64,
     tools: Vec<Arc<dyn crate::tools::ToolExecutor>>,
     tools_policy: Vec<mur_common::agent::ToolRule>,
+    /// Per-agent effort for this agent's own turns. `None` = the API default.
+    /// Mechanical internal calls override it downward regardless (see
+    /// `graceful_exit`).
+    effort: Option<mur_common::llm::Effort>,
     /// Multi-turn chat memory keyed by `context.task_id` (see `ConversationStore`).
     conversations: Mutex<ConversationStore>,
     /// Set by `begin_drain()` during graceful shutdown. When true, `run_sync_inner`
@@ -318,6 +322,7 @@ impl TaskRunner {
             max_token_budget: DEFAULT_MAX_TOKEN_BUDGET,
             tools: vec![],
             tools_policy: vec![],
+            effort: None,
             conversations: Mutex::new(ConversationStore::default()),
             draining: Arc::new(AtomicBool::new(false)),
         }
@@ -408,6 +413,12 @@ impl TaskRunner {
 
     pub fn with_tools_policy(mut self, rules: Vec<mur_common::agent::ToolRule>) -> Self {
         self.tools_policy = rules;
+        self
+    }
+
+    /// Set the agent's per-turn effort (from its profile).
+    pub fn with_effort(mut self, effort: Option<mur_common::llm::Effort>) -> Self {
+        self.effort = effort;
         self
     }
 
@@ -1119,6 +1130,7 @@ impl TaskRunner {
             temperature: None,
             max_tokens: None,
             tools: vec![],
+            effort: self.effort,
             intent,
             task_id: Some(task_id.to_string()),
             ..Default::default()
@@ -1580,6 +1592,7 @@ impl TaskRunner {
                 messages: history.clone(),
                 temperature: None,
                 max_tokens: None,
+                effort: self.effort,
                 tools: tool_defs.clone(),
                 intent,
                 task_id: Some(task_id.to_string()),
@@ -1831,6 +1844,11 @@ impl TaskRunner {
             messages,
             temperature: None,
             max_tokens: None,
+            // Mechanical: recap what happened, no tools, no decisions — and it
+            // fires exactly when a budget or loop guard already tripped, so
+            // inheriting the agent's `xhigh` for a post-mortem is the wrong
+            // direction. Pinned low regardless of the profile.
+            effort: Some(mur_common::llm::Effort::Low),
             tools: vec![], // tools disabled: force a textual summary
             ..Default::default()
         };
@@ -3221,6 +3239,7 @@ mod tests {
             vec![],
             vec![],
             Some(3),
+            None,
             None,
         );
         let _ = runner.run_sync(loop_spec("loop")).await;
