@@ -266,6 +266,14 @@ impl LlmClient for OpenAiClient {
         if let Some(t) = req.temperature {
             body["temperature"] = json!(t);
         }
+        // Effort, narrowed to what this model family understands. Absent for
+        // local and non-reasoning models rather than sent and ignored.
+        if let Some(e) = req
+            .effort
+            .and_then(|e| mur_common::llm::openai_reasoning_effort(&self.model, e))
+        {
+            body["reasoning_effort"] = json!(e);
+        }
         if let Some(m) = req.max_tokens {
             body["max_tokens"] = json!(m);
         }
@@ -334,6 +342,14 @@ impl LlmClient for OpenAiClient {
         });
         if let Some(t) = req.temperature {
             body["temperature"] = json!(t);
+        }
+        // Effort, narrowed to what this model family understands. Absent for
+        // local and non-reasoning models rather than sent and ignored.
+        if let Some(e) = req
+            .effort
+            .and_then(|e| mur_common::llm::openai_reasoning_effort(&self.model, e))
+        {
+            body["reasoning_effort"] = json!(e);
         }
         if let Some(m) = req.max_tokens {
             body["max_tokens"] = json!(m);
