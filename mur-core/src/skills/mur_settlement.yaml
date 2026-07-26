@@ -1,0 +1,77 @@
+name: mur-settlement
+version: 1.0.0
+publisher: human:mur-official
+description: 'How to close out a turn that changed something: separate verified from merely done, name what is left, and put the handoff last.'
+category: context
+provenance: human
+content:
+  abstract: 'When a turn edits files, runs commands, or stops early, the runtime appends a settlement card built from what actually happened. Write the prose around it: one line of state, what is blocked and why, and what the user must do next. Never claim a thing works unless a command proved it.'
+  context: |
+    ## The rule that matters
+
+    **Do not report a change as working unless something ran and passed.**
+
+    Editing nine files is not a passing build. "Renamed it everywhere" after
+    zero compiles is a claim about intent, not about code. Say what you did and
+    say it is unverified — that reads as weaker and is worth far more, because
+    the moment one "done" turns out to be untested, every later report has to
+    be re-checked by hand.
+
+    Concretely, these are three different states and must not be merged:
+
+    | State | What it means | How to say it |
+    | --- | --- | --- |
+    | Verified | A command ran and passed | "tests 12/12" — quote the number |
+    | Changed | Files edited, nothing run | "changed, not compiled" |
+    | Blocked | Failed, refused, or never attempted | Name the reason and the fix |
+
+    The runtime prints a settlement card with those three columns filled in
+    from what it observed. You cannot talk around it — if you write "all fixed"
+    above a card that says *nothing ran*, the contradiction is right there. Let
+    the card carry the accounting and spend your words on what it cannot know.
+
+    ## What to write
+
+    Three short pieces, in this order:
+
+    1. **State** — one sentence: what was asked, and whether it is done.
+       Lead with the outcome, not the journey.
+    2. **What is left** — anything unfinished, with the reason and what would
+       unblock it. Include work you decided to skip and why; a silent omission
+       reads as completion.
+    3. **Your move** — what the user has to do, as an imperative. Put it last
+       so it is the thing still on screen. Omit the section entirely when there
+       is nothing for them to do — a hollow "let me know if you need anything"
+       trains people to stop reading the end of your messages.
+
+    ## Do not
+
+    - **Do not restate the transcript.** They watched the tool calls scroll
+      past. Summarise the outcome, not the sequence.
+    - **Do not draw the table yourself.** The runtime renders it, sized to the
+      terminal. Your ASCII version will disagree with it and cost tokens.
+    - **Do not settle a question.** If the turn only read files or answered
+      something, just answer. A three-row summary under a one-line reply is
+      noise, and noise is how a real signal stops being read.
+    - **Do not bury the ask.** If the user must run a command, it goes on its
+      own line, copy-pasteable, at the end.
+
+    ## When you were cut off
+
+    If the card says the turn stopped at a cap or a budget, say so in your own
+    first sentence too. Your reply and the card are read together; a confident
+    "all done" above a card that says *output may be incomplete* is the single
+    worst thing you can produce, because now the user cannot tell which half to
+    believe.
+  procedure: []
+triggers:
+  # session_start, not manual: a reporting rule is only useful if it is already
+  # in context when the turn ends. A `manual` trigger would never fire and the
+  # skill would ship as dead weight.
+  - type: session_start
+  - type: manual
+tags:
+  - discipline
+  - reporting
+priority: normal
+updated_at: 1970-01-01T00:00:00Z
