@@ -144,12 +144,7 @@ pub async fn maintenance_call(
     };
 
     // Budget check (pre-flight)
-    let projected_cost = pricing::estimate_cost(
-        &entry.provider,
-        &entry.model,
-        budget.max_input,
-        budget.max_output,
-    );
+    let projected_cost = pricing::estimate_cost(&entry, budget.max_input, budget.max_output);
     if let Err(spent) =
         budget::check_and_reserve(&ctx.budget_ledger, projected_cost, ctx.daily_cap_usd)
     {
@@ -192,12 +187,7 @@ pub async fn maintenance_call(
     // Budget settle (actual cost)
     let actual_input_tokens = resp.usage.input_tokens as u32;
     let actual_output_tokens = resp.usage.output_tokens as u32;
-    let actual_cost = pricing::estimate_cost(
-        &entry.provider,
-        &entry.model,
-        actual_input_tokens,
-        actual_output_tokens,
-    );
+    let actual_cost = pricing::estimate_cost(&entry, actual_input_tokens, actual_output_tokens);
     let _ = budget::settle(&ctx.budget_ledger, projected_cost, actual_cost);
 
     // Cache
