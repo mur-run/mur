@@ -35,6 +35,7 @@ path = "src/lib.rs"
 mur-common = { path = "../mur-common" }
 mur-compress = { path = "../mur-compress" }
 mur-channel = { path = "../mur-channel" }
+mur-open-items = { path = "../mur-open-items" }
 tokio = { workspace = true, features = ["net"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

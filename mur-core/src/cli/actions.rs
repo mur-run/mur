@@ -305,6 +305,26 @@ pub enum ScheduleAction {
 }
 
 #[derive(Subcommand)]
+pub enum OpenAction {
+    /// Record something an agent says is still outstanding
+    Add {
+        /// One line, imperative where possible
+        title: String,
+        /// Which agent is claiming it
+        #[arg(long, default_value = "mur")]
+        agent: String,
+        /// The command or place that resolves it
+        #[arg(long)]
+        next: Option<String>,
+    },
+    /// Mark a reported item resolved (observed items clear themselves)
+    Done {
+        /// Item id from `mur open`
+        id: String,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum SessionAction {
     /// Start recording a session
     Start {

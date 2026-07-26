@@ -159,6 +159,8 @@ pub enum SlashCmd {
     Skin(Option<String>),
     /// `/panel [tab] [target]` — open/drive the MUR Hub companion window.
     Panel(Vec<String>),
+    /// `/open` — what is still outstanding, observed and reported kept apart.
+    Open,
     Quit,
     Unknown(String),
 }
@@ -191,6 +193,7 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
         "skill" | "skills" => SlashCmd::Skill(words.map(str::to_string).collect()),
         "skin" | "theme" => SlashCmd::Skin(words.next().map(str::to_string)),
         "panel" => SlashCmd::Panel(words.map(str::to_string).collect()),
+        "open" | "todo" => SlashCmd::Open,
         "exit" | "quit" | "q" => SlashCmd::Quit,
         other => SlashCmd::Unknown(other.to_string()),
     })
@@ -392,6 +395,9 @@ pub struct App {
     /// Wall-clock instant when the current agent turn began (set in
     /// `begin_user_turn`, cleared in `finish_agent_turn` / `fail_turn`).
     pub turn_started: Option<std::time::Instant>,
+    /// Fingerprint of the open-item set the user was last told about, so the
+    /// end-of-turn notice fires on change rather than on every turn.
+    pub open_items_fp: Option<u64>,
     /// Cumulative token counts for this session (all turns combined).
     pub session_in: u64,
     pub session_out: u64,
@@ -498,6 +504,7 @@ impl App {
             // notifications, which is the safe default.)
             focused: true,
             turn_started: None,
+            open_items_fp: None,
             session_in: 0,
             session_out: 0,
             turn_in: 0,
@@ -779,6 +786,24 @@ impl App {
         self.streaming = false;
         self.current_task_id = None;
         self.turn_started = None;
+        self.note_open_items_if_changed();
+    }
+
+    /// After a turn, say what is outstanding — but only if the set changed.
+    ///
+    /// Repeating the same three items after every turn is how a status line
+    /// becomes wallpaper. Staying silent when nothing moved is what keeps the
+    /// line worth reading on the turn something does.
+    pub fn note_open_items_if_changed(&mut self) {
+        let items = crate::open_items::collect(&self.home);
+        let fp = crate::open_items::fingerprint(&items);
+        if self.open_items_fp == Some(fp) {
+            return;
+        }
+        self.open_items_fp = Some(fp);
+        if let Some(line) = crate::open_items::summary_line(&items) {
+            self.push_system(line);
+        }
     }
 
     /// Mark a partial (cancelled) turn as finished without persisting a reply.

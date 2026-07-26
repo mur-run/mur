@@ -13,8 +13,8 @@ use crate::cli::{
     CapabilityAction, ChannelAction, ChatAction, Cli, CommanderAction, Commands,
     ConversationsAction, DaemonAction, DeepResearchAction, DeployAction, DraftsAction, EvalAction,
     ExchangeAction, FleetAction, HookEvent, InternalsAction, MurmurdAction, OfficialAction,
-    ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction,
-    WorkflowAction,
+    OpenAction, ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction,
+    VoiceAction, WorkflowAction,
 };
 use crate::store::config as store_config;
 use crate::{cmd, dashboard, team, verify};
@@ -992,6 +992,32 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Out { action, force } => {
             eprintln!("# mur out: use `mur session out`");
             cmd::session::cmd_out(action.as_deref(), force).await?
+        }
+        Commands::Open { action, json } => {
+            let home = crate::paths::mur_root(None);
+            match action {
+                Some(OpenAction::Add { title, agent, next }) => {
+                    let id = crate::open_items::reported::report(
+                        &home,
+                        &agent,
+                        &title,
+                        next.as_deref(),
+                    )?;
+                    println!("Recorded (reported by {agent}): {id}");
+                }
+                Some(OpenAction::Done { id }) => {
+                    crate::open_items::reported::resolve(&home, &id)?;
+                    println!("Resolved {id}");
+                }
+                None => {
+                    let items = crate::open_items::collect(&home);
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&items)?);
+                    } else {
+                        print!("{}", crate::open_items::render(&items));
+                    }
+                }
+            }
         }
         Commands::Push { dry_run } => {
             let config = crate::store::config::load_config()?;

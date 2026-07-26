@@ -6346,6 +6346,7 @@ dependencies = [
  "mur-channel",
  "mur-common",
  "mur-compress",
+ "mur-open-items",
  "ndarray 0.17.2",
  "ort",
  "rand 0.8.6",
@@ -6519,6 +6520,7 @@ dependencies = [
  "mur-channel",
  "mur-common",
  "mur-compress",
+ "mur-open-items",
  "notify",
  "oauth2",
  "open",
@@ -6650,6 +6652,18 @@ dependencies = [
  "tracing",
  "uniffi",
  "uuid",
+]
+
+[[package]]
+name = "mur-open-items"
+version = "2.57.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

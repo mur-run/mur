@@ -11,6 +11,7 @@ members = [
     "mur-research-gateway",
     "mur-compress",
     "mur-channel",
+    "mur-open-items",
     "mur-mobile-sdk",
     "mur-zfs-agent",
     # "mur-commander",  # separate crate — v0.2.0 released
