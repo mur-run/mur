@@ -23,6 +23,11 @@ use crate::llm::ToolDef;
 
 pub const FLEET_RUN: &str = "fleet_run";
 
+/// The one fleet with a dedicated CLI verb rather than `fleet run <name>`.
+/// The fleet name and the subcommand are the same word by coincidence, so
+/// naming it once keeps a rename of either from silently half-applying.
+const DEEP_RESEARCH: &str = "deep-research";
+
 /// Default / ceiling for how long a run may take before the child is killed.
 /// Fleet loops are long-lived (multi-iteration research runs take minutes);
 /// the ceiling keeps a wedged loop from pinning a tool slot forever.
@@ -144,7 +149,7 @@ Long-running: default timeout {DEFAULT_TIMEOUT_SECS}s (max {MAX_TIMEOUT_SECS}s).
 
         // Argv only — never a shell — so goal text cannot inject.
         let args: Vec<String> = match (&fleet[..], &goal) {
-            ("deep-research", Some(g)) => vec!["deep-research".into(), g.clone()],
+            (DEEP_RESEARCH, Some(g)) => vec![DEEP_RESEARCH.into(), g.clone()],
             (_, Some(g)) => vec!["fleet".into(), "run".into(), fleet.clone(), g.clone()],
             (_, None) => vec!["fleet".into(), "run".into(), fleet.clone(), "--loop".into()],
         };

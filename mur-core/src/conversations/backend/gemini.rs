@@ -79,6 +79,10 @@ struct ApiUsage {
     prompt_token_count: u64,
     #[serde(default, rename = "candidatesTokenCount")]
     candidates_token_count: u64,
+    /// Subset of `promptTokenCount`, not an additional count — Google bills it
+    /// at ~1/10 the input rate, so it has to be split out rather than summed.
+    #[serde(default, rename = "cachedContentTokenCount")]
+    cached_content_token_count: u64,
 }
 
 #[async_trait]
@@ -128,13 +132,22 @@ impl ChatBackend for GeminiBackend {
             .map(|p| p.text.clone())
             .unwrap_or_default();
 
+        let cached = parsed.usage_metadata.cached_content_token_count;
         Ok(ChatResponse {
             text,
             usage: Usage {
-                input_tokens: parsed.usage_metadata.prompt_token_count,
+                // Downstream cost math (and the Anthropic backend it shares a
+                // shape with) treats input and cache tokens as disjoint, so the
+                // cached slice comes out of the prompt count instead of being
+                // charged twice at the full input rate.
+                input_tokens: parsed
+                    .usage_metadata
+                    .prompt_token_count
+                    .saturating_sub(cached),
                 output_tokens: parsed.usage_metadata.candidates_token_count,
+                // Gemini bills cache writes per storage-hour, not per token.
                 cache_creation_input_tokens: 0,
-                cache_read_input_tokens: 0,
+                cache_read_input_tokens: cached,
                 provider: "gemini",
                 model: req.model.into(),
             },
@@ -224,6 +237,28 @@ mod tests {
         assert_eq!(r.usage.input_tokens, 4);
         assert_eq!(r.usage.output_tokens, 1);
         assert_eq!(r.usage.provider, "gemini");
+    }
+
+    #[tokio::test]
+    async fn cached_prompt_tokens_are_split_out_not_double_counted() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1beta/models/gemini-pro-3:generateContent"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .set_body_string(r#"{"candidates":[{"content":{"parts":[{"text":"hi"}]}}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":1,"cachedContentTokenCount":80}}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let b = GeminiBackend::new(&server.uri(), "synthetic-key", Duration::from_secs(5));
+        let r = b.generate(req("gemini-pro-3", "hi")).await.unwrap();
+        // 100 prompt tokens of which 80 were cached: 20 fresh, 80 at the cache
+        // rate. Summing them instead would bill 180 tokens for a 100-token call.
+        assert_eq!(r.usage.input_tokens, 20);
+        assert_eq!(r.usage.cache_read_input_tokens, 80);
+        assert_eq!(r.usage.cache_creation_input_tokens, 0);
     }
 
     #[tokio::test]
