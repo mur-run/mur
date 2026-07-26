@@ -1050,29 +1050,33 @@ pub async fn run(cli: Cli) -> Result<()> {
                     let items = crate::open_items::collect(&home);
                     // Fail toward showing: an unreadable config yields no
                     // mutes, never a quiet, confident, incomplete list.
-                    let muted_cfg = if all {
-                        Vec::new()
-                    } else {
-                        mur_common::config::Config::load_or_default(&cfg_path)
-                            .open_items
-                            .muted
-                    };
-                    let (visible, muted) = crate::open_items::partition(items.clone(), &muted_cfg);
+                    let configured = mur_common::config::Config::load_or_default(&cfg_path)
+                        .open_items
+                        .muted;
+                    // `--all` suspends the policy for this render. It does not
+                    // change what the policy *is*, which is why only the human
+                    // half below consults it.
+                    let effective = if all { Vec::new() } else { configured.clone() };
+                    let (visible, matched) =
+                        crate::open_items::partition(items.clone(), &effective);
                     if json {
                         // Display policy never truncates the machine-readable
-                        // form: consumers get every item plus the mute set and
-                        // apply their own policy. Emitting only the visible
-                        // half would make a fully muted list indistinguishable
-                        // from an empty one for anything but a human reader.
+                        // form: consumers get every item plus the configured
+                        // mute set and apply their own policy. Emitting only
+                        // the visible half would make a fully muted list
+                        // indistinguishable from an empty one, and reporting
+                        // only the mutes that matched today would make a
+                        // consumer's view of the policy depend on what happens
+                        // to be outstanding.
                         println!(
                             "{}",
                             serde_json::to_string_pretty(&serde_json::json!({
                                 "items": items,
-                                "muted": muted,
+                                "muted": configured,
                             }))?
                         );
                     } else {
-                        print!("{}", crate::open_items::render(&visible, &muted));
+                        print!("{}", crate::open_items::render(&visible, &matched));
                     }
                 }
             }
