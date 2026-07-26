@@ -307,6 +307,12 @@ files.
   Object (Windows) — plus a DNS-resolver guard that filters network egress.
 - **Human-in-the-loop** — tool calls pause for your approval in Hub and in
   `mur agent cli` (opt out per session with `--auto`).
+- **Capability routing** — an agent blocked by the sandbox doesn't hand the job
+  back to you: the denial names the fleets that actually hold that binary, and
+  the agent delegates. `mur agent who --can cargo` shows the same picture,
+  derived from what the kernel enforces rather than from a list anyone
+  maintains — including the capable fleets you haven't authorized yet, and the
+  command that authorizes them.
 - **Deletion safety** — destructive file actions go through a trash with a
   cancel window and explicit restore (`mur agent trash`); nothing is
   hard-deleted on a timer.
@@ -379,7 +385,7 @@ mur dashboard        # terminal TUI dashboard
 ```
 mur
 ├── init / doctor / update / stats / verify
-├── agent        create · cli · send · card · export · install · addon · companion ·
+├── agent        create · cli · send · card · who · export · install · addon · companion ·
 │                voice · pair · schedule · perm · secret · trash · rollback … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · run   (squads of agents over a shared channel)
