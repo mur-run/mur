@@ -57,7 +57,7 @@ const CLOUD_LLM_DEFAULTS: &[CloudDefault] = &[
     CloudDefault {
         key_provider: "anthropic",
         cfg_provider: "anthropic",
-        model: "claude-opus-4-6",
+        model: "claude-opus-5",
         openai_url: None,
     },
     CloudDefault {
@@ -69,13 +69,13 @@ const CLOUD_LLM_DEFAULTS: &[CloudDefault] = &[
     CloudDefault {
         key_provider: "gemini",
         cfg_provider: "gemini",
-        model: "gemini-2.5-flash",
+        model: "gemini-3.6-flash",
         openai_url: None,
     },
     CloudDefault {
         key_provider: "openrouter",
         cfg_provider: "openai",
-        model: "google/gemini-2.5-flash",
+        model: "google/gemini-3.6-flash",
         openai_url: Some("https://openrouter.ai/api/v1"),
     },
 ];
@@ -251,7 +251,7 @@ pub fn apply(plan: &ModelSetupPlan, config: &mut Config) {
 pub fn is_factory_default_models(config: &Config) -> bool {
     let d = Config::default();
     // provider/model alone can coincidentally match the shipped defaults
-    // (e.g. recommend() picks anthropic/claude-opus-4-6 for the smart slot,
+    // (e.g. recommend() picks anthropic/claude-opus-5 for the smart slot,
     // same as Config::default()) — api_key_ref is what actually flips once a
     // key is wired up, so it must gate the "still untouched" check too.
     config.llm.provider == d.llm.provider
@@ -322,7 +322,7 @@ mod tests {
         let plan = recommend(&d, &[anthropic_key()]);
         let smart = plan.smart.unwrap();
         assert_eq!(smart.provider, "anthropic");
-        assert_eq!(smart.model, "claude-opus-4-6");
+        assert_eq!(smart.model, "claude-opus-5");
         assert_eq!(smart.api_key_ref.as_deref(), Some("keychain:mur/anthropic"));
         let search = plan.search.unwrap();
         assert_eq!(search.provider, "ollama");
@@ -360,7 +360,7 @@ mod tests {
         );
         let smart = plan.smart.unwrap();
         assert_eq!(smart.provider, "openai");
-        assert_eq!(smart.model, "google/gemini-2.5-flash");
+        assert_eq!(smart.model, "google/gemini-3.6-flash");
         assert_eq!(
             smart.openai_url.as_deref(),
             Some("https://openrouter.ai/api/v1")

@@ -16,7 +16,7 @@ const M: ModelOption[] = [
   {
     ref_name: "claude_sonnet",
     provider: "anthropic",
-    model: "claude-sonnet-4-6",
+    model: "claude-sonnet-5",
     capabilities: ["tool_use"],
   },
   {

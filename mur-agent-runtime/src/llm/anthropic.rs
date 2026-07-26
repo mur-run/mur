@@ -21,14 +21,30 @@ const DEFAULT_VERSION: &str = "2023-06-01";
 /// Output-token ceiling when a request leaves `max_tokens` unset. This is a
 /// CEILING, not a target — the model only generates what it needs, so cost
 /// rises only when output is genuinely large. Coding agents routinely write
-/// whole source files via large `bash` heredocs; the previous 1024 cap
-/// truncated those responses mid-tool_use, leaving the tool_use `input` JSON
-/// incomplete and the call unparseable. 16384 gives normal file writes room to
-/// complete without truncation.
-const DEFAULT_MAX_TOKENS: u32 = 16384;
+/// whole source files via large `bash` heredocs; a 1024 cap truncated those
+/// responses mid-tool_use, leaving the tool_use `input` JSON incomplete and
+/// the call unparseable.
+///
+/// Raised from 16384 when `claude-opus-5` became the default: this request
+/// never sends a `thinking` field, which meant "no thinking" on Opus 4.6 but
+/// means "adaptive thinking, on" from Opus 5 onward — and `max_tokens` caps
+/// thinking AND response text together. Without the extra room the same
+/// mid-tool_use truncation returns, now caused by thinking eating the budget.
+const DEFAULT_MAX_TOKENS: u32 = 32768;
 
 /// Total time allowed for a single LLM request (including server think time).
-const LLM_REQUEST_TIMEOUT_SECS: u64 = 60;
+///
+/// This is a TOTAL timeout — reqwest applies it until the response body has
+/// finished, so it bounds streamed responses too, and it is the constraint
+/// that actually binds. At roughly 50-80 output tokens/sec, 60s ran out
+/// somewhere around 3-5k tokens, well under `DEFAULT_MAX_TOKENS`; raising the
+/// token ceiling alone would have changed nothing. Adaptive thinking (now on
+/// by default — see above) spends part of that same wall clock before any
+/// text is emitted, which tightened it further.
+///
+/// 180s is chosen to make the token ceiling reachable while still failing a
+/// wedged request inside a few minutes rather than holding the slot open.
+const LLM_REQUEST_TIMEOUT_SECS: u64 = 180;
 /// Time allowed to establish a TCP connection to the LLM endpoint.
 const LLM_CONNECT_TIMEOUT_SECS: u64 = 10;
 

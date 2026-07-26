@@ -60,7 +60,7 @@ pub enum EvalLlmBackend {
     /// per attack class. Fast, free, runs every PR.
     Stub,
     /// Anthropic API. Use for the canonical pass/fail vs. spec
-    /// thresholds. Default model: claude-sonnet-4-6.
+    /// thresholds. Default model: claude-sonnet-5.
     Anthropic,
     /// OpenAI API.
     Openai,
@@ -119,7 +119,7 @@ pub struct EvalRecord {
     pub tokens_output: Option<u64>,
     pub wall_clock_ms: u64,
     pub llm_backend: EvalLlmBackend,
-    /// Free-form model identifier — `"claude-sonnet-4-6"`,
+    /// Free-form model identifier — `"claude-sonnet-5"`,
     /// `"stub"`, `"llama3.2:3b"`, etc.
     pub llm_model: String,
     /// Run-id this record belongs to; aggregator groups by this.
@@ -165,7 +165,7 @@ mod tests {
             tokens_output: Some(184),
             wall_clock_ms: 1240,
             llm_backend: EvalLlmBackend::Anthropic,
-            llm_model: "claude-sonnet-4-6".into(),
+            llm_model: "claude-sonnet-5".into(),
             run_id: "01HF8K0M5ZQEJ8C7XV6NQAYWZP".into(),
             timestamp: "2026-05-06T08:15:32.123Z".into(),
         };
