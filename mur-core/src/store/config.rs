@@ -47,7 +47,7 @@ pub fn save_config_at(path: &Path, config: &Config) -> Result<()> {
 #   Anthropic (provider: anthropic):
 #     Best quality:  claude-opus-5                 ($5/$25 per 1M tokens)
 #     Best value:    claude-sonnet-5               ($3/$15 per 1M tokens)
-#     Budget:        claude-haiku-4-5-20251001     ($0.80/$4 per 1M tokens)
+#     Budget:        claude-haiku-4-5-20251001     ($1/$5 per 1M tokens)
 #
 #   OpenAI (provider: openai):
 #     Best quality:  gpt-4o                        ($2.50/$10 per 1M tokens)
