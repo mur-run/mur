@@ -128,7 +128,19 @@ pub fn save_config_at(path: &Path, config: &Config) -> Result<()> {
 #   To save cost, switch to Sonnet: llm.model: claude-sonnet-5
 
 "#;
-    fs::write(path, format!("{}{}", header, yaml))?;
+    let content = format!("{}{}", header, yaml);
+
+    // Atomic write: temp file in the same directory, then rename (matches the
+    // store/yaml.rs pattern). A crash, full disk, or killed process partway
+    // through a plain `fs::write` could otherwise leave a truncated
+    // config.yaml that then fails to parse on the next read; `rename` is only
+    // atomic within a filesystem, so the temp file must live next to `path`,
+    // not in a system temp directory.
+    let tmp_path = path.with_extension("yaml.tmp");
+    fs::write(&tmp_path, &content)
+        .with_context(|| format!("Failed to write temp file: {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, path)
+        .with_context(|| format!("Failed to rename temp to final: {}", path.display()))?;
     Ok(())
 }
 
@@ -218,6 +230,41 @@ mod save_roundtrip_tests {
         assert_eq!(
             after, corrupt,
             "corrupt file must be left byte-for-byte untouched:\n{after}"
+        );
+
+        // The whole point of refusing early is that the operation touches
+        // nothing — a temp file created (and perhaps abandoned) partway
+        // through would still be a leak, even though the real config is safe.
+        let entries: Vec<String> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            entries,
+            vec!["config.yaml".to_string()],
+            "a refused write must not create a temp file either, found: {entries:?}"
+        );
+    }
+
+    /// A rename-based atomic writer that forgets to clean up (or renames to
+    /// the wrong path) would leak its `.tmp` file on every save — assert the
+    /// directory holds only the final `config.yaml` afterward.
+    #[test]
+    fn save_leaves_no_stray_temp_file_on_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+
+        let cfg = Config::default();
+        save_config_at(&path, &cfg).unwrap();
+
+        let entries: Vec<String> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            entries,
+            vec!["config.yaml".to_string()],
+            "directory must contain only config.yaml after a successful save, found: {entries:?}"
         );
     }
 
