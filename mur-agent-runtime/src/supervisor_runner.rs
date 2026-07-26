@@ -162,6 +162,7 @@ pub fn build_runner(
     tools_policy: Vec<mur_common::agent::ToolRule>,
     max_iterations: Option<u32>,
     max_tokens: Option<u64>,
+    effort: Option<mur_common::llm::Effort>,
 ) -> Arc<TaskRunner> {
     let mut runner = TaskRunner::with_llm(client)
         .with_system_prompt(base_system_prompt)
@@ -169,7 +170,8 @@ pub fn build_runner(
         .with_skills_cfg(skills_cfg)
         .with_hitl_timeout_secs(hitl_timeout_secs)
         .with_tools(tools)
-        .with_tools_policy(tools_policy);
+        .with_tools_policy(tools_policy)
+        .with_effort(effort);
     if let Some(n) = max_iterations {
         runner = runner.with_max_iterations(n);
     }
@@ -330,6 +332,7 @@ pub async fn build_provider_runner(
             tools_policy.clone(),
             max_iterations,
             max_tokens,
+            profile.inner.effort,
         );
         (r, Some(client), Some(pool.clone()))
     };
