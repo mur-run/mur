@@ -189,6 +189,22 @@ pub fn budget_exceeded(spent: f64, next_cost: f64, budget: Option<f64>) -> bool 
 
 /// Conservative per-1k-token USD rate for projection: `MUR_FLEET_COST_PER_1K`
 /// env → else the dearest output rate in `models.yaml` → else `DEFAULT_PRICE_PER_1K`.
+/// The dearest output rate in the registry, in USD per 1k tokens.
+///
+/// A ceiling rather than a per-model lookup: the guard bills a flat rate
+/// against an iteration's whole token count, so it has to be at least as
+/// expensive as anything the fleet could have used. Split out from
+/// `fleet_price_per_1k` so the ceiling property is testable without touching
+/// the filesystem or the process environment.
+fn dearest_output_rate(reg: &mur_common::model::ModelRegistry) -> Option<f64> {
+    let max = reg
+        .models
+        .values()
+        .filter_map(|m| m.effective_costs().1)
+        .fold(0.0_f64, f64::max);
+    (max > 0.0).then_some(max)
+}
+
 fn fleet_price_per_1k(mur_home: &Path) -> f64 {
     if let Ok(v) = std::env::var("MUR_FLEET_COST_PER_1K")
         && let Ok(p) = v.parse::<f64>()
@@ -196,15 +212,10 @@ fn fleet_price_per_1k(mur_home: &Path) -> f64 {
     {
         return p;
     }
-    if let Ok(reg) = mur_common::model::ModelRegistry::load_from(&mur_home.join("models.yaml")) {
-        let max = reg
-            .models
-            .values()
-            .filter_map(|m| m.effective_costs().1)
-            .fold(0.0_f64, f64::max);
-        if max > 0.0 {
-            return max;
-        }
+    if let Ok(reg) = mur_common::model::ModelRegistry::load_from(&mur_home.join("models.yaml"))
+        && let Some(rate) = dearest_output_rate(&reg)
+    {
+        return rate;
     }
     DEFAULT_PRICE_PER_1K
 }
@@ -856,6 +867,81 @@ mod tests {
         // no env + no models.yaml → documented default
         unsafe { std::env::remove_var("MUR_FLEET_COST_PER_1K") };
         assert!((fleet_price_per_1k(tmp.path()) - DEFAULT_PRICE_PER_1K).abs() < 1e-9);
+    }
+
+    /// The budget guard bills one flat rate against an iteration's whole token
+    /// count, while the cost report prices each component separately. If the
+    /// guard's rate ever dips below what the report would charge for a token of
+    /// any model in the registry, the fleet overspends its budget by exactly
+    /// that ratio — and nothing on screen says so. Both bugs this branch fixed
+    /// were that failure: a rate in the wrong field made the guard 5x cheap,
+    /// and a stripped registry would have made it 57x cheap.
+    #[test]
+    fn guard_rate_is_never_below_what_the_report_charges() {
+        use crate::cmd::conversations_cost_report::resolve_rates;
+        use mur_common::model::{ModelEntry, ModelRegistry};
+
+        let entry = |input: f64, output: f64| ModelEntry {
+            provider: "anthropic".into(),
+            model: "m".into(),
+            input_cost_per_1k: Some(input),
+            output_cost_per_1k: Some(output),
+            ..Default::default()
+        };
+        let mut reg = ModelRegistry::default();
+        for (alias, wire, i, o) in [
+            ("opus", "claude-opus-5", 0.005, 0.025),
+            ("sonnet", "claude-sonnet-5", 0.003, 0.015),
+            ("haiku", "claude-haiku-4-5", 0.001, 0.005),
+            ("ds", "deepseek-v4-pro", 0.000435, 0.00087),
+        ] {
+            reg.models.insert(
+                alias.into(),
+                ModelEntry {
+                    model: wire.into(),
+                    ..entry(i, o)
+                },
+            );
+        }
+
+        let guard = dearest_output_rate(&reg).expect("registry is priced");
+        for e in reg.models.values() {
+            // Per 1k, against the report's per-1M rates.
+            let ((r_in, r_out, r_cw, r_cr), _) =
+                resolve_rates(&e.model, Some(&reg)).expect("report prices it");
+            for (label, report_rate) in [
+                ("input", r_in),
+                ("output", r_out),
+                ("cache_write", r_cw),
+                ("cache_read", r_cr),
+            ] {
+                assert!(
+                    guard >= report_rate / 1000.0,
+                    "guard {guard}/1k is under the {label} rate the report charges for {} \
+                     ({}/1k) — a fleet on that model overspends its budget",
+                    e.model,
+                    report_rate / 1000.0
+                );
+            }
+        }
+    }
+
+    /// A registry that prices nothing must not collapse the ceiling to zero —
+    /// the documented default is deliberately dearer than any real model.
+    #[test]
+    fn unpriced_registry_yields_no_ceiling_rather_than_a_free_one() {
+        use mur_common::model::{ModelEntry, ModelRegistry};
+        let mut reg = ModelRegistry::default();
+        reg.models.insert(
+            "local".into(),
+            ModelEntry {
+                provider: "openai".into(),
+                model: "Qwen3.5-4B-MLX-4bit".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(dearest_output_rate(&reg), None);
+        assert!(DEFAULT_PRICE_PER_1K > 0.025, "default must top real models");
     }
 
     #[test]
