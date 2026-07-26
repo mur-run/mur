@@ -84,8 +84,13 @@ fn price_table(model: &str) -> Option<(f64, f64, f64, f64)> {
         m if m.starts_with("claude-opus-5") => Some((5.00, 25.00, 6.25, 0.50)),
         m if m.starts_with("claude-sonnet-5") => Some((3.00, 15.00, 3.75, 0.30)),
         m if m.starts_with("claude-sonnet-4-6") => Some((3.00, 15.00, 3.75, 0.30)),
-        m if m.starts_with("claude-opus-4-7") => Some((15.00, 75.00, 18.75, 1.50)),
-        m if m.starts_with("claude-opus-4-6") => Some((15.00, 75.00, 18.75, 1.50)),
+        // The whole Opus 4.x line is $5/$25, same as Opus 5 — these carried
+        // $15/$75 from an older generation and overstated every report on
+        // those models by 3x. `claude-opus-4-8` was missing outright, which
+        // fails the other way: no row means no estimate at all.
+        m if m.starts_with("claude-opus-4-8") => Some((5.00, 25.00, 6.25, 0.50)),
+        m if m.starts_with("claude-opus-4-7") => Some((5.00, 25.00, 6.25, 0.50)),
+        m if m.starts_with("claude-opus-4-6") => Some((5.00, 25.00, 6.25, 0.50)),
         m if m.starts_with("gpt-4o-mini") => Some((0.15, 0.60, 0.0, 0.0)),
         m if m.starts_with("gpt-4o") => Some((2.50, 10.00, 0.0, 0.0)),
         m if m.starts_with("gpt-4.1-mini") => Some((0.40, 1.60, 0.0, 0.0)),
@@ -293,6 +298,25 @@ mod tests {
             price_table("claude-sonnet-4-6"),
             Some((3.00, 15.00, 3.75, 0.30))
         );
+        // The whole Opus 4.x line shares Opus 5's rate. These read $15/$75 —
+        // an older generation's price — and silently tripled every report on
+        // them, which no test would have caught because the report still
+        // rendered.
+        for m in ["claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6"] {
+            assert_eq!(price_table(m), Some((5.00, 25.00, 6.25, 0.50)), "{m}");
+        }
+        // Cache rates are derived, not independent: write is 1.25x input and
+        // read 0.1x. A row that breaks that is a typo, not a price.
+        for m in [
+            "claude-opus-5",
+            "claude-opus-4-8",
+            "claude-sonnet-5",
+            "claude-haiku-4-5",
+        ] {
+            let (inp, _out, cw, cr) = price_table(m).unwrap();
+            assert!((cw - inp * 1.25).abs() < 1e-9, "{m} cache-write");
+            assert!((cr - inp * 0.10).abs() < 1e-9, "{m} cache-read");
+        }
         assert_eq!(price_table("no-such-model"), None);
     }
 
