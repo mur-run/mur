@@ -170,6 +170,45 @@ pub fn supported_effort(model: &str, want: Effort) -> Option<Effort> {
     None
 }
 
+/// The `reasoning_effort` value to send for an OpenAI-compatible model, or
+/// `None` when the model takes no such parameter.
+///
+/// Verified against the current OpenAI reasoning guide rather than recalled:
+/// the parameter is `reasoning.effort` (accepted as `reasoning_effort` on the
+/// chat endpoint) and its vocabulary is `none | minimal | low | medium | high
+/// | xhigh | max` — a superset of ours, not the three levels an older memory
+/// would suggest. Checking mattered: building the mapping from that memory
+/// would have clamped `xhigh` away for no reason.
+///
+/// Two deliberate narrowings, both because this client is not "OpenAI" — it is
+/// *anything OpenAI-compatible*, including OpenRouter and local servers:
+///
+/// * Gated on the model family, not the provider. A local llama behind an
+///   OpenAI-shaped endpoint has no idea what `reasoning_effort` means.
+/// * `Xhigh`/`Max` clamp to `high`. The docs state the accepted values are
+///   model-dependent and publish no table, so passing the top of the scale
+///   through would be a 400 waiting for whichever model lacks it. Degrading is
+///   the same call made for Anthropic's missing `xhigh` step — and the same
+///   one made everywhere today: never fail the default path, lose a little
+///   depth instead. Lift the clamp per-model once a support table exists.
+pub fn openai_reasoning_effort(model: &str, want: Effort) -> Option<&'static str> {
+    /// Model families that take a reasoning effort. Prefixes, matched after
+    /// any `vendor/` prefix is stripped — OpenRouter names models
+    /// `openai/gpt-5`, and `google/gemini-3.6-flash` must NOT match.
+    const REASONING_FAMILIES: &[&str] = &["gpt-5", "o1", "o3", "o4"];
+
+    let m = model.to_lowercase();
+    let bare = m.rsplit('/').next().unwrap_or(&m);
+    if !REASONING_FAMILIES.iter().any(|f| bare.starts_with(f)) {
+        return None;
+    }
+    Some(match want {
+        Effort::Low => "low",
+        Effort::Medium => "medium",
+        Effort::High | Effort::Xhigh | Effort::Max => "high",
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,6 +255,37 @@ mod tests {
         assert_eq!(Effort::Max.as_str(), "max");
         // Ordered cheapest-first so a caller can clamp with `min`.
         assert!(Effort::Low < Effort::High && Effort::High < Effort::Max);
+    }
+
+    #[test]
+    fn openai_effort_gates_on_family_and_clamps_the_top() {
+        // The three shared levels pass through by name.
+        assert_eq!(openai_reasoning_effort("gpt-5", Effort::Low), Some("low"));
+        assert_eq!(
+            openai_reasoning_effort("o3-mini", Effort::Medium),
+            Some("medium")
+        );
+        // Top of the scale degrades rather than risking a 400 on a model whose
+        // subset lacks it — the accepted values are model-dependent and there
+        // is no published table to key on.
+        assert_eq!(
+            openai_reasoning_effort("gpt-5", Effort::Xhigh),
+            Some("high")
+        );
+        assert_eq!(openai_reasoning_effort("gpt-5", Effort::Max), Some("high"));
+        // OpenRouter prefixes its models; the family gate must see through it…
+        assert_eq!(
+            openai_reasoning_effort("openai/gpt-5", Effort::Low),
+            Some("low")
+        );
+        // …without letting a non-OpenAI model routed the same way through.
+        assert_eq!(
+            openai_reasoning_effort("google/gemini-3.6-flash", Effort::Low),
+            None
+        );
+        // A local model behind an OpenAI-shaped endpoint takes no such param.
+        assert_eq!(openai_reasoning_effort("llama3.2:3b", Effort::Low), None);
+        assert_eq!(openai_reasoning_effort("gpt-4o", Effort::Low), None);
     }
 
     #[test]
