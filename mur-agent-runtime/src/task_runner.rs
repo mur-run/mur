@@ -1566,6 +1566,9 @@ impl TaskRunner {
         // NOT — that's progress, not a loop. Requires fingerprinting AFTER
         // the tool runs, since the result isn't known until then.
         let mut fingerprints: VecDeque<(String, u64, u64)> = VecDeque::with_capacity(LOOP_WINDOW);
+        // Settlement accounting for this turn. Recorded from the loop's own
+        // view of each call, so the card cannot disagree with what happened.
+        let mut ledger = crate::turn_ledger::TurnLedger::default();
 
         let mut iteration: u32 = 0;
         while iteration < self.max_iterations {
@@ -1577,7 +1580,7 @@ impl TaskRunner {
                 .saturating_sub(start_tokens);
             if spent >= self.max_token_budget {
                 let msg = self
-                    .graceful_exit(client, &history, LoopStop::TokenBudget)
+                    .graceful_exit(client, &history, LoopStop::TokenBudget, &ledger)
                     .await;
                 return Ok((
                     msg,
@@ -1714,13 +1717,13 @@ impl TaskRunner {
             });
 
             if resp.tool_calls.is_empty() || resp.stop_reason == StopReason::EndTurn {
-                return Ok((
-                    Message {
-                        role: "agent".into(),
-                        parts: vec![mur_common::a2a::MessagePart::Text { text: resp.text }],
-                    },
-                    None,
-                ));
+                ledger.iterations = iteration;
+                ledger.stop = if resp.stop_reason == StopReason::MaxTokens {
+                    crate::turn_ledger::StopKind::MaxTokens
+                } else {
+                    crate::turn_ledger::StopKind::EndTurn
+                };
+                return Ok((settle(resp.text, &ledger), None));
             }
 
             // Execute tools and collect results.
@@ -1748,6 +1751,11 @@ impl TaskRunner {
             // making progress (don't abort). Fingerprinting happens here,
             // AFTER execution, because the result is needed.
             for (call, entry) in resp.tool_calls.iter().zip(results.iter()) {
+                ledger.record(crate::turn_ledger::Action {
+                    tool: call.tool_name.clone(),
+                    target: crate::turn_ledger::describe_target(&call.tool_name, &call.input),
+                    outcome: crate::turn_ledger::classify(&entry.content, entry.is_error),
+                });
                 let fp = (
                     call.tool_name.clone(),
                     fingerprint_args(&call.input),
@@ -1764,7 +1772,7 @@ impl TaskRunner {
                     // sanitizes, but keeping history consistent is cheap.
                     history.push(RichMessage::ToolResults { results });
                     let msg = self
-                        .graceful_exit(client, &history, LoopStop::LoopDetected)
+                        .graceful_exit(client, &history, LoopStop::LoopDetected, &ledger)
                         .await;
                     return Ok((
                         msg,
@@ -1800,7 +1808,7 @@ impl TaskRunner {
         }
 
         let msg = self
-            .graceful_exit(client, &history, LoopStop::MaxIterations)
+            .graceful_exit(client, &history, LoopStop::MaxIterations, &ledger)
             .await;
         Ok((
             msg,
@@ -1820,6 +1828,7 @@ impl TaskRunner {
         client: &dyn crate::llm::LlmClient,
         history: &[crate::llm::RichMessage],
         reason: LoopStop,
+        ledger: &crate::turn_ledger::TurnLedger,
     ) -> Message {
         use crate::llm::{LlmRequest, RichMessage};
 
@@ -1852,7 +1861,7 @@ impl TaskRunner {
             tools: vec![], // tools disabled: force a textual summary
             ..Default::default()
         };
-        let mut text = match client.generate(req).await {
+        let text = match client.generate(req).await {
             Ok(resp) => {
                 self.cumulative_input_tokens
                     .fetch_add(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
@@ -1868,17 +1877,51 @@ impl TaskRunner {
                     .unwrap_or_else(|| format!("Stopped: {} budget reached.", reason.as_str()))
             }
         };
-        // #595: mark output that ended at the iteration cap so partial
-        // execution is visible instead of silently reported as clean.
-        if matches!(reason, LoopStop::MaxIterations) {
-            text.push_str(
-                "\n\n[runtime: turn ended at the iteration cap — output may be incomplete]",
-            );
-        }
-        Message {
-            role: "agent".into(),
-            parts: vec![mur_common::a2a::MessagePart::Text { text }],
-        }
+        // #595: mark output that ended early so partial execution is visible
+        // instead of silently reported as clean. This used to be a string
+        // appended after whatever the model had just claimed, which let the two
+        // contradict each other in the same reply; it is now a row in the
+        // settlement, next to what did and did not actually run.
+        let ledger = crate::turn_ledger::TurnLedger {
+            stop: match reason {
+                LoopStop::MaxIterations => crate::turn_ledger::StopKind::MaxIterations,
+                LoopStop::TokenBudget => crate::turn_ledger::StopKind::TokenBudget,
+                LoopStop::LoopDetected => crate::turn_ledger::StopKind::LoopDetected,
+            },
+            ..ledger.clone()
+        };
+        settle(text, &ledger)
+    }
+}
+
+/// Attach the settlement to a turn's reply, when the turn earned one.
+///
+/// Two parts on one message: the rendered card for whoever is reading, and the
+/// ledger as `MessagePart::Data` for whoever is parsing. A headless caller —
+/// `mur agent send`, a fleet step, the Hub — gets the same accounting as the
+/// TUI without scraping prose out of the text part.
+///
+/// Turns that only answered a question get neither: a settlement under a
+/// one-line reply is noise, and noise is how a useful signal stops being read.
+fn settle(text: String, ledger: &crate::turn_ledger::TurnLedger) -> Message {
+    let mut parts = vec![mur_common::a2a::MessagePart::Text {
+        text: if ledger.warrants_settlement() {
+            format!("{text}{}", crate::turn_ledger::render(ledger))
+        } else {
+            text
+        },
+    }];
+    if ledger.warrants_settlement()
+        && let Ok(data) = serde_json::to_value(ledger)
+    {
+        parts.push(mur_common::a2a::MessagePart::Data {
+            mime_type: "application/vnd.mur.turn-ledger+json".into(),
+            data,
+        });
+    }
+    Message {
+        role: "agent".into(),
+        parts,
     }
 }
 
@@ -2864,8 +2907,11 @@ mod tests {
             "truncated text must be preserved, got: {reply_text}"
         );
         assert!(
-            reply_text.ends_with(crate::llm::MAX_TOKENS_TRUNCATION_MARKER),
-            "reply must end with the visible truncation marker, got: {reply_text}"
+            // The marker stays inline where the truncation happened; the
+            // settlement now follows it, so it is no longer the last thing in
+            // the reply.
+            reply_text.contains(crate::llm::MAX_TOKENS_TRUNCATION_MARKER),
+            "reply must carry the visible truncation marker, got: {reply_text}"
         );
         let usage = task.usage.expect("usage is always populated");
         assert_eq!(
@@ -3465,10 +3511,21 @@ mod tests {
         ];
 
         let msg = runner
-            .graceful_exit(client.as_ref(), &history, LoopStop::LoopDetected)
+            .graceful_exit(
+                client.as_ref(),
+                &history,
+                LoopStop::LoopDetected,
+                &crate::turn_ledger::TurnLedger::default(),
+            )
             .await;
         // Summary turn succeeded (not the fallback path).
-        assert_eq!(text_of(&msg), "SUMMARY: done.");
+        // The settlement follows the model's text now; this test is about the
+        // dangling tool_use being sanitised, not the exact reply bytes.
+        assert!(
+            text_of(&msg).starts_with("SUMMARY: done."),
+            "{}",
+            text_of(&msg)
+        );
 
         // Inspect what the LLM actually received: collect every tool_use id and
         // every tool_result id, then assert no tool_use id is unmatched.
@@ -3503,9 +3560,15 @@ mod tests {
     /// #595 — graceful_exit must append the iteration-cap marker to the
     /// output text ONLY when the stop reason is `MaxIterations`, so partial
     /// execution at the cap is visible instead of looking like a clean
-    /// completion. A sibling reason (`LoopDetected`) must NOT carry it.
+    /// completion.
+    ///
+    /// The premise widened when the notice moved into the settlement: it used
+    /// to be an iteration-cap-only string appended after whatever the model
+    /// had just claimed, so a budget stop looked clean. Every non-clean stop
+    /// now names itself, and each names the RIGHT one — a card that said
+    /// "iteration cap" for a token-budget stop would be worse than silence.
     #[tokio::test]
-    async fn graceful_exit_marks_output_only_at_iteration_cap() {
+    async fn graceful_exit_names_the_stop_reason_in_the_settlement() {
         use crate::llm::stub::SequenceLlm;
         let client: Arc<dyn crate::llm::LlmClient> = Arc::new(SequenceLlm::new(vec![
             end_turn_response("partial work done"),
@@ -3518,22 +3581,36 @@ mod tests {
         }];
 
         let capped = runner
-            .graceful_exit(client.as_ref(), &history, LoopStop::MaxIterations)
+            .graceful_exit(
+                client.as_ref(),
+                &history,
+                LoopStop::MaxIterations,
+                &crate::turn_ledger::TurnLedger::default(),
+            )
             .await;
+        let capped_text = text_of(&capped);
         assert!(
-            text_of(&capped)
-                .contains("[runtime: turn ended at the iteration cap — output may be incomplete]"),
-            "MaxIterations exit must carry the iteration-cap marker: {}",
-            text_of(&capped)
+            capped_text.contains("iteration cap")
+                && capped_text.contains("output may be incomplete"),
+            "MaxIterations exit must name the cap: {capped_text}"
         );
 
         let other = runner
-            .graceful_exit(client.as_ref(), &history, LoopStop::LoopDetected)
+            .graceful_exit(
+                client.as_ref(),
+                &history,
+                LoopStop::LoopDetected,
+                &crate::turn_ledger::TurnLedger::default(),
+            )
             .await;
+        let other_text = text_of(&other);
         assert!(
-            !text_of(&other).contains("iteration cap"),
-            "LoopDetected exit must NOT carry the iteration-cap marker: {}",
-            text_of(&other)
+            !other_text.contains("iteration cap"),
+            "LoopDetected must not be reported as an iteration cap: {other_text}"
+        );
+        assert!(
+            other_text.contains("loop detected"),
+            "LoopDetected must name its own reason: {other_text}"
         );
     }
 
