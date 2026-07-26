@@ -2,6 +2,7 @@ pub mod a2a;
 pub mod action;
 pub mod actor;
 pub mod agent;
+pub mod agent_facts;
 pub mod agent_name;
 pub mod bridge;
 pub mod build;

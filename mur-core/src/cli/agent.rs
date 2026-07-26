@@ -111,6 +111,20 @@ pub enum AgentAction {
         /// Agent name
         name: String,
     },
+    /// Who can do what — the dispatch index, derived from what the sandbox
+    /// actually enforces. With no filter, prints the whole roster.
+    Who {
+        /// Only agents that explicitly hold this binary (e.g. `cargo`), plus
+        /// the fleets that could be delegated the work
+        #[arg(long)]
+        can: Option<String>,
+        /// Only agents with a skill whose name contains this
+        #[arg(long)]
+        skill: Option<String>,
+        /// Whose dispatch permissions to evaluate (default: the concierge)
+        #[arg(long = "as")]
+        as_agent: Option<String>,
+    },
     /// Interactive streaming TUI chat with an agent (the agent must be running)
     Cli {
         /// Agent name(s) — more than one opens each chat in its own split pane

@@ -142,6 +142,7 @@ mod tests {
         let bash_exec: Arc<dyn ToolExecutor> = Arc::new(BashTool {
             working_dir: std::path::PathBuf::from("/tmp"),
             session_cwd: crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
+            agent: None,
         });
         let bash_def = bash_exec.def();
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
@@ -174,6 +175,7 @@ mod tests {
         let bash_exec: Arc<dyn ToolExecutor> = Arc::new(BashTool {
             working_dir: std::path::PathBuf::from("/tmp"),
             session_cwd: crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
+            agent: None,
         });
         let bash_def = bash_exec.def();
         let rules = vec![ToolRule {

@@ -247,13 +247,22 @@ pub async fn build_provider_runner(
     // profile and sandboxed children can dial it. See profile_needs_egress.
     let egress = egress_proxy;
     let pool = McpPool::new(enabled_mcp.clone(), sandbox_policy, egress);
+    // MUR_HOME-aware home dir — same expression as `prepare_runtime`/`supervisor.rs`
+    // (the old inline "local"-arm recompute below ignored MUR_HOME; unifying on
+    // this shared value is a disclosed, intentional bug-fix — see task-7-report.md).
+    let mur_home = std::env::var_os("MUR_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
+
     // Issue #591 / runtime-file-tools-cwd: bash and the three file tools share
     // ONE session cwd (initial value = agent_home). The bash tool's `cwd`
     // parameter updates it; file tools resolve relative paths against the
     // current snapshot. A `cd` inside a bash subprocess is NOT retained.
     let session_cwd = crate::tools::fs_policy::SessionCwd::new(agent_home.to_path_buf());
-    let bash_exec: Arc<dyn crate::tools::ToolExecutor> =
-        Arc::new(BashTool::new(agent_home.to_path_buf(), session_cwd.clone()));
+    let bash_exec: Arc<dyn crate::tools::ToolExecutor> = Arc::new(
+        BashTool::new(agent_home.to_path_buf(), session_cwd.clone())
+            .with_agent(mur_home.clone(), profile.inner.name.clone()),
+    );
     let bash_def = bash_exec.def();
     // Issue #712: the file tools must never touch the agent's own
     // profile.yaml / identity.key, whatever the profile grants.
@@ -284,13 +293,6 @@ pub async fn build_provider_runner(
         pool.clone(),
     )
     .await;
-
-    // MUR_HOME-aware home dir — same expression as `prepare_runtime`/`supervisor.rs`
-    // (the old inline "local"-arm recompute below ignored MUR_HOME; unifying on
-    // this shared value is a disclosed, intentional bug-fix — see task-7-report.md).
-    let mur_home = std::env::var_os("MUR_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
 
     // Built-in fleet_run: registered ONLY for agents allowlisted in the global
     // config (`fleet_run.agents`, deny-by-default) — unauthorized agents never

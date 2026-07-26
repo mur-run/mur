@@ -8,6 +8,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use mur_common::agent_facts::{AgentFacts, ExecFacts, agent_facts};
 use mur_common::channel::ChannelEvent;
 use mur_common::fleet::Fleet;
 use mur_common::skill::manifest::{Procedure, ProcedureStep};
@@ -131,13 +132,27 @@ pub fn parse_router_plan(text: &str, members: &[String], goal: &str) -> Option<P
 
 /// Ask the router agent to produce a plan; `None` on any failure (caller falls
 /// back to broadcast). Requires the router agent to be running.
+///
+/// A fleet with one member short-circuits to broadcast (`None`). This is a
+/// deliberate trade, not a pure optimisation: the router's only remaining
+/// freedom with one executor is to pre-split the goal into several steps for
+/// that same agent — something the member agent does for itself anyway — and
+/// rediscovering the one possible assignee costs a full LLM round trip on
+/// EVERY iteration. It matters because solo fleets are the adapter for
+/// agent-granularity dispatch (`mur agent who` routes a denied binary to the
+/// narrowest capable fleet, usually a one-member one); an adapter that doubles
+/// the cost of every mechanical command pushes people toward the ungoverned
+/// `mur agent send` path instead.
 pub fn plan_via_router(
     mur_home: &Path,
     fleet: &Fleet,
     goal: &str,
     events: &[ChannelEvent],
 ) -> Option<Procedure> {
-    let prompt = build_plan_prompt(fleet, events);
+    if fleet.members.len() <= 1 {
+        return None;
+    }
+    let prompt = build_plan_prompt(mur_home, fleet, events);
     let params = json!({
         "message": { "role": "user", "parts": [{ "kind": "text", "text": prompt }] }
     });
@@ -154,7 +169,61 @@ pub fn plan_via_router(
     parse_router_plan(&out, &fleet.members, goal)
 }
 
-fn build_plan_prompt(fleet: &Fleet, events: &[ChannelEvent]) -> String {
+/// How many of a member's skills to name before truncating. A router prompt
+/// gains nothing from a member's twentieth skill, and one agent here really
+/// does have nineteen.
+const ROSTER_MAX_SKILLS: usize = 6;
+/// Same idea for writable roots: enough to tell repos apart, not an inventory.
+const ROSTER_MAX_WRITES: usize = 2;
+
+/// One line per member: what it is, what it knows, and — the part no
+/// self-description can fake — what the kernel actually lets it run and write.
+///
+/// Without this the router sees `Members: frontend, rustsmith, pm, qa` and
+/// routes on what the NAMES suggest. Facts, not names, decide who can do the
+/// work; a good name is a coincidence.
+///
+/// Pure so it can be tested without a `~/.mur`. Returns `None` when no member
+/// resolved, so the caller keeps today's plain-names line rather than sending a
+/// worse prompt.
+fn member_roster(facts: &[AgentFacts]) -> Option<String> {
+    if facts.is_empty() {
+        return None;
+    }
+    let trunc = |items: &[String], max: usize| -> String {
+        let shown: Vec<String> = items.iter().take(max).cloned().collect();
+        match items.len().checked_sub(max) {
+            Some(n) if n > 0 => format!("{}, +{n} more", shown.join(", ")),
+            _ => shown.join(", "),
+        }
+    };
+    let lines: Vec<String> = facts
+        .iter()
+        .map(|f| {
+            let mut parts = vec![format!("- {}", f.name)];
+            if !f.role.is_empty() {
+                parts.push(format!("({})", f.role));
+            }
+            let exec = match &f.exec {
+                ExecFacts::Unrestricted => "any".to_string(),
+                ExecFacts::Nothing => "none".to_string(),
+                ExecFacts::Allowlist(l) => trunc(l, ROSTER_MAX_SKILLS),
+            };
+            parts.push(format!("| can run: {exec}"));
+            if !f.writes.is_empty() {
+                let w: Vec<String> = f.writes.iter().map(|p| p.display().to_string()).collect();
+                parts.push(format!("| writes: {}", trunc(&w, ROSTER_MAX_WRITES)));
+            }
+            if !f.skills.is_empty() {
+                parts.push(format!("| skills: {}", trunc(&f.skills, ROSTER_MAX_SKILLS)));
+            }
+            parts.join(" ")
+        })
+        .collect();
+    Some(lines.join("\n"))
+}
+
+fn build_plan_prompt(mur_home: &Path, fleet: &Fleet, events: &[ChannelEvent]) -> String {
     let recent: String = events
         .iter()
         .rev()
@@ -164,11 +233,20 @@ fn build_plan_prompt(fleet: &Fleet, events: &[ChannelEvent]) -> String {
         .map(|t| format!("- {t}"))
         .collect::<Vec<_>>()
         .join("\n");
+    let facts: Vec<AgentFacts> = fleet
+        .members
+        .iter()
+        .filter_map(|m| agent_facts(mur_home, m))
+        .collect();
+    let members = match member_roster(&facts) {
+        Some(roster) => format!("\n{roster}"),
+        None => format!(" {}", fleet.members.join(", ")),
+    };
     format!(
-        "You are the router for fleet '{}'. Goal: {}\nMembers (delegate ONLY to these): {}\nRecent channel activity:\n{}\n\nProduce a minimal plan that assigns work to the RIGHT members (not everyone) with dependencies. Reply with ONLY JSON:\n{{\"steps\":[{{\"id\":\"s1\",\"member\":\"<one of the members>\",\"task\":\"<what to do>\",\"depends_on\":[]}}]}}\nUse `depends_on` (referencing earlier step ids) for steps that must wait. Keep it small.",
+        "You are the router for fleet '{}'. Goal: {}\nMembers (delegate ONLY to these):{}\nRecent channel activity:\n{}\n\nProduce a minimal plan that assigns work to the RIGHT members (not everyone) with dependencies. Match each step to a member that can actually run it — `can run` and `writes` are what the sandbox enforces, so a member without the binary or the directory WILL fail the step. Reply with ONLY JSON:\n{{\"steps\":[{{\"id\":\"s1\",\"member\":\"<one of the members>\",\"task\":\"<what to do>\",\"depends_on\":[]}}]}}\nUse `depends_on` (referencing earlier step ids) for steps that must wait. Keep it small.",
         fleet.name,
         fleet.goal,
-        fleet.members.join(", "),
+        members,
         if recent.is_empty() {
             "(none yet)"
         } else {
@@ -278,5 +356,42 @@ mod tests {
             "original goal must lead the intent"
         );
         assert!(intent.contains("do part one"));
+    }
+
+    fn roster_facts(name: &str, exec: ExecFacts, writes: &[&str], skills: &[&str]) -> AgentFacts {
+        AgentFacts {
+            name: name.into(),
+            role: String::new(),
+            exec,
+            writes: writes.iter().map(std::path::PathBuf::from).collect(),
+            net: mur_common::agent::NetworkOutboundMode::Restricted,
+            skills: skills.iter().map(|s| s.to_string()).collect(),
+            model_ref: String::new(),
+            running: true,
+            drift: false,
+        }
+    }
+
+    #[test]
+    fn roster_states_the_enforced_facts_and_truncates() {
+        let long: Vec<&str> = vec!["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
+        let r = member_roster(&[roster_facts(
+            "rustsmith",
+            ExecFacts::Allowlist(vec!["git".into(), "cargo".into()]),
+            &["/repo/mur", "/home/rs", "/cache"],
+            &long,
+        )])
+        .unwrap();
+        assert!(r.contains("can run: git, cargo"), "{r}");
+        // Writes are capped, and the overflow is stated rather than hidden.
+        assert!(r.contains("writes: /repo/mur, /home/rs, +1 more"), "{r}");
+        assert!(r.contains("+2 more"), "skills not truncated: {r}");
+    }
+
+    #[test]
+    fn roster_is_none_when_no_member_resolved() {
+        // Caller must fall back to the plain names line, never to an empty
+        // "Members:" section.
+        assert!(member_roster(&[]).is_none());
     }
 }
