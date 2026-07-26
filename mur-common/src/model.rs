@@ -214,7 +214,13 @@ pub fn pick_cheap_model(reg: &ModelRegistry, exclude: Option<&str>) -> Option<St
         .iter()
         .filter(|(k, _)| exclude != Some(k.as_str()))
         .filter(|(_, e)| e.capabilities.is_empty() || e.capabilities.iter().any(|c| c == "chat"))
-        .filter_map(|(k, e)| e.cost_per_1k_tokens.map(|c| (c, k.clone())))
+        .filter_map(|(k, e)| {
+            // Not the deprecated field directly: `mur model add --output-cost`
+            // deliberately leaves it unset, so reading it drops every entry
+            // added with the current flags instead of ranking it.
+            let (input, output) = e.effective_costs();
+            output.or(input).map(|c| (c, k.clone()))
+        })
         .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(_, k)| k)
 }
@@ -683,5 +689,37 @@ mod switch_tests {
         let mut empty = ModelRegistry::default();
         empty.models.insert("e".into(), mk(0.0, &["embedding"]));
         assert_eq!(pick_cheap_model(&empty, None), None);
+    }
+
+    /// `mur model add --input-cost/--output-cost` leaves `cost_per_1k_tokens`
+    /// unset, so an entry priced the current way must still be rankable.
+    #[test]
+    fn pick_cheap_model_sees_split_cost_entries() {
+        let mut reg = ModelRegistry::default();
+        let split = |input: f64, output: f64| ModelEntry {
+            provider: "x".into(),
+            model: "m".into(),
+            capabilities: vec!["chat".into()],
+            input_cost_per_1k: Some(input),
+            output_cost_per_1k: Some(output),
+            ..Default::default()
+        };
+        reg.models.insert("dear".into(), split(0.005, 0.025));
+        reg.models.insert("cheap".into(), split(0.0001, 0.0004));
+        assert_eq!(pick_cheap_model(&reg, None), Some("cheap".into()));
+
+        // Input-only entries are priced too, rather than silently skipped.
+        let mut input_only = ModelRegistry::default();
+        input_only.models.insert(
+            "in".into(),
+            ModelEntry {
+                provider: "x".into(),
+                model: "m".into(),
+                capabilities: vec!["chat".into()],
+                input_cost_per_1k: Some(0.002),
+                ..Default::default()
+            },
+        );
+        assert_eq!(pick_cheap_model(&input_only, None), Some("in".into()));
     }
 }

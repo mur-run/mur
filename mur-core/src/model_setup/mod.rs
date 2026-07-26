@@ -63,19 +63,19 @@ const CLOUD_LLM_DEFAULTS: &[CloudDefault] = &[
     CloudDefault {
         key_provider: "openai",
         cfg_provider: "openai",
-        model: "gpt-4o-mini",
+        model: "gpt-5.4-mini",
         openai_url: None,
     },
     CloudDefault {
         key_provider: "gemini",
         cfg_provider: "gemini",
-        model: "gemini-3.6-flash",
+        model: "gemini-3.5-flash-lite",
         openai_url: None,
     },
     CloudDefault {
         key_provider: "openrouter",
         cfg_provider: "openai",
-        model: "google/gemini-3.6-flash",
+        model: "google/gemini-3.5-flash-lite",
         openai_url: Some("https://openrouter.ai/api/v1"),
     },
 ];
@@ -360,7 +360,7 @@ mod tests {
         );
         let smart = plan.smart.unwrap();
         assert_eq!(smart.provider, "openai");
-        assert_eq!(smart.model, "google/gemini-3.6-flash");
+        assert_eq!(smart.model, "google/gemini-3.5-flash-lite");
         assert_eq!(
             smart.openai_url.as_deref(),
             Some("https://openrouter.ai/api/v1")

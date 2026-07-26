@@ -50,16 +50,18 @@ pub fn save_config_at(path: &Path, config: &Config) -> Result<()> {
 #     Budget:        claude-haiku-4-5-20251001     ($1/$5 per 1M tokens)
 #
 #   OpenAI (provider: openai):
-#     Best quality:  gpt-4o                        ($2.50/$10 per 1M tokens)
-#     Best value:    gpt-4o-mini                   ($0.15/$0.60 per 1M tokens)
+#     Best quality:  gpt-5.6-sol                   ($5/$30 per 1M tokens)
+#     Balanced:      gpt-5.6-terra                 ($2.50/$15 per 1M tokens)
+#     Best value:    gpt-5.4-mini                  ($0.75/$4.50 per 1M tokens)
 #
 #   Gemini (provider: gemini):
-#     Best quality:  gemini-3.5-pro                ($1.25/$10 per 1M tokens)
-#     Best value:    gemini-3.6-flash              ($0.15/$0.60 per 1M tokens)
+#     Best quality:  gemini-3.1-pro-preview        ($2/$12 per 1M tokens)
+#     Balanced:      gemini-3.6-flash              ($1.50/$7.50 per 1M tokens)
+#     Best value:    gemini-3.5-flash-lite         ($0.30/$2.50 per 1M tokens)
 #
 #   OpenRouter (provider: openai, set openai_url to https://openrouter.ai/api/v1):
-#     Best quality:  anthropic/claude-sonnet-4     ($3/$15 per 1M tokens)
-#     Best value:    google/gemini-3.6-flash       ($0.15/$0.60 per 1M tokens)
+#     Best quality:  anthropic/claude-sonnet-5     ($3/$15 per 1M tokens)
+#     Best value:    google/gemini-3.5-flash-lite  ($0.30/$2.50 per 1M tokens)
 #
 #   Ollama (provider: ollama):
 #     Best quality:  gemma4:31b                    (free, needs 24GB+ RAM)

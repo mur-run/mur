@@ -73,6 +73,16 @@ struct ApiUsage {
     prompt_tokens: u64,
     #[serde(default)]
     completion_tokens: u64,
+    #[serde(default)]
+    prompt_tokens_details: ApiPromptDetails,
+}
+
+/// `cached_tokens` is a subset of `prompt_tokens`, not an extra count — it is
+/// billed at ~1/10 the input rate, so it has to be split out rather than summed.
+#[derive(Debug, Default, Deserialize)]
+struct ApiPromptDetails {
+    #[serde(default)]
+    cached_tokens: u64,
 }
 
 #[async_trait]
@@ -136,13 +146,15 @@ impl ChatBackend for OpenAIBackend {
             .and_then(|c| c.message.content.clone())
             .unwrap_or_default();
 
+        let cached = parsed.usage.prompt_tokens_details.cached_tokens;
         Ok(ChatResponse {
             text,
             usage: Usage {
-                input_tokens: parsed.usage.prompt_tokens,
+                input_tokens: parsed.usage.prompt_tokens.saturating_sub(cached),
                 output_tokens: parsed.usage.completion_tokens,
+                // Prompt caching is automatic; there is no per-token write fee.
                 cache_creation_input_tokens: 0,
-                cache_read_input_tokens: 0,
+                cache_read_input_tokens: cached,
                 provider: "openai",
                 model: req.model.into(),
             },
