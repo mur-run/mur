@@ -30,6 +30,7 @@ pub mod channel_import;
 pub mod cli;
 mod comm;
 mod doctor;
+mod effort;
 pub mod export;
 mod hub;
 pub(crate) mod install;
@@ -75,6 +76,7 @@ pub use cli::cmd_cli;
 pub use comm::{cmd_card, cmd_send};
 #[allow(unused_imports)]
 pub use doctor::cmd_doctor;
+pub use effort::cmd_effort;
 #[allow(unused_imports)]
 pub use export::cmd_export;
 #[allow(unused_imports)]

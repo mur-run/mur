@@ -112,6 +112,7 @@ pub fn cmd_create(
         name: name.to_string(),
         display_name,
         role: None,
+        effort: None,
         version: "0.1.0".to_string(),
         persona: Persona {
             category: PersonaCategory::Custom,
