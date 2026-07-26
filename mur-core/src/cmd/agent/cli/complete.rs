@@ -39,7 +39,11 @@ pub struct CompletionState {
 const COMMANDS: &[(&str, &str, &[&str])] = &[
     ("auto", "session-wide auto-approval", &["on", "off"]),
     ("card", "show this agent's card", &[]),
-    ("channels", "list or switch channels", &[]),
+    (
+        "channels",
+        "list, switch, or follow channels",
+        &["--follow"],
+    ),
     ("clear", "start a new conversation", &[]),
     ("help", "show the command cheatsheet", &[]),
     (
