@@ -51,6 +51,14 @@ pub struct ModelEntry {
     /// Model context window size in tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
+    /// When the rates above were recorded.
+    ///
+    /// Vendors move prices; a rate written months ago is a guess wearing the
+    /// costume of a fact, and nothing else on this struct can tell the two
+    /// apart. `None` means unknown — entries predating this field, or hand-
+    /// written ones — which is honest rather than defaulting to "fresh".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priced_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl ModelEntry {
@@ -62,6 +70,26 @@ impl ModelEntry {
         let output = self.output_cost_per_1k.or(self.cost_per_1k_tokens);
         let input = self.input_cost_per_1k.or(self.cost_per_1k_tokens);
         (input, output)
+    }
+
+    /// Whether this entry carries any rate at all.
+    pub fn is_priced(&self) -> bool {
+        let (input, output) = self.effective_costs();
+        input.is_some() || output.is_some()
+    }
+
+    /// Stamp `priced_at` with `now`, but only if a rate is actually present —
+    /// a date on an unpriced entry would claim a freshness it does not have.
+    /// Never overwrites an existing stamp with an older one.
+    pub fn stamp_priced_at(&mut self, now: chrono::DateTime<chrono::Utc>) {
+        if self.is_priced() && self.priced_at.is_none_or(|prev| prev < now) {
+            self.priced_at = Some(now);
+        }
+    }
+
+    /// How long ago the rates were recorded, or `None` when unstamped.
+    pub fn price_age(&self, now: chrono::DateTime<chrono::Utc>) -> Option<chrono::TimeDelta> {
+        self.priced_at.map(|at| now - at)
     }
 }
 
@@ -276,6 +304,7 @@ models:
                 input_cost_per_1k: None,
                 output_cost_per_1k: None,
                 context_window: None,
+                priced_at: None,
             },
         );
         let s = serde_yaml_ng::to_string(&r).unwrap();
@@ -335,6 +364,7 @@ roles:
                 input_cost_per_1k: None,
                 output_cost_per_1k: None,
                 context_window: None,
+                priced_at: None,
             },
         );
         reg.roles.insert(
@@ -365,6 +395,7 @@ roles:
                 input_cost_per_1k: None,
                 output_cost_per_1k: None,
                 context_window: None,
+                priced_at: None,
             },
         );
         reg.roles.insert(
@@ -419,6 +450,7 @@ models:
                 input_cost_per_1k: None,
                 output_cost_per_1k: None,
                 context_window: None,
+                priced_at: None,
             },
         );
         let yaml = serde_yaml_ng::to_string(&r2).unwrap();
@@ -563,6 +595,7 @@ mod io_tests {
                 input_cost_per_1k: None,
                 output_cost_per_1k: None,
                 context_window: None,
+                priced_at: None,
             },
         );
         r.save_to(&p).unwrap();
@@ -689,6 +722,65 @@ mod switch_tests {
         let mut empty = ModelRegistry::default();
         empty.models.insert("e".into(), mk(0.0, &["embedding"]));
         assert_eq!(pick_cheap_model(&empty, None), None);
+    }
+
+    /// A price with no date is a guess wearing the costume of a fact. But a
+    /// date on an entry that carries no price would be the same lie in the
+    /// other direction, so the stamp is conditional on there being a rate.
+    #[test]
+    fn priced_at_stamps_only_priced_entries() {
+        let now = chrono::Utc::now();
+
+        let mut unpriced = ModelEntry {
+            provider: "openai".into(),
+            model: "local-thing".into(),
+            ..Default::default()
+        };
+        unpriced.stamp_priced_at(now);
+        assert_eq!(unpriced.priced_at, None);
+        assert_eq!(unpriced.price_age(now), None);
+
+        let mut priced = ModelEntry {
+            output_cost_per_1k: Some(0.025),
+            ..unpriced.clone()
+        };
+        priced.stamp_priced_at(now);
+        assert_eq!(priced.priced_at, Some(now));
+
+        // A legacy single-rate entry counts as priced.
+        let mut legacy = ModelEntry {
+            cost_per_1k_tokens: Some(0.01),
+            ..unpriced.clone()
+        };
+        legacy.stamp_priced_at(now);
+        assert!(legacy.priced_at.is_some());
+
+        // Re-stamping never moves the date backwards.
+        let earlier = now - chrono::TimeDelta::days(30);
+        priced.stamp_priced_at(earlier);
+        assert_eq!(priced.priced_at, Some(now));
+    }
+
+    /// Entries written before this field existed must keep loading, and must
+    /// report an unknown age rather than inheriting today's date.
+    #[test]
+    fn registry_without_priced_at_still_loads_and_reports_unknown_age() {
+        let yaml = r#"
+schema_version: 1
+models:
+  opus:
+    provider: anthropic
+    model: claude-opus-5
+    input_cost_per_1k: 0.005
+    output_cost_per_1k: 0.025
+"#;
+        let reg: ModelRegistry = serde_yaml_ng::from_str(yaml).unwrap();
+        let e = &reg.models["opus"];
+        assert_eq!(e.priced_at, None);
+        assert_eq!(e.price_age(chrono::Utc::now()), None);
+        // Round-trips without inventing the field.
+        let out = serde_yaml_ng::to_string(&reg).unwrap();
+        assert!(!out.contains("priced_at"), "{out}");
     }
 
     /// `mur model add --input-cost/--output-cost` leaves `cost_per_1k_tokens`
