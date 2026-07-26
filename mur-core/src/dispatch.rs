@@ -1014,7 +1014,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&items)?);
                     } else {
-                        print!("{}", crate::open_items::render(&items));
+                        print!("{}", crate::open_items::render(&items, &[]));
                     }
                 }
             }
