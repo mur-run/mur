@@ -22,7 +22,9 @@ impl ChannelStore {
     fn channel_dir(&self, id: &str) -> PathBuf {
         self.root.join(id)
     }
-    fn events_path(&self, id: &str) -> PathBuf {
+    /// Path of a channel's append-only log. Public so a reader can cheaply
+    /// gate on its length instead of re-parsing an unchanged log.
+    pub fn events_path(&self, id: &str) -> PathBuf {
         self.channel_dir(id).join("events.jsonl")
     }
     fn manifest_path(&self, id: &str) -> PathBuf {
