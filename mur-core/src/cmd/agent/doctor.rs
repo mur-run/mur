@@ -12,12 +12,20 @@ pub struct AgentRow {
     pub lock_sha: String,
     pub disk_sha: String,
     pub stale: bool,
+    /// The agent's `profile.yaml` / `sys_prompt.md` was edited after this
+    /// process started, so its live entitlements are NOT what the files say.
+    ///
+    /// Distinct from `stale`, which compares the runtime BINARY's git sha:
+    /// nothing was watching for a config edit. `mur agent perm …` warns once,
+    /// at edit time, and then the discrepancy is invisible — which is how a
+    /// grant that "was definitely added" silently fails to apply.
+    pub profile_drift: bool,
 }
 
 /// Build a doctor row for a single agent from its parsed lock file.
 ///
 /// Pure function — no I/O — so it is cheap to unit-test.
-pub fn build_row(name: &str, lock: &LockFile, disk_sha: &str) -> AgentRow {
+pub fn build_row(name: &str, lock: &LockFile, disk_sha: &str, profile_drift: bool) -> AgentRow {
     let lock_sha = if lock.build_sha.is_empty() {
         "unknown".to_string()
     } else {
@@ -28,6 +36,7 @@ pub fn build_row(name: &str, lock: &LockFile, disk_sha: &str) -> AgentRow {
         lock_sha,
         disk_sha: disk_sha.to_string(),
         stale: stale::is_stale(lock, disk_sha),
+        profile_drift,
     }
 }
 
@@ -92,7 +101,9 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
                 Ok(l) => l,
                 Err(_) => continue, // malformed lock — skip
             };
-            rows.push(build_row(&agent_name, &lock, &disk_sha));
+            let drift = mur_common::agent_facts::agent_facts(&mur_home, &agent_name)
+                .is_some_and(|f| f.drift);
+            rows.push(build_row(&agent_name, &lock, &disk_sha, drift));
         }
     }
 
@@ -107,6 +118,7 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
                     "name":     r.name,
                     "running":  true,
                     "stale":    r.stale,
+                    "profile_drift": r.profile_drift,
                     "lock_sha": r.lock_sha,
                     "disk_sha": r.disk_sha,
                 })
@@ -124,6 +136,11 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
                 println!(
                     "{}: running, STALE (lock {} vs disk {}) \u{2192} run 'mur agent restart {}'",
                     r.name, lock8, disk8, r.name
+                );
+            } else if r.profile_drift {
+                println!(
+                    "{}: running, binary current but PROFILE EDITED SINCE START \u{2192} run 'mur agent restart {}'",
+                    r.name, r.name
                 );
             } else {
                 println!("{}: running, current", r.name);
@@ -189,7 +206,7 @@ mod tests {
     #[test]
     fn build_row_stale_when_shas_differ() {
         let lock = make_lock("abc123def456");
-        let row = build_row("myagent", &lock, "999999999999");
+        let row = build_row("myagent", &lock, "999999999999", false);
         assert!(row.stale);
         assert_eq!(row.name, "myagent");
         assert_eq!(row.lock_sha, "abc123def456");
@@ -199,14 +216,25 @@ mod tests {
     #[test]
     fn build_row_current_when_shas_match() {
         let lock = make_lock("abc123def456");
-        let row = build_row("myagent", &lock, "abc123def456");
+        let row = build_row("myagent", &lock, "abc123def456", false);
         assert!(!row.stale);
+    }
+
+    #[test]
+    fn profile_drift_is_independent_of_binary_staleness() {
+        // The two conditions are orthogonal: a current binary can still be
+        // running yesterday's entitlements, which is the case nothing used to
+        // report.
+        let lock = make_lock("abc123def456");
+        let row = build_row("myagent", &lock, "abc123def456", true);
+        assert!(!row.stale);
+        assert!(row.profile_drift);
     }
 
     #[test]
     fn build_row_empty_lock_sha_shown_as_unknown() {
         let lock = make_lock("");
-        let row = build_row("myagent", &lock, "abc123def456");
+        let row = build_row("myagent", &lock, "abc123def456", false);
         assert!(row.stale);
         assert_eq!(row.lock_sha, "unknown");
     }
@@ -214,7 +242,7 @@ mod tests {
     #[test]
     fn build_row_two_unknowns_not_stale() {
         let lock = make_lock("unknown");
-        let row = build_row("myagent", &lock, "unknown");
+        let row = build_row("myagent", &lock, "unknown", false);
         assert!(!row.stale);
     }
 
