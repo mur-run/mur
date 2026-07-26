@@ -651,12 +651,10 @@ jobs:
         env:
           CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
 
-      - name: Wait for crates.io index propagation
-        run: sleep 60
-
-      - name: Publish mur-core
-        # Allowed to fail until mur-agent-runtime is published to crates.io.
-        continue-on-error: true
-        run: cargo publish -p mur-core --token "${CRATES_IO_TOKEN}"
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+      # Only mur-common is published. Everything below it (mur-compress,
+      # mur-channel, mur-open-items, mur-agent-runtime) is `publish = false`,
+      # and mur-core depends on all of them, so `cargo publish -p mur-core`
+      # cannot succeed. It used to run here under `continue-on-error`, which
+      # meant it failed on every release since 0.2.0 and said nothing.
+      # The user-facing artifact is the `mur` binary — Homebrew and the
+      # installer — not the library. See issue #773.
