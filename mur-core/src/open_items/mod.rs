@@ -21,13 +21,13 @@
 
 use std::path::Path;
 
-pub use mur_common::open_items::{ItemSource, OpenItem};
+pub use mur_open_items::{ItemSource, OpenItem};
 
 pub mod observed;
 
-/// The agent-authored half lives in `mur-common` so the agent runtime can
-/// write to it without depending on this crate.
-pub use mur_common::open_items as reported;
+/// The agent-authored half lives in its own crate so the agent runtime can
+/// write to it without depending on this one.
+pub use mur_open_items as reported;
 
 /// Everything outstanding, observed first.
 ///

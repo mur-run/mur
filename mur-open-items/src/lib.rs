@@ -7,9 +7,15 @@
 //! promises made in conversation that no file records, and nothing but the
 //! agent's word says it is real.
 //!
-//! The types and the reported log live here rather than in `mur-core` because
-//! the agent runtime writes to the log and does not (and should not) depend on
-//! `mur-core`. Collection of observed items, and rendering, stay in `mur-core`.
+//! Its own crate rather than a module in `mur-common` or `mur-core`, because
+//! both the CLI and the agent runtime write here and the runtime must not
+//! depend on `mur-core` (that would drag LanceDB and Arrow into every agent
+//! process). Same shape as `mur-channel` and `mur-compress`: shared state with
+//! its own file format, owned by neither caller.
+//!
+//! Collecting *observed* items needs to know MUR's on-disk layout, so that and
+//! the rendering stay in `mur-core`. What lives here is the vocabulary both
+//! sides speak and the one file they both touch.
 //!
 //! # Reported storage
 //!

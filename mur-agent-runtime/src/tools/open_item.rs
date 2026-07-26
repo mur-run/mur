@@ -61,7 +61,7 @@ previous call to clear one."
 
     async fn execute(&self, input: serde_json::Value) -> Result<String, ToolError> {
         if let Some(id) = input.get("resolve").and_then(|v| v.as_str()) {
-            mur_common::open_items::resolve(&self.mur_home, id)
+            mur_open_items::resolve(&self.mur_home, id)
                 .map_err(|e| ToolError::Execution(format!("resolve open item: {e}")))?;
             return Ok(format!("Resolved open item {id}."));
         }
@@ -88,7 +88,7 @@ previous call to clear one."
             .map(str::trim)
             .filter(|s| !s.is_empty());
 
-        let id = mur_common::open_items::report(&self.mur_home, &self.agent_name, title, next)
+        let id = mur_open_items::report(&self.mur_home, &self.agent_name, title, next)
             .map_err(|e| ToolError::Execution(format!("record open item: {e}")))?;
 
         Ok(format!(
@@ -118,12 +118,12 @@ mod tests {
             .execute(serde_json::json!({"title": "write the tests", "next": "cargo test"}))
             .await
             .unwrap();
-        assert_eq!(mur_common::open_items::open(tmp.path()).len(), 1);
+        assert_eq!(mur_open_items::open(tmp.path()).len(), 1);
 
         // The id is in the reply so the model can clear it next turn.
         let id = out.split_whitespace().nth(2).unwrap().trim_end_matches('.');
         t.execute(serde_json::json!({"resolve": id})).await.unwrap();
-        assert!(mur_common::open_items::open(tmp.path()).is_empty());
+        assert!(mur_open_items::open(tmp.path()).is_empty());
     }
 
     /// An empty or missing title must not become a blank line in the user's
@@ -155,6 +155,6 @@ mod tests {
             .await
             .unwrap_err();
         assert!(format!("{err:?}").contains("too long"), "{err:?}");
-        assert!(mur_common::open_items::open(tmp.path()).is_empty());
+        assert!(mur_open_items::open(tmp.path()).is_empty());
     }
 }
