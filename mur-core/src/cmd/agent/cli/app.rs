@@ -145,8 +145,12 @@ pub enum SlashCmd {
     Clear,
     Card,
     Sessions,
-    /// `/channels [N]` — list channels or switch to channel N.
-    Channels(Option<usize>),
+    /// `/channels [N] [--follow]` — list channels, switch to channel N, or
+    /// live-tail channel N (`--follow` with no N stops following).
+    Channels {
+        n: Option<usize>,
+        follow: bool,
+    },
     /// `/auto [on|off]` — toggle (None) or set session-wide auto-approval.
     Auto(Option<bool>),
     /// `/verbose [on|off]` — toggle (None) or set expanded tool-card rendering.
@@ -175,7 +179,11 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
         "card" => SlashCmd::Card,
         "sessions" | "ls" => SlashCmd::Sessions,
         "channels" | "chan" => {
-            SlashCmd::Channels(words.next().and_then(|s| s.parse::<usize>().ok()))
+            let args: Vec<&str> = words.collect();
+            SlashCmd::Channels {
+                n: args.iter().find_map(|s| s.parse::<usize>().ok()),
+                follow: args.iter().any(|s| *s == "--follow" || *s == "-f"),
+            }
         }
         "auto" => SlashCmd::Auto(match words.next() {
             Some("on") => Some(true),
@@ -435,6 +443,9 @@ pub struct App {
     /// (/clear, /channels switch): the event loop wipes screen + scrollback
     /// and re-anchors a fresh viewport before the next draw.
     pub wants_screen_wipe: bool,
+    /// A channel being live-tailed (`/channels N --follow`) — someone else's
+    /// conversation, not this pane's. `None` = not following.
+    pub follow: Option<super::follow::Follow>,
     /// Sent-message history for shell-style ↑/↓ recall in the composer.
     pub sent_history: Vec<String>,
     /// Current position while browsing `sent_history` (None = not browsing).
@@ -515,6 +526,7 @@ impl App {
             pending_suggestions: Vec::new(),
             suggestion_ghost: None,
             wants_screen_wipe: false,
+            follow: None,
             sent_history: Vec::new(),
             hist_idx: None,
             hist_stash: String::new(),
@@ -976,8 +988,38 @@ impl App {
         Ok(())
     }
 
-    /// Load prior turns into the transcript (resume), threading the last agent
-    /// task id as context.
+    /// Begin live-tailing `channel_id` (`/channels N --follow`). Refuses this
+    /// pane's own channel: its turns are already in the transcript and the
+    /// tail would double-render every one of them.
+    pub fn start_follow(
+        &mut self,
+        channel_id: &str,
+        now: std::time::Instant,
+    ) -> anyhow::Result<()> {
+        if self.channel.as_ref().is_some_and(|c| c.id == channel_id) {
+            anyhow::bail!("that is the channel this pane is on — nothing to follow");
+        }
+        self.follow = Some(super::follow::Follow::start(&self.home, channel_id, now)?);
+        Ok(())
+    }
+
+    /// Render whatever landed in the followed channel. Any error stops
+    /// following — a vanished channel must not report itself every poll.
+    pub fn poll_follow(&mut self, now: std::time::Instant) {
+        let Some(mut f) = self.follow.take() else {
+            return;
+        };
+        match f.drain(&self.home, now) {
+            Ok(lines) => {
+                for l in lines {
+                    self.push_system(l);
+                }
+                self.follow = Some(f);
+            }
+            Err(e) => self.push_system(format!("follow {} stopped: {e:#}", f.tag())),
+        }
+    }
+
     /// Record a completed `!command` run: show it, persist it, and queue it
     /// for the agent's next turn.
     pub fn push_shell(&mut self, cmd: &str, output: &str) {
@@ -1405,13 +1447,30 @@ mod tests {
 
     #[test]
     fn parse_slash_channels() {
-        assert_eq!(parse_slash("/channels"), Some(SlashCmd::Channels(None)));
+        let plain = |n| Some(SlashCmd::Channels { n, follow: false });
+        assert_eq!(parse_slash("/channels"), plain(None));
+        assert_eq!(parse_slash("/channels 2"), plain(Some(2)));
+        assert_eq!(parse_slash("/chan"), plain(None));
+        assert_eq!(parse_slash("/channels x"), plain(None));
+        // The flag is order-independent, and `-f` is the short form. No N with
+        // `--follow` means "stop following".
+        for line in ["/channels 2 --follow", "/channels --follow 2", "/chan -f 2"] {
+            assert_eq!(
+                parse_slash(line),
+                Some(SlashCmd::Channels {
+                    n: Some(2),
+                    follow: true
+                }),
+                "{line}"
+            );
+        }
         assert_eq!(
-            parse_slash("/channels 2"),
-            Some(SlashCmd::Channels(Some(2)))
+            parse_slash("/channels --follow"),
+            Some(SlashCmd::Channels {
+                n: None,
+                follow: true
+            })
         );
-        assert_eq!(parse_slash("/chan"), Some(SlashCmd::Channels(None)));
-        assert_eq!(parse_slash("/channels x"), Some(SlashCmd::Channels(None)));
     }
 
     #[test]
