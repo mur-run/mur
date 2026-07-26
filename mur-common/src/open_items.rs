@@ -1,4 +1,17 @@
-//! Reported open items — what an agent claims is still outstanding.
+//! Open items shared between the CLI and the agent runtime.
+//!
+//! Two kinds of claim, never mixed. [`ItemSource::Observed`] is derived from
+//! state MUR itself holds — a queued job, a file in the inbox — and cannot be
+//! wrong about its own existence. [`ItemSource::Reported`] is what an agent
+//! wrote down because it decided something was left undone: it catches
+//! promises made in conversation that no file records, and nothing but the
+//! agent's word says it is real.
+//!
+//! The types and the reported log live here rather than in `mur-core` because
+//! the agent runtime writes to the log and does not (and should not) depend on
+//! `mur-core`. Collection of observed items, and rendering, stay in `mur-core`.
+//!
+//! # Reported storage
 //!
 //! Append-only JSONL at `<mur_home>/open-items.jsonl`, folded on read. Same
 //! idiom as the unified channel: never rewrite history, append the correction.
@@ -15,7 +28,68 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use super::{ItemSource, OpenItem};
+/// Whether MUR observed the item itself, or an agent merely reported it.
+///
+/// Displays keep the two apart. A panel that presents an agent's recollection
+/// with the same confidence as a file on disk teaches the reader to distrust
+/// all of it, and the failure mode of a status surface is not being wrong
+/// once — it is being ignored forever after.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ItemSource {
+    /// Derived from MUR's own state.
+    Observed,
+    /// Asserted by an agent.
+    Reported,
+}
+
+impl ItemSource {
+    /// Short marker for dense displays (a TUI footer, a status line).
+    pub fn marker(&self) -> &'static str {
+        match self {
+            ItemSource::Observed => "●",
+            ItemSource::Reported => "○",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            ItemSource::Observed => "observed",
+            ItemSource::Reported => "reported",
+        }
+    }
+
+    fn rank(&self) -> u8 {
+        match self {
+            ItemSource::Observed => 0,
+            ItemSource::Reported => 1,
+        }
+    }
+}
+
+impl PartialOrd for ItemSource {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ItemSource {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.rank().cmp(&other.rank())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenItem {
+    /// One line, imperative where possible.
+    pub title: String,
+    /// The command or place that resolves it, when there is an obvious one.
+    pub next: Option<String>,
+    pub source: ItemSource,
+    /// Where it came from: `"inbox"`, `"fleet:acme"`, `"agent:mur"`.
+    pub origin: String,
+    pub at: chrono::DateTime<chrono::Utc>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

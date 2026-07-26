@@ -4,6 +4,7 @@ pub mod fleet_run;
 pub(crate) mod fs_policy;
 pub mod mcp;
 pub mod naming;
+pub mod open_item;
 pub mod read_file;
 pub mod registry;
 pub(crate) mod suggest;
