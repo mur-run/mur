@@ -48,6 +48,10 @@ pub struct AgentFacts {
     pub net: NetworkOutboundMode,
     pub skills: Vec<String>,
     pub model_ref: String,
+    /// Per-turn effort from the profile. `None` means unset — which is the API
+    /// default (`high`), not "no effort"; `mur agent who` says so explicitly
+    /// because the difference is the whole point.
+    pub effort: Option<crate::llm::Effort>,
     pub running: bool,
     /// `profile.yaml` (or `sys_prompt.md`) was edited after the running process
     /// started, so the live agent is NOT what this index describes. See
@@ -301,6 +305,7 @@ pub fn agent_facts(mur_home: &Path, name: &str) -> Option<AgentFacts> {
             &p.skills,
         ),
         model_ref: p.model_ref.clone().unwrap_or_default(),
+        effort: p.effort,
         // Not running => nothing to drift from; the next start reads disk.
         drift: running && started_after_edits(&agent_dir) == Some(false),
         running,
@@ -388,6 +393,7 @@ mod tests {
             net,
             skills: vec![],
             model_ref: String::new(),
+            effort: None,
             running: true,
             drift: false,
         }
