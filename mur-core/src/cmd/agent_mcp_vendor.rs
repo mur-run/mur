@@ -116,6 +116,80 @@ fn resolve_bin(dir: &Path, name: &str) -> Result<PathBuf> {
         .with_context(|| format!("canonicalize {}", abs.display()))
 }
 
+/// Outcome of `npm audit signatures` over the installed tree.
+struct SignatureAudit {
+    /// Packages whose registry signature failed to verify. Non-empty means the
+    /// bytes on disk are not what the registry signed.
+    invalid: Vec<String>,
+    /// Packages that published no signature at all.
+    missing: u32,
+}
+
+/// Parse `npm audit signatures --json`.
+///
+/// Split out from the subprocess call so the contract can be tested without
+/// npm, a network, or an installed tree — this is the part that decides
+/// whether a vendor is refused.
+fn parse_audit(body: &str) -> Option<SignatureAudit> {
+    let v: serde_json::Value = serde_json::from_str(body.trim()).ok()?;
+    let names = |key: &str| -> Vec<String> {
+        v.get(key)
+            .and_then(|a| a.as_array())
+            .map(|a| {
+                a.iter()
+                    .map(|e| {
+                        e.get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("<unnamed>")
+                            .to_string()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    Some(SignatureAudit {
+        invalid: names("invalid"),
+        missing: names("missing").len() as u32,
+    })
+}
+
+/// Verify that the installed tree came from the registry.
+///
+/// The lockfile hash proves the tree hasn't changed since install; it says
+/// nothing about where those bytes came from, and would pin a poisoned cache
+/// as happily as a clean one. Registry signatures close exactly that gap, and
+/// they close it here — at install time, with network already in hand — rather
+/// than costing anything at startup.
+///
+/// `Ok(None)` when the audit could not run (npm too old, offline). Refusing to
+/// vendor over an unavailable audit would trade a real capability for a check
+/// that is advisory by nature.
+fn audit_signatures(dir: &Path) -> Result<Option<SignatureAudit>> {
+    let out = match std::process::Command::new("npm")
+        .args(["audit", "signatures", "--json"])
+        .current_dir(dir)
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("warning: could not run `npm audit signatures` ({e}); skipping");
+            return Ok(None);
+        }
+    };
+    // Exit status is non-zero when anything failed to verify, so parse the
+    // body regardless and let its contents decide.
+    let body = String::from_utf8_lossy(&out.stdout);
+    match parse_audit(&body) {
+        Some(a) => Ok(Some(a)),
+        None => {
+            eprintln!(
+                "warning: `npm audit signatures` returned output this version can't read; skipping",
+            );
+            Ok(None)
+        }
+    }
+}
+
 /// Vendor `entry`'s package: install it, repoint the entry at the installed
 /// script, and record the lockfile fingerprint.
 ///
@@ -130,6 +204,20 @@ pub fn vendor_entry(
 ) -> Result<PathBuf> {
     let dir = install_dir(mur_home, agent, &entry.name);
     npm_install(&dir, name, version)?;
+
+    let audit = audit_signatures(&dir)?;
+    if let Some(a) = &audit
+        && !a.invalid.is_empty()
+    {
+        bail!(
+            "refusing to vendor: {} package(s) failed registry signature verification ({}). \
+             The bytes on disk are not what the registry signed — do not run this server \
+             until you know why.",
+            a.invalid.len(),
+            a.invalid.join(", "),
+        );
+    }
+
     let bin = resolve_bin(&dir, name)?;
     let lock = lockfile_sha256(&dir)?;
 
@@ -142,6 +230,7 @@ pub fn vendor_entry(
         version: version.to_string(),
         install_dir: dir.display().to_string(),
         lockfile_sha256: lock,
+        signatures_missing: audit.as_ref().map(|a| a.missing),
     });
     Ok(dir)
 }
@@ -214,6 +303,14 @@ pub fn cmd_mcp_vendor(
     println!("  installed:   {}@{version}", pin.name);
     println!("  directory:   {}", dir.display());
     println!("  lockfile:    sha256:{}", pin.lockfile_sha256);
+    match pin.signatures_missing {
+        Some(0) => println!("  signatures:  every package verified against the registry"),
+        Some(n) => println!(
+            "  signatures:  verified, except {n} package(s) that publish none \
+             (common for older releases)"
+        ),
+        None => println!("  signatures:  not audited (npm too old, or offline)"),
+    }
     println!("\nRestart the agent to launch from the vendored copy.");
     Ok(())
 }
@@ -309,6 +406,57 @@ mod tests {
             install_dir(home, "a1", "fetch"),
             install_dir(home, "a2", "fetch"),
             "two agents must not share one install they can both invalidate",
+        );
+    }
+
+    // ── Registry signature audit ────────────────────────────────────────────
+
+    /// The shape npm 10 actually returns for a clean tree, captured from a real
+    /// run against @yawlabs/fetch-mcp (105 packages, all verified).
+    #[test]
+    fn a_clean_audit_reports_nothing_missing_and_nothing_invalid() {
+        let a = parse_audit(r#"{"invalid":[],"missing":[]}"#).expect("clean body parses");
+        assert!(a.invalid.is_empty());
+        assert_eq!(a.missing, 0);
+    }
+
+    /// Unsigned packages are common for older releases — worth recording, not
+    /// worth refusing over.
+    #[test]
+    fn unsigned_packages_are_counted_not_fatal() {
+        let a = parse_audit(r#"{"invalid":[],"missing":[{"name":"old-pkg"},{"name":"older"}]}"#)
+            .unwrap();
+        assert_eq!(a.missing, 2);
+        assert!(a.invalid.is_empty(), "missing is not invalid");
+    }
+
+    /// An invalid signature means the bytes on disk are not what the registry
+    /// signed. `vendor_entry` refuses on this, so the names have to survive
+    /// parsing to reach the user.
+    #[test]
+    fn invalid_signatures_keep_their_package_names() {
+        let a = parse_audit(r#"{"invalid":[{"name":"evil-dep"}],"missing":[]}"#).unwrap();
+        assert_eq!(a.invalid, vec!["evil-dep".to_string()]);
+    }
+
+    #[test]
+    fn an_unreadable_audit_body_is_not_silently_treated_as_clean() {
+        assert!(parse_audit("npm ERR! code ENOTFOUND").is_none());
+        assert!(parse_audit("").is_none());
+    }
+
+    /// A future npm that renames or drops the field must not turn into a
+    /// confident "all verified".
+    #[test]
+    fn missing_keys_degrade_to_empty_rather_than_inventing_results() {
+        let a = parse_audit(r#"{}"#).expect("valid json still parses");
+        assert!(a.invalid.is_empty());
+        assert_eq!(a.missing, 0);
+        let a = parse_audit(r#"{"invalid":[{}],"missing":[]}"#).unwrap();
+        assert_eq!(
+            a.invalid,
+            vec!["<unnamed>".to_string()],
+            "an entry without a name still has to be reported, not dropped",
         );
     }
 }

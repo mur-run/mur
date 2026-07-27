@@ -369,6 +369,20 @@ pub struct McpPackagePin {
     pub install_dir: String,
     /// SHA-256 (lowercase hex) of `<install_dir>/package-lock.json`.
     pub lockfile_sha256: String,
+
+    /// How many packages in the installed tree published no registry
+    /// signature, as reported by `npm audit signatures` at vendor time.
+    ///
+    /// `None` — the audit did not run (npm too old, or offline).
+    /// `Some(0)` — every package in the tree carried a verified signature.
+    /// `Some(n)` — `n` packages are unsigned; the rest verified.
+    ///
+    /// A signature that verifies proves the bytes came from the registry, which
+    /// the content hash cannot: it would faithfully pin a poisoned cache. An
+    /// *invalid* signature is not recorded here because it blocks the vendor
+    /// outright — that is an integrity failure, not a property to note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signatures_missing: Option<u32>,
 }
 
 /// Authentication scheme for a remote (HTTP) MCP server.
