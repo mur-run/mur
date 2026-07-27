@@ -8,6 +8,7 @@
 
 pub mod gate;
 pub mod proposal;
+pub mod recurrence;
 pub mod skeleton;
 
 use anyhow::Result;
@@ -39,6 +40,9 @@ pub fn scan_in_dirs(
         .unwrap_or_default()
         .as_millis() as u64;
     let idle_ms = (cfg.idle_minutes.max(0) as u64) * 60 * 1000;
+    let index_path = recurrence::path_for(inbox_dir);
+    let mut index = recurrence::load(&index_path);
+    let mut index_dirty = false;
 
     for entry in std::fs::read_dir(recordings_dir)? {
         let path = entry?.path();
@@ -107,6 +111,22 @@ pub fn scan_in_dirs(
         }
         let skeleton = skeleton::skeletonize_steps(&steps);
 
+        // Recorded only after the shape gate, so transcripts never pollute the
+        // index. Below `min_occurrences` the sighting is banked and nothing is
+        // proposed — a procedure is something done more than once (#783).
+        let now = chrono::Utc::now().to_rfc3339();
+        let occurrences = index.observe(&skeleton, &id, &now, cfg.similarity_merge_threshold);
+        index_dirty = true;
+        if !meta.marked && occurrences < cfg.min_occurrences {
+            tracing::debug!(
+                "harvest: session {} seen {}x, below min_occurrences {}",
+                id,
+                occurrences,
+                cfg.min_occurrences
+            );
+            continue;
+        }
+
         let similar_to = existing_workflow_steps
             .iter()
             .map(|(name, wsteps)| (name, proposal::step_similarity(&skeleton, wsteps)))
@@ -128,6 +148,7 @@ pub fn scan_in_dirs(
             skeleton,
             event_count: events.len(),
             duration_secs,
+            occurrences,
             created_at: chrono::Utc::now().to_rfc3339(),
             status: proposal::ProposalStatus::Pending,
             similar_to,
@@ -135,6 +156,9 @@ pub fn scan_in_dirs(
         };
         proposal::save_in_dir(inbox_dir, &p)?;
         report.proposed += 1;
+    }
+    if index_dirty {
+        recurrence::save(&index_path, &index)?;
     }
     Ok(report)
 }
@@ -277,6 +301,8 @@ mod tests {
 
         let cfg = HarvestCfg {
             idle_minutes: 0,
+            // Recurrence has its own tests below; this one is about project stamping.
+            min_occurrences: 1,
             ..Default::default()
         };
         scan_in_dirs(&rec, &inbox, &[], &cfg).unwrap();
@@ -296,6 +322,7 @@ mod tests {
 
         let cfg = HarvestCfg {
             idle_minutes: 0, // session timestamps are ancient → idle
+            min_occurrences: 1,
             ..Default::default()
         };
         let r1 = scan_in_dirs(&rec, &inbox, &[], &cfg).unwrap();
@@ -317,6 +344,7 @@ mod tests {
 
         let cfg = HarvestCfg {
             idle_minutes: 0,
+            min_occurrences: 1,
             ..Default::default()
         };
         let existing = vec![(
@@ -330,5 +358,62 @@ mod tests {
         scan_in_dirs(&rec, &inbox, &existing, &cfg).unwrap();
         let pending = proposal::pending_in_dir(&inbox).unwrap();
         assert_eq!(pending[0].similar_to.as_deref(), Some("deploy-api"));
+    }
+
+    #[test]
+    fn one_off_session_is_not_proposed() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let rec = tmp.path().join("recordings");
+        let inbox = tmp.path().join("inbox");
+        write_session(&rec, "s1", 4, false);
+
+        let cfg = HarvestCfg {
+            idle_minutes: 0,
+            ..Default::default() // min_occurrences = 2
+        };
+        let r = scan_in_dirs(&rec, &inbox, &[], &cfg).unwrap();
+        assert_eq!(r.scanned, 1, "still gated and judged");
+        assert_eq!(r.proposed, 0, "seen once is a session, not a procedure");
+        // The sighting is banked so the next run of the same steps can recur.
+        let idx = recurrence::load(&recurrence::path_for(&inbox));
+        assert_eq!(idx.entries.len(), 1);
+    }
+
+    #[test]
+    fn repeating_the_same_steps_proposes_on_the_second_sighting() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let rec = tmp.path().join("recordings");
+        let inbox = tmp.path().join("inbox");
+        let cfg = HarvestCfg {
+            idle_minutes: 0,
+            ..Default::default()
+        };
+
+        write_session(&rec, "s1", 4, false);
+        assert_eq!(scan_in_dirs(&rec, &inbox, &[], &cfg).unwrap().proposed, 0);
+
+        // Same procedure, different session: now it is a routine.
+        write_session(&rec, "s2", 4, false);
+        assert_eq!(scan_in_dirs(&rec, &inbox, &[], &cfg).unwrap().proposed, 1);
+
+        let pending = proposal::pending_in_dir(&inbox).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].id, "s2");
+        assert_eq!(pending[0].occurrences, 2);
+    }
+
+    #[test]
+    fn marked_session_is_proposed_on_first_sight() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let rec = tmp.path().join("recordings");
+        let inbox = tmp.path().join("inbox");
+        write_session(&rec, "s1", 4, true);
+
+        let cfg = HarvestCfg {
+            idle_minutes: 0,
+            ..Default::default()
+        };
+        // `mur in` is an explicit human yes — it outranks the heuristic.
+        assert_eq!(scan_in_dirs(&rec, &inbox, &[], &cfg).unwrap().proposed, 1);
     }
 }
