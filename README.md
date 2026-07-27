@@ -335,8 +335,11 @@ files.
 - **Enforced MCP pins** — an agent **refuses to start** when an MCP server's
   binary no longer matches the hash pinned at install, or isn't signed.
   `mur agent mcp inspect <agent>` shows pinned vs current; `mur agent mcp pin
-  <agent> <server>` re-approves. MUR's own bundled MCP server re-pins itself
-  when MUR upgrades, so routine upgrades never stop your agents.
+  <agent> <server>` re-approves; `mur doctor` reports drift across every agent
+  before you meet it as a failed startup. MUR's own bundled MCP server re-pins
+  itself when MUR upgrades, and interpreter-launched servers (`npx …`, `python
+  -m …`) are reported as unprotected rather than enforced — hashing the
+  interpreter breaks on unrelated runtime upgrades without covering what it runs.
 
 ### 🔌 Power the tools you already pay for
 

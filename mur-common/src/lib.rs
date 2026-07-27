@@ -37,6 +37,7 @@ pub mod local_llm;
 pub mod lock_file;
 pub mod manifest;
 pub mod mcp_naming;
+pub mod mcp_package;
 pub mod media;
 pub mod mobile;
 pub mod model;
