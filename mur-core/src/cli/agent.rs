@@ -910,6 +910,13 @@ pub enum AgentMcpAction {
         /// inspect stays fast; pass `--probe` for the active scan.
         #[arg(long)]
         probe: bool,
+        /// Re-install a vendored entry from its pinned lockfile and diff the
+        /// result against what's on disk. The only check here whose reference
+        /// value comes from the registry rather than this machine, so it sees
+        /// a locally-edited tree even when the recorded hash was edited to
+        /// match. Costs a full reinstall.
+        #[arg(long)]
+        deep: bool,
     },
     /// Re-compute and persist the install-time binary pin (and
     /// optionally refresh publisher metadata). Used after reviewing
