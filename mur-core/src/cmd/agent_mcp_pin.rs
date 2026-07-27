@@ -525,10 +525,7 @@ pub fn cmd_mcp_inspect(
             match &entry.package {
                 Some(pkg) => {
                     println!();
-                    let clean = crate::cmd::agent_mcp_deep_audit::report(
-                        &entry.name,
-                        std::path::Path::new(&pkg.install_dir),
-                    );
+                    let clean = crate::cmd::agent_mcp_deep_audit::report(&entry.name, pkg);
                     if !clean {
                         worst = worst.max(InspectStatus::BinaryDrift as u8);
                     }
