@@ -190,6 +190,38 @@ fn audit_signatures(dir: &Path) -> Result<Option<SignatureAudit>> {
     }
 }
 
+/// Pull the SLSA predicate type out of `npm view <spec> dist.attestations --json`.
+///
+/// Split from the subprocess call so the shape is testable offline. An empty
+/// body is npm's way of saying the field doesn't exist, which is the common
+/// case and not an error.
+fn parse_provenance(body: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(body.trim()).ok()?;
+    v.get("provenance")?
+        .get("predicateType")?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// Ask the registry whether this release published build provenance.
+///
+/// Only the vendored package itself is queried. `npm audit signatures` already
+/// verifies any attestations across the whole tree; what it doesn't tell us is
+/// whether *this* package has one, and asking per-dependency would be a
+/// hundred network round-trips for a field that is recorded, never enforced.
+fn query_provenance(name: &str, version: &str) -> Option<String> {
+    let out = std::process::Command::new("npm")
+        .args([
+            "view",
+            &format!("{name}@{version}"),
+            "dist.attestations",
+            "--json",
+        ])
+        .output()
+        .ok()?;
+    parse_provenance(&String::from_utf8_lossy(&out.stdout))
+}
+
 /// Vendor `entry`'s package: install it, repoint the entry at the installed
 /// script, and record the lockfile fingerprint.
 ///
@@ -231,6 +263,7 @@ pub fn vendor_entry(
         install_dir: dir.display().to_string(),
         lockfile_sha256: lock,
         signatures_missing: audit.as_ref().map(|a| a.missing),
+        provenance: query_provenance(name, version),
     });
     Ok(dir)
 }
@@ -310,6 +343,13 @@ pub fn cmd_mcp_vendor(
              (common for older releases)"
         ),
         None => println!("  signatures:  not audited (npm too old, or offline)"),
+    }
+    match &pin.provenance {
+        Some(p) => println!("  provenance:  published ({p})"),
+        None => println!(
+            "  provenance:  none published — the registry can attest these bytes, \
+             but not where they were built"
+        ),
     }
     println!("\nRestart the agent to launch from the vendored copy.");
     Ok(())
@@ -458,5 +498,40 @@ mod tests {
             vec!["<unnamed>".to_string()],
             "an entry without a name still has to be reported, not dropped",
         );
+    }
+
+    // ── Provenance ──────────────────────────────────────────────────────────
+
+    /// The shape npm returns for a release published with provenance, captured
+    /// from real `npm view sigstore dist.attestations --json` output.
+    #[test]
+    fn provenance_predicate_type_is_extracted() {
+        let body = r#"{
+          "url": "https://registry.npmjs.org/-/npm/v1/attestations/sigstore@5.0.0",
+          "provenance": { "predicateType": "https://slsa.dev/provenance/v1" }
+        }"#;
+        assert_eq!(
+            parse_provenance(body).as_deref(),
+            Some("https://slsa.dev/provenance/v1"),
+        );
+    }
+
+    /// Most releases publish none — npm prints nothing at all. That is the
+    /// common case, not a failure, and must not read as an error.
+    #[test]
+    fn no_attestations_is_absence_not_failure() {
+        assert_eq!(parse_provenance(""), None);
+        assert_eq!(parse_provenance("{}"), None);
+        assert_eq!(
+            parse_provenance(r#"{"url":"x"}"#),
+            None,
+            "url without provenance"
+        );
+        assert_eq!(
+            parse_provenance(r#"{"provenance":{}}"#),
+            None,
+            "no predicateType"
+        );
+        assert_eq!(parse_provenance("npm ERR! 404"), None);
     }
 }
