@@ -7,9 +7,11 @@
 //! map and the §6.1 acceptance footer for ship status.
 //!
 //! Wiring:
-//! * `on_startup` — Rule 11 (M7.7): codesign / signtool every entry
-//!   in `ctx.mcp_server_binaries()`; refuse startup if any unsigned
-//!   on macOS / Windows. Linux is a no-op.
+//! * Rules 6 (M9.3) and 11 (M7.7) are **admission control**, not hooks —
+//!   see [`verify_mcp_supply_chain`], called by the supervisor before the
+//!   agent comes up. They used to live in `on_startup`, which is an
+//!   observe-only phase that discards every hook error into a warning, so
+//!   neither rule could actually refuse a startup (#791).
 //! * `on_prompt_submit` — Rule 3 (M7.4) wraps every prior `role:tool`
 //!   message with `<untrusted_tool_result source="tool_result:<name>">`
 //!   AND M3.8 reads the multimodal provenance ledger to wrap PDF/OCR
@@ -50,6 +52,93 @@ use mur_common::permissions::{GrantDecision, GrantStore, ScopeKey};
 /// multimodal artifact was attached to the current turn. Read by
 /// `pre_tool_use` to decide whether to gate side-effect tools.
 const TURN_FLAG_AFTER_UNTRUSTED: &str = "after_untrusted_input";
+
+/// B0 rules 11 (M7.7) and 6 (M9.3) — MCP supply-chain admission control.
+///
+/// Refuses to let the agent come up when an MCP binary is unsigned, or when a
+/// binary pinned at install time has changed underneath the profile. Returns
+/// the operator-facing reason; the caller must propagate it, not log it.
+///
+/// **Why this is a free function and not a hook.** Both rules were written to
+/// `return Err(...)` from `B0SafetyHook::on_startup` with the documented intent
+/// of refusing startup. `HookChain::on_startup` is an observe-only phase: it
+/// returns `()` and folds every hook error into `warn!`. Neither rule had ever
+/// stopped anything — an MCP binary swapped after install started normally,
+/// leaving one warning line in `stderr.log` (#791). Enforcement belongs on a
+/// path whose failure aborts, so it lives here and the supervisor calls it with
+/// `?` before the runtime is assembled.
+///
+/// Soft failures (binary missing or unreadable) stay warnings: rule 11 already
+/// catches real tampering, and a missing binary is far more likely to be "the
+/// user uninstalled the MCP without removing the profile entry" than an attack.
+///
+/// Description-hash verification is deliberately not done here — it happens
+/// lazily at the first MCP call (M9.3.5), because spawning every pinned MCP at
+/// startup just to read `tools/list` would N×-bloat boot time.
+pub fn verify_mcp_supply_chain(
+    mcp_server_binaries: &[PathBuf],
+    profile: &AgentProfile,
+) -> Result<(), String> {
+    // ── Rule 11 (M7.7): signature check. macOS/Windows only; the Linux
+    // `verify_signed` helper is a no-op per spec §6.1 row 11.
+    for path in mcp_server_binaries {
+        if let Err(reason) = crate::hooks::b0_helpers::verify_signed(path) {
+            return Err(format!(
+                "B0 rule 11: MCP binary signature check failed: {reason}"
+            ));
+        }
+    }
+
+    // ── Rule 6 (M9.3): install-time pin verification.
+    for entry in &profile.mcp_servers {
+        let Some(expected) = &entry.binary_sha256 else {
+            // Pre-M9 entry — skip silently; the cookbook documents
+            // `mur agent mcp pin <name>` as the migration verb.
+            continue;
+        };
+        // Resolve via PATH exactly as install does (mur_common::exec) so both
+        // passes hash the same binary `Command::new` will spawn. A bare
+        // `node`/`npx` opened verbatim is a CWD-relative path that doesn't
+        // exist, which previously soft-failed and skipped the pin entirely.
+        let prog = entry
+            .command
+            .split_whitespace()
+            .next()
+            .unwrap_or(&entry.command);
+        let path = match mur_common::exec::resolve_command(prog) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(
+                    mcp = %entry.name,
+                    error = %e,
+                    "B0 rule 6: pin verify soft-failed (command not resolvable); continuing",
+                );
+                continue;
+            }
+        };
+        match crate::hooks::b0_helpers::verify_mcp_binary_hash(expected, &path) {
+            Ok(()) => tracing::debug!(mcp = %entry.name, "B0 rule 6: pin verified"),
+            Err(crate::hooks::b0_helpers::PinDriftReason::BinaryDrift { .. }) => {
+                return Err(format!(
+                    "B0 rule 6: MCP `{}` changed since install — \
+                     run `mur agent mcp inspect {}` to review the \
+                     drift and `mur agent mcp pin {}` to re-approve, \
+                     or `mur agent mcp remove {}` to uninstall.",
+                    entry.name, entry.name, entry.name, entry.name,
+                ));
+            }
+            Err(soft @ crate::hooks::b0_helpers::PinDriftReason::BinaryMissing { .. })
+            | Err(soft @ crate::hooks::b0_helpers::PinDriftReason::BinaryReadError { .. }) => {
+                tracing::warn!(
+                    mcp = %entry.name,
+                    reason = %soft,
+                    "B0 rule 6: pin verify soft-failed; continuing",
+                );
+            }
+        }
+    }
+    Ok(())
+}
 
 pub struct B0SafetyHook {
     /// Loaded lazily on first use per `HookCtx::agent_home()` so tests
@@ -106,10 +195,14 @@ impl Hook for B0SafetyHook {
         "B0SafetyHook"
     }
 
+    /// Startup observation only. The two supply-chain rules that used to live
+    /// here (6 and 11) are enforced by [`verify_mcp_supply_chain`] instead —
+    /// this phase discards hook errors into warnings, so they could never
+    /// refuse a startup from here (#791).
     async fn on_startup(
         &self,
-        ctx: &HookCtx,
-        profile: &AgentProfile,
+        _ctx: &HookCtx,
+        _profile: &AgentProfile,
         _tok: &CancellationToken,
     ) -> Result<(), HookError> {
         // ── B1 sandbox attestation ────────────────────────────────────────
@@ -134,85 +227,6 @@ impl Hook for B0SafetyHook {
             }
         }
 
-        // ── Rule 11 (M7.7): MCP binary signature check. ──────────────────
-        // Iterate every MCP server binary the supervisor resolved from
-        // `profile.mcp_servers[*].command` and refuse startup if any
-        // are unsigned. macOS/Windows only; Linux's `verify_signed`
-        // helper is a noop per spec §6.1 row 11.
-        for path in ctx.mcp_server_binaries() {
-            if let Err(reason) = crate::hooks::b0_helpers::verify_signed(path) {
-                return Err(HookError::Runtime(format!(
-                    "B0 rule 11: MCP binary signature check failed: {reason}"
-                )));
-            }
-        }
-
-        // ── Rule 6 (M9.3): MCP install-time pin verification. ────────────
-        // For every entry pinned at install time (via M9.2), re-hash
-        // the binary on disk and compare. On hard drift, refuse to
-        // start so the user is forced to run `mur agent mcp inspect
-        // <name>` and re-approve. On soft fails (binary missing or
-        // unreadable) we log a warning and continue — rule 11 above
-        // already caught real tampering, and a missing binary is more
-        // likely "user uninstalled the MCP without removing the
-        // profile entry" than an attack.
-        //
-        // Description-hash verification happens lazily at first MCP
-        // call (M9.3.5) rather than here; spawning every pinned MCP
-        // at startup just to read `tools/list` would N×-bloat boot
-        // time without user-visible benefit.
-        for entry in &profile.mcp_servers {
-            let Some(expected) = &entry.binary_sha256 else {
-                // Pre-M9 entry — skip silently; the cookbook documents
-                // `mur agent mcp pin <name>` as the migration verb.
-                continue;
-            };
-            // Resolve via PATH exactly as install does (mur_common::exec) so
-            // both passes hash the same binary `Command::new` will spawn. A bare
-            // `node`/`npx` opened verbatim is a CWD-relative path that doesn't
-            // exist, which previously soft-failed and skipped the pin entirely.
-            let prog = entry
-                .command
-                .split_whitespace()
-                .next()
-                .unwrap_or(&entry.command);
-            let path = match mur_common::exec::resolve_command(prog) {
-                Ok(p) => p,
-                Err(e) => {
-                    // Can't locate the binary (likely the user uninstalled the
-                    // MCP without removing the profile entry) — soft fail, same
-                    // as BinaryMissing below.
-                    tracing::warn!(
-                        mcp = %entry.name,
-                        error = %e,
-                        "B0 rule 6: pin verify soft-failed (command not resolvable); continuing",
-                    );
-                    continue;
-                }
-            };
-            match crate::hooks::b0_helpers::verify_mcp_binary_hash(expected, &path) {
-                Ok(()) => {
-                    tracing::debug!(mcp = %entry.name, "B0 rule 6: pin verified");
-                }
-                Err(crate::hooks::b0_helpers::PinDriftReason::BinaryDrift { .. }) => {
-                    return Err(HookError::Runtime(format!(
-                        "B0 rule 6: MCP `{}` changed since install — \
-                         run `mur agent mcp inspect {}` to review the \
-                         drift and `mur agent mcp pin {}` to re-approve, \
-                         or `mur agent mcp remove {}` to uninstall.",
-                        entry.name, entry.name, entry.name, entry.name,
-                    )));
-                }
-                Err(soft @ crate::hooks::b0_helpers::PinDriftReason::BinaryMissing { .. })
-                | Err(soft @ crate::hooks::b0_helpers::PinDriftReason::BinaryReadError { .. }) => {
-                    tracing::warn!(
-                        mcp = %entry.name,
-                        reason = %soft,
-                        "B0 rule 6: pin verify soft-failed; continuing",
-                    );
-                }
-            }
-        }
         Ok(())
     }
 

@@ -520,10 +520,13 @@ impl std::fmt::Display for PinDriftReason {
 /// so the install-side and verify-side outputs are byte-identical.
 /// Duplicated rather than imported to avoid the `mur-agent-runtime ←
 /// mur-core` dependency cycle this hook already takes pains to avoid.
-pub fn verify_mcp_binary_hash(
-    expected: &str,
-    path: &std::path::Path,
-) -> Result<(), PinDriftReason> {
+/// SHA-256 (lowercase hex) of a binary, in exactly the form a `binary_sha256`
+/// pin records.
+///
+/// Shared by the verifier below and by the supervisor's re-pin of MUR's own
+/// bundled MCP server, so the hash that gets written and the hash that gets
+/// checked can never disagree about algorithm or encoding.
+pub fn binary_sha256(path: &std::path::Path) -> Result<String, PinDriftReason> {
     use sha2::{Digest, Sha256};
     use std::fs::File;
     use std::io::Read;
@@ -561,7 +564,14 @@ pub fn verify_mcp_binary_hash(
         };
         hasher.update(&buf[..n]);
     }
-    let actual = hex::encode(hasher.finalize());
+    Ok(hex::encode(hasher.finalize()))
+}
+
+pub fn verify_mcp_binary_hash(
+    expected: &str,
+    path: &std::path::Path,
+) -> Result<(), PinDriftReason> {
+    let actual = binary_sha256(path)?;
     if actual.eq_ignore_ascii_case(expected) {
         Ok(())
     } else {

@@ -207,7 +207,22 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         });
         if uses_bundled {
             match mur_common::exec::ensure_bundled_mcp_server() {
-                Ok(p) => info!(path = %p.display(), "ensured bundled mcp-server"),
+                Ok(p) => {
+                    info!(path = %p.display(), "ensured bundled mcp-server");
+                    // Re-pin: we just put this binary there ourselves, from the
+                    // `mur-mcp-server` shipped beside the running `mur`. Its
+                    // trust anchor is "same install as this runtime", not a
+                    // hash recorded weeks ago — an attacker who can swap it has
+                    // already swapped `mur` itself.
+                    //
+                    // Without this, every `mur` upgrade leaves the profile
+                    // pinned to the previous binary, so B0 rule 6 (now
+                    // enforcing, #791) would refuse to start the agent after a
+                    // routine upgrade. Third-party MCP entries are untouched.
+                    if let Err(e) = crate::mcp_repin::repin_bundled_mcp(&agent_home, &p) {
+                        warn!(error = %e, "could not re-pin bundled mcp-server");
+                    }
+                }
                 Err(e) => warn!(
                     error = %e,
                     "could not refresh bundled mcp-server; using existing copy if present"

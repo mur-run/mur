@@ -567,6 +567,14 @@ pub(crate) async fn prepare_runtime(
             mur_common::exec::resolve_command(prog).ok()
         })
         .collect();
+
+    // B0 rules 11 + 6: MCP supply-chain admission control. Runs BEFORE the
+    // hook chain because it must be able to abort startup — `on_startup` is an
+    // observe-only phase that folds hook errors into warnings, which is why
+    // these two rules never refused anything until #791.
+    crate::hooks::b0::verify_mcp_supply_chain(&mcp_server_binaries, &profile.inner)
+        .map_err(|e| anyhow::anyhow!(e))?;
+
     let hook_ctx = HookCtx {
         agent_name: profile.inner.name.clone(),
         agent_uuid: profile.inner.id.clone(),
