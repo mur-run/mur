@@ -81,14 +81,20 @@ pub fn scan_in_dirs(
             tracing::debug!("harvest gate skipped session {}: {}", id, decision.reason);
             continue;
         }
-        let steps = skeleton::steps_from_events(&events);
+        let steps = skeleton::commands_from_events(&events);
         if steps.is_empty() {
             continue; // nothing procedural to propose
         }
+        // Bare tool markers carry no arguments — such a proposal says nothing a
+        // reviewer could act on, redacted or not.
+        if steps.iter().all(|s| s.starts_with("tool:")) {
+            continue;
+        }
+        let skeleton = skeleton::skeletonize_steps(&steps);
 
         let similar_to = existing_workflow_steps
             .iter()
-            .map(|(name, wsteps)| (name, proposal::step_similarity(&steps, wsteps)))
+            .map(|(name, wsteps)| (name, proposal::step_similarity(&skeleton, wsteps)))
             .filter(|(_, sim)| *sim >= cfg.similarity_merge_threshold)
             .max_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(name, _)| name.clone());
@@ -110,6 +116,7 @@ pub fn scan_in_dirs(
             suggested_name: proposal::suggest_name(&title),
             title,
             steps,
+            skeleton,
             event_count: events.len(),
             duration_secs,
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -141,12 +148,14 @@ pub fn scan() -> Result<ScanReport> {
         .unwrap_or_default()
         .into_iter()
         .map(|w| {
-            let steps = w
+            // Skeletonize so both sides of the similarity check speak the same
+            // language — raw workflow commands never matched session skeletons.
+            let steps: Vec<String> = w
                 .steps
                 .iter()
                 .map(|s| s.command.clone().unwrap_or_else(|| s.description.clone()))
                 .collect();
-            (w.name.clone(), steps)
+            (w.name.clone(), skeleton::skeletonize_steps(&steps))
         })
         .collect();
     scan_in_dirs(&recordings, &proposal::inbox_dir(), &existing, &cfg.harvest)
