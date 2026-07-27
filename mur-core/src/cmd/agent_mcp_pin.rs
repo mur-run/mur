@@ -230,6 +230,10 @@ pub enum InspectStatus {
     BothDrifted = 3,
     MissingPin = 4,
     BinaryMissing = 5,
+    /// Interpreter-launched (`npx @scope/pkg`, `python -m …`): the pin covers
+    /// the interpreter, not the server code, so it is reported rather than
+    /// enforced. Not a failure — the agent starts — but not protection either.
+    InterpreterUnprotected = 6,
 }
 
 /// Classify one MCP entry's binary against its pin, without printing.
@@ -241,6 +245,9 @@ pub fn binary_status(entry: &mur_common::agent::McpServerEntry) -> InspectStatus
     let Some(expected) = &entry.binary_sha256 else {
         return InspectStatus::MissingPin;
     };
+    if mur_common::exec::is_interpreter_command(&entry.command) {
+        return InspectStatus::InterpreterUnprotected;
+    }
     let Ok(path) = resolve_command(&entry.command) else {
         return InspectStatus::BinaryMissing;
     };
@@ -286,6 +293,22 @@ pub fn inspect_one(entry: &mur_common::agent::McpServerEntry) -> InspectStatus {
     };
 
     println!("  pinned sha256:  {expected}");
+    if mur_common::exec::is_interpreter_command(&entry.command) {
+        println!(
+            "  status:         INTERPRETER-LAUNCHED — pin covers `{}`, not the server code",
+            entry
+                .command
+                .split_whitespace()
+                .next()
+                .unwrap_or(&entry.command)
+        );
+        println!(
+            "  hint:           not enforced at startup: hashing the interpreter breaks on any \
+             unrelated runtime upgrade and still would not cover what it runs. Pin the package \
+             version instead (lockfile / integrity hash) if this server matters."
+        );
+        return InspectStatus::InterpreterUnprotected;
+    }
     let path = match resolve_command(&entry.command) {
         Ok(p) => p,
         Err(_) => {
@@ -578,6 +601,20 @@ mod tests {
     /// `binary_status` is what both `inspect` and `mur doctor` classify with —
     /// if it and the printed report ever disagree, one of them lies about
     /// whether an agent is about to refuse to start.
+    /// An `npx @scope/pkg` entry pins **npx**. Enforcing that hash breaks the
+    /// agent on any unrelated Node upgrade and still says nothing about the
+    /// package npx fetches, so it must not read as drift.
+    #[test]
+    fn interpreter_launched_entries_are_reported_not_enforced() {
+        for command in ["npx", "node", "python3", "uvx", "/opt/homebrew/bin/npx"] {
+            assert_eq!(
+                binary_status(&entry_for(command, Some(&"0".repeat(64)))) as u8,
+                InspectStatus::InterpreterUnprotected as u8,
+                "`{command}` launches other code; its hash is not the server's",
+            );
+        }
+    }
+
     #[test]
     fn binary_status_classifies_every_case() {
         let mut f = NamedTempFile::new().unwrap();

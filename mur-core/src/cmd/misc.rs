@@ -236,6 +236,16 @@ fn report_mcp_pins(mur_dir: &std::path::Path) {
                      `mur agent mcp pin {agent} {name}` to start enforcing.",
                     name = entry.name,
                 )),
+                InspectStatus::InterpreterUnprotected => problems.push(format!(
+                    "  ⚠ {agent}/{name}: launched via `{launcher}` — the pin covers the \
+                     interpreter, not the server code, so it is not enforced.",
+                    name = entry.name,
+                    launcher = entry
+                        .command
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or(&entry.command),
+                )),
                 // Description-hash states need a live probe; `inspect --probe` owns those.
                 _ => {}
             }

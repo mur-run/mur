@@ -96,6 +96,21 @@ pub fn verify_mcp_supply_chain(
             // `mur agent mcp pin <name>` as the migration verb.
             continue;
         };
+        // An interpreter-launched server (`npx @scope/pkg`, `python -m …`) pins
+        // the *interpreter*, not the server. Refusing startup on that hash
+        // would brick the agent on any unrelated Node/Python upgrade while
+        // still not covering the code it runs, so the pin is reported as
+        // unprotected rather than enforced. Package-level pinning is the real
+        // fix and a different mechanism.
+        if mur_common::exec::is_interpreter_command(&entry.command) {
+            tracing::warn!(
+                mcp = %entry.name,
+                command = %entry.command,
+                "B0 rule 6: interpreter-launched MCP — binary pin does not cover the server code, \
+                 not enforced (see `mur doctor`)",
+            );
+            continue;
+        }
         // Resolve via PATH exactly as install does (mur_common::exec) so both
         // passes hash the same binary `Command::new` will spawn. A bare
         // `node`/`npx` opened verbatim is a CWD-relative path that doesn't
