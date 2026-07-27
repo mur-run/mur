@@ -526,20 +526,29 @@ pub fn cmd_mcp_vendor(
     println!("  installed:   {}@{version}", pin.name);
     println!("  directory:   {}", dir.display());
     println!("  lockfile:    sha256:{}", pin.lockfile_sha256);
-    match pin.signatures_missing {
-        Some(0) => println!("  signatures:  every package verified against the registry"),
-        Some(n) => println!(
-            "  signatures:  verified, except {n} package(s) that publish none \
-             (common for older releases)"
-        ),
-        None => println!("  signatures:  not audited (npm too old, or offline)"),
-    }
-    match &pin.provenance {
-        Some(p) => println!("  provenance:  published ({p})"),
-        None => println!(
-            "  provenance:  none published — the registry can attest these bytes, \
-             but not where they were built"
-        ),
+    // These two lines describe npm-specific checks. Printing npm's wording for
+    // a PyPI install would state things that never happened — "not audited
+    // (npm too old, or offline)" when npm was never involved, and "none
+    // published" when nothing was ever asked.
+    if pin.runner == "pypi" {
+        println!("  hashes:      every package verified by uv during install (--require-hashes)");
+        println!("  provenance:  not queried for PyPI");
+    } else {
+        match pin.signatures_missing {
+            Some(0) => println!("  signatures:  every package verified against the registry"),
+            Some(n) => println!(
+                "  signatures:  verified, except {n} package(s) that publish none \
+                 (common for older releases)"
+            ),
+            None => println!("  signatures:  not audited (npm too old, or offline)"),
+        }
+        match &pin.provenance {
+            Some(p) => println!("  provenance:  published ({p})"),
+            None => println!(
+                "  provenance:  none published — the registry can attest these bytes, \
+                 but not where they were built"
+            ),
+        }
     }
     println!("\nRestart the agent to launch from the vendored copy.");
     Ok(())
