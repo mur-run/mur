@@ -106,3 +106,79 @@ fn pre_m9_entry_without_pin_skipped_cleanly() {
         "pre-M9 (no pin) entry should pass: {result:?}"
     );
 }
+
+// ── Vendored packages (#796) ────────────────────────────────────────────────
+//
+// A vendored entry launches `node <install>/…`, which is interpreter-shaped —
+// but MUR owns that directory, so its lockfile IS verifiable and must be
+// enforced rather than waved through by the interpreter exemption.
+
+fn profile_with_vendored(install_dir: &std::path::Path, lockfile_sha256: &str) -> AgentProfile {
+    let mut profile = minimal_profile();
+    profile.mcp_servers.push(McpServerEntry {
+        name: "fetch-mcp".into(),
+        command: "node".into(),
+        args: vec![
+            install_dir
+                .join("node_modules/x/dist/index.js")
+                .display()
+                .to_string(),
+        ],
+        // No binary pin: hashing `node` was never the point.
+        binary_sha256: None,
+        package: Some(mur_common::agent::McpPackagePin {
+            runner: "npm".into(),
+            name: "@yawlabs/fetch-mcp".into(),
+            version: "0.3.6".into(),
+            install_dir: install_dir.display().to_string(),
+            lockfile_sha256: lockfile_sha256.into(),
+        }),
+        ..Default::default()
+    });
+    profile
+}
+
+fn write_lockfile(dir: &std::path::Path, body: &[u8]) -> String {
+    std::fs::write(dir.join("package-lock.json"), body).unwrap();
+    sha256_hex(body)
+}
+
+#[test]
+fn vendored_package_passes_when_the_lockfile_matches() {
+    let dir = TempDir::new().unwrap();
+    let sha = write_lockfile(dir.path(), b"{\"lockfileVersion\":3}");
+    let result = verify_mcp_supply_chain(&[], &profile_with_vendored(dir.path(), &sha));
+    assert!(result.is_ok(), "matching lockfile should pass: {result:?}");
+}
+
+#[test]
+fn vendored_package_refuses_startup_when_the_tree_changed() {
+    let dir = TempDir::new().unwrap();
+    let sha = write_lockfile(dir.path(), b"{\"lockfileVersion\":3}");
+    // A dependency swapped underneath the install rewrites the lockfile.
+    std::fs::write(
+        dir.path().join("package-lock.json"),
+        b"{\"lockfileVersion\":3,\"packages\":{\"node_modules/evil\":{}}}",
+    )
+    .unwrap();
+
+    let msg = verify_mcp_supply_chain(&[], &profile_with_vendored(dir.path(), &sha))
+        .expect_err("a changed vendored tree must refuse startup");
+    assert!(msg.contains("vendored MCP `fetch-mcp`"), "got {msg}");
+    assert!(msg.contains("@yawlabs/fetch-mcp@0.3.6"), "got {msg}");
+    assert!(msg.contains("mur agent mcp vendor"), "got {msg}");
+}
+
+/// Deleting the install must not lock the user out of their own agent: the
+/// recovery command lives in the CLI, which they can't reach if the agent
+/// refuses to boot over a directory they removed.
+#[test]
+fn vendored_package_with_a_missing_install_does_not_block_startup() {
+    let dir = TempDir::new().unwrap();
+    let profile = profile_with_vendored(dir.path(), &"a".repeat(64)); // no lockfile written
+    let result = verify_mcp_supply_chain(&[], &profile);
+    assert!(
+        result.is_ok(),
+        "a missing install should warn, not strand the agent: {result:?}"
+    );
+}
