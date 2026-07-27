@@ -91,6 +91,15 @@ fn health_for(provider: &str, api_key_ref: Option<&str>) -> String {
     if provider == "ollama" {
         return "ready".into();
     }
+    // ponytail: this is the only place the lib's test binary can reach the
+    // real login keychain. `MUR_HOME` is mutated by ~45 unsynchronized
+    // set/remove pairs across this crate's tests behind 5 different mutexes;
+    // losing that race makes `get_slots()` read the developer's actual
+    // ~/.mur/config.yaml and pops a macOS password prompt per keychain: ref.
+    // Compiles to `false` in release. Upgrade path: one crate-wide env lock.
+    if cfg!(test) {
+        return "unset".into();
+    }
     match api_key_ref {
         None => "unset".into(),
         Some(r) => match r.parse::<mur_common::secret::SecretRef>() {
