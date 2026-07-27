@@ -332,6 +332,11 @@ files.
   provenance under a strict *never-shadow* rule: an imported plugin or bundled
   skill can never silently override a builtin. `mur skill doctor` flags drift and
   de-pins stale vendored copies; imported add-ons re-verify on `mur agent addon reimport`.
+- **Enforced MCP pins** — an agent **refuses to start** when an MCP server's
+  binary no longer matches the hash pinned at install, or isn't signed.
+  `mur agent mcp inspect <agent>` shows pinned vs current; `mur agent mcp pin
+  <agent> <server>` re-approves. MUR's own bundled MCP server re-pins itself
+  when MUR upgrades, so routine upgrades never stop your agents.
 
 ### 🔌 Power the tools you already pay for
 
