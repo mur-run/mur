@@ -707,7 +707,7 @@ Run `mur learn` to extract new patterns from recent sessions.
         // Reload config in case model setup saved changes
         config = crate::store::config::load_config().unwrap_or(config);
         config.community.enabled = true;
-        let _ = crate::store::config::save_config(&config);
+        crate::store::config::save_config(&config)?;
         println!("  Community sharing enabled.");
         println!("  Run `mur auth login` to authenticate and start sharing patterns.");
     }
