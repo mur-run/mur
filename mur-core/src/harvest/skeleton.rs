@@ -38,22 +38,37 @@ pub fn skeletonize_command(cmd: &str) -> String {
         .join(" ")
 }
 
-/// Extract an ordered, consecutive-deduped list of skeletonized commands from
-/// a session's tool_call events. Non-shell tools become `tool:<Name>` markers.
-pub fn steps_from_events(events: &[SessionEvent]) -> Vec<String> {
+/// Skeletonize a step list into a matching key, re-deduping consecutive steps
+/// that collapse to the same skeleton. `tool:<Name>` markers pass through.
+pub fn skeletonize_steps(steps: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for s in steps {
+        let k = if s.starts_with("tool:") {
+            s.clone()
+        } else {
+            skeletonize_command(s)
+        };
+        if out.last() != Some(&k) {
+            out.push(k);
+        }
+    }
+    out
+}
+
+/// Extract an ordered, consecutive-deduped list of the commands a session actually
+/// ran. Non-shell tools become `tool:<Name>` markers. This is the reviewable
+/// artifact; `skeletonize_steps` derives the matching key from it.
+pub fn commands_from_events(events: &[SessionEvent]) -> Vec<String> {
     let mut steps: Vec<String> = Vec::new();
     for e in events {
         if e.event_type != "tool_call" {
             continue;
         }
         let step = match e.tool.as_deref() {
-            Some("Bash") | Some("shell") => {
-                let cmd = serde_json::from_str::<serde_json::Value>(&e.content)
-                    .ok()
-                    .and_then(|v| v.get("command").and_then(|c| c.as_str()).map(str::to_owned))
-                    .unwrap_or_else(|| e.content.clone());
-                skeletonize_command(&cmd)
-            }
+            Some("Bash") | Some("shell") => serde_json::from_str::<serde_json::Value>(&e.content)
+                .ok()
+                .and_then(|v| v.get("command").and_then(|c| c.as_str()).map(str::to_owned))
+                .unwrap_or_else(|| e.content.clone()),
             Some(other) => format!("tool:{}", other),
             None => continue,
         };
@@ -93,7 +108,7 @@ mod tests {
     }
 
     #[test]
-    fn steps_dedupe_consecutive_and_mark_tools() {
+    fn commands_dedupe_consecutive_and_mark_tools() {
         let events = vec![
             tool_event("Bash", r#"{"command":"cargo build"}"#),
             tool_event("Bash", r#"{"command":"cargo build"}"#),
@@ -101,8 +116,30 @@ mod tests {
             tool_event("Bash", r#"{"command":"cargo test"}"#),
         ];
         assert_eq!(
-            steps_from_events(&events),
+            commands_from_events(&events),
             vec!["cargo build", "tool:Read", "cargo test"]
         );
+    }
+
+    #[test]
+    fn commands_keep_literals_skeleton_strips_them() {
+        let events = vec![
+            tool_event("Bash", r#"{"command":"fly deploy --app \"my-api\""}"#),
+            tool_event("Bash", r#"{"command":"fly deploy --app \"my-web\""}"#),
+        ];
+        let cmds = commands_from_events(&events);
+        // The reviewable artifact keeps what was actually typed …
+        assert_eq!(
+            cmds,
+            vec!["fly deploy --app \"my-api\"", "fly deploy --app \"my-web\""]
+        );
+        // … while the matching key collapses both to one step.
+        assert_eq!(skeletonize_steps(&cmds), vec!["fly deploy --app <STR>"]);
+    }
+
+    #[test]
+    fn skeletonize_steps_passes_tool_markers_through() {
+        let steps = vec!["tool:Read".to_string(), "cat /a/b".to_string()];
+        assert_eq!(skeletonize_steps(&steps), vec!["tool:Read", "cat <PATH>"]);
     }
 }
