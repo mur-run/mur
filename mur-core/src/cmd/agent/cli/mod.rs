@@ -1102,11 +1102,38 @@ fn persist_skin(home: &std::path::Path, name: &str) -> anyhow::Result<()> {
     let path = home.join("config.yaml");
     let mut cfg = Config::load_or_default(&path);
     cfg.cli.skin = Some(name.to_string());
-    let text = serde_yaml::to_string(&cfg).context("serialise config")?;
-    let tmp = path.with_extension("yaml.tmp");
-    std::fs::write(&tmp, &text).context("write config tmp")?;
-    std::fs::rename(&tmp, &path).context("rename config")?;
-    Ok(())
+    crate::store::config::save_config_at(&path, &cfg)
+}
+
+#[cfg(test)]
+mod persist_skin_tests {
+    use super::persist_skin;
+
+    /// `persist_skin` must go through the shared `save_config_at` writer
+    /// instead of hand-rolling its own serialise/write/rename — otherwise it
+    /// inherits the bug that writer was just fixed for: a typed `Config`
+    /// round-trip silently drops every top-level block it has no field for
+    /// (e.g. a hand-written `research_gateway` block).
+    #[test]
+    fn persist_skin_preserves_blocks_the_typed_config_does_not_know() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        std::fs::write(
+            home.join("config.yaml"),
+            "research_gateway:\n  brave_api_key_ref: keychain:mur/brave\n",
+        )
+        .unwrap();
+
+        persist_skin(home, "dark").unwrap();
+
+        let back = std::fs::read_to_string(home.join("config.yaml")).unwrap();
+        assert!(back.contains("skin: dark"), "skin not written:\n{back}");
+        assert!(back.contains("research_gateway"), "block dropped:\n{back}");
+        assert!(
+            back.contains("keychain:mur/brave"),
+            "value dropped:\n{back}"
+        );
+    }
 }
 
 /// Stage a base64 image (with its mime) to send with the next message.
@@ -1646,8 +1673,13 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
         SlashCmd::Panel(args) => panel::handle_panel_command(app, &args),
         SlashCmd::Open => {
             let items = crate::open_items::collect(&app.home);
-            app.open_items_fp = Some(crate::open_items::fingerprint(&items));
-            app.push_system(crate::open_items::render(&items).trim().to_string());
+            let (visible, muted) = crate::open_items::partition(items, &app.muted_origins());
+            app.open_items_fp = Some(crate::open_items::fingerprint(&visible));
+            app.push_system(
+                crate::open_items::render(&visible, &muted)
+                    .trim()
+                    .to_string(),
+            );
         }
         SlashCmd::Unknown(c) => app.push_system(format!("unknown command: /{c} — try /help")),
     }

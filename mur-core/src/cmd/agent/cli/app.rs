@@ -801,19 +801,32 @@ impl App {
         self.note_open_items_if_changed();
     }
 
+    /// Origins the user has muted. Read fresh, so `mur open mute` in another
+    /// terminal takes effect on the next turn rather than the next restart.
+    pub fn muted_origins(&self) -> Vec<String> {
+        mur_common::config::Config::load_or_default(&self.home.join("config.yaml"))
+            .open_items
+            .muted
+    }
+
     /// After a turn, say what is outstanding — but only if the set changed.
     ///
     /// Repeating the same three items after every turn is how a status line
     /// becomes wallpaper. Staying silent when nothing moved is what keeps the
-    /// line worth reading on the turn something does.
+    /// line worth reading on the turn something does. Muted sources are removed
+    /// before the comparison, so muting silences this too — the turn notice is
+    /// where noise costs most, because it interrupts.
     pub fn note_open_items_if_changed(&mut self) {
-        let items = crate::open_items::collect(&self.home);
-        let fp = crate::open_items::fingerprint(&items);
+        let (visible, _) = crate::open_items::partition(
+            crate::open_items::collect(&self.home),
+            &self.muted_origins(),
+        );
+        let fp = crate::open_items::fingerprint(&visible);
         if self.open_items_fp == Some(fp) {
             return;
         }
         self.open_items_fp = Some(fp);
-        if let Some(line) = crate::open_items::summary_line(&items) {
+        if let Some(line) = crate::open_items::summary_line(&visible) {
             self.push_system(line);
         }
     }
@@ -2028,5 +2041,70 @@ mod session_cost_tests {
         // unpriced model → None (fail-open: unknown cost never blocks)
         a.pricing = super::super::footer::Pricing::default();
         assert_eq!(a.session_cost(), None);
+    }
+}
+
+#[cfg(test)]
+mod open_items_notice_tests {
+    use super::*;
+
+    fn app_with_muted(home: &tempfile::TempDir, muted: &str) -> App {
+        std::fs::write(
+            home.path().join("config.yaml"),
+            format!("open_items:\n  muted:\n    - {muted}\n"),
+        )
+        .unwrap();
+        let session = Session::create(home.path(), "a").unwrap();
+        App::new(
+            home.path().to_path_buf(),
+            "a".into(),
+            session,
+            &super::super::theme::DARK,
+        )
+    }
+
+    fn add_proposals(home: &tempfile::TempDir, names: &[&str]) {
+        let dir = home.path().join("inbox").join("workflow-proposals");
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in names {
+            std::fs::write(dir.join(format!("{n}.yaml")), "name: x\n").unwrap();
+        }
+    }
+
+    /// The turn notice is where noise costs most, because it interrupts. A
+    /// muted source must not wake it — not on the first turn, and not when it
+    /// churns.
+    #[test]
+    fn a_muted_source_never_wakes_the_turn_notice() {
+        let home = tempfile::tempdir().unwrap();
+        add_proposals(&home, &["a", "b", "c"]);
+        let mut app = app_with_muted(&home, "inbox");
+
+        let before = app.messages.len();
+        app.note_open_items_if_changed();
+        assert_eq!(app.messages.len(), before, "muted source produced a line");
+
+        // The muted source changes. Still nothing.
+        add_proposals(&home, &["d", "e"]);
+        app.note_open_items_if_changed();
+        assert_eq!(app.messages.len(), before, "muted churn produced a line");
+    }
+
+    /// ...and the mute must not silence everything else with it, or the notice
+    /// is dead rather than quiet.
+    #[test]
+    fn an_unmuted_source_still_speaks() {
+        let home = tempfile::tempdir().unwrap();
+        add_proposals(&home, &["a"]);
+        let mut app = app_with_muted(&home, "something-else");
+
+        let before = app.messages.len();
+        app.note_open_items_if_changed();
+        assert_eq!(app.messages.len(), before + 1);
+        assert!(
+            app.messages.last().unwrap().text.contains("open item"),
+            "{:?}",
+            app.messages.last()
+        );
     }
 }
