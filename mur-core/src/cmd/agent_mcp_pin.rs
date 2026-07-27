@@ -313,6 +313,10 @@ pub fn inspect_one(entry: &mur_common::agent::McpServerEntry) -> InspectStatus {
             }
             None => println!("  signatures:     not audited at install"),
         }
+        match &pkg.provenance {
+            Some(p) => println!("  provenance:     {p}"),
+            None => println!("  provenance:     none published by this release"),
+        }
         println!("  pinned lock:    {}", pkg.lockfile_sha256);
         let lock = std::path::Path::new(&pkg.install_dir).join("package-lock.json");
         let Ok(actual) = compute_binary_sha256(&lock) else {
