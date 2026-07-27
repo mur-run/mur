@@ -115,6 +115,8 @@ LanceDB vector index is always rebuildable via `mur internals reindex`.
 
 For detailed agent / companion / GUI export / runtime internals, read `docs/architecture/runtime-overview.md` only when the task requires it.
 
+Before changing anything that pins, verifies, or launches an MCP server, read `docs/architecture/mcp-supply-chain.md` — it records what each check covers, what it structurally cannot, and the two things deliberately not built (with reasons, so they don't get re-proposed).
+
 ## Development Notes
 
 - Rust edition 2024 — `let` chains stable (`if let … && let …`)
