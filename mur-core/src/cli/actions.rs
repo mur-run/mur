@@ -266,6 +266,23 @@ pub enum WorkflowAction {
         #[arg(long)]
         team: String,
     },
+    /// Delete a workflow from the server and from disk.
+    ///
+    /// Deleting only the local file does not stick: `mur sync` pulls every
+    /// workflow the server holds and writes it back. This removes the server
+    /// copy — for every device on the account — then the local file.
+    Delete {
+        /// Workflow name
+        name: String,
+        /// Skip the confirmation prompt
+        #[arg(long)]
+        yes: bool,
+        /// Remove only the local file, leaving the server copy in place.
+        /// It will return on the next sync; useful only for a workflow that
+        /// was never published.
+        #[arg(long = "local-only")]
+        local_only: bool,
+    },
     /// Install a workflow from a team
     Install {
         /// Workflow name

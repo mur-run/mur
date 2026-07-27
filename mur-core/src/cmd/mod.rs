@@ -90,6 +90,7 @@ pub(crate) mod update;
 pub(crate) mod var;
 pub(crate) mod verify;
 pub mod workflow;
+pub mod workflow_delete;
 
 #[cfg(feature = "sources")]
 pub(crate) mod source_cmd;
