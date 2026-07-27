@@ -11,6 +11,7 @@ pub(crate) mod agent_history;
 pub mod agent_hooks;
 /// B0 M9.2 — install-time MCP hash + publisher prompt for `mur agent mcp add`.
 pub(crate) mod agent_mcp_pin;
+pub(crate) mod agent_mcp_vendor;
 pub mod agent_pair;
 pub(crate) mod agent_propagate;
 pub(crate) mod agent_rekey;

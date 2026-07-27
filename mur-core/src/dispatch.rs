@@ -1618,6 +1618,12 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 publisher_homepage,
                 publisher_registry_id,
             )?,
+            AgentMcpAction::Vendor {
+                name,
+                server_id,
+                version,
+                force,
+            } => cmd::agent_mcp_vendor::cmd_mcp_vendor(&name, &server_id, version, force)?,
             AgentMcpAction::Enable { name, server_id } => {
                 cmd::agent::cmd_mcp_set_enabled(&name, &server_id, true)?
             }
