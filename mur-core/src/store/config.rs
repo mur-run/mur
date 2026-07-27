@@ -28,6 +28,61 @@ pub fn save_config(config: &Config) -> Result<()> {
     save_config_at(&config_path(), config)
 }
 
+/// Serialise `config`, then restore any top-level block the typed `Config`
+/// has no field for.
+///
+/// `Config` cannot round-trip what it cannot parse, so serialising the struct
+/// alone silently deletes user blocks — `research_gateway` was measurably lost
+/// on every `mur sleep` (#778). Typed fields win; only keys absent from the
+/// new document are carried over from the old one.
+///
+/// A file that exists but fails to parse is refused outright (`Err`, nothing
+/// written) rather than silently treated as "no existing config" — that
+/// would replace the user's entire file with defaults instead of merely
+/// skipping the merge (residual gap found in review of #778). A missing
+/// file is first-run and must still succeed; a file that parses to
+/// something other than a mapping (e.g. an empty file parses to `null`) is
+/// not a parse failure and also keeps
+/// today's skip-the-merge-and-write behaviour.
+fn merge_over_existing(path: &Path, config: &Config) -> Result<String> {
+    let mut out = serde_yaml::to_value(config)?;
+
+    match fs::read_to_string(path) {
+        Ok(content) => {
+            let existing: serde_yaml::Value = serde_yaml::from_str(&content).map_err(|e| {
+                anyhow::anyhow!(
+                    "config at {} is not valid YAML and was left untouched \
+                     (fix the syntax and try again): {e}",
+                    path.display()
+                )
+            })?;
+
+            if let (serde_yaml::Value::Mapping(old), serde_yaml::Value::Mapping(new)) =
+                (existing, &mut out)
+            {
+                for (k, v) in old {
+                    if !new.contains_key(&k) {
+                        new.insert(k, v);
+                    }
+                }
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // First run: nothing to merge over.
+        }
+        Err(e) => {
+            return Err(e).with_context(|| {
+                format!(
+                    "could not read existing config at {} (left untouched)",
+                    path.display()
+                )
+            });
+        }
+    }
+
+    Ok(serde_yaml::to_string(&out)?)
+}
+
 /// Save config to an explicit path (same YAML + header as [`save_config`]).
 /// Exists so callers with an explicit `MUR_HOME` (tests, per-agent CLI
 /// handlers) can persist config without going through the process-global
@@ -38,7 +93,7 @@ pub fn save_config_at(path: &Path, config: &Config) -> Result<()> {
     }
 
     // Serialize to YAML, then prepend a header with model recommendations
-    let yaml = serde_yaml::to_string(config)?;
+    let yaml = merge_over_existing(path, config)?;
     let header = r#"# MUR Configuration
 # Docs: https://github.com/mur-run/mur
 #
@@ -73,7 +128,19 @@ pub fn save_config_at(path: &Path, config: &Config) -> Result<()> {
 #   To save cost, switch to Sonnet: llm.model: claude-sonnet-5
 
 "#;
-    fs::write(path, format!("{}{}", header, yaml))?;
+    let content = format!("{}{}", header, yaml);
+
+    // Atomic write: temp file in the same directory, then rename (matches the
+    // store/yaml.rs pattern). A crash, full disk, or killed process partway
+    // through a plain `fs::write` could otherwise leave a truncated
+    // config.yaml that then fails to parse on the next read; `rename` is only
+    // atomic within a filesystem, so the temp file must live next to `path`,
+    // not in a system temp directory.
+    let tmp_path = path.with_extension("yaml.tmp");
+    fs::write(&tmp_path, &content)
+        .with_context(|| format!("Failed to write temp file: {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, path)
+        .with_context(|| format!("Failed to rename temp to final: {}", path.display()))?;
     Ok(())
 }
 
@@ -92,4 +159,145 @@ fn config_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("~"))
         .join(".mur")
         .join("config.yaml")
+}
+
+#[cfg(test)]
+mod save_roundtrip_tests {
+    use super::*;
+    use mur_common::config::Config;
+
+    /// `Config` cannot round-trip a block it has no field for, so serialising
+    /// the struct alone deletes it. Measured on a real config: a hand-written
+    /// `research_gateway` block vanished on the next `mur sleep`.
+    #[test]
+    fn save_preserves_blocks_the_typed_config_does_not_know() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        std::fs::write(
+            &path,
+            "research_gateway:\n  brave_api_key_ref: keychain:mur/brave\n",
+        )
+        .unwrap();
+
+        let cfg = Config::load_or_default(&path);
+        save_config_at(&path, &cfg).unwrap();
+
+        let back = std::fs::read_to_string(&path).unwrap();
+        assert!(back.contains("research_gateway"), "block dropped:\n{back}");
+        assert!(
+            back.contains("keychain:mur/brave"),
+            "value dropped:\n{back}"
+        );
+    }
+
+    /// The typed fields must still win — an unknown-block merge that also
+    /// resurrected stale known values would be a different bug.
+    #[test]
+    fn typed_fields_still_overwrite_the_old_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        std::fs::write(&path, "session:\n  retention_days: 3\nkeep_me: yes\n").unwrap();
+
+        let mut cfg = Config::load_or_default(&path);
+        cfg.session.retention_days = 99;
+        save_config_at(&path, &cfg).unwrap();
+
+        let back = std::fs::read_to_string(&path).unwrap();
+        assert!(back.contains("99"), "typed field not written:\n{back}");
+        assert!(back.contains("keep_me"), "unknown key dropped:\n{back}");
+    }
+
+    /// A file that exists but fails to parse must never be silently replaced
+    /// with defaults — that would wipe every user setting, not just the
+    /// unknown blocks `merge_over_existing` is meant to protect. The fix
+    /// must refuse the write and leave the corrupt file exactly as it was.
+    #[test]
+    fn save_errors_on_corrupt_existing_file_and_leaves_it_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        let corrupt = "session:\n  retention_days: [1, 2\nother: true\n";
+        std::fs::write(&path, corrupt).unwrap();
+
+        let cfg = Config::default();
+        let result = save_config_at(&path, &cfg);
+
+        assert!(
+            result.is_err(),
+            "corrupt existing config must not be silently overwritten"
+        );
+
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            after, corrupt,
+            "corrupt file must be left byte-for-byte untouched:\n{after}"
+        );
+
+        // The whole point of refusing early is that the operation touches
+        // nothing — a temp file created (and perhaps abandoned) partway
+        // through would still be a leak, even though the real config is safe.
+        let entries: Vec<String> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            entries,
+            vec!["config.yaml".to_string()],
+            "a refused write must not create a temp file either, found: {entries:?}"
+        );
+    }
+
+    /// A rename-based atomic writer that forgets to clean up (or renames to
+    /// the wrong path) would leak its `.tmp` file on every save — assert the
+    /// directory holds only the final `config.yaml` afterward.
+    #[test]
+    fn save_leaves_no_stray_temp_file_on_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+
+        let cfg = Config::default();
+        save_config_at(&path, &cfg).unwrap();
+
+        let entries: Vec<String> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            entries,
+            vec!["config.yaml".to_string()],
+            "directory must contain only config.yaml after a successful save, found: {entries:?}"
+        );
+    }
+
+    /// First run: no config file yet. This must keep working — it is not
+    /// the "corrupt file" case.
+    #[test]
+    fn save_succeeds_when_file_does_not_exist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        assert!(!path.exists());
+
+        let cfg = Config::default();
+        let result = save_config_at(&path, &cfg);
+
+        assert!(result.is_ok(), "first-run save must succeed: {result:?}");
+        assert!(path.exists());
+    }
+
+    /// An empty file parses to `Value::Null`, not a mapping — that is a
+    /// valid (if trivial) document, not a parse failure, so it must not be
+    /// treated as corrupt.
+    #[test]
+    fn save_succeeds_when_existing_file_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        std::fs::write(&path, "").unwrap();
+
+        let cfg = Config::default();
+        let result = save_config_at(&path, &cfg);
+
+        assert!(
+            result.is_ok(),
+            "empty existing file must still allow save: {result:?}"
+        );
+    }
 }
