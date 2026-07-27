@@ -91,6 +91,40 @@ pub fn verify_mcp_supply_chain(
 
     // ── Rule 6 (M9.3): install-time pin verification.
     for entry in &profile.mcp_servers {
+        // A vendored package is the one interpreter-launched shape that CAN be
+        // verified: MUR installed it into a directory it owns, so the lockfile
+        // recorded at approval still describes the tree unless something
+        // changed it. Checked before the interpreter skip below, which would
+        // otherwise wave through the very case made verifiable on purpose.
+        if let Some(pkg) = &entry.package {
+            let lock = std::path::Path::new(&pkg.install_dir).join("package-lock.json");
+            match crate::hooks::b0_helpers::binary_sha256(&lock) {
+                Ok(actual) if actual.eq_ignore_ascii_case(&pkg.lockfile_sha256) => {
+                    tracing::debug!(mcp = %entry.name, "B0 rule 6: vendored package verified");
+                }
+                Ok(_) => {
+                    return Err(format!(
+                        "B0 rule 6: vendored MCP `{}` ({}@{}) no longer matches the tree \
+                         installed at approval time — re-run `mur agent mcp vendor <agent> {}` \
+                         to reinstall and re-approve, or `mur agent mcp remove <agent> {}` \
+                         to uninstall.",
+                        entry.name, pkg.name, pkg.version, entry.name, entry.name,
+                    ));
+                }
+                Err(reason) => {
+                    // Install gone or unreadable. Same call as a missing binary
+                    // below: far more likely "the user deleted it" than an
+                    // attack, and refusing to boot would strand the agent with
+                    // no way back in.
+                    tracing::warn!(
+                        mcp = %entry.name,
+                        reason = %reason,
+                        "B0 rule 6: vendored package lockfile unreadable; continuing",
+                    );
+                }
+            }
+            continue;
+        }
         let Some(expected) = &entry.binary_sha256 else {
             // Pre-M9 entry — skip silently; the cookbook documents
             // `mur agent mcp pin <name>` as the migration verb.

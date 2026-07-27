@@ -203,6 +203,7 @@ pub fn build_pinned_entry(
         url: None,
         auth: None,
         requires_programs: Vec::new(),
+        package: None,
     }
 }
 
@@ -242,6 +243,20 @@ pub enum InspectStatus {
 /// `mur doctor` reports it across every agent. Two callers computing "is this
 /// drifted?" separately is exactly how one of them ends up wrong.
 pub fn binary_status(entry: &mur_common::agent::McpServerEntry) -> InspectStatus {
+    // A vendored entry is pinned by its lockfile, not by the hash of the
+    // `node` that runs it — check that first, or the interpreter branch below
+    // would report the one verifiable shape as unprotected.
+    if let Some(pkg) = &entry.package {
+        let lock = std::path::Path::new(&pkg.install_dir).join("package-lock.json");
+        let Ok(actual) = compute_binary_sha256(&lock) else {
+            return InspectStatus::BinaryMissing;
+        };
+        return if actual.eq_ignore_ascii_case(&pkg.lockfile_sha256) {
+            InspectStatus::Clean
+        } else {
+            InspectStatus::BinaryDrift
+        };
+    }
     let Some(expected) = &entry.binary_sha256 else {
         return InspectStatus::MissingPin;
     };

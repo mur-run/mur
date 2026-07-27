@@ -254,7 +254,9 @@ fn report_mcp_pins(mur_dir: &std::path::Path) {
                         )),
                         Some(spec) => problems.push(format!(
                             "  ⚠ {agent}/{name}: launched via `{launcher}` at {pkg} — version \
-                             recorded, but the package contents are not verified.",
+                             recorded, but the package contents are not verified.\n     \
+                             `mur agent mcp vendor {agent} {name}` installs it where MUR can \
+                             verify it.",
                             name = entry.name,
                             pkg = spec.to_arg(),
                         )),

@@ -333,6 +333,42 @@ pub struct McpServerEntry {
     /// Absent → empty; resolved by `mur agent/fleet doctor` + `install-deps`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires_programs: Vec<ProgramDep>,
+
+    /// Vendored package this entry launches, when MUR installed it itself.
+    ///
+    /// Present only for entries moved off a package runner by
+    /// `mur agent mcp vendor`. Its existence is what makes the contents of an
+    /// interpreter-launched server verifiable at all: `npx @scope/pkg` resolves
+    /// on every spawn and pins nothing, whereas a vendored install lives in a
+    /// directory MUR owns and can be checked before the agent comes up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<McpPackagePin>,
+}
+
+/// A package MUR installed itself, and the fingerprint that proves the
+/// installed tree hasn't changed.
+///
+/// `lockfile_sha256` hashes the install's `package-lock.json`, which already
+/// records an integrity hash for every package in the dependency tree — so one
+/// small file covers the whole tree, and startup verification stays cheap no
+/// matter how large `node_modules` grows.
+///
+/// The lockfile pins what was *installed*. Editing a file inside
+/// `node_modules` afterwards would not change it; catching that needs a full
+/// tree hash, which is deliberately not done here — see the module docs on
+/// `mur-core::cmd::agent_mcp_vendor` for where that line is drawn.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct McpPackagePin {
+    /// Package ecosystem — `npm` today.
+    pub runner: String,
+    /// Package name, including any `@scope/` prefix.
+    pub name: String,
+    /// Exact installed version.
+    pub version: String,
+    /// Directory MUR installed into, absolute.
+    pub install_dir: String,
+    /// SHA-256 (lowercase hex) of `<install_dir>/package-lock.json`.
+    pub lockfile_sha256: String,
 }
 
 /// Authentication scheme for a remote (HTTP) MCP server.

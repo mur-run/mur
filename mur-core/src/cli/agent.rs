@@ -932,6 +932,25 @@ pub enum AgentMcpAction {
         #[arg(long = "publisher-registry-id")]
         publisher_registry_id: Option<String>,
     },
+    /// Install a package-runner MCP server (`npx @scope/pkg`) into a directory
+    /// MUR owns and launch it directly, so its contents can be verified.
+    ///
+    /// A runner resolves the package at every spawn, which pins nothing: the
+    /// binary hash covers `npx`, not the server. Vendoring installs the exact
+    /// version under `~/.mur/mcp-packages/`, repoints the entry at the
+    /// installed script, and records the lockfile fingerprint that B0 rule 6
+    /// then enforces at startup. Applies on the agent's next restart.
+    Vendor {
+        name: String,
+        server_id: String,
+        /// Version to install. Defaults to the version already pinned in the
+        /// entry's args, or the registry's current one.
+        #[arg(long)]
+        version: Option<String>,
+        /// Skip the y/N approval prompt.
+        #[arg(long)]
+        force: bool,
+    },
     /// Enable a previously disabled MCP server for this agent.
     Enable { name: String, server_id: String },
     /// Disable an MCP server for this agent WITHOUT removing it. The entry +
