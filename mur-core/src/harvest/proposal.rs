@@ -24,6 +24,11 @@ pub struct Proposal {
     /// kebab-case workflow name suggestion.
     pub suggested_name: String,
     pub steps: Vec<String>,
+    /// Matching key: `steps` with volatile literals stripped. Kept separate so the
+    /// reviewable `steps` never gets redacted down to `<STR>`/`<PATH>` noise.
+    /// Empty on proposals written before the two were split.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skeleton: Vec<String>,
     pub event_count: usize,
     pub duration_secs: i64,
     pub created_at: String,
@@ -162,7 +167,8 @@ mod tests {
             project: None,
             title: "Deploy api".into(),
             suggested_name: "deploy-api".into(),
-            steps: vec!["cargo build".into(), "fly deploy --app <STR>".into()],
+            steps: vec!["cargo build".into(), "fly deploy --app \"api\"".into()],
+            skeleton: vec!["cargo build".into(), "fly deploy --app <STR>".into()],
             event_count: 12,
             duration_secs: 300,
             created_at: "2026-06-11T00:00:00Z".into(),
