@@ -1929,8 +1929,14 @@ pub struct HarvestCfg {
     #[serde(default = "default_harvest_enabled")]
     pub session_start_hint: bool,
     /// Step-skeleton Jaccard similarity at/above which a proposal becomes a merge suggestion.
+    /// Doubles as the "same procedure?" test for the recurrence index (#783).
     #[serde(default = "default_similarity_merge_threshold")]
     pub similarity_merge_threshold: f32,
+    /// A procedure is something done more than once (#783): a session's skeleton
+    /// must have been seen this many times before it becomes a proposal.
+    /// A session marked with `mur in` bypasses it.
+    #[serde(default = "default_min_occurrences")]
+    pub min_occurrences: usize,
 }
 
 impl Default for HarvestCfg {
@@ -1976,6 +1982,11 @@ fn default_max_extract_input_tokens() -> usize {
 }
 fn default_similarity_merge_threshold() -> f32 {
     0.6
+}
+/// Twice. The minimum that can distinguish "did it again" from "did it" — a
+/// higher bar would silently discard real routines while the index is young (#783).
+fn default_min_occurrences() -> usize {
+    2
 }
 
 // ── M7a: Cross-agent observability ─────────────────────────────────
