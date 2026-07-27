@@ -298,6 +298,45 @@ pub fn inspect_one(entry: &mur_common::agent::McpServerEntry) -> InspectStatus {
         println!("  installed_at:   {}", t.to_rfc3339());
     }
 
+    // A vendored entry is pinned by its lockfile, not by the hash of the
+    // `node` that launches it — report that instead of the binary story.
+    if let Some(pkg) = &entry.package {
+        println!(
+            "  package:        {}@{} ({})",
+            pkg.name, pkg.version, pkg.runner
+        );
+        println!("  install dir:    {}", pkg.install_dir);
+        match pkg.signatures_missing {
+            Some(0) => println!("  signatures:     all verified against the registry at install"),
+            Some(n) => {
+                println!("  signatures:     verified, except {n} package(s) publishing none")
+            }
+            None => println!("  signatures:     not audited at install"),
+        }
+        println!("  pinned lock:    {}", pkg.lockfile_sha256);
+        let lock = std::path::Path::new(&pkg.install_dir).join("package-lock.json");
+        let Ok(actual) = compute_binary_sha256(&lock) else {
+            println!("  current lock:   <not readable — install missing?>");
+            println!(
+                "  status:         INSTALL MISSING — `mur agent mcp vendor <agent> {}` to reinstall",
+                entry.name,
+            );
+            return InspectStatus::BinaryMissing;
+        };
+        println!("  current lock:   {actual}");
+        return if actual.eq_ignore_ascii_case(&pkg.lockfile_sha256) {
+            println!("  status:         CLEAN");
+            InspectStatus::Clean
+        } else {
+            println!("  status:         TREE DRIFT");
+            println!(
+                "  hint:           `mur agent mcp vendor <agent> {}` to reinstall and re-approve",
+                entry.name,
+            );
+            InspectStatus::BinaryDrift
+        };
+    }
+
     let Some(expected) = &entry.binary_sha256 else {
         println!("  pin status:     <unpinned> (pre-M9 entry)");
         println!(
