@@ -73,6 +73,7 @@ mod tests {
                 skeleton: vec!["cargo build".into()],
                 event_count: 5,
                 duration_secs: 60,
+                occurrences: 2,
                 created_at: "2026-06-11T00:00:00Z".into(),
                 status: ProposalStatus::Pending,
                 similar_to: None,

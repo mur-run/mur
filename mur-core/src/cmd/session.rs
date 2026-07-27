@@ -361,6 +361,21 @@ pub(crate) async fn cmd_out(action: Option<&str>, force: bool) -> anyhow::Result
 
     if pending.is_empty() {
         eprintln!("✓ Nothing to harvest — no pending workflow proposals.");
+        // A silent gate is indistinguishable from a broken one. Say what has
+        // been banked so "no proposals" reads as "nothing has repeated yet"
+        // rather than "recurrence is dead" (#783).
+        let idx = crate::harvest::recurrence::load(&crate::harvest::recurrence::path_for(&inbox));
+        if let Some(top) = idx.entries.iter().map(|e| e.count).max() {
+            let need = crate::store::config::load_config()
+                .map(|c| c.harvest.min_occurrences)
+                .unwrap_or(0);
+            eprintln!(
+                "  {} session shape(s) banked, most-repeated {}× — a proposal needs {}×.",
+                idx.entries.len(),
+                top,
+                need
+            );
+        }
         eprintln!("  (Recording is always on; see `mur session list`.)");
         return Ok(());
     }
@@ -389,10 +404,16 @@ pub(crate) async fn cmd_out(action: Option<&str>, force: bool) -> anyhow::Result
     for p in pending {
         eprintln!();
         eprintln!(
-            "◆ \"{}\"  ({} events · {}m)",
+            "◆ \"{}\"  ({} events · {}m{})",
             p.title,
             p.event_count,
-            p.duration_secs / 60
+            p.duration_secs / 60,
+            // Why this proposal exists at all — a one-off never gets here (#783).
+            if p.occurrences > 1 {
+                format!(" · seen {}×", p.occurrences)
+            } else {
+                String::new()
+            }
         );
         for (i, s) in p.steps.iter().enumerate().take(8) {
             eprintln!("    {}. {}", i + 1, s);

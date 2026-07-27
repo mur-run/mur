@@ -31,6 +31,11 @@ pub struct Proposal {
     pub skeleton: Vec<String>,
     pub event_count: usize,
     pub duration_secs: i64,
+    /// How many times harvest has seen this skeleton, including this session.
+    /// The reason the proposal exists at all (#783); 1 on proposals written
+    /// before recurrence, and on sessions marked with `mur in`.
+    #[serde(default)]
+    pub occurrences: usize,
     pub created_at: String,
     pub status: ProposalStatus,
     /// Existing workflow this proposal nearly duplicates (suggest merge).
@@ -241,6 +246,7 @@ mod tests {
             skeleton: vec!["cargo build".into(), "fly deploy --app <STR>".into()],
             event_count: 12,
             duration_secs: 300,
+            occurrences: 2,
             created_at: "2026-06-11T00:00:00Z".into(),
             status,
             similar_to: None,
