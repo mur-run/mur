@@ -199,6 +199,32 @@ pub fn retrieval_envelope(outcome: &AutoOutcome, query: Option<&str>) -> Value {
     })
 }
 
+/// True if `value` is, or anywhere contains, a non-text MCP content block.
+///
+/// Per the MCP spec a content block's `type` is one of
+/// `text | image | audio | resource | resource_link`. Everything but `text`
+/// carries a binary or reference payload. Base64 image data is high-entropy, so
+/// running it through the text compressors yields a truncated data URI that is
+/// neither readable nor still an image block — the caller (a model driving a
+/// GUI, reading a rendered chart) goes blind, and `mur_retrieve` can only hand
+/// back the raw base64, which is not an image block either. Pass them through.
+///
+/// The walk descends into object values so a wrapper like
+/// `{"content": [{"type":"image",...}]}` is caught too — otherwise the `Object`
+/// arm below would pick that array as its largest field and compress it.
+fn holds_non_text_content(value: &Value) -> bool {
+    match value {
+        Value::Array(items) => items.iter().any(holds_non_text_content),
+        Value::Object(map) => {
+            matches!(
+                map.get("type").and_then(Value::as_str),
+                Some("image" | "audio" | "resource" | "resource_link")
+            ) || map.values().any(holds_non_text_content)
+        }
+        _ => false,
+    }
+}
+
 /// Compress a tool-output JSON `value` in place, routing by shape so the engine's
 /// top-level-array / text compressors actually fire (the JSON compressor only
 /// collapses a *top-level* array — see `compressors/json.rs`):
@@ -207,6 +233,9 @@ pub fn retrieval_envelope(outcome: &AutoOutcome, query: Option<&str>) -> Value {
 /// - `Object` → compress its largest array-valued field, splicing a compact
 ///   summary back in; scalar fields are left untouched.
 ///
+/// Non-text MCP content is passed through untouched — see
+/// [`holds_non_text_content`].
+///
 /// Returns `Some(replacement)` iff compression fired, else `None`.
 pub fn auto_compress_value(
     engine: &CompressEngine,
@@ -214,6 +243,12 @@ pub fn auto_compress_value(
     query: Option<&str>,
     min_tokens: usize,
 ) -> Option<Value> {
+    // Guard here rather than in `auto_compress_value_guarded`: this function is
+    // reachable directly from both LLM-facing surfaces (`mur-mcp-server`'s
+    // `maybe_compress_tool_output` and the `PostToolUse` hook in `mur-core`).
+    if holds_non_text_content(value) {
+        return None;
+    }
     match value {
         Value::String(s) => {
             let o = auto_compress(engine, s, query, min_tokens);
@@ -347,6 +382,51 @@ mod tests {
             .map(|i| format!("{{\"id\":{i},\"name\":\"item-{i}\",\"value\":{}}}", i * 7))
             .collect();
         format!("[{}]", items.join(","))
+    }
+
+    /// An MCP image result, shaped like a real `mcp__computer-use__screenshot`
+    /// return and far over `min_tokens` so it would fire without the guard.
+    fn mcp_image_result() -> Value {
+        serde_json::json!([{
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": "/9j/4AAQSkZJRgABAQAASABIAAD".repeat(4000),
+            }
+        }])
+    }
+
+    #[test]
+    fn mcp_image_content_is_never_compressed() {
+        let (_dir, eng) = engine();
+        let img = mcp_image_result();
+
+        // Sanity: the same payload as plain text is well over the gate, so a
+        // `None` here is the guard firing, not the size gate.
+        let as_text = Value::String(img.to_string());
+        assert!(
+            auto_compress_value(&eng, &as_text, None, 1500).is_some(),
+            "fixture must be large enough to compress, else this test proves nothing"
+        );
+
+        assert!(auto_compress_value(&eng, &img, None, 1500).is_none());
+        assert!(auto_compress_value_guarded(&eng, &img, None, 1500, false).is_none());
+
+        // Wrapped one level down: the `Object` arm would otherwise pick the
+        // image array as its largest field.
+        let wrapped = serde_json::json!({ "content": img, "isError": false });
+        assert!(auto_compress_value(&eng, &wrapped, None, 1500).is_none());
+    }
+
+    #[test]
+    fn text_content_blocks_still_compress() {
+        let (_dir, eng) = engine();
+        let text = serde_json::json!([{ "type": "text", "text": big_json_array() }]);
+        assert!(
+            auto_compress_value(&eng, &text, None, 1500).is_some(),
+            "the guard must not swallow ordinary text content blocks"
+        );
     }
 
     #[test]
