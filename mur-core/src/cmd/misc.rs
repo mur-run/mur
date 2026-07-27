@@ -181,7 +181,81 @@ pub(crate) fn cmd_doctor() -> Result<()> {
         ),
     }
 
+    report_mcp_pins(&mur_dir);
+
     Ok(())
+}
+
+/// Report agents whose pinned MCP binaries no longer match what's on disk.
+///
+/// B0 rule 6 refuses to start such an agent, so this is the difference between
+/// finding out here and finding out when the agent won't come up. The signal
+/// existed in `mur agent mcp inspect` all along and nothing was watching it —
+/// one agent sat in drift for three days while `mur agent status` said healthy.
+fn report_mcp_pins(mur_dir: &std::path::Path) {
+    use crate::cmd::agent_mcp_pin::{InspectStatus, binary_status};
+
+    let agents_dir = mur_dir.join("agents");
+    let Ok(entries) = std::fs::read_dir(&agents_dir) else {
+        return; // no agents yet — nothing to say
+    };
+    let mut dirs: Vec<_> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+    dirs.sort(); // deterministic output
+
+    let mut checked = 0usize;
+    let mut problems: Vec<String> = Vec::new();
+
+    for dir in dirs {
+        let agent = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let Ok(yaml) = std::fs::read_to_string(dir.join("profile.yaml")) else {
+            continue;
+        };
+        let Ok(profile) = serde_yaml_ng::from_str::<mur_common::agent::AgentProfile>(&yaml) else {
+            continue;
+        };
+        for entry in &profile.mcp_servers {
+            checked += 1;
+            match binary_status(entry) {
+                InspectStatus::Clean => {}
+                InspectStatus::BinaryDrift => problems.push(format!(
+                    "  ❌ {agent}/{name}: binary changed since install — this agent will REFUSE \
+                     to start.\n     `mur agent mcp inspect {agent} --server {name}` to review, \
+                     `mur agent mcp pin {agent} {name}` to re-approve.",
+                    name = entry.name,
+                )),
+                InspectStatus::BinaryMissing => problems.push(format!(
+                    "  ⚠ {agent}/{name}: binary not found ({command}).",
+                    name = entry.name,
+                    command = entry.command,
+                )),
+                InspectStatus::MissingPin => problems.push(format!(
+                    "  ⚠ {agent}/{name}: unpinned (installed before pinning) — \
+                     `mur agent mcp pin {agent} {name}` to start enforcing.",
+                    name = entry.name,
+                )),
+                // Description-hash states need a live probe; `inspect --probe` owns those.
+                _ => {}
+            }
+        }
+    }
+
+    if checked == 0 {
+        return; // no MCP servers wired anywhere — silence beats a green tick
+    }
+    if problems.is_empty() {
+        println!("✅ MCP pins: {checked} checked, all match");
+    } else {
+        println!(
+            "MCP pins: {checked} checked, {} need attention",
+            problems.len()
+        );
+        for p in &problems {
+            println!("{p}");
+        }
+    }
 }
 
 /// host:port to TCP-probe for a LOCAL embedding provider; None for remote

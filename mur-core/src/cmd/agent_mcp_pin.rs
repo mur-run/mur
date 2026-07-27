@@ -232,6 +232,28 @@ pub enum InspectStatus {
     BinaryMissing = 5,
 }
 
+/// Classify one MCP entry's binary against its pin, without printing.
+///
+/// The single source of truth for pin status: `inspect_one` renders this, and
+/// `mur doctor` reports it across every agent. Two callers computing "is this
+/// drifted?" separately is exactly how one of them ends up wrong.
+pub fn binary_status(entry: &mur_common::agent::McpServerEntry) -> InspectStatus {
+    let Some(expected) = &entry.binary_sha256 else {
+        return InspectStatus::MissingPin;
+    };
+    let Ok(path) = resolve_command(&entry.command) else {
+        return InspectStatus::BinaryMissing;
+    };
+    let Ok(actual) = compute_binary_sha256(&path) else {
+        return InspectStatus::BinaryMissing;
+    };
+    if actual.eq_ignore_ascii_case(expected) {
+        InspectStatus::Clean
+    } else {
+        InspectStatus::BinaryDrift
+    }
+}
+
 /// Print pinned vs current state for one MCP entry. Returns the
 /// exit-code-shaped status; `cmd_mcp_inspect` lifts that to
 /// `std::process::exit` after running through the dispatch.
@@ -542,6 +564,62 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    fn entry_for(command: &str, pin: Option<&str>) -> mur_common::agent::McpServerEntry {
+        mur_common::agent::McpServerEntry {
+            name: "media".into(),
+            command: command.into(),
+            args: vec![],
+            binary_sha256: pin.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    /// `binary_status` is what both `inspect` and `mur doctor` classify with —
+    /// if it and the printed report ever disagree, one of them lies about
+    /// whether an agent is about to refuse to start.
+    #[test]
+    fn binary_status_classifies_every_case() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(b"v1 body\n").unwrap();
+        let path = f.path().display().to_string();
+        let pin = compute_binary_sha256(f.path()).unwrap();
+
+        assert_eq!(
+            binary_status(&entry_for(&path, Some(&pin))) as u8,
+            InspectStatus::Clean as u8,
+        );
+        assert_eq!(
+            binary_status(&entry_for(&path, None)) as u8,
+            InspectStatus::MissingPin as u8,
+            "an entry from before pinning existed must not read as drift",
+        );
+        assert_eq!(
+            binary_status(&entry_for(&path, Some(&"0".repeat(64)))) as u8,
+            InspectStatus::BinaryDrift as u8,
+        );
+        assert_eq!(
+            binary_status(&entry_for("/nonexistent/mcp-binary", Some(&pin))) as u8,
+            InspectStatus::BinaryMissing as u8,
+            "a binary the user uninstalled is not the same finding as a swapped one",
+        );
+    }
+
+    /// A pin recorded in upper-case hex must still match — `verify_mcp_binary_hash`
+    /// on the runtime side compares case-insensitively, and a mismatch here would
+    /// mean doctor reports clean while the agent refuses to start.
+    #[test]
+    fn binary_status_is_case_insensitive_about_the_pin() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(b"v1 body\n").unwrap();
+        let path = f.path().display().to_string();
+        let pin = compute_binary_sha256(f.path()).unwrap().to_uppercase();
+
+        assert_eq!(
+            binary_status(&entry_for(&path, Some(&pin))) as u8,
+            InspectStatus::Clean as u8,
+        );
+    }
 
     #[test]
     fn binary_sha256_matches_known_vector() {
