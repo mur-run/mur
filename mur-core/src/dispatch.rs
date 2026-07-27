@@ -1595,8 +1595,10 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 name,
                 server,
                 probe,
+                deep,
             } => {
-                let code = cmd::agent_mcp_pin::cmd_mcp_inspect(&name, server.as_deref(), probe)?;
+                let code =
+                    cmd::agent_mcp_pin::cmd_mcp_inspect(&name, server.as_deref(), probe, deep)?;
                 if code != 0 {
                     std::process::exit(code);
                 }
