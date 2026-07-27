@@ -97,7 +97,7 @@ pub fn verify_mcp_supply_chain(
         // changed it. Checked before the interpreter skip below, which would
         // otherwise wave through the very case made verifiable on purpose.
         if let Some(pkg) = &entry.package {
-            let lock = std::path::Path::new(&pkg.install_dir).join("package-lock.json");
+            let lock = pkg.lockfile_path();
             match crate::hooks::b0_helpers::binary_sha256(&lock) {
                 Ok(actual) if actual.eq_ignore_ascii_case(&pkg.lockfile_sha256) => {
                     tracing::debug!(mcp = %entry.name, "B0 rule 6: vendored package verified");
