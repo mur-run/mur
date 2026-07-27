@@ -267,6 +267,31 @@ impl StdioMcpClient {
         Ok(())
     }
 
+    /// Explain a closed stdout by looking at what happened to the child.
+    ///
+    /// A server that exited and a server that was killed both present as "no
+    /// more lines". Naming the exit status turns an hour of guessing into one
+    /// line — a macOS binary killed for a stale code-signing cache reports
+    /// `signal 9` here and nothing at all in stderr (#791).
+    async fn stream_closed_error(&self) -> McpError {
+        let status = {
+            let mut child = self.child.lock().await;
+            child.try_wait()
+        };
+        match status {
+            Ok(Some(st)) => McpError::Server(format!(
+                "mcp server `{}` exited before replying ({st})",
+                self.server_name
+            )),
+            // Still alive, or we cannot tell — say so rather than implying an exit.
+            Ok(None) => McpError::StreamClosed,
+            Err(e) => McpError::Server(format!(
+                "mcp server `{}` closed stdout; wait failed: {e}",
+                self.server_name
+            )),
+        }
+    }
+
     async fn request(&self, method: &str, params: Value) -> Result<Value, McpError> {
         let id = {
             let mut g = self.next_id.lock().await;
@@ -284,7 +309,10 @@ impl StdioMcpClient {
         let mut stdout = self.stdout.lock().await;
         loop {
             let next = stdout.next_line().await?;
-            let line = next.ok_or(McpError::StreamClosed)?;
+            let line = match next {
+                Some(l) => l,
+                None => return Err(self.stream_closed_error().await),
+            };
             let v: Value = serde_json::from_str(&line)?;
             if v.get("id") == Some(&json!(id)) {
                 if let Some(err) = v.get("error") {

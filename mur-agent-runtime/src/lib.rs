@@ -25,6 +25,7 @@ pub mod import;
 pub mod llm;
 pub mod lock_file;
 pub mod mcp;
+pub mod mcp_repin;
 pub mod multi_call;
 pub mod multimodal;
 pub mod oauth;
