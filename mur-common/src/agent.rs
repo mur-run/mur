@@ -383,6 +383,18 @@ pub struct McpPackagePin {
     /// outright — that is an integrity failure, not a property to note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signatures_missing: Option<u32>,
+
+    /// SLSA predicate type of the package's build provenance, when it
+    /// publishes one — e.g. `https://slsa.dev/provenance/v1`. `None` means no
+    /// attestation was published (still the common case).
+    ///
+    /// Provenance ties a release back to a source repository and CI run, and
+    /// is the only signal here that can catch a **malicious publish**: a
+    /// content hash pins whatever was released, faithfully preserving a
+    /// poisoned version rather than detecting it. Recorded and shown, never
+    /// required — ecosystem coverage is far too thin to gate on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<String>,
 }
 
 /// Authentication scheme for a remote (HTTP) MCP server.
