@@ -346,6 +346,7 @@ mod tests {
                 url: None,
                 auth: None,
                 requires_programs: Vec::new(),
+                package: None,
             });
         }
 
