@@ -14,9 +14,24 @@
 agentdojo==0.1.32
 
 # HarmBench — jailbreak + agentic-misuse benchmark (CAIS 2024).
-# Released as a GitHub repo, not a wheel; pip+git URL with commit
-# hash for full reproducibility. Bump the hash to update.
-harmbench @ git+https://github.com/centerforaisafety/HarmBench.git@v1.0.0
+#
+# NOT a dependency. It was listed here as
+#   harmbench @ git+https://github.com/centerforaisafety/HarmBench.git@v1.0.0
+# and failed every install with `pathspec 'v1.0.0' did not match`, which is
+# why the B0 Eval job had never run (#805). Repinning does not fix it:
+#
+#   * upstream publishes no tags at all (`git ls-remote --tags` is empty), and
+#   * the repo has no setup.py / pyproject.toml / setup.cfg, so pip cannot
+#     install it from any ref — it is a research repo of loose scripts.
+#
+# Nothing imports it either: `scripts/eval/harmbench/run.py` runs off
+# `fixtures/synthetic_harmbench_cases.json`, and its own docstring defers the
+# real package integration to M11.3.1. So the line was blocking the eval in
+# exchange for nothing.
+#
+# When M11.3.1 lands, vendor it the way its shape requires — clone at a commit
+# SHA and add it to PYTHONPATH, plus install its own requirements.txt — rather
+# than declaring it a package it isn't.
 
 # Driver glue — keep deps minimal. The harness orchestrates upstream
 # packages + spawns the mur runtime; it doesn't need a heavy framework.
