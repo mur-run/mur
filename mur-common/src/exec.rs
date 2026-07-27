@@ -113,6 +113,34 @@ fn sha256_file(path: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
+/// Launchers that run *other* code: hashing one of these tells you nothing
+/// about the MCP server it starts.
+const INTERPRETERS: &[&str] = &[
+    "npx", "node", "bunx", "bun", "deno", "python", "python3", "uv", "uvx", "pipx", "ruby", "perl",
+    "sh", "bash", "zsh",
+];
+
+/// Whether `command` launches an MCP server through an interpreter or package
+/// runner rather than being the server binary itself.
+///
+/// This decides whether a `binary_sha256` pin means anything. For
+/// `command: npx, args: @yawlabs/fetch-mcp` the pin hashes **npx** — so it
+/// breaks on every unrelated Node upgrade while saying nothing at all about
+/// `@yawlabs/fetch-mcp`, which npx resolves and may fetch fresh at run time.
+/// Enforcing such a pin is both fragile and hollow; the honest report is that
+/// the server code is unprotected.
+///
+/// Real coverage for these needs a package-level pin (version + integrity),
+/// which is a different mechanism than hashing a file on disk.
+pub fn is_interpreter_command(command: &str) -> bool {
+    let first = command.split_whitespace().next().unwrap_or(command);
+    let stem = Path::new(first)
+        .file_stem() // also strips .exe / .cmd on Windows
+        .and_then(|s| s.to_str())
+        .unwrap_or(first);
+    INTERPRETERS.contains(&stem.to_ascii_lowercase().as_str())
+}
+
 /// Resolve `command` to an absolute path on disk.
 ///
 /// - If `command` is already absolute or contains a path separator, canonicalize
@@ -153,6 +181,41 @@ pub fn resolve_command(command: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interpreter_commands_are_recognised_including_paths_and_args() {
+        for c in [
+            "npx",
+            "node",
+            "python3",
+            "uvx",
+            "bunx",
+            "deno",
+            "sh",
+            "/opt/homebrew/bin/npx",
+            "npx @yawlabs/fetch-mcp",
+            "NPX",
+            "npx.cmd",
+        ] {
+            assert!(
+                is_interpreter_command(c),
+                "`{c}` should count as an interpreter"
+            );
+        }
+    }
+
+    #[test]
+    fn real_server_binaries_are_not_interpreters() {
+        for c in [
+            "mur-mcp-server",
+            "/Users/x/.mur/mcp-servers/mur-mcp-server",
+            "agent-browser",
+            "mur-research-gateway",
+            "nodemon-ish",
+        ] {
+            assert!(!is_interpreter_command(c), "`{c}` is the server itself");
+        }
+    }
 
     #[test]
     fn errors_on_missing_binary() {

@@ -230,6 +230,35 @@ pub enum InspectStatus {
     BothDrifted = 3,
     MissingPin = 4,
     BinaryMissing = 5,
+    /// Interpreter-launched (`npx @scope/pkg`, `python -m …`): the pin covers
+    /// the interpreter, not the server code, so it is reported rather than
+    /// enforced. Not a failure — the agent starts — but not protection either.
+    InterpreterUnprotected = 6,
+}
+
+/// Classify one MCP entry's binary against its pin, without printing.
+///
+/// The single source of truth for pin status: `inspect_one` renders this, and
+/// `mur doctor` reports it across every agent. Two callers computing "is this
+/// drifted?" separately is exactly how one of them ends up wrong.
+pub fn binary_status(entry: &mur_common::agent::McpServerEntry) -> InspectStatus {
+    let Some(expected) = &entry.binary_sha256 else {
+        return InspectStatus::MissingPin;
+    };
+    if mur_common::exec::is_interpreter_command(&entry.command) {
+        return InspectStatus::InterpreterUnprotected;
+    }
+    let Ok(path) = resolve_command(&entry.command) else {
+        return InspectStatus::BinaryMissing;
+    };
+    let Ok(actual) = compute_binary_sha256(&path) else {
+        return InspectStatus::BinaryMissing;
+    };
+    if actual.eq_ignore_ascii_case(expected) {
+        InspectStatus::Clean
+    } else {
+        InspectStatus::BinaryDrift
+    }
 }
 
 /// Print pinned vs current state for one MCP entry. Returns the
@@ -264,6 +293,22 @@ pub fn inspect_one(entry: &mur_common::agent::McpServerEntry) -> InspectStatus {
     };
 
     println!("  pinned sha256:  {expected}");
+    if mur_common::exec::is_interpreter_command(&entry.command) {
+        println!(
+            "  status:         INTERPRETER-LAUNCHED — pin covers `{}`, not the server code",
+            entry
+                .command
+                .split_whitespace()
+                .next()
+                .unwrap_or(&entry.command)
+        );
+        println!(
+            "  hint:           not enforced at startup: hashing the interpreter breaks on any \
+             unrelated runtime upgrade and still would not cover what it runs. Pin the package \
+             version instead (lockfile / integrity hash) if this server matters."
+        );
+        return InspectStatus::InterpreterUnprotected;
+    }
     let path = match resolve_command(&entry.command) {
         Ok(p) => p,
         Err(_) => {
@@ -412,6 +457,38 @@ pub fn cmd_mcp_inspect(name: &str, server_id: Option<&str>, probe: bool) -> Resu
 /// failure (timeout / spawn error) the pin still lands but
 /// `description_hash` stays None — the user sees a warning and can
 /// re-pin later.
+/// Record the version an interpreter-launched entry currently resolves to,
+/// rewriting its args in place. Returns the pinned `name@version` when it
+/// changed anything.
+///
+/// Best-effort by design: no network, no npm, or an unparseable arg shape all
+/// leave the entry exactly as it was. A pin that can't reach the registry is a
+/// worse reason to fail than to proceed — the binary pin below still applies.
+fn pin_package_version(entry: &mut McpServerEntry) -> Option<String> {
+    use mur_common::mcp_package::{parse_spec, resolve_current_version, runner_for};
+
+    let spec = parse_spec(&entry.command, &entry.args)?;
+    if !spec.floats() {
+        return None; // already pinned to a release
+    }
+    let runner = runner_for(&entry.command)?;
+    match resolve_current_version(runner, &spec.name) {
+        Ok(version) => {
+            let pinned = format!("{}@{version}", spec.name);
+            entry.args[spec.arg_index] = pinned.clone();
+            Some(pinned)
+        }
+        Err(e) => {
+            eprintln!(
+                "warning: could not resolve a current version for `{}` ({e}); \
+                 the entry stays on a floating spec and will resolve fresh on every start.",
+                spec.name,
+            );
+            None
+        }
+    }
+}
+
 pub fn cmd_mcp_pin(
     name: &str,
     server_id: &str,
@@ -427,6 +504,12 @@ pub fn cmd_mcp_pin(
         .iter_mut()
         .find(|s| s.name == server_id)
         .ok_or_else(|| anyhow::anyhow!("MCP server `{server_id}` not found on agent `{name}`"))?;
+
+    // For an interpreter-launched entry the binary hash below covers the
+    // launcher, not the server (#795). The one thing that can be pinned here is
+    // *which release* the runner resolves — so record it, turning "whatever the
+    // registry serves at spawn" into the version the user approved just now.
+    let version_pinned = pin_package_version(entry);
 
     let resolved = resolve_command(&entry.command)
         .with_context(|| format!("resolve command `{}`", entry.command))?;
@@ -492,6 +575,9 @@ pub fn cmd_mcp_pin(
     if !force {
         println!("Re-approving MCP `{server_id}` on agent `{name}`:");
         println!("  command:        {}", resolved.display());
+        if let Some(pinned) = &version_pinned {
+            println!("  package:        {pinned}  (NEW — was floating to latest)");
+        }
         if let Some(old) = &entry.binary_sha256 {
             if old.eq_ignore_ascii_case(&new_hash) {
                 println!("  binary sha256:  {new_hash}  (unchanged)");
@@ -542,6 +628,76 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    fn entry_for(command: &str, pin: Option<&str>) -> mur_common::agent::McpServerEntry {
+        mur_common::agent::McpServerEntry {
+            name: "media".into(),
+            command: command.into(),
+            args: vec![],
+            binary_sha256: pin.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    /// `binary_status` is what both `inspect` and `mur doctor` classify with —
+    /// if it and the printed report ever disagree, one of them lies about
+    /// whether an agent is about to refuse to start.
+    /// An `npx @scope/pkg` entry pins **npx**. Enforcing that hash breaks the
+    /// agent on any unrelated Node upgrade and still says nothing about the
+    /// package npx fetches, so it must not read as drift.
+    #[test]
+    fn interpreter_launched_entries_are_reported_not_enforced() {
+        for command in ["npx", "node", "python3", "uvx", "/opt/homebrew/bin/npx"] {
+            assert_eq!(
+                binary_status(&entry_for(command, Some(&"0".repeat(64)))) as u8,
+                InspectStatus::InterpreterUnprotected as u8,
+                "`{command}` launches other code; its hash is not the server's",
+            );
+        }
+    }
+
+    #[test]
+    fn binary_status_classifies_every_case() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(b"v1 body\n").unwrap();
+        let path = f.path().display().to_string();
+        let pin = compute_binary_sha256(f.path()).unwrap();
+
+        assert_eq!(
+            binary_status(&entry_for(&path, Some(&pin))) as u8,
+            InspectStatus::Clean as u8,
+        );
+        assert_eq!(
+            binary_status(&entry_for(&path, None)) as u8,
+            InspectStatus::MissingPin as u8,
+            "an entry from before pinning existed must not read as drift",
+        );
+        assert_eq!(
+            binary_status(&entry_for(&path, Some(&"0".repeat(64)))) as u8,
+            InspectStatus::BinaryDrift as u8,
+        );
+        assert_eq!(
+            binary_status(&entry_for("/nonexistent/mcp-binary", Some(&pin))) as u8,
+            InspectStatus::BinaryMissing as u8,
+            "a binary the user uninstalled is not the same finding as a swapped one",
+        );
+    }
+
+    /// A pin recorded in upper-case hex must still match — `verify_mcp_binary_hash`
+    /// on the runtime side compares case-insensitively, and a mismatch here would
+    /// mean doctor reports clean while the agent refuses to start.
+    #[test]
+    fn binary_status_is_case_insensitive_about_the_pin() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(b"v1 body\n").unwrap();
+        let path = f.path().display().to_string();
+        let pin = compute_binary_sha256(f.path()).unwrap().to_uppercase();
+
+        assert_eq!(
+            binary_status(&entry_for(&path, Some(&pin))) as u8,
+            InspectStatus::Clean as u8,
+        );
+    }
 
     #[test]
     fn binary_sha256_matches_known_vector() {
