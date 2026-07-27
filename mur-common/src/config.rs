@@ -1914,6 +1914,12 @@ pub struct HarvestCfg {
     /// A session is considered ended when its last event is older than this.
     #[serde(default = "default_idle_minutes")]
     pub idle_minutes: i64,
+    /// Ceilings — past these a recording is a session, not a procedure (#781).
+    /// A session marked with `mur in` bypasses both.
+    #[serde(default = "default_max_steps")]
+    pub max_steps: usize,
+    #[serde(default = "default_max_duration_secs")]
+    pub max_duration_secs: i64,
     /// §3.7 hard caps (persisted now; enforced when the LLM extract path lands in v2 P5a).
     #[serde(default = "default_max_llm_calls_per_day")]
     pub max_llm_calls_per_day: u32,
@@ -1950,6 +1956,17 @@ fn default_min_duration_secs() -> i64 {
 }
 fn default_idle_minutes() -> i64 {
     30
+}
+/// Above ~20 distinct commands a recording reads as a transcript, not a
+/// procedure a human would write down. Measured against a real 38-proposal
+/// inbox: everything plausible sat below it, nothing accepted sat above (#781).
+fn default_max_steps() -> usize {
+    20
+}
+/// 30 minutes. Long enough for a real deploy/release procedure including waits,
+/// short enough to exclude debugging sessions (#781).
+fn default_max_duration_secs() -> i64 {
+    1800
 }
 fn default_max_llm_calls_per_day() -> u32 {
     10

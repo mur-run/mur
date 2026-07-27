@@ -72,6 +72,46 @@ pub fn gate(events: &[SessionEvent], meta: &SessionMeta, cfg: &HarvestCfg) -> Ga
     }
 }
 
+/// Second gate, on the extracted step list: reject recordings whose *shape* says
+/// "session" rather than "procedure" (#781).
+///
+/// `gate` above is floor-only — a single tool call clears it — so a 405-step,
+/// 24-hour debugging transcript passed as easily as a five-command deploy. Those
+/// proposals are unreviewable, and an inbox full of them buries the good ones.
+/// A session marked with `mur in` is an explicit human "yes" and bypasses this.
+pub fn shape_gate(
+    steps: &[String],
+    duration_secs: i64,
+    marked: bool,
+    cfg: &HarvestCfg,
+) -> GateDecision {
+    if marked {
+        return GateDecision {
+            pass: true,
+            reason: "marked via mur in".to_string(),
+        };
+    }
+    if steps.len() > cfg.max_steps {
+        return GateDecision {
+            pass: false,
+            reason: format!("{} steps > max_steps {}", steps.len(), cfg.max_steps),
+        };
+    }
+    if duration_secs > cfg.max_duration_secs {
+        return GateDecision {
+            pass: false,
+            reason: format!(
+                "{}s > max_duration_secs {}",
+                duration_secs, cfg.max_duration_secs
+            ),
+        };
+    }
+    GateDecision {
+        pass: true,
+        reason: String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,5 +163,38 @@ mod tests {
     fn marked_session_always_passes() {
         let cfg = HarvestCfg::default();
         assert!(gate(&[], &meta(0, true), &cfg).pass);
+    }
+
+    fn steps(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("step-{i}")).collect()
+    }
+
+    #[test]
+    fn short_session_passes_shape_gate() {
+        let cfg = HarvestCfg::default();
+        assert!(shape_gate(&steps(5), 60, false, &cfg).pass);
+    }
+
+    #[test]
+    fn long_session_fails_shape_gate() {
+        let cfg = HarvestCfg::default();
+        let d = shape_gate(&steps(cfg.max_steps + 1), 60, false, &cfg);
+        assert!(!d.pass);
+        assert!(d.reason.contains("max_steps"), "{}", d.reason);
+    }
+
+    #[test]
+    fn slow_session_fails_shape_gate() {
+        let cfg = HarvestCfg::default();
+        let d = shape_gate(&steps(3), cfg.max_duration_secs + 1, false, &cfg);
+        assert!(!d.pass);
+        assert!(d.reason.contains("max_duration_secs"), "{}", d.reason);
+    }
+
+    #[test]
+    fn marked_session_bypasses_shape_gate() {
+        let cfg = HarvestCfg::default();
+        let long = steps(cfg.max_steps + 100);
+        assert!(shape_gate(&long, cfg.max_duration_secs * 10, true, &cfg).pass);
     }
 }
