@@ -139,9 +139,15 @@ async fn os_actor(
                     }
 
                     Msg::Stop(slug) => {
-                        if let Some(mut child) = children.remove(&slug) {
-                            let _ = child.kill();
-                            let _ = child.wait();
+                        match children.remove(&slug) {
+                            Some(mut child) => {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                            }
+                            // No handle of our own — the runtime may still be
+                            // alive from an earlier Hub session or the CLI.
+                            // Stop it for real before clearing its files.
+                            None => stop_unowned_runtime(&mur_home, &slug),
                         }
                         clear_runtime_state(&mur_home, &slug);
                         known.remove(&slug);
@@ -266,16 +272,75 @@ fn spawn_runtime(slug: &str, mur_home: &Path) -> Result<Child, String> {
 
 /// Whether a live process currently owns the agent's `running.lock`.
 fn lock_is_live(mur_home: &Path, slug: &str) -> bool {
+    lock_owner_pid(mur_home, slug).is_some()
+}
+
+/// The pid of the live process owning the agent's `running.lock`, if any.
+fn lock_owner_pid(mur_home: &Path, slug: &str) -> Option<u32> {
     let lock = mur_home.join("agents").join(slug).join("running.lock");
     match mur_common::lock_file::read(&lock) {
-        Ok(Some(l)) => mur_common::lock_file::pid_alive(l.pid),
-        _ => false,
+        Ok(Some(l)) if mur_common::lock_file::pid_alive(l.pid) => Some(l.pid),
+        _ => None,
     }
 }
 
+/// Stop whatever process owns `slug`'s lock, when it is not one of our own
+/// tracked children (a runtime started by an earlier Hub session, or by the
+/// CLI). SIGTERM, then SIGKILL if it outlives the grace period.
+///
+/// Without this, `Msg::Stop` for an untracked runtime went straight to
+/// `clear_runtime_state` and only deleted the lock files out from under a
+/// process that kept running — see the duplicate-supervisor path documented on
+/// `clear_runtime_state`.
+fn stop_unowned_runtime(mur_home: &Path, slug: &str) {
+    let Some(pid) = lock_owner_pid(mur_home, slug) else {
+        return;
+    };
+    warn!(agent = %slug, pid, "stopping untracked runtime holding the lock");
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+    }
+    let deadline = std::time::Instant::now() + STOP_GRACE;
+    while std::time::Instant::now() < deadline {
+        if !mur_common::lock_file::pid_alive(pid) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(200));
+}
+
+/// How long an untracked runtime gets to exit on SIGTERM before SIGKILL.
+const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Remove an agent's lock/socket/sentinel files (after stopping or before a
-/// fresh spawn).
+/// fresh spawn) — **only when no live process owns them**.
+///
+/// The owner check is load-bearing, not defensive. `running.sentinel` carries
+/// the flock that makes supervisor startup mutually exclusive, and a flock
+/// lives on an inode, not a path: deleting the sentinel while its holder is
+/// still alive leaves that holder locking a file nobody can see, so the next
+/// supervisor acquires the "lock" and both run against one agent home. That is
+/// exactly how two `mur-agent-runtime --profile mur` processes ended up sharing
+/// `agent.sock` (issue #790) — a Stop for an agent the Hub had lost the child
+/// handle for cleared the files without stopping anything.
+///
+/// Deleting `agent.sock` has the same shape: the path may already belong to a
+/// newer supervisor's listener.
 fn clear_runtime_state(mur_home: &Path, slug: &str) {
+    if let Some(pid) = lock_owner_pid(mur_home, slug) {
+        warn!(
+            agent = %slug,
+            pid,
+            "refusing to clear runtime state: a live process still owns the lock"
+        );
+        return;
+    }
     let dir = mur_home.join("agents").join(slug);
     for f in ["running.lock", "agent.sock", "running.sentinel"] {
         let _ = std::fs::remove_file(dir.join(f));
@@ -340,6 +405,90 @@ fn find_runtime_binary() -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Write a `running.lock` naming `pid` and the sentinel that carries the
+    /// startup flock, and return the agent dir.
+    fn seed_runtime_state(mur_home: &Path, slug: &str, pid: u32) -> PathBuf {
+        let dir = mur_home.join("agents").join(slug);
+        std::fs::create_dir_all(&dir).unwrap();
+        let lock = mur_common::LockFile {
+            schema: 1,
+            uuid: "u".into(),
+            name: slug.into(),
+            pid,
+            ppid: 0,
+            started_at: String::new(),
+            binary_version: String::new(),
+            transports: mur_common::agent::LockTransports {
+                stdio: true,
+                unix_socket: None,
+                tcp: None,
+                webhook: None,
+            },
+            card_digest: String::new(),
+            capabilities: vec![],
+            build_sha: String::new(),
+            proto_version: 0,
+        };
+        std::fs::write(dir.join("running.lock"), serde_json::to_vec(&lock).unwrap()).unwrap();
+        std::fs::write(dir.join("running.sentinel"), b"").unwrap();
+        std::fs::write(dir.join("agent.sock"), b"").unwrap();
+        dir
+    }
+
+    /// A pid that is guaranteed not to be alive: spawn a child and reap it.
+    fn dead_pid() -> u32 {
+        let mut c = Command::new(if cfg!(windows) { "cmd" } else { "true" })
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = c.id();
+        let _ = c.wait();
+        pid
+    }
+
+    /// Deleting `running.sentinel` under a live owner destroys the flock that
+    /// makes supervisor startup mutually exclusive — the next Start then
+    /// acquires a "lock" nobody holds and a second supervisor runs against the
+    /// same agent home (#790).
+    #[test]
+    fn clear_runtime_state_refuses_while_a_live_process_owns_the_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = seed_runtime_state(tmp.path(), "live", std::process::id());
+
+        clear_runtime_state(tmp.path(), "live");
+
+        for f in ["running.lock", "agent.sock", "running.sentinel"] {
+            assert!(
+                dir.join(f).exists(),
+                "{f} must survive: its owner is still running"
+            );
+        }
+    }
+
+    #[test]
+    fn clear_runtime_state_removes_state_left_by_a_dead_process() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = seed_runtime_state(tmp.path(), "dead", dead_pid());
+
+        clear_runtime_state(tmp.path(), "dead");
+
+        for f in ["running.lock", "agent.sock", "running.sentinel"] {
+            assert!(!dir.join(f).exists(), "{f} should have been cleared");
+        }
+    }
+
+    #[test]
+    fn lock_owner_pid_reports_only_live_owners() {
+        let tmp = tempfile::tempdir().unwrap();
+        seed_runtime_state(tmp.path(), "live", std::process::id());
+        seed_runtime_state(tmp.path(), "dead", dead_pid());
+
+        assert_eq!(lock_owner_pid(tmp.path(), "live"), Some(std::process::id()));
+        assert_eq!(lock_owner_pid(tmp.path(), "dead"), None);
+        assert_eq!(lock_owner_pid(tmp.path(), "never-existed"), None);
+    }
 
     #[test]
     fn runtime_state_serializes_correctly() {
