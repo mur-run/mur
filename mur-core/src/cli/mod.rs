@@ -283,6 +283,9 @@ see `mur skill <command> --help`.")]
         /// Machine-readable output
         #[arg(long)]
         json: bool,
+        /// Include muted sources
+        #[arg(long)]
+        all: bool,
     },
     /// Push pending signals from the outbox to the server
     Push {
