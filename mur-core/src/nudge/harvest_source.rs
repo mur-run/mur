@@ -57,6 +57,7 @@ mod tests {
                 title: "Deploy api".into(),
                 suggested_name: "deploy-api".into(),
                 steps: vec!["cargo build".into()],
+                skeleton: vec!["cargo build".into()],
                 event_count: 5,
                 duration_secs: 60,
                 created_at: "2026-06-11T00:00:00Z".into(),
