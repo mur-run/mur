@@ -170,6 +170,11 @@ pub async fn run(cli: Cli) -> Result<()> {
             WorkflowAction::Publish { name, team } => {
                 cmd::workflow::cmd_workflow_publish(&name, &team)?
             }
+            WorkflowAction::Delete {
+                name,
+                yes,
+                local_only,
+            } => cmd::workflow_delete::cmd_workflow_delete(&name, yes, local_only).await?,
             WorkflowAction::Install { name, from } => {
                 cmd::workflow::cmd_workflow_install(&name, &from)?
             }
