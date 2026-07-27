@@ -132,6 +132,9 @@ fn profile_with_vendored(install_dir: &std::path::Path, lockfile_sha256: &str) -
             version: "0.3.6".into(),
             install_dir: install_dir.display().to_string(),
             lockfile_sha256: lockfile_sha256.into(),
+            // Functional update so a new pin field doesn't break this fixture,
+            // the way adding `signatures_missing` did.
+            ..Default::default()
         }),
         ..Default::default()
     });
