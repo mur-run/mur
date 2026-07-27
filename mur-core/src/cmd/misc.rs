@@ -236,16 +236,35 @@ fn report_mcp_pins(mur_dir: &std::path::Path) {
                      `mur agent mcp pin {agent} {name}` to start enforcing.",
                     name = entry.name,
                 )),
-                InspectStatus::InterpreterUnprotected => problems.push(format!(
-                    "  ⚠ {agent}/{name}: launched via `{launcher}` — the pin covers the \
-                     interpreter, not the server code, so it is not enforced.",
-                    name = entry.name,
-                    launcher = entry
+                InspectStatus::InterpreterUnprotected => {
+                    let launcher = entry
                         .command
                         .split_whitespace()
                         .next()
-                        .unwrap_or(&entry.command),
-                )),
+                        .unwrap_or(&entry.command);
+                    match mur_common::mcp_package::parse_spec(&entry.command, &entry.args) {
+                        // A floating spec is the sharp edge: the code that runs
+                        // can change between two starts with no user action.
+                        Some(spec) if spec.floats() => problems.push(format!(
+                            "  ⚠ {agent}/{name}: `{launcher} {pkg}` has no pinned version — \
+                             resolved fresh on every start.\n     \
+                             `mur agent mcp pin {agent} {name}` records the version it resolves to now.",
+                            name = entry.name,
+                            pkg = spec.name,
+                        )),
+                        Some(spec) => problems.push(format!(
+                            "  ⚠ {agent}/{name}: launched via `{launcher}` at {pkg} — version \
+                             recorded, but the package contents are not verified.",
+                            name = entry.name,
+                            pkg = spec.to_arg(),
+                        )),
+                        None => problems.push(format!(
+                            "  ⚠ {agent}/{name}: launched via `{launcher}` — the pin covers the \
+                             interpreter, not the server code, so it is not enforced.",
+                            name = entry.name,
+                        )),
+                    }
+                }
                 // Description-hash states need a live probe; `inspect --probe` owns those.
                 _ => {}
             }

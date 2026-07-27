@@ -457,6 +457,38 @@ pub fn cmd_mcp_inspect(name: &str, server_id: Option<&str>, probe: bool) -> Resu
 /// failure (timeout / spawn error) the pin still lands but
 /// `description_hash` stays None — the user sees a warning and can
 /// re-pin later.
+/// Record the version an interpreter-launched entry currently resolves to,
+/// rewriting its args in place. Returns the pinned `name@version` when it
+/// changed anything.
+///
+/// Best-effort by design: no network, no npm, or an unparseable arg shape all
+/// leave the entry exactly as it was. A pin that can't reach the registry is a
+/// worse reason to fail than to proceed — the binary pin below still applies.
+fn pin_package_version(entry: &mut McpServerEntry) -> Option<String> {
+    use mur_common::mcp_package::{parse_spec, resolve_current_version, runner_for};
+
+    let spec = parse_spec(&entry.command, &entry.args)?;
+    if !spec.floats() {
+        return None; // already pinned to a release
+    }
+    let runner = runner_for(&entry.command)?;
+    match resolve_current_version(runner, &spec.name) {
+        Ok(version) => {
+            let pinned = format!("{}@{version}", spec.name);
+            entry.args[spec.arg_index] = pinned.clone();
+            Some(pinned)
+        }
+        Err(e) => {
+            eprintln!(
+                "warning: could not resolve a current version for `{}` ({e}); \
+                 the entry stays on a floating spec and will resolve fresh on every start.",
+                spec.name,
+            );
+            None
+        }
+    }
+}
+
 pub fn cmd_mcp_pin(
     name: &str,
     server_id: &str,
@@ -472,6 +504,12 @@ pub fn cmd_mcp_pin(
         .iter_mut()
         .find(|s| s.name == server_id)
         .ok_or_else(|| anyhow::anyhow!("MCP server `{server_id}` not found on agent `{name}`"))?;
+
+    // For an interpreter-launched entry the binary hash below covers the
+    // launcher, not the server (#795). The one thing that can be pinned here is
+    // *which release* the runner resolves — so record it, turning "whatever the
+    // registry serves at spawn" into the version the user approved just now.
+    let version_pinned = pin_package_version(entry);
 
     let resolved = resolve_command(&entry.command)
         .with_context(|| format!("resolve command `{}`", entry.command))?;
@@ -537,6 +575,9 @@ pub fn cmd_mcp_pin(
     if !force {
         println!("Re-approving MCP `{server_id}` on agent `{name}`:");
         println!("  command:        {}", resolved.display());
+        if let Some(pinned) = &version_pinned {
+            println!("  package:        {pinned}  (NEW — was floating to latest)");
+        }
         if let Some(old) = &entry.binary_sha256 {
             if old.eq_ignore_ascii_case(&new_hash) {
                 println!("  binary sha256:  {new_hash}  (unchanged)");
