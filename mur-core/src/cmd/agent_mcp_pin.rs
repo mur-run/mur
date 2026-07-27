@@ -475,7 +475,12 @@ pub async fn inspect_one_probed(
 /// `mur agent mcp inspect <name> [--server <id>]`. Without `--server`,
 /// prints all MCPs on the agent and returns the WORST status (highest
 /// numeric value) so a scripted caller knows whether ANY MCP drifted.
-pub fn cmd_mcp_inspect(name: &str, server_id: Option<&str>, probe: bool) -> Result<i32> {
+pub fn cmd_mcp_inspect(
+    name: &str,
+    server_id: Option<&str>,
+    probe: bool,
+    deep: bool,
+) -> Result<i32> {
     let (_path, profile) = crate::cmd::agent::load_profile_for_edit(name)?;
     if profile.mcp_servers.is_empty() {
         println!("Agent `{name}` has no MCP servers configured.");
@@ -501,6 +506,27 @@ pub fn cmd_mcp_inspect(name: &str, server_id: Option<&str>, probe: bool) -> Resu
             inspect_one(entry) as u8
         };
         worst = worst.max(status);
+
+        // The deep pass re-derives the tree from the registry, so it can see
+        // what a locally-stored hash cannot: an edited file leaves the lockfile
+        // — and therefore the startup pin — untouched.
+        if deep {
+            match &entry.package {
+                Some(pkg) => {
+                    println!();
+                    let clean = crate::cmd::agent_mcp_deep_audit::report(
+                        &entry.name,
+                        std::path::Path::new(&pkg.install_dir),
+                    );
+                    if !clean {
+                        worst = worst.max(InspectStatus::BinaryDrift as u8);
+                    }
+                }
+                None => {
+                    println!("  deep audit:     n/a — only vendored entries can be re-derived");
+                }
+            }
+        }
         printed = true;
     }
     if !printed && let Some(id) = server_id {
