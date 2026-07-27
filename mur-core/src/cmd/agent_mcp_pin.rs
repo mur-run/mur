@@ -247,7 +247,7 @@ pub fn binary_status(entry: &mur_common::agent::McpServerEntry) -> InspectStatus
     // `node` that runs it — check that first, or the interpreter branch below
     // would report the one verifiable shape as unprotected.
     if let Some(pkg) = &entry.package {
-        let lock = std::path::Path::new(&pkg.install_dir).join("package-lock.json");
+        let lock = pkg.lockfile_path();
         let Ok(actual) = compute_binary_sha256(&lock) else {
             return InspectStatus::BinaryMissing;
         };
@@ -318,7 +318,7 @@ pub fn inspect_one(entry: &mur_common::agent::McpServerEntry) -> InspectStatus {
             None => println!("  provenance:     none published by this release"),
         }
         println!("  pinned lock:    {}", pkg.lockfile_sha256);
-        let lock = std::path::Path::new(&pkg.install_dir).join("package-lock.json");
+        let lock = pkg.lockfile_path();
         let Ok(actual) = compute_binary_sha256(&lock) else {
             println!("  current lock:   <not readable — install missing?>");
             println!(
