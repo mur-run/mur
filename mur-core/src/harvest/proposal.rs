@@ -137,6 +137,76 @@ pub fn step_similarity(a: &[String], b: &[String]) -> f32 {
     inter / union
 }
 
+/// Longest title we keep; past this a reviewer is reading a paragraph, not
+/// scanning a list.
+const TITLE_MAX: usize = 60;
+
+/// Turn a raw session title into something a reviewer can scan.
+///
+/// `meta.title` is the user's first chat message verbatim, so it arrives as a
+/// slash command, a multi-line paste, or a `<task-notification>` blob about as
+/// often as it arrives as a sentence (#781). Keep the first line, drop the
+/// slash-command verb, cap the length; when nothing survives, name the session
+/// after the programs it actually ran.
+pub fn clean_title(raw: Option<&str>, steps: &[String]) -> String {
+    raw.and_then(|t| t.lines().next())
+        .map(str::trim)
+        // A leading '<' means a system-injected blob, never a human title.
+        .filter(|l| !l.starts_with('<'))
+        .map(|l| match l.strip_prefix('/') {
+            // "/mur-out review the inbox" → "review the inbox"; bare "/mur-out" → ""
+            Some(rest) => rest.split_once(char::is_whitespace).map_or("", |(_, r)| r),
+            None => l,
+        })
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(truncate_words)
+        .unwrap_or_else(|| programs_of(steps))
+}
+
+/// Cap at `TITLE_MAX`, breaking on a word boundary rather than mid-word.
+fn truncate_words(s: &str) -> String {
+    if s.chars().count() <= TITLE_MAX {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    for w in s.split_whitespace() {
+        if out.chars().count() + w.chars().count() + 1 > TITLE_MAX {
+            break;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(w);
+    }
+    // A single word longer than the cap leaves `out` empty — cut it instead.
+    if out.is_empty() {
+        out = s.chars().take(TITLE_MAX).collect();
+    }
+    out
+}
+
+/// Fallback title: the distinct programs the session invoked, in order.
+fn programs_of(steps: &[String]) -> String {
+    let mut progs: Vec<&str> = Vec::new();
+    for s in steps {
+        let Some(p) = s.split_whitespace().next() else {
+            continue;
+        };
+        let p = p.strip_prefix("tool:").unwrap_or(p);
+        if !p.is_empty() && !progs.contains(&p) {
+            progs.push(p);
+        }
+        if progs.len() == 3 {
+            break;
+        }
+    }
+    if progs.is_empty() {
+        return "captured session".to_string();
+    }
+    progs.join(", ")
+}
+
 /// kebab-case a session title into a workflow name suggestion.
 pub fn suggest_name(title: &str) -> String {
     let name: String = title
@@ -230,5 +300,44 @@ mod tests {
     fn list_pending_empty_dir_is_empty() {
         let tmp = tempfile::TempDir::new().unwrap();
         assert!(list_pending(tmp.path(), 5).is_empty());
+    }
+
+    #[test]
+    fn clean_title_keeps_a_plain_sentence() {
+        assert_eq!(clean_title(Some("deploy the api"), &[]), "deploy the api");
+    }
+
+    #[test]
+    fn clean_title_drops_noise_and_falls_back_to_programs() {
+        let steps = vec!["git status".to_string(), "cargo build".to_string()];
+        // multi-line paste → first line only
+        assert_eq!(
+            clean_title(Some("fix the gate\nand also…"), &steps),
+            "fix the gate"
+        );
+        // slash command → the argument, or the fallback when there is none
+        assert_eq!(
+            clean_title(Some("/mur-out review inbox"), &steps),
+            "review inbox"
+        );
+        assert_eq!(clean_title(Some("/mur-out"), &steps), "git, cargo");
+        // system-injected blob is never a title
+        assert_eq!(
+            clean_title(Some("<task-notification>…"), &steps),
+            "git, cargo"
+        );
+        assert_eq!(clean_title(None, &steps), "git, cargo");
+        assert_eq!(clean_title(None, &[]), "captured session");
+    }
+
+    #[test]
+    fn clean_title_caps_length_on_a_word_boundary() {
+        let long = "word ".repeat(40);
+        let t = clean_title(Some(&long), &[]);
+        assert!(t.chars().count() <= TITLE_MAX, "{t:?}");
+        assert!(t.ends_with("word"), "{t:?}");
+        // a single unbreakable word still gets cut
+        let blob = "x".repeat(200);
+        assert_eq!(clean_title(Some(&blob), &[]).chars().count(), TITLE_MAX);
     }
 }
