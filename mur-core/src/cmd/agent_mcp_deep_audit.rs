@@ -80,11 +80,18 @@ fn hash_tree(root: &Path) -> Result<BTreeMap<String, String>> {
             if meta.is_dir() {
                 stack.push(path);
             } else if meta.is_file() {
+                // Normalise separators so a key means the same thing on every
+                // platform: the two trees being compared are always local, but
+                // the paths also land in user-facing output and in tests, and
+                // `a\b\c` vs `a/b/c` is a difference nobody wants to reason
+                // about.
                 let rel = path
                     .strip_prefix(root)
                     .unwrap_or(&path)
-                    .display()
-                    .to_string();
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("/");
                 let hash = crate::cmd::agent_mcp_pin::compute_binary_sha256(&path)
                     .with_context(|| format!("hash {}", path.display()))?;
                 out.insert(rel, hash);
@@ -262,7 +269,12 @@ mod tests {
         std::os::unix::fs::symlink(d.path().join("top.js"), d.path().join("link.js")).unwrap();
 
         let t = hash_tree(d.path()).unwrap();
-        assert!(t.contains_key("a/b/c/f.js"), "nested files must be walked");
+        assert!(
+            t.contains_key("a/b/c/f.js"),
+            "nested files must be walked, with `/` keys on every platform \
+             (Windows CI caught this one); got {:?}",
+            t.keys().collect::<Vec<_>>(),
+        );
         assert!(t.contains_key("top.js"));
         #[cfg(unix)]
         assert!(
