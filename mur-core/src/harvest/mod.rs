@@ -90,6 +90,21 @@ pub fn scan_in_dirs(
         if steps.iter().all(|s| s.starts_with("tool:")) {
             continue;
         }
+        let duration_secs = match (events.first(), events.last()) {
+            (Some(f), Some(l)) if l.timestamp >= f.timestamp => {
+                ((l.timestamp - f.timestamp) / 1000) as i64
+            }
+            _ => 0,
+        };
+        let shape = gate::shape_gate(&steps, duration_secs, meta.marked, cfg);
+        if !shape.pass {
+            tracing::debug!(
+                "harvest shape gate skipped session {}: {}",
+                id,
+                shape.reason
+            );
+            continue;
+        }
         let skeleton = skeleton::skeletonize_steps(&steps);
 
         let similar_to = existing_workflow_steps
@@ -99,13 +114,7 @@ pub fn scan_in_dirs(
             .max_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(name, _)| name.clone());
 
-        let title = meta.title.clone().unwrap_or_else(|| id.clone());
-        let duration_secs = match (events.first(), events.last()) {
-            (Some(f), Some(l)) if l.timestamp >= f.timestamp => {
-                ((l.timestamp - f.timestamp) / 1000) as i64
-            }
-            _ => 0,
-        };
+        let title = proposal::clean_title(meta.title.as_deref(), &steps);
         // Project the session ran in (repo root), for project-local skill scope.
         let project = events
             .iter()
