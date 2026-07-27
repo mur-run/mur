@@ -397,6 +397,30 @@ pub struct McpPackagePin {
     pub provenance: Option<String>,
 }
 
+impl McpPackagePin {
+    /// Name of the lockfile whose hash is `lockfile_sha256`.
+    ///
+    /// npm writes `package-lock.json` itself; for PyPI, MUR generates one with
+    /// `uv pip compile --generate-hashes`, which records a sha256 for every
+    /// package in the resolved tree — the same property that lets one small
+    /// file stand in for the whole install.
+    pub fn lockfile_name(&self) -> &'static str {
+        match self.runner.as_str() {
+            "pypi" => "requirements.lock",
+            _ => "package-lock.json",
+        }
+    }
+
+    /// Absolute path of the lockfile this pin covers.
+    ///
+    /// The startup check, `inspect`, and the deep audit all resolve it through
+    /// here, so a newly supported ecosystem cannot end up verified against the
+    /// wrong file in one of them and silently pass.
+    pub fn lockfile_path(&self) -> std::path::PathBuf {
+        std::path::Path::new(&self.install_dir).join(self.lockfile_name())
+    }
+}
+
 /// Authentication scheme for a remote (HTTP) MCP server.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "kind")]

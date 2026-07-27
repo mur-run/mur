@@ -247,7 +247,7 @@ pub fn binary_status(entry: &mur_common::agent::McpServerEntry) -> InspectStatus
     // `node` that runs it — check that first, or the interpreter branch below
     // would report the one verifiable shape as unprotected.
     if let Some(pkg) = &entry.package {
-        let lock = std::path::Path::new(&pkg.install_dir).join("package-lock.json");
+        let lock = pkg.lockfile_path();
         let Ok(actual) = compute_binary_sha256(&lock) else {
             return InspectStatus::BinaryMissing;
         };
@@ -306,19 +306,30 @@ pub fn inspect_one(entry: &mur_common::agent::McpServerEntry) -> InspectStatus {
             pkg.name, pkg.version, pkg.runner
         );
         println!("  install dir:    {}", pkg.install_dir);
-        match pkg.signatures_missing {
-            Some(0) => println!("  signatures:     all verified against the registry at install"),
-            Some(n) => {
-                println!("  signatures:     verified, except {n} package(s) publishing none")
+        // npm-specific findings, in npm's terms. A PyPI install verifies every
+        // hash through uv at install time and is never asked about
+        // attestations, so borrowing this wording would report checks that
+        // never ran.
+        if pkg.runner == "pypi" {
+            println!("  hashes:         verified by uv at install (--require-hashes)");
+            println!("  provenance:     not queried for PyPI");
+        } else {
+            match pkg.signatures_missing {
+                Some(0) => {
+                    println!("  signatures:     all verified against the registry at install")
+                }
+                Some(n) => {
+                    println!("  signatures:     verified, except {n} package(s) publishing none")
+                }
+                None => println!("  signatures:     not audited at install"),
             }
-            None => println!("  signatures:     not audited at install"),
-        }
-        match &pkg.provenance {
-            Some(p) => println!("  provenance:     {p}"),
-            None => println!("  provenance:     none published by this release"),
+            match &pkg.provenance {
+                Some(p) => println!("  provenance:     {p}"),
+                None => println!("  provenance:     none published by this release"),
+            }
         }
         println!("  pinned lock:    {}", pkg.lockfile_sha256);
-        let lock = std::path::Path::new(&pkg.install_dir).join("package-lock.json");
+        let lock = pkg.lockfile_path();
         let Ok(actual) = compute_binary_sha256(&lock) else {
             println!("  current lock:   <not readable — install missing?>");
             println!(
@@ -514,10 +525,7 @@ pub fn cmd_mcp_inspect(
             match &entry.package {
                 Some(pkg) => {
                     println!();
-                    let clean = crate::cmd::agent_mcp_deep_audit::report(
-                        &entry.name,
-                        std::path::Path::new(&pkg.install_dir),
-                    );
+                    let clean = crate::cmd::agent_mcp_deep_audit::report(&entry.name, pkg);
                     if !clean {
                         worst = worst.max(InspectStatus::BinaryDrift as u8);
                     }

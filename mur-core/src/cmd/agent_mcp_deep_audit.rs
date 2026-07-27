@@ -22,13 +22,15 @@
 //!
 //! ## What it compares
 //!
-//! Regular files under `node_modules`, by content. Symlinks (npm's `.bin`
+//! Regular files under the installed tree (`node_modules` for npm,
+//! `venv/lib/python*/site-packages` for PyPI), by content. Symlinks (npm's `.bin`
 //! shims) are skipped: they are regenerated per install and their targets are
 //! derived from the same package metadata already covered by the lockfile.
 //! A tampered shim is therefore out of scope for this pass, and saying so is
 //! better than implying a coverage that isn't there.
 
 use anyhow::{Context, Result, bail};
+use mur_common::agent::McpPackagePin;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -155,26 +157,88 @@ fn reinstall_from_lockfile(install_dir: &Path, scratch: &Path) -> Result<()> {
 ///
 /// Returns the differences; an empty vec means the install matches a clean one
 /// byte for byte.
-pub fn audit_vendored_install(install_dir: &Path) -> Result<Vec<Difference>> {
-    if !install_dir.join("package-lock.json").is_file() {
+pub fn audit_vendored_install(pin: &McpPackagePin) -> Result<Vec<Difference>> {
+    let install_dir = Path::new(&pin.install_dir);
+    if !pin.lockfile_path().is_file() {
         bail!(
-            "no lockfile at {} — nothing to re-derive from",
+            "no {} at {} — nothing to re-derive from",
+            pin.lockfile_name(),
             install_dir.display(),
         );
     }
     let scratch = tempfile::tempdir().context("create audit scratch dir")?;
-    reinstall_from_lockfile(install_dir, scratch.path())?;
+    let (installed_subdir, fresh_subdir) = match pin.runner.as_str() {
+        "pypi" => {
+            uv_reinstall_from_lockfile(install_dir, scratch.path())?;
+            (site_packages(install_dir)?, site_packages(scratch.path())?)
+        }
+        _ => {
+            reinstall_from_lockfile(install_dir, scratch.path())?;
+            (
+                install_dir.join("node_modules"),
+                scratch.path().join("node_modules"),
+            )
+        }
+    };
 
-    let on_disk = hash_tree(&install_dir.join("node_modules"))?;
-    let fresh = hash_tree(&scratch.path().join("node_modules"))?;
+    let on_disk = hash_tree(&installed_subdir)?;
+    let fresh = hash_tree(&fresh_subdir)?;
     Ok(diff_trees(&on_disk, &fresh))
 }
 
+/// Reinstall the pinned Python set into `scratch`'s own venv.
+///
+/// `--require-hashes` means uv re-verifies every hash in the lockfile as it
+/// installs, so a package whose bytes changed upstream fails here rather than
+/// showing up as a diff.
+fn uv_reinstall_from_lockfile(install_dir: &Path, scratch: &Path) -> Result<()> {
+    let lock = install_dir.join("requirements.lock");
+    std::fs::copy(&lock, scratch.join("requirements.lock"))
+        .with_context(|| format!("copy {} into the audit scratch dir", lock.display()))?;
+    let out = std::process::Command::new("uv")
+        .args(["venv", "venv", "--quiet"])
+        .current_dir(scratch)
+        .output()
+        .map_err(|e| anyhow::anyhow!("run uv venv: {e} (is uv on PATH?)"))?;
+    if !out.status.success() {
+        bail!(
+            "uv venv failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let out = std::process::Command::new("uv")
+        .args(["pip", "install", "--python"])
+        .arg(scratch.join("venv").join("bin").join("python"))
+        .args(["--require-hashes", "-r", "requirements.lock", "--quiet"])
+        .current_dir(scratch)
+        .output()
+        .map_err(|e| anyhow::anyhow!("run uv pip install: {e}"))?;
+    if !out.status.success() {
+        bail!(
+            "uv reinstall from the pinned lockfile failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim(),
+        );
+    }
+    Ok(())
+}
+
+/// A venv's `site-packages`, whose path carries the interpreter version.
+fn site_packages(root: &Path) -> Result<std::path::PathBuf> {
+    let lib = root.join("venv").join("lib");
+    let entry = std::fs::read_dir(&lib)
+        .with_context(|| format!("read {}", lib.display()))?
+        .filter_map(|e| e.ok())
+        .find(|e| e.file_name().to_string_lossy().starts_with("python"))
+        .ok_or_else(|| anyhow::anyhow!("no python*/ under {}", lib.display()))?;
+    Ok(entry.path().join("site-packages"))
+}
+
 /// Render the audit for one entry. Returns true when the tree is clean.
-pub fn report(server_name: &str, install_dir: &Path) -> bool {
+pub fn report(server_name: &str, pin: &McpPackagePin) -> bool {
+    let install_dir = Path::new(&pin.install_dir);
     println!("Deep audit of `{server_name}` ({})", install_dir.display());
-    println!("  reinstalling from the pinned lockfile…");
-    match audit_vendored_install(install_dir) {
+    println!("  reinstalling from the pinned {}…", pin.lockfile_name());
+    match audit_vendored_install(pin) {
         Ok(diffs) if diffs.is_empty() => {
             println!("  status:         CLEAN — matches a fresh install of the same lockfile");
             true
@@ -293,10 +357,37 @@ mod tests {
         );
     }
 
+    fn pin_for(dir: &Path, runner: &str) -> McpPackagePin {
+        McpPackagePin {
+            runner: runner.into(),
+            name: "x".into(),
+            version: "1".into(),
+            install_dir: dir.display().to_string(),
+            lockfile_sha256: "h".into(),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn auditing_without_a_lockfile_is_an_error_not_a_clean_verdict() {
         let d = tempfile::tempdir().unwrap();
-        let err = audit_vendored_install(d.path()).unwrap_err().to_string();
-        assert!(err.contains("no lockfile"), "got: {err}");
+        let err = audit_vendored_install(&pin_for(d.path(), "npm"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("package-lock.json"), "got: {err}");
+    }
+
+    /// The error has to name the runner's own lockfile. Looking for
+    /// `package-lock.json` in a Python install would find nothing — and a
+    /// missing file reads as "install gone", so the mistake would pass quietly
+    /// instead of failing.
+    #[test]
+    fn the_missing_lockfile_error_names_the_runners_own_file() {
+        let d = tempfile::tempdir().unwrap();
+        let err = audit_vendored_install(&pin_for(d.path(), "pypi"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("requirements.lock"), "got: {err}");
+        assert!(!err.contains("package-lock.json"), "got: {err}");
     }
 }

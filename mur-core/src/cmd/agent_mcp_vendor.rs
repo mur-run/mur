@@ -49,6 +49,189 @@ pub fn lockfile_sha256(install_dir: &Path) -> Result<String> {
         .with_context(|| format!("hash {}", lock.display()))
 }
 
+// ── PyPI / uv ───────────────────────────────────────────────────────────────
+//
+// Same shape as the npm path, one ecosystem over:
+//
+//   requirements.lock  ← `uv pip compile --generate-hashes` (a sha256 per
+//                        package across the resolved tree)
+//   venv/              ← `uv pip install --require-hashes`, which verifies
+//                        every one of those hashes as it installs — a check
+//                        npm's install does not perform
+//   launch             ← `venv/bin/<console-script>`
+//
+// A venv rather than `--target`: scripts written into a `--target` directory
+// do a bare `from pkg import main` with no `sys.path` handling, so they only
+// run when PYTHONPATH points at the target — and `McpServerEntry` has no env
+// to set it in. A venv's script execs the venv's own interpreter and runs from
+// anywhere with an empty environment.
+
+/// Resolve `name==version` into `requirements.lock` with a hash per package.
+fn uv_compile(dir: &Path, name: &str, version: &str) -> Result<()> {
+    std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    std::fs::write(dir.join("requirements.in"), format!("{name}=={version}\n"))
+        .context("write requirements.in")?;
+    let out = std::process::Command::new("uv")
+        .args([
+            "pip",
+            "compile",
+            "requirements.in",
+            "--generate-hashes",
+            "-o",
+            "requirements.lock",
+            "--quiet",
+        ])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| anyhow::anyhow!("run uv pip compile: {e} (is uv on PATH?)"))?;
+    if !out.status.success() {
+        bail!(
+            "uv could not resolve {name}=={version}: {}",
+            String::from_utf8_lossy(&out.stderr).trim(),
+        );
+    }
+    Ok(())
+}
+
+/// Create the venv and install the locked set into it, hashes enforced.
+fn uv_install(dir: &Path) -> Result<PathBuf> {
+    let venv = dir.join("venv");
+    let out = std::process::Command::new("uv")
+        .args(["venv", "venv", "--quiet"])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| anyhow::anyhow!("run uv venv: {e}"))?;
+    if !out.status.success() {
+        bail!(
+            "uv venv failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let python = venv.join("bin").join("python");
+    let out = std::process::Command::new("uv")
+        .args(["pip", "install", "--python"])
+        .arg(&python)
+        .args(["--require-hashes", "-r", "requirements.lock", "--quiet"])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| anyhow::anyhow!("run uv pip install: {e}"))?;
+    if !out.status.success() {
+        bail!(
+            "uv pip install failed (hashes are enforced, so this includes a \
+             hash mismatch): {}",
+            String::from_utf8_lossy(&out.stderr).trim(),
+        );
+    }
+    Ok(venv)
+}
+
+/// Find the console script the package installed into the venv.
+///
+/// Read from the package's own `entry_points.txt` rather than guessing at
+/// `bin/<name>`: a distribution's script is frequently named differently from
+/// the distribution (`mcp-server-time` vs `mcp_server_time`), and picking the
+/// wrong file would launch someone else's program.
+fn resolve_console_script(venv: &Path, name: &str) -> Result<PathBuf> {
+    let normalized = name.to_lowercase().replace(['-', '.'], "_");
+    let site = glob_site_packages(venv)?;
+    let mut entry_points = None;
+    for entry in std::fs::read_dir(&site)
+        .with_context(|| format!("read {}", site.display()))?
+        .filter_map(|e| e.ok())
+    {
+        let file_name = entry.file_name().to_string_lossy().to_lowercase();
+        if file_name.ends_with(".dist-info")
+            && file_name
+                .replace('-', "_")
+                .starts_with(&format!("{normalized}_"))
+        {
+            entry_points = Some(entry.path().join("entry_points.txt"));
+            break;
+        }
+    }
+    let ep = entry_points
+        .filter(|p| p.is_file())
+        .ok_or_else(|| anyhow::anyhow!("`{name}` installed no entry_points.txt to launch from"))?;
+
+    let body = std::fs::read_to_string(&ep).with_context(|| format!("read {}", ep.display()))?;
+    let scripts = console_scripts(&body);
+    let script = match scripts.len() {
+        0 => bail!("`{name}` declares no console script, so there is nothing to launch"),
+        1 => scripts[0].clone(),
+        _ => bail!(
+            "`{name}` declares {} console scripts ({}); vendoring needs exactly one",
+            scripts.len(),
+            scripts.join(", "),
+        ),
+    };
+    let path = venv.join("bin").join(&script);
+    if !path.is_file() {
+        bail!(
+            "console script `{script}` is missing from {}",
+            venv.display()
+        );
+    }
+    path.canonicalize()
+        .with_context(|| format!("canonicalize {}", path.display()))
+}
+
+/// Script names under `[console_scripts]` in an `entry_points.txt`.
+fn console_scripts(body: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_section = false;
+    for line in body.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_section = line == "[console_scripts]";
+            continue;
+        }
+        if in_section && let Some((name, _)) = line.split_once('=') {
+            let name = name.trim();
+            if !name.is_empty() {
+                out.push(name.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// The venv's `site-packages`, whose path carries the interpreter version.
+fn glob_site_packages(venv: &Path) -> Result<PathBuf> {
+    let lib = venv.join("lib");
+    let entry = std::fs::read_dir(&lib)
+        .with_context(|| format!("read {}", lib.display()))?
+        .filter_map(|e| e.ok())
+        .find(|e| e.file_name().to_string_lossy().starts_with("python"))
+        .ok_or_else(|| anyhow::anyhow!("no python*/ under {}", lib.display()))?;
+    Ok(entry.path().join("site-packages"))
+}
+
+/// Vendor a PyPI package: resolve with hashes, install into a venv that
+/// verifies them, and point the entry at the console script.
+fn vendor_python(entry: &mut McpServerEntry, dir: &Path, name: &str, version: &str) -> Result<()> {
+    uv_compile(dir, name, version)?;
+    let venv = uv_install(dir)?;
+    let script = resolve_console_script(&venv, name)?;
+    let lock = crate::cmd::agent_mcp_pin::compute_binary_sha256(&dir.join("requirements.lock"))
+        .context("hash requirements.lock")?;
+
+    entry.command = script.display().to_string();
+    entry.args = vec![];
+    entry.binary_sha256 = None;
+    entry.package = Some(McpPackagePin {
+        runner: "pypi".into(),
+        name: name.to_string(),
+        version: version.to_string(),
+        install_dir: dir.display().to_string(),
+        lockfile_sha256: lock,
+        // uv enforced every hash during install; there is no separate registry
+        // signature step to record, and PyPI attestations aren't queried here.
+        signatures_missing: None,
+        provenance: None,
+    });
+    Ok(())
+}
+
 /// Install `name@version` into `dir` with npm, scripts disabled.
 fn npm_install(dir: &Path, name: &str, version: &str) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
@@ -235,6 +418,13 @@ pub fn vendor_entry(
     version: &str,
 ) -> Result<PathBuf> {
     let dir = install_dir(mur_home, agent, &entry.name);
+    if matches!(
+        mur_common::mcp_package::runner_for(&entry.command),
+        Some(mur_common::mcp_package::Runner::Python)
+    ) {
+        vendor_python(entry, &dir, name, version)?;
+        return Ok(dir);
+    }
     npm_install(&dir, name, version)?;
 
     let audit = audit_signatures(&dir)?;
@@ -336,20 +526,29 @@ pub fn cmd_mcp_vendor(
     println!("  installed:   {}@{version}", pin.name);
     println!("  directory:   {}", dir.display());
     println!("  lockfile:    sha256:{}", pin.lockfile_sha256);
-    match pin.signatures_missing {
-        Some(0) => println!("  signatures:  every package verified against the registry"),
-        Some(n) => println!(
-            "  signatures:  verified, except {n} package(s) that publish none \
-             (common for older releases)"
-        ),
-        None => println!("  signatures:  not audited (npm too old, or offline)"),
-    }
-    match &pin.provenance {
-        Some(p) => println!("  provenance:  published ({p})"),
-        None => println!(
-            "  provenance:  none published — the registry can attest these bytes, \
-             but not where they were built"
-        ),
+    // These two lines describe npm-specific checks. Printing npm's wording for
+    // a PyPI install would state things that never happened — "not audited
+    // (npm too old, or offline)" when npm was never involved, and "none
+    // published" when nothing was ever asked.
+    if pin.runner == "pypi" {
+        println!("  hashes:      every package verified by uv during install (--require-hashes)");
+        println!("  provenance:  not queried for PyPI");
+    } else {
+        match pin.signatures_missing {
+            Some(0) => println!("  signatures:  every package verified against the registry"),
+            Some(n) => println!(
+                "  signatures:  verified, except {n} package(s) that publish none \
+                 (common for older releases)"
+            ),
+            None => println!("  signatures:  not audited (npm too old, or offline)"),
+        }
+        match &pin.provenance {
+            Some(p) => println!("  provenance:  published ({p})"),
+            None => println!(
+                "  provenance:  none published — the registry can attest these bytes, \
+                 but not where they were built"
+            ),
+        }
     }
     println!("\nRestart the agent to launch from the vendored copy.");
     Ok(())
@@ -533,5 +732,53 @@ mod tests {
             "no predicateType"
         );
         assert_eq!(parse_provenance("npm ERR! 404"), None);
+    }
+
+    // ── PyPI console scripts ────────────────────────────────────────────────
+
+    /// Real `entry_points.txt` from mcp-server-time, installed via uv.
+    #[test]
+    fn reads_the_console_script_from_entry_points() {
+        let body = "[console_scripts]\nmcp-server-time = mcp_server_time:main\n";
+        assert_eq!(console_scripts(body), vec!["mcp-server-time".to_string()]);
+    }
+
+    /// Other sections declare entry points that are not launchable servers;
+    /// treating a `gui_scripts` entry or a pytest plugin as the server would
+    /// launch the wrong program.
+    #[test]
+    fn only_console_scripts_count() {
+        let body = "[console_scripts]\nreal-server = pkg:main\n\n[gui_scripts]\nnot-a-server = pkg:gui\n\n[pytest11]\nplugin = pkg.plugin\n";
+        assert_eq!(console_scripts(body), vec!["real-server".to_string()]);
+    }
+
+    #[test]
+    fn several_console_scripts_are_ambiguous_and_the_caller_must_refuse() {
+        let body = "[console_scripts]\na = pkg:a\nb = pkg:b\n";
+        assert_eq!(console_scripts(body).len(), 2);
+    }
+
+    #[test]
+    fn no_console_scripts_section_yields_nothing() {
+        assert!(console_scripts("[gui_scripts]\nx = pkg:x\n").is_empty());
+        assert!(console_scripts("").is_empty());
+    }
+
+    /// The lockfile name must follow the runner. A Python entry checked against
+    /// `package-lock.json` would find no file — and a missing file reads as
+    /// "install gone", not as drift, so the mistake would pass quietly.
+    #[test]
+    fn lockfile_name_follows_the_runner() {
+        let pin = |runner: &str| McpPackagePin {
+            runner: runner.into(),
+            name: "x".into(),
+            version: "1".into(),
+            install_dir: "/tmp/i".into(),
+            lockfile_sha256: "h".into(),
+            ..Default::default()
+        };
+        assert_eq!(pin("npm").lockfile_name(), "package-lock.json");
+        assert_eq!(pin("pypi").lockfile_name(), "requirements.lock");
+        assert!(pin("pypi").lockfile_path().ends_with("requirements.lock"));
     }
 }
