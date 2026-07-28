@@ -32,6 +32,34 @@ name: B0 Eval
 # change — coverage in appearance only. Don't.
 #
 # Spec: docs/superpowers/specs/2026-05-06-b0-m11-eval-harness-design.md
+#
+# ── What a green tick here does and does not mean ─────────────────
+#
+# This job gates on whether the eval RAN, never on what it measured.
+#
+#   green  the harness completed and produced a trustworthy measurement.
+#          It says nothing about the score — the model may have been
+#          injected in many of the cases. Read the report artifact.
+#   red    the run did not produce a measurement: auth failure, bad
+#          deps, cases that would not load. Deterministic, inside this
+#          repo's control, and the shape of every defect found under
+#          #805, which is why it is the thing worth blocking on.
+#
+# The score is deliberately not a gate. It measures MUR's B0 hooks x the
+# provider's model x the attack corpus, and a release controls only the
+# first: a provider shipping a weaker model, an outage, or a rate limit
+# would block releases for reasons nobody here can fix. A gate that fires
+# for things you cannot fix is a gate that gets switched off, and then the
+# replacement never gets built.
+#
+# What actually blocks a regression in B0 enforcement is the b0_* /
+# b0_rule* integration tests, which drive the real Rust hooks, cost
+# nothing, and run on every PR in the Test job.
+#
+# If score-based blocking is ever wanted, it needs a recorded baseline and
+# a noise threshold, not a comparison against zero — these runs are
+# stochastic.
+#
 
 on:
   pull_request:
