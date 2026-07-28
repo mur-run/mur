@@ -364,9 +364,18 @@ pub struct App {
     /// Count of leading `messages` already flushed into the terminal's native
     /// scrollback via `Terminal::insert_before` (Inline mode). Only messages
     /// at index `>= flushed_upto` are still painted in the live viewport —
-    /// in practice that's at most the one currently-streaming message, since
-    /// a message is flushed the moment it stops streaming.
+    /// the newest screenful, since a message is flushed only once the live
+    /// band overflows (see `ui::flush_finished`).
     pub flushed_upto: usize,
+    /// Bytes of `messages[flushed_upto].text` already flushed into scrollback
+    /// as complete markdown blocks while that turn was still streaming (0 when
+    /// nothing of it is committed). The live band paints only what follows.
+    pub flushed_bytes: usize,
+    /// Hash of the exact committed prefix, so a message whose text was
+    /// replaced (`finish_agent_turn` installs the authoritative reply) or
+    /// dropped (`fail_turn`) can be detected instead of splicing a remainder
+    /// onto text that never had that prefix.
+    pub flushed_hash: u64,
     /// True while the Ctrl+O transcript overlay is showing. The overlay
     /// stays in raw mode/alt-screen and keys route through the normal event
     /// loop (`overlay_key_action`) instead of a blocking stdin read.
@@ -500,6 +509,8 @@ impl App {
             needs_full_redraw: false,
             render_mode: RenderMode::Inline,
             flushed_upto: 0,
+            flushed_bytes: 0,
+            flushed_hash: 0,
             overlay_open: false,
             overlay_text: None,
             last_ctrl_c_at: None,
@@ -991,6 +1002,7 @@ impl App {
         self.channel = None;
         self.messages.clear();
         self.flushed_upto = 0;
+        self.flushed_bytes = 0;
         self.needs_full_redraw = true;
         self.context_task_id = None;
         self.current_task_id = None;
@@ -1015,6 +1027,7 @@ impl App {
         self.channel = None;
         self.messages.clear();
         self.flushed_upto = 0;
+        self.flushed_bytes = 0;
         self.context_task_id = None;
         self.current_task_id = None;
         self.streaming = false;
