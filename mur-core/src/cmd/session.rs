@@ -730,10 +730,37 @@ async fn cmd_out_execute(action: &str, force: bool) -> anyhow::Result<()> {
             }
         }
         "skip" => {
-            eprintln!("Done.");
+            // Say what actually happened. "Done." reads like the inbox was
+            // dealt with; skip touches nothing, and the session-start hook
+            // brings the same proposals back tomorrow.
+            let inbox = crate::harvest::proposal::inbox_dir();
+            match crate::harvest::proposal::pending_in_dir(&inbox) {
+                Ok(p) if !p.is_empty() => eprintln!(
+                    "Skipped — {} proposal(s) still pending. `mur out --action reject` dismisses them.",
+                    p.len()
+                ),
+                _ => eprintln!("Done."),
+            }
+        }
+        "reject" => {
+            let inbox = crate::harvest::proposal::inbox_dir();
+            let dismissed = crate::harvest::proposal::dismiss_pending_in_dir(&inbox)?;
+            if dismissed.is_empty() {
+                eprintln!("No pending proposals to reject.");
+            } else {
+                eprintln!("Dismissed {} proposal(s):", dismissed.len());
+                for (id, title) in &dismissed {
+                    let short: String = id.chars().take(8).collect();
+                    let line = title.lines().next().unwrap_or("").trim();
+                    eprintln!("  {short}  {line}");
+                }
+            }
         }
         _ => {
-            anyhow::bail!("Unknown action '{}'. Use: analyze, export, skip", action);
+            anyhow::bail!(
+                "Unknown action '{}'. Use: analyze, export, skip, reject",
+                action
+            );
         }
     }
 

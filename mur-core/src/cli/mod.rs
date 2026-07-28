@@ -268,7 +268,7 @@ see `mur skill <command> --help`.")]
     /// Stop session recording with post-session menu (shorthand for session stop + next action)
     #[command(hide = true)]
     Out {
-        /// Action to perform: analyze, export, skip (skips menu in non-TTY mode)
+        /// Action to perform: analyze, export, skip, reject (skips menu in non-TTY mode)
         #[arg(long)]
         action: Option<String>,
         /// Force LLM analysis even for short sessions
