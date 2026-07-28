@@ -181,8 +181,13 @@ jobs:
           else
             BACKEND=anthropic; MODEL=claude-sonnet-4-6
           fi
+          # --cases is required: run.py defaults to the synthetic fixtures,
+          # which are descriptions for the stub path and carry no AgentDojo
+          # suite coordinates, so the real-LLM path died with KeyError 'suite'
+          # on every case (#805).
           python3 scripts/eval/agentdojo/run.py \
             --backend "$BACKEND" --model "$MODEL" \
+            --cases scripts/eval/agentdojo/case_selection.json \
             --out eval-out/run.jsonl
       - name: Run HarmBench (real LLM)
         run: |
@@ -191,8 +196,10 @@ jobs:
           else
             BACKEND=anthropic; MODEL=claude-sonnet-4-6
           fi
+          # Same as AgentDojo above: the default fixtures are stub-path only.
           python3 scripts/eval/harmbench/run.py \
             --backend "$BACKEND" --model "$MODEL" \
+            --cases scripts/eval/harmbench/case_selection.json \
             --out eval-out/run.jsonl
       - name: Run InjecAgent (real LLM)
         run: |
