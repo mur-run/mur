@@ -45,12 +45,24 @@ on:
   push:
     tags: ['v*']
   schedule:
+    # Hours are chosen to miss DeepSeek's peak-pricing window, which charges
+    # 2x on every billing item during Beijing 09:00-12:00 and 14:00-18:00
+    # (Beijing = UTC+8). The previous UTC hours landed exactly on peak
+    # starts — 01:00 UTC is 09:00 Beijing, 09:00 UTC is 17:00 Beijing — so
+    # both API-spending crons paid double for nothing. Keep any future
+    # change off-peak: safe UTC hours are 04:00-16:00 minus 06:00-10:00,
+    # i.e. 04:00-06:00 and 10:00-16:00, plus 16:00-01:00.
+    #
     # Nightly: agentdojo + harmbench + injecagent + llama-guard re-grade
-    - cron: '0 1 * * *'
-    # Weekly Monday 09:00 UTC — real-LLM track (kept for release cadence)
-    - cron: '0 9 * * 1'
-    # Weekly Sunday 02:00 UTC — cargo-fuzz 10 min per target
-    - cron: '0 2 * * 0'
+    # 17:00 UTC = 01:00 Beijing (off-peak)
+    - cron: '0 17 * * *'
+    # Weekly Monday real-LLM track (kept for release cadence)
+    # 13:00 UTC = 21:00 Beijing (off-peak)
+    - cron: '0 13 * * 1'
+    # Weekly Sunday cargo-fuzz, 10 min per target. No API spend, but moved
+    # for consistency so nobody reads 02:00 as a deliberate peak-hour choice.
+    # 19:00 UTC = 03:00 Beijing (off-peak)
+    - cron: '0 19 * * 0'
   workflow_dispatch:
     inputs:
       backend:
@@ -291,7 +303,7 @@ jobs:
   llama-guard-nightly:
     name: Llama-Guard nightly re-grade
     runs-on: [self-hosted, ollama]
-    if: github.event_name == 'schedule' && github.event.schedule == '0 1 * * *'
+    if: github.event_name == 'schedule' && github.event.schedule == '0 17 * * *'
     needs: real-llm
     steps:
       - uses: actions/checkout@v6
@@ -327,7 +339,7 @@ jobs:
     name: cargo-fuzz weekly (10 min per target)
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    if: github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0'
+    if: github.event_name == 'schedule' && github.event.schedule == '0 19 * * 0'
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@nightly
