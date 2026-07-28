@@ -131,9 +131,10 @@ pub async fn test_provider(
     let home = mur_home();
     let base = base_url.clone();
     let prov = provider.clone();
+    let prov2 = provider.clone();
     // discover_models uses reqwest::blocking — run it off the async runtime.
     let ids = tokio::task::spawn_blocking(move || {
-        model_discovery::discover_models(&base, key.as_deref(), DISCOVER_TIMEOUT_SECS)
+        model_discovery::discover_models_for(&prov2, &base, key.as_deref(), DISCOVER_TIMEOUT_SECS)
     })
     .await
     .map_err(|e| format!("discovery task failed: {e}"))?

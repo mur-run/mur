@@ -66,21 +66,58 @@ fn models_url(base_url: &str) -> String {
     }
 }
 
-/// Discover available models via HTTP GET to `{base}/v1/models`.
-///
-/// Best-effort with timeout. If API key is provided and non-empty, sends `Authorization: Bearer <key>`.
-/// Returns model IDs extracted from the response envelope.
+/// Registry provider key whose API authenticates the non-OpenAI way.
+pub const ANTHROPIC_PROVIDER: &str = "anthropic";
+/// Anthropic requires a dated API version on every request. Pinned, not
+/// configurable: it selects a wire contract, so it moves with the code that
+/// parses the response, never with user config.
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+/// Auth headers for `provider`. Anthropic rejects `Authorization: Bearer` — it
+/// takes `x-api-key` plus `anthropic-version`. Everything else we talk to is
+/// OpenAI-compatible. Keyed off the provider, not the host, so an Anthropic
+/// endpoint reached through a proxy (`ANTHROPIC_BASE_URL`) still authenticates.
+fn auth_headers(provider: &str, api_key: Option<&str>) -> Vec<(&'static str, String)> {
+    let Some(k) = api_key.filter(|k| !k.is_empty()) else {
+        return Vec::new();
+    };
+    if provider.eq_ignore_ascii_case(ANTHROPIC_PROVIDER) {
+        vec![
+            ("x-api-key", k.to_string()),
+            ("anthropic-version", ANTHROPIC_VERSION.to_string()),
+        ]
+    } else {
+        vec![("Authorization", format!("Bearer {k}"))]
+    }
+}
+
+/// Discover available models via HTTP GET to `{base}/v1/models`, assuming
+/// OpenAI-compatible Bearer auth. Use [`discover_models_for`] when the
+/// provider is known.
 #[allow(dead_code)]
 pub fn discover_models(
     base_url: &str,
     api_key: Option<&str>,
     timeout_secs: u64,
 ) -> Result<Vec<String>> {
+    discover_models_for("", base_url, api_key, timeout_secs)
+}
+
+/// Discover available models for `provider` via HTTP GET to `{base}/v1/models`.
+///
+/// Best-effort with timeout. A non-empty API key is sent with whichever auth
+/// header the provider expects (see [`auth_headers`]).
+/// Returns model IDs extracted from the response envelope.
+#[allow(dead_code)]
+pub fn discover_models_for(
+    provider: &str,
+    base_url: &str,
+    api_key: Option<&str>,
+    timeout_secs: u64,
+) -> Result<Vec<String>> {
     let url = models_url(base_url);
     let url_for_err = url.clone();
-    let bearer = api_key
-        .filter(|k| !k.is_empty())
-        .map(|k| format!("Bearer {k}"));
+    let headers = auth_headers(provider, api_key);
 
     // `reqwest::blocking` panics if constructed inside a Tokio runtime context
     // (the CLI's `block_on`, or a `spawn_blocking` worker which carries a
@@ -91,8 +128,8 @@ pub fn discover_models(
             .timeout(Duration::from_secs(timeout_secs))
             .build()?;
         let mut rb = client.get(url);
-        if let Some(b) = bearer {
-            rb = rb.header("Authorization", b);
+        for (name, value) in headers {
+            rb = rb.header(name, value);
         }
         // A 401/404 still has a body; without this check it parses to an empty
         // list and the caller reads "reachable, zero models" instead of "auth
@@ -212,6 +249,23 @@ pub fn probe_local(timeout_secs: u64) -> Vec<DetectedLocal> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auth_header_style_follows_the_provider() {
+        // Anthropic: x-api-key + version, never Bearer (a Bearer request 401s).
+        let a = auth_headers(ANTHROPIC_PROVIDER, Some("k"));
+        assert_eq!(a[0], ("x-api-key", "k".to_string()));
+        assert_eq!(a[1].0, "anthropic-version");
+        assert!(!a.iter().any(|(n, _)| *n == "Authorization"));
+        // Everyone else is OpenAI-compatible.
+        assert_eq!(
+            auth_headers("openai", Some("k")),
+            vec![("Authorization", "Bearer k".to_string())]
+        );
+        // No key (local runtimes) → no auth header at all.
+        assert!(auth_headers("ollama", None).is_empty());
+        assert!(auth_headers(ANTHROPIC_PROVIDER, Some("")).is_empty());
+    }
 
     #[test]
     fn parses_openai_envelope() {
