@@ -63,7 +63,8 @@ pub fn read(lock_path: &Path) -> std::io::Result<Option<LockFile>> {
 /// On Unix uses `kill(pid, 0)` — signal 0 is a no-op probe that checks
 /// process existence and permission without delivering any signal.
 ///
-/// On Windows uses `OpenProcess` with `PROCESS_QUERY_LIMITED_INFORMATION`.
+/// On Windows uses `OpenProcess` with `PROCESS_QUERY_LIMITED_INFORMATION`,
+/// then `GetExitCodeProcess` — an openable handle is NOT proof of life.
 ///
 /// On other platforms returns `true` (optimistically treat any present lock
 /// as live, since P0a agents are not supported there).
@@ -76,15 +77,34 @@ pub fn pid_alive(pid: u32) -> bool {
 
 #[cfg(windows)]
 pub fn pid_alive(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: OpenProcess/GetExitCodeProcess/CloseHandle are safe to call with
+    // any pid; the handle is closed on every path out.
     unsafe {
         let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if h.is_null() {
             return false;
         }
+        // A terminated process stays openable until the last handle to it is
+        // closed — Windows' equivalent of a zombie. Treating a non-null handle
+        // as "alive" therefore reports a just-crashed agent as running, and
+        // `clear_runtime_state` then refuses to clear its stale lock. Ask for
+        // the exit code instead: only STILL_ACTIVE means running. (Known
+        // Windows caveat: a process that exits with code 259 is
+        // indistinguishable from a running one. Our runtimes never exit 259,
+        // and the failure direction is the conservative one — a lock kept, not
+        // a live process's lock deleted.)
+        let mut code: u32 = 0;
+        let queried = GetExitCodeProcess(h, &mut code);
         CloseHandle(h);
-        true
+        // If the query itself fails we cannot tell, so claim alive: keeping a
+        // dead process's lock costs the user one manual clear, while deleting
+        // a live one's lock lets a second supervisor run against the same agent
+        // home (#790).
+        queried == 0 || code == STILL_ACTIVE as u32
     }
 }
 
