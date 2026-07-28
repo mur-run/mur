@@ -434,7 +434,7 @@ pub enum SessionAction {
     },
     /// Stop session recording with post-session menu
     Out {
-        /// Action to perform: analyze, export, skip
+        /// Action to perform: analyze, export, skip, reject
         #[arg(long)]
         action: Option<String>,
         /// Force LLM analysis even for short sessions
