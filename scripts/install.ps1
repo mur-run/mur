@@ -55,9 +55,15 @@ try {
     Expand-Archive -Path (Join-Path $tmp $asset) -DestinationPath $tmp -Force
     $exe = Get-ChildItem -Path $tmp -Recurse -Filter 'mur.exe' | Select-Object -First 1
     if (-not $exe) { throw 'Archive did not contain mur.exe' }
-    Move-Item -Force -Path $exe.FullName -Destination (Join-Path $installDir 'mur.exe')
-    $mcpexe = Get-ChildItem -Path $tmp -Recurse -Filter 'mur-mcp-server.exe' | Select-Object -First 1
-    if ($mcpexe) { Move-Item -Force -Path $mcpexe.FullName -Destination (Join-Path $installDir 'mur-mcp-server.exe') }
+    # Keep this list in sync with the Homebrew formula's `install` block.
+    # Optional entries are skipped when an older release did not ship them.
+    foreach ($name in 'mur', 'mur-mcp-server', 'murmurd', 'mur-agent-runtime') {
+        $found = Get-ChildItem -Path $tmp -Recurse -Filter "$name.exe" | Select-Object -First 1
+        if ($found) { Move-Item -Force -Path $found.FullName -Destination (Join-Path $installDir "$name.exe") }
+    }
+    # `murmur` is argv[0] shorthand for `mur agent cli` (BusyBox convention).
+    # ponytail: copy, not a symlink — those need Developer Mode or admin on Windows.
+    Copy-Item -Force -Path (Join-Path $installDir 'mur.exe') -Destination (Join-Path $installDir 'murmur.exe')
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
