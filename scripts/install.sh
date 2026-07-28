@@ -110,9 +110,15 @@ fi
 # --- Extract + install ---
 tar -xzf "$TMP/$ASSET" -C "$TMP"
 [ -f "$TMP/mur" ] || die "Archive did not contain a mur binary."
-chmod +x "$TMP/mur" "$TMP/mur-mcp-server"
-mv "$TMP/mur" "$INSTALL_DIR/mur"
-mv "$TMP/mur-mcp-server" "$INSTALL_DIR/mur-mcp-server"
+# Keep this list in sync with the Homebrew formula's `install` block.
+# Optional entries are skipped when an older release did not ship them.
+for b in mur mur-mcp-server murmurd mur-agent-runtime; do
+    [ -f "$TMP/$b" ] || continue
+    chmod +x "$TMP/$b"
+    mv "$TMP/$b" "$INSTALL_DIR/$b"
+done
+# `murmur` is argv[0] shorthand for `mur agent cli` (BusyBox convention).
+ln -sfn mur "$INSTALL_DIR/murmur"
 
 # --- PATH check ---
 case ":$PATH:" in
