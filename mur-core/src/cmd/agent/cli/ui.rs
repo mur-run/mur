@@ -331,33 +331,23 @@ fn render_chooser_band(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-/// Draws the transcript pane and returns its *ideal* height (content rows +
-/// borders, unclamped by `area`) — the caller uses this to shrink the inline
-/// viewport itself via `Terminal::resize` before the next frame. Clamped
-/// drawing still happens against `area` here so a still-oversized viewport
-/// (the frame right after content shrinks, before the resize takes effect)
-/// never panics or scrolls oddly.
 /// Fixed separator width for flushed scrollback lines: the real frame width
 /// isn't known at flush time (content prints above the inline viewport and
 /// the terminal soft-wraps it), so a modest fixed rule stands in.
 const SEPARATOR_WIDTH: usize = 60;
 
-/// Flush every settled message into the terminal's native scrollback via
-/// `Terminal::insert_before`, so the live viewport only ever paints the
-/// currently-streaming tail. A message is "settled" once it can no longer
-/// change: not itself streaming, and not the trailing entry while a turn is
-/// in progress (the tail may still gain appended text). No-op in Fullscreen
-/// mode (the overlay reads `app.messages` directly) and when nothing new has
-/// settled since the last call.
-pub fn flush_finished<B: Backend>(
-    terminal: &mut ratatui::Terminal<B>,
-    app: &mut App,
-) -> std::io::Result<()> {
-    use super::app::RenderMode;
-    if app.render_mode != RenderMode::Inline {
-        return Ok(());
-    }
-    let theme = app.theme;
+/// Rows the live transcript band can paint inside a viewport of `viewport_h`:
+/// what the `render` layout leaves after the composer, the status line, an
+/// open chooser band, and the band's own TOP/BOTTOM borders.
+fn band_inner_rows(app: &App, viewport_h: u16) -> u16 {
+    let input_h = (app.input.lines().len() as u16 + 2).clamp(3, 8);
+    let chooser_h = chooser_band_height(app, viewport_h, input_h);
+    viewport_h.saturating_sub(input_h + 1 + chooser_h + 2)
+}
+
+/// Index one past the last message that is settled AND therefore flushable:
+/// everything before the still-streaming turn.
+fn settle_end(app: &App) -> usize {
     let total = app.messages.len();
     let ceiling = if app.streaming {
         total.saturating_sub(1)
@@ -368,31 +358,136 @@ pub fn flush_finished<B: Backend>(
     while end < ceiling && !app.messages[end].streaming {
         end += 1;
     }
-    if end <= app.flushed_upto {
-        return Ok(());
-    }
+    end
+}
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    for i in app.flushed_upto..end {
-        if i > 0 {
-            if theme.show_separator {
-                lines.push(Line::styled(
-                    "─".repeat(SEPARATOR_WIDTH),
-                    Style::default().fg(theme.separator),
-                ));
-            } else {
-                lines.push(Line::default());
-            }
+fn prefix_hash(s: &str) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::hash::DefaultHasher::new();
+    h.write(s.as_bytes());
+    h.finish()
+}
+
+/// Bytes of `messages[flushed_upto].text` already committed to scrollback —
+/// or 0 when that bookkeeping no longer describes the message there.
+///
+/// It can stop describing it two ways: `finish_agent_turn` installs the
+/// authoritative reply over the streamed text, and `fail_turn` drops the
+/// streaming message outright. Both are caught by re-hashing the prefix, so a
+/// remainder is never spliced onto text that never had that prefix.
+fn effective_skip(app: &App) -> usize {
+    if app.flushed_bytes == 0 {
+        return 0;
+    }
+    let Some(m) = app.messages.get(app.flushed_upto) else {
+        return 0;
+    };
+    if m.role != Role::Agent || m.step.is_some() {
+        return 0;
+    }
+    match m.text.get(..app.flushed_bytes) {
+        Some(p) if prefix_hash(p) == app.flushed_hash => app.flushed_bytes,
+        _ => 0,
+    }
+}
+
+/// Byte offset one past the FIRST complete markdown block in `rest` (0 when
+/// there is none yet) — the next chunk of a streaming reply that can be
+/// committed to scrollback.
+///
+/// A block ends at a blank line outside a fenced code block. Committing whole
+/// blocks is what makes a chunk immutable: block-level markdown renders the
+/// same alone as it does in context, so the renderer can never want to rewrite
+/// a line that is already in scrollback and can no longer be redrawn.
+fn next_block_end(rest: &str) -> usize {
+    let mut in_fence = false;
+    let mut off = 0usize;
+    for line in rest.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+        } else if !in_fence && trimmed.is_empty() {
+            return off + line.len();
         }
-        push_message(
-            &mut lines,
-            &app.messages[i],
-            app.spinner,
-            theme,
-            app.cards_expanded,
-        );
+        off += line.len();
     }
+    0
+}
 
+/// Lines the live band paints for one message, honoring a committed prefix on
+/// the band's head message (its committed part is already in scrollback).
+fn push_live(lines: &mut Vec<Line<'static>>, app: &App, m: &ChatMsg, skip: usize) {
+    push_live_inner(lines, app, m, skip, false)
+}
+
+/// Same, but rendered the way the message will look once it SETTLES — used for
+/// every flush decision.
+///
+/// A streaming body paints raw (markdown is only parsed at finish time), and
+/// raw is taller: markdown collapses the blank lines between list items and
+/// paragraphs. Measuring raw over-commits — the band would be full while
+/// streaming and then, the moment the turn settles and re-renders shorter,
+/// short by exactly the lines markdown folded away, with no way to pull them
+/// back out of scrollback. Measuring settled means the band is exactly full
+/// after the turn; while streaming it simply tail-follows, as it always has.
+fn push_live_measured(lines: &mut Vec<Line<'static>>, app: &App, m: &ChatMsg, skip: usize) {
+    push_live_inner(lines, app, m, skip, true)
+}
+
+fn push_live_inner(
+    lines: &mut Vec<Line<'static>>,
+    app: &App,
+    m: &ChatMsg,
+    skip: usize,
+    as_settled: bool,
+) {
+    let streaming_agent = m.streaming && m.role == Role::Agent && m.step.is_none();
+    if skip == 0 && !(as_settled && streaming_agent) {
+        push_message(lines, m, app.spinner, app.theme, app.cards_expanded);
+        return;
+    }
+    if skip == 0 {
+        // Measuring a streaming turn: header + reasoning, then the settled body.
+        push_agent_header(lines, m, app.spinner, app.theme);
+    }
+    // Continuation of a partially-committed agent turn: body only, no header.
+    lines.extend(agent_body_lines(
+        m.text.get(skip..).unwrap_or(""),
+        m.streaming && !as_settled,
+        app.spinner,
+        app.theme,
+        None,
+    ));
+}
+
+/// Wrapped (physical) row count of `lines` inside the band, measured exactly
+/// the way `render_transcript` paints them (`Paragraph::line_count`, not
+/// `lines.len()`), so flush decisions stay in lock-step with the band.
+/// `outer_width` is the full pane width, before the border block trims it.
+fn band_rows(
+    theme: &'static super::theme::Theme,
+    lines: Vec<Line<'static>>,
+    outer_width: u16,
+) -> u16 {
+    if lines.is_empty() {
+        return 0;
+    }
+    let block = Block::default()
+        .borders(Borders::TOP | Borders::BOTTOM)
+        .padding(Padding::horizontal(theme.inner_padding as u16));
+    let inner_width = block.inner(Rect::new(0, 0, outer_width.max(1), 1)).width;
+    Paragraph::new(Text::from(lines))
+        .wrap(Wrap { trim: false })
+        .line_count(inner_width.max(1)) as u16
+}
+
+/// Print `lines` into the terminal's scrollback above the inline viewport.
+fn emit<B: Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+    lines: Vec<Line<'static>>,
+    pad: u16,
+    width: u16,
+) -> std::io::Result<()> {
     // Height must be the WRAPPED (physical) row count, not the logical line
     // count: `insert_before` renders into a buffer exactly `height` rows tall,
     // and `Wrap` soft-wraps any line wider than the pane into extra rows. Using
@@ -400,8 +495,6 @@ pub fn flush_finished<B: Backend>(
     // tail into the void (never reaches scrollback, so it can't be scrolled
     // back to). `Paragraph::line_count(width)` accounts for wrap + the padding
     // block. (Enabled by the `unstable-rendered-line-info` ratatui feature.)
-    let pad = theme.inner_padding as u16;
-    let width = terminal.size()?.width.max(1);
     let text = Text::from(lines);
     let block = || Block::default().padding(Padding::horizontal(pad));
     let height = (Paragraph::new(text.clone())
@@ -415,8 +508,144 @@ pub fn flush_finished<B: Backend>(
             .block(block())
             .render(buf.area, buf);
         blank_wide_char_continuations(buf);
-    })?;
-    app.flushed_upto = end;
+    })
+}
+
+/// Flush the OVERFLOW of the live band into the terminal's native scrollback
+/// via `Terminal::insert_before`: the oldest settled messages, then complete
+/// blocks of a still-streaming reply — and in both cases only as much as it
+/// takes for what remains to fit the band.
+///
+/// Why overflow and not "everything settled": the Inline viewport has a fixed
+/// height (see `viewport_h_for`), so flushing eagerly leaves the band blank and
+/// the composer sitting that many rows above the screen bottom. Keeping the
+/// band full of real content is what glues the composer to the bottom row with
+/// no gap, and it means the viewport is never resized — so none of ratatui's
+/// re-anchor paths (which can only leak blank rows into scrollback or float the
+/// viewport up) ever run.
+///
+/// A whole message is flushable once it can no longer change: not itself
+/// streaming, and not the trailing entry while a turn is in progress. A
+/// streaming reply spills block by block instead, so a long answer scrolls into
+/// native scrollback as it arrives rather than being trapped in the band.
+/// No-op in Fullscreen mode (the overlay reads `app.messages` directly) and
+/// while the band still fits.
+pub fn flush_finished<B: Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+    app: &mut App,
+    viewport_h: u16,
+) -> std::io::Result<()> {
+    use super::app::RenderMode;
+    if app.render_mode != RenderMode::Inline {
+        return Ok(());
+    }
+    let theme = app.theme;
+    let pad = theme.inner_padding as u16;
+    let width = terminal.size()?.width.max(1);
+    let cap = u32::from(band_inner_rows(app, viewport_h));
+
+    let mut skip = effective_skip(app);
+    if app.flushed_bytes > 0 && skip == 0 {
+        // The committed prefix no longer belongs to the message sitting there;
+        // forget it and let that message flush whole. A visible duplicate of
+        // the partial text beats splicing a remainder onto the wrong body.
+        app.flushed_bytes = 0;
+    }
+
+    // ── 1. whole settled messages, oldest first ────────────────────────────
+    // Per-message row counts: wrapping is per line and the band draws no
+    // separators between messages, so the band total is their sum. Summing
+    // once keeps this O(n) instead of re-measuring the whole tail per
+    // candidate index (a resize resets `flushed_upto` to 0).
+    let start = app.flushed_upto.min(app.messages.len());
+    let rows: Vec<u16> = app.messages[start..]
+        .iter()
+        .enumerate()
+        .map(|(n, m)| {
+            let mut lines = Vec::new();
+            push_live_measured(&mut lines, app, m, if n == 0 { skip } else { 0 });
+            band_rows(theme, lines, width)
+        })
+        .collect();
+    let mut total: u32 = rows.iter().map(|r| u32::from(*r)).sum();
+    let settled = settle_end(app);
+    let mut end = start;
+    while end < settled && total > cap {
+        total -= u32::from(rows[end - start]);
+        end += 1;
+    }
+    if end > start {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        for i in start..end {
+            let msg_skip = if i == start { skip } else { 0 };
+            // Separator between messages — never before a continuation, which
+            // resumes a message whose head is already in scrollback.
+            if i > 0 && msg_skip == 0 {
+                if theme.show_separator {
+                    lines.push(Line::styled(
+                        "─".repeat(SEPARATOR_WIDTH),
+                        Style::default().fg(theme.separator),
+                    ));
+                } else {
+                    lines.push(Line::default());
+                }
+            }
+            push_live(&mut lines, app, &app.messages[i], msg_skip);
+        }
+        emit(terminal, lines, pad, width)?;
+        app.flushed_upto = end;
+        app.flushed_bytes = 0;
+        skip = 0;
+    }
+
+    // ── 2. still overflowing → spill complete blocks of the streaming turn ──
+    // One block at a time, re-measuring, so the band keeps painting a full
+    // screenful instead of emptying out mid-turn.
+    while total > cap {
+        let Some(m) = app.messages.get(app.flushed_upto) else {
+            break;
+        };
+        // ponytail: reasoning turns keep the whole-message flush. `thinking`
+        // renders above the body, so committing a body block first would strand
+        // any reasoning that arrives later after it in scrollback.
+        if !m.streaming || m.role != Role::Agent || m.step.is_some() || !m.thinking.is_empty() {
+            break;
+        }
+        let rest = m.text.get(skip..).unwrap_or("");
+        let block_end = next_block_end(rest);
+        if block_end == 0 {
+            break;
+        }
+        let chunk = &rest[..block_end];
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        if skip == 0 {
+            if app.flushed_upto > 0 {
+                if theme.show_separator {
+                    lines.push(Line::styled(
+                        "─".repeat(SEPARATOR_WIDTH),
+                        Style::default().fg(theme.separator),
+                    ));
+                } else {
+                    lines.push(Line::default());
+                }
+            }
+            lines.push(Line::from(Span::styled(
+                "● agent".to_string(),
+                Style::default()
+                    .fg(theme.agent)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
+        lines.extend(agent_body_lines(chunk, false, app.spinner, theme, None));
+        emit(terminal, lines, pad, width)?;
+        skip += block_end;
+        app.flushed_bytes = skip;
+        app.flushed_hash = prefix_hash(&app.messages[app.flushed_upto].text[..skip]);
+
+        let mut live = Vec::new();
+        push_live_measured(&mut live, app, &app.messages[app.flushed_upto], skip);
+        total = u32::from(band_rows(theme, live, width));
+    }
     Ok(())
 }
 
@@ -444,42 +673,6 @@ fn blank_wide_char_continuations(buf: &mut ratatui::buffer::Buffer) {
     }
 }
 
-/// Wrapped (physical) row count of the *live* region — the still-unflushed
-/// transcript tail (`app.messages[flushed_upto..]`), soft-wrapped at the
-/// transcript pane's inner width. Same accounting as `render_transcript` and
-/// `flush_finished` (`Paragraph::line_count`, not `lines.len()`), so the
-/// dynamic viewport height in the event loop stays in lock-step with what the
-/// live region actually paints. `outer_width` is the full transcript pane
-/// width (before the TOP/BOTTOM border block trims it to inner width).
-///
-/// Returns 0 when there is nothing live to paint (all settled + flushed).
-/// The empty-transcript welcome screen is intentionally NOT measured here:
-/// `desired_viewport_h` keeps the full viewport in that case.
-pub fn live_tail_rows(app: &App, outer_width: u16) -> u16 {
-    let theme = app.theme;
-    let start = app.flushed_upto.min(app.messages.len());
-    if start >= app.messages.len() {
-        return 0;
-    }
-    let mut lines: Vec<Line> = Vec::new();
-    for m in &app.messages[start..] {
-        push_message(&mut lines, m, app.spinner, theme, app.cards_expanded);
-    }
-    if lines.is_empty() {
-        return 0;
-    }
-    // Reproduce render_transcript's block exactly so the wrapped row count
-    // matches the painted region: horizontal padding trims the same columns,
-    // and `line_count` folds in wrap + padding at the inner width.
-    let block = Block::default()
-        .borders(Borders::TOP | Borders::BOTTOM)
-        .padding(Padding::horizontal(theme.inner_padding as u16));
-    let inner_width = block.inner(Rect::new(0, 0, outer_width.max(1), 1)).width;
-    Paragraph::new(Text::from(lines))
-        .wrap(Wrap { trim: false })
-        .line_count(inner_width.max(1)) as u16
-}
-
 /// Draws the *live* region only: everything at index `< app.flushed_upto` has
 /// already been flushed into the terminal's own scrollback (see
 /// `flush_finished`), so this is at most the one currently-streaming message
@@ -500,9 +693,12 @@ fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let inner_width = inner.width;
 
     let start = app.flushed_upto.min(app.messages.len());
+    // The head message may be partially committed to scrollback already (a
+    // streaming reply spills complete blocks); paint only what follows.
+    let skip = effective_skip(app);
     let mut lines: Vec<Line> = Vec::new();
-    for m in &app.messages[start..] {
-        push_message(&mut lines, m, app.spinner, theme, app.cards_expanded);
+    for (n, m) in app.messages[start..].iter().enumerate() {
+        push_live(&mut lines, app, m, if n == 0 { skip } else { 0 });
     }
 
     if lines.is_empty() && start == 0 {
@@ -532,6 +728,83 @@ fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let offset = max_scroll - app.scroll_back;
 
     f.render_widget(output.block(block).scroll((offset, 0)), area);
+}
+
+/// Header line of an agent turn plus its reasoning block: an animated bullet
+/// while streaming, a solid one once done — so an in-progress turn reads as
+/// "live" at a glance vs. a finished one. Reasoning stays visible after the
+/// turn finishes (D5).
+fn push_agent_header(
+    lines: &mut Vec<Line<'static>>,
+    m: &ChatMsg,
+    spinner: usize,
+    theme: &'static super::theme::Theme,
+) {
+    let (bullet, header_style) = if m.streaming {
+        let spin = SPINNER[spinner % SPINNER.len()];
+        (format!("{spin} agent"), Style::default().fg(theme.agent))
+    } else {
+        (
+            "● agent".to_string(),
+            Style::default()
+                .fg(theme.agent)
+                .add_modifier(Modifier::BOLD),
+        )
+    };
+    lines.push(Line::from(Span::styled(bullet, header_style)));
+    if !m.thinking.is_empty() {
+        for l in m.thinking.lines() {
+            lines.push(Line::styled(
+                format!("{MSG_INDENT}{l}"),
+                Style::default()
+                    .fg(theme.thinking)
+                    .add_modifier(Modifier::ITALIC | Modifier::DIM),
+            ));
+        }
+    }
+}
+
+/// Body lines of an agent turn — no header, no reasoning: raw text plus a
+/// trailing spinner while streaming, markdown-rendered once settled.
+///
+/// `cached` is the markdown rendered once at finish time for the WHOLE message
+/// (`ChatMsg::rendered`); pass `None` when rendering a slice of it, so the
+/// slice gets its own render instead of the whole reply's.
+fn agent_body_lines(
+    text: &str,
+    streaming: bool,
+    spinner: usize,
+    theme: &'static super::theme::Theme,
+    cached: Option<&Vec<Line<'static>>>,
+) -> Vec<Line<'static>> {
+    if streaming {
+        let mut body: Vec<Line<'static>> = text
+            .lines()
+            .map(|l| Line::raw(format!("{MSG_INDENT}{l}")))
+            .collect();
+        // Trailing spinner so the user sees liveness.
+        let spin = SPINNER[spinner % SPINNER.len()];
+        match body.last_mut() {
+            Some(last) => last.spans.push(Span::styled(
+                format!(" {spin}"),
+                Style::default().fg(theme.agent),
+            )),
+            None => body.push(Line::styled(
+                spin.to_string(),
+                Style::default().fg(theme.agent),
+            )),
+        }
+        body
+    } else if let Some(cached) = cached {
+        // Finished reply: reuse the markdown rendered once at finish time.
+        cached.iter().cloned().map(indent_line).collect()
+    } else {
+        markdown::render(text)
+            .lines
+            .into_iter()
+            .map(indent_line)
+            .collect()
+    }
 }
 
 fn push_message(
@@ -603,55 +876,14 @@ fn push_message(
         Role::Agent => {
             // Animated bullet while streaming, solid bullet once done — so an
             // in-progress turn reads as "live" at a glance vs. a finished one.
-            let (bullet, header_style) = if m.streaming {
-                let spin = SPINNER[spinner % SPINNER.len()];
-                (format!("{spin} agent"), Style::default().fg(theme.agent))
-            } else {
-                (
-                    "● agent".to_string(),
-                    Style::default()
-                        .fg(theme.agent)
-                        .add_modifier(Modifier::BOLD),
-                )
-            };
-            lines.push(Line::from(Span::styled(bullet, header_style)));
-            // Reasoning stays visible after the turn finishes (D5).
-            if !m.thinking.is_empty() {
-                for l in m.thinking.lines() {
-                    lines.push(Line::styled(
-                        format!("{MSG_INDENT}{l}"),
-                        Style::default()
-                            .fg(theme.thinking)
-                            .add_modifier(Modifier::ITALIC | Modifier::DIM),
-                    ));
-                }
-            }
-            if m.streaming {
-                let mut body: Vec<Line> = m
-                    .text
-                    .lines()
-                    .map(|l| Line::raw(format!("{MSG_INDENT}{l}")))
-                    .collect();
-                // Trailing spinner so the user sees liveness.
-                let spin = SPINNER[spinner % SPINNER.len()];
-                match body.last_mut() {
-                    Some(last) => last.spans.push(Span::styled(
-                        format!(" {spin}"),
-                        Style::default().fg(theme.agent),
-                    )),
-                    None => body.push(Line::styled(
-                        spin.to_string(),
-                        Style::default().fg(theme.agent),
-                    )),
-                }
-                lines.extend(body);
-            } else if let Some(cached) = &m.rendered {
-                // Finished reply: reuse the markdown rendered once at finish time.
-                lines.extend(cached.iter().cloned().map(indent_line));
-            } else {
-                // Fallback (should not happen): render on the fly.
-                lines.extend(markdown::render(&m.text).lines.into_iter().map(indent_line));
-            }
+            push_agent_header(lines, m, spinner, theme);
+            lines.extend(agent_body_lines(
+                &m.text,
+                m.streaming,
+                spinner,
+                theme,
+                m.rendered.as_ref(),
+            ));
         }
     }
 }
@@ -943,6 +1175,41 @@ fn centered_rect(pct_x: u16, pct_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - pct_x) / 2),
         ])
         .split(v[1])[1]
+}
+
+#[cfg(test)]
+mod block_boundary_tests {
+    use super::next_block_end;
+
+    #[test]
+    fn commits_one_complete_paragraph_at_a_time() {
+        let s = "first para\n\nsecond para\n\nthird";
+        let n = next_block_end(s);
+        assert_eq!(&s[..n], "first para\n\n");
+        // The next call, on the remainder, takes exactly the next block.
+        let rest = &s[n..];
+        let m = next_block_end(rest);
+        assert_eq!(&rest[..m], "second para\n\n");
+        // A trailing block with no blank line after it is never committable —
+        // it may still grow.
+        assert_eq!(next_block_end(&rest[m..]), 0);
+    }
+
+    #[test]
+    fn a_blank_line_inside_a_fence_is_not_a_boundary() {
+        // Committing here would strand an unterminated ``` in scrollback and
+        // re-render the fence body once it closes.
+        let s = "```rust\nlet a = 1;\n\nlet b = 2;\n```\n\ntail";
+        let n = next_block_end(s);
+        assert_eq!(&s[..n], "```rust\nlet a = 1;\n\nlet b = 2;\n```\n\n");
+        assert_eq!(next_block_end("```\nunclosed\n\nstill inside\n"), 0);
+    }
+
+    #[test]
+    fn nothing_to_commit_yet() {
+        assert_eq!(next_block_end(""), 0);
+        assert_eq!(next_block_end("one line, still streaming"), 0);
+    }
 }
 
 #[cfg(test)]
