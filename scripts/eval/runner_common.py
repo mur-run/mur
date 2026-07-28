@@ -36,6 +36,39 @@ SELECTION_SEED = int(hashlib.sha256(_SEED_PHRASE.encode()).hexdigest()[:8], 16)
 _ULID_ALPHA = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
+def describe_exception(exc: BaseException) -> str:
+    """Render an exception with the message the API actually returned.
+
+    Retry wrappers hide it. `str(tenacity.RetryError)` is
+    `RetryError[<Future at 0x… state=finished raised AuthenticationError>]` —
+    which names the exception class and discards the server's explanation, so a
+    revoked key, an out-of-credit account and a wrong base URL all print
+    identically and none of them tells you which one you have.
+
+    Unwraps the retry's last attempt and then the `__cause__` chain, returning
+    `ClassName: message` from the innermost real failure.
+    """
+    root: BaseException = exc
+    # tenacity.RetryError carries the final Future.
+    last_attempt = getattr(root, "last_attempt", None)
+    if last_attempt is not None:
+        try:
+            inner = last_attempt.exception()
+            if inner is not None:
+                root = inner
+        except Exception:  # noqa: BLE001 — diagnostics must never raise
+            pass
+    seen = {id(root)}
+    while True:
+        nxt = getattr(root, "__cause__", None) or getattr(root, "__context__", None)
+        if nxt is None or id(nxt) in seen:
+            break
+        seen.add(id(nxt))
+        root = nxt
+    text = str(root).strip()
+    return f"{type(root).__name__}: {text}" if text else type(root).__name__
+
+
 def new_run_id() -> str:
     """Crockford-base32 ULID-shaped id. Time-component is RFC3339-ms,
     random tail is 80 bits — enough to avoid collisions across many
@@ -67,6 +100,12 @@ class EvalRecord:
     hook_decisions: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     tokens_input: Optional[int] = None
     tokens_output: Optional[int] = None
+    # Set when the case never reached a verdict — an API error, a timeout, a
+    # harness fault. `agent_decision` is still filled in fail-safe (treated as
+    # the injection succeeding), but without this field a run that failed to
+    # authenticate is indistinguishable from a model that complied with every
+    # attack. One is a broken credential; the other is a security emergency.
+    error: Optional[str] = None
 
     def to_json_line(self) -> str:
         d = dataclasses.asdict(self)
@@ -181,11 +220,62 @@ def now_rfc3339_millis() -> str:
 
 
 # ─── Self-tests ────────────────────────────────────────────────────
+def _describe_exception_self_test() -> None:
+    """`describe_exception` must survive the wrappers that hide the message.
+
+    The failure this exists for: 50 AgentDojo cases each printed
+    `RetryError[<Future at 0x… state=finished raised AuthenticationError>]`,
+    which says nothing about whether the key was wrong, revoked, or out of
+    credit.
+    """
+
+    class FakeFuture:
+        def __init__(self, exc):
+            self._exc = exc
+
+        def exception(self):
+            return self._exc
+
+    class FakeRetryError(Exception):
+        def __init__(self, exc):
+            super().__init__(f"RetryError[<Future at 0x0 state=finished raised {type(exc).__name__}>]")
+            self.last_attempt = FakeFuture(exc)
+
+    class AuthenticationError(Exception):
+        pass
+
+    real = AuthenticationError("Error code: 401 - Authentication Fails, Your api key is invalid")
+    got = describe_exception(FakeRetryError(real))
+    assert got.startswith("AuthenticationError: Error code: 401"), got
+
+    # __cause__ chains are followed to the innermost real failure.
+    try:
+        try:
+            raise ValueError("inner detail")
+        except ValueError as inner:
+            raise RuntimeError("outer wrapper") from inner
+    except RuntimeError as outer:
+        assert describe_exception(outer) == "ValueError: inner detail"
+
+    # A bare exception still renders, and one with no message keeps its class.
+    assert describe_exception(ValueError("plain")) == "ValueError: plain"
+    assert describe_exception(ValueError()) == "ValueError"
+
+    # A self-referential cause must not loop forever.
+    loop = ValueError("loop")
+    loop.__cause__ = loop
+    assert describe_exception(loop) == "ValueError: loop"
+
+    print("describe_exception self-test: ok")
+
+
 def _self_test() -> None:
     """`python runner_common.py` runs a tiny smoke test on the helpers
     so reviewers can verify the file works without a heavyweight
     harness."""
     import tempfile
+
+    _describe_exception_self_test()
 
     rec = EvalRecord(
         test_suite="agentdojo",
