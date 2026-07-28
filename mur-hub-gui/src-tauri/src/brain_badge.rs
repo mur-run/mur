@@ -25,10 +25,42 @@ pub fn current_model_label(mur_home: &Path) -> Option<String> {
     Some(profile.model.name)
 }
 
+/// True while the concierge is still running the brain it shipped with — i.e.
+/// the user has never pointed it at a registry model. `model_ref` is the
+/// codebase-wide marker for "the user chose this" (see
+/// `seed_mur::ensure_concierge_model`, which refuses to touch a profile that
+/// has one), so its absence is what the upgrade nudge is actually about.
+/// A profile that cannot be read is treated as "not stock": never nag about an
+/// agent we failed to inspect.
+pub fn is_stock_brain(mur_home: &Path) -> bool {
+    let Ok(body) = std::fs::read_to_string(mur_home.join("agents/mur/profile.yaml")) else {
+        return false;
+    };
+    match serde_yaml_ng::from_str::<mur_common::AgentProfile>(&body) {
+        Ok(profile) => profile.model_ref.is_none(),
+        Err(_) => false,
+    }
+}
+
+#[derive(serde::Serialize)]
+pub struct NudgeStatus {
+    /// The user pressed "no thanks" at some point — never nag again.
+    pub dismissed: bool,
+    /// Human-readable name of the concierge's current model, for display.
+    pub model: Option<String>,
+    /// Whether the nudge has anything to offer: only true while the concierge
+    /// is still on its stock brain.
+    pub stock_brain: bool,
+}
+
 #[tauri::command]
-pub fn nudge_status() -> (bool, Option<String>) {
+pub fn nudge_status() -> NudgeStatus {
     let home = crate::mur_home_path();
-    (is_nudge_dismissed(&home), current_model_label(&home))
+    NudgeStatus {
+        dismissed: is_nudge_dismissed(&home),
+        model: current_model_label(&home),
+        stock_brain: is_stock_brain(&home),
+    }
 }
 
 #[tauri::command]
@@ -60,6 +92,30 @@ mod tests {
         assert_eq!(
             current_model_label(home.path()).as_deref(),
             Some("Qwen3.5-2B-MLX-4bit")
+        );
+    }
+
+    #[test]
+    fn stock_brain_only_until_a_model_ref_is_chosen() {
+        let home = TempDir::new().unwrap();
+        // No profile at all → nothing to nag about.
+        assert!(!is_stock_brain(home.path()));
+
+        std::fs::create_dir_all(home.path().join("agents/mur")).unwrap();
+        let path = home.path().join("agents/mur/profile.yaml");
+        let stock = include_str!("../resources/mur-agent-template/profile.yaml");
+        std::fs::write(&path, stock).unwrap();
+        assert!(
+            is_stock_brain(home.path()),
+            "seed template has no model_ref — the nudge should offer an upgrade"
+        );
+
+        let mut profile: mur_common::AgentProfile = serde_yaml_ng::from_str(stock).unwrap();
+        profile.model_ref = Some("anthropic_opus_5".into());
+        std::fs::write(&path, serde_yaml_ng::to_string(&profile).unwrap()).unwrap();
+        assert!(
+            !is_stock_brain(home.path()),
+            "the user picked a brain — never nag again"
         );
     }
 }

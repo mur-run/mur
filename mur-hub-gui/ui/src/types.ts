@@ -26,38 +26,9 @@ export interface AgentRuntimeStatus {
   state: RuntimeState;
 }
 
-// ── Wizard types (M-h4) ───────────────────────────────────────────────────
-
-export type WizardPersona =
-  | "research"
-  | "automation"
-  | "monitor"
-  | "notify"
-  | "commerce"
-  | "custom";
+// ── Appearance types ──────────────────────────────────────────────────────
 
 export type BehaviorPreset = "quiet" | "normal" | "lively";
-
-export interface RenderProgressSnapshot {
-  total: number;
-  done: number;
-  failed: number;
-}
-
-/** Full wizard state returned by every wizard_* command. */
-export interface WizardSnapshot {
-  step: number;
-  persona: WizardPersona | null;
-  name: string | null;
-  description: string | null;
-  style_preset_id: string | null;
-  preset_family: string | null;
-  behavior_preset: BehaviorPreset | null;
-  needs_photo: boolean;
-  source_photo: string | null;
-  render_progress: RenderProgressSnapshot | null;
-  render_done: boolean;
-}
 
 /** Built-in preset summary for the style picker. */
 export interface PresetSummary {
@@ -160,6 +131,7 @@ export interface DetailPatch {
   persona_risk?: string;
   persona_verbosity?: string;
   style_preset?: string;
+  source_image_path?: string;
   behavior_preset?: string;
   model_ref?: string;
 }
@@ -240,4 +212,14 @@ export interface HitlRequest {
   tool_input: Record<string, unknown>;
   prompt: string;
   timeout_ms: number;
+}
+
+/** `nudge_status` — state of the "connect a smarter brain" nudge. */
+export interface NudgeStatus {
+  /** The user pressed "no thanks" at some point — never nag again. */
+  dismissed: boolean;
+  /** Human-readable name of the concierge's current model, for display. */
+  model: string | null;
+  /** Only true while the concierge is still on the brain it shipped with. */
+  stock_brain: boolean;
 }
