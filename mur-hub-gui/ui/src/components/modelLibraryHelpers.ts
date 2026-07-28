@@ -13,6 +13,13 @@ export interface CloudPreset {
 
 export const CLOUD_PRESETS: CloudPreset[] = [
   {
+    key: "anthropic",
+    name: "Anthropic (Claude)",
+    baseUrl: "https://api.anthropic.com/v1",
+    logo: "A",
+    color: "#C5694A",
+  },
+  {
     key: "openai",
     name: "OpenAI",
     baseUrl: "https://api.openai.com/v1",
@@ -91,10 +98,10 @@ export const CLOUD_PRESETS: CloudPreset[] = [
   },
 ];
 
-// Anthropic and Azure OpenAI are intentionally NOT presets here: both use a
-// non-Bearer auth header (x-api-key / api-key) that model_discovery's
-// generic OpenAI-compatible client doesn't send, so "test connection" would
-// always 401. Add them once discover_models() supports per-provider auth.
+// Azure OpenAI is intentionally NOT a preset here: its `api-key` auth header
+// and deployment-scoped URLs are not the generic OpenAI-compatible shape
+// model_discovery speaks. Anthropic IS a preset — discover_models_for() sends
+// its `x-api-key` + `anthropic-version` headers.
 
 /**
  * Pure immutable selection toggle — does not mutate the input Set.
