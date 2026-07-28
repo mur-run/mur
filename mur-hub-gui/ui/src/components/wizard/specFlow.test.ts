@@ -7,31 +7,34 @@ import {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-function s(step: SpecFlowState["step"], kind: SpecFlowState["kind"] = null): SpecFlowState {
-  return { step, kind };
+function s(
+  step: SpecFlowState["step"],
+  source: SpecFlowState["source"] = null,
+): SpecFlowState {
+  return { step, source };
 }
 
-// ── SELECT_KIND ───────────────────────────────────────────────────────────────
+// ── SELECT_SOURCE ─────────────────────────────────────────────────────────────
 
-describe("SELECT_KIND on 'kind' step", () => {
-  it("companion → 'companion' step", () => {
-    const next = specReducer(SPEC_FLOW_INITIAL, { type: "SELECT_KIND", kind: "companion" });
-    expect(next).toEqual(s("companion", "companion"));
+describe("SELECT_SOURCE on 'source' step", () => {
+  it("template → 'role' step", () => {
+    const next = specReducer(SPEC_FLOW_INITIAL, { type: "SELECT_SOURCE", source: "template" });
+    expect(next).toEqual(s("role", "template"));
   });
 
-  it("specialist → 'role' step", () => {
-    const next = specReducer(SPEC_FLOW_INITIAL, { type: "SELECT_KIND", kind: "specialist" });
-    expect(next).toEqual(s("role", "specialist"));
+  it("official → 'official' step", () => {
+    const next = specReducer(SPEC_FLOW_INITIAL, { type: "SELECT_SOURCE", source: "official" });
+    expect(next).toEqual(s("official", "official"));
   });
 
-  it("both → 'role' step (both also goes through specialist flow)", () => {
-    const next = specReducer(SPEC_FLOW_INITIAL, { type: "SELECT_KIND", kind: "both" });
-    expect(next).toEqual(s("role", "both"));
+  it("import stays on 'source' — the host owns the import modal", () => {
+    const next = specReducer(SPEC_FLOW_INITIAL, { type: "SELECT_SOURCE", source: "import" });
+    expect(next).toEqual(s("source", "import"));
   });
 
-  it("SELECT_KIND on a non-kind step is a no-op", () => {
-    const inRole = s("role", "specialist");
-    const next = specReducer(inRole, { type: "SELECT_KIND", kind: "companion" });
+  it("SELECT_SOURCE on a non-source step is a no-op", () => {
+    const inRole = s("role", "template");
+    const next = specReducer(inRole, { type: "SELECT_SOURCE", source: "official" });
     expect(next).toEqual(inRole);
   });
 });
@@ -39,65 +42,78 @@ describe("SELECT_KIND on 'kind' step", () => {
 // ── BACK ──────────────────────────────────────────────────────────────────────
 
 describe("BACK transitions", () => {
-  it("BACK on 'kind' is a no-op (already at start)", () => {
+  it("BACK on 'source' is a no-op (already at start)", () => {
     expect(specReducer(SPEC_FLOW_INITIAL, { type: "BACK" })).toEqual(SPEC_FLOW_INITIAL);
   });
 
-  it("BACK from 'companion' → 'kind' with kind cleared", () => {
-    const next = specReducer(s("companion", "companion"), { type: "BACK" });
-    expect(next).toEqual(s("kind", null));
+  it("BACK from 'role' → 'source' with the source cleared", () => {
+    expect(specReducer(s("role", "template"), { type: "BACK" })).toEqual(s("source", null));
   });
 
-  it("BACK from 'role' → 'kind' with kind cleared", () => {
-    const next = specReducer(s("role", "specialist"), { type: "BACK" });
-    expect(next).toEqual(s("kind", null));
+  it("BACK from 'official' → 'source' with the source cleared", () => {
+    expect(specReducer(s("official", "official"), { type: "BACK" })).toEqual(s("source", null));
   });
 
   it("BACK from 'generating' → 'role'", () => {
-    const next = specReducer(s("generating", "specialist"), { type: "BACK" });
-    expect(next).toEqual(s("role", "specialist"));
+    expect(specReducer(s("generating", "template"), { type: "BACK" })).toEqual(
+      s("role", "template"),
+    );
   });
 
   it("BACK from 'review' → 'generating'", () => {
-    const next = specReducer(s("review", "specialist"), { type: "BACK" });
-    expect(next).toEqual(s("generating", "specialist"));
+    expect(specReducer(s("review", "template"), { type: "BACK" })).toEqual(
+      s("generating", "template"),
+    );
   });
 
   it("BACK from 'eval' is a no-op (terminal: agent created, draft consumed)", () => {
-    const next = specReducer(s("eval", "specialist"), { type: "BACK" });
-    expect(next).toEqual(s("eval", "specialist"));
+    const st = s("eval", "template");
+    expect(specReducer(st, { type: "BACK" })).toEqual(st);
+  });
+
+  it("BACK from 'appearance' is a no-op (the agent already exists)", () => {
+    const st = s("appearance", "official");
+    expect(specReducer(st, { type: "BACK" })).toEqual(st);
   });
 });
 
 // ── NEXT ──────────────────────────────────────────────────────────────────────
 
-describe("NEXT transitions (specialist path)", () => {
+describe("NEXT transitions", () => {
   it("NEXT from 'role' → 'generating'", () => {
-    const next = specReducer(s("role", "specialist"), { type: "NEXT" });
-    expect(next).toEqual(s("generating", "specialist"));
+    expect(specReducer(s("role", "template"), { type: "NEXT" })).toEqual(
+      s("generating", "template"),
+    );
   });
 
   it("NEXT from 'generating' → 'review'", () => {
-    const next = specReducer(s("generating", "specialist"), { type: "NEXT" });
-    expect(next).toEqual(s("review", "specialist"));
+    expect(specReducer(s("generating", "template"), { type: "NEXT" })).toEqual(
+      s("review", "template"),
+    );
   });
 
   it("NEXT from 'review' → 'eval'", () => {
-    const next = specReducer(s("review", "specialist"), { type: "NEXT" });
-    expect(next).toEqual(s("eval", "specialist"));
+    expect(specReducer(s("review", "template"), { type: "NEXT" })).toEqual(s("eval", "template"));
   });
 
-  it("NEXT on 'eval' is a no-op (terminal)", () => {
-    const st = s("eval", "specialist");
+  it("NEXT from 'eval' → 'appearance' (every new agent gets the offer)", () => {
+    expect(specReducer(s("eval", "template"), { type: "NEXT" })).toEqual(
+      s("appearance", "template"),
+    );
+  });
+
+  it("NEXT from 'official' → 'appearance' (an installed agent can be a pet too)", () => {
+    expect(specReducer(s("official", "official"), { type: "NEXT" })).toEqual(
+      s("appearance", "official"),
+    );
+  });
+
+  it("NEXT on 'appearance' is a no-op (terminal)", () => {
+    const st = s("appearance", "template");
     expect(specReducer(st, { type: "NEXT" })).toEqual(st);
   });
 
-  it("NEXT on 'companion' is a no-op (handed off to existing wizard)", () => {
-    const st = s("companion", "companion");
-    expect(specReducer(st, { type: "NEXT" })).toEqual(st);
-  });
-
-  it("NEXT on 'kind' is a no-op", () => {
+  it("NEXT on 'source' is a no-op", () => {
     expect(specReducer(SPEC_FLOW_INITIAL, { type: "NEXT" })).toEqual(SPEC_FLOW_INITIAL);
   });
 });
@@ -106,34 +122,30 @@ describe("NEXT transitions (specialist path)", () => {
 
 describe("RESET", () => {
   it("resets from any step to initial state", () => {
-    const deep = s("eval", "both");
-    expect(specReducer(deep, { type: "RESET" })).toEqual(SPEC_FLOW_INITIAL);
+    expect(specReducer(s("appearance", "official"), { type: "RESET" })).toEqual(
+      SPEC_FLOW_INITIAL,
+    );
   });
 });
 
-// ── Full companion flow ───────────────────────────────────────────────────────
+// ── Full paths ────────────────────────────────────────────────────────────────
 
-describe("Full companion flow path", () => {
-  it("kind → companion (hand-off step) via SELECT_KIND", () => {
+describe("Full flow paths", () => {
+  it("template: source → role → generating → review → eval → appearance", () => {
     let st = SPEC_FLOW_INITIAL;
-    st = specReducer(st, { type: "SELECT_KIND", kind: "companion" });
-    expect(st.step).toBe("companion");
-    expect(st.kind).toBe("companion");
-  });
-});
-
-// ── Full specialist flow ──────────────────────────────────────────────────────
-
-describe("Full specialist flow path", () => {
-  it("kind → role → generating → review → eval", () => {
-    let st = SPEC_FLOW_INITIAL;
-    st = specReducer(st, { type: "SELECT_KIND", kind: "specialist" });
+    st = specReducer(st, { type: "SELECT_SOURCE", source: "template" });
     expect(st.step).toBe("role");
+    for (const expected of ["generating", "review", "eval", "appearance"]) {
+      st = specReducer(st, { type: "NEXT" });
+      expect(st.step).toBe(expected);
+    }
+  });
+
+  it("official: source → official → appearance", () => {
+    let st = SPEC_FLOW_INITIAL;
+    st = specReducer(st, { type: "SELECT_SOURCE", source: "official" });
+    expect(st.step).toBe("official");
     st = specReducer(st, { type: "NEXT" });
-    expect(st.step).toBe("generating");
-    st = specReducer(st, { type: "NEXT" });
-    expect(st.step).toBe("review");
-    st = specReducer(st, { type: "NEXT" });
-    expect(st.step).toBe("eval");
+    expect(st.step).toBe("appearance");
   });
 });

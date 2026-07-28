@@ -165,6 +165,9 @@ pub struct DetailPatch {
     pub persona_verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style_preset: Option<String>,
+    /// Source photo for photo-based (polaroid) presets. Must exist on disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_image_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behavior_preset: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -314,6 +317,18 @@ pub fn update_agent_detail(name: String, patch: DetailPatch) -> Result<AgentDeta
             profile.appearance.render_status = mur_common::agent::RenderStatus::Pending;
         }
         profile.appearance.style_preset = s;
+    }
+
+    // Apply source-photo patch. Photo-based (polaroid) presets render FROM this
+    // image, so a path that isn't there would fail deep inside the render job
+    // with nothing pointing back at the cause — reject it here instead.
+    if let Some(p) = patch.source_image_path {
+        let path = std::path::PathBuf::from(&p);
+        if !path.exists() {
+            return Err(format!("photo not found: {p}"));
+        }
+        profile.appearance.source_image_path = Some(path);
+        profile.appearance.render_status = mur_common::agent::RenderStatus::Pending;
     }
 
     // Apply model patch — the ref must exist in the registry so the agent

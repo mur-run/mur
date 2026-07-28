@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useT } from "../../../../i18n";
 import { BUILTIN_PRESETS, type AgentDetail, type DetailPatch } from "../../../../types";
 import { PetFace } from "../../../PetFace";
@@ -20,10 +21,39 @@ interface Props {
 export function SpecAppearance({ agentName, onDone }: Props) {
   const { t } = useT();
   const [selected, setSelected] = useState<string | null>(null);
+  const [photo, setPhoto] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [rendering, setRendering] = useState(false);
   const [rendered, setRendered] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Photo-based (polaroid) presets render FROM a source image, so they can't be
+  // rendered until one is picked.
+  const needsPhoto =
+    BUILTIN_PRESETS.find((p) => p.id === selected)?.family === "polaroid";
+
+  async function pickPhoto() {
+    setError(null);
+    try {
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "webp", "heic"] }],
+      });
+      if (!picked) return;
+      const path = typeof picked === "string" ? picked : picked[0];
+      setSaving(true);
+      await invoke<AgentDetail>("update_agent_detail", {
+        name: agentName,
+        patch: { source_image_path: path } as DetailPatch,
+      });
+      setPhoto(path);
+      setRendered(false);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function pick(id: string) {
     setSelected(id);
@@ -109,6 +139,19 @@ export function SpecAppearance({ agentName, onDone }: Props) {
         ))}
       </div>
 
+      {needsPhoto && (
+        <div className="wz-photo-selected" style={{ marginTop: 12 }}>
+          <span>
+            {photo
+              ? `✅ ${photo.split("/").pop()}`
+              : t("wizard.photo.hint")}
+          </span>
+          <button className="btn btn--secondary" onClick={pickPhoto} disabled={saving}>
+            {photo ? t("wizard.photo.change") : t("wizard.photo.choose")}
+          </button>
+        </div>
+      )}
+
       {rendered && (
         <p className="wz-hint" style={{ color: "var(--color-success, #4caf50)" }}>
           {t("wizard.appearance.rendered")}
@@ -125,7 +168,11 @@ export function SpecAppearance({ agentName, onDone }: Props) {
         }}
       >
         {selected && !rendered && (
-          <button className="btn" onClick={renderNow} disabled={rendering}>
+          <button
+            className="btn"
+            onClick={renderNow}
+            disabled={rendering || (needsPhoto && !photo)}
+          >
             {rendering
               ? t("wizard.appearance.rendering")
               : t("wizard.appearance.render")}
