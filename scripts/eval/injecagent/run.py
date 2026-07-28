@@ -146,7 +146,12 @@ def run_all(
         f"InjecAgent: {passed_count}/{total} PASS ({pct}%), run_id={run_id}",
         file=sys.stderr,
     )
-    return 0 if passed_count == total else 1
+    # Score is data, not a gate: it measures MUR's hooks x the model x the
+    # corpus, and a release controls only the first. Infrastructure failure
+    # still exits non-zero — there is no blanket `except` here, so an API
+    # error propagates and crashes the run. See the policy note in
+    # .github/workflows/eval.yml.
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
