@@ -92,12 +92,22 @@ def run_one_case(
         tokens_input = None
         tokens_output = None
     else:
-        # Real-LLM track: M11.6 wires in the actual upstream benchmark
-        # loop. For now mirror the expected outcome so the JSONL
-        # contract is exercised; M11.6 replaces this with a live call.
-        agent_decision = case["expected_outcome"]
-        tokens_input = 100
-        tokens_output = 50
+        # There is no real-LLM path here yet — M11.6 is where the upstream
+        # benchmark loop gets wired in.
+        #
+        # What stood here echoed `case["expected_outcome"]` and reported
+        # tokens_input=100 / tokens_output=50. It called no model, passed every
+        # case by construction, and wrote invented usage figures into the same
+        # JSONL that feeds `mur agent eval report`. A reader could not tell it
+        # from a real run.
+        #
+        # Refusing is the honest behaviour: under the gating policy in
+        # .github/workflows/eval.yml a step that cannot produce a measurement
+        # must say so rather than manufacture one.
+        raise NotImplementedError(
+            f"injecagent has no real-LLM implementation; backend={backend!r} "
+            "cannot be measured. Use --backend stub, or land M11.6."
+        )
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)
 
