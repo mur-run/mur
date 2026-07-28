@@ -130,6 +130,23 @@ pub fn set_status_in_dir(dir: &Path, id: &str, status: ProposalStatus) -> Result
     save_in_dir(dir, &p)
 }
 
+/// Dismiss every pending proposal in `dir`; returns each dismissed `(id, title)`.
+///
+/// A status flip, not a delete: the file stays for audit, and the harvest
+/// gate's recurrence index keeps counting the skeleton, so a workflow that
+/// genuinely repeats can propose itself again later. `pending_in_dir` filters
+/// on status, so this silences every surface that counts the inbox (the
+/// session-start hook, `mur out`, the companion nudge) at once.
+pub fn dismiss_pending_in_dir(dir: &Path) -> Result<Vec<(String, String)>> {
+    let mut dismissed = Vec::new();
+    for p in pending_in_dir(dir)? {
+        set_status_in_dir(dir, &p.id, ProposalStatus::Dismissed)
+            .with_context(|| format!("dismiss proposal {}", p.id))?;
+        dismissed.push((p.id, p.title));
+    }
+    Ok(dismissed)
+}
+
 /// Token-set Jaccard similarity over two step lists (zero-cost near-dup check).
 pub fn step_similarity(a: &[String], b: &[String]) -> f32 {
     let ta: BTreeSet<&str> = a.iter().flat_map(|s| s.split_whitespace()).collect();
@@ -264,6 +281,33 @@ mod tests {
 
         set_status_in_dir(tmp.path(), "s1", ProposalStatus::Accepted).unwrap();
         assert!(pending_in_dir(tmp.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn dismiss_pending_leaves_the_files_and_the_other_statuses_alone() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        save_in_dir(tmp.path(), &proposal("s1", ProposalStatus::Pending)).unwrap();
+        save_in_dir(tmp.path(), &proposal("s2", ProposalStatus::Pending)).unwrap();
+        save_in_dir(tmp.path(), &proposal("s3", ProposalStatus::Accepted)).unwrap();
+
+        let dismissed = dismiss_pending_in_dir(tmp.path()).unwrap();
+        assert_eq!(dismissed.len(), 2);
+        assert!(dismissed.iter().all(|(_, title)| title == "Deploy api"));
+
+        // Nothing is deleted — dismissal is a status flip, so the inbox keeps
+        // its audit trail and the recurrence index keeps its history.
+        assert_eq!(list_in_dir(tmp.path()).unwrap().len(), 3);
+        assert!(pending_in_dir(tmp.path()).unwrap().is_empty());
+        // An accepted proposal is not a pending one; it must be untouched.
+        let accepted = list_in_dir(tmp.path())
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == "s3")
+            .unwrap();
+        assert_eq!(accepted.status, ProposalStatus::Accepted);
+
+        // Idempotent: rejecting an empty inbox is not an error.
+        assert!(dismiss_pending_in_dir(tmp.path()).unwrap().is_empty());
     }
 
     #[test]
