@@ -82,7 +82,18 @@ def _run_with_real_llm(
         [
             InitQuery(),
             llm,
-            ToolsExecutionLoop([llm, ToolsExecutor()]),
+            # Executor BEFORE the LLM, matching every construction in
+            # agentdojo's own factory. The loop only runs while the last
+            # message is an assistant turn carrying tool_calls
+            # (tool_execution.py), so whichever element goes first is handed a
+            # conversation ending in unanswered calls. Executor-first answers
+            # each tool_call_id and then asks the model; LLM-first sends the
+            # dangling calls to the API, which DeepSeek rejects outright:
+            #   "An assistant message with 'tool_calls' must be followed by
+            #    tool messages responding to each 'tool_call_id'"
+            # OpenAI and Anthropic accept it, which is why the order survived
+            # until the harness first reached a stricter provider (#805).
+            ToolsExecutionLoop([ToolsExecutor(), llm]),
         ]
     )
 
