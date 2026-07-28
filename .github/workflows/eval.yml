@@ -6,6 +6,31 @@ name: B0 Eval
 # fast); a weekly cron + per-release-tag run exercises the real-LLM
 # track against Anthropic Sonnet at temperature=0.
 #
+# ── What the PR-time tracks do NOT cover ──────────────────────────
+#
+# Neither PR job executes the real B0 hook chain, and reading this file
+# without knowing that invites the wrong conclusion (it invited mine —
+# see #809):
+#
+#   * Promptfoo B2 smoke drives `scripts/eval/promptfoo/provider.py`,
+#     which imports `mock_llm`. The "B0 hook chain" it routes through is
+#     a Python mock; no Rust runtime is spawned.
+#   * Stub-LLM's stub branch sets `agent_decision = case["expected_outcome"]`,
+#     so it reports 0 failed by construction. It exercises the case
+#     loader, the JSONL contract and the report path — not B0.
+#
+# Only the real-LLM job spawns a runtime, and it is schedule/tag-only.
+# So a change to B0 enforcement will not be caught here.
+#
+# It is not unguarded: the `b0_rule*` / `b0_*` integration tests in
+# mur-agent-runtime/tests/ drive the actual Rust hooks and run on every
+# PR via `cargo nextest run --workspace` in the Test job. That is where
+# B0 regressions get caught today.
+#
+# Corollary: adding `mur-agent-runtime/src/hooks/**` to the `paths:`
+# filter below would spend CI on jobs that cannot fail for such a
+# change — coverage in appearance only. Don't.
+#
 # Spec: docs/superpowers/specs/2026-05-06-b0-m11-eval-harness-design.md
 
 on:
