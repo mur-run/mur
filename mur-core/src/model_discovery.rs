@@ -77,6 +77,7 @@ pub fn discover_models(
     timeout_secs: u64,
 ) -> Result<Vec<String>> {
     let url = models_url(base_url);
+    let url_for_err = url.clone();
     let bearer = api_key
         .filter(|k| !k.is_empty())
         .map(|k| format!("Bearer {k}"));
@@ -93,7 +94,20 @@ pub fn discover_models(
         if let Some(b) = bearer {
             rb = rb.header("Authorization", b);
         }
-        Ok(rb.send()?.text()?)
+        // A 401/404 still has a body; without this check it parses to an empty
+        // list and the caller reads "reachable, zero models" instead of "auth
+        // failed". Fail loudly instead.
+        let resp = rb.send()?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().unwrap_or_default();
+            anyhow::bail!(
+                "{status} from {}: {}",
+                url_for_err,
+                body.chars().take(200).collect::<String>()
+            );
+        }
+        Ok(resp.text()?)
     })
     .join()
     .map_err(|_| anyhow::anyhow!("discovery thread panicked"))??;
@@ -267,6 +281,42 @@ mod tests {
                 "base_url must end with /v1"
             );
         }
+    }
+
+    /// One-shot HTTP server on an ephemeral port; serves `status_line` + `body`
+    /// to a single client and returns the base URL to aim `discover_models` at.
+    /// ponytail: stdlib TcpListener, not a mock-server dependency.
+    fn one_shot_server(status_line: &'static str, body: &'static str) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            if let Ok((mut stream, _)) = listener.accept() {
+                let _ = stream.read(&mut [0u8; 1024]);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status_line}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        format!("http://127.0.0.1:{port}/v1")
+    }
+
+    #[test]
+    fn non_success_status_errors_instead_of_reading_as_zero_models() {
+        let base = one_shot_server("401 Unauthorized", r#"{"error":{"message":"bad key"}}"#);
+        let err = discover_models(&base, Some("nope"), 5)
+            .expect_err("a 401 must not parse into an empty model list")
+            .to_string();
+        assert!(err.contains("401"), "status must reach the caller: {err}");
+        assert!(err.contains("bad key"), "body must reach the caller: {err}");
+    }
+
+    #[test]
+    fn success_status_still_parses_the_envelope() {
+        let base = one_shot_server("200 OK", r#"{"data":[{"id":"gpt-4"}]}"#);
+        assert_eq!(discover_models(&base, None, 5).unwrap(), vec!["gpt-4"]);
     }
 
     #[test]
