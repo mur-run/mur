@@ -28,21 +28,17 @@ pub fn is_commander_running_at(pid_path: &Path) -> bool {
         Err(_) => return false,
     };
 
-    let pid: i32 = match content.trim().parse() {
+    let pid: u32 = match content.trim().parse() {
         Ok(p) => p,
         Err(_) => return false,
     };
 
-    // Check if process is alive (signal 0 = existence check)
-    #[cfg(unix)]
-    {
-        unsafe { libc::kill(pid, 0) == 0 }
-    }
-    #[cfg(not(unix))]
-    {
-        // On non-Unix, assume Commander is not running (best effort)
-        false
-    }
+    // Same liveness question as a runtime lock file — use the same answer
+    // instead of a second hand-rolled probe. The old `#[cfg(not(unix))]` arm
+    // returned false unconditionally, so on Windows `auto_detect_executor`
+    // never chose Commander and `mur workflow` reclaimed schedules from a
+    // Commander that was very much alive.
+    crate::lock_file::pid_alive(pid)
 }
 
 /// Default schedules.yaml path.
