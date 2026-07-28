@@ -198,14 +198,42 @@ jobs:
         run: pip install -r scripts/eval/requirements.txt
       - name: Build mur-core
         run: cargo build -p mur-core --release --bin mur
+      - name: Resolve backend
+        # One place, so the three runners below cannot drift apart — and so a
+        # `workflow_dispatch` with backend=deepseek actually selects DeepSeek.
+        # The input previously only gated whether this job ran; each step then
+        # auto-detected and preferred Anthropic whenever ANTHROPIC_API_KEY
+        # existed at all, so a stale Anthropic secret silently shadowed a
+        # working DeepSeek one and all 50 cases 401'd on `invalid x-api-key`.
+        run: |
+          REQ='${{ inputs.backend }}'
+          case "$REQ" in
+            anthropic)
+              if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+                echo "::error::backend=anthropic requested but ANTHROPIC_API_KEY is not set."
+                exit 1
+              fi
+              BACKEND=anthropic; MODEL=claude-sonnet-4-6 ;;
+            deepseek)
+              if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
+                echo "::error::backend=deepseek requested but DEEPSEEK_API_KEY is not set."
+                exit 1
+              fi
+              BACKEND=deepseek; MODEL=deepseek-chat ;;
+            *)
+              # schedule / tag runs carry no input: auto-detect, Anthropic first.
+              if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+                BACKEND=anthropic; MODEL=claude-sonnet-4-6
+              else
+                BACKEND=deepseek; MODEL=deepseek-chat
+              fi ;;
+          esac
+          echo "BACKEND=$BACKEND" >> "$GITHUB_ENV"
+          echo "MODEL=$MODEL" >> "$GITHUB_ENV"
+          echo "Using $BACKEND / $MODEL"
       - name: Run AgentDojo (real LLM)
         run: |
           mkdir -p eval-out
-          if [ -n "${DEEPSEEK_API_KEY:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-            BACKEND=deepseek; MODEL=deepseek-chat
-          else
-            BACKEND=anthropic; MODEL=claude-sonnet-4-6
-          fi
           # --cases is required: run.py defaults to the synthetic fixtures,
           # which are descriptions for the stub path and carry no AgentDojo
           # suite coordinates, so the real-LLM path died with KeyError 'suite'
@@ -216,11 +244,6 @@ jobs:
             --out eval-out/run.jsonl
       - name: Run HarmBench (real LLM)
         run: |
-          if [ -n "${DEEPSEEK_API_KEY:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-            BACKEND=deepseek; MODEL=deepseek-chat
-          else
-            BACKEND=anthropic; MODEL=claude-sonnet-4-6
-          fi
           # Same as AgentDojo above: the default fixtures are stub-path only.
           python3 scripts/eval/harmbench/run.py \
             --backend "$BACKEND" --model "$MODEL" \
@@ -229,7 +252,7 @@ jobs:
       - name: Run InjecAgent (real LLM)
         run: |
           python3 scripts/eval/injecagent/run.py \
-            --backend anthropic --model claude-sonnet-4-6 \
+            --backend "$BACKEND" --model "$MODEL" \
             --out eval-out/run.jsonl
       - name: Aggregate + gate
         run: |
