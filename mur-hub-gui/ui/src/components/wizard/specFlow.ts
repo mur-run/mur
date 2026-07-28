@@ -1,13 +1,16 @@
 /**
- * specFlow.ts — Pure state machine for the agent-wizard "Specialist" flow (Plan 4).
+ * specFlow.ts — Pure state machine for the agent-creation wizard.
  *
- * The Companion flow (Steps 1–6) is UNCHANGED. This file only governs Step 0 (kind
- * selection) and the subsequent routing:
+ * Step 0 asks where the agent comes from, not what "kind" it is. The old
+ * companion / specialist / both fork conflated two independent things — what an
+ * agent DOES (role, skills, prompt) and what it LOOKS like — and only the
+ * specialist branch ever produced a working agent (the companion branch never
+ * wrote a profile.yaml). Appearance is now a step every new agent passes
+ * through, so any agent can be a desktop pet.
  *
- *   Companion  → existing wizard steps 1–6 (no change)
- *   Specialist → Plan 4 steps: Role → Generating → Review → Eval   (T5–T6)
- *   Both       → Specialist steps, then an Appearance step that gives the
- *                just-created specialist a companion pet look (style + render)
+ *   template → Role → Generating → Review → Eval → Appearance
+ *   official → Catalog (browse + install)        → Appearance
+ *   import   → handed to MuragentImportModal (the wizard closes)
  *
  * `specReducer` is a pure function: (SpecFlowState, SpecFlowEvent) → SpecFlowState.
  * It has no side-effects and is fully unit-testable with Vitest.
@@ -15,33 +18,34 @@
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type AgentKind = "companion" | "specialist" | "both";
+/** Where the new agent comes from. */
+export type AgentSource = "template" | "official" | "import";
 
 export type SpecFlowStep =
-  | "kind"          // Step 0: Companion / Specialist / Both fork
-  | "companion"     // Hand-off to existing wizard steps 1–6
-  | "role"          // Specialist Step 1: Role selection (T5)
-  | "generating"    // Specialist Step 2: LLM generation in-progress (T5)
-  | "review"        // Specialist Step 3: Review generated draft (T6)
-  | "eval"          // Specialist Step 4: Eval scores (T6)
-  | "appearance";   // Both Step 5: give the new specialist a pet look
+  | "source"        // Step 0: where does this agent come from?
+  | "role"          // Template flow: role selection
+  | "generating"    // Template flow: LLM generation in-progress
+  | "review"        // Template flow: review generated draft
+  | "eval"          // Template flow: eval scores
+  | "official"      // Official flow: browse + install a catalog item
+  | "appearance";   // Shared final step: give the new agent a pet look
 
 export interface SpecFlowState {
   step: SpecFlowStep;
-  kind: AgentKind | null;
+  source: AgentSource | null;
 }
 
 export type SpecFlowEvent =
-  | { type: "SELECT_KIND"; kind: AgentKind }
+  | { type: "SELECT_SOURCE"; source: AgentSource }
   | { type: "BACK" }
-  | { type: "NEXT" }   // advance through specialist steps
+  | { type: "NEXT" }
   | { type: "RESET" };
 
 // ── Initial state ─────────────────────────────────────────────────────────────
 
 export const SPEC_FLOW_INITIAL: SpecFlowState = {
-  step: "kind",
-  kind: null,
+  step: "source",
+  source: null,
 };
 
 // ── Reducer ───────────────────────────────────────────────────────────────────
@@ -49,39 +53,48 @@ export const SPEC_FLOW_INITIAL: SpecFlowState = {
 /**
  * Pure state-machine reducer for the wizard flow.
  *
- * SELECT_KIND on "kind" step → route to "companion" or "role" depending on kind.
- * BACK → return to the previous step (or stay at "kind").
- * NEXT → advance through specialist steps.
- * RESET → return to initial state.
+ * SELECT_SOURCE on "source" → route into that source's first step. "import" is
+ * handled by the host (it opens the .muragent import modal), so it records the
+ * source and stays put while the host closes the wizard.
+ * BACK → previous step, never past a point where the agent already exists.
+ * NEXT → advance; both creating flows converge on "appearance".
  */
 export function specReducer(
   state: SpecFlowState,
   event: SpecFlowEvent,
 ): SpecFlowState {
   switch (event.type) {
-    case "SELECT_KIND": {
-      const kind = event.kind;
-      if (state.step !== "kind") return state;
-      const next: SpecFlowStep =
-        kind === "companion" ? "companion" : "role";
-      return { step: next, kind };
+    case "SELECT_SOURCE": {
+      if (state.step !== "source") return state;
+      const source = event.source;
+      switch (source) {
+        case "template":
+          return { step: "role", source };
+        case "official":
+          return { step: "official", source };
+        case "import":
+          // The host opens the import modal and closes the wizard — no step of
+          // our own to move to.
+          return { ...state, source };
+      }
+      return state;
     }
 
     case "BACK": {
       switch (state.step) {
-        case "kind":
+        case "source":
           return state; // already at the start
-        case "companion":
-          return { ...state, step: "kind", kind: null };
         case "role":
-          return { ...state, step: "kind", kind: null };
+        case "official":
+          return { step: "source", source: null };
         case "generating":
           return { ...state, step: "role" };
         case "review":
           return { ...state, step: "generating" };
         case "eval":
-          // Terminal: the agent is already created and the draft consumed —
-          // going BACK to re-approve a consumed draft would error. No-op.
+        case "appearance":
+          // Terminal: the agent already exists on disk. Going BACK to
+          // re-approve a consumed draft would error. No-op.
           return state;
         default:
           return state;
@@ -97,11 +110,10 @@ export function specReducer(
         case "review":
           return { ...state, step: "eval" };
         case "eval":
-          // "both" appends a pet-appearance step; plain specialist is terminal.
-          return state.kind === "both"
-            ? { ...state, step: "appearance" }
-            : state;
-        // "companion" and "appearance" do not NEXT further via this reducer
+        case "official":
+          // Every created agent gets the appearance offer.
+          return { ...state, step: "appearance" };
+        // "appearance" is terminal — the host closes the wizard.
         default:
           return state;
       }

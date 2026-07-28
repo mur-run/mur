@@ -26,6 +26,7 @@ pub mod model_slots;
 mod model_switch;
 pub mod models_admin;
 pub mod notif;
+pub mod official_catalog;
 pub mod onboarding;
 pub mod panel;
 pub mod pet;
@@ -41,7 +42,6 @@ use mur_gui_core::discovery::{AgentDiscovery, AgentEntry};
 use mur_gui_core::event_bus::EventBus;
 use mur_gui_core::sidecar::{AgentRuntimeStatus, Supervisor};
 use mur_gui_core::stub;
-use onboarding::WizardState;
 use pet::{EventBusState, PetState};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -265,7 +265,6 @@ pub fn run() {
         .manage(AgentState(Mutex::new(Vec::new())))
         .manage(chat::ChatRegistryState::default())
         .manage(SupervisorState(supervisor))
-        .manage(WizardState(Mutex::new(None)))
         .manage(onboarding::spec::WizardSpecState::default())
         .manage(PetState(Mutex::new(std::collections::HashMap::new())))
         .manage(EventBusState(EventBus::new(256)))
@@ -614,15 +613,6 @@ pub fn run() {
             hitl::hitl_pending_list,
             open_dashboard,
             toggle_popover,
-            onboarding::wizard_open,
-            onboarding::wizard_set_persona,
-            onboarding::wizard_set_name,
-            onboarding::wizard_set_preset,
-            onboarding::wizard_set_behavior,
-            onboarding::wizard_set_photo,
-            onboarding::wizard_start_render,
-            onboarding::wizard_finish,
-            onboarding::wizard_cancel,
             onboarding::render_agent_expressions,
             onboarding::first_launch::check_first_launch,
             onboarding::first_launch::mark_first_launch_done,
@@ -667,6 +657,9 @@ pub fn run() {
             cli_tools::cli_version_skew,
             brain_badge::nudge_status,
             brain_badge::nudge_dismiss,
+            official_catalog::official_list,
+            official_catalog::official_logged_in,
+            official_catalog::official_install,
             detail::get_agent_detail,
             detail::update_agent_detail,
             detail::list_models,

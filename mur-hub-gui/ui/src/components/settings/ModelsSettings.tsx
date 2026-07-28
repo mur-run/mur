@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../i18n";
 import type { TranslationKey } from "../../i18n/types";
+import type { NudgeStatus } from "../../types";
 import { ModelLibrary } from "../ModelLibrary";
 import type { ModelOption } from "../modelPicker";
 import type { DetectedLocalView } from "../ModelLibraryPanels";
@@ -41,8 +42,8 @@ export function ModelsSettings() {
   const [msErr, setMsErr] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
-    invoke<[boolean, string | null]>("nudge_status")
-      .then(([, m]) => setBrain(m))
+    invoke<NudgeStatus>("nudge_status")
+      .then((s) => setBrain(s.model))
       .catch(() => {});
     invoke<ModelSlotsView>("model_slots_get")
       .then(setSlots)

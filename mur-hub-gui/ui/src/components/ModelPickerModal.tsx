@@ -1,6 +1,9 @@
 /**
- * ModelPickerModal — mandatory first-run modal shown when no model is configured.
- * Non-dismissible: no close button, backdrop click is a no-op.
+ * ModelPickerModal — pick the brain the concierge runs on.
+ *
+ * Two callers: the mandatory first-run case (no model configured at all —
+ * `dismissible` off, so there is no way out but to choose) and the "connect a
+ * smarter brain" nudge (`dismissible` on).
  *
  * Two paths to configure a model:
  * 1. Download MUR's bundled local model (~1.6 GB) — invoke('download_local_model'),
@@ -40,9 +43,16 @@ type Section = "local-download" | "connect";
 interface Props {
   isOpen: boolean;
   onClose: () => void;
+  /**
+   * Let the user walk away (✕ and backdrop click). Off by default: the
+   * first-run case is mandatory because nothing works without a model. The
+   * "connect a smarter brain" nudge opens the same picker as an *offer*, so it
+   * passes true.
+   */
+  dismissible?: boolean;
 }
 
-export function ModelPickerModal({ isOpen, onClose }: Props) {
+export function ModelPickerModal({ isOpen, onClose, dismissible = false }: Props) {
   const { t } = useT();
 
   // Download tile state
@@ -159,21 +169,38 @@ export function ModelPickerModal({ isOpen, onClose }: Props) {
   ];
 
   return (
-    // Mandatory overlay — backdrop click is a no-op (no onClick handler on overlay)
-    <div className="wz-overlay" role="dialog" aria-modal="true">
+    // Backdrop closes only when the picker is an offer, not a requirement.
+    <div
+      className="wz-overlay"
+      role="dialog"
+      aria-modal="true"
+      onMouseDown={(e) => {
+        if (dismissible && e.target === e.currentTarget) onClose();
+      }}
+    >
       <div
         className="wz-modal"
         style={{ width: 560, maxWidth: "95vw" }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header — no close button (mandatory) */}
         <div className="wz-header" style={{ padding: "18px 20px 14px" }}>
-          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>
-            {t("modelPicker.title")}
-          </h2>
-          <p style={{ margin: "6px 0 0", fontSize: 13, color: "var(--text-secondary, #888)" }}>
-            {t("modelPicker.subtitle")}
-          </p>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>
+              {t("modelPicker.title")}
+            </h2>
+            <p style={{ margin: "6px 0 0", fontSize: 13, color: "var(--text-secondary, #888)" }}>
+              {t("modelPicker.subtitle")}
+            </p>
+          </div>
+          {dismissible && (
+            <button
+              className="wz-close"
+              onClick={onClose}
+              aria-label={t("wizard.close")}
+            >
+              ✕
+            </button>
+          )}
         </div>
 
         {/* Section tabs */}
