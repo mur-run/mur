@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { currentMonitor, getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { useAgents } from "../context/AgentContext";
-import type { AgentEntry, AgentRuntimeStatus } from "../types";
+import type { AgentEntry, AgentRuntimeStatus, NudgeStatus } from "../types";
 import { WizardModal } from "./wizard/WizardModal";
 import { PresetImportModal } from "./PresetImportModal";
 import { MuragentImportModal } from "./MuragentImportModal";
@@ -284,12 +284,14 @@ export function DashboardApp() {
     }).catch(() => {});
   }, []);
 
-  // Check nudge dismissal on mount; show upgrade banner when not dismissed and a model is available.
+  // Check nudge dismissal on mount; offer the upgrade only while the concierge
+  // is still on its stock brain — once the user has picked a model there is
+  // nothing to nudge about.
   useEffect(() => {
-    invoke<[boolean, string | null]>("nudge_status")
-      .then(([dismissed, model]) => {
-        setNudgeDismissed(dismissed);
-        if (!dismissed && model) setShowUpgradeNudge(true);
+    invoke<NudgeStatus>("nudge_status")
+      .then((s) => {
+        setNudgeDismissed(s.dismissed);
+        if (!s.dismissed && s.stock_brain) setShowUpgradeNudge(true);
       })
       .catch(() => {});
   }, []);
@@ -399,7 +401,7 @@ export function DashboardApp() {
                 className="toolbar-btn toolbar-btn--primary"
                 onClick={() => {
                   setShowUpgradeNudge(false);
-                  setWizardOpen(true);
+                  setModelPickerOpen(true);
                 }}
               >
                 {t("dashboard.nudgeAccept")}
@@ -561,6 +563,7 @@ export function DashboardApp() {
           setWizardOpen(false);
           if (name) invoke("list_agents").catch(() => {});
         }}
+        onImport={() => setMuragentImportOpen(true)}
       />
       <PresetImportModal
         isOpen={presetImportOpen}
@@ -592,6 +595,7 @@ export function DashboardApp() {
       <ModelPickerModal
         isOpen={modelPickerOpen}
         onClose={() => setModelPickerOpen(false)}
+        dismissible
       />
       <InstallInboxModal />
     </div>
