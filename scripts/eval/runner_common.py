@@ -66,7 +66,34 @@ def describe_exception(exc: BaseException) -> str:
         seen.add(id(nxt))
         root = nxt
     text = str(root).strip()
-    return f"{type(root).__name__}: {text}" if text else type(root).__name__
+    out = f"{type(root).__name__}: {text}" if text else type(root).__name__
+
+    # An HTTP error's str() is the status line only — httpx renders
+    # "Client error '400 Bad Request' for url '…'" and drops the body, which is
+    # the one place the provider says *why* it refused. Fifty identical 400s
+    # from DeepSeek told us nothing until this was added.
+    body = _http_response_body(root)
+    return f"{out} — {body}" if body else out
+
+
+def _http_response_body(exc: BaseException, limit: int = 400) -> Optional[str]:
+    """The response body of an httpx/requests error, if this is one.
+
+    Best-effort and silent: a diagnostic helper that raises would replace the
+    error being diagnosed. Truncated, because a provider that answers 400 with
+    an HTML page should not push the real errors off the top of the log.
+    """
+    resp = getattr(exc, "response", None)
+    if resp is None:
+        return None
+    try:
+        text = (resp.text or "").strip()
+    except Exception:  # noqa: BLE001 — never raise from diagnostics
+        return None
+    if not text:
+        return None
+    text = " ".join(text.split())  # collapse newlines: one log line per case
+    return text[:limit] + "…" if len(text) > limit else text
 
 
 def new_run_id() -> str:
@@ -265,6 +292,39 @@ def _describe_exception_self_test() -> None:
     loop = ValueError("loop")
     loop.__cause__ = loop
     assert describe_exception(loop) == "ValueError: loop"
+
+    # HTTP errors must carry the response body: httpx's str() is the status
+    # line alone, and 50 identical "400 Bad Request" lines from DeepSeek said
+    # nothing about what it objected to.
+    class FakeResponse:
+        def __init__(self, text): self.text = text
+
+    class FakeHTTPStatusError(Exception):
+        def __init__(self, msg, body):
+            super().__init__(msg)
+            self.response = FakeResponse(body)
+
+    got = describe_exception(FakeHTTPStatusError(
+        "Client error '400 Bad Request' for url 'https://api.deepseek.com/chat/completions'",
+        '{"error":{"message":"Model does not exist","type":"invalid_request_error"}}',
+    ))
+    assert "400 Bad Request" in got and "Model does not exist" in got, got
+
+    # A body that is huge, blank, or unreadable must degrade, never raise.
+    assert describe_exception(FakeHTTPStatusError("boom", "x" * 5000)).endswith("…")
+    assert describe_exception(FakeHTTPStatusError("boom", "   ")) == "FakeHTTPStatusError: boom"
+
+    class ExplodingResponse:
+        @property
+        def text(self): raise RuntimeError("body unreadable")
+
+    exploding = Exception("boom")
+    exploding.response = ExplodingResponse()
+    assert describe_exception(exploding) == "Exception: boom"
+
+    # Multi-line bodies collapse so one case stays one log line.
+    got = describe_exception(FakeHTTPStatusError("boom", "line one\nline two"))
+    assert "\n" not in got and "line one line two" in got, got
 
     print("describe_exception self-test: ok")
 
