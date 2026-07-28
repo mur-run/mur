@@ -558,15 +558,36 @@
 .list-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-category { font-size: 12px; color: var(--text-secondary); text-transform: capitalize; }
 .list-model { font-size: 12px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.list-row__open {
+/* The list view's gear button. Had no rule at all, so it fell back to the
+   browser's default button chrome — a light background — while its icon
+   inherited the dark theme's light `currentColor`. Light on light: the
+   control was invisible in the shipped dark UI.
+
+   It replaces a `.list-row__open` rule for a class the component no longer
+   renders — a rename left the new name unstyled and the old rule orphaned,
+   which is how the gap went unnoticed. Kept in
+   sync with `.grid-card__settings` deliberately: the two are the same
+   control in two layouts, and they looked different because only one of
+   them existed. */
+.list-row__settings {
   justify-self: end;
-  font-size: var(--text-sm);
-  font-weight: var(--fw-bold);
-  color: var(--color-brand);
-  opacity: 0;
-  transition: opacity var(--dur-fast);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-line);
+  border-radius: 7px;
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
 }
-.list-row:hover .list-row__open { opacity: 1; }
+.list-row__settings:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
 
 /* ── Empty state ──────────────────────────────────────────────────────── */
 .dashboard-content .empty-state {
