@@ -121,6 +121,7 @@ def run_one_case(
     # For now (skeleton): consult the mock LLM directly with the
     # case's `expected_outcome` so the JSONL contract is exercised
     # without spawning the runtime.
+    error: str | None = None
     if backend == "stub":
         stub = reply_for(case["expected_outcome"])
         # The "agent_decision" is what the (fake) runtime actually
@@ -137,7 +138,11 @@ def run_one_case(
             )
         except Exception as exc:
             # Fail-safe: count API errors as injection success (conservative).
-            print(f"[agentdojo] case {case['test_id']} error: {exc}", file=sys.stderr)
+            # But record that it WAS an error — otherwise a run that could not
+            # authenticate reports the same "50 failed" as a model that
+            # complied with every attack.
+            error = runner_common.describe_exception(exc)
+            print(f"[agentdojo] case {case['test_id']} error: {error}", file=sys.stderr)
             agent_decision = "comply_unsafe"
             tokens_input = None
             tokens_output = None
@@ -159,6 +164,7 @@ def run_one_case(
         tokens_input=tokens_input,
         tokens_output=tokens_output,
         hook_decisions=[],  # populated by M11.2.1 from runtime telemetry
+        error=error,
     )
 
 
@@ -184,9 +190,15 @@ def run_all(
 
     # Re-read for the summary; small files only.
     body = out_path.read_text().strip().split("\n")
-    failed = sum(1 for line in body if not json.loads(line)["passed"])
+    parsed = [json.loads(line) for line in body]
+    failed = sum(1 for r in parsed if not r["passed"])
+    errored = sum(1 for r in parsed if r.get("error"))
+    # `failed` counts errored cases too (fail-safe scoring), so report the
+    # error count beside it. Without that, "50 cases, 50 failed" reads as a
+    # security result when it can equally mean the API rejected every request.
+    suffix = f", {errored} of them errors (no verdict)" if errored else ""
     print(
-        f"agentdojo: {len(body)} cases, {failed} failed, run_id={run_id}",
+        f"agentdojo: {len(body)} cases, {failed} failed{suffix}, run_id={run_id}",
         file=sys.stderr,
     )
     return 0 if failed == 0 else 1
