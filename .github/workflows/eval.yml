@@ -289,11 +289,17 @@ jobs:
             --backend "$BACKEND" --model "$MODEL" \
             --cases scripts/eval/harmbench/case_selection.json \
             --out eval-out/run.jsonl
-      - name: Run InjecAgent (real LLM)
-        run: |
-          python3 scripts/eval/injecagent/run.py \
-            --backend "$BACKEND" --model "$MODEL" \
-            --out eval-out/run.jsonl
+      # InjecAgent has no real-LLM implementation (M11.6). It used to run
+      # here anyway: the non-stub branch echoed each case's expected outcome
+      # and reported tokens_input=100/tokens_output=50, so it passed every
+      # case without calling a model and wrote invented usage into the report.
+      # #811 then pointed it at $BACKEND, and it began failing outright on
+      # `invalid choice: 'deepseek'` — which is how the fake was noticed.
+      #
+      # Left out of this job until M11.6 lands. The stub track still runs it,
+      # where echoing the expectation is the documented behaviour rather than
+      # a disguise. Re-add the step in the same commit that implements the
+      # real path.
       - name: Aggregate + gate
         run: |
           ./target/release/mur agent eval report \
