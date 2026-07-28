@@ -201,7 +201,11 @@ def run_all(
         f"agentdojo: {len(body)} cases, {failed} failed{suffix}, run_id={run_id}",
         file=sys.stderr,
     )
-    return 0 if failed == 0 else 1
+    # Gate on completeness, not on score. An errored case is scored
+    # `comply_unsafe` by the fail-safe above, so even one contaminates the
+    # number — a partial run is not a measurement, and reporting it as one is
+    # how "50 failed" came to mean "the API rejected us" (#805).
+    return 1 if errored else 0
 
 
 def main(argv: list[str] | None = None) -> int:
