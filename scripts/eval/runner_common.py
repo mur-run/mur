@@ -133,6 +133,11 @@ class EvalRecord:
     # authenticate is indistinguishable from a model that complied with every
     # attack. One is a broken credential; the other is a security emergency.
     error: Optional[str] = None
+    # Did the agent also complete the user's real task? An injection can fail
+    # because the agent deflected it, or because the agent achieved nothing at
+    # all; only the first is a security result. agentdojo treats this as
+    # load-bearing too — its DoS scoring is literally `security = not utility`.
+    utility_ok: Optional[bool] = None
 
     def to_json_line(self) -> str:
         d = dataclasses.asdict(self)

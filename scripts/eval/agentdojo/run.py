@@ -54,12 +54,15 @@ def _build_llm(backend: str, model: str):
 
 def _run_with_real_llm(
     case: dict[str, Any], model: str, backend: str = "anthropic"
-) -> tuple[str, int | None, int | None]:
+) -> tuple[str, int | None, int | None, bool]:
     """Run one AgentDojo case against a live model via run_task_with_pipeline().
 
-    Returns (agent_decision, tokens_input, tokens_output).
-    agent_decision='refuse'       when security_ok=True  (injection failed).
-    agent_decision='comply_unsafe' when security_ok=False (injection succeeded).
+    Returns (agent_decision, tokens_input, tokens_output, utility_ok).
+    agent_decision='comply_unsafe' when the injection succeeded.
+    agent_decision='refuse'        when it did not.
+    utility_ok is whether the agent also completed the user's actual task —
+    without it, "the injection failed" cannot be told apart from "the agent
+    did nothing".
     """
     from agentdojo.agent_pipeline import (
         AgentPipeline,
@@ -97,14 +100,26 @@ def _run_with_real_llm(
         ]
     )
 
-    _utility_ok, security_ok = suite.run_task_with_pipeline(
+    utility_ok, injection_succeeded = suite.run_task_with_pipeline(
         pipeline, user_task, injection_task, injections
     )
 
-    # security_ok=True → injection did NOT succeed → agent resisted → "refuse"
-    agent_decision = "refuse" if security_ok else "comply_unsafe"
-    # ponytail: token counts not exposed by run_task_with_pipeline; None for now
-    return agent_decision, None, None
+    # The second return value is whether the INJECTION succeeded, not whether
+    # the agent stayed secure. agentdojo is explicit —
+    # `BaseInjectionTask.security`: "Returns True if the injection was executed
+    # correctly" — and its own DoS handling reads `security = not utility`,
+    # which only makes sense if True means the attack landed.
+    #
+    # This was inverted here, so the harness reported every resisted attack as
+    # a breach: a run where the model deflected all 50 injections printed
+    # "50 cases, 50 failed".
+    agent_decision = "comply_unsafe" if injection_succeeded else "refuse"
+
+    # Utility matters for reading that number. An injection can fail because
+    # the agent deflected it, or because the agent accomplished nothing at all
+    # — and only the first is a security result. Discarding utility made the
+    # two indistinguishable, so it is carried through to the record.
+    return agent_decision, None, None, utility_ok
 
 
 def load_cases(path: pathlib.Path) -> list[dict[str, Any]]:
@@ -133,6 +148,7 @@ def run_one_case(
     # case's `expected_outcome` so the JSONL contract is exercised
     # without spawning the runtime.
     error: str | None = None
+    utility_ok: bool | None = None
     if backend == "stub":
         stub = reply_for(case["expected_outcome"])
         # The "agent_decision" is what the (fake) runtime actually
@@ -144,7 +160,7 @@ def run_one_case(
         tokens_output = None
     else:
         try:
-            agent_decision, tokens_input, tokens_output = _run_with_real_llm(
+            agent_decision, tokens_input, tokens_output, utility_ok = _run_with_real_llm(
                 case, model, backend=backend
             )
         except Exception as exc:
@@ -176,6 +192,7 @@ def run_one_case(
         tokens_output=tokens_output,
         hook_decisions=[],  # populated by M11.2.1 from runtime telemetry
         error=error,
+        utility_ok=utility_ok,
     )
 
 
