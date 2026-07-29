@@ -12,6 +12,7 @@ mod bash_class;
 mod complete;
 mod diff;
 mod dump;
+mod fleet_rail;
 mod follow;
 mod footer;
 mod manage;
@@ -108,6 +109,7 @@ const PLAIN_STEP_HINT_MAX: usize = 120;
 const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /mcp  /skill  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
+#[allow(clippy::too_many_arguments)]
 pub async fn cmd_cli(
     names: &[String],
     resume: bool,
@@ -116,6 +118,7 @@ pub async fn cmd_cli(
     plain: bool,
     budget_usd: Option<f64>,
     auto_reads: bool,
+    fleet: Option<String>,
 ) -> Result<()> {
     if names.len() > 1 {
         if budget_usd.is_some() {
@@ -128,11 +131,23 @@ pub async fn cmd_cli(
                 "note: --auto-reads is only enforced in the single-agent TUI; it is ignored when opening multiple agents."
             );
         }
+        if fleet.is_some() {
+            eprintln!(
+                "note: --fleet is only shown in the single-agent TUI; it is ignored when opening multiple agents."
+            );
+        }
         let names = names.to_vec();
         return tokio::task::spawn_blocking(move || multiplex::run(&names, resume, auto)).await?;
     }
     let name = names.first().context("at least one agent name required")?;
     let home = super::resolve_mur_home()?;
+
+    // Fail loudly on an unknown fleet. Degrading to a plain murmur would leave
+    // the user believing they are watching a fleet when they are not.
+    if let Some(f) = fleet.as_deref() {
+        crate::cmd::fleet::store::load_fleet(&home, f).with_context(|| format!("--fleet {f}"))?;
+    }
+
     let agent = canonicalize_agent_name(&home, name);
 
     // Streaming requires a live socket; fail early with a friendly hint.
@@ -163,6 +178,11 @@ pub async fn cmd_cli(
                 "note: --auto-reads is only enforced in the interactive TUI; it is ignored in plain/piped mode."
             );
         }
+        if fleet.is_some() {
+            eprintln!(
+                "note: --fleet is only shown in the interactive TUI; it is ignored in plain/piped mode."
+            );
+        }
         let home2 = home.clone();
         let agent2 = agent.clone();
         let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
@@ -170,7 +190,10 @@ pub async fn cmd_cli(
             .await?;
     }
 
-    run_tui(home, agent, resume, auto, skin, budget_usd, auto_reads).await
+    run_tui(
+        home, agent, resume, auto, skin, budget_usd, auto_reads, fleet,
+    )
+    .await
 }
 
 // ── TUI mode ────────────────────────────────────────────────────────────────
@@ -264,6 +287,7 @@ impl Drop for TerminalGuard {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_tui(
     home: PathBuf,
     agent: String,
@@ -272,6 +296,7 @@ async fn run_tui(
     skin: Option<String>,
     budget_usd: Option<f64>,
     auto_reads: bool,
+    fleet: Option<String>,
 ) -> Result<()> {
     // Resolve skin: CLI flag > config > "dark"
     let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
@@ -330,6 +355,9 @@ async fn run_tui(
     .context("init terminal")?;
 
     let mut app = build_app(&home, &agent, resume, active_theme)?;
+    if let Some(f) = fleet.as_deref() {
+        app.fleet = Some(fleet_rail::FleetRail::start(f));
+    }
     app.skills = complete::load_agent_skills(&agent);
     app.pricing = load_pricing(&home, &agent);
     if unknown_skin {
@@ -630,6 +658,27 @@ async fn event_loop(
             .as_ref()
             .map(|f| TokioInstant::from_std(f.next_poll))
             .unwrap_or_else(|| TokioInstant::from_std(StdInstant::now()));
+        // Fleet rail: cheap when nothing moved (two metadata calls), and only
+        // forces a redraw when the folded view actually changed.
+        if let Some(rail) = app.fleet.as_mut()
+            && StdInstant::now() >= rail.next_poll()
+            && rail.poll(&app.home, StdInstant::now())
+        {
+            app.needs_full_redraw = true;
+        }
+        // The rail needs its own wake source, exactly like `follow`: without
+        // this arm, an idle loop (no keypresses, no streaming, transcript
+        // non-empty so `blink_at` is disarmed) never wakes on its own, the
+        // poll above never gets a turn, and the rail goes stale forever on a
+        // terminal the user is just reading. The arm body is empty on
+        // purpose — waking the loop is the whole job; the poll above runs at
+        // the top of the next iteration.
+        let rail_armed = app.fleet.is_some();
+        let rail_at = app
+            .fleet
+            .as_ref()
+            .map(|r| TokioInstant::from_std(r.next_poll()))
+            .unwrap_or_else(|| TokioInstant::from_std(StdInstant::now()));
         tokio::select! {
             maybe = events.next() => match maybe {
                 Some(Ok(ev)) => handle_event(app, ev, &tx).await,
@@ -648,6 +697,11 @@ async fn event_loop(
             _ = tokio::time::sleep_until(follow_at), if follow_armed => {
                 app.poll_follow(StdInstant::now());
             }
+            // Wake at the rail's next-poll deadline; the poll itself already
+            // ran at the top of THIS iteration and gates on the same
+            // deadline, so this arm's only job is to schedule the NEXT
+            // wake-up. No state change needed here.
+            _ = tokio::time::sleep_until(rail_at), if rail_armed => {}
             _ = tokio::time::sleep_until(input_due), if input_armed => {
                 if let Some(raw) = take_due_input(app, StdInstant::now())
                     && let Some(p) = &app.panel
