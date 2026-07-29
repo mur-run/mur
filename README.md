@@ -102,6 +102,10 @@ never heard of MUR.
 2. Drag **MUR Hub** into Applications and open it.
 3. Say hi — the built-in concierge agent **MUR** is alive immediately: **offline,
    no API key, no signup**, running on a bundled local multimodal model.
+4. **+ New Agent** asks where the next one comes from — a **role template** MUR
+   fills in for you (skills, system prompt, least-privilege permissions), the
+   **official catalog**, or a `.muragent` a friend shared. Giving it a pet look
+   is the last step of every route, so any agent can live on your desktop.
 
 Received a `.muragent` file from a friend? **Double-click it.** Hub verifies the
 signature, walks you through model setup, and the agent comes alive.
@@ -300,6 +304,12 @@ The `.muragent` package is DSSE-signed and **contains no executable code and no
 secrets** — private keys and API keys are stripped at export. The recipient
 installs MUR Hub once (signed + notarized); after that, agents travel as plain
 files.
+
+MUR publishes agents the same way. `mur official list` browses the curated
+catalog and `mur official install agents/<name>` installs one — the bundle is
+signed by MUR and carries a license bound to your account, so an installed
+official agent verifies on your machine and nowhere else. The Hub's **+ New
+Agent** wizard offers the same catalog as a source.
 
 ### 🔐 Stay governed
 
