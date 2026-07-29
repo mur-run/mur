@@ -32,6 +32,15 @@ pub fn verify_event(
     }
 }
 
+/// Parse `MUR_CHANNEL_REQUIRE_SIG`: only explicit truthy values enable
+/// signature enforcement (`=0` / `=false`, or unset, must NOT turn it on).
+/// Shared by every reader of the var so the parsing rule lives in one place.
+pub(crate) fn require_sig_from_env() -> bool {
+    std::env::var("MUR_CHANNEL_REQUIRE_SIG")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes"))
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

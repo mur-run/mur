@@ -178,6 +178,11 @@ pub async fn cmd_cli(
                 "note: --auto-reads is only enforced in the interactive TUI; it is ignored in plain/piped mode."
             );
         }
+        if fleet.is_some() {
+            eprintln!(
+                "note: --fleet is only shown in the interactive TUI; it is ignored in plain/piped mode."
+            );
+        }
         let home2 = home.clone();
         let agent2 = agent.clone();
         let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
@@ -351,7 +356,7 @@ async fn run_tui(
 
     let mut app = build_app(&home, &agent, resume, active_theme)?;
     if let Some(f) = fleet.as_deref() {
-        app.fleet = Some(fleet_rail::FleetRail::start(&home, f));
+        app.fleet = Some(fleet_rail::FleetRail::start(f));
     }
     app.skills = complete::load_agent_skills(&agent);
     app.pricing = load_pricing(&home, &agent);
@@ -657,7 +662,7 @@ async fn event_loop(
         // forces a redraw when the folded view actually changed.
         if let Some(rail) = app.fleet.as_mut()
             && StdInstant::now() >= rail.next_poll()
-            && rail.poll(&app.home.clone(), StdInstant::now())
+            && rail.poll(&app.home, StdInstant::now())
         {
             app.needs_full_redraw = true;
         }

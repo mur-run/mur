@@ -205,20 +205,22 @@ pub struct FleetRail {
     channel_id: String,
     /// Channel log size at the last poll; unchanged size means nothing to parse.
     last_len: u64,
-    /// Newest mtime seen in the jobs dir; jobs move far slower than events.
-    last_jobs_mtime: Option<std::time::SystemTime>,
+    /// (entry count, newest mtime) seen in the jobs dir at the last poll. The
+    /// count catches a deletion that `max(mtime)` alone would miss — removing
+    /// any job that isn't the newest leaves the max unchanged and the gate
+    /// blind to a real change.
+    last_jobs_gate: (usize, Option<std::time::SystemTime>),
     view: RailView,
     next_poll: Instant,
 }
 
 impl FleetRail {
-    pub fn start(home: &Path, fleet: &str) -> Self {
-        let _ = home;
+    pub fn start(fleet: &str) -> Self {
         Self {
             fleet: fleet.to_string(),
             channel_id: format!("fleet-{fleet}"),
             last_len: u64::MAX, // force the first poll to do real work
-            last_jobs_mtime: None,
+            last_jobs_gate: (0, None),
             view: RailView::default(),
             next_poll: Instant::now(),
         }
@@ -240,20 +242,20 @@ impl FleetRail {
         let len = std::fs::metadata(store.events_path(&self.channel_id))
             .map(|m| m.len())
             .unwrap_or(0);
-        let jobs_mtime = newest_jobs_mtime(home, &self.fleet);
-        if len == self.last_len && jobs_mtime == self.last_jobs_mtime {
+        let jobs_gate = jobs_dir_gate(home, &self.fleet);
+        if len == self.last_len && jobs_gate == self.last_jobs_gate {
             return false;
         }
         self.last_len = len;
-        self.last_jobs_mtime = jobs_mtime;
+        self.last_jobs_gate = jobs_gate;
 
-        let mut notice = None;
+        let mut notices: Vec<String> = Vec::new();
         // `load_events` treats a missing log as an empty one (Ok(vec![])) so a
         // brand-new channel with zero events isn't an error — but that means it
         // can't distinguish "this fleet's channel doesn't exist" from "it exists
         // and is quiet". The manifest is the fleet's actual existence check.
         if store.load_manifest(&self.channel_id).is_err() {
-            notice = Some("⚠ channel unreadable".to_string());
+            notices.push("⚠ channel unreadable".to_string());
         }
         let events = match store.load_events(&self.channel_id) {
             Ok(evs) => {
@@ -261,26 +263,51 @@ impl FleetRail {
                 // actor's signature is dropped, never rendered. The rail
                 // vouches for OTHER agents, so showing an unverified "done"
                 // would lend the UI's credibility to a forgery.
-                let require_sig = std::env::var("MUR_CHANNEL_REQUIRE_SIG")
-                    .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes"))
-                    .unwrap_or(false);
-                evs.into_iter()
-                    .filter(|e| {
-                        crate::channel_verify::verify_event(home, &self.channel_id, e, require_sig)
-                    })
-                    .collect::<Vec<_>>()
+                let require_sig = crate::channel_verify::require_sig_from_env();
+                verify_events(home, &self.channel_id, evs, require_sig)
             }
             Err(_) => {
-                notice = Some("⚠ channel unreadable".to_string());
+                notices.push("⚠ channel unreadable".to_string());
                 Vec::new()
             }
         };
 
-        let jobs = crate::cmd::fleet::jobs::list_jobs_raw(home, &self.fleet).unwrap_or_default();
+        let members = fold_members(&events);
+
+        // "Load once, use twice" (spec §3): the events already loaded and
+        // verified above also feed job reconciliation, the same convergence
+        // `mur fleet show`/`mur fleet jobs` apply via `reconcile_jobs` — but
+        // applied in memory only (no `save_job`); the rail stays read-only.
+        let channel_terminal = crate::cmd::fleet::jobs::channel_terminal_status(&events);
+        let jobs_line_text = match crate::cmd::fleet::jobs::list_jobs_raw(home, &self.fleet) {
+            Ok(mut jobs) => {
+                let now_utc = Utc::now();
+                for j in jobs.iter_mut() {
+                    if let Some((s, _)) =
+                        crate::cmd::fleet::jobs::reconcile_running(j, channel_terminal, now_utc)
+                    {
+                        j.status = s;
+                    }
+                }
+                jobs_line(&self.fleet, &jobs)
+            }
+            Err(_) => {
+                // A corrupt job file must not read as "not run yet" (`jobs_line`
+                // on an empty Vec would say exactly that) — fall back to a
+                // summary derived from the channel fold instead (spec §4).
+                notices.push("⚠ jobs unreadable".to_string());
+                channel_derived_line(&self.fleet, &members)
+            }
+        };
+
         let view = RailView {
-            jobs_line: jobs_line(&self.fleet, &jobs),
-            members: fold_members(&events),
-            notice,
+            jobs_line: jobs_line_text,
+            members,
+            notice: if notices.is_empty() {
+                None
+            } else {
+                Some(notices.join("  "))
+            },
         };
         let changed = view != self.view;
         self.view = view;
@@ -288,291 +315,93 @@ impl FleetRail {
     }
 }
 
-/// Newest mtime across the fleet's job files — the cheap "did jobs move?" gate.
-fn newest_jobs_mtime(home: &Path, fleet: &str) -> Option<std::time::SystemTime> {
+/// Fallback collapsed line when the job store is unreadable (spec §4): counts
+/// derived from the channel fold instead of the job store, since the store is
+/// exactly what's unavailable.
+fn channel_derived_line(fleet: &str, members: &[MemberRow]) -> String {
+    let done = members
+        .iter()
+        .filter(|m| m.state == MemberState::Done)
+        .count();
+    let working = members
+        .iter()
+        .filter(|m| matches!(m.state, MemberState::Working { .. }))
+        .count();
+    let blocked = members
+        .iter()
+        .filter(|m| matches!(m.state, MemberState::Blocked { .. }))
+        .count();
+    let failed = members
+        .iter()
+        .filter(|m| m.state == MemberState::Failed)
+        .count();
+    let mut line = format!("fleet · {fleet}   member {done}/{} done", members.len());
+    if working > 0 {
+        line.push_str(&format!(" · {working} ⏵ working"));
+    }
+    if blocked > 0 {
+        line.push_str(&format!(" · {blocked} ▲ blocked"));
+    }
+    if failed > 0 {
+        line.push_str(&format!(" · {failed} ✖ failed"));
+    }
+    line
+}
+
+/// Verify each event against its actor's pubkey, resolving each distinct
+/// actor's key ONCE per poll rather than once per event. `actor_pubkey` does
+/// up to two file reads plus a rotation-chain verify; on a channel with
+/// thousands of events, re-resolving per event means thousands of synchronous
+/// file reads on the event-loop thread every ~700ms. Semantics are identical
+/// to `channel_verify::verify_event` per event, including its
+/// `None => !require_sig` fallback for an actor whose key can't be resolved.
+fn verify_events(
+    home: &Path,
+    channel_id: &str,
+    events: Vec<ChannelEvent>,
+    require_sig: bool,
+) -> Vec<ChannelEvent> {
+    let mut cache: std::collections::HashMap<(String, Option<u32>), Option<[u8; 32]>> =
+        std::collections::HashMap::new();
+    events
+        .into_iter()
+        .filter(|ev| {
+            let agent = match &ev.actor {
+                ChannelActor::Agent { id } => id.as_str(),
+                _ => crate::channel_writer::ROUTER_AGENT,
+            };
+            let pk = *cache
+                .entry((agent.to_string(), ev.key_version))
+                .or_insert_with(|| {
+                    mur_channel::sign::resolve_writer_pubkey(
+                        &home.join("agents").join(agent),
+                        ev.key_version,
+                    )
+                });
+            match pk {
+                Some(pk) => mur_channel::sign::verify_one(channel_id, ev, &pk, require_sig),
+                None => !require_sig,
+            }
+        })
+        .collect()
+}
+
+/// (entry count, newest mtime) across the fleet's job files — the cheap "did
+/// jobs move?" gate. The count is load-bearing: deleting a non-newest job
+/// leaves `max(mtime)` unchanged, so mtime alone misses it.
+fn jobs_dir_gate(home: &Path, fleet: &str) -> (usize, Option<std::time::SystemTime>) {
     let dir = crate::cmd::fleet::jobs::jobs_dir(home, fleet);
-    std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
+    let entries: Vec<_> = std::fs::read_dir(dir)
+        .map(|rd| rd.flatten().collect())
+        .unwrap_or_default();
+    let count = entries.len();
+    let max_mtime = entries
+        .iter()
         .filter_map(|e| e.metadata().ok()?.modified().ok())
-        .max()
+        .max();
+    (count, max_mtime)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn ev(
-        seq: u64,
-        actor: ChannelActor,
-        kind: EventKind,
-        payload: serde_json::Value,
-    ) -> ChannelEvent {
-        ChannelEvent {
-            seq,
-            ts: DateTime::parse_from_rfc3339("2026-07-29T00:00:00Z")
-                .unwrap()
-                .with_timezone(&Utc),
-            actor,
-            kind,
-            payload,
-            idempotency_key: None,
-            sig: None,
-            key_version: None,
-        }
-    }
-
-    fn agent(id: &str) -> ChannelActor {
-        ChannelActor::Agent { id: id.into() }
-    }
-
-    #[test]
-    fn state_changes_map_to_member_states() {
-        let evs = vec![
-            ev(
-                1,
-                agent("qa"),
-                EventKind::StateChange,
-                json!({"from": "submitted", "to": "working"}),
-            ),
-            ev(
-                2,
-                agent("backend"),
-                EventKind::StateChange,
-                json!({"from": "working", "to": "completed"}),
-            ),
-            ev(
-                3,
-                agent("dataml"),
-                EventKind::StateChange,
-                json!({"from": "working", "to": "failed"}),
-            ),
-            ev(
-                4,
-                agent("pm"),
-                EventKind::StateChange,
-                json!({"from": "working", "to": "canceled"}),
-            ),
-        ];
-        let rows = fold_members(&evs);
-        let by = |n: &str| rows.iter().find(|r| r.agent == n).unwrap().state.clone();
-        assert!(matches!(by("qa"), MemberState::Working { .. }));
-        assert!(matches!(by("backend"), MemberState::Done));
-        // canceled and rejected collapse into failed — the user only needs
-        // "it did not finish".
-        assert!(matches!(by("dataml"), MemberState::Failed));
-        assert!(matches!(by("pm"), MemberState::Failed));
-    }
-
-    #[test]
-    fn a_hitl_request_blocks_and_its_response_unblocks() {
-        let req = json!({"hitl_id": "h1", "tool_name": "bash", "summary": "cargo publish", "action_hash": "x", "tier": "write"});
-        let evs = vec![
-            ev(
-                1,
-                agent("qa"),
-                EventKind::StateChange,
-                json!({"to": "working"}),
-            ),
-            ev(2, agent("qa"), EventKind::HitlRequest, req),
-        ];
-        let rows = fold_members(&evs);
-        match &rows[0].state {
-            MemberState::Blocked { summary, hitl_id } => {
-                assert_eq!(hitl_id, "h1");
-                assert!(summary.contains("cargo publish"));
-            }
-            other => panic!("expected blocked, got {other:?}"),
-        }
-
-        // The approval is written by the HUMAN, not by the blocked agent, so
-        // clearing must key on hitl_id — never on the actor.
-        let mut evs = evs;
-        evs.push(ev(
-            3,
-            ChannelActor::Human {
-                name: "david".into(),
-            },
-            EventKind::HitlResponse,
-            json!({"hitl_id": "h1", "allow": true, "surface": "cli"}),
-        ));
-        let rows = fold_members(&evs);
-        assert!(matches!(rows[0].state, MemberState::Working { .. }));
-    }
-
-    #[test]
-    fn tool_calls_annotate_the_working_row() {
-        let evs = vec![
-            ev(
-                1,
-                agent("qa"),
-                EventKind::StateChange,
-                json!({"to": "working"}),
-            ),
-            ev(
-                2,
-                agent("qa"),
-                EventKind::ToolCall,
-                json!({"tool": "bash", "command": "cargo test"}),
-            ),
-        ];
-        let rows = fold_members(&evs);
-        match &rows[0].state {
-            MemberState::Working { tool, .. } => assert_eq!(tool.as_deref(), Some("cargo test")),
-            other => panic!("expected working, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn human_and_system_actors_never_become_rows() {
-        let evs = vec![
-            ev(
-                1,
-                ChannelActor::Human {
-                    name: "david".into(),
-                },
-                EventKind::Message,
-                json!({"text": "go"}),
-            ),
-            ev(
-                2,
-                ChannelActor::System,
-                EventKind::StateChange,
-                json!({"to": "working"}),
-            ),
-        ];
-        assert!(fold_members(&evs).is_empty());
-    }
-
-    #[test]
-    fn blocked_sorts_first_then_working_then_finished() {
-        let evs = vec![
-            ev(
-                1,
-                agent("aaa_done"),
-                EventKind::StateChange,
-                json!({"to": "completed"}),
-            ),
-            ev(
-                2,
-                agent("bbb_working"),
-                EventKind::StateChange,
-                json!({"to": "working"}),
-            ),
-            ev(
-                3,
-                agent("ccc_blocked"),
-                EventKind::HitlRequest,
-                json!({"hitl_id": "h1", "tool_name": "bash", "summary": "rm", "action_hash": "x", "tier": "write"}),
-            ),
-        ];
-        let rows = fold_members(&evs);
-        let names: Vec<&str> = rows.iter().map(|r| r.agent.as_str()).collect();
-        assert_eq!(names, vec!["ccc_blocked", "bbb_working", "aaa_done"]);
-    }
-
-    #[test]
-    fn an_empty_channel_has_no_rows() {
-        assert!(fold_members(&[]).is_empty());
-    }
-
-    use mur_common::fleet::{Job, JobStatus};
-
-    fn job(id: &str, status: JobStatus) -> Job {
-        Job {
-            id: id.into(),
-            text: "do the thing".into(),
-            source: "cli".into(),
-            status,
-            created_at: "2026-07-29T00:00:00Z".into(),
-            started_at: None,
-            finished_at: None,
-            run_id: None,
-            result: None,
-            error: None,
-        }
-    }
-
-    #[test]
-    fn jobs_line_counts_terminal_over_total() {
-        let jobs = vec![
-            job("1", JobStatus::Done),
-            job("2", JobStatus::Failed),
-            job("3", JobStatus::Running),
-            job("4", JobStatus::Queued),
-            job("5", JobStatus::Queued),
-        ];
-        // 2 of 5 have reached a terminal state; one of those failed.
-        let line = jobs_line("develop", &jobs);
-        assert!(line.contains("fleet · develop"), "got: {line}");
-        assert!(line.contains("job 2/5"), "got: {line}");
-        assert!(line.contains("1 ⏵ running"), "got: {line}");
-        assert!(line.contains("1 ✖ failed"), "got: {line}");
-    }
-
-    #[test]
-    fn jobs_line_says_not_run_yet_when_there_are_none() {
-        let line = jobs_line("develop", &[]);
-        assert!(line.contains("not run yet"), "got: {line}");
-        assert!(line.contains("mur fleet run develop"), "got: {line}");
-    }
-
-    #[test]
-    fn jobs_line_omits_the_failed_clause_when_nothing_failed() {
-        let line = jobs_line("develop", &[job("1", JobStatus::Done)]);
-        assert!(!line.contains("failed"), "got: {line}");
-    }
-
-    use std::time::Instant;
-
-    /// A fleet channel with one member. `create_for_fleet(fleet_name, router,
-    /// members)` names the channel `fleet-<fleet_name>` itself — the rail must
-    /// derive the same id from `--fleet dev`.
-    fn seed_home() -> tempfile::TempDir {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
-        svc.create_for_fleet("dev", "mur", &["qa".to_string()])
-            .unwrap();
-        tmp
-    }
-
-    #[test]
-    fn poll_reports_change_only_when_the_log_grows() {
-        let tmp = seed_home();
-        let now = Instant::now();
-        let mut rail = FleetRail::start(tmp.path(), "dev");
-
-        // First poll reads the (empty) channel and the (absent) job dir.
-        assert!(rail.poll(tmp.path(), now), "first poll must produce a view");
-        assert!(rail.view().members.is_empty());
-        assert!(rail.view().jobs_line.contains("not run yet"));
-
-        // Nothing changed → no work, no change reported.
-        assert!(!rail.poll(tmp.path(), now));
-
-        // A member acts → the next poll picks it up.
-        let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
-        svc.append(
-            "fleet-dev",
-            ChannelActor::Agent { id: "qa".into() },
-            EventKind::StateChange,
-            serde_json::json!({"to": "working"}),
-            None,
-        )
-        .unwrap();
-        assert!(rail.poll(tmp.path(), now), "log grew → view must change");
-        assert_eq!(rail.view().members.len(), 1);
-        assert_eq!(rail.view().members[0].agent, "qa");
-    }
-
-    #[test]
-    fn an_unreadable_channel_degrades_instead_of_failing() {
-        let tmp = tempfile::TempDir::new().unwrap(); // no channel at all
-        let mut rail = FleetRail::start(tmp.path(), "ghost");
-        rail.poll(tmp.path(), Instant::now());
-        assert!(rail.view().members.is_empty());
-        // The rail says so on its own line; it never returns Err.
-        assert!(rail.view().notice.is_some());
-    }
-}
+#[path = "fleet_rail/tests.rs"]
+mod tests;

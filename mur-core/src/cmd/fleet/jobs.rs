@@ -59,7 +59,7 @@ pub fn save_job(mur_home: &Path, fleet: &str, job: &Job) -> Result<()> {
 /// The channel's terminal outcome for a run, read from its event log (#10):
 /// the last `StateChange` event whose `to` is terminal, mapped to a job status.
 /// `None` if the channel has no terminal StateChange yet (still working).
-fn channel_terminal_status(events: &[ChannelEvent]) -> Option<JobStatus> {
+pub(crate) fn channel_terminal_status(events: &[ChannelEvent]) -> Option<JobStatus> {
     events
         .iter()
         .filter(|e| e.kind == EventKind::StateChange)
@@ -85,7 +85,7 @@ fn channel_terminal_status(events: &[ChannelEvent]) -> Option<JobStatus> {
 ///  2. **Orphan staleness** — a job still `running` `RUNNING_GRACE_SECS` after
 ///     `started_at`, with no terminal channel signal, has no live run: its
 ///     process died (the four-day `019f69d8`). Mark `failed(orphaned)`.
-fn reconcile_running(
+pub(crate) fn reconcile_running(
     job: &Job,
     channel: Option<JobStatus>,
     now: chrono::DateTime<chrono::Utc>,

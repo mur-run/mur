@@ -107,7 +107,7 @@ Existing enums only; no new vocabulary.
 
 | channel event | member state |
 |---|---|
-| `StateChange → Working` | ⏵ working |
+| `StateChange → Working`, or `StateChange → "submitted"` | ⏵ working |
 | `StateChange → InputRequired`, or a `HitlRequest` with no matching `HitlResponse` | ▲ **blocked** (with the request summary) |
 | `StateChange → Completed` | ✔ done |
 | `StateChange → Failed` / `Canceled` / `Rejected` | ✖ failed |
