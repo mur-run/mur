@@ -1544,7 +1544,13 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             plain,
             budget_usd,
             auto_reads,
-        } => cmd::agent::cmd_cli(&names, resume, auto, skin, plain, budget_usd, auto_reads).await?,
+            fleet,
+        } => {
+            cmd::agent::cmd_cli(
+                &names, resume, auto, skin, plain, budget_usd, auto_reads, fleet,
+            )
+            .await?
+        }
         AgentAction::Pair { name } => cmd::agent_pair::cmd_pair(&name)?,
         AgentAction::Devices => cmd::agent_pair::cmd_devices()?,
         AgentAction::Unpair { fingerprint } => cmd::agent_pair::cmd_unpair(&fingerprint)?,

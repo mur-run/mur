@@ -59,7 +59,7 @@ pub fn save_job(mur_home: &Path, fleet: &str, job: &Job) -> Result<()> {
 /// The channel's terminal outcome for a run, read from its event log (#10):
 /// the last `StateChange` event whose `to` is terminal, mapped to a job status.
 /// `None` if the channel has no terminal StateChange yet (still working).
-fn channel_terminal_status(events: &[ChannelEvent]) -> Option<JobStatus> {
+pub(crate) fn channel_terminal_status(events: &[ChannelEvent]) -> Option<JobStatus> {
     events
         .iter()
         .filter(|e| e.kind == EventKind::StateChange)
@@ -85,7 +85,7 @@ fn channel_terminal_status(events: &[ChannelEvent]) -> Option<JobStatus> {
 ///  2. **Orphan staleness** — a job still `running` `RUNNING_GRACE_SECS` after
 ///     `started_at`, with no terminal channel signal, has no live run: its
 ///     process died (the four-day `019f69d8`). Mark `failed(orphaned)`.
-fn reconcile_running(
+pub(crate) fn reconcile_running(
     job: &Job,
     channel: Option<JobStatus>,
     now: chrono::DateTime<chrono::Utc>,
@@ -156,11 +156,10 @@ fn reconcile_jobs(mur_home: &Path, fleet: &str, jobs: &mut [Job]) {
     }
 }
 
-/// All jobs sorted oldest-first (UUIDv7 lexical sort == time order).
-///
-/// Reconciles zombie `running` jobs against the channel/orphan rules (#10)
-/// before returning, so every caller (`fleet show`, `fleet jobs`) sees truth.
-pub fn list_jobs(mur_home: &Path, fleet: &str) -> Result<Vec<Job>> {
+/// Jobs straight from the store, oldest-first, with no channel reconciliation.
+/// `list_jobs` adds reconciliation on top; callers that already hold the
+/// channel's events (the murmur fleet rail) use this to avoid re-parsing it.
+pub(crate) fn list_jobs_raw(mur_home: &Path, fleet: &str) -> Result<Vec<Job>> {
     if !valid_fleet_name(fleet) {
         bail!("invalid fleet name '{fleet}': use lowercase letters, digits, '-' or '_'");
     }
@@ -183,6 +182,15 @@ pub fn list_jobs(mur_home: &Path, fleet: &str) -> Result<Vec<Job>> {
     }
     // Sort by id (UUIDv7 = time order)
     jobs.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(jobs)
+}
+
+/// All jobs sorted oldest-first (UUIDv7 lexical sort == time order).
+///
+/// Reconciles zombie `running` jobs against the channel/orphan rules (#10)
+/// before returning, so every caller (`fleet show`, `fleet jobs`) sees truth.
+pub fn list_jobs(mur_home: &Path, fleet: &str) -> Result<Vec<Job>> {
+    let mut jobs = list_jobs_raw(mur_home, fleet)?;
     // #10: converge zombie `running` records to their true terminal state.
     reconcile_jobs(mur_home, fleet, &mut jobs);
     Ok(jobs)

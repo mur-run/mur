@@ -163,6 +163,11 @@ pub enum AgentAction {
         /// conservative (fail-safe: anything uncertain still asks).
         #[arg(long = "auto-reads")]
         auto_reads: bool,
+        /// Watch a fleet's shared channel in a status band: job progress at
+        /// rest, expanding when a member is blocked. Names the fleet, not the
+        /// channel — `--fleet develop` watches `fleet-develop`.
+        #[arg(long)]
+        fleet: Option<String>,
     },
     /// Rotate an agent's Ed25519 identity keypair (P0a.6).
     Rekey {
@@ -1132,6 +1137,7 @@ mod tests {
             plain: _,
             budget_usd: _,
             auto_reads: _,
+            fleet: _,
         } = parse_cli_action(&["mur", "agent", "cli", "a1", "a2", "a3", "--auto"])
         else {
             panic!("expected Cli variant");
@@ -1153,6 +1159,24 @@ mod tests {
     #[test]
     fn agent_cli_requires_at_least_one_name() {
         assert!(Cli::try_parse_from(["mur", "agent", "cli"]).is_err());
+    }
+
+    #[test]
+    fn cli_action_parses_fleet_flag() {
+        let AgentAction::Cli { names, fleet, .. } =
+            parse_cli_action(&["mur", "agent", "cli", "mur", "--fleet", "develop"])
+        else {
+            panic!("expected Cli action");
+        };
+        assert_eq!(names, vec!["mur".to_string()]);
+        assert_eq!(fleet.as_deref(), Some("develop"));
+
+        // Absent by default — a plain murmur must not become fleet-aware.
+        let AgentAction::Cli { fleet, .. } = parse_cli_action(&["mur", "agent", "cli", "mur"])
+        else {
+            panic!("expected Cli action");
+        };
+        assert_eq!(fleet, None);
     }
 
     #[test]

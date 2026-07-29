@@ -81,9 +81,7 @@ pub async fn gate(
             // loop) so `wait_for_response` is pure w.r.t. config and tests never
             // race on a process-global env var. Only explicit truthy values
             // enable enforcement: `=0` / `=false` must NOT turn it on.
-            let require_sig = std::env::var("MUR_CHANNEL_REQUIRE_SIG")
-                .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes"))
-                .unwrap_or(false);
+            let require_sig = crate::channel_verify::require_sig_from_env();
             let request = HitlRequest {
                 hitl_id: hitl_id.clone(),
                 action_hash: hash.clone(),
