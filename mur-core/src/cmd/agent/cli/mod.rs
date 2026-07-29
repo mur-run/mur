@@ -108,6 +108,7 @@ const PLAIN_STEP_HINT_MAX: usize = 120;
 const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /mcp  /skill  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
+#[allow(clippy::too_many_arguments)]
 pub async fn cmd_cli(
     names: &[String],
     resume: bool,
@@ -116,6 +117,7 @@ pub async fn cmd_cli(
     plain: bool,
     budget_usd: Option<f64>,
     auto_reads: bool,
+    fleet: Option<String>,
 ) -> Result<()> {
     if names.len() > 1 {
         if budget_usd.is_some() {
@@ -128,11 +130,23 @@ pub async fn cmd_cli(
                 "note: --auto-reads is only enforced in the single-agent TUI; it is ignored when opening multiple agents."
             );
         }
+        if fleet.is_some() {
+            eprintln!(
+                "note: --fleet is only shown in the single-agent TUI; it is ignored when opening multiple agents."
+            );
+        }
         let names = names.to_vec();
         return tokio::task::spawn_blocking(move || multiplex::run(&names, resume, auto)).await?;
     }
     let name = names.first().context("at least one agent name required")?;
     let home = super::resolve_mur_home()?;
+
+    // Fail loudly on an unknown fleet. Degrading to a plain murmur would leave
+    // the user believing they are watching a fleet when they are not.
+    if let Some(f) = fleet.as_deref() {
+        crate::cmd::fleet::store::load_fleet(&home, f).with_context(|| format!("--fleet {f}"))?;
+    }
+
     let agent = canonicalize_agent_name(&home, name);
 
     // Streaming requires a live socket; fail early with a friendly hint.
