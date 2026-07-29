@@ -661,6 +661,19 @@ async fn event_loop(
         {
             app.needs_full_redraw = true;
         }
+        // The rail needs its own wake source, exactly like `follow`: without
+        // this arm, an idle loop (no keypresses, no streaming, transcript
+        // non-empty so `blink_at` is disarmed) never wakes on its own, the
+        // poll above never gets a turn, and the rail goes stale forever on a
+        // terminal the user is just reading. The arm body is empty on
+        // purpose — waking the loop is the whole job; the poll above runs at
+        // the top of the next iteration.
+        let rail_armed = app.fleet.is_some();
+        let rail_at = app
+            .fleet
+            .as_ref()
+            .map(|r| TokioInstant::from_std(r.next_poll()))
+            .unwrap_or_else(|| TokioInstant::from_std(StdInstant::now()));
         tokio::select! {
             maybe = events.next() => match maybe {
                 Some(Ok(ev)) => handle_event(app, ev, &tx).await,
@@ -679,6 +692,11 @@ async fn event_loop(
             _ = tokio::time::sleep_until(follow_at), if follow_armed => {
                 app.poll_follow(StdInstant::now());
             }
+            // Wake at the rail's next-poll deadline; the poll itself already
+            // ran at the top of THIS iteration and gates on the same
+            // deadline, so this arm's only job is to schedule the NEXT
+            // wake-up. No state change needed here.
+            _ = tokio::time::sleep_until(rail_at), if rail_armed => {}
             _ = tokio::time::sleep_until(input_due), if input_armed => {
                 if let Some(raw) = take_due_input(app, StdInstant::now())
                     && let Some(p) = &app.panel
