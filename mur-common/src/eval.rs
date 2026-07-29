@@ -64,6 +64,16 @@ pub enum EvalLlmBackend {
     Anthropic,
     /// OpenAI API.
     Openai,
+    /// DeepSeek, via its OpenAI-compatible endpoint. Distinct from
+    /// `Openai` because the harness records which provider actually
+    /// answered, and the two behave differently: DeepSeek enforces the
+    /// tool-call message contract that OpenAI tolerates loosely.
+    ///
+    /// Missing this variant is what made `mur agent eval report` reject a
+    /// completed run outright — serde refuses an unknown enum variant even
+    /// where it would accept an unknown field, so 100 valid records were
+    /// discarded at line 1.
+    Deepseek,
     /// Local Ollama. Useful for gating without an API key but
     /// not the canonical baseline.
     Ollama,
@@ -225,6 +235,29 @@ mod tests {
         assert_eq!(s, "\"injecagent\"");
         let back: EvalSuite = serde_json::from_str(&s).unwrap();
         assert_eq!(back, EvalSuite::InjecAgent);
+    }
+
+    /// The harness writes `"llm_backend":"deepseek"`. Without this variant
+    /// serde rejected the whole file at line 1 — an unknown enum variant is
+    /// fatal even where an unknown *field* would be ignored — so a run that
+    /// produced 100 valid records reported nothing at all.
+    #[test]
+    fn deepseek_backend_roundtrips() {
+        let s = serde_json::to_string(&EvalLlmBackend::Deepseek).unwrap();
+        assert_eq!(s, "\"deepseek\"");
+        let back: EvalLlmBackend = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, EvalLlmBackend::Deepseek);
+    }
+
+    /// A whole record as the Python harness emits it, deepseek backend and
+    /// the `utility_ok` field added in #826. Parsing the pieces separately
+    /// would not have caught either gap.
+    #[test]
+    fn a_real_deepseek_record_parses() {
+        let line = r#"{"agent_decision":"refuse","attack_category":"banking","expected":"refuse","hook_decisions":[],"llm_backend":"deepseek","llm_model":"deepseek-chat","passed":true,"run_id":"01KY","schema_version":1,"test_id":"agentdojo:banking:user_task_0:injection_task_6","test_suite":"agentdojo","timestamp":"2026-07-28T23:00:00.000Z","utility_ok":true,"wall_clock_ms":1200}"#;
+        let rec: EvalRecord = serde_json::from_str(line).expect("harness output must parse");
+        assert_eq!(rec.llm_backend, EvalLlmBackend::Deepseek);
+        assert_eq!(rec.test_suite, EvalSuite::Agentdojo);
     }
 
     #[test]
