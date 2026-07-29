@@ -838,8 +838,8 @@ git commit -m "feat(murmur): gated fleet-rail poller over channel + job store"
 - Modify: `mur-core/src/cmd/agent/cli/ui.rs`
 
 **Interfaces:**
-- Consumes: `RailView`, `MemberState`, `MAX_EXPANDED_ROWS`, `App.fleet` (Task 6 adds the field — for this task, add it first as `pub fleet: Option<super::fleet_rail::FleetRail>` in `app.rs` and leave it `None`).
-- Produces: `pub fn fleet_rail_height(app: &App) -> u16`, `fn render_fleet_rail(f: &mut Frame, app: &App, area: Rect)`.
+- Consumes: `RailView`, `MemberState`, `MAX_EXPANDED_ROWS` (Tasks 2–4). This task adds `App.fleet` itself; Task 6 populates it.
+- Produces: `pub fn rail_height_for(view: &RailView) -> u16`, `pub fn fleet_rail_height(app: &App) -> u16`, `fn band_capacity(viewport_h: u16, input_h: u16, chooser_h: u16, rail_h: u16) -> u16`, `fn render_fleet_rail(f: &mut Frame, app: &App, area: Rect)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -889,21 +889,13 @@ mod fleet_rail_layout_tests {
         // The guard for the one dangerous coupling: band_inner_rows decides
         // when transcript content is flushed to scrollback, so it must account
         // for every row the rail paints or the flush drifts from the picture.
+        // Tested on the pure arithmetic so no App and no test-only seam in
+        // production code are needed.
         let viewport_h = 20u16;
-        let tmp = tempfile::TempDir::new().unwrap();
-        // App::new(home, agent, session, theme) — the same constructor
-        // `cmd_cli` uses (mod.rs:393). There is no App::for_test; the only
-        // `for_test` in app.rs builds a ChatMsg.
-        let mut app = App::new(
-            tmp.path().to_path_buf(),
-            "mur".to_string(),
-            crate::cmd::agent::cli::persist::Session::create(tmp.path(), "mur").unwrap(),
-            crate::cmd::agent::cli::theme::resolve_skin("dark"),
-        );
-        let without = band_inner_rows(&app, viewport_h);
-        app.fleet_view_for_test = Some(view(3));
-        let with = band_inner_rows(&app, viewport_h);
-        assert_eq!(without - with, rail_height_for(&view(3)));
+        let input_h = 3u16;
+        let without = band_capacity(viewport_h, input_h, 0, 0);
+        let with_rail = band_capacity(viewport_h, input_h, 0, rail_height_for(&view(3)));
+        assert_eq!(without - with_rail, rail_height_for(&view(3)));
     }
 }
 ```
@@ -1027,45 +1019,48 @@ Then wire the band into `render()` (`ui.rs:51`), between the transcript and the 
     render_status(f, app, chunks[4]);
 ```
 
-and subtract it in `band_inner_rows`:
+and subtract it in `band_inner_rows`. Split the arithmetic into a pure
+helper so the coupling is a testable function rather than a fact buried in a
+method that needs an `App`:
 
 ```rust
+/// Rows left for the live transcript band inside `viewport_h` once the
+/// composer, status line, chooser band, fleet rail and the band's own
+/// TOP/BOTTOM borders have taken theirs.
+fn band_capacity(viewport_h: u16, input_h: u16, chooser_h: u16, rail_h: u16) -> u16 {
+    viewport_h.saturating_sub(input_h + 1 + chooser_h + rail_h + 2)
+}
+
 fn band_inner_rows(app: &App, viewport_h: u16) -> u16 {
     let input_h = (app.input.lines().len() as u16 + 2).clamp(3, 8);
     let chooser_h = chooser_band_height(app, viewport_h, input_h);
     // The rail steals rows from the live band; miss it here and the flush
     // decision drifts from what is painted.
-    let rail_h = fleet_rail_height(app);
-    viewport_h.saturating_sub(input_h + 1 + chooser_h + rail_h + 2)
+    band_capacity(viewport_h, input_h, chooser_h, fleet_rail_height(app))
 }
 ```
 
-- [ ] **Step 4: Add the test seams to `App`**
+- [ ] **Step 4: Add the rail field to `App`**
 
 In `app.rs`:
 
 ```rust
     /// Fleet rail, when `--fleet` is on. `None` for an ordinary murmur.
     pub fleet: Option<super::fleet_rail::FleetRail>,
-    /// Test-only override so layout tests need no poller or filesystem.
-    #[cfg(test)]
-    pub fleet_view_for_test: Option<super::fleet_rail::RailView>,
 ```
 
 ```rust
 impl App {
-    /// The rail's current view, from the live poller or (in tests) the override.
+    /// The rail's current view, or `None` when `--fleet` is off.
     pub fn fleet_view(&self) -> Option<&super::fleet_rail::RailView> {
-        #[cfg(test)]
-        if self.fleet_view_for_test.is_some() {
-            return self.fleet_view_for_test.as_ref();
-        }
         self.fleet.as_ref().map(|f| f.view())
     }
 }
 ```
 
-Initialize `fleet: None` (and `fleet_view_for_test: None`) wherever `App` is constructed.
+Initialize `fleet: None` in `App::new` (`app.rs:478`). No test-only field and
+no `#[cfg(test)]` branch in the getter: the layout tests exercise
+`rail_height_for` and `band_capacity`, which take their inputs directly.
 
 - [ ] **Step 5: Run the tests**
 
