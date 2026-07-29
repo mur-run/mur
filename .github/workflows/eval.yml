@@ -194,9 +194,21 @@ jobs:
           retention-days: 30
 
   # ── Real-LLM track ────────────────────────────────────────────────
-  # Runs on weekly cron + every v* tag. ~$5/run (50+50 cases).
+  # Runs on weekly cron + every v* tag. 50 AgentDojo + 50 HarmBench cases.
   # Requires ANTHROPIC_API_KEY or DEEPSEEK_API_KEY GitHub secret.
   # DeepSeek is auto-selected when only DEEPSEEK_API_KEY is set.
+  #
+  # Cost per run, which differs by roughly two orders of magnitude:
+  #   anthropic  ~$5      — original estimate for claude-sonnet, not
+  #                         re-measured since.
+  #   deepseek   ~$0.06   — measured 2026-07-29 off-peak, balance
+  #                         13.44 -> 13.38 across a 50+50 run.
+  #                         Double it during DeepSeek's peak window
+  #                         (Beijing 09:00-12:00 and 14:00-18:00); the
+  #                         crons above are set to miss it.
+  #
+  # Worth stating because the two invite opposite decisions about cadence:
+  # nightly on Anthropic is ~$150/month, nightly on DeepSeek is under $2.
   real-llm:
     name: Real-LLM (release / cron)
     runs-on: ubuntu-latest
