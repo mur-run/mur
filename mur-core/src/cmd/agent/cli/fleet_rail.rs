@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
+use mur_common::fleet::{Job, JobStatus};
 
 /// Most member rows shown when the rail expands. Blocked sorts first, so
 /// whatever is truncated is the least urgent.
@@ -145,6 +146,35 @@ pub fn fold_members(events: &[ChannelEvent]) -> Vec<MemberRow> {
             .then_with(|| a.agent.cmp(&b.agent))
     });
     rows
+}
+
+/// The always-present collapsed line: how far the fleet's work has got.
+///
+/// `2/5` is jobs in a terminal state over the total — the question a user asks
+/// first ("how far along?"), answered by the slow-moving store rather than by
+/// the event stream.
+pub fn jobs_line(fleet: &str, jobs: &[Job]) -> String {
+    if jobs.is_empty() {
+        return format!("fleet · {fleet}   not run yet (mur fleet run {fleet})");
+    }
+    let total = jobs.len();
+    let terminal = jobs.iter().filter(|j| j.status.is_terminal()).count();
+    let running = jobs
+        .iter()
+        .filter(|j| j.status == JobStatus::Running)
+        .count();
+    let failed = jobs
+        .iter()
+        .filter(|j| matches!(j.status, JobStatus::Failed | JobStatus::Canceled))
+        .count();
+    let mut line = format!("fleet · {fleet}   job {terminal}/{total}");
+    if running > 0 {
+        line.push_str(&format!(" · {running} ⏵ running"));
+    }
+    if failed > 0 {
+        line.push_str(&format!(" · {failed} ✖ failed"));
+    }
+    line
 }
 
 #[cfg(test)]
@@ -324,5 +354,52 @@ mod tests {
     #[test]
     fn an_empty_channel_has_no_rows() {
         assert!(fold_members(&[]).is_empty());
+    }
+
+    use mur_common::fleet::{Job, JobStatus};
+
+    fn job(id: &str, status: JobStatus) -> Job {
+        Job {
+            id: id.into(),
+            text: "do the thing".into(),
+            source: "cli".into(),
+            status,
+            created_at: "2026-07-29T00:00:00Z".into(),
+            started_at: None,
+            finished_at: None,
+            run_id: None,
+            result: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn jobs_line_counts_terminal_over_total() {
+        let jobs = vec![
+            job("1", JobStatus::Done),
+            job("2", JobStatus::Failed),
+            job("3", JobStatus::Running),
+            job("4", JobStatus::Queued),
+            job("5", JobStatus::Queued),
+        ];
+        // 2 of 5 have reached a terminal state; one of those failed.
+        let line = jobs_line("develop", &jobs);
+        assert!(line.contains("fleet · develop"), "got: {line}");
+        assert!(line.contains("job 2/5"), "got: {line}");
+        assert!(line.contains("1 ⏵ running"), "got: {line}");
+        assert!(line.contains("1 ✖ failed"), "got: {line}");
+    }
+
+    #[test]
+    fn jobs_line_says_not_run_yet_when_there_are_none() {
+        let line = jobs_line("develop", &[]);
+        assert!(line.contains("not run yet"), "got: {line}");
+        assert!(line.contains("mur fleet run develop"), "got: {line}");
+    }
+
+    #[test]
+    fn jobs_line_omits_the_failed_clause_when_nothing_failed() {
+        let line = jobs_line("develop", &[job("1", JobStatus::Done)]);
+        assert!(!line.contains("failed"), "got: {line}");
     }
 }
