@@ -185,7 +185,10 @@ pub async fn cmd_cli(
             .await?;
     }
 
-    run_tui(home, agent, resume, auto, skin, budget_usd, auto_reads).await
+    run_tui(
+        home, agent, resume, auto, skin, budget_usd, auto_reads, fleet,
+    )
+    .await
 }
 
 // ── TUI mode ────────────────────────────────────────────────────────────────
@@ -279,6 +282,7 @@ impl Drop for TerminalGuard {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_tui(
     home: PathBuf,
     agent: String,
@@ -287,6 +291,7 @@ async fn run_tui(
     skin: Option<String>,
     budget_usd: Option<f64>,
     auto_reads: bool,
+    fleet: Option<String>,
 ) -> Result<()> {
     // Resolve skin: CLI flag > config > "dark"
     let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
@@ -345,6 +350,9 @@ async fn run_tui(
     .context("init terminal")?;
 
     let mut app = build_app(&home, &agent, resume, active_theme)?;
+    if let Some(f) = fleet.as_deref() {
+        app.fleet = Some(fleet_rail::FleetRail::start(&home, f));
+    }
     app.skills = complete::load_agent_skills(&agent);
     app.pricing = load_pricing(&home, &agent);
     if unknown_skin {
@@ -645,6 +653,14 @@ async fn event_loop(
             .as_ref()
             .map(|f| TokioInstant::from_std(f.next_poll))
             .unwrap_or_else(|| TokioInstant::from_std(StdInstant::now()));
+        // Fleet rail: cheap when nothing moved (two metadata calls), and only
+        // forces a redraw when the folded view actually changed.
+        if let Some(rail) = app.fleet.as_mut()
+            && StdInstant::now() >= rail.next_poll()
+            && rail.poll(&app.home.clone(), StdInstant::now())
+        {
+            app.needs_full_redraw = true;
+        }
         tokio::select! {
             maybe = events.next() => match maybe {
                 Some(Ok(ev)) => handle_event(app, ev, &tx).await,
