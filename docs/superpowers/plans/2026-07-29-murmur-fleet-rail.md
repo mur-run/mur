@@ -615,14 +615,15 @@ git commit -m "feat(murmur): job-progress summary line for the fleet rail"
 Add to `mod tests`:
 
 ```rust
-    use mur_common::channel::ParticipantRole;
     use std::time::Instant;
 
-    /// A channel with one member, plus the fleet dir the rail reads jobs from.
+    /// A fleet channel with one member. `create_for_fleet(fleet_name, router,
+    /// members)` names the channel `fleet-<fleet_name>` itself — the rail must
+    /// derive the same id from `--fleet dev`.
     fn seed_home() -> tempfile::TempDir {
         let tmp = tempfile::TempDir::new().unwrap();
         let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
-        svc.create("fleet-dev", "goal", &[("mur", ParticipantRole::Router)])
+        svc.create_for_fleet("dev", "mur", &["qa".to_string()])
             .unwrap();
         tmp
     }
@@ -889,7 +890,16 @@ mod fleet_rail_layout_tests {
         // when transcript content is flushed to scrollback, so it must account
         // for every row the rail paints or the flush drifts from the picture.
         let viewport_h = 20u16;
-        let mut app = App::for_test();
+        let tmp = tempfile::TempDir::new().unwrap();
+        // App::new(home, agent, session, theme) — the same constructor
+        // `cmd_cli` uses (mod.rs:393). There is no App::for_test; the only
+        // `for_test` in app.rs builds a ChatMsg.
+        let mut app = App::new(
+            tmp.path().to_path_buf(),
+            "mur".to_string(),
+            crate::cmd::agent::cli::persist::Session::create(tmp.path(), "mur").unwrap(),
+            crate::cmd::agent::cli::theme::resolve_skin("dark"),
+        );
         let without = band_inner_rows(&app, viewport_h);
         app.fleet_view_for_test = Some(view(3));
         let with = band_inner_rows(&app, viewport_h);
