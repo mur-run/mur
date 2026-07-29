@@ -50,9 +50,13 @@ Every fact below was verified in the repositories, not assumed.
     limits:     { memory_mb: 512, file_descriptors: 1024, processes: 32 }
   ```
 
-- The catalog's publish workflow already runs Rust (`dtolnay/rust-toolchain`)
-  and `tools/official-sign`, so it can deserialize `mur_common::AgentProfile`
-  rather than re-parsing YAML by hand.
+- The catalog's publish workflow runs Rust (`dtolnay/rust-toolchain`) and
+  `tools/official-sign`, and that tool's `Cargo.toml` **already depends on
+  `mur-common`** (`git = ".../mur", branch = "main"`). `AgentProfile` is
+  therefore already in scope for the build: deriving the summary needs no new
+  dependency and no hand-rolled YAML parsing. A local clone of the catalog repo
+  exists at `/Volumes/Firecuda4tb/Projects/official-sign` — the directory name
+  is the tool, the repository is the catalog.
 - `GET /api/v1/core/catalog` returns the index, minus the server-internal
   download fields. There is no per-item endpoint.
 - The dashboard detail page resolves an item from the list (there is nothing
