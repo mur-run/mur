@@ -1,8 +1,13 @@
 //! `--fleet` status rail: folds a fleet's shared channel into per-member state.
 
+use std::path::Path;
+use std::time::Instant;
+
 use chrono::{DateTime, Utc};
 use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 use mur_common::fleet::{Job, JobStatus};
+
+use super::follow::POLL_INTERVAL;
 
 /// Most member rows shown when the rail expands. Blocked sorts first, so
 /// whatever is truncated is the least urgent.
@@ -175,6 +180,122 @@ pub fn jobs_line(fleet: &str, jobs: &[Job]) -> String {
         line.push_str(&format!(" · {failed} ✖ failed"));
     }
     line
+}
+
+/// What the band renders. Recomputed only when the channel log or the job
+/// store actually changed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RailView {
+    pub jobs_line: String,
+    pub members: Vec<MemberRow>,
+    /// Degraded-state text (unreadable channel, unreadable jobs). Rendered in
+    /// place of detail; never an error the caller has to handle.
+    pub notice: Option<String>,
+}
+
+/// Polls one fleet's channel and job store, folding both into a `RailView`.
+///
+/// Deliberately a separate type from `Follow`: that one turns events into
+/// transcript lines (history, reaches scrollback), this one folds them into
+/// current state (repainted every frame, never flushed). Keeping them apart also
+/// leaves `app.follow` free, so `/channels <id> --follow` still works while a
+/// rail is up.
+pub struct FleetRail {
+    fleet: String,
+    channel_id: String,
+    /// Channel log size at the last poll; unchanged size means nothing to parse.
+    last_len: u64,
+    /// Newest mtime seen in the jobs dir; jobs move far slower than events.
+    last_jobs_mtime: Option<std::time::SystemTime>,
+    view: RailView,
+    next_poll: Instant,
+}
+
+impl FleetRail {
+    pub fn start(home: &Path, fleet: &str) -> Self {
+        let _ = home;
+        Self {
+            fleet: fleet.to_string(),
+            channel_id: format!("fleet-{fleet}"),
+            last_len: u64::MAX, // force the first poll to do real work
+            last_jobs_mtime: None,
+            view: RailView::default(),
+            next_poll: Instant::now(),
+        }
+    }
+
+    pub fn view(&self) -> &RailView {
+        &self.view
+    }
+
+    pub fn next_poll(&self) -> Instant {
+        self.next_poll
+    }
+
+    /// Recompute if anything moved. Returns true when the view changed, so the
+    /// caller redraws only then.
+    pub fn poll(&mut self, home: &Path, now: Instant) -> bool {
+        self.next_poll = now + POLL_INTERVAL;
+        let store = mur_channel::ChannelStore::new(home);
+        let len = std::fs::metadata(store.events_path(&self.channel_id))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let jobs_mtime = newest_jobs_mtime(home, &self.fleet);
+        if len == self.last_len && jobs_mtime == self.last_jobs_mtime {
+            return false;
+        }
+        self.last_len = len;
+        self.last_jobs_mtime = jobs_mtime;
+
+        let mut notice = None;
+        // `load_events` treats a missing log as an empty one (Ok(vec![])) so a
+        // brand-new channel with zero events isn't an error — but that means it
+        // can't distinguish "this fleet's channel doesn't exist" from "it exists
+        // and is quiet". The manifest is the fleet's actual existence check.
+        if store.load_manifest(&self.channel_id).is_err() {
+            notice = Some("⚠ channel unreadable".to_string());
+        }
+        let events = match store.load_events(&self.channel_id) {
+            Ok(evs) => {
+                // Same trust rule as every other fold: an event that fails its
+                // actor's signature is dropped, never rendered. The rail
+                // vouches for OTHER agents, so showing an unverified "done"
+                // would lend the UI's credibility to a forgery.
+                let require_sig = std::env::var("MUR_CHANNEL_REQUIRE_SIG")
+                    .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes"))
+                    .unwrap_or(false);
+                evs.into_iter()
+                    .filter(|e| {
+                        crate::channel_verify::verify_event(home, &self.channel_id, e, require_sig)
+                    })
+                    .collect::<Vec<_>>()
+            }
+            Err(_) => {
+                notice = Some("⚠ channel unreadable".to_string());
+                Vec::new()
+            }
+        };
+
+        let jobs = crate::cmd::fleet::jobs::list_jobs_raw(home, &self.fleet).unwrap_or_default();
+        let view = RailView {
+            jobs_line: jobs_line(&self.fleet, &jobs),
+            members: fold_members(&events),
+            notice,
+        };
+        let changed = view != self.view;
+        self.view = view;
+        changed
+    }
+}
+
+/// Newest mtime across the fleet's job files — the cheap "did jobs move?" gate.
+fn newest_jobs_mtime(home: &Path, fleet: &str) -> Option<std::time::SystemTime> {
+    let dir = crate::cmd::fleet::jobs::jobs_dir(home, fleet);
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter_map(|e| e.metadata().ok()?.modified().ok())
+        .max()
 }
 
 #[cfg(test)]
@@ -401,5 +522,57 @@ mod tests {
     fn jobs_line_omits_the_failed_clause_when_nothing_failed() {
         let line = jobs_line("develop", &[job("1", JobStatus::Done)]);
         assert!(!line.contains("failed"), "got: {line}");
+    }
+
+    use std::time::Instant;
+
+    /// A fleet channel with one member. `create_for_fleet(fleet_name, router,
+    /// members)` names the channel `fleet-<fleet_name>` itself — the rail must
+    /// derive the same id from `--fleet dev`.
+    fn seed_home() -> tempfile::TempDir {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+        svc.create_for_fleet("dev", "mur", &["qa".to_string()])
+            .unwrap();
+        tmp
+    }
+
+    #[test]
+    fn poll_reports_change_only_when_the_log_grows() {
+        let tmp = seed_home();
+        let now = Instant::now();
+        let mut rail = FleetRail::start(tmp.path(), "dev");
+
+        // First poll reads the (empty) channel and the (absent) job dir.
+        assert!(rail.poll(tmp.path(), now), "first poll must produce a view");
+        assert!(rail.view().members.is_empty());
+        assert!(rail.view().jobs_line.contains("not run yet"));
+
+        // Nothing changed → no work, no change reported.
+        assert!(!rail.poll(tmp.path(), now));
+
+        // A member acts → the next poll picks it up.
+        let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+        svc.append(
+            "fleet-dev",
+            ChannelActor::Agent { id: "qa".into() },
+            EventKind::StateChange,
+            serde_json::json!({"to": "working"}),
+            None,
+        )
+        .unwrap();
+        assert!(rail.poll(tmp.path(), now), "log grew → view must change");
+        assert_eq!(rail.view().members.len(), 1);
+        assert_eq!(rail.view().members[0].agent, "qa");
+    }
+
+    #[test]
+    fn an_unreadable_channel_degrades_instead_of_failing() {
+        let tmp = tempfile::TempDir::new().unwrap(); // no channel at all
+        let mut rail = FleetRail::start(tmp.path(), "ghost");
+        rail.poll(tmp.path(), Instant::now());
+        assert!(rail.view().members.is_empty());
+        // The rail says so on its own line; it never returns Err.
+        assert!(rail.view().notice.is_some());
     }
 }
