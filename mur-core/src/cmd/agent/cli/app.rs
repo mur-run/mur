@@ -472,6 +472,8 @@ pub struct App {
     pub panel_input_seen: String,
     pub panel_input_sent: String,
     pub panel_input_deadline: Option<std::time::Instant>,
+    /// Fleet rail, when `--fleet` is on. `None` for an ordinary murmur.
+    pub fleet: Option<super::fleet_rail::FleetRail>,
 }
 
 impl App {
@@ -551,7 +553,13 @@ impl App {
             panel_input_seen: String::new(),
             panel_input_sent: String::new(),
             panel_input_deadline: None,
+            fleet: None,
         }
+    }
+
+    /// The rail's current view, or `None` when `--fleet` is off.
+    pub fn fleet_view(&self) -> Option<&super::fleet_rail::RailView> {
+        self.fleet.as_ref().map(|f| f.view())
     }
 
     /// Estimated cumulative session cost in USD, or `None` if the model's

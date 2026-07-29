@@ -48,10 +48,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
     // can't cover the reply the user must read to choose. The slash-command
     // menu keeps the compact popup (the user is typing, not reading).
     let chooser_h = chooser_band_height(app, f.area().height, input_height);
+    let rail_h = fleet_rail_height(app);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
+            Constraint::Length(rail_h),
             Constraint::Length(chooser_h),
             Constraint::Length(input_height),
             Constraint::Length(1),
@@ -59,13 +61,16 @@ pub fn render(f: &mut Frame, app: &mut App) {
         .split(f.area());
 
     render_transcript(f, app, chunks[0]);
-    if chooser_h > 0 {
-        render_chooser_band(f, app, chunks[1]);
-    } else {
-        render_completion(f, app, chunks[2]);
+    if rail_h > 0 {
+        render_fleet_rail(f, app, chunks[1]);
     }
-    f.render_widget(&app.input, chunks[2]);
-    render_status(f, app, chunks[3]);
+    if chooser_h > 0 {
+        render_chooser_band(f, app, chunks[2]);
+    } else {
+        render_completion(f, app, chunks[3]);
+    }
+    f.render_widget(&app.input, chunks[3]);
+    render_status(f, app, chunks[4]);
 
     // Inline approval lives on the card (Task 4) when the runtime sent a
     // step_id. Fall back to the centered modal only for older runtimes.
@@ -336,13 +341,106 @@ fn render_chooser_band(f: &mut Frame, app: &App, area: Rect) {
 /// the terminal soft-wraps it), so a modest fixed rule stands in.
 const SEPARATOR_WIDTH: usize = 60;
 
+/// Rows the fleet rail paints: one collapsed line, plus a capped member list
+/// when someone is blocked. A working fleet is not news; a stalled one is.
+pub fn rail_height_for(view: &crate::cmd::agent::cli::fleet_rail::RailView) -> u16 {
+    use crate::cmd::agent::cli::fleet_rail::{MAX_EXPANDED_ROWS, MemberState};
+    let blocked = view
+        .members
+        .iter()
+        .any(|m| matches!(m.state, MemberState::Blocked { .. }));
+    if !blocked {
+        return 1;
+    }
+    1 + view.members.len().min(MAX_EXPANDED_ROWS) as u16
+}
+
+/// Height of the rail band for the current app state; 0 when `--fleet` is off.
+pub fn fleet_rail_height(app: &App) -> u16 {
+    app.fleet_view().map(rail_height_for).unwrap_or(0)
+}
+
+fn render_fleet_rail(f: &mut Frame, app: &App, area: Rect) {
+    use crate::cmd::agent::cli::fleet_rail::{MAX_EXPANDED_ROWS, MemberState};
+    let Some(view) = app.fleet_view() else {
+        return;
+    };
+    let theme = app.theme;
+    let mut lines: Vec<Line> = Vec::new();
+
+    let head = match &view.notice {
+        Some(n) => format!("{}  {n}", view.jobs_line),
+        None => view.jobs_line.clone(),
+    };
+    lines.push(Line::styled(
+        head,
+        Style::default()
+            .fg(theme.border_title)
+            .add_modifier(Modifier::BOLD),
+    ));
+
+    if rail_height_for(view) > 1 {
+        for m in view.members.iter().take(MAX_EXPANDED_ROWS) {
+            let (glyph, body, color) = match &m.state {
+                MemberState::Blocked { summary, .. } => {
+                    ("▲", format!("blocked: {summary}"), theme.warn)
+                }
+                MemberState::Working { tool, since } => (
+                    "⏵",
+                    match tool {
+                        Some(t) => format!("working ({}) · {t}", elapsed(*since)),
+                        None => format!("working ({})", elapsed(*since)),
+                    },
+                    theme.agent,
+                ),
+                MemberState::Done => ("✔", "done".to_string(), theme.success),
+                MemberState::Failed => ("✖", "failed".to_string(), theme.error),
+            };
+            lines.push(Line::styled(
+                format!("  {:<10} {glyph} {body}", m.agent),
+                Style::default().fg(color),
+            ));
+        }
+        let extra = view.members.len().saturating_sub(MAX_EXPANDED_ROWS);
+        if extra > 0 {
+            lines.push(Line::styled(
+                format!("  … {extra} more"),
+                Style::default().fg(theme.system),
+            ));
+        }
+    }
+
+    f.render_widget(Paragraph::new(Text::from(lines)), area);
+}
+
+/// "2m" / "1h04m" — elapsed since a member last changed state. Shown instead
+/// of a staleness verdict: a runtime that died mid-turn shows a growing
+/// number rather than a state we guessed.
+fn elapsed(since: chrono::DateTime<chrono::Utc>) -> String {
+    let secs = (chrono::Utc::now() - since).num_seconds().max(0);
+    match secs {
+        0..=59 => format!("{secs}s"),
+        60..=3599 => format!("{}m", secs / 60),
+        _ => format!("{}h{:02}m", secs / 3600, (secs % 3600) / 60),
+    }
+}
+
+/// Rows left for the live transcript band inside `viewport_h` once the
+/// composer, status line, chooser band, fleet rail and the band's own
+/// TOP/BOTTOM borders have taken theirs.
+fn band_capacity(viewport_h: u16, input_h: u16, chooser_h: u16, rail_h: u16) -> u16 {
+    viewport_h.saturating_sub(input_h + 1 + chooser_h + rail_h + 2)
+}
+
 /// Rows the live transcript band can paint inside a viewport of `viewport_h`:
 /// what the `render` layout leaves after the composer, the status line, an
 /// open chooser band, and the band's own TOP/BOTTOM borders.
 fn band_inner_rows(app: &App, viewport_h: u16) -> u16 {
     let input_h = (app.input.lines().len() as u16 + 2).clamp(3, 8);
     let chooser_h = chooser_band_height(app, viewport_h, input_h);
-    viewport_h.saturating_sub(input_h + 1 + chooser_h + 2)
+    // The rail steals rows from the live band; miss it here and the flush
+    // decision drifts from what is painted.
+    band_capacity(viewport_h, input_h, chooser_h, fleet_rail_height(app))
 }
 
 /// Index one past the last message that is settled AND therefore flushable:
@@ -1282,5 +1380,58 @@ mod footer_fmt_tests {
         let s2 = footer_segments(1000, 1000, 1000, 1000, 0, &Pricing::default(), Some(20.0));
         assert!(s2.contains("/ $20.00"), "got: {s2}");
         assert!(!s2.contains("$18.00"));
+    }
+}
+
+#[cfg(test)]
+mod fleet_rail_layout_tests {
+    use super::*;
+    use crate::cmd::agent::cli::fleet_rail::{MemberRow, MemberState, RailView};
+
+    fn view(blocked: usize) -> RailView {
+        RailView {
+            jobs_line: "fleet · dev   job 0/1".into(),
+            members: (0..blocked)
+                .map(|i| MemberRow {
+                    agent: format!("m{i}"),
+                    state: MemberState::Blocked {
+                        summary: "approve".into(),
+                        hitl_id: format!("h{i}"),
+                    },
+                })
+                .collect(),
+            notice: None,
+        }
+    }
+
+    #[test]
+    fn rail_is_one_row_until_someone_is_blocked() {
+        assert_eq!(rail_height_for(&view(0)), 1);
+        assert_eq!(rail_height_for(&view(1)), 2);
+        assert_eq!(rail_height_for(&view(3)), 4);
+    }
+
+    #[test]
+    fn the_expanded_rail_is_capped() {
+        use crate::cmd::agent::cli::fleet_rail::MAX_EXPANDED_ROWS;
+        assert_eq!(
+            rail_height_for(&view(50)),
+            1 + MAX_EXPANDED_ROWS as u16,
+            "an unbounded rail would eat the transcript"
+        );
+    }
+
+    #[test]
+    fn the_live_band_gives_back_exactly_what_the_rail_takes() {
+        // The guard for the one dangerous coupling: band_inner_rows decides
+        // when transcript content is flushed to scrollback, so it must account
+        // for every row the rail paints or the flush drifts from the picture.
+        // Tested on the pure arithmetic so no App and no test-only seam in
+        // production code are needed.
+        let viewport_h = 20u16;
+        let input_h = 3u16;
+        let without = band_capacity(viewport_h, input_h, 0, 0);
+        let with_rail = band_capacity(viewport_h, input_h, 0, rail_height_for(&view(3)));
+        assert_eq!(without - with_rail, rail_height_for(&view(3)));
     }
 }
