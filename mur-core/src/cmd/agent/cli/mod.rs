@@ -12,6 +12,7 @@ mod bash_class;
 mod complete;
 mod diff;
 mod dump;
+mod fleet_rail;
 mod follow;
 mod footer;
 mod manage;
