@@ -1205,4 +1205,77 @@ mod tests {
             outcome_label(LoopStop::MaxIterations)
         );
     }
+
+    #[tokio::test]
+    async fn queue_drained_break_fires_when_policy_is_queue_empty_and_queue_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let fleet = Fleet {
+            name: "dev".into(),
+            display_name: String::new(),
+            goal: "standing goal".into(),
+            router: None,
+            members: vec!["pm".into()],
+            team_id: None,
+            channel_id: "fleet-dev".into(),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: Some(mur_common::fleet::FleetLoop {
+                trigger: "manual".into(),
+                max_iterations: 1,
+                budget_usd: 0.0,
+                deadline: String::new(),
+                done_when: super::super::done_policy::DONE_WHEN_QUEUE_EMPTY.into(),
+            }),
+            parallel: None,
+            requires_programs: vec![],
+        };
+        crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
+        mur_channel::ChannelService::open(home)
+            .unwrap()
+            .create_for_fleet("dev", "mur", &["pm".into()])
+            .unwrap();
+        // No job is ever queued, so the break fires on iteration 1 — ahead of
+        // the `plan_via_router` dial, so no live "pm" agent is needed here.
+        let stop = run_loop_for_test(home).await;
+        assert_eq!(stop, LoopStop::QueueDrained);
+    }
+
+    #[tokio::test]
+    async fn queue_drained_break_stays_inert_under_router_policy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let fleet = Fleet {
+            name: "dev".into(),
+            display_name: String::new(),
+            goal: "standing goal".into(),
+            router: None,
+            members: vec!["pm".into()],
+            team_id: None,
+            channel_id: "fleet-dev".into(),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: Some(mur_common::fleet::FleetLoop {
+                trigger: "manual".into(),
+                max_iterations: 1,
+                budget_usd: 0.0,
+                deadline: String::new(),
+                done_when: String::new(), // router policy — the fallback for empty/legacy values
+            }),
+            parallel: None,
+            requires_programs: vec![],
+        };
+        crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
+        mur_channel::ChannelService::open(home)
+            .unwrap()
+            .create_for_fleet("dev", "mur", &["pm".into()])
+            .unwrap();
+        // Same empty queue as the fires case, but router policy: the gate must
+        // not mistake an empty queue for `done_when: queue-empty`. No live
+        // "pm" agent exists to dial, so the iteration errors out and
+        // `run_loop_for_test` folds that into MaxIterations — the only claim
+        // under test is that the gate did NOT mistake this for a drained queue.
+        let stop = run_loop_for_test(home).await;
+        assert_ne!(stop, LoopStop::QueueDrained);
+    }
 }
