@@ -2,8 +2,9 @@
 //!
 //! This is the `Reported` half of open items — the agent's word, stored so the
 //! user sees it after the conversation that produced it has scrolled away.
-//! It writes only to `<mur_home>/open-items.jsonl`, so an agent needs no
-//! filesystem grant over `~/.mur` to use it.
+//! It writes only to `<mur_home>/open-items.jsonl`, which the sandbox policy
+//! allowlists by name, so an agent needs no filesystem grant over `~/.mur` to
+//! use it.
 //!
 //! No allowlist gate, unlike `fleet_run`. That tool spawns processes and spends
 //! money; this one appends a line of text to a log the user reads. The blast
@@ -62,7 +63,7 @@ previous call to clear one."
     async fn execute(&self, input: serde_json::Value) -> Result<String, ToolError> {
         if let Some(id) = input.get("resolve").and_then(|v| v.as_str()) {
             mur_open_items::resolve(&self.mur_home, id)
-                .map_err(|e| ToolError::Execution(format!("resolve open item: {e}")))?;
+                .map_err(|e| ToolError::Execution(format!("resolve open item: {e:#}")))?;
             return Ok(format!("Resolved open item {id}."));
         }
 
@@ -88,8 +89,12 @@ previous call to clear one."
             .map(str::trim)
             .filter(|s| !s.is_empty());
 
+        // `{e:#}`, not `{e}`: anyhow's plain Display prints only the outermost
+        // context, so an io failure here reached the model as a bare
+        // `open <path>` with the errno dropped — the one detail that separates
+        // "the sandbox denied it" from "the disk is full".
         let id = mur_open_items::report(&self.mur_home, &self.agent_name, title, next)
-            .map_err(|e| ToolError::Execution(format!("record open item: {e}")))?;
+            .map_err(|e| ToolError::Execution(format!("record open item: {e:#}")))?;
 
         Ok(format!(
             "Recorded as {id}. The user sees it under \"reported\" in `mur open`, marked as your \

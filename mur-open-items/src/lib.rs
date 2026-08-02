@@ -114,8 +114,13 @@ enum Record {
     },
 }
 
+/// Log filename under `<mur_home>`. Public because the runtime's sandbox
+/// policy has to allowlist this exact file for the `open_item` tool to work;
+/// two spellings of it would fail silently (a grant on a path nothing writes).
+pub const LOG_FILE: &str = "open-items.jsonl";
+
 fn log_path(mur_home: &Path) -> PathBuf {
-    mur_home.join("open-items.jsonl")
+    mur_home.join(LOG_FILE)
 }
 
 /// Append one agent-reported item. Returns its id.
