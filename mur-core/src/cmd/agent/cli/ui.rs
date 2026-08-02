@@ -26,6 +26,11 @@ const OVERLAY_HINT: &str = " press Enter or Esc to return · Ctrl+D quit ";
 /// reads as belonging to its speaker rather than sitting flush with the header.
 const MSG_INDENT: &str = "  ";
 
+/// Composer height when the input is empty (one text row plus its border).
+/// Typing grows it up to `INPUT_H_MAX`.
+const INPUT_H_MIN: u16 = 3;
+const INPUT_H_MAX: u16 = 8;
+
 /// Prepend the body indent to an already-styled line (e.g. cached markdown).
 fn indent_line(mut line: Line<'static>) -> Line<'static> {
     line.spans.insert(0, Span::raw(MSG_INDENT));
@@ -42,7 +47,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         return;
     }
     let input_lines = app.input.lines().len() as u16;
-    let input_height = (input_lines + 2).clamp(3, 8);
+    let input_height = (input_lines + 2).clamp(INPUT_H_MIN, INPUT_H_MAX);
     // The agent chooser (suggested replies) renders as its own layout band
     // between transcript and composer — never a Clear-overlay popup — so it
     // can't cover the reply the user must read to choose. The slash-command
@@ -451,15 +456,17 @@ fn band_capacity(viewport_h: u16, input_h: u16, chooser_h: u16, rail_h: u16) -> 
     viewport_h.saturating_sub(input_h + 1 + chooser_h + rail_h + 2)
 }
 
-/// Rows the live transcript band can paint inside a viewport of `viewport_h`:
-/// what the `render` layout leaves after the composer, the status line, an
-/// open chooser band, and the band's own TOP/BOTTOM borders.
+/// Rows the live transcript band may KEEP inside a viewport of `viewport_h`.
+///
+/// Deliberately the band's LARGEST height, not its height this frame: a
+/// grown composer and an open chooser band are both temporary, but a flush
+/// is not — rows pushed to scrollback never come back, so flushing to fit a
+/// transient squeeze leaves a blank hole above the composer the moment that
+/// squeeze ends. Over-keeping is free: the band tail-follows, so surplus
+/// rows simply wait off-screen until the space is theirs again. The rail is
+/// the exception — it stays for the session, so it really does take its rows.
 fn band_inner_rows(app: &App, viewport_h: u16) -> u16 {
-    let input_h = (app.input.lines().len() as u16 + 2).clamp(3, 8);
-    let chooser_h = chooser_band_height(app, viewport_h, input_h);
-    // The rail steals rows from the live band; miss it here and the flush
-    // decision drifts from what is painted.
-    band_capacity(viewport_h, input_h, chooser_h, fleet_rail_height(app))
+    band_capacity(viewport_h, INPUT_H_MIN, 0, fleet_rail_height(app))
 }
 
 /// Index one past the last message that is settled AND therefore flushable:
@@ -687,7 +694,14 @@ pub fn flush_finished<B: Backend>(
     let mut total: u32 = rows.iter().map(|r| u32::from(*r)).sum();
     let settled = settle_end(app);
     let mut end = start;
-    while end < settled && total > cap {
+    // Stop BEFORE the message whose departure would leave the band short. A
+    // flush is one-way, and a message is flushed whole, so "flush while we
+    // overflow" hands a 30-row reply to scrollback and leaves the band empty —
+    // the transcript ends mid-screen with a blank slab down to the composer.
+    // Keeping it costs nothing: the band tail-follows, so the surplus rows sit
+    // off-screen (PageUp reaches them) until later messages push them out for
+    // real.
+    while end < settled && total > cap && total - u32::from(rows[end - start]) >= cap {
         total -= u32::from(rows[end - start]);
         end += 1;
     }
