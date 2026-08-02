@@ -107,8 +107,7 @@ filter across chips; empty-group hiding; chip + search compose.
 CLI `mur fleet label`, label-scoped bulk actions (stop all `web`), colours in
 `murmur`, and syncing labels to MUR Server teams.
 
-## Open question for approval
+## Decision (approved 2026-08-03)
 
-Primary = first entry in the ordered list, edited by reordering. The alternative
-is an explicit `primary:` field per fleet. Recommendation: **ordered list** —
-fewer states, cannot desync.
+Primary = **first entry in the ordered list**, edited by reordering; no separate
+`primary:` field — fewer states, cannot desync. Spec final.
