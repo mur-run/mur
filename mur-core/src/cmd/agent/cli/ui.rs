@@ -567,7 +567,14 @@ fn push_live_inner(
 ) {
     let streaming_agent = m.streaming && m.role == Role::Agent && m.step.is_none();
     if skip == 0 && !(as_settled && streaming_agent) {
-        push_message(lines, m, app.spinner, app.theme, app.cards_expanded);
+        push_message(
+            lines,
+            m,
+            app.spinner,
+            app.theme,
+            app.cards_expanded,
+            app.width,
+        );
         return;
     }
     if skip == 0 {
@@ -944,10 +951,16 @@ fn push_message(
     spinner: usize,
     theme: &'static super::theme::Theme,
     cards_expanded: bool,
+    width: u16,
 ) {
     // Step cards replace role-based rendering entirely for that message.
     if let Some(card) = &m.step {
-        lines.extend(super::render_card::card_lines(card, theme, cards_expanded));
+        lines.extend(super::render_card::card_lines(
+            card,
+            theme,
+            cards_expanded,
+            width,
+        ));
         return;
     }
     match m.role {
@@ -1019,6 +1032,13 @@ fn push_message(
     }
 }
 
+/// Separator between status-bar segments.
+const FOOTER_SEP: &str = " · ";
+
+/// Below this many columns the status bar drops the steering hint and keeps
+/// the numbers.
+const STATUS_FULL_MIN_WIDTH: u16 = 100;
+
 fn render_status(f: &mut Frame, app: &App, area: Rect) {
     let theme = app.theme;
     let (msg, color) = if let Some(req) = &app.hitl {
@@ -1036,10 +1056,14 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         )
     } else if app.streaming {
         let spin = SPINNER[app.spinner % SPINNER.len()];
-        (
-            format!("{spin} generating… · type to steer · Ctrl+C to cancel"),
-            theme.agent,
-        )
+        // The steering hint is the first thing to drop when the row is tight:
+        // it is advice, and everything to its right is state.
+        let msg = if area.width >= STATUS_FULL_MIN_WIDTH {
+            format!("{spin} generating… · type to steer · Ctrl+C to cancel")
+        } else {
+            format!("{spin} generating…")
+        };
+        (msg, theme.agent)
     } else {
         let ctx = if app.context_task_id.is_some() {
             " · context kept"
@@ -1102,6 +1126,22 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
     spans.push(Span::styled(msg, Style::default().fg(color)));
 
     // Glass Box observability: tokens · cost · ctx · timer.
+    //
+    // Budgeted against the room actually left on the row. This used to be
+    // assembled at full length and handed to the terminal, which clipped the
+    // overflow — and what fell off the right edge was the context bar, the one
+    // figure here that changes what you do next.
+    let timer = app.turn_started.map(|t0| {
+        let secs = t0.elapsed().as_secs();
+        format!("{}m{:02}s · esc=stop", secs / 60, secs % 60)
+    });
+    let reserved: usize = spans
+        .iter()
+        .map(|s| s.content.chars().count())
+        .sum::<usize>()
+        + timer
+            .as_deref()
+            .map_or(0, |t| t.chars().count() + FOOTER_SEP.chars().count());
     let obs = footer_segments(
         app.turn_in,
         app.turn_out,
@@ -1110,13 +1150,15 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         app.ctx_tokens,
         &app.pricing,
         app.budget_usd,
+        usize::from(area.width).saturating_sub(reserved + FOOTER_SEP.chars().count()),
     );
-    spans.push(Span::raw(" · "));
-    spans.push(Span::styled(obs, Style::default().fg(theme.system)));
-    if let Some(t0) = app.turn_started {
-        let secs = t0.elapsed().as_secs();
+    if !obs.is_empty() {
+        spans.push(Span::raw(FOOTER_SEP));
+        spans.push(Span::styled(obs, Style::default().fg(theme.system)));
+    }
+    if let Some(t) = timer {
         spans.push(Span::styled(
-            format!(" · {}m{:02}s · esc=stop", secs / 60, secs % 60),
+            format!("{FOOTER_SEP}{t}"),
             Style::default().fg(theme.system),
         ));
     }
@@ -1230,8 +1272,20 @@ fn fmt_tok(n: u64) -> String {
     }
 }
 
-/// Pure footer formatter: `"{turn}/{sess} tok · {cost} · ctx <bar> N%"`.
-/// Cost shows `—` when unpriced; ctx part is omitted when no window is known.
+/// Pure footer formatter: `"{turn}/{sess} tok · {cost} · ctx <bar> N%"`,
+/// trimmed to `budget` columns.
+///
+/// Cost is the SESSION estimate, not the turn's: the turn's usage is zero for
+/// the whole time a reply is streaming, so the bar read `$0.000 est` next to a
+/// six-figure session token count — which parses as "this was free". When a cap
+/// is set the same figure renders as `spent / cap` instead of printing two
+/// different costs side by side. `—` when the model is unpriced; the ctx part
+/// is omitted when no window is known.
+///
+/// Segments drop right-to-left as `budget` shrinks — token pair first, then
+/// cost — because the context bar is the only number here that changes what
+/// you do next.
+#[allow(clippy::too_many_arguments)]
 fn footer_segments(
     turn_in: u64,
     turn_out: u64,
@@ -1240,53 +1294,55 @@ fn footer_segments(
     ctx_tokens: u64,
     pricing: &super::footer::Pricing,
     budget_usd: Option<f64>,
+    budget: usize,
 ) -> String {
     use super::footer::{CTX_BAR_WIDTH, UsageCounts, context_pct, ctx_bar, turn_cost};
 
-    let turn_tok = turn_in + turn_out;
-    let sess_tok = sess_in + sess_out;
+    let toks = format!(
+        "{}/{} tok",
+        fmt_tok(turn_in + turn_out),
+        fmt_tok(sess_in + sess_out)
+    );
 
-    let u = UsageCounts {
-        input: turn_in,
-        output: turn_out,
-    };
-    let cost = match turn_cost(pricing, &u) {
-        Some(c) => format!("${:.3} est", c),
-        None => "\u{2014}".to_string(), // em dash
+    let spent = turn_cost(
+        pricing,
+        &UsageCounts {
+            input: sess_in,
+            output: sess_out,
+        },
+    );
+    let cost = match (spent, budget_usd) {
+        (Some(c), Some(cap)) => format!("${c:.2} / ${cap:.2}"),
+        (Some(c), None) => format!("${c:.3} est"),
+        (None, Some(cap)) => format!("/ ${cap:.2}"),
+        (None, None) => "\u{2014}".to_string(), // em dash
     };
 
-    let ctx_part = match pricing.window {
+    let ctx = match pricing.window {
         Some(w) if w > 0 => {
             let pct = context_pct(ctx_tokens, w);
-            format!(" · ctx {} {}%", ctx_bar(pct, CTX_BAR_WIDTH), pct)
+            format!("ctx {} {}%", ctx_bar(pct, CTX_BAR_WIDTH), pct)
         }
         _ => String::new(),
     };
 
-    // Budget suffix: estimated session spend against the cap. The spent figure
-    // is omitted (just `/ $cap`) when the model has no pricing.
-    let budget_part = match budget_usd {
-        Some(cap) => {
-            let sess = UsageCounts {
-                input: sess_in,
-                output: sess_out,
-            };
-            match turn_cost(pricing, &sess) {
-                Some(spent) => format!(" · ${spent:.2} / ${cap:.2}"),
-                None => format!(" · / ${cap:.2}"),
-            }
+    for parts in [
+        [toks.as_str(), cost.as_str(), ctx.as_str()].as_slice(),
+        [cost.as_str(), ctx.as_str()].as_slice(),
+        [ctx.as_str()].as_slice(),
+    ] {
+        let s = parts
+            .iter()
+            .filter(|p| !p.is_empty())
+            .copied()
+            .collect::<Vec<_>>()
+            .join(FOOTER_SEP);
+        if s.chars().count() <= budget {
+            return s;
         }
-        None => String::new(),
-    };
-
-    format!(
-        "{}/{} tok · {}{}{}",
-        fmt_tok(turn_tok),
-        fmt_tok(sess_tok),
-        cost,
-        ctx_part,
-        budget_part
-    )
+    }
+    // Nothing fits: print nothing rather than a mangled half-number.
+    String::new()
 }
 
 fn centered_rect(pct_x: u16, pct_y: u16, area: Rect) -> Rect {
@@ -1379,9 +1435,12 @@ mod footer_fmt_tests {
     use super::footer_segments;
     use crate::cmd::agent::cli::footer::Pricing;
 
+    /// Enough room that these assertions test the formatting, not the trimming.
+    const WIDE: usize = 200;
+
     #[test]
     fn shows_tokens_and_dash_cost_when_unpriced() {
-        let s = footer_segments(1240, 0, 1240, 0, 0, &Pricing::default(), None);
+        let s = footer_segments(1240, 0, 1240, 0, 0, &Pricing::default(), None, WIDE);
         assert!(s.contains("1,240 tok") || s.contains("1240 tok"));
         assert!(s.contains('\u{2014}')); // em dash — no price
     }
@@ -1393,7 +1452,7 @@ mod footer_fmt_tests {
             out_per_1k: Some(0.015),
             window: Some(100_000),
         };
-        let s = footer_segments(1000, 1000, 1000, 1000, 32_000, &p, None);
+        let s = footer_segments(1000, 1000, 1000, 1000, 32_000, &p, None, WIDE);
         assert!(s.contains("$0.018"));
         assert!(s.contains("32%"));
         assert!(!s.contains(" / $")); // no budget suffix when budget is None
@@ -1407,12 +1466,49 @@ mod footer_fmt_tests {
             window: None,
         };
         // session 1000/1000 → $18.00 spent, cap $20.00
-        let s = footer_segments(1000, 1000, 1000, 1000, 0, &p, Some(20.0));
+        let s = footer_segments(1000, 1000, 1000, 1000, 0, &p, Some(20.0), WIDE);
         assert!(s.contains("$18.00 / $20.00"), "got: {s}");
         // unpriced model → spent omitted, cap still shown
-        let s2 = footer_segments(1000, 1000, 1000, 1000, 0, &Pricing::default(), Some(20.0));
+        let s2 = footer_segments(
+            1000,
+            1000,
+            1000,
+            1000,
+            0,
+            &Pricing::default(),
+            Some(20.0),
+            WIDE,
+        );
         assert!(s2.contains("/ $20.00"), "got: {s2}");
         assert!(!s2.contains("$18.00"));
+    }
+
+    #[test]
+    fn cost_is_the_session_not_the_turn() {
+        let p = Pricing {
+            in_per_1k: Some(3.0),
+            out_per_1k: Some(15.0),
+            window: None,
+        };
+        // Mid-stream: the turn's usage hasn't been reported yet. The bar used
+        // to price the turn, so it read "$0.000 est" beside a session total.
+        let s = footer_segments(0, 0, 1000, 1000, 0, &p, None, WIDE);
+        assert!(s.contains("$18.000 est"), "got: {s}");
+    }
+
+    #[test]
+    fn narrow_bar_keeps_the_context_gauge_and_drops_the_rest() {
+        let p = Pricing {
+            in_per_1k: Some(0.003),
+            out_per_1k: Some(0.015),
+            window: Some(100_000),
+        };
+        let full = footer_segments(1000, 1000, 1000, 1000, 91_000, &p, None, WIDE);
+        let tight = footer_segments(1000, 1000, 1000, 1000, 91_000, &p, None, 20);
+        assert!(full.len() > tight.len());
+        assert!(tight.contains("91%"), "got: {tight}");
+        assert!(!tight.contains("tok"), "got: {tight}");
+        assert!(tight.chars().count() <= 20, "got: {tight}");
     }
 }
 
