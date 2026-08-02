@@ -13,6 +13,7 @@ use mur_common::channel::{ChannelActor, ChannelEvent};
 use mur_common::fleet::{Fleet, Job, JobStatus};
 use sha2::{Digest, Sha256};
 
+use super::done_policy::done_marker;
 use super::progress::{
     RunProgress, StepProgress, StepState, classify_phase, iteration_summary_line,
 };
@@ -88,19 +89,6 @@ pub fn is_converged(reply: &str) -> bool {
         .collect();
     let has = |t: &str| tokens.iter().any(|w| w == t);
     has("done") && !has("continue") && !has("not") && !has("incomplete")
-}
-
-/// A structured `done_when` marker predicate: `marker:<TEXT>` means "converge
-/// when a member emits `<TEXT>` as a sentinel (its own line) in the channel".
-/// Returns the (trimmed, non-empty) marker text, or None for an empty /
-/// non-`marker:` criterion (→ router fallback).
-/// Machine-checkable convergence: deterministic and LLM-independent, vs. trusting
-/// the router's free-text self-assessment.
-pub fn done_marker(done_when: &str) -> Option<&str> {
-    done_when
-        .strip_prefix("marker:")
-        .map(str::trim)
-        .filter(|m| !m.is_empty())
 }
 
 /// Has a member emitted `marker` as a SENTINEL — the sole trimmed content of
@@ -738,16 +726,6 @@ mod tests {
             sig: None,
             key_version: None,
         }
-    }
-
-    #[test]
-    fn done_marker_parses_structured_criterion() {
-        assert_eq!(done_marker("marker:FLEET_DONE"), Some("FLEET_DONE"));
-        assert_eq!(done_marker("marker:  SHIPPED  "), Some("SHIPPED")); // trimmed
-        assert_eq!(done_marker("marker:"), None); // empty
-        assert_eq!(done_marker("marker:   "), None); // whitespace only
-        assert_eq!(done_marker("all tasks closed"), None); // free text → router fallback
-        assert_eq!(done_marker(""), None);
     }
 
     #[test]
