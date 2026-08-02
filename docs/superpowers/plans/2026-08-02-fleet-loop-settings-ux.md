@@ -16,9 +16,20 @@
 
 - **Rust edition 2024.** `let` chains are stable — `if let Some(x) = a && x > 0` is valid and preferred over nesting.
 - **Run Rust tests with `cargo nextest run`, never `cargo test`.** Plain `cargo test --workspace` fails 7 tests spuriously in this repo.
-- **`mur-core` needs environment to compile.** Prefix every cargo command in this plan with:
-  `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist`
-  Without `ORT_STRATEGY` the onnxruntime link fails; without `MUR_WEB_DIST` the dashboard embed fails.
+- **`mur-core` needs environment to compile and to run.** Prefix every cargo
+  command in this plan with:
+  ```
+  RUST_MIN_STACK=33554432 ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist CARGO_TARGET_DIR=/Volumes/Firecuda4tb/Projects/mur/target
+  ```
+  Without `ORT_STRATEGY` the onnxruntime link fails; without `MUR_WEB_DIST` the
+  dashboard embed fails. `RUST_MIN_STACK` is **required, not a fallback** —
+  verified on this machine: without it, `cargo nextest run -p mur-core fleet`
+  SIGABRTs on `cli::tests::cli_parses_fleet_create` and
+  `cli::agent::tests::cli_action_parses_fleet_flag` from a pre-existing debug
+  clap stack overflow. With it, all 285 pass. `CARGO_TARGET_DIR` points at the
+  main checkout's already-warm 19G target because this volume has ~23G free and
+  a second Tauri target would not fit; drop it if you are not working from a
+  worktree.
 - **No hardcoded values** (CLAUDE.md rule 1). Every literal that appears in more than one place, or that a reader would have to guess the meaning of, gets a named constant. This plan names them: `DONE_WHEN_QUEUE_EMPTY`, `CRON_PREVIEW_COUNT`, `CRON_PREVIEW_DEBOUNCE_MS`.
 - **Single source file ≤ 800 lines** (CLAUDE.md rule 4). `mur-core/src/cmd/fleet/loop_run.rs` is already **1201 lines** — over the limit before this work starts. Do not add net new code to it. Task 1 exists specifically so the new policy code lands in its own module. Splitting the rest of `loop_run.rs` is a separate PR and out of scope here.
 - **Brand is uppercase `MUR`** in anything user-visible (CLAUDE.md rule 7). None of the new strings in this plan mention the brand, so this is a review check, not an action.
