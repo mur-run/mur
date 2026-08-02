@@ -107,7 +107,10 @@ LanceDB vector index is always rebuildable via `mur internals reindex`.
 
 - `mur verify [--file path] [--all]` — scan docs for stale claims (paths, commands, code refs)
 - `mur agent <subcommand>` — manage murmur agents (create / list / status / send / card / cli / export / doctor / prompt / mcp / skill / perm / secret / companion / rekey / schedule). `cli <name>...` opens an interactive streaming TUI chat with a running agent (`--resume` to continue the last conversation); in-session slash commands include `/channels [N]` (list/switch channels) and `/sessions`; multiple names open one multiplexer pane per agent (tmux primary; zellij/WezTerm/kitty auto-detected). The `murmur` symlink is the quick form: `murmur a1 a2 a3` ≡ `mur agent cli a1 a2 a3`; bare `murmur` opens the concierge. `mcp` now also includes `add-remote`, `login`, and `registry-add` for remote (Streamable HTTP) servers with static bearer or OAuth 2.1 auth — see `docs/architecture/runtime-overview.md` for the full transport and auth details. Full surface in `docs/architecture/runtime-overview.md`.
-- `mur fleet {create|list|show|run|stop|start|export|import|partition-plan|merge}` — squads of agents working a shared goal over one signed channel (id `fleet-<name>`). `create` writes `~/.mur/fleets/<name>/fleet.yaml` + the shared channel (router→Router, members→Delegate; agent names canonicalized; fleet name validated as a lowercase slug); `run` executes one iteration by fanning the goal to each member via the existing DAG executor delegation; `run --loop [--max-iterations N] [--deadline 2h]` runs a **guarded loop** (Phase 2a) — iteration-cap / deadline / stuck-detection guards (in `cmd/fleet/loop_run.rs`, outside any agent) + convergence (structured `done_when: marker:<TEXT>` → deterministic, converge when a member emits the marker as a sentinel on its own line this run — own-line not substring, so prose quoting/negating it can't false-converge; else free-text → router DONE/CONTINUE; fail-safe to continue). Skills/rules gain a `scope: {User|Project|Fleet|Enterprise}` field (+ `scope_visible` predicate; live injection wiring is Phase 2b). `fleet` (agent squad) is orthogonal to `team` (the user's human org/seats) and to `fleet_sync` (device sync). See `docs/superpowers/specs/2026-06-19-mur-fleet-design.md`. **Phase 2b (shipped):** the daemon's `fleet_tick` (`mur-daemon/src/fleet_tick.rs`, on the 30s action-tick cycle) can auto-run any fleet whose `loop.trigger` is due — `interval:<dur>` or `cron:<5-field POSIX expr>` (local tz; cron fleets are baseline-stamped on first sight so they fire on the next boundary, never spuriously on enable) — tracked via `~/.mur/fleets/<name>/.last_run`, each loop on an isolated thread + fresh runtime so the blocking router dial never stalls the daemon; reuses the Phase-2a guards. **Auto-run is OFF by default** — the safety gate `MUR_FLEET_AUTORUN=1` must be set to opt in (best-practice: no unattended autonomy without an explicit switch + enforced budget + kill-switch). Both `run`/`--loop`/auto-run pass `yes:false` (fail-closed; never blanket-approve risk-tiered steps). **Budget guard (Phase 3, shipped):** `run --loop --budget-usd X` (or `loop.budget_usd`) stops before cumulative cost exceeds the budget. Spend is now **REAL** — each turn's actual input+output tokens flow back via `Task.usage` → `PipelineOutput.tokens_used` (summed across delegate turns + retries) → `loop_run`; a 0-token iteration falls back to the projection so spend can never silently under-count (fail-safe). Rate from `MUR_FLEET_COST_PER_1K` env → else dearest `models.yaml` output rate → else a documented default. **Kill-switch (Phase 3, shipped):** `mur fleet stop <name>` writes a `~/.mur/fleets/<name>/.stopped` sentinel — a running `--loop` bails next iteration (`LoopStop::Stopped`), the daemon won't auto-run it, and manual `run` refuses; `mur fleet start <name>` clears it. **Auto-run now requires a positive budget** (`due_fleets` skips interval fleets with `budget_usd<=0`) — so the auto-run safety triad is complete: `MUR_FLEET_AUTORUN` switch + per-fleet budget + kill-switch. **Router planning (Phase 3, shipped):** the router emits a structured DAG each iteration (`cmd/fleet/plan.rs`; member + dependency + cycle validated) that routes work to the right members, **falling back to broadcast-to-all** on any absent/invalid plan (`run` and `--loop` both). **Cron trigger (shipped):** `loop.trigger: cron:<5-field POSIX>` (local tz; `mur-daemon/src/fleet_tick.rs` `is_due` cron branch + `establish_cron_baselines`, reusing `mur-agent-runtime::scheduler::next_fire_after`). **Scope skills (shipped):** `scope_visible` is live in both the CLI hook and the runtime injector; harvest stamps Project scope from the repo root; `mur skill scope <name> [--fleet|--project|--user]` authors scope; fleet-scoped skills inject for members via a **membership-verified** `active_fleet` (derived from the `fleet-<name>` channel id, gated on local fleet membership — fail-closed). **Real per-token accounting (shipped)** + **structured `done_when` (shipped):** `done_when: marker:<TEXT>` converges deterministically (member emits the marker as an own-line sentinel this run; no router LLM call). **Commander governance (shipped):** commander governance hooks (kill + budget-ceiling) via `mur commander`, honored by loop + daemon (fail-closed on Err), audited via `GovernanceState`. Remaining Phase 3 (refinements): team-shared fleets. Live `run`/`run --loop`/auto-run need running member agents (operator-tested). **Bundle sharing (Phase A, shipped):** `export <name> [--with-members]` / `import <file> [--force] [--no-members] [--yes]` — share a fleet `.fleet` bundle (signed tar.gz: fleet.yaml + fleet-scoped skills + optional member profiles); import verifies signature, security-scans skills, installs at lowest trust (peer TOFU), regenerates member identities locally (never copies the private key), never overwrites existing agents, never auto-runs. **Concurrent merge (P3 Phase 0, experimental, default OFF):** `mur fleet merge-concurrent <name> [--stats] [--promote] [--target <path>]` (requires `MUR_PARALLEL_CONCURRENT=1`) runs zero-dependency Model-A post-hoc N-way line merge across a parallel run's worktrees: disjoint hunks auto-merge, any overlapping region is reported and escalated (never silently merged), `--promote` refuses on unresolved overlaps and reverts on `cargo check` failure, `--stats` writes `concurrent_stats.json` (Spike-1 overlap rate that gates whether the Loro CRDT engine in Phase 1 is ever built). Guarantees deterministic order-independent convergence of merged bytes, NOT correctness. See `docs/superpowers/specs/2026-06-29-parallel-tracks-p3-concurrent-merge-design.md` and `docs/superpowers/validation/spike1-overlap-rate.md`. **Spike-1 DECIDED (observational — `mur-core/examples/spike1_history.rs` mines real git-merge history through the production classifier): 0.1% overlap → StructuralMerger is the final answer, the Loro CRDT (Phase 1) is shelved.** **Agent-triggered runs (`fleet_run` built-in tool, shipped):** a sandboxed agent (e.g. the murmur concierge) can trigger a guarded fleet run / `mur deep-research` WITHOUT `~/.mur` fs grants — the runtime built-in tool (`mur-agent-runtime/src/tools/fleet_run.rs`) spawns the `mur` CLI; deny-by-default on both axes via `~/.mur/config.yaml` `fleet_run: {agents: [...], fleets: [...]}` (global config = out of any agent's write reach), requires a positive `loop.budget_usd`, and the sandbox seal adds the narrow carve-ins (`fleets`/`commander`/`conversations` write + `mur` spawn) only for allowlisted agents (`sandbox/policy.rs`). Config change → agent restart to apply. **Tier 1 worktree execution (experimental, default OFF):** `MUR_PARALLEL_EXEC=1 mur fleet run <name>` on a fleet with a `parallel:` block creates one git worktree per track (`.worktrees/`, via the previously-dormant `create_tracks`), prompt-routes each delegate to work+commit inside its worktree using the bash tool's existing per-call `cwd` param (no runtime change), caps fan-out (`max_concurrency`), and leaves worktrees + `tracks.json` for the existing reconcilers (`merge`/`compare`/`merge-concurrent`). A best-effort collision guard reports any agent that strays into the main checkout (the signal that justifies Tier 2 runtime-enforced cwd). Goal: dogfood parallel Claude Code on real MUR work and measure the live overlap rate (the serial-history proxy can't see the parallel regime). See `docs/superpowers/plans/2026-06-30-parallel-tracks-tier1-worktree-execution.md`.
+- `mur fleet {create|list|show|run|stop|start|export|import|partition-plan|merge}` — squads of agents working a shared goal over one signed channel (id `fleet-<name>`), defined in `~/.mur/fleets/<name>/fleet.yaml`. `run` fans the goal to members via the DAG executor; `run --loop` adds guards (iteration cap, deadline, stuck-detection, `--budget-usd` from real per-token spend) and converges on `done_when: marker:<TEXT>` (own-line sentinel, not substring) or router DONE/CONTINUE.
+  - **Safety triad — do not weaken:** unattended auto-run is OFF unless `MUR_FLEET_AUTORUN=1`; auto-run also requires a positive `loop.budget_usd`; `mur fleet stop <name>` is the kill-switch (`.stopped` sentinel, honored by loop + daemon + manual run; cleared by `start`). Every path passes `yes:false` — never blanket-approve risk-tiered steps. Commander governance (kill + budget ceiling) is fail-closed on Err.
+  - Experimental, default OFF: `MUR_PARALLEL_EXEC=1` (per-track git worktrees), `MUR_PARALLEL_CONCURRENT=1` (`merge-concurrent` N-way line merge — converges bytes, NOT correctness).
+  - Design, phase history, and the Spike-1 overlap decision: `docs/superpowers/specs/2026-06-19-mur-fleet-design.md`, `docs/superpowers/specs/2026-06-29-parallel-tracks-p3-concurrent-merge-design.md`, `docs/superpowers/validation/spike1-overlap-rate.md`.
 
 - `mur model {add|list|show|remove|migrate|prices|role}` — `~/.mur/models.yaml` provider/model registry. `add` accepts `--input-cost`/`--output-cost` (USD per 1k tokens) and auto-fills pricing + context window from the models.dev catalog unless `--no-fetch`; `prices {refresh|show}` manages the cached catalog (`~/.mur/cache/model-prices.json`). The Hub GUI **Model Library** (mur-hub-gui) connects cloud providers (key → Keychain) and auto-detects local runtimes, discovers models via `/v1/models`, and adds them as registry aliases. See `docs/superpowers/specs/2026-04-29-model-registry-and-secret-refs-design.md` and `2026-06-17-mur-model-library-design.md`.
 - `mur official {list|install <id>}` — browse and install official MUR agents/fleets from the app.mur.run catalog. Install requires `mur login`; pro-tier items require an active subscription. Downloads carry an account-bound `OfficialLicense` (stored in `~/.mur/licenses/`); the fleet/agent import paths refuse official-marked bundles without a matching license (anti-sharing gate; expiry gates downloads only, never installed content). See `docs/superpowers/specs/2026-07-20-official-catalog-design.md`.
@@ -141,60 +144,12 @@ Before changing anything that pins, verifies, or launches an MCP server, read `d
 
 ## Release Process
 
-`main` is protected: direct pushes are rejected ("Changes must be made through a
-pull request", required check "CI pass"). The version bump therefore goes through
-a PR, and **the tag is pushed only after the bump is on `main`** — tagging first
-strands the tag on a commit no branch contains.
-
-1. **Bump the `Cargo.toml` workspace version FIRST** so `mur --version` matches the
-   tag. CI validates it: a tag whose version disagrees with `Cargo.toml` fails at
-   the `validate-version` job. Move both lock files with it — the root one and
-   `mur-hub-gui/src-tauri/Cargo.lock`, which keeps its own copy of every workspace
-   crate's version and breaks the Hub's release build when it disagrees.
-   ```bash
-   # `sed -i '' '0,/re/s//repl/'` is a GNU-ism that fails SILENTLY on macOS —
-   # exit 0, file unchanged. Edit the line directly and check the result.
-   python3 - <<'EOF'
-   s = open("Cargo.toml").read()
-   assert s.count('version = "X.Y.Z-old"') == 1
-   open("Cargo.toml", "w").write(s.replace('version = "X.Y.Z-old"', 'version = "X.Y.Z"', 1))
-   EOF
-   cargo update --workspace
-   cargo update --workspace --manifest-path mur-hub-gui/src-tauri/Cargo.toml
-   git checkout -b chore/bump-X.Y.Z
-   git add Cargo.toml Cargo.lock mur-hub-gui/src-tauri/Cargo.lock
-   git commit -m "chore(release): bump workspace version to X.Y.Z"
-   git push -u origin chore/bump-X.Y.Z
-   gh pr create --base main --title "chore(release): bump workspace version to X.Y.Z"
-   ```
-2. Merge that PR once CI is green, then update your local `main`:
-   ```bash
-   git checkout main && git pull --ff-only
-   ```
-3. **Only now** tag the commit that is on `main`, and push the tag by itself:
-   ```bash
-   git tag -a vX.Y.Z -m "message"
-   git push origin vX.Y.Z
-   ```
-   Never `git push origin main --tags`: that pushes two refs, and when branch
-   protection declines `main` the tag still lands — the error names only the
-   rejected branch, so it reads as a clean failure while a release is already
-   building from a commit that is not on `main`.
-4. The release workflow (`release.yml`) handles the rest: cross-platform build,
-   GitHub Release, Homebrew formula update, installer deployment, crates.io publish.
-5. Verify: `brew update && brew upgrade mur`
+`main` is protected, so the version bump goes through a PR and the tag is pushed only after the bump lands on `main`. Full step-by-step (both Cargo.lock files, the macOS `sed` trap, why never `git push origin main --tags`): the **`mur-release`** skill (`.claude/skills/mur-release/`).
 
 ## Documentation Checklist
 
-When making changes, check whether these need updating. For the full how-to (mechanics of each location + publish gotchas), use the **`update-docs`** skill (`.claude/skills/update-docs/`).
-
-1. **`README.md`** — `/Volumes/Firecuda4tb/Projects/mur/README.md`
-2. **Documents page** — https://app.mur.run/docs/core
-   - Source: `/Volumes/Firecuda4tb/Projects/mur-server/dashboard/docs-content/`
-   - Page component: `/Volumes/Firecuda4tb/Projects/mur-server/dashboard/src/app/docs/core/[[...slug]]/page.tsx`
-   - Navigation: `/Volumes/Firecuda4tb/Projects/mur-server/dashboard/src/components/docs/coreNavigation.tsx`
-3. **Product page** — https://app.mur.run/products/mur
-   - Source: `/Volumes/Firecuda4tb/Projects/mur-server/dashboard/src/app/products/mur/page.tsx`
+After a user-facing change, update all three: **`README.md`**, the **docs site** (https://app.mur.run/docs/core), and the **product page** (https://app.mur.run/products/mur).
+Exact source paths, wiring, and publish gotchas live in the **`update-docs`** skill (`.claude/skills/update-docs/`) — use it, don't reconstruct the paths.
 
 ## Mandatory Rules
 
