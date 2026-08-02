@@ -13,7 +13,7 @@ use mur_common::channel::{ChannelActor, ChannelEvent};
 use mur_common::fleet::{Fleet, Job, JobStatus};
 use sha2::{Digest, Sha256};
 
-use super::done_policy::done_marker;
+use super::done_policy::{DonePolicy, done_marker, done_policy};
 use super::progress::{
     RunProgress, StepProgress, StepState, classify_phase, iteration_summary_line,
 };
@@ -54,6 +54,9 @@ pub enum LoopStop {
     Stopped,
     /// A commander governance kill (or zero budget-ceiling) halted the loop.
     CommanderKilled,
+    /// `done_when: queue-empty` and an iteration found no queued job — the
+    /// fleet's work is done because there is none left.
+    QueueDrained,
 }
 
 /// Parse a humantime-ish duration: `30s`, `5m`, `2h`, `1d`, or a bare integer
@@ -306,6 +309,7 @@ fn outcome_label(stop: LoopStop) -> &'static str {
         LoopStop::Budget => "budget",
         LoopStop::Stopped => "stopped",
         LoopStop::CommanderKilled => "commander-killed",
+        LoopStop::QueueDrained => "queue-drained",
     }
 }
 
@@ -472,6 +476,20 @@ pub async fn run_guarded(
         let pre_events = svc.load_events(&fleet.channel_id).unwrap_or_default();
         // Drain job queue: oldest queued job is this iteration's goal; else standing goal.
         let (iter_goal, mut active_job) = iteration_goal(mur_home, name, &fleet.goal)?;
+
+        // `done_when: queue-empty` — a drained queue IS the completion
+        // condition. Checked here, ahead of `plan_via_router` and every other
+        // model call, so a cron tick that wakes to an empty queue costs nothing
+        // rather than costing a full iteration. Stuck-detection cannot stand in
+        // for this: a member replying "what should I run?" counts as progress,
+        // so `stuck` resets and the loop runs to the iteration cap.
+        if active_job.is_none()
+            && let Some(lc) = fleet.loop_cfg.as_ref()
+            && done_policy(&lc.done_when) == DonePolicy::QueueEmpty
+        {
+            println!("── fleet '{name}': job queue empty — nothing to do ──");
+            break LoopStop::QueueDrained;
+        }
         let planning_fleet = mur_common::fleet::Fleet {
             goal: iter_goal.clone(),
             ..fleet.clone()
@@ -1174,6 +1192,17 @@ mod tests {
         assert!(
             audit.contains(&format!("\"nonce\":\"{nonce}\"")),
             "audit must bind the exact deciding directive nonce ({nonce})"
+        );
+    }
+
+    #[test]
+    fn queue_drained_outcome_has_its_own_label() {
+        // The progress file's `outcome` is how a caller tells "finished because
+        // there was nothing left to do" from "ran out of iterations".
+        assert_eq!(outcome_label(LoopStop::QueueDrained), "queue-drained");
+        assert_ne!(
+            outcome_label(LoopStop::QueueDrained),
+            outcome_label(LoopStop::MaxIterations)
         );
     }
 }
