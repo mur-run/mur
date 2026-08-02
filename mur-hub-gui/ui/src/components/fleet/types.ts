@@ -6,6 +6,15 @@ export interface FleetSummary {
   active_jobs: number;
   stopped: boolean;
   running: boolean;
+  /** Label ids, primary first. Empty means ungrouped. */
+  labels: string[];
+}
+
+export interface LabelView {
+  id: string;
+  display: string;
+  color: string | null;
+  fleet_count: number;
 }
 
 export interface FleetLoopView {
