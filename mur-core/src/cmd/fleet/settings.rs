@@ -26,6 +26,15 @@ use super::store;
 ///
 /// Validation reuses the parsers execution uses (`parse_duration`,
 /// `scheduler::next_fire_after`) so it cannot disagree with what will run.
+///
+/// Expects `trigger`/`deadline`/`done_when` to already be trimmed by the
+/// caller. Trimming a local copy in here for the check while the caller
+/// stores the original would let a value pass validation and still persist
+/// with stray whitespace attached — which then fails every `strip_prefix`
+/// read downstream (`fleet_tick.rs`, `done_policy::done_marker`) exactly
+/// like the fail-open cases this function exists to catch. `cmd_fleet_set_loop`
+/// trims once and passes that same value both here and to the merge, so
+/// what was validated is what gets stored.
 fn validate_loop_fields(
     trigger: Option<&str>,
     max_iterations: Option<u32>,
@@ -34,7 +43,6 @@ fn validate_loop_fields(
     done_when: Option<&str>,
 ) -> Result<()> {
     if let Some(t) = trigger {
-        let t = t.trim();
         if let Some(expr) = t.strip_prefix("cron:") {
             if mur_agent_runtime::scheduler::next_fire_after(expr, chrono::Local::now()).is_none() {
                 bail!("cron expression {expr:?} is invalid or will never fire");
@@ -71,7 +79,6 @@ fn validate_loop_fields(
     }
 
     if let Some(dw) = done_when {
-        let dw = dw.trim();
         let recognised = dw.is_empty()
             || dw == super::done_policy::DONE_WHEN_QUEUE_EMPTY
             || super::done_policy::done_marker(dw).is_some();
@@ -100,6 +107,15 @@ pub fn cmd_fleet_set_loop(
     budget_usd: Option<f64>,
     done_when: Option<String>,
 ) -> Result<()> {
+    // Trim once and reuse the trimmed value for both validation and the
+    // merge below, so "what was validated is what gets stored". Deadline is
+    // included even though `parse_duration` already trims internally on
+    // both write and read — the invariant should hold for all three string
+    // fields rather than for two of three by coincidence.
+    let trigger = trigger.map(|t| t.trim().to_string());
+    let deadline = deadline.map(|d| d.trim().to_string());
+    let done_when = done_when.map(|dw| dw.trim().to_string());
+
     validate_loop_fields(
         trigger.as_deref(),
         max_iterations,
@@ -287,5 +303,42 @@ mod tests {
             l.deadline, "2026-12-31",
             "a pre-existing bad value is left alone, not rejected"
         );
+    }
+
+    #[test]
+    fn set_loop_stores_the_trimmed_value_it_validated() {
+        // A value with stray whitespace must not pass validation against a
+        // trimmed copy and then persist with the whitespace still attached:
+        // that form fails every `strip_prefix` read downstream
+        // (`fleet_tick.rs`, `done_policy::done_marker`) and silently falls
+        // back exactly like the fail-open cases this validator exists to
+        // catch. A leading/trailing space is an ordinary UX slip, not a
+        // contrived input — neither the CLI nor the Hub trims before calling.
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        super::super::create::cmd_fleet_create(
+            home,
+            "dev",
+            vec!["pm".into()],
+            None,
+            Some("g".into()),
+            None,
+        )
+        .unwrap();
+
+        cmd_fleet_set_loop(
+            home,
+            "dev",
+            Some(" interval:30m ".to_string()),
+            None,
+            None,
+            None,
+            Some("  marker:DONE  ".to_string()),
+        )
+        .unwrap();
+
+        let l = store::load_fleet(home, "dev").unwrap().loop_cfg.unwrap();
+        assert_eq!(l.trigger, "interval:30m", "no leading/trailing whitespace");
+        assert_eq!(l.done_when, "marker:DONE", "no leading/trailing whitespace");
     }
 }
