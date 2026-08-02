@@ -10,6 +10,7 @@ pub mod export;
 pub mod import;
 pub mod jobs;
 pub mod judge_cmd;
+pub mod labels;
 pub mod list;
 pub mod loop_run;
 pub mod partition_cmd;
