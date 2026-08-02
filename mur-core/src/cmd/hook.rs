@@ -77,14 +77,16 @@ fn compress_tool_response(
     }
     let replacement =
         mur_compress::auto_compress_value(engine, tool_response, None, cfg.min_tokens)?;
-    let updated_tool_output = match replacement {
-        serde_json::Value::String(s) => s,
-        other => serde_json::to_string(&other).ok()?,
-    };
+    // Emit the replacement with its shape intact. Claude Code validates
+    // `updatedToolOutput` against the ORIGINATING tool's output schema, so
+    // stringifying an object replacement (Edit/Write/Bash/Agent all hand us
+    // objects, and `auto_compress_value` deliberately preserves that shape by
+    // compressing only the largest string/array field) fails validation with
+    // "expected object, received string" and the compression is discarded.
     let line = serde_json::json!({
         "hookSpecificOutput": {
             "hookEventName": "PostToolUse",
-            "updatedToolOutput": updated_tool_output,
+            "updatedToolOutput": replacement,
         }
     });
     serde_json::to_string(&line).ok()
@@ -666,13 +668,65 @@ mod compress_tool_response_tests {
             parsed["hookSpecificOutput"]["hookEventName"],
             json!("PostToolUse")
         );
-        let updated = parsed["hookSpecificOutput"]["updatedToolOutput"]
-            .as_str()
-            .expect("updatedToolOutput must be a JSON string");
-        assert!(!updated.is_empty());
+        let updated = &parsed["hookSpecificOutput"]["updatedToolOutput"];
+        // An array response has no tool-declared shape to preserve (this path
+        // serves MCP list results), so it keeps the object envelope. What must
+        // NOT happen is the envelope arriving JSON-stringified — Claude Code
+        // validates against the originating tool's schema and discards it.
         assert!(
-            updated.contains("mur_retrieve"),
-            "expected retrieval hash marker in: {updated}"
+            updated.is_object(),
+            "envelope must not be stringified; got: {updated}"
+        );
+        assert_eq!(updated["compressed"], json!(true));
+        assert!(
+            updated["hash"].as_str().is_some_and(|h| !h.is_empty()),
+            "offloaded result must carry a hash: {updated}"
+        );
+        assert!(
+            updated["note"]
+                .as_str()
+                .is_some_and(|n| n.contains("mur_retrieve")),
+            "expected retrieval marker in note: {updated}"
+        );
+    }
+
+    #[test]
+    fn object_tool_response_keeps_object_shape() {
+        // Claude Code validates `updatedToolOutput` against the originating
+        // tool's output schema. Edit/Write/Bash/Agent all hand the hook an
+        // object, so a stringified replacement is rejected with "expected
+        // object, received string" and the compression is silently dropped.
+        let (_dir, eng) = engine();
+        let cfg = auto_cfg();
+        let raw = json!({
+            "tool_name": "Bash",
+            "tool_response": {
+                "stdout": big_tool_response().to_string(),
+                "stderr": "",
+                "interrupted": false,
+            },
+        });
+
+        let line = compress_tool_response(&raw, &cfg, &eng).expect("gate should fire");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&line).expect("line must be valid JSON");
+        let updated = &parsed["hookSpecificOutput"]["updatedToolOutput"];
+
+        assert!(
+            updated.is_object(),
+            "must stay an object or Claude Code discards it; got: {updated}"
+        );
+        assert_eq!(updated["interrupted"], json!(false), "siblings preserved");
+        assert_eq!(updated["stderr"], json!(""), "siblings preserved");
+        // `stdout` was declared a string by the tool, so the compressed form
+        // must still be a string — the retrieval hash is inlined as text
+        // rather than swapped in as the object envelope.
+        let stdout = updated["stdout"]
+            .as_str()
+            .expect("stdout must stay a string, not become the object envelope");
+        assert!(
+            stdout.contains("mur_retrieve"),
+            "compressed stdout should carry the retrieval marker: {stdout}"
         );
     }
 

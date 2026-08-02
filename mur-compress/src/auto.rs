@@ -152,6 +152,16 @@ pub fn has_tool_error(value: &Value) -> bool {
     tool_error_count(value) > 0
 }
 
+/// The warning that must precede any offloaded result bundling tool errors,
+/// so a failure can't read as success until someone calls `mur_retrieve`.
+/// Shared by the object envelope's `note` and the string form's prefix.
+pub fn error_warning(error_count: usize) -> String {
+    format!(
+        "WARNING: this offloaded result contains {error_count} tool error(s); \
+         do NOT treat it as success — call mur_retrieve to inspect."
+    )
+}
+
 /// Model-readable hint describing how to recover the full content. When
 /// `error_count > 0` the note leads with a hard warning so the offloaded
 /// result is never read as success before retrieval.
@@ -162,10 +172,7 @@ pub fn retrieval_note_with_errors(
 ) -> String {
     let base = retrieval_note(hash, query);
     if error_count > 0 {
-        format!(
-            "WARNING: this offloaded result contains {error_count} tool error(s); \
-             do NOT treat it as success — call mur_retrieve to inspect. {base}"
-        )
+        format!("{} {base}", error_warning(error_count))
     } else {
         base
     }
@@ -252,7 +259,7 @@ pub fn auto_compress_value(
     match value {
         Value::String(s) => {
             let o = auto_compress(engine, s, query, min_tokens);
-            o.fired.then(|| value_replacement(&o, query))
+            o.fired.then(|| shaped_replacement(value, &o, query))
         }
         Value::Array(_) => {
             let o = auto_compress(engine, &value.to_string(), query, min_tokens);
@@ -281,7 +288,7 @@ pub fn auto_compress_value(
                 return None;
             }
             let mut out = map.clone();
-            out.insert(key, value_replacement(&o, query));
+            out.insert(key, shaped_replacement(field, &o, query));
             Some(Value::Object(out))
         }
         _ => None,
@@ -328,6 +335,16 @@ fn annotate_offload_errors(mut replacement: Value, original: &Value, query: Opti
     if n == 0 {
         return replacement;
     }
+    // String replacements (a schema-declared string field, see
+    // `shaped_replacement`) carry their retrieval note inline rather than in an
+    // envelope, so `as_object_mut` would skip them and the warning would be
+    // silently dropped — exactly the error-hiding this function exists to stop.
+    if let Some(s) = replacement.as_str() {
+        if s.contains("mur_retrieve") {
+            return Value::String(format!("{}\n\n{s}", error_warning(n)));
+        }
+        return replacement;
+    }
     // Top-level offload envelope.
     if let Some(obj) = replacement.as_object_mut() {
         if obj.get("compressed") == Some(&Value::Bool(true))
@@ -340,8 +357,15 @@ fn annotate_offload_errors(mut replacement: Value, original: &Value, query: Opti
             obj.insert("tool_errors".into(), Value::from(n));
             return replacement;
         }
-        // Object whose largest field was replaced with an envelope.
+        // Object whose largest field was replaced — envelope or, for a
+        // schema-declared string field, the inline-note string form.
         for (_k, v) in obj.iter_mut() {
+            if let Some(s) = v.as_str() {
+                if s.contains("mur_retrieve") {
+                    *v = Value::String(format!("{}\n\n{s}", error_warning(n)));
+                }
+                continue;
+            }
             if let Some(inner) = v.as_object_mut()
                 && inner.get("compressed") == Some(&Value::Bool(true))
                 && let Some(h) = inner.get("hash").and_then(|h| h.as_str()).map(String::from)
@@ -363,6 +387,34 @@ fn value_replacement(outcome: &AutoOutcome, query: Option<&str>) -> Value {
     match outcome.hash {
         Some(_) => retrieval_envelope(outcome, query),
         None => Value::String(outcome.text.clone()),
+    }
+}
+
+/// Replacement that preserves `original`'s JSON type.
+///
+/// Claude Code validates a PostToolUse `updatedToolOutput` against the
+/// ORIGINATING tool's output schema, so handing back the object envelope where
+/// the tool declared a string (Bash's `stdout`/`stderr`, Edit's and Write's
+/// fields) fails validation and the entire compression is discarded — silently,
+/// via "using original output". For a string we therefore inline the retrieval
+/// note into the text instead of wrapping it, so the hash stays reachable by
+/// `mur_retrieve` while the field keeps the type the tool declared.
+///
+/// Note the asymmetry this creates with [`is_compressed_envelope`]-style
+/// guards, which recognise only the object form: nothing here re-enters the
+/// compressor, because PostToolUse runs once per tool call on a fresh result.
+///
+/// Arrays keep the envelope: they reach here from MCP list results, whose
+/// output schemas are unconstrained.
+fn shaped_replacement(original: &Value, outcome: &AutoOutcome, query: Option<&str>) -> Value {
+    match original {
+        Value::String(_) if outcome.hash.is_some() => Value::String(format!(
+            "{}\n\n{}",
+            outcome.text,
+            retrieval_note(outcome.hash.as_deref(), query)
+        )),
+        Value::String(_) => Value::String(outcome.text.clone()),
+        _ => value_replacement(outcome, query),
     }
 }
 
@@ -544,8 +596,13 @@ mod tests {
         let out = auto_compress_value(&eng, &v, None, 50).expect("should fire");
         assert_eq!(out["interrupted"], serde_json::json!(false));
         assert_eq!(out["stderr"], serde_json::json!(""));
-        assert_eq!(out["stdout"]["compressed"], serde_json::json!(true));
-        assert!(out["stdout"]["hash"].as_str().is_some());
+        // `stdout` is a string in Claude Code's Bash output schema, so the
+        // replacement must stay a string — swapping in the object envelope
+        // fails schema validation and the compression is thrown away.
+        let stdout = out["stdout"]
+            .as_str()
+            .expect("stdout must stay a string, not become the envelope");
+        assert!(stdout.contains("mur_retrieve"), "{stdout}");
     }
 
     #[test]
@@ -653,11 +710,12 @@ mod tests {
         let v = Value::String(big_json_array());
         let out = auto_compress_value_guarded(&eng, &v, None, 100, false)
             .expect("clean large payload should still compress");
-        assert_eq!(out["compressed"], serde_json::json!(true));
-        assert!(out["hash"].as_str().is_some());
+        // A string input keeps the string shape; the hash rides along in the
+        // inline retrieval note.
+        let s = out.as_str().expect("string input keeps string shape");
+        assert!(s.contains("mur_retrieve"), "{s}");
         // No error annotation on a clean result.
-        assert!(out.get("tool_errors").is_none());
-        assert!(!out["note"].as_str().unwrap().contains("WARNING"));
+        assert!(!s.contains("WARNING"), "{s}");
     }
 
     #[test]
