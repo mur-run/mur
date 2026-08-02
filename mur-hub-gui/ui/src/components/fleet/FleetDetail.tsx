@@ -6,8 +6,9 @@ import type { TranslationKey } from "../../i18n/types";
 import type { AgentEntry } from "../../types";
 import { CATEGORY_COLORS, avatarPreset, familyOf } from "../../utils";
 import { PetFace } from "../PetFace";
-import type { FleetDetail as Detail, JobRow } from "./types";
+import type { FleetDetail as Detail, JobRow, LabelView } from "./types";
 import { DURATION_RE } from "./fleetCreateForm";
+import { makePrimary, toggleAssignment } from "./fleetLabels";
 import {
   parseTrigger,
   buildTrigger,
@@ -21,6 +22,10 @@ interface Props {
   detail: Detail;
   jobs: JobRow[];
   agentMap: Map<string, AgentEntry>;
+  /** The whole registry, in registry order — the chips offered here. */
+  labels: LabelView[];
+  /** This fleet's assigned label ids, primary first. */
+  fleetLabels: string[];
   onRefresh: () => void;
   onDelete: () => void;
 }
@@ -47,7 +52,7 @@ function jobStatusClass(status: JobRow["status"]): string {
   return `fleet-job__status fleet-job__status--${status}`;
 }
 
-export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Props) {
+export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRefresh, onDelete }: Props) {
   const { t } = useT();
   const [busy, setBusy] = useState<string | null>(null);
   const [sendInput, setSendInput] = useState("");
@@ -83,6 +88,18 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
       });
       showToast(t("fleet.settings.saved"));
       onRefresh();
+    } catch (err) {
+      showToast(String(err), 4000);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function saveLabels(ids: string[]) {
+    setBusy("fleet_set_labels");
+    try {
+      await invoke("fleet_set_labels", { name: detail.name, ids });
+      onRefresh(); // reloads the list so the rail regroups immediately
     } catch (err) {
       showToast(String(err), 4000);
     } finally {
@@ -304,6 +321,42 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
         )}
         <button className="toolbar-btn" onClick={handleExport} disabled={busy !== null}>{t("fleet.export")}</button>
         <button className="toolbar-btn" onClick={handleImport} disabled={busy !== null}>{t("fleet.import")}</button>
+      </div>
+
+      <div className="fleet-section">
+        <div className="fleet-section__label">{t("fleet.labels")}</div>
+        {labels.length === 0 ? (
+          <div className="fleet-labels__empty">{t("fleet.labelsEmpty")}</div>
+        ) : (
+          <>
+            <div className="fleet-labels">
+              {labels.map((l) => {
+                const on = fleetLabels.includes(l.id);
+                const primary = fleetLabels[0] === l.id;
+                return (
+                  <button
+                    key={l.id}
+                    className={`fleet-chip${on ? " is-active" : ""}${primary ? " is-primary" : ""}`}
+                    style={l.color ? { borderColor: l.color } : undefined}
+                    disabled={busy !== null}
+                    title={primary ? t("fleet.labelPrimary") : t("fleet.labelMakePrimary")}
+                    onClick={(e) => {
+                      // Plain click toggles; alt/⌥-click promotes to primary.
+                      const next = e.altKey
+                        ? makePrimary(fleetLabels, l.id)
+                        : toggleAssignment(fleetLabels, l.id);
+                      void saveLabels(next);
+                    }}
+                  >
+                    {primary && <span className="fleet-chip__pin">★</span>}
+                    {l.display || l.id}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="fleet-labels__hint">{t("fleet.labelHint")}</div>
+          </>
+        )}
       </div>
 
       <div className="fleet-section">

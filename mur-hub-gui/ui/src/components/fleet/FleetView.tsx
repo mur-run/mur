@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useT } from "../../i18n";
 import type { AgentEntry } from "../../types";
-import type { FleetSummary, FleetDetail as Detail, JobRow } from "./types";
+import type { FleetSummary, FleetDetail as Detail, JobRow, LabelView } from "./types";
 import { FleetRail } from "./FleetRail";
 import { FleetDetail } from "./FleetDetail";
 import { FleetCreateModal } from "./FleetCreateModal";
@@ -17,6 +17,18 @@ function showToast(msg: string, durationMs = 2500) {
   setTimeout(() => el.remove(), durationMs);
 }
 
+const LABEL_FILTER_KEY = "mur.fleet.labelFilter";
+
+function loadLabelFilter(): string[] {
+  try {
+    const raw = localStorage.getItem(LABEL_FILTER_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 export function FleetView({ query, onSelect }: { query?: string; onSelect?: (name: string | null) => void }) {
   const { t } = useT();
   const [fleets, setFleets] = useState<FleetSummary[]>([]);
@@ -25,7 +37,16 @@ export function FleetView({ query, onSelect }: { query?: string; onSelect?: (nam
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [agentMap, setAgentMap] = useState<Map<string, AgentEntry>>(new Map());
+  const [labels, setLabels] = useState<LabelView[]>([]);
+  const [selectedLabels, setSelectedLabels] = useState<string[]>(loadLabelFilter);
   const selectedRef = useRef<string | null>(null);
+
+  // Persist the chip selection so the rail comes back the way it was left.
+  useEffect(() => {
+    try {
+      localStorage.setItem(LABEL_FILTER_KEY, JSON.stringify(selectedLabels));
+    } catch { /* private mode / quota — filtering still works this session */ }
+  }, [selectedLabels]);
 
   useEffect(() => {
     selectedRef.current = selectedName;
@@ -50,6 +71,14 @@ export function FleetView({ query, onSelect }: { query?: string; onSelect?: (nam
     }
   }
 
+  async function loadLabels() {
+    try {
+      setLabels(await invoke<LabelView[]>("fleet_labels_list"));
+    } catch {
+      setLabels([]); // registry unreadable — degrade to a flat, unlabelled rail
+    }
+  }
+
   async function loadDetail(name: string) {
     try {
       const [d, j] = await Promise.all([
@@ -64,9 +93,10 @@ export function FleetView({ query, onSelect }: { query?: string; onSelect?: (nam
     }
   }
 
-  // Initial list load + agents map
+  // Initial list load + labels + agents map
   useEffect(() => {
     void loadList();
+    void loadLabels();
     invoke<AgentEntry[]>("list_agents").then((agents) => {
       setAgentMap(new Map(agents.map((a) => [a.name, a])));
     }).catch(() => {});
@@ -102,7 +132,14 @@ export function FleetView({ query, onSelect }: { query?: string; onSelect?: (nam
 
   function handleRefresh() {
     void loadList();
+    void loadLabels();
     if (selectedName) void loadDetail(selectedName);
+  }
+
+  function toggleLabel(id: string) {
+    setSelectedLabels((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
   }
 
   function handleDelete() {
@@ -125,6 +162,10 @@ export function FleetView({ query, onSelect }: { query?: string; onSelect?: (nam
           return f.name.toLowerCase().includes(q) || f.display_name.toLowerCase().includes(q) || f.goal.toLowerCase().includes(q);
         }) : fleets}
         selectedName={selectedName}
+        labels={labels}
+        selectedLabels={selectedLabels}
+        onToggleLabel={toggleLabel}
+        onClearLabels={() => setSelectedLabels([])}
         onSelect={handleSelect}
         onNew={() => setShowCreate(true)}
       />
@@ -135,6 +176,8 @@ export function FleetView({ query, onSelect }: { query?: string; onSelect?: (nam
             detail={detail}
             jobs={jobs}
             agentMap={agentMap}
+            labels={labels}
+            fleetLabels={fleets.find((f) => f.name === detail.name)?.labels ?? []}
             onRefresh={handleRefresh}
             onDelete={handleDelete}
           />

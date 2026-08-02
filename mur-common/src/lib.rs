@@ -31,6 +31,7 @@ pub mod hub;
 pub mod identity;
 pub mod jcs;
 pub mod knowledge;
+pub mod labels;
 pub mod ledger;
 pub mod llm;
 pub mod local_llm;
