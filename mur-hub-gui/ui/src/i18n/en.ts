@@ -705,6 +705,8 @@ export const en = {
   "fleet.settings.budgetWarning": "Needed (> 0) for auto-run",
   "fleet.settings.doneWhen": "Done when",
   "fleet.settings.doneWhenHint": "marker:DONE (optional)",
+  "fleet.settings.doneWhenHelp":
+    "Must start with marker: — the member ends the loop by emitting that text on its own line. Leave empty to let the router decide each iteration.",
   "fleet.settings.lastRun": "Last auto-run",
   "fleet.settings.lastRunNever": "never",
   "fleet.settings.stopHint": "Stopping this fleet (below) also blocks auto-run.",

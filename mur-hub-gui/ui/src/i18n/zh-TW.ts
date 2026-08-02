@@ -707,6 +707,8 @@ export const zhTW: Table = {
   "fleet.settings.budgetWarning": "自動執行需要大於 0 的預算",
   "fleet.settings.doneWhen": "完成條件",
   "fleet.settings.doneWhenHint": "marker:DONE（選填）",
+  "fleet.settings.doneWhenHelp":
+    "必須以 marker: 開頭 — 成員單獨一行輸出該文字即結束迴圈。留空則每輪由路由器判斷。",
   "fleet.settings.lastRun": "上次自動執行",
   "fleet.settings.lastRunNever": "從未執行",
   "fleet.settings.stopHint": "停止此機群（下方）也會阻止自動執行。",

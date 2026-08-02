@@ -44,6 +44,17 @@ describe("settingsAreValid", () => {
     expect(settingsAreValid("interval", "2026-12-31", "")).toBe(false);
   });
 
+  // Same fail-open shape as the deadline: the backend only strips a `marker:`
+  // prefix, so a bare "DONE" silently means "no marker convergence".
+  it("rejects a done_when without the marker: prefix", () => {
+    expect(settingsAreValid("manual", "", "", "DONE")).toBe(false);
+  });
+
+  it("accepts a marker: done_when and an empty one", () => {
+    expect(settingsAreValid("manual", "", "", "marker:RESEARCH_COMPLETE")).toBe(true);
+    expect(settingsAreValid("manual", "", "", "")).toBe(true);
+  });
+
   it("accepts an interval trigger with a valid duration value", () => {
     expect(settingsAreValid("interval", "30m", "")).toBe(true);
   });

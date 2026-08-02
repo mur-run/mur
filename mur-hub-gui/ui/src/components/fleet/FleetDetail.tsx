@@ -70,13 +70,13 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
   const budgetWarning = trigKind !== "manual" && (!budget.trim() || Number(budget) <= 0);
 
   async function handleSaveSettings() {
-    if (!settingsAreValid(trigKind, trigValue, deadline)) return;
+    if (!settingsAreValid(trigKind, trigValue, deadline, doneWhen)) return;
     setBusy("fleet_set_loop");
     try {
       await invoke("fleet_set_loop", {
         name: detail.name,
         trigger: buildTrigger(trigKind, trigValue),
-        maxIterations: maxIter.trim() ? Number(maxIter) : null,
+        maxIterations: maxIter.trim() ? Math.trunc(Number(maxIter)) : null,
         deadline: deadline.trim() || null,
         budgetUsd: budget.trim() ? Number(budget) : null,
         doneWhen: doneWhen.trim() || null,
@@ -122,7 +122,7 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
     showToast(t("fleet.runStarted"));
     await call("fleet_run_loop", {
       name: detail.name,
-      maxIterations: loopIterations.trim() ? Number(loopIterations) : null,
+      maxIterations: loopIterations.trim() ? Math.trunc(Number(loopIterations)) : null,
       deadline: loopDeadline.trim() || null,
       budgetUsd: loopBudget.trim() ? Number(loopBudget) : null,
     });
@@ -266,6 +266,9 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
           <>
             <div className="fleet-detail__loop-row">
               <input
+                type="number"
+                min="1"
+                step="1"
                 value={loopIterations}
                 onChange={(e) => setLoopIterations(e.target.value)}
                 placeholder="8"
@@ -275,7 +278,7 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
                 onChange={(e) => setLoopDeadline(e.target.value)}
                 placeholder="2h"
               />
-              <input value={loopBudget} onChange={(e) => setLoopBudget(e.target.value)} placeholder="$" />
+              <input value={loopBudget} onChange={(e) => setLoopBudget(e.target.value)} placeholder="$" type="number" min="0" step="0.01" />
               <button
                 className="toolbar-btn toolbar-btn--primary"
                 onClick={handleRunLoop}
@@ -392,7 +395,14 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
         )}
         <div className="fleet-settings__row">
           <label>{t("fleet.settings.maxIterations")}</label>
-          <input value={maxIter} onChange={(e) => setMaxIter(e.target.value)} placeholder="8" />
+          <input
+            type="number"
+            min="1"
+            step="1"
+            value={maxIter}
+            onChange={(e) => setMaxIter(e.target.value)}
+            placeholder="8"
+          />
         </div>
         <div className="fleet-settings__row">
           <label>{t("fleet.settings.deadline")}</label>
@@ -404,7 +414,14 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
         <div className="fleet-settings__hint">{t("fleet.settings.deadlineHint")}</div>
         <div className="fleet-settings__row">
           <label>{t("fleet.settings.budget")}</label>
-          <input value={budget} onChange={(e) => setBudget(e.target.value)} placeholder="0.00" />
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={budget}
+            onChange={(e) => setBudget(e.target.value)}
+            placeholder="0.00"
+          />
         </div>
         {budgetWarning && <div className="fleet-settings__warning">{t("fleet.settings.budgetWarning")}</div>}
         <div className="fleet-settings__row">
@@ -415,6 +432,7 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
             placeholder={t("fleet.settings.doneWhenHint")}
           />
         </div>
+        <div className="fleet-settings__hint">{t("fleet.settings.doneWhenHelp")}</div>
         <div className="fleet-settings__hint">
           {t("fleet.settings.lastRun")}: {detail.loop_cfg?.last_run ?? t("fleet.settings.lastRunNever")}
           <br />
@@ -423,7 +441,7 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
         <button
           className="toolbar-btn toolbar-btn--primary"
           onClick={handleSaveSettings}
-          disabled={busy !== null || !settingsAreValid(trigKind, trigValue, deadline)}
+          disabled={busy !== null || !settingsAreValid(trigKind, trigValue, deadline, doneWhen)}
         >
           {t("fleet.settings.save")}
         </button>

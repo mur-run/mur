@@ -27,10 +27,19 @@ export function buildTrigger(kind: TriggerKind, value: string): string {
  * fires" on the backend (fail-open) -- this is the safety property Task 6 review
  * flagged as needing test coverage.
  */
-export function settingsAreValid(trigKind: TriggerKind, trigValue: string, deadline: string): boolean {
+export function settingsAreValid(
+  trigKind: TriggerKind,
+  trigValue: string,
+  deadline: string,
+  doneWhen = ""
+): boolean {
   if (trigKind === "interval" && !DURATION_RE.test(trigValue.trim())) return false;
   if (trigKind === "cron" && trigValue.trim() === "") return false;
   if (deadline.trim() !== "" && !DURATION_RE.test(deadline.trim())) return false;
+  // Same fail-open shape: the backend only recognises a `marker:` prefix
+  // (strip_prefix in loop_run.rs). Anything else silently falls back to router
+  // convergence, so a typo'd "DONE" would look configured but do nothing.
+  if (doneWhen.trim() !== "" && !doneWhen.trim().startsWith("marker:")) return false;
   return true;
 }
 
