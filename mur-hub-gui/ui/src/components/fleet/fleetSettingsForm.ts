@@ -30,16 +30,11 @@ export function buildTrigger(kind: TriggerKind, value: string): string {
 export function settingsAreValid(
   trigKind: TriggerKind,
   trigValue: string,
-  deadline: string,
-  doneWhen = ""
+  deadline: string
 ): boolean {
   if (trigKind === "interval" && !DURATION_RE.test(trigValue.trim())) return false;
   if (trigKind === "cron" && trigValue.trim() === "") return false;
   if (deadline.trim() !== "" && !DURATION_RE.test(deadline.trim())) return false;
-  // Same fail-open shape: the backend only recognises a `marker:` prefix
-  // (strip_prefix in loop_run.rs). Anything else silently falls back to router
-  // convergence, so a typo'd "DONE" would look configured but do nothing.
-  if (doneWhen.trim() !== "" && !doneWhen.trim().startsWith("marker:")) return false;
   return true;
 }
 
@@ -68,3 +63,48 @@ export function modeBadgeLabel(
   }
   return `${t("fleet.create.mode.partition")} · ${summary.target_file ?? ""}`;
 }
+
+/** Which completion policy the Settings select is showing. */
+export type DonePolicyKind = "router" | "queue-empty" | "marker";
+
+/** The `done_when` sentinel selecting the queue-drained policy. Must stay in
+ *  step with mur-core's `DONE_WHEN_QUEUE_EMPTY`. */
+export const DONE_WHEN_QUEUE_EMPTY = "queue-empty";
+
+const MARKER_PREFIX = "marker:";
+
+/**
+ * Classify a stored `done_when`, mirroring mur-core's `done_policy`: anything
+ * that is neither the queue sentinel nor a usable `marker:` value means "ask
+ * the router" -- including legacy free-text criteria, which is exactly what the
+ * backend does with them.
+ */
+export function parseDonePolicy(doneWhen: string): DonePolicyKind {
+  const v = doneWhen.trim();
+  if (v.startsWith(MARKER_PREFIX) && v.slice(MARKER_PREFIX.length).trim() !== "") return "marker";
+  if (v === DONE_WHEN_QUEUE_EMPTY) return "queue-empty";
+  return "router";
+}
+
+/**
+ * The value to save for a chosen policy. `marker` returns the loaded expression
+ * verbatim: the Hub never authors a marker, because it cannot supply the other
+ * half of the contract -- something has to teach an agent to emit that text,
+ * and that lives in the goal or a skill, not in this form.
+ *
+ * `router` returns "" rather than null on purpose. The backend treats a null as
+ * "leave this field alone", so an explicit empty string is the only way to
+ * clear a previously-set criterion.
+ */
+export function buildDoneWhen(kind: DonePolicyKind, loaded: string): string {
+  if (kind === DONE_WHEN_QUEUE_EMPTY) return DONE_WHEN_QUEUE_EMPTY;
+  if (kind === "marker") return loaded.trim();
+  return "";
+}
+
+/** Which hint line explains the currently-selected policy. */
+export const DONE_POLICY_HINT: Record<DonePolicyKind, TranslationKey> = {
+  router: "fleet.settings.donePolicyHintRouter",
+  "queue-empty": "fleet.settings.donePolicyHintQueueEmpty",
+  marker: "fleet.settings.donePolicyHintMarker",
+};

@@ -706,9 +706,14 @@ export const zhTW: Table = {
   "fleet.settings.budget": "預算（美金）",
   "fleet.settings.budgetWarning": "自動執行需要大於 0 的預算",
   "fleet.settings.doneWhen": "完成條件",
-  "fleet.settings.doneWhenHint": "marker:DONE（選填）",
-  "fleet.settings.doneWhenHelp":
-    "必須以 marker: 開頭 — 成員單獨一行輸出該文字即結束迴圈。留空則每輪由路由器判斷。",
+  "fleet.settings.donePolicyRouter": "每輪由路由器判斷",
+  "fleet.settings.donePolicyQueueEmpty": "佇列清空時結束",
+  "fleet.settings.donePolicyHintRouter":
+    "每輪多一次模型呼叫，而且可能誤判。迭代上限、截止時間與預算仍然框得住迴圈。",
+  "fleet.settings.donePolicyHintQueueEmpty":
+    "某一輪發現沒有排隊的工作就結束。零成本且確定，適合用工作餵養的機群。",
+  "fleet.settings.donePolicyHintMarker":
+    "成員單獨一行輸出這段文字即收斂。請在 fleet.yaml 設定，並在同處寫明是誰教成員輸出它。",
   "fleet.settings.lastRun": "上次自動執行",
   "fleet.settings.lastRunNever": "從未執行",
   "fleet.settings.stopHint": "停止此機群（下方）也會阻止自動執行。",

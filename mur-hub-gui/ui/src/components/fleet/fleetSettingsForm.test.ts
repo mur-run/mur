@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { parseTrigger, buildTrigger, settingsAreValid, modeBadgeLabel, loopDeadlineIsValid } from "./fleetSettingsForm";
+import {
+  parseTrigger,
+  buildTrigger,
+  settingsAreValid,
+  modeBadgeLabel,
+  loopDeadlineIsValid,
+  parseDonePolicy,
+  buildDoneWhen,
+} from "./fleetSettingsForm";
 
 describe("parseTrigger", () => {
   it("null loop_cfg → manual", () => {
@@ -42,17 +50,6 @@ describe("settingsAreValid", () => {
 
   it("rejects an interval trigger with a non-duration value", () => {
     expect(settingsAreValid("interval", "2026-12-31", "")).toBe(false);
-  });
-
-  // Same fail-open shape as the deadline: the backend only strips a `marker:`
-  // prefix, so a bare "DONE" silently means "no marker convergence".
-  it("rejects a done_when without the marker: prefix", () => {
-    expect(settingsAreValid("manual", "", "", "DONE")).toBe(false);
-  });
-
-  it("accepts a marker: done_when and an empty one", () => {
-    expect(settingsAreValid("manual", "", "", "marker:RESEARCH_COMPLETE")).toBe(true);
-    expect(settingsAreValid("manual", "", "", "")).toBe(true);
   });
 
   it("accepts an interval trigger with a valid duration value", () => {
@@ -103,5 +100,29 @@ describe("modeBadgeLabel", () => {
     expect(modeBadgeLabel({ mode: "partition", track_count: 0, target_file: "src/widget.rs" }, t)).toBe(
       "Partition · src/widget.rs"
     );
+  });
+});
+
+describe("parseDonePolicy", () => {
+  it("maps a stored done_when to a policy, treating legacy criteria as router", () => {
+    expect(parseDonePolicy("marker:RESEARCH_COMPLETE")).toBe("marker");
+    expect(parseDonePolicy("queue-empty")).toBe("queue-empty");
+    expect(parseDonePolicy("")).toBe("router");
+    // Free-text criteria predate this vocabulary and mean "ask the router",
+    // which is what the backend already does with them.
+    expect(parseDonePolicy("all_tasks_done")).toBe("router");
+    // A prefix with nothing after it is not a usable marker.
+    expect(parseDonePolicy("marker:")).toBe("router");
+  });
+});
+
+describe("buildDoneWhen", () => {
+  it("writes an empty string for router, which is how the field gets cleared", () => {
+    // `doneWhen.trim() || null` used to send null here, and the backend reads
+    // null as "leave alone" -- so the Hub could not clear done_when at all.
+    expect(buildDoneWhen("router", "marker:DONE")).toBe("");
+    expect(buildDoneWhen("queue-empty", "")).toBe("queue-empty");
+    // The Hub never authors a marker; it only preserves the loaded one.
+    expect(buildDoneWhen("marker", "marker:RESEARCH_COMPLETE")).toBe("marker:RESEARCH_COMPLETE");
   });
 });

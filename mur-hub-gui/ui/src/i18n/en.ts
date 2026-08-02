@@ -704,9 +704,14 @@ export const en = {
   "fleet.settings.budget": "Budget (USD)",
   "fleet.settings.budgetWarning": "Needed (> 0) for auto-run",
   "fleet.settings.doneWhen": "Done when",
-  "fleet.settings.doneWhenHint": "marker:DONE (optional)",
-  "fleet.settings.doneWhenHelp":
-    "Must start with marker: — the member ends the loop by emitting that text on its own line. Leave empty to let the router decide each iteration.",
+  "fleet.settings.donePolicyRouter": "Router decides each iteration",
+  "fleet.settings.donePolicyQueueEmpty": "Stop when the job queue is empty",
+  "fleet.settings.donePolicyHintRouter":
+    "Costs one model call per iteration and can misjudge. The iteration cap, deadline and budget still bound the loop.",
+  "fleet.settings.donePolicyHintQueueEmpty":
+    "Finishes as soon as an iteration finds nothing queued. Free and deterministic — the right choice for a fleet you feed with jobs.",
+  "fleet.settings.donePolicyHintMarker":
+    "Converges when a member emits this text on a line of its own. Set in fleet.yaml, alongside whatever teaches the agent to emit it.",
   "fleet.settings.lastRun": "Last auto-run",
   "fleet.settings.lastRunNever": "never",
   "fleet.settings.stopHint": "Stopping this fleet (below) also blocks auto-run.",

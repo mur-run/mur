@@ -14,7 +14,11 @@ import {
   settingsAreValid,
   modeBadgeLabel,
   loopDeadlineIsValid,
+  parseDonePolicy,
+  buildDoneWhen,
+  DONE_POLICY_HINT,
   type TriggerKind,
+  type DonePolicyKind,
 } from "./fleetSettingsForm";
 
 interface Props {
@@ -65,12 +69,14 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
   const [budget, setBudget] = useState(
     detail.loop_cfg?.budget_usd ? String(detail.loop_cfg.budget_usd) : ""
   );
-  const [doneWhen, setDoneWhen] = useState(detail.loop_cfg?.done_when ?? "");
+  const loadedDoneWhen = detail.loop_cfg?.done_when ?? "";
+  const loadedDonePolicy = parseDonePolicy(loadedDoneWhen);
+  const [donePolicy, setDonePolicy] = useState<DonePolicyKind>(loadedDonePolicy);
 
   const budgetWarning = trigKind !== "manual" && (!budget.trim() || Number(budget) <= 0);
 
   async function handleSaveSettings() {
-    if (!settingsAreValid(trigKind, trigValue, deadline, doneWhen)) return;
+    if (!settingsAreValid(trigKind, trigValue, deadline)) return;
     setBusy("fleet_set_loop");
     try {
       await invoke("fleet_set_loop", {
@@ -79,7 +85,7 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
         maxIterations: maxIter.trim() ? Math.trunc(Number(maxIter)) : null,
         deadline: deadline.trim() || null,
         budgetUsd: budget.trim() ? Number(budget) : null,
-        doneWhen: doneWhen.trim() || null,
+        doneWhen: buildDoneWhen(donePolicy, loadedDoneWhen),
       });
       showToast(t("fleet.settings.saved"));
       onRefresh();
@@ -426,13 +432,21 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
         {budgetWarning && <div className="fleet-settings__warning">{t("fleet.settings.budgetWarning")}</div>}
         <div className="fleet-settings__row">
           <label>{t("fleet.settings.doneWhen")}</label>
-          <input
-            value={doneWhen}
-            onChange={(e) => setDoneWhen(e.target.value)}
-            placeholder={t("fleet.settings.doneWhenHint")}
-          />
+          <select
+            value={donePolicy}
+            onChange={(e) => setDonePolicy(e.target.value as DonePolicyKind)}
+          >
+            <option value="router">{t("fleet.settings.donePolicyRouter")}</option>
+            <option value="queue-empty">{t("fleet.settings.donePolicyQueueEmpty")}</option>
+            {/* Only offered when one is already set: the Hub preserves a marker
+                but never authors one, because it cannot supply the half of the
+                contract that teaches an agent to emit the text. */}
+            {loadedDonePolicy === "marker" && (
+              <option value="marker">{loadedDoneWhen.trim()}</option>
+            )}
+          </select>
         </div>
-        <div className="fleet-settings__hint">{t("fleet.settings.doneWhenHelp")}</div>
+        <div className="fleet-settings__hint">{t(DONE_POLICY_HINT[donePolicy])}</div>
         <div className="fleet-settings__hint">
           {t("fleet.settings.lastRun")}: {detail.loop_cfg?.last_run ?? t("fleet.settings.lastRunNever")}
           <br />
@@ -441,7 +455,7 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
         <button
           className="toolbar-btn toolbar-btn--primary"
           onClick={handleSaveSettings}
-          disabled={busy !== null || !settingsAreValid(trigKind, trigValue, deadline, doneWhen)}
+          disabled={busy !== null || !settingsAreValid(trigKind, trigValue, deadline)}
         >
           {t("fleet.settings.save")}
         </button>
