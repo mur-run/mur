@@ -355,12 +355,16 @@ pub struct MobileRelayConfig {
 }
 
 impl Config {
-    /// Read from disk, falling back to defaults.
+    /// Read from disk, falling back to defaults. Legacy conversation model
+    /// fields are migrated **in memory only** — this is called from agent
+    /// runtime processes (`mur-agent-runtime`), which must never write the
+    /// user's config file.
     pub fn load_or_default(path: &std::path::Path) -> Self {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| serde_yaml_ng::from_str(&s).ok())
-            .unwrap_or_default()
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return Self::default();
+        };
+        let text = crate::config_migrate::migrate_conversations_yaml(&text).unwrap_or(text);
+        serde_yaml_ng::from_str(&text).unwrap_or_default()
     }
 }
 
