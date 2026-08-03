@@ -41,6 +41,7 @@ fn mur_conversations_doctor_runs() {
     assert!(stdout.contains("Ollama")); // NEW Phase 2A
     assert!(stdout.contains(".history/")); // NEW Phase 2C
     assert!(stdout.contains("spans:")); // NEW Phase 3.1
+    assert!(stdout.contains("conversations backends")); // NEW conversations-backend-single-track task 8
 }
 
 #[test]

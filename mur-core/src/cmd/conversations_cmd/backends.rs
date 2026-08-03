@@ -32,10 +32,7 @@ use std::time::Duration;
 
 use mur_common::config::{BackendConfig, Config};
 
-use crate::conversations::backend::factory::{
-    DEFAULT_ANTHROPIC_ENDPOINT, DEFAULT_GEMINI_ENDPOINT, DEFAULT_OPENAI_ENDPOINT,
-    DEFAULT_OPENROUTER_ENDPOINT, resolve_api_key,
-};
+use crate::conversations::backend::factory::{default_endpoint, resolve_api_key};
 use crate::model_discovery::parse_models_response;
 
 /// One row of the `conversations backends` listing: which real call site
@@ -101,19 +98,18 @@ pub(super) fn stage_backend_rows(cfg: &Config) -> Vec<StageBackendRow> {
 }
 
 /// The endpoint a row's backend will actually dial when `BackendConfig.endpoint`
-/// is `None` — mirrors `backend::factory::build_raw`'s per-provider fallback
-/// so the listing never shows a blank for an unpinned stage.
+/// is `None`. Delegates entirely to `factory::default_endpoint` — the single
+/// source of truth `build_raw` itself dials through — rather than keeping a
+/// second copy of the provider match here. (Fix round 1: the two used to be
+/// separate copies of the same match; a provider added to one without the
+/// other let doctor silently print a fallback string for a provider that
+/// actually dials fine.)
 fn resolved_endpoint(b: &BackendConfig) -> String {
-    b.endpoint
-        .clone()
-        .unwrap_or_else(|| match b.provider.as_str() {
-            "ollama" => mur_common::config::DEFAULT_OLLAMA_ENDPOINT.to_string(),
-            "anthropic" => DEFAULT_ANTHROPIC_ENDPOINT.to_string(),
-            "openai" => DEFAULT_OPENAI_ENDPOINT.to_string(),
-            "openrouter" => DEFAULT_OPENROUTER_ENDPOINT.to_string(),
-            "gemini" => DEFAULT_GEMINI_ENDPOINT.to_string(),
-            other => format!("(no default endpoint for {other})"),
-        })
+    b.endpoint.clone().unwrap_or_else(|| {
+        default_endpoint(&b.provider)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("(no default endpoint for {})", b.provider))
+    })
 }
 
 /// Renders the `conversations backends` table: header line + one line per
