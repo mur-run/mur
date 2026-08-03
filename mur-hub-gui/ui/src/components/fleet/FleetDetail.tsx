@@ -265,6 +265,21 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
     }
   }
 
+  async function handleCancelJob(job: { id: string; text: string }) {
+    const msg = t("fleet.confirmCancelJob").replace("{job}", job.text.split("\n")[0].slice(0, 60));
+    const ok = await confirm(msg, { title: t("fleet.cancelJob"), kind: "warning" });
+    if (!ok) return;
+    setBusy("fleet_cancel_job");
+    try {
+      await invoke("fleet_cancel_job", { name: detail.name, id: job.id });
+      onRefresh();
+    } catch (err) {
+      showToast(String(err), 4000);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handleShowAll() {
     if (showAll) { setShowAll(false); setAllJobs([]); return; }
     setBusy("fleet_jobs");
@@ -577,6 +592,16 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
               </span>
               <span className="fleet-job__text">{job.text}</span>
               <span className="fleet-job__ts">{job.created_at.slice(0, 10)}</span>
+              {job.status === "queued" && (
+                <button
+                  className="fleet-job__cancel"
+                  title={t("fleet.cancelJob")}
+                  onClick={() => handleCancelJob(job)}
+                  disabled={busy !== null}
+                >
+                  ×
+                </button>
+              )}
             </div>
           ))}
         </div>
