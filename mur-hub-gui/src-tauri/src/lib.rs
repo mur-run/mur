@@ -714,6 +714,7 @@ pub fn run() {
             fleet::get_fleet_autorun,
             fleet::set_fleet_autorun,
             fleet::fleet_send,
+            fleet::fleet_cancel_job,
             fleet::fleet_jobs,
             fleet::fleet_add_member,
             fleet::fleet_remove_member,
