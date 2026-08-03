@@ -46,6 +46,16 @@ pub fn build_for_stage(cfg: &BackendConfig, stage: &'static str) -> Result<Arc<d
     )))
 }
 
+/// Provider default endpoints, used when `BackendConfig.endpoint` is `None`.
+/// `pub(crate)` (not just local to `build_raw`) so `cmd::conversations_cmd`'s
+/// `doctor` can report the endpoint a stage will actually dial without
+/// re-typing these literals a second time and risking drift (conversations
+/// backend doctor task, 2026-08-03).
+pub(crate) const DEFAULT_ANTHROPIC_ENDPOINT: &str = "https://api.anthropic.com";
+pub(crate) const DEFAULT_OPENAI_ENDPOINT: &str = "https://api.openai.com/v1";
+pub(crate) const DEFAULT_OPENROUTER_ENDPOINT: &str = "https://openrouter.ai/api/v1";
+pub(crate) const DEFAULT_GEMINI_ENDPOINT: &str = "https://generativelanguage.googleapis.com";
+
 /// Default env var name for an API-key-bearing provider. Mirrors the
 /// historical mur-common::config::LlmConfig fallback so users with
 /// `provider: anthropic` and no explicit `api_key_env:` keep working
@@ -60,7 +70,11 @@ fn default_key_env(provider: &str) -> &'static str {
     }
 }
 
-fn resolve_api_key(cfg: &BackendConfig) -> Result<String> {
+/// `pub(crate)` so `cmd::conversations_cmd::backends` can reuse the same
+/// SecretRef/env-var resolution `doctor` needs for its cloud-provider key
+/// checks, instead of re-implementing it (conversations backend doctor task,
+/// 2026-08-03).
+pub(crate) fn resolve_api_key(cfg: &BackendConfig) -> Result<String> {
     if let Some(r) = cfg.api_key_ref.as_deref() {
         let sref: mur_common::secret::SecretRef = r
             .parse()
@@ -100,7 +114,7 @@ fn build_raw(cfg: &BackendConfig) -> Result<Arc<dyn ChatBackend>> {
             let endpoint = cfg
                 .endpoint
                 .as_deref()
-                .unwrap_or("https://api.anthropic.com");
+                .unwrap_or(DEFAULT_ANTHROPIC_ENDPOINT);
             let timeout = Duration::from_secs(cfg.timeout_secs.unwrap_or(120));
             Arc::new(super::anthropic::AnthropicBackend::new(
                 endpoint, &api_key, timeout,
@@ -108,10 +122,7 @@ fn build_raw(cfg: &BackendConfig) -> Result<Arc<dyn ChatBackend>> {
         }
         "openai" => {
             let api_key = resolve_api_key(cfg)?;
-            let endpoint = cfg
-                .endpoint
-                .as_deref()
-                .unwrap_or("https://api.openai.com/v1");
+            let endpoint = cfg.endpoint.as_deref().unwrap_or(DEFAULT_OPENAI_ENDPOINT);
             let timeout = Duration::from_secs(cfg.timeout_secs.unwrap_or(120));
             Arc::new(super::openai::OpenAIBackend::new(
                 endpoint, &api_key, timeout,
@@ -122,7 +133,7 @@ fn build_raw(cfg: &BackendConfig) -> Result<Arc<dyn ChatBackend>> {
             let endpoint = cfg
                 .endpoint
                 .as_deref()
-                .unwrap_or("https://openrouter.ai/api/v1");
+                .unwrap_or(DEFAULT_OPENROUTER_ENDPOINT);
             let timeout = Duration::from_secs(cfg.timeout_secs.unwrap_or(120));
             Arc::new(super::openai::OpenAIBackend::new(
                 endpoint, &api_key, timeout,
@@ -130,10 +141,7 @@ fn build_raw(cfg: &BackendConfig) -> Result<Arc<dyn ChatBackend>> {
         }
         "gemini" => {
             let api_key = resolve_api_key(cfg)?;
-            let endpoint = cfg
-                .endpoint
-                .as_deref()
-                .unwrap_or("https://generativelanguage.googleapis.com");
+            let endpoint = cfg.endpoint.as_deref().unwrap_or(DEFAULT_GEMINI_ENDPOINT);
             let timeout = Duration::from_secs(cfg.timeout_secs.unwrap_or(120));
             Arc::new(super::gemini::GeminiBackend::new(
                 endpoint, &api_key, timeout,
