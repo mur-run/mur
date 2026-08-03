@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use mur_common::fleet::Job;
 use mur_common::parallel::ParallelConfig;
 use mur_core::cmd::fleet::{
-    control, create, delete, export, import, jobs, loop_run, roster, run, settings, store,
+    control, create, delete, export, import, jobs, labels, loop_run, roster, run, settings, store,
 };
 use serde::Serialize;
 use tauri::Emitter;
@@ -21,6 +21,18 @@ pub struct FleetSummary {
     pub active_jobs: usize,
     pub stopped: bool,
     pub running: bool,
+    /// Label ids, primary first. Empty means the fleet is ungrouped.
+    pub labels: Vec<String>,
+}
+
+/// One label as the Hub renders it: id, display text, optional color, and how
+/// many fleets carry it (for the chip's count badge).
+#[derive(Serialize, Clone)]
+pub struct LabelView {
+    pub id: String,
+    pub display: String,
+    pub color: Option<String>,
+    pub fleet_count: usize,
 }
 
 #[derive(Serialize, Clone)]
@@ -118,6 +130,7 @@ fn display(name: &str, display_name: &str) -> String {
 pub fn fleet_list() -> Result<Vec<FleetSummary>, String> {
     let home = mur_home_path();
     let names = store::list_fleets(&home).map_err(|e| e.to_string())?;
+    let registry = labels::load(&home);
     let mut summaries = Vec::new();
     for name in names {
         if let Ok(fleet) = store::load_fleet(&home, &name) {
@@ -135,10 +148,58 @@ pub fn fleet_list() -> Result<Vec<FleetSummary>, String> {
                 active_jobs,
                 stopped,
                 running: active_jobs > 0 && !stopped,
+                labels: registry.labels_of(&fleet.name).to_vec(),
             });
         }
     }
     Ok(summaries)
+}
+
+/// Every known label, in registry order, with its fleet count.
+#[tauri::command]
+pub fn fleet_labels_list() -> Result<Vec<LabelView>, String> {
+    let home = mur_home_path();
+    let registry = labels::load(&home);
+    Ok(registry
+        .labels
+        .iter()
+        .map(|l| LabelView {
+            id: l.id.clone(),
+            display: l.display_or_id().to_string(),
+            color: l.color.clone(),
+            fleet_count: registry.fleet_count(&l.id),
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub fn fleet_label_create(
+    id: String,
+    display: String,
+    color: Option<String>,
+) -> Result<(), String> {
+    let home = mur_home_path();
+    labels::create_label(&home, &id, &display, color).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn fleet_label_rename(id: String, display: String) -> Result<(), String> {
+    let home = mur_home_path();
+    labels::rename_label(&home, &id, &display).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn fleet_label_delete(id: String) -> Result<(), String> {
+    let home = mur_home_path();
+    labels::delete_label(&home, &id).map_err(|e| e.to_string())
+}
+
+/// Replace a fleet's labels. `ids[0]` becomes the primary — the group it is
+/// listed under.
+#[tauri::command]
+pub fn fleet_set_labels(name: String, ids: Vec<String>) -> Result<(), String> {
+    let home = mur_home_path();
+    labels::set_labels(&home, &name, ids).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
