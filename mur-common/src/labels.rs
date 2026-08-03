@@ -194,8 +194,10 @@ mod tests {
     #[test]
     fn normalize_drops_unknown_and_duplicate_ids() {
         let mut r = reg();
-        r.assignments
-            .insert("ghost".into(), vec!["nope".into(), "web".into(), "web".into()]);
+        r.assignments.insert(
+            "ghost".into(),
+            vec!["nope".into(), "web".into(), "web".into()],
+        );
         r.assignments.insert("empty".into(), vec!["nope".into()]);
         r.normalize();
         assert_eq!(r.labels_of("ghost"), ["web"]);
