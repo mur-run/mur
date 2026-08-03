@@ -17,6 +17,7 @@ import {
   parseDonePolicy,
   buildDoneWhen,
   DONE_POLICY_HINT,
+  DONE_WHEN_QUEUE_EMPTY,
   buildCronExpr,
   CRON_PREVIEW_COUNT,
   CRON_PREVIEW_DEBOUNCE_MS,
@@ -124,7 +125,12 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
         name: detail.name,
         trigger: buildTrigger(trigKind, trigValue),
         maxIterations: maxIter.trim() ? Math.trunc(Number(maxIter)) : null,
-        deadline: deadline.trim() || null,
+        // Always a string, never null: the backend reads a `null` deadline as
+        // "leave this field alone", so `|| null` here was the same
+        // can't-clear-the-field bug `buildDoneWhen` already fixed for
+        // `done_when` -- an emptied box would save, say "Settings saved", and
+        // silently keep the old deadline. The validator already accepts "".
+        deadline: deadline.trim(),
         budgetUsd: budget.trim() ? Number(budget) : null,
         doneWhen: buildDoneWhen(donePolicy, loadedDoneWhen),
       });
@@ -516,7 +522,7 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
             onChange={(e) => setDonePolicy(e.target.value as DonePolicyKind)}
           >
             <option value="router">{t("fleet.settings.donePolicyRouter")}</option>
-            <option value="queue-empty">{t("fleet.settings.donePolicyQueueEmpty")}</option>
+            <option value={DONE_WHEN_QUEUE_EMPTY}>{t("fleet.settings.donePolicyQueueEmpty")}</option>
             {/* Only offered when one is already set: the Hub preserves a marker
                 but never authors one, because it cannot supply the half of the
                 contract that teaches an agent to emit the text. */}

@@ -46,8 +46,14 @@ pub fn done_policy(done_when: &str) -> DonePolicy<'_> {
 /// non-`marker:` criterion (→ router fallback).
 /// Machine-checkable convergence: deterministic and LLM-independent, vs. trusting
 /// the router's free-text self-assessment.
+///
+/// Strips the prefix from the *trimmed* input — a hand-edited
+/// `done_when: " marker:X"` must classify the same way here as it does in the
+/// Hub's `parseDonePolicy` (which trims first), or the UI shows a policy the
+/// loop isn't actually using.
 pub fn done_marker(done_when: &str) -> Option<&str> {
     done_when
+        .trim()
         .strip_prefix(MARKER_PREFIX)
         .map(str::trim)
         .filter(|m| !m.is_empty())
@@ -65,6 +71,10 @@ mod tests {
         assert_eq!(done_marker("marker:   "), None); // whitespace only
         assert_eq!(done_marker("all tasks closed"), None); // free text → router fallback
         assert_eq!(done_marker(""), None);
+        // Leading whitespace before the prefix (a hand-edited fleet.yaml) must
+        // still classify as a marker — matches the Hub's `parseDonePolicy`,
+        // which trims before checking the prefix.
+        assert_eq!(done_marker("  marker:FLEET_DONE"), Some("FLEET_DONE"));
     }
 
     #[test]

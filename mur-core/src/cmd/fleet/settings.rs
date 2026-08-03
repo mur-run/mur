@@ -45,7 +45,11 @@ fn validate_loop_fields(
     if let Some(t) = trigger {
         if let Some(expr) = t.strip_prefix("cron:") {
             if mur_agent_runtime::scheduler::next_fire_after(expr, chrono::Local::now()).is_none() {
-                bail!("cron expression {expr:?} is invalid or will never fire");
+                bail!(
+                    "cron expression {expr:?} must be a 5-field POSIX schedule like \
+                     \"0 9 * * 1-5\" that can actually fire — a day/month combination \
+                     naming no real date (e.g. Feb 31) will never fire"
+                );
             }
         } else if let Some(dur) = t.strip_prefix("interval:") {
             if super::loop_run::parse_duration(dur).is_none() {
@@ -63,8 +67,8 @@ fn validate_loop_fields(
     }
 
     if let Some(d) = deadline
-        && !d.trim().is_empty()
-        && super::loop_run::parse_duration(d.trim()).is_none()
+        && !d.is_empty()
+        && super::loop_run::parse_duration(d).is_none()
     {
         bail!(
             "deadline {d:?} must be a duration relative to the loop start \

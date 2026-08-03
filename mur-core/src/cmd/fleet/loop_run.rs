@@ -13,7 +13,7 @@ use mur_common::channel::{ChannelActor, ChannelEvent};
 use mur_common::fleet::{Fleet, Job, JobStatus};
 use sha2::{Digest, Sha256};
 
-use super::done_policy::{DonePolicy, done_marker, done_policy};
+use super::done_policy::{DonePolicy, done_policy};
 use super::progress::{
     RunProgress, StepProgress, StepState, classify_phase, iteration_summary_line,
 };
@@ -623,19 +623,26 @@ pub async fn run_guarded(
             stuck += 1;
         }
 
-        // Convergence. A structured `done_when: marker:<TEXT>` is checked
+        // Convergence: three policies, dispatched from the same `done_when`
+        // string `done_policy()` classified against above. `Marker` is checked
         // deterministically against this run's channel events (no LLM, no
-        // trusting the router's self-assessment). Otherwise fall back to asking
-        // the router — a failed ask (e.g. router down) is treated as "continue",
-        // and the cap/deadline/stuck guards still bound the loop either way.
+        // trusting the router's self-assessment). `QueueEmpty` has nothing to
+        // check here — the drained-queue break above is its only stop, so
+        // falling through to the router would both cost a call this policy
+        // promises not to make and risk a wrong DONE (the router sees the
+        // channel, not the queue, and a member reporting its own completion
+        // reads a lot like the fleet's). `Router` is the fallback: a failed ask
+        // (e.g. router down) is treated as "continue", and the cap/deadline/
+        // stuck guards still bound the loop either way.
         let done_when = fleet
             .loop_cfg
             .as_ref()
             .map(|l| l.done_when.as_str())
             .unwrap_or("");
-        let converged = match done_marker(done_when) {
-            Some(marker) => channel_has_marker(&events, marker, start_seq),
-            None => ask_router_done(mur_home, &fleet, &events).unwrap_or(false),
+        let converged = match done_policy(done_when) {
+            DonePolicy::Marker(m) => channel_has_marker(&events, m, start_seq),
+            DonePolicy::QueueEmpty => false, // the drained-queue break above is the only stop for this policy
+            DonePolicy::Router => ask_router_done(mur_home, &fleet, &events).unwrap_or(false),
         };
         if converged {
             break LoopStop::Converged;
@@ -1277,5 +1284,45 @@ mod tests {
         // under test is that the gate did NOT mistake this for a drained queue.
         let stop = run_loop_for_test(home).await;
         assert_ne!(stop, LoopStop::QueueDrained);
+    }
+
+    #[tokio::test]
+    async fn queue_empty_policy_with_claimed_job_does_not_converge_via_router() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let fleet = Fleet {
+            name: "dev".into(),
+            display_name: String::new(),
+            goal: "standing goal".into(),
+            router: None,
+            members: vec!["pm".into()],
+            team_id: None,
+            channel_id: "fleet-dev".into(),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: Some(mur_common::fleet::FleetLoop {
+                trigger: "manual".into(),
+                max_iterations: 1,
+                budget_usd: 0.0,
+                deadline: String::new(),
+                done_when: super::super::done_policy::DONE_WHEN_QUEUE_EMPTY.into(),
+            }),
+            parallel: None,
+            requires_programs: vec![],
+        };
+        crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
+        mur_channel::ChannelService::open(home)
+            .unwrap()
+            .create_for_fleet("dev", "mur", &["pm".into()])
+            .unwrap();
+        // A claimed job means `active_job` is `Some`, so the drained-queue
+        // break above does NOT fire and this iteration takes the normal
+        // delegate path — regression coverage for the bug where `queue-empty`
+        // fell through `done_marker` (which only recognises `marker:`) into
+        // `ask_router_done`, paying for an LLM call on every iteration that
+        // actually does work, on a policy that promises never to make one.
+        super::super::jobs::enqueue_job(home, "dev", "job-1", "cli").unwrap();
+        let stop = run_loop_for_test(home).await;
+        assert_ne!(stop, LoopStop::Converged);
     }
 }
