@@ -652,6 +652,8 @@ export const en = {
   "fleet.import": "Import",
   "fleet.delete": "Delete Fleet",
   "fleet.confirmDelete": "Delete fleet \"{name}\"? This cannot be undone.",
+  "fleet.cancelJob": "Cancel Job",
+  "fleet.confirmCancelJob": "Cancel queued job \"{job}\"? This cannot be undone.",
   "fleet.dangerZone": "Danger Zone",
   "fleet.deleteDesc": "Permanently delete this fleet and all its configuration.",
   "fleet.jobs": "Jobs",

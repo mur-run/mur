@@ -654,6 +654,8 @@ export const zhTW: Table = {
   "fleet.import": "匯入",
   "fleet.delete": "刪除機群",
   "fleet.confirmDelete": "確定刪除機群「{name}」？此操作無法復原。",
+  "fleet.cancelJob": "取消工作",
+  "fleet.confirmCancelJob": "確定取消排隊中的工作「{job}」？此操作無法復原。",
   "fleet.dangerZone": "危險操作",
   "fleet.deleteDesc": "永久刪除此機群及所有相關設定，無法復原。",
   "fleet.jobs": "任務",

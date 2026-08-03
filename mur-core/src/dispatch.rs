@@ -338,6 +338,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                 FleetAction::Jobs { name, all } => {
                     cmd::fleet::jobs::cmd_fleet_jobs(&mur_home, &name, all)?
                 }
+                FleetAction::Cancel { name, id, yes } => {
+                    cmd::fleet::jobs::cmd_fleet_cancel(&mur_home, &name, &id, yes)?
+                }
                 FleetAction::Stop { name } => {
                     cmd::fleet::control::cmd_fleet_stop(&mur_home, &name)?
                 }
