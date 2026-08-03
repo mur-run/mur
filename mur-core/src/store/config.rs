@@ -25,16 +25,17 @@ pub fn load_config() -> Result<Config> {
     // the legacy keys before they could be converted.
     let content = match mur_common::config_migrate::migrate_conversations_yaml(&content) {
         Some(migrated) => {
-            // Atomic write: temp file beside the target, then rename — the
-            // same inline pattern `save_config_at` uses below. `rename` is
-            // only atomic within a filesystem, so the temp file must live
-            // next to `path`, not in a system temp directory.
-            let tmp_path = path.with_extension("yaml.tmp");
-            fs::write(&tmp_path, &migrated)
-                .with_context(|| format!("Failed to write temp file: {}", tmp_path.display()))?;
-            fs::rename(&tmp_path, &path)
-                .with_context(|| format!("Failed to rename temp to final: {}", path.display()))?;
-            println!(
+            // Atomic write: temp file beside the target, then rename.
+            // Delegates to the shared helper (`yaml_edit::write_atomic`),
+            // which for a `.yaml` path produces the identical
+            // `<path>.yaml.tmp` temp name and the same write-then-rename
+            // sequence this block used to inline.
+            crate::yaml_edit::write_atomic(&path, migrated.as_bytes())?;
+            // Diagnostic only, not data: several commands (`search --json`,
+            // `context --json`, etc.) call `load_config()` and then print
+            // JSON to stdout, so this must go to stderr or it corrupts
+            // machine-readable output.
+            eprintln!(
                 "MUR: migrated conversations model settings in {} to explicit backends",
                 path.display()
             );
