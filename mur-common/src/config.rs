@@ -1561,9 +1561,11 @@ extractive_backend:
     #[test]
     fn legacy_conversation_fields_are_gone_from_serialized_output() {
         let cfg = Config::default();
-        // Scoped to the conversations block on purpose: `embedding` still
-        // carries its own `ollama_endpoint` until Task 5, and asserting over
-        // the whole document here would leave a knowingly-red test behind.
+        // Scoped to the conversations block intentionally: `embedding` still
+        // carries its own `ollama_endpoint`, and asserting over the whole
+        // document here would require that field to be omitted, which is not
+        // the case. The Config type will never serialize without it, so this
+        // scoping to conversations is permanent.
         let yaml = serde_yaml_ng::to_string(&cfg.conversations).expect("serializes");
         for key in ["extractive_model", "abstractive_model", "ollama_endpoint"] {
             assert!(
