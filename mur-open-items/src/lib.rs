@@ -114,8 +114,23 @@ enum Record {
     },
 }
 
+/// Log filename under `<mur_home>`. Public because the runtime's sandbox
+/// policy has to allowlist this exact file for the `open_item` tool to work;
+/// two spellings of it would fail silently (a grant on a path nothing writes).
+pub const LOG_FILE: &str = "open-items.jsonl";
+
 fn log_path(mur_home: &Path) -> PathBuf {
-    mur_home.join("open-items.jsonl")
+    mur_home.join(LOG_FILE)
+}
+
+impl Record {
+    /// When the record was written — the ordering key the fold trusts, since
+    /// a cross-machine merge makes line order meaningless.
+    fn at(&self) -> chrono::DateTime<chrono::Utc> {
+        match self {
+            Record::Open { at, .. } | Record::Resolve { at, .. } => *at,
+        }
+    }
 }
 
 /// Append one agent-reported item. Returns its id.
@@ -154,26 +169,48 @@ fn append(mur_home: &Path, rec: &Record) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    let mut line = serde_json::to_string(rec)?;
+    line.push('\n');
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
         .with_context(|| format!("open {}", path.display()))?;
-    writeln!(f, "{}", serde_json::to_string(rec)?)?;
+    // One write, newline included. `writeln!` emits the record and the newline
+    // as two separate syscalls, and `O_APPEND` only makes each individual write
+    // atomic — so a second agent's runtime appending in that gap concatenated
+    // two records onto one line. `open()` skips malformed lines by design, so
+    // both of them vanished without a word. Every agent shares this one file;
+    // two of them running at once is the normal case, not the edge case.
+    // ponytail: no lock — a record is one small write, which O_APPEND keeps
+    // whole. If these ever grow past a page, take an advisory lock instead.
+    f.write_all(line.as_bytes())?;
     Ok(())
 }
 
 /// Fold the log into the items still open. A malformed line is skipped rather
 /// than fatal — a half-written record must not take the whole panel down.
+///
+/// Folded in **timestamp order, not file order**. The log syncs between
+/// machines with `merge=union`, which keeps both sides' lines but decides
+/// their order by how git happened to lay out the hunks. A resolve made on the
+/// laptop has to beat an earlier open from the desktop whichever side git put
+/// first, or an item silently comes back from the dead — or worse, a finished
+/// one stays finished after somebody re-opened it. The sort is stable, so
+/// records sharing an instant keep the order they were written in.
 pub fn open(mur_home: &Path) -> Vec<OpenItem> {
     let Ok(body) = std::fs::read_to_string(log_path(mur_home)) else {
         return Vec::new();
     };
+    let mut recs: Vec<Record> = body
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<Record>(l).ok())
+        .collect();
+    recs.sort_by_key(Record::at);
+
     let mut live: Vec<(String, OpenItem)> = Vec::new();
-    for line in body.lines().filter(|l| !l.trim().is_empty()) {
-        let Ok(rec) = serde_json::from_str::<Record>(line) else {
-            continue;
-        };
+    for rec in recs {
         match rec {
             Record::Open {
                 id,
@@ -216,6 +253,66 @@ mod tests {
 
     fn home() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
+    }
+
+    /// `merge=union` keeps both machines' lines but decides their order by how
+    /// git laid out the hunks, so the fold must not read anything into it.
+    #[test]
+    fn fold_reads_timestamps_not_line_order() {
+        // a1: opened, then resolved five seconds later — but the resolve line
+        // sits ABOVE the open. b2: resolved, then re-opened nine seconds later,
+        // with the re-open below. Line order says the opposite of both.
+        let lines = [
+            r#"{"kind":"resolve","id":"a1","at":"2026-08-03T10:00:05Z"}"#,
+            r#"{"kind":"open","id":"a1","agent":"m","title":"finished","at":"2026-08-03T10:00:00Z"}"#,
+            r#"{"kind":"resolve","id":"b2","at":"2026-08-03T10:00:01Z"}"#,
+            r#"{"kind":"open","id":"b2","agent":"m","title":"reopened","at":"2026-08-03T10:00:09Z"}"#,
+        ];
+        let forward = home();
+        std::fs::write(log_path(forward.path()), lines.join("\n") + "\n").unwrap();
+        let items = open(forward.path());
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(items[0].title, "reopened");
+
+        // Whatever order the merge leaves behind must fold to the same answer.
+        let mut reversed: Vec<&str> = lines.to_vec();
+        reversed.reverse();
+        let backward = home();
+        std::fs::write(log_path(backward.path()), reversed.join("\n") + "\n").unwrap();
+        assert_eq!(open(backward.path()), items);
+    }
+
+    /// Every agent's runtime appends to this one file, so two agents running at
+    /// once is the normal case. Before the single-write fix this lost ~30% of
+    /// records per run: two JSON bodies concatenated onto one line, which
+    /// `open()` then skipped as malformed — silently, by design.
+    #[test]
+    fn concurrent_appends_never_land_on_the_same_line() {
+        let h = home();
+        let path = h.path().to_path_buf();
+        std::thread::scope(|s| {
+            for t in 0..8 {
+                let p = path.clone();
+                s.spawn(move || {
+                    for i in 0..500 {
+                        report(&p, "a", &format!("t{t}-{i}"), None).unwrap();
+                    }
+                });
+            }
+        });
+        let body = std::fs::read_to_string(log_path(&path)).unwrap();
+        let bad: Vec<&str> = body
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter(|l| serde_json::from_str::<Record>(l).is_err())
+            .collect();
+        assert!(
+            bad.is_empty(),
+            "{} malformed lines, e.g. {:?}",
+            bad.len(),
+            &bad[..bad.len().min(2)]
+        );
+        assert_eq!(open(&path).len(), 4000, "records lost");
     }
 
     #[test]
