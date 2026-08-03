@@ -135,3 +135,23 @@ export function buildCronExpr(shape: CronShape, time: string): string {
   if (shape === "weekdays") return `${minute} ${hour} * * 1-5`;
   return `${minute} ${hour} * * *`;
 }
+
+/** Default time offered when the loaded expression has no readable `H:M`. */
+export const CRON_DEFAULT_TIME = "09:00";
+
+/**
+ * The `HH:MM` a native <input type="time"> should show for an existing cron
+ * expression, so picking a preset shape recomposes the schedule the fleet
+ * already has rather than silently moving it. Returns null when the first two
+ * fields are not a plain minute and hour (steps, lists, ranges, `*` hour).
+ */
+export function parseCronTime(expr: string): string | null {
+  const fields = expr.trim().split(/\s+/);
+  if (fields.length < 2) return null;
+  const [minuteStr, hourStr] = fields;
+  if (!/^\d+$/.test(minuteStr) || !/^\d+$/.test(hourStr)) return null;
+  const minute = Number(minuteStr);
+  const hour = Number(hourStr);
+  if (minute < 0 || minute > 59 || hour < 0 || hour > 23) return null;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}

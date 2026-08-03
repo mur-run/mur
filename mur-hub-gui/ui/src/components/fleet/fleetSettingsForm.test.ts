@@ -8,6 +8,7 @@ import {
   parseDonePolicy,
   buildDoneWhen,
   buildCronExpr,
+  parseCronTime,
 } from "./fleetSettingsForm";
 
 describe("parseTrigger", () => {
@@ -137,5 +138,26 @@ describe("buildCronExpr", () => {
     expect(buildCronExpr("weekdays", "18:00")).toBe("0 18 * * 1-5");
     // A native time input is empty until touched; midnight is the safe read.
     expect(buildCronExpr("daily", "")).toBe("0 0 * * *");
+  });
+});
+
+describe("parseCronTime", () => {
+  it("reads a plain minute and hour off the front of a cron expression", () => {
+    expect(parseCronTime("30 14 * * *")).toBe("14:30");
+    expect(parseCronTime("0 9 * * 1-5")).toBe("09:00");
+  });
+
+  it("returns null when the minute or hour is not a plain integer", () => {
+    // Step value -- there is no single minute to show.
+    expect(parseCronTime("*/15 * * * *")).toBeNull();
+    // "Every hour" has no hour to show; showing one would misrepresent it.
+    expect(parseCronTime("0 * * * *")).toBeNull();
+  });
+
+  it("returns null for empty or out-of-range input", () => {
+    expect(parseCronTime("")).toBeNull();
+    // Minute 70 is not a real minute -- a bad load should not become a bad
+    // display that then gets baked back into the expression on the next edit.
+    expect(parseCronTime("70 14 * * *")).toBeNull();
   });
 });

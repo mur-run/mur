@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { useT } from "../../i18n";
@@ -20,6 +20,8 @@ import {
   buildCronExpr,
   CRON_PREVIEW_COUNT,
   CRON_PREVIEW_DEBOUNCE_MS,
+  parseCronTime,
+  CRON_DEFAULT_TIME,
   type TriggerKind,
   type DonePolicyKind,
   type CronShape,
@@ -67,13 +69,18 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
   const [trigKind, setTrigKind] = useState<TriggerKind>(initialTrigger.kind);
   const [trigValue, setTrigValue] = useState(initialTrigger.value);
   const [cronShape, setCronShape] = useState<CronShape>("custom");
-  const [cronTime, setCronTime] = useState("09:00");
+  const [cronTime, setCronTime] = useState(parseCronTime(initialTrigger.value) ?? CRON_DEFAULT_TIME);
   const [cronFires, setCronFires] = useState<string[] | null>(null);
   const [cronInvalid, setCronInvalid] = useState(false);
+  const cronRequestId = useRef(0);
 
   // Ask the backend what this expression will actually do. Debounced so typing
   // does not fire a command per keystroke; the cleanup cancels an in-flight
-  // timer so only the latest value is ever evaluated.
+  // timer so only the latest value is ever evaluated. A request sequence
+  // number guards the case where the timer already fired and invoke() is in
+  // flight: two edits close together can resolve out of order (next_n_fires'
+  // cost varies with how far it has to scan), so only the response matching
+  // the latest dispatched request is applied.
   useEffect(() => {
     if (trigKind !== "cron" || trigValue.trim() === "") {
       setCronFires(null);
@@ -81,12 +88,15 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
       return;
     }
     const timer = setTimeout(() => {
+      const requestId = ++cronRequestId.current;
       invoke<string[]>("cron_preview", { expr: trigValue, count: CRON_PREVIEW_COUNT })
         .then((fires) => {
+          if (cronRequestId.current !== requestId) return;
           setCronFires(fires);
           setCronInvalid(false);
         })
         .catch(() => {
+          if (cronRequestId.current !== requestId) return;
           setCronFires(null);
           setCronInvalid(true);
         });
