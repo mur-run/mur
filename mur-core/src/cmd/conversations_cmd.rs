@@ -431,17 +431,28 @@ pub async fn cmd_conversations_reindex(args: ReindexArgs) -> Result<()> {
     Ok(())
 }
 
-/// Collect the unique BackendConfigs across the four conversations call sites
-/// (compact.{extractive, abstractive}, ask.{backend, rewriter_backend}),
-/// dedup by (provider, model) so the same provider+model isn't probed twice.
+/// Collect the unique BackendConfigs across the six conversations call sites
+/// (compact.{extractive, abstractive}, ask.{backend, rewriter_backend},
+/// rollup.{extractive, abstractive}), dedup by (provider, model) so the same
+/// provider+model isn't probed twice.
 fn collect_backend_configs(
     cfg: &mur_common::config::Config,
 ) -> Vec<mur_common::config::BackendConfig> {
     let mut backends = vec![
-        cfg.conversations.compact.synthesize_extractive_backend(),
-        cfg.conversations.compact.synthesize_abstractive_backend(),
-        cfg.conversations.ask.synthesize_backend(),
-        cfg.conversations.ask.synthesize_rewriter_backend(),
+        cfg.conversations
+            .compact
+            .effective_extractive_backend(&cfg.llm),
+        cfg.conversations
+            .compact
+            .effective_abstractive_backend(&cfg.llm),
+        cfg.conversations.ask.effective_backend(&cfg.llm),
+        cfg.conversations.ask.effective_rewriter_backend(&cfg.llm),
+        cfg.conversations
+            .rollup
+            .effective_extractive_backend(&cfg.llm),
+        cfg.conversations
+            .rollup
+            .effective_abstractive_backend(&cfg.llm),
     ];
     backends.sort_by(|a, b| (&a.provider, &a.model).cmp(&(&b.provider, &b.model)));
     backends.dedup_by(|a, b| a.provider == b.provider && a.model == b.model);
@@ -507,26 +518,35 @@ pub async fn cmd_conversations_doctor() -> Result<()> {
         );
     }
 
-    // Ollama reachability (non-blocking 1s probe)
+    // Ollama reachability (non-blocking 1s probe) — only when a conversations
+    // stage actually routes through Ollama.
     let cfg = crate::store::config::load_config().unwrap_or_default();
-    let endpoint = cfg.conversations.compact.ollama_endpoint.clone();
-    let reachable = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        reqwest::get(format!("{}/api/tags", endpoint.trim_end_matches('/'))),
-    )
-    .await
-    .ok()
-    .and_then(|r| r.ok())
-    .map(|r| r.status().is_success())
-    .unwrap_or(false);
-    if reachable {
-        println!("  ✓ Ollama reachable at {endpoint}");
+    let backends = collect_backend_configs(&cfg);
+    let ollama_backends: Vec<_> = backends.iter().filter(|b| b.provider == "ollama").collect();
+    if ollama_backends.is_empty() {
+        println!("  · no conversations stage routes through Ollama (skipping reachability probe)");
     } else {
-        println!("  · Ollama not reachable at {endpoint} (compact + ask will degrade)");
+        let endpoint = ollama_backends[0]
+            .endpoint
+            .clone()
+            .unwrap_or_else(|| "http://localhost:11434".to_string());
+        let reachable = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            reqwest::get(format!("{}/api/tags", endpoint.trim_end_matches('/'))),
+        )
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
+        if reachable {
+            println!("  ✓ Ollama reachable at {endpoint}");
+        } else {
+            println!("  · Ollama not reachable at {endpoint} (compact + ask will degrade)");
+        }
     }
 
     // P1: Cloud provider probes (anthropic only for P1)
-    let backends = collect_backend_configs(&cfg);
     let cloud_backends: Vec<_> = backends
         .iter()
         .filter(|b| b.provider == "anthropic")
@@ -768,71 +788,81 @@ pub async fn cmd_conversations_preflight() -> Result<()> {
 
     // ── Phase 2C probes ───────────────────────────────────────────────────
 
-    // Load config once for Ollama endpoint + model names.
+    // Load config once; derive which Ollama-routed backends (if any) the
+    // conversations pipeline actually uses.
     let cfg = crate::store::config::load_config().unwrap_or_default();
-    let endpoint = cfg.conversations.compact.ollama_endpoint.clone();
-    let models_needed: Vec<String> = {
-        let mut v = vec![
-            cfg.conversations.compact.extractive_model.clone(),
-            cfg.conversations.compact.abstractive_model.clone(),
-            cfg.conversations.ask.model.clone(),
-        ];
-        v.sort();
-        v.dedup();
-        v.retain(|m| !m.is_empty());
-        v
-    };
+    let ollama_backends: Vec<_> = collect_backend_configs(&cfg)
+        .into_iter()
+        .filter(|b| b.provider == "ollama")
+        .collect();
 
-    // Ollama reachability + /api/tags probe (2s timeout; non-fatal).
-    let url = format!("{}/api/tags", endpoint.trim_end_matches('/'));
-    let tags_body: Option<String> =
-        match tokio::time::timeout(std::time::Duration::from_secs(2), reqwest::get(&url)).await {
-            Ok(Ok(resp)) if resp.status().is_success() => {
-                println!("  ✓ Ollama reachable at {endpoint}");
-                resp.text().await.ok()
-            }
-            Ok(Ok(resp)) => {
-                println!("  ✗ Ollama at {endpoint} returned {}", resp.status());
-                ok = false;
-                None
-            }
-            Ok(Err(e)) => {
-                println!("  ✗ Ollama at {endpoint} unreachable: {e}");
-                ok = false;
-                None
-            }
-            Err(_) => {
-                println!("  ✗ Ollama at {endpoint} timed out (2s)");
-                ok = false;
-                None
-            }
+    if ollama_backends.is_empty() {
+        println!("  · no conversations stage routes through Ollama (skipping Ollama probe)");
+    } else {
+        let endpoint = ollama_backends[0]
+            .endpoint
+            .clone()
+            .unwrap_or_else(|| "http://localhost:11434".to_string());
+        let models_needed: Vec<String> = {
+            let mut v: Vec<String> = ollama_backends.iter().map(|b| b.model.clone()).collect();
+            v.sort();
+            v.dedup();
+            v.retain(|m| !m.is_empty());
+            v
         };
 
-    // Model-pull check — only if we got a tags response.
-    if let Some(body) = &tags_body {
-        let installed: Vec<String> = serde_json::from_str::<serde_json::Value>(body)
-            .ok()
-            .and_then(|v| v.get("models").cloned())
-            .and_then(|m| m.as_array().cloned())
-            .map(|arr| {
-                arr.into_iter()
-                    .filter_map(|e| e.get("name").and_then(|n| n.as_str()).map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-        for m in &models_needed {
-            if installed.iter().any(|n| n == m) {
-                println!("  ✓ model {m} pulled");
-            } else {
-                println!("  ✗ model {m} missing — run: ollama pull {m}");
-                ok = false;
+        // Ollama reachability + /api/tags probe (2s timeout; non-fatal).
+        let url = format!("{}/api/tags", endpoint.trim_end_matches('/'));
+        let tags_body: Option<String> =
+            match tokio::time::timeout(std::time::Duration::from_secs(2), reqwest::get(&url)).await
+            {
+                Ok(Ok(resp)) if resp.status().is_success() => {
+                    println!("  ✓ Ollama reachable at {endpoint}");
+                    resp.text().await.ok()
+                }
+                Ok(Ok(resp)) => {
+                    println!("  ✗ Ollama at {endpoint} returned {}", resp.status());
+                    ok = false;
+                    None
+                }
+                Ok(Err(e)) => {
+                    println!("  ✗ Ollama at {endpoint} unreachable: {e}");
+                    ok = false;
+                    None
+                }
+                Err(_) => {
+                    println!("  ✗ Ollama at {endpoint} timed out (2s)");
+                    ok = false;
+                    None
+                }
+            };
+
+        // Model-pull check — only if we got a tags response.
+        if let Some(body) = &tags_body {
+            let installed: Vec<String> = serde_json::from_str::<serde_json::Value>(body)
+                .ok()
+                .and_then(|v| v.get("models").cloned())
+                .and_then(|m| m.as_array().cloned())
+                .map(|arr| {
+                    arr.into_iter()
+                        .filter_map(|e| e.get("name").and_then(|n| n.as_str()).map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            for m in &models_needed {
+                if installed.iter().any(|n| n == m) {
+                    println!("  ✓ model {m} pulled");
+                } else {
+                    println!("  ✗ model {m} missing — run: ollama pull {m}");
+                    ok = false;
+                }
             }
+        } else if !models_needed.is_empty() {
+            println!(
+                "  · skipped model check ({} models wanted; Ollama unreachable)",
+                models_needed.len()
+            );
         }
-    } else if !models_needed.is_empty() {
-        println!(
-            "  · skipped model check ({} models wanted; Ollama unreachable)",
-            models_needed.len()
-        );
     }
 
     // Pattern dir readable.
@@ -946,19 +976,15 @@ pub async fn cmd_conversations_rollup(args: RollupArgs) -> Result<()> {
         RollupKinds, rollup_missing, rollup_month, rollup_week,
     };
 
-    let rollup_cfg = crate::store::config::load_config()
-        .ok()
-        .unwrap_or_default()
-        .conversations
-        .rollup
-        .clone();
+    let config = crate::store::config::load_config().unwrap_or_default();
+    let rollup_cfg = config.conversations.rollup.clone();
 
     if let Some(w) = args.week {
         // Phase 3.2.1: --if-stale is a no-op; the default (force=false)
         // already triggers the sha-based idempotency check inside
         // rollup_week. Flag retained for backward-compat with scripts.
         let force = args.force;
-        let r = rollup_week(&w, force, &rollup_cfg, None).await?;
+        let r = rollup_week(&w, force, &rollup_cfg, &config.llm, None).await?;
         println!("{}: {:?} ({}ms)", r.window, r.outcome, r.duration_ms);
         return Ok(());
     }
@@ -967,13 +993,14 @@ pub async fn cmd_conversations_rollup(args: RollupArgs) -> Result<()> {
         // already triggers the sha-based idempotency check inside
         // rollup_month. Flag retained for backward-compat with scripts.
         let force = args.force;
-        let r = rollup_month(&m, force, &rollup_cfg, None).await?;
+        let r = rollup_month(&m, force, &rollup_cfg, &config.llm, None).await?;
         println!("{}: {:?} ({}ms)", r.window, r.outcome, r.duration_ms);
         return Ok(());
     }
     if args.all_missing {
         let sweep = rollup_missing(
             &rollup_cfg,
+            &config.llm,
             RollupKinds::All,
             args.max_weeks,
             args.max_months,
@@ -1096,7 +1123,9 @@ pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
 
     if args.extractive_only {
         // Crude guard rail: no abstractive model.
-        cfg.abstractive_model = String::new();
+        let mut blanked = cfg.effective_abstractive_backend(&config.llm);
+        blanked.model = String::new();
+        cfg.abstractive_backend = Some(blanked);
     }
     if args.debug_prompt {
         eprintln!("(debug_prompt not yet wired to individual stages; enabling in Phase 2C)");
@@ -1109,7 +1138,7 @@ pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
     if let Some(d) = args.date {
         let date = NaiveDate::parse_from_str(&d, "%Y-%m-%d")?;
         let force = args.force || args.if_stale;
-        let r = summarize::compact_day(date, force, &cfg, None).await?;
+        let r = summarize::compact_day(date, force, &cfg, &config.llm, None).await?;
         println!(
             "{date}: {:?} ({} spans, {}ms)",
             r.outcome, r.extractive_spans, r.duration_ms
@@ -1123,9 +1152,16 @@ pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
         .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
         .transpose()?;
 
-    let report =
-        summarize::compact_missing(&cfg, since, args.if_stale, args.force, args.max_days, None)
-            .await?;
+    let report = summarize::compact_missing(
+        &cfg,
+        &config.llm,
+        since,
+        args.if_stale,
+        args.force,
+        args.max_days,
+        None,
+    )
+    .await?;
 
     if report.day_reports.is_empty() {
         println!("(nothing to compact)");
@@ -1144,16 +1180,12 @@ pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
 
     // Phase 3.2: cascade into rollups unless explicitly suppressed.
     if !args.skip_rollups {
-        let rollup_cfg = crate::store::config::load_config()
-            .ok()
-            .unwrap_or_default()
-            .conversations
-            .rollup
-            .clone();
+        let rollup_cfg = config.conversations.rollup.clone();
         if rollup_cfg.enabled {
             println!("\nrollup sweep:");
             let sweep = crate::conversations::summarize::rollup::rollup_missing(
                 &rollup_cfg,
+                &config.llm,
                 crate::conversations::summarize::rollup::RollupKinds::All,
                 None,
                 None,
@@ -1208,6 +1240,7 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
     let ask_cfg = cfg.conversations.ask.clone();
     let history_retain = cfg.conversations.compact.history_retain;
     let history_turns = ask_cfg.continue_history_turns;
+    let effective = ask_cfg.effective_backend(&cfg.llm);
 
     // --show-session path: no LLM calls, early return
     if args.show_session {
@@ -1239,9 +1272,12 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
     // on timeout. The main generation path still uses its own client with
     // the full ask_cfg.timeout_secs budget (plumbed via ask_stream).
     let prior_slice = session.last_n(history_turns);
-    let model = args.model.clone().unwrap_or_else(|| ask_cfg.model.clone());
+    let model = args
+        .model
+        .clone()
+        .unwrap_or_else(|| effective.model.clone());
     let rewriter_backend = crate::conversations::backend::factory::build_for_stage(
-        &ask_cfg.synthesize_rewriter_backend(),
+        &ask_cfg.effective_rewriter_backend(&cfg.llm),
         "rewriter",
     )?;
     let rewrite = ask::rewriter::rewrite(
@@ -1279,18 +1315,17 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         ask_cfg.summarize_model.as_deref(),
     );
     // Build the answer-streaming backend via factory, honoring the per-stage
-    // `ask.backend` override. synthesize_backend() now bakes ask.timeout_secs
-    // into the synthesized BackendConfig (see I2 fix in P3 task 1) so factory's
-    // 120s default doesn't override the user's per-call budget.
+    // `ask.backend` override. effective_backend() bakes ask.timeout_secs into
+    // the resolved BackendConfig (see I2 fix in P3 task 1) so factory's 120s
+    // default doesn't override the user's per-call budget.
     //
     // P3 task 8: build TWO backends (Stage 1b + answer stream) from the same
     // BackendConfig but tag them differently for telemetry — cost-report
     // breaks down spend by stage.
-    let backend_cfg = ask_cfg.synthesize_backend();
     let stage1b_backend =
-        crate::conversations::backend::factory::build_for_stage(&backend_cfg, "ask.compress_hit")?;
+        crate::conversations::backend::factory::build_for_stage(&effective, "ask.compress_hit")?;
     let answer_backend =
-        crate::conversations::backend::factory::build_for_stage(&backend_cfg, "ask.generate")?;
+        crate::conversations::backend::factory::build_for_stage(&effective, "ask.generate")?;
     let req = ask::AskRequest {
         question: question.clone(),
         filters,
@@ -1299,7 +1334,7 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         escalation_threshold: ask_cfg.escalation_threshold,
         mmr_threshold: ask_cfg.mmr_threshold,
         model,
-        endpoint: ask_cfg.ollama_endpoint.clone(),
+        endpoint: effective.endpoint.clone().unwrap_or_default(),
         format: if args.json {
             ask::Format::Json
         } else {

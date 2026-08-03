@@ -15,7 +15,7 @@ pub mod writer;
 
 use anyhow::Result;
 use chrono::{NaiveDate, Utc};
-use mur_common::config::CompactConfig;
+use mur_common::config::{CompactConfig, LlmConfig};
 use sha2::{Digest, Sha256};
 use std::time::Instant;
 use tracing::info_span;
@@ -52,6 +52,7 @@ pub async fn compact_day(
     date: NaiveDate,
     force: bool,
     cfg: &CompactConfig,
+    llm: &LlmConfig,
     root_override: Option<&str>,
 ) -> Result<DayReport> {
     let _span = info_span!("compact.day", %date).entered();
@@ -94,7 +95,7 @@ pub async fn compact_day(
     // P1 canary: extractive uses the new ChatBackend trait via factory::build,
     // so users can override `compact.extractive_backend` in config.yaml to
     // route extractive summarization through Anthropic instead of local Ollama.
-    let extractive_cfg = cfg.synthesize_extractive_backend();
+    let extractive_cfg = cfg.effective_extractive_backend(llm);
     let extractive_backend =
         crate::conversations::backend::factory::build_for_stage(&extractive_cfg, "extractive")?;
     let chunks = chunker::chunk_day(&msgs, cfg.chunk_tokens as usize);
@@ -127,7 +128,7 @@ pub async fn compact_day(
     // Abstractive — same trait migration as P1 extractive. compact.abstractive
     // now flows through factory::build, so users can override
     // `compact.abstractive_backend` to route through Anthropic.
-    let abstractive_cfg = cfg.synthesize_abstractive_backend();
+    let abstractive_cfg = cfg.effective_abstractive_backend(llm);
     let abstractive_backend =
         crate::conversations::backend::factory::build_for_stage(&abstractive_cfg, "abstractive")?;
     let abstractive_result = abstractive::summarize(
@@ -182,8 +183,8 @@ pub async fn compact_day(
     let doc = writer::SummaryDoc {
         date,
         generated_at: Utc::now(),
-        extractive_model: cfg.extractive_model.clone(),
-        abstractive_model: cfg.abstractive_model.clone(),
+        extractive_model: extractive_cfg.model.clone(),
+        abstractive_model: abstractive_cfg.model.clone(),
         mur_version: env!("CARGO_PKG_VERSION").into(),
         duration_ms: start.elapsed().as_millis() as u64,
         conv_count,
@@ -301,6 +302,7 @@ pub async fn compact_day(
 
 pub async fn compact_missing(
     cfg: &CompactConfig,
+    llm: &LlmConfig,
     since: Option<NaiveDate>,
     if_stale: bool,
     force: bool,
@@ -337,7 +339,7 @@ pub async fn compact_missing(
             });
             continue;
         }
-        let r = compact_day(date, effective_force, cfg, root_override).await?;
+        let r = compact_day(date, effective_force, cfg, llm, root_override).await?;
         match &r.outcome {
             Outcome::Written { .. } | Outcome::Noop => report.ok += 1,
             Outcome::Failed(_) => report.err += 1,
@@ -516,6 +518,10 @@ mod orch_tests {
         CompactConfig::default()
     }
 
+    fn llm() -> LlmConfig {
+        LlmConfig::default()
+    }
+
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn compact_day_happy_path_mock() {
@@ -525,7 +531,9 @@ mod orch_tests {
         let root = tmp.path().to_str().unwrap();
         let date = NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
         seed_raw(root, date, "mock extractive span");
-        let r = compact_day(date, false, &cfg(), Some(root)).await.unwrap();
+        let r = compact_day(date, false, &cfg(), &llm(), Some(root))
+            .await
+            .unwrap();
         match r.outcome {
             Outcome::Written { .. } => {}
             other => panic!("expected Written, got {:?}", other),
@@ -542,8 +550,12 @@ mod orch_tests {
         let root = tmp.path().to_str().unwrap();
         let date = NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
         seed_raw(root, date, "mock extractive span");
-        let _ = compact_day(date, false, &cfg(), Some(root)).await.unwrap();
-        let r2 = compact_day(date, false, &cfg(), Some(root)).await.unwrap();
+        let _ = compact_day(date, false, &cfg(), &llm(), Some(root))
+            .await
+            .unwrap();
+        let r2 = compact_day(date, false, &cfg(), &llm(), Some(root))
+            .await
+            .unwrap();
         assert!(matches!(
             r2.outcome,
             Outcome::Skipped { .. } | Outcome::Noop
@@ -564,7 +576,7 @@ mod orch_tests {
         }
         let mut c = cfg();
         c.max_days_per_run = 3;
-        let report = compact_missing(&c, None, false, false, None, Some(root))
+        let report = compact_missing(&c, &llm(), None, false, false, None, Some(root))
             .await
             .unwrap();
         assert_eq!(report.day_reports.len(), 3);
@@ -587,7 +599,9 @@ mod orch_tests {
         // the reorder is harmless (keywords derived from original span text), not that
         // macro_refs actually runs — that's covered by macro_refs::tests.
         seed_raw(root, date, "mock extractive span");
-        let r = compact_day(date, false, &cfg(), Some(root)).await.unwrap();
+        let r = compact_day(date, false, &cfg(), &llm(), Some(root))
+            .await
+            .unwrap();
         // Re-read the written summary and confirm no "pattern" keyword appears.
         let (md_path, _) = summary_paths_for(date, Some(root));
         let body = std::fs::read_to_string(&md_path).unwrap();
@@ -625,7 +639,9 @@ mod orch_tests {
         let root = tmp.path().to_str().unwrap();
         let date = NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
         seed_raw(root, date, "mock extractive span");
-        let _ = compact_day(date, false, &cfg(), Some(root)).await.unwrap();
+        let _ = compact_day(date, false, &cfg(), &llm(), Some(root))
+            .await
+            .unwrap();
         let (md_path, _) = summary_paths_for(date, Some(root));
         let body = std::fs::read_to_string(&md_path).unwrap();
         // Extract narrative section
@@ -713,7 +729,9 @@ Today was a test.
             refs: vec![],
         };
         store::append(&m, Some(root)).unwrap();
-        let r = compact_day(date, false, &cfg(), Some(root)).await.unwrap();
+        let r = compact_day(date, false, &cfg(), &llm(), Some(root))
+            .await
+            .unwrap();
         assert!(matches!(r.outcome, Outcome::Written { .. }));
         let idx = crate::conversations::index::ConversationIndex::open(1024, Some(root))
             .await

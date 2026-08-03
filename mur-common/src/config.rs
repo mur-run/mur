@@ -726,10 +726,6 @@ fn default_server_url() -> String {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AskConfig {
-    #[serde(default = "ask_default_model")]
-    pub model: String,
-    #[serde(default = "compact_default_ollama_endpoint")]
-    pub ollama_endpoint: String,
     #[serde(default = "ask_default_k_summary")]
     pub k_summary: u32,
     #[serde(default = "ask_default_k_raw")]
@@ -762,59 +758,16 @@ pub struct AskConfig {
     #[serde(default)]
     pub summarize_model: Option<String>,
     /// Per-stage backend override for the answer-generation model.
-    /// None = synthesize from legacy `model` + `ollama_endpoint`.
+    /// None = inherit the smart slot (`config.llm`).
     #[serde(default)]
     pub backend: Option<BackendConfig>,
     /// Per-stage backend override for the query rewriter.
-    /// None = synthesize an Ollama BackendConfig over the legacy `model` +
-    /// `ollama_endpoint` with `rewriter_timeout_secs` baked in.
+    /// None = inherit the smart slot (`config.llm`).
     #[serde(default)]
     pub rewriter_backend: Option<BackendConfig>,
 }
 
 impl AskConfig {
-    /// Returns the effective backend for the answer-generation model.
-    /// Per-stage `backend` override wins; otherwise synthesize from legacy
-    /// fields (`model`, `ollama_endpoint`) into an Ollama BackendConfig.
-    ///
-    /// `timeout_secs` is baked from `self.timeout_secs` so the answer call
-    /// inherits the user's per-call budget (rather than factory's 120s
-    /// default). When the user supplied an explicit `backend` override
-    /// with its own `timeout_secs`, that wins — we only synthesize when
-    /// `self.backend` is None.
-    pub fn synthesize_backend(&self) -> BackendConfig {
-        self.backend.clone().unwrap_or_else(|| BackendConfig {
-            provider: "ollama".into(),
-            model: self.model.clone(),
-            endpoint: Some(self.ollama_endpoint.clone()),
-            api_key_env: None,
-            api_key_ref: None,
-            timeout_secs: Some(self.timeout_secs as u64),
-        })
-    }
-
-    /// Returns the effective backend for the query rewriter.
-    ///
-    /// When `self.rewriter_backend` is None, this synthesizes its OWN
-    /// Ollama BackendConfig with `self.rewriter_timeout_secs` baked in —
-    /// it does NOT fall through to `synthesize_backend()`. The rewriter
-    /// has a much tighter latency budget than the answer call (rewriter
-    /// output is small and falling back to the raw question on timeout
-    /// is non-fatal), so we don't want a slow Ollama burning the full
-    /// `timeout_secs` budget before the user sees any response.
-    pub fn synthesize_rewriter_backend(&self) -> BackendConfig {
-        self.rewriter_backend
-            .clone()
-            .unwrap_or_else(|| BackendConfig {
-                provider: "ollama".into(),
-                model: self.model.clone(),
-                endpoint: Some(self.ollama_endpoint.clone()),
-                api_key_env: None,
-                api_key_ref: None,
-                timeout_secs: Some(self.rewriter_timeout_secs as u64),
-            })
-    }
-
     /// Effective backend for answer generation. An explicit per-stage
     /// override wins; otherwise the stage inherits the smart slot
     /// (`config.llm`) with this stage's own timeout baked in, so a slow
@@ -843,8 +796,6 @@ impl AskConfig {
 impl Default for AskConfig {
     fn default() -> Self {
         Self {
-            model: ask_default_model(),
-            ollama_endpoint: compact_default_ollama_endpoint(),
             k_summary: ask_default_k_summary(),
             k_raw: ask_default_k_raw(),
             escalation_threshold: ask_default_esc(),
@@ -864,9 +815,6 @@ impl Default for AskConfig {
     }
 }
 
-fn ask_default_model() -> String {
-    DEFAULT_LOCAL_LLM_MODEL.into()
-}
 fn ask_default_k_summary() -> u32 {
     5
 }
@@ -966,12 +914,6 @@ pub struct CompactConfig {
     pub enabled_in_daemon: bool,
     #[serde(default = "compact_default_max_days")]
     pub max_days_per_run: u32,
-    #[serde(default = "compact_default_model")]
-    pub extractive_model: String,
-    #[serde(default = "compact_default_model")]
-    pub abstractive_model: String,
-    #[serde(default = "compact_default_ollama_endpoint")]
-    pub ollama_endpoint: String,
     #[serde(default = "compact_default_max_spans")]
     pub max_extractive_spans: u32,
     #[serde(default = "compact_default_max_words")]
@@ -983,52 +925,16 @@ pub struct CompactConfig {
     #[serde(default = "compact_default_cron")]
     pub daemon_cron: String,
     /// Per-stage backend override for extractive summarization.
-    /// None = synthesize from legacy `extractive_model` + `ollama_endpoint`.
+    /// None = inherit the smart slot (`config.llm`).
     #[serde(default)]
     pub extractive_backend: Option<BackendConfig>,
     /// Per-stage backend override for abstractive summarization.
-    /// None = synthesize from legacy `abstractive_model` + `ollama_endpoint`.
+    /// None = inherit the smart slot (`config.llm`).
     #[serde(default)]
     pub abstractive_backend: Option<BackendConfig>,
 }
 
 impl CompactConfig {
-    /// Returns the effective backend for the extractive stage.
-    /// Per-stage `extractive_backend` override wins; otherwise synthesize
-    /// from legacy fields into an Ollama BackendConfig.
-    ///
-    /// CompactConfig has no per-stage timeout field, so synthesis bakes
-    /// the conservative 120s default — matching the previously-hardcoded
-    /// `Duration::from_secs(120)` at the call sites (byte-identical to
-    /// the pre-trait OllamaClient construction).
-    pub fn synthesize_extractive_backend(&self) -> BackendConfig {
-        self.extractive_backend
-            .clone()
-            .unwrap_or_else(|| BackendConfig {
-                provider: "ollama".into(),
-                model: self.extractive_model.clone(),
-                endpoint: Some(self.ollama_endpoint.clone()),
-                api_key_env: None,
-                api_key_ref: None,
-                timeout_secs: Some(120),
-            })
-    }
-
-    /// Returns the effective backend for the abstractive stage.
-    /// See `synthesize_extractive_backend` for the timeout rationale.
-    pub fn synthesize_abstractive_backend(&self) -> BackendConfig {
-        self.abstractive_backend
-            .clone()
-            .unwrap_or_else(|| BackendConfig {
-                provider: "ollama".into(),
-                model: self.abstractive_model.clone(),
-                endpoint: Some(self.ollama_endpoint.clone()),
-                api_key_env: None,
-                api_key_ref: None,
-                timeout_secs: Some(120),
-            })
-    }
-
     /// Effective backend for the extractive stage. Override wins; otherwise
     /// inherit the smart slot. CompactConfig has no per-stage timeout field,
     /// so inheritance bakes the same conservative 120s the fabricated Ollama
@@ -1059,9 +965,6 @@ impl Default for CompactConfig {
         Self {
             enabled_in_daemon: true,
             max_days_per_run: compact_default_max_days(),
-            extractive_model: compact_default_model(),
-            abstractive_model: compact_default_model(),
-            ollama_endpoint: compact_default_ollama_endpoint(),
             max_extractive_spans: compact_default_max_spans(),
             max_abstractive_words: compact_default_max_words(),
             chunk_tokens: compact_default_chunk_tokens(),
@@ -1075,12 +978,6 @@ impl Default for CompactConfig {
 
 fn compact_default_max_days() -> u32 {
     7
-}
-fn compact_default_model() -> String {
-    DEFAULT_LOCAL_LLM_MODEL.into()
-}
-fn compact_default_ollama_endpoint() -> String {
-    "http://localhost:11434".into()
 }
 fn compact_default_max_spans() -> u32 {
     20
@@ -1120,12 +1017,6 @@ pub struct RollupConfig {
     pub week_mmr_threshold: f64,
     #[serde(default = "rollup_default_month_mmr")]
     pub month_mmr_threshold: f64,
-    #[serde(default = "compact_default_model")]
-    pub extractive_model: String,
-    #[serde(default = "compact_default_model")]
-    pub abstractive_model: String,
-    #[serde(default = "compact_default_ollama_endpoint")]
-    pub ollama_endpoint: String,
     /// Per-stage backend override for the extractive stage.
     /// None = inherit the smart slot (`config.llm`).
     #[serde(default)]
@@ -1148,9 +1039,6 @@ impl Default for RollupConfig {
             max_abstractive_words_per_month: rollup_default_max_words_month(),
             week_mmr_threshold: rollup_default_week_mmr(),
             month_mmr_threshold: rollup_default_month_mmr(),
-            extractive_model: compact_default_model(),
-            abstractive_model: compact_default_model(),
-            ollama_endpoint: compact_default_ollama_endpoint(),
             extractive_backend: None,
             abstractive_backend: None,
         }
@@ -1337,9 +1225,6 @@ foo: bar
         let c = CompactConfig::default();
         assert!(c.enabled_in_daemon);
         assert_eq!(c.max_days_per_run, 7);
-        assert_eq!(c.extractive_model, "qwen3.5:4b");
-        assert_eq!(c.abstractive_model, "qwen3.5:4b");
-        assert_eq!(c.ollama_endpoint, "http://localhost:11434");
         assert_eq!(c.max_extractive_spans, 20);
         assert_eq!(c.chunk_tokens, 6000);
         assert_eq!(c.history_retain, 5);
@@ -1352,21 +1237,24 @@ foo: bar
 conversations:
   compact:
     max_days_per_run: 3
-    extractive_model: qwen3:4b
+    extractive_backend:
+      provider: anthropic
+      model: claude-haiku-4-5
 "#;
         let v: serde_yaml::Value = serde_yaml::from_str(y).unwrap();
         let conv: ConversationsConfig = serde_yaml::from_value(v["conversations"].clone()).unwrap();
         assert_eq!(conv.compact.max_days_per_run, 3);
-        assert_eq!(conv.compact.extractive_model, "qwen3:4b");
+        assert_eq!(
+            conv.compact.extractive_backend.as_ref().unwrap().model,
+            "claude-haiku-4-5"
+        );
         assert!(conv.compact.enabled_in_daemon); // default preserved
-        assert_eq!(conv.compact.abstractive_model, "qwen3.5:4b"); // default preserved
+        assert!(conv.compact.abstractive_backend.is_none()); // default preserved
     }
 
     #[test]
     fn ask_config_defaults() {
         let c = AskConfig::default();
-        assert_eq!(c.model, "qwen3.5:4b");
-        assert_eq!(c.ollama_endpoint, "http://localhost:11434");
         assert_eq!(c.k_raw, 10);
         assert_eq!(c.escalation_threshold, 0.5);
         assert_eq!(c.mmr_threshold, 0.88);
@@ -1399,9 +1287,6 @@ conversations:
         assert_eq!(c.max_abstractive_words_per_month, 700);
         assert!((c.week_mmr_threshold - 0.85).abs() < 1e-9);
         assert!((c.month_mmr_threshold - 0.82).abs() < 1e-9);
-        assert_eq!(c.extractive_model, "qwen3.5:4b");
-        assert_eq!(c.abstractive_model, "qwen3.5:4b");
-        assert_eq!(c.ollama_endpoint, "http://localhost:11434");
     }
 
     #[test]
@@ -1456,7 +1341,7 @@ conversations:
         let y = r#"
 conversations:
   ask:
-    model: qwen3:14b
+    min_score: 0.4
 "#;
         let v: serde_yaml::Value = serde_yaml::from_str(y).unwrap();
         let conv: ConversationsConfig = serde_yaml::from_value(v["conversations"].clone()).unwrap();
@@ -1663,6 +1548,21 @@ extractive_backend:
         assert_eq!(b.model, "Qwen3.5-4B-MLX-4bit");
         assert_eq!(b.endpoint.as_deref(), Some("http://127.0.0.1:8000/v1"));
         assert!(c.abstractive_backend.is_none());
+    }
+
+    #[test]
+    fn legacy_conversation_fields_are_gone_from_serialized_output() {
+        let cfg = Config::default();
+        // Scoped to the conversations block on purpose: `embedding` still
+        // carries its own `ollama_endpoint` until Task 5, and asserting over
+        // the whole document here would leave a knowingly-red test behind.
+        let yaml = serde_yaml_ng::to_string(&cfg.conversations).expect("serializes");
+        for key in ["extractive_model", "abstractive_model", "ollama_endpoint"] {
+            assert!(
+                !yaml.contains(key),
+                "legacy key {key} still serialized:\n{yaml}"
+            );
+        }
     }
 }
 
@@ -2162,37 +2062,12 @@ mod per_stage_backend_tests {
     use super::*;
 
     #[test]
-    fn legacy_compact_config_has_no_per_stage_overrides() {
-        let yaml = "\
-extractive_model: qwen3:14b
-abstractive_model: qwen3:14b
-ollama_endpoint: http://localhost:11434
-";
-        let cfg: CompactConfig = serde_yaml::from_str(yaml).unwrap();
-        assert!(cfg.extractive_backend.is_none());
-        assert!(cfg.abstractive_backend.is_none());
-        assert_eq!(cfg.extractive_model, "qwen3:14b");
-        assert_eq!(cfg.abstractive_model, "qwen3:14b");
-        assert_eq!(cfg.ollama_endpoint, "http://localhost:11434");
-    }
-
-    #[test]
-    fn legacy_ask_config_has_no_per_stage_overrides() {
-        let yaml = "model: qwen3:14b\nollama_endpoint: http://localhost:11434\n";
-        let cfg: AskConfig = serde_yaml::from_str(yaml).unwrap();
-        assert!(cfg.backend.is_none());
-        assert!(cfg.rewriter_backend.is_none());
-        assert_eq!(cfg.model, "qwen3:14b");
-    }
-
-    #[test]
     fn compact_extractive_backend_override_parses() {
         let yaml = "\
 extractive_backend:
   provider: anthropic
   model: claude-haiku-4-5
   api_key_env: ANTHROPIC_API_KEY
-abstractive_model: qwen3:14b
 ";
         let cfg: CompactConfig = serde_yaml::from_str(yaml).unwrap();
         let extractive = cfg
@@ -2221,108 +2096,33 @@ rewriter_backend:
     }
 
     #[test]
-    fn synthesize_legacy_to_backend_config_for_compact_extractive() {
-        let yaml = "\
-extractive_model: qwen3:14b
-ollama_endpoint: http://192.168.1.10:11434
-";
-        let cfg: CompactConfig = serde_yaml::from_str(yaml).unwrap();
-        let synth = cfg.synthesize_extractive_backend();
-        assert_eq!(synth.provider, "ollama");
-        assert_eq!(synth.model, "qwen3:14b");
-        assert_eq!(synth.endpoint.as_deref(), Some("http://192.168.1.10:11434"));
-        assert_eq!(synth.api_key_env, None);
-    }
-
-    #[test]
-    fn synthesize_legacy_to_backend_config_for_ask() {
-        let yaml = "model: qwen3:14b\nollama_endpoint: http://localhost:11434\n";
-        let cfg: AskConfig = serde_yaml::from_str(yaml).unwrap();
-        let synth = cfg.synthesize_backend();
-        assert_eq!(synth.provider, "ollama");
-        assert_eq!(synth.model, "qwen3:14b");
-        assert_eq!(synth.endpoint.as_deref(), Some("http://localhost:11434"));
-    }
-
-    #[test]
-    fn synthesize_rewriter_uses_legacy_ollama_when_no_rewriter_override() {
-        // Rewriter no longer falls through to synthesize_backend() when
-        // `rewriter_backend` is unset (see I2 fix in P3 task 1). It now
-        // always synthesizes its own ollama BackendConfig over the legacy
-        // model + endpoint with `rewriter_timeout_secs` baked in, so a
-        // slow rewriter call doesn't burn the full ask budget. The
-        // per-stage `ask.backend` override therefore does NOT propagate to
-        // the rewriter — set `ask.rewriter_backend` explicitly if you want
-        // a non-Ollama rewriter.
-        let yaml = "\
-backend:
-  provider: anthropic
-  model: claude-sonnet-5
-  api_key_env: ANTHROPIC_API_KEY
-";
-        let cfg: AskConfig = serde_yaml::from_str(yaml).unwrap();
-        let rewriter = cfg.synthesize_rewriter_backend();
-        assert_eq!(rewriter.provider, "ollama");
-        assert_eq!(rewriter.model, ask_default_model());
-        assert_eq!(
-            rewriter.timeout_secs,
-            Some(ask_default_rewriter_timeout() as u64)
-        );
-    }
-
-    #[test]
-    fn ask_synthesize_backend_inherits_timeout_secs_from_legacy_field() {
-        let cfg = AskConfig {
-            timeout_secs: 45,
-            ..AskConfig::default()
-        };
-        let b = cfg.synthesize_backend();
-        assert_eq!(
-            b.timeout_secs,
-            Some(45),
-            "synthesize_backend() must propagate ask.timeout_secs into the synthesized BackendConfig"
-        );
-    }
-
-    #[test]
-    fn ask_synthesize_backend_does_not_override_explicit_per_stage_timeout() {
-        let mut cfg = AskConfig {
-            timeout_secs: 45,
-            ..AskConfig::default()
-        };
+    fn rewriter_does_not_fall_through_to_the_answer_stage_override() {
+        // effective_rewriter_backend must NOT fall through to
+        // effective_backend when `rewriter_backend` is unset — it inherits
+        // the smart slot directly (with rewriter_timeout_secs baked in),
+        // even when the answer stage has its own explicit `backend`
+        // override. Set `ask.rewriter_backend` explicitly to point the
+        // rewriter somewhere else.
+        let mut cfg = AskConfig::default();
         cfg.backend = Some(BackendConfig {
             provider: "anthropic".into(),
-            model: "claude-haiku-4-5".into(),
+            model: "claude-sonnet-5".into(),
             endpoint: None,
             api_key_env: Some("ANTHROPIC_API_KEY".into()),
             api_key_ref: None,
-            timeout_secs: Some(10),
+            timeout_secs: None,
         });
-        let b = cfg.synthesize_backend();
+        let rewriter = cfg.effective_rewriter_backend(&omlx_llm());
+        assert_eq!(rewriter.provider, "openai");
+        assert_eq!(rewriter.model, "Qwen3.5-4B-MLX-4bit");
         assert_eq!(
-            b.timeout_secs,
-            Some(10),
-            "explicit per-stage timeout_secs must NOT be overridden by ask.timeout_secs"
+            rewriter.timeout_secs,
+            Some(cfg.rewriter_timeout_secs as u64)
         );
     }
 
     #[test]
-    fn ask_synthesize_rewriter_backend_uses_rewriter_timeout_secs_when_synthesizing() {
-        let cfg = AskConfig {
-            timeout_secs: 120,
-            rewriter_timeout_secs: 8,
-            ..AskConfig::default()
-        };
-        let b = cfg.synthesize_rewriter_backend();
-        assert_eq!(
-            b.timeout_secs,
-            Some(8),
-            "rewriter synthesis must use rewriter_timeout_secs (not the answer-call timeout)"
-        );
-    }
-
-    #[test]
-    fn ask_synthesize_rewriter_backend_does_not_override_explicit_per_stage_timeout() {
+    fn rewriter_explicit_override_timeout_wins_over_rewriter_timeout_secs() {
         let mut cfg = AskConfig {
             rewriter_timeout_secs: 8,
             ..AskConfig::default()
@@ -2335,32 +2135,12 @@ backend:
             api_key_ref: None,
             timeout_secs: Some(30),
         });
-        let b = cfg.synthesize_rewriter_backend();
+        let b = cfg.effective_rewriter_backend(&omlx_llm());
         assert_eq!(
             b.timeout_secs,
             Some(30),
-            "explicit per-stage rewriter timeout_secs must NOT be overridden by ask.rewriter_timeout_secs"
+            "explicit per-stage rewriter_backend override must NOT be overridden by ask.rewriter_timeout_secs"
         );
-    }
-
-    #[test]
-    fn compact_synthesize_extractive_backend_inherits_default_timeout_when_no_override() {
-        // CompactConfig has no per-stage timeout field — extractive synthesis
-        // should fall back to the conservative 120s default.
-        let cfg = CompactConfig::default();
-        let b = cfg.synthesize_extractive_backend();
-        assert_eq!(
-            b.timeout_secs,
-            Some(120),
-            "compact synthesis without per-stage override must produce 120s timeout"
-        );
-    }
-
-    #[test]
-    fn compact_synthesize_abstractive_backend_inherits_default_timeout_when_no_override() {
-        let cfg = CompactConfig::default();
-        let b = cfg.synthesize_abstractive_backend();
-        assert_eq!(b.timeout_secs, Some(120));
     }
 
     fn omlx_llm() -> LlmConfig {
