@@ -242,9 +242,27 @@ pub fn apply(plan: &ModelSetupPlan, config: &mut Config) {
         config.embedding.api_key_ref = e.api_key_ref.clone();
     }
     if let Some(m) = &plan.conversations_model {
-        config.conversations.ask.model = m.clone();
-        config.conversations.compact.extractive_model = m.clone();
-        config.conversations.rollup.extractive_model = m.clone();
+        // `conversations_model` is deliberately independent of `plan.smart`
+        // (see `recommend()`: keep the high-volume, latency-sensitive
+        // conversations pipeline on a free local model even when a cloud key
+        // is available for smart) — so this must be an explicit per-stage
+        // pin, not a `None`/inherit-smart clear.
+        //
+        // `DiscoveredModel::backend` (Ollama vs OMlx) is lost by the time it
+        // reaches `conversations_model: Option<String>` (see `recommend()`),
+        // a pre-existing limitation; hardcoding "ollama" here just carries
+        // that same assumption forward rather than introducing a new one.
+        let backend = mur_common::config::BackendConfig {
+            provider: "ollama".into(),
+            model: m.clone(),
+            endpoint: None,
+            api_key_env: None,
+            api_key_ref: None,
+            timeout_secs: None,
+        };
+        config.conversations.ask.backend = Some(backend.clone());
+        config.conversations.compact.extractive_backend = Some(backend.clone());
+        config.conversations.rollup.extractive_backend = Some(backend);
     }
 }
 
@@ -383,9 +401,25 @@ mod tests {
         );
         assert_eq!(cfg.embedding.model, "qwen3-embedding:0.6b");
         assert_eq!(cfg.embedding.dimensions, 1024);
-        assert_eq!(cfg.conversations.ask.model, "qwen3.5:4b");
-        assert_eq!(cfg.conversations.compact.extractive_model, "qwen3.5:4b");
-        assert_eq!(cfg.conversations.rollup.extractive_model, "qwen3.5:4b");
+        // Legacy behavior (pre-refactor) asserted the bare `.model`/
+        // `.extractive_model` string fields directly. Post-refactor, the
+        // conversations stages store an explicit per-stage `BackendConfig`
+        // override, resolved through `effective_*`.
+        let ask_backend = cfg.conversations.ask.effective_backend(&cfg.llm);
+        assert_eq!(ask_backend.provider, "ollama");
+        assert_eq!(ask_backend.model, "qwen3.5:4b");
+        let compact_backend = cfg
+            .conversations
+            .compact
+            .effective_extractive_backend(&cfg.llm);
+        assert_eq!(compact_backend.provider, "ollama");
+        assert_eq!(compact_backend.model, "qwen3.5:4b");
+        let rollup_backend = cfg
+            .conversations
+            .rollup
+            .effective_extractive_backend(&cfg.llm);
+        assert_eq!(rollup_backend.provider, "ollama");
+        assert_eq!(rollup_backend.model, "qwen3.5:4b");
         assert!(!is_factory_default_models(&cfg));
     }
 

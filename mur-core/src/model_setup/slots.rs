@@ -64,27 +64,24 @@ pub struct ModelSlotsView {
 }
 
 fn ask_pair(cfg: &Config) -> (String, String) {
-    match &cfg.conversations.ask.backend {
-        Some(b) => (b.provider.clone(), b.model.clone()),
-        None => ("ollama".into(), cfg.conversations.ask.model.clone()),
-    }
+    let b = cfg.conversations.ask.effective_backend(&cfg.llm);
+    (b.provider, b.model)
 }
 
 fn compact_pair(cfg: &Config) -> (String, String) {
-    match &cfg.conversations.compact.extractive_backend {
-        Some(b) => (b.provider.clone(), b.model.clone()),
-        None => (
-            "ollama".into(),
-            cfg.conversations.compact.extractive_model.clone(),
-        ),
-    }
+    let b = cfg
+        .conversations
+        .compact
+        .effective_extractive_backend(&cfg.llm);
+    (b.provider, b.model)
 }
 
 fn rollup_pair(cfg: &Config) -> (String, String) {
-    (
-        "ollama".into(),
-        cfg.conversations.rollup.extractive_model.clone(),
-    )
+    let b = cfg
+        .conversations
+        .rollup
+        .effective_extractive_backend(&cfg.llm);
+    (b.provider, b.model)
 }
 
 fn health_for(provider: &str, api_key_ref: Option<&str>) -> String {
@@ -220,51 +217,29 @@ fn resolve_selection(sel: &SlotSelection, reg: &ModelRegistry) -> Result<Resolve
     }
 }
 
-/// Writes a resolved selection into an Ask/Compact per-stage backend override
-/// (Local clears the override back to the legacy string field; Registry sets
-/// an explicit override), or into Rollup's legacy field directly (Local only).
+/// Pins a resolved selection as an explicit per-stage backend override for
+/// Ask/Compact/Rollup. Local and Registry now produce the same shape once
+/// resolved (`Resolved`), so both always pin.
 fn write_conversation_stage(
     cfg: &mut Config,
     id: SlotId,
     sel: &SlotSelection,
     r: &Resolved,
 ) -> Result<()> {
+    let backend = BackendConfig {
+        provider: r.provider.clone(),
+        model: r.model.clone(),
+        endpoint: r.endpoint.clone(),
+        api_key_env: None,
+        api_key_ref: r.api_key_ref.clone(),
+        timeout_secs: None,
+    };
     match id {
-        SlotId::Ask => match sel {
-            SlotSelection::Local { .. } => {
-                cfg.conversations.ask.backend = None;
-                cfg.conversations.ask.model = r.model.clone();
-            }
-            SlotSelection::Registry { .. } => {
-                cfg.conversations.ask.backend = Some(BackendConfig {
-                    provider: r.provider.clone(),
-                    model: r.model.clone(),
-                    endpoint: r.endpoint.clone(),
-                    api_key_env: None,
-                    api_key_ref: r.api_key_ref.clone(),
-                    timeout_secs: None,
-                });
-            }
-        },
-        SlotId::Compact => match sel {
-            SlotSelection::Local { .. } => {
-                cfg.conversations.compact.extractive_backend = None;
-                cfg.conversations.compact.extractive_model = r.model.clone();
-            }
-            SlotSelection::Registry { .. } => {
-                cfg.conversations.compact.extractive_backend = Some(BackendConfig {
-                    provider: r.provider.clone(),
-                    model: r.model.clone(),
-                    endpoint: r.endpoint.clone(),
-                    api_key_env: None,
-                    api_key_ref: r.api_key_ref.clone(),
-                    timeout_secs: None,
-                });
-            }
-        },
+        SlotId::Ask => cfg.conversations.ask.backend = Some(backend),
+        SlotId::Compact => cfg.conversations.compact.extractive_backend = Some(backend),
         SlotId::Rollup => match sel {
             SlotSelection::Local { .. } => {
-                cfg.conversations.rollup.extractive_model = r.model.clone()
+                cfg.conversations.rollup.extractive_backend = Some(backend)
             }
             SlotSelection::Registry { .. } => bail!("this stage runs locally; pick a local model"),
         },
@@ -322,6 +297,8 @@ pub fn set_slot(slot: SlotId, sel: &SlotSelection) -> Result<ModelSlotsView> {
             cfg.llm.openai_url = r.endpoint.clone();
             cfg.llm.api_key_ref = r.api_key_ref.clone();
 
+            // A stage that was already tracking `smart` keeps tracking it —
+            // re-pin it to today's resolution, same as a direct dispatch.
             if ask_follows {
                 write_conversation_stage(&mut cfg, SlotId::Ask, sel, &r)?;
             }
@@ -379,7 +356,12 @@ mod tests {
         unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
 
         let v = get_slots().unwrap();
-        assert!(!v.ask.follows_smart);
+        // Legacy behavior (pre-refactor) was `!follows_smart` here: a fresh
+        // config's `ask.model` was its own hardcoded-ollama default,
+        // independent of `cfg.llm`. Post-refactor, `backend: None` means
+        // "inherit the smart slot" — so a fresh config genuinely does follow
+        // smart from the start.
+        assert!(v.ask.follows_smart);
 
         let sel = SlotSelection::Local {
             provider: "ollama".into(),
