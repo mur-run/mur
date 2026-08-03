@@ -1078,6 +1078,14 @@ pub struct RollupConfig {
     pub abstractive_model: String,
     #[serde(default = "compact_default_ollama_endpoint")]
     pub ollama_endpoint: String,
+    /// Per-stage backend override for the extractive stage.
+    /// None = inherit the smart slot (`config.llm`).
+    #[serde(default)]
+    pub extractive_backend: Option<BackendConfig>,
+    /// Per-stage backend override for the abstractive stage.
+    /// None = inherit the smart slot (`config.llm`).
+    #[serde(default)]
+    pub abstractive_backend: Option<BackendConfig>,
 }
 
 impl Default for RollupConfig {
@@ -1095,6 +1103,8 @@ impl Default for RollupConfig {
             extractive_model: compact_default_model(),
             abstractive_model: compact_default_model(),
             ollama_endpoint: compact_default_ollama_endpoint(),
+            extractive_backend: None,
+            abstractive_backend: None,
         }
     }
 }
@@ -1564,6 +1574,23 @@ embedding:
         // Same for a config that is simply absent.
         let missing = Config::load_or_default(&tmp.path().join("nope.yaml"));
         assert!(missing.open_items.muted.is_empty());
+    }
+
+    #[test]
+    fn rollup_config_accepts_backend_overrides() {
+        let yaml = r#"
+enabled: true
+extractive_backend:
+  provider: openai
+  model: Qwen3.5-4B-MLX-4bit
+  endpoint: http://127.0.0.1:8000/v1
+"#;
+        let c: RollupConfig = serde_yaml_ng::from_str(yaml).expect("parses");
+        let b = c.extractive_backend.expect("override present");
+        assert_eq!(b.provider, "openai");
+        assert_eq!(b.model, "Qwen3.5-4B-MLX-4bit");
+        assert_eq!(b.endpoint.as_deref(), Some("http://127.0.0.1:8000/v1"));
+        assert!(c.abstractive_backend.is_none());
     }
 }
 
