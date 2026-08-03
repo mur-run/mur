@@ -159,12 +159,22 @@ fn append(mur_home: &Path, rec: &Record) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    let mut line = serde_json::to_string(rec)?;
+    line.push('\n');
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
         .with_context(|| format!("open {}", path.display()))?;
-    writeln!(f, "{}", serde_json::to_string(rec)?)?;
+    // One write, newline included. `writeln!` emits the record and the newline
+    // as two separate syscalls, and `O_APPEND` only makes each individual write
+    // atomic — so a second agent's runtime appending in that gap concatenated
+    // two records onto one line. `open()` skips malformed lines by design, so
+    // both of them vanished without a word. Every agent shares this one file;
+    // two of them running at once is the normal case, not the edge case.
+    // ponytail: no lock — a record is one small write, which O_APPEND keeps
+    // whole. If these ever grow past a page, take an advisory lock instead.
+    f.write_all(line.as_bytes())?;
     Ok(())
 }
 
@@ -221,6 +231,39 @@ mod tests {
 
     fn home() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
+    }
+
+    /// Every agent's runtime appends to this one file, so two agents running at
+    /// once is the normal case. Before the single-write fix this lost ~30% of
+    /// records per run: two JSON bodies concatenated onto one line, which
+    /// `open()` then skipped as malformed — silently, by design.
+    #[test]
+    fn concurrent_appends_never_land_on_the_same_line() {
+        let h = home();
+        let path = h.path().to_path_buf();
+        std::thread::scope(|s| {
+            for t in 0..8 {
+                let p = path.clone();
+                s.spawn(move || {
+                    for i in 0..500 {
+                        report(&p, "a", &format!("t{t}-{i}"), None).unwrap();
+                    }
+                });
+            }
+        });
+        let body = std::fs::read_to_string(log_path(&path)).unwrap();
+        let bad: Vec<&str> = body
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter(|l| serde_json::from_str::<Record>(l).is_err())
+            .collect();
+        assert!(
+            bad.is_empty(),
+            "{} malformed lines, e.g. {:?}",
+            bad.len(),
+            &bad[..bad.len().min(2)]
+        );
+        assert_eq!(open(&path).len(), 4000, "records lost");
     }
 
     #[test]
