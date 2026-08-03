@@ -217,13 +217,11 @@ Append to `mod tests`:
             api_key_ref: None,
             timeout_secs: None,
         });
-        let b = r.abstractive_backend_or_inherit_check(&omlx_llm());
+        let b = r.effective_abstractive_backend(&omlx_llm());
         assert_eq!(b.provider, "ollama");
         assert_eq!(b.endpoint.as_deref(), Some("http://box.local:11434"));
     }
 ```
-
-Note: the last test deliberately calls a name that does not exist — replace `abstractive_backend_or_inherit_check` with `effective_abstractive_backend` in Step 3. It is written this way so Step 2 fails loudly rather than passing by accident.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -665,12 +663,11 @@ Append to `mod tests` in `mur-common/src/config.rs`:
     #[test]
     fn legacy_conversation_fields_are_gone_from_serialized_output() {
         let cfg = Config::default();
-        let yaml = serde_yaml_ng::to_string(&cfg).expect("serializes");
-        for key in [
-            "extractive_model",
-            "abstractive_model",
-            "ollama_endpoint",
-        ] {
+        // Scoped to the conversations block on purpose: `embedding` still
+        // carries its own `ollama_endpoint` until Task 5, and asserting over
+        // the whole document here would leave a knowingly-red test behind.
+        let yaml = serde_yaml_ng::to_string(&cfg.conversations).expect("serializes");
+        for key in ["extractive_model", "abstractive_model", "ollama_endpoint"] {
             assert!(
                 !yaml.contains(key),
                 "legacy key {key} still serialized:\n{yaml}"
@@ -678,8 +675,6 @@ Append to `mod tests` in `mur-common/src/config.rs`:
         }
     }
 ```
-
-Note this also asserts `embedding.ollama_endpoint` is gone, which Task 5 delivers. Expect it to still fail after this task; it goes green at the end of Task 5.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -765,7 +760,7 @@ RUST_MIN_STACK=33554432 cargo nextest run -p mur-core conversations
 cargo clippy -p mur-common -p mur-core -- -D warnings
 ```
 
-Expected: green, except `legacy_conversation_fields_are_gone_from_serialized_output` which still fails on `embedding.ollama_endpoint` until Task 5.
+Expected: green. Every test passes; nothing is left knowingly red.
 
 - [ ] **Step 6: Commit**
 
@@ -869,7 +864,7 @@ cargo nextest run -p mur-common
 cargo nextest run -p mur-core embedding
 ```
 
-Expected: PASS — including `legacy_conversation_fields_are_gone_from_serialized_output` from Task 4, which now goes green.
+Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
