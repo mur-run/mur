@@ -85,6 +85,7 @@ mod sync;
 mod team;
 mod update;
 mod verify;
+mod yaml_edit;
 
 use cli::Cli;
 
