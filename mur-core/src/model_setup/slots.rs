@@ -4,9 +4,7 @@
 //! model, `llm.*`) and `search` (embeddings) are the two primary slots users
 //! pick directly; `ask`/`compact`/`rollup` conversation stages default to
 //! following `smart` and can be pinned independently via a per-stage backend
-//! override — except `rollup`, which (like `summarize`) is local-only and
-//! rejects a registry (cloud) pin; `summarize`/`reflector`/`curator` are
-//! secondary slots.
+//! override; `summarize`/`reflector`/`curator` are secondary slots.
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -220,16 +218,9 @@ fn resolve_selection(sel: &SlotSelection, reg: &ModelRegistry) -> Result<Resolve
 }
 
 /// Pins a resolved selection as an explicit per-stage backend override for
-/// Ask/Compact/Rollup. Local and Registry produce the same `Resolved` shape,
-/// and Ask/Compact always pin either one — but Rollup stays local-only
-/// (background, extractive-heavy job; same restriction as `Summarize`) and
-/// rejects a `Registry` selection.
-fn write_conversation_stage(
-    cfg: &mut Config,
-    id: SlotId,
-    sel: &SlotSelection,
-    r: &Resolved,
-) -> Result<()> {
+/// Ask/Compact/Rollup. Local and Registry now produce the same shape once
+/// resolved (`Resolved`), so both always pin.
+fn write_conversation_stage(cfg: &mut Config, id: SlotId, r: &Resolved) -> Result<()> {
     let backend = BackendConfig {
         provider: r.provider.clone(),
         model: r.model.clone(),
@@ -241,12 +232,7 @@ fn write_conversation_stage(
     match id {
         SlotId::Ask => cfg.conversations.ask.backend = Some(backend),
         SlotId::Compact => cfg.conversations.compact.extractive_backend = Some(backend),
-        SlotId::Rollup => match sel {
-            SlotSelection::Local { .. } => {
-                cfg.conversations.rollup.extractive_backend = Some(backend)
-            }
-            SlotSelection::Registry { .. } => bail!("this stage runs locally; pick a local model"),
-        },
+        SlotId::Rollup => cfg.conversations.rollup.extractive_backend = Some(backend),
         _ => unreachable!("write_conversation_stage only called for Ask/Compact/Rollup"),
     }
     Ok(())
@@ -294,10 +280,6 @@ pub fn set_slot(slot: SlotId, sel: &SlotSelection) -> Result<ModelSlotsView> {
             let ask_follows = ask_pair(&cfg) == old_pair;
             let compact_follows = compact_pair(&cfg) == old_pair;
             let rollup_follows = rollup_pair(&cfg) == old_pair;
-            // Snapshot before `cfg.llm` moves — rollup may need to freeze on
-            // this below, since it can't be allowed to inherit whatever
-            // `cfg.llm` becomes.
-            let old_llm_backend = cfg.llm.to_backend_config();
 
             let r = resolve_selection(sel, &reg)?;
             cfg.llm.provider = r.provider;
@@ -320,24 +302,8 @@ pub fn set_slot(slot: SlotId, sel: &SlotSelection) -> Result<ModelSlotsView> {
             if compact_follows {
                 cfg.conversations.compact.extractive_backend = None;
             }
-            // Rollup is local-only (`write_conversation_stage` rejects a
-            // `Registry` pin outright). It may keep *inheriting* only while
-            // smart stays local — the moment smart moves to a non-local
-            // selection, leaving it on `None` would let it silently start
-            // running on the new cloud backend the next time anything reads
-            // `effective_extractive_backend`, which is exactly the
-            // local-only invariant this stage exists to guarantee. So it
-            // freezes on the last backend it was actually tracking instead
-            // of following off the edge.
             if rollup_follows {
-                if let SlotSelection::Local { .. } = sel {
-                    cfg.conversations.rollup.extractive_backend = None;
-                } else {
-                    cfg.conversations.rollup.extractive_backend = Some(BackendConfig {
-                        timeout_secs: Some(120),
-                        ..old_llm_backend
-                    });
-                }
+                cfg.conversations.rollup.extractive_backend = None;
             }
         }
         SlotId::Search => {
@@ -352,13 +318,9 @@ pub fn set_slot(slot: SlotId, sel: &SlotSelection) -> Result<ModelSlotsView> {
             cfg.embedding.openai_url = r.endpoint;
             cfg.embedding.api_key_ref = r.api_key_ref;
         }
-        SlotId::Ask | SlotId::Compact => {
+        SlotId::Ask | SlotId::Compact | SlotId::Rollup => {
             let r = resolve_selection(sel, &reg)?;
-            write_conversation_stage(&mut cfg, slot, sel, &r)?;
-        }
-        SlotId::Rollup => {
-            let r = resolve_selection(sel, &reg)?;
-            write_conversation_stage(&mut cfg, slot, sel, &r)?;
+            write_conversation_stage(&mut cfg, slot, &r)?;
         }
         SlotId::Summarize => match sel {
             SlotSelection::Local { model, .. } => {
@@ -418,21 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn rollup_rejects_registry_selection() {
-        let _g = ENV_TEST_LOCK.lock().unwrap();
-        let tmp = tempfile::TempDir::new().unwrap();
-        unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
-
-        let sel = SlotSelection::Registry {
-            ref_name: "whatever".into(),
-        };
-        assert!(set_slot(SlotId::Rollup, &sel).is_err());
-
-        unsafe { std::env::remove_var("MUR_HOME") };
-    }
-
-    #[test]
-    fn rollup_freezes_local_instead_of_following_smart_to_cloud() {
+    fn rollup_accepts_registry_selection_like_ask_and_compact() {
         let _g = ENV_TEST_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
         unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
@@ -443,40 +391,29 @@ mod tests {
             ModelEntry {
                 provider: "anthropic".into(),
                 model: "claude-opus-5".into(),
+                base_url: Some("https://api.anthropic.com".into()),
                 ..Default::default()
             },
         );
         reg.save_to(&ModelRegistry::default_path().unwrap())
             .unwrap();
 
-        // Smart starts local — rollup inherits it, same as ask/compact.
-        let local = SlotSelection::Local {
-            provider: "ollama".into(),
-            model: "llama3:8b".into(),
-            base_url: "http://localhost:11434".into(),
-            dims: None,
-        };
-        let v = set_slot(SlotId::Smart, &local).unwrap();
-        assert!(v.rollup.follows_smart);
-
-        // Smart moves to a cloud registry pick. Ask has no local-only
-        // restriction, so it follows smart there; rollup must NOT — it has
-        // to stay on the last local backend it was actually tracking rather
-        // than silently inheriting the cloud pick the moment `cfg.llm`
-        // changes underneath its `None` override.
-        let cloud = SlotSelection::Registry {
+        let sel = SlotSelection::Registry {
             ref_name: "cloud-opus".into(),
         };
-        let v = set_slot(SlotId::Smart, &cloud).unwrap();
-        assert_eq!(v.smart.provider, "anthropic");
-        assert!(v.ask.follows_smart);
-        assert_eq!(v.ask.provider, "anthropic");
-        assert!(
-            !v.rollup.follows_smart,
-            "rollup must not follow smart into the cloud"
-        );
-        assert_eq!(v.rollup.provider, "ollama");
-        assert_eq!(v.rollup.model, "llama3:8b");
+        let v = set_slot(SlotId::Rollup, &sel).unwrap();
+        assert_eq!(v.rollup.provider, "anthropic");
+        assert_eq!(v.rollup.model, "claude-opus-5");
+
+        let cfg = load_config().unwrap();
+        let b = cfg
+            .conversations
+            .rollup
+            .extractive_backend
+            .expect("rollup takes an explicit Registry pin now, like ask/compact");
+        assert_eq!(b.provider, "anthropic");
+        assert_eq!(b.model, "claude-opus-5");
+        assert_eq!(b.endpoint.as_deref(), Some("https://api.anthropic.com"));
 
         unsafe { std::env::remove_var("MUR_HOME") };
     }
