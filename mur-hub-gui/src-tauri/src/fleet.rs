@@ -270,6 +270,27 @@ pub fn fleet_set_loop(
     .map_err(|e| e.to_string())
 }
 
+/// The next `count` fire times for a 5-field cron expression, formatted in the
+/// machine's local time.
+///
+/// Deliberately routed through `mur_agent_runtime::scheduler` rather than a
+/// JavaScript cron library: the daemon decides due-ness with this same parser,
+/// and a preview that disagrees with the scheduler (on six-field padding, or
+/// day-of-week numbering) is worse than no preview at all.
+///
+/// `Err` means the expression does not parse. `Ok(vec![])` means it parses but
+/// will never fire again — two different problems, and the caller shows two
+/// different messages.
+#[tauri::command]
+pub fn cron_preview(expr: String, count: usize) -> Result<Vec<String>, String> {
+    let fires = mur_agent_runtime::scheduler::next_n_fires(expr.trim(), count)
+        .map_err(|e| e.to_string())?;
+    Ok(fires
+        .iter()
+        .map(|t| t.format("%-m/%-d %H:%M").to_string())
+        .collect())
+}
+
 #[tauri::command]
 pub fn get_fleet_autorun() -> Result<bool, String> {
     let cfg = mur_core::store::config::load_config().map_err(|e| e.to_string())?;

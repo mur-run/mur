@@ -37,6 +37,7 @@ notify = "6"
 # Workspace siblings — reused from the root repo via relative path.
 mur-common = { path = "../../mur-common" }
 mur-core = { path = "../../mur-core" }
+mur-agent-runtime = { path = "../../mur-agent-runtime" }
 mur-gui-core = { path = "../../mur-gui-core" }
 mur-channel = { path = "../../mur-channel" }
 
