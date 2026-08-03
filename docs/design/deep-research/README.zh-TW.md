@@ -135,7 +135,7 @@ mur deep-research run deep-research --max-iterations 4 --deadline 30m
 ```
 
 - **結果落在哪** — 每個 worker 的引用回覆是 `~/.mur/channels/fleet-deep-research/events.jsonl` 裡的簽名事件。`~/.mur/index/channels/` 的 SQLite read-model 是可重建的投影。每個引用都能對到一筆 gateway audit 記錄。
-- **Config knobs(無硬編值)** — `MUR_RESEARCH_MAX_FETCH_CHARS`、`…_SEARCH_LIMIT`、`…_TIMEOUT_SECS`、`…_LIGHTPANDA_PATH`、`…_DENY_HOSTS`——env 或 `~/.mur/config.yaml` 的 `research_gateway:`,絕不用字面值。
+- **Config knobs(無硬編值)** — `MUR_RESEARCH_MAX_FETCH_CHARS`、`…_SEARCH_LIMIT`、`…_SEARCH_ENDPOINT`、`…_TIMEOUT_SECS`、`…_LIGHTPANDA_PATH`、`…_DENY_HOSTS`——env 或 `~/.mur/config.yaml` 的 `research_gateway:`,絕不用字面值。
 
 ---
 

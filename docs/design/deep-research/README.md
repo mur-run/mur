@@ -140,7 +140,7 @@ mur deep-research run deep-research --max-iterations 4 --deadline 30m
 ```
 
 - **Where results live** — each worker's cited reply is a signed event in `~/.mur/channels/fleet-deep-research/events.jsonl`. The SQLite read-model at `~/.mur/index/channels/` is a rebuildable projection. Every citation reconciles to a gateway audit record.
-- **Config knobs (no hardcoded values)** — `MUR_RESEARCH_MAX_FETCH_CHARS`, `…_SEARCH_LIMIT`, `…_TIMEOUT_SECS`, `…_LIGHTPANDA_PATH`, `…_DENY_HOSTS` — env or `research_gateway:` in `~/.mur/config.yaml`, never literals.
+- **Config knobs (no hardcoded values)** — `MUR_RESEARCH_MAX_FETCH_CHARS`, `…_SEARCH_LIMIT`, `…_SEARCH_ENDPOINT`, `…_TIMEOUT_SECS`, `…_LIGHTPANDA_PATH`, `…_DENY_HOSTS` — env or `research_gateway:` in `~/.mur/config.yaml`, never literals.
 
 ---
 

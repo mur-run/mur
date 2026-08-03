@@ -135,7 +135,7 @@ mur deep-research run deep-research --max-iterations 4 --deadline 30m
 ```
 
 - **結果の在り処** — 各ワーカーの引用付き返信は `~/.mur/channels/fleet-deep-research/events.jsonl` の署名済みイベント。`~/.mur/index/channels/` の SQLite read-model は再構築可能な射影。各引用は 1 つのゲートウェイ監査レコードに突き合わせられる。
-- **設定ノブ(ハードコード値なし)** — `MUR_RESEARCH_MAX_FETCH_CHARS`、`…_SEARCH_LIMIT`、`…_TIMEOUT_SECS`、`…_LIGHTPANDA_PATH`、`…_DENY_HOSTS` — env または `~/.mur/config.yaml` の `research_gateway:`。リテラルは決して使わない。
+- **設定ノブ(ハードコード値なし)** — `MUR_RESEARCH_MAX_FETCH_CHARS`、`…_SEARCH_LIMIT`、`…_SEARCH_ENDPOINT`、`…_TIMEOUT_SECS`、`…_LIGHTPANDA_PATH`、`…_DENY_HOSTS` — env または `~/.mur/config.yaml` の `research_gateway:`。リテラルは決して使わない。
 
 ---
 
