@@ -1,13 +1,16 @@
 //! `mur conversations doctor` — pipeline health checks: raw/summary
-//! coverage, Ollama reachability, cloud provider probes, span/rollup
-//! indexing.
+//! coverage, per-stage backend listing, Ollama reachability, cloud provider
+//! probes, span/rollup indexing.
 //!
 //! Split out of the flat `conversations_cmd.rs` into its own submodule
 //! (fix round 1, finding 4) to keep individual command files under the
 //! repo's 800-line cap. `collect_backend_configs`, `group_ollama_backends_by_endpoint`,
 //! `probe_ollama_tags`, and `OllamaProbeOutcome` stay module-private in the
 //! parent `conversations_cmd` (`super`) since `doctor` and `preflight` both
-//! need them (fix round 1, finding 2).
+//! need them (fix round 1, finding 2). The per-stage backend listing and the
+//! multi-provider cloud probe live in the sibling `backends` submodule
+//! (conversations backend doctor task, 2026-08-03) rather than growing this
+//! file or `mod.rs` further.
 
 use anyhow::Result;
 
@@ -81,6 +84,16 @@ pub async fn cmd_conversations_doctor() -> Result<()> {
     // when a conversations stage actually routes through Ollama.
     let cfg = crate::store::config::load_config().unwrap_or_default();
     let backends = collect_backend_configs(&cfg);
+
+    // Per-stage backend listing: which real call site dials which backend,
+    // and whether that's a pinned per-stage override or inherited from the
+    // smart slot (`config.llm`). See `backends` submodule.
+    let stage_rows = super::backends::stage_backend_rows(&cfg);
+    print!(
+        "{}",
+        super::backends::render_stage_backends_table(&stage_rows)
+    );
+
     let ollama_groups = group_ollama_backends_by_endpoint(&backends);
     if ollama_groups.is_empty() {
         println!("  · no conversations stage routes through Ollama (skipping reachability probe)");
@@ -101,71 +114,14 @@ pub async fn cmd_conversations_doctor() -> Result<()> {
         }
     }
 
-    // P1: Cloud provider probes (anthropic only for P1)
-    let cloud_backends: Vec<_> = backends
-        .iter()
-        .filter(|b| b.provider == "anthropic")
-        .collect();
-    if cloud_backends.is_empty() {
-        println!("  · no cloud providers in active config (skipping cloud probes)");
-    } else {
-        for b in cloud_backends {
-            // Env-var check first
-            let key_env = match b.api_key_env.as_deref() {
-                Some(e) => e,
-                None => {
-                    println!(
-                        "  ✗ anthropic backend for {} has no api_key_env in config",
-                        b.model
-                    );
-                    continue;
-                }
-            };
-            let key = match std::env::var(key_env) {
-                Ok(v) if !v.is_empty() => {
-                    println!("  ✓ anthropic api_key_env {key_env} is set");
-                    v
-                }
-                _ => {
-                    println!("  ✗ anthropic api_key_env {key_env} is unset or empty");
-                    continue;
-                }
-            };
-            // Reachability + model-existence probe (2s timeout, non-fatal)
-            let endpoint = b.endpoint.as_deref().unwrap_or("https://api.anthropic.com");
-            let url = format!("{}/v1/models/{}", endpoint.trim_end_matches('/'), b.model);
-            let probe = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                reqwest::Client::new()
-                    .get(&url)
-                    .header("x-api-key", &key)
-                    .header("anthropic-version", "2023-06-01")
-                    .send(),
-            )
-            .await;
-            match probe {
-                Ok(Ok(r)) if r.status().is_success() => {
-                    println!("  ✓ anthropic model {} reachable at {endpoint}", b.model);
-                }
-                Ok(Ok(r)) => {
-                    println!(
-                        "  ✗ anthropic model {} returned {} at {endpoint}",
-                        b.model,
-                        r.status()
-                    );
-                }
-                Ok(Err(e)) => {
-                    println!("  ✗ anthropic probe for {} failed: {e}", b.model);
-                }
-                Err(_) => {
-                    println!(
-                        "  · anthropic probe for {} timed out at {endpoint} (2s)",
-                        b.model
-                    );
-                }
-            }
-        }
-    }
+    // Cloud provider probes: openai/openrouter (including local
+    // OpenAI-compatible runtimes like omlx) get a live `/models` listing
+    // check; anthropic keeps its existing key-check + live reachability
+    // probe; gemini gets the key-check only (no live call — see
+    // `backends::probe_and_print_gemini`). Scoped to `backends`, the same
+    // deduped six-stage list the Ollama probe above uses, so a cloud
+    // provider no stage routes to is never reported as a failure.
+    super::backends::probe_and_print_cloud_backends(&backends).await;
 
     // Phase 2C: .history/ coverage — how many archived summary revisions + total bytes.
     let history_dir = conversations::paths::summary_history_dir(None);

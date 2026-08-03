@@ -8,6 +8,7 @@ use tracing::info;
 
 use crate::conversations;
 
+mod backends;
 mod doctor;
 mod preflight;
 
@@ -474,7 +475,9 @@ fn collect_backend_configs(
     backends.sort_by(|a, b| {
         (&a.provider, &a.model, &a.endpoint).cmp(&(&b.provider, &b.model, &b.endpoint))
     });
-    backends.dedup_by(|a, b| a.provider == b.provider && a.model == b.model && a.endpoint == b.endpoint);
+    backends.dedup_by(|a, b| {
+        a.provider == b.provider && a.model == b.model && a.endpoint == b.endpoint
+    });
     backends
 }
 
