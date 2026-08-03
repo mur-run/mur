@@ -123,6 +123,16 @@ fn log_path(mur_home: &Path) -> PathBuf {
     mur_home.join(LOG_FILE)
 }
 
+impl Record {
+    /// When the record was written — the ordering key the fold trusts, since
+    /// a cross-machine merge makes line order meaningless.
+    fn at(&self) -> chrono::DateTime<chrono::Utc> {
+        match self {
+            Record::Open { at, .. } | Record::Resolve { at, .. } => *at,
+        }
+    }
+}
+
 /// Append one agent-reported item. Returns its id.
 ///
 /// The id is derived from agent + title so the same claim repeated across
@@ -180,15 +190,27 @@ fn append(mur_home: &Path, rec: &Record) -> Result<()> {
 
 /// Fold the log into the items still open. A malformed line is skipped rather
 /// than fatal — a half-written record must not take the whole panel down.
+///
+/// Folded in **timestamp order, not file order**. The log syncs between
+/// machines with `merge=union`, which keeps both sides' lines but decides
+/// their order by how git happened to lay out the hunks. A resolve made on the
+/// laptop has to beat an earlier open from the desktop whichever side git put
+/// first, or an item silently comes back from the dead — or worse, a finished
+/// one stays finished after somebody re-opened it. The sort is stable, so
+/// records sharing an instant keep the order they were written in.
 pub fn open(mur_home: &Path) -> Vec<OpenItem> {
     let Ok(body) = std::fs::read_to_string(log_path(mur_home)) else {
         return Vec::new();
     };
+    let mut recs: Vec<Record> = body
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<Record>(l).ok())
+        .collect();
+    recs.sort_by_key(Record::at);
+
     let mut live: Vec<(String, OpenItem)> = Vec::new();
-    for line in body.lines().filter(|l| !l.trim().is_empty()) {
-        let Ok(rec) = serde_json::from_str::<Record>(line) else {
-            continue;
-        };
+    for rec in recs {
         match rec {
             Record::Open {
                 id,
@@ -231,6 +253,33 @@ mod tests {
 
     fn home() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
+    }
+
+    /// `merge=union` keeps both machines' lines but decides their order by how
+    /// git laid out the hunks, so the fold must not read anything into it.
+    #[test]
+    fn fold_reads_timestamps_not_line_order() {
+        // a1: opened, then resolved five seconds later — but the resolve line
+        // sits ABOVE the open. b2: resolved, then re-opened nine seconds later,
+        // with the re-open below. Line order says the opposite of both.
+        let lines = [
+            r#"{"kind":"resolve","id":"a1","at":"2026-08-03T10:00:05Z"}"#,
+            r#"{"kind":"open","id":"a1","agent":"m","title":"finished","at":"2026-08-03T10:00:00Z"}"#,
+            r#"{"kind":"resolve","id":"b2","at":"2026-08-03T10:00:01Z"}"#,
+            r#"{"kind":"open","id":"b2","agent":"m","title":"reopened","at":"2026-08-03T10:00:09Z"}"#,
+        ];
+        let forward = home();
+        std::fs::write(log_path(forward.path()), lines.join("\n") + "\n").unwrap();
+        let items = open(forward.path());
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(items[0].title, "reopened");
+
+        // Whatever order the merge leaves behind must fold to the same answer.
+        let mut reversed: Vec<&str> = lines.to_vec();
+        reversed.reverse();
+        let backward = home();
+        std::fs::write(log_path(backward.path()), reversed.join("\n") + "\n").unwrap();
+        assert_eq!(open(backward.path()), items);
     }
 
     /// Every agent's runtime appends to this one file, so two agents running at
