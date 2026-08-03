@@ -624,6 +624,10 @@ async fn event_loop(
                 last_size = terminal.backend().size()?;
             }
         }
+        // One ioctl per pass keeps every width-sensitive row (composer hint,
+        // status line, tool-card arg hints) honest in both render modes —
+        // `last_size` above is only refreshed on the Inline path.
+        app.width = terminal.backend().size()?.width.max(1);
         app.sync_input_block();
         // Leaving (or returning to) the welcome is the only time the viewport
         // height changes without the terminal resizing. Route it through the
@@ -1310,8 +1314,14 @@ fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: boo
             }
         });
         match (allow, auto) {
+            // Auto-approval shows as a dim tag on the card itself, not as its
+            // own transcript row. The row it replaces was emitted for every
+            // single tool call and said nothing the card couldn't: it doubled
+            // the height of the scrollback for zero extra information.
             (true, true) => {
-                app.push_success(format!("auto-approved `{}` (session)", req.tool_name))
+                if let Some(sid) = &req.step_id {
+                    app.mark_card_auto_approved(sid);
+                }
             }
             (true, false) => app.push_success(format!("approved `{}`", req.tool_name)),
             (false, _) => app.push_warn(format!("denied `{}`", req.tool_name)),
