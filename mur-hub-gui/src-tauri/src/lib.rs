@@ -710,6 +710,7 @@ pub fn run() {
             fleet::fleet_run,
             fleet::fleet_run_loop,
             fleet::fleet_set_loop,
+            fleet::cron_preview,
             fleet::get_fleet_autorun,
             fleet::set_fleet_autorun,
             fleet::fleet_send,

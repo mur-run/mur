@@ -161,7 +161,7 @@ fn extract_report(
     let marker = fleet
         .loop_cfg
         .as_ref()
-        .and_then(|l| crate::cmd::fleet::loop_run::done_marker(&l.done_when));
+        .and_then(|l| crate::cmd::fleet::done_policy::done_marker(&l.done_when));
     let agent_texts = events
         .iter()
         .filter(|e| e.seq > baseline_seq && matches!(e.actor, ChannelActor::Agent { .. }));
