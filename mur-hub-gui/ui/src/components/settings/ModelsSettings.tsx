@@ -163,7 +163,7 @@ export function ModelsSettings() {
             <summary>{t("settings.slots.advanced")}</summary>
             {row("conv.ask", "ask", slots.ask)}
             {row("conv.compact", "compact", slots.compact)}
-            {row("conv.rollup", "rollup", slots.rollup, { localOnly: true })}
+            {row("conv.rollup", "rollup", slots.rollup)}
             {roleRow("settings.slots.reflector", "reflector", slots.reflector)}
             {roleRow("settings.slots.curator", "curator", slots.curator)}
           </details>
