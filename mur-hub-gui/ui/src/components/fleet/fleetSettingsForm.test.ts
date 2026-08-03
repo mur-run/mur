@@ -7,6 +7,7 @@ import {
   loopDeadlineIsValid,
   parseDonePolicy,
   buildDoneWhen,
+  buildCronExpr,
 } from "./fleetSettingsForm";
 
 describe("parseTrigger", () => {
@@ -124,5 +125,17 @@ describe("buildDoneWhen", () => {
     expect(buildDoneWhen("queue-empty", "")).toBe("queue-empty");
     // The Hub never authors a marker; it only preserves the loaded one.
     expect(buildDoneWhen("marker", "marker:RESEARCH_COMPLETE")).toBe("marker:RESEARCH_COMPLETE");
+  });
+});
+
+describe("buildCronExpr", () => {
+  it("composes a cron expression from a shape and a HH:MM time", () => {
+    // Hourly uses the minute only -- the hour a user picked is meaningless for
+    // "every hour", and silently keeping it would make 09:15 fire once a day.
+    expect(buildCronExpr("hourly", "09:15")).toBe("15 * * * *");
+    expect(buildCronExpr("daily", "09:05")).toBe("5 9 * * *");
+    expect(buildCronExpr("weekdays", "18:00")).toBe("0 18 * * 1-5");
+    // A native time input is empty until touched; midnight is the safe read.
+    expect(buildCronExpr("daily", "")).toBe("0 0 * * *");
   });
 });

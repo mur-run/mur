@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { useT } from "../../i18n";
@@ -17,8 +17,12 @@ import {
   parseDonePolicy,
   buildDoneWhen,
   DONE_POLICY_HINT,
+  buildCronExpr,
+  CRON_PREVIEW_COUNT,
+  CRON_PREVIEW_DEBOUNCE_MS,
   type TriggerKind,
   type DonePolicyKind,
+  type CronShape,
 } from "./fleetSettingsForm";
 
 interface Props {
@@ -62,6 +66,33 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
   const initialTrigger = parseTrigger(detail.loop_cfg);
   const [trigKind, setTrigKind] = useState<TriggerKind>(initialTrigger.kind);
   const [trigValue, setTrigValue] = useState(initialTrigger.value);
+  const [cronShape, setCronShape] = useState<CronShape>("custom");
+  const [cronTime, setCronTime] = useState("09:00");
+  const [cronFires, setCronFires] = useState<string[] | null>(null);
+  const [cronInvalid, setCronInvalid] = useState(false);
+
+  // Ask the backend what this expression will actually do. Debounced so typing
+  // does not fire a command per keystroke; the cleanup cancels an in-flight
+  // timer so only the latest value is ever evaluated.
+  useEffect(() => {
+    if (trigKind !== "cron" || trigValue.trim() === "") {
+      setCronFires(null);
+      setCronInvalid(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      invoke<string[]>("cron_preview", { expr: trigValue, count: CRON_PREVIEW_COUNT })
+        .then((fires) => {
+          setCronFires(fires);
+          setCronInvalid(false);
+        })
+        .catch(() => {
+          setCronFires(null);
+          setCronInvalid(true);
+        });
+    }, CRON_PREVIEW_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [trigKind, trigValue]);
   const [maxIter, setMaxIter] = useState(
     detail.loop_cfg?.max_iterations ? String(detail.loop_cfg.max_iterations) : ""
   );
@@ -234,6 +265,12 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
 
   const displayedJobs = showAll ? allJobs : jobs;
 
+  function applyCronShape(shape: CronShape, time: string) {
+    setCronShape(shape);
+    setCronTime(time);
+    if (shape !== "custom") setTrigValue(buildCronExpr(shape, time));
+  }
+
   return (
     <div className="fleet-detail">
       <div className="fleet-detail__header">
@@ -398,6 +435,38 @@ export function FleetDetail({ detail, jobs, agentMap, onRefresh, onDelete }: Pro
         </div>
         {trigKind === "interval" && !DURATION_RE.test(trigValue.trim()) && (
           <div className="fleet-settings__warning">{t("fleet.settings.invalidDuration")}</div>
+        )}
+        {trigKind === "cron" && (
+          <div className="fleet-settings__row">
+            <label>{t("fleet.settings.cronShape")}</label>
+            <select
+              value={cronShape}
+              onChange={(e) => applyCronShape(e.target.value as CronShape, cronTime)}
+            >
+              <option value="custom">{t("fleet.settings.cronShapeCustom")}</option>
+              <option value="hourly">{t("fleet.settings.cronShapeHourly")}</option>
+              <option value="daily">{t("fleet.settings.cronShapeDaily")}</option>
+              <option value="weekdays">{t("fleet.settings.cronShapeWeekdays")}</option>
+            </select>
+            {cronShape !== "custom" && (
+              <input
+                type="time"
+                value={cronTime}
+                onChange={(e) => applyCronShape(cronShape, e.target.value)}
+              />
+            )}
+          </div>
+        )}
+        {trigKind === "cron" && cronInvalid && (
+          <div className="fleet-settings__warning">{t("fleet.settings.cronInvalid")}</div>
+        )}
+        {trigKind === "cron" && cronFires !== null && cronFires.length === 0 && (
+          <div className="fleet-settings__warning">{t("fleet.settings.cronNeverFires")}</div>
+        )}
+        {trigKind === "cron" && cronFires !== null && cronFires.length > 0 && (
+          <div className="fleet-settings__hint">
+            {t("fleet.settings.cronNext")}: {cronFires.join(" · ")} ({t("fleet.settings.cronLocalTime")})
+          </div>
         )}
         <div className="fleet-settings__row">
           <label>{t("fleet.settings.maxIterations")}</label>

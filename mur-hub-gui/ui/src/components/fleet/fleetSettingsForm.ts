@@ -108,3 +108,30 @@ export const DONE_POLICY_HINT: Record<DonePolicyKind, TranslationKey> = {
   "queue-empty": "fleet.settings.donePolicyHintQueueEmpty",
   marker: "fleet.settings.donePolicyHintMarker",
 };
+
+/** Preset schedule shapes offered above the raw cron field. `custom` means the
+ *  user is editing the expression directly and no preset applies. */
+export type CronShape = "custom" | "hourly" | "daily" | "weekdays";
+
+/** How many upcoming fire times to show under the cron field. */
+export const CRON_PREVIEW_COUNT = 3;
+/** Idle time before asking the backend to re-evaluate a typed expression. */
+export const CRON_PREVIEW_DEBOUNCE_MS = 300;
+
+/**
+ * Compose a 5-field cron expression from a preset shape and the `HH:MM` string
+ * a native <input type="time"> produces.
+ *
+ * Three shapes, not a full builder: these plus the existing `interval:<dur>`
+ * trigger cover the schedules fleets actually use, and anything rarer is a
+ * direct edit of the expression -- which stays visible and is verified by the
+ * fire-time preview either way.
+ */
+export function buildCronExpr(shape: CronShape, time: string): string {
+  const [h = "", m = ""] = time.split(":");
+  const hour = Number(h) || 0;
+  const minute = Number(m) || 0;
+  if (shape === "hourly") return `${minute} * * * *`;
+  if (shape === "weekdays") return `${minute} ${hour} * * 1-5`;
+  return `${minute} ${hour} * * *`;
+}
