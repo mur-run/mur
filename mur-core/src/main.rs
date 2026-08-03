@@ -85,6 +85,9 @@ mod sync;
 mod team;
 mod update;
 mod verify;
+// The bin target calls `write_atomic` but not `set_top_level_scalar`,
+// whose only caller is the library test (`mur-core/tests/yaml_edit.rs`).
+#[allow(dead_code)]
 mod yaml_edit;
 
 use cli::Cli;
