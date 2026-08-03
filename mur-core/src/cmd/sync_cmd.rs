@@ -600,6 +600,18 @@ pub(crate) async fn device_sync(
                 run_git_in(&mur_dir, &["remote", "add", "origin", remote])?;
             }
 
+            // Both directions need this in place, and pull needs it most: the
+            // open-items log is append-only and both machines append at EOF,
+            // so an ordinary three-way merge conflicts on every single sync.
+            // `merge=union` keeps both sides' lines instead, which is only safe
+            // because the fold is upsert-by-id in timestamp order — duplicated
+            // and interleaved lines reach the same answer either way.
+            if let Err(e) = ensure_union_merge(&mur_dir)
+                && !quiet
+            {
+                eprintln!("  ⚠ could not write .gitattributes: {e}");
+            }
+
             match direction {
                 DeviceSyncDirection::Pull => {
                     let branch = detect_git_branch(&mur_dir);
@@ -624,7 +636,17 @@ pub(crate) async fn device_sync(
                     if !quiet {
                         eprintln!("  📤 Git push...");
                     }
-                    let _ = run_git_in(&mur_dir, &["add", "skills/", "workflows/", "config.yaml"]);
+                    let _ = run_git_in(
+                        &mur_dir,
+                        &[
+                            "add",
+                            "skills/",
+                            "workflows/",
+                            "config.yaml",
+                            ".gitattributes",
+                            mur_open_items::LOG_FILE,
+                        ],
+                    );
                     let commit_result =
                         run_git_in(&mur_dir, &["commit", "-m", "mur: auto-sync patterns"]);
                     // Commit may fail if nothing changed — that's fine
@@ -700,6 +722,38 @@ fn detect_git_branch(dir: &std::path::Path) -> String {
         return "main".to_string();
     }
     "main".to_string()
+}
+
+/// Mark the append-only open-items log as union-merged, idempotently.
+///
+/// Two machines both append at end-of-file, which is the one shape an ordinary
+/// three-way merge cannot resolve — every sync would stop on a conflict in a
+/// file no human ever edits. Union merge keeps both sides' lines; `open()`
+/// folds them by id in timestamp order, so the duplicates and the interleaving
+/// come out the same on both machines.
+///
+/// Written before the pull, not just the push: git reads the merge driver from
+/// the working tree as it merges, so a rule that only arrives *inside* the
+/// commit being pulled is too late for that very pull.
+///
+/// ponytail: if a machine already tracks a `.gitattributes` without this rule,
+/// the write dirties the tree and that one pull warns instead of rebasing. The
+/// following push commits the rule and every sync after it is clean, so this
+/// costs one warning once rather than a lock file and a state machine.
+fn ensure_union_merge(mur_dir: &std::path::Path) -> std::io::Result<()> {
+    let path = mur_dir.join(".gitattributes");
+    let rule = format!("{} merge=union", mur_open_items::LOG_FILE);
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    if existing.lines().any(|l| l.trim() == rule) {
+        return Ok(());
+    }
+    let mut body = existing;
+    if !body.is_empty() && !body.ends_with('\n') {
+        body.push('\n');
+    }
+    body.push_str(&rule);
+    body.push('\n');
+    std::fs::write(&path, body)
 }
 
 fn run_git_in(dir: &std::path::Path, args: &[&str]) -> Result<String> {
@@ -2103,6 +2157,32 @@ mod deep_research_skill_tests {
                 .any(|l| l.trim() == "RESEARCH_COMPLETE" || l.trim() == "`RESEARCH_COMPLETE`"),
             "router skill must instruct emitting RESEARCH_COMPLETE alone on its own line"
         );
+    }
+}
+
+#[cfg(test)]
+mod gitattributes_tests {
+    use super::ensure_union_merge;
+
+    /// Runs on every sync, so it has to be idempotent and must not clobber a
+    /// `.gitattributes` the user wrote for their own reasons.
+    #[test]
+    fn union_merge_rule_is_added_once_and_preserves_existing_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".gitattributes");
+        std::fs::write(&path, "*.png binary").unwrap();
+
+        ensure_union_merge(dir.path()).unwrap();
+        ensure_union_merge(dir.path()).unwrap();
+
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            body.matches("merge=union").count(),
+            1,
+            "rule must not stack up: {body}"
+        );
+        assert!(body.contains("*.png binary"), "clobbered: {body}");
+        assert!(body.ends_with('\n'), "no trailing newline: {body:?}");
     }
 }
 

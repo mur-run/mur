@@ -196,14 +196,22 @@ pub fn classify(content: &str, is_error: bool) -> Outcome {
     Outcome::Ok
 }
 
+/// How many changed files the card names before collapsing to `+N more`.
+const CHANGED_SHOWN: usize = 6;
+
 /// Render the settlement card.
 ///
 /// The runtime draws this, not the model. Two reasons: the model would spend
 /// tokens on box-drawing and get the alignment wrong, and — the one that
 /// matters — a table assembled from the loop's own records cannot be talked
 /// around. The prose above it may still overclaim; this will not agree with it.
+///
+/// Fenced as a code block because every consumer renders the reply as
+/// Markdown, where a single newline is a *soft* break: the whole table was
+/// being reflowed into one paragraph, which is exactly the "alignment the
+/// model would get wrong" that drawing it here was meant to prevent.
 pub fn render(ledger: &TurnLedger) -> String {
-    let mut out = String::from("\n\n─ settlement ─────────────────────────────\n");
+    let mut out = String::from("\n\n```\n─ settlement ─────────────────────────────\n");
 
     let verified = ledger.verified();
     if verified.is_empty() {
@@ -221,12 +229,23 @@ pub fn render(ledger: &TurnLedger) -> String {
 
     let changed = ledger.changed();
     if !changed.is_empty() {
-        out.push_str(&format!("  ~ changed    {} file(s)\n", changed.len()));
-        for a in changed.iter().take(6) {
-            out.push_str(&format!("      {}\n", a.target));
+        // Deduped by target: the ledger holds one action per edit, so an agent
+        // that touched one file four times used to be reported as four changed
+        // files — over a list that visibly repeated the same path. An inflated
+        // count is the one thing this card cannot afford.
+        // ponytail: linear scan, a turn's worth of actions is tiny.
+        let mut files: Vec<&str> = Vec::new();
+        for a in &changed {
+            if !files.contains(&a.target.as_str()) {
+                files.push(&a.target);
+            }
         }
-        if changed.len() > 6 {
-            out.push_str(&format!("      +{} more\n", changed.len() - 6));
+        out.push_str(&format!("  ~ changed    {} file(s)\n", files.len()));
+        for t in files.iter().take(CHANGED_SHOWN) {
+            out.push_str(&format!("      {t}\n"));
+        }
+        if files.len() > CHANGED_SHOWN {
+            out.push_str(&format!("      +{} more\n", files.len() - CHANGED_SHOWN));
         }
     }
 
@@ -250,7 +269,7 @@ pub fn render(ledger: &TurnLedger) -> String {
             ledger.iterations
         ));
     }
-    out.push_str("──────────────────────────────────────────");
+    out.push_str("──────────────────────────────────────────\n```");
     out
 }
 
@@ -345,6 +364,24 @@ mod tests {
         // not read as success.
         assert!(card.contains("nothing ran"), "{card}");
         assert!(card.contains("1 file(s)"), "{card}");
+    }
+
+    #[test]
+    fn render_counts_files_not_edits_and_survives_a_markdown_renderer() {
+        let mut l = TurnLedger::default();
+        for _ in 0..4 {
+            l.record(act("edit_file", "src/a.rs", Outcome::Ok));
+        }
+        l.record(act("edit_file", "src/b.rs", Outcome::Ok));
+        let card = render(&l);
+        // Four edits to one file is one changed file. The old count said 5 and
+        // then listed src/a.rs four times underneath itself.
+        assert!(card.contains("2 file(s)"), "{card}");
+        assert_eq!(card.matches("src/a.rs").count(), 1, "{card}");
+        // Fenced, or every consumer's Markdown pass reflows the rows into one
+        // paragraph (a single newline is a soft break in CommonMark).
+        assert!(card.starts_with("\n\n```\n"), "{card}");
+        assert!(card.ends_with("```"), "{card}");
     }
 
     #[test]

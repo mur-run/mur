@@ -81,7 +81,7 @@ pub async fn build_tools(
                 match pool.list_tools(&name).await {
                     Ok(tools) => Some((name, sanitized, tools, timeout_secs)),
                     Err(e) => {
-                        tracing::warn!(server = %name, "mcp tools/list failed: {e}");
+                        tracing::warn!(server = %name, "mcp tools/list failed: {e:#}");
                         None
                     }
                 }
