@@ -18,6 +18,31 @@ pub fn load_config() -> Result<Config> {
 
     let content = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read config: {}", path.display()))?;
+
+    // One-shot migration of the legacy conversations model fields. Runs here,
+    // at the CLI's own load, because every `save_config` caller loads first —
+    // migrating on read is what closes the window in which a save would erase
+    // the legacy keys before they could be converted.
+    let content = match mur_common::config_migrate::migrate_conversations_yaml(&content) {
+        Some(migrated) => {
+            // Atomic write: temp file beside the target, then rename — the
+            // same inline pattern `save_config_at` uses below. `rename` is
+            // only atomic within a filesystem, so the temp file must live
+            // next to `path`, not in a system temp directory.
+            let tmp_path = path.with_extension("yaml.tmp");
+            fs::write(&tmp_path, &migrated)
+                .with_context(|| format!("Failed to write temp file: {}", tmp_path.display()))?;
+            fs::rename(&tmp_path, &path)
+                .with_context(|| format!("Failed to rename temp to final: {}", path.display()))?;
+            println!(
+                "MUR: migrated conversations model settings in {} to explicit backends",
+                path.display()
+            );
+            migrated
+        }
+        None => content,
+    };
+
     let config: Config = serde_yaml::from_str(&content)
         .with_context(|| format!("Failed to parse config: {}", path.display()))?;
     Ok(config)
