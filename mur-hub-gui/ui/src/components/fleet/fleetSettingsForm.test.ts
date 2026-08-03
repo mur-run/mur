@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { parseTrigger, buildTrigger, settingsAreValid, modeBadgeLabel, loopDeadlineIsValid } from "./fleetSettingsForm";
+import {
+  parseTrigger,
+  buildTrigger,
+  settingsAreValid,
+  modeBadgeLabel,
+  loopDeadlineIsValid,
+  parseDonePolicy,
+  buildDoneWhen,
+  buildCronExpr,
+  parseCronTime,
+} from "./fleetSettingsForm";
 
 describe("parseTrigger", () => {
   it("null loop_cfg → manual", () => {
@@ -92,5 +102,62 @@ describe("modeBadgeLabel", () => {
     expect(modeBadgeLabel({ mode: "partition", track_count: 0, target_file: "src/widget.rs" }, t)).toBe(
       "Partition · src/widget.rs"
     );
+  });
+});
+
+describe("parseDonePolicy", () => {
+  it("maps a stored done_when to a policy, treating legacy criteria as router", () => {
+    expect(parseDonePolicy("marker:RESEARCH_COMPLETE")).toBe("marker");
+    expect(parseDonePolicy("queue-empty")).toBe("queue-empty");
+    expect(parseDonePolicy("")).toBe("router");
+    // Free-text criteria predate this vocabulary and mean "ask the router",
+    // which is what the backend already does with them.
+    expect(parseDonePolicy("all_tasks_done")).toBe("router");
+    // A prefix with nothing after it is not a usable marker.
+    expect(parseDonePolicy("marker:")).toBe("router");
+  });
+});
+
+describe("buildDoneWhen", () => {
+  it("writes an empty string for router, which is how the field gets cleared", () => {
+    // `doneWhen.trim() || null` used to send null here, and the backend reads
+    // null as "leave alone" -- so the Hub could not clear done_when at all.
+    expect(buildDoneWhen("router", "marker:DONE")).toBe("");
+    expect(buildDoneWhen("queue-empty", "")).toBe("queue-empty");
+    // The Hub never authors a marker; it only preserves the loaded one.
+    expect(buildDoneWhen("marker", "marker:RESEARCH_COMPLETE")).toBe("marker:RESEARCH_COMPLETE");
+  });
+});
+
+describe("buildCronExpr", () => {
+  it("composes a cron expression from a shape and a HH:MM time", () => {
+    // Hourly uses the minute only -- the hour a user picked is meaningless for
+    // "every hour", and silently keeping it would make 09:15 fire once a day.
+    expect(buildCronExpr("hourly", "09:15")).toBe("15 * * * *");
+    expect(buildCronExpr("daily", "09:05")).toBe("5 9 * * *");
+    expect(buildCronExpr("weekdays", "18:00")).toBe("0 18 * * 1-5");
+    // A native time input is empty until touched; midnight is the safe read.
+    expect(buildCronExpr("daily", "")).toBe("0 0 * * *");
+  });
+});
+
+describe("parseCronTime", () => {
+  it("reads a plain minute and hour off the front of a cron expression", () => {
+    expect(parseCronTime("30 14 * * *")).toBe("14:30");
+    expect(parseCronTime("0 9 * * 1-5")).toBe("09:00");
+  });
+
+  it("returns null when the minute or hour is not a plain integer", () => {
+    // Step value -- there is no single minute to show.
+    expect(parseCronTime("*/15 * * * *")).toBeNull();
+    // "Every hour" has no hour to show; showing one would misrepresent it.
+    expect(parseCronTime("0 * * * *")).toBeNull();
+  });
+
+  it("returns null for empty or out-of-range input", () => {
+    expect(parseCronTime("")).toBeNull();
+    // Minute 70 is not a real minute -- a bad load should not become a bad
+    // display that then gets baked back into the expression on the next edit.
+    expect(parseCronTime("70 14 * * *")).toBeNull();
   });
 });

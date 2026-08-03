@@ -23,7 +23,8 @@ channels (blackboard), `channel/delegate` (supervisor edge), the DAG executor, s
 - `mur fleet run <name> [job]` — one iteration.
 - `mur fleet run <name> --loop [--max-iterations N] [--deadline 2h] [--budget-usd X]` — guarded
   loop: stops on iteration cap / deadline / budget / stuck-detection, or converges on
-  `done_when: marker:<TEXT>` (a member emits the marker as an own-line sentinel) else router DONE/CONTINUE.
+  `done_when: marker:<TEXT>` (a member emits the marker as an own-line sentinel),
+  `done_when: queue-empty` (stops once an iteration finds nothing queued), or router DONE/CONTINUE.
 - **daemon auto-run** — `fleet_tick` fires any fleet whose `loop.trigger` is due (`interval:<dur>`
   or `cron:<5-field>`). Gated: `MUR_FLEET_AUTORUN=1` **and** a positive `loop.budget_usd`.
   Kill-switch: `mur fleet stop <name>` (`.stopped` sentinel); `mur fleet start <name>` clears it.

@@ -6812,6 +6812,7 @@ dependencies = [
  "chrono",
  "core-foundation 0.10.1",
  "dirs 5.0.1",
+ "mur-agent-runtime",
  "mur-channel",
  "mur-common",
  "mur-core",
