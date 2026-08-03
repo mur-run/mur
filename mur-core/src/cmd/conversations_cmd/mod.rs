@@ -8,6 +8,19 @@ use tracing::info;
 
 use crate::conversations;
 
+mod doctor;
+mod preflight;
+
+// `pub use` re-exports for the public CLI dispatch API. The lib crate doesn't
+// reference these names internally; consumers (main.rs, dispatch.rs) reach
+// them via `crate::cmd::conversations_cmd::cmd_conversations_*`. Rustc still
+// flags them as `unused_imports` under the lib+bin compilation split —
+// silenced here (same idiom as `cmd/agent/mod.rs`).
+#[allow(unused_imports)]
+pub use doctor::cmd_conversations_doctor;
+#[allow(unused_imports)]
+pub use preflight::cmd_conversations_preflight;
+
 pub fn cmd_chat_list(since: Option<String>, src: Option<String>) -> Result<()> {
     let since_date = since
         .as_deref()
@@ -433,8 +446,8 @@ pub async fn cmd_conversations_reindex(args: ReindexArgs) -> Result<()> {
 
 /// Collect the unique BackendConfigs across the six conversations call sites
 /// (compact.{extractive, abstractive}, ask.{backend, rewriter_backend},
-/// rollup.{extractive, abstractive}), dedup by (provider, model) so the same
-/// provider+model isn't probed twice.
+/// rollup.{extractive, abstractive}), dedup by (provider, model, endpoint) so
+/// the same provider+model+endpoint isn't probed twice.
 fn collect_backend_configs(
     cfg: &mur_common::config::Config,
 ) -> Vec<mur_common::config::BackendConfig> {
@@ -454,393 +467,83 @@ fn collect_backend_configs(
             .rollup
             .effective_abstractive_backend(&cfg.llm),
     ];
-    backends.sort_by(|a, b| (&a.provider, &a.model).cmp(&(&b.provider, &b.model)));
-    backends.dedup_by(|a, b| a.provider == b.provider && a.model == b.model);
+    // NOTE: the dedup key includes `endpoint` on purpose. Two stages can route
+    // the same model to two different hosts; keying on (provider, model) alone
+    // silently drops one of the endpoints from the probe set (fix round 1,
+    // finding 1).
+    backends.sort_by(|a, b| {
+        (&a.provider, &a.model, &a.endpoint).cmp(&(&b.provider, &b.model, &b.endpoint))
+    });
+    backends.dedup_by(|a, b| a.provider == b.provider && a.model == b.model && a.endpoint == b.endpoint);
     backends
 }
 
-pub async fn cmd_conversations_doctor() -> Result<()> {
-    println!("conversations doctor");
-    let dirs = conversations::store::list_raw_dirs(None).unwrap_or_default();
-    println!("  ✓ raw day-dirs: {}", dirs.len());
-    let audit_ok = conversations::audit::verify(None).unwrap_or(false);
-    println!("  {} audit hash chain", if audit_ok { "✓" } else { "✗" });
-    let cfg_days = conversations::retention::retention_days_from_config();
-    println!("  ✓ retention_days = {cfg_days}");
-    let enabled = conversations::is_enabled().unwrap_or(false);
-    println!(
-        "  {} conversations.enabled",
-        if enabled { "✓" } else { "·" }
-    );
-
-    // Phase 2A additions
-    let raw_dir = conversations::paths::raw_root(None);
-    let summary_dir = conversations::paths::conversations_root(None).join("summary");
-    let raw_days: Vec<_> = std::fs::read_dir(&raw_dir)
-        .ok()
-        .map(|rd| {
-            rd.flatten()
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .collect()
-        })
-        .unwrap_or_default();
-    let summary_count = std::fs::read_dir(&summary_dir)
-        .ok()
-        .map(|rd| {
-            rd.flatten()
-                .filter(|e| {
-                    e.path()
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .map(|s| s == "md")
-                        .unwrap_or(false)
-                })
-                .count()
-        })
-        .unwrap_or(0);
-
-    let today = chrono::Utc::now().date_naive();
-    let completed_days: Vec<&String> = raw_days
-        .iter()
-        .filter(|d| {
-            chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d")
-                .map(|pd| pd < today)
-                .unwrap_or(false)
-        })
-        .collect();
-    let missing = completed_days.len().saturating_sub(summary_count);
-    if missing == 0 {
-        println!("  ✓ summaries: all {summary_count} completed days covered");
-    } else {
-        println!(
-            "  ⚠ summaries: {summary_count} of {} completed days covered — run 'mur conversations compact'",
-            completed_days.len()
-        );
-    }
-
-    // Ollama reachability (non-blocking 1s probe) — only when a conversations
-    // stage actually routes through Ollama.
-    let cfg = crate::store::config::load_config().unwrap_or_default();
-    let backends = collect_backend_configs(&cfg);
-    let ollama_backends: Vec<_> = backends.iter().filter(|b| b.provider == "ollama").collect();
-    if ollama_backends.is_empty() {
-        println!("  · no conversations stage routes through Ollama (skipping reachability probe)");
-    } else {
-        let endpoint = ollama_backends[0]
-            .endpoint
-            .clone()
-            .unwrap_or_else(|| "http://localhost:11434".to_string());
-        let reachable = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            reqwest::get(format!("{}/api/tags", endpoint.trim_end_matches('/'))),
-        )
-        .await
-        .ok()
-        .and_then(|r| r.ok())
-        .map(|r| r.status().is_success())
-        .unwrap_or(false);
-        if reachable {
-            println!("  ✓ Ollama reachable at {endpoint}");
-        } else {
-            println!("  · Ollama not reachable at {endpoint} (compact + ask will degrade)");
-        }
-    }
-
-    // P1: Cloud provider probes (anthropic only for P1)
-    let cloud_backends: Vec<_> = backends
-        .iter()
-        .filter(|b| b.provider == "anthropic")
-        .collect();
-    if cloud_backends.is_empty() {
-        println!("  · no cloud providers in active config (skipping cloud probes)");
-    } else {
-        for b in cloud_backends {
-            // Env-var check first
-            let key_env = match b.api_key_env.as_deref() {
-                Some(e) => e,
-                None => {
-                    println!(
-                        "  ✗ anthropic backend for {} has no api_key_env in config",
-                        b.model
-                    );
-                    continue;
-                }
-            };
-            let key = match std::env::var(key_env) {
-                Ok(v) if !v.is_empty() => {
-                    println!("  ✓ anthropic api_key_env {key_env} is set");
-                    v
-                }
-                _ => {
-                    println!("  ✗ anthropic api_key_env {key_env} is unset or empty");
-                    continue;
-                }
-            };
-            // Reachability + model-existence probe (2s timeout, non-fatal)
-            let endpoint = b.endpoint.as_deref().unwrap_or("https://api.anthropic.com");
-            let url = format!("{}/v1/models/{}", endpoint.trim_end_matches('/'), b.model);
-            let probe = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                reqwest::Client::new()
-                    .get(&url)
-                    .header("x-api-key", &key)
-                    .header("anthropic-version", "2023-06-01")
-                    .send(),
-            )
-            .await;
-            match probe {
-                Ok(Ok(r)) if r.status().is_success() => {
-                    println!("  ✓ anthropic model {} reachable at {endpoint}", b.model);
-                }
-                Ok(Ok(r)) => {
-                    println!(
-                        "  ✗ anthropic model {} returned {} at {endpoint}",
-                        b.model,
-                        r.status()
-                    );
-                }
-                Ok(Err(e)) => {
-                    println!("  ✗ anthropic probe for {} failed: {e}", b.model);
-                }
-                Err(_) => {
-                    println!(
-                        "  · anthropic probe for {} timed out at {endpoint} (2s)",
-                        b.model
-                    );
-                }
-            }
-        }
-    }
-
-    // Phase 2C: .history/ coverage — how many archived summary revisions + total bytes.
-    let history_dir = conversations::paths::summary_history_dir(None);
-    let (hist_count, hist_bytes) = if history_dir.exists() {
-        std::fs::read_dir(&history_dir)
-            .ok()
-            .map(|rd| {
-                rd.flatten()
-                    .filter(|e| {
-                        e.path()
-                            .extension()
-                            .and_then(|s| s.to_str())
-                            .map(|s| s == "md")
-                            .unwrap_or(false)
-                    })
-                    .fold((0u64, 0u64), |(n, bytes), e| {
-                        let sz = std::fs::metadata(e.path()).map(|m| m.len()).unwrap_or(0);
-                        (n + 1, bytes + sz)
-                    })
-            })
-            .unwrap_or((0, 0))
-    } else {
-        (0, 0)
-    };
-    if hist_count == 0 {
-        println!("  · .history/: empty (no summary rewrites yet)");
-    } else {
-        println!(
-            "  ✓ .history/: {hist_count} archived revisions, {:.1} KB",
-            hist_bytes as f64 / 1024.0
-        );
-    }
-
-    // Phase 3.1: span (layer=2) coverage.
-    let dims: i32 = {
-        let c = crate::store::config::load_config().unwrap_or_default();
-        crate::store::embedding::EmbeddingConfig::from_config(&c).dimensions as i32
-    };
-    let idx_for_count = crate::conversations::index::ConversationIndex::open(dims, None).await;
-    match idx_for_count {
-        Ok(idx) => {
-            let n = idx.count_rows_at_layer(2).await.unwrap_or(0);
-            if n > 0 {
-                println!("  ✓ spans: {n} rows at layer=2");
-            } else if summary_count > 0 {
-                println!(
-                    "  · spans: 0 indexed — run 'mur conversations reindex --spans-only' for span-level Ask retrieval"
-                );
-            } else {
-                println!("  · spans: no summaries yet");
-            }
-        }
-        Err(e) => {
-            println!("  · spans: could not open index: {e}");
-        }
-    }
-
-    // Phase 3.2: rollup coverage
-    let dims: i32 = {
-        let c = crate::store::config::load_config().unwrap_or_default();
-        crate::store::embedding::EmbeddingConfig::from_config(&c).dimensions as i32
-    };
-    match crate::conversations::index::ConversationIndex::open(dims, None).await {
-        Ok(idx) => {
-            let weekly_count = idx.count_rows_at_layer(3).await.unwrap_or(0);
-            let monthly_count = idx.count_rows_at_layer(4).await.unwrap_or(0);
-            let weekly_md_root = crate::conversations::paths::weekly_summary_root(None);
-            let last_weekly = if weekly_md_root.exists() {
-                std::fs::read_dir(&weekly_md_root).ok().and_then(|rd| {
-                    rd.flatten()
-                        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
-                        .filter_map(|e| e.file_name().into_string().ok())
-                        .filter_map(|n| n.strip_suffix(".md").map(String::from))
-                        .max()
-                })
-            } else {
-                None
-            };
-            let monthly_md_root = crate::conversations::paths::monthly_summary_root(None);
-            let last_monthly = if monthly_md_root.exists() {
-                std::fs::read_dir(&monthly_md_root).ok().and_then(|rd| {
-                    rd.flatten()
-                        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
-                        .filter_map(|e| e.file_name().into_string().ok())
-                        .filter_map(|n| n.strip_suffix(".md").map(String::from))
-                        .max()
-                })
-            } else {
-                None
-            };
-
-            if weekly_count > 0 {
-                println!(
-                    "  ✓ weekly rollups: {weekly_count} rows at layer=3{}",
-                    last_weekly
-                        .map(|l| format!(" (last: {l})"))
-                        .unwrap_or_default()
-                );
-            } else {
-                println!(
-                    "  · weekly rollups: 0 indexed — run 'mur conversations rollup --all-missing'"
-                );
-            }
-            if monthly_count > 0 {
-                println!(
-                    "  ✓ monthly rollups: {monthly_count} rows at layer=4{}",
-                    last_monthly
-                        .map(|l| format!(" (last: {l})"))
-                        .unwrap_or_default()
-                );
-            } else {
-                println!("  · monthly rollups: no weeks yet");
-            }
-        }
-        Err(e) => {
-            println!("  · weekly rollups: could not open index: {e}");
-            println!("  · monthly rollups: could not open index: {e}");
-        }
-    }
-
-    Ok(())
+/// One Ollama endpoint actually used by the conversations pipeline, and the
+/// distinct, non-empty models routed to it.
+#[derive(Debug)]
+struct OllamaEndpointGroup {
+    endpoint: String,
+    /// Sorted, deduped, non-empty model names routed to this endpoint.
+    models: Vec<String>,
 }
 
-/// BP1 amendment: dedicated preflight check bundle (daemon, disk, staging, audit presence).
-/// Phase 2C: extends with Ollama reachability, model-pull checks, pattern dir, free memory.
-pub async fn cmd_conversations_preflight() -> Result<()> {
-    use crate::conversations::migrate;
-    let plan = migrate::dry_run(None)?;
-
-    let mut ok = true;
-    println!("conversations preflight");
-    if plan.commander_daemon_running {
-        println!("  ✗ commander daemon appears to be running");
-        ok = false;
-    } else {
-        println!("  ✓ commander daemon not running");
-    }
-    // Disk space check (best-effort; does not resolve mount points perfectly).
-    // fs_available_bytes returns None (treated as unlimited) in Phase 1 —
-    // a proper statvfs wrapper lands in a later task.
-    let home = dirs::home_dir().unwrap_or_default();
-    let needed = plan.free_space_needed_bytes;
-    let free = fs_available_bytes(&home).unwrap_or(u64::MAX);
-    if free < needed {
-        println!(
-            "  ✗ disk: {:.1} MB free, need {:.1} MB",
-            free as f64 / 1_048_576.0,
-            needed as f64 / 1_048_576.0
-        );
-        ok = false;
-    } else {
-        println!(
-            "  ✓ disk: {:.1} MB free, need {:.1} MB",
-            free as f64 / 1_048_576.0,
-            needed as f64 / 1_048_576.0
-        );
-    }
-    let staging = home.join(".mur/.conversations-migrating");
-    if staging.exists() {
-        println!(
-            "  ✗ staging dir exists at {} — run migrate --resume or --discard-staging",
-            staging.display()
-        );
-        ok = false;
-    } else {
-        println!("  ✓ no stale staging dir");
-    }
-    // Commander audit presence (not verification — different algo)
-    let cmdr_audit = home.join(".mur/commander/audit.jsonl");
-    if cmdr_audit.exists() {
-        println!("  ✓ commander audit present (opaque bridge target)");
-    } else {
-        println!("  · no commander audit; migration will bridge from ZERO_HASH");
-    }
-
-    // ── Phase 2C probes ───────────────────────────────────────────────────
-
-    // Load config once; derive which Ollama-routed backends (if any) the
-    // conversations pipeline actually uses.
-    let cfg = crate::store::config::load_config().unwrap_or_default();
-    let ollama_backends: Vec<_> = collect_backend_configs(&cfg)
-        .into_iter()
-        .filter(|b| b.provider == "ollama")
-        .collect();
-
-    if ollama_backends.is_empty() {
-        println!("  · no conversations stage routes through Ollama (skipping Ollama probe)");
-    } else {
-        let endpoint = ollama_backends[0]
+/// Groups the Ollama-routed backends by endpoint so each distinct endpoint is
+/// probed and validated on its own.
+///
+/// Before this helper existed, `doctor`/`preflight` each probed
+/// `ollama_backends[0].endpoint` — one arbitrarily-chosen endpoint — and
+/// checked every Ollama-routed model against it. A user with `ask.backend` on
+/// `box.local:11434` and `compact.extractive_backend` on `localhost:11434`
+/// got the second stage's model reported missing against a host that was
+/// never queried (fix round 1, finding 1). Grouping by endpoint here means a
+/// model is only ever validated against the endpoint it is actually routed to.
+fn group_ollama_backends_by_endpoint(
+    backends: &[mur_common::config::BackendConfig],
+) -> Vec<OllamaEndpointGroup> {
+    let mut grouped: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for b in backends.iter().filter(|b| b.provider == "ollama") {
+        if b.model.is_empty() {
+            continue;
+        }
+        let endpoint = b
             .endpoint
             .clone()
-            .unwrap_or_else(|| "http://localhost:11434".to_string());
-        let models_needed: Vec<String> = {
-            let mut v: Vec<String> = ollama_backends.iter().map(|b| b.model.clone()).collect();
-            v.sort();
-            v.dedup();
-            v.retain(|m| !m.is_empty());
-            v
-        };
+            .unwrap_or_else(|| mur_common::config::DEFAULT_OLLAMA_ENDPOINT.to_string());
+        grouped.entry(endpoint).or_default().push(b.model.clone());
+    }
+    grouped
+        .into_iter()
+        .map(|(endpoint, mut models)| {
+            models.sort();
+            models.dedup();
+            OllamaEndpointGroup { endpoint, models }
+        })
+        .collect()
+}
 
-        // Ollama reachability + /api/tags probe (2s timeout; non-fatal).
-        let url = format!("{}/api/tags", endpoint.trim_end_matches('/'));
-        let tags_body: Option<String> =
-            match tokio::time::timeout(std::time::Duration::from_secs(2), reqwest::get(&url)).await
-            {
-                Ok(Ok(resp)) if resp.status().is_success() => {
-                    println!("  ✓ Ollama reachable at {endpoint}");
-                    resp.text().await.ok()
-                }
-                Ok(Ok(resp)) => {
-                    println!("  ✗ Ollama at {endpoint} returned {}", resp.status());
-                    ok = false;
-                    None
-                }
-                Ok(Err(e)) => {
-                    println!("  ✗ Ollama at {endpoint} unreachable: {e}");
-                    ok = false;
-                    None
-                }
-                Err(_) => {
-                    println!("  ✗ Ollama at {endpoint} timed out (2s)");
-                    ok = false;
-                    None
-                }
-            };
+/// Outcome of probing one Ollama endpoint's `/api/tags`.
+enum OllamaProbeOutcome {
+    /// Reachable; carries the installed model names.
+    Reachable(Vec<String>),
+    /// Not reachable; carries a human-readable reason ("returned 500", "timed
+    /// out (2s)", …).
+    Unreachable(String),
+}
 
-        // Model-pull check — only if we got a tags response.
-        if let Some(body) = &tags_body {
-            let installed: Vec<String> = serde_json::from_str::<serde_json::Value>(body)
+/// Probes one endpoint's `/api/tags`. Shared by `doctor` (reachability only)
+/// and `preflight` (reachability + per-model pull check) — see finding 2 of
+/// fix round 1: these were near-duplicated derive-backends → pick-endpoint →
+/// probe blocks.
+async fn probe_ollama_tags(endpoint: &str, timeout: std::time::Duration) -> OllamaProbeOutcome {
+    let url = format!("{}/api/tags", endpoint.trim_end_matches('/'));
+    match tokio::time::timeout(timeout, reqwest::get(&url)).await {
+        Ok(Ok(resp)) if resp.status().is_success() => {
+            let installed = resp
+                .text()
+                .await
                 .ok()
+                .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
                 .and_then(|v| v.get("models").cloned())
                 .and_then(|m| m.as_array().cloned())
                 .map(|arr| {
@@ -849,68 +552,12 @@ pub async fn cmd_conversations_preflight() -> Result<()> {
                         .collect()
                 })
                 .unwrap_or_default();
-            for m in &models_needed {
-                if installed.iter().any(|n| n == m) {
-                    println!("  ✓ model {m} pulled");
-                } else {
-                    println!("  ✗ model {m} missing — run: ollama pull {m}");
-                    ok = false;
-                }
-            }
-        } else if !models_needed.is_empty() {
-            println!(
-                "  · skipped model check ({} models wanted; Ollama unreachable)",
-                models_needed.len()
-            );
+            OllamaProbeOutcome::Reachable(installed)
         }
+        Ok(Ok(resp)) => OllamaProbeOutcome::Unreachable(format!("returned {}", resp.status())),
+        Ok(Err(e)) => OllamaProbeOutcome::Unreachable(format!("unreachable: {e}")),
+        Err(_) => OllamaProbeOutcome::Unreachable(format!("timed out ({}s)", timeout.as_secs())),
     }
-
-    // Pattern dir readable.
-    let patterns_dir = home.join(".mur/patterns");
-    if patterns_dir.exists() {
-        match std::fs::read_dir(&patterns_dir) {
-            Ok(_) => println!("  ✓ patterns dir readable at {}", patterns_dir.display()),
-            Err(e) => {
-                println!(
-                    "  ✗ patterns dir at {} unreadable: {e}",
-                    patterns_dir.display()
-                );
-                ok = false;
-            }
-        }
-    } else {
-        println!(
-            "  · patterns dir {} missing (pattern refs will be a no-op)",
-            patterns_dir.display()
-        );
-    }
-
-    // Free memory check (informational).
-    match system_free_memory_mb() {
-        Some(mb) if mb < 4096 => {
-            println!("  · free mem: {mb} MB (< 4 GB — LLM calls may swap)");
-        }
-        Some(mb) => {
-            println!("  ✓ free mem: {mb} MB");
-        }
-        None => {
-            println!("  · free mem: unknown (sysinfo probe skipped)");
-        }
-    }
-
-    if ok {
-        println!("\n→ preflight passed");
-    } else {
-        println!("\n✗ preflight FAILED — resolve issues above");
-        std::process::exit(1);
-    }
-    Ok(())
-}
-
-/// Phase 1: returns None (treated as unlimited) so the disk check never blocks.
-/// A proper statvfs wrapper can land in a later task.
-fn fs_available_bytes(_path: &std::path::Path) -> Option<u64> {
-    None
 }
 
 /// BP2 amendment: dry-run by default; `run=true` means actually migrate.
@@ -1553,18 +1200,6 @@ fn truncate_chars_simple(s: &str, max: usize) -> String {
     }
 }
 
-fn system_free_memory_mb() -> Option<u64> {
-    let mut sys = sysinfo::System::new();
-    sys.refresh_memory();
-    // sysinfo reports in KiB; convert to MiB.
-    let avail_kib = sys.available_memory();
-    if avail_kib == 0 {
-        None
-    } else {
-        Some(avail_kib / 1024)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1623,5 +1258,109 @@ mod tests {
             "config-disabled stays disabled without CLI override"
         );
         assert_eq!(model.as_deref(), Some("qwen3:14b"));
+    }
+
+    // ── Fix round 1, finding 1 pinning tests ──────────────────────────────
+    //
+    // Before this fix, doctor/preflight probed `ollama_backends[0].endpoint`
+    // (one arbitrary endpoint) and validated every Ollama-routed model
+    // against it. A model actually routed to a second endpoint was reported
+    // "missing" against a host that was never queried.
+
+    #[test]
+    fn group_ollama_backends_by_endpoint_keeps_endpoints_separate() {
+        let backends = vec![
+            mur_common::config::BackendConfig {
+                provider: "ollama".into(),
+                model: "llama3:70b".into(),
+                endpoint: Some("http://localhost:11434".into()),
+                ..Default::default()
+            },
+            mur_common::config::BackendConfig {
+                provider: "ollama".into(),
+                model: "qwen3:4b".into(),
+                endpoint: Some("http://box.local:11434".into()),
+                ..Default::default()
+            },
+        ];
+        let groups = group_ollama_backends_by_endpoint(&backends);
+        assert_eq!(
+            groups.len(),
+            2,
+            "two distinct endpoints must stay distinct: {groups:?}"
+        );
+
+        let local = groups
+            .iter()
+            .find(|g| g.endpoint == "http://localhost:11434")
+            .expect("localhost group present");
+        assert_eq!(local.models, vec!["llama3:70b".to_string()]);
+
+        let boxed = groups
+            .iter()
+            .find(|g| g.endpoint == "http://box.local:11434")
+            .expect("box.local group present");
+        assert_eq!(boxed.models, vec!["qwen3:4b".to_string()]);
+
+        // The bug this pins: model B must never appear under endpoint A's group.
+        assert!(!local.models.contains(&"qwen3:4b".to_string()));
+        assert!(!boxed.models.contains(&"llama3:70b".to_string()));
+    }
+
+    #[test]
+    fn collect_backend_configs_keeps_same_model_on_different_endpoints_distinct() {
+        // Two stages route the SAME model name to two DIFFERENT Ollama hosts.
+        // Deduping by (provider, model) alone — the pre-fix behavior — would
+        // collapse these into one entry and silently drop an endpoint from
+        // the probe set.
+        let shared_model = "llama3:70b";
+        let cfg = mur_common::config::Config {
+            conversations: mur_common::config::ConversationsConfig {
+                ask: mur_common::config::AskConfig {
+                    backend: Some(mur_common::config::BackendConfig {
+                        provider: "ollama".into(),
+                        model: shared_model.into(),
+                        endpoint: Some("http://localhost:11434".into()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                compact: mur_common::config::CompactConfig {
+                    extractive_backend: Some(mur_common::config::BackendConfig {
+                        provider: "ollama".into(),
+                        model: shared_model.into(),
+                        endpoint: Some("http://box.local:11434".into()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let backends = collect_backend_configs(&cfg);
+        let groups = group_ollama_backends_by_endpoint(&backends);
+        assert_eq!(
+            groups.len(),
+            2,
+            "same model on two different endpoints must survive as two groups: {groups:?}"
+        );
+
+        // The bug this pins: the model routed to endpoint B (box.local) must
+        // not be reported missing when only endpoint A (localhost) was
+        // probed — it must show up in box.local's own group, not be
+        // silently dropped by dedup.
+        let box_group = groups
+            .iter()
+            .find(|g| g.endpoint == "http://box.local:11434")
+            .expect("box.local endpoint must survive dedup, not be silently dropped");
+        assert!(box_group.models.contains(&shared_model.to_string()));
+
+        let local_group = groups
+            .iter()
+            .find(|g| g.endpoint == "http://localhost:11434")
+            .expect("localhost endpoint must survive dedup too");
+        assert!(local_group.models.contains(&shared_model.to_string()));
     }
 }

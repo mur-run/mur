@@ -11,9 +11,7 @@
 
 use serde_yaml_ng::{Mapping, Value};
 
-use crate::config::DEFAULT_LOCAL_LLM_MODEL;
-
-const DEFAULT_OLLAMA_ENDPOINT: &str = "http://localhost:11434";
+use crate::config::{DEFAULT_LOCAL_LLM_MODEL, DEFAULT_OLLAMA_ENDPOINT};
 
 /// One legacy model field and the override field it becomes.
 struct StageField {

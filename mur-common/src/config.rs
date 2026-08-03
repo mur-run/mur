@@ -15,6 +15,12 @@ pub const DEFAULT_COOLDOWN_SECS: u64 = 60;
 pub const DEFAULT_ROUTING_THRESHOLD: u32 = 2000;
 pub const DEFAULT_SMART_MAX_ESCALATIONS: u32 = 1;
 
+/// The Ollama provider default endpoint. Single definition — `BackendConfig`
+/// resolution (`default_ollama_endpoint`), `config_migrate`, and the
+/// conversations `doctor`/`preflight` probes all read this constant instead of
+/// repeating the literal.
+pub const DEFAULT_OLLAMA_ENDPOINT: &str = "http://localhost:11434";
+
 fn default_max_retries() -> u32 {
     DEFAULT_MAX_RETRIES
 }
@@ -690,7 +696,7 @@ fn default_dimensions() -> usize {
     1024
 }
 fn default_ollama_endpoint() -> String {
-    "http://localhost:11434".to_string()
+    DEFAULT_OLLAMA_ENDPOINT.to_string()
 }
 fn default_llm_provider() -> String {
     "anthropic".to_string()
@@ -2103,15 +2109,17 @@ rewriter_backend:
         // even when the answer stage has its own explicit `backend`
         // override. Set `ask.rewriter_backend` explicitly to point the
         // rewriter somewhere else.
-        let mut cfg = AskConfig::default();
-        cfg.backend = Some(BackendConfig {
-            provider: "anthropic".into(),
-            model: "claude-sonnet-5".into(),
-            endpoint: None,
-            api_key_env: Some("ANTHROPIC_API_KEY".into()),
-            api_key_ref: None,
-            timeout_secs: None,
-        });
+        let cfg = AskConfig {
+            backend: Some(BackendConfig {
+                provider: "anthropic".into(),
+                model: "claude-sonnet-5".into(),
+                endpoint: None,
+                api_key_env: Some("ANTHROPIC_API_KEY".into()),
+                api_key_ref: None,
+                timeout_secs: None,
+            }),
+            ..Default::default()
+        };
         let rewriter = cfg.effective_rewriter_backend(&omlx_llm());
         assert_eq!(rewriter.provider, "openai");
         assert_eq!(rewriter.model, "Qwen3.5-4B-MLX-4bit");
