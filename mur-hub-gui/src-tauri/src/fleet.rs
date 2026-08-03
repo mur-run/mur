@@ -311,6 +311,14 @@ pub fn fleet_send(name: String, text: String) -> Result<String, String> {
     Ok(job.id)
 }
 
+/// Cancel a queued job. Queued-only — see `jobs::cmd_fleet_cancel`.
+#[tauri::command]
+pub fn fleet_cancel_job(name: String, id: String) -> Result<(), String> {
+    let home = mur_home_path();
+    // yes: true — Hub already confirmed user via JS confirm()
+    jobs::cmd_fleet_cancel(&home, &name, &id, true).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn fleet_jobs(name: String, all: bool) -> Result<Vec<JobRow>, String> {
     let home = mur_home_path();

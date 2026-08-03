@@ -549,6 +549,16 @@ pub enum FleetAction {
         #[arg(long)]
         all: bool,
     },
+    /// Cancel a queued job so no run picks it up
+    Cancel {
+        /// Fleet name
+        name: String,
+        /// Job id, or a unique prefix of one (see `mur fleet jobs`)
+        id: String,
+        /// Skip the confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
     /// Stop a fleet (kill-switch): disable auto-run and halt a running loop
     Stop {
         /// Fleet name
