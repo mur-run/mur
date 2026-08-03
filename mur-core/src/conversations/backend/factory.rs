@@ -47,14 +47,13 @@ pub fn build_for_stage(cfg: &BackendConfig, stage: &'static str) -> Result<Arc<d
 }
 
 /// Provider default endpoints, used when `BackendConfig.endpoint` is `None`.
-/// `pub(crate)` (not just local to `build_raw`) so `cmd::conversations_cmd`'s
-/// `doctor` can report the endpoint a stage will actually dial without
-/// re-typing these literals a second time and risking drift (conversations
+/// Module-private: the only accessor outside `build_raw` is `default_endpoint`
+/// below — nothing else should reach for these literals directly (conversations
 /// backend doctor task, 2026-08-03).
-pub(crate) const DEFAULT_ANTHROPIC_ENDPOINT: &str = "https://api.anthropic.com";
-pub(crate) const DEFAULT_OPENAI_ENDPOINT: &str = "https://api.openai.com/v1";
-pub(crate) const DEFAULT_OPENROUTER_ENDPOINT: &str = "https://openrouter.ai/api/v1";
-pub(crate) const DEFAULT_GEMINI_ENDPOINT: &str = "https://generativelanguage.googleapis.com";
+const DEFAULT_ANTHROPIC_ENDPOINT: &str = "https://api.anthropic.com";
+const DEFAULT_OPENAI_ENDPOINT: &str = "https://api.openai.com/v1";
+const DEFAULT_OPENROUTER_ENDPOINT: &str = "https://openrouter.ai/api/v1";
+const DEFAULT_GEMINI_ENDPOINT: &str = "https://generativelanguage.googleapis.com";
 
 /// Default env var name for an API-key-bearing provider. Mirrors the
 /// historical mur-common::config::LlmConfig fallback so users with
@@ -67,6 +66,31 @@ fn default_key_env(provider: &str) -> &'static str {
         "gemini" => "GEMINI_API_KEY",
         "openrouter" => "OPENROUTER_API_KEY",
         _ => "LLM_API_KEY",
+    }
+}
+
+/// Single source of truth for "what endpoint does provider X dial when
+/// `BackendConfig.endpoint` is `None`" — called by both `build_raw` (the
+/// real dial-out path, below) and `cmd::conversations_cmd::backends`'s
+/// doctor listing (`pub(crate)` for that cross-module call).
+///
+/// Before this fix, `backends.rs` kept its own copy of this same
+/// provider-match to render a fallback endpoint for doctor's per-stage
+/// table. Extracting the four `DEFAULT_*_ENDPOINT` constants fixed drift
+/// in the *values*, but the two match arms themselves could still drift:
+/// adding a provider here without also adding it to the other copy would
+/// have doctor silently print `(no default endpoint for X)` for a
+/// provider that dials just fine. Routing both call sites through this
+/// one function makes that class of bug structurally impossible — there
+/// is exactly one place in the crate that answers this question.
+pub(crate) fn default_endpoint(provider: &str) -> Option<&'static str> {
+    match provider {
+        "ollama" => Some(mur_common::config::DEFAULT_OLLAMA_ENDPOINT),
+        "anthropic" => Some(DEFAULT_ANTHROPIC_ENDPOINT),
+        "openai" => Some(DEFAULT_OPENAI_ENDPOINT),
+        "openrouter" => Some(DEFAULT_OPENROUTER_ENDPOINT),
+        "gemini" => Some(DEFAULT_GEMINI_ENDPOINT),
+        _ => None,
     }
 }
 
@@ -105,16 +129,17 @@ fn build_raw(cfg: &BackendConfig) -> Result<Arc<dyn ChatBackend>> {
     }
     let inner: Arc<dyn ChatBackend> = match cfg.provider.as_str() {
         "ollama" => {
-            let endpoint = cfg.endpoint.as_deref().unwrap_or("http://localhost:11434");
+            let endpoint = cfg.endpoint.as_deref().unwrap_or_else(|| {
+                default_endpoint("ollama").expect("ollama has a default endpoint")
+            });
             let timeout = Duration::from_secs(cfg.timeout_secs.unwrap_or(120));
             Arc::new(OllamaBackend::new(endpoint, timeout))
         }
         "anthropic" => {
             let api_key = resolve_api_key(cfg)?;
-            let endpoint = cfg
-                .endpoint
-                .as_deref()
-                .unwrap_or(DEFAULT_ANTHROPIC_ENDPOINT);
+            let endpoint = cfg.endpoint.as_deref().unwrap_or_else(|| {
+                default_endpoint("anthropic").expect("anthropic has a default endpoint")
+            });
             let timeout = Duration::from_secs(cfg.timeout_secs.unwrap_or(120));
             Arc::new(super::anthropic::AnthropicBackend::new(
                 endpoint, &api_key, timeout,
@@ -122,7 +147,9 @@ fn build_raw(cfg: &BackendConfig) -> Result<Arc<dyn ChatBackend>> {
         }
         "openai" => {
             let api_key = resolve_api_key(cfg)?;
-            let endpoint = cfg.endpoint.as_deref().unwrap_or(DEFAULT_OPENAI_ENDPOINT);
+            let endpoint = cfg.endpoint.as_deref().unwrap_or_else(|| {
+                default_endpoint("openai").expect("openai has a default endpoint")
+            });
             let timeout = Duration::from_secs(cfg.timeout_secs.unwrap_or(120));
             Arc::new(super::openai::OpenAIBackend::new(
                 endpoint, &api_key, timeout,
@@ -130,10 +157,9 @@ fn build_raw(cfg: &BackendConfig) -> Result<Arc<dyn ChatBackend>> {
         }
         "openrouter" => {
             let api_key = resolve_api_key(cfg)?;
-            let endpoint = cfg
-                .endpoint
-                .as_deref()
-                .unwrap_or(DEFAULT_OPENROUTER_ENDPOINT);
+            let endpoint = cfg.endpoint.as_deref().unwrap_or_else(|| {
+                default_endpoint("openrouter").expect("openrouter has a default endpoint")
+            });
             let timeout = Duration::from_secs(cfg.timeout_secs.unwrap_or(120));
             Arc::new(super::openai::OpenAIBackend::new(
                 endpoint, &api_key, timeout,
@@ -141,7 +167,9 @@ fn build_raw(cfg: &BackendConfig) -> Result<Arc<dyn ChatBackend>> {
         }
         "gemini" => {
             let api_key = resolve_api_key(cfg)?;
-            let endpoint = cfg.endpoint.as_deref().unwrap_or(DEFAULT_GEMINI_ENDPOINT);
+            let endpoint = cfg.endpoint.as_deref().unwrap_or_else(|| {
+                default_endpoint("gemini").expect("gemini has a default endpoint")
+            });
             let timeout = Duration::from_secs(cfg.timeout_secs.unwrap_or(120));
             Arc::new(super::gemini::GeminiBackend::new(
                 endpoint, &api_key, timeout,
@@ -310,7 +338,12 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn openrouter_provider_aliases_to_openai_with_default_endpoint() {
+    async fn openrouter_provider_aliases_to_openai_backend() {
+        // Endpoint substitution itself is covered by
+        // `default_endpoint_maps_each_known_provider_and_none_for_unknown`
+        // below (this name used to claim endpoint coverage it didn't
+        // provide — `provider_name()` is the only thing observable through
+        // `Arc<dyn ChatBackend>`).
         let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
         unsafe { std::env::remove_var("MUR_LLM_MOCK") };
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
@@ -318,7 +351,7 @@ mod tests {
         let cfg = BackendConfig {
             provider: "openrouter".into(),
             model: "anthropic/claude-haiku-4-5".into(),
-            endpoint: None, // factory should auto-set https://openrouter.ai/api/v1
+            endpoint: None,
             api_key_env: Some("MUR_TEST_OR_KEY".into()),
             api_key_ref: None,
             timeout_secs: None,
@@ -327,6 +360,34 @@ mod tests {
         // openrouter alias surfaces as "openai" (it IS an OpenAI-compat backend)
         assert_eq!(b.provider_name(), "openai");
         unsafe { std::env::remove_var("MUR_TEST_OR_KEY") };
+    }
+
+    /// Makes the four `DEFAULT_*_ENDPOINT` constants (and Ollama's, from
+    /// mur-common) directly observable — `build_raw`'s own tests can only
+    /// see them indirectly through `Arc<dyn ChatBackend>`, which erases the
+    /// endpoint entirely. Also the fix-round-1 regression test for I1/I2:
+    /// `default_endpoint` must be the *only* place mapping provider ->
+    /// default endpoint, so this is the one test that has to be updated
+    /// (not a second copy added elsewhere) whenever a provider's default
+    /// changes or a new provider is added.
+    #[test]
+    fn default_endpoint_maps_each_known_provider_and_none_for_unknown() {
+        assert_eq!(
+            default_endpoint("ollama"),
+            Some(mur_common::config::DEFAULT_OLLAMA_ENDPOINT)
+        );
+        assert_eq!(
+            default_endpoint("anthropic"),
+            Some(DEFAULT_ANTHROPIC_ENDPOINT)
+        );
+        assert_eq!(default_endpoint("openai"), Some(DEFAULT_OPENAI_ENDPOINT));
+        assert_eq!(
+            default_endpoint("openrouter"),
+            Some(DEFAULT_OPENROUTER_ENDPOINT)
+        );
+        assert_eq!(default_endpoint("gemini"), Some(DEFAULT_GEMINI_ENDPOINT));
+        assert_eq!(default_endpoint("cohere"), None);
+        assert_eq!(default_endpoint(""), None);
     }
 
     #[tokio::test]
