@@ -814,6 +814,30 @@ impl AskConfig {
                 timeout_secs: Some(self.rewriter_timeout_secs as u64),
             })
     }
+
+    /// Effective backend for answer generation. An explicit per-stage
+    /// override wins; otherwise the stage inherits the smart slot
+    /// (`config.llm`) with this stage's own timeout baked in, so a slow
+    /// backend cannot silently fall back to the factory's 120s default.
+    pub fn effective_backend(&self, llm: &LlmConfig) -> BackendConfig {
+        self.backend.clone().unwrap_or_else(|| BackendConfig {
+            timeout_secs: Some(self.timeout_secs as u64),
+            ..llm.to_backend_config()
+        })
+    }
+
+    /// Effective backend for the query rewriter. Deliberately does NOT fall
+    /// through to `effective_backend`: the rewriter's output is small and
+    /// falling back to the raw question on timeout is non-fatal, so it keeps
+    /// the much tighter `rewriter_timeout_secs` budget.
+    pub fn effective_rewriter_backend(&self, llm: &LlmConfig) -> BackendConfig {
+        self.rewriter_backend
+            .clone()
+            .unwrap_or_else(|| BackendConfig {
+                timeout_secs: Some(self.rewriter_timeout_secs as u64),
+                ..llm.to_backend_config()
+            })
+    }
 }
 
 impl Default for AskConfig {
@@ -1004,6 +1028,30 @@ impl CompactConfig {
                 timeout_secs: Some(120),
             })
     }
+
+    /// Effective backend for the extractive stage. Override wins; otherwise
+    /// inherit the smart slot. CompactConfig has no per-stage timeout field,
+    /// so inheritance bakes the same conservative 120s the fabricated Ollama
+    /// config used.
+    pub fn effective_extractive_backend(&self, llm: &LlmConfig) -> BackendConfig {
+        self.extractive_backend
+            .clone()
+            .unwrap_or_else(|| BackendConfig {
+                timeout_secs: Some(120),
+                ..llm.to_backend_config()
+            })
+    }
+
+    /// Effective backend for the abstractive stage. See
+    /// `effective_extractive_backend` for the timeout rationale.
+    pub fn effective_abstractive_backend(&self, llm: &LlmConfig) -> BackendConfig {
+        self.abstractive_backend
+            .clone()
+            .unwrap_or_else(|| BackendConfig {
+                timeout_secs: Some(120),
+                ..llm.to_backend_config()
+            })
+    }
 }
 
 impl Default for CompactConfig {
@@ -1106,6 +1154,30 @@ impl Default for RollupConfig {
             extractive_backend: None,
             abstractive_backend: None,
         }
+    }
+}
+
+impl RollupConfig {
+    /// Effective backend for the extractive stage. Override wins; otherwise
+    /// inherit the smart slot with the same 120s budget the previously
+    /// hardcoded inline config used (`summarize/rollup.rs`).
+    pub fn effective_extractive_backend(&self, llm: &LlmConfig) -> BackendConfig {
+        self.extractive_backend
+            .clone()
+            .unwrap_or_else(|| BackendConfig {
+                timeout_secs: Some(120),
+                ..llm.to_backend_config()
+            })
+    }
+
+    /// Effective backend for the abstractive stage.
+    pub fn effective_abstractive_backend(&self, llm: &LlmConfig) -> BackendConfig {
+        self.abstractive_backend
+            .clone()
+            .unwrap_or_else(|| BackendConfig {
+                timeout_secs: Some(120),
+                ..llm.to_backend_config()
+            })
     }
 }
 
@@ -2289,6 +2361,83 @@ backend:
         let cfg = CompactConfig::default();
         let b = cfg.synthesize_abstractive_backend();
         assert_eq!(b.timeout_secs, Some(120));
+    }
+
+    fn omlx_llm() -> LlmConfig {
+        LlmConfig {
+            provider: "omlx".into(),
+            model: "Qwen3.5-4B-MLX-4bit".into(),
+            api_key_env: None,
+            api_key_ref: Some("env:OMLX_API_KEY".into()),
+            openai_url: Some("http://127.0.0.1:8000/v1".into()),
+        }
+    }
+
+    #[test]
+    fn ask_without_override_inherits_smart_slot_and_maps_omlx_to_openai() {
+        let ask = AskConfig::default();
+        let b = ask.effective_backend(&omlx_llm());
+        assert_eq!(b.provider, "openai");
+        assert_eq!(b.model, "Qwen3.5-4B-MLX-4bit");
+        assert_eq!(b.endpoint.as_deref(), Some("http://127.0.0.1:8000/v1"));
+        assert_eq!(b.api_key_ref.as_deref(), Some("env:OMLX_API_KEY"));
+        // stage timeout is baked in, not left to the factory's 120s default
+        assert_eq!(b.timeout_secs, Some(ask.timeout_secs as u64));
+    }
+
+    #[test]
+    fn ask_rewriter_inherits_its_own_shorter_timeout_not_the_answer_one() {
+        let ask = AskConfig::default();
+        let b = ask.effective_rewriter_backend(&omlx_llm());
+        assert_eq!(b.timeout_secs, Some(ask.rewriter_timeout_secs as u64));
+        assert_ne!(b.timeout_secs, Some(ask.timeout_secs as u64));
+    }
+
+    #[test]
+    fn explicit_override_wins_over_the_smart_slot() {
+        let mut ask = AskConfig::default();
+        ask.backend = Some(BackendConfig {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+            endpoint: None,
+            api_key_env: None,
+            api_key_ref: None,
+            timeout_secs: Some(42),
+        });
+        let b = ask.effective_backend(&omlx_llm());
+        assert_eq!(b.provider, "anthropic");
+        assert_eq!(b.timeout_secs, Some(42));
+    }
+
+    #[test]
+    fn compact_and_rollup_inherit_smart_slot_with_the_120s_budget() {
+        let llm = omlx_llm();
+        for b in [
+            CompactConfig::default().effective_extractive_backend(&llm),
+            CompactConfig::default().effective_abstractive_backend(&llm),
+            RollupConfig::default().effective_extractive_backend(&llm),
+            RollupConfig::default().effective_abstractive_backend(&llm),
+        ] {
+            assert_eq!(b.provider, "openai");
+            assert_eq!(b.endpoint.as_deref(), Some("http://127.0.0.1:8000/v1"));
+            assert_eq!(b.timeout_secs, Some(120));
+        }
+    }
+
+    #[test]
+    fn rollup_override_is_honored() {
+        let mut r = RollupConfig::default();
+        r.abstractive_backend = Some(BackendConfig {
+            provider: "ollama".into(),
+            model: "qwen3:4b".into(),
+            endpoint: Some("http://box.local:11434".into()),
+            api_key_env: None,
+            api_key_ref: None,
+            timeout_secs: None,
+        });
+        let b = r.effective_abstractive_backend(&omlx_llm());
+        assert_eq!(b.provider, "ollama");
+        assert_eq!(b.endpoint.as_deref(), Some("http://box.local:11434"));
     }
 }
 
