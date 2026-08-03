@@ -423,9 +423,11 @@ pub struct EmbeddingConfig {
     #[serde(default = "default_dimensions")]
     pub dimensions: usize,
 
-    /// Ollama endpoint
-    #[serde(default = "default_ollama_endpoint")]
-    pub ollama_endpoint: String,
+    /// Ollama endpoint. `None` for every non-Ollama provider — the OpenAI
+    /// path uses `openai_url`. Kept out of the serialized document when
+    /// unset so it stops reappearing in configs that never use it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ollama_endpoint: Option<String>,
 
     /// API key env var name (e.g. "OPENAI_API_KEY")
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -447,7 +449,7 @@ impl Default for EmbeddingConfig {
             provider: default_embedding_provider(),
             model: default_embedding_model(),
             dimensions: default_dimensions(),
-            ollama_endpoint: default_ollama_endpoint(),
+            ollama_endpoint: Some(default_ollama_endpoint()),
             api_key_env: None,
             api_key_ref: None,
             openai_url: None,
@@ -1569,6 +1571,27 @@ extractive_backend:
                 "legacy key {key} still serialized:\n{yaml}"
             );
         }
+    }
+
+    #[test]
+    fn embedding_ollama_endpoint_is_omitted_when_unset() {
+        let mut cfg = Config::default();
+        cfg.embedding.provider = "omlx".into();
+        cfg.embedding.openai_url = Some("http://127.0.0.1:8000/v1".into());
+        cfg.embedding.ollama_endpoint = None;
+        let yaml = serde_yaml_ng::to_string(&cfg).expect("serializes");
+        assert!(
+            !yaml.contains("ollama_endpoint"),
+            "dead field re-emitted:\n{yaml}"
+        );
+    }
+
+    #[test]
+    fn embedding_ollama_endpoint_still_round_trips_when_set() {
+        let yaml =
+            "provider: ollama\nmodel: nomic-embed-text\nollama_endpoint: http://box.local:11434\n";
+        let e: EmbeddingConfig = serde_yaml_ng::from_str(yaml).expect("parses");
+        assert_eq!(e.ollama_endpoint.as_deref(), Some("http://box.local:11434"));
     }
 }
 

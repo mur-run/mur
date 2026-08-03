@@ -293,7 +293,7 @@ fn report_mcp_pins(mur_dir: &std::path::Path) {
 /// providers (cloud APIs are auth-gated and shouldn't be probed blindly).
 fn embedding_probe_addr(emb: &mur_common::config::EmbeddingConfig) -> Option<String> {
     let url = match emb.provider.as_str() {
-        "ollama" => emb.ollama_endpoint.clone(),
+        "ollama" => emb.ollama_endpoint.clone().unwrap_or_default(),
         _ => emb.openai_url.clone()?,
     };
     let rest = url
