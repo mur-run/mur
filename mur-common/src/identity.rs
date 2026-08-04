@@ -110,6 +110,12 @@ impl AgentIdentity {
         self.signing.sign(msg).to_bytes()
     }
 
+    /// Sign `msg` and encode the signature as multibase Base58Btc — the exact
+    /// encoding `verify_bytes` decodes (mirrors mur-channel/src/sign.rs).
+    pub fn sign_multibase(&self, msg: &[u8]) -> String {
+        multibase::encode(multibase::Base::Base58Btc, self.sign_bytes(msg))
+    }
+
     pub fn verifying_key(&self) -> VerifyingKey {
         self.signing.verifying_key()
     }
