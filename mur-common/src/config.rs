@@ -602,6 +602,11 @@ pub struct RetrievalConfig {
     /// MMR diversity threshold (cosine > this = too similar)
     #[serde(default = "default_mmr_threshold")]
     pub mmr_threshold: f64,
+
+    /// Injection slots reserved for notes when mature skills would otherwise
+    /// fill every seat (memory federation P1). 0 disables the reservation.
+    #[serde(default = "default_reserved_note_slots")]
+    pub reserved_note_slots: usize,
 }
 
 impl Default for RetrievalConfig {
@@ -611,8 +616,13 @@ impl Default for RetrievalConfig {
             max_tokens: default_max_tokens(),
             min_score: default_min_score(),
             mmr_threshold: default_mmr_threshold(),
+            reserved_note_slots: default_reserved_note_slots(),
         }
     }
+}
+
+fn default_reserved_note_slots() -> usize {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1752,6 +1762,13 @@ impl Default for SkillsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SkillLifecycleConfig {
+    // ── Per-kind decay curves (memory federation P1) ─────────────────────
+    /// Half-life multiplier for `kind=rule` notes — behavioral guidance
+    /// iterates fast, so it decays fast.
+    pub note_rule_half_life_factor: f64,
+    /// Half-life multiplier for `kind=fact` notes — environment truths
+    /// decay slowly.
+    pub note_fact_half_life_factor: f64,
     // ── Promotion thresholds (must be exceeded) ──────────────────────────
     pub promote_draft_uses: u64,
     pub promote_emerging_uses: u64,
@@ -1806,6 +1823,8 @@ impl Default for SkillLifecycleConfig {
             auto_archive_age_days: 180,
             broken_workflow_streak: 3,
             archive_destroy_grace_days: 30,
+            note_rule_half_life_factor: crate::skill::lifecycle::NOTE_RULE_HALF_LIFE_FACTOR,
+            note_fact_half_life_factor: crate::skill::lifecycle::NOTE_FACT_HALF_LIFE_FACTOR,
         }
     }
 }
