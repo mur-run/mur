@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { useT } from "../../i18n";
@@ -15,7 +15,18 @@ import {
   settingsAreValid,
   modeBadgeLabel,
   loopDeadlineIsValid,
+  parseDonePolicy,
+  buildDoneWhen,
+  DONE_POLICY_HINT,
+  DONE_WHEN_QUEUE_EMPTY,
+  buildCronExpr,
+  CRON_PREVIEW_COUNT,
+  CRON_PREVIEW_DEBOUNCE_MS,
+  parseCronTime,
+  CRON_DEFAULT_TIME,
   type TriggerKind,
+  type DonePolicyKind,
+  type CronShape,
 } from "./fleetSettingsForm";
 
 interface Props {
@@ -63,6 +74,41 @@ export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRef
   const initialTrigger = parseTrigger(detail.loop_cfg);
   const [trigKind, setTrigKind] = useState<TriggerKind>(initialTrigger.kind);
   const [trigValue, setTrigValue] = useState(initialTrigger.value);
+  const [cronShape, setCronShape] = useState<CronShape>("custom");
+  const [cronTime, setCronTime] = useState(parseCronTime(initialTrigger.value) ?? CRON_DEFAULT_TIME);
+  const [cronFires, setCronFires] = useState<string[] | null>(null);
+  const [cronInvalid, setCronInvalid] = useState(false);
+  const cronRequestId = useRef(0);
+
+  // Ask the backend what this expression will actually do. Debounced so typing
+  // does not fire a command per keystroke; the cleanup cancels an in-flight
+  // timer so only the latest value is ever evaluated. A request sequence
+  // number guards the case where the timer already fired and invoke() is in
+  // flight: two edits close together can resolve out of order (next_n_fires'
+  // cost varies with how far it has to scan), so only the response matching
+  // the latest dispatched request is applied.
+  useEffect(() => {
+    if (trigKind !== "cron" || trigValue.trim() === "") {
+      setCronFires(null);
+      setCronInvalid(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      const requestId = ++cronRequestId.current;
+      invoke<string[]>("cron_preview", { expr: trigValue, count: CRON_PREVIEW_COUNT })
+        .then((fires) => {
+          if (cronRequestId.current !== requestId) return;
+          setCronFires(fires);
+          setCronInvalid(false);
+        })
+        .catch(() => {
+          if (cronRequestId.current !== requestId) return;
+          setCronFires(null);
+          setCronInvalid(true);
+        });
+    }, CRON_PREVIEW_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [trigKind, trigValue]);
   const [maxIter, setMaxIter] = useState(
     detail.loop_cfg?.max_iterations ? String(detail.loop_cfg.max_iterations) : ""
   );
@@ -70,7 +116,9 @@ export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRef
   const [budget, setBudget] = useState(
     detail.loop_cfg?.budget_usd ? String(detail.loop_cfg.budget_usd) : ""
   );
-  const [doneWhen, setDoneWhen] = useState(detail.loop_cfg?.done_when ?? "");
+  const loadedDoneWhen = detail.loop_cfg?.done_when ?? "";
+  const loadedDonePolicy = parseDonePolicy(loadedDoneWhen);
+  const [donePolicy, setDonePolicy] = useState<DonePolicyKind>(loadedDonePolicy);
 
   const budgetWarning = trigKind !== "manual" && (!budget.trim() || Number(budget) <= 0);
 
@@ -81,10 +129,15 @@ export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRef
       await invoke("fleet_set_loop", {
         name: detail.name,
         trigger: buildTrigger(trigKind, trigValue),
-        maxIterations: maxIter.trim() ? Number(maxIter) : null,
-        deadline: deadline.trim() || null,
+        maxIterations: maxIter.trim() ? Math.trunc(Number(maxIter)) : null,
+        // Always a string, never null: the backend reads a `null` deadline as
+        // "leave this field alone", so `|| null` here was the same
+        // can't-clear-the-field bug `buildDoneWhen` already fixed for
+        // `done_when` -- an emptied box would save, say "Settings saved", and
+        // silently keep the old deadline. The validator already accepts "".
+        deadline: deadline.trim(),
         budgetUsd: budget.trim() ? Number(budget) : null,
-        doneWhen: doneWhen.trim() || null,
+        doneWhen: buildDoneWhen(donePolicy, loadedDoneWhen),
       });
       showToast(t("fleet.settings.saved"));
       onRefresh();
@@ -139,7 +192,7 @@ export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRef
     showToast(t("fleet.runStarted"));
     await call("fleet_run_loop", {
       name: detail.name,
-      maxIterations: loopIterations.trim() ? Number(loopIterations) : null,
+      maxIterations: loopIterations.trim() ? Math.trunc(Number(loopIterations)) : null,
       deadline: loopDeadline.trim() || null,
       budgetUsd: loopBudget.trim() ? Number(loopBudget) : null,
     });
@@ -229,6 +282,21 @@ export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRef
     }
   }
 
+  async function handleCancelJob(job: { id: string; text: string }) {
+    const msg = t("fleet.confirmCancelJob").replace("{job}", job.text.split("\n")[0].slice(0, 60));
+    const ok = await confirm(msg, { title: t("fleet.cancelJob"), kind: "warning" });
+    if (!ok) return;
+    setBusy("fleet_cancel_job");
+    try {
+      await invoke("fleet_cancel_job", { name: detail.name, id: job.id });
+      onRefresh();
+    } catch (err) {
+      showToast(String(err), 4000);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handleShowAll() {
     if (showAll) { setShowAll(false); setAllJobs([]); return; }
     setBusy("fleet_jobs");
@@ -244,6 +312,12 @@ export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRef
   }
 
   const displayedJobs = showAll ? allJobs : jobs;
+
+  function applyCronShape(shape: CronShape, time: string) {
+    setCronShape(shape);
+    setCronTime(time);
+    if (shape !== "custom") setTrigValue(buildCronExpr(shape, time));
+  }
 
   return (
     <div className="fleet-detail">
@@ -283,6 +357,9 @@ export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRef
           <>
             <div className="fleet-detail__loop-row">
               <input
+                type="number"
+                min="1"
+                step="1"
                 value={loopIterations}
                 onChange={(e) => setLoopIterations(e.target.value)}
                 placeholder="8"
@@ -292,7 +369,7 @@ export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRef
                 onChange={(e) => setLoopDeadline(e.target.value)}
                 placeholder="2h"
               />
-              <input value={loopBudget} onChange={(e) => setLoopBudget(e.target.value)} placeholder="$" />
+              <input value={loopBudget} onChange={(e) => setLoopBudget(e.target.value)} placeholder="$" type="number" min="0" step="0.01" />
               <button
                 className="toolbar-btn toolbar-btn--primary"
                 onClick={handleRunLoop}
@@ -443,9 +520,48 @@ export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRef
         {trigKind === "interval" && !DURATION_RE.test(trigValue.trim()) && (
           <div className="fleet-settings__warning">{t("fleet.settings.invalidDuration")}</div>
         )}
+        {trigKind === "cron" && (
+          <div className="fleet-settings__row">
+            <label>{t("fleet.settings.cronShape")}</label>
+            <select
+              value={cronShape}
+              onChange={(e) => applyCronShape(e.target.value as CronShape, cronTime)}
+            >
+              <option value="custom">{t("fleet.settings.cronShapeCustom")}</option>
+              <option value="hourly">{t("fleet.settings.cronShapeHourly")}</option>
+              <option value="daily">{t("fleet.settings.cronShapeDaily")}</option>
+              <option value="weekdays">{t("fleet.settings.cronShapeWeekdays")}</option>
+            </select>
+            {cronShape !== "custom" && (
+              <input
+                type="time"
+                value={cronTime}
+                onChange={(e) => applyCronShape(cronShape, e.target.value)}
+              />
+            )}
+          </div>
+        )}
+        {trigKind === "cron" && cronInvalid && (
+          <div className="fleet-settings__warning">{t("fleet.settings.cronInvalid")}</div>
+        )}
+        {trigKind === "cron" && cronFires !== null && cronFires.length === 0 && (
+          <div className="fleet-settings__warning">{t("fleet.settings.cronNeverFires")}</div>
+        )}
+        {trigKind === "cron" && cronFires !== null && cronFires.length > 0 && (
+          <div className="fleet-settings__hint">
+            {t("fleet.settings.cronNext")}: {cronFires.join(" · ")} ({t("fleet.settings.cronLocalTime")})
+          </div>
+        )}
         <div className="fleet-settings__row">
           <label>{t("fleet.settings.maxIterations")}</label>
-          <input value={maxIter} onChange={(e) => setMaxIter(e.target.value)} placeholder="8" />
+          <input
+            type="number"
+            min="1"
+            step="1"
+            value={maxIter}
+            onChange={(e) => setMaxIter(e.target.value)}
+            placeholder="8"
+          />
         </div>
         <div className="fleet-settings__row">
           <label>{t("fleet.settings.deadline")}</label>
@@ -457,17 +573,33 @@ export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRef
         <div className="fleet-settings__hint">{t("fleet.settings.deadlineHint")}</div>
         <div className="fleet-settings__row">
           <label>{t("fleet.settings.budget")}</label>
-          <input value={budget} onChange={(e) => setBudget(e.target.value)} placeholder="0.00" />
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={budget}
+            onChange={(e) => setBudget(e.target.value)}
+            placeholder="0.00"
+          />
         </div>
         {budgetWarning && <div className="fleet-settings__warning">{t("fleet.settings.budgetWarning")}</div>}
         <div className="fleet-settings__row">
           <label>{t("fleet.settings.doneWhen")}</label>
-          <input
-            value={doneWhen}
-            onChange={(e) => setDoneWhen(e.target.value)}
-            placeholder={t("fleet.settings.doneWhenHint")}
-          />
+          <select
+            value={donePolicy}
+            onChange={(e) => setDonePolicy(e.target.value as DonePolicyKind)}
+          >
+            <option value="router">{t("fleet.settings.donePolicyRouter")}</option>
+            <option value={DONE_WHEN_QUEUE_EMPTY}>{t("fleet.settings.donePolicyQueueEmpty")}</option>
+            {/* Only offered when one is already set: the Hub preserves a marker
+                but never authors one, because it cannot supply the half of the
+                contract that teaches an agent to emit the text. */}
+            {loadedDonePolicy === "marker" && (
+              <option value="marker">{loadedDoneWhen.trim()}</option>
+            )}
+          </select>
         </div>
+        <div className="fleet-settings__hint">{t(DONE_POLICY_HINT[donePolicy])}</div>
         <div className="fleet-settings__hint">
           {t("fleet.settings.lastRun")}: {detail.loop_cfg?.last_run ?? t("fleet.settings.lastRunNever")}
           <br />
@@ -513,6 +645,16 @@ export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRef
               </span>
               <span className="fleet-job__text">{job.text}</span>
               <span className="fleet-job__ts">{job.created_at.slice(0, 10)}</span>
+              {job.status === "queued" && (
+                <button
+                  className="fleet-job__cancel"
+                  title={t("fleet.cancelJob")}
+                  onClick={() => handleCancelJob(job)}
+                  disabled={busy !== null}
+                >
+                  ×
+                </button>
+              )}
             </div>
           ))}
         </div>

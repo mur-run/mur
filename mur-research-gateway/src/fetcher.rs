@@ -12,9 +12,6 @@ pub(crate) const MAX_BODY_BYTES: usize = 5 * 1024 * 1024; // ponytail: 5MB cap; 
 const SEARCH_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
 
-/// DuckDuckGo's server-rendered (no-JS) HTML search endpoint.
-const DDG_HTML_ENDPOINT: &str = "https://html.duckduckgo.com/html/";
-
 /// Max `search` attempts against DuckDuckGo before giving up. Under N concurrent
 /// research workers hitting DDG's html endpoint from one IP, DDG rate-limits
 /// with an HTTP 202 challenge page (no results); a short backoff usually clears
@@ -221,6 +218,7 @@ pub async fn search(
     brave_key: Option<&str>,
     deny: &[String],
     timeout: Duration,
+    endpoint: &str,
 ) -> Result<Vec<SearchHit>, FetchError> {
     match brave_key {
         Some(key) => match search_brave(query, limit, key, deny, timeout).await {
@@ -231,10 +229,10 @@ pub async fn search(
                     "brave search failed ({}), falling back to DuckDuckGo",
                     fetch_err_brief(&e)
                 );
-                search_tier1(query, limit, deny, timeout).await
+                search_tier1(query, limit, deny, timeout, endpoint).await
             }
         },
-        None => search_tier1(query, limit, deny, timeout).await,
+        None => search_tier1(query, limit, deny, timeout, endpoint).await,
     }
 }
 
@@ -336,8 +334,17 @@ pub async fn search_tier1(
     limit: usize,
     deny: &[String],
     timeout: Duration,
+    endpoint: &str,
 ) -> Result<Vec<SearchHit>, FetchError> {
-    let mut search_url = url::Url::parse(DDG_HTML_ENDPOINT).expect("static URL is valid");
+    // Operator-supplied (config/env), so a bad value must surface as an error
+    // the worker can read — never a panic that takes the gateway down.
+    let mut search_url = url::Url::parse(endpoint).map_err(|e| {
+        FetchError::Http(format!(
+            "search endpoint is not a valid URL ({e}): {endpoint:?} — fix \
+             research_gateway.search_endpoint in ~/.mur/config.yaml or \
+             MUR_RESEARCH_SEARCH_ENDPOINT"
+        ))
+    })?;
     search_url.query_pairs_mut().append_pair("q", query);
 
     let screened = screen_url_blocking(search_url.as_str(), deny)
@@ -521,6 +528,27 @@ fn decode_uddg(href: &str) -> Option<String> {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn search_tier1_rejects_a_malformed_endpoint_instead_of_panicking() {
+        // The endpoint is operator input (config.yaml / env), so a bad value
+        // must come back as an error the worker can read — the old code
+        // `.expect("static URL is valid")`d it, which was only safe while the
+        // endpoint was a hardcoded const. No network is touched: the URL fails
+        // to parse before any request is built.
+        let err = search_tier1("q", 3, &[], Duration::from_secs(1), "not a url")
+            .await
+            .expect_err("a malformed endpoint must be an error, not a panic");
+        let FetchError::Http(msg) = err else {
+            panic!("malformed endpoint must be FetchError::Http");
+        };
+        // Name both operator config paths so the message stays actionable.
+        assert!(msg.contains("search_endpoint"), "message was: {msg}");
+        assert!(
+            msg.contains("MUR_RESEARCH_SEARCH_ENDPOINT"),
+            "message was: {msg}"
+        );
+    }
 
     #[test]
     fn search_blocked_error_names_workaround_and_operator_fix() {

@@ -29,8 +29,10 @@ pub struct StepCard {
     /// approval). Set when the matching `tool/approval_needed` arrives, cleared
     /// on decision.
     pub awaiting_hitl: bool,
-    /// True when the card's tool call was auto-approved by the `--auto-reads`
-    /// read lane (rendered as `[read · auto]` tag on the header).
+    /// True when the card's tool call was auto-approved — by the `--auto-reads`
+    /// read lane or by a session allow (`[a]`). Rendered as an `[auto]` tag on
+    /// the header, which is the ONLY trace of auto-approval in the transcript:
+    /// the separate notice row it replaced was printed for every call.
     pub auto_approved: bool,
 }
 

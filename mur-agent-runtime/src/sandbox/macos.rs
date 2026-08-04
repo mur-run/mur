@@ -32,7 +32,14 @@ pub fn apply_macos(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
             unsafe { sandbox_free_error(error_buf) };
             s
         };
-        tracing::warn!(error = %msg, "macOS sandbox_init failed; running advisory-only");
+        // Report the fact (not enforcing), not a decision this layer does not
+        // make: the supervisor consults `fail_closed_on_sandbox_error` and may
+        // refuse to start rather than continue advisory-only.
+        tracing::warn!(
+            error = %msg,
+            "macOS sandbox_init failed; sandbox NOT enforcing — \
+             fail_closed_on_sandbox_error decides whether startup continues"
+        );
         return Ok(SandboxStatus {
             platform: "macos-sbpl-failed".to_string(),
             effective_abi: None,
