@@ -16,6 +16,7 @@ pub mod local;
 pub mod lockfile;
 pub mod manifest;
 pub mod mcp;
+pub mod note;
 pub mod parser;
 pub mod peers;
 pub mod publisher_trust;

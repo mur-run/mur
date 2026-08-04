@@ -165,6 +165,12 @@ pub enum SlashCmd {
     Mcp(Vec<String>),
     /// `/skill [list|add|remove] …` — manage the agent's skills.
     Skill(Vec<String>),
+    /// `/remember [--kind rule|fact] <text>` — save an agent-local memory note.
+    Remember(Vec<String>),
+    /// `/memories` — list every note this agent can see, labeled by scope.
+    Memories,
+    /// `/forget <name|last>` — demote an agent-local note to Destroyed.
+    Forget(Option<String>),
     /// `/skin [dark|light|mur]` — show or switch the active skin (persists to config).
     Skin(Option<String>),
     /// `/panel [tab] [target]` — open/drive the MUR Hub companion window.
@@ -205,6 +211,9 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
         }),
         "mcp" => SlashCmd::Mcp(words.map(str::to_string).collect()),
         "skill" | "skills" => SlashCmd::Skill(words.map(str::to_string).collect()),
+        "remember" => SlashCmd::Remember(words.map(str::to_string).collect()),
+        "memories" | "mem" => SlashCmd::Memories,
+        "forget" => SlashCmd::Forget(words.next().map(str::to_string)),
         "skin" | "theme" => SlashCmd::Skin(words.next().map(str::to_string)),
         "panel" => SlashCmd::Panel(words.map(str::to_string).collect()),
         "open" | "todo" => SlashCmd::Open,
@@ -1357,6 +1366,19 @@ mod tests {
         assert_eq!(parse_slash("/help"), Some(SlashCmd::Help));
         assert_eq!(parse_slash("/new"), Some(SlashCmd::Clear));
         assert_eq!(parse_slash("/card"), Some(SlashCmd::Card));
+        assert_eq!(parse_slash("/memories"), Some(SlashCmd::Memories));
+        assert_eq!(
+            parse_slash("/forget last"),
+            Some(SlashCmd::Forget(Some("last".into())))
+        );
+        assert_eq!(
+            parse_slash("/remember reply in zh-TW"),
+            Some(SlashCmd::Remember(vec![
+                "reply".into(),
+                "in".into(),
+                "zh-TW".into()
+            ]))
+        );
         assert_eq!(parse_slash("/q"), Some(SlashCmd::Quit));
         assert_eq!(
             parse_slash("/bogus"),

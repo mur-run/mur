@@ -12,10 +12,8 @@ use std::path::PathBuf;
 
 use mur_common::skill::lifecycle::NoteKind;
 use mur_common::skill::loader::is_valid_skill_name;
-use mur_common::skill::manifest::{Content, SkillManifest, Visibility};
 use mur_common::skill::stats::SkillStats;
 use mur_common::skill::store::agent_skill_dir;
-use mur_common::skill::types::{Category, Priority};
 
 use super::{ToolError, ToolExecutor};
 use crate::llm::ToolDef;
@@ -129,45 +127,15 @@ impl ToolExecutor for RememberTool {
             )));
         }
 
-        // Mirrors `mur notes create` (notes_cmd::do_create), agent-local:
-        // Category::Note + kind-as-tag, Draft lifecycle via fresh stats.
-        let manifest = SkillManifest {
-            name: name.clone(),
-            version: "1.0.0".into(),
-            publisher: format!("agent:{}", self.agent_name),
-            description: description.clone(),
-            category: Category::Note,
-            hosts: vec![],
-            scope: Default::default(),
-            visibility: Visibility::default(),
-            origin: None,
-            origin_version: None,
-            origin_hash: None,
-            fleet: None,
-            team: None,
-            governance: None,
-            project: None,
-            content: Content {
-                r#abstract: description.clone(),
-                context: None,
-                procedure: None,
-                command: None,
-                note: Some(content),
-            },
-            requires: vec![],
-            tags: match kind {
-                NoteKind::Rule => vec!["rule".into()],
-                NoteKind::Fact => vec![],
-            },
-            triggers: vec![],
-            priority: Priority::Normal,
-            evolution_log: vec![],
-            transfer_chain: vec![],
-            mcp_requirements: vec![],
-            provenance: Default::default(),
-            updated_at: chrono::Utc::now(),
-            requires_programs: vec![],
-        };
+        // Same canonical shape as `mur notes create` / TUI `/remember` —
+        // one builder (mur_common::skill::note), agent-local write target.
+        let manifest = mur_common::skill::note::note_manifest(&mur_common::skill::note::NoteSpec {
+            name: &name,
+            description: &description,
+            body: &content,
+            kind,
+            publisher: &format!("agent:{}", self.agent_name),
+        });
         mur_common::skill::validate(&manifest)
             .map_err(|e| ToolError::InvalidInput(format!("invalid memory note: {e}")))?;
         mur_common::skill::store::write_to_dir(&dir, &manifest)
