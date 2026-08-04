@@ -73,6 +73,45 @@ impl Inbox {
         Ok(path)
     }
 
+    /// P2c-2 ingest gate — the signature proves *who said it*, the scope
+    /// check proves *they may say it there*. Unsigned signals pass unless
+    /// `require` (legacy drops + the commander wire are unsigned); a PRESENT
+    /// signature is always checked fail-closed: it must verify against the
+    /// claimed actor's on-disk pubkey (`agents/<actor>/identity.pub`) and the
+    /// self-reported scope must be one an agent identity may claim (Personal —
+    /// agents have no team/community authority).
+    fn check_signal_sig(&self, signal: &Signal, require: bool) -> Result<(), String> {
+        if signal.sig.is_none() {
+            return if require {
+                Err("unsigned signal rejected (MUR_SIGNAL_REQUIRE_SIG)".into())
+            } else {
+                Ok(())
+            };
+        }
+        let actor = &signal.actor.native_id;
+        // The actor name is joined into a path below — allow exactly the
+        // charset agent dirs use, or the join is a traversal primitive (same
+        // guard the daemon applies to snapshot requests).
+        if !valid_agent_name(actor) {
+            return Err(format!(
+                "signed signal actor '{actor}' is not a valid agent name"
+            ));
+        }
+        let dir = self.mur_home.join("agents").join(actor);
+        let pubkey = mur_common::identity::AgentIdentity::load_pubkey(&dir)
+            .map_err(|e| format!("no verifiable identity for actor '{actor}': {e}"))?;
+        if !signal.verify(&pubkey) {
+            return Err(format!("signature verification failed for actor '{actor}'"));
+        }
+        if signal.scope != mur_common::Scope::Personal {
+            return Err(format!(
+                "agent '{actor}' may not emit {:?}-scoped signals",
+                signal.scope
+            ));
+        }
+        Ok(())
+    }
+
     /// Apply every YAML file in the inbox (non-hidden) to the given store.
     ///
     /// Successfully-applied or intentionally-skipped files are removed from
@@ -82,6 +121,7 @@ impl Inbox {
     /// the same signal UUID is re-emitted (e.g. after a retry in FlushService).
     pub fn apply_all(&self, store: &YamlStore) -> Result<ApplyReport> {
         let mut report = ApplyReport::default();
+        let require_sig = mur_common::signal::require_sig_from_env();
         let mut seen = self.load_seen_ids();
         let mut newly_seen: Vec<Uuid> = Vec::new();
 
@@ -113,6 +153,16 @@ impl Inbox {
             // Skip duplicate signal IDs (idempotency guard against FlushService retries)
             if seen.contains(&signal.id) {
                 report.skipped += 1;
+                let _ = std::fs::remove_file(&p);
+                continue;
+            }
+
+            // Signature gate (P2c-2). Rejected files are REMOVED (a bad
+            // signature is permanent — retrying can't fix it) but NOT marked
+            // seen, so a correctly-signed re-emission of the same id may
+            // still apply later.
+            if let Err(reason) = self.check_signal_sig(&signal, require_sig) {
+                report.errors.push(format!("{}: {reason}", p.display()));
                 let _ = std::fs::remove_file(&p);
                 continue;
             }
@@ -259,6 +309,7 @@ impl Inbox {
         use mur_common::{Signal, SignalTarget};
 
         let mut report = ApplyReport::default();
+        let require_sig = mur_common::signal::require_sig_from_env();
         let mut seen = self.load_seen_ids();
         let mut newly_seen: Vec<uuid::Uuid> = Vec::new();
 
@@ -282,6 +333,12 @@ impl Inbox {
             let target_is_skill = matches!(signal.target, SignalTarget::Skill { .. });
             if !target_is_skill {
                 continue; // handled by apply_all (pattern branch)
+            }
+            // Signature gate (P2c-2) — same rules as apply_all.
+            if let Err(reason) = self.check_signal_sig(&signal, require_sig) {
+                report.errors.push(format!("{}: {reason}", p.display()));
+                let _ = std::fs::remove_file(&p);
+                continue;
             }
             match self.apply_skill_one(&signal) {
                 Ok(true) => {
@@ -361,6 +418,15 @@ impl Inbox {
     }
 }
 
+/// Exactly the charset agent directory names use (see the daemon's snapshot-
+/// request guard) — anything else would make `agents/<name>` a traversal.
+fn valid_agent_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 fn is_inbox_yaml(p: &Path) -> bool {
     if !p.is_file() {
         return false;
@@ -417,6 +483,8 @@ mod tests {
             scope: Scope::Personal,
             confidence: 1.0,
             schema_version: SIGNAL_SCHEMA_VERSION,
+            sig: None,
+            key_version: 0,
         }
     }
 
@@ -561,6 +629,8 @@ mod tests {
             scope: Scope::Personal,
             confidence: 1.0,
             schema_version: SIGNAL_SCHEMA_VERSION,
+            sig: None,
+            key_version: 0,
         };
         inbox.receive(&sig).unwrap();
         let report = inbox.apply_all(&store).unwrap();
@@ -595,6 +665,8 @@ mod tests {
             scope: Scope::Personal,
             confidence: 1.0,
             schema_version: SIGNAL_SCHEMA_VERSION,
+            sig: None,
+            key_version: 0,
         };
         inbox.receive(&sig).unwrap();
         let report = inbox.apply_all(&store).unwrap();
@@ -718,6 +790,8 @@ mod tests {
             kind: SignalKind::SkillExecutionSuccess,
             scope: Scope::Personal,
             confidence: 1.0,
+            sig: None,
+            key_version: 0,
         };
         inbox.receive(&signal).unwrap();
         let report = inbox.apply_skill_signals().unwrap();
@@ -730,5 +804,116 @@ mod tests {
             mur_common::skill::event_log::SkillEvent::Execution { ref outcome, .. }
             if outcome == "success"
         ));
+    }
+
+    // ── P2c-2 signature gate ─────────────────────────────────────────────
+
+    use mur_common::identity::AgentIdentity;
+
+    /// Register agent `name` under `<home>/agents/` with a real keypair.
+    fn agent_fixture(home: &Path, name: &str) -> AgentIdentity {
+        let dir = home.join("agents").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let id = AgentIdentity::generate();
+        id.save(&dir).unwrap();
+        id
+    }
+
+    #[test]
+    fn signed_signal_verifies_and_applies() {
+        let tmp = tempdir().unwrap();
+        let (store, inbox) = setup(tmp.path());
+        store.save(&make_pattern("p1")).unwrap();
+        let id = agent_fixture(tmp.path(), "w1");
+
+        let mut sig = signal("p1", SignalKind::ExecutionSuccess, "w1");
+        sig.sign(&id);
+        inbox.receive(&sig).unwrap();
+        let report = inbox.apply_all(&store).unwrap();
+        assert_eq!(report.applied, 1, "errors: {:?}", report.errors);
+        assert!(report.errors.is_empty());
+    }
+
+    #[test]
+    fn tampered_signed_signal_is_rejected_and_removed() {
+        let tmp = tempdir().unwrap();
+        let (store, inbox) = setup(tmp.path());
+        store.save(&make_pattern("p1")).unwrap();
+        let id = agent_fixture(tmp.path(), "w1");
+
+        let mut sig = signal("p1", SignalKind::ExecutionSuccess, "w1");
+        sig.sign(&id);
+        sig.confidence = 0.1; // tamper AFTER signing
+        inbox.receive(&sig).unwrap();
+
+        let report = inbox.apply_all(&store).unwrap();
+        assert_eq!(report.applied, 0);
+        assert_eq!(report.errors.len(), 1);
+        assert!(report.errors[0].contains("verification failed"));
+        // File removed (permanent failure — no poison retry), pattern untouched.
+        assert_eq!(
+            std::fs::read_dir(tmp.path().join("inbox"))
+                .unwrap()
+                .filter(|e| is_inbox_yaml(&e.as_ref().unwrap().path()))
+                .count(),
+            0
+        );
+        assert_eq!(store.get("p1").unwrap().evidence.success_signals, 0);
+    }
+
+    #[test]
+    fn signed_signal_with_non_personal_scope_is_rejected() {
+        let tmp = tempdir().unwrap();
+        let (store, inbox) = setup(tmp.path());
+        store.save(&make_pattern("p1")).unwrap();
+        let id = agent_fixture(tmp.path(), "w1");
+
+        let mut sig = signal("p1", SignalKind::ExecutionSuccess, "w1");
+        sig.scope = Scope::Team {
+            team_id: "ops".into(),
+        };
+        sig.sign(&id); // signature VALID — the scope claim itself is the violation
+        inbox.receive(&sig).unwrap();
+
+        let report = inbox.apply_all(&store).unwrap();
+        assert_eq!(report.applied, 0);
+        assert_eq!(report.errors.len(), 1);
+        assert!(report.errors[0].contains("may not emit"));
+    }
+
+    #[test]
+    fn signed_signal_without_registered_identity_is_rejected() {
+        let tmp = tempdir().unwrap();
+        let (store, inbox) = setup(tmp.path());
+        store.save(&make_pattern("p1")).unwrap();
+        // NO agent_fixture: sign with a key the central store has never seen.
+        let rogue = AgentIdentity::generate();
+
+        let mut sig = signal("p1", SignalKind::ExecutionSuccess, "ghost");
+        sig.sign(&rogue);
+        inbox.receive(&sig).unwrap();
+
+        let report = inbox.apply_all(&store).unwrap();
+        assert_eq!(report.applied, 0);
+        assert_eq!(report.errors.len(), 1);
+        assert!(report.errors[0].contains("no verifiable identity"));
+    }
+
+    #[test]
+    fn require_mode_rejects_unsigned_and_traversal_actor_names() {
+        let tmp = tempdir().unwrap();
+        let (_store, inbox) = setup(tmp.path());
+
+        // Unsigned tolerated by default, rejected under require.
+        let unsigned = signal("p1", SignalKind::ExecutionSuccess, "w1");
+        assert!(inbox.check_signal_sig(&unsigned, false).is_ok());
+        assert!(inbox.check_signal_sig(&unsigned, true).is_err());
+
+        // A signed signal claiming a path-traversal actor never reaches the join.
+        let id = AgentIdentity::generate();
+        let mut evil = signal("p1", SignalKind::ExecutionSuccess, "../w1");
+        evil.sign(&id);
+        let err = inbox.check_signal_sig(&evil, false).unwrap_err();
+        assert!(err.contains("not a valid agent name"));
     }
 }
