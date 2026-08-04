@@ -8,6 +8,7 @@ mod mobile_server;
 mod relay_client;
 mod signal_server;
 mod skill_upgrade_tick;
+mod snapshot_requests;
 mod sleep;
 mod store_health;
 mod stt_sink;
@@ -98,6 +99,10 @@ async fn main() -> Result<()> {
         }
         Err(e) => eprintln!("murmurd: signal-server token error: {e:#}"),
     }
+
+    // Memory-federation P0 — serve signed snapshot requests (best-effort loop;
+    // verification + scope assembly happen here, outside every agent sandbox).
+    snapshot_requests::spawn(mur_dir.clone());
 
     // P1 — start the mobile WebSocket endpoint (best-effort; failure is non-fatal).
     // No persistent pairing token: enrollment uses on-demand single-use windows
