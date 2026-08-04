@@ -219,7 +219,11 @@ fn resolve_selection(sel: &SlotSelection, reg: &ModelRegistry) -> Result<Resolve
 
 /// Pins a resolved selection as an explicit per-stage backend override for
 /// Ask/Compact/Rollup. Local and Registry now produce the same shape once
-/// resolved (`Resolved`), so both always pin.
+/// resolved (`Resolved`), so both always pin. Compact/Rollup each pin BOTH
+/// the extractive and abstractive halves to the same resolved backend — a
+/// stage without an override inherits the smart slot (`cfg.llm`), which can
+/// be cloud, so leaving one half unset would silently split the stage
+/// across two different backends (I2).
 fn write_conversation_stage(cfg: &mut Config, id: SlotId, r: &Resolved) -> Result<()> {
     let backend = BackendConfig {
         provider: r.provider.clone(),
@@ -231,8 +235,14 @@ fn write_conversation_stage(cfg: &mut Config, id: SlotId, r: &Resolved) -> Resul
     };
     match id {
         SlotId::Ask => cfg.conversations.ask.backend = Some(backend),
-        SlotId::Compact => cfg.conversations.compact.extractive_backend = Some(backend),
-        SlotId::Rollup => cfg.conversations.rollup.extractive_backend = Some(backend),
+        SlotId::Compact => {
+            cfg.conversations.compact.extractive_backend = Some(backend.clone());
+            cfg.conversations.compact.abstractive_backend = Some(backend);
+        }
+        SlotId::Rollup => {
+            cfg.conversations.rollup.extractive_backend = Some(backend.clone());
+            cfg.conversations.rollup.abstractive_backend = Some(backend);
+        }
         _ => unreachable!("write_conversation_stage only called for Ask/Compact/Rollup"),
     }
     Ok(())
@@ -410,10 +420,67 @@ mod tests {
             .conversations
             .rollup
             .extractive_backend
+            .clone()
             .expect("rollup takes an explicit Registry pin now, like ask/compact");
         assert_eq!(b.provider, "anthropic");
         assert_eq!(b.model, "claude-opus-5");
         assert_eq!(b.endpoint.as_deref(), Some("https://api.anthropic.com"));
+        // I2 regression: write_conversation_stage() must pin the abstractive
+        // half alongside the extractive one it has always pinned — leaving
+        // it `None` would let it silently fall through effective_backend to
+        // whatever `cfg.llm` (the smart slot) is, independent of this pin.
+        let ab = cfg
+            .conversations
+            .rollup
+            .abstractive_backend
+            .expect("rollup's abstractive half is pinned alongside the extractive half");
+        assert_eq!(ab.provider, "anthropic");
+        assert_eq!(ab.model, "claude-opus-5");
+
+        unsafe { std::env::remove_var("MUR_HOME") };
+    }
+
+    #[test]
+    fn compact_set_slot_pins_the_abstractive_half_too() {
+        // Same I2 regression as above, exercised through the Compact arm of
+        // write_conversation_stage() rather than Rollup.
+        let _g = ENV_TEST_LOCK.lock().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
+
+        let mut reg = ModelRegistry::default();
+        reg.models.insert(
+            "cloud-opus".into(),
+            ModelEntry {
+                provider: "anthropic".into(),
+                model: "claude-opus-5".into(),
+                base_url: Some("https://api.anthropic.com".into()),
+                ..Default::default()
+            },
+        );
+        reg.save_to(&ModelRegistry::default_path().unwrap())
+            .unwrap();
+
+        let sel = SlotSelection::Registry {
+            ref_name: "cloud-opus".into(),
+        };
+        set_slot(SlotId::Compact, &sel).unwrap();
+
+        let cfg = load_config().unwrap();
+        let ext = cfg
+            .conversations
+            .compact
+            .extractive_backend
+            .expect("compact extractive half pinned");
+        assert_eq!(ext.provider, "anthropic");
+        assert_eq!(ext.model, "claude-opus-5");
+        let ab = cfg
+            .conversations
+            .compact
+            .abstractive_backend
+            .expect("compact's abstractive half is pinned alongside the extractive half");
+        assert_eq!(ab.provider, "anthropic");
+        assert_eq!(ab.model, "claude-opus-5");
 
         unsafe { std::env::remove_var("MUR_HOME") };
     }

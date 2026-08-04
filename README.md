@@ -168,7 +168,10 @@ local:
 ```yaml
 conversations:
   compact:
-    # extractive stage → cloud (fast + cheap), abstractive stays local
+    # extractive stage → cloud (fast + cheap). abstractive_backend is left
+    # unset here, so it inherits the top-level `llm:` block (local or
+    # cloud, whatever that's set to) — give it its own override to pin it
+    # independently.
     extractive_backend:
       provider: anthropic          # ollama | anthropic
       model: claude-haiku-4-5
@@ -176,7 +179,10 @@ conversations:
       # endpoint: https://api.anthropic.com   # optional override
       # timeout_secs: 120                     # optional, default 120
   ask:
-    # answer stage → cloud, query rewriter stays local
+    # answer stage → cloud. rewriter_backend is left unset here, so the
+    # rewriter follows this same answer-stage backend (cloud too) — set
+    # rewriter_backend explicitly if you want the rewriter pinned somewhere
+    # else (e.g. kept local while the answer stage runs in the cloud).
     backend:
       provider: anthropic
       model: claude-sonnet-5
