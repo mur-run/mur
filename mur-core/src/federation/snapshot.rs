@@ -21,32 +21,10 @@ pub fn read_snapshot_ref(agent_name: &str) -> Result<Option<SnapshotRef>> {
     Ok(Some(snap))
 }
 
-// `read_snapshot_ref` / `write_snapshot_ref` outlive the retired Pattern pull:
-// `cmd/eval.rs` still reads the Pattern-era ref for snapshot age. Once eval
-// migrates to `read_skill_snapshot_ref`, both can go.
-pub(crate) fn write_snapshot_ref(
-    agent_name: &str,
-    snap: &SnapshotRef,
-    cache_dir: &std::path::Path,
-) -> Result<()> {
-    let yaml = serde_yaml_ng::to_string(snap)
-        .with_context(|| format!("serialize snapshot-ref for {agent_name}"))?;
-    let dest = cache_dir.join(".snapshot-ref");
-    let tmp = cache_dir.join(".snapshot-ref.tmp");
-    std::fs::write(&tmp, yaml)?;
-    std::fs::rename(&tmp, &dest)?;
-    Ok(())
-}
-
-fn get_knowledge_head_sha() -> Result<String> {
-    let mur_dir = crate::store::yaml::default_mur_dir();
-    let repo = git2::Repository::open(&mur_dir)
-        .with_context(|| format!("open knowledge repo at {}", mur_dir.display()))?;
-    let head = repo.head()?;
-    let commit = head.peel_to_commit()?;
-    let full_sha = commit.id().to_string();
-    Ok(full_sha[..12].to_string())
-}
+// `read_snapshot_ref` outlives the retired Pattern pull: `cmd/eval.rs` still
+// reads the Pattern-era ref for snapshot age. Once eval migrates to
+// `read_skill_snapshot_ref`, it can go. (The matching writer now lives only
+// in this file's tests — nothing in production writes the Pattern ref.)
 
 // ── Skill snapshot (memory federation P0) ────────────────────────────
 // Spec: docs/superpowers/specs/2026-08-04-unified-memory-federation.md.
@@ -168,6 +146,23 @@ pub fn read_skill_snapshot_ref(
 mod tests {
     use super::*;
     use mur_common::agent::PatternFilter;
+
+    /// Pattern-era ref writer — production writers are gone with the retired
+    /// pull; kept in tests so the roundtrip below still exercises the on-disk
+    /// shape `cmd/eval.rs` reads via `read_snapshot_ref`.
+    fn write_snapshot_ref(
+        agent_name: &str,
+        snap: &SnapshotRef,
+        cache_dir: &std::path::Path,
+    ) -> Result<()> {
+        let yaml = serde_yaml_ng::to_string(snap)
+            .with_context(|| format!("serialize snapshot-ref for {agent_name}"))?;
+        let dest = cache_dir.join(".snapshot-ref");
+        let tmp = cache_dir.join(".snapshot-ref.tmp");
+        std::fs::write(&tmp, yaml)?;
+        std::fs::rename(&tmp, &dest)?;
+        Ok(())
+    }
 
     #[test]
     fn test_snapshot_ref_roundtrip() {

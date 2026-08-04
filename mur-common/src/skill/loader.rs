@@ -178,11 +178,13 @@ pub fn load_all(mur_home: &Path, agent_name: &str) -> Vec<LoadedSkill> {
             }
             let dir = cache_dir.join(&name);
             let dir_for_loader = dir.clone();
-            if let Some(mut loaded) =
-                load_one(mur_home, &name, SkillScope::Global, &trust, move |_m, _n| {
-                    crate::skill::read_from_dir(&dir_for_loader)
-                })
-            {
+            if let Some(mut loaded) = load_one(
+                mur_home,
+                &name,
+                SkillScope::Global,
+                &trust,
+                move |_m, _n| crate::skill::read_from_dir(&dir_for_loader),
+            ) {
                 loaded.dir = dir;
                 seen_names.insert(loaded.name.clone());
                 out.push(loaded);

@@ -707,7 +707,7 @@ Steps:
 
 Steps:
 
-- [ ] New test in `mur-core/src/federation/snapshot.rs` tests:
+- [x] New test in `mur-core/src/federation/snapshot.rs` tests:
 
 ```rust
     #[test]
@@ -731,11 +731,11 @@ Steps:
 
       (`write_skill_fixture` is the helper Task 3's tests already created — reuse it,
       do not write a second fixture.)
-- [ ] `cargo nextest run -p mur-core -E 'test(smoke_assemble)'` → `1 passed`.
-- [ ] Full gate: `cargo nextest run -p mur-common -p mur-core -p mur-daemon
+- [x] `cargo nextest run -p mur-core -E 'test(smoke_assemble)'` → `1 passed`.
+- [x] Full gate: `cargo nextest run -p mur-common -p mur-core -p mur-daemon
       -p mur-agent-runtime` green; `cargo clippy --workspace -- -D warnings`;
       `cargo fmt --check`.
-- [ ] Commit: `test(core): federation P0 smoke — pull to injectable cache`
+- [x] Commit: `test(core): federation P0 smoke — pull to injectable cache`
 
 ---
 
