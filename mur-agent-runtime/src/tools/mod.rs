@@ -7,6 +7,7 @@ pub mod naming;
 pub mod open_item;
 pub mod read_file;
 pub mod registry;
+pub mod remember;
 pub(crate) mod suggest;
 pub mod write_file;
 
