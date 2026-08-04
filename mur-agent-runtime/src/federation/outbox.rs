@@ -105,6 +105,10 @@ impl AgentOutbox {
             scope: Scope::Personal,
             confidence: 1.0,
             schema_version: SIGNAL_SCHEMA_VERSION,
+            // Unsigned at rest in the agent's own outbox; the sleep-cycle
+            // flush signs at the home boundary (federation/sync.rs, P2c-2).
+            sig: None,
+            key_version: 0,
         };
 
         let ts = now.format("%Y-%m-%dT%H-%M-%S");

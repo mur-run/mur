@@ -213,6 +213,10 @@ pub async fn build_provider_runner(
     // (`FallbackLlmClient`) path below records `Event::Routing`; the
     // single-model path has nothing to route between, so it's left alone.
     telemetry: Option<tokio::sync::mpsc::Sender<crate::telemetry_writer::Event>>,
+    // Supervisor's pre-sandbox-loaded keypair (#858: never lazy-load identity
+    // after the sandbox applies) — signs memory proposals dropped by the
+    // built-in remember tool (P2c-2).
+    identity: Arc<mur_common::identity::AgentIdentity>,
 ) -> anyhow::Result<(
     Arc<TaskRunner>,
     Option<Arc<dyn LlmClient>>,
@@ -347,6 +351,7 @@ pub async fn build_provider_runner(
                 Arc::new(RememberTool {
                     mur_home: mur_home.clone(),
                     agent_name: profile.inner.name.clone(),
+                    identity: identity.clone(),
                 }),
             );
         }
