@@ -7,6 +7,7 @@
 //! plan, not this module.
 
 pub mod gate;
+pub mod memory_proposal;
 pub mod proposal;
 pub mod recurrence;
 pub mod skeleton;

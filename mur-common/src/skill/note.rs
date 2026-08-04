@@ -87,3 +87,46 @@ mod tests {
         }
     }
 }
+
+// ── Memory proposals (federation P2c) ────────────────────────────────────
+// The central-curation leg: an agent that remembers something ALSO proposes
+// it for review. The proposal is a file drop under the inbox (the runtime's
+// one granted central-store write surface); `mur session out` reviews it and
+// only an accepted proposal becomes a GLOBAL note — "visibility follows
+// scope, propagation follows maturity" means nothing an agent inferred
+// reaches other agents without either usage-earned maturity or this human
+// gate.
+
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+/// Proposal drop directory, relative to the MUR home.
+pub const MEMORY_PROPOSAL_DIR: &str = "inbox/memory-proposals";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryProposal {
+    /// Canonical name of the agent that captured the memory.
+    pub agent: String,
+    pub proposed_at: chrono::DateTime<Utc>,
+    /// The full note manifest — same shape the agent wrote locally.
+    pub manifest: SkillManifest,
+}
+
+/// Atomically drop `proposal` into the inbox. Returns the written path.
+/// Deterministic name (`<agent>-<note>`): re-remembering the same note
+/// replaces the pending proposal instead of stacking duplicates.
+pub fn write_memory_proposal(
+    mur_home: &Path,
+    proposal: &MemoryProposal,
+) -> std::io::Result<PathBuf> {
+    let dir = mur_home.join(MEMORY_PROPOSAL_DIR);
+    std::fs::create_dir_all(&dir)?;
+    let fname = format!("{}-{}.yaml", proposal.agent, proposal.manifest.name);
+    let dest = dir.join(&fname);
+    let tmp = dir.join(format!(".{fname}.tmp"));
+    let yaml = serde_yaml_ng::to_string(proposal)
+        .map_err(|e| std::io::Error::other(format!("serialize proposal: {e}")))?;
+    std::fs::write(&tmp, yaml)?;
+    std::fs::rename(&tmp, &dest)?;
+    Ok(dest)
+}

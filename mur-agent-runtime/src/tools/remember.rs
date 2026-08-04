@@ -150,10 +150,23 @@ impl ToolExecutor for RememberTool {
         std::fs::write(&stats_path, json)
             .map_err(|e| ToolError::Execution(format!("write stats: {e}")))?;
 
+        // Central-curation leg (P2c): also propose the note for human review —
+        // only an accepted proposal becomes a GLOBAL note. Best-effort: the
+        // agent-local memory above is already durable, so a proposal-write
+        // failure warns instead of failing the remember.
+        let proposal = mur_common::skill::note::MemoryProposal {
+            agent: self.agent_name.clone(),
+            proposed_at: chrono::Utc::now(),
+            manifest,
+        };
+        if let Err(e) = mur_common::skill::note::write_memory_proposal(&self.mur_home, &proposal) {
+            tracing::warn!(error = %e, "memory proposal drop failed (agent-local copy is safe)");
+        }
+
         Ok(format!(
             "remembered '{name}' (kind={kind:?}, state=Draft, agent-local; effective next \
-             turn). Now tell the user in ONE line, in their language, what you saved and \
-             that /forget {name} undoes it."
+             turn; queued for the user's `mur session out` review). Now tell the user in \
+             ONE line, in their language, what you saved and that /forget {name} undoes it."
         ))
     }
 }
