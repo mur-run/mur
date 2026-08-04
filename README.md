@@ -160,10 +160,10 @@ API keys are stored as `SecretRef`s (`env:`, `keychain:`, `file:`, `cmd:`) — n
 
 #### Cloud LLM backend (opt-in)
 
-Conversation summarization and ask stages default to local Ollama. Each stage
+Conversation stages inherit the top-level `llm:` block by default. Each stage
 accepts an optional `BackendConfig` override in `~/.mur/config.yaml`, so you
-can route individual stages through Anthropic while everything else stays
-local:
+can pin individual stages to a different provider while everything else inherits
+the top-level setting:
 
 ```yaml
 conversations:
