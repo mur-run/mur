@@ -52,6 +52,16 @@ pub const MAX_SEARCH_LIMIT: usize = 20;
 /// Default `agent-browser` binary name, resolved via `PATH`.
 pub const DEFAULT_AGENT_BROWSER_BIN: &str = "agent-browser";
 
+/// DuckDuckGo's server-rendered (no-JS) HTML search endpoint — the keyless
+/// default for tier-1 `search`. Overridable because this host is a single
+/// point of failure: networks that blackhole DDG (SYN dropped despite DNS
+/// resolving) leave keyless search dead with no signal but a timeout. Point
+/// it at a DDG mirror or an egress proxy that can reach it. The response
+/// parser still expects DuckDuckGo's HTML shape — this swaps the host, not
+/// the search engine. For a genuinely different engine, configure a Brave
+/// key (`brave_api_key` / `MUR_RESEARCH_BRAVE_KEY`) instead.
+pub const DEFAULT_SEARCH_ENDPOINT: &str = "https://html.duckduckgo.com/html/";
+
 /// Chrome-tier stealth flags (comma-separated, forwarded verbatim as
 /// `agent-browser` args). MUST NEVER be forwarded to the lightpanda tier —
 /// see `browser::build_fetch_argv`'s doc comment /
@@ -97,6 +107,7 @@ const ENV_LIGHTPANDA_PATH: &str = "MUR_RESEARCH_LIGHTPANDA_PATH";
 const ENV_CHROME_STEALTH_ARGS: &str = "MUR_RESEARCH_CHROME_STEALTH_ARGS";
 const ENV_RENDER_ENGINE: &str = "MUR_RESEARCH_RENDER_ENGINE";
 const ENV_OBSCURA_PATH: &str = "MUR_RESEARCH_OBSCURA_PATH";
+const ENV_SEARCH_ENDPOINT: &str = "MUR_RESEARCH_SEARCH_ENDPOINT";
 
 /// Fully-resolved gateway configuration — YAML defaults merged with env
 /// overrides, ready to use for the lifetime of the process.
@@ -113,6 +124,9 @@ pub struct GatewayConfig {
     pub max_fetch_chars: usize,
     /// Brave Search API token; `Some` → `search` uses Brave, `None` → DDG.
     pub brave_api_key: Option<String>,
+    /// Tier-1 search endpoint (DuckDuckGo-shaped HTML). See
+    /// [`DEFAULT_SEARCH_ENDPOINT`].
+    pub search_endpoint: String,
 }
 
 /// Raw `research_gateway:` YAML shape. Every field is optional/defaulted so
@@ -134,6 +148,7 @@ struct GatewayConfigYaml {
     chrome_stealth_args: Option<String>,
     render_engine: Option<String>,
     obscura_path: Option<String>,
+    search_endpoint: Option<String>,
 }
 
 /// Resolve `research_gateway.brave_api_key_ref` — a mur-common `SecretRef`
@@ -227,6 +242,10 @@ pub fn load_from_yaml(yaml: &str, mur_home: &Path) -> GatewayConfig {
         .or_else(|| resolve_brave_key_ref(raw.brave_api_key_ref.as_deref()))
         .or_else(|| raw.brave_api_key.filter(|s| !s.is_empty()));
 
+    let search_endpoint = non_empty_env(ENV_SEARCH_ENDPOINT)
+        .or(raw.search_endpoint)
+        .unwrap_or_else(|| DEFAULT_SEARCH_ENDPOINT.to_string());
+
     let agent_browser_bin = non_empty_env(ENV_AGENT_BROWSER_BIN)
         .or(raw.agent_browser_bin)
         .unwrap_or_else(|| DEFAULT_AGENT_BROWSER_BIN.to_string());
@@ -273,6 +292,7 @@ pub fn load_from_yaml(yaml: &str, mur_home: &Path) -> GatewayConfig {
         search_limit,
         max_fetch_chars,
         brave_api_key,
+        search_endpoint,
     }
 }
 
@@ -387,6 +407,34 @@ mod tests {
         assert!(c.search_limit >= 1); // documented default present
         unsafe {
             std::env::remove_var(ENV_FETCH_TIMEOUT_SECS);
+        }
+    }
+
+    #[test]
+    fn search_endpoint_precedence_default_then_yaml_then_env() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // SAFETY: env mutation guarded by ENV_LOCK above.
+        unsafe {
+            std::env::remove_var(ENV_SEARCH_ENDPOINT);
+        }
+        let yaml = "research_gateway:\n  search_endpoint: \"https://ddg.mirror.test/html/\"\n";
+
+        // 1. neither set -> the documented default
+        let c = load_from_yaml("", Path::new("/nonexistent"));
+        assert_eq!(c.search_endpoint, DEFAULT_SEARCH_ENDPOINT);
+
+        // 2. YAML set -> YAML wins over the default
+        let c = load_from_yaml(yaml, Path::new("/nonexistent"));
+        assert_eq!(c.search_endpoint, "https://ddg.mirror.test/html/");
+
+        // 3. env set -> env wins over YAML (same precedence as every sibling)
+        unsafe {
+            std::env::set_var(ENV_SEARCH_ENDPOINT, "https://from-env.test/html/");
+        }
+        let c = load_from_yaml(yaml, Path::new("/nonexistent"));
+        assert_eq!(c.search_endpoint, "https://from-env.test/html/");
+        unsafe {
+            std::env::remove_var(ENV_SEARCH_ENDPOINT);
         }
     }
 

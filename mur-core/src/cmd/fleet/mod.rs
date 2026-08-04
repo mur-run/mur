@@ -6,6 +6,7 @@ pub mod concurrent_cmd;
 pub mod control;
 pub mod create;
 pub mod delete;
+pub mod done_policy;
 pub mod export;
 pub mod import;
 pub mod jobs;

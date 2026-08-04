@@ -13,6 +13,7 @@ use mur_common::channel::{ChannelActor, ChannelEvent};
 use mur_common::fleet::{Fleet, Job, JobStatus};
 use sha2::{Digest, Sha256};
 
+use super::done_policy::{DonePolicy, done_policy};
 use super::progress::{
     RunProgress, StepProgress, StepState, classify_phase, iteration_summary_line,
 };
@@ -53,6 +54,9 @@ pub enum LoopStop {
     Stopped,
     /// A commander governance kill (or zero budget-ceiling) halted the loop.
     CommanderKilled,
+    /// `done_when: queue-empty` and an iteration found no queued job — the
+    /// fleet's work is done because there is none left.
+    QueueDrained,
 }
 
 /// Parse a humantime-ish duration: `30s`, `5m`, `2h`, `1d`, or a bare integer
@@ -88,19 +92,6 @@ pub fn is_converged(reply: &str) -> bool {
         .collect();
     let has = |t: &str| tokens.iter().any(|w| w == t);
     has("done") && !has("continue") && !has("not") && !has("incomplete")
-}
-
-/// A structured `done_when` marker predicate: `marker:<TEXT>` means "converge
-/// when a member emits `<TEXT>` as a sentinel (its own line) in the channel".
-/// Returns the (trimmed, non-empty) marker text, or None for an empty /
-/// non-`marker:` criterion (→ router fallback).
-/// Machine-checkable convergence: deterministic and LLM-independent, vs. trusting
-/// the router's free-text self-assessment.
-pub fn done_marker(done_when: &str) -> Option<&str> {
-    done_when
-        .strip_prefix("marker:")
-        .map(str::trim)
-        .filter(|m| !m.is_empty())
 }
 
 /// Has a member emitted `marker` as a SENTINEL — the sole trimmed content of
@@ -318,6 +309,7 @@ fn outcome_label(stop: LoopStop) -> &'static str {
         LoopStop::Budget => "budget",
         LoopStop::Stopped => "stopped",
         LoopStop::CommanderKilled => "commander-killed",
+        LoopStop::QueueDrained => "queue-drained",
     }
 }
 
@@ -484,6 +476,20 @@ pub async fn run_guarded(
         let pre_events = svc.load_events(&fleet.channel_id).unwrap_or_default();
         // Drain job queue: oldest queued job is this iteration's goal; else standing goal.
         let (iter_goal, mut active_job) = iteration_goal(mur_home, name, &fleet.goal)?;
+
+        // `done_when: queue-empty` — a drained queue IS the completion
+        // condition. Checked here, ahead of `plan_via_router` and every other
+        // model call, so a cron tick that wakes to an empty queue costs nothing
+        // rather than costing a full iteration. Stuck-detection cannot stand in
+        // for this: a member replying "what should I run?" counts as progress,
+        // so `stuck` resets and the loop runs to the iteration cap.
+        if active_job.is_none()
+            && let Some(lc) = fleet.loop_cfg.as_ref()
+            && done_policy(&lc.done_when) == DonePolicy::QueueEmpty
+        {
+            println!("── fleet '{name}': job queue empty — nothing to do ──");
+            break LoopStop::QueueDrained;
+        }
         let planning_fleet = mur_common::fleet::Fleet {
             goal: iter_goal.clone(),
             ..fleet.clone()
@@ -617,19 +623,26 @@ pub async fn run_guarded(
             stuck += 1;
         }
 
-        // Convergence. A structured `done_when: marker:<TEXT>` is checked
+        // Convergence: three policies, dispatched from the same `done_when`
+        // string `done_policy()` classified against above. `Marker` is checked
         // deterministically against this run's channel events (no LLM, no
-        // trusting the router's self-assessment). Otherwise fall back to asking
-        // the router — a failed ask (e.g. router down) is treated as "continue",
-        // and the cap/deadline/stuck guards still bound the loop either way.
+        // trusting the router's self-assessment). `QueueEmpty` has nothing to
+        // check here — the drained-queue break above is its only stop, so
+        // falling through to the router would both cost a call this policy
+        // promises not to make and risk a wrong DONE (the router sees the
+        // channel, not the queue, and a member reporting its own completion
+        // reads a lot like the fleet's). `Router` is the fallback: a failed ask
+        // (e.g. router down) is treated as "continue", and the cap/deadline/
+        // stuck guards still bound the loop either way.
         let done_when = fleet
             .loop_cfg
             .as_ref()
             .map(|l| l.done_when.as_str())
             .unwrap_or("");
-        let converged = match done_marker(done_when) {
-            Some(marker) => channel_has_marker(&events, marker, start_seq),
-            None => ask_router_done(mur_home, &fleet, &events).unwrap_or(false),
+        let converged = match done_policy(done_when) {
+            DonePolicy::Marker(m) => channel_has_marker(&events, m, start_seq),
+            DonePolicy::QueueEmpty => false, // the drained-queue break above is the only stop for this policy
+            DonePolicy::Router => ask_router_done(mur_home, &fleet, &events).unwrap_or(false),
         };
         if converged {
             break LoopStop::Converged;
@@ -738,16 +751,6 @@ mod tests {
             sig: None,
             key_version: None,
         }
-    }
-
-    #[test]
-    fn done_marker_parses_structured_criterion() {
-        assert_eq!(done_marker("marker:FLEET_DONE"), Some("FLEET_DONE"));
-        assert_eq!(done_marker("marker:  SHIPPED  "), Some("SHIPPED")); // trimmed
-        assert_eq!(done_marker("marker:"), None); // empty
-        assert_eq!(done_marker("marker:   "), None); // whitespace only
-        assert_eq!(done_marker("all tasks closed"), None); // free text → router fallback
-        assert_eq!(done_marker(""), None);
     }
 
     #[test]
@@ -1197,5 +1200,129 @@ mod tests {
             audit.contains(&format!("\"nonce\":\"{nonce}\"")),
             "audit must bind the exact deciding directive nonce ({nonce})"
         );
+    }
+
+    #[test]
+    fn queue_drained_outcome_has_its_own_label() {
+        // The progress file's `outcome` is how a caller tells "finished because
+        // there was nothing left to do" from "ran out of iterations".
+        assert_eq!(outcome_label(LoopStop::QueueDrained), "queue-drained");
+        assert_ne!(
+            outcome_label(LoopStop::QueueDrained),
+            outcome_label(LoopStop::MaxIterations)
+        );
+    }
+
+    #[tokio::test]
+    async fn queue_drained_break_fires_when_policy_is_queue_empty_and_queue_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let fleet = Fleet {
+            name: "dev".into(),
+            display_name: String::new(),
+            goal: "standing goal".into(),
+            router: None,
+            members: vec!["pm".into()],
+            team_id: None,
+            channel_id: "fleet-dev".into(),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: Some(mur_common::fleet::FleetLoop {
+                trigger: "manual".into(),
+                max_iterations: 1,
+                budget_usd: 0.0,
+                deadline: String::new(),
+                done_when: super::super::done_policy::DONE_WHEN_QUEUE_EMPTY.into(),
+            }),
+            parallel: None,
+            requires_programs: vec![],
+        };
+        crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
+        mur_channel::ChannelService::open(home)
+            .unwrap()
+            .create_for_fleet("dev", "mur", &["pm".into()])
+            .unwrap();
+        // No job is ever queued, so the break fires on iteration 1 — ahead of
+        // the `plan_via_router` dial, so no live "pm" agent is needed here.
+        let stop = run_loop_for_test(home).await;
+        assert_eq!(stop, LoopStop::QueueDrained);
+    }
+
+    #[tokio::test]
+    async fn queue_drained_break_stays_inert_under_router_policy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let fleet = Fleet {
+            name: "dev".into(),
+            display_name: String::new(),
+            goal: "standing goal".into(),
+            router: None,
+            members: vec!["pm".into()],
+            team_id: None,
+            channel_id: "fleet-dev".into(),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: Some(mur_common::fleet::FleetLoop {
+                trigger: "manual".into(),
+                max_iterations: 1,
+                budget_usd: 0.0,
+                deadline: String::new(),
+                done_when: String::new(), // router policy — the fallback for empty/legacy values
+            }),
+            parallel: None,
+            requires_programs: vec![],
+        };
+        crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
+        mur_channel::ChannelService::open(home)
+            .unwrap()
+            .create_for_fleet("dev", "mur", &["pm".into()])
+            .unwrap();
+        // Same empty queue as the fires case, but router policy: the gate must
+        // not mistake an empty queue for `done_when: queue-empty`. No live
+        // "pm" agent exists to dial, so the iteration errors out and
+        // `run_loop_for_test` folds that into MaxIterations — the only claim
+        // under test is that the gate did NOT mistake this for a drained queue.
+        let stop = run_loop_for_test(home).await;
+        assert_ne!(stop, LoopStop::QueueDrained);
+    }
+
+    #[tokio::test]
+    async fn queue_empty_policy_with_claimed_job_does_not_converge_via_router() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let fleet = Fleet {
+            name: "dev".into(),
+            display_name: String::new(),
+            goal: "standing goal".into(),
+            router: None,
+            members: vec!["pm".into()],
+            team_id: None,
+            channel_id: "fleet-dev".into(),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: Some(mur_common::fleet::FleetLoop {
+                trigger: "manual".into(),
+                max_iterations: 1,
+                budget_usd: 0.0,
+                deadline: String::new(),
+                done_when: super::super::done_policy::DONE_WHEN_QUEUE_EMPTY.into(),
+            }),
+            parallel: None,
+            requires_programs: vec![],
+        };
+        crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
+        mur_channel::ChannelService::open(home)
+            .unwrap()
+            .create_for_fleet("dev", "mur", &["pm".into()])
+            .unwrap();
+        // A claimed job means `active_job` is `Some`, so the drained-queue
+        // break above does NOT fire and this iteration takes the normal
+        // delegate path — regression coverage for the bug where `queue-empty`
+        // fell through `done_marker` (which only recognises `marker:`) into
+        // `ask_router_done`, paying for an LLM call on every iteration that
+        // actually does work, on a policy that promises never to make one.
+        super::super::jobs::enqueue_job(home, "dev", "job-1", "cli").unwrap();
+        let stop = run_loop_for_test(home).await;
+        assert_ne!(stop, LoopStop::Converged);
     }
 }

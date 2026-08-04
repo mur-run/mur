@@ -512,7 +512,7 @@ pub enum FleetAction {
         worktree: bool,
     },
     /// Update a fleet's loop/auto-run config (trigger, budget, iteration cap,
-    /// deadline, done-when marker). Only the flags you pass are changed —
+    /// deadline, done-when policy). Only the flags you pass are changed —
     /// everything else already set is preserved.
     SetLoop {
         /// Fleet name
@@ -529,7 +529,8 @@ pub enum FleetAction {
         /// Projected USD budget ceiling for the loop; required > 0 for daemon auto-run
         #[arg(long)]
         budget_usd: Option<f64>,
-        /// Convergence marker: `marker:<TEXT>` (own-line sentinel), or leave unset for router judgment
+        /// Completion policy: marker:<TEXT> (own-line sentinel), queue-empty
+        /// (stop when nothing is queued), or leave unset for router judgment
         #[arg(long)]
         done_when: Option<String>,
     },
@@ -547,6 +548,16 @@ pub enum FleetAction {
         /// Include terminal (done/failed/canceled) jobs
         #[arg(long)]
         all: bool,
+    },
+    /// Cancel a queued job so no run picks it up
+    Cancel {
+        /// Fleet name
+        name: String,
+        /// Job id, or a unique prefix of one (see `mur fleet jobs`)
+        id: String,
+        /// Skip the confirmation prompt
+        #[arg(long)]
+        yes: bool,
     },
     /// Stop a fleet (kill-switch): disable auto-run and halt a running loop
     Stop {
