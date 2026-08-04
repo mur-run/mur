@@ -5,10 +5,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use mur_common::skill::lifecycle::NoteKind;
-use mur_common::skill::manifest::{Content, SkillManifest, Visibility};
 use mur_common::skill::stats::{LifecycleState, SkillStats};
 use mur_common::skill::store::{global_skill_dir, read_from_dir, write_to_dir};
-use mur_common::skill::types::{Category, Priority};
+use mur_common::skill::types::Category;
 use mur_common::skill::validate;
 use mur_common::telemetry::METHOD_NOTE_RETRIEVED;
 
@@ -34,45 +33,13 @@ pub fn do_create(
         bail!("note '{name}' already exists at {}", dir.display());
     }
 
-    let manifest = SkillManifest {
-        name: name.to_string(),
-        version: "1.0.0".into(),
-        publisher: DEFAULT_PUBLISHER.into(),
-        description: description.to_string(),
-        category: Category::Note,
-        hosts: vec![],
-        scope: Default::default(),
-        visibility: Visibility::default(),
-        origin: None,
-        origin_version: None,
-        origin_hash: None,
-        fleet: None,
-        team: None,
-        governance: None,
-        project: None,
-        content: Content {
-            r#abstract: description.to_string(),
-            context: None,
-            procedure: None,
-            command: None,
-            note: Some(body.to_string()),
-        },
-        requires: vec![],
-        // Kind lives in the tags (federation P1): a `rule` tag marks a rule;
-        // a plain note is a fact. `note_kind()` is the single reader.
-        tags: match kind {
-            NoteKind::Rule => vec!["rule".into()],
-            NoteKind::Fact => vec![],
-        },
-        triggers: vec![],
-        priority: Priority::Normal,
-        evolution_log: vec![],
-        transfer_chain: vec![],
-        mcp_requirements: vec![],
-        provenance: Default::default(),
-        updated_at: chrono::Utc::now(),
-        requires_programs: vec![],
-    };
+    let manifest = mur_common::skill::note::note_manifest(&mur_common::skill::note::NoteSpec {
+        name,
+        description,
+        body,
+        kind,
+        publisher: DEFAULT_PUBLISHER,
+    });
 
     validate(&manifest).with_context(|| format!("validate note '{name}'"))?;
     let written =
