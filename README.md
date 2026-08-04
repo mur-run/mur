@@ -175,7 +175,7 @@ conversations:
     # cloud, whatever that's set to) — give it its own override to pin it
     # independently.
     extractive_backend:
-      provider: anthropic          # ollama | anthropic
+      provider: anthropic          # ollama | anthropic | openai | openrouter | gemini
       model: claude-haiku-4-5
       api_key_env: ANTHROPIC_API_KEY
       # endpoint: https://api.anthropic.com   # optional override
@@ -190,6 +190,10 @@ conversations:
       model: claude-sonnet-5
       api_key_env: ANTHROPIC_API_KEY
     # rewriter_backend:                       # same shape, per-stage
+  rollup:
+    # weekly/monthly rollups take the same two overrides as compact
+    # extractive_backend: …
+    # abstractive_backend: …
 ```
 
 Fields: `provider`, `model`, optional `endpoint`, `api_key_env` (name of the
@@ -197,6 +201,17 @@ env var holding the key — the key itself never lives in config), `api_key_ref`
 (a secret-ref string such as `env:VARNAME`, checked before `api_key_env`), and
 `timeout_secs`. Leaving an override unset makes that stage inherit the
 top-level `llm:` block — there is no separate local-only fallback anymore.
+
+`mur chat doctor` prints every stage with the provider, model and endpoint it
+will actually dial, marked `[pinned]` or `[follows smart]`, then probes each
+distinct endpoint once — so you can verify routing before any conversation
+data exists.
+
+**Upgrading:** configs written before per-stage backends stored a bare model
+name plus an `ollama_endpoint`. MUR converts them the first time it loads your
+config and writes the result back once. A stage still on its shipped defaults
+becomes an inherit; a stage you had customized is pinned to an explicit Ollama
+backend, preserving exactly what it did before.
 
 Typical cost with Haiku-extractive + Sonnet-ask is on the order of a few
 dollars per month of daily use. Verify your setup with the ignored live
