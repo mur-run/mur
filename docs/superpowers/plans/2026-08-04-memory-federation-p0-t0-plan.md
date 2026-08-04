@@ -207,7 +207,7 @@ mod tests {
 
 Steps:
 
-- [ ] Follow the `ParallelJobsConfig` precedent in `mur-common/src/config.rs`
+- [x] Follow the `ParallelJobsConfig` precedent in `mur-common/src/config.rs`
       (around line 183). Add next to it:
 
 ```rust
@@ -245,7 +245,7 @@ impl Default for SnapshotConfig {
     pub federation_snapshot: SnapshotConfig,
 ```
 
-- [ ] Test in the existing config test module:
+- [x] Test in the existing config test module:
 
 ```rust
     #[test]
@@ -262,12 +262,12 @@ impl Default for SnapshotConfig {
 
       (If `LifecycleState` lacks `Serialize`/`Deserialize`/`PartialEq` derives, add the
       missing ones to its derive list in `stats.rs` — additive, no behavior change.)
-- [ ] `cargo nextest run -p mur-common -E 'test(federation_snapshot)'` → `1 passed`.
-- [ ] **Workspace-literal check** (a new field on a shared mur-common type breaks struct
+- [x] `cargo nextest run -p mur-common -E 'test(federation_snapshot)'` → `1 passed`.
+- [x] **Workspace-literal check** (a new field on a shared mur-common type breaks struct
       literals in other members and EXCLUDED Tauri crates):
       `cargo test --workspace --no-run 2>&1 | tail -5` must end in a successful build.
       `#[serde(default)]` covers YAML; fix any `Config { .. }` literals the compiler names.
-- [ ] Commit: `feat(common): federation_snapshot config block`
+- [x] Commit: `feat(common): federation_snapshot config block`
 
 ---
 
