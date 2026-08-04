@@ -1,0 +1,7 @@
+# `mur-core`'s bin target has ~12 clap CLI-parse tests that overflow the default
+# 2 MiB thread stack in a debug build. Without this they SIGABRT, so a bare
+# `cargo nextest run --workspace` is red for everyone unless they know to
+# export it by hand. nextest has no `[env]` key of its own (0.9.137 warns
+# "ignoring unknown configuration key"), so it lives here.
+[env]
+RUST_MIN_STACK = "33554432"
