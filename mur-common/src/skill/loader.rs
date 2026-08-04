@@ -157,6 +157,41 @@ pub fn load_all(mur_home: &Path, agent_name: &str) -> Vec<LoadedSkill> {
             }
         }
     }
+    // Federated knowledge cache next (daemon-assembled snapshot of global
+    // skills at or above the lifecycle floor; federation P0). A cache entry
+    // wins over a same-named global — it IS that global skill, scope-filtered
+    // — but never over a per-agent install.
+    let cache_dir = mur_home
+        .join("agents")
+        .join(agent_name)
+        .join("knowledge_cache");
+    if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+        let mut names: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().join("skill.yaml").is_file())
+            .filter_map(|e| e.file_name().to_str().map(String::from))
+            .collect();
+        names.sort(); // deterministic load order
+        for name in names {
+            if seen_names.contains(&name) {
+                continue;
+            }
+            let dir = cache_dir.join(&name);
+            let dir_for_loader = dir.clone();
+            if let Some(mut loaded) = load_one(
+                mur_home,
+                &name,
+                SkillScope::Global,
+                &trust,
+                move |_m, _n| crate::skill::read_from_dir(&dir_for_loader),
+            ) {
+                loaded.dir = dir;
+                seen_names.insert(loaded.name.clone());
+                out.push(loaded);
+            }
+        }
+    }
+
     if let Ok(names) = local::list_installed(mur_home) {
         for name in names {
             if seen_names.contains(&name) {
@@ -273,11 +308,15 @@ mod tests {
     }
 
     fn make(name: &str) -> SkillManifest {
+        make_desc(name, "test")
+    }
+
+    fn make_desc(name: &str, desc: &str) -> SkillManifest {
         parse_canonical(&format!(
             r#"name: {name}
 version: 1.0.0
 publisher: human:t
-description: test
+description: {desc}
 category: context
 content:
   abstract: hi
@@ -285,6 +324,51 @@ content:
 "#
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn knowledge_cache_skill_loads() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        let cdir = home
+            .join("agents/a1/knowledge_cache")
+            .join("federated-skill");
+        write_to_dir(&cdir, &make("federated-skill")).unwrap();
+
+        let loaded = load_all(home, "a1");
+        let hit = loaded
+            .iter()
+            .find(|s| s.name == "federated-skill")
+            .expect("cached skill must be visible to the loader");
+        assert_eq!(hit.dir, cdir);
+    }
+
+    #[test]
+    fn agent_local_wins_over_cache_wins_over_global() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        write_to_dir(
+            &home.join("agents/a1/skills/dup"),
+            &make_desc("dup", "agent-local"),
+        )
+        .unwrap();
+        write_to_dir(
+            &home.join("agents/a1/knowledge_cache/dup"),
+            &make_desc("dup", "cache"),
+        )
+        .unwrap();
+        write_to_dir(&home.join("skills/dup"), &make_desc("dup", "global")).unwrap();
+
+        let loaded = load_all(home, "a1");
+        let dups: Vec<_> = loaded.iter().filter(|s| s.name == "dup").collect();
+        assert_eq!(dups.len(), 1, "name collision must resolve to ONE copy");
+        assert_eq!(dups[0].manifest.description, "agent-local");
+
+        // Remove the per-agent copy: the cache copy takes over, not the global.
+        std::fs::remove_dir_all(home.join("agents/a1/skills/dup")).unwrap();
+        let loaded = load_all(home, "a1");
+        let dup = loaded.iter().find(|s| s.name == "dup").unwrap();
+        assert_eq!(dup.manifest.description, "cache");
     }
 
     #[test]

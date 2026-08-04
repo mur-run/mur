@@ -184,6 +184,10 @@ pub struct Config {
     #[serde(default)]
     pub parallel_jobs: ParallelJobsConfig,
 
+    /// Memory-federation snapshot settings (`federation_snapshot:`).
+    #[serde(default)]
+    pub federation_snapshot: SnapshotConfig,
+
     // --- fleet_run runtime built-in tool ---
     #[serde(default)]
     pub fleet_run: FleetRunConfig,
@@ -208,6 +212,32 @@ pub struct ParallelJobsConfig {
     /// Empty = deny all.
     #[serde(default)]
     pub targets: Vec<String>,
+}
+
+// --- memory-federation snapshot (spec 2026-08-04-unified-memory-federation) ---
+
+/// Daemon-side settings for the signed snapshot pull. Stored under
+/// `federation_snapshot:` in `~/.mur/config.yaml`; every field has a default
+/// so an absent block means "defaults", never "off".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SnapshotConfig {
+    /// How often the daemon sweeps `inbox/snapshot-requests/`, in seconds.
+    pub poll_secs: u64,
+    /// Reject requests older than this (replay blunting), in seconds.
+    pub request_max_age_secs: u64,
+    /// Minimum lifecycle state a global skill needs to enter a snapshot.
+    pub min_lifecycle: crate::skill::stats::LifecycleState,
+}
+
+impl Default for SnapshotConfig {
+    fn default() -> Self {
+        Self {
+            poll_secs: 30,
+            request_max_age_secs: 600,
+            min_lifecycle: crate::skill::stats::LifecycleState::Stable,
+        }
+    }
 }
 
 /// Authorization gate for the runtime's built-in `fleet_run` tool. Stored under
@@ -1385,6 +1415,17 @@ conversations:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn federation_snapshot_defaults_apply_when_block_absent() {
+        let c: super::Config = serde_yaml_ng::from_str("{}").unwrap();
+        assert_eq!(c.federation_snapshot.poll_secs, 30);
+        assert_eq!(c.federation_snapshot.request_max_age_secs, 600);
+        assert_eq!(
+            c.federation_snapshot.min_lifecycle,
+            crate::skill::stats::LifecycleState::Stable
+        );
+    }
+
     use super::*;
 
     #[test]

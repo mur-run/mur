@@ -1,6 +1,6 @@
 //! Agent-side sleep cycle: fires every `agent_idle_minutes`, flushes the
 //! evidence outbox to `~/.mur/inbox/` (file-drop; daemon picks up), then
-//! refreshes the snapshot via a `mur agent snapshot pull` subprocess.
+//! drops a signed snapshot request for the daemon to serve (federation P0).
 
 use super::outbox::AgentOutbox;
 use anyhow::Result;
@@ -70,33 +70,46 @@ fn flush_outbox(agent_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Invoke `mur agent snapshot pull <name>` as a best-effort subprocess.
+/// Ask the daemon for a fresh knowledge snapshot by dropping a signed request
+/// into `<mur_home>/inbox/snapshot-requests/`. The daemon — outside this
+/// sandbox — verifies the signature against the agent's on-disk pubkey and
+/// assembles the snapshot central-side; this side writes ONE small file and
+/// never spawns anything. (The previous `mur agent snapshot pull` subprocess
+/// required `mur` on the spawn allowlist — the entire CLI surface — and died
+/// with EPERM under sandbox.) Uses the same `<mur_home>/inbox/...` write
+/// grant the outbox flush above relies on.
 fn refresh_snapshot(agent_name: &str) {
-    let mur_bin = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("mur")))
-        .unwrap_or_else(|| PathBuf::from("mur"));
-    // Fire-and-forget, but `std::process::Child` has no background reaper
-    // (unlike `tokio::process::Child`): an un-waited subprocess becomes a
-    // permanent zombie once it exits. Reap it on a detached thread instead
-    // of leaking (dogfood issue 11).
-    match std::process::Command::new(&mur_bin)
-        .args(["agent", "snapshot", "pull", agent_name])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
-        Ok(child) => {
-            std::thread::spawn(move || {
-                let mut child = child;
-                let _ = child.wait();
-            });
-            info!(agent = %agent_name, "agent sleep-cycle: snapshot pull triggered");
+    let mur_home = match dirs::home_dir() {
+        Some(h) => h.join(".mur"),
+        None => {
+            warn!(agent = %agent_name, "agent sleep-cycle: no home dir; skipping snapshot request");
+            return;
         }
+    };
+    match write_snapshot_request_at(&mur_home, agent_name) {
+        Ok(()) => info!(agent = %agent_name, "agent sleep-cycle: snapshot request dropped"),
         Err(e) => {
-            warn!(agent = %agent_name, error = %e, "agent sleep-cycle: snapshot pull spawn failed");
+            warn!(agent = %agent_name, error = %e, "agent sleep-cycle: snapshot request write failed")
         }
     }
+}
+
+/// Testable core of `refresh_snapshot`: sign with the agent identity and
+/// atomically drop the request file.
+fn write_snapshot_request_at(mur_home: &std::path::Path, agent_name: &str) -> Result<()> {
+    use mur_common::snapshot_request::{SNAPSHOT_REQUEST_DIR, SnapshotRequest};
+    let identity =
+        mur_common::identity::AgentIdentity::load(&mur_home.join("agents").join(agent_name))
+            .map_err(|e| anyhow::anyhow!("load agent identity: {e}"))?;
+    let req = SnapshotRequest::create(agent_name, &identity, chrono::Utc::now());
+    let dir = mur_home.join(SNAPSHOT_REQUEST_DIR);
+    std::fs::create_dir_all(&dir)?;
+    // One pending request per agent: deterministic name, tmp+rename.
+    let dest = dir.join(format!("{agent_name}.yaml"));
+    let tmp = dir.join(format!(".{agent_name}.yaml.tmp"));
+    std::fs::write(&tmp, serde_yaml_ng::to_string(&req)?)?;
+    std::fs::rename(&tmp, &dest)?;
+    Ok(())
 }
 
 fn mur_inbox_dir() -> Result<PathBuf> {
@@ -119,4 +132,27 @@ fn agent_idle_minutes() -> u64 {
         return minutes;
     }
     5
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_request_is_written_and_verifies() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let agent_dir = home.join("agents/w1");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let id = mur_common::identity::AgentIdentity::generate();
+        id.save(&agent_dir).unwrap();
+
+        write_snapshot_request_at(home, "w1").unwrap();
+
+        let p = home.join("inbox/snapshot-requests/w1.yaml");
+        let req: mur_common::snapshot_request::SnapshotRequest =
+            serde_yaml_ng::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+        assert!(req.verify(&id.verifying_key_bytes()));
+        assert_eq!(req.agent, "w1");
+    }
 }

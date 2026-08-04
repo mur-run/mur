@@ -1,53 +1,49 @@
 use anyhow::Result;
-use mur_common::agent::AgentProfile;
+use std::path::PathBuf;
 
-pub fn cmd_snapshot_pull(name: &str, dry_run: bool) -> Result<()> {
-    let profile_path = dirs::home_dir()
+fn mur_home() -> Result<PathBuf> {
+    Ok(dirs::home_dir()
         .ok_or_else(|| anyhow::anyhow!("no home dir"))?
-        .join(".mur/agents")
-        .join(name)
-        .join("profile.yaml");
-    let filter = if profile_path.exists() {
-        let body = std::fs::read_to_string(&profile_path)?;
-        let profile: AgentProfile = serde_yaml_ng::from_str(&body)?;
-        profile.federation.filter
-    } else {
-        mur_common::agent::PatternFilter::default()
-    };
+        .join(".mur"))
+}
 
+/// `mur agent snapshot pull <name>` — assemble the skill snapshot into the
+/// agent's `knowledge_cache/` (federation P0). `--dry-run` lists what would
+/// be copied under the configured lifecycle floor without writing anything.
+pub fn cmd_snapshot_pull(name: &str, dry_run: bool) -> Result<()> {
+    let home = mur_home()?;
     if dry_run {
-        let store = crate::store::yaml::YamlStore::default_store()?;
-        let all = store.list_all()?;
-        let matched = crate::federation::snapshot::apply_filter(all, &filter);
+        let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
+        let floor = cfg.federation_snapshot.min_lifecycle;
+        let eligible = crate::federation::snapshot::eligible_skills(&home, floor)?;
         println!(
-            "Would snapshot {} patterns for agent '{name}':",
-            matched.len()
+            "Would snapshot {} skills for agent '{name}' (floor: {floor:?}):",
+            eligible.len()
         );
-        for p in &matched {
-            println!("  {} (importance={:.2})", p.name, p.importance);
+        for (skill, state) in &eligible {
+            println!("  {skill} ({state:?})");
         }
         return Ok(());
     }
-
-    let snap = crate::federation::pull_snapshot(name, &filter)?;
+    let snap = crate::federation::assemble_skill_snapshot(&home, name)?;
     println!(
-        "Snapshot pulled for '{name}': {} @ {}",
-        snap.knowledge_commit, snap.taken_at
+        "Snapshot assembled for '{name}': {} skills @ {}",
+        snap.skill_count,
+        snap.taken_at.to_rfc3339()
     );
     Ok(())
 }
 
+/// `mur agent snapshot show <name>` — print the current skill-snapshot ref.
 pub fn cmd_snapshot_show(name: &str) -> Result<()> {
-    match crate::federation::read_snapshot_ref(name)? {
-        Some(r) => {
-            println!("commit:   {}", r.knowledge_commit);
-            println!("taken_at: {}", r.taken_at);
-            println!(
-                "filter:   tier={:?} maturity={:?} importance_min={} max_count={}",
-                r.filter.tier, r.filter.maturity, r.filter.importance_min, r.filter.max_count
-            );
+    let home = mur_home()?;
+    match crate::federation::read_skill_snapshot_ref(&home, name)? {
+        Some(snap) => {
+            println!("agent: {name}");
+            println!("skills: {}", snap.skill_count);
+            println!("taken_at: {}", snap.taken_at.to_rfc3339());
         }
-        None => println!("No snapshot for agent '{name}'"),
+        None => println!("no snapshot for '{name}' (never pulled)"),
     }
     Ok(())
 }
