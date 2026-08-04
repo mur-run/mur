@@ -13,6 +13,7 @@ pub mod channel;
 pub mod commander;
 pub mod companion;
 pub mod config;
+pub mod config_migrate;
 pub mod conversation;
 pub mod coordination;
 pub mod deps;

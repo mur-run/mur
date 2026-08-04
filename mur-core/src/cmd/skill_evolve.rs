@@ -12,7 +12,7 @@ pub struct EvolveOptions {
 pub async fn cmd_evolve(home: &Path, opts: EvolveOptions) -> Result<()> {
     let config_path = home.join("config.yaml");
     let cfg = mur_common::config::Config::load_or_default(&config_path);
-    let backend = cfg.conversations.ask.synthesize_backend();
+    let backend = cfg.conversations.ask.effective_backend(&cfg.llm);
     let llm = crate::conversations::backend::factory::build_for_stage(&backend, "skill.evolve")
         .context("build LLM client")?;
 

@@ -293,7 +293,10 @@ fn report_mcp_pins(mur_dir: &std::path::Path) {
 /// providers (cloud APIs are auth-gated and shouldn't be probed blindly).
 fn embedding_probe_addr(emb: &mur_common::config::EmbeddingConfig) -> Option<String> {
     let url = match emb.provider.as_str() {
-        "ollama" => emb.ollama_endpoint.clone(),
+        "ollama" => emb
+            .ollama_endpoint
+            .clone()
+            .unwrap_or_else(|| mur_common::config::DEFAULT_OLLAMA_ENDPOINT.to_string()),
         _ => emb.openai_url.clone()?,
     };
     let rest = url
@@ -396,5 +399,21 @@ mod doctor_tests {
         // openai-style provider without a URL → nothing to probe.
         e.openai_url = None;
         assert_eq!(embedding_probe_addr(&e), None);
+    }
+
+    #[test]
+    fn probe_addr_ollama_with_no_endpoint_uses_default() {
+        // An EmbeddingConfig with provider=ollama and ollama_endpoint=None
+        // must resolve to the DEFAULT_OLLAMA_ENDPOINT, not an empty string.
+        // This ensures `mur doctor` correctly identifies local Ollama and probes it.
+        let e = EmbeddingConfig {
+            ollama_endpoint: None,
+            ..Default::default()
+        };
+        assert_eq!(
+            embedding_probe_addr(&e).as_deref(),
+            Some("127.0.0.1:11434"),
+            "ollama with no endpoint should resolve to default localhost:11434"
+        );
     }
 }

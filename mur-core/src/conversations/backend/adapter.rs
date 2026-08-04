@@ -65,7 +65,7 @@ pub fn build_chat_adapter(
     stage: &'static str,
 ) -> anyhow::Result<ChatBackendAdapter> {
     let cfg = Config::load_or_default(&home.join("config.yaml"));
-    let mut backend_cfg = cfg.conversations.ask.synthesize_backend();
+    let mut backend_cfg = cfg.conversations.ask.effective_backend(&cfg.llm);
     if let Some(m) = model_override {
         backend_cfg.model = m.to_string();
     }

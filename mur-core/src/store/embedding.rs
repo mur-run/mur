@@ -120,7 +120,11 @@ impl EmbeddingConfig {
                 }
             }
             _ => EmbeddingProvider::Ollama {
-                base_url: cfg.embedding.ollama_endpoint.clone(),
+                base_url: cfg
+                    .embedding
+                    .ollama_endpoint
+                    .clone()
+                    .unwrap_or_else(|| mur_common::config::DEFAULT_OLLAMA_ENDPOINT.to_string()),
             },
         };
         Self {
