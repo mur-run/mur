@@ -60,7 +60,7 @@ pub struct AskRequest {
     /// Optional pre-built backend for the answer-generation streaming call.
     /// `None` = synthesize an Ollama backend from `endpoint` + `model` (the
     /// legacy path). Construct via
-    /// `factory::build_for_stage(&ask_cfg.synthesize_backend(), "ask.generate")`
+    /// `factory::build_for_stage(&ask_cfg.effective_backend(&cfg.llm), "ask.generate")`
     /// at the CLI/API call site to honor the per-stage `ask.backend` override
     /// AND emit per-call cost telemetry.
     pub answer_backend: Option<Arc<dyn ChatBackend>>,
