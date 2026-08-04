@@ -299,6 +299,20 @@ locally (scrubbed at write, retention-GC'd, one line of config to turn off).
 workflow proposals MUR harvested from your recent sessions — accept one and
 it becomes a draft workflow you can run with `mur run`.
 
+Agents **remember proactively**: state a durable preference mid-chat ("from
+now on, reply in zh-TW") and the agent saves it as a memory note — and tells
+you so, in one line, with `/forget` as the undo. Notes come in two kinds with
+matched decay: `rule` (behavioral guidance, fast half-life) and `fact`
+(environment truth, slow half-life). A reserved injection slot keeps fresh
+notes from being permanently outbid by mature skills. Off switch / confirm-
+first: `memory.capture` in `~/.mur/config.yaml`.
+
+Knowledge **federates on maturity**: each agent's sleep cycle drops an
+Ed25519-signed snapshot request; the daemon verifies it outside the sandbox
+and assembles the curated skills (lifecycle ≥ `stable` by default) into that
+agent's local cache — so every agent keeps learning from the team's proven
+knowledge without ever reading the central store directly.
+
 ### 💬 Be everywhere you are
 
 - **MUR Hub** — multi-conversation rail across the fleet, streaming replies,
