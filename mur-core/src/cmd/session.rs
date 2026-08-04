@@ -460,6 +460,59 @@ pub(crate) async fn cmd_out(action: Option<&str>, force: bool) -> anyhow::Result
             _ => break,
         }
     }
+
+    review_memory_proposals()?;
+    Ok(())
+}
+
+/// Memory-proposal review lane (federation P2c): what agents remembered and
+/// proposed for team-wide visibility. Accept = the note becomes GLOBAL (all
+/// agents' loaders see it); dismiss = the proposal is consumed while the
+/// capturing agent keeps its local copy.
+fn review_memory_proposals() -> Result<()> {
+    let home = crate::paths::mur_root(None);
+    let pending = crate::harvest::memory_proposal::pending(&home)?;
+    if pending.is_empty() {
+        return Ok(());
+    }
+    eprintln!("\n{} memory proposal(s) from agents:", pending.len());
+    for p in &pending {
+        let kind = mur_common::skill::lifecycle::note_kind(&p.proposal.manifest)
+            .map(|k| format!("{k:?}").to_lowercase())
+            .unwrap_or_default();
+        eprintln!(
+            "\n  [{}] {} ({kind}) — {}",
+            p.proposal.agent, p.proposal.manifest.name, p.proposal.manifest.description
+        );
+        if let Some(body) = &p.proposal.manifest.content.note {
+            for line in body.lines().take(3) {
+                eprintln!("    {line}");
+            }
+        }
+        let items = &[
+            "✓ Accept — make it a shared note (visible to all agents)",
+            "⏭ Skip",
+            "✗ Dismiss — drop the proposal (agent keeps its local copy)",
+        ];
+        let choice = dialoguer::Select::new()
+            .with_prompt(format!("Share `{}`?", p.proposal.manifest.name))
+            .items(items)
+            .default(1)
+            .interact()
+            .unwrap_or(1);
+        match choice {
+            0 => match crate::harvest::memory_proposal::accept(&home, p) {
+                Ok(name) => eprintln!("  ✓ shared as `{name}` — ~/.mur/skills/{name}/skill.yaml"),
+                Err(e) => eprintln!("  ✗ {e}"),
+            },
+            2 => {
+                if let Err(e) = crate::harvest::memory_proposal::dismiss(p) {
+                    eprintln!("  ✗ {e}");
+                }
+            }
+            _ => {}
+        }
+    }
     Ok(())
 }
 
