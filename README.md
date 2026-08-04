@@ -295,23 +295,34 @@ recorded behavior is the authoring tool.
 
 Capture is **ambient**: once hooks are installed, every session is recorded
 locally (scrubbed at write, retention-GC'd, one line of config to turn off).
-`mur in` just marks the current session as important; `mur out` reviews the
-workflow proposals MUR harvested from your recent sessions — accept one and
-it becomes a draft workflow you can run with `mur run`.
+`mur in` just marks the current session as important; `mur out` reviews what
+MUR queued for you — workflow proposals harvested from recent sessions, and
+memory notes your agents want to share. Accept a workflow proposal and it
+becomes a draft you can run with `mur run`.
 
 Agents **remember proactively**: state a durable preference mid-chat ("from
 now on, reply in zh-TW") and the agent saves it as a memory note — and tells
-you so, in one line, with `/forget` as the undo. Notes come in two kinds with
-matched decay: `rule` (behavioral guidance, fast half-life) and `fact`
-(environment truth, slow half-life). A reserved injection slot keeps fresh
-notes from being permanently outbid by mature skills. Off switch / confirm-
-first: `memory.capture` in `~/.mur/config.yaml`.
+you so, in one line, with `/forget` as the undo (`/memories` lists everything
+it knows). Notes come in two kinds with matched decay: `rule` (behavioral
+guidance, fast half-life) and `fact` (environment truth, slow half-life). A
+reserved injection slot keeps fresh notes from being permanently outbid by
+mature skills. Off switch / confirm-first: `memory.capture` in
+`~/.mur/config.yaml`.
 
-Knowledge **federates on maturity**: each agent's sleep cycle drops an
-Ed25519-signed snapshot request; the daemon verifies it outside the sandbox
-and assembles the curated skills (lifecycle ≥ `stable` by default) into that
-agent's local cache — so every agent keeps learning from the team's proven
-knowledge without ever reading the central store directly.
+What an agent remembers **stays its own until you say otherwise**: each
+remember also files a proposal into your `mur out` review lane — accept and
+the note goes global (every agent's loader sees it), dismiss and the agent
+keeps its private copy. Nothing an agent inferred reaches other agents
+without usage-earned maturity or that explicit human gate.
+
+Knowledge **federates on maturity, signed both ways**: each agent's sleep
+cycle drops an Ed25519-signed snapshot request; the daemon verifies it
+outside the sandbox and assembles the curated skills (lifecycle ≥ `stable`
+by default) into that agent's local cache. Outbound is signed too — evidence
+signals and memory proposals are signed with the agent's identity key as they
+leave its home, and ingest verifies who said it (and that it may) before
+anything is applied; the review lane labels each proposal `✓ signed`.
+`MUR_SIGNAL_REQUIRE_SIG=1` turns tolerance for legacy unsigned drops off.
 
 ### 💬 Be everywhere you are
 
