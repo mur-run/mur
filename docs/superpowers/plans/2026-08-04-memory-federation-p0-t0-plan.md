@@ -681,7 +681,7 @@ skills; precedence **agent-local > knowledge_cache > global** via the existing
 
 Steps:
 
-- [ ] In `mur-common/src/skill/loader.rs::load_all` (line ~130), between the per-agent
+- [x] In `mur-common/src/skill/loader.rs::load_all` (line ~130), between the per-agent
       block and the global block, insert a scan of
       `mur_home/agents/<agent_name>/knowledge_cache/` that loads each
       `<dir>/skill.yaml` through the SAME per-skill load path the other two blocks use
@@ -689,15 +689,15 @@ Steps:
       agent-local wins over cache and cache wins over global. Trust: cached skills load
       with the same `TrustLevel` resolution the global block uses (they ARE the global
       skills, relocated — do not invent a new trust rule here).
-- [ ] Tests in `loader.rs`:
+- [x] Tests in `loader.rs`:
   - `knowledge_cache_skill_loads`: tempdir home, skill only in the cache → present in
     `load_all` output.
   - `agent_local_wins_over_cache_wins_over_global`: same name in all three places with
     distinguishable descriptions → the agent-local copy is the one loaded, and with the
     agent-local one removed, the cache copy is.
-- [ ] `cargo nextest run -p mur-common -E 'test(knowledge_cache) or test(wins_over)'` →
+- [x] `cargo nextest run -p mur-common -E 'test(knowledge_cache) or test(wins_over)'` →
       `2 passed`.
-- [ ] Commit: `feat(common): skill loader reads the per-agent knowledge_cache`
+- [x] Commit: `feat(common): skill loader reads the per-agent knowledge_cache`
 
 ---
 
