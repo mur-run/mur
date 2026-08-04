@@ -636,7 +636,10 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // 8e. E3 — agent-side sleep cycle: flush evidence outbox + pull snapshot.
     {
         let name = profile.inner.name.clone();
-        transport_tasks.push(crate::federation::spawn_agent_sleep_cycle(name));
+        transport_tasks.push(crate::federation::spawn_agent_sleep_cycle(
+            name,
+            identity.clone(),
+        ));
         info!("agent sleep-cycle spawned");
     }
 
