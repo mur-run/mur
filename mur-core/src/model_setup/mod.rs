@@ -266,9 +266,20 @@ pub fn apply(plan: &ModelSetupPlan, config: &mut Config) {
             api_key_ref: c.api_key_ref.clone(),
             timeout_secs: None,
         };
+        // Pin all six conversation-stage backends, not just the three
+        // legacy fields (ask + the extractive halves of compact/rollup).
+        // Before this branch the unwritten three (compact/rollup
+        // abstractive) defaulted to a fabricated local Ollama backend, so
+        // they stayed local even though nothing here set them explicitly.
+        // Now that a `None` backend inherits `cfg.llm` (the smart slot,
+        // which `recommend()` prefers cloud for whenever a key is present),
+        // leaving them unset would silently move e.g. the daily
+        // (abstractive) summarizer to the cloud on a fresh local setup.
         config.conversations.ask.backend = Some(backend.clone());
         config.conversations.compact.extractive_backend = Some(backend.clone());
-        config.conversations.rollup.extractive_backend = Some(backend);
+        config.conversations.compact.abstractive_backend = Some(backend.clone());
+        config.conversations.rollup.extractive_backend = Some(backend.clone());
+        config.conversations.rollup.abstractive_backend = Some(backend);
     }
 }
 
@@ -440,6 +451,28 @@ mod tests {
             .expect("rollup stage gets an explicit backend too");
         assert_eq!(rollup_b.provider, "ollama");
         assert_eq!(rollup_b.model, "qwen3.5:4b");
+        // I2 regression: the abstractive halves must be pinned local too.
+        // `cfg.llm` (asserted "anthropic" above) is the cloud smart slot —
+        // before the fix these two fields were left `None`, which resolves
+        // through `effective_abstractive_backend` straight to `cfg.llm`, so
+        // e.g. the daemon's daily (abstractive) summarizer would silently
+        // run on claude-opus-5 instead of the local model discovered here.
+        let compact_ab = cfg
+            .conversations
+            .compact
+            .abstractive_backend
+            .as_ref()
+            .expect("compact abstractive half gets an explicit backend too, not just extractive");
+        assert_eq!(compact_ab.provider, "ollama");
+        assert_eq!(compact_ab.model, "qwen3.5:4b");
+        let rollup_ab = cfg
+            .conversations
+            .rollup
+            .abstractive_backend
+            .as_ref()
+            .expect("rollup abstractive half gets an explicit backend too, not just extractive");
+        assert_eq!(rollup_ab.provider, "ollama");
+        assert_eq!(rollup_ab.model, "qwen3.5:4b");
         assert!(!is_factory_default_models(&cfg));
     }
 

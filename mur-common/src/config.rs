@@ -774,7 +774,8 @@ pub struct AskConfig {
     #[serde(default)]
     pub backend: Option<BackendConfig>,
     /// Per-stage backend override for the query rewriter.
-    /// None = inherit the smart slot (`config.llm`).
+    /// None = inherit the answer stage's backend (`self.backend`), falling
+    /// through to the smart slot (`config.llm`) only if that is also unset.
     #[serde(default)]
     pub rewriter_backend: Option<BackendConfig>,
 }
@@ -791,16 +792,24 @@ impl AskConfig {
         })
     }
 
-    /// Effective backend for the query rewriter. Deliberately does NOT fall
-    /// through to `effective_backend`: the rewriter's output is small and
-    /// falling back to the raw question on timeout is non-fatal, so it keeps
-    /// the much tighter `rewriter_timeout_secs` budget.
+    /// Effective backend for the query rewriter. An explicit
+    /// `rewriter_backend` override wins outright. Otherwise the rewriter
+    /// follows the answer stage's backend (`self.backend`), and only falls
+    /// through to the smart slot (`llm`) when the answer stage has no
+    /// override either — the rewriter is not an independent pinning point,
+    /// only an independent timeout. Whichever source it resolves from, it
+    /// always keeps its own much tighter `rewriter_timeout_secs` budget:
+    /// the rewriter's output is small and falling back to the raw question
+    /// on timeout is non-fatal.
     pub fn effective_rewriter_backend(&self, llm: &LlmConfig) -> BackendConfig {
         self.rewriter_backend
             .clone()
             .unwrap_or_else(|| BackendConfig {
                 timeout_secs: Some(self.rewriter_timeout_secs as u64),
-                ..llm.to_backend_config()
+                ..self
+                    .backend
+                    .clone()
+                    .unwrap_or_else(|| llm.to_backend_config())
             })
     }
 }
@@ -2131,13 +2140,17 @@ rewriter_backend:
     }
 
     #[test]
-    fn rewriter_does_not_fall_through_to_the_answer_stage_override() {
-        // effective_rewriter_backend must NOT fall through to
-        // effective_backend when `rewriter_backend` is unset — it inherits
-        // the smart slot directly (with rewriter_timeout_secs baked in),
-        // even when the answer stage has its own explicit `backend`
-        // override. Set `ask.rewriter_backend` explicitly to point the
-        // rewriter somewhere else.
+    fn rewriter_falls_through_to_answer_stage_backend_before_the_smart_slot() {
+        // C1 regression test: effective_rewriter_backend must follow the
+        // answer stage's `backend` when `rewriter_backend` is unset, NOT
+        // fall straight through to the smart slot (`llm`) — the rewriter is
+        // not an independent pinning point, only an independent timeout.
+        // `llm` below uses a distinctly different provider ("omlx", which
+        // to_backend_config() maps to "openai") than `cfg.backend`
+        // ("anthropic"), so this test cannot pass by coincidentally landing
+        // on the same provider from either source: if the fix regresses to
+        // falling through to `llm`, `rewriter.provider` comes back
+        // "openai" and the first assertion fails.
         let cfg = AskConfig {
             backend: Some(BackendConfig {
                 provider: "anthropic".into(),
@@ -2150,11 +2163,12 @@ rewriter_backend:
             ..Default::default()
         };
         let rewriter = cfg.effective_rewriter_backend(&omlx_llm());
-        assert_eq!(rewriter.provider, "openai");
-        assert_eq!(rewriter.model, "Qwen3.5-4B-MLX-4bit");
+        assert_eq!(rewriter.provider, "anthropic");
+        assert_eq!(rewriter.model, "claude-sonnet-5");
         assert_eq!(
             rewriter.timeout_secs,
-            Some(cfg.rewriter_timeout_secs as u64)
+            Some(cfg.rewriter_timeout_secs as u64),
+            "rewriter must keep its own tighter timeout even while following the answer stage's backend"
         );
     }
 
