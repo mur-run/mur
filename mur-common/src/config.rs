@@ -194,6 +194,10 @@ pub struct Config {
     #[serde(default)]
     pub federation_snapshot: SnapshotConfig,
 
+    /// Proactive memory capture (`memory:`, federation P2).
+    #[serde(default)]
+    pub memory: MemoryConfig,
+
     // --- fleet_run runtime built-in tool ---
     #[serde(default)]
     pub fleet_run: FleetRunConfig,
@@ -244,6 +248,35 @@ impl Default for SnapshotConfig {
             min_lifecycle: crate::skill::stats::LifecycleState::Stable,
         }
     }
+}
+
+/// Proactive memory capture (memory federation P2): gates the runtime's
+/// built-in `remember` tool and its system-prompt directive. Stored under
+/// `memory:` in `~/.mur/config.yaml`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct MemoryConfig {
+    pub capture: CaptureMode,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            capture: CaptureMode::AutoAnnounce,
+        }
+    }
+}
+
+/// How agents capture memories mid-conversation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureMode {
+    /// Agent asks for a one-line confirmation before saving.
+    Ask,
+    /// Agent saves immediately and announces in the same reply (default).
+    AutoAnnounce,
+    /// The `remember` tool is not registered at all.
+    Off,
 }
 
 /// Authorization gate for the runtime's built-in `fleet_run` tool. Stored under
@@ -1422,6 +1455,10 @@ mod tests {
             c.federation_snapshot.min_lifecycle,
             crate::skill::stats::LifecycleState::Stable
         );
+        // Memory capture (P2a): defaults to auto_announce; `off` parses.
+        assert_eq!(c.memory.capture, super::CaptureMode::AutoAnnounce);
+        let c: super::Config = serde_yaml_ng::from_str("memory:\n  capture: off\n").unwrap();
+        assert_eq!(c.memory.capture, super::CaptureMode::Off);
     }
 
     use super::*;
