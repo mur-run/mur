@@ -24,6 +24,64 @@ pub fn half_life_days(state: LifecycleState) -> f64 {
     }
 }
 
+// ── Per-kind decay curves (memory federation P1) ─────────────────────────
+// One lifecycle, kind-appropriate dynamics: behavioral rules iterate fast
+// and must decay fast; environment facts stay true for a long time.
+
+/// Default half-life multiplier for `kind=rule` notes.
+pub const NOTE_RULE_HALF_LIFE_FACTOR: f64 = 0.5;
+/// Default half-life multiplier for `kind=fact` notes.
+pub const NOTE_FACT_HALF_LIFE_FACTOR: f64 = 2.0;
+
+/// The two knowledge shapes a `Category::Note` skill can carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteKind {
+    /// Behavioral guidance — short half-life, fast iteration.
+    Rule,
+    /// Semantic statement about the environment — long half-life.
+    Fact,
+}
+
+impl NoteKind {
+    /// Compile-time default decay multiplier for this kind. The lifecycle
+    /// sweep applies the config-overridable values from
+    /// [`LifecycleThresholds`]; retrieval-side decay uses these defaults so
+    /// the two decay systems agree unless deliberately tuned apart.
+    pub fn default_half_life_factor(self) -> f64 {
+        match self {
+            NoteKind::Rule => NOTE_RULE_HALF_LIFE_FACTOR,
+            NoteKind::Fact => NOTE_FACT_HALF_LIFE_FACTOR,
+        }
+    }
+}
+
+/// Kind of a note manifest: `Category::Note` + a `rule` tag → `Rule`; a plain
+/// note is a `Fact` (facts are the default larval form; rules are explicit).
+/// Non-note skills have no kind.
+pub fn note_kind(manifest: &crate::skill::SkillManifest) -> Option<NoteKind> {
+    if manifest.category != crate::skill::Category::Note {
+        return None;
+    }
+    if manifest.tags.iter().any(|t| t == "rule") {
+        Some(NoteKind::Rule)
+    } else {
+        Some(NoteKind::Fact)
+    }
+}
+
+/// Decay half-life multiplier for `manifest` under thresholds `t` — notes get
+/// per-kind curves; everything else (and a missing manifest) is 1.0.
+pub fn half_life_factor_for(
+    manifest: Option<&crate::skill::SkillManifest>,
+    t: &LifecycleThresholds,
+) -> f64 {
+    match manifest.and_then(note_kind) {
+        Some(NoteKind::Rule) => t.note_rule_half_life_factor,
+        Some(NoteKind::Fact) => t.note_fact_half_life_factor,
+        None => 1.0,
+    }
+}
+
 /// Runtime-immutable lifecycle thresholds, derived from `SkillLifecycleConfig`.
 ///
 /// Created once per sweep and threaded through to `next_state`. The `Default`
@@ -47,6 +105,9 @@ pub struct LifecycleThresholds {
     pub deprecated_no_success_days: i64,
     pub auto_archive_confidence: f64,
     pub auto_archive_age_days: i64,
+    /// Per-kind decay multipliers (federation P1). See [`half_life_factor_for`].
+    pub note_rule_half_life_factor: f64,
+    pub note_fact_half_life_factor: f64,
 }
 
 impl Default for LifecycleThresholds {
@@ -67,6 +128,8 @@ impl Default for LifecycleThresholds {
             deprecated_no_success_days: DEPRECATED_NO_SUCCESS_DAYS,
             auto_archive_confidence: AUTO_ARCHIVE_CONFIDENCE,
             auto_archive_age_days: AUTO_ARCHIVE_AGE_DAYS,
+            note_rule_half_life_factor: NOTE_RULE_HALF_LIFE_FACTOR,
+            note_fact_half_life_factor: NOTE_FACT_HALF_LIFE_FACTOR,
         }
     }
 }
@@ -89,6 +152,8 @@ impl From<&SkillLifecycleConfig> for LifecycleThresholds {
             deprecated_no_success_days: c.deprecated_no_success_days,
             auto_archive_confidence: c.auto_archive_confidence,
             auto_archive_age_days: c.auto_archive_age_days,
+            note_rule_half_life_factor: c.note_rule_half_life_factor,
+            note_fact_half_life_factor: c.note_fact_half_life_factor,
         }
     }
 }
@@ -513,6 +578,37 @@ mod tests {
         assert_eq!(
             cap_for_provenance(LifecycleState::Draft, Provenance::Llm, false, true),
             LifecycleState::Draft
+        );
+    }
+}
+
+#[cfg(test)]
+mod note_kind_tests {
+    use super::*;
+
+    fn manifest(category: &str, tags: &str) -> crate::skill::SkillManifest {
+        crate::skill::parse_canonical(&format!(
+            "name: t\nversion: 1.0.0\npublisher: human:t\ndescription: d\ncategory: {category}\ntags: {tags}\ncontent:\n  abstract: a\n  context: c\n"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn note_kind_rule_fact_and_none() {
+        assert_eq!(note_kind(&manifest("note", "[rule]")), Some(NoteKind::Rule));
+        assert_eq!(note_kind(&manifest("note", "[]")), Some(NoteKind::Fact));
+        assert_eq!(note_kind(&manifest("context", "[rule]")), None);
+    }
+
+    #[test]
+    fn half_life_factor_rule_halves_fact_doubles_skill_unchanged() {
+        let t = LifecycleThresholds::default();
+        assert!(half_life_factor_for(Some(&manifest("note", "[rule]")), &t) < 1.0);
+        assert!(half_life_factor_for(Some(&manifest("note", "[]")), &t) > 1.0);
+        assert_eq!(half_life_factor_for(None, &t), 1.0);
+        assert_eq!(
+            half_life_factor_for(Some(&manifest("context", "[]")), &t),
+            1.0
         );
     }
 }

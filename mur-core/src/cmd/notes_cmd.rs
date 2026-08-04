@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
+use mur_common::skill::lifecycle::NoteKind;
 use mur_common::skill::manifest::{Content, SkillManifest, Visibility};
 use mur_common::skill::stats::{LifecycleState, SkillStats};
 use mur_common::skill::store::{global_skill_dir, read_from_dir, write_to_dir};
@@ -21,7 +22,13 @@ const DEFAULT_PUBLISHER: &str = "human:local";
 /// Errors:
 /// - if the target skill directory already contains a `skill.yaml` (duplicate name)
 /// - if the resulting manifest fails `mur_common::skill::validate::validate`
-pub fn do_create(mur_home: &Path, name: &str, description: &str, body: &str) -> Result<PathBuf> {
+pub fn do_create(
+    mur_home: &Path,
+    name: &str,
+    description: &str,
+    body: &str,
+    kind: NoteKind,
+) -> Result<PathBuf> {
     let dir = global_skill_dir(mur_home, name);
     if dir.join("skill.yaml").exists() {
         bail!("note '{name}' already exists at {}", dir.display());
@@ -51,7 +58,12 @@ pub fn do_create(mur_home: &Path, name: &str, description: &str, body: &str) -> 
             note: Some(body.to_string()),
         },
         requires: vec![],
-        tags: vec![],
+        // Kind lives in the tags (federation P1): a `rule` tag marks a rule;
+        // a plain note is a fact. `note_kind()` is the single reader.
+        tags: match kind {
+            NoteKind::Rule => vec!["rule".into()],
+            NoteKind::Fact => vec![],
+        },
         triggers: vec![],
         priority: Priority::Normal,
         evolution_log: vec![],
@@ -75,7 +87,13 @@ use crate::retrieve::scoring::{Scored, score_and_rank_generic};
 use crate::retrieve::skill_candidates::{LoadedSkill, load_skill_candidates};
 
 /// Top-level `mur notes create` handler.
-pub fn cmd_create(name: &str, description: &str, body_file: Option<&Path>) -> Result<()> {
+pub fn cmd_create(
+    name: &str,
+    description: &str,
+    body_file: Option<&Path>,
+    kind: &str,
+) -> Result<()> {
+    let kind = parse_note_kind(kind)?;
     let body = match body_file {
         Some(p) => {
             std::fs::read_to_string(p).with_context(|| format!("read body file {}", p.display()))?
@@ -89,7 +107,7 @@ pub fn cmd_create(name: &str, description: &str, body_file: Option<&Path>) -> Re
         }
     };
     let home = resolve_mur_home()?;
-    let path = do_create(&home, name, description, &body)?;
+    let path = do_create(&home, name, description, &body, kind)?;
     println!("Created note '{}' at {}", name, path.display());
     Ok(())
 }
@@ -192,7 +210,8 @@ pub fn cmd_show(name: &str) -> Result<()> {
     let view = do_show(&home, name)?;
     println!("# {}", view.name);
     println!("{}", view.description);
-    println!("maturity: {:?}\n", view.maturity);
+    println!("maturity: {:?}", view.maturity);
+    println!("kind: {:?}\n", view.kind);
     println!("{}", view.body);
 
     // Viewing a note is a retrieval — best-effort, never fail the read.
@@ -208,6 +227,16 @@ pub struct NoteListRow {
     pub name: String,
     pub maturity: LifecycleState,
     pub description: String,
+}
+
+/// Parse a CLI `--kind` value. Only the two kinds exist; anything else is a
+/// user error, not a default.
+pub fn parse_note_kind(s: &str) -> Result<NoteKind> {
+    match s.to_ascii_lowercase().as_str() {
+        "rule" => Ok(NoteKind::Rule),
+        "fact" => Ok(NoteKind::Fact),
+        other => bail!("unknown note kind '{other}' (expected: rule | fact)"),
+    }
 }
 
 /// Parse a `--maturity` value (case-insensitive) into a `LifecycleState`.
@@ -232,6 +261,7 @@ pub struct NoteView {
     pub name: String,
     pub description: String,
     pub maturity: LifecycleState,
+    pub kind: NoteKind,
     pub body: String,
 }
 
@@ -246,10 +276,13 @@ pub fn do_show(mur_home: &Path, name: &str) -> Result<NoteView> {
         .map(|s| s.lifecycle_state)
         .unwrap_or_default();
     let body = manifest.content.note.clone().unwrap_or_default();
+    // Notes always have a kind; Fact is the tagless default.
+    let kind = mur_common::skill::lifecycle::note_kind(&manifest).unwrap_or(NoteKind::Fact);
     Ok(NoteView {
         name: manifest.name,
         description: manifest.description,
         maturity,
+        kind,
         body,
     })
 }
@@ -291,6 +324,7 @@ mod tests {
             "rust-error-handling",
             "Rust error handling reference",
             "# Rust Error Handling\n\nUse anyhow for app errors.",
+            NoteKind::Fact,
         )
         .unwrap();
 
@@ -309,10 +343,35 @@ mod tests {
     }
 
     #[test]
+    fn rule_kind_lands_in_tags_and_roundtrips() {
+        let tmp = tempdir().unwrap();
+        do_create(
+            tmp.path(),
+            "always-zh",
+            "reply language",
+            "reply in zh-TW",
+            NoteKind::Rule,
+        )
+        .unwrap();
+        let view = do_show(tmp.path(), "always-zh").unwrap();
+        assert_eq!(view.kind, NoteKind::Rule);
+        // and a plain note stays a fact
+        do_create(
+            tmp.path(),
+            "os-ver",
+            "environment fact",
+            "macOS 15",
+            NoteKind::Fact,
+        )
+        .unwrap();
+        assert_eq!(do_show(tmp.path(), "os-ver").unwrap().kind, NoteKind::Fact);
+    }
+
+    #[test]
     fn do_create_rejects_duplicate_name() {
         let tmp = tempdir().unwrap();
-        do_create(tmp.path(), "dup", "d", "body").unwrap();
-        let err = do_create(tmp.path(), "dup", "d", "body").unwrap_err();
+        do_create(tmp.path(), "dup", "d", "body", NoteKind::Fact).unwrap();
+        let err = do_create(tmp.path(), "dup", "d", "body", NoteKind::Fact).unwrap_err();
         assert!(err.to_string().contains("already exists"));
     }
 
@@ -320,7 +379,7 @@ mod tests {
     fn do_create_rejects_invalid_name() {
         let tmp = tempdir().unwrap();
         // Uppercase letters violate validate_name (ascii_lowercase only).
-        let err = do_create(tmp.path(), "BadName", "d", "body").unwrap_err();
+        let err = do_create(tmp.path(), "BadName", "d", "body", NoteKind::Fact).unwrap_err();
         assert!(err.to_string().contains("validate") || err.to_string().contains("name"));
     }
 
@@ -336,6 +395,7 @@ mod tests {
             "deploy-fly",
             "Deploy to Fly.io",
             "# fly deploy steps",
+            NoteKind::Fact,
         )
         .unwrap();
 
@@ -367,6 +427,7 @@ mod tests {
             "rust-anyhow",
             "Anyhow for rust apps",
             "# anyhow\nuse anyhow for application errors",
+            NoteKind::Fact,
         )
         .unwrap();
         do_create(
@@ -374,6 +435,7 @@ mod tests {
             "rust-thiserror",
             "thiserror for libraries",
             "# thiserror\nuse thiserror for library errors",
+            NoteKind::Fact,
         )
         .unwrap();
         do_create(
@@ -381,6 +443,7 @@ mod tests {
             "unrelated-brew",
             "homebrew update",
             "# brew\nrun brew update weekly",
+            NoteKind::Fact,
         )
         .unwrap();
 
@@ -411,6 +474,7 @@ mod tests {
             "fly-deploy",
             "Deploy a Rust app to Fly.io",
             "# Deploy Steps\n1. cargo build --release\n2. fly deploy",
+            NoteKind::Fact,
         )
         .unwrap();
 
@@ -419,6 +483,7 @@ mod tests {
             "brew-tips",
             "Homebrew maintenance",
             "# Brew\nRun brew update weekly to keep formulae fresh.",
+            NoteKind::Fact,
         )
         .unwrap();
 
@@ -434,7 +499,7 @@ mod tests {
         }
 
         // Re-running create with the same name fails — proves duplicate detection survives a real flow.
-        let err = do_create(tmp.path(), "fly-deploy", "x", "y").unwrap_err();
+        let err = do_create(tmp.path(), "fly-deploy", "x", "y", NoteKind::Fact).unwrap_err();
         assert!(err.to_string().contains("already exists"));
     }
 
@@ -485,8 +550,8 @@ mod tests {
     #[test]
     fn do_list_returns_notes_sorted_by_name_with_maturity() {
         let tmp = tempdir().unwrap();
-        do_create(tmp.path(), "zebra", "z note", "body").unwrap();
-        do_create(tmp.path(), "alpha", "a note", "body").unwrap();
+        do_create(tmp.path(), "zebra", "z note", "body", NoteKind::Fact).unwrap();
+        do_create(tmp.path(), "alpha", "a note", "body", NoteKind::Fact).unwrap();
 
         let rows = do_list(tmp.path(), None, 10).unwrap();
         assert_eq!(rows.len(), 2);
@@ -498,7 +563,7 @@ mod tests {
     #[test]
     fn do_list_filters_by_maturity() {
         let tmp = tempdir().unwrap();
-        do_create(tmp.path(), "n1", "d", "body").unwrap();
+        do_create(tmp.path(), "n1", "d", "body", NoteKind::Fact).unwrap();
         // Fresh notes are Draft.
         assert!(
             do_list(tmp.path(), Some(LifecycleState::Stable), 10)
@@ -517,7 +582,7 @@ mod tests {
     fn do_list_excludes_non_note_skills() {
         use std::fs;
         let tmp = tempdir().unwrap();
-        do_create(tmp.path(), "real-note", "d", "body").unwrap();
+        do_create(tmp.path(), "real-note", "d", "body", NoteKind::Fact).unwrap();
         let ctx = tmp.path().join("skills").join("ctx");
         fs::create_dir_all(&ctx).unwrap();
         fs::write(
@@ -537,7 +602,14 @@ mod tests {
     #[test]
     fn do_show_returns_a_note_view() {
         let tmp = tempdir().unwrap();
-        do_create(tmp.path(), "my-note", "My description", "# Heading\nprose").unwrap();
+        do_create(
+            tmp.path(),
+            "my-note",
+            "My description",
+            "# Heading\nprose",
+            NoteKind::Fact,
+        )
+        .unwrap();
 
         let v = do_show(tmp.path(), "my-note").unwrap();
         assert_eq!(v.name, "my-note");
@@ -573,8 +645,22 @@ mod tests {
     #[test]
     fn create_then_list_and_show_compose() {
         let tmp = tempdir().unwrap();
-        do_create(tmp.path(), "fly", "Deploy to fly", "# fly\nsteps").unwrap();
-        do_create(tmp.path(), "brew", "Brew tips", "# brew\nupdate").unwrap();
+        do_create(
+            tmp.path(),
+            "fly",
+            "Deploy to fly",
+            "# fly\nsteps",
+            NoteKind::Fact,
+        )
+        .unwrap();
+        do_create(
+            tmp.path(),
+            "brew",
+            "Brew tips",
+            "# brew\nupdate",
+            NoteKind::Fact,
+        )
+        .unwrap();
 
         // list is sorted by name
         let rows = do_list(tmp.path(), None, 10).unwrap();
@@ -613,6 +699,7 @@ mod tests {
             "rust-errors",
             "Rust error handling",
             "# body\nanyhow",
+            NoteKind::Fact,
         )
         .unwrap();
 

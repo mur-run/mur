@@ -234,7 +234,18 @@ impl Retrievable for LoadedSkill {
     }
 
     fn decay_half_life_days(&self) -> f64 {
-        self.tier().decay_half_life_days() as f64
+        // Per-kind curves (federation P1): rule notes decay fast, fact notes
+        // linger. Uses the compile-time default factors — the config override
+        // applies to the lifecycle sweep; retrieval uses the same defaults so
+        // the two decay systems agree unless deliberately tuned apart.
+        let factor = mur_common::skill::lifecycle::note_kind(&self.manifest)
+            .map(|k| k.default_half_life_factor())
+            .unwrap_or(1.0);
+        self.tier().decay_half_life_days() as f64 * factor
+    }
+
+    fn is_note(&self) -> bool {
+        self.manifest.category == mur_common::skill::Category::Note
     }
 
     fn is_active(&self) -> bool {
