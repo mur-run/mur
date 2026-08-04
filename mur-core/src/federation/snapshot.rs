@@ -186,13 +186,25 @@ mod tests {
 
     // ── skill snapshot (federation P0) ──────────────────────────────────
 
-    /// Global skill fixture: minimal manifest + stats.json at `state`.
+    /// Global skill fixture: canonical manifest + stats.json at `state`.
+    /// The manifest must be loader-parseable (not just copyable) because the
+    /// smoke test walks the full assemble → loader path.
     fn write_skill_fixture(mur_home: &Path, name: &str, state: LifecycleState) {
         let d = mur_home.join("skills").join(name);
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(
             d.join("skill.yaml"),
-            format!("name: {name}\ndescription: fixture\n"),
+            format!(
+                r#"name: {name}
+version: 1.0.0
+publisher: human:t
+description: fixture
+category: context
+content:
+  abstract: hi
+  context: body
+"#
+            ),
         )
         .unwrap();
         let mut stats = SkillStats::new(name, "1.0.0", "digest", chrono::Utc::now());
@@ -248,6 +260,23 @@ mod tests {
         assert!(
             !home.join("agents/t-agent/patterns_cache").exists(),
             "empty Pattern-era cache must be cleaned up"
+        );
+    }
+
+    #[test]
+    fn smoke_assemble_then_loader_sees_the_skill() {
+        // P0 exit criterion (spec): one pull → cache → loadable for injection.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        std::fs::create_dir_all(home.join("agents/smoke")).unwrap();
+        write_skill_fixture(home, "smoke-skill", LifecycleState::Stable);
+
+        assemble_skill_snapshot(home, "smoke").unwrap();
+
+        let loaded = mur_common::skill::loader::load_all(home, "smoke");
+        assert!(
+            loaded.iter().any(|s| s.name == "smoke-skill"),
+            "cached skill must be visible to the injection loader"
         );
     }
 }
