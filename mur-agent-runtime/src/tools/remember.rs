@@ -51,6 +51,10 @@ pub struct RememberTool {
     pub mur_home: PathBuf,
     /// Canonical (on-disk) agent name — the note lands in this agent's home.
     pub agent_name: String,
+    /// The supervisor's pre-sandbox-loaded keypair (#858: never lazy-load
+    /// identity after the sandbox applies). Signs the memory proposal at the
+    /// drop so review can verify who proposed it (P2c-2).
+    pub identity: std::sync::Arc<mur_common::identity::AgentIdentity>,
 }
 
 #[async_trait::async_trait]
@@ -154,11 +158,14 @@ impl ToolExecutor for RememberTool {
         // only an accepted proposal becomes a GLOBAL note. Best-effort: the
         // agent-local memory above is already durable, so a proposal-write
         // failure warns instead of failing the remember.
-        let proposal = mur_common::skill::note::MemoryProposal {
+        let mut proposal = mur_common::skill::note::MemoryProposal {
             agent: self.agent_name.clone(),
             proposed_at: chrono::Utc::now(),
             manifest,
+            sig: None,
+            key_version: 0,
         };
+        proposal.sign(&self.identity);
         if let Err(e) = mur_common::skill::note::write_memory_proposal(&self.mur_home, &proposal) {
             tracing::warn!(error = %e, "memory proposal drop failed (agent-local copy is safe)");
         }
@@ -179,7 +186,26 @@ mod tests {
         RememberTool {
             mur_home: home.to_path_buf(),
             agent_name: "w1".into(),
+            identity: std::sync::Arc::new(mur_common::identity::AgentIdentity::generate()),
         }
+    }
+
+    #[tokio::test]
+    async fn dropped_proposal_is_signed_by_the_agent_identity() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let t = tool(home);
+        t.execute(input("reply-in-zh-tw", "rule")).await.unwrap();
+
+        let p = home.join("inbox/memory-proposals/w1-reply-in-zh-tw.yaml");
+        let proposal: mur_common::skill::note::MemoryProposal =
+            serde_yaml_ng::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        assert!(proposal.verify(&t.identity.verifying_key_bytes()));
+
+        // Tamper detection end-to-end: edit the file body, signature dies.
+        let mut edited = proposal.clone();
+        edited.manifest.content.note = Some("always en-US".into());
+        assert!(!edited.verify(&t.identity.verifying_key_bytes()));
     }
 
     fn input(name: &str, kind: &str) -> serde_json::Value {

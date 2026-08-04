@@ -27,12 +27,22 @@ pub fn cmd_agent_reconnect(name: &str) -> Result<()> {
     let inbox = crate::sync::inbox::Inbox::default_location()?;
     let store = crate::store::yaml::YamlStore::default_store()?;
 
+    // Best-effort P2c-2 signing at the flush boundary, mirroring the runtime
+    // sleep-cycle: the CLI runs as the user, who owns the agent's key. A
+    // missing key just flushes unsigned (legacy-tolerated on ingest).
+    let identity = outbox_dir
+        .parent()
+        .and_then(|agent_dir| mur_common::identity::AgentIdentity::load(agent_dir).ok());
+
     let mut received: Vec<std::path::PathBuf> = Vec::new();
     for path in &pending {
         let yaml = std::fs::read_to_string(path)
             .with_context(|| format!("read outbox file {}", path.display()))?;
-        let signal: Signal = serde_yaml::from_str(&yaml)
+        let mut signal: Signal = serde_yaml::from_str(&yaml)
             .with_context(|| format!("parse signal from {}", path.display()))?;
+        if let Some(id) = &identity {
+            signal.sign(id);
+        }
         inbox.receive(&signal)?;
         received.push(path.clone());
     }
@@ -107,6 +117,8 @@ mod tests {
             scope: Scope::Personal,
             confidence: 1.0,
             schema_version: SIGNAL_SCHEMA_VERSION,
+            sig: None,
+            key_version: 0,
         };
         let ts = now.format("%Y-%m-%dT%H-%M-%S");
         let fname = format!("{ts}-{id}.yaml");
