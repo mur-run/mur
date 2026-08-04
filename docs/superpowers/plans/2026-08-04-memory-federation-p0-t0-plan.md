@@ -411,7 +411,7 @@ pub fn assemble_skill_snapshot(
 
 Steps:
 
-- [ ] New file `mur-daemon/src/snapshot_requests.rs`:
+- [x] New file `mur-daemon/src/snapshot_requests.rs`:
 
 ```rust
 //! Sweep `~/.mur/inbox/snapshot-requests/` for signed SnapshotRequests,
@@ -588,12 +588,12 @@ mod tests {
 }
 ```
 
-- [ ] `mur-daemon/src/main.rs`: add `mod snapshot_requests;` and, next to the existing
+- [x] `mur-daemon/src/main.rs`: add `mod snapshot_requests;` and, next to the existing
       `mobile_server::spawn(mur_dir.clone(), …)` call (line ~108),
       `snapshot_requests::spawn(mur_dir.clone());`.
-- [ ] `cargo nextest run -p mur-daemon -E 'test(snapshot)'` → `4 passed`.
+- [x] `cargo nextest run -p mur-daemon -E 'test(snapshot)'` → `4 passed`.
       `cargo clippy -p mur-daemon -- -D warnings` clean.
-- [ ] Commit: `feat(daemon): verify and serve signed snapshot requests`
+- [x] Commit: `feat(daemon): verify and serve signed snapshot requests`
 
 ---
 
@@ -604,7 +604,7 @@ mod tests {
 
 Steps:
 
-- [ ] Rewrite `refresh_snapshot` in `mur-agent-runtime/src/federation/sync.rs`
+- [x] Rewrite `refresh_snapshot` in `mur-agent-runtime/src/federation/sync.rs`
       (delete the `std::process::Command` block AND its zombie-reaper thread, sync.rs
       lines ~74-99):
 
@@ -641,7 +641,7 @@ fn write_snapshot_request(agent_name: &str) -> anyhow::Result<()> {
       (`mur_inbox_dir` stays for the outbox flush. If `sync.rs` uses a `MUR_HOME`-aware
       home resolver elsewhere, reuse that instead of raw `dirs::home_dir` — match the
       file's existing resolution, do not introduce a second convention.)
-- [ ] Test (in `sync.rs` tests, tempdir as home via the same override the file's existing
+- [x] Test (in `sync.rs` tests, tempdir as home via the same override the file's existing
       tests use — if none exist, take `mur_home: &Path` as a parameter on
       `write_snapshot_request` and have `refresh_snapshot` resolve it, so the test calls
       the parameterized fn):
@@ -665,11 +665,11 @@ fn write_snapshot_request(agent_name: &str) -> anyhow::Result<()> {
     }
 ```
 
-- [ ] Grep-guard step: `rg "Command::new" mur-agent-runtime/src/federation/` must return
+- [x] Grep-guard step: `rg "Command::new" mur-agent-runtime/src/federation/` must return
       nothing.
-- [ ] `cargo nextest run -p mur-agent-runtime -E 'test(snapshot_request)'` → `1 passed`;
+- [x] `cargo nextest run -p mur-agent-runtime -E 'test(snapshot_request)'` → `1 passed`;
       clippy clean.
-- [ ] Commit: `feat(runtime): signed snapshot request replaces the mur subprocess pull`
+- [x] Commit: `feat(runtime): signed snapshot request replaces the mur subprocess pull`
 
 ---
 
