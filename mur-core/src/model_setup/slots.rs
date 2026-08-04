@@ -311,9 +311,11 @@ pub fn set_slot(slot: SlotId, sel: &SlotSelection) -> Result<ModelSlotsView> {
             }
             if compact_follows {
                 cfg.conversations.compact.extractive_backend = None;
+                cfg.conversations.compact.abstractive_backend = None;
             }
             if rollup_follows {
                 cfg.conversations.rollup.extractive_backend = None;
+                cfg.conversations.rollup.abstractive_backend = None;
             }
         }
         SlotId::Search => {
@@ -481,6 +483,97 @@ mod tests {
             .expect("compact's abstractive half is pinned alongside the extractive half");
         assert_eq!(ab.provider, "anthropic");
         assert_eq!(ab.model, "claude-opus-5");
+
+        unsafe { std::env::remove_var("MUR_HOME") };
+    }
+
+    #[test]
+    fn smart_set_clears_all_six_backends_not_just_extractive_halves() {
+        // N1 regression: After write_conversation_stage was enhanced to pin
+        // BOTH extractive and abstractive halves (previously just extractive),
+        // set_slot(Smart, new_model) must clear ALL six overrides for stages
+        // that were pinned to the OLD smart value. Before this fix, when
+        // set_slot tried to clear the backends, it only cleared the extractive
+        // halves, leaving the abstractive halves pinned to the old smart value.
+        // Result: ask/compact/rollup report the new smart model (from extractive)
+        // but abstractive stages execute against the old smart (misreporting).
+        let _g = ENV_TEST_LOCK.lock().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
+
+        let mut reg = ModelRegistry::default();
+        reg.models.insert(
+            "local-llm".into(),
+            ModelEntry {
+                provider: "ollama".into(),
+                model: "llama2".into(),
+                base_url: Some("http://localhost:11434".into()),
+                ..Default::default()
+            },
+        );
+        reg.models.insert(
+            "cloud-opus".into(),
+            ModelEntry {
+                provider: "anthropic".into(),
+                model: "claude-opus-5".into(),
+                base_url: Some("https://api.anthropic.com".into()),
+                ..Default::default()
+            },
+        );
+        reg.save_to(&ModelRegistry::default_path().unwrap())
+            .unwrap();
+
+        // Set smart to local_llm first, so the stages can be pinned to match it
+        let local_sel = SlotSelection::Registry {
+            ref_name: "local-llm".into(),
+        };
+        set_slot(SlotId::Smart, &local_sel).unwrap();
+
+        // Now pin all six backends explicitly to local_llm by calling set_slot
+        // on each stage individually. These will match the current smart value.
+        set_slot(SlotId::Ask, &local_sel).unwrap();
+        set_slot(SlotId::Compact, &local_sel).unwrap();
+        set_slot(SlotId::Rollup, &local_sel).unwrap();
+
+        let cfg = load_config().unwrap();
+        assert!(cfg.conversations.ask.backend.is_some());
+        assert!(cfg.conversations.compact.extractive_backend.is_some());
+        assert!(cfg.conversations.compact.abstractive_backend.is_some());
+        assert!(cfg.conversations.rollup.extractive_backend.is_some());
+        assert!(cfg.conversations.rollup.abstractive_backend.is_some());
+
+        // Now call set_slot on Smart to a different model. Since all the
+        // stages' backends match the local model (the current smart value),
+        // the code detects they are "following" smart and should clear them
+        // to follow the new smart value.
+        let cloud_sel = SlotSelection::Registry {
+            ref_name: "cloud-opus".into(),
+        };
+        set_slot(SlotId::Smart, &cloud_sel).unwrap();
+
+        // With the fix, ALL backends should be None now (cleared to follow new Smart).
+        // Without the fix, abstractive halves would still be Some(local_llm).
+        let cfg = load_config().unwrap();
+        assert!(
+            cfg.conversations.ask.backend.is_none(),
+            "ask.backend should be None (cleared to follow new Smart)"
+        );
+        assert!(
+            cfg.conversations.compact.extractive_backend.is_none(),
+            "compact.extractive_backend should be None (cleared to follow new Smart)"
+        );
+        assert!(
+            cfg.conversations.compact.abstractive_backend.is_none(),
+            "compact.abstractive_backend should be None (cleared to follow new Smart) — N1 regression fix"
+        );
+        assert!(
+            cfg.conversations.rollup.extractive_backend.is_none(),
+            "rollup.extractive_backend should be None (cleared to follow new Smart)"
+        );
+        assert!(
+            cfg.conversations.rollup.abstractive_backend.is_none(),
+            "rollup.abstractive_backend should be None (cleared to follow new Smart) — N1 regression fix"
+        );
 
         unsafe { std::env::remove_var("MUR_HOME") };
     }
