@@ -3,6 +3,14 @@
 //! One central file, atomically written (tmp + rename) exactly like
 //! `store::save_fleet`. A missing or corrupt file is *not* an error: the Hub
 //! must degrade to an unlabelled flat list rather than fail to render.
+//!
+//! Every function here is reached through the lib target, by `mur-hub-gui`'s
+//! Tauri commands. Labels are a Hub surface with no CLI subcommand, so the
+//! `mur` binary's own module tree sees them as unused and `-D warnings` fails
+//! the build without this. The allow is scoped to the module rather than to
+//! each function so that adding one later does not re-trip it — and it comes
+//! off the day `mur fleet label` exists.
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 
@@ -208,7 +216,11 @@ mod tests {
         let h = tmp.path();
         // One real fleet on disk, one only in the registry.
         std::fs::create_dir_all(store::fleet_dir(h, "dev")).unwrap();
-        std::fs::write(store::fleet_path(h, "dev"), "name: dev\nchannel_id: fleet-dev\n").unwrap();
+        std::fs::write(
+            store::fleet_path(h, "dev"),
+            "name: dev\nchannel_id: fleet-dev\n",
+        )
+        .unwrap();
         create_label(h, "web", "Web", None).unwrap();
         set_labels(h, "dev", vec!["web".into()]).unwrap();
         set_labels(h, "ghost-fleet", vec!["web".into()]).unwrap();

@@ -84,12 +84,14 @@ pub fn resolve_jobs(
 /// Fail-closed: any miss returns an Err immediately. Called before any
 /// channel mint or dial so a prompt-injected concierge cannot widen the
 /// target set (OWASP Agentic ASI02/03/04).
-fn check_authorization(allow: &HashSet<String>, jobs: &[Job]) -> Result<()> {
+fn check_authorization(allow: &HashSet<String>, jobs: &[Job], config_path: &Path) -> Result<()> {
     for j in jobs {
         if !allow.contains(&j.assignee) {
             bail!(
-                "target '{}' not authorized for parallel_jobs — add it to `parallel_jobs.targets` \
-                 in ~/.mur/config.yaml (deny-by-default)",
+                "target '{}' not authorized for parallel_jobs (deny-by-default) — add it under \
+                 `parallel_jobs.targets` in {}, e.g.\n\nparallel_jobs:\n  targets:\n    - {}",
+                j.assignee,
+                config_path.display(),
                 j.assignee
             );
         }
@@ -102,14 +104,15 @@ fn check_authorization(allow: &HashSet<String>, jobs: &[Job]) -> Result<()> {
 /// Mirrors the `verified_active_fleet` pattern (any miss is a denial, never
 /// fail-open).
 fn authorize_targets(mur_home: &Path, jobs: &[Job]) -> Result<()> {
-    let cfg = Config::load_or_default(&mur_home.join("config.yaml"));
+    let config_path = mur_home.join("config.yaml");
+    let cfg = Config::load_or_default(&config_path);
     let allow: HashSet<String> = cfg
         .parallel_jobs
         .targets
         .iter()
         .map(|t| canonicalize_agent_name(mur_home, t))
         .collect();
-    check_authorization(&allow, jobs)
+    check_authorization(&allow, jobs, &config_path)
 }
 
 /// Run N jobs as one ephemeral, channel-recorded DAG. Mints a throwaway
@@ -219,7 +222,7 @@ mod tests {
             assignee: "rustsmith".into(),
         }];
         assert!(
-            check_authorization(&allow, &jobs).is_err(),
+            check_authorization(&allow, &jobs, Path::new("config.yaml")).is_err(),
             "empty allowlist must reject any target"
         );
     }
@@ -232,7 +235,7 @@ mod tests {
             assignee: "rustsmith".into(),
         }];
         assert!(
-            check_authorization(&allow, &jobs).is_ok(),
+            check_authorization(&allow, &jobs, Path::new("config.yaml")).is_ok(),
             "allowlisted target must be permitted"
         );
     }
@@ -244,7 +247,7 @@ mod tests {
             description: "a".into(),
             assignee: "unknown-agent".into(),
         }];
-        let err = check_authorization(&allow, &jobs).unwrap_err();
+        let err = check_authorization(&allow, &jobs, Path::new("config.yaml")).unwrap_err();
         assert!(
             err.to_string().contains("not authorized"),
             "error must mention authorization: {err}"
@@ -266,7 +269,7 @@ mod tests {
             },
         ];
         assert!(
-            check_authorization(&allow, &jobs).is_err(),
+            check_authorization(&allow, &jobs, Path::new("config.yaml")).is_err(),
             "must reject when any target is not in the allowlist"
         );
     }

@@ -213,6 +213,77 @@ pub fn cmd_fleet_send(mur_home: &Path, fleet: &str, text: &str) -> Result<()> {
     Ok(())
 }
 
+/// Resolve `prefix` to exactly one cancelable job. Only `queued` jobs can be
+/// canceled: a `running` one has a live child process that this command cannot
+/// reach, and marking it terminal would only make the record lie.
+/// ponytail: queued-only. Canceling a running job means killing its run —
+/// `mur fleet stop` is the kill-switch for that today.
+fn resolve_cancelable<'a>(jobs: &'a [Job], prefix: &str) -> Result<&'a Job> {
+    if prefix.is_empty() {
+        bail!("pass a job id (or a unique prefix of one)");
+    }
+    let matches: Vec<&Job> = jobs.iter().filter(|j| j.id.starts_with(prefix)).collect();
+    match matches.as_slice() {
+        [] => bail!("no job matching '{prefix}'"),
+        [job] if job.status == JobStatus::Queued => Ok(job),
+        [job] => bail!(
+            "job {} is {}, not queued — only queued jobs can be canceled",
+            &job.id[..job.id.len().min(8)],
+            job.status.as_str()
+        ),
+        many => bail!(
+            "'{prefix}' matches {} jobs — use a longer prefix",
+            many.len()
+        ),
+    }
+}
+
+/// `mur fleet cancel <name> <id> [--yes]` — drop a queued job so no run picks
+/// it up. Terminal and irreversible (there is no un-cancel), so it prompts for
+/// y/N unless `yes` — same contract as `mur fleet delete`.
+pub fn cmd_fleet_cancel(mur_home: &Path, fleet: &str, id_prefix: &str, yes: bool) -> Result<()> {
+    let _ = store::load_fleet(mur_home, fleet)?;
+    let jobs = list_jobs(mur_home, fleet)?;
+    let mut job = resolve_cancelable(&jobs, id_prefix)?.clone();
+
+    if !yes && !confirm_cancel(&job)? {
+        println!("Aborted — job {} left queued.", short(&job.id));
+        return Ok(());
+    }
+
+    job.status = JobStatus::Canceled;
+    job.finished_at = Some(chrono::Utc::now().to_rfc3339());
+    save_job(mur_home, fleet, &job)?;
+    println!("Canceled job {} for fleet '{fleet}'.", job.id);
+    Ok(())
+}
+
+/// Interactive y/N confirmation (skipped when `--yes`). Shows the job text so
+/// an id prefix that resolved to the wrong job is visible before it is spent.
+fn confirm_cancel(job: &Job) -> Result<bool> {
+    use std::io::Write;
+    let preview: String = job
+        .text
+        .lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .take(60)
+        .collect();
+    print!(
+        "Cancel queued job {} ({preview})? This cannot be undone. [y/N] ",
+        short(&job.id)
+    );
+    std::io::stdout().flush()?;
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    Ok(matches!(input.trim().to_lowercase().as_str(), "y" | "yes"))
+}
+
+fn short(id: &str) -> &str {
+    &id[..id.len().min(8)]
+}
+
 /// Which jobs `mur fleet jobs` shows: all when `all`, else only non-terminal
 /// (queued/running). Pure so the filter is testable without capturing stdout.
 fn visible_jobs(jobs: &[Job], all: bool) -> Vec<&Job> {
@@ -328,5 +399,61 @@ mod tests {
         assert_eq!(jobs[0].source, "cli");
         // jobs view runs without panicking on existing fleet
         cmd_fleet_jobs(home, "dev", true).unwrap();
+    }
+
+    #[test]
+    fn cancel_only_queued_and_only_on_unambiguous_prefix() {
+        let mk = |id: &str, status| Job {
+            id: id.into(),
+            text: "t".into(),
+            source: "cli".into(),
+            status,
+            created_at: "now".into(),
+            started_at: None,
+            finished_at: None,
+            run_id: None,
+            result: None,
+            error: None,
+        };
+        let jobs = vec![
+            mk("019f0000-aaaa", JobStatus::Queued),
+            mk("019f0000-bbbb", JobStatus::Queued),
+            mk("abcd1234-cccc", JobStatus::Running),
+        ];
+        // unique prefix + queued → resolves
+        assert_eq!(
+            resolve_cancelable(&jobs, "019f0000-a").unwrap().id,
+            "019f0000-aaaa"
+        );
+        // shared prefix → refuse rather than cancel the wrong one
+        assert!(resolve_cancelable(&jobs, "019f").is_err());
+        // running is not cancelable here (the run owns it)
+        assert!(resolve_cancelable(&jobs, "abcd").is_err());
+        assert!(resolve_cancelable(&jobs, "nope").is_err());
+        assert!(resolve_cancelable(&jobs, "").is_err());
+    }
+
+    #[test]
+    fn cancel_marks_job_terminal_so_next_queued_skips_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        super::super::create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, None, None)
+            .unwrap();
+        let a = enqueue_job(home, "dev", "first", "cli").unwrap();
+        let b = enqueue_job(home, "dev", "second", "cli").unwrap();
+
+        cmd_fleet_cancel(home, "dev", &a.id, true).unwrap();
+
+        let canceled = list_jobs(home, "dev")
+            .unwrap()
+            .into_iter()
+            .find(|j| j.id == a.id)
+            .unwrap();
+        assert_eq!(canceled.status, JobStatus::Canceled);
+        assert!(canceled.finished_at.is_some());
+        // the run picks up the next one, not the canceled one
+        assert_eq!(next_queued(home, "dev").unwrap().unwrap().id, b.id);
+        // already terminal → second cancel refused
+        assert!(cmd_fleet_cancel(home, "dev", &a.id, true).is_err());
     }
 }

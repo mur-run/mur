@@ -324,6 +324,13 @@ Agent** wizard offers the same catalog as a source.
   Object (Windows) — plus a DNS-resolver guard that filters network egress.
 - **Human-in-the-loop** — tool calls pause for your approval in Hub and in
   `mur agent cli` (opt out per session with `--auto`).
+- **Loop settings that can't quietly mean something else** — a fleet loop ends
+  when its job queue drains, when a member emits an agreed marker on a line of
+  its own, or when the router judges it done. `mur fleet set-loop` refuses a
+  value that would be silently reinterpreted: a calendar date is not a deadline,
+  `--max-iterations 0` is not zero, and a cron expression that can never fire is
+  not a schedule. Unattended auto-run still needs an explicit budget, and
+  `mur fleet stop` still ends everything.
 - **Settlement** — a turn that changed anything ends with a card the runtime
   draws from its own tool records, not from the model's summary: what was
   **verified** (a command ran and passed), what was **changed** (files edited,
@@ -421,7 +428,7 @@ mur
 ├── agent        create · cli · send · card · who · export · install · addon · companion ·
 │                voice · pair · schedule · perm · secret · trash · rollback … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
-├── fleet        create · list · show · run   (squads of agents over a shared channel)
+├── fleet        create · list · show · run · set-loop · send · jobs   (squads of agents over a shared channel)
 ├── official     list · install   (official agents/fleets from the app.mur.run catalog)
 ├── deep-research  setup · status · ask   (web research with wizard UX)
 ├── skill        install · search · show · doctor · generate · suggest · evolve · recombine ·

@@ -94,12 +94,38 @@ impl<'de> Deserialize<'de> for SecretRef {
     }
 }
 
+/// Force-block OS keychain access in this process: lookups behave as
+/// "not found", writes are rejected. Exists so processes that must never
+/// trigger a macOS keychain password prompt (test runs, CI) can opt out.
+pub const ENV_KEYCHAIN_DISABLED: &str = "MUR_KEYCHAIN_DISABLED";
+/// Overrides the automatic test-process block below. Set by tests that
+/// install a keyring mock builder (those never reach the real keychain).
+pub const ENV_KEYCHAIN_ALLOW: &str = "MUR_KEYCHAIN_ALLOW";
+
+/// Cargo test binaries get a fresh hash suffix on every rebuild, so macOS
+/// keychain "always allow" ACLs never stick and any test that resolves a
+/// real `keychain:` ref (e.g. via the user's ~/.mur/config.yaml) rains
+/// password prompts on every run. nextest sets `NEXTEST=1` in each test
+/// process — treat that as "no real keychain" unless explicitly re-enabled.
+fn keychain_blocked() -> bool {
+    if std::env::var_os(ENV_KEYCHAIN_ALLOW).is_some() {
+        return false;
+    }
+    std::env::var_os(ENV_KEYCHAIN_DISABLED).is_some() || std::env::var_os("NEXTEST").is_some()
+}
+
 impl SecretRef {
     pub async fn resolve(&self) -> Result<SecretString, SecretError> {
         match self {
             SecretRef::Env(var) => std::env::var(var)
                 .map(SecretString::from)
                 .map_err(|_| SecretError::EnvNotSet(var.clone())),
+            SecretRef::Keychain { service, account } if keychain_blocked() => {
+                Err(SecretError::KeychainNotFound {
+                    service: service.clone(),
+                    account: account.clone(),
+                })
+            }
             SecretRef::Keychain { service, account } => {
                 let svc = service.clone();
                 let acct = account.clone();
@@ -200,6 +226,9 @@ pub async fn keychain_get(
     service: &str,
     account: &str,
 ) -> Result<Option<SecretString>, SecretError> {
+    if keychain_blocked() {
+        return Ok(None);
+    }
     let svc = service.to_string();
     let acct = account.to_string();
     tokio::task::spawn_blocking(move || -> Result<Option<String>, SecretError> {
@@ -219,6 +248,12 @@ pub async fn keychain_get(
 /// Write a secret to the OS keychain. Used by `mur agent secret set` and the
 /// GUI's `set_secret` command.
 pub async fn keychain_set(service: &str, account: &str, value: &str) -> Result<(), SecretError> {
+    if keychain_blocked() {
+        return Err(SecretError::KeychainBackend(format!(
+            "keychain access disabled in this process ({ENV_KEYCHAIN_DISABLED}/test); \
+             set {ENV_KEYCHAIN_ALLOW}=1 to override"
+        )));
+    }
     let svc = service.to_string();
     let acct = account.to_string();
     let val = value.to_string();
@@ -237,6 +272,9 @@ pub async fn keychain_set(service: &str, account: &str, value: &str) -> Result<(
 /// Delete a secret from the OS keychain. Idempotent: missing entries are not
 /// an error. Used by `mur agent secret delete`.
 pub async fn keychain_delete(service: &str, account: &str) -> Result<(), SecretError> {
+    if keychain_blocked() {
+        return Ok(());
+    }
     let svc = service.to_string();
     let acct = account.to_string();
     tokio::task::spawn_blocking(move || -> Result<(), SecretError> {
@@ -538,10 +576,23 @@ mod keychain_test_fixture {
 
     static MOCK_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
 
+    /// Serialize env-var mutation with the mock installs above (both are
+    /// process-global). Used by tests that exercise `keychain_blocked`.
+    pub(super) async fn env_lock() -> AsyncMutexGuard<'static, ()> {
+        MOCK_LOCK.lock().await
+    }
+
     pub(super) async fn install_mock(
         initial: Option<(&str, &str, &str)>,
     ) -> AsyncMutexGuard<'static, ()> {
         let g = MOCK_LOCK.lock().await;
+        // The mock never reaches the real OS keychain, so lift the automatic
+        // test-process keychain block (`keychain_blocked`).
+        // SAFETY: env mutation serialized by MOCK_LOCK; nextest runs one test
+        // per process anyway.
+        unsafe {
+            std::env::set_var(super::ENV_KEYCHAIN_ALLOW, "1");
+        }
         let store: Store = Arc::new(Mutex::new(HashMap::new()));
         if let Some((svc, user, pw)) = initial {
             store
@@ -560,6 +611,31 @@ mod resolve_keychain_tests {
     use super::keychain_test_fixture::install_mock;
     use super::*;
     use secrecy::ExposeSecret;
+
+    #[tokio::test]
+    async fn blocked_process_never_reaches_keychain() {
+        let _g = super::keychain_test_fixture::env_lock().await;
+        // SAFETY: env mutation serialized on the fixture lock; nextest is
+        // process-per-test anyway.
+        unsafe {
+            std::env::remove_var(ENV_KEYCHAIN_ALLOW);
+            std::env::set_var(ENV_KEYCHAIN_DISABLED, "1");
+        }
+        let s = SecretRef::Keychain {
+            service: "mur-test".into(),
+            account: "nope".into(),
+        };
+        assert!(matches!(
+            s.resolve().await,
+            Err(SecretError::KeychainNotFound { .. })
+        ));
+        assert!(keychain_get("mur-test", "nope").await.unwrap().is_none());
+        assert!(keychain_set("mur-test", "nope", "v").await.is_err());
+        assert!(keychain_delete("mur-test", "nope").await.is_ok());
+        unsafe {
+            std::env::remove_var(ENV_KEYCHAIN_DISABLED);
+        }
+    }
 
     #[tokio::test]
     async fn resolves_when_set() {

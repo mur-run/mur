@@ -135,7 +135,7 @@ mur deep-research run deep-research --max-iterations 4 --deadline 30m
 ```
 
 - **결과가 있는 곳** — 각 워커의 인용 응답은 `~/.mur/channels/fleet-deep-research/events.jsonl` 의 서명된 이벤트다. `~/.mur/index/channels/` 의 SQLite read-model 은 재구축 가능한 프로젝션이다. 각 인용은 하나의 게이트웨이 감사 레코드에 대응된다.
-- **설정 노브(하드코딩 값 없음)** — `MUR_RESEARCH_MAX_FETCH_CHARS`, `…_SEARCH_LIMIT`, `…_TIMEOUT_SECS`, `…_LIGHTPANDA_PATH`, `…_DENY_HOSTS` — env 또는 `~/.mur/config.yaml` 의 `research_gateway:`, 결코 리터럴을 쓰지 않는다.
+- **설정 노브(하드코딩 값 없음)** — `MUR_RESEARCH_MAX_FETCH_CHARS`, `…_SEARCH_LIMIT`, `…_SEARCH_ENDPOINT`, `…_TIMEOUT_SECS`, `…_LIGHTPANDA_PATH`, `…_DENY_HOSTS` — env 또는 `~/.mur/config.yaml` 의 `research_gateway:`, 결코 리터럴을 쓰지 않는다.
 
 ---
 

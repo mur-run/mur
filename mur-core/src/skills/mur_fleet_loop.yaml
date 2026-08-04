@@ -25,8 +25,10 @@ content:
     - `mur fleet set-loop <name> --done-when "marker:ALL_GREEN"`
 
     The loop converges only when a member emits the marker alone on its
-    own line during that run. If `--done-when` is unset, the router judges
-    DONE vs CONTINUE each iteration, fail-safe defaulting to continue.
+    own line during that run. `--done-when queue-empty` converges as soon
+    as an iteration finds the job queue drained, with no LLM call. If
+    `--done-when` is unset, the router judges DONE vs CONTINUE each
+    iteration, fail-safe defaulting to continue.
 
     ## Budget
 

@@ -511,6 +511,26 @@
   flex: none;
 }
 
+.fleet-job__cancel {
+  flex: none;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-tertiary);
+}
+
+.fleet-job__cancel:hover:not(:disabled) {
+  color: var(--danger, #d64545);
+}
+
+.fleet-job__cancel:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .fleet-jobs__more {
   margin-top: 6px;
   font-size: 11px;

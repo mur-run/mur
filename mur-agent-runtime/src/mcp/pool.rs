@@ -55,6 +55,9 @@ impl McpPool {
                 use std::io::{BufRead, BufReader};
                 for line in BufReader::new(stderr).lines() {
                     match line {
+                        Ok(l) if is_noteworthy_stderr(&l) => {
+                            tracing::warn!(server = %server_name, "mcp stderr: {l}")
+                        }
                         Ok(l) => tracing::debug!(server = %server_name, "mcp stderr: {l}"),
                         Err(_) => break,
                     }
@@ -92,10 +95,41 @@ impl McpPool {
     }
 }
 
+/// Whether a child MCP server's stderr line should surface at `warn!` instead
+/// of `debug!`. Routine chatter stays at debug so a chatty server cannot flood
+/// the agent log — but a child's own WARN/ERROR is often the operator's ONLY
+/// signal that the server degraded rather than failed outright: a secret ref
+/// that silently fell back to a default leaves a working-but-wrong config with
+/// no other trace.
+// ponytail: substring match on the level marker — covers the tracing /
+// env_logger style output MUR's own servers emit. Widen the match rather than
+// parsing per-server log formats.
+fn is_noteworthy_stderr(line: &str) -> bool {
+    line.contains("WARN") || line.contains("ERROR")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sandbox::SandboxPolicy;
+
+    #[test]
+    fn child_warnings_surface_above_debug_but_chatter_does_not() {
+        // The line that went missing in practice: the research gateway warns
+        // that a keychain-backed brave_api_key_ref did not resolve, then
+        // silently falls back to a keyless search path. Logged at debug!, it
+        // never reached the agent log and the degraded config looked healthy.
+        assert!(is_noteworthy_stderr(
+            "2026-08-03T09:01:20Z  WARN mur_research_gateway: brave_api_key_ref did not resolve"
+        ));
+        assert!(is_noteworthy_stderr("ERROR failed to open index"));
+        // Routine chatter stays at debug — a per-call audit line must not
+        // promote itself into the operator's warning stream.
+        assert!(!is_noteworthy_stderr(
+            r#"INFO research_gateway_audit: {"verb":"search","outcome":"ok"}"#
+        ));
+        assert!(!is_noteworthy_stderr("starting up"));
+    }
 
     #[tokio::test]
     async fn unknown_server_returns_error() {

@@ -86,9 +86,17 @@ impl ToolExecutor for McpToolExecutor {
         })
         .await
         .map_err(|_| {
+            // A timeout says we stopped waiting — it does NOT say the call
+            // failed. MCP has no cancel: the server keeps running the tool.
+            // Reporting this as a plain failure taught agents to "recover" by
+            // re-dispatching work that was already in flight, or to burn a
+            // turn on `sleep` waiting for a result they'd been told was dead.
             ToolError::Execution(format!(
-                "tool `{}` timed out after {:?}",
-                self.wire_name, self.timeout
+                "tool `{}` did not return within {:?}; MUR stopped waiting, but the server may \
+                 still be running it — treat the outcome as unknown, check for side effects \
+                 before retrying. Raise `timeout_secs` for MCP server `{}` if this tool is \
+                 expected to run long.",
+                self.wire_name, self.timeout, self.server
             ))
         })??;
 

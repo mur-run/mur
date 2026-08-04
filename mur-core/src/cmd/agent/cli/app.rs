@@ -32,6 +32,12 @@ const ENTER_HINT_FULL: &str = " message — Enter to send · Shift+Enter newline
 #[cfg(not(target_os = "macos"))]
 const ENTER_HINT_FULL: &str = " message — Enter to send · Shift+Enter newline (Alt+Enter also works) · Ctrl+V image · Ctrl+O transcript · /help · Ctrl+D quit";
 
+/// Assumed terminal width until the event loop reports the real one.
+const DEFAULT_WIDTH: u16 = 80;
+
+/// Columns a bordered block spends on its own corners, unavailable to a title.
+const BORDER_CORNERS: usize = 2;
+
 /// Who authored a message in the transcript.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -444,6 +450,12 @@ pub struct App {
     /// When true, tool-call step cards render fully (args + result) instead of
     /// the default one-line collapsed summary. Toggled with `/verbose`.
     pub cards_expanded: bool,
+    /// Terminal width in columns, refreshed once per event-loop pass. Anything
+    /// that has to fit on one row — the composer hint, the status line, a tool
+    /// card's arg hint — sizes itself against this instead of a fixed column
+    /// count that clipped mid-word on a wide terminal and overflowed a narrow
+    /// one. 80 until the first refresh.
+    pub width: u16,
     /// Live completion menu (slash commands / agent skills). `None` = closed.
     /// Derived from the input text — recomputed on every edit by `mod.rs`.
     pub completion: Option<CompletionState>,
@@ -541,6 +553,7 @@ impl App {
             budget_usd: None,
             auto_reads: false,
             cards_expanded: false,
+            width: DEFAULT_WIDTH,
             completion: None,
             skills: Vec::new(),
             pending_suggestions: Vec::new(),
@@ -924,8 +937,9 @@ impl App {
         }
     }
 
-    /// Mark the card with this `step_id` as auto-approved by the read lane
-    /// (`--auto-reads`). Call BEFORE moving `req` into `app.hitl`.
+    /// Mark the card with this `step_id` as auto-approved — by the read lane
+    /// (`--auto-reads`) or by a session allow (`[a]`). Call BEFORE moving `req`
+    /// into `app.hitl`.
     pub fn mark_card_auto_approved(&mut self, step_id: &str) {
         if let Some(card) = self
             .messages
@@ -1188,7 +1202,14 @@ impl App {
     /// `&mut App` inside the draw closure.
     pub fn sync_input_block(&mut self) {
         let theme = self.theme;
-        let hint = if theme.compact_input {
+        // The long hint only goes up when it fits. Ratatui clips a Block title
+        // that overruns the block, and the clip lands mid-word — the composer
+        // border used to end in "… /help · Ct" on anything but a very wide
+        // terminal. Two border corners plus the pane padding are unavailable
+        // to the title.
+        let budget = usize::from(self.width)
+            .saturating_sub(usize::from(theme.inner_padding) * 2 + BORDER_CORNERS);
+        let hint = if theme.compact_input || ENTER_HINT_FULL.chars().count() > budget {
             ENTER_HINT_COMPACT
         } else {
             ENTER_HINT_FULL
@@ -1220,7 +1241,7 @@ fn new_input() -> TextArea<'static> {
     ta.set_block(
         Block::default()
             .borders(Borders::TOP | Borders::BOTTOM)
-            .title(ENTER_HINT_FULL),
+            .title(ENTER_HINT_COMPACT),
     );
     ta.set_cursor_line_style(Style::default());
     ta.set_placeholder_text("Type a message…");

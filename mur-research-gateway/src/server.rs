@@ -221,7 +221,8 @@ impl McpServer {
         let deny = &self.config.deny_hosts;
         let timeout = self.config.timeout;
         let brave_key = self.config.brave_api_key.as_deref();
-        match fetcher::search(&query, limit, brave_key, deny, timeout).await {
+        let endpoint = &self.config.search_endpoint;
+        match fetcher::search(&query, limit, brave_key, deny, timeout, endpoint).await {
             Ok(hits) => {
                 audit(AuditRecord::new("search", query, None, "ok"));
                 Response::success(

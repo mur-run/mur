@@ -27,7 +27,11 @@ export function buildTrigger(kind: TriggerKind, value: string): string {
  * fires" on the backend (fail-open) -- this is the safety property Task 6 review
  * flagged as needing test coverage.
  */
-export function settingsAreValid(trigKind: TriggerKind, trigValue: string, deadline: string): boolean {
+export function settingsAreValid(
+  trigKind: TriggerKind,
+  trigValue: string,
+  deadline: string
+): boolean {
   if (trigKind === "interval" && !DURATION_RE.test(trigValue.trim())) return false;
   if (trigKind === "cron" && trigValue.trim() === "") return false;
   if (deadline.trim() !== "" && !DURATION_RE.test(deadline.trim())) return false;
@@ -58,4 +62,96 @@ export function modeBadgeLabel(
     return `${t("fleet.create.mode.speculative")} · ${summary.track_count} ${t("fleet.run.tracksSuffix")}`;
   }
   return `${t("fleet.create.mode.partition")} · ${summary.target_file ?? ""}`;
+}
+
+/** Which completion policy the Settings select is showing. */
+export type DonePolicyKind = "router" | "queue-empty" | "marker";
+
+/** The `done_when` sentinel selecting the queue-drained policy. Must stay in
+ *  step with mur-core's `DONE_WHEN_QUEUE_EMPTY`. */
+export const DONE_WHEN_QUEUE_EMPTY = "queue-empty";
+
+const MARKER_PREFIX = "marker:";
+
+/**
+ * Classify a stored `done_when`, mirroring mur-core's `done_policy`: anything
+ * that is neither the queue sentinel nor a usable `marker:` value means "ask
+ * the router" -- including legacy free-text criteria, which is exactly what the
+ * backend does with them.
+ */
+export function parseDonePolicy(doneWhen: string): DonePolicyKind {
+  const v = doneWhen.trim();
+  if (v.startsWith(MARKER_PREFIX) && v.slice(MARKER_PREFIX.length).trim() !== "") return "marker";
+  if (v === DONE_WHEN_QUEUE_EMPTY) return "queue-empty";
+  return "router";
+}
+
+/**
+ * The value to save for a chosen policy. `marker` returns the loaded expression
+ * verbatim: the Hub never authors a marker, because it cannot supply the other
+ * half of the contract -- something has to teach an agent to emit that text,
+ * and that lives in the goal or a skill, not in this form.
+ *
+ * `router` returns "" rather than null on purpose. The backend treats a null as
+ * "leave this field alone", so an explicit empty string is the only way to
+ * clear a previously-set criterion.
+ */
+export function buildDoneWhen(kind: DonePolicyKind, loaded: string): string {
+  if (kind === DONE_WHEN_QUEUE_EMPTY) return DONE_WHEN_QUEUE_EMPTY;
+  if (kind === "marker") return loaded.trim();
+  return "";
+}
+
+/** Which hint line explains the currently-selected policy. */
+export const DONE_POLICY_HINT: Record<DonePolicyKind, TranslationKey> = {
+  router: "fleet.settings.donePolicyHintRouter",
+  "queue-empty": "fleet.settings.donePolicyHintQueueEmpty",
+  marker: "fleet.settings.donePolicyHintMarker",
+};
+
+/** Preset schedule shapes offered above the raw cron field. `custom` means the
+ *  user is editing the expression directly and no preset applies. */
+export type CronShape = "custom" | "hourly" | "daily" | "weekdays";
+
+/** How many upcoming fire times to show under the cron field. */
+export const CRON_PREVIEW_COUNT = 3;
+/** Idle time before asking the backend to re-evaluate a typed expression. */
+export const CRON_PREVIEW_DEBOUNCE_MS = 300;
+
+/**
+ * Compose a 5-field cron expression from a preset shape and the `HH:MM` string
+ * a native <input type="time"> produces.
+ *
+ * Three shapes, not a full builder: these plus the existing `interval:<dur>`
+ * trigger cover the schedules fleets actually use, and anything rarer is a
+ * direct edit of the expression -- which stays visible and is verified by the
+ * fire-time preview either way.
+ */
+export function buildCronExpr(shape: CronShape, time: string): string {
+  const [h = "", m = ""] = time.split(":");
+  const hour = Number(h) || 0;
+  const minute = Number(m) || 0;
+  if (shape === "hourly") return `${minute} * * * *`;
+  if (shape === "weekdays") return `${minute} ${hour} * * 1-5`;
+  return `${minute} ${hour} * * *`;
+}
+
+/** Default time offered when the loaded expression has no readable `H:M`. */
+export const CRON_DEFAULT_TIME = "09:00";
+
+/**
+ * The `HH:MM` a native <input type="time"> should show for an existing cron
+ * expression, so picking a preset shape recomposes the schedule the fleet
+ * already has rather than silently moving it. Returns null when the first two
+ * fields are not a plain minute and hour (steps, lists, ranges, `*` hour).
+ */
+export function parseCronTime(expr: string): string | null {
+  const fields = expr.trim().split(/\s+/);
+  if (fields.length < 2) return null;
+  const [minuteStr, hourStr] = fields;
+  if (!/^\d+$/.test(minuteStr) || !/^\d+$/.test(hourStr)) return null;
+  const minute = Number(minuteStr);
+  const hour = Number(hourStr);
+  if (minute < 0 || minute > 59 || hour < 0 || hour > 23) return null;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }

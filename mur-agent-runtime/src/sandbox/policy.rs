@@ -218,6 +218,28 @@ impl SandboxPolicy {
             fs_write.push(channels);
         }
 
+        // `<mur_home>/open-items.jsonl` is the `open_item` built-in's only
+        // write target. That tool's doc comment claimed an agent needs no
+        // filesystem grant to use it, but nothing ever put the file in this
+        // allowlist, so "record a todo" failed for every sandboxed agent —
+        // and the failure surfaced as a bare `open <path>` with the errno
+        // dropped, so the agent could only guess at the cause. Same
+        // create-before-grant idiom as `channels`: an append-only log starts
+        // out absent, and Landlock skips rules on paths that don't exist at
+        // seal time.
+        if let Some(items) = agent_home
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|m| m.join(mur_open_items::LOG_FILE))
+            && !fs_write.contains(&items)
+        {
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&items);
+            fs_write.push(items);
+        }
+
         // `<mur_home>/index` holds three things with very different trust
         // requirements: the channels read-model subdir (`index/channels/`,
         // channels.db + WAL/SHM), the `*.lance` retrieval stores, and
@@ -790,6 +812,23 @@ mod tests {
                 .fs_write
                 .contains(&PathBuf::from("/tmp/mur/channels"))
         );
+    }
+
+    #[test]
+    fn open_items_log_is_writable_so_the_built_in_tool_works() {
+        // The `open_item` tool has exactly one write target and no entitlement
+        // of its own. Without this grant, "record a todo" failed for every
+        // sandboxed agent while the tool's own docs said it needed nothing.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mur_home = tmp.path();
+        let agent_home = mur_home.join("agents").join("mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+        let log = mur_home.join(mur_open_items::LOG_FILE);
+        assert!(policy.fs_write.contains(&log), "{:?}", policy.fs_write);
+        // Created up front: a rule on a path that does not exist yet is
+        // dropped at seal time, and the log is append-only from absent.
+        assert!(log.exists());
     }
 
     #[test]

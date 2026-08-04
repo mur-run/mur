@@ -27,6 +27,7 @@ pub(super) fn warn_if_running(name: &str) {
         && pid_alive(lock.pid)
     {
         eprintln!("warning: '{name}' is running; restart required for changes to take effect");
+        eprintln!("         run: mur agent restart {name}");
     }
 }
 
