@@ -18,6 +18,11 @@ pub enum NotesAction {
         /// Read the markdown body from this file. If omitted, body is read from stdin.
         #[arg(long)]
         body_file: Option<PathBuf>,
+
+        /// Note kind: `rule` (behavioral guidance, fast decay) or `fact`
+        /// (environment truth, slow decay).
+        #[arg(long, default_value = "fact")]
+        kind: String,
     },
 
     /// Rank existing notes by a keyword query.

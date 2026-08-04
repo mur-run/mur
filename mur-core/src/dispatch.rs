@@ -965,7 +965,8 @@ pub async fn run(cli: Cli) -> Result<()> {
                 name,
                 description,
                 body_file,
-            } => cmd::notes_cmd::cmd_create(&name, &description, body_file.as_deref())?,
+                kind,
+            } => cmd::notes_cmd::cmd_create(&name, &description, body_file.as_deref(), &kind)?,
             crate::cli::notes::NotesAction::Search { query, limit } => {
                 cmd::notes_cmd::cmd_search(&query, limit)?
             }

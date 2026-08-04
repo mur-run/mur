@@ -6,8 +6,8 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use mur_common::skill::event_log::{SkillEvent, event_log_path, read_events};
 use mur_common::skill::lifecycle::{
-    LifecycleThresholds, calculate_decay, cap_for_provenance, half_life_days, next_state,
-    on_promotion, transition_allowed,
+    LifecycleThresholds, calculate_decay, cap_for_provenance, half_life_days, half_life_factor_for,
+    next_state, on_promotion, transition_allowed,
 };
 use mur_common::skill::stats::{LifecycleState, SkillStats};
 use std::path::Path;
@@ -202,16 +202,19 @@ pub fn run_sweep(home: &Path, opts: SweepOptions) -> Result<SweepReport> {
             false
         };
 
+        // Loaded once per skill: kind-aware decay below and the provenance
+        // gate both need it. A missing manifest degrades the same way in both
+        // places (factor 1.0 / provenance Human).
+        let manifest = mur_common::skill::local::load_installed(home, &name).ok();
+
         // ── Normal scoring path ───────────────────────────────────────────
         let proposed = if forced_deprecated {
             LifecycleState::Deprecated
         } else {
             // Provenance gate (A1): an LLM-authored, uncurated skill cannot rise
-            // above Emerging. Load the manifest for its provenance; a missing
+            // above Emerging. Reuses the manifest loaded above; a missing
             // manifest defaults to Human (no cap), matching `#[serde(default)]`.
-            let provenance = mur_common::skill::local::load_installed(home, &name)
-                .map(|m| m.provenance)
-                .unwrap_or_default();
+            let provenance = manifest.as_ref().map(|m| m.provenance).unwrap_or_default();
             cap_for_provenance(
                 next_state(&current, opts.now, &opts.thresholds),
                 provenance,
@@ -223,7 +226,10 @@ pub fn run_sweep(home: &Path, opts: SweepOptions) -> Result<SweepReport> {
         let decayed_value = calculate_decay(
             current.anchor_confidence,
             current.last_success_at,
-            half_life_days(current.lifecycle_state),
+            // Per-kind curves (federation P1): rule notes halve their
+            // half-life, fact notes double it; plain skills are unchanged.
+            half_life_days(current.lifecycle_state)
+                * half_life_factor_for(manifest.as_ref(), &opts.thresholds),
             opts.now,
         );
         report.decayed += 1;

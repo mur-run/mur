@@ -36,6 +36,11 @@ pub trait Retrievable {
     fn decay_half_life_days(&self) -> f64;
     /// Filter predicate: items where this returns false are dropped before scoring.
     fn is_active(&self) -> bool;
+    /// Whether this item is a note (`Category::Note`). Drives the reserved
+    /// note slots in the budget stage; non-note implementors keep the default.
+    fn is_note(&self) -> bool {
+        false
+    }
 
     /// Hook for item-specific score adjustment. Default: identity.
     /// Pattern overrides to apply `scope_mult`, `kind_score_boost`, `lang_mult`.
@@ -153,6 +158,9 @@ const SCORE_FLOOR: f64 = 0.42;
 
 /// Default max patterns to return
 const MAX_PATTERNS: usize = 5;
+/// Injection slots held for notes when mature skills would otherwise fill
+/// every seat (federation P1). Config override: `retrieval.reserved_note_slots`.
+const RESERVED_NOTE_SLOTS: usize = 1;
 
 /// Default max total tokens (rough: 1 token ≈ 4 chars)
 const MAX_TOKENS: usize = 2000;
@@ -211,6 +219,7 @@ where
     let score_floor = config.map_or(SCORE_FLOOR, |c| c.min_score);
     let max_patterns = config.map_or(MAX_PATTERNS, |c| c.max_patterns);
     let max_tokens = config.map_or(MAX_TOKENS, |c| c.max_tokens);
+    let reserved_note_slots = config.map_or(RESERVED_NOTE_SLOTS, |c| c.reserved_note_slots);
 
     let mut scored: Vec<Scored<T>> = candidates
         .into_iter()
@@ -254,19 +263,59 @@ where
         }
     });
 
-    // Budget: max items and max tokens.
+    // Budget: max items and max tokens. Keep what didn't fit — the note
+    // reservation below may promote from it.
     let mut result = Vec::new();
+    let mut leftovers = Vec::new();
     let mut token_count = 0;
+    let mut budget_full = false;
     for sp in scored {
-        if result.len() >= max_patterns {
-            break;
+        if budget_full {
+            leftovers.push(sp);
+            continue;
         }
         let est_tokens = sp.item.text().len() / 4;
-        if token_count + est_tokens > max_tokens && !result.is_empty() {
-            break;
+        if result.len() >= max_patterns
+            || (token_count + est_tokens > max_tokens && !result.is_empty())
+        {
+            budget_full = true;
+            leftovers.push(sp);
+            continue;
         }
         token_count += est_tokens;
         result.push(sp);
+    }
+
+    // Reserved note slots (federation P1): mature skills must not permanently
+    // outbid notes, or "a Draft note takes effect immediately" is false in
+    // practice. When fewer than the reserved number of notes made the cut and
+    // eligible notes are in the leftovers, swap out the lowest-scoring
+    // non-notes from the tail. Item-for-item swap;
+    // ponytail: token budget treats the swap as neutral — revisit only if
+    // real note bodies blow the token cap.
+    if budget_full && reserved_note_slots > 0 {
+        let mut notes_in = result.iter().filter(|s| s.item.is_note()).count();
+        let mut promoted: Vec<Scored<T>> = Vec::new();
+        for sp in leftovers {
+            if notes_in >= reserved_note_slots {
+                break;
+            }
+            if sp.item.is_note() {
+                promoted.push(sp);
+                notes_in += 1;
+            }
+        }
+        for note in promoted {
+            match result.iter().rposition(|s| !s.item.is_note()) {
+                Some(pos) => {
+                    result.remove(pos);
+                    // Score ≤ every kept score, so appending keeps the
+                    // descending order intact.
+                    result.push(note);
+                }
+                None => break,
+            }
+        }
     }
     result
 }
@@ -1047,5 +1096,146 @@ mod tests {
             assert_eq!(g.item.name, l.item.name);
             assert!((g.score - l.score).abs() < 1e-9);
         }
+    }
+}
+
+#[cfg(test)]
+mod note_reservation_tests {
+    use super::*;
+
+    struct Item {
+        name: String,
+        note: bool,
+        importance: f64,
+    }
+    impl Retrievable for Item {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            "topic thing"
+        }
+        fn text(&self) -> Cow<'_, str> {
+            Cow::Borrowed("topic body content")
+        }
+        fn tag_terms(&self) -> Vec<&str> {
+            vec![]
+        }
+        fn importance(&self) -> f64 {
+            self.importance
+        }
+        fn effectiveness(&self) -> f64 {
+            1.0
+        }
+        fn tier(&self) -> Tier {
+            Tier::Project
+        }
+        fn created_at(&self) -> chrono::DateTime<chrono::Utc> {
+            Utc::now()
+        }
+        fn last_activity(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+            Some(Utc::now())
+        }
+        fn decay_half_life_days(&self) -> f64 {
+            90.0
+        }
+        fn is_active(&self) -> bool {
+            true
+        }
+        fn is_note(&self) -> bool {
+            self.note
+        }
+    }
+
+    /// Six max-importance skills + one zero-importance note: the note always
+    /// ranks last, so without the reservation it never survives the 5-item cap.
+    fn skills_and_note() -> Vec<Item> {
+        let mut v: Vec<Item> = (0..6)
+            .map(|i| Item {
+                name: format!("skill-{i}"),
+                note: false,
+                importance: 1.0,
+            })
+            .collect();
+        v.push(Item {
+            name: "the-note".into(),
+            note: true,
+            importance: 0.0,
+        });
+        v
+    }
+
+    fn cfg(reserved: usize) -> RetrievalConfig {
+        RetrievalConfig {
+            min_score: 0.0,
+            reserved_note_slots: reserved,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn reserved_slot_swaps_in_the_best_note() {
+        let r = score_and_rank_generic_with_config("topic", skills_and_note(), &cfg(1));
+        assert_eq!(r.len(), 5, "item cap must be unchanged by the swap");
+        assert!(
+            r.last().unwrap().item.note,
+            "the note takes the reserved tail slot"
+        );
+        assert_eq!(
+            r.iter().filter(|s| s.item.note).count(),
+            1,
+            "exactly the reserved number of notes"
+        );
+    }
+
+    #[test]
+    fn reservation_disabled_keeps_old_behavior() {
+        let r = score_and_rank_generic_with_config("topic", skills_and_note(), &cfg(0));
+        assert_eq!(r.len(), 5);
+        assert!(
+            !r.iter().any(|s| s.item.note),
+            "reserved_note_slots=0 must opt out entirely"
+        );
+    }
+
+    #[test]
+    fn no_swap_when_a_note_already_made_the_cut() {
+        // The note outranks every skill: it earns its seat, nothing is swapped.
+        let mut items = skills_and_note();
+        items.last_mut().unwrap().importance = 1.0;
+        for s in items.iter_mut().take(3) {
+            s.importance = 0.0;
+        }
+        let r = score_and_rank_generic_with_config("topic", items, &cfg(1));
+        assert_eq!(r.len(), 5);
+        assert_eq!(r.iter().filter(|s| s.item.note).count(), 1);
+        assert!(
+            !r.last().unwrap().item.note || r.iter().take(4).all(|s| !s.item.note),
+            "an organically-placed note is not duplicated by the reservation"
+        );
+    }
+
+    #[test]
+    fn under_cap_result_is_untouched() {
+        // Three items only: nothing overflows, reservation is a no-op.
+        let items: Vec<Item> = vec![
+            Item {
+                name: "a".into(),
+                note: false,
+                importance: 1.0,
+            },
+            Item {
+                name: "b".into(),
+                note: true,
+                importance: 0.5,
+            },
+            Item {
+                name: "c".into(),
+                note: false,
+                importance: 0.9,
+            },
+        ];
+        let r = score_and_rank_generic_with_config("topic", items, &cfg(1));
+        assert_eq!(r.len(), 3, "all items fit; no swap path runs");
     }
 }
