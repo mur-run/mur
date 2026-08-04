@@ -261,6 +261,19 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // matches the macOS SBPL subpath grant — so co-watching works on both kernels,
     // not just macOS. (We create the dir first so the Landlock rule sticks.)
     let mut extra_write_paths: Vec<std::path::PathBuf> = Vec::new();
+    // Memory federation (P0): the sleep cycle drops signed snapshot requests
+    // and flushed outbox signals into `<mur_home>/inbox/…`. That is the ONLY
+    // central-store write the runtime is granted — the daemon treats the inbox
+    // as an attacker-writable surface and verifies signatures, so this grant
+    // widens no trust boundary. Created first so the Landlock rule sticks
+    // (same reasoning as the VLC runtime dir below).
+    {
+        let inbox_dir = mur_home.join("inbox");
+        let _ = std::fs::create_dir_all(
+            mur_home.join(mur_common::snapshot_request::SNAPSHOT_REQUEST_DIR),
+        );
+        extra_write_paths.push(inbox_dir);
+    }
     if let Some(vlc) = mur_common::media::load_runtime(&mur_home) {
         extra_ports.push(vlc.port);
         let runtime_dir = mur_common::media::runtime_dir(&mur_home);
@@ -636,7 +649,10 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // 8e. E3 — agent-side sleep cycle: flush evidence outbox + pull snapshot.
     {
         let name = profile.inner.name.clone();
-        transport_tasks.push(crate::federation::spawn_agent_sleep_cycle(name));
+        transport_tasks.push(crate::federation::spawn_agent_sleep_cycle(
+            name,
+            identity.clone(),
+        ));
         info!("agent sleep-cycle spawned");
     }
 
