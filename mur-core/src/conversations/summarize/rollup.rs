@@ -49,6 +49,7 @@ pub async fn rollup_week(
     iso_week: &str,
     force: bool,
     cfg: &mur_common::config::RollupConfig,
+    llm: &mur_common::config::LlmConfig,
     root_override: Option<&str>,
 ) -> Result<RollupReport> {
     let start = Instant::now();
@@ -173,23 +174,13 @@ pub async fn rollup_week(
         selected.truncate(cfg.max_extractive_spans_per_week as usize);
     }
 
-    // Abstractive (P3 migration: trait-based). RollupConfig has no per-stage
-    // backend override field today, so we synthesize the legacy ollama config
-    // inline. Adding rollup-specific routing is a defensible follow-up but
-    // explicitly out of scope for P3.
-    let abstractive_cfg = mur_common::config::BackendConfig {
-        provider: "ollama".into(),
-        model: cfg.abstractive_model.clone(),
-        endpoint: Some(cfg.ollama_endpoint.clone()),
-        api_key_env: None,
-        api_key_ref: None,
-        timeout_secs: Some(120),
-    };
+    // Abstractive (P3 migration: trait-based).
+    let abstractive_cfg = cfg.effective_abstractive_backend(llm);
     let abstractive_backend =
         crate::conversations::backend::factory::build_for_stage(&abstractive_cfg, "rollup")?;
     let abstractive = super::abstractive::rollup_narrative(
         abstractive_backend.as_ref(),
-        &cfg.abstractive_model,
+        &abstractive_cfg.model,
         &RollupAbstractiveInput {
             kind: RollupKind::Week,
             window_label: iso_week,
@@ -245,14 +236,15 @@ pub async fn rollup_week(
     let prev_week = iso_week_label_for(monday - Duration::days(7));
     let next_week = iso_week_label_for(monday + Duration::days(7));
 
+    let extractive_cfg = cfg.effective_extractive_backend(llm);
     let doc = RollupDoc {
         kind: RollupKind::Week,
         window_label: iso_week.to_string(),
         window_start: monday,
         source_labels,
         generated_at: Utc::now(),
-        extractive_model: cfg.extractive_model.clone(),
-        abstractive_model: cfg.abstractive_model.clone(),
+        extractive_model: extractive_cfg.model.clone(),
+        abstractive_model: abstractive_cfg.model.clone(),
         mur_version: env!("CARGO_PKG_VERSION").to_string(),
         duration_ms: start.elapsed().as_millis() as u64,
         sources,
@@ -290,6 +282,7 @@ pub async fn rollup_month(
     yyyy_mm: &str,
     force: bool,
     cfg: &mur_common::config::RollupConfig,
+    llm: &mur_common::config::LlmConfig,
     root_override: Option<&str>,
 ) -> Result<RollupReport> {
     let start = Instant::now();
@@ -429,21 +422,13 @@ pub async fn rollup_month(
         selected.truncate(cfg.max_extractive_spans_per_month as usize);
     }
 
-    // Abstractive (P3 migration: trait-based). See week-rollup site above for
-    // why we synthesize the BackendConfig inline.
-    let abstractive_cfg = mur_common::config::BackendConfig {
-        provider: "ollama".into(),
-        model: cfg.abstractive_model.clone(),
-        endpoint: Some(cfg.ollama_endpoint.clone()),
-        api_key_env: None,
-        api_key_ref: None,
-        timeout_secs: Some(120),
-    };
+    // Abstractive (P3 migration: trait-based).
+    let abstractive_cfg = cfg.effective_abstractive_backend(llm);
     let abstractive_backend =
         crate::conversations::backend::factory::build_for_stage(&abstractive_cfg, "rollup")?;
     let abstractive = super::abstractive::rollup_narrative(
         abstractive_backend.as_ref(),
-        &cfg.abstractive_model,
+        &abstractive_cfg.model,
         &RollupAbstractiveInput {
             kind: RollupKind::Month,
             window_label: yyyy_mm,
@@ -511,14 +496,15 @@ pub async fn rollup_month(
         month_label_for(n)
     };
 
+    let extractive_cfg = cfg.effective_extractive_backend(llm);
     let doc = RollupDoc {
         kind: RollupKind::Month,
         window_label: yyyy_mm.to_string(),
         window_start: first_day,
         source_labels: week_labels,
         generated_at: Utc::now(),
-        extractive_model: cfg.extractive_model.clone(),
-        abstractive_model: cfg.abstractive_model.clone(),
+        extractive_model: extractive_cfg.model.clone(),
+        abstractive_model: abstractive_cfg.model.clone(),
         mur_version: env!("CARGO_PKG_VERSION").to_string(),
         duration_ms: start.elapsed().as_millis() as u64,
         sources,
@@ -554,6 +540,7 @@ pub async fn rollup_month(
 
 pub async fn rollup_missing(
     cfg: &mur_common::config::RollupConfig,
+    llm: &mur_common::config::LlmConfig,
     kinds: RollupKinds,
     max_weeks_override: Option<u32>,
     max_months_override: Option<u32>,
@@ -604,7 +591,7 @@ pub async fn rollup_missing(
             if taken >= cap {
                 break;
             }
-            let r = rollup_week(&w, false, cfg, root_override).await?;
+            let r = rollup_week(&w, false, cfg, llm, root_override).await?;
             match &r.outcome {
                 RollupOutcome::Written { .. } | RollupOutcome::Noop => report.week_ok += 1,
                 RollupOutcome::Failed(_) => report.week_err += 1,
@@ -656,7 +643,7 @@ pub async fn rollup_missing(
             if taken >= cap {
                 break;
             }
-            let r = rollup_month(&m, false, cfg, root_override).await?;
+            let r = rollup_month(&m, false, cfg, llm, root_override).await?;
             match &r.outcome {
                 RollupOutcome::Written { .. } | RollupOutcome::Noop => report.month_ok += 1,
                 RollupOutcome::Failed(_) => report.month_err += 1,
@@ -745,6 +732,10 @@ mod tests {
         mur_common::config::RollupConfig::default()
     }
 
+    fn llm() -> mur_common::config::LlmConfig {
+        mur_common::config::LlmConfig::default()
+    }
+
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn rollup_week_produces_layer_3_row_and_md() {
@@ -757,7 +748,7 @@ mod tests {
             let date = NaiveDate::from_ymd_opt(2026, 4, d).unwrap();
             seed_day_for_rollup(root, date, &format!("day {d} span text")).await;
         }
-        let report = rollup_week("2026-W16", false, &cfg(), Some(root))
+        let report = rollup_week("2026-W16", false, &cfg(), &llm(), Some(root))
             .await
             .unwrap();
         assert!(
@@ -781,7 +772,7 @@ mod tests {
         unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
-        let report = rollup_week("2026-W16", false, &cfg(), Some(root))
+        let report = rollup_week("2026-W16", false, &cfg(), &llm(), Some(root))
             .await
             .unwrap();
         assert!(matches!(report.outcome, RollupOutcome::Skipped { .. }));
@@ -799,11 +790,11 @@ mod tests {
             let date = NaiveDate::from_ymd_opt(2026, 4, d).unwrap();
             seed_day_for_rollup(root, date, &format!("day {d} span")).await;
         }
-        let _ = rollup_week("2026-W16", false, &cfg(), Some(root))
+        let _ = rollup_week("2026-W16", false, &cfg(), &llm(), Some(root))
             .await
             .unwrap();
         // Second call with no changes — should skip due to matching input_content_sha
-        let r2 = rollup_week("2026-W16", false, &cfg(), Some(root))
+        let r2 = rollup_week("2026-W16", false, &cfg(), &llm(), Some(root))
             .await
             .unwrap();
         // Hot path: the sha-based idempotency check in rollup_week fires
@@ -840,12 +831,12 @@ mod tests {
         }
         let mut c = cfg();
         c.max_weeks_per_run = 2;
-        let sweep = rollup_missing(&c, RollupKinds::WeekOnly, None, None, Some(root))
+        let sweep = rollup_missing(&c, &llm(), RollupKinds::WeekOnly, None, None, Some(root))
             .await
             .unwrap();
         assert_eq!(sweep.week_ok, 2, "throttle=2 should write 2 weeks");
         // Second invocation should pick up the remaining week (W03)
-        let sweep2 = rollup_missing(&c, RollupKinds::WeekOnly, None, None, Some(root))
+        let sweep2 = rollup_missing(&c, &llm(), RollupKinds::WeekOnly, None, None, Some(root))
             .await
             .unwrap();
         assert!(

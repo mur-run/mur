@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::discovery::aggregate::{MenuRowKind, build_embedding_menu, build_llm_menu};
 use crate::discovery::{Backend, DiscoveredModel};
-use mur_common::config::Config;
+use mur_common::config::{BackendConfig, Config};
 use mur_common::model::ModelRegistry;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,7 +43,13 @@ pub struct SearchChoice {
 pub struct ModelSetupPlan {
     pub smart: Option<SlotChoice>,
     pub search: Option<SearchChoice>,
-    pub conversations_model: Option<String>,
+    /// Backend for the three conversation stages (ask/compact/rollup).
+    /// Deliberately derived from the *local* model rather than `smart`:
+    /// conversation stages stay on-device even when a cloud key is present
+    /// (see `recommend()`). Carries the real `provider`/`openai_url`/
+    /// `api_key_ref` for whichever backend the local model was discovered
+    /// on (Ollama vs oMLX) — never just a bare model-name string.
+    pub conversations: Option<SlotChoice>,
     pub summary: String,
 }
 
@@ -203,7 +209,7 @@ pub fn recommend(discovered: &[DiscoveredModel], keys: &[KeySource]) -> ModelSet
         }),
     };
 
-    let conversations_model = local_llm.as_ref().map(|m| m.id.clone());
+    let conversations = local_llm.as_ref().map(local_slot_choice);
 
     let summary = match (&smart, &search) {
         (None, _) => {
@@ -222,7 +228,7 @@ pub fn recommend(discovered: &[DiscoveredModel], keys: &[KeySource]) -> ModelSet
     ModelSetupPlan {
         smart,
         search,
-        conversations_model,
+        conversations,
         summary,
     }
 }
@@ -241,10 +247,39 @@ pub fn apply(plan: &ModelSetupPlan, config: &mut Config) {
         config.embedding.openai_url = e.openai_url.clone();
         config.embedding.api_key_ref = e.api_key_ref.clone();
     }
-    if let Some(m) = &plan.conversations_model {
-        config.conversations.ask.model = m.clone();
-        config.conversations.compact.extractive_model = m.clone();
-        config.conversations.rollup.extractive_model = m.clone();
+    if let Some(c) = &plan.conversations {
+        // `conversations` is deliberately independent of `plan.smart` (see
+        // `recommend()`: keep the high-volume, latency-sensitive
+        // conversations pipeline on the local model even when a cloud key
+        // is available for smart) — so this must be an explicit per-stage
+        // pin, not a `None`/inherit-smart clear.
+        //
+        // `c` already carries whichever backend the local model was
+        // discovered on (`local_slot_choice()` maps `Backend::Ollama` to
+        // "ollama" and `Backend::OMlx` to "openai" + its own endpoint/key
+        // ref) — no hardcoded provider here.
+        let backend = BackendConfig {
+            provider: c.provider.clone(),
+            model: c.model.clone(),
+            endpoint: c.openai_url.clone(),
+            api_key_env: None,
+            api_key_ref: c.api_key_ref.clone(),
+            timeout_secs: None,
+        };
+        // Pin all six conversation-stage backends, not just the three
+        // legacy fields (ask + the extractive halves of compact/rollup).
+        // Before this branch the unwritten three (compact/rollup
+        // abstractive) defaulted to a fabricated local Ollama backend, so
+        // they stayed local even though nothing here set them explicitly.
+        // Now that a `None` backend inherits `cfg.llm` (the smart slot,
+        // which `recommend()` prefers cloud for whenever a key is present),
+        // leaving them unset would silently move e.g. the daily
+        // (abstractive) summarizer to the cloud on a fresh local setup.
+        config.conversations.ask.backend = Some(backend.clone());
+        config.conversations.compact.extractive_backend = Some(backend.clone());
+        config.conversations.compact.abstractive_backend = Some(backend.clone());
+        config.conversations.rollup.extractive_backend = Some(backend.clone());
+        config.conversations.rollup.abstractive_backend = Some(backend);
     }
 }
 
@@ -327,7 +362,12 @@ mod tests {
         let search = plan.search.unwrap();
         assert_eq!(search.provider, "ollama");
         assert_eq!(search.dimensions, 1024);
-        assert_eq!(plan.conversations_model.as_deref(), Some("qwen3.5:4b"));
+        // Conversations deliberately keep the local runtime even though
+        // `smart` went cloud above — and carry a real backend, not a bare
+        // model-name string.
+        let conversations = plan.conversations.unwrap();
+        assert_eq!(conversations.provider, "ollama");
+        assert_eq!(conversations.model, "qwen3.5:4b");
     }
 
     #[test]
@@ -383,10 +423,90 @@ mod tests {
         );
         assert_eq!(cfg.embedding.model, "qwen3-embedding:0.6b");
         assert_eq!(cfg.embedding.dimensions, 1024);
-        assert_eq!(cfg.conversations.ask.model, "qwen3.5:4b");
-        assert_eq!(cfg.conversations.compact.extractive_model, "qwen3.5:4b");
-        assert_eq!(cfg.conversations.rollup.extractive_model, "qwen3.5:4b");
+        // `apply()` must write an explicit per-stage `BackendConfig`
+        // override — not leave the field `None` to fall through
+        // `effective_*` to `smart` (which is "anthropic" in this test) and
+        // not a bare model-name string either.
+        let b = cfg
+            .conversations
+            .ask
+            .backend
+            .as_ref()
+            .expect("setup writes an explicit backend, not a bare model name");
+        assert_eq!(b.provider, "ollama");
+        assert_eq!(b.model, "qwen3.5:4b");
+        let compact_b = cfg
+            .conversations
+            .compact
+            .extractive_backend
+            .as_ref()
+            .expect("compact stage gets an explicit backend too");
+        assert_eq!(compact_b.provider, "ollama");
+        assert_eq!(compact_b.model, "qwen3.5:4b");
+        let rollup_b = cfg
+            .conversations
+            .rollup
+            .extractive_backend
+            .as_ref()
+            .expect("rollup stage gets an explicit backend too");
+        assert_eq!(rollup_b.provider, "ollama");
+        assert_eq!(rollup_b.model, "qwen3.5:4b");
+        // I2 regression: the abstractive halves must be pinned local too.
+        // `cfg.llm` (asserted "anthropic" above) is the cloud smart slot —
+        // before the fix these two fields were left `None`, which resolves
+        // through `effective_abstractive_backend` straight to `cfg.llm`, so
+        // e.g. the daemon's daily (abstractive) summarizer would silently
+        // run on claude-opus-5 instead of the local model discovered here.
+        let compact_ab = cfg
+            .conversations
+            .compact
+            .abstractive_backend
+            .as_ref()
+            .expect("compact abstractive half gets an explicit backend too, not just extractive");
+        assert_eq!(compact_ab.provider, "ollama");
+        assert_eq!(compact_ab.model, "qwen3.5:4b");
+        let rollup_ab = cfg
+            .conversations
+            .rollup
+            .abstractive_backend
+            .as_ref()
+            .expect("rollup abstractive half gets an explicit backend too, not just extractive");
+        assert_eq!(rollup_ab.provider, "ollama");
+        assert_eq!(rollup_ab.model, "qwen3.5:4b");
         assert!(!is_factory_default_models(&cfg));
+    }
+
+    #[test]
+    fn an_omlx_local_model_reaches_the_conversation_stages_as_openai() {
+        // The exact bug this whole change exists to fix: a local model
+        // discovered on the oMLX backend must not surface in the
+        // conversation stages paired with the Ollama runtime it never ran
+        // on (that pairing would silently send every request to
+        // `localhost:11434` for a model that endpoint doesn't have).
+        let discovered = vec![DiscoveredModel {
+            id: "Qwen3.5-4B-MLX-4bit".into(),
+            backend: Backend::OMlx,
+            kind: ModelKind::Llm,
+            dims: None,
+            family: None,
+            size_bytes: None,
+            probed_at: None,
+        }];
+        let plan = recommend(&discovered, &[]);
+        let mut cfg = mur_common::config::Config::default();
+        apply(&plan, &mut cfg);
+        let b = cfg
+            .conversations
+            .ask
+            .backend
+            .expect("apply() writes an explicit backend for the omlx model");
+        assert_eq!(
+            b.provider, "openai",
+            "omlx must not be left as an Ollama name"
+        );
+        assert_eq!(b.model, "Qwen3.5-4B-MLX-4bit");
+        assert_eq!(b.endpoint.as_deref(), Some("http://localhost:8000/v1"));
+        assert_eq!(b.api_key_ref.as_deref(), Some("env:OMLX_API_KEY"));
     }
 
     #[test]
