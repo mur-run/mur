@@ -158,6 +158,8 @@ mur model prices refresh                      # refresh the cached models.dev pr
 
 API keys are stored as `SecretRef`s (`env:`, `keychain:`, `file:`, `cmd:`) — never written to config in plaintext. The **MUR Hub** desktop app has a **Model Library** that connects cloud providers (key saved to the macOS Keychain), auto-detects local runtimes (Ollama / MLX / LM Studio), discovers their models via `/v1/models`, and adds them to the registry — no YAML editing required.
 
+**Reuse the subscriptions you already pay for.** The companion [mur-model-gateway](https://github.com/mur-run/mur-model-gateway) runs a local endpoint (`127.0.0.1:8088`) that routes Anthropic / OpenAI / Gemini calls through one outlet and attaches credentials from your OS keychain — point a registry entry's `base_url` at it and your agents ride your existing Claude Code login instead of a separate metered API key.
+
 #### Cloud LLM backend (opt-in)
 
 Conversation summarization and ask stages default to local Ollama. Each stage
