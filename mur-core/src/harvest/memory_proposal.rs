@@ -13,10 +13,47 @@ use std::path::{Path, PathBuf};
 use mur_common::skill::note::{MEMORY_PROPOSAL_DIR, MemoryProposal};
 use mur_common::skill::store::global_skill_dir;
 
+/// Signature status of a pending proposal, computed at listing time (P2c-2).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProposalSigStatus {
+    /// Signature present and verified against the agent's on-disk pubkey.
+    Verified,
+    /// Legacy pre-P2c-2 drop with no signature. Acceptable unless
+    /// `MUR_SIGNAL_REQUIRE_SIG` enforces signing.
+    Unsigned,
+    /// Signature present but wrong, or the claimed agent has no verifiable
+    /// identity — never acceptable (fail-closed).
+    Invalid(String),
+}
+
 /// A pending proposal plus the file it came from.
 pub struct PendingMemoryProposal {
     pub path: PathBuf,
     pub proposal: MemoryProposal,
+    pub sig_status: ProposalSigStatus,
+}
+
+/// The signature proves *who proposed it*: verify against the CLAIMED agent's
+/// pubkey at `agents/<agent>/identity.pub`. The agent name is joined into a
+/// path, so it gets the same charset guard every other file-drop surface has.
+fn sig_status(mur_home: &Path, proposal: &MemoryProposal) -> ProposalSigStatus {
+    if proposal.sig.is_none() {
+        return ProposalSigStatus::Unsigned;
+    }
+    let agent = &proposal.agent;
+    let name_ok = !agent.is_empty()
+        && agent
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !name_ok {
+        return ProposalSigStatus::Invalid(format!("'{agent}' is not a valid agent name"));
+    }
+    let dir = mur_home.join("agents").join(agent);
+    match mur_common::identity::AgentIdentity::load_pubkey(&dir) {
+        Ok(pubkey) if proposal.verify(&pubkey) => ProposalSigStatus::Verified,
+        Ok(_) => ProposalSigStatus::Invalid(format!("signature does not verify for '{agent}'")),
+        Err(e) => ProposalSigStatus::Invalid(format!("no verifiable identity for '{agent}': {e}")),
+    }
 }
 
 /// All pending proposals, oldest first. Unparseable files are skipped with a
@@ -36,7 +73,14 @@ pub fn pending(mur_home: &Path) -> Result<Vec<PendingMemoryProposal>> {
             .map_err(anyhow::Error::from)
             .and_then(|t| serde_yaml_ng::from_str::<MemoryProposal>(&t).map_err(Into::into))
         {
-            Ok(proposal) => out.push(PendingMemoryProposal { path, proposal }),
+            Ok(proposal) => {
+                let sig_status = sig_status(mur_home, &proposal);
+                out.push(PendingMemoryProposal {
+                    path,
+                    proposal,
+                    sig_status,
+                })
+            }
             Err(e) => {
                 tracing::warn!(file = %path.display(), error = %e, "skipping unparseable memory proposal")
             }
@@ -50,6 +94,20 @@ pub fn pending(mur_home: &Path) -> Result<Vec<PendingMemoryProposal>> {
 /// existing skill) and consume the proposal file. Returns the note name.
 pub fn accept(mur_home: &Path, pending: &PendingMemoryProposal) -> Result<String> {
     let manifest = &pending.proposal.manifest;
+    // Signature gate first (P2c-2): a bad signature is never acceptable;
+    // unsigned is legacy-tolerated unless enforcement is on.
+    match &pending.sig_status {
+        ProposalSigStatus::Invalid(reason) => {
+            bail!("refusing '{}': {reason}", manifest.name)
+        }
+        ProposalSigStatus::Unsigned if mur_common::signal::require_sig_from_env() => {
+            bail!(
+                "refusing unsigned proposal '{}' (MUR_SIGNAL_REQUIRE_SIG)",
+                manifest.name
+            )
+        }
+        _ => {}
+    }
     // Same gates the synced NewDraftSkill path applies: the name is joined
     // into the skills dir, so validate before any filesystem contact.
     if !mur_common::skill::is_valid_skill_name(&manifest.name) {
@@ -93,6 +151,8 @@ mod tests {
                 kind: NoteKind::Rule,
                 publisher: &format!("agent:{agent}"),
             }),
+            sig: None,
+            key_version: 0,
         };
         write_memory_proposal(home, &p).unwrap();
     }
@@ -143,5 +203,75 @@ mod tests {
             1,
             "deterministic file name dedups"
         );
+    }
+
+    // ── P2c-2 signature gate ─────────────────────────────────────────────
+
+    use mur_common::identity::AgentIdentity;
+
+    /// Drop a SIGNED proposal from a registered agent; returns its identity.
+    fn drop_signed(home: &Path, agent: &str, name: &str, tamper: bool) -> AgentIdentity {
+        let dir = home.join("agents").join(agent);
+        std::fs::create_dir_all(&dir).unwrap();
+        let id = AgentIdentity::generate();
+        id.save(&dir).unwrap();
+
+        let mut p = MemoryProposal {
+            agent: agent.into(),
+            proposed_at: chrono::Utc::now(),
+            manifest: note_manifest(&NoteSpec {
+                name,
+                description: "reply language",
+                body: "always zh-TW",
+                kind: NoteKind::Rule,
+                publisher: &format!("agent:{agent}"),
+            }),
+            sig: None,
+            key_version: 0,
+        };
+        p.sign(&id);
+        if tamper {
+            p.manifest.content.note = Some("always en-US".into()); // post-sign edit
+        }
+        write_memory_proposal(home, &p).unwrap();
+        id
+    }
+
+    #[test]
+    fn signed_proposal_lists_verified_and_accepts() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        drop_signed(home, "w1", "reply-zh", false);
+
+        let list = pending(home).unwrap();
+        assert_eq!(list[0].sig_status, ProposalSigStatus::Verified);
+        assert_eq!(accept(home, &list[0]).unwrap(), "reply-zh");
+    }
+
+    #[test]
+    fn tampered_proposal_lists_invalid_and_accept_refuses() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        drop_signed(home, "w1", "reply-zh", true);
+
+        let list = pending(home).unwrap();
+        assert!(matches!(list[0].sig_status, ProposalSigStatus::Invalid(_)));
+        let err = accept(home, &list[0]).unwrap_err().to_string();
+        assert!(err.contains("refusing"), "got: {err}");
+        assert!(
+            !home.join("skills/reply-zh/skill.yaml").exists(),
+            "tampered proposal must not land"
+        );
+    }
+
+    #[test]
+    fn unsigned_legacy_proposal_still_accepts_by_default() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        drop_proposal(home, "w1", "legacy-note");
+
+        let list = pending(home).unwrap();
+        assert_eq!(list[0].sig_status, ProposalSigStatus::Unsigned);
+        assert_eq!(accept(home, &list[0]).unwrap(), "legacy-note");
     }
 }

@@ -97,6 +97,16 @@ impl AgentIdentity {
         Ok(Self { signing })
     }
 
+    /// Load ONLY the public key from `<dir>/identity.pub` — for verifiers
+    /// (inbox ingest, proposal review) that must not require the private key.
+    pub fn load_pubkey(dir: &Path) -> Result<[u8; 32], IdentityError> {
+        let path = dir.join("identity.pub");
+        if !path.exists() {
+            return Err(IdentityError::NotFound);
+        }
+        decode_pubkey(fs::read_to_string(&path)?.trim())
+    }
+
     pub fn signing_key(&self) -> &SigningKey {
         &self.signing
     }

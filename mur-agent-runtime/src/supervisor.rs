@@ -401,6 +401,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         max_iterations,
         max_tokens,
         Some(writer.sender()),
+        identity.clone(),
     )
     .await?;
     let dispatcher = Arc::new(build_dispatcher(

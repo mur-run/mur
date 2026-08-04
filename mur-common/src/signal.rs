@@ -52,6 +52,15 @@ pub struct Signal {
     /// keep signals within the same major forward-compatible.
     #[serde(default = "current_schema_version")]
     pub schema_version: u32,
+    /// Multibase (Base58Btc) Ed25519 signature over [`sign_input`] — federation
+    /// P2c-2, following the v3d `ChannelEvent` precedent. `None` = legacy
+    /// unsigned signal (tolerated on ingest unless `MUR_SIGNAL_REQUIRE_SIG`).
+    /// Additive `#[serde(default)]` field — allowed within frozen schema v1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig: Option<String>,
+    /// Key-rotation version; 0 = initial identity key.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub key_version: u32,
 }
 
 fn default_confidence() -> f64 {
@@ -59,6 +68,62 @@ fn default_confidence() -> f64 {
 }
 fn current_schema_version() -> u32 {
     SIGNAL_SCHEMA_VERSION
+}
+pub(crate) fn is_zero(v: &u32) -> bool {
+    *v == 0
+}
+
+/// Canonicalization version — bump if the sign-input shape changes so an old
+/// signature is never silently checked against a new canonicalization.
+pub const SIGNAL_SIG_INPUT_VERSION: u32 = 1;
+
+/// Canonical signed bytes for a [`Signal`]: every semantic field, `sig`
+/// excluded. `serde_json` sorts object keys (no preserve_order), so this is
+/// deterministic for a given input. The `domain` tag prevents a signature
+/// minted here from verifying in any other MUR signing context.
+fn sign_input(s: &Signal) -> Vec<u8> {
+    let canon = serde_json::json!({
+        "domain": "mur-signal",
+        "v": SIGNAL_SIG_INPUT_VERSION,
+        "id": s.id,
+        "emitted_at": s.emitted_at,
+        "actor": s.actor,
+        "target": s.target,
+        "kind": s.kind,
+        "scope": s.scope,
+        "confidence": s.confidence,
+        "schema_version": s.schema_version,
+        "key_version": s.key_version,
+    });
+    serde_json::to_vec(&canon).unwrap_or_default()
+}
+
+/// Parse `MUR_SIGNAL_REQUIRE_SIG`: only explicit truthy values enable
+/// signature enforcement (`=0` / `=false`, or unset, must NOT turn it on) —
+/// default-off is migration safety AND the commander wire (frozen v1, signals
+/// arrive bearer-token-authed but unsigned). One parser for every reader,
+/// mirroring `MUR_CHANNEL_REQUIRE_SIG`.
+pub fn require_sig_from_env() -> bool {
+    std::env::var("MUR_SIGNAL_REQUIRE_SIG")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes"))
+        .unwrap_or(false)
+}
+
+impl Signal {
+    /// Sign this signal in place with the emitting agent's identity key.
+    /// The signature covers every field except `sig` itself.
+    pub fn sign(&mut self, identity: &crate::identity::AgentIdentity) {
+        self.sig = Some(identity.sign_multibase(&sign_input(self)));
+    }
+
+    /// Fail-closed signature check against `pubkey`. An unsigned signal
+    /// never verifies — callers decide whether unsigned is tolerated.
+    pub fn verify(&self, pubkey: &[u8; 32]) -> bool {
+        match &self.sig {
+            Some(sig) => crate::identity::verify_bytes(pubkey, &sign_input(self), sig),
+            None => false,
+        }
+    }
 }
 
 /// HTTP batch wrapper for `POST /v1/signals/batch`.
@@ -149,6 +214,8 @@ mod tests {
             scope: Scope::Personal,
             confidence: 0.9,
             schema_version: SIGNAL_SCHEMA_VERSION,
+            sig: None,
+            key_version: 0,
         }
     }
 
@@ -310,6 +377,8 @@ scope: { kind: personal }
             scope: Scope::Personal,
             confidence: 0.75,
             schema_version: SIGNAL_SCHEMA_VERSION,
+            sig: None,
+            key_version: 0,
         };
         let y = serde_yaml::to_string(&sig).unwrap();
         assert!(y.contains("kind: new_draft_pattern"));
@@ -325,6 +394,62 @@ scope: { kind: personal }
     #[test]
     fn schema_version_constant() {
         assert_eq!(SIGNAL_SCHEMA_VERSION, 1);
+    }
+
+    #[test]
+    fn sign_verify_roundtrip_and_yaml_preserves_sig() {
+        let id = crate::identity::AgentIdentity::generate();
+        let mut s = sample_signal();
+        s.sign(&id);
+        assert!(s.verify(&id.verifying_key_bytes()));
+
+        let yaml = serde_yaml::to_string(&s).unwrap();
+        let back: Signal = serde_yaml::from_str(&yaml).unwrap();
+        assert!(back.verify(&id.verifying_key_bytes()));
+    }
+
+    #[test]
+    fn tampered_field_fails_verification() {
+        let id = crate::identity::AgentIdentity::generate();
+        let mut s = sample_signal();
+        s.sign(&id);
+        s.scope = Scope::Team {
+            team_id: "ops".into(),
+        }; // scope-escalation attempt after signing
+        assert!(!s.verify(&id.verifying_key_bytes()));
+    }
+
+    #[test]
+    fn wrong_key_and_unsigned_fail_verification() {
+        let id = crate::identity::AgentIdentity::generate();
+        let other = crate::identity::AgentIdentity::generate();
+        let mut s = sample_signal();
+        assert!(
+            !s.verify(&id.verifying_key_bytes()),
+            "unsigned never verifies"
+        );
+        s.sign(&id);
+        assert!(!s.verify(&other.verifying_key_bytes()));
+    }
+
+    #[test]
+    fn legacy_unsigned_yaml_deserializes_with_defaults() {
+        // Pre-P2c-2 signal yaml — no sig/key_version fields.
+        let y = r#"
+id: 00000000-0000-0000-0000-000000000009
+emitted_at: 2026-04-18T10:00:00Z
+actor: { source: commander_daemon, native_id: x }
+target: { kind: pattern, name: foo, scope: { kind: personal } }
+kind: { type: execution_success }
+scope: { kind: personal }
+"#;
+        let s: Signal = serde_yaml::from_str(y).unwrap();
+        assert!(s.sig.is_none());
+        assert_eq!(s.key_version, 0);
+        // And an unsigned signal serializes WITHOUT the new keys (wire-stable).
+        let out = serde_yaml::to_string(&s).unwrap();
+        assert!(!out.contains("sig:"));
+        assert!(!out.contains("key_version:"));
     }
 
     #[test]

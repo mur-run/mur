@@ -480,8 +480,14 @@ fn review_memory_proposals() -> Result<()> {
         let kind = mur_common::skill::lifecycle::note_kind(&p.proposal.manifest)
             .map(|k| format!("{k:?}").to_lowercase())
             .unwrap_or_default();
+        // The human is the gate — show what the signature actually proves.
+        let sig_note = match &p.sig_status {
+            crate::harvest::memory_proposal::ProposalSigStatus::Verified => "✓ signed",
+            crate::harvest::memory_proposal::ProposalSigStatus::Unsigned => "unsigned",
+            crate::harvest::memory_proposal::ProposalSigStatus::Invalid(_) => "✗ INVALID SIGNATURE",
+        };
         eprintln!(
-            "\n  [{}] {} ({kind}) — {}",
+            "\n  [{}] {} ({kind}, {sig_note}) — {}",
             p.proposal.agent, p.proposal.manifest.name, p.proposal.manifest.description
         );
         if let Some(body) = &p.proposal.manifest.content.note {

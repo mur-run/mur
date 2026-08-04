@@ -289,6 +289,8 @@ mod tests {
             scope: Scope::Personal,
             confidence: 1.0,
             schema_version: SIGNAL_SCHEMA_VERSION,
+            sig: None,
+            key_version: 0,
         }
     }
 

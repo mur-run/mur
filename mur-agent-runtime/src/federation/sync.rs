@@ -36,13 +36,28 @@ pub fn spawn_agent_sleep_cycle(
 }
 
 fn run_agent_cycle(agent_name: &str, identity: &mur_common::identity::AgentIdentity) -> Result<()> {
-    flush_outbox(agent_name)?;
+    flush_outbox(agent_name, identity)?;
     refresh_snapshot(agent_name, identity);
     Ok(())
 }
 
-/// Copy pending outbox signals to `~/.mur/inbox/` for the daemon to pick up.
-fn flush_outbox(agent_name: &str) -> Result<()> {
+/// Parse an outbox signal, sign it with the agent's identity (P2c-2), and
+/// return the signed YAML to drop. Signing happens HERE — the trust boundary
+/// where the signal leaves the agent's home — so every outbox writer is
+/// covered without threading the key into each of them.
+fn sign_signal_yaml(
+    yaml: &str,
+    identity: &mur_common::identity::AgentIdentity,
+) -> Result<(Signal, String)> {
+    let mut signal: Signal = serde_yaml_ng::from_str(yaml)?;
+    signal.sign(identity);
+    let signed = serde_yaml_ng::to_string(&signal)?;
+    Ok((signal, signed))
+}
+
+/// Copy pending outbox signals to `~/.mur/inbox/` for the daemon to pick up,
+/// signing each at the boundary so ingest can verify who said it.
+fn flush_outbox(agent_name: &str, identity: &mur_common::identity::AgentIdentity) -> Result<()> {
     let outbox = AgentOutbox::open(agent_name)?;
     let pending = outbox.list_pending()?;
     if pending.is_empty() {
@@ -55,7 +70,7 @@ fn flush_outbox(agent_name: &str) -> Result<()> {
     let mut flushed = Vec::new();
     for path in &pending {
         let yaml = std::fs::read_to_string(path)?;
-        let signal: Signal = serde_yaml_ng::from_str(&yaml)?;
+        let (signal, signed_yaml) = sign_signal_yaml(&yaml, identity)?;
         let fname = format!(
             "{}-{}.yaml",
             signal.emitted_at.format("%Y-%m-%dT%H-%M-%S"),
@@ -63,7 +78,7 @@ fn flush_outbox(agent_name: &str) -> Result<()> {
         );
         let dest = inbox_dir.join(&fname);
         let tmp = inbox_dir.join(format!(".{fname}.tmp"));
-        std::fs::write(&tmp, &yaml)?;
+        std::fs::write(&tmp, &signed_yaml)?;
         std::fs::rename(&tmp, &dest)?;
         flushed.push(path.clone());
     }
@@ -164,5 +179,36 @@ mod tests {
             serde_yaml_ng::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
         assert!(req.verify(&id.verifying_key_bytes()));
         assert_eq!(req.agent, "w1");
+    }
+
+    #[test]
+    fn flushed_signal_yaml_is_signed_and_verifies() {
+        let id = mur_common::identity::AgentIdentity::generate();
+        let unsigned = mur_common::Signal {
+            id: uuid::Uuid::new_v4(),
+            emitted_at: chrono::Utc::now(),
+            actor: mur_common::Actor {
+                source: mur_common::ActorSource::MurCli,
+                native_id: "w1".into(),
+                display_name: None,
+                resolved_user_id: None,
+            },
+            target: mur_common::SignalTarget::Skill {
+                name: "s".into(),
+                scope: mur_common::Scope::Personal,
+            },
+            kind: mur_common::SignalKind::SkillExecutionSuccess,
+            scope: mur_common::Scope::Personal,
+            confidence: 1.0,
+            schema_version: mur_common::SIGNAL_SCHEMA_VERSION,
+            sig: None,
+            key_version: 0,
+        };
+        let yaml = serde_yaml_ng::to_string(&unsigned).unwrap();
+        let (signal, signed_yaml) = sign_signal_yaml(&yaml, &id).unwrap();
+        assert!(signal.verify(&id.verifying_key_bytes()));
+        // The DROPPED yaml (what ingest reads) carries the verifying signature.
+        let reparsed: mur_common::Signal = serde_yaml_ng::from_str(&signed_yaml).unwrap();
+        assert!(reparsed.verify(&id.verifying_key_bytes()));
     }
 }
