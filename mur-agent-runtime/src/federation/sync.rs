@@ -10,8 +10,17 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 /// Spawn a background task that periodically flushes the evidence outbox and
-/// refreshes the pattern snapshot for `agent_name`.
-pub fn spawn_agent_sleep_cycle(agent_name: String) -> tokio::task::JoinHandle<()> {
+/// requests a fresh knowledge snapshot for `agent_name`.
+///
+/// `identity` is the supervisor's pre-sandbox-loaded keypair (supervisor step
+/// 3a). It MUST be passed in rather than re-read from disk: the B1 sandbox
+/// denies reads of the agent's own `identity.key` once applied, so a lazy
+/// per-cycle `AgentIdentity::load` fails with "identity files not found" on
+/// every enforcing platform — exactly what the T0 tracer caught live.
+pub fn spawn_agent_sleep_cycle(
+    agent_name: String,
+    identity: std::sync::Arc<mur_common::identity::AgentIdentity>,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let interval_minutes = agent_idle_minutes();
         let mut ticker = tokio::time::interval(Duration::from_secs(interval_minutes * 60));
@@ -19,16 +28,16 @@ pub fn spawn_agent_sleep_cycle(agent_name: String) -> tokio::task::JoinHandle<()
         ticker.tick().await;
         loop {
             ticker.tick().await;
-            if let Err(e) = run_agent_cycle(&agent_name) {
+            if let Err(e) = run_agent_cycle(&agent_name, &identity) {
                 warn!(agent = %agent_name, error = %e, "agent sleep-cycle error");
             }
         }
     })
 }
 
-fn run_agent_cycle(agent_name: &str) -> Result<()> {
+fn run_agent_cycle(agent_name: &str, identity: &mur_common::identity::AgentIdentity) -> Result<()> {
     flush_outbox(agent_name)?;
-    refresh_snapshot(agent_name);
+    refresh_snapshot(agent_name, identity);
     Ok(())
 }
 
@@ -78,7 +87,7 @@ fn flush_outbox(agent_name: &str) -> Result<()> {
 /// required `mur` on the spawn allowlist — the entire CLI surface — and died
 /// with EPERM under sandbox.) Uses the same `<mur_home>/inbox/...` write
 /// grant the outbox flush above relies on.
-fn refresh_snapshot(agent_name: &str) {
+fn refresh_snapshot(agent_name: &str, identity: &mur_common::identity::AgentIdentity) {
     let mur_home = match dirs::home_dir() {
         Some(h) => h.join(".mur"),
         None => {
@@ -86,7 +95,7 @@ fn refresh_snapshot(agent_name: &str) {
             return;
         }
     };
-    match write_snapshot_request_at(&mur_home, agent_name) {
+    match write_snapshot_request_at(&mur_home, agent_name, identity) {
         Ok(()) => info!(agent = %agent_name, "agent sleep-cycle: snapshot request dropped"),
         Err(e) => {
             warn!(agent = %agent_name, error = %e, "agent sleep-cycle: snapshot request write failed")
@@ -94,14 +103,15 @@ fn refresh_snapshot(agent_name: &str) {
     }
 }
 
-/// Testable core of `refresh_snapshot`: sign with the agent identity and
-/// atomically drop the request file.
-fn write_snapshot_request_at(mur_home: &std::path::Path, agent_name: &str) -> Result<()> {
+/// Testable core of `refresh_snapshot`: sign with the (pre-sandbox-loaded)
+/// agent identity and atomically drop the request file.
+fn write_snapshot_request_at(
+    mur_home: &std::path::Path,
+    agent_name: &str,
+    identity: &mur_common::identity::AgentIdentity,
+) -> Result<()> {
     use mur_common::snapshot_request::{SNAPSHOT_REQUEST_DIR, SnapshotRequest};
-    let identity =
-        mur_common::identity::AgentIdentity::load(&mur_home.join("agents").join(agent_name))
-            .map_err(|e| anyhow::anyhow!("load agent identity: {e}"))?;
-    let req = SnapshotRequest::create(agent_name, &identity, chrono::Utc::now());
+    let req = SnapshotRequest::create(agent_name, identity, chrono::Utc::now());
     let dir = mur_home.join(SNAPSHOT_REQUEST_DIR);
     std::fs::create_dir_all(&dir)?;
     // One pending request per agent: deterministic name, tmp+rename.
@@ -147,7 +157,7 @@ mod tests {
         let id = mur_common::identity::AgentIdentity::generate();
         id.save(&agent_dir).unwrap();
 
-        write_snapshot_request_at(home, "w1").unwrap();
+        write_snapshot_request_at(home, "w1", &id).unwrap();
 
         let p = home.join("inbox/snapshot-requests/w1.yaml");
         let req: mur_common::snapshot_request::SnapshotRequest =
