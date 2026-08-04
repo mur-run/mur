@@ -17,6 +17,7 @@ mod follow;
 mod footer;
 mod manage;
 mod markdown;
+mod memory_cmds;
 mod multiplex;
 mod panel;
 mod paste;
@@ -106,7 +107,7 @@ const SPINNER_MS: u64 = 90;
 /// Max chars of an arg hint shown on a step line in `--plain` mode.
 const PLAIN_STEP_HINT_MAX: usize = 120;
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /mcp  /skill  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
+const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /mcp  /skill  /remember <text> (save a memory)  /memories  /forget <name|last>  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
 #[allow(clippy::too_many_arguments)]
@@ -1636,6 +1637,17 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
         SlashCmd::Mcp(args) => run_manage(app, move |agent| manage::run_mcp(&agent, &args)).await,
         SlashCmd::Skill(args) => {
             run_manage(app, move |agent| manage::run_skill(&agent, &args)).await
+        }
+        SlashCmd::Remember(args) => {
+            let msg = memory_cmds::remember(&app.home, &app.agent, &args)
+                .unwrap_or_else(|e| format!("remember failed: {e}"));
+            app.push_system(msg);
+        }
+        SlashCmd::Memories => app.push_system(memory_cmds::memories(&app.home, &app.agent)),
+        SlashCmd::Forget(target) => {
+            let msg = memory_cmds::forget(&app.home, &app.agent, target.as_deref())
+                .unwrap_or_else(|e| format!("forget failed: {e}"));
+            app.push_system(msg);
         }
         SlashCmd::Skin(name_opt) => match name_opt {
             None => {
