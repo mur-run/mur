@@ -326,6 +326,7 @@ fn run_retrieval_eval(format: &str) -> Result<i32> {
         min_score: 0.0,
         max_tokens: 10000,
         mmr_threshold: 0.85,
+        reserved_note_slots: 0, // eval ranks patterns only; no notes to reserve for
     };
 
     let queries = test_queries();
