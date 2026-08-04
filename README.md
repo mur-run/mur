@@ -185,9 +185,10 @@ conversations:
 ```
 
 Fields: `provider`, `model`, optional `endpoint`, `api_key_env` (name of the
-env var holding the key — the key itself never lives in config), and
-`timeout_secs`. Leaving an override unset keeps that stage on the legacy
-local fields (`extractive_model` / `abstractive_model` + `ollama_endpoint`).
+env var holding the key — the key itself never lives in config), `api_key_ref`
+(a secret-ref string such as `env:VARNAME`, checked before `api_key_env`), and
+`timeout_secs`. Leaving an override unset makes that stage inherit the
+top-level `llm:` block — there is no separate local-only fallback anymore.
 
 Typical cost with Haiku-extractive + Sonnet-ask is on the order of a few
 dollars per month of daily use. Verify your setup with the ignored live

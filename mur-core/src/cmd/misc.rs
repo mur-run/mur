@@ -406,9 +406,10 @@ mod doctor_tests {
         // An EmbeddingConfig with provider=ollama and ollama_endpoint=None
         // must resolve to the DEFAULT_OLLAMA_ENDPOINT, not an empty string.
         // This ensures `mur doctor` correctly identifies local Ollama and probes it.
-        let mut e = EmbeddingConfig::default();
-        e.provider = "ollama".into();
-        e.ollama_endpoint = None;
+        let e = EmbeddingConfig {
+            ollama_endpoint: None,
+            ..Default::default()
+        };
         assert_eq!(
             embedding_probe_addr(&e).as_deref(),
             Some("127.0.0.1:11434"),
