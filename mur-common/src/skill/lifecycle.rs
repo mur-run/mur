@@ -231,7 +231,7 @@ pub fn cap_for_provenance(
     gate_enabled: bool,
 ) -> LifecycleState {
     let gated = gate_enabled && provenance == Provenance::Llm && !curated;
-    if gated && rank(proposed) > rank(LifecycleState::Emerging) {
+    if gated && lifecycle_rank(proposed) > lifecycle_rank(LifecycleState::Emerging) {
         LifecycleState::Emerging
     } else {
         proposed
@@ -253,7 +253,7 @@ pub fn transition_allowed(
     if from == to {
         return false;
     }
-    if stats.pinned && rank(to) < rank(from) {
+    if stats.pinned && lifecycle_rank(to) < lifecycle_rank(from) {
         return false;
     }
     let elapsed = now - stats.lifecycle_changed_at;
@@ -263,7 +263,10 @@ pub fn transition_allowed(
     true
 }
 
-fn rank(s: LifecycleState) -> u8 {
+/// Total order over lifecycle states. Public because the federation snapshot
+/// floor (mur-core) compares against the same ranking — a duplicated table
+/// drifting from this one would silently change what federates.
+pub fn lifecycle_rank(s: LifecycleState) -> u8 {
     match s {
         LifecycleState::Destroyed => 0,
         LifecycleState::Archived => 1,

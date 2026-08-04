@@ -281,7 +281,7 @@ impl Default for SnapshotConfig {
 
 Steps:
 
-- [ ] In `mur-core/src/federation/snapshot.rs`, add (Pattern-era `pull_snapshot`,
+- [x] In `mur-core/src/federation/snapshot.rs`, add (Pattern-era `pull_snapshot`,
       `apply_filter`, and `PatternFilter` plumbing get deleted in the last step of this
       task — write the new code first so the file never loses its only content):
 
@@ -379,7 +379,7 @@ pub fn assemble_skill_snapshot(
       the match arms into mur-core — duplicate rank tables drifting apart is exactly the
       cross-task bug class this plan's self-review checks for.
 
-- [ ] Tests (same file, `#[cfg(test)]`), each with a tempdir `mur_home` fixture that
+- [x] Tests (same file, `#[cfg(test)]`), each with a tempdir `mur_home` fixture that
       writes `skills/<name>/skill.yaml` (any minimal valid manifest YAML) and a stats
       file via `SkillStats::path`:
   - `assemble_filters_below_floor`: one Stable + one Draft skill → cache holds exactly
@@ -388,9 +388,9 @@ pub fn assemble_skill_snapshot(
     Draft; assemble again → cache no longer contains it.
   - `assemble_removes_empty_patterns_cache`: pre-create empty `patterns_cache/` →
     gone after assembly.
-- [ ] Watch them fail, implement, watch pass:
+- [x] Watch them fail, implement, watch pass:
       `cargo nextest run -p mur-core -E 'test(assemble_)'` → `3 passed`.
-- [ ] Re-point the CLI (`mur-core/src/cmd/agent/snapshot.rs`): `cmd_snapshot_pull` calls
+- [x] Re-point the CLI (`mur-core/src/cmd/agent/snapshot.rs`): `cmd_snapshot_pull` calls
       `assemble_skill_snapshot` (drop the `PatternFilter` load; `--dry-run` lists the
       skills that WOULD be copied with their lifecycle state, using the same floor);
       `cmd_snapshot_show` prints the `.snapshot-ref` from `knowledge_cache`. Delete the
@@ -398,9 +398,9 @@ pub fn assemble_skill_snapshot(
       mur-core/src mur-agent-runtime/src` — remove `profile.federation.filter` ONLY if
       that search shows no remaining consumer; otherwise leave the profile field and
       file a TODO referencing this plan.
-- [ ] `cargo nextest run -p mur-core -E 'test(snapshot)'` green; clippy clean:
+- [x] `cargo nextest run -p mur-core -E 'test(snapshot)'` green; clippy clean:
       `cargo clippy -p mur-core -- -D warnings`.
-- [ ] Commit: `feat(core): skill snapshot assembly into knowledge_cache`
+- [x] Commit: `feat(core): skill snapshot assembly into knowledge_cache`
 
 ---
 

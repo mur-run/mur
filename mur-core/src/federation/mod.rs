@@ -1,2 +1,2 @@
 pub mod snapshot;
-pub use snapshot::{pull_snapshot, read_snapshot_ref};
+pub use snapshot::{assemble_skill_snapshot, read_skill_snapshot_ref, read_snapshot_ref};
