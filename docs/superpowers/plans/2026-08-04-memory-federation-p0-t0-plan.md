@@ -65,7 +65,7 @@ runtime prompt changes.
 
 Steps:
 
-- [ ] In `mur-common/src/identity.rs`, directly under `sign_bytes` (line ~108), add:
+- [x] In `mur-common/src/identity.rs`, directly under `sign_bytes` (line ~108), add:
 
 ```rust
     /// Sign `msg` and encode the signature as multibase Base58Btc — the exact
@@ -75,7 +75,7 @@ Steps:
     }
 ```
 
-- [ ] Write the failing test first — new file `mur-common/src/snapshot_request.rs` with ONLY
+- [x] Write the failing test first — new file `mur-common/src/snapshot_request.rs` with ONLY
       the test module below plus empty stubs; watch it fail to compile / fail assertions:
 
 ```rust
@@ -190,12 +190,12 @@ mod tests {
 }
 ```
 
-- [ ] Register the module: in `mur-common/src/lib.rs`, alongside the existing `pub mod
+- [x] Register the module: in `mur-common/src/lib.rs`, alongside the existing `pub mod
       identity;`, add `pub mod snapshot_request;`.
-- [ ] Run and watch pass:
+- [x] Run and watch pass:
       `cargo nextest run -p mur-common -E 'test(snapshot_request)'`
       Expected: `5 tests run: 5 passed`.
-- [ ] Commit: `feat(common): signed SnapshotRequest for the federation pull leg`
+- [x] Commit: `feat(common): signed SnapshotRequest for the federation pull leg`
 
 ---
 

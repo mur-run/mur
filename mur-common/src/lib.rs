@@ -29,6 +29,7 @@ pub mod hitl;
 pub mod hooks_config;
 pub mod hub;
 pub mod identity;
+pub mod snapshot_request;
 pub mod jcs;
 pub mod knowledge;
 pub mod labels;
