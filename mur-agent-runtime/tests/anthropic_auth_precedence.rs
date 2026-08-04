@@ -366,9 +366,19 @@ mod mock_keyring {
     /// process-global. Returns nothing — drop semantics aren't needed because
     /// the next test's call replaces the store.
     pub fn install_empty() {
+        allow_keychain();
         let store: Store = Arc::new(StdMutex::new(HashMap::new()));
         let builder: Box<CredentialBuilder> = Box::new(SharedMockBuilder { store });
         keyring::set_default_credential_builder(builder);
+    }
+
+    /// Lift mur-common's automatic test-process keychain block — these tests
+    /// go through the mock builder, never the real OS keychain.
+    fn allow_keychain() {
+        // SAFETY: caller holds ENV_LOCK; nextest is process-per-test anyway.
+        unsafe {
+            std::env::set_var(mur_common::secret::ENV_KEYCHAIN_ALLOW, "1");
+        }
     }
 
     /// A backend that always returns an error other than `NoEntry` (simulates
@@ -411,6 +421,7 @@ mod mock_keyring {
         }
     }
     pub fn install_failing() {
+        allow_keychain();
         let builder: Box<CredentialBuilder> = Box::new(AlwaysFailBuilder);
         keyring::set_default_credential_builder(builder);
     }
