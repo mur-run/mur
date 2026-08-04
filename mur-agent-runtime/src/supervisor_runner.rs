@@ -331,12 +331,50 @@ pub async fn build_provider_runner(
             );
         }
     }
+    // Built-in remember (memory federation P2a): proactive capture of durable
+    // user preferences/facts as agent-local Draft notes. Gated on the global
+    // `memory.capture` config; an explicit Deny in the profile still wins.
+    let memory_capture = crate::tools::remember::capture_mode(&mur_home);
+    {
+        use crate::tools::remember::{REMEMBER, RememberTool};
+        use mur_common::agent::{ToolPolicy, resolve_tool_policy};
+        use mur_common::config::CaptureMode;
+        if memory_capture != CaptureMode::Off
+            && resolve_tool_policy(&tools_policy, REMEMBER) != ToolPolicy::Deny
+        {
+            tool_map.insert(
+                REMEMBER.to_string(),
+                Arc::new(RememberTool {
+                    mur_home: mur_home.clone(),
+                    agent_name: profile.inner.name.clone(),
+                }),
+            );
+        }
+    }
     let tools: Vec<Arc<dyn crate::tools::ToolExecutor>> = tool_map.into_values().collect();
+
+    // Memory-capture directive (P2a): appended to the system prompt whenever
+    // the remember tool is available, so the prompt contract and the tool's
+    // presence never disagree. `ask` mode adds the confirm-first sentence.
+    let system_prompt_with_memory: Option<String> = {
+        use mur_common::config::CaptureMode;
+        match memory_capture {
+            CaptureMode::Off => profile.system_prompt.clone(),
+            mode => {
+                let mut p = profile.system_prompt.clone().unwrap_or_default();
+                p.push_str(crate::tools::remember::MEMORY_DIRECTIVE);
+                if mode == CaptureMode::Ask {
+                    p.push_str(crate::tools::remember::MEMORY_DIRECTIVE_ASK);
+                }
+                Some(p)
+            }
+        }
+    };
 
     let build = |client: Arc<dyn LlmClient>| {
         let r = crate::supervisor_runner::build_runner(
             client.clone(),
-            profile.system_prompt.clone(),
+            system_prompt_with_memory.clone(),
             runtime_skills.clone(),
             skills_cfg.clone(),
             Some(Arc::new(hook_chain.clone())),
