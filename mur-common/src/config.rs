@@ -2212,15 +2212,17 @@ rewriter_backend:
 
     #[test]
     fn explicit_override_wins_over_the_smart_slot() {
-        let mut ask = AskConfig::default();
-        ask.backend = Some(BackendConfig {
-            provider: "anthropic".into(),
-            model: "claude-haiku-4-5".into(),
-            endpoint: None,
-            api_key_env: None,
-            api_key_ref: None,
-            timeout_secs: Some(42),
-        });
+        let ask = AskConfig {
+            backend: Some(BackendConfig {
+                provider: "anthropic".into(),
+                model: "claude-haiku-4-5".into(),
+                endpoint: None,
+                api_key_env: None,
+                api_key_ref: None,
+                timeout_secs: Some(42),
+            }),
+            ..Default::default()
+        };
         let b = ask.effective_backend(&omlx_llm());
         assert_eq!(b.provider, "anthropic");
         assert_eq!(b.timeout_secs, Some(42));
@@ -2243,15 +2245,17 @@ rewriter_backend:
 
     #[test]
     fn rollup_override_is_honored() {
-        let mut r = RollupConfig::default();
-        r.abstractive_backend = Some(BackendConfig {
-            provider: "ollama".into(),
-            model: "qwen3:4b".into(),
-            endpoint: Some("http://box.local:11434".into()),
-            api_key_env: None,
-            api_key_ref: None,
-            timeout_secs: None,
-        });
+        let r = RollupConfig {
+            abstractive_backend: Some(BackendConfig {
+                provider: "ollama".into(),
+                model: "qwen3:4b".into(),
+                endpoint: Some("http://box.local:11434".into()),
+                api_key_env: None,
+                api_key_ref: None,
+                timeout_secs: None,
+            }),
+            ..Default::default()
+        };
         let b = r.effective_abstractive_backend(&omlx_llm());
         assert_eq!(b.provider, "ollama");
         assert_eq!(b.endpoint.as_deref(), Some("http://box.local:11434"));
