@@ -1,0 +1,39 @@
+name: mur-deep-research
+version: 0.1.0
+publisher: human:mur
+description: "Use when asked to research a topic, do web/deep research, or survey sources — 研究, 深入研究, 查資料, 調查."
+category: workflow
+hosts: [all]
+content:
+  abstract: |
+    MUR ships a native deep-research fleet. `mur deep-research "question"`
+    runs a guarded multi-agent research loop; bare shows status; `setup`
+    is the one-time wizard. Reach for it before hand-rolling web searches.
+  context: |
+    # mur-deep-research — native research fleet
+
+    When the user asks for research on a topic, check the fleet before
+    hand-rolling ad-hoc web searches:
+
+    1. `mur deep-research` (bare) — status panel: provisioned or not,
+       model, worker count, budget, egress state.
+    2. Not provisioned → `mur deep-research setup` — interactive wizard
+       (model, workers, budget, egress consent). Run it WITH the user:
+       egress consent is an explicit human decision, never assume it.
+    3. Provisioned → `mur deep-research "the question"` — preflight
+       checks, then a guarded fleet loop (iteration cap, deadline,
+       budget, kill-switch, RESEARCH_COMPLETE marker convergence).
+
+    Advanced flag-based path: `mur deep-research provision` creates
+    restricted worker agents that mount the `research-gateway` MCP
+    server (workers have no egress of their own; the per-server egress
+    grant is a separate consent step). `mur deep-research run` is a thin
+    wrapper over `mur fleet run --loop` — same guard rails.
+
+    Kill-switch: `mur fleet stop deep-research`.
+tags: [mur, deep-research, fleet, builtin]
+triggers:
+  - type: keyword
+    pattern: "(deep.?research|research (this|that|the web|into)|survey sources|literature review|幫我研究|深入研究|深度研究|查資料)"
+  - type: manual
+priority: normal

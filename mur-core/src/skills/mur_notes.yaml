@@ -1,0 +1,35 @@
+name: mur-notes
+version: 0.1.0
+publisher: human:mur
+description: "Use when saving or recalling free-form knowledge — note this down, what did we note about X, 筆記, 記下來, 查筆記."
+category: context
+hosts: [all]
+content:
+  abstract: |
+    Notes are category:note skills with markdown bodies — durable
+    free-form knowledge with maturity and decay. Create with
+    `mur notes create`, recall with `search`/`show`. Also exposed to AI
+    tools as the MCP tools `mur_notes_search` / `mur_notes_show`.
+  context: |
+    # mur-notes — durable free-form knowledge
+
+    - `mur notes create <name> -d "one-line description"` — body from
+      `--body-file <path>` or stdin. Name is kebab-case, ≤ 64 chars.
+      Pick `--kind rule` for behavioral guidance (fast decay) or the
+      default `--kind fact` for environment truths (slow decay).
+    - `mur notes search "<query>"` — rank existing notes by keyword.
+    - `mur notes list [--maturity <m>]` — browse.
+    - `mur notes show <name>` — print body + maturity (records a
+      retrieval, which feeds the maturity lifecycle).
+
+    Search BEFORE creating: a hit means update that note instead of
+    writing a near-duplicate.
+
+    From inside an AI conversation prefer the MCP tools
+    (`mur_notes_search`, `mur_notes_show`) — same store, no shell.
+tags: [mur, notes, knowledge, builtin]
+triggers:
+  - type: keyword
+    pattern: "(mur notes|note (this|that|it) down|what did we note|記(下來|個筆記)|查筆記|筆記)"
+  - type: manual
+priority: normal

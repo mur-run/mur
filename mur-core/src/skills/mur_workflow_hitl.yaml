@@ -1,5 +1,5 @@
 name: mur-workflow-hitl
-version: 0.1.0
+version: 0.2.0
 publisher: human:mur
 description: "Risk-tiered human approval gates on channel workflow runs: pause, approve/deny, resume."
 category: context
@@ -7,47 +7,40 @@ visibility: on_demand
 hosts: [all]
 content:
   abstract: |
-    Workflow-skill DAGs can include approval nodes that pause a run and
-    wait on a human. Gates are risk-tiered so low-risk steps auto-pass
-    while high-risk ones require an explicit approve/deny before the
-    workflow resumes.
+    Channel-attached workflow runs pause on risk-tiered HITL gates.
+    Read-tier steps run unattended; every mutating tier waits for
+    `mur channel approve` before the executor proceeds. Actions are
+    SHA-256-pinned and re-verified at the execute boundary.
   context: |
-    # Human-in-the-Loop Workflow Gates
+    # Human-in-the-Loop Workflow Gates (v3c)
 
     ## Risk tiers
-    Approval nodes declare a risk tier that decides who must respond
-    and how long the run will wait:
-    - **low** — informational; auto-approved unless a reviewer opts in.
-    - **medium** — requires one approval from any authorized reviewer.
-    - **high** — requires explicit approval from a named owner/role;
-      no timeout auto-approve.
-    Tier is set per-node in the DAG (`kind: approval`, `risk: low |
-    medium | high`).
+    Every step carries a risk tier, severity-ordered:
+    `read < write < network-egress < spend < destructive < privileged`.
+    Tier is resolved most-restrictive-wins and is NEVER LLM-asserted.
+    Default gate mode: `read` runs unattended (post-hoc audit event);
+    every other tier pauses and asks a human before execution.
 
-    ## Channel runs
-    When a workflow skill with approval nodes runs, MUR posts the
-    pending decision to the configured channel (chat, CLI session, or
-    notification target) attached to that run. The message includes
-    the step context, the risk tier, and the exact command to respond.
-    Multiple concurrent runs are distinguishable by run ID in the
-    channel message.
+    ## Attach a run to a channel
+    HITL gates only exist on channel-attached runs:
+    - `mur workflow run --channel-new <skill>` — new channel for this run.
+    - `mur workflow run --channel <id> <skill>` — append to an existing one.
+    A paused step writes a `HitlRequest` event (with `hitl_id`, the step
+    context, and the SHA-256 pin of the canonical action) into the
+    channel and waits.
 
-    ## Approve
-    - `mur workflow approve <run-id> [--step <id>]` — approve the
-      pending gate and let the DAG proceed to its next edge.
-    - `mur workflow deny <run-id> [--step <id>] [--reason "<text>"]` —
-      deny the gate; the run transitions to a failed/blocked state and
-      does not continue past that node.
+    ## Approve / deny
+    - `mur channel approve <channel_id> <hitl_id>` — approve; the
+      executor re-verifies the pinned hash at the execute boundary and
+      fails closed if the action drifted since the request.
+    - `mur channel approve <channel_id> <hitl_id> --deny [--reason "<msg>"]`
+      — deny; the run does not continue past that step.
 
-    ## Resume & auto
-    - `mur workflow resume <run-id>` — after approval, resumes execution
-      from the paused node if it didn't auto-continue.
-    - Low-tier gates may be configured with `auto_approve_after: <dur>`
-      to proceed automatically if no human responds within the window;
-      medium/high tiers never auto-approve regardless of timeout.
-    - A denied or timed-out high-tier gate leaves the run paused for
-      manual intervention rather than auto-failing silently.
+    ## Resume
+    Crashed or interrupted runs resume from the channel's `ToolResult`
+    cursor — re-run the same `mur workflow run --channel <id> <skill>`;
+    `append_event` is idempotency-key deduped, so replays are safe.
 
-    Ground truth: mur <cmd> --help · Full tutorial: https://app.mur.run/tutorials/mur-daily-jobs-cookbook.html
+    Ground truth: `mur channel --help` and `mur workflow run --help`.
 tags: [mur, workflow, hitl, context]
 priority: normal
