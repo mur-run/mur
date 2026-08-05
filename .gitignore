@@ -7,7 +7,6 @@ research/
 .claude/*
 !.claude/skills/
 .serena/
-.github/
 .worktrees/
 .idea/
 
