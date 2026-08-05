@@ -11,6 +11,19 @@ use uuid::Uuid;
 
 use crate::store::yaml::YamlStore;
 
+/// Subdirectory of the inbox holding signals received over the authenticated
+/// commander wire (bearer-token HTTP). See [`Inbox::receive_wire`].
+pub const WIRE_SUBDIR: &str = "wire";
+
+/// Canonical inbox file name for a signal (shared by the local and wire drops).
+pub fn signal_file_name(signal: &Signal) -> String {
+    format!(
+        "{}-{}.yaml",
+        signal.emitted_at.format("%Y-%m-%dT%H-%M-%S"),
+        signal.id
+    )
+}
+
 /// Receive side of the sync protocol — reads Signal YAML files and applies
 /// Evidence updates to patterns via [`YamlStore`].
 pub struct Inbox {
@@ -59,18 +72,60 @@ impl Inbox {
     /// Persist a signal received from the server into the inbox (used by the
     /// fetcher before `apply_all`).
     pub fn receive(&self, signal: &Signal) -> Result<PathBuf> {
-        let name = format!(
-            "{}-{}.yaml",
-            signal.emitted_at.format("%Y-%m-%dT%H-%M-%S"),
-            signal.id
-        );
-        let path = self.dir.join(&name);
-        let tmp = self.dir.join(format!(".{}.tmp", name));
+        Self::receive_into(&self.dir, signal)
+    }
+
+    /// Like [`Inbox::receive`], but into the `wire/` subdirectory — the
+    /// provenance marker for the token-authed commander wire (frozen v1:
+    /// signals arrive bearer-authed but unsigned). `apply_all` exempts this
+    /// subdirectory from `MUR_SIGNAL_REQUIRE_SIG`; a PRESENT signature is
+    /// still verified fail-closed. The exemption stands until the wire grows
+    /// operator-signed batches (the governance key is already pinnable via
+    /// `mur commander pin`).
+    pub fn receive_wire(&self, signal: &Signal) -> Result<PathBuf> {
+        let dir = self.wire_dir();
+        std::fs::create_dir_all(&dir)?;
+        Self::receive_into(&dir, signal)
+    }
+
+    /// The `wire/` subdirectory (commander-wire provenance; see
+    /// [`Inbox::receive_wire`]).
+    pub fn wire_dir(&self) -> PathBuf {
+        self.dir.join(WIRE_SUBDIR)
+    }
+
+    fn receive_into(dir: &Path, signal: &Signal) -> Result<PathBuf> {
+        let name = signal_file_name(signal);
+        let path = dir.join(&name);
+        let tmp = dir.join(format!(".{}.tmp", name));
         let yaml = serde_yaml::to_string(signal)
             .with_context(|| format!("serialize signal {}", signal.id))?;
         std::fs::write(&tmp, yaml)?;
         std::fs::rename(&tmp, &path)?;
         Ok(path)
+    }
+
+    /// Every pending inbox file paired with the signature requirement its
+    /// provenance carries: locally-dropped files take the caller's `require`,
+    /// `wire/` files never require (token-authed wire — see
+    /// [`Inbox::receive_wire`]).
+    fn scan(&self, require_sig: bool) -> Result<Vec<(PathBuf, bool)>> {
+        let mut files: Vec<(PathBuf, bool)> = Vec::new();
+        for entry in std::fs::read_dir(&self.dir)? {
+            let p = entry?.path();
+            if is_inbox_yaml(&p) {
+                files.push((p, require_sig));
+            }
+        }
+        if let Ok(entries) = std::fs::read_dir(self.wire_dir()) {
+            for entry in entries {
+                let p = entry?.path();
+                if is_inbox_yaml(&p) {
+                    files.push((p, false));
+                }
+            }
+        }
+        Ok(files)
     }
 
     /// P2c-2 ingest gate — the signature proves *who said it*, the scope
@@ -125,12 +180,7 @@ impl Inbox {
         let mut seen = self.load_seen_ids();
         let mut newly_seen: Vec<Uuid> = Vec::new();
 
-        for entry in std::fs::read_dir(&self.dir)? {
-            let p = entry?.path();
-            if !is_inbox_yaml(&p) {
-                continue;
-            }
-
+        for (p, require) in self.scan(require_sig)? {
             let yaml = match std::fs::read_to_string(&p) {
                 Ok(s) => s,
                 Err(e) => {
@@ -161,7 +211,7 @@ impl Inbox {
             // signature is permanent — retrying can't fix it) but NOT marked
             // seen, so a correctly-signed re-emission of the same id may
             // still apply later.
-            if let Err(reason) = self.check_signal_sig(&signal, require_sig) {
+            if let Err(reason) = self.check_signal_sig(&signal, require) {
                 report.errors.push(format!("{}: {reason}", p.display()));
                 let _ = std::fs::remove_file(&p);
                 continue;
@@ -313,11 +363,7 @@ impl Inbox {
         let mut seen = self.load_seen_ids();
         let mut newly_seen: Vec<uuid::Uuid> = Vec::new();
 
-        for entry in std::fs::read_dir(&self.dir)? {
-            let p = entry?.path();
-            if !is_inbox_yaml(&p) {
-                continue;
-            }
+        for (p, require) in self.scan(require_sig)? {
             let Ok(text) = std::fs::read_to_string(&p) else {
                 continue;
             };
@@ -335,7 +381,7 @@ impl Inbox {
                 continue; // handled by apply_all (pattern branch)
             }
             // Signature gate (P2c-2) — same rules as apply_all.
-            if let Err(reason) = self.check_signal_sig(&signal, require_sig) {
+            if let Err(reason) = self.check_signal_sig(&signal, require) {
                 report.errors.push(format!("{}: {reason}", p.display()));
                 let _ = std::fs::remove_file(&p);
                 continue;
@@ -897,6 +943,34 @@ mod tests {
         assert_eq!(report.applied, 0);
         assert_eq!(report.errors.len(), 1);
         assert!(report.errors[0].contains("no verifiable identity"));
+    }
+
+    #[test]
+    fn wire_drops_are_exempt_from_require_sig() {
+        let tmp = tempdir().unwrap();
+        let (_store, inbox) = setup(tmp.path());
+        let local = signal("p1", SignalKind::ExecutionSuccess, "w1");
+        let wire = signal("p2", SignalKind::ExecutionSuccess, "cmdr");
+        inbox.receive(&local).unwrap();
+        inbox.receive_wire(&wire).unwrap();
+
+        // The wire drop lands under wire/, not the main dir.
+        assert!(inbox.wire_dir().join(signal_file_name(&wire)).exists());
+
+        let pairs = inbox.scan(true).unwrap();
+        assert_eq!(pairs.len(), 2);
+        let require_for = |id: &uuid::Uuid| {
+            pairs
+                .iter()
+                .find(|(p, _)| p.to_string_lossy().contains(&id.to_string()))
+                .unwrap()
+                .1
+        };
+        assert!(
+            require_for(&local.id),
+            "local drop must require a signature"
+        );
+        assert!(!require_for(&wire.id), "wire drop must be exempt");
     }
 
     #[test]
