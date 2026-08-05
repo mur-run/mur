@@ -1844,6 +1844,15 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
                 app.pending_suggestions = suggest::parse_suggestions(&args);
             } else {
                 app.saw_step_this_turn = true;
+                // A delegated fleet run is a long, otherwise-opaque step:
+                // auto-arm the member rail + milestone follow so the user
+                // watches it happen instead of staring at a spinner.
+                if name == fleet_rail::FLEET_RUN_TOOL
+                    && let Some(fleet) = args.get("fleet").and_then(|v| v.as_str())
+                {
+                    let fleet = fleet.to_string();
+                    app.arm_auto_fleet(&step_id, &fleet, StdInstant::now());
+                }
                 app.push_step_started(step_id, name, args);
             }
         }
@@ -1866,6 +1875,7 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
                 error,
                 duration_ms,
             );
+            app.finish_auto_fleet(&step_id, ok, duration_ms);
         }
     }
 }

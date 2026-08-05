@@ -18,6 +18,11 @@ struct DelegationPayload<'a> {
     target_agent: &'a str,
     child_task_id: &'a str,
     parent_channel_id: &'a str,
+    /// Sub-goal text handed to the delegate, so observers (fleet rail,
+    /// followed-channel milestones) can say WHAT was delegated, not just to
+    /// whom. Optional: absent on legacy events and non-goal delegations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    goal: Option<&'a str>,
 }
 
 /// Build the canonical `Delegation` event payload (single-sourced schema). Used
@@ -28,11 +33,13 @@ pub fn delegation_payload(
     parent_channel_id: &str,
     target_agent: &str,
     child_task_id: &str,
+    goal: Option<&str>,
 ) -> serde_json::Value {
     serde_json::to_value(DelegationPayload {
         target_agent,
         child_task_id,
         parent_channel_id,
+        goal,
     })
     .expect("DelegationPayload serializes")
 }
@@ -259,7 +266,7 @@ impl ChannelService {
         child_task_id: &str,
         idempotency_key: Option<String>,
     ) -> Result<ChannelEvent> {
-        let payload = delegation_payload(channel_id, target_agent, child_task_id);
+        let payload = delegation_payload(channel_id, target_agent, child_task_id, None);
         self.append(
             channel_id,
             ChannelActor::System,
