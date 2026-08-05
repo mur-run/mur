@@ -121,6 +121,10 @@ pub enum Commands {
         /// Only check whether a newer version exists; don't install
         #[arg(long)]
         check: bool,
+        /// After upgrading (macOS), restart agents running a stale binary.
+        /// Names in `update.restart_exclude` (~/.mur/config.yaml) are skipped.
+        #[arg(long)]
+        restart_agents: bool,
     },
     /// Show workflow composition & decomposition suggestions and pending nudges.
     #[command(hide = true)]

@@ -5,6 +5,7 @@
 //! unit testing possible.
 
 pub mod release;
+pub mod resign;
 pub mod source;
 pub mod swap;
 
@@ -13,6 +14,9 @@ use anyhow::{Context, Result};
 #[derive(Debug, Clone, Copy)]
 pub struct UpdateOptions {
     pub check_only: bool,
+    /// After a successful upgrade, restart agents running a stale binary
+    /// (honoring `update.restart_exclude`).
+    pub restart_agents: bool,
 }
 
 pub fn run(opts: UpdateOptions) -> Result<()> {
@@ -32,6 +36,10 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
         if !status.success() {
             anyhow::bail!("brew upgrade mur failed ({status})");
         }
+        // brew pour leaves the binaries ad-hoc signed (relocation invalidates
+        // any CI signature) — re-sign with the stable identity so keychain
+        // grants survive, then walk the deploy checklist (#849/#866).
+        resign::post_upgrade(opts.restart_agents)?;
         return Ok(());
     }
     if let Some(hint) = src.upgrade_hint() {
@@ -108,6 +116,7 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
     {
         swap::swap(&tmp_bin, &target)?;
         println!("Updated to v{latest}");
+        resign::post_upgrade(opts.restart_agents)?;
     }
     #[cfg(windows)]
     {
