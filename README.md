@@ -126,6 +126,9 @@ brew install mur-run/tap/mur
 
 # From source
 cargo install mur-core        # installs the `mur` binary
+
+# Later: upgrade in place, and restart agents onto the new binary
+mur update --restart-agents
 ```
 
 ```bash
