@@ -198,12 +198,15 @@ pub async fn run(cli: Cli) -> Result<()> {
                 cmd::reindex::cmd_reindex().await?;
             }
         }
-        Commands::Update { check } => {
+        Commands::Update {
+            check,
+            restart_agents,
+        } => {
             // `update::run` uses `reqwest::blocking`, whose internal runtime panics
             // when dropped inside this async context. Run it on a blocking thread
             // (no entered runtime there). Manual installs (InstallSource::Other)
             // reach the network path, so this must not panic for them.
-            tokio::task::spawn_blocking(move || cmd::update::cmd_update(check))
+            tokio::task::spawn_blocking(move || cmd::update::cmd_update(check, restart_agents))
                 .await
                 .context("update task panicked")??
         }

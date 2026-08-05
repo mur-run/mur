@@ -209,6 +209,26 @@ pub struct Config {
     // --- Hub Fleet Manager redesign ---
     #[serde(default)]
     pub fleet: FleetConfig,
+
+    /// `mur update` post-upgrade behavior (`update:`, issue #866).
+    #[serde(default)]
+    pub update: UpdateConfig,
+}
+
+/// Post-upgrade settings for `mur update`. Stored under `update:` in
+/// `~/.mur/config.yaml`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct UpdateConfig {
+    /// macOS code-signing identity used to re-sign installed binaries after an
+    /// upgrade. Keychain grants bind to the signing identity; fresh installs
+    /// are ad-hoc (new CDHash per build), so without a stable identity every
+    /// upgrade kills the grants and service-launched agents fail silently
+    /// (#849/#866). Fallback: the `MUR_CODESIGN_IDENTITY` env var.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codesign_identity: Option<String>,
+    /// Agent names `mur update --restart-agents` must never touch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub restart_exclude: Vec<String>,
 }
 
 /// Authorization gate for the `parallel_jobs` MCP tool. Stored under `parallel_jobs:`
@@ -1446,6 +1466,24 @@ conversations:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn update_defaults_apply_when_block_absent_and_fields_parse() {
+        let c: super::Config = serde_yaml_ng::from_str("{}").unwrap();
+        assert_eq!(c.update, super::UpdateConfig::default());
+        assert!(c.update.codesign_identity.is_none());
+        assert!(c.update.restart_exclude.is_empty());
+
+        let c: super::Config = serde_yaml_ng::from_str(
+            "update:\n  codesign_identity: \"Developer ID Application: X (TEAM)\"\n  restart_exclude: [dr_worker_1]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            c.update.codesign_identity.as_deref(),
+            Some("Developer ID Application: X (TEAM)")
+        );
+        assert_eq!(c.update.restart_exclude, vec!["dr_worker_1".to_string()]);
+    }
+
     #[test]
     fn federation_snapshot_defaults_apply_when_block_absent() {
         let c: super::Config = serde_yaml_ng::from_str("{}").unwrap();

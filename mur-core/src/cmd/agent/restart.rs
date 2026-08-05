@@ -129,6 +129,45 @@ pub(crate) fn select_targets_with_on_disk(
     Ok(targets)
 }
 
+/// Restart every STALE agent except the excluded names — the
+/// `mur update --restart-agents` entry point. Exclusions come from
+/// `update.restart_exclude` in `~/.mur/config.yaml` and are honored even when
+/// the excluded agent is stale (the point: some agents must never be bounced
+/// unattended). Unlike `cmd_restart`, an excluded-but-stale agent is reported,
+/// not an error.
+pub fn restart_stale_excluding(exclude: &[String]) -> Result<()> {
+    let mur_home = resolve_mur_home()?;
+    let agents_dir = mur_home.join("agents");
+
+    let all_stale = select_targets(&mur_home, &[], false, true)?;
+    let (targets, skipped): (Vec<String>, Vec<String>) =
+        all_stale.into_iter().partition(|t| !exclude.contains(t));
+
+    if !skipped.is_empty() {
+        println!(
+            "skipping excluded agent(s) still on the old binary: {}",
+            skipped.join(", ")
+        );
+    }
+    if targets.is_empty() {
+        println!("No stale agents to restart.");
+        return Ok(());
+    }
+
+    let on_disk = stale::on_disk_sha();
+    let mut any_err = false;
+    for agent_name in &targets {
+        if let Err(e) = restart_one(agent_name, &agents_dir, &on_disk) {
+            eprintln!("error restarting '{agent_name}': {e}");
+            any_err = true;
+        }
+    }
+    if any_err {
+        bail!("one or more agents failed to restart");
+    }
+    Ok(())
+}
+
 /// Gracefully restart one or more agents.
 ///
 /// - `names` / `all` / `stale`: select targets (mirror `cmd_stop`).
