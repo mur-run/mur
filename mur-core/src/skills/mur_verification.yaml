@@ -42,7 +42,9 @@ content:
     | Requirements met | Line-by-line checklist against the spec |
 
     A fleet member emitting its done_when marker or replying DONE is a claim,
-    not evidence. Check the diff.
+    not evidence. Check the diff. `mur open` labels outstanding items by
+    whether MUR observed them or an agent merely reported them — treat
+    reported-only items as unverified.
 
     ## Red flags
 

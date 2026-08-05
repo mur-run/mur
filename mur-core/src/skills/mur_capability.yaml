@@ -1,0 +1,37 @@
+name: mur-capability
+version: 0.1.0
+publisher: human:mur
+description: "Use when giving an agent a bundle of MCP servers/skills/programs at once — capability, bundle, 能力包, 裝能力."
+category: workflow
+hosts: [all]
+content:
+  abstract: |
+    Capabilities are installable bundles of MCP servers + skills +
+    required programs. Browse with `mur capability list`/`show`, put one
+    onto an agent with `install`, take it off with `remove` — instead of
+    wiring MCP servers and skills one by one.
+  context: |
+    # mur-capability — bundle install for agents
+
+    Wiring an agent with several MCP servers, skills, and required
+    programs one by one is error-prone. A capability is one named
+    bundle.
+
+    - `mur capability list` — available bundles.
+    - `mur capability show <name>` — exactly what it would install
+      (MCP servers, skills, required programs). Read this BEFORE
+      installing.
+    - `mur capability install <name> --agent <agent>` — install onto an
+      agent (`--yes` skips the confirmation; keep the confirmation in
+      interactive sessions).
+    - `mur capability remove <name> --agent <agent>` — uninstall.
+
+    Bundles reference their contents rather than embedding copies, so an
+    installed capability tracks the shared skill store. Required
+    programs are verified against signed recipes at install time.
+tags: [mur, capability, agent, builtin]
+triggers:
+  - type: keyword
+    pattern: "(mur capability|install.{0,12}capability|capability bundle|能力包|(安裝|移除)能力)"
+  - type: manual
+priority: normal
