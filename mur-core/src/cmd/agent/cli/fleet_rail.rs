@@ -13,6 +13,11 @@ use super::follow::POLL_INTERVAL;
 /// whatever is truncated is the least urgent.
 pub const MAX_EXPANDED_ROWS: usize = 6;
 
+/// Name of the runtime's built-in delegated-fleet tool. A `StepStarted`
+/// carrying this name (with a `fleet` arg) is the TUI's cue to auto-arm the
+/// rail and the milestone follow.
+pub const FLEET_RUN_TOOL: &str = "fleet_run";
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum MemberState {
     /// Waiting on a human. `hitl_id` is what `mur channel approve` takes.
@@ -96,6 +101,24 @@ pub fn fold_members(events: &[ChannelEvent]) -> Vec<MemberRow> {
             continue;
         }
 
+        // Production delegate-path shape (v3d-2): the router records each
+        // delegation as a System event carrying `target_agent` — the member's
+        // turn START. The member itself only ever writes its signed reply
+        // Message (turn END). Fold both, so the rail works against real
+        // channels and not just the members-emit-their-own-state shape
+        // handled below (kept for A2 forward-compatibility).
+        if ev.kind == EventKind::Delegation
+            && let Some(target) = field(ev, &["target_agent"])
+        {
+            let target = target.to_string();
+            let i = index(&mut rows, &target, ev.ts);
+            rows[i].state = MemberState::Working {
+                tool: field(ev, &["goal"]).map(str::to_string),
+                since: ev.ts,
+            };
+            continue;
+        }
+
         let ChannelActor::Agent { id } = &ev.actor else {
             continue;
         };
@@ -140,6 +163,15 @@ pub fn fold_members(events: &[ChannelEvent]) -> Vec<MemberRow> {
                     hitl_id: field(ev, &["hitl_id"]).unwrap_or_default().to_string(),
                 };
             }
+            EventKind::Message => {
+                // The member's signed reply — its turn is over. A Blocked row
+                // stays blocked: a HITL gate outlives any message and is only
+                // cleared by its HitlResponse above.
+                let i = index(&mut rows, id, ev.ts);
+                if !matches!(rows[i].state, MemberState::Blocked { .. }) {
+                    rows[i].state = MemberState::Done;
+                }
+            }
             _ => {}
         }
     }
@@ -157,9 +189,15 @@ pub fn fold_members(events: &[ChannelEvent]) -> Vec<MemberRow> {
 ///
 /// `2/5` is jobs in a terminal state over the total — the question a user asks
 /// first ("how far along?"), answered by the slow-moving store rather than by
-/// the event stream.
-pub fn jobs_line(fleet: &str, jobs: &[Job]) -> String {
+/// the event stream. `run_in_flight` is the TUI's own knowledge that a
+/// delegated `fleet_run` step is currently executing: goal-mode runs never
+/// touch the job store, so without it an in-flight run reads as "not run yet"
+/// (empty store) or as already finished (stale terminal jobs).
+pub fn jobs_line(fleet: &str, jobs: &[Job], run_in_flight: bool) -> String {
     if jobs.is_empty() {
+        if run_in_flight {
+            return format!("fleet · {fleet}   ⏵ run in progress");
+        }
         return format!("fleet · {fleet}   not run yet (mur fleet run {fleet})");
     }
     let total = jobs.len();
@@ -178,6 +216,9 @@ pub fn jobs_line(fleet: &str, jobs: &[Job]) -> String {
     }
     if failed > 0 {
         line.push_str(&format!(" · {failed} ✖ failed"));
+    }
+    if run_in_flight && running == 0 {
+        line.push_str(" · ⏵ run in progress");
     }
     line
 }
@@ -210,6 +251,9 @@ pub struct FleetRail {
     /// any job that isn't the newest leaves the max unchanged and the gate
     /// blind to a real change.
     last_jobs_gate: (usize, Option<std::time::SystemTime>),
+    /// A delegated `fleet_run` step is currently executing in this pane
+    /// (armed on `StepStarted`, cleared on `StepCompleted`).
+    run_in_flight: bool,
     view: RailView,
     next_poll: Instant,
 }
@@ -221,8 +265,23 @@ impl FleetRail {
             channel_id: format!("fleet-{fleet}"),
             last_len: u64::MAX, // force the first poll to do real work
             last_jobs_gate: (0, None),
+            run_in_flight: false,
             view: RailView::default(),
             next_poll: Instant::now(),
+        }
+    }
+
+    /// The fleet this rail watches.
+    pub fn fleet(&self) -> &str {
+        &self.fleet
+    }
+
+    /// Flip the in-flight flag (see the field doc). Busts the poll gate so the
+    /// collapsed line reflects the flip even when nothing on disk moved.
+    pub fn set_run_in_flight(&mut self, v: bool) {
+        if self.run_in_flight != v {
+            self.run_in_flight = v;
+            self.last_len = u64::MAX;
         }
     }
 
@@ -289,7 +348,7 @@ impl FleetRail {
                         j.status = s;
                     }
                 }
-                jobs_line(&self.fleet, &jobs)
+                jobs_line(&self.fleet, &jobs, self.run_in_flight)
             }
             Err(_) => {
                 // A corrupt job file must not read as "not run yet" (`jobs_line`

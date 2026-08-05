@@ -345,7 +345,7 @@ fn jobs_line_counts_terminal_over_total() {
         job("5", JobStatus::Queued),
     ];
     // 2 of 5 have reached a terminal state; one of those failed.
-    let line = jobs_line("develop", &jobs);
+    let line = jobs_line("develop", &jobs, false);
     assert!(line.contains("fleet · develop"), "got: {line}");
     assert!(line.contains("job 2/5"), "got: {line}");
     assert!(line.contains("1 ⏵ running"), "got: {line}");
@@ -354,14 +354,14 @@ fn jobs_line_counts_terminal_over_total() {
 
 #[test]
 fn jobs_line_says_not_run_yet_when_there_are_none() {
-    let line = jobs_line("develop", &[]);
+    let line = jobs_line("develop", &[], false);
     assert!(line.contains("not run yet"), "got: {line}");
     assert!(line.contains("mur fleet run develop"), "got: {line}");
 }
 
 #[test]
 fn jobs_line_omits_the_failed_clause_when_nothing_failed() {
-    let line = jobs_line("develop", &[job("1", JobStatus::Done)]);
+    let line = jobs_line("develop", &[job("1", JobStatus::Done)], false);
     assert!(!line.contains("failed"), "got: {line}");
 }
 
@@ -482,4 +482,109 @@ fn poll_falls_back_to_channel_summary_when_jobs_store_is_unreadable() {
         "notice must surface the unreadable store, got: {:?}",
         view.notice
     );
+}
+
+// ── Production delegate-path shapes (v3d-2) ─────────────────────────────────
+// Real fleet channels contain System delegations (turn start) and the
+// member's own signed reply Message (turn end) — never member-emitted
+// state-changes. The fold must produce rows from THOSE.
+
+#[test]
+fn system_delegation_starts_a_member_row_with_its_goal() {
+    let evs = vec![
+        ev(
+            1,
+            ChannelActor::System,
+            EventKind::Delegation,
+            json!({
+                "target_agent": "dr_worker_1",
+                "child_task_id": "ct-1",
+                "parent_channel_id": "fleet-deep-research",
+                "goal": "survey memory designs"
+            }),
+        ),
+        ev(
+            2,
+            ChannelActor::System,
+            EventKind::StateChange,
+            json!({"from": "submitted", "to": "working"}),
+        ),
+    ];
+    let rows = fold_members(&evs);
+    assert_eq!(rows.len(), 1, "System state-changes must not become rows");
+    assert_eq!(rows[0].agent, "dr_worker_1");
+    match &rows[0].state {
+        MemberState::Working { tool, .. } => {
+            assert_eq!(tool.as_deref(), Some("survey memory designs"));
+        }
+        s => panic!("expected Working, got {s:?}"),
+    }
+}
+
+#[test]
+fn member_reply_marks_done_and_redelegation_restarts() {
+    let deleg = |seq| {
+        ev(
+            seq,
+            ChannelActor::System,
+            EventKind::Delegation,
+            json!({"target_agent": "qa", "child_task_id": "ct", "parent_channel_id": "fleet-x"}),
+        )
+    };
+    let reply = |seq| {
+        ev(
+            seq,
+            agent("qa"),
+            EventKind::Message,
+            json!({"text": "## Summary\nall done"}),
+        )
+    };
+    let rows = fold_members(&[deleg(1), reply(2)]);
+    assert!(
+        matches!(rows[0].state, MemberState::Done),
+        "reply ends the turn: {:?}",
+        rows[0].state
+    );
+    let rows = fold_members(&[deleg(1), reply(2), deleg(3)]);
+    assert!(
+        matches!(rows[0].state, MemberState::Working { .. }),
+        "re-delegation restarts the member: {:?}",
+        rows[0].state
+    );
+}
+
+#[test]
+fn member_message_never_clears_a_hitl_block() {
+    let evs = vec![
+        ev(
+            1,
+            agent("qa"),
+            EventKind::HitlRequest,
+            json!({"summary": "git push", "hitl_id": "h-1"}),
+        ),
+        ev(
+            2,
+            agent("qa"),
+            EventKind::Message,
+            json!({"text": "waiting"}),
+        ),
+    ];
+    let rows = fold_members(&evs);
+    assert!(
+        matches!(rows[0].state, MemberState::Blocked { .. }),
+        "got {:?}",
+        rows[0].state
+    );
+}
+
+#[test]
+fn jobs_line_flags_an_in_flight_goal_run() {
+    // Goal-mode runs never touch the job store: an empty store must read as
+    // in-progress, not "not run yet"…
+    let line = jobs_line("develop", &[], true);
+    assert!(line.contains("run in progress"), "got: {line}");
+    assert!(!line.contains("not run yet"), "got: {line}");
+    // …and stale terminal jobs must not read as "all finished".
+    let line = jobs_line("develop", &[job("1", JobStatus::Done)], true);
+    assert!(line.contains("run in progress"), "got: {line}");
 }

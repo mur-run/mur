@@ -591,8 +591,18 @@ async fn execute_step(
 
         // Record the delegation up front (System actor, deterministic key),
         // SIGNED by the router (v3d) via the single-sourced payload builder.
+        // The goal snippet lets observers (fleet rail / followed-channel
+        // milestones) show WHAT was delegated; clipped so one long step
+        // description cannot bloat the append-only log.
         if let Ok(svc) = ChannelService::open(mur_home) {
-            let payload = mur_channel::service::delegation_payload(cid, &canonical, &child_task_id);
+            const DELEGATION_GOAL_SNIP: usize = 200;
+            let goal_snip: String = goal_text.chars().take(DELEGATION_GOAL_SNIP).collect();
+            let payload = mur_channel::service::delegation_payload(
+                cid,
+                &canonical,
+                &child_task_id,
+                Some(&goal_snip),
+            );
             let _ = crate::channel_writer::append_as_writer(
                 &svc,
                 mur_home,
