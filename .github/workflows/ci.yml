@@ -380,35 +380,12 @@ jobs:
     needs: [changes, test, clippy, fmt, gui, hub_gui, e2e_quick, required-reason-apis]
     runs-on: ubuntu-latest
     steps:
-      - name: Verify all required jobs succeeded or were skipped
+      # `skipped` is fine (paths-filter excluded the job); failure/cancelled
+      # anywhere fails the gate. `needs.*` includes `changes` itself, which
+      # the old per-job version never checked — a failed `changes` used to
+      # skip every downstream job and pass this gate green.
+      - name: Fail on any failed or cancelled upstream job
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
-          # Echo the status of each upstream job so failures are obvious in logs.
-          # `cancelled` propagates as failure; `skipped` is acceptable (means
-          # paths-filter excluded it). Anything else (failure, neutral) fails.
-          for job in test clippy fmt gui hub_gui e2e_quick required-reason-apis; do
-            result="${{ toJson(needs) }}"
-            echo "$result"
-            break  # printed once is enough; per-job check below is the real gate
-          done
-          if [[ "${{ needs.test.result }}" != "success" && "${{ needs.test.result }}" != "skipped" ]]; then
-            echo "::error::test job failed: ${{ needs.test.result }}"; exit 1
-          fi
-          if [[ "${{ needs.clippy.result }}" != "success" && "${{ needs.clippy.result }}" != "skipped" ]]; then
-            echo "::error::clippy job failed: ${{ needs.clippy.result }}"; exit 1
-          fi
-          if [[ "${{ needs.fmt.result }}" != "success" ]]; then
-            echo "::error::fmt job failed: ${{ needs.fmt.result }}"; exit 1
-          fi
-          if [[ "${{ needs.gui.result }}" != "success" && "${{ needs.gui.result }}" != "skipped" ]]; then
-            echo "::error::gui job failed: ${{ needs.gui.result }}"; exit 1
-          fi
-          if [[ "${{ needs.hub_gui.result }}" != "success" && "${{ needs.hub_gui.result }}" != "skipped" ]]; then
-            echo "::error::hub_gui job failed: ${{ needs.hub_gui.result }}"; exit 1
-          fi
-          if [[ "${{ needs.e2e_quick.result }}" != "success" && "${{ needs.e2e_quick.result }}" != "skipped" ]]; then
-            echo "::error::e2e_quick job failed: ${{ needs.e2e_quick.result }}"; exit 1
-          fi
-          if [[ "${{ needs.required-reason-apis.result }}" != "success" ]]; then
-            echo "::error::required-reason-apis job failed: ${{ needs.required-reason-apis.result }}"; exit 1
-          fi
-          echo "All upstream jobs succeeded or were correctly skipped."
+          echo '${{ toJson(needs) }}'
+          exit 1

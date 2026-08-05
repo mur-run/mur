@@ -3,6 +3,10 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # tag.yml pushes the tag with GITHUB_TOKEN, which suppresses the push event
+  # (recursion guard), then dispatches this workflow at the tag ref — where
+  # $GITHUB_REF_NAME is the tag name, same as under a human tag push.
+  workflow_dispatch:
 
 permissions:
   contents: write
