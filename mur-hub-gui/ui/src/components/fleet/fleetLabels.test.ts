@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   filterByLabels,
   groupFleets,
+  labelIdFrom,
   makePrimary,
   toggleAssignment,
   UNGROUPED,
@@ -108,5 +109,22 @@ describe("makePrimary", () => {
 
   it("is a no-op on the current primary", () => {
     expect(makePrimary(["dev", "ops"], "dev")).toEqual(["dev", "ops"]);
+  });
+});
+
+describe("labelIdFrom", () => {
+  it("slugs a typed name to the backend's character class", () => {
+    expect(labelIdFrom("Deep Research!", [])).toBe("deep-research");
+  });
+
+  it("falls back to label-N when the name has nothing to slug", () => {
+    expect(labelIdFrom("研究", [])).toBe("label-1");
+    expect(labelIdFrom("研究", ["label-1"])).toBe("label-2");
+  });
+
+  it("stays within 32 chars and never ends on a dash", () => {
+    const id = labelIdFrom("a".repeat(31) + " b", []);
+    expect(id.length).toBeLessThanOrEqual(32);
+    expect(id.endsWith("-")).toBe(false);
   });
 });

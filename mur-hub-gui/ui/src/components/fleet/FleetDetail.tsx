@@ -8,7 +8,7 @@ import { CATEGORY_COLORS, avatarPreset, familyOf } from "../../utils";
 import { PetFace } from "../PetFace";
 import type { FleetDetail as Detail, JobRow, LabelView } from "./types";
 import { DURATION_RE } from "./fleetCreateForm";
-import { makePrimary, toggleAssignment } from "./fleetLabels";
+import { labelIdFrom, makePrimary, toggleAssignment } from "./fleetLabels";
 import {
   parseTrigger,
   buildTrigger,
@@ -68,6 +68,7 @@ export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRef
   const [busy, setBusy] = useState<string | null>(null);
   const [sendInput, setSendInput] = useState("");
   const [addInput, setAddInput] = useState("");
+  const [newLabel, setNewLabel] = useState("");
   const [showAll, setShowAll] = useState(false);
   const [allJobs, setAllJobs] = useState<JobRow[]>([]);
 
@@ -153,6 +154,29 @@ export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRef
     try {
       await invoke("fleet_set_labels", { name: detail.name, ids });
       onRefresh(); // reloads the list so the rail regroups immediately
+    } catch (err) {
+      showToast(String(err), 4000);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Create a label and assign it to this fleet in one go: a label made from
+  // the fleet you are looking at is one you want on that fleet. It lands last,
+  // so it only becomes the group (primary) if this fleet had none.
+  async function createLabel() {
+    const display = newLabel.trim();
+    if (display === "") return;
+    const id = labelIdFrom(display, labels.map((l) => l.id));
+    setBusy("fleet_label_create");
+    try {
+      await invoke("fleet_label_create", { id, display, color: null });
+      await invoke("fleet_set_labels", {
+        name: detail.name,
+        ids: toggleAssignment(fleetLabels, id),
+      });
+      setNewLabel("");
+      onRefresh();
     } catch (err) {
       showToast(String(err), 4000);
     } finally {
@@ -402,9 +426,7 @@ export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRef
 
       <div className="fleet-section">
         <div className="fleet-section__label">{t("fleet.labels")}</div>
-        {labels.length === 0 ? (
-          <div className="fleet-labels__empty">{t("fleet.labelsEmpty")}</div>
-        ) : (
+        {labels.length > 0 && (
           <>
             <div className="fleet-labels">
               {labels.map((l) => {
@@ -433,6 +455,29 @@ export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRef
             </div>
             <div className="fleet-labels__hint">{t("fleet.labelHint")}</div>
           </>
+        )}
+        <div className="fleet-labels__new">
+          <input
+            value={newLabel}
+            onChange={(e) => setNewLabel(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void createLabel();
+              if (e.key === "Escape") setNewLabel("");
+            }}
+            placeholder={t("fleet.labelNew")}
+            autoComplete="off"
+            disabled={busy !== null}
+          />
+          <button
+            className="toolbar-btn"
+            onClick={() => void createLabel()}
+            disabled={busy !== null || newLabel.trim() === ""}
+          >
+            +
+          </button>
+        </div>
+        {labels.length === 0 && (
+          <div className="fleet-labels__empty">{t("fleet.labelsEmpty")}</div>
         )}
       </div>
 
