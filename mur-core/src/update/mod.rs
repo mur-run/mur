@@ -39,7 +39,9 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
         // brew pour leaves the binaries ad-hoc signed (relocation invalidates
         // any CI signature) — re-sign with the stable identity so keychain
         // grants survive, then walk the deploy checklist (#849/#866).
-        resign::post_upgrade(opts.restart_agents)?;
+        // No extracted runtime here: brew just refreshed the keg, so the
+        // sibling fallback finds the current one.
+        resign::post_upgrade(opts.restart_agents, None)?;
         return Ok(());
     }
     if let Some(hint) = src.upgrade_hint() {
@@ -110,13 +112,26 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
     } else {
         "mur.new"
     });
-    release::extract_binary(asset_name, &bin_bytes, &tmp_bin)?;
+    release::extract_binary(
+        asset_name,
+        &bin_bytes,
+        if cfg!(windows) { "mur.exe" } else { "mur" },
+        &tmp_bin,
+    )?;
 
     #[cfg(unix)]
     {
+        // The tarball ships the agent runtime too — hand it to post_upgrade so
+        // the launchd copy is refreshed from THIS release, not from whatever
+        // stale sibling is installed (the brew keg lags `mur update`).
+        let tmp_runtime = tmp_dir.path().join("mur-agent-runtime.new");
+        let fresh_runtime =
+            release::extract_binary(asset_name, &bin_bytes, "mur-agent-runtime", &tmp_runtime)
+                .ok()
+                .map(|_| tmp_runtime);
         swap::swap(&tmp_bin, &target)?;
         println!("Updated to v{latest}");
-        resign::post_upgrade(opts.restart_agents)?;
+        resign::post_upgrade(opts.restart_agents, fresh_runtime.as_deref())?;
     }
     #[cfg(windows)]
     {

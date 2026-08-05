@@ -301,9 +301,15 @@ mod checksum_tests {
 use std::io::{Read, Write};
 use std::path::Path;
 
-/// Extract the `mur` (or `mur.exe`) binary from a release archive (tar.gz or zip)
-/// and write it to `dest`. Returns an error if the archive contains no `mur` entry.
-pub fn extract_binary(archive_name: &str, bytes: &[u8], dest: &Path) -> anyhow::Result<()> {
+/// Extract the named binary from a release archive (tar.gz or zip) and write
+/// it to `dest`. `entry_name` is the exact file name inside the archive (e.g.
+/// `mur`, `mur-agent-runtime`, `mur.exe`). Errors if the entry is absent.
+pub fn extract_binary(
+    archive_name: &str,
+    bytes: &[u8],
+    entry_name: &str,
+    dest: &Path,
+) -> anyhow::Result<()> {
     if archive_name.ends_with(".tar.gz") || archive_name.ends_with(".tgz") {
         let gz = flate2::read::GzDecoder::new(bytes);
         let mut tar = tar::Archive::new(gz);
@@ -311,7 +317,7 @@ pub fn extract_binary(archive_name: &str, bytes: &[u8], dest: &Path) -> anyhow::
             let mut entry = entry?;
             let path = entry.path()?.into_owned();
             let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if name == "mur" {
+            if name == entry_name {
                 let mut buf = Vec::new();
                 entry.read_to_end(&mut buf)?;
                 std::fs::File::create(dest)?.write_all(&buf)?;
@@ -323,7 +329,7 @@ pub fn extract_binary(archive_name: &str, bytes: &[u8], dest: &Path) -> anyhow::
                 return Ok(());
             }
         }
-        anyhow::bail!("archive {archive_name} did not contain a `mur` binary");
+        anyhow::bail!("archive {archive_name} did not contain a `{entry_name}` binary");
     }
     if archive_name.ends_with(".zip") {
         let cursor = std::io::Cursor::new(bytes);
@@ -331,14 +337,14 @@ pub fn extract_binary(archive_name: &str, bytes: &[u8], dest: &Path) -> anyhow::
         for i in 0..zip.len() {
             let mut entry = zip.by_index(i)?;
             let name = entry.name().rsplit('/').next().unwrap_or("").to_string();
-            if name == "mur.exe" {
+            if name == entry_name {
                 let mut buf = Vec::new();
                 entry.read_to_end(&mut buf)?;
                 std::fs::File::create(dest)?.write_all(&buf)?;
                 return Ok(());
             }
         }
-        anyhow::bail!("archive {archive_name} did not contain mur.exe");
+        anyhow::bail!("archive {archive_name} did not contain {entry_name}");
     }
     anyhow::bail!("unknown archive type: {archive_name}")
 }
@@ -368,8 +374,17 @@ mod extract_tests {
         let bytes = build_tgz(&[("mur", b"FAKEBIN")]);
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("mur");
-        extract_binary("foo.tar.gz", &bytes, &dest).unwrap();
+        extract_binary("foo.tar.gz", &bytes, "mur", &dest).unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), b"FAKEBIN");
+    }
+
+    #[test]
+    fn extracts_named_sibling_from_tgz() {
+        let bytes = build_tgz(&[("mur", b"MURBIN"), ("mur-agent-runtime", b"RUNTIMEBIN")]);
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("mur-agent-runtime");
+        extract_binary("foo.tar.gz", &bytes, "mur-agent-runtime", &dest).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"RUNTIMEBIN");
     }
 
     #[test]
@@ -377,6 +392,6 @@ mod extract_tests {
         let bytes = build_tgz(&[("README", b"hi")]);
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("mur");
-        assert!(extract_binary("foo.tar.gz", &bytes, &dest).is_err());
+        assert!(extract_binary("foo.tar.gz", &bytes, "mur", &dest).is_err());
     }
 }

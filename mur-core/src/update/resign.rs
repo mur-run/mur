@@ -26,12 +26,17 @@ pub const SIGN_TARGETS: &[&str] = &[
 /// Run the post-upgrade leg: re-sign (macOS only — see the module docs), print
 /// the deploy checklist, optionally restart stale agents.
 ///
+/// `fresh_runtime` is the `mur-agent-runtime` extracted from the release
+/// archive, when it shipped one — the authoritative source for refreshing the
+/// launchd copy (installed siblings can lag the self-update).
+///
 /// Only the re-signing is macOS-specific. The checklist and the restart leg
 /// apply everywhere: an upgrade changes every binary's hash on any platform,
 /// which stales the running agents and their SHA-pinned MCP servers alike.
-pub fn post_upgrade(restart_agents: bool) -> Result<()> {
+#[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+pub fn post_upgrade(restart_agents: bool, fresh_runtime: Option<&std::path::Path>) -> Result<()> {
     #[cfg(target_os = "macos")]
-    macos::resign_installed_binaries()?;
+    macos::resign_installed_binaries(fresh_runtime)?;
 
     print_checklist();
 
@@ -82,7 +87,7 @@ pub(crate) fn is_adhoc_output(codesign_dv_output: &str) -> bool {
 #[cfg(target_os = "macos")]
 mod macos {
     use std::collections::BTreeSet;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
 
     use anyhow::{Context, Result, bail};
@@ -91,7 +96,7 @@ mod macos {
 
     /// Re-sign every installed MUR binary with the configured identity. No
     /// identity configured → warn loudly and leave the install ad-hoc.
-    pub(super) fn resign_installed_binaries() -> Result<()> {
+    pub(super) fn resign_installed_binaries(fresh_runtime: Option<&Path>) -> Result<()> {
         let identity = pick_identity(
             config_identity().as_deref(),
             std::env::var("MUR_CODESIGN_IDENTITY").ok().as_deref(),
@@ -114,7 +119,7 @@ mod macos {
         };
 
         let mut targets = discover_targets();
-        refresh_local_runtime_copy(&mut targets);
+        refresh_local_runtime_copy(&mut targets, fresh_runtime);
         if targets.is_empty() {
             println!("⚠ no installed MUR binaries found to re-sign");
             return Ok(());
@@ -185,24 +190,30 @@ mod macos {
     }
 
     /// The launchd services run a COPY (not a symlink) of the runtime at
-    /// `~/.local/bin/mur-agent-runtime`. Refresh it from the newly-installed
-    /// runtime before signing — a stale copy is the old-version + SIGKILL trap.
-    fn refresh_local_runtime_copy(targets: &mut Vec<PathBuf>) {
+    /// `~/.local/bin/mur-agent-runtime`. Refresh it from the runtime shipped
+    /// with this release when available, else from a freshly-installed sibling
+    /// — a stale copy is the old-version trap.
+    fn refresh_local_runtime_copy(targets: &mut Vec<PathBuf>, fresh_runtime: Option<&Path>) {
         let Some(copy) = local_runtime_copy_path() else {
             return;
         };
         if !copy.exists() {
             return; // this machine doesn't use the copy layout
         }
-        let source = targets.iter().find(|p| {
-            p.file_name().is_some_and(|n| n == "mur-agent-runtime")
-                && p.canonicalize().ok() != copy.canonicalize().ok()
+        let source: Option<PathBuf> = fresh_runtime.map(PathBuf::from).or_else(|| {
+            targets
+                .iter()
+                .find(|p| {
+                    p.file_name().is_some_and(|n| n == "mur-agent-runtime")
+                        && p.canonicalize().ok() != copy.canonicalize().ok()
+                })
+                .cloned()
         });
         match source {
-            Some(src) => match std::fs::copy(src, &copy) {
+            Some(src) => match replace_file(&src, &copy) {
                 Ok(_) => println!("✓ refreshed {} from {}", copy.display(), src.display()),
                 Err(e) => println!(
-                    "⚠ could not refresh {} ({e}) — it may be running; re-signing the existing copy",
+                    "⚠ could not refresh {} ({e}) — re-signing the existing copy",
                     copy.display()
                 ),
             },
@@ -214,6 +225,32 @@ mod macos {
         }
         if !targets.contains(&copy) {
             targets.push(copy);
+        }
+    }
+
+    /// Copy `src` next to `dst`, then rename over it. Overwriting `dst` in
+    /// place would SIGKILL every process executing that inode; the rename
+    /// leaves running processes on the old inode instead.
+    fn replace_file(src: &Path, dst: &Path) -> std::io::Result<()> {
+        let tmp = dst.with_extension("new");
+        std::fs::copy(src, &tmp)?;
+        std::fs::rename(&tmp, dst)
+    }
+
+    #[cfg(test)]
+    mod macos_tests {
+        use super::replace_file;
+
+        #[test]
+        fn replace_file_swaps_content_and_leaves_no_temp() {
+            let dir = tempfile::tempdir().unwrap();
+            let src = dir.path().join("src");
+            let dst = dir.path().join("mur-agent-runtime");
+            std::fs::write(&src, b"NEW").unwrap();
+            std::fs::write(&dst, b"OLD").unwrap();
+            replace_file(&src, &dst).unwrap();
+            assert_eq!(std::fs::read(&dst).unwrap(), b"NEW");
+            assert!(!dir.path().join("mur-agent-runtime.new").exists());
         }
     }
 
