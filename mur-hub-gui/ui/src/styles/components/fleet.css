@@ -143,6 +143,17 @@
   margin-top: 6px;
 }
 
+.fleet-labels__new {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.fleet-labels__new input {
+  flex: 1;
+  min-width: 0;
+}
+
 .fleet-rail__empty {
   padding: 16px 12px;
   font-size: 12px;

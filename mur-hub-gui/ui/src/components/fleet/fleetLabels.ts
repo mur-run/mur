@@ -84,3 +84,30 @@ export function toggleAssignment(ids: string[], id: string): string[] {
 export function makePrimary(ids: string[], id: string): string[] {
   return [id, ...ids.filter((x) => x !== id)];
 }
+
+/**
+ * Derive a registry id from a typed display name, matching the backend's
+ * `valid_label_id`: lowercase ASCII, digits, '-' or '_', max 32 chars.
+ *
+ * A name with no ASCII to slug — "研究", "🚀" — would otherwise reduce to the
+ * empty string and be rejected, so it falls back to `label-N` using the first
+ * free N. The id is internal (chips and group headers render `display`), so a
+ * synthetic one costs the user nothing.
+ */
+export function labelIdFrom(name: string, taken: string[]): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32)
+    // slice() can re-expose a trailing '-'; the backend accepts it, but it
+    // reads like a truncation bug in the file.
+    .replace(/-+$/, "");
+  if (slug !== "") return slug;
+
+  const used = new Set(taken);
+  for (let n = 1; ; n++) {
+    const id = `label-${n}`;
+    if (!used.has(id)) return id;
+  }
+}
