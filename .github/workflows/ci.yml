@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+# A new commit on a PR obsoletes the in-flight run for the old commit —
+# cancel it instead of finishing a 3-OS matrix nobody will read. push:main
+# runs never cancel (post-merge validation must complete).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
   # Disable incremental compilation across all CI jobs. Incremental adds a
@@ -81,6 +88,7 @@ jobs:
     needs: changes
     if: github.event_name == 'push' || needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60 # hung build ≠ 6h default; normal runs are well under
     strategy:
       fail-fast: false
       matrix:
@@ -168,6 +176,7 @@ jobs:
     needs: changes
     if: github.event_name == 'push' || needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -216,6 +225,7 @@ jobs:
     needs: changes
     if: github.event_name == 'push' || needs.changes.outputs.gui == 'true'
     runs-on: ubuntu-22.04   # widest glibc compat for AppImage downstream
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -242,7 +252,7 @@ jobs:
         # Saves ~75-85s per run on a job whose apt-install step was 91s.
         # `version: 1.0` is the cache key — bump it when adding/removing
         # packages so the cache invalidates.
-        uses: awalsh128/cache-apt-pkgs-action@latest
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.3
         with:
           version: "1.1"
           packages: >-
@@ -279,6 +289,7 @@ jobs:
     needs: changes
     if: github.event_name == 'push' || needs.changes.outputs.hub_gui == 'true'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -306,7 +317,7 @@ jobs:
         run: sudo apt-get update
       - name: Install Linux system libraries (Tauri 2)
         if: runner.os == 'Linux'
-        uses: awalsh128/cache-apt-pkgs-action@latest
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.3
         with:
           version: "1.1"
           packages: >-
@@ -347,6 +358,7 @@ jobs:
     needs: changes
     if: github.event_name == 'push' || needs.changes.outputs.e2e == 'true'
     runs-on: macos-latest
+    timeout-minutes: 45
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
