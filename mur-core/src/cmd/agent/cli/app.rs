@@ -495,6 +495,10 @@ pub struct App {
     pub panel_input_deadline: Option<std::time::Instant>,
     /// Fleet rail, when `--fleet` is on. `None` for an ordinary murmur.
     pub fleet: Option<super::fleet_rail::FleetRail>,
+    /// `step_id` of an in-flight `fleet_run` tool step that auto-armed the
+    /// rail/follow, so its `StepCompleted` can close them out. `None` when no
+    /// delegated fleet run is executing.
+    pub auto_fleet_step: Option<String>,
 }
 
 impl App {
@@ -576,6 +580,7 @@ impl App {
             panel_input_sent: String::new(),
             panel_input_deadline: None,
             fleet: None,
+            auto_fleet_step: None,
         }
     }
 
@@ -1100,6 +1105,63 @@ impl App {
             }
             Err(e) => self.push_system(format!("follow {} stopped: {e:#}", f.tag())),
         }
+    }
+
+    /// Auto-arm live fleet progress when a delegated `fleet_run` step starts:
+    /// the member rail (replaced only when absent or watching a different
+    /// fleet) plus a milestone follow of `fleet-<name>`. A user-armed follow
+    /// is never clobbered — the auto follow only takes an empty slot — and
+    /// the pane's own channel is never followed (its turns already render).
+    pub fn arm_auto_fleet(&mut self, step_id: &str, fleet: &str, now: std::time::Instant) {
+        self.auto_fleet_step = Some(step_id.to_string());
+        if !self.fleet.as_ref().is_some_and(|r| r.fleet() == fleet) {
+            self.fleet = Some(super::fleet_rail::FleetRail::start(fleet));
+        }
+        if let Some(rail) = self.fleet.as_mut() {
+            rail.set_run_in_flight(true);
+        }
+        let channel_id = format!("fleet-{fleet}");
+        let on_own_pane = self.channel.as_ref().is_some_and(|c| c.id == channel_id);
+        let can_follow = self.follow.is_none() && !on_own_pane;
+        if can_follow {
+            self.follow = Some(super::follow::Follow::start_auto(
+                &self.home,
+                &channel_id,
+                now,
+            ));
+        }
+        self.push_system(if can_follow {
+            format!(
+                "⛴ fleet {fleet} started — following {channel_id} (milestones land here; /channels N --follow for the raw log)"
+            )
+        } else {
+            format!("⛴ fleet {fleet} started")
+        });
+    }
+
+    /// Close out an auto-armed `fleet_run` when its step completes: drain the
+    /// follow's tail, drop it (only if auto), leave the rail up — Done/Failed
+    /// member states are worth reading — and put the outcome on the record.
+    pub fn finish_auto_fleet(&mut self, step_id: &str, ok: bool, duration_ms: u64) {
+        if self.auto_fleet_step.as_deref() != Some(step_id) {
+            return;
+        }
+        self.auto_fleet_step = None;
+        // Catch the run's last events before the follow goes away.
+        self.poll_follow(std::time::Instant::now());
+        if self.follow.as_ref().is_some_and(|f| f.auto) {
+            self.follow = None;
+        }
+        let mut fleet = String::new();
+        if let Some(rail) = self.fleet.as_mut() {
+            rail.set_run_in_flight(false);
+            fleet = rail.fleet().to_string();
+        }
+        let took = super::follow::fmt_elapsed(chrono::Duration::milliseconds(duration_ms as i64));
+        self.push_system(format!(
+            "⛴ fleet {fleet} {} ({took})",
+            if ok { "finished" } else { "failed" }
+        ));
     }
 
     /// Record a completed `!command` run: show it, persist it, and queue it
