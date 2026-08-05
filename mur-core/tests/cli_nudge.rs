@@ -161,15 +161,18 @@ fn phase2_end_to_end_deliver_ack_drain() {
     // 2. Seed a ledger with a surfaced candidate (snapshot present).
     let c = cand("phase2", "phase2-workflow");
     let mut ledger = NudgeLedger::default();
-    NudgeEmitter::emit_pending(&mut ledger, &[c.clone()], chrono::Utc::now());
+    NudgeEmitter::emit_pending(&mut ledger, std::slice::from_ref(&c), chrono::Utc::now());
     ledger
         .save(&NudgeLedger::default_path_in(mur.path()))
         .unwrap();
 
     // 3. Deliver the candidate to the agent inbox.
-    let n =
-        mur_core::nudge::companion::deliver_nudges_to_companions(mur.path(), &[c.clone()], "en")
-            .unwrap();
+    let n = mur_core::nudge::companion::deliver_nudges_to_companions(
+        mur.path(),
+        std::slice::from_ref(&c),
+        "en",
+    )
+    .unwrap();
     assert_eq!(n, 1);
     let inbox_file = agent_dir.join("companion/inbox/nudge_phase2.md");
     assert!(inbox_file.exists());
@@ -211,9 +214,12 @@ fn phase2_end_to_end_deliver_ack_drain() {
     //    but the consumed file was removed. Re-deliver recreates it;
     //    the ledger filter in record_nudges_for_candidates prevents
     //    accepted candidates from being surfaced again upstream.
-    let n2 =
-        mur_core::nudge::companion::deliver_nudges_to_companions(mur.path(), &[c.clone()], "en")
-            .unwrap();
+    let n2 = mur_core::nudge::companion::deliver_nudges_to_companions(
+        mur.path(),
+        std::slice::from_ref(&c),
+        "en",
+    )
+    .unwrap();
     assert_eq!(n2, 1); // deliver doesn't check ledger; file was consumed
     // But filter_actionable excludes it:
     let actionable = ledger.filter_actionable(&[c], chrono::Utc::now(), 10);

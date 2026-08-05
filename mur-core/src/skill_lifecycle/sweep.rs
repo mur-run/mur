@@ -287,6 +287,20 @@ pub fn run_sweep(home: &Path, opts: SweepOptions) -> Result<SweepReport> {
     Ok(report)
 }
 
+fn matches_filter(name: &str, filter: Option<&str>) -> bool {
+    match filter {
+        None => true,
+        Some(f) => {
+            if f.contains('*') || f.contains('?') {
+                let pat = crate::skill_stats::reindex::glob_pattern(f);
+                pat.matches(name)
+            } else {
+                name == f
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -783,19 +797,5 @@ mod tests {
         ];
         // Only the final event forms a streak of 1.
         assert_eq!(consecutive_trailing_workflow_failures(&events), 1);
-    }
-}
-
-fn matches_filter(name: &str, filter: Option<&str>) -> bool {
-    match filter {
-        None => true,
-        Some(f) => {
-            if f.contains('*') || f.contains('?') {
-                let pat = crate::skill_stats::reindex::glob_pattern(f);
-                pat.matches(name)
-            } else {
-                name == f
-            }
-        }
     }
 }

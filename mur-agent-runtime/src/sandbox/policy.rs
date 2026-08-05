@@ -1030,9 +1030,11 @@ mod tests {
 
     #[test]
     fn proxy_only_port_assembly_routes_llm_and_egress_to_loopback() {
-        let mut policy = SandboxPolicy::default();
-        policy.net_allow_ports = Some(Vec::new()); // ProxyOnly: deny general TCP
-        policy.net_loopback_allowed = true; // …but loopback carve-outs permitted
+        let mut policy = SandboxPolicy {
+            net_allow_ports: Some(Vec::new()), // ProxyOnly: deny general TCP
+            net_loopback_allowed: true,        // …but loopback carve-outs permitted
+            ..Default::default()
+        };
         // LLM port (cc-proxy) must land in LOOPBACK, not general ports.
         policy.allow_extra_ports(&[8088]);
         // Egress proxy port must be accepted even though general list is empty.
@@ -1057,9 +1059,11 @@ mod tests {
         // Off is ALSO net_allow_ports = Some([]), but net_loopback_allowed = false
         // (the default) — neither helper may re-open loopback. This is the guard the
         // flag exists for.
-        let mut policy = SandboxPolicy::default();
-        policy.net_allow_ports = Some(Vec::new());
-        // net_loopback_allowed left false
+        let mut policy = SandboxPolicy {
+            net_allow_ports: Some(Vec::new()),
+            // net_loopback_allowed left false
+            ..Default::default()
+        };
         policy.allow_extra_ports(&[8088]);
         policy.allow_loopback_ports(&[54321]);
         assert!(
@@ -1072,8 +1076,10 @@ mod tests {
     fn restricted_port_assembly_unchanged() {
         // Non-empty general list = generic Restricted: LLM port still goes to
         // net_allow_ports (unchanged behavior).
-        let mut policy = SandboxPolicy::default();
-        policy.net_allow_ports = Some(vec![80, 443]);
+        let mut policy = SandboxPolicy {
+            net_allow_ports: Some(vec![80, 443]),
+            ..Default::default()
+        };
         policy.allow_extra_ports(&[8088]);
         assert!(policy.net_allow_ports.as_ref().unwrap().contains(&8088));
         assert!(!policy.net_allow_loopback_ports.contains(&8088));
@@ -1504,24 +1510,30 @@ mod tests {
     fn connect_tcp_ports_proxy_only_is_loopback_only() {
         // ProxyOnly: empty general list + loopback ports → only the loopback ports
         // get ConnectTcp rules (general egress e.g. 443 is default-denied).
-        let mut policy = SandboxPolicy::default();
-        policy.net_allow_ports = Some(Vec::new());
-        policy.net_allow_loopback_ports = vec![8088, 54321];
+        let policy = SandboxPolicy {
+            net_allow_ports: Some(Vec::new()),
+            net_allow_loopback_ports: vec![8088, 54321],
+            ..Default::default()
+        };
         assert_eq!(connect_tcp_ports(&policy), vec![8088u16, 54321]);
     }
 
     #[test]
     fn connect_tcp_ports_restricted_is_general_plus_loopback() {
-        let mut policy = SandboxPolicy::default();
-        policy.net_allow_ports = Some(vec![80, 443]);
-        policy.net_allow_loopback_ports = vec![54321];
+        let policy = SandboxPolicy {
+            net_allow_ports: Some(vec![80, 443]),
+            net_allow_loopback_ports: vec![54321],
+            ..Default::default()
+        };
         assert_eq!(connect_tcp_ports(&policy), vec![80u16, 443, 54321]);
     }
 
     #[test]
     fn connect_tcp_ports_off_and_unrestricted_are_empty() {
-        let mut off = SandboxPolicy::default();
-        off.net_allow_ports = Some(Vec::new()); // Off: empty general + empty loopback
+        let off = SandboxPolicy {
+            net_allow_ports: Some(Vec::new()), // Off: empty general + empty loopback
+            ..Default::default()
+        };
         assert!(connect_tcp_ports(&off).is_empty());
         let unr = SandboxPolicy::default(); // Unrestricted: net_allow_ports = None
         assert!(connect_tcp_ports(&unr).is_empty());

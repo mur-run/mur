@@ -114,7 +114,6 @@ mod tests {
                 read: vec![],
                 write: vec![root.to_string()],
                 deny: vec![],
-                ..Default::default()
             },
         )
     }

@@ -54,6 +54,6 @@ mod tests {
         assert!(s.active && s.muted);
         let s = stop(home.path()).unwrap();
         assert!(!s.active && s.muted);
-        assert_eq!(status(home.path()).active, false);
+        assert!(!status(home.path()).active);
     }
 }

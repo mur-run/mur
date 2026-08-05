@@ -1138,8 +1138,6 @@ pub fn create_draft_workflow(
     create_draft_workflow_in(&store, name, description, trigger, source_sessions)
 }
 
-/// Draft workflow with skeleton steps (harvest accept path). Steps containing
-
 #[cfg(test)]
 mod tests {
     use super::*;

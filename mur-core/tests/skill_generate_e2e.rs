@@ -19,11 +19,8 @@ impl LlmClient for ScriptedLlm {
         async move { Ok(resp) }
     }
 
-    fn embed(
-        &self,
-        _text: &str,
-    ) -> impl std::future::Future<Output = Result<Vec<f32>, LlmError>> + Send {
-        async move { Ok(vec![]) }
+    async fn embed(&self, _text: &str) -> Result<Vec<f32>, LlmError> {
+        Ok(vec![])
     }
 }
 

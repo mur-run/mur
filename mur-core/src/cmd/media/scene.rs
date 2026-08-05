@@ -57,33 +57,6 @@ pub fn parse_completion(resp: &Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-#[cfg(test)]
-mod request_tests {
-    use super::*;
-
-    #[test]
-    fn request_has_text_and_image_parts() {
-        let body = build_request("Qwen3.5-2B-MLX-4bit", "hi", "data:image/png;base64,AAA");
-        let content = &body["messages"][0]["content"];
-        assert_eq!(content[0]["type"], "text");
-        assert_eq!(content[1]["type"], "image_url");
-        assert_eq!(content[1]["image_url"]["url"], "data:image/png;base64,AAA");
-    }
-
-    #[test]
-    fn data_url_prefixed() {
-        assert!(png_data_url(b"\x89PNG").starts_with("data:image/png;base64,"));
-    }
-
-    #[test]
-    fn parse_extracts_content() {
-        let resp = serde_json::json!({
-            "choices": [{ "message": { "content": "這是一隻貓" } }]
-        });
-        assert_eq!(parse_completion(&resp).as_deref(), Some("這是一隻貓"));
-    }
-}
-
 // ── Orchestrator ──
 
 use mur_common::config::DEFAULT_BUNDLED_MODEL_ID;
@@ -165,4 +138,31 @@ pub async fn explain(prompt: Option<&str>) -> Result<String> {
         .context("parse VLM response")?;
 
     parse_completion(&resp).context("VLM returned no content")
+}
+
+#[cfg(test)]
+mod request_tests {
+    use super::*;
+
+    #[test]
+    fn request_has_text_and_image_parts() {
+        let body = build_request("Qwen3.5-2B-MLX-4bit", "hi", "data:image/png;base64,AAA");
+        let content = &body["messages"][0]["content"];
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "image_url");
+        assert_eq!(content[1]["image_url"]["url"], "data:image/png;base64,AAA");
+    }
+
+    #[test]
+    fn data_url_prefixed() {
+        assert!(png_data_url(b"\x89PNG").starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn parse_extracts_content() {
+        let resp = serde_json::json!({
+            "choices": [{ "message": { "content": "這是一隻貓" } }]
+        });
+        assert_eq!(parse_completion(&resp).as_deref(), Some("這是一隻貓"));
+    }
 }

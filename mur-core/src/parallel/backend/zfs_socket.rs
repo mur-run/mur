@@ -168,7 +168,9 @@ mod tests {
             if let Ok((stream, _)) = listener.accept() {
                 let mut w = stream.try_clone().unwrap();
                 let r = BufReader::new(stream);
-                for line in r.lines().flatten() {
+                // `map_while` (not `flatten`): stop on the first IO error
+                // instead of spinning forever if it repeats.
+                for line in r.lines().map_while(Result::ok) {
                     let _ = line;
                     let mut resp = serde_json::to_string(&ZfsResponse::Ok).unwrap();
                     resp.push('\n');

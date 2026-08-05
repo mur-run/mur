@@ -161,8 +161,10 @@ fn candidates_pin_overrides_everything() {
         factory_for(Default::default()),
         retry0(),
     );
-    let mut req = LlmRequest::default();
-    req.pin_model_ref = Some("frontier".into());
+    let req = LlmRequest {
+        pin_model_ref: Some("frontier".into()),
+        ..Default::default()
+    };
     assert_eq!(fb.candidates_for(&req), vec!["frontier".to_string()]);
 }
 
@@ -170,13 +172,15 @@ fn candidates_pin_overrides_everything() {
 fn candidates_smart_background_prepends_cheap() {
     use mur_common::agent::AgentProfile;
     use mur_common::config::{ModelSwitchConfig, SmartConfig};
-    let mut cfg = ModelSwitchConfig::default();
-    cfg.default = Some("primary".into());
-    cfg.fallback_chain = vec!["primary".into(), "mid".into()];
-    cfg.smart = SmartConfig {
-        enabled: true,
-        cheap: Some("cheap".into()),
-        max_escalations: 1,
+    let cfg = ModelSwitchConfig {
+        default: Some("primary".into()),
+        fallback_chain: vec!["primary".into(), "mid".into()],
+        smart: SmartConfig {
+            enabled: true,
+            cheap: Some("cheap".into()),
+            max_escalations: 1,
+        },
+        ..Default::default()
     };
     let fb = FallbackLlmClient::new_routed(
         AgentProfile::default_for_tests(),
@@ -185,8 +189,10 @@ fn candidates_smart_background_prepends_cheap() {
         retry0(),
     );
     // Background + smart → cheap first, then phase-1 candidates, deduped.
-    let mut bg = LlmRequest::default();
-    bg.intent = RequestIntent::Background(BackgroundKind::Scheduled);
+    let bg = LlmRequest {
+        intent: RequestIntent::Background(BackgroundKind::Scheduled),
+        ..Default::default()
+    };
     assert_eq!(
         fb.candidates_for(&bg),
         vec!["cheap".to_string(), "primary".into(), "mid".into()]
@@ -203,13 +209,15 @@ fn candidates_smart_background_prepends_cheap() {
 async fn routed_generate_picks_frontier_for_large_request() {
     use mur_common::agent::AgentProfile;
     use mur_common::config::{ModelSwitchConfig, RoutingConfig};
-    let mut cfg = ModelSwitchConfig::default();
-    cfg.routing = RoutingConfig {
-        enabled: true,
-        cheap: Some("cheap".into()),
-        frontier: Some("frontier".into()),
-        threshold_input_tokens: Some(5),
-        smart: None,
+    let cfg = ModelSwitchConfig {
+        routing: RoutingConfig {
+            enabled: true,
+            cheap: Some("cheap".into()),
+            frontier: Some("frontier".into()),
+            threshold_input_tokens: Some(5),
+            smart: None,
+        },
+        ..Default::default()
     };
     let mut scripts = std::collections::HashMap::new();
     scripts.insert("frontier".to_string(), vec![Ok(())]);
@@ -258,12 +266,14 @@ async fn cascade_escalates_structural_fail_under_background_smart() {
     );
     scripts.insert("primary".to_string(), vec![Ok(())]);
 
-    let mut cfg = ModelSwitchConfig::default();
-    cfg.default = Some("primary".into());
-    cfg.smart = SmartConfig {
-        enabled: true,
-        cheap: Some("cheap".into()),
-        max_escalations: 1,
+    let cfg = ModelSwitchConfig {
+        default: Some("primary".into()),
+        smart: SmartConfig {
+            enabled: true,
+            cheap: Some("cheap".into()),
+            max_escalations: 1,
+        },
+        ..Default::default()
     };
     let fb = FallbackLlmClient::new_routed(
         AgentProfile::default_for_tests(),
@@ -272,8 +282,10 @@ async fn cascade_escalates_structural_fail_under_background_smart() {
         retry0(),
     );
 
-    let mut bg = LlmRequest::default();
-    bg.intent = RequestIntent::Background(BackgroundKind::Scheduled);
+    let bg = LlmRequest {
+        intent: RequestIntent::Background(BackgroundKind::Scheduled),
+        ..Default::default()
+    };
     assert_eq!(fb.generate(bg).await.unwrap().text, "primary");
 }
 
@@ -308,12 +320,14 @@ async fn cascade_respects_max_escalations() {
         vec![Err(LlmError::InvalidResponse("still empty".into()))],
     );
 
-    let mut cfg = ModelSwitchConfig::default();
-    cfg.default = Some("primary".into());
-    cfg.smart = SmartConfig {
-        enabled: true,
-        cheap: Some("cheap".into()),
-        max_escalations: 1,
+    let cfg = ModelSwitchConfig {
+        default: Some("primary".into()),
+        smart: SmartConfig {
+            enabled: true,
+            cheap: Some("cheap".into()),
+            max_escalations: 1,
+        },
+        ..Default::default()
     };
     let fb = FallbackLlmClient::new_routed(
         AgentProfile::default_for_tests(),
@@ -322,8 +336,10 @@ async fn cascade_respects_max_escalations() {
         retry0(),
     );
 
-    let mut bg = LlmRequest::default();
-    bg.intent = RequestIntent::Background(BackgroundKind::Scheduled);
+    let bg = LlmRequest {
+        intent: RequestIntent::Background(BackgroundKind::Scheduled),
+        ..Default::default()
+    };
     let err = fb.generate(bg).await.unwrap_err();
     assert!(matches!(err, LlmError::InvalidResponse(_)));
 }
@@ -354,12 +370,14 @@ async fn routed_generate_emits_routing_event_on_escalation() {
     );
     scripts.insert("primary".to_string(), vec![Ok(())]);
 
-    let mut cfg = ModelSwitchConfig::default();
-    cfg.default = Some("primary".into());
-    cfg.smart = SmartConfig {
-        enabled: true,
-        cheap: Some("cheap".into()),
-        max_escalations: 1,
+    let cfg = ModelSwitchConfig {
+        default: Some("primary".into()),
+        smart: SmartConfig {
+            enabled: true,
+            cheap: Some("cheap".into()),
+            max_escalations: 1,
+        },
+        ..Default::default()
     };
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
     let fb = FallbackLlmClient::new_routed(
@@ -370,12 +388,14 @@ async fn routed_generate_emits_routing_event_on_escalation() {
     )
     .with_telemetry(tx, "coach");
 
-    let mut bg = LlmRequest::default();
-    bg.intent = RequestIntent::Background(BackgroundKind::Scheduled);
-    bg.messages = vec![RichMessage::Text {
-        role: "user".into(),
-        content: "do the thing".into(),
-    }];
+    let bg = LlmRequest {
+        intent: RequestIntent::Background(BackgroundKind::Scheduled),
+        messages: vec![RichMessage::Text {
+            role: "user".into(),
+            content: "do the thing".into(),
+        }],
+        ..Default::default()
+    };
     let resp = fb.generate(bg).await.unwrap();
     assert_eq!(resp.text, "primary");
 

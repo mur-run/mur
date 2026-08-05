@@ -111,6 +111,7 @@ mod tests {
         let f = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
+            .truncate(true)
             .open(&lock_path)
             .unwrap();
         f.lock_exclusive().unwrap();

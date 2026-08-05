@@ -10,7 +10,7 @@ fn make_finding(skill_name: &str, check_id: &str, fixable: bool) -> Finding {
         category: "deps".to_string(),
         severity: Severity::Fail,
         skill_name: skill_name.to_string(),
-        message: format!("Required skill 'missing-dep' is not installed."),
+        message: "Required skill 'missing-dep' is not installed.".to_string(),
         remediation: Some("mur skill install missing-dep".to_string()),
         fixable,
     }

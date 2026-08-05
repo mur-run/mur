@@ -189,7 +189,12 @@ jobs:
       # `--no-deps` skips clippy on the ~800 dependency crates (linting them
       # serves no purpose since we can't fix them upstream from here). Saves
       # ~50-70s on a 125s job. Real lint coverage on our own code is unchanged.
-      - run: cargo clippy --all --no-deps --locked -- -D warnings
+      #
+      # `--all-targets` includes tests, benches and examples. Without it, test
+      # code is never linted and rots: the sweep that first added this flag had
+      # ~40 accumulated violations to clear, two of which were real defects
+      # (an error-loop `flatten()` and an undefined-truncate file open).
+      - run: cargo clippy --all --all-targets --no-deps --locked -- -D warnings
 
   fmt:
     name: Format

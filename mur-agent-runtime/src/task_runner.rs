@@ -3773,9 +3773,11 @@ mod tests {
         // Must retry at least once for the backoff to matter, and stay small
         // enough that a still-limited account fails a turn in a bounded time
         // (2s + 4s + 8s = 14s at the current base) rather than hanging.
-        assert!(MAX_RATE_LIMIT_RETRIES >= 1);
-        assert!(MAX_RATE_LIMIT_RETRIES <= 5);
-        assert!(RATE_LIMIT_BACKOFF_BASE >= std::time::Duration::from_millis(1));
+        // Const items, so editing a constant out of range fails the BUILD
+        // rather than only this test.
+        const _: () = assert!(MAX_RATE_LIMIT_RETRIES >= 1);
+        const _: () = assert!(MAX_RATE_LIMIT_RETRIES <= 5);
+        const _: () = assert!(RATE_LIMIT_BACKOFF_BASE.as_millis() >= 1);
         let max_delay = rate_limit_backoff_delay(MAX_RATE_LIMIT_RETRIES);
         assert!(max_delay <= std::time::Duration::from_secs(60));
     }

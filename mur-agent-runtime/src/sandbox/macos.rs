@@ -615,9 +615,11 @@ mod tests {
         // A worker whose egress is ONLY via loopback proxy: deny all general TCP outbound
         // and rely on loopback-only access. The airtight guarantee assumes no general
         // `(remote tcp "*:PORT")` allow exists (that would be a direct-egress escape hatch).
-        let mut policy = SandboxPolicy::default();
-        policy.net_allow_ports = Some(Vec::new()); // deny all general TCP outbound
-        policy.net_allow_loopback_ports = vec![58999];
+        let policy = SandboxPolicy {
+            net_allow_ports: Some(Vec::new()), // deny all general TCP outbound
+            net_allow_loopback_ports: vec![58999],
+            ..Default::default()
+        };
         let sbpl = build_sbpl_profile(&policy);
 
         // When all general TCP is denied, the deny network-outbound is present.
@@ -631,9 +633,11 @@ mod tests {
 
     #[test]
     fn proxy_only_sbpl_allows_loopback_and_dns_but_no_wildcard() {
-        let mut policy = SandboxPolicy::default();
-        policy.net_allow_ports = Some(Vec::new()); // deny general TCP
-        policy.net_allow_loopback_ports = vec![8088, 54321]; // cc-proxy + egress proxy
+        let policy = SandboxPolicy {
+            net_allow_ports: Some(Vec::new()),           // deny general TCP
+            net_allow_loopback_ports: vec![8088, 54321], // cc-proxy + egress proxy
+            ..Default::default()
+        };
         let sbpl = build_sbpl_profile(&policy);
 
         assert!(sbpl.contains("(deny network-outbound)"));

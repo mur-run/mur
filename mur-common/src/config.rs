@@ -1642,8 +1642,10 @@ embedding:
         assert_eq!(e.api_key_ref, None);
 
         // Set → survives YAML round-trip and to_backend_config.
-        let mut l2 = LlmConfig::default();
-        l2.api_key_ref = Some("keychain:mur/anthropic".into());
+        let l2 = LlmConfig {
+            api_key_ref: Some("keychain:mur/anthropic".into()),
+            ..Default::default()
+        };
         let y = serde_yaml_ng::to_string(&l2).unwrap();
         let l3: LlmConfig = serde_yaml_ng::from_str(&y).unwrap();
         assert_eq!(l3.api_key_ref.as_deref(), Some("keychain:mur/anthropic"));
