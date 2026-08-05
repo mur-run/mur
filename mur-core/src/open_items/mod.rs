@@ -175,7 +175,7 @@ mod tests {
     fn observed_items_sort_before_reported_regardless_of_age() {
         let old = Utc::now() - chrono::TimeDelta::days(30);
         let new = Utc::now();
-        let mut v = vec![
+        let mut v = [
             item(ItemSource::Reported, "agent said so", new),
             item(ItemSource::Observed, "queued job", old),
         ];

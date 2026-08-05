@@ -135,7 +135,6 @@ mod tests {
             read: read.iter().map(|s| s.to_string()).collect(),
             write: write.iter().map(|s| s.to_string()).collect(),
             deny: deny.iter().map(|s| s.to_string()).collect(),
-            ..Default::default()
         }
     }
 

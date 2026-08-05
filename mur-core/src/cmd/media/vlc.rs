@@ -48,28 +48,6 @@ pub fn command_url(port: u16, cmd: &str, extra: &[(&str, &str)]) -> String {
     url
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn detect_respects_env_override() {
-        // Point at a path that does not exist → None.
-        unsafe { std::env::set_var("MUR_VLC_PATH", "/no/such/vlc") };
-        assert_eq!(detect_vlc(), None);
-        unsafe { std::env::remove_var("MUR_VLC_PATH") };
-    }
-
-    #[test]
-    fn command_url_encodes_extra() {
-        let u = command_url(8080, "in_play", &[("input", "https://x/y?a=b")]);
-        assert!(u.starts_with("http://127.0.0.1:8080/requests/status.xml?command=in_play&input="));
-        assert!(u.contains("https%3A%2F%2Fx%2Fy%3Fa%3Db"));
-    }
-    // VlcStatus / parse_status_xml tests live in mur-common::media (where the
-    // parser now lives).
-}
-
 // ── Runtime management ──
 
 use super::{gen_password, load_runtime, pick_free_port, save_runtime};
@@ -240,4 +218,26 @@ pub(super) async fn ensure_for_snapshot(client: &reqwest::Client) -> Result<VlcR
 pub(super) async fn snapshot_command(rt: &VlcRuntime, client: &reqwest::Client) -> Result<()> {
     let _ = send_command(rt, client, "snapshot", &[]).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_respects_env_override() {
+        // Point at a path that does not exist → None.
+        unsafe { std::env::set_var("MUR_VLC_PATH", "/no/such/vlc") };
+        assert_eq!(detect_vlc(), None);
+        unsafe { std::env::remove_var("MUR_VLC_PATH") };
+    }
+
+    #[test]
+    fn command_url_encodes_extra() {
+        let u = command_url(8080, "in_play", &[("input", "https://x/y?a=b")]);
+        assert!(u.starts_with("http://127.0.0.1:8080/requests/status.xml?command=in_play&input="));
+        assert!(u.contains("https%3A%2F%2Fx%2Fy%3Fa%3Db"));
+    }
+    // VlcStatus / parse_status_xml tests live in mur-common::media (where the
+    // parser now lives).
 }

@@ -67,12 +67,10 @@ fn write_telemetry_fixture(telemetry_dir: &std::path::Path, skill_name: &str) {
         format!(
             r#"{{"mur.event.type":"telemetry/llm_call","mur.task.id":"t1","mur.fired_skills":["{skill_name}"],"gen_ai.usage.input_tokens":100,"gen_ai.request.model":"claude","latency_ms":1200}}"#
         ),
-        format!(
-            r#"{{"mur.event.type":"telemetry/tool_call","mur.task.id":"t1","tool":"wrong.tool","ok":false,"duration_ms":500}}"#
-        ),
-        format!(
-            r#"{{"mur.event.type":"telemetry/error","mur.task.id":"t1","kind":"ToolError","message":"tool 'wrong.tool' not found"}}"#
-        ),
+        r#"{"mur.event.type":"telemetry/tool_call","mur.task.id":"t1","tool":"wrong.tool","ok":false,"duration_ms":500}"#
+            .to_string(),
+        r#"{"mur.event.type":"telemetry/error","mur.task.id":"t1","kind":"ToolError","message":"tool 'wrong.tool' not found"}"#
+            .to_string(),
     ];
     std::fs::write(telemetry_dir.join("2026-05-25.jsonl"), lines.join("\n")).unwrap();
 }
