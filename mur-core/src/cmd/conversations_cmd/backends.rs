@@ -354,13 +354,15 @@ mod tests {
     /// `openai` provider at the omlx endpoint, not "no provider"/"unknown".
     #[test]
     fn stage_backend_rows_reports_pinned_vs_follows_smart_with_omlx_provider_alias() {
-        let mut cfg = Config::default();
-        cfg.llm = LlmConfig {
-            provider: "omlx".to_string(),
-            model: "Qwen3.5-4B-MLX-4bit".to_string(),
-            api_key_env: None,
-            api_key_ref: None,
-            openai_url: Some("http://127.0.0.1:8000/v1".to_string()),
+        let mut cfg = Config {
+            llm: LlmConfig {
+                provider: "omlx".to_string(),
+                model: "Qwen3.5-4B-MLX-4bit".to_string(),
+                api_key_env: None,
+                api_key_ref: None,
+                openai_url: Some("http://127.0.0.1:8000/v1".to_string()),
+            },
+            ..Default::default()
         };
         cfg.conversations.ask.backend = Some(BackendConfig {
             provider: "openai".to_string(),

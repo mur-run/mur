@@ -7,6 +7,9 @@ use mur_core::skill_lifecycle::sweep::{SweepOptions, run_sweep};
 use std::fs;
 use tempfile::TempDir;
 
+// Positional fixture builder: every argument is a dimension a sweep test
+// varies. Bundling them into a struct would only move the noise.
+#[allow(clippy::too_many_arguments)]
 fn make_stats(
     name: &str,
     state: LifecycleState,
