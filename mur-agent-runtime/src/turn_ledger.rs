@@ -169,7 +169,40 @@ pub fn describe_target(tool: &str, input: &serde_json::Value) -> String {
             .map(str::to_string)
             .unwrap_or_else(|| input.to_string())
     };
-    truncate(raw.trim(), 72)
+    let raw = raw.trim();
+    // No-argument calls (`{}`) carry no identifying target — an empty cell
+    // reads better on the card than JSON punctuation.
+    if raw == "{}" || raw == "null" {
+        return String::new();
+    }
+    truncate(raw, 72)
+}
+
+/// `mcp__server__tool` → `tool`. The server prefix is routing, not identity —
+/// on the card it only pushes the name the user knows off the line.
+fn short_tool(tool: &str) -> &str {
+    tool.strip_prefix("mcp__")
+        .and_then(|rest| rest.split_once("__"))
+        .map(|(_, t)| t)
+        .unwrap_or(tool)
+}
+
+/// Strip the transport's wrapping from a failure so the card shows the reason,
+/// not the plumbing: "tool error: tool execution failed: X" → "X". The ledger
+/// keeps the raw detail; this is display-only.
+fn clean_reason(why: &str) -> String {
+    let mut s = why.trim();
+    loop {
+        let t = s
+            .trim_start_matches("tool error:")
+            .trim_start_matches("tool execution failed:")
+            .trim_start();
+        if t == s {
+            break;
+        }
+        s = t;
+    }
+    truncate(s, 80)
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -221,9 +254,15 @@ pub fn render(ledger: &TurnLedger) -> String {
         // assume the latter.
         out.push_str("  ✔ verified   (nothing ran — no evidence this works)\n");
     } else {
-        out.push_str("  ✔ verified\n");
+        // One line per action: the glyph carries "verified"; a group header
+        // would only push the content into a second indent level.
         for a in &verified {
-            out.push_str(&format!("      {} {}\n", a.tool, a.target));
+            let tool = short_tool(&a.tool);
+            if a.target.is_empty() || a.target == tool {
+                out.push_str(&format!("  ✔ {tool}\n"));
+            } else {
+                out.push_str(&format!("  ✔ {tool} · {}\n", a.target));
+            }
         }
     }
 
@@ -251,14 +290,20 @@ pub fn render(ledger: &TurnLedger) -> String {
 
     let blocked = ledger.blocked();
     if !blocked.is_empty() {
-        out.push_str("  ✘ blocked\n");
+        // Reason on the tool line (transport noise stripped), target on its
+        // own indented line — a 72-char command glued to a 120-char error was
+        // the least readable row this card produced.
         for a in &blocked {
             let why = match &a.outcome {
                 Outcome::Denied(d) => format!("sandbox: {d}"),
-                Outcome::Failed(f) => f.clone(),
+                Outcome::Failed(f) => clean_reason(f),
                 Outcome::Ok => String::new(),
             };
-            out.push_str(&format!("      {} — {}\n", a.target, why));
+            let tool = short_tool(&a.tool);
+            out.push_str(&format!("  ✘ {tool} · {why}\n"));
+            if !a.target.is_empty() && a.target != tool {
+                out.push_str(&format!("      {}\n", a.target));
+            }
         }
     }
 
@@ -418,5 +463,43 @@ mod tests {
         // Newlines would break the row.
         let multi = serde_json::json!({"command": "a\nb"});
         assert_eq!(describe_target("bash", &multi), "a b");
+    }
+
+    #[test]
+    fn describe_target_drops_empty_args() {
+        // `{}` is punctuation, not a target — the card line reads better bare.
+        assert_eq!(
+            describe_target("mcp__media__stats", &serde_json::json!({})),
+            ""
+        );
+        assert_eq!(
+            describe_target("mcp__media__stats", &serde_json::Value::Null),
+            ""
+        );
+    }
+
+    /// The exact shapes from the field report: an MCP tool with empty args and
+    /// a bash failure wrapped twice by the transport.
+    #[test]
+    fn render_compacts_mcp_names_and_transport_noise() {
+        let mut l = TurnLedger::default();
+        l.record(act("mcp__media__mur_compress_stats", "", Outcome::Ok));
+        l.record(act(
+            "bash",
+            "ls; grep -rn \"compress-today\" --include=* -l . 2>/dev/null | head",
+            Outcome::Failed(
+                "tool error: tool execution failed: command timed out after 30s".into(),
+            ),
+        ));
+        let card = render(&l);
+        assert!(card.contains("  ✔ mur_compress_stats\n"), "{card}");
+        assert!(!card.contains("mcp__media"), "{card}");
+        assert!(!card.contains("{}"), "{card}");
+        assert!(
+            card.contains("  ✘ bash · command timed out after 30s\n"),
+            "{card}"
+        );
+        assert!(!card.contains("tool execution failed"), "{card}");
+        assert!(card.contains("      ls; grep"), "{card}");
     }
 }
