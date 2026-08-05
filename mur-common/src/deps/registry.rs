@@ -91,7 +91,7 @@ mod tests {
         assert!(
             r.install_to
                 .as_ref()
-                .map_or(false, |p| p.starts_with("aura/"))
+                .is_some_and(|p| p.starts_with("aura/"))
         );
         assert!(is_curated("lightpanda"));
         assert!(!is_curated("totally-unknown-key"));

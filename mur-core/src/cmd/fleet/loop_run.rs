@@ -973,7 +973,9 @@ mod tests {
             },
         );
         assert_eq!(dearest_output_rate(&reg), None);
-        assert!(DEFAULT_PRICE_PER_1K > 0.025, "default must top real models");
+        // Const item: editing the default below a real model's rate fails the
+        // BUILD, not just this test.
+        const _: () = assert!(DEFAULT_PRICE_PER_1K > 0.025);
     }
 
     #[test]

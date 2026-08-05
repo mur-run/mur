@@ -256,7 +256,7 @@ mod tests {
         // 1. Seed nudge ledger with a surfaced candidate "abc123" (snapshot present)
         let c = cand();
         let mut ledger = NudgeLedger::default();
-        NudgeEmitter::emit_pending(&mut ledger, &[c.clone()], chrono::Utc::now());
+        NudgeEmitter::emit_pending(&mut ledger, std::slice::from_ref(&c), chrono::Utc::now());
         ledger
             .save(&NudgeLedger::default_path_in(mur.path()))
             .unwrap();

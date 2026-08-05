@@ -312,7 +312,7 @@ mod skill_fleet_tests {
         apply_fleet_pull(
             dev.path(),
             mur_common::sync_types::FleetEntityType::Skill,
-            &[ent.clone()],
+            std::slice::from_ref(&ent),
         )
         .unwrap();
         apply_fleet_pull(

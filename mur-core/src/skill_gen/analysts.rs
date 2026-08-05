@@ -197,11 +197,8 @@ mod tests {
             async move { Ok(r) }
         }
 
-        fn embed(
-            &self,
-            _text: &str,
-        ) -> impl std::future::Future<Output = Result<Vec<f32>, LlmError>> + Send {
-            async move { Ok(vec![]) }
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, LlmError> {
+            Ok(vec![])
         }
     }
 
@@ -253,10 +250,7 @@ mod tests {
     #[tokio::test]
     async fn error_analyst_exhausts_rounds() {
         // 5 responses without PATCH:
-        let mut responses = Vec::new();
-        for _ in 0..5 {
-            responses.push("THOUGHT: still thinking. ACTION: inspect_turn 1");
-        }
+        let responses = vec!["THOUGHT: still thinking. ACTION: inspect_turn 1"; 5];
         let llm = mock_llm(responses);
         let trajs = vec![make_trajectory(Outcome::Failure {
             reason: "timeout".into(),
