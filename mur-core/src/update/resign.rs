@@ -7,12 +7,14 @@
 //! Re-signing with a stable identity right after the upgrade keeps the
 //! identity, and therefore the grants, across upgrades.
 //!
-//! Off macOS this whole module is a no-op.
+//! Only the re-signing is macOS-specific — the deploy checklist and the
+//! stale-agent restart run on every platform.
 
 use anyhow::Result;
 
 /// Binary names eligible for post-upgrade re-signing: everything that resolves
 /// `keychain:` SecretRefs plus the SHA-pinned MCP gateway.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const SIGN_TARGETS: &[&str] = &[
     "mur",
     "murmurd",
@@ -21,18 +23,40 @@ pub const SIGN_TARGETS: &[&str] = &[
     "mur-agent-runtime",
 ];
 
-/// Run the post-upgrade leg: re-sign (when an identity is configured), print
+/// Run the post-upgrade leg: re-sign (macOS only — see the module docs), print
 /// the deploy checklist, optionally restart stale agents.
+///
+/// Only the re-signing is macOS-specific. The checklist and the restart leg
+/// apply everywhere: an upgrade changes every binary's hash on any platform,
+/// which stales the running agents and their SHA-pinned MCP servers alike.
 pub fn post_upgrade(restart_agents: bool) -> Result<()> {
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = restart_agents;
-        Ok(())
-    }
     #[cfg(target_os = "macos")]
-    {
-        macos::post_upgrade(restart_agents)
+    macos::resign_installed_binaries()?;
+
+    print_checklist();
+
+    if restart_agents {
+        crate::cmd::agent::restart_stale_excluding(&restart_exclusions())?;
     }
+    Ok(())
+}
+
+fn load_config() -> mur_common::config::Config {
+    let home = crate::paths::mur_root(None);
+    mur_common::config::Config::load_or_default(&home.join("config.yaml"))
+}
+
+fn restart_exclusions() -> Vec<String> {
+    load_config().update.restart_exclude
+}
+
+fn print_checklist() {
+    println!();
+    println!("To finish the deploy:");
+    println!("  1. Restart agents still running the old binary:");
+    println!("       mur agent restart --stale        (or rerun with --restart-agents)");
+    println!("  2. Upgraded binaries have new hashes — refresh MCP pins per agent:");
+    println!("       mur agent mcp pin <agent> <server>");
 }
 
 /// Identity precedence: config beats env; empty strings count as unset.
@@ -65,64 +89,47 @@ mod macos {
 
     use super::{SIGN_TARGETS, is_adhoc_output, pick_identity};
 
-    pub(super) fn post_upgrade(restart_agents: bool) -> Result<()> {
+    /// Re-sign every installed MUR binary with the configured identity. No
+    /// identity configured → warn loudly and leave the install ad-hoc.
+    pub(super) fn resign_installed_binaries() -> Result<()> {
         let identity = pick_identity(
             config_identity().as_deref(),
             std::env::var("MUR_CODESIGN_IDENTITY").ok().as_deref(),
         );
 
-        match identity {
-            None => {
-                println!(
-                    "⚠ No codesign identity configured — installed binaries stay ad-hoc signed."
-                );
-                println!(
-                    "  macOS keychain grants will NOT survive this upgrade: agents using \
-                     `keychain:` secrets"
-                );
-                println!(
-                    "  may fail silently until re-authorized in the foreground (#866). To fix \
-                     permanently, set"
-                );
-                println!(
-                    "  `update.codesign_identity` in ~/.mur/config.yaml (or MUR_CODESIGN_IDENTITY)."
-                );
-            }
-            Some(id) => {
-                let mut targets = discover_targets();
-                refresh_local_runtime_copy(&mut targets);
-                if targets.is_empty() {
-                    println!("⚠ no installed MUR binaries found to re-sign");
-                } else {
-                    sign_all(&id, &targets)?;
-                    verify_not_adhoc(&targets)?;
-                    println!(
-                        "✓ re-signed {} binaries with '{id}' — keychain grants survive this upgrade",
-                        targets.len()
-                    );
-                }
-            }
-        }
+        let Some(id) = identity else {
+            println!("⚠ No codesign identity configured — installed binaries stay ad-hoc signed.");
+            println!(
+                "  macOS keychain grants will NOT survive this upgrade: agents using \
+                 `keychain:` secrets"
+            );
+            println!(
+                "  may fail silently until re-authorized in the foreground (#866). To fix \
+                 permanently, set"
+            );
+            println!(
+                "  `update.codesign_identity` in ~/.mur/config.yaml (or MUR_CODESIGN_IDENTITY)."
+            );
+            return Ok(());
+        };
 
-        print_checklist();
-        if restart_agents {
-            let exclude = restart_exclusions();
-            crate::cmd::agent::restart_stale_excluding(&exclude)?;
+        let mut targets = discover_targets();
+        refresh_local_runtime_copy(&mut targets);
+        if targets.is_empty() {
+            println!("⚠ no installed MUR binaries found to re-sign");
+            return Ok(());
         }
+        sign_all(&id, &targets)?;
+        verify_not_adhoc(&targets)?;
+        println!(
+            "✓ re-signed {} binaries with '{id}' — keychain grants survive this upgrade",
+            targets.len()
+        );
         Ok(())
     }
 
-    fn load_config() -> mur_common::config::Config {
-        let home = crate::paths::mur_root(None);
-        mur_common::config::Config::load_or_default(&home.join("config.yaml"))
-    }
-
     fn config_identity() -> Option<String> {
-        load_config().update.codesign_identity
-    }
-
-    fn restart_exclusions() -> Vec<String> {
-        load_config().update.restart_exclude
+        super::load_config().update.codesign_identity
     }
 
     /// Every existing SIGN_TARGETS binary, canonicalized (sign the real file,
@@ -261,15 +268,6 @@ mod macos {
             bail!("signature verification failed:\n  {}", bad.join("\n  "));
         }
         Ok(())
-    }
-
-    fn print_checklist() {
-        println!();
-        println!("To finish the deploy:");
-        println!("  1. Restart agents still running the old binary:");
-        println!("       mur agent restart --stale        (or rerun with --restart-agents)");
-        println!("  2. Re-signed binaries have new hashes — refresh MCP pins per agent:");
-        println!("       mur agent mcp pin <agent> <server>");
     }
 }
 
