@@ -1279,6 +1279,17 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path, mur_root: &std::path::Pat
             include_str!("../skills/mur_workflow_delegate.yaml"),
         ),
         (
+            "mur-deep-research",
+            include_str!("../skills/mur_deep_research.yaml"),
+        ),
+        (
+            "mur-capability",
+            include_str!("../skills/mur_capability.yaml"),
+        ),
+        ("mur-official", include_str!("../skills/mur_official.yaml")),
+        ("mur-notes", include_str!("../skills/mur_notes.yaml")),
+        ("mur-chat", include_str!("../skills/mur_chat.yaml")),
+        (
             "mur-agent-setup",
             include_str!("../skills/mur_agent_setup.yaml"),
         ),
@@ -1880,6 +1891,23 @@ mod builtin_skill_tests {
                 include_str!("../skills/mur_workflow_delegate.yaml"),
                 true,
             ),
+            (
+                "mur-deep-research",
+                include_str!("../skills/mur_deep_research.yaml"),
+                false,
+            ),
+            (
+                "mur-capability",
+                include_str!("../skills/mur_capability.yaml"),
+                false,
+            ),
+            (
+                "mur-official",
+                include_str!("../skills/mur_official.yaml"),
+                false,
+            ),
+            ("mur-notes", include_str!("../skills/mur_notes.yaml"), false),
+            ("mur-chat", include_str!("../skills/mur_chat.yaml"), false),
             (
                 "mur-agent-setup",
                 include_str!("../skills/mur_agent_setup.yaml"),

@@ -1,0 +1,39 @@
+name: mur-chat
+version: 0.1.0
+publisher: human:mur
+description: "Use when asked about past AI conversations — what did we discuss, find that conversation, 之前聊過, 對話紀錄."
+category: context
+hosts: [all]
+content:
+  abstract: |
+    The conversations archive keeps three layers: day index, summaries,
+    raw JSONL. `mur chat ask "question"` answers over the archive;
+    `search` does semantic + keyword lookup; `list`/`show`/`raw` walk
+    the layers directly.
+  context: |
+    # mur-chat — query the conversations archive
+
+    Past sessions across AI tools are archived in three layers. To
+    answer "what did we discuss about X":
+
+    - `mur chat ask "the question"` — natural-language answer over the
+      archive (`--since`/`--until`/`--src` narrow it, `--k` sets hits).
+    - `mur chat search "<query>"` — semantic + keyword hits
+      (`--limit`, `--src`).
+
+    Walking the layers directly:
+    - `mur chat list` — days in the archive (Layer 1 index).
+    - `mur chat show <day>` — a day's summary (Layer 2).
+    - `mur chat raw <conversation>` — raw JSONL (Layer 3) when the
+      summary is not enough.
+
+    Maintenance (only when asked or when `ask`/`search` come back
+    empty): `mur chat pull` ingests polling sources (Cursor / Gemini /
+    Aider), `mur chat reindex` rebuilds the vector index, `mur chat
+    doctor` runs archive health checks.
+tags: [mur, chat, archive, builtin]
+triggers:
+  - type: keyword
+    pattern: "(mur chat|(that|previous|past) conversation|what did we (discuss|talk about)|之前(聊過|討論|談過)|對話(紀錄|記錄|檔案))"
+  - type: manual
+priority: normal

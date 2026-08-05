@@ -1,0 +1,38 @@
+name: mur-official
+version: 0.1.0
+publisher: human:mur
+description: "Use when browsing or installing official MUR agents/fleets from the catalog — official, 官方目錄, 官方 agent."
+category: workflow
+hosts: [all]
+content:
+  abstract: |
+    `mur official list` browses the app.mur.run catalog;
+    `mur official install <id>` downloads, verifies, and installs an
+    official agent or fleet. Install requires `mur login`; pro-tier
+    items need an active subscription.
+  context: |
+    # mur-official — the official catalog
+
+    - `mur official list` — official agents and fleets from app.mur.run.
+    - `mur official install <id>` — id form is `agents/<name>` or
+      `fleets/<name>`, e.g. `agents/researcher`, `fleets/deep-research`.
+
+    What install does for you: downloads the bundle, verifies its
+    signature, and stores an account-bound license under
+    `~/.mur/licenses/`. Expect these failure shapes:
+
+    - Not logged in → run `mur auth login` first (install requires it).
+    - Pro-tier item without an active subscription → the download is
+      refused; that is a subscription issue, not a bug.
+    - Importing an official-marked bundle that arrived some other way
+      (copied from a friend) → the import path refuses it without a
+      matching license. This anti-sharing gate is by design; do not try
+      to work around it.
+    - License expiry gates NEW downloads only — already-installed
+      content keeps working.
+tags: [mur, official, catalog, builtin]
+triggers:
+  - type: keyword
+    pattern: "(mur official|official (catalog|agent|fleet)|官方(目錄|代理|agent|fleet)|安裝官方)"
+  - type: manual
+priority: normal
