@@ -1,0 +1,50 @@
+name: Tag release
+
+# When a version bump lands on main, tag it and kick off release.yml.
+#
+# Why the explicit dispatch: tags pushed with GITHUB_TOKEN deliberately do
+# NOT fire `on: push: tags` workflows (GitHub's recursion guard). The guard
+# has two documented exceptions — workflow_dispatch and repository_dispatch —
+# so this workflow creates the tag (no event fires) and then dispatches
+# release.yml at the tag ref itself. Inside that run `$GITHUB_REF_NAME` is
+# the tag name, exactly as under a human `git push origin vX.Y.Z`, so
+# release.yml needs no changes beyond carrying the workflow_dispatch trigger.
+#
+# The manual path still works: a human-pushed tag fires release.yml directly
+# via the push event, and the guard below sees the tag already exists and
+# does nothing — the two paths cannot double-fire.
+
+on:
+  push:
+    branches: [main]
+    paths: ['Cargo.toml']
+
+# Serialize back-to-back bumps so two runs never race on tag creation.
+concurrency: tag-release
+
+permissions:
+  contents: write # push the tag
+  actions: write # dispatch release.yml
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Tag and dispatch release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          # Not every Cargo.toml touch is a bump (dependency edits land here
+          # too). An already-tagged version means nothing to do.
+          if git ls-remote --exit-code --tags origin "$v" >/dev/null 2>&1; then
+            echo "$v already tagged — nothing to do"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$v" -m "$v"
+          git push origin "$v"
+          gh workflow run release.yml --ref "$v"
+          echo "tagged $v and dispatched release.yml"
