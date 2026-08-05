@@ -135,30 +135,23 @@ fn write_to_inbox(signals: &[Signal]) -> (usize, usize) {
     let mut accepted = 0usize;
     let mut deduplicated = 0usize;
     for signal in signals {
-        let dest = inbox_path_for(signal);
+        // Wire provenance: the batch arrived bearer-authed, so drop it into
+        // the inbox's wire/ subdirectory — apply_all exempts that dir from
+        // MUR_SIGNAL_REQUIRE_SIG (frozen wire v1 signals are unsigned).
+        let dest = inbox
+            .wire_dir()
+            .join(mur_core::sync::inbox::signal_file_name(signal));
         if dest.exists() {
             deduplicated += 1;
             continue;
         }
-        if let Err(e) = inbox.receive(signal) {
+        if let Err(e) = inbox.receive_wire(signal) {
             eprintln!("murmurd signal-server: inbox receive error: {e:#}");
         } else {
             accepted += 1;
         }
     }
     (accepted, deduplicated)
-}
-
-fn inbox_path_for(signal: &Signal) -> PathBuf {
-    let fname = format!(
-        "{}-{}.yaml",
-        signal.emitted_at.format("%Y-%m-%dT%H-%M-%S"),
-        signal.id
-    );
-    dirs::home_dir()
-        .unwrap_or_default()
-        .join(".mur/inbox")
-        .join(fname)
 }
 
 fn check_bearer(expected: &str, headers: &HeaderMap) -> bool {
