@@ -8,7 +8,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::store;
+use super::{labels, store};
 
 /// Delete a fleet: removes `~/.mur/fleets/<name>/` and the shared channel
 /// `fleet-<name>`. Member agents are left intact.
@@ -31,6 +31,14 @@ pub fn cmd_fleet_delete(mur_home: &Path, name: &str, yes: bool) -> Result<()> {
     let dir = store::fleet_dir(mur_home, name);
     if dir.exists() {
         std::fs::remove_dir_all(&dir)?;
+    }
+
+    // Only now, with the directory gone, does prune see this fleet as absent
+    // and drop its label assignments. Never fail an already-completed delete
+    // over it: the worst case is one orphan entry, which the rail already
+    // tolerates (an unknown primary falls back to Ungrouped).
+    if let Err(e) = labels::prune(mur_home) {
+        tracing::warn!("label prune after deleting fleet '{name}' failed (ignored): {e}");
     }
 
     println!(
@@ -75,6 +83,33 @@ mod tests {
         assert!(
             svc.store().load_manifest("fleet-dev").is_err(),
             "channel must be gone"
+        );
+    }
+
+    #[test]
+    fn delete_prunes_the_fleets_label_assignments() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        for f in ["dev", "keep"] {
+            create::cmd_fleet_create(home, f, vec!["pm".into()], None, Some("g".into()), None)
+                .unwrap();
+        }
+        labels::create_label(home, "web", "Web", None).unwrap();
+        labels::set_labels(home, "dev", vec!["web".into()]).unwrap();
+        labels::set_labels(home, "keep", vec!["web".into()]).unwrap();
+
+        cmd_fleet_delete(home, "dev", true).unwrap();
+
+        let reg = labels::load(home);
+        assert_eq!(reg.primary_of("dev"), None, "dead fleet must be forgotten");
+        assert_eq!(
+            reg.primary_of("keep"),
+            Some("web"),
+            "surviving fleet keeps its label"
+        );
+        assert!(
+            reg.get("web").is_some(),
+            "the label itself outlives the fleet"
         );
     }
 
