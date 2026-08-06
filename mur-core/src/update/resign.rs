@@ -30,20 +30,35 @@ pub const SIGN_TARGETS: &[&str] = &[
 /// archive, when it shipped one — the authoritative source for refreshing the
 /// launchd copy (installed siblings can lag the self-update).
 ///
-/// Only the re-signing is macOS-specific. The checklist and the restart leg
-/// apply everywhere: an upgrade changes every binary's hash on any platform,
-/// which stales the running agents and their SHA-pinned MCP servers alike.
+/// Only the re-signing is macOS-specific. The checklist and the restart legs
+/// (agents + daemon) apply everywhere: an upgrade changes every binary's hash
+/// on any platform, which stales every long-lived process running the old one.
 #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
 pub fn post_upgrade(restart_agents: bool, fresh_runtime: Option<&std::path::Path>) -> Result<()> {
     #[cfg(target_os = "macos")]
     macos::resign_installed_binaries(fresh_runtime)?;
 
-    print_checklist();
+    let daemon_running = crate::cmd::murmurd::murmurd_running();
+    print_checklist(restart_agents, daemon_running);
 
-    if restart_agents {
-        crate::cmd::agent::restart_stale_excluding(&restart_exclusions())?;
+    let agents_result = if restart_agents {
+        crate::cmd::agent::restart_stale_excluding(&restart_exclusions())
+    } else {
+        Ok(())
+    };
+    // The daemon is a long-lived process like any agent: without a restart it
+    // keeps executing pre-upgrade code indefinitely. Runs even when the agent
+    // leg failed — a half-finished deploy should not also strand the daemon
+    // on the old binary. Best-effort: a daemon that will not come back must
+    // not turn a completed binary upgrade into an error.
+    if restart_agents && daemon_running {
+        println!("restarting murmurd onto the upgraded binary…");
+        if let Err(e) = crate::cmd::murmurd::cmd_murmurd_restart() {
+            eprintln!("warning: murmurd restart failed: {e:#} — run `mur daemon restart` manually");
+        }
     }
-    Ok(())
+    crate::update::warn_stale_compress_writers();
+    agents_result
 }
 
 fn load_config() -> mur_common::config::Config {
@@ -55,13 +70,23 @@ fn restart_exclusions() -> Vec<String> {
     load_config().update.restart_exclude
 }
 
-fn print_checklist() {
+/// Printed only when `--restart-agents` was NOT passed — with it, both legs
+/// run automatically and a checklist would just narrate them. The old advice
+/// to re-pin MCP servers after an upgrade is gone on purpose: the bundled
+/// server re-pins itself at agent start (`mur-agent-runtime/src/mcp_repin.rs`,
+/// #793) and third-party pins cover binaries an upgrade never touches.
+fn print_checklist(restart_agents: bool, daemon_running: bool) {
+    if restart_agents {
+        return;
+    }
     println!();
     println!("To finish the deploy:");
     println!("  1. Restart agents still running the old binary:");
     println!("       mur agent restart --stale        (or rerun with --restart-agents)");
-    println!("  2. Upgraded binaries have new hashes — refresh MCP pins per agent:");
-    println!("       mur agent mcp pin <agent> <server>");
+    if daemon_running {
+        println!("  2. Move the running daemon onto the new binary:");
+        println!("       mur daemon restart");
+    }
 }
 
 /// Identity precedence: config beats env; empty strings count as unset.

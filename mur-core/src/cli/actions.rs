@@ -84,6 +84,9 @@ pub enum DaemonAction {
     },
     /// Stop the murmurd daemon
     Stop,
+    /// Restart the murmurd daemon (stop, wait for the old pid to exit, start
+    /// detached) — the way to move a running daemon onto an upgraded binary
+    Restart,
     /// Show murmurd daemon status
     Status,
     /// Start the local API server for the web dashboard
@@ -115,6 +118,8 @@ pub enum MurmurdAction {
     },
     /// Stop the murmurd daemon
     Stop,
+    /// Restart the murmurd daemon (stop, wait, start detached)
+    Restart,
     /// Show murmurd daemon status
     Status,
 }
