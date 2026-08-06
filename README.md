@@ -127,7 +127,8 @@ brew install mur-run/tap/mur
 # From source
 cargo install mur-core        # installs the `mur` binary
 
-# Later: upgrade in place, and restart agents onto the new binary
+# Later: upgrade in place — agents AND the daemon restart onto the new
+# binary, each verified and reported in a per-agent summary table
 mur update --restart-agents
 ```
 
@@ -329,6 +330,11 @@ anything is applied; the review lane labels each proposal `✓ signed`.
 
 ### 💬 Be everywhere you are
 
+- **Live fleet progress in the terminal** — when an agent kicks off a fleet
+  from chat, `murmur` automatically arms a per-member status rail and streams
+  milestone lines (delegations with their sub-goal, member-written completion
+  summaries with elapsed time, run outcomes, approval gates) into the
+  transcript as they land in the fleet's signed channel.
 - **MUR Hub** — multi-conversation rail across the fleet, streaming replies,
   human-in-the-loop tool approvals, dashboards, and drag-out **desktop pets**
   with expressions and speech bubbles.
@@ -488,7 +494,7 @@ mur
 ├── model        add · list · show · remove · migrate
 ├── source       external knowledge — Obsidian · Notion · Joplin
 ├── project      index · search   (semantic code search)
-├── daemon       start · stop · status · serve · sleep
+├── daemon       start · stop · restart · status · serve · sleep
 ├── auth         login · logout
 ├── team         shared skills (private registries)
 ├── push / fetch signal outbox / inbox ↔ server
