@@ -114,6 +114,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             match action {
                 MurmurdAction::Start { detach } => cmd::murmurd::cmd_murmurd_start(detach)?,
                 MurmurdAction::Stop => cmd::murmurd::cmd_murmurd_stop()?,
+                MurmurdAction::Restart => cmd::murmurd::cmd_murmurd_restart()?,
                 MurmurdAction::Status => cmd::murmurd::cmd_murmurd_status()?,
             }
         }
@@ -1482,6 +1483,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Daemon { action } => match action {
             DaemonAction::Start { detach } => cmd::murmurd::cmd_murmurd_start(detach)?,
             DaemonAction::Stop => cmd::murmurd::cmd_murmurd_stop()?,
+            DaemonAction::Restart => cmd::murmurd::cmd_murmurd_restart()?,
             DaemonAction::Status => cmd::murmurd::cmd_murmurd_status()?,
             DaemonAction::Serve {
                 port,
