@@ -26,6 +26,11 @@ const RESTART_KILL_GRACE_SECS: u64 = 5;
 /// false-warns "did not respawn" on a restart that actually succeeded.
 const RESTART_RESPAWN_WAIT_SECS: u64 = 120;
 
+/// Second, shorter window after the active retry (service kick / re-spawn).
+/// The first window already absorbed the service manager's worst-case respawn
+/// latency; this one only needs to cover a fresh start.
+const RESTART_RETRY_WAIT_SECS: u64 = 30;
+
 /// Compute the total seconds to wait before firing the SIGKILL fallback.
 ///
 /// Pure helper so the math can be unit-tested independently of live processes.
@@ -129,6 +134,48 @@ pub(crate) fn select_targets_with_on_disk(
     Ok(targets)
 }
 
+/// One agent's restart outcome, for the end-of-run summary.
+struct RestartReport {
+    ok: bool,
+    detail: String,
+}
+
+/// Restart every agent in `targets`, then print a final verdict table. This
+/// is the accountability step: fire-and-forget restarts are exactly how a
+/// stopped concierge went unnoticed in the field. Errors and unconfirmed
+/// agents both fail the run — after the table, so the user sees the whole
+/// picture, not the first casualty.
+fn run_restarts(targets: &[String], agents_dir: &Path, on_disk: &str) -> Result<()> {
+    let mut reports: Vec<(String, RestartReport)> = Vec::new();
+    for agent_name in targets {
+        let report = match restart_one(agent_name, agents_dir, on_disk) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("error restarting '{agent_name}': {e:#}");
+                RestartReport {
+                    ok: false,
+                    detail: format!("'{agent_name}' restart errored: {e:#}"),
+                }
+            }
+        };
+        reports.push((agent_name.clone(), report));
+    }
+    let failed = reports.iter().filter(|(_, r)| !r.ok).count();
+    println!();
+    println!(
+        "restart summary — {}/{} confirmed running:",
+        reports.len() - failed,
+        reports.len()
+    );
+    for (_, r) in &reports {
+        println!("  {} {}", if r.ok { "✓" } else { "✗" }, r.detail);
+    }
+    if failed > 0 {
+        bail!("{failed} agent(s) not confirmed running — see the summary above");
+    }
+    Ok(())
+}
+
 /// Restart every STALE agent except the excluded names — the
 /// `mur update --restart-agents` entry point. Exclusions come from
 /// `update.restart_exclude` in `~/.mur/config.yaml` and are honored even when
@@ -155,17 +202,7 @@ pub fn restart_stale_excluding(exclude: &[String]) -> Result<()> {
     }
 
     let on_disk = stale::on_disk_sha();
-    let mut any_err = false;
-    for agent_name in &targets {
-        if let Err(e) = restart_one(agent_name, &agents_dir, &on_disk) {
-            eprintln!("error restarting '{agent_name}': {e}");
-            any_err = true;
-        }
-    }
-    if any_err {
-        bail!("one or more agents failed to restart");
-    }
-    Ok(())
+    run_restarts(&targets, &agents_dir, &on_disk)
 }
 
 /// Gracefully restart one or more agents.
@@ -207,23 +244,13 @@ pub fn cmd_restart(names: &[String], all: bool, stale: bool, dry_run: bool) -> R
     }
 
     let on_disk = stale::on_disk_sha();
-    let mut any_err = false;
-
-    for agent_name in &targets {
-        if let Err(e) = restart_one(agent_name, &agents_dir, &on_disk) {
-            eprintln!("error restarting '{agent_name}': {e}");
-            any_err = true;
-        }
-    }
-
-    if any_err {
-        bail!("one or more agents failed to restart");
-    }
-    Ok(())
+    run_restarts(&targets, &agents_dir, &on_disk)
 }
 
-/// Restart a single agent: SIGTERM, wait for exit, poll for fresh lock.
-fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<()> {
+/// Restart a single agent: SIGTERM, wait for exit, respawn, verify the fresh
+/// lock. `ok: false` means the agent was NOT confirmed running — never a
+/// silent note.
+fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<RestartReport> {
     let agent_home = agents_dir.join(name);
     let lock_path = agent_home.join("running.lock");
 
@@ -286,59 +313,37 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<()> {
     // (shared with the service-managed path) has a fresh process to find.
     if !has_service {
         println!("agent '{name}' has no service installed; respawning runtime directly");
-        let target = resolve_runtime_target();
-        let mur_home = resolve_mur_home()?;
-        let stderr_log = agent_home.join("stderr.log");
-        let stdout_file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&stderr_log)
-            .map_err(|e| {
-                anyhow::anyhow!("open {} for respawn stdout: {e}", stderr_log.display())
-            })?;
-        let stderr_file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&stderr_log)
-            .map_err(|e| {
-                anyhow::anyhow!("open {} for respawn stderr: {e}", stderr_log.display())
-            })?;
-        Command::new(&target)
-            .arg("--profile")
-            .arg(name)
-            .env("MUR_HOME", &mur_home)
-            .stdin(Stdio::null())
-            .stdout(stdout_file)
-            .stderr(stderr_file)
-            .spawn()
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to respawn runtime for '{name}' at {}: {e}",
-                    target.display()
-                )
-            })?;
+        direct_respawn(name, &agent_home)?;
     }
 
     // ── Poll for fresh running.lock with a different pid ──────────────
     // launchd KeepAlive=true respawns on process exit; we wait up to
     // RESTART_RESPAWN_WAIT_SECS for the new lock to appear.
-    let respawn_deadline =
-        std::time::Instant::now() + std::time::Duration::from_secs(RESTART_RESPAWN_WAIT_SECS);
-    let new_pid = loop {
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        if std::time::Instant::now() >= respawn_deadline {
-            break None;
-        }
-        if let Ok(Some(new_lock)) = read_lock(&lock_path)
-            && new_lock.pid != old_pid
-        {
-            break Some((new_lock.pid, new_lock.build_sha));
-        }
-    };
+    let mut new_pid = poll_new_lock(&lock_path, old_pid, RESTART_RESPAWN_WAIT_SECS);
 
-    match new_pid {
+    // ── Active retry ──────────────────────────────────────────────────
+    // The passive wait can fail two ways seen in the field: a service
+    // manager still tracking a ZOMBIE instance under a pid that was never
+    // the lock's (so from its side the job is "running" and KeepAlive never
+    // fires), and a direct respawn that died at boot (its stderr is in the
+    // agent's stderr.log). A service kick kills whatever instance the
+    // manager tracks and restarts from the unit; a serviceless agent just
+    // gets one more spawn. One retry, then a shorter window.
+    if new_pid.is_none() {
+        if has_service {
+            if kickstart_service(name) {
+                println!("agent '{name}': no respawn seen; kicked the service unit");
+            }
+        } else {
+            println!("agent '{name}': no respawn seen; retrying direct respawn");
+            direct_respawn(name, &agent_home)?;
+        }
+        new_pid = poll_new_lock(&lock_path, old_pid, RESTART_RETRY_WAIT_SECS);
+    }
+
+    Ok(match new_pid {
         Some((_pid, new_sha)) => {
-            println!(
+            let line = format!(
                 "agent '{name}' restarted ({} → {})",
                 short8(&old_sha),
                 short8(if new_sha.is_empty() {
@@ -347,17 +352,109 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<()> {
                     &new_sha
                 }),
             );
+            println!("{line}");
+            RestartReport {
+                ok: true,
+                detail: line,
+            }
         }
         None => {
-            eprintln!(
-                "note: '{name}' was stopped; its respawn was not seen within {RESTART_RESPAWN_WAIT_SECS} s — \
-                 launchd may still be bringing it up. Check 'mur agent runtime-doctor' shortly; \
-                 if it stays down, confirm launchd KeepAlive is enabled."
+            let line = format!(
+                "'{name}' not confirmed running within {}s — check `mur agent status {name}` and its stderr.log",
+                RESTART_RESPAWN_WAIT_SECS + RESTART_RETRY_WAIT_SECS
             );
+            eprintln!("✗ {line}");
+            RestartReport {
+                ok: false,
+                detail: line,
+            }
+        }
+    })
+}
+
+/// Spawn the runtime directly (detached) for an agent with no service unit.
+fn direct_respawn(name: &str, agent_home: &Path) -> Result<()> {
+    let target = resolve_runtime_target();
+    let mur_home = resolve_mur_home()?;
+    let stderr_log = agent_home.join("stderr.log");
+    let stdout_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&stderr_log)
+        .map_err(|e| anyhow::anyhow!("open {} for respawn stdout: {e}", stderr_log.display()))?;
+    let stderr_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&stderr_log)
+        .map_err(|e| anyhow::anyhow!("open {} for respawn stderr: {e}", stderr_log.display()))?;
+    Command::new(&target)
+        .arg("--profile")
+        .arg(name)
+        .env("MUR_HOME", &mur_home)
+        .stdin(Stdio::null())
+        .stdout(stdout_file)
+        .stderr(stderr_file)
+        .spawn()
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "failed to respawn runtime for '{name}' at {}: {e}",
+                target.display()
+            )
+        })?;
+    Ok(())
+}
+
+/// Wait up to `secs` for `lock_path` to hold a pid different from `old_pid`.
+fn poll_new_lock(lock_path: &Path, old_pid: u32, secs: u64) -> Option<(u32, String)> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        if let Ok(Some(new_lock)) = read_lock(lock_path)
+            && new_lock.pid != old_pid
+        {
+            return Some((new_lock.pid, new_lock.build_sha));
         }
     }
+}
 
-    Ok(())
+/// Actively (re)start the agent's service unit, killing whatever instance the
+/// service manager currently tracks — including a zombie whose pid never
+/// matched the lock's. Returns false when there is no service manager, the
+/// unit isn't loaded, or the command failed; callers treat that as "nothing
+/// kicked" and let the poll decide.
+#[cfg(target_os = "macos")]
+fn kickstart_service(name: &str) -> bool {
+    let uid = unsafe { libc::getuid() };
+    Command::new("launchctl")
+        .args([
+            "kickstart",
+            "-k",
+            &format!("gui/{uid}/run.mur.agent.{name}"),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn kickstart_service(name: &str) -> bool {
+    Command::new("systemctl")
+        .args(["--user", "restart", &format!("mur-agent-{name}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn kickstart_service(_name: &str) -> bool {
+    false
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────

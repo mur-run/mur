@@ -57,18 +57,23 @@ pub fn cmd_murmurd_stop() -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_murmurd_start(detach: bool) -> Result<()> {
+/// The murmurd binary this `mur` would launch: a sibling of the current exe.
+fn murmurd_binary() -> Result<std::path::PathBuf> {
     let murmurd = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("murmurd")))
         .unwrap_or_else(|| std::path::PathBuf::from("murmurd"));
-
     if !murmurd.exists() {
         anyhow::bail!(
             "murmurd binary not found at {}. Build with: cargo build -p mur-daemon",
             murmurd.display()
         );
     }
+    Ok(murmurd)
+}
+
+pub fn cmd_murmurd_start(detach: bool) -> Result<()> {
+    let murmurd = murmurd_binary()?;
 
     let mut cmd = std::process::Command::new(&murmurd);
     if detach {
@@ -83,4 +88,73 @@ pub fn cmd_murmurd_start(detach: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// How long `restart` waits for the old daemon to exit before SIGKILL. The
+/// daemon's shutdown is quick (drop sockets, flush lock); this only guards a
+/// wedged process.
+const MURMURD_STOP_WAIT_SECS: u64 = 15;
+
+fn murmurd_lock_path() -> Result<std::path::PathBuf> {
+    Ok(dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("no home dir"))?
+        .join(".mur")
+        .join("murmurd.lock"))
+}
+
+/// Whether a murmurd instance is currently alive (lock exists AND its pid is).
+pub fn murmurd_running() -> bool {
+    let Ok(path) = murmurd_lock_path() else {
+        return false;
+    };
+    let Ok(s) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(&s)
+        .ok()
+        .and_then(|v| v.get("pid").and_then(|p| p.as_u64()))
+        .is_some_and(|pid| mur_common::lock_file::pid_alive(pid as u32))
+}
+
+/// `mur daemon restart` — stop the running daemon, WAIT for its pid to
+/// actually exit (plain `stop` returns the moment SIGTERM is sent, and a
+/// back-to-back start would race the dying process for the lock), then start
+/// a fresh one detached. The way a running daemon moves onto an upgraded
+/// binary — without this, murmurd keeps executing pre-upgrade code
+/// indefinitely.
+pub fn cmd_murmurd_restart() -> Result<()> {
+    // Resolve the replacement binary FIRST: stop-then-fail-to-start leaves
+    // the daemon down, which a smoke run demonstrated the hard way.
+    murmurd_binary()?;
+    let lock_path = murmurd_lock_path()?;
+    if let Ok(s) = std::fs::read_to_string(&lock_path) {
+        if let Some(pid) = serde_json::from_str::<serde_json::Value>(&s)
+            .ok()
+            .and_then(|v| v.get("pid").and_then(|p| p.as_u64()))
+        {
+            let pid = pid as u32;
+            if mur_common::lock_file::pid_alive(pid) {
+                #[cfg(unix)]
+                unsafe {
+                    libc::kill(pid as libc::pid_t, libc::SIGTERM);
+                }
+                let deadline = std::time::Instant::now()
+                    + std::time::Duration::from_secs(MURMURD_STOP_WAIT_SECS);
+                while std::time::Instant::now() < deadline && mur_common::lock_file::pid_alive(pid)
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                if mur_common::lock_file::pid_alive(pid) {
+                    #[cfg(unix)]
+                    unsafe {
+                        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                println!("murmurd stopped (pid {pid})");
+            }
+        }
+        let _ = std::fs::remove_file(&lock_path);
+    }
+    cmd_murmurd_start(true)
 }

@@ -178,9 +178,64 @@ fn stale_hub_nudge_from(host_path_contents: &str, cli_version: &str) -> Option<S
     }
 }
 
+/// Best-effort, after an upgrade: name the mur-compress writer versions that
+/// were active in the last two days yet are older than this CLI. Those are
+/// long-lived processes outside `mur update`'s reach — the model gateway is
+/// the usual culprit — still executing pre-upgrade crates. One line, informed
+/// by the shared stats ledger; any read/parse problem stays silent.
+pub(crate) fn warn_stale_compress_writers() {
+    let home = crate::paths::mur_root(None);
+    let Ok(s) = std::fs::read_to_string(home.join("compress").join("stats.json")) else {
+        return;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) else {
+        return;
+    };
+    let today = chrono::Local::now().date_naive();
+    let days = [
+        today.to_string(),
+        today.pred_opt().map(|d| d.to_string()).unwrap_or_default(),
+    ];
+    let stale = stale_writer_versions(&v, &days, env!("CARGO_PKG_VERSION"));
+    if !stale.is_empty() {
+        println!(
+            "ℹ mur-compress writers on older crates were active recently: {} — \
+             a long-lived service outside this update (e.g. mur-model-gateway) \
+             is still on old code; rebuild/restart it to pick up current behavior.",
+            stale.join(", ")
+        );
+    }
+}
+
+/// Pure core of [`warn_stale_compress_writers`]: versions from the stats
+/// ledger's `buckets[version][date]` slices that recorded compressions on any
+/// of `days` and are strictly older than `current`.
+fn stale_writer_versions(stats: &serde_json::Value, days: &[String], current: &str) -> Vec<String> {
+    let Some(buckets) = stats.get("buckets").and_then(|b| b.as_object()) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = buckets
+        .iter()
+        .filter(|(ver, _)| release::is_newer(ver, current).ok() == Some(true))
+        .filter(|(_, per_day)| {
+            days.iter().any(|d| {
+                per_day
+                    .get(d)
+                    .and_then(|s| s.get("compressions"))
+                    .and_then(|c| c.as_u64())
+                    .unwrap_or(0)
+                    > 0
+            })
+        })
+        .map(|(ver, _)| ver.clone())
+        .collect();
+    out.sort();
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::stale_hub_nudge_from;
+    use super::{stale_hub_nudge_from, stale_writer_versions};
 
     const HOST_PATH: &str = "/Applications/MUR Hub.app/Contents/MacOS/mur-hub-gui\n2.26.0";
 
@@ -200,5 +255,33 @@ mod tests {
         assert!(stale_hub_nudge_from("/only/a/path", "2.27.0").is_none());
         assert!(stale_hub_nudge_from("/path\n   ", "2.27.0").is_none());
         assert!(stale_hub_nudge_from("", "2.27.0").is_none());
+    }
+
+    /// The field shape: an old gateway bucket active today, current-version
+    /// buckets active too, and a dormant ancient bucket that must stay out.
+    #[test]
+    fn stale_writer_versions_names_active_old_buckets_only() {
+        let stats = serde_json::json!({
+            "buckets": {
+                "2.61.0": { "2026-08-05": { "compressions": 1500 } },
+                "2.66.0": { "2026-08-05": { "compressions": 40 } },
+                "2.40.1": { "2026-07-01": { "compressions": 9999 } },
+                "not-a-version": { "2026-08-05": { "compressions": 5 } }
+            }
+        });
+        let days = ["2026-08-05".to_string(), "2026-08-04".to_string()];
+        assert_eq!(
+            stale_writer_versions(&stats, &days, "2.66.0"),
+            vec!["2.61.0".to_string()],
+        );
+    }
+
+    #[test]
+    fn stale_writer_versions_silent_on_missing_buckets() {
+        let days = ["2026-08-05".to_string()];
+        assert!(stale_writer_versions(&serde_json::json!({}), &days, "2.66.0").is_empty());
+        assert!(
+            stale_writer_versions(&serde_json::json!({"buckets": 3}), &days, "2.66.0").is_empty()
+        );
     }
 }
