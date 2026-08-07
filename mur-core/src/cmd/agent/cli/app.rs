@@ -330,6 +330,11 @@ pub struct App {
     /// approval row shown there) rather than left unattached. Drives whether
     /// the centered modal is also needed — see `mark_card_awaiting`.
     pub hitl_inline_shown: bool,
+    /// When the last HITL decision was resolved, for swallowing a stale
+    /// decision key: if a gate auto-resolves (read lane / /auto) just as the
+    /// operator presses `y`, that keystroke would otherwise land in the
+    /// composer as text.
+    pub hitl_resolved_at: Option<std::time::Instant>,
     pub session: Session,
     /// Cached live-channel id + state for status bar. Refreshed after each
     /// persisted turn on resume/switch. `None` until first append.
@@ -520,6 +525,7 @@ impl App {
             streaming: false,
             hitl: None,
             hitl_inline_shown: false,
+            hitl_resolved_at: None,
             session,
             channel: None,
             scroll_back: 0,

@@ -1051,13 +1051,14 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         // Surface the auto-deny clock: the gate expires approvals after
         // DEFAULT_TIMEOUT (300s). Reuse `created_at` rather than tracking new
         // state; the status bar redraws on each blink deadline so it ticks.
+        // The tool name goes here so the operator always knows WHAT they are
+        // being asked to approve at any width; the decision keys live in the
+        // framed modal / inline row, which is where the user is looking.
         let remaining = crate::hitl::gate::DEFAULT_TIMEOUT
             .as_secs()
             .saturating_sub(req.created_at.elapsed().as_secs());
         (
-            format!(
-                "tool approval needed (auto-deny in {remaining}s) — [y] approve · [a] always (session) · [A] all (session) · [n] deny"
-            ),
+            format!("⏳ approve {} · auto-deny in {remaining}s", req.tool_name),
             Color::Yellow,
         )
     } else if app.streaming {
@@ -1242,6 +1243,13 @@ fn render_hitl(f: &mut Frame, hitl: &super::stream::HitlRequest) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" always allow this tool (session)    "),
+        Span::styled(
+            "[A]",
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" allow all tools (session)    "),
         Span::styled(
             "[n]",
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),

@@ -811,6 +811,20 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                 }
                 return;
             }
+            // Stale-decision swallow: a gate that auto-resolves (read lane,
+            // /auto, session allow) the moment the operator presses a decision
+            // key would otherwise send that keystroke into the composer as
+            // text. For a short window after any resolution, eat one more
+            // decision key so the composer stays clean.
+            if let Some(t) = app.hitl_resolved_at
+                && t.elapsed() < std::time::Duration::from_millis(800)
+                && matches!(
+                    key.code,
+                    KeyCode::Char('y' | 'Y' | 'a' | 'A' | 'n' | 'N') | KeyCode::Esc
+                )
+            {
+                return;
+            }
             if key.code != KeyCode::Esc {
                 app.last_esc_at = None;
                 app.esc_hint = false;
@@ -1276,6 +1290,7 @@ fn decide_hitl(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: bool) {
 
 fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: bool, auto: bool) {
     if let Some(req) = app.hitl.take() {
+        app.hitl_resolved_at = Some(std::time::Instant::now());
         if let Some(sid) = &req.step_id {
             app.clear_card_awaiting(sid);
         }
@@ -1748,14 +1763,27 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
                 .is_some_and(|sid| app.mark_card_awaiting(&sid));
             // Session auto-approval: `/auto`/`--auto` covers every tool; the
             // modal's [a] key covers a single tool name.
-            // Read lane: `--auto-reads` auto-approves read-only bash commands.
-            let read_auto = app.auto_reads
-                && req.tool_name == "bash"
-                && req
-                    .tool_input
-                    .get("command")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(bash_class::is_readonly_bash);
+            // Read lane: `--auto-reads` auto-approves read-only tools.
+            // `read_file` is read-only by construction (a dedicated read
+            // tool, sandbox-enforced); bash needs a provably read-only
+            // command. Reads never ask, mirroring Claude Code — the gate
+            // that used to hit every read_file bought zero safety: an
+            // approved `bash cat` could read the same files anyway, so the
+            // prompt was friction that trained blind approval.
+            let read_auto = if app.auto_reads {
+                if req.tool_name == "read_file" {
+                    true
+                } else {
+                    req.tool_name == "bash"
+                        && req
+                            .tool_input
+                            .get("command")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(bash_class::is_readonly_bash)
+                }
+            } else {
+                false
+            };
             let auto =
                 app.auto_approve || app.session_tool_allow.contains(&req.tool_name) || read_auto;
             if !app.focused && !auto {
