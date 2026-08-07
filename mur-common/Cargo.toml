@@ -25,6 +25,7 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 shell-escape = "0.1"
 dirs = "6"
+sys-locale = "0.3"  # OS locale for profile defaults (same version as mur-agent-runtime)
 libc = "0.2"
 regex-lite = "0.1"
 ed25519-dalek = { version = "2", features = ["rand_core", "pkcs8", "pem"] }

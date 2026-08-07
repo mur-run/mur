@@ -6437,6 +6437,7 @@ dependencies = [
  "shell-words",
  "shellexpand",
  "subtle",
+ "sys-locale",
  "tar",
  "tempfile",
  "thiserror 2.0.18",
