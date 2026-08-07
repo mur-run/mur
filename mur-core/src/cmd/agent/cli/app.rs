@@ -326,6 +326,10 @@ pub struct App {
     pub turn_produced_output: bool,
     pub streaming: bool,
     pub hitl: Option<HitlRequest>,
+    /// True when the current `hitl` was attached to a step card (inline
+    /// approval row shown there) rather than left unattached. Drives whether
+    /// the centered modal is also needed — see `mark_card_awaiting`.
+    pub hitl_inline_shown: bool,
     pub session: Session,
     /// Cached live-channel id + state for status bar. Refreshed after each
     /// persisted turn on resume/switch. `None` until first append.
@@ -515,6 +519,7 @@ impl App {
             turn_produced_output: false,
             streaming: false,
             hitl: None,
+            hitl_inline_shown: false,
             session,
             channel: None,
             scroll_back: 0,
@@ -940,7 +945,10 @@ impl App {
     }
 
     /// Flag the card with this `step_id` as awaiting a HITL decision.
-    pub fn mark_card_awaiting(&mut self, step_id: &str) {
+    /// Returns whether a matching card was actually found: the approval
+    /// gate fires before the step card exists in the common case, so the
+    /// caller must not assume a `step_id` implies the inline row is shown.
+    pub fn mark_card_awaiting(&mut self, step_id: &str) -> bool {
         if let Some(card) = self
             .messages
             .iter_mut()
@@ -948,6 +956,9 @@ impl App {
             .find_map(|m| m.step.as_mut().filter(|c| c.id == step_id))
         {
             card.awaiting_hitl = true;
+            true
+        } else {
+            false
         }
     }
 
@@ -1982,6 +1993,25 @@ mod awaiting_tests {
         a.clear_card_awaiting("s1");
         let card = a.messages.iter().find_map(|m| m.step.as_ref()).unwrap();
         assert!(!card.awaiting_hitl);
+    }
+
+    #[test]
+    fn mark_card_awaiting_reports_whether_it_found_a_card() {
+        let mut a = App::test_fixture();
+        a.begin_user_turn("edit it");
+        a.push_step_started(
+            "s1".into(),
+            "edit".into(),
+            serde_json::json!({"file_path":"a.rs"}),
+        );
+        a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5);
+
+        // No card exists for this step_id: the caller must be told so it can
+        // fall back to the modal instead of assuming inline approval worked.
+        assert!(!a.mark_card_awaiting("no-such-step"));
+
+        // A card exists for "s1": attachment succeeds and is reported.
+        assert!(a.mark_card_awaiting("s1"));
     }
 }
 

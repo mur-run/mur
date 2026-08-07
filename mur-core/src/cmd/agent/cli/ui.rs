@@ -77,10 +77,16 @@ pub fn render(f: &mut Frame, app: &mut App) {
     f.render_widget(&app.input, chunks[3]);
     render_status(f, app, chunks[4]);
 
-    // Inline approval lives on the card (Task 4) when the runtime sent a
-    // step_id. Fall back to the centered modal only for older runtimes.
+    // The centered modal is the fallback whenever the approval was NOT
+    // attached to a step card's inline row. We key this on actual
+    // attachment (`hitl_inline_shown`), not on whether the runtime sent a
+    // step_id: the approval gate commonly fires before the step card
+    // exists, so `mark_card_awaiting` silently finds nothing even though
+    // step_id is Some — gating on step_id alone left the operator with
+    // neither the modal nor the inline row. Do not revert to a
+    // step_id.is_none() check.
     if let Some(hitl) = &app.hitl
-        && hitl.step_id.is_none()
+        && !app.hitl_inline_shown
     {
         render_hitl(f, hitl);
     }
