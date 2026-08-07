@@ -5,7 +5,7 @@ use mur_common::agent::FilesystemEntitlement;
 
 use crate::llm::ToolDef;
 use crate::tools::fs_policy::{SessionCwd, check_write_entitlement};
-use crate::tools::{ToolError, ToolExecutor};
+use crate::tools::{ToolError, ToolExecutor, ToolOutput};
 
 pub struct EditFileTool {
     pub session_cwd: SessionCwd,
@@ -42,7 +42,7 @@ impl ToolExecutor for EditFileTool {
         }
     }
 
-    async fn execute(&self, input: serde_json::Value) -> Result<String, ToolError> {
+    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
         let raw = input["path"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("missing 'path' field".into()))?;
@@ -95,10 +95,7 @@ impl ToolExecutor for EditFileTool {
                 "write", &canonical, &base, &e,
             ))
         })?;
-        Ok(format!(
-            "replaced {found} occurrence(s) in {}",
-            canonical.display()
-        ))
+        Ok(format!("replaced {found} occurrence(s) in {}", canonical.display()).into())
     }
 }
 
@@ -177,7 +174,7 @@ mod tests {
             .execute(serde_json::json!({"path": "f.txt", "old_string": "X", "new_string": "Y", "expected_count": 2}))
             .await
             .unwrap();
-        assert!(r.contains("replaced 2"));
+        assert!(r.text.contains("replaced 2"));
         assert_eq!(
             std::fs::read_to_string(td.path().join("f.txt")).unwrap(),
             "Y and Y"

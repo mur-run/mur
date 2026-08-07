@@ -82,6 +82,8 @@ pub struct ToolResultEntry {
     pub call_id: String,
     pub content: String,
     pub is_error: bool,
+    #[serde(default)]
+    pub status: crate::tools::ToolStatus,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

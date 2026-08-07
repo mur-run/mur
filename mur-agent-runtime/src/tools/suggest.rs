@@ -3,7 +3,7 @@
 //! streamed tool-call args (`StepStarted`); the executor itself does nothing and
 //! returns a bare acknowledgement so the model can finish its turn.
 
-use super::{ToolError, ToolExecutor};
+use super::{ToolError, ToolExecutor, ToolOutput};
 use crate::llm::ToolDef;
 
 /// Canonical tool name. Shared by the runtime gate and the TUI interceptor.
@@ -78,9 +78,9 @@ impl ToolExecutor for SuggestRepliesTool {
         }
     }
 
-    async fn execute(&self, _input: serde_json::Value) -> Result<String, ToolError> {
+    async fn execute(&self, _input: serde_json::Value) -> Result<ToolOutput, ToolError> {
         // No side effects: the replies reach the user via the streamed args.
-        Ok("ok".to_string())
+        Ok("ok".to_string().into())
     }
 }
 

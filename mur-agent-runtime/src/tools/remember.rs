@@ -15,7 +15,7 @@ use mur_common::skill::loader::is_valid_skill_name;
 use mur_common::skill::stats::SkillStats;
 use mur_common::skill::store::agent_skill_dir;
 
-use super::{ToolError, ToolExecutor};
+use super::{ToolError, ToolExecutor, ToolOutput};
 use crate::llm::ToolDef;
 
 pub const REMEMBER: &str = "remember";
@@ -96,7 +96,7 @@ impl ToolExecutor for RememberTool {
         }
     }
 
-    async fn execute(&self, input: serde_json::Value) -> Result<String, ToolError> {
+    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
         let get = |k: &str| -> Result<String, ToolError> {
             input
                 .get(k)
@@ -174,7 +174,8 @@ impl ToolExecutor for RememberTool {
             "remembered '{name}' (kind={kind:?}, state=Draft, agent-local; effective next \
              turn; queued for the user's `mur session out` review). Now tell the user in \
              ONE line, in their language, what you saved and that /forget {name} undoes it."
-        ))
+        )
+        .into())
     }
 }
 
@@ -225,7 +226,7 @@ mod tests {
             .execute(input("reply-in-zh-tw", "rule"))
             .await
             .unwrap();
-        assert!(out.contains("reply-in-zh-tw"));
+        assert!(out.text.contains("reply-in-zh-tw"));
 
         // Loadable through the standard loader, agent-local scope, Rule kind.
         let loaded = mur_common::skill::loader::load_all(home, "w1");

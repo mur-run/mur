@@ -3,7 +3,7 @@ use tokio::process::Command;
 
 use mur_common::agent_facts::{ExecRoutes, who_can_exec};
 
-use super::{ToolError, ToolExecutor};
+use super::{ToolError, ToolExecutor, ToolOutput, ToolStatus};
 use crate::exec_dirs;
 use crate::llm::ToolDef;
 
@@ -212,7 +212,7 @@ Commands are killed after `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {
         }
     }
 
-    async fn execute(&self, input: serde_json::Value) -> Result<String, ToolError> {
+    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
         let command = input["command"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("missing 'command' field".into()))?
@@ -286,6 +286,7 @@ Commands are killed after `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {
             }
             combined.push_str(&stderr);
         }
+        let mut status = ToolStatus::Ok;
         if !output.status.success() {
             let code = output.status.code().unwrap_or(-1);
             if !combined.is_empty() {
@@ -297,11 +298,18 @@ Commands are killed after `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {
             {
                 let cwd = working_dir.canonicalize().unwrap_or(working_dir.clone());
                 let routes = who_can_exec(mur_home, agent, &bin, Some(&cwd));
-                combined.push_str(&spawn_denied_hint(&bin, agent, &routes));
+                let hint = spawn_denied_hint(&bin, agent, &routes);
+                combined.push_str(&hint);
+                status = ToolStatus::Denied { detail: hint };
+            } else {
+                status = ToolStatus::Failed { exit_code: code };
             }
         }
 
-        Ok(combined)
+        Ok(ToolOutput {
+            text: combined,
+            status,
+        })
     }
 }
 
@@ -342,7 +350,7 @@ mod tests {
             .execute(serde_json::json!({"command": "echo hello"}))
             .await
             .unwrap();
-        assert!(out.contains("hello"), "got: {out}");
+        assert!(out.text.contains("hello"), "got: {}", out.text);
     }
 
     #[cfg(unix)]
@@ -353,7 +361,7 @@ mod tests {
             .execute(serde_json::json!({"command": "echo err >&2"}))
             .await
             .unwrap();
-        assert!(out.contains("err"), "got: {out}");
+        assert!(out.text.contains("err"), "got: {}", out.text);
     }
 
     #[tokio::test]
@@ -498,8 +506,9 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            out.contains("/opt/homebrew/bin"),
-            "spawned shell's PATH should include the standard dirs, got: {out}"
+            out.text.contains("/opt/homebrew/bin"),
+            "spawned shell's PATH should include the standard dirs, got: {}",
+            out.text
         );
     }
 

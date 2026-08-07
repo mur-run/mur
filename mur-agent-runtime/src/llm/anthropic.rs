@@ -780,6 +780,7 @@ mod tests {
                     call_id: "id1".into(),
                     content: "hi\n".into(),
                     is_error: false,
+                    status: crate::tools::ToolStatus::Ok,
                 }],
             },
         ];
@@ -857,6 +858,7 @@ mod tests {
                     call_id: "c1".into(),
                     content: "ok".into(),
                     is_error: false,
+                    status: crate::tools::ToolStatus::Ok,
                 }],
             },
             RichMessage::Text {

@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use super::{ToolError, ToolExecutor};
+use super::{ToolError, ToolExecutor, ToolOutput};
 use crate::llm::ToolDef;
 use crate::mcp::pool::McpPool;
 use crate::protocol::mcp_client::McpClient;
@@ -69,7 +69,7 @@ impl ToolExecutor for McpToolExecutor {
         self.def.clone()
     }
 
-    async fn execute(&self, input: Value) -> Result<String, ToolError> {
+    async fn execute(&self, input: Value) -> Result<ToolOutput, ToolError> {
         let client_arc: Arc<Mutex<McpClient>> = self
             .pool
             .client(&self.server)
@@ -108,7 +108,7 @@ impl ToolExecutor for McpToolExecutor {
         if is_error {
             Err(ToolError::Execution(text))
         } else {
-            Ok(text)
+            Ok(text.into())
         }
     }
 }
