@@ -74,6 +74,10 @@ pub enum StreamMsg {
         full_len: usize,
         error: Option<String>,
         duration_ms: u64,
+        /// The sandbox refused to run this call. Distinct from a legitimate
+        /// non-zero exit (`ok: false`); an older runtime that omits this key
+        /// is treated as not-denied.
+        denied: bool,
     },
 }
 
@@ -282,6 +286,7 @@ pub fn spawn_stream(
                         full_len,
                         error,
                         duration_ms,
+                        denied,
                     } => StreamMsg::StepCompleted {
                         task_id,
                         step_id,
@@ -291,6 +296,7 @@ pub fn spawn_stream(
                         full_len,
                         error,
                         duration_ms,
+                        denied,
                     },
                 };
                 let _ = tx.blocking_send(msg);

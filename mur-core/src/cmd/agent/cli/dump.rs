@@ -87,7 +87,7 @@ fn card_text(card: &StepCard) -> String {
 mod tests {
     use super::transcript_to_text;
     use crate::cmd::agent::cli::app::{ChatMsg, Role};
-    use crate::cmd::agent::cli::step::StepCard;
+    use crate::cmd::agent::cli::step::{CallOutcome, StepCard};
 
     #[test]
     fn renders_user_and_agent_and_reasoning() {
@@ -109,7 +109,7 @@ mod tests {
             "bash".into(),
             serde_json::json!({"command":"ls"}),
         );
-        card.complete(true, "a.rs\nb.rs".into(), false, 2, None, 5);
+        card.complete(CallOutcome::Ok, "a.rs\nb.rs".into(), false, 2, None, 5);
         let m = ChatMsg::tool_for_test(card);
         let t = transcript_to_text(&[m]);
         assert!(t.contains("bash"));
@@ -121,7 +121,14 @@ mod tests {
     #[test]
     fn renders_error_card() {
         let mut card = StepCard::new("s1".into(), "bash".into(), serde_json::json!({}));
-        card.complete(false, "boom".into(), false, 4, Some("exit 1".into()), 3);
+        card.complete(
+            CallOutcome::Failed,
+            "boom".into(),
+            false,
+            4,
+            Some("exit 1".into()),
+            3,
+        );
         let t = transcript_to_text(&[ChatMsg::tool_for_test(card)]);
         assert!(t.contains("exit 1"));
     }

@@ -274,6 +274,10 @@ pub enum StepEvent {
         full_len: usize,
         error: Option<String>,
         duration_ms: u64,
+        /// The sandbox refused to run this call (e.g. a denied write). Distinct
+        /// from a legitimate non-zero exit (`ok: false`); an older runtime that
+        /// doesn't send this key is treated as not-denied.
+        denied: bool,
     },
 }
 
@@ -294,6 +298,7 @@ pub fn parse_step(p: &Value, completed: bool) -> StepEvent {
             full_len: p.get("full_len").and_then(Value::as_u64).unwrap_or(0) as usize,
             error: p.get("error").and_then(Value::as_str).map(str::to_string),
             duration_ms: p.get("duration_ms").and_then(Value::as_u64).unwrap_or(0),
+            denied: p.get("denied").and_then(Value::as_bool).unwrap_or(false),
         }
     } else {
         StepEvent::Started {
@@ -800,7 +805,8 @@ mod step_parse_tests {
             "truncated": false,
             "full_len": 4u64,
             "error": null,
-            "duration_ms": 123u64
+            "duration_ms": 123u64,
+            "denied": false
         });
         match parse_step(&p, true) {
             StepEvent::Completed {
@@ -812,6 +818,7 @@ mod step_parse_tests {
                 full_len,
                 error,
                 duration_ms,
+                denied,
             } => {
                 assert_eq!(step_id, "s2");
                 assert_eq!(task_id, "t2");
@@ -821,6 +828,7 @@ mod step_parse_tests {
                 assert_eq!(full_len, 4);
                 assert!(error.is_none());
                 assert_eq!(duration_ms, 123);
+                assert!(!denied);
             }
             StepEvent::Started { .. } => panic!("expected Completed"),
         }

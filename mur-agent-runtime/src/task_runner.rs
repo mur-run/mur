@@ -1359,6 +1359,7 @@ impl TaskRunner {
                                     } else {
                                         serde_json::Value::Null
                                     },
+                                    "denied": matches!(status, crate::tools::ToolStatus::Denied { .. }),
                                     "duration_ms": t0.elapsed().as_millis() as u64,
                                 }),
                             ))
@@ -1476,6 +1477,7 @@ impl TaskRunner {
                         } else {
                             serde_json::Value::Null
                         },
+                        "denied": matches!(status, crate::tools::ToolStatus::Denied { .. }),
                         "duration_ms": t0_ask.elapsed().as_millis() as u64,
                     }),
                 ))
