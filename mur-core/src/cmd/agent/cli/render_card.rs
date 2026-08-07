@@ -326,7 +326,7 @@ fn arg_hint(card: &StepCard, budget: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{ARG_HINT_MIN, card_lines, elide_middle, hint_budget, hint_field, strip_cd_prefix};
-    use crate::cmd::agent::cli::step::StepCard;
+    use crate::cmd::agent::cli::step::{CallOutcome, StepCard};
     use crate::cmd::agent::cli::theme;
 
     /// A conventional 80-column terminal, so these assertions keep testing the
@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn done_card_shows_output_and_duration() {
         let mut c = StepCard::new("s1".into(), "read".into(), serde_json::json!({}));
-        c.complete(true, "412 lines".into(), false, 9, None, 8);
+        c.complete(CallOutcome::Ok, "412 lines".into(), false, 9, None, 8);
         let lines = card_lines(&c, theme::resolve_skin("dark"), true, TEST_WIDTH);
         let text: String = lines
             .iter()
@@ -443,7 +443,14 @@ mod tests {
     #[test]
     fn error_card_shows_red_marker_and_message() {
         let mut c = StepCard::new("s1".into(), "bash".into(), serde_json::json!({}));
-        c.complete(false, "boom".into(), false, 4, Some("exit 101".into()), 3);
+        c.complete(
+            CallOutcome::Failed,
+            "boom".into(),
+            false,
+            4,
+            Some("exit 101".into()),
+            3,
+        );
         let lines = card_lines(&c, theme::resolve_skin("dark"), true, TEST_WIDTH);
         let text: String = lines
             .iter()
@@ -497,7 +504,7 @@ mod tests {
             serde_json::json!({ "query": "workflow" }),
         );
         c.complete(
-            true,
+            CallOutcome::Ok,
             r#"{"count":0,"results":[]}"#.into(),
             false,
             24,
@@ -515,7 +522,14 @@ mod tests {
     #[test]
     fn collapsed_card_still_shows_errors_and_hitl() {
         let mut c = StepCard::new("s1".into(), "bash".into(), serde_json::json!({}));
-        c.complete(false, "boom".into(), false, 4, Some("exit 101".into()), 3);
+        c.complete(
+            CallOutcome::Failed,
+            "boom".into(),
+            false,
+            4,
+            Some("exit 101".into()),
+            3,
+        );
         c.awaiting_hitl = true;
         let text = joined(&card_lines(
             &c,
@@ -537,7 +551,7 @@ mod tests {
             "edit".into(),
             serde_json::json!({"file_path":"a.rs"}),
         );
-        c.complete(true, "patched".into(), false, 1, None, 4);
+        c.complete(CallOutcome::Ok, "patched".into(), false, 1, None, 4);
         c.awaiting_hitl = true;
         let lines = card_lines(&c, theme::resolve_skin("dark"), true, TEST_WIDTH);
         let text: String = lines

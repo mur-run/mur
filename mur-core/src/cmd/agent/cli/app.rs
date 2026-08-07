@@ -933,6 +933,7 @@ impl App {
         full_len: usize,
         error: Option<String>,
         duration_ms: u64,
+        denied: bool,
     ) {
         if let Some(card) = self
             .messages
@@ -940,7 +941,12 @@ impl App {
             .rev()
             .find_map(|m| m.step.as_mut().filter(|c| c.id == step_id))
         {
-            card.complete(ok, output, truncated, full_len, error, duration_ms);
+            let outcome = match (ok, denied) {
+                (_, true) => super::step::CallOutcome::Denied,
+                (true, _) => super::step::CallOutcome::Ok,
+                (false, _) => super::step::CallOutcome::Failed,
+            };
+            card.complete(outcome, output, truncated, full_len, error, duration_ms);
         }
     }
 
@@ -1781,7 +1787,7 @@ mod step_app_tests {
             "bash".into(),
             serde_json::json!({ "cmd": "ls" }),
         );
-        a.update_step_completed("s1", true, "foo.rs\n".into(), false, 7, None, 42);
+        a.update_step_completed("s1", true, "foo.rs\n".into(), false, 7, None, 42, false);
         let card = a
             .messages
             .iter()
@@ -1801,7 +1807,7 @@ mod step_app_tests {
             "read".into(),
             serde_json::json!({"path":"a.rs"}),
         );
-        a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5);
+        a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5, false);
         // No streaming segment now (tool turn, no text deltas).
         a.finish_agent_turn("here is the summary".into(), Some("t1".into()));
         let last = a.messages.last().unwrap();
@@ -1986,7 +1992,7 @@ mod awaiting_tests {
             "edit".into(),
             serde_json::json!({"file_path":"a.rs"}),
         );
-        a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5);
+        a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5, false);
         a.mark_card_awaiting("s1");
         let card = a.messages.iter().find_map(|m| m.step.as_ref()).unwrap();
         assert!(card.awaiting_hitl);
@@ -2004,7 +2010,7 @@ mod awaiting_tests {
             "edit".into(),
             serde_json::json!({"file_path":"a.rs"}),
         );
-        a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5);
+        a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5, false);
 
         // No card exists for this step_id: the caller must be told so it can
         // fall back to the modal instead of assuming inline approval worked.
