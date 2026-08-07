@@ -12,6 +12,21 @@ pub enum StepState {
 // Used by the step card UI renderer (render_card.rs).
 pub const ARGS_MAX_LINES: usize = 12;
 
+/// How a tool call finished, for the step card's eyes only.
+///
+/// Mirrors the runtime's `ToolStatus` so the CLI stops inferring status from
+/// output text. `Ok` means the call ran — including a legitimate non-zero exit
+/// (`grep` with no match); the runtime reports those as successful invocations,
+/// so they keep the check mark. `Denied` means the sandbox refused to run it,
+/// which must render as a failure even though the invocation itself succeeded.
+/// `Failed` means the tool errored outright.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallOutcome {
+    Ok,
+    Failed,
+    Denied,
+}
+
 /// One tool call, shown inline in the transcript.
 #[derive(Debug, Clone)]
 pub struct StepCard {
@@ -55,17 +70,16 @@ impl StepCard {
 
     pub fn complete(
         &mut self,
-        ok: bool,
+        outcome: CallOutcome,
         output: String,
         truncated: bool,
         full_len: usize,
         error: Option<String>,
         duration_ms: u64,
     ) {
-        self.state = if ok {
-            StepState::Done
-        } else {
-            StepState::Error
+        self.state = match outcome {
+            CallOutcome::Ok => StepState::Done,
+            CallOutcome::Failed | CallOutcome::Denied => StepState::Error,
         };
         self.output = output;
         self.truncated = truncated;
@@ -86,7 +100,7 @@ impl StepCard {
 
 #[cfg(test)]
 mod tests {
-    use super::{StepCard, StepState};
+    use super::{CallOutcome, StepCard, StepState};
 
     fn card() -> StepCard {
         StepCard::new(
@@ -106,7 +120,7 @@ mod tests {
     #[test]
     fn complete_ok_sets_done_and_glyph() {
         let mut c = card();
-        c.complete(true, "412 lines".into(), false, 9, None, 8);
+        c.complete(CallOutcome::Ok, "412 lines".into(), false, 9, None, 8);
         assert_eq!(c.state, StepState::Done);
         assert_eq!(c.glyph(), "✔");
         assert_eq!(c.duration_ms, Some(8));
@@ -115,9 +129,38 @@ mod tests {
     #[test]
     fn complete_err_sets_error_and_keeps_message() {
         let mut c = card();
-        c.complete(false, "boom".into(), false, 4, Some("exit 1".into()), 3);
+        c.complete(
+            CallOutcome::Failed,
+            "boom".into(),
+            false,
+            4,
+            Some("exit 1".into()),
+            3,
+        );
         assert_eq!(c.state, StepState::Error);
         assert_eq!(c.glyph(), "✗");
         assert_eq!(c.error.as_deref(), Some("exit 1"));
+    }
+
+    #[test]
+    fn complete_ok_but_denied_sets_error_and_glyph() {
+        // The sandbox refused the call: the invocation itself succeeded
+        // (outcome would otherwise be `Ok`) but nothing ran, so this must
+        // render as a denial, not a check mark.
+        let mut c = card();
+        c.complete(CallOutcome::Denied, "denied".into(), false, 6, None, 5);
+        assert_eq!(c.state, StepState::Error);
+        assert_eq!(c.glyph(), "✗");
+    }
+
+    #[test]
+    fn complete_ok_not_denied_keeps_check_mark() {
+        // A plain non-zero exit (e.g. grep with no match) arrives as
+        // `CallOutcome::Ok` — the tool ran, it just found nothing. This is
+        // the case that must keep its check mark.
+        let mut c = card();
+        c.complete(CallOutcome::Ok, "no matches".into(), false, 10, None, 4);
+        assert_eq!(c.state, StepState::Done);
+        assert_eq!(c.glyph(), "✔");
     }
 }
