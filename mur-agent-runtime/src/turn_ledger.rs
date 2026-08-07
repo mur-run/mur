@@ -49,6 +49,44 @@ impl Action {
     fn mutating(&self) -> bool {
         MUTATING_TOOLS.contains(&self.tool.as_str())
     }
+
+    /// Did this call actually exercise the change — a build, test, or lint
+    /// run — rather than merely succeed at something read-only?
+    ///
+    /// Ponytail: this only ever looks at `bash` targets, and only credits a
+    /// literal `cargo test|build|check|clippy|nextest` (or `npm test`/`pytest`
+    /// as a nod to non-Rust repos) when it is what the command *starts with*,
+    /// after stripping one optional leading `cd <path> && ` prefix (agents
+    /// routinely prepend that). It does not understand shell composition
+    /// beyond that one prefix (`&&` chains, `;`, aliases, Makefile targets,
+    /// `just`, CI wrapper scripts, or a test binary invoked directly), and a
+    /// runner name appearing anywhere but leading position — e.g. inside a
+    /// `grep`/`sed` pattern — is deliberately not credited. A command this
+    /// helper fails to recognise must fall back to not-evidence, because a
+    /// false `verified` is exactly the failure this card exists to prevent —
+    /// a missed real gate run only costs a slightly less generous report,
+    /// not a false claim of proof.
+    fn is_evidence(&self) -> bool {
+        if self.tool != "bash" {
+            return false;
+        }
+        const RUNNERS: &[&str] = &[
+            "cargo test",
+            "cargo build",
+            "cargo check",
+            "cargo clippy",
+            "cargo nextest",
+            "npm test",
+            "pytest",
+        ];
+        let command = self.target.trim();
+        let command = command
+            .strip_prefix("cd ")
+            .and_then(|rest| rest.split_once("&&"))
+            .map(|(_, after)| after.trim())
+            .unwrap_or(command);
+        RUNNERS.iter().any(|r| command.starts_with(r))
+    }
 }
 
 /// Why the turn ended.
@@ -111,12 +149,14 @@ impl TurnLedger {
         self.actions.push(action);
     }
 
-    /// Commands that ran and succeeded — the only thing here that constitutes
-    /// evidence.
+    /// Commands that ran, succeeded, and are recognisable gate runs (test,
+    /// build, check, or lint) — the only thing here that constitutes
+    /// evidence. A successful `cat` or `grep` is not evidence and must not
+    /// count.
     pub fn verified(&self) -> Vec<&Action> {
         self.actions
             .iter()
-            .filter(|a| !a.mutating() && a.outcome == Outcome::Ok)
+            .filter(|a| !a.mutating() && a.outcome == Outcome::Ok && a.is_evidence())
             .collect()
     }
 
@@ -215,13 +255,11 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 /// Classify a tool result. `is_error` is structural, so failure never has to be
-/// guessed — but a sandbox denial is worth separating out, and the only signal
-/// for it is the hint the bash tool writes on a kernel EPERM.
-pub fn classify(content: &str, is_error: bool) -> Outcome {
-    if let Some(i) = content.find("[sandbox]") {
-        let rest = &content[i..];
-        let line = rest.lines().next().unwrap_or(rest);
-        return Outcome::Denied(truncate(line.trim_start_matches("[sandbox] "), 120));
+/// guessed — and so is a sandbox denial: it comes from the tool's own
+/// `ToolStatus`, not from sniffing the output text for a hint.
+pub fn classify(content: &str, is_error: bool, status: &crate::tools::ToolStatus) -> Outcome {
+    if let crate::tools::ToolStatus::Denied { detail } = status {
+        return Outcome::Denied(truncate(detail, 120));
     }
     if is_error {
         return Outcome::Failed(truncate(content.trim(), 120));
@@ -344,6 +382,48 @@ mod tests {
     }
 
     #[test]
+    fn a_read_with_nothing_run_is_not_evidence() {
+        let mut l = TurnLedger::default();
+        l.record(act("read_file", "src/a.rs", Outcome::Ok));
+        // A successful read (or a sed/grep/cat, same shape) is not evidence
+        // that anything works — it must report as nothing having run.
+        assert!(l.verified().is_empty());
+        let card = render(&l);
+        assert!(card.contains("nothing ran"), "{card}");
+    }
+
+    #[test]
+    fn a_passing_test_suite_is_evidence() {
+        let mut l = TurnLedger::default();
+        l.record(act("edit_file", "src/a.rs", Outcome::Ok));
+        l.record(act("bash", "cargo test --workspace", Outcome::Ok));
+        assert_eq!(l.verified().len(), 1);
+        assert_eq!(l.verified()[0].target, "cargo test --workspace");
+    }
+
+    #[test]
+    fn a_runner_name_inside_a_grep_pattern_is_not_evidence() {
+        let mut l = TurnLedger::default();
+        // Investigating this very bug looks like this: a grep for the
+        // runner string must not itself be credited as having run it.
+        l.record(act("bash", "grep -rn \"cargo test\" src/", Outcome::Ok));
+        assert!(l.verified().is_empty());
+        let card = render(&l);
+        assert!(card.contains("nothing ran"), "{card}");
+    }
+
+    #[test]
+    fn a_runner_after_a_cd_prefix_is_evidence() {
+        let mut l = TurnLedger::default();
+        l.record(act(
+            "bash",
+            "cd /repo && cargo nextest run -p x",
+            Outcome::Ok,
+        ));
+        assert_eq!(l.verified().len(), 1);
+    }
+
+    #[test]
     fn a_failed_command_is_never_evidence() {
         let mut l = TurnLedger::default();
         l.record(act(
@@ -384,8 +464,11 @@ mod tests {
     #[test]
     fn classify_separates_denial_from_ordinary_failure() {
         let denied = classify(
-            "[exit code: 126]\n\n[sandbox] `cargo` is not in agent 'mur''s spawn allowlist\nmore",
+            "ignored",
             false,
+            &crate::tools::ToolStatus::Denied {
+                detail: "`cargo` is not in agent 'mur''s spawn allowlist".to_string(),
+            },
         );
         match denied {
             Outcome::Denied(d) => assert!(d.contains("cargo"), "{d}"),
@@ -394,10 +477,13 @@ mod tests {
         // A denial is not merely a failure: the remedy is to route or grant,
         // not to retry, so it must not be folded into Failed.
         assert!(matches!(
-            classify("error: no such file", true),
+            classify("error: no such file", true, &crate::tools::ToolStatus::Ok),
             Outcome::Failed(_)
         ));
-        assert_eq!(classify("all good", false), Outcome::Ok);
+        assert_eq!(
+            classify("all good", false, &crate::tools::ToolStatus::Ok),
+            Outcome::Ok
+        );
     }
 
     #[test]
@@ -481,9 +567,17 @@ mod tests {
     /// The exact shapes from the field report: an MCP tool with empty args and
     /// a bash failure wrapped twice by the transport.
     #[test]
-    fn render_compacts_mcp_names_and_transport_noise() {
+    fn render_compacts_mcp_names_and_transport_noise_in_blocked() {
         let mut l = TurnLedger::default();
-        l.record(act("mcp__media__mur_compress_stats", "", Outcome::Ok));
+        // mur_compress_stats is a query, not evidence — it does not belong in
+        // `verified` (that's covered elsewhere). Here it's denied, so it's the
+        // vehicle for exercising short_tool()/noise-stripping on the blocked
+        // row instead of the verified one.
+        l.record(act(
+            "mcp__media__mur_compress_stats",
+            "",
+            Outcome::Denied("not permitted".into()),
+        ));
         l.record(act(
             "bash",
             "ls; grep -rn \"compress-today\" --include=* -l . 2>/dev/null | head",
@@ -492,7 +586,10 @@ mod tests {
             ),
         ));
         let card = render(&l);
-        assert!(card.contains("  ✔ mur_compress_stats\n"), "{card}");
+        assert!(
+            card.contains("  ✘ mur_compress_stats · sandbox: not permitted\n"),
+            "{card}"
+        );
         assert!(!card.contains("mcp__media"), "{card}");
         assert!(!card.contains("{}"), "{card}");
         assert!(

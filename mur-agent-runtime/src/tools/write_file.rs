@@ -4,7 +4,7 @@ use mur_common::agent::FilesystemEntitlement;
 
 use crate::llm::ToolDef;
 use crate::tools::fs_policy::{SessionCwd, check_write_entitlement};
-use crate::tools::{ToolError, ToolExecutor};
+use crate::tools::{ToolError, ToolExecutor, ToolOutput};
 
 pub struct WriteFileTool {
     pub session_cwd: SessionCwd,
@@ -39,7 +39,7 @@ impl ToolExecutor for WriteFileTool {
         }
     }
 
-    async fn execute(&self, input: serde_json::Value) -> Result<String, ToolError> {
+    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
         let raw = input["path"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("missing 'path' field".into()))?;
@@ -68,11 +68,7 @@ impl ToolExecutor for WriteFileTool {
                 "write", &target, &base, &e,
             ))
         })?;
-        Ok(format!(
-            "wrote {} bytes to {}",
-            content.len(),
-            target.display()
-        ))
+        Ok(format!("wrote {} bytes to {}", content.len(), target.display()).into())
     }
 }
 
@@ -97,7 +93,7 @@ mod tests {
             .execute(serde_json::json!({"path": "a.txt", "content": "one"}))
             .await
             .unwrap();
-        assert!(r.contains("wrote 3 bytes"));
+        assert!(r.text.contains("wrote 3 bytes"));
         t.execute(serde_json::json!({"path": "a.txt", "content": "two2"}))
             .await
             .unwrap();
