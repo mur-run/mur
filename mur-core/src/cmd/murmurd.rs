@@ -185,13 +185,13 @@ pub fn cmd_murmurd_restart() -> Result<()> {
     }
     // Only remove the lock once we've either confirmed the old daemon is
     // dead or confirmed there was none to begin with.
-    if let Err(e) = std::fs::remove_file(&lock_path) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            println!(
-                "warning: could not remove stale lock at {}: {e}",
-                lock_path.display()
-            );
-        }
+    if let Err(e) = std::fs::remove_file(&lock_path)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        println!(
+            "warning: could not remove stale lock at {}: {e}",
+            lock_path.display()
+        );
     }
     cmd_murmurd_start(true)
 }
