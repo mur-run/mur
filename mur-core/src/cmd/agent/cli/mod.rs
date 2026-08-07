@@ -780,32 +780,64 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
             // live so the user is never trapped by a stale/unanswerable modal,
             // and any other key keeps going to the composer so typed text isn't
             // silently swallowed while the modal is up.
+            //
+            // Decision LETTERS only count while the composer is empty. Once the
+            // operator has typed anything they are writing a message, not
+            // answering the gate, and `y`/`a`/`n` are ordinary characters —
+            // before this guard, sending "modal" while a gate was open ate the
+            // `a`, approved the call, AND added the tool to
+            // `session_tool_allow` for the whole session. Esc and the Ctrl
+            // combos are exempt: they cannot collide with typed text, and Esc
+            // must always remain the escape hatch.
             if app.hitl.is_some() {
+                let composer_empty = app.input_text().is_empty();
                 match key.code {
                     KeyCode::Char('d') if ctrl => request_quit(app, tx),
                     KeyCode::Char('c') if ctrl => decide_hitl(app, tx, false),
-                    KeyCode::Char('y') | KeyCode::Char('Y') => decide_hitl(app, tx, true),
-                    // [a] — always allow THIS tool name for the session
-                    // (per-tool-name grain; each distinct tool still asks once).
-                    KeyCode::Char('a') => {
-                        if let Some(req) = &app.hitl {
-                            app.session_tool_allow.insert(req.tool_name.clone());
+                    KeyCode::Char('y') | KeyCode::Char('Y') if composer_empty => {
+                        app.hitl_grant_confirm = None;
+                        decide_hitl(app, tx, true)
+                    }
+                    // Session-wide grants are two-press: the first arms the
+                    // confirm, the second commits. One keystroke must never
+                    // hand out blanket approval.
+                    //
+                    // The arming press ALSO types its character, so someone
+                    // starting the message "add the test" keeps every letter —
+                    // arming is invisible to them and the next key disarms it.
+                    // The confirming press takes that character back out.
+                    KeyCode::Char(c @ ('a' | 'A'))
+                        if composer_empty || app.hitl_grant_confirm == Some(c) =>
+                    {
+                        if app.hitl_grant_confirm == Some(c) {
+                            app.hitl_grant_confirm = None;
+                            app.input.delete_char();
+                            if c == 'a' {
+                                if let Some(req) = &app.hitl {
+                                    app.session_tool_allow.insert(req.tool_name.clone());
+                                }
+                            } else {
+                                app.auto_approve = true;
+                            }
+                            decide_hitl(app, tx, true);
+                        } else {
+                            app.hitl_grant_confirm = Some(c);
+                            app.input.input(key);
                         }
-                        decide_hitl(app, tx, true);
                     }
-                    // [A] — always allow ALL tools for the session (#7 grain
-                    // fix / proposal 1a): flip the global `auto_approve` so the
-                    // user need not press [a] once per distinct tool name. Same
-                    // session lifetime as `[a]`; cleared by `/auto off`.
-                    KeyCode::Char('A') => {
-                        app.auto_approve = true;
-                        decide_hitl(app, tx, true);
-                    }
-                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    KeyCode::Char('n') | KeyCode::Char('N') if composer_empty => {
+                        app.hitl_grant_confirm = None;
                         decide_hitl(app, tx, false)
                     }
-                    KeyCode::Enter => {} // no submit while the modal is open
+                    KeyCode::Esc => {
+                        app.hitl_grant_confirm = None;
+                        decide_hitl(app, tx, false)
+                    }
+                    // No submit while the modal is open, but still disarm: the
+                    // modal promises "any other key cancels".
+                    KeyCode::Enter => app.hitl_grant_confirm = None,
                     _ => {
+                        app.hitl_grant_confirm = None;
                         app.input.input(key);
                     }
                 }
@@ -1291,6 +1323,7 @@ fn decide_hitl(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: bool) {
 fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: bool, auto: bool) {
     if let Some(req) = app.hitl.take() {
         app.hitl_resolved_at = Some(std::time::Instant::now());
+        app.hitl_grant_confirm = None;
         if let Some(sid) = &req.step_id {
             app.clear_card_awaiting(sid);
         }
@@ -2148,4 +2181,86 @@ fn run_plain(home: &Path, agent: &str, auto: bool, interactive: bool) -> Result<
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod hitl_key_tests {
+    use super::*;
+    use crossterm::event::{KeyEvent, KeyEventState};
+
+    fn gate(app: &mut App) {
+        app.hitl = Some(stream::HitlRequest {
+            hitl_id: "h1".into(),
+            step_id: None,
+            tool_name: "write_file".into(),
+            tool_input: serde_json::json!({}),
+            prompt: "approve?".into(),
+            created_at: std::time::Instant::now(),
+        });
+    }
+
+    fn key(c: char) -> Event {
+        Event::Key(KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        })
+    }
+
+    async fn type_str(app: &mut App, s: &str, tx: &mpsc::Sender<StreamMsg>) {
+        for c in s.chars() {
+            handle_event(app, key(c), tx).await;
+        }
+    }
+
+    /// The bug this guards: typing a message while a gate was open let the
+    /// first `a` approve the call AND grant the tool for the whole session,
+    /// with the character deleted from the message ("modal" arrived "modl").
+    #[tokio::test]
+    async fn typing_a_message_never_decides_the_gate() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut app = App::test_fixture();
+        gate(&mut app);
+
+        type_str(&mut app, "add the test", &tx).await;
+
+        assert!(app.hitl.is_some(), "gate must still be pending");
+        assert!(app.session_tool_allow.is_empty(), "no session grant");
+        assert!(!app.auto_approve, "no blanket auto-approve");
+        assert_eq!(app.input_text(), "add the test", "text must be intact");
+    }
+
+    /// Once the composer holds text the operator is writing, not deciding —
+    /// even the single-press keys are ordinary characters.
+    #[tokio::test]
+    async fn decision_keys_are_text_once_the_composer_is_dirty() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut app = App::test_fixture();
+        gate(&mut app);
+
+        type_str(&mut app, "why", &tx).await; // 'y' must not approve
+        type_str(&mut app, "not", &tx).await; // 'n' must not deny
+
+        assert!(app.hitl.is_some(), "gate must still be pending");
+        assert_eq!(app.input_text(), "whynot");
+    }
+
+    /// Deliberate path: two presses on an empty composer grant the tool and
+    /// leave no stray character behind.
+    #[tokio::test]
+    async fn double_press_grants_the_session_allow() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut app = App::test_fixture();
+        gate(&mut app);
+
+        handle_event(&mut app, key('a'), &tx).await;
+        assert!(app.hitl.is_some(), "first press only arms");
+        assert_eq!(app.hitl_grant_confirm, Some('a'));
+
+        handle_event(&mut app, key('a'), &tx).await;
+        assert!(app.session_tool_allow.contains("write_file"));
+        assert!(app.hitl.is_none(), "second press resolves the gate");
+        assert_eq!(app.input_text(), "", "armed char is taken back");
+    }
 }
