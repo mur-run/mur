@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use mur_common::agent::FilesystemEntitlement;
 
 use crate::llm::ToolDef;
-use crate::tools::{ToolError, ToolExecutor};
+use crate::tools::{ToolError, ToolExecutor, ToolOutput};
 
 /// Hard ceiling on returned bytes so a huge file cannot blow up the turn.
 const MAX_RETURN_BYTES: usize = 512 * 1024;
@@ -81,7 +81,7 @@ Relative paths resolve against the shared session working directory (the same ba
         }
     }
 
-    async fn execute(&self, input: serde_json::Value) -> Result<String, ToolError> {
+    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
         let raw = input["path"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("missing 'path' field".into()))?;
@@ -120,9 +120,9 @@ Relative paths resolve against the shared session working directory (the same ba
             cut.truncate(MAX_RETURN_BYTES);
             let mut s = String::from_utf8_lossy(&cut).into_owned();
             s.push_str("\n… [truncated at 512KiB — use offset/limit to window]");
-            return Ok(s);
+            return Ok(s.into());
         }
-        Ok(windowed)
+        Ok(windowed.into())
     }
 }
 
@@ -176,7 +176,11 @@ mod tests {
             .execute(serde_json::json!({"path": "spec.md"}))
             .await
             .unwrap();
-        assert!(before.contains("HOME"), "expected HOME, got {before}");
+        assert!(
+            before.text.contains("HOME"),
+            "expected HOME, got {}",
+            before.text
+        );
 
         // bash with explicit cwd moves the shared base to `other`.
         bash.execute(serde_json::json!({"command": "true", "cwd": other.path().to_str().unwrap()}))
@@ -189,8 +193,9 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            after.contains("OTHER"),
-            "expected OTHER after bash cwd, got {after}"
+            after.text.contains("OTHER"),
+            "expected OTHER after bash cwd, got {}",
+            after.text
         );
     }
 
@@ -233,7 +238,7 @@ mod tests {
             .execute(serde_json::json!({"path": "f.txt", "offset": 2, "limit": 2}))
             .await
             .unwrap();
-        assert_eq!(out, "l2\nl3");
+        assert_eq!(out.text, "l2\nl3");
     }
 
     #[tokio::test]
@@ -248,7 +253,8 @@ mod tests {
         assert_eq!(
             t.execute(serde_json::json!({"path": "f.txt"}))
                 .await
-                .unwrap(),
+                .unwrap()
+                .text,
             "hi"
         );
     }

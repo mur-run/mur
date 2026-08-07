@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use tokio::process::Command;
 
-use super::{ToolError, ToolExecutor};
+use super::{ToolError, ToolExecutor, ToolOutput};
 use crate::llm::ToolDef;
 
 pub const FLEET_RUN: &str = "fleet_run";
@@ -101,7 +101,7 @@ Long-running: default timeout {DEFAULT_TIMEOUT_SECS}s (max {MAX_TIMEOUT_SECS}s).
         }
     }
 
-    async fn execute(&self, input: serde_json::Value) -> Result<String, ToolError> {
+    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
         let fleet = input
             .get("fleet")
             .and_then(|v| v.as_str())
@@ -201,7 +201,7 @@ Long-running: default timeout {DEFAULT_TIMEOUT_SECS}s (max {MAX_TIMEOUT_SECS}s).
                 .collect();
             combined = format!("[output truncated to last {MAX_OUTPUT_CHARS} chars]\n…{tail}");
         }
-        Ok(combined)
+        Ok(combined.into())
     }
 }
 
