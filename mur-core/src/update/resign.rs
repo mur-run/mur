@@ -262,23 +262,6 @@ mod macos {
         std::fs::rename(&tmp, dst)
     }
 
-    #[cfg(test)]
-    mod macos_tests {
-        use super::replace_file;
-
-        #[test]
-        fn replace_file_swaps_content_and_leaves_no_temp() {
-            let dir = tempfile::tempdir().unwrap();
-            let src = dir.path().join("src");
-            let dst = dir.path().join("mur-agent-runtime");
-            std::fs::write(&src, b"NEW").unwrap();
-            std::fs::write(&dst, b"OLD").unwrap();
-            replace_file(&src, &dst).unwrap();
-            assert_eq!(std::fs::read(&dst).unwrap(), b"NEW");
-            assert!(!dir.path().join("mur-agent-runtime.new").exists());
-        }
-    }
-
     /// `codesign --force -s <identity>` each target. Fail loud with every
     /// failure listed — a partially-signed install is exactly the silent state
     /// this feature exists to prevent.
@@ -330,6 +313,23 @@ mod macos {
             bail!("signature verification failed:\n  {}", bad.join("\n  "));
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod macos_tests {
+        use super::replace_file;
+
+        #[test]
+        fn replace_file_swaps_content_and_leaves_no_temp() {
+            let dir = tempfile::tempdir().unwrap();
+            let src = dir.path().join("src");
+            let dst = dir.path().join("mur-agent-runtime");
+            std::fs::write(&src, b"NEW").unwrap();
+            std::fs::write(&dst, b"OLD").unwrap();
+            replace_file(&src, &dst).unwrap();
+            assert_eq!(std::fs::read(&dst).unwrap(), b"NEW");
+            assert!(!dir.path().join("mur-agent-runtime.new").exists());
+        }
     }
 }
 

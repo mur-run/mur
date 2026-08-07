@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 
 pub fn cmd_murmurd_status() -> Result<()> {
     let lock_path = dirs::home_dir()
@@ -127,12 +127,14 @@ pub fn cmd_murmurd_restart() -> Result<()> {
     // the daemon down, which a smoke run demonstrated the hard way.
     murmurd_binary()?;
     let lock_path = murmurd_lock_path()?;
-    if let Ok(s) = std::fs::read_to_string(&lock_path) {
-        if let Some(pid) = serde_json::from_str::<serde_json::Value>(&s)
-            .ok()
-            .and_then(|v| v.get("pid").and_then(|p| p.as_u64()))
-        {
-            let pid = pid as u32;
+    match std::fs::read_to_string(&lock_path) {
+        Ok(s) => {
+            let pid = serde_json::from_str::<serde_json::Value>(&s)
+                .context("murmurd.lock contains invalid JSON; refusing to restart blind")?
+                .get("pid")
+                .and_then(|p| p.as_u64())
+                .context("murmurd.lock has no 'pid' field; refusing to restart blind")?
+                as u32;
             if mur_common::lock_file::pid_alive(pid) {
                 #[cfg(unix)]
                 unsafe {
@@ -151,10 +153,45 @@ pub fn cmd_murmurd_restart() -> Result<()> {
                     }
                     std::thread::sleep(std::time::Duration::from_millis(200));
                 }
+                // Verify the kill actually took effect before we tell the
+                // caller it's safe to start a fresh instance — a wedged
+                // (D-state) process can survive SIGKILL, and starting a
+                // second daemon on top of a still-live one races both for
+                // the same lock and socket.
+                if mur_common::lock_file::pid_alive(pid) {
+                    bail!(
+                        "murmurd (pid {pid}) did not exit after SIGTERM/SIGKILL; \
+                         refusing to start a second instance. Investigate the \
+                         process manually (it may be wedged) before retrying."
+                    );
+                }
                 println!("murmurd stopped (pid {pid})");
             }
         }
-        let _ = std::fs::remove_file(&lock_path);
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // No lock file at all: nothing to stop, safe to proceed.
+        }
+        Err(e) => {
+            // Lock file exists but couldn't be read (permissions, transient
+            // I/O, truncated concurrent write). Treat this as "unknown
+            // state" rather than "not running" — starting a new daemon here
+            // could spawn a second instance alongside a live one.
+            return Err(e).context(format!(
+                "could not read murmurd lock at {}; refusing to restart blind \
+                 (daemon may still be running)",
+                lock_path.display()
+            ));
+        }
+    }
+    // Only remove the lock once we've either confirmed the old daemon is
+    // dead or confirmed there was none to begin with.
+    if let Err(e) = std::fs::remove_file(&lock_path)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        println!(
+            "warning: could not remove stale lock at {}: {e}",
+            lock_path.display()
+        );
     }
     cmd_murmurd_start(true)
 }
