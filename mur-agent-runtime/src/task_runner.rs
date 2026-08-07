@@ -1580,7 +1580,7 @@ impl TaskRunner {
                 .saturating_sub(start_tokens);
             if spent >= self.max_token_budget {
                 let msg = self
-                    .graceful_exit(client, &history, LoopStop::TokenBudget, &ledger)
+                    .graceful_exit(client, &history, LoopStop::TokenBudget, &ledger, iteration)
                     .await;
                 return Ok((
                     msg,
@@ -1772,7 +1772,7 @@ impl TaskRunner {
                     // sanitizes, but keeping history consistent is cheap.
                     history.push(RichMessage::ToolResults { results });
                     let msg = self
-                        .graceful_exit(client, &history, LoopStop::LoopDetected, &ledger)
+                        .graceful_exit(client, &history, LoopStop::LoopDetected, &ledger, iteration)
                         .await;
                     return Ok((
                         msg,
@@ -1808,7 +1808,7 @@ impl TaskRunner {
         }
 
         let msg = self
-            .graceful_exit(client, &history, LoopStop::MaxIterations, &ledger)
+            .graceful_exit(client, &history, LoopStop::MaxIterations, &ledger, iteration)
             .await;
         Ok((
             msg,
@@ -1829,6 +1829,7 @@ impl TaskRunner {
         history: &[crate::llm::RichMessage],
         reason: LoopStop,
         ledger: &crate::turn_ledger::TurnLedger,
+        iterations: u32,
     ) -> Message {
         use crate::llm::{LlmRequest, RichMessage};
 
@@ -1888,6 +1889,11 @@ impl TaskRunner {
                 LoopStop::TokenBudget => crate::turn_ledger::StopKind::TokenBudget,
                 LoopStop::LoopDetected => crate::turn_ledger::StopKind::LoopDetected,
             },
+            // Use the live counter passed in, not `ledger.iterations`: on the
+            // early-exit paths the caller's ledger was never updated with the
+            // current count, so trusting the field here would render "0
+            // iterations" even though the counter itself is correct.
+            iterations,
             ..ledger.clone()
         };
         settle(text, &ledger)
@@ -3516,6 +3522,7 @@ mod tests {
                 &history,
                 LoopStop::LoopDetected,
                 &crate::turn_ledger::TurnLedger::default(),
+                2,
             )
             .await;
         // Summary turn succeeded (not the fallback path).
@@ -3586,6 +3593,7 @@ mod tests {
                 &history,
                 LoopStop::MaxIterations,
                 &crate::turn_ledger::TurnLedger::default(),
+                3,
             )
             .await;
         let capped_text = text_of(&capped);
@@ -3601,6 +3609,7 @@ mod tests {
                 &history,
                 LoopStop::LoopDetected,
                 &crate::turn_ledger::TurnLedger::default(),
+                3,
             )
             .await;
         let other_text = text_of(&other);
