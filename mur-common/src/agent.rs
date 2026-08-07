@@ -1312,13 +1312,55 @@ pub struct CompanionConfig {
     pub proactive: ProactiveConfig,
 }
 
-/// Resolve a default BCP-47 locale from the `LANG` environment variable
-/// (e.g. `zh_TW.UTF-8` → `zh-TW`). Falls back to `en-US`.
+/// Resolve a default BCP-47 locale: the OS locale first (sys-locale already
+/// returns BCP-47, e.g. `zh-Hant-TW`), then the `LANG` environment variable
+/// (POSIX form `zh_TW.UTF-8` → `zh-TW`), then `en-US`.
+///
+/// OS-first matters because this is also the serde default for
+/// `AgentProfile.locale`: under launchd there is no `LANG`, so the old
+/// LANG-only resolution silently defaulted every headless agent to `en-US`
+/// even on a non-English system.
 pub fn default_locale() -> String {
-    std::env::var("LANG")
-        .ok()
-        .and_then(|v| v.split('.').next().map(|s| s.replace('_', "-")))
+    sys_locale::get_locale()
+        .filter(|l| !l.is_empty())
+        .or_else(|| std::env::var("LANG").ok().and_then(|v| normalize_lang(&v)))
         .unwrap_or_else(|| "en-US".into())
+}
+
+/// Parse a POSIX-style `LANG` value into BCP-47 (`zh_TW.UTF-8` → `zh-TW`).
+fn normalize_lang(v: &str) -> Option<String> {
+    v.split('.')
+        .next()
+        .map(|s| s.replace('_', "-"))
+        .filter(|s| !s.is_empty())
+}
+
+#[cfg(test)]
+mod locale_tests {
+    use super::normalize_lang;
+
+    #[test]
+    fn lang_with_encoding_and_region_normalizes() {
+        assert_eq!(normalize_lang("zh_TW.UTF-8").as_deref(), Some("zh-TW"));
+    }
+
+    #[test]
+    fn lang_without_encoding_normalizes() {
+        assert_eq!(normalize_lang("en_US").as_deref(), Some("en-US"));
+    }
+
+    #[test]
+    fn lang_with_script_keeps_script() {
+        assert_eq!(
+            normalize_lang("zh_Hant_TW.UTF-8").as_deref(),
+            Some("zh-Hant-TW")
+        );
+    }
+
+    #[test]
+    fn empty_lang_yields_none() {
+        assert_eq!(normalize_lang(""), None);
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
