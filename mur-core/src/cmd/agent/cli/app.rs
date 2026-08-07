@@ -335,6 +335,12 @@ pub struct App {
     /// operator presses `y`, that keystroke would otherwise land in the
     /// composer as text.
     pub hitl_resolved_at: Option<std::time::Instant>,
+    /// Pending second press for a session-wide grant (`a` or `A`). A single
+    /// stray keystroke must never hand a tool blanket approval, so those two
+    /// keys arm this instead of granting; a second matching press commits and
+    /// any other key disarms it. `y`/`n` stay single-press — they decide one
+    /// call, not the rest of the session.
+    pub hitl_grant_confirm: Option<char>,
     pub session: Session,
     /// Cached live-channel id + state for status bar. Refreshed after each
     /// persisted turn on resume/switch. `None` until first append.
@@ -526,6 +532,7 @@ impl App {
             hitl: None,
             hitl_inline_shown: false,
             hitl_resolved_at: None,
+            hitl_grant_confirm: None,
             session,
             channel: None,
             scroll_back: 0,
