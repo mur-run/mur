@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 pub fn cmd_murmurd_status() -> Result<()> {
     let lock_path = dirs::home_dir()

@@ -1808,7 +1808,13 @@ impl TaskRunner {
         }
 
         let msg = self
-            .graceful_exit(client, &history, LoopStop::MaxIterations, &ledger, iteration)
+            .graceful_exit(
+                client,
+                &history,
+                LoopStop::MaxIterations,
+                &ledger,
+                iteration,
+            )
             .await;
         Ok((
             msg,
