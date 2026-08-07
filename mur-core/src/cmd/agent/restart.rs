@@ -31,6 +31,12 @@ const RESTART_RESPAWN_WAIT_SECS: u64 = 120;
 /// latency; this one only needs to cover a fresh start.
 const RESTART_RETRY_WAIT_SECS: u64 = 30;
 
+/// Fallback `stop_timeout_secs` used when the agent's `profile.yaml` cannot be
+/// read or parsed. Kept as a named const (not a bare literal) so the value
+/// used in the SIGKILL-timing computation can never drift from the value
+/// reported in the operator-facing warning.
+const DEFAULT_STOP_TIMEOUT_SECS: u64 = 15;
+
 /// Compute the total seconds to wait before firing the SIGKILL fallback.
 ///
 /// Pure helper so the math can be unit-tested independently of live processes.
@@ -276,11 +282,24 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
     // cooperative drain can complete before we force-kill.
     let stop_timeout = {
         let pp = agent_home.join("profile.yaml");
-        fs::read_to_string(&pp)
+        match fs::read_to_string(&pp)
             .ok()
             .and_then(|y| serde_yaml_ng::from_str::<_AgentProfile>(&y).ok())
-            .map(|p| p.lifecycle.stop_timeout_secs)
-            .unwrap_or(15)
+        {
+            Some(p) => p.lifecycle.stop_timeout_secs,
+            None => {
+                // Profile missing/unreadable/malformed: fall back to the
+                // default, but say so — silently truncating an operator's
+                // configured drain window is exactly the kind of thing
+                // that only shows up as a mysteriously-killed agent later.
+                println!(
+                    "agent '{name}': could not read stop_timeout_secs from \
+                     {}; defaulting to {DEFAULT_STOP_TIMEOUT_SECS}s",
+                    pp.display()
+                );
+                DEFAULT_STOP_TIMEOUT_SECS
+            }
+        }
     };
 
     // ── SIGTERM (drain) ───────────────────────────────────────────────
@@ -333,6 +352,17 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
         if has_service {
             if kickstart_service(name) {
                 println!("agent '{name}': no respawn seen; kicked the service unit");
+            } else {
+                // The service manager either has no unit loaded or the kick
+                // command itself failed. Don't leave the agent for dead on
+                // a passive poll alone — fall back to a direct spawn so a
+                // stale/removed unit doesn't strand the agent, and tell the
+                // operator the kick didn't work so they can investigate the
+                // unit if this keeps happening.
+                println!(
+                    "agent '{name}': service kickstart failed; falling back to direct respawn"
+                );
+                direct_respawn(name, &agent_home)?;
             }
         } else {
             println!("agent '{name}': no respawn seen; retrying direct respawn");
