@@ -88,7 +88,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
     if let Some(hitl) = &app.hitl
         && !app.hitl_inline_shown
     {
-        render_hitl(f, hitl);
+        render_hitl(f, hitl, app.hitl_grant_confirm);
     }
 }
 
@@ -1207,7 +1207,7 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn render_hitl(f: &mut Frame, hitl: &super::stream::HitlRequest) {
+fn render_hitl(f: &mut Frame, hitl: &super::stream::HitlRequest, grant_confirm: Option<char>) {
     let area = centered_rect(70, 50, f.area());
     let input = serde_json::to_string_pretty(&hitl.tool_input).unwrap_or_default();
     let mut lines = vec![
@@ -1228,34 +1228,54 @@ fn render_hitl(f: &mut Frame, hitl: &super::stream::HitlRequest) {
         ));
     }
     lines.push(Line::default());
-    lines.push(Line::from(vec![
-        Span::styled(
-            "[y]",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" approve    "),
-        Span::styled(
-            "[a]",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" always allow this tool (session)    "),
-        Span::styled(
-            "[A]",
-            Style::default()
-                .fg(Color::Magenta)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" allow all tools (session)    "),
-        Span::styled(
-            "[n]",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" deny / Esc"),
-    ]));
+    // When a session-wide grant is armed, the modal shows ONLY the confirm
+    // instruction: the operator is answering "do you really mean the whole
+    // session?", and re-printing the full key row there invites a reflex press.
+    if let Some(c) = grant_confirm {
+        let what = if c == 'a' {
+            format!("`{}` for this session", hitl.tool_name)
+        } else {
+            "ALL tools for this session".to_string()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("press [{c}] again"),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!(" to allow {what} — any other key cancels")),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled(
+                "[y]",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" approve    "),
+            Span::styled(
+                "[a]",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" always allow this tool (session)    "),
+            Span::styled(
+                "[A]",
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" allow all tools (session)    "),
+            Span::styled(
+                "[n]",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" deny / Esc"),
+        ]));
+    }
 
     let block = Block::default()
         .borders(Borders::ALL)
