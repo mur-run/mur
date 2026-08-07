@@ -12,7 +12,7 @@
 //! deleting a line, and the display already marks every item here as the
 //! agent's unverified claim.
 
-use crate::tools::{ToolDef, ToolError, ToolExecutor};
+use crate::tools::{ToolDef, ToolError, ToolExecutor, ToolOutput};
 
 pub const OPEN_ITEM: &str = "open_item";
 
@@ -60,11 +60,11 @@ previous call to clear one."
         }
     }
 
-    async fn execute(&self, input: serde_json::Value) -> Result<String, ToolError> {
+    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
         if let Some(id) = input.get("resolve").and_then(|v| v.as_str()) {
             mur_open_items::resolve(&self.mur_home, id)
                 .map_err(|e| ToolError::Execution(format!("resolve open item: {e:#}")))?;
-            return Ok(format!("Resolved open item {id}."));
+            return Ok(format!("Resolved open item {id}.").into());
         }
 
         let title = input
@@ -99,7 +99,8 @@ previous call to clear one."
         Ok(format!(
             "Recorded as {id}. The user sees it under \"reported\" in `mur open`, marked as your \
 unverified claim."
-        ))
+        )
+        .into())
     }
 }
 
@@ -126,7 +127,12 @@ mod tests {
         assert_eq!(mur_open_items::open(tmp.path()).len(), 1);
 
         // The id is in the reply so the model can clear it next turn.
-        let id = out.split_whitespace().nth(2).unwrap().trim_end_matches('.');
+        let id = out
+            .text
+            .split_whitespace()
+            .nth(2)
+            .unwrap()
+            .trim_end_matches('.');
         t.execute(serde_json::json!({"resolve": id})).await.unwrap();
         assert!(mur_open_items::open(tmp.path()).is_empty());
     }

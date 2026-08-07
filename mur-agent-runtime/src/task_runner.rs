@@ -1276,6 +1276,9 @@ impl TaskRunner {
                 call_id: call.call_id.clone(),
                 content: format!("unknown tool: {}", call.tool_name),
                 is_error: true,
+                status: crate::tools::ToolStatus::Denied {
+                    detail: format!("unknown tool: {}", call.tool_name),
+                },
             });
         }
 
@@ -1308,6 +1311,9 @@ impl TaskRunner {
                         call_id: call.call_id.clone(),
                         content: format!("Tool `{}` is denied by policy.", call.tool_name),
                         is_error: true,
+                        status: crate::tools::ToolStatus::Denied {
+                            detail: format!("Tool `{}` is denied by policy.", call.tool_name),
+                        },
                     });
                 }
                 ToolPolicy::Allow => {
@@ -1328,9 +1334,13 @@ impl TaskRunner {
                             .await;
                     }
                     let t0 = std::time::Instant::now();
-                    let (output, is_error) = match tool.execute(call.input.clone()).await {
-                        Ok(out) => (out, false),
-                        Err(e) => (format!("tool error: {e}"), true),
+                    let (output, status, is_error) = match tool.execute(call.input.clone()).await {
+                        Ok(out) => (out.text, out.status, false),
+                        Err(e) => (
+                            format!("tool error: {e}"),
+                            crate::tools::ToolStatus::Failed { exit_code: -1 },
+                            true,
+                        ),
                     };
                     if let Some(ref n) = step_notifier {
                         let (out, truncated, full_len) = cap_step_output(&output);
@@ -1358,6 +1368,7 @@ impl TaskRunner {
                         call_id: call.call_id.clone(),
                         content: output,
                         is_error,
+                        status,
                     });
                 }
                 ToolPolicy::Ask => {
@@ -1440,9 +1451,13 @@ impl TaskRunner {
                 .await;
         }
         let t0_ask = std::time::Instant::now();
-        let (output, is_error) = match tool.execute(call.input.clone()).await {
-            Ok(out) => (out, false),
-            Err(e) => (format!("tool error: {e}"), true),
+        let (output, status, is_error) = match tool.execute(call.input.clone()).await {
+            Ok(out) => (out.text, out.status, false),
+            Err(e) => (
+                format!("tool error: {e}"),
+                crate::tools::ToolStatus::Failed { exit_code: -1 },
+                true,
+            ),
         };
         if let Some(ref n) = step_notifier {
             let (out, truncated, full_len) = cap_step_output(&output);
@@ -1474,6 +1489,7 @@ impl TaskRunner {
             call_id: call.call_id.clone(),
             content: output,
             is_error,
+            status,
         })
     }
 
@@ -1754,7 +1770,11 @@ impl TaskRunner {
                 ledger.record(crate::turn_ledger::Action {
                     tool: call.tool_name.clone(),
                     target: crate::turn_ledger::describe_target(&call.tool_name, &call.input),
-                    outcome: crate::turn_ledger::classify(&entry.content, entry.is_error),
+                    outcome: crate::turn_ledger::classify(
+                        &entry.content,
+                        entry.is_error,
+                        &entry.status,
+                    ),
                 });
                 let fp = (
                     call.tool_name.clone(),
@@ -1993,6 +2013,7 @@ fn sanitize_dangling_tool_uses(
                     call_id: c.call_id.clone(),
                     content: format!("[stopped: {}]", reason.as_str()),
                     is_error: true,
+                    status: crate::tools::ToolStatus::Ok,
                 })
                 .collect();
             if !missing.is_empty() {
@@ -2260,11 +2281,13 @@ mod tests {
                 call_id: "c1".into(),
                 content: "this is a large tool output".into(),
                 is_error: false,
+                status: crate::tools::ToolStatus::Ok,
             },
             ToolResultEntry {
                 call_id: "c2".into(),
                 content: "ok".into(),
                 is_error: false,
+                status: crate::tools::ToolStatus::Ok,
             },
         ];
         runner.apply_post_tool_use(&calls, &mut results).await;
@@ -2610,9 +2633,9 @@ mod tests {
         async fn execute(
             &self,
             _input: serde_json::Value,
-        ) -> Result<String, crate::tools::ToolError> {
+        ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
             self.calls.fetch_add(1, Ordering::Relaxed);
-            Ok("ran".into())
+            Ok("ran".to_string().into())
         }
     }
 
@@ -2637,9 +2660,9 @@ mod tests {
         async fn execute(
             &self,
             _input: serde_json::Value,
-        ) -> Result<String, crate::tools::ToolError> {
+        ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
             self.calls.fetch_add(1, Ordering::Relaxed);
-            Ok("fleet ran".into())
+            Ok("fleet ran".to_string().into())
         }
     }
 
@@ -3334,10 +3357,10 @@ mod tests {
         async fn execute(
             &self,
             _input: serde_json::Value,
-        ) -> Result<String, crate::tools::ToolError> {
+        ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
             let n = self.calls.fetch_add(1, Ordering::Relaxed);
             // Distinct content each call -> distinct result fingerprint.
-            Ok(format!("build output #{n}"))
+            Ok(format!("build output #{n}").into())
         }
     }
 
@@ -3360,8 +3383,8 @@ mod tests {
         async fn execute(
             &self,
             _input: serde_json::Value,
-        ) -> Result<String, crate::tools::ToolError> {
-            Ok("identical build output".into())
+        ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
+            Ok("identical build output".to_string().into())
         }
     }
 

@@ -554,6 +554,7 @@ mod tests {
                     call_id: "call_abc".into(),
                     content: "hi\n".into(),
                     is_error: false,
+                    status: crate::tools::ToolStatus::Ok,
                 }],
             },
         ];
