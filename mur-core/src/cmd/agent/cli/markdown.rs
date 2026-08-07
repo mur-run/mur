@@ -37,6 +37,12 @@ struct Renderer {
     quote: bool,
     /// One entry per open list; `Some(n)` = ordered list next number.
     list_stack: Vec<Option<u64>>,
+    /// Table collection: while inside a table, text/code/emphasis accumulate
+    /// into `table_cur_cell` instead of `cur`, rows are collected in
+    /// `table_rows`, and `TagEnd::Table` renders them as aligned columns.
+    in_table: bool,
+    table_rows: Vec<Vec<Vec<Span<'static>>>>,
+    table_cur_cell: Vec<Span<'static>>,
 }
 
 impl Renderer {
@@ -56,7 +62,12 @@ impl Renderer {
 
     fn push_text(&mut self, text: &str) {
         let style = self.span_style();
-        self.cur.push(Span::styled(text.to_string(), style));
+        let span = Span::styled(text.to_string(), style);
+        if self.in_table {
+            self.table_cur_cell.push(span);
+        } else {
+            self.cur.push(span);
+        }
     }
 
     /// Push the in-progress spans as a line. A no-op when there is nothing
@@ -64,6 +75,9 @@ impl Renderer {
     /// `flush_line` between two list items never injects a stray blank (which
     /// previously rendered tight lists double-spaced with a leading blank).
     fn flush_line(&mut self) {
+        if self.in_table {
+            return; // cell content stays in the cell buffer; lines come at table end
+        }
         if self.cur.is_empty() {
             return;
         }
@@ -107,8 +121,12 @@ impl Renderer {
                 }
             }
             Event::Code(t) => {
-                self.cur
-                    .push(Span::styled(t.to_string(), Style::default().fg(CODE)));
+                let span = Span::styled(t.to_string(), Style::default().fg(CODE));
+                if self.in_table {
+                    self.table_cur_cell.push(span);
+                } else {
+                    self.cur.push(span);
+                }
             }
             Event::SoftBreak => self.cur.push(Span::raw(" ".to_string())),
             Event::HardBreak => self.flush_line(),
@@ -150,10 +168,31 @@ impl Renderer {
                     .push(Span::styled(marker, Style::default().fg(HEADING)));
             }
             Tag::Paragraph => {
+                if self.in_table {
+                    return; // cells wrap their text in paragraphs; no indent/flush
+                }
                 if self.list_stack.is_empty() {
                     self.flush_line();
                 }
                 self.indent();
+            }
+            Tag::Table(_) => {
+                self.flush_line();
+                self.in_table = true;
+                self.table_rows.clear();
+                self.table_cur_cell.clear();
+            }
+            // The head row is wrapped in `TableHead`, not `TableRow` — both
+            // must open a new row or the header cells are silently dropped.
+            Tag::TableHead | Tag::TableRow => {
+                // End any in-progress cell (malformed tables may omit the
+                // close tag), then start a fresh row.
+                if !self.table_cur_cell.is_empty()
+                    && let Some(row) = self.table_rows.last_mut()
+                {
+                    row.push(std::mem::take(&mut self.table_cur_cell));
+                }
+                self.table_rows.push(Vec::new());
             }
             _ => {}
         }
@@ -187,13 +226,110 @@ impl Renderer {
             }
             TagEnd::Item => self.flush_line(),
             TagEnd::Paragraph => {
+                if self.in_table {
+                    return;
+                }
                 self.flush_line();
                 if self.list_stack.is_empty() {
                     self.blank_line();
                 }
             }
+            TagEnd::TableCell => {
+                let cell = std::mem::take(&mut self.table_cur_cell);
+                if let Some(row) = self.table_rows.last_mut() {
+                    row.push(cell);
+                }
+            }
+            TagEnd::TableRow => {
+                if !self.table_cur_cell.is_empty()
+                    && let Some(row) = self.table_rows.last_mut()
+                {
+                    row.push(std::mem::take(&mut self.table_cur_cell));
+                }
+            }
+            TagEnd::Table => self.render_table(),
             _ => {}
         }
+    }
+
+    /// Emit the collected rows as aligned, wrapped-free column lines: header
+    /// row bold with a dim separator under it. Cell text keeps its inline
+    /// styles (code, bold); widths are display-columns (CJK-safe), each
+    /// column capped so a pathological cell cannot balloon the line.
+    fn render_table(&mut self) {
+        let rows = std::mem::take(&mut self.table_rows);
+        self.in_table = false;
+        self.table_cur_cell.clear();
+        if rows.is_empty() {
+            return;
+        }
+        let ncols = rows.iter().map(Vec::len).max().unwrap_or(0);
+        if ncols == 0 {
+            return;
+        }
+        const CELL_MAX: usize = 24;
+        let rows: Vec<Vec<Line<'static>>> = rows
+            .into_iter()
+            .map(|mut r| {
+                while r.len() < ncols {
+                    r.push(Vec::new());
+                }
+                r.into_iter()
+                    .map(|spans| {
+                        Line::from(
+                            spans
+                                .into_iter()
+                                .map(|s| {
+                                    // Guard against stray newlines inside a cell.
+                                    Span::styled(s.content.replace('\n', " "), s.style)
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut widths = vec![0usize; ncols];
+        for row in &rows {
+            for (i, cell) in row.iter().enumerate() {
+                widths[i] = widths[i].max(cell.width());
+            }
+        }
+        for w in &mut widths {
+            *w = (*w).min(CELL_MAX);
+        }
+        for (ri, row) in rows.iter().enumerate() {
+            let mut line: Vec<Span<'static>> = Vec::new();
+            for (ci, cell) in row.iter().enumerate() {
+                if ci > 0 {
+                    line.push(Span::raw(" │ ".to_string()));
+                }
+                let pad = " ".repeat(widths[ci].saturating_sub(cell.width()));
+                line.push(Span::raw(pad));
+                if ri == 0 {
+                    // Header: bold, matching the heading style.
+                    line.extend(
+                        cell.spans
+                            .iter()
+                            .cloned()
+                            .map(|s| Span::styled(s.content, s.style.add_modifier(Modifier::BOLD))),
+                    );
+                } else {
+                    line.extend(cell.spans.iter().cloned());
+                }
+            }
+            self.lines.push(Line::from(line));
+            if ri == 0 {
+                let sep = widths
+                    .iter()
+                    .map(|w| "─".repeat(*w))
+                    .collect::<Vec<_>>()
+                    .join("─┼─");
+                self.lines
+                    .push(Line::styled(sep, Style::default().fg(QUOTE)));
+            }
+        }
+        self.blank_line();
     }
 
     fn finish(mut self) -> Text<'static> {
@@ -239,6 +375,50 @@ mod tests {
         assert!(s.contains("• b"));
         assert!(s.contains("1. one"));
         assert!(s.contains("2. two"));
+    }
+
+    #[test]
+    fn renders_table_with_aligned_columns_and_bold_header() {
+        let t = render(
+            "| file:line | Status | Evidence |\n\
+             | --- | --- | --- |\n\
+             | `murmurd.rs:130` | CONFIRMED | lock read fail-open |\n\
+             | `step.rs:56` | REJECTED | — |",
+        );
+        let lines = t
+            .lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        // Header and both body rows survive as their own lines with the column
+        // separator; the markdown pipes themselves are gone.
+        assert!(lines[0].contains("file:line"), "lines: {lines:?}");
+        assert!(lines[0].contains("│"));
+        assert!(lines[2].contains("CONFIRMED"));
+        assert!(lines[2].contains("│"));
+        assert!(lines[3].contains("REJECTED"));
+        // Header row cell spans are styled bold (pad/separator spans aren't).
+        assert!(
+            t.lines[0]
+                .spans
+                .iter()
+                .any(|s| s.style.add_modifier.contains(Modifier::BOLD))
+        );
+        // A separator line sits under the header.
+        assert!(lines[1].contains('─'));
+    }
+
+    #[test]
+    fn table_does_not_bleed_into_following_paragraph() {
+        let t = render("| a | b |\n| --- | --- |\n| 1 | 2 |\n\nAfter the table.");
+        let s = plain(&t);
+        assert!(s.contains("After the table."));
+        assert!(s.contains("│"));
     }
 
     fn rows(text: &Text) -> Vec<String> {
