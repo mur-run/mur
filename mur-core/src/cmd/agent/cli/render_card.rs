@@ -241,27 +241,91 @@ fn hint_budget(width: u16) -> usize {
         .max(ARG_HINT_MIN)
 }
 
-/// Compact first-scalar-arg hint for the header line (e.g. file path, query).
-/// Clips at `budget` bytes so long paths don't wrap the header.
-/// Uses `floor_char_boundary` to avoid panicking on multi-byte chars (CJK, emoji).
+/// One display column carved out of the hint budget for the `…`
+/// middle-elision marker itself, so `elide_middle` never returns something
+/// longer than `budget` columns. The budget arithmetic here is byte-based,
+/// not column-based, so this (like the rest of the budget) is only an
+/// approximation of display width once the string contains wide characters.
+const ELLIPSIS_OVERHEAD: usize = 1;
+
+/// Session-constant prefix every bash command shares when the agent re-`cd`s
+/// into the working directory before each call. Stripping it before hinting
+/// is what stops eighteen rows in a row from sharing one useless 55-byte
+/// prefix and differing only in the part that gets truncated away.
+fn strip_cd_prefix(cmd: &str) -> &str {
+    let Some(rest) = cmd.strip_prefix("cd ") else {
+        return cmd;
+    };
+    match rest.find(" && ") {
+        Some(i) => &rest[i + 4..],
+        None => cmd,
+    }
+}
+
+/// Pick the field that actually describes what a tool call did: the command
+/// for bash, the path for file tools, falling back to the first string value
+/// in `args` (the old behaviour, which picked an arbitrary key because
+/// `serde_json::Map` sorts alphabetically) only when neither is present.
+fn hint_field(card: &StepCard) -> Option<&str> {
+    let obj = card.args.as_object()?;
+    if card.name.eq_ignore_ascii_case("bash")
+        && let Some(cmd) = obj.get("command").and_then(|v| v.as_str())
+    {
+        return Some(cmd);
+    }
+    if let Some(path) = obj
+        .get("file_path")
+        .or_else(|| obj.get("path"))
+        .and_then(|v| v.as_str())
+    {
+        return Some(path);
+    }
+    obj.values().find_map(|v| v.as_str())
+}
+
+/// Truncate `s` to `budget` bytes by cutting out of the middle and keeping
+/// head and tail, so the distinguishing suffix (a filename, a flag, the part
+/// that differs between two otherwise-identical commands) survives instead
+/// of being the first thing cut. Uses `floor_char_boundary`/
+/// `ceil_char_boundary` so multi-byte chars (CJK, emoji) can't be split.
+fn elide_middle(s: &str, budget: usize) -> String {
+    if s.len() <= budget {
+        return s.to_string();
+    }
+    let keep = budget.saturating_sub(ELLIPSIS_OVERHEAD);
+    let head_len = keep / 2;
+    let tail_len = keep - head_len;
+    let head_end = s.floor_char_boundary(head_len);
+    let tail_start = s.ceil_char_boundary(s.len().saturating_sub(tail_len));
+    if tail_start <= head_end {
+        // Budget too small to fit both a head and a tail — fall back to a
+        // plain head clip rather than emit an empty or malformed hint.
+        let end = s.floor_char_boundary(budget);
+        return format!("{}…", &s[..end]);
+    }
+    format!("{}…{}", &s[..head_end], &s[tail_start..])
+}
+
+/// Compact arg hint for the header line (e.g. bash command, file path, query).
+/// For bash, strips a leading `cd <path> && ` segment first since it is
+/// session state repeated on every row and carries no distinguishing
+/// information. Elides the middle rather than the tail so truncation never
+/// eats the part that differs between two otherwise-similar calls.
 fn arg_hint(card: &StepCard, budget: usize) -> String {
-    card.args
-        .as_object()
-        .and_then(|m| m.values().find_map(|v| v.as_str()))
-        .map(|s| {
-            if s.len() > budget {
-                let end = s.floor_char_boundary(budget);
-                format!("{}…", &s[..end])
-            } else {
-                s.to_string()
-            }
-        })
-        .unwrap_or_default()
+    let Some(raw) = hint_field(card) else {
+        return String::new();
+    };
+    let s = if card.name.eq_ignore_ascii_case("bash") {
+        strip_cd_prefix(raw)
+    } else {
+        raw
+    };
+    elide_middle(s, budget)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ARG_HINT_MIN, card_lines, hint_budget};
+    use super::{ARG_HINT_MIN, card_lines, elide_middle, hint_budget, hint_field, strip_cd_prefix};
     use crate::cmd::agent::cli::step::StepCard;
     use crate::cmd::agent::cli::theme;
 
@@ -322,6 +386,58 @@ mod tests {
             serde_json::json!({ "path": long_cjk }),
         );
         let _ = card_lines(&c, theme::resolve_skin("dark"), true, TEST_WIDTH); // must NOT panic
+    }
+
+    #[test]
+    fn strip_cd_prefix_removes_session_constant_cd() {
+        assert_eq!(
+            strip_cd_prefix(r#"cd /some/path && grep -n "x" f.rs"#),
+            r#"grep -n "x" f.rs"#
+        );
+        // No cd prefix: left untouched.
+        assert_eq!(
+            strip_cd_prefix(r#"grep -n "x" f.rs"#),
+            r#"grep -n "x" f.rs"#
+        );
+    }
+
+    #[test]
+    fn hint_field_picks_bash_command_over_an_earlier_sorting_key() {
+        // `args` is a serde_json::Map (BTreeMap), so "aaa_unrelated" sorts
+        // before "command" alphabetically. The old code took the first
+        // string value in the map and would have picked this one instead.
+        let c = StepCard::new(
+            "s1".into(),
+            "bash".into(),
+            serde_json::json!({ "aaa_unrelated": "not the command", "command": "cargo test" }),
+        );
+        assert_eq!(hint_field(&c), Some("cargo test"));
+    }
+
+    #[test]
+    fn elide_middle_keeps_head_and_tail_so_differing_tails_differ() {
+        // Old tail-truncation cut everything after `budget` bytes, so two
+        // commands sharing a long common prefix and differing only at the
+        // end produced identical, useless hints.
+        let a = "cargo test --workspace --package mur-core --lib render_card::tests::alpha";
+        let b = "cargo test --workspace --package mur-core --lib render_card::tests::zzzzz";
+        let hint_a = elide_middle(a, 40);
+        let hint_b = elide_middle(b, 40);
+        assert_ne!(hint_a, hint_b);
+        assert!(hint_a.contains('…'));
+        assert!(hint_b.contains('…'));
+    }
+
+    #[test]
+    fn elide_middle_on_long_multibyte_path_does_not_panic_and_respects_budget() {
+        let long_cjk = "檔".repeat(50); // 3 bytes/char → ~150 bytes, well past 40
+        let budget = 40;
+        let hint = elide_middle(&long_cjk, budget);
+        // `…` itself is 3 UTF-8 bytes but ELLIPSIS_OVERHEAD reserves 1 (a
+        // display column, not a byte — see its doc comment), so the byte
+        // length can run a couple of bytes over `budget`, never far over it.
+        assert!(hint.len() <= budget + "…".len());
+        assert!(hint.contains('…'));
     }
 
     #[test]
