@@ -1865,6 +1865,7 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
             full_len,
             error,
             duration_ms,
+            denied,
             ..
         } => {
             app.update_step_completed(
@@ -1875,6 +1876,7 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
                 full_len,
                 error,
                 duration_ms,
+                denied,
             );
             app.finish_auto_fleet(&step_id, ok, duration_ms);
         }
