@@ -96,15 +96,30 @@ pub fn event_log_path(mur_home: &Path, skill_name: &str) -> PathBuf {
 }
 
 pub fn append_event(path: &Path, event: &SkillEvent) -> Result<()> {
+    use fs2::FileExt;
+    use std::io::{Seek, SeekFrom};
+
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let line = serde_json::to_string(event)?;
+    // Open read+write (not `append(true)`) and take an exclusive flock,
+    // seeking to end ourselves — matches multimodal::ledger::append.
+    // `append(true)` alone doesn't request enough access for `LockFileEx`
+    // on Windows, and without a lock concurrent writers can interleave
+    // their `write()` syscalls and tear a line.
     let mut f = std::fs::OpenOptions::new()
         .create(true)
-        .append(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
         .open(path)?;
-    writeln!(f, "{line}")?;
+    f.lock_exclusive()?;
+    f.seek(SeekFrom::End(0))?;
+    // One write() call for the whole line (content + newline) so a torn
+    // write can't happen even if the lock were ever dropped.
+    f.write_all(format!("{line}\n").as_bytes())?;
+    f.unlock()?;
     Ok(())
 }
 
@@ -386,6 +401,52 @@ mod tests {
         append_event(&path, &exec_ok(1)).unwrap();
         let events = read_events(&path).unwrap();
         assert_eq!(events.len(), 2);
+    }
+
+    /// Regression test for torn/interleaved lines under concurrent writers.
+    ///
+    /// N threads each append M events to the same path with no external
+    /// synchronization; `append_event` itself must serialize the writes via
+    /// flock, otherwise two writers' `write()` syscalls can interleave and
+    /// glue/tear a line. `parse_events_jsonl` uses `.collect::<Result<_>>()`,
+    /// so a torn line makes the *whole* `read_events` call return `Err`
+    /// rather than silently dropping one entry — either way it's a real
+    /// failure, so we assert both that reading succeeds and that we get
+    /// back exactly the expected count.
+    ///
+    /// Verified this reproduces against the old `append(true)` + `writeln!`
+    /// implementation: reverting `append_event` to that shape and rerunning
+    /// this test failed within a handful of runs with
+    /// `called \`Result::unwrap()\` on an \`Err\` value: trailing characters
+    /// at line 1 column 69` — a torn/glued line that no longer parses as
+    /// JSON. It's a data race so it doesn't fail on literally every run,
+    /// but it reproduces reliably enough (a handful of tries) to be
+    /// confident it exercises the bug.
+    #[test]
+    fn concurrent_appends_produce_no_torn_lines() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+
+        const THREADS: i64 = 8;
+        const PER_THREAD: i64 = 25;
+
+        let handles: Vec<_> = (0..THREADS)
+            .map(|t| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    for i in 0..PER_THREAD {
+                        let ts_offset = t * PER_THREAD + i;
+                        append_event(&path, &retrieval(ts_offset)).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let events = read_events(&path).unwrap();
+        assert_eq!(events.len(), (THREADS * PER_THREAD) as usize);
     }
 
     #[test]
