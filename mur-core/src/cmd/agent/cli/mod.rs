@@ -710,6 +710,22 @@ async fn event_loop(
             .as_ref()
             .map(|r| TokioInstant::from_std(r.next_poll()))
             .unwrap_or_else(|| TokioInstant::from_std(StdInstant::now()));
+        // A gate nobody answers expires on the runtime side and the call is
+        // denied there. Nothing tells the CLI — `StreamMsg::Expired` only
+        // arrives if the operator decides too LATE — so the request sat in
+        // `app.hitl` forever and the status line kept advertising
+        // "auto-deny in 0s" over a request that was already dead, while the
+        // transcript said it had been denied. Retire it locally on the same
+        // deadline the status line counts down to, so the two agree.
+        expire_stale_hitl(app);
+        // Wake exactly at the expiry, or an idle loop (nothing streaming, no
+        // blink, no rail) never notices its own countdown reaching zero.
+        let hitl_armed = app.hitl.is_some();
+        let hitl_at = app
+            .hitl
+            .as_ref()
+            .map(|r| TokioInstant::from_std(r.created_at + crate::hitl::gate::DEFAULT_TIMEOUT))
+            .unwrap_or_else(|| TokioInstant::from_std(StdInstant::now()));
         tokio::select! {
             maybe = events.next() => match maybe {
                 Some(Ok(ev)) => handle_event(app, ev, &tx).await,
@@ -733,6 +749,7 @@ async fn event_loop(
             // deadline, so this arm's only job is to schedule the NEXT
             // wake-up. No state change needed here.
             _ = tokio::time::sleep_until(rail_at), if rail_armed => {}
+            _ = tokio::time::sleep_until(hitl_at), if hitl_armed => {}
             _ = tokio::time::sleep_until(input_due), if input_armed => {
                 if let Some(raw) = take_due_input(app, StdInstant::now())
                     && let Some(p) = &app.panel
@@ -1315,6 +1332,43 @@ fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
 /// isn't reported to the user as success).
 fn decide_hitl(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: bool) {
     decide_hitl_with_note(app, tx, allow, false);
+}
+
+/// Retire an approval request that has outlived the gate's timeout.
+///
+/// The runtime denies the call on its own deadline and says nothing about it:
+/// `StreamMsg::Expired` only arrives when the operator answers too LATE, so a
+/// gate nobody touched stayed in `app.hitl` forever. The status line went on
+/// advertising "tool approval needed (auto-deny in 0s)" for a request that was
+/// already dead — the one surface still claiming a decision was wanted.
+///
+/// Uses the same `DEFAULT_TIMEOUT` the status line counts down to, so the
+/// display and the state cannot disagree. (A profile that shortens
+/// `hitl.timeout_secs` still expires earlier on the runtime side than the CLI
+/// shows; the request carries no timeout for the CLI to read.)
+///
+/// Returns whether anything was retired.
+fn expire_stale_hitl(app: &mut App) -> bool {
+    let Some(req) = &app.hitl else { return false };
+    if req.created_at.elapsed() < crate::hitl::gate::DEFAULT_TIMEOUT {
+        return false;
+    }
+    let tool = req.tool_name.clone();
+    let step = req.step_id.clone();
+    app.hitl = None;
+    app.hitl_grant_confirm = None;
+    // Same swallow window as a normal decision: a key pressed just as the gate
+    // died must not land in the composer as text.
+    app.hitl_resolved_at = Some(StdInstant::now());
+    if let Some(sid) = step {
+        app.clear_card_awaiting(&sid);
+    }
+    app.push_system_sev(
+        format!("approval for `{tool}` timed out — auto-denied"),
+        app::Severity::Warn,
+    );
+    app.needs_full_redraw = true;
+    true
 }
 
 fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: bool, auto: bool) {
@@ -2324,5 +2378,42 @@ mod hitl_key_tests {
             said.contains("bash") && said.contains("write_file"),
             "{said}"
         );
+    }
+
+    /// A gate nobody answers is denied by the runtime on its own deadline and
+    /// the CLI is never told. The request used to sit in `app.hitl` forever,
+    /// so the status line kept asking for a decision on a dead request while
+    /// the transcript already said it had been denied.
+    #[test]
+    fn stale_gate_is_retired_so_the_status_line_stops_asking() {
+        let mut app = App::test_fixture();
+        gate(&mut app);
+
+        // Fresh: nothing to retire.
+        assert!(!expire_stale_hitl(&mut app));
+        assert!(app.hitl.is_some());
+
+        // Past the gate's deadline: retired, and the operator is told why.
+        if let Some(req) = &mut app.hitl {
+            req.created_at = std::time::Instant::now()
+                - crate::hitl::gate::DEFAULT_TIMEOUT
+                - std::time::Duration::from_secs(1);
+        }
+        assert!(expire_stale_hitl(&mut app));
+        assert!(app.hitl.is_none(), "status line must stop asking");
+        let said = app
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == Role::System)
+            .map(|m| m.text.clone())
+            .unwrap_or_default();
+        assert!(
+            said.contains("write_file") && said.contains("timed out"),
+            "{said}"
+        );
+
+        // Idempotent: nothing left to retire.
+        assert!(!expire_stale_hitl(&mut app));
     }
 }
