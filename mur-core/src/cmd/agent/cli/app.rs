@@ -326,10 +326,6 @@ pub struct App {
     pub turn_produced_output: bool,
     pub streaming: bool,
     pub hitl: Option<HitlRequest>,
-    /// True when the current `hitl` was attached to a step card (inline
-    /// approval row shown there) rather than left unattached. Drives whether
-    /// the centered modal is also needed — see `mark_card_awaiting`.
-    pub hitl_inline_shown: bool,
     /// When the last HITL decision was resolved, for swallowing a stale
     /// decision key: if a gate auto-resolves (read lane / /auto) just as the
     /// operator presses `y`, that keystroke would otherwise land in the
@@ -530,7 +526,6 @@ impl App {
             turn_produced_output: false,
             streaming: false,
             hitl: None,
-            hitl_inline_shown: false,
             hitl_resolved_at: None,
             hitl_grant_confirm: None,
             session,
@@ -963,11 +958,11 @@ impl App {
         }
     }
 
-    /// Flag the card with this `step_id` as awaiting a HITL decision.
-    /// Returns whether a matching card was actually found: the approval
-    /// gate fires before the step card exists in the common case, so the
-    /// caller must not assume a `step_id` implies the inline row is shown.
-    pub fn mark_card_awaiting(&mut self, step_id: &str) -> bool {
+    /// Flag the card with this `step_id` as awaiting a HITL decision, so it
+    /// renders the inline approval row. Whether that row can actually be SEEN
+    /// is a separate question — ask [`App::hitl_inline_visible`] at render
+    /// time, not once at attach time.
+    pub fn mark_card_awaiting(&mut self, step_id: &str) {
         if let Some(card) = self
             .messages
             .iter_mut()
@@ -975,10 +970,28 @@ impl App {
             .find_map(|m| m.step.as_mut().filter(|c| c.id == step_id))
         {
             card.awaiting_hitl = true;
-            true
-        } else {
-            false
         }
+    }
+
+    /// Is the inline approval row for the open gate actually on screen?
+    ///
+    /// Only a card still in the live band can repaint: messages below
+    /// `flushed_upto` are committed to the terminal's native scrollback and
+    /// their rows are frozen forever. The renderer suppresses the centered
+    /// modal when this is true, so a wrong `true` costs the operator every
+    /// surface at once — no modal, no inline row, and a status line that
+    /// cannot name the tool. Two ways that used to happen: the gate fires
+    /// before the card exists (common), and the card is flushed to scrollback
+    /// either before the gate opens or while it is still open.
+    ///
+    /// Recompute it per frame; do not cache.
+    pub fn hitl_inline_visible(&self, step_id: Option<&str>) -> bool {
+        let Some(sid) = step_id else { return false };
+        self.messages.iter().skip(self.flushed_upto).any(|m| {
+            m.step
+                .as_ref()
+                .is_some_and(|c| c.id == sid && c.awaiting_hitl)
+        })
     }
 
     /// Mark the card with this `step_id` as auto-approved — by the read lane
@@ -2015,7 +2028,7 @@ mod awaiting_tests {
     }
 
     #[test]
-    fn mark_card_awaiting_reports_whether_it_found_a_card() {
+    fn inline_row_visible_only_for_a_card_in_the_live_band() {
         let mut a = App::test_fixture();
         a.begin_user_turn("edit it");
         a.push_step_started(
@@ -2025,12 +2038,53 @@ mod awaiting_tests {
         );
         a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5, false);
 
-        // No card exists for this step_id: the caller must be told so it can
+        // No card exists for this step_id: the renderer must be told so it can
         // fall back to the modal instead of assuming inline approval worked.
-        assert!(!a.mark_card_awaiting("no-such-step"));
+        a.mark_card_awaiting("no-such-step");
+        assert!(!a.hitl_inline_visible(Some("no-such-step")));
 
-        // A card exists for "s1": attachment succeeds and is reported.
-        assert!(a.mark_card_awaiting("s1"));
+        // A card exists for "s1" and is still in the live band: the inline row
+        // is genuinely on screen, so the modal stands down.
+        a.mark_card_awaiting("s1");
+        assert!(a.hitl_inline_visible(Some("s1")));
+
+        // A gate with no step_id at all can never be inline.
+        assert!(!a.hitl_inline_visible(None));
+    }
+
+    /// A card already committed to the terminal's native scrollback can never
+    /// repaint, so the inline approval row on it shows the operator nothing.
+    /// Claiming it is visible suppressed the modal too and left an approval
+    /// request with no surface at all — no modal, no row, no tool name.
+    #[test]
+    fn flushed_card_is_not_visible_so_the_modal_takes_over() {
+        let mut a = App::test_fixture();
+        a.begin_user_turn("edit it");
+        a.push_step_started(
+            "s1".into(),
+            "edit".into(),
+            serde_json::json!({"file_path":"a.rs"}),
+        );
+        a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5, false);
+        a.mark_card_awaiting("s1");
+        assert!(a.hitl_inline_visible(Some("s1")), "live band: row shows");
+
+        // The band overflows and the card is committed to scrollback — this
+        // can happen while the gate is still open, which is why visibility is
+        // recomputed per frame instead of cached at attach time.
+        a.flushed_upto = a.messages.len();
+        assert!(
+            !a.hitl_inline_visible(Some("s1")),
+            "frozen rows cannot show an approval request"
+        );
+
+        // The flag itself stays set: a full redraw / transcript dump uses it.
+        let card = a
+            .messages
+            .iter()
+            .find_map(|m| m.step.as_ref().filter(|c| c.id == "s1"))
+            .unwrap();
+        assert!(card.awaiting_hitl);
     }
 }
 

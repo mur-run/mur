@@ -77,16 +77,16 @@ pub fn render(f: &mut Frame, app: &mut App) {
     f.render_widget(&app.input, chunks[3]);
     render_status(f, app, chunks[4]);
 
-    // The centered modal is the fallback whenever the approval was NOT
-    // attached to a step card's inline row. We key this on actual
-    // attachment (`hitl_inline_shown`), not on whether the runtime sent a
-    // step_id: the approval gate commonly fires before the step card
-    // exists, so `mark_card_awaiting` silently finds nothing even though
-    // step_id is Some — gating on step_id alone left the operator with
-    // neither the modal nor the inline row. Do not revert to a
-    // step_id.is_none() check.
+    // The centered modal is the fallback whenever the approval's inline row on
+    // a step card is not actually visible. Key it on VISIBILITY recomputed per
+    // frame (`hitl_inline_visible`), never on whether the runtime sent a
+    // step_id and never on a cached flag: the gate commonly fires before the
+    // card exists, and a card that is live when the gate opens can be flushed
+    // into frozen scrollback while it is still open. Both used to leave the
+    // operator with neither surface. The invariant: an open gate always has at
+    // least one place the operator can see it.
     if let Some(hitl) = &app.hitl
-        && !app.hitl_inline_shown
+        && !app.hitl_inline_visible(hitl.step_id.as_deref())
     {
         render_hitl(f, hitl, app.hitl_grant_confirm);
     }
