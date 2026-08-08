@@ -123,6 +123,7 @@ fn spawn_sandboxed_runs_true() {
             spawn: SpawnEntitlement {
                 mode: SpawnMode::Any,
                 allowed: vec![],
+                allowed_dirs: vec![],
             },
         },
         syscalls: Default::default(),
@@ -297,6 +298,7 @@ fn linux_ruleset_paths_are_absolute() {
             spawn: SpawnEntitlement {
                 mode: SpawnMode::Any,
                 allowed: vec![],
+                allowed_dirs: vec![],
             },
         },
         syscalls: Default::default(),

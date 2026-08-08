@@ -744,6 +744,13 @@ pub enum AgentPermAction {
     AllowSpawn { name: String, binary: String },
     /// Remove a binary from the spawn allowlist
     DenySpawn { name: String, binary: String },
+    /// Allow exec of everything under a directory — the build lane, for
+    /// toolchains that compile and then run their own binaries (cargo build
+    /// scripts, proc macros, test executables). Grant a build-output
+    /// directory, never a source tree or a home directory
+    AllowSpawnDir { name: String, dir: String },
+    /// Remove a directory from the build lane
+    DenySpawnDir { name: String, dir: String },
     /// Set a numeric resource limit (memory_mb, file_descriptors, processes)
     SetLimit {
         name: String,

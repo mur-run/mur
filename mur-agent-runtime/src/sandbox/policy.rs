@@ -465,6 +465,32 @@ impl SandboxPolicy {
             }
         }
 
+        // Explicit build-lane grants (`processes.spawn.allowed_dirs`). A
+        // toolchain that compiles its own executables cannot be expressed as
+        // a list of binaries — a Rust build execs build scripts, proc-macro
+        // shims and test binaries at hash-suffixed paths that do not exist
+        // until the build creates them. Fail closed the same way the literal
+        // list does: an entry that is missing, is not a directory, or cannot
+        // be canonicalized is dropped rather than widened.
+        for dir in &ent.processes.spawn.allowed_dirs {
+            let expanded = expand(dir);
+            let Ok(canon) = std::fs::canonicalize(&expanded) else {
+                continue;
+            };
+            if !canon.is_dir() {
+                continue;
+            }
+            // A grant of `/`, `/usr`, the home directory, or a bare
+            // `/Volumes/<mount>` is not a build lane; it is every binary
+            // reachable under it. Same guard the derived prefixes use.
+            if is_guarded_prefix(&canon, &home) {
+                continue;
+            }
+            if !spawn_allowed_prefixes.contains(&canon) {
+                spawn_allowed_prefixes.push(canon);
+            }
+        }
+
         let (net_allow_ports, net_allow_hosts, net_loopback_allowed) =
             match ent.network.outbound.mode {
                 NetworkOutboundMode::Unrestricted => (None, None, false),
@@ -757,6 +783,7 @@ mod tests {
                 spawn: SpawnEntitlement {
                     mode: SpawnMode::Allowlist,
                     allowed: vec![],
+                    allowed_dirs: vec![],
                 },
             },
             syscalls: Default::default(),
@@ -1238,6 +1265,60 @@ mod tests {
                 .all(|p| p.ends_with("fake-tool")),
             "no unrelated binary name should have leaked into spawn_allowed_paths: {:?}",
             policy.spawn_allowed_paths
+        );
+    }
+
+    /// The build lane: an explicit directory grant becomes an exec prefix, so
+    /// a toolchain can run binaries it compiles itself (cargo build scripts,
+    /// proc-macro shims, test executables) at paths that do not exist when
+    /// the entitlement is written. Fails closed on anything unusable, and
+    /// refuses a grant so broad it is not a lane at all.
+    #[test]
+    fn build_lane_grants_a_directory_prefix_and_fails_closed() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp.path().join("target");
+        std::fs::create_dir_all(&target).expect("mkdir target");
+        let a_file = tmp.path().join("not-a-dir");
+        std::fs::write(&a_file, b"x").expect("write file");
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+
+        let mut ent = minimal_entitlements();
+        ent.processes.spawn.mode = SpawnMode::Allowlist;
+        ent.processes.spawn.allowed_dirs = vec![
+            target.to_string_lossy().to_string(),
+            a_file.to_string_lossy().to_string(), // not a directory
+            "/definitely/does/not/exist".to_string(), // missing
+            "/".to_string(),                      // guarded: not a lane
+            home.to_string_lossy().to_string(),   // guarded: whole home
+        ];
+
+        let policy =
+            SandboxPolicy::from_entitlements(&ent, &PathBuf::from("/tmp/agent_home_build_lane"));
+
+        let canon_target = std::fs::canonicalize(&target).expect("canonicalize target");
+        assert!(
+            policy.spawn_allowed_prefixes.contains(&canon_target),
+            "the build-output directory must become an exec prefix: {:?}",
+            policy.spawn_allowed_prefixes
+        );
+        for bad in [
+            PathBuf::from("/"),
+            home.clone(),
+            PathBuf::from("/definitely/does/not/exist"),
+        ] {
+            assert!(
+                !policy.spawn_allowed_prefixes.contains(&bad),
+                "must not grant {bad:?}: {:?}",
+                policy.spawn_allowed_prefixes
+            );
+        }
+        assert!(
+            !policy
+                .spawn_allowed_prefixes
+                .iter()
+                .any(|p| p.ends_with("not-a-dir")),
+            "a plain file is not a lane: {:?}",
+            policy.spawn_allowed_prefixes
         );
     }
 

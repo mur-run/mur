@@ -1883,6 +1883,12 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentPermAction::DenySpawn { name, binary } => {
                 cmd::agent::cmd_perm_deny_spawn(&name, &binary)?
             }
+            AgentPermAction::AllowSpawnDir { name, dir } => {
+                cmd::agent::cmd_perm_allow_spawn_dir(&name, &dir)?
+            }
+            AgentPermAction::DenySpawnDir { name, dir } => {
+                cmd::agent::cmd_perm_deny_spawn_dir(&name, &dir)?
+            }
             AgentPermAction::SetLimit { name, key, value } => {
                 cmd::agent::cmd_perm_set_limit(&name, &key, value)?
             }
