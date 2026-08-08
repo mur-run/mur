@@ -174,11 +174,6 @@ pub async fn cmd_cli(
                 "note: --budget-usd is only enforced in the interactive TUI; it is ignored in plain/piped mode."
             );
         }
-        if auto_reads {
-            eprintln!(
-                "note: --auto-reads is only enforced in the interactive TUI; it is ignored in plain/piped mode."
-            );
-        }
         if fleet.is_some() {
             eprintln!(
                 "note: --fleet is only shown in the interactive TUI; it is ignored in plain/piped mode."
@@ -187,8 +182,10 @@ pub async fn cmd_cli(
         let home2 = home.clone();
         let agent2 = agent.clone();
         let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
-        return tokio::task::spawn_blocking(move || run_plain(&home2, &agent2, auto, interactive))
-            .await?;
+        return tokio::task::spawn_blocking(move || {
+            run_plain(&home2, &agent2, auto, auto_reads, interactive)
+        })
+        .await?;
     }
 
     run_tui(
@@ -1808,20 +1805,8 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
             // that used to hit every read_file bought zero safety: an
             // approved `bash cat` could read the same files anyway, so the
             // prompt was friction that trained blind approval.
-            let read_auto = if app.auto_reads {
-                if req.tool_name == "read_file" {
-                    true
-                } else {
-                    req.tool_name == "bash"
-                        && req
-                            .tool_input
-                            .get("command")
-                            .and_then(serde_json::Value::as_str)
-                            .is_some_and(bash_class::is_readonly_bash)
-                }
-            } else {
-                false
-            };
+            let read_auto = app.auto_reads
+                && bash_class::is_readonly_call(&req.tool_name, Some(&req.tool_input));
             let auto =
                 app.auto_approve || app.session_tool_allow.contains(&req.tool_name) || read_auto;
             if !app.focused && !auto {
@@ -2030,13 +2015,24 @@ mod notify_tests {
 
 /// Pipe-safe fallback: read a line from stdin, stream the reply as plain text to
 /// stdout, repeat. No ANSI, no TUI. Threads conversation context across turns.
-fn run_plain(home: &Path, agent: &str, auto: bool, interactive: bool) -> Result<()> {
+fn run_plain(
+    home: &Path,
+    agent: &str,
+    auto: bool,
+    auto_reads: bool,
+    interactive: bool,
+) -> Result<()> {
     use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
     use std::io::Write as _;
     let out2 = RefCell::new(io::stdout());
     let mut context: Option<String> = None;
     let pricing = load_pricing(home, agent);
+    // Tools the operator granted with `[a]` this session. Plain mode had no
+    // such set, so `[a]lways` approved exactly one call — the prompt said one
+    // thing and the code did another.
+    let session_allow: RefCell<std::collections::HashSet<String>> =
+        RefCell::new(Default::default());
 
     loop {
         if interactive {
@@ -2082,19 +2078,34 @@ fn run_plain(home: &Path, agent: &str, auto: bool, interactive: bool) -> Result<
                 let allow = if auto {
                     eprintln!("[non-interactive: auto-approving tool-approval request (--auto)]");
                     true
+                } else if auto_reads && bash_class::is_readonly_call(tool, hitl.get("tool_input")) {
+                    // Same lane as the TUI, same classifier. This mode used to
+                    // ignore `--auto-reads` outright, so the identical flag
+                    // behaved differently depending on how the CLI was started
+                    // — and plain mode is exactly where unattended runs live.
+                    eprintln!("  [auto-approved read-only {tool} (--auto-reads)]");
+                    true
+                } else if session_allow.borrow().contains(tool) {
+                    eprintln!("  [auto-approved {tool} (session allow)]");
+                    true
                 } else if interactive {
                     // Outer loop releases stdin lock between reads (Task 2), so
                     // we can safely acquire a fresh lock here to prompt the user.
-                    // [a]lways approves once in v1 (no session allow-set) — intentional.
                     let mut o = io::stdout();
                     let _ = write!(o, "  tool approval: {tool} — [y]es / [a]lways / [n]o? ");
                     let _ = o.flush();
                     let mut ans = String::new();
                     let _ = io::stdin().lock().read_line(&mut ans);
-                    matches!(
-                        ans.trim().chars().next(),
-                        Some('y') | Some('Y') | Some('a') | Some('A')
-                    )
+                    match ans.trim().chars().next() {
+                        // [a] now means what it says. It used to approve just
+                        // this one call while the prompt promised "always".
+                        Some('a' | 'A') => {
+                            session_allow.borrow_mut().insert(tool.to_string());
+                            true
+                        }
+                        Some('y' | 'Y') => true,
+                        _ => false,
+                    }
                 } else {
                     eprintln!(
                         "[non-interactive: auto-denying tool-approval request (use --auto to allow)]"
