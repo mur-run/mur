@@ -369,6 +369,7 @@ fn default_entitlements_custom() -> Entitlements {
             spawn: SpawnEntitlement {
                 mode: SpawnMode::Allowlist,
                 allowed: vec![],
+                allowed_dirs: vec![],
             },
         },
         syscalls: SyscallsEntitlement {
