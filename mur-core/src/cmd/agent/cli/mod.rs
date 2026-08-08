@@ -1669,7 +1669,21 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
                     decide_hitl_with_note(app, tx, true, true);
                 }
             } else {
-                app.push_system("auto-approve OFF — tool calls ask again");
+                // Revoke the per-tool `[a]` grants too. To the operator those
+                // ARE auto-approval, so leaving them behind made "tool calls
+                // ask again" a lie — and nothing else ever cleared
+                // `session_tool_allow`, so a grant (including one pressed by
+                // accident) was irreversible for the rest of the session.
+                let mut revoked: Vec<String> = app.session_tool_allow.drain().collect();
+                revoked.sort_unstable();
+                if revoked.is_empty() {
+                    app.push_system("auto-approve OFF — tool calls ask again");
+                } else {
+                    app.push_system(format!(
+                        "auto-approve OFF — tool calls ask again (revoked the session allow for {})",
+                        revoked.join(", ")
+                    ));
+                }
             }
         }
         SlashCmd::Verbose(set) => {
@@ -2267,5 +2281,37 @@ mod hitl_key_tests {
         assert!(app.session_tool_allow.contains("write_file"));
         assert!(app.hitl.is_none(), "second press resolves the gate");
         assert_eq!(app.input_text(), "", "armed char is taken back");
+    }
+
+    /// `/auto off` used to clear only the blanket flag, so tools muted with
+    /// `[a]` kept skipping the gate while the CLI announced "tool calls ask
+    /// again". Nothing else ever cleared them: a grant was permanent for the
+    /// session, including one pressed by accident.
+    #[tokio::test]
+    async fn auto_off_revokes_per_tool_session_grants() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut app = App::test_fixture();
+        app.auto_approve = true;
+        app.session_tool_allow.insert("write_file".into());
+        app.session_tool_allow.insert("bash".into());
+
+        handle_slash(&mut app, SlashCmd::Auto(Some(false)), &tx).await;
+
+        assert!(!app.auto_approve);
+        assert!(
+            app.session_tool_allow.is_empty(),
+            "per-tool grants must be revoked too"
+        );
+        let said = app
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == Role::System)
+            .map(|m| m.text.clone())
+            .unwrap_or_default();
+        assert!(
+            said.contains("bash") && said.contains("write_file"),
+            "{said}"
+        );
     }
 }
