@@ -1045,6 +1045,11 @@ const FOOTER_SEP: &str = " · ";
 /// the numbers.
 const STATUS_FULL_MIN_WIDTH: u16 = 100;
 
+/// Longest joined tool-name list the `AUTO:` badge will spell out before it
+/// falls back to a bare count. Sized so the badge cannot crowd out the rest of
+/// the status bar on a narrow terminal — two typical tool names fit.
+const AUTO_NAMES_MAX: usize = 24;
+
 fn render_status(f: &mut Frame, app: &App, area: Rect) {
     let theme = app.theme;
     let (msg, color) = if let Some(req) = &app.hitl {
@@ -1103,8 +1108,20 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         ));
         spans.push(Span::raw("  "));
     } else if !app.session_tool_allow.is_empty() {
+        // Name the muted tools when they fit. `AUTO:2` said something was
+        // muted but never what, and nothing else would tell you either —
+        // so the operator could not check whether a grant they did not mean
+        // to make was still in force. `/auto off` revokes them.
+        let mut names: Vec<&str> = app.session_tool_allow.iter().map(String::as_str).collect();
+        names.sort_unstable();
+        let joined = names.join(",");
+        let label = if joined.chars().count() <= AUTO_NAMES_MAX {
+            format!(" AUTO:{joined} ")
+        } else {
+            format!(" AUTO:{} ", names.len())
+        };
         spans.push(Span::styled(
-            format!(" AUTO:{} ", app.session_tool_allow.len()),
+            label,
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Yellow)
