@@ -374,7 +374,21 @@ Agent** wizard offers the same catalog as a source.
 - **Kernel sandbox** per OS — Landlock + seccomp (Linux), SBPL (macOS), Job
   Object (Windows) — plus a DNS-resolver guard that filters network egress.
 - **Human-in-the-loop** — tool calls pause for your approval in Hub and in
-  `mur agent cli` (opt out per session with `--auto`).
+  `mur agent cli` (opt out per session with `--auto`). While a gate is open the
+  decision keys only count when you aren't mid-message, and a session-wide
+  grant takes two presses — typing an ordinary sentence can't hand a tool
+  blanket approval. An open gate always renders somewhere, `/auto off` revokes
+  the per-tool grants it claims to revoke, and a gate that times out stops
+  asking. Reads never have to stop the run: `--auto-reads` covers `read_file`
+  and provably read-only shell commands, in the TUI and in `--plain` alike.
+- **Build lane** — a toolchain that compiles its own executables can't be
+  expressed as a list of binaries: `cargo` runs build scripts and test
+  executables at paths that don't exist until the build creates them. Grant the
+  build-output directory instead — `mur agent perm allow-spawn-dir <agent>
+  <dir>` — and an agent can finally verify its own work. Narrow by
+  construction: `/`, `/usr`, `/opt`, your home directory and a bare mount point
+  are refused, and filesystem and network entitlements still bound whatever
+  runs.
 - **Loop settings that can't quietly mean something else** — a fleet loop ends
   when its job queue drains, when a member emits an agreed marker on a line of
   its own, or when the router judges it done. `mur fleet set-loop` refuses a
