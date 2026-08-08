@@ -1790,10 +1790,15 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
         StreamMsg::Delta { text, thinking, .. } => app.append_delta(&text, thinking),
         StreamMsg::Hitl { req, .. } => {
             app.saw_hitl_this_turn = true;
-            app.hitl_inline_shown = req
-                .step_id
-                .clone()
-                .is_some_and(|sid| app.mark_card_awaiting(&sid));
+            // Flag the card so it renders the inline approval row. Whether
+            // that row is actually VISIBLE is recomputed every frame by the
+            // renderer (`ui::inline_row_visible`) rather than cached here: a
+            // card that is live now can be flushed into scrollback while the
+            // gate is still open, and a cached "inline is showing" would keep
+            // the modal suppressed over rows that can no longer repaint.
+            if let Some(sid) = req.step_id.clone() {
+                app.mark_card_awaiting(&sid);
+            }
             // Session auto-approval: `/auto`/`--auto` covers every tool; the
             // modal's [a] key covers a single tool name.
             // Read lane: `--auto-reads` auto-approves read-only tools.
