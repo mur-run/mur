@@ -156,6 +156,7 @@ fn test_default_entitlements() -> Entitlements {
             spawn: SpawnEntitlement {
                 mode: SpawnMode::Allowlist,
                 allowed: vec![],
+                allowed_dirs: vec![],
             },
         },
         syscalls: SyscallsEntitlement::default(),

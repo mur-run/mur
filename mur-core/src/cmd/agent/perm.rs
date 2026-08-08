@@ -234,6 +234,43 @@ pub fn cmd_perm_deny_spawn(name: &str, binary: &str) -> Result<()> {
     Ok(())
 }
 
+/// Grant the build lane: every executable under `dir` becomes spawnable.
+///
+/// The binary allowlist cannot express a toolchain that compiles its own
+/// executables — a Rust build execs `target/debug/build/<crate>-<hash>/
+/// build-script-build`, proc-macro shims and freshly linked test binaries,
+/// at paths that do not exist until the build creates them. Print what the
+/// grant means rather than accepting it silently: this is a wider door than
+/// naming one binary, and the operator should see that in the terminal.
+pub fn cmd_perm_allow_spawn_dir(name: &str, dir: &str) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    let dirs = &mut profile.entitlements.processes.spawn.allowed_dirs;
+    if !dirs.iter().any(|d| d == dir) {
+        dirs.push(dir.to_string());
+    }
+    save_profile(&path, &mut profile)?;
+    println!("build lane: '{name}' may now exec anything under {dir}");
+    println!(
+        "  filesystem and network entitlements still bound what that code can reach — \
+         check them with `mur agent perm show {name}`"
+    );
+    warn_if_running(name);
+    Ok(())
+}
+
+pub fn cmd_perm_deny_spawn_dir(name: &str, dir: &str) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    profile
+        .entitlements
+        .processes
+        .spawn
+        .allowed_dirs
+        .retain(|d| d != dir);
+    save_profile(&path, &mut profile)?;
+    warn_if_running(name);
+    Ok(())
+}
+
 pub fn cmd_perm_set_limit(name: &str, key: &str, value: u64) -> Result<()> {
     let (path, mut profile) = load_profile_for_edit(name)?;
     let lim = &mut profile.entitlements.limits;
