@@ -661,6 +661,13 @@ async fn event_loop(
         // `render_mode`, and the draw below must land on the matching
         // surface (small inline viewport vs. full-frame alt-screen).
         sync_surface(app)?;
+        // Retire an expired gate BEFORE drawing. Running it after the draw
+        // cleared the state but left the stale frame on screen: the loop wakes
+        // at the deadline, paints the still-open gate, retires it, then sleeps
+        // with nothing left to wake it — so the status line went on asking for
+        // a decision on a request that had already been denied, which is the
+        // very thing retiring it was meant to stop.
+        expire_stale_hitl(app);
         if app.needs_full_redraw {
             terminal.clear()?;
             app.needs_full_redraw = false;
@@ -710,16 +717,9 @@ async fn event_loop(
             .as_ref()
             .map(|r| TokioInstant::from_std(r.next_poll()))
             .unwrap_or_else(|| TokioInstant::from_std(StdInstant::now()));
-        // A gate nobody answers expires on the runtime side and the call is
-        // denied there. Nothing tells the CLI — `StreamMsg::Expired` only
-        // arrives if the operator decides too LATE — so the request sat in
-        // `app.hitl` forever and the status line kept advertising
-        // "auto-deny in 0s" over a request that was already dead, while the
-        // transcript said it had been denied. Retire it locally on the same
-        // deadline the status line counts down to, so the two agree.
-        expire_stale_hitl(app);
         // Wake exactly at the expiry, or an idle loop (nothing streaming, no
-        // blink, no rail) never notices its own countdown reaching zero.
+        // blink, no rail) never notices its own countdown reaching zero. The
+        // sweep itself runs before the draw at the top of the loop.
         let hitl_armed = app.hitl.is_some();
         let hitl_at = app
             .hitl
