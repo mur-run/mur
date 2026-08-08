@@ -773,6 +773,22 @@ pub struct SpawnEntitlement {
     pub mode: SpawnMode,
     #[serde(default)]
     pub allowed: Vec<String>,
+    /// Directories whose entire subtree may be exec'd — the "build lane".
+    ///
+    /// `allowed` cannot express a toolchain that compiles its own
+    /// executables: a Rust build execs `target/debug/build/<crate>-<hash>/
+    /// build-script-build`, proc-macro shims, and freshly linked test
+    /// binaries, all at paths that do not exist until the build creates them
+    /// and change on every dependency bump. Without this an agent granted
+    /// `cargo` could compile nothing and could never verify its own work.
+    ///
+    /// Grant narrowly — a build-output directory, not a source tree or a
+    /// home directory. Everything under it becomes exec'able, so the tree
+    /// should be one the agent already has write access to and nothing else
+    /// depends on. Filesystem and network entitlements still bound what the
+    /// executed code can reach.
+    #[serde(default)]
+    pub allowed_dirs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

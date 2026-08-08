@@ -24,7 +24,11 @@ fn ent_with_spawn(mode: SpawnMode, allowed: Vec<String>) -> Entitlements {
         },
         filesystem: FilesystemEntitlement::default(),
         processes: ProcessesEntitlement {
-            spawn: SpawnEntitlement { mode, allowed },
+            spawn: SpawnEntitlement {
+                mode,
+                allowed,
+                allowed_dirs: vec![],
+            },
         },
         syscalls: SyscallsEntitlement::default(),
         limits: LimitsEntitlement::default(),

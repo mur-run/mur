@@ -33,6 +33,7 @@ fn ent_with_outbound(mode: NetworkOutboundMode, allow: Vec<String>) -> Entitleme
             spawn: SpawnEntitlement {
                 mode: SpawnMode::Allowlist,
                 allowed: vec![],
+                allowed_dirs: vec![],
             },
         },
         syscalls: SyscallsEntitlement::default(),

@@ -29,6 +29,7 @@ pub fn restrict_for_trust(base: &Entitlements, trust: TrustLevel) -> Entitlement
                 spawn: SpawnEntitlement {
                     mode: SpawnMode::Allowlist,
                     allowed: vec![],
+                    allowed_dirs: vec![],
                 },
             };
         }
@@ -66,6 +67,7 @@ mod tests {
                 spawn: SpawnEntitlement {
                     mode: SpawnMode::Any,
                     allowed: vec!["sh".into()],
+                    allowed_dirs: vec![],
                 },
             },
             syscalls: SyscallsEntitlement::default(),

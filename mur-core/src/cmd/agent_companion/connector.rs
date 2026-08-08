@@ -582,6 +582,7 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
                 spawn: SpawnEntitlement {
                     mode: SpawnMode::Allowlist,
                     allowed: vec![],
+                    allowed_dirs: vec![],
                 },
             },
             syscalls: SyscallsEntitlement {
