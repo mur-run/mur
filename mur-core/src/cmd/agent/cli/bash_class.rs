@@ -46,6 +46,27 @@ const GIT_READONLY_SUBCMDS: &[&str] = &[
     "grep",
 ];
 
+/// Does the `--auto-reads` lane cover this tool call?
+///
+/// The single definition of the lane, shared by the interactive TUI and plain
+/// mode — they used to disagree, with plain mode ignoring `--auto-reads`
+/// entirely, so the same flag meant different things depending on how you
+/// started the CLI.
+///
+/// `read_file` is read-only by construction: a dedicated read tool, enforced
+/// by the sandbox's read entitlements. `bash` has to prove it with
+/// [`is_readonly_bash`]. Everything else prompts.
+pub fn is_readonly_call(tool_name: &str, tool_input: Option<&serde_json::Value>) -> bool {
+    match tool_name {
+        "read_file" => true,
+        "bash" => tool_input
+            .and_then(|v| v.get("command"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(is_readonly_bash),
+        _ => false,
+    }
+}
+
 pub fn is_readonly_bash(cmd: &str) -> bool {
     let cmd = cmd.trim();
     if cmd.is_empty() {
@@ -79,7 +100,27 @@ pub fn is_readonly_bash(cmd: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_readonly_bash;
+    use super::{is_readonly_bash, is_readonly_call};
+
+    /// The lane both the TUI and plain mode ask. `read_file` rides on the
+    /// sandbox's read entitlement; `bash` still has to prove itself; anything
+    /// that could write must prompt no matter which mode is running.
+    #[test]
+    fn readonly_call_covers_read_file_and_proven_bash_only() {
+        let cmd = |c: &str| serde_json::json!({ "command": c });
+
+        assert!(is_readonly_call("read_file", None));
+        assert!(is_readonly_call("bash", Some(&cmd("git status"))));
+
+        assert!(!is_readonly_call("bash", Some(&cmd("rm -rf /"))));
+        assert!(!is_readonly_call("bash", Some(&cmd("cat a > b"))));
+        assert!(
+            !is_readonly_call("bash", None),
+            "no command => cannot prove"
+        );
+        assert!(!is_readonly_call("write_file", None));
+        assert!(!is_readonly_call("edit", Some(&cmd("git status"))));
+    }
 
     #[test]
     fn auto_approves_plain_read_commands() {
