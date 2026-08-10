@@ -1188,7 +1188,7 @@ impl App {
     pub fn arm_auto_fleet(&mut self, step_id: &str, fleet: &str, now: std::time::Instant) {
         self.auto_fleet_step = Some(step_id.to_string());
         if !self.fleet.as_ref().is_some_and(|r| r.fleet() == fleet) {
-            self.fleet = Some(super::fleet_rail::FleetRail::start(fleet));
+            self.fleet = Some(super::fleet_rail::FleetRail::start_auto(fleet));
         }
         if let Some(rail) = self.fleet.as_mut() {
             rail.set_run_in_flight(true);
@@ -1213,8 +1213,16 @@ impl App {
     }
 
     /// Close out an auto-armed `fleet_run` when its step completes: drain the
-    /// follow's tail, drop it (only if auto), leave the rail up — Done/Failed
-    /// member states are worth reading — and put the outcome on the record.
+    /// follow's tail, drop it (only if auto), commit the rail's final member
+    /// states to the transcript, and retire an auto-armed rail.
+    ///
+    /// The rail is live state repainted every frame and never flushed to
+    /// scrollback, so leaving it up after the run kept the outcome visible
+    /// but out of the record: `Ctrl+O` and the persisted transcript had
+    /// nothing, and the band stayed on screen for the rest of the session
+    /// showing a run that had already ended. Folding the view into the
+    /// outcome message fixes both. A `--fleet` rail the user armed themselves
+    /// stays up — they asked for a band, not a run report.
     pub fn finish_auto_fleet(&mut self, step_id: &str, ok: bool, duration_ms: u64) {
         if self.auto_fleet_step.as_deref() != Some(step_id) {
             return;
@@ -1225,16 +1233,33 @@ impl App {
         if self.follow.as_ref().is_some_and(|f| f.auto) {
             self.follow = None;
         }
+        let home = self.home.clone();
         let mut fleet = String::new();
+        let mut summary = Vec::new();
+        let mut retire = false;
         if let Some(rail) = self.fleet.as_mut() {
             rail.set_run_in_flight(false);
+            // A view up to POLL_INTERVAL stale would freeze the wrong states
+            // into history. `set_run_in_flight` already busted the poll gate.
+            rail.poll(&home, std::time::Instant::now());
             fleet = rail.fleet().to_string();
+            summary = rail.view().summary();
+            retire = rail.is_auto();
+        }
+        if retire {
+            self.fleet = None;
         }
         let took = super::follow::fmt_elapsed(chrono::Duration::milliseconds(duration_ms as i64));
-        self.push_system(format!(
+        let head = format!(
             "⛴ fleet {fleet} {} ({took})",
             if ok { "finished" } else { "failed" }
-        ));
+        );
+        self.push_system(
+            std::iter::once(head)
+                .chain(summary)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
     }
 
     /// Record a completed `!command` run: show it, persist it, and queue it
@@ -1870,6 +1895,41 @@ mod step_app_tests {
             card.duration_ms.is_none(),
             "a call nobody answered has no honest duration"
         );
+    }
+
+    /// An auto-armed rail is live state that never reaches scrollback, so the
+    /// run's outcome has to be committed to the transcript before the band
+    /// goes away — and the band has to go away, or it outlives its run.
+    #[test]
+    fn an_auto_armed_fleet_rail_lands_in_the_transcript_and_retires() {
+        let mut a = app();
+        a.arm_auto_fleet("s1", "dev", std::time::Instant::now());
+        assert!(a.fleet.is_some(), "arming should raise the rail");
+
+        a.finish_auto_fleet("s1", true, 4000);
+
+        assert!(
+            a.fleet.is_none(),
+            "an auto-armed rail must not outlive its run"
+        );
+        let last = a.messages.last().expect("outcome message").text.clone();
+        assert!(last.contains("⛴ fleet dev finished"), "got: {last}");
+        // The rail's own view, not just the headline: this is the part that
+        // used to exist only on screen.
+        assert!(last.lines().count() > 1, "rail view not committed: {last}");
+    }
+
+    /// A `--fleet` rail is a band the user asked to keep; a delegated run
+    /// ending inside it must not take it down.
+    #[test]
+    fn a_user_armed_fleet_rail_survives_a_delegated_run() {
+        let mut a = app();
+        a.fleet = Some(super::super::fleet_rail::FleetRail::start("dev"));
+        a.arm_auto_fleet("s1", "dev", std::time::Instant::now());
+
+        a.finish_auto_fleet("s1", true, 4000);
+
+        assert!(a.fleet.is_some(), "a user-armed rail must survive the run");
     }
 
     #[test]
