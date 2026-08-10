@@ -124,7 +124,7 @@ fn official_gate_agent(
     }
     let Some(user) = logged_in_user else {
         bail!(
-            "this is official MUR content — log in (`mur login`) and get it from app.mur.run via `mur official install`"
+            "this is official MUR content — log in (`mur auth login`) and get it from app.mur.run via `mur official install`"
         );
     };
     let item = format!("agents/{agent_slug}");

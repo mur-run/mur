@@ -1257,7 +1257,7 @@ pub enum ProjectAction {
 pub enum OfficialAction {
     /// List official agents and fleets from app.mur.run
     List,
-    /// Download, verify, and install an official item (requires `mur login`)
+    /// Download, verify, and install an official item (requires `mur auth login`)
     Install {
         /// Catalog id, e.g. agents/researcher or fleets/deep-research
         id: String,

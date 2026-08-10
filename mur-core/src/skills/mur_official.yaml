@@ -8,7 +8,7 @@ content:
   abstract: |
     `mur official list` browses the app.mur.run catalog;
     `mur official install <id>` downloads, verifies, and installs an
-    official agent or fleet. Install requires `mur login`; pro-tier
+    official agent or fleet. Install requires `mur auth login`; pro-tier
     items need an active subscription.
   context: |
     # mur-official — the official catalog

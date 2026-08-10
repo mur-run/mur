@@ -19,7 +19,9 @@ pub(crate) async fn cmd_official_list() -> Result<()> {
         );
     }
     if crate::auth::load_tokens().is_none() {
-        println!("\nLog in with `mur login` to install (pro items need a MUR Pro subscription).");
+        println!(
+            "\nLog in with `mur auth login` to install (pro items need a MUR Pro subscription)."
+        );
     }
     Ok(())
 }

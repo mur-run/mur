@@ -17,11 +17,12 @@ use crate::official::store::save_license;
 /// Download and install `id` (`agents/<name>` or `fleets/<name>`).
 pub async fn install_item(id: &str) -> Result<()> {
     // 1. Identity first — everything downstream binds to it.
-    let tokens = crate::auth::load_tokens().context("not logged in — run `mur login` first")?;
+    let tokens =
+        crate::auth::load_tokens().context("not logged in — run `mur auth login` first")?;
     let user_id = tokens
         .user_id
         .clone()
-        .context("stored login has no account id — run `mur auth logout` then `mur login`")?;
+        .context("stored login has no account id — run `mur auth logout` then `mur auth login`")?;
 
     // 2. Download bundle + license.
     let base = crate::auth::server_url();
