@@ -665,6 +665,7 @@ pub fn run() {
             detail::list_models,
             models_admin::probe_local_providers,
             models_admin::test_provider,
+            models_admin::suggested_base_url,
             models_admin::add_models,
             models_admin::remove_model,
             models_admin::update_model,

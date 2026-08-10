@@ -105,31 +105,108 @@ pub fn provider_secret_ref(reg: &ModelRegistry, provider: &str) -> Option<Secret
         .and_then(|e| e.secret.clone())
 }
 
+/// Base URL already stored for `provider`, if any.
+///
+/// A provider fronted by a proxy (mur-model-gateway, LiteLLM, a self-hosted
+/// relay) has its endpoint in the registry, not at the vendor's canonical
+/// host. Discovery must reuse it or it dials the vendor directly with a
+/// gateway token and gets a 401.
+pub fn provider_base_url(reg: &ModelRegistry, provider: &str) -> Option<String> {
+    reg.models
+        .values()
+        .find(|e| e.provider == provider && e.base_url.is_some())
+        .and_then(|e| e.base_url.clone())
+}
+
+/// Endpoint the Model Library should offer for `provider` before the user
+/// edits it: an existing registry entry wins, else the local OAuth bridge
+/// (mur-model-gateway / cc-proxy) when it is enabled and listening.
+///
+/// The bridge is Anthropic-specific — it swaps `x-api-key` for the Bearer +
+/// betas shape subscription tokens need — so it is only suggested there. A
+/// machine with no registry entry and no bridge gets `None`, and the caller
+/// keeps the vendor's canonical host (the plain API-key path).
+pub fn suggest_base_url(provider: &str) -> Option<String> {
+    if let Some(url) = ModelRegistry::default_path()
+        .ok()
+        .and_then(|p| ModelRegistry::load_from(&p).ok())
+        .and_then(|reg| provider_base_url(&reg, provider))
+    {
+        return Some(url);
+    }
+    if !provider.eq_ignore_ascii_case("anthropic") {
+        return None;
+    }
+    let cfg = mur_common::config::Config::load_or_default(&mur_home().join("config.yaml"));
+    mur_gui_core::oauth_bridge::resolve_bridge_url(
+        &cfg.cc_proxy,
+        std::env::var("ANTHROPIC_BASE_URL").ok().as_deref(),
+        mur_gui_core::oauth_bridge::bridge_is_listening,
+    )
+}
+
+/// Prefill for the Model Library's BASE URL field. See [`suggest_base_url`].
+#[tauri::command]
+pub fn suggested_base_url(provider: String) -> Option<String> {
+    suggest_base_url(&provider)
+}
+
+/// A subscription token sent as `x-api-key` to the vendor host always 401s —
+/// it has to traverse the bridge. Say that instead of echoing the raw body.
+fn explain_oauth_misroute(key: Option<&str>, base: &str, bridge_url: &str) -> Option<String> {
+    let key = key?;
+    if !key.contains("sk-ant-oat") || !base.contains("api.anthropic.com") {
+        return None;
+    }
+    Some(format!(
+        "This looks like an Anthropic subscription token (sk-ant-oat…), which \
+         api.anthropic.com rejects when sent directly. Either point BASE URL at \
+         your mur-model-gateway ({bridge_url}), or paste a standard API key \
+         (sk-ant-api…) to call Anthropic directly."
+    ))
+}
+
 #[tauri::command]
 pub async fn test_provider(
     provider: String,
-    base_url: String,
+    base_url: Option<String>,
     api_key: Option<String>,
 ) -> Result<Vec<EnrichedModelView>, String> {
+    let path = ModelRegistry::default_path().map_err(|e| e.to_string())?;
+    let reg = ModelRegistry::load_from(&path).ok();
+
     // Explicit key from the UI wins. Otherwise (re-exploring a connected
     // provider with no key field) resolve the provider's stored SecretRef so
     // re-explore no longer 401s.
     let key: Option<String> = match api_key.filter(|k| !k.is_empty()) {
         Some(k) => Some(k),
-        None => {
-            let path = ModelRegistry::default_path().map_err(|e| e.to_string())?;
-            match ModelRegistry::load_from(&path)
-                .ok()
-                .and_then(|reg| provider_secret_ref(&reg, &provider))
-            {
-                Some(secret) => secret.resolve_to_string().await,
-                None => None,
-            }
-        }
+        None => match reg
+            .as_ref()
+            .and_then(|reg| provider_secret_ref(reg, &provider))
+        {
+            Some(secret) => secret.resolve_to_string().await,
+            None => None,
+        },
     };
 
+    // Same fallback as add_models: an empty field means "whatever this provider
+    // already uses", not "the vendor's canonical host".
+    let base = base_url
+        .filter(|u| !u.trim().is_empty())
+        .or_else(|| suggest_base_url(&provider))
+        .ok_or_else(|| format!("no base URL for provider {provider}"))?;
+
+    if let Some(msg) = explain_oauth_misroute(
+        key.as_deref(),
+        &base,
+        &mur_common::config::Config::load_or_default(&mur_home().join("config.yaml"))
+            .cc_proxy
+            .url,
+    ) {
+        return Err(msg);
+    }
+
     let home = mur_home();
-    let base = base_url.clone();
     let prov = provider.clone();
     let prov2 = provider.clone();
     // discover_models uses reqwest::blocking — run it off the async runtime.
@@ -171,12 +248,9 @@ pub fn add_models(
     // Resolve base_url: use the provided value, or fall back to an existing
     // registry entry for the same provider (handles connected providers whose
     // base_url was already stored), or leave None.
-    let resolved_base_url = base_url.clone().or_else(|| {
-        reg.models
-            .values()
-            .find(|e| e.provider == provider)
-            .and_then(|e| e.base_url.clone())
-    });
+    let resolved_base_url = base_url
+        .clone()
+        .or_else(|| provider_base_url(&reg, &provider));
     for pick in picks {
         let price = model_prices::lookup(&home, &provider, &pick.model, is_local);
         let entry = ModelEntry {
@@ -348,5 +422,84 @@ mod tests {
     fn apply_cost_update_errors_on_unknown_ref() {
         let mut reg = ModelRegistry::default();
         assert!(apply_cost_update(&mut reg, "missing", Some(0.001), None).is_err());
+    }
+
+    fn reg_with(provider: &str, base_url: Option<&str>) -> ModelRegistry {
+        let mut reg = ModelRegistry::default();
+        reg.models.insert(
+            format!("{provider}_a"),
+            ModelEntry {
+                provider: provider.into(),
+                model: "m".into(),
+                base_url: base_url.map(str::to_string),
+                ..Default::default()
+            },
+        );
+        reg
+    }
+
+    #[test]
+    fn provider_base_url_returns_the_gateway_endpoint_in_use() {
+        let reg = reg_with("anthropic", Some("http://127.0.0.1:8088"));
+        assert_eq!(
+            provider_base_url(&reg, "anthropic").as_deref(),
+            Some("http://127.0.0.1:8088")
+        );
+        // Untouched providers must not inherit it.
+        assert_eq!(provider_base_url(&reg, "openai"), None);
+    }
+
+    #[test]
+    fn provider_base_url_skips_entries_without_one() {
+        let mut reg = reg_with("anthropic", None);
+        reg.models.insert(
+            "anthropic_b".into(),
+            ModelEntry {
+                provider: "anthropic".into(),
+                model: "m2".into(),
+                base_url: Some("http://127.0.0.1:8088".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            provider_base_url(&reg, "anthropic").as_deref(),
+            Some("http://127.0.0.1:8088")
+        );
+    }
+
+    const BRIDGE: &str = "http://127.0.0.1:8088";
+
+    #[test]
+    fn oauth_token_against_the_vendor_host_is_explained_not_echoed() {
+        let msg = explain_oauth_misroute(
+            Some("sk-ant-oat03-EXAMPLE"),
+            "https://api.anthropic.com/v1",
+            BRIDGE,
+        );
+        assert!(msg.is_some_and(|m| m.contains(BRIDGE)));
+    }
+
+    #[test]
+    fn oauth_token_through_the_gateway_is_allowed() {
+        assert_eq!(
+            explain_oauth_misroute(Some("sk-ant-oat03-EXAMPLE"), BRIDGE, BRIDGE),
+            None
+        );
+    }
+
+    #[test]
+    fn plain_api_key_against_the_vendor_host_is_allowed() {
+        assert_eq!(
+            explain_oauth_misroute(
+                Some("sk-ant-api03-EXAMPLE"),
+                "https://api.anthropic.com/v1",
+                BRIDGE
+            ),
+            None
+        );
+        assert_eq!(
+            explain_oauth_misroute(None, "https://api.anthropic.com/v1", BRIDGE),
+            None
+        );
     }
 }
