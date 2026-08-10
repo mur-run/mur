@@ -61,6 +61,14 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       .then((agents) => dispatch({ type: "set_agents", agents }))
       .catch(console.error);
 
+    // Pair the listener below with a one-shot read, the same way `list_agents`
+    // does. `runtime-status-changed` only fires on change, so without this the
+    // map stays empty until an agent starts or stops and every already-running
+    // agent renders idle.
+    invoke<AgentRuntimeStatus[]>("list_runtime_statuses")
+      .then((statuses) => dispatch({ type: "set_runtime", statuses }))
+      .catch(console.error);
+
     const unAgents = listen<AgentEntry[]>("agents-updated", (e) =>
       dispatch({ type: "set_agents", agents: e.payload }),
     );

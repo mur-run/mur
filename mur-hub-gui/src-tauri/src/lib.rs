@@ -66,6 +66,18 @@ fn list_agents(state: State<'_, AgentState>) -> Vec<AgentEntry> {
     state.0.lock().unwrap().clone()
 }
 
+/// The runtime snapshot as it stands right now.
+///
+/// `runtime-status-changed` only fires when the value *changes*, so a UI that
+/// mounts after the supervisor has settled sees nothing and renders every agent
+/// idle. `list_agents` above has always had this invoke-once-then-listen pair;
+/// runtime status was listen-only, which is what left the Agents page showing a
+/// resting flock while the agents were up.
+#[tauri::command]
+fn list_runtime_statuses(supervisor: State<'_, SupervisorState>) -> Vec<AgentRuntimeStatus> {
+    supervisor.0.status_receiver().borrow().clone()
+}
+
 #[tauri::command]
 async fn start_agent(name: String, supervisor: State<'_, SupervisorState>) -> Result<(), String> {
     supervisor.0.start(&name).await
@@ -588,6 +600,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_agents,
+            list_runtime_statuses,
             panel::panel_sessions,
             panel::panel_insert,
             panel::open_panel_window,
