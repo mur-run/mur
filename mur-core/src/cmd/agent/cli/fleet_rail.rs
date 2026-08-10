@@ -43,6 +43,17 @@ pub struct MemberRow {
 }
 
 impl MemberState {
+    /// The state's glyph. Lives here rather than in the renderer so the band
+    /// and the transcript summary can't drift into two different alphabets.
+    pub fn glyph(&self) -> &'static str {
+        match self {
+            MemberState::Blocked { .. } => "▲",
+            MemberState::Working { .. } => "⏵",
+            MemberState::Done => "✔",
+            MemberState::Failed => "✖",
+        }
+    }
+
     /// Sort key: blocked first, then working, then finished.
     fn rank(&self) -> u8 {
         match self {
@@ -234,6 +245,34 @@ pub struct RailView {
     pub notice: Option<String>,
 }
 
+impl RailView {
+    /// The view as plain transcript lines.
+    ///
+    /// The band is live state repainted every frame — it is never flushed to
+    /// scrollback, so whatever it showed at the end of a run disappears with
+    /// the session. This is how the final member states get committed to
+    /// history instead. `Working` is spelled "still working" because at run
+    /// end that is news, not progress.
+    pub fn summary(&self) -> Vec<String> {
+        let head = match &self.notice {
+            Some(n) => format!("{}  {n}", self.jobs_line),
+            None => self.jobs_line.clone(),
+        };
+        let mut out = vec![head];
+        out.extend(self.members.iter().map(|m| {
+            let state = match &m.state {
+                MemberState::Blocked { summary, .. } => format!("blocked: {summary}"),
+                MemberState::Working { tool: Some(t), .. } => format!("still working · {t}"),
+                MemberState::Working { tool: None, .. } => "still working".to_string(),
+                MemberState::Done => "done".to_string(),
+                MemberState::Failed => "failed".to_string(),
+            };
+            format!("  {} {} · {state}", m.state.glyph(), m.agent)
+        }));
+        out
+    }
+}
+
 /// Polls one fleet's channel and job store, folding both into a `RailView`.
 ///
 /// Deliberately a separate type from `Follow`: that one turns events into
@@ -254,6 +293,11 @@ pub struct FleetRail {
     /// A delegated `fleet_run` step is currently executing in this pane
     /// (armed on `StepStarted`, cleared on `StepCompleted`).
     run_in_flight: bool,
+    /// True when the rail was auto-armed by a delegated `fleet_run` step
+    /// rather than by the user's `--fleet`. An auto-armed rail belongs to one
+    /// run and is dropped when that run ends; a `--fleet` rail is a band the
+    /// user asked to keep.
+    auto: bool,
     view: RailView,
     next_poll: Instant,
 }
@@ -266,9 +310,23 @@ impl FleetRail {
             last_len: u64::MAX, // force the first poll to do real work
             last_jobs_gate: (0, None),
             run_in_flight: false,
+            auto: false,
             view: RailView::default(),
             next_poll: Instant::now(),
         }
+    }
+
+    /// A rail armed by a delegated `fleet_run` step (see the `auto` field).
+    pub fn start_auto(fleet: &str) -> Self {
+        Self {
+            auto: true,
+            ..Self::start(fleet)
+        }
+    }
+
+    /// True when this rail belongs to one delegated run, not to `--fleet`.
+    pub fn is_auto(&self) -> bool {
+        self.auto
     }
 
     /// The fleet this rail watches.
