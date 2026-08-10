@@ -88,6 +88,19 @@ impl StepCard {
         self.duration_ms = Some(duration_ms);
     }
 
+    /// Close a call the runtime never reported on, because the turn carrying
+    /// it ended first (idle timeout, failed task, dead dial).
+    ///
+    /// Deliberately not `complete(Failed, …)`: that stamps a `duration_ms`,
+    /// and the only honest duration for a call nobody ever answered is the
+    /// one we already have — usually none. Leaves `duration_ms` untouched so
+    /// the card says how it ended without inventing how long it took.
+    pub fn abandon(&mut self, reason: String) {
+        self.state = StepState::Error;
+        self.error = Some(reason);
+        self.awaiting_hitl = false;
+    }
+
     // glyph is called by render_card::card_lines.
     pub fn glyph(&self) -> &'static str {
         match self.state {
