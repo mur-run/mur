@@ -94,7 +94,11 @@ else
     wget -q "$CHECKSUMS_URL" -O "$TMP/checksums.txt" || die "Download failed."
 fi
 
-EXPECTED=$(grep " [*]*$ASSET" "$TMP/checksums.txt" | awk '{print $1}' | head -n1)
+# The release job hashes `./<file>`, so the listed names carry a `./` prefix;
+# sha256sum's binary mode would add a `*` instead. Normalise the name and match
+# it whole, rather than substring-matching the tail of the line.
+EXPECTED=$(awk -v f="$ASSET" '{ n=$2; sub(/^[*]/,"",n); sub(/^\.\//,"",n); if (n==f) print $1 }' \
+    "$TMP/checksums.txt" | head -n1)
 [ -n "$EXPECTED" ] || die "No checksum entry for $ASSET in checksums.txt."
 
 if command -v sha256sum >/dev/null 2>&1; then

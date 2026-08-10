@@ -44,8 +44,10 @@ try {
     Invoke-WebRequest -Uri $assetUrl     -OutFile (Join-Path $tmp $asset)
     Invoke-WebRequest -Uri $checksumsUrl -OutFile (Join-Path $tmp 'checksums.txt')
 
+    # The release job hashes `./<file>`, so listed names carry a `./` prefix;
+    # sha256sum's binary mode would use `*` instead. Accept any of them.
     $expectedLine = (Get-Content (Join-Path $tmp 'checksums.txt')) |
-        Where-Object { $_ -match "[ *]$([regex]::Escape($asset))$" }
+        Where-Object { $_ -match "[ */]$([regex]::Escape($asset))$" }
     if (-not $expectedLine) { throw "No checksum entry for $asset" }
     $expected = ($expectedLine -split '\s+')[0].ToLower()
 
