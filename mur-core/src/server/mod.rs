@@ -203,7 +203,6 @@ pub fn build_router_with_auth(state: AppState, auth_token: Option<Arc<str>>) -> 
             "http://localhost:3847".parse().unwrap(),
             "https://mur.run".parse().unwrap(),
             "https://www.mur.run".parse().unwrap(),
-            "https://mur-run.github.io".parse().unwrap(),
             "https://dashboard.mur.run".parse().unwrap(),
         ])
         .allow_methods(AllowMethods::any())
