@@ -507,11 +507,27 @@ jobs:
           merge-multiple: true
 
       - name: Create checksums
-        # No `|| true`: a release page with an empty checksums.txt is a
-        # silent failure — if the artifact globs come up empty, fail here.
+        # Hash every published *binary* artifact, `.pkg`/`.dmg` included: they
+        # were uploaded but never listed, so the two macOS installers were the
+        # only downloads a user could not verify. `.sig`/`latest.json` stay out
+        # — they are the Tauri updater's own signed chain, checked against its
+        # embedded pubkey rather than against this file.
+        #
+        # nullglob because this job publishes even when `package-macos` /
+        # `hub-macos` fail (see `if:` above), so the macOS globs may legitimately
+        # match nothing. An entirely empty set still fails: a release page with
+        # an empty checksums.txt is a silent failure.
+        shell: bash
         run: |
-          sha256sum ./*.tar.gz ./*.zip > checksums.txt
+          shopt -s nullglob
+          artifacts=( ./*.tar.gz ./*.zip ./*.pkg ./*.dmg )
+          if [ ${#artifacts[@]} -eq 0 ]; then
+            echo "::error::no release artifacts to checksum"
+            exit 1
+          fi
+          sha256sum "${artifacts[@]}" > checksums.txt
           test -s checksums.txt
+          cat checksums.txt
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2

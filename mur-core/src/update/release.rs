@@ -245,7 +245,13 @@ pub fn checksum_for(checksums_txt: &str, filename: &str) -> Option<String> {
         }
         let mut parts = line.splitn(2, char::is_whitespace);
         let hex = parts.next()?.trim();
-        let rest = parts.next()?.trim_start_matches('*').trim();
+        // Two markers to shed: `sha256sum -b` writes `*<file>`, and the release
+        // job hashes `./*.tar.gz` so every published entry carries a `./` while
+        // callers pass a bare asset name (#906 fixed the same skew in the shell
+        // installers, but not here). Strip the prefix only — a suffix match
+        // would let `./evil/mur.zip` answer for `mur.zip`.
+        let rest = parts.next()?.trim().trim_start_matches('*');
+        let rest = rest.strip_prefix("./").unwrap_or(rest);
         if rest == filename {
             return Some(hex.to_string());
         }
@@ -285,6 +291,40 @@ mod checksum_tests {
     fn returns_none_when_missing() {
         let txt = "deadbeef *mur.zip\n";
         assert!(checksum_for(txt, "other.tar.gz").is_none());
+    }
+
+    /// The release job runs `sha256sum ./*.tar.gz ...`, so every published
+    /// entry carries a `./` prefix while `asset_name_for_host` yields a bare
+    /// name. Verbatim from the v2.68.2 release; an exact-match lookup misses
+    /// it and `mur update` aborts with "no checksum entry".
+    #[test]
+    fn matches_dot_slash_prefixed_entries_from_the_real_release() {
+        let txt = "\
+cddbd2918f3cde9e14f8e3977250d33563ea6e4f554babfa184f71b50b8f0d19  ./MUR-Hub.app.tar.gz
+df1570333a6df897ce074112c2185f0bc2d1d5e588ffc975fc0b09e2191b28f9  ./mur-aarch64-apple-darwin.tar.gz
+5641a2c0b21e93380ddbd3f33709d9ef0c0eb06b478b7a7ccb5dc1f89fceb473  ./mur-x86_64-unknown-linux-gnu.tar.gz
+6df9822b5e91e8d6794b6982ac5039640270058b70b6eb87d551691814518784  ./mur-x86_64-pc-windows-msvc.zip
+";
+        for (name, want) in [
+            (
+                "mur-aarch64-apple-darwin.tar.gz",
+                "df1570333a6df897ce074112c2185f0bc2d1d5e588ffc975fc0b09e2191b28f9",
+            ),
+            (
+                "mur-x86_64-pc-windows-msvc.zip",
+                "6df9822b5e91e8d6794b6982ac5039640270058b70b6eb87d551691814518784",
+            ),
+        ] {
+            assert_eq!(checksum_for(txt, name).as_deref(), Some(want), "{name}");
+        }
+    }
+
+    /// Normalization strips a leading `./`, not a directory: a suffix match
+    /// would let `./evil/mur.zip` answer for `mur.zip`.
+    #[test]
+    fn does_not_match_a_same_named_file_in_a_subdirectory() {
+        let txt = "deadbeef  ./nested/mur.zip\n";
+        assert!(checksum_for(txt, "mur.zip").is_none());
     }
 
     #[test]
