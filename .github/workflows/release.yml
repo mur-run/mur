@@ -20,10 +20,6 @@ permissions:
 #   APPLE_TEAM_NAME          - "common name" piece used in the codesign identity
 #   CRATES_IO_TOKEN          - crates.io API token (publish-crates job)
 #   HOMEBREW_TAP_TOKEN       - existing, used by update-homebrew job
-# DNS prerequisite:
-#   - mur.run DNS must CNAME to mur-run.github.io
-#   - GitHub Pages must be configured to publish from gh-pages branch with
-#     "mur.run" as the custom domain.
 
 jobs:
   validate-version:
