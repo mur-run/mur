@@ -110,7 +110,13 @@ async fn os_actor(
     // Agents this Hub spawned and supervises directly. The Hub owns each
     // child's lifetime, so there is exactly one runtime per agent.
     let mut children: HashMap<String, Child> = HashMap::new();
-    let mut known: HashSet<String> = HashSet::new();
+    // Runtimes already alive when this Hub session started — from the CLI, from
+    // `mur agent install-service`, or from a previous Hub — belong in the
+    // tracked set too. Without this seed the set only ever holds agents *this*
+    // session started, so `emit_status`'s lock check (which exists precisely to
+    // recognise foreign runtimes) is never asked about them and the Agents page
+    // renders every one of them idle while they are plainly running.
+    let mut known: HashSet<String> = adopt_live_runtimes(&mur_home);
     let mut poll_interval = tokio::time::interval(Duration::from_secs(5));
     poll_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -157,6 +163,10 @@ async fn os_actor(
             }
 
             _ = poll_interval.tick() => {
+                // Re-adopt on every tick, not just at startup: an agent can be
+                // started from the CLI while the Hub is open, and it would
+                // otherwise stay invisible until the next Hub restart.
+                known.extend(adopt_live_runtimes(&mur_home));
                 if !known.is_empty() {
                     emit_status(&known, &mur_home, &mut children, &status_tx);
                 }
@@ -282,6 +292,21 @@ fn lock_owner_pid(mur_home: &Path, slug: &str) -> Option<u32> {
         Ok(Some(l)) if mur_common::lock_file::pid_alive(l.pid) => Some(l.pid),
         _ => None,
     }
+}
+
+/// Every agent holding a live `running.lock` right now, including runtimes this
+/// Hub never spawned. Cheap enough for the 5-second poll: one `read_dir` plus a
+/// small JSON read and a `kill(0)` per agent directory.
+fn adopt_live_runtimes(mur_home: &Path) -> HashSet<String> {
+    let Ok(entries) = std::fs::read_dir(mur_home.join("agents")) else {
+        return HashSet::new();
+    };
+    entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|slug| lock_is_live(mur_home, slug))
+        .collect()
 }
 
 /// Stop whatever process owns `slug`'s lock, when it is not one of our own
@@ -446,6 +471,30 @@ mod tests {
         let pid = c.id();
         let _ = c.wait();
         pid
+    }
+
+    /// A runtime the Hub did not spawn (CLI, launchd, an earlier Hub) has to
+    /// land in the tracked set, or the Agents page reports it idle while it is
+    /// plainly running — which is what every agent looked like after a Hub
+    /// restart, because the set started empty and only `Start` ever filled it.
+    #[test]
+    fn adopt_live_runtimes_finds_foreign_runtimes_and_ignores_the_rest() {
+        let tmp = tempfile::tempdir().unwrap();
+        seed_runtime_state(tmp.path(), "alive", std::process::id());
+        seed_runtime_state(tmp.path(), "exited", dead_pid());
+        std::fs::create_dir_all(tmp.path().join("agents").join("never-started")).unwrap();
+
+        assert_eq!(
+            adopt_live_runtimes(tmp.path()),
+            HashSet::from(["alive".to_string()])
+        );
+    }
+
+    /// No `~/.mur/agents` yet (fresh install) must not panic the supervisor.
+    #[test]
+    fn adopt_live_runtimes_on_a_missing_agents_dir_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(adopt_live_runtimes(tmp.path()).is_empty());
     }
 
     /// Deleting `running.sentinel` under a live owner destroys the flock that
