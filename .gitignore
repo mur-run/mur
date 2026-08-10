@@ -23,3 +23,11 @@ eval-out/
 
 # Skill-authoring scratch dir (docs/superpowers/plans/2026-07-04-role-skill-packs.md)
 registry-work/
+
+# `mur sync` rewrites its generated block into any of these that EXIST on disk
+# (mur-core/src/inject/sync.rs, gated on `target_path.exists()`), so a tracked
+# copy turns every sync into a dirty working tree. CLAUDE.md is the one
+# hand-authored source; keep local tool files local.
+AGENTS.md
+.cursorrules
+.windsurfrules
