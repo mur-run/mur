@@ -606,38 +606,12 @@ jobs:
           git commit -m "mur ${{ steps.version.outputs.version }}"
           git push
 
-  deploy-installer:
-    name: Deploy install.sh / install.ps1 to mur.run
-    needs: release
-    if: always() && needs.release.result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Stage installer scripts
-        run: |
-          mkdir -p /tmp/installer
-          cp scripts/install.sh  /tmp/installer/install.sh
-          cp scripts/install.ps1 /tmp/installer/install.ps1
-
-      - name: Push to gh-pages
-        run: |
-          git fetch origin gh-pages || git checkout --orphan gh-pages
-          git checkout gh-pages
-          cp /tmp/installer/install.sh  install.sh
-          cp /tmp/installer/install.ps1 install.ps1
-          if [ ! -f CNAME ]; then echo "mur.run" > CNAME; fi
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add install.sh install.ps1 CNAME
-          if git diff --cached --quiet; then
-            echo "No installer changes."
-            exit 0
-          fi
-          git commit -m "installer scripts for ${GITHUB_REF_NAME}"
-          git push origin gh-pages
+  # No installer-deploy job here on purpose. install.sh / install.ps1 are
+  # served from mur-run/mur.run-website (public/), which is what mur.run
+  # actually resolves to. This job used to copy scripts/install.* to the
+  # gh-pages branch, which stopped serving the domain when it moved to
+  # Vercel — so it published corrected installers where nobody could fetch
+  # them while the live ones stayed broken. Change the installer there.
 
   publish-crates:
     name: Publish to crates.io
