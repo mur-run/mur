@@ -13,6 +13,7 @@ use tui_textarea::TextArea;
 use super::complete::{Candidate, CompletionState};
 use super::markdown;
 use super::persist::{ChannelMeta, Session, TurnRecord};
+use super::step::StepState;
 use super::stream::HitlRequest;
 use super::theme::Theme;
 use super::welcome::{Blink, MascotMode, resolve_mascot_mode};
@@ -857,6 +858,7 @@ impl App {
         self.streaming = false;
         self.current_task_id = None;
         self.turn_started = None;
+        self.resolve_open_steps("turn ended without a result for this call");
         self.note_open_items_if_changed();
     }
 
@@ -958,6 +960,32 @@ impl App {
         }
     }
 
+    /// Close every step card still spinning, because the turn that owned them
+    /// has ended.
+    ///
+    /// A card leaves `Running` only when its matching `tool/result` arrives.
+    /// A turn that dies first — the runtime went idle, the dial timed out, the
+    /// task failed — never sends one, so the card spins forever and the
+    /// transcript keeps claiming a tool is running long after nothing is.
+    /// That is the same failure as an approval gate with no visible surface:
+    /// the screen and the truth disagree, and the screen is the one the
+    /// operator believes.
+    ///
+    /// Only cards still in the live band repaint; anything already committed
+    /// to native scrollback is frozen. The spinning card is by definition the
+    /// most recent one, so in practice it is the one that gets fixed.
+    pub fn resolve_open_steps(&mut self, reason: &str) {
+        for card in self
+            .messages
+            .iter_mut()
+            .skip(self.flushed_upto)
+            .filter_map(|m| m.step.as_mut())
+            .filter(|c| c.state == StepState::Running)
+        {
+            card.abandon(reason.to_string());
+        }
+    }
+
     /// Flag the card with this `step_id` as awaiting a HITL decision, so it
     /// renders the inline approval row. Whether that row can actually be SEEN
     /// is a separate question — ask [`App::hitl_inline_visible`] at render
@@ -1029,6 +1057,7 @@ impl App {
             self.messages.remove(i);
         }
         self.push_system(format!("error: {err}"));
+        self.resolve_open_steps(err);
         self.streaming = false;
         self.current_task_id = None;
         self.turn_started = None;
@@ -1055,6 +1084,7 @@ impl App {
         self.current_task_id = None;
         self.turn_started = None;
         self.inflight_params = None;
+        self.resolve_open_steps("the turn this call belonged to no longer exists");
     }
 
     /// Surface — and persist into the channel — that the last user message
@@ -1802,6 +1832,44 @@ mod step_app_tests {
             "empty placeholder dropped, only step card"
         );
         assert!(agent_msgs[0].step.is_some(), "must be step card");
+    }
+
+    /// The screenshot bug: a `fleet_run` card kept spinning after the turn
+    /// carrying it had already died on the runtime's 600s idle timeout. No
+    /// `tool/result` ever arrives for such a call, so nothing else will ever
+    /// move the card off `Running`.
+    #[test]
+    fn a_failed_turn_stops_the_spinner_on_its_open_step_cards() {
+        let mut a = app();
+        a.begin_user_turn("run the fleet");
+        a.push_step_started("s1".into(), "fleet_run".into(), serde_json::json!({}));
+        let running = |a: &App| {
+            a.messages
+                .iter()
+                .filter_map(|m| m.step.as_ref())
+                .filter(|c| c.state == StepState::Running)
+                .count()
+        };
+        assert_eq!(running(&a), 1, "card starts out running");
+
+        a.fail_turn("agent 'mur' went idle for 600s without a response");
+
+        assert_eq!(running(&a), 0, "no card may outlive the turn that owns it");
+        let card = a
+            .messages
+            .iter()
+            .find_map(|m| m.step.as_ref())
+            .expect("step card");
+        assert_eq!(card.state, StepState::Error);
+        assert!(
+            card.error.as_deref().is_some_and(|e| e.contains("idle")),
+            "the card must say WHY it stopped, not just that it did: {:?}",
+            card.error
+        );
+        assert!(
+            card.duration_ms.is_none(),
+            "a call nobody answered has no honest duration"
+        );
     }
 
     #[test]
