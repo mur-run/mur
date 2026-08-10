@@ -1827,10 +1827,19 @@ mod sync_skill_tests {
         // A reporting rule has to be in context when the turn ends, so the
         // trigger is load-bearing: shipped with only `manual` it would never
         // fire and the skill would be dead weight nobody notices.
+        //
+        // Assert it through the parser, not on the raw text. A `contains`
+        // check passes on a file the loader rejects — which is exactly what
+        // happened while this skill shipped an unparseable `procedure: []`.
         let body = std::fs::read_to_string(&path).unwrap();
+        let m = mur_common::skill::parse_canonical(&body)
+            .unwrap_or_else(|e| panic!("mur-settlement must parse: {e}\n{body}"));
         assert!(
-            body.contains("session_start"),
-            "mur-settlement must load at session start, got: {body}"
+            m.triggers
+                .iter()
+                .any(|t| t.kind == mur_common::skill::types::TriggerKind::SessionStart),
+            "mur-settlement must load at session start, got: {:?}",
+            m.triggers
         );
     }
 
@@ -2066,6 +2075,36 @@ mod builtin_skill_tests {
                 "{name}: body {body_lines} lines (budget 150)"
             );
         }
+    }
+
+    /// Every built-in skill YAML must deserialize into a `SkillManifest`.
+    ///
+    /// The case list above — and the two other lists in this file — are
+    /// hand-maintained, so a skill is only covered if someone remembers to add
+    /// it. `mur_settlement.yaml` shipped a `procedure: []` (an empty sequence
+    /// where the schema wants a `Procedure` struct) and no test noticed: it was
+    /// in none of the lists, and its own test asserted on a raw substring
+    /// rather than parsing. `ensure_mur_skill` still wrote the file, so the
+    /// only symptom was a WARN during `mur sync` and the skill silently missing
+    /// from retrieval.
+    ///
+    /// Reading the directory instead of a literal list is what makes this
+    /// unmissable: a new skill is covered the moment it lands.
+    #[test]
+    fn every_builtin_skill_yaml_parses() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/skills");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&dir).expect("read src/skills") {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+                continue;
+            }
+            let raw = std::fs::read_to_string(&path).expect("read skill yaml");
+            mur_common::skill::parse_canonical(&raw)
+                .unwrap_or_else(|e| panic!("{} does not parse: {e}", path.display()));
+            checked += 1;
+        }
+        assert!(checked > 0, "no built-in skill YAML found in {dir:?}");
     }
 }
 

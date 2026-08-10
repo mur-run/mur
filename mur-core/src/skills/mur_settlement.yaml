@@ -63,7 +63,6 @@ content:
     "all done" above a card that says *output may be incomplete* is the single
     worst thing you can produce, because now the user cannot tell which half to
     believe.
-  procedure: []
 triggers:
   # session_start, not manual: a reporting rule is only useful if it is already
   # in context when the turn ends. A `manual` trigger would never fire and the
