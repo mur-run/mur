@@ -588,3 +588,57 @@ fn jobs_line_flags_an_in_flight_goal_run() {
     let line = jobs_line("develop", &[job("1", JobStatus::Done)], true);
     assert!(line.contains("run in progress"), "got: {line}");
 }
+
+#[test]
+fn summary_spells_out_every_member_state_for_the_transcript() {
+    let view = RailView {
+        jobs_line: "fleet · dev   job 2/3".into(),
+        members: vec![
+            MemberRow {
+                agent: "coder".into(),
+                state: MemberState::Done,
+            },
+            MemberRow {
+                agent: "tester".into(),
+                state: MemberState::Failed,
+            },
+            MemberRow {
+                agent: "review".into(),
+                state: MemberState::Blocked {
+                    summary: "rm -rf build".into(),
+                    hitl_id: "h1".into(),
+                },
+            },
+            MemberRow {
+                agent: "docs".into(),
+                state: MemberState::Working {
+                    tool: Some("grep".into()),
+                    since: Utc::now(),
+                },
+            },
+        ],
+        notice: Some("⚠ channel unreadable".into()),
+    };
+
+    let lines = view.summary();
+    assert_eq!(
+        lines.len(),
+        5,
+        "one head line plus one per member: {lines:?}"
+    );
+    assert!(lines[0].contains("job 2/3") && lines[0].contains("⚠ channel unreadable"));
+    assert!(lines[1].contains("✔ coder · done"), "got: {}", lines[1]);
+    assert!(lines[2].contains("✖ tester · failed"), "got: {}", lines[2]);
+    assert!(
+        lines[3].contains("▲ review · blocked: rm -rf build"),
+        "got: {}",
+        lines[3]
+    );
+    // A member still working when the run ended is the one state the band
+    // would have shown as ordinary progress; in a run report it is news.
+    assert!(
+        lines[4].contains("⏵ docs · still working · grep"),
+        "got: {}",
+        lines[4]
+    );
+}

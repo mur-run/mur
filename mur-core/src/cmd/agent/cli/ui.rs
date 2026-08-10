@@ -401,21 +401,19 @@ fn rail_lines(
 
     if rail_height_for(view) > 1 {
         for m in view.members.iter().take(MAX_EXPANDED_ROWS) {
-            let (glyph, body, color) = match &m.state {
-                MemberState::Blocked { summary, .. } => {
-                    ("▲", format!("blocked: {summary}"), theme.warn)
-                }
+            let (body, color) = match &m.state {
+                MemberState::Blocked { summary, .. } => (format!("blocked: {summary}"), theme.warn),
                 MemberState::Working { tool, since } => (
-                    "⏵",
                     match tool {
                         Some(t) => format!("working ({}) · {t}", elapsed(*since)),
                         None => format!("working ({})", elapsed(*since)),
                     },
                     theme.agent,
                 ),
-                MemberState::Done => ("✔", "done".to_string(), theme.success),
-                MemberState::Failed => ("✖", "failed".to_string(), theme.error),
+                MemberState::Done => ("done".to_string(), theme.success),
+                MemberState::Failed => ("failed".to_string(), theme.error),
             };
+            let glyph = m.state.glyph();
             lines.push(Line::styled(
                 format!("  {:<10} {glyph} {body}", m.agent),
                 Style::default().fg(color),
