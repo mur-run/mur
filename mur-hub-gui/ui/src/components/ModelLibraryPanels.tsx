@@ -6,12 +6,39 @@
  * exported so ModelLibrary.tsx can import them.
  */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ModelOption } from "./modelPicker";
 import { formatCost } from "./modelPicker";
 import { togglePick, type CloudPreset } from "./modelLibraryHelpers";
 import { useT } from "../i18n";
+
+/**
+ * Endpoint the backend suggests for `provider` before the user edits the
+ * field: an existing registry entry, else a live local OAuth bridge
+ * (mur-model-gateway). `null` until it answers, and for a provider with
+ * neither — callers fall back to the vendor default.
+ *
+ * A provider behind a gateway must not be discovered against the vendor host:
+ * its stored token is a gateway token and the vendor answers 401. Asking the
+ * backend keeps that precedence in one place (`suggest_base_url`).
+ */
+function useSuggestedBaseUrl(provider: string): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    setUrl(null);
+    invoke<string | null>("suggested_base_url", { provider })
+      .then((u) => {
+        if (live) setUrl(u ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [provider]);
+  return url;
+}
 
 // ── Tauri command return types ─────────────────────────────────────────────
 
@@ -381,9 +408,11 @@ export function ConnectedPanel({
   const color = providerColor(providerKey);
 
   const provModels = registryModels.filter((m) => m.provider === providerKey);
-  const existingBaseUrl = "";
+  const suggested = useSuggestedBaseUrl(providerKey);
 
-  const [baseUrl, setBaseUrl] = useState(existingBaseUrl);
+  const [baseUrlEdit, setBaseUrlEdit] = useState<string | null>(null);
+  // The suggestion arrives async — read through to it until the user types.
+  const baseUrl = baseUrlEdit ?? suggested ?? "";
   const [discovered, setDiscovered] = useState<EnrichedModelView[]>([]);
   const [picks, setPicks] = useState<Set<string>>(new Set());
   const [testing, setTesting] = useState(false);
@@ -465,7 +494,7 @@ export function ConnectedPanel({
           type="url"
           value={baseUrl}
           placeholder="https://…"
-          onChange={(e) => setBaseUrl(e.target.value)}
+          onChange={(e) => setBaseUrlEdit(e.target.value)}
         />
         <div className="ml-hint">{t("lib.baseUrlHint")}</div>
       </div>
@@ -625,7 +654,12 @@ export function NewProviderPanel({
 }) {
   const provModels = registryModels.filter((m) => m.provider === preset.key);
   const { t } = useT();
-  const [baseUrl, setBaseUrl] = useState(preset.baseUrl);
+  const [baseUrlEdit, setBaseUrlEdit] = useState<string | null>(null);
+  // A gateway-backed provider must not be re-tested against the vendor host,
+  // so the endpoint already in use outranks the preset default. The suggestion
+  // arrives async — read through to it until the user types.
+  const suggested = useSuggestedBaseUrl(preset.key);
+  const baseUrl = baseUrlEdit ?? suggested ?? preset.baseUrl;
   const [apiKey, setApiKey] = useState("");
   const [secretKind, setSecretKind] = useState<SecretKind>("keychain");
   const [testing, setTesting] = useState(false);
@@ -641,7 +675,7 @@ export function NewProviderPanel({
   const prevKey = useRef(preset.key);
   if (prevKey.current !== preset.key) {
     prevKey.current = preset.key;
-    setBaseUrl(preset.baseUrl);
+    setBaseUrlEdit(null);
     setApiKey("");
     setSecretKind("keychain");
     setTesting(false);
@@ -724,7 +758,7 @@ export function NewProviderPanel({
           className="ml-input"
           type="url"
           value={baseUrl}
-          onChange={(e) => setBaseUrl(e.target.value)}
+          onChange={(e) => setBaseUrlEdit(e.target.value)}
         />
         <div className="ml-hint">{t("lib.baseUrlHint")}</div>
       </div>
