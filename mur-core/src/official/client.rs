@@ -84,7 +84,7 @@ pub async fn download_item(
         .context("download item")?;
     match resp.status().as_u16() {
         200 => {}
-        401 => bail!("not authorized — log in again (`mur login`)"),
+        401 => bail!("not authorized — log in again (`mur auth login`)"),
         402 | 403 => {
             bail!("'{id}' requires an active MUR Pro subscription — manage at app.mur.run")
         }

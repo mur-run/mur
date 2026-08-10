@@ -113,7 +113,7 @@ LanceDB vector index is always rebuildable via `mur internals reindex`.
   - Design, phase history, and the Spike-1 overlap decision: `docs/superpowers/specs/2026-06-19-mur-fleet-design.md`, `docs/superpowers/specs/2026-06-29-parallel-tracks-p3-concurrent-merge-design.md`, `docs/superpowers/validation/spike1-overlap-rate.md`.
 
 - `mur model {add|list|show|remove|migrate|prices|role}` — `~/.mur/models.yaml` provider/model registry. `add` accepts `--input-cost`/`--output-cost` (USD per 1k tokens) and auto-fills pricing + context window from the models.dev catalog unless `--no-fetch`; `prices {refresh|show}` manages the cached catalog (`~/.mur/cache/model-prices.json`). The Hub GUI **Model Library** (mur-hub-gui) connects cloud providers (key → Keychain) and auto-detects local runtimes, discovers models via `/v1/models`, and adds them as registry aliases. See `docs/superpowers/specs/2026-04-29-model-registry-and-secret-refs-design.md` and `2026-06-17-mur-model-library-design.md`.
-- `mur official {list|install <id>}` — browse and install official MUR agents/fleets from the app.mur.run catalog. Install requires `mur login`; pro-tier items require an active subscription. Downloads carry an account-bound `OfficialLicense` (stored in `~/.mur/licenses/`); the fleet/agent import paths refuse official-marked bundles without a matching license (anti-sharing gate; expiry gates downloads only, never installed content). See `docs/superpowers/specs/2026-07-20-official-catalog-design.md`.
+- `mur official {list|install <id>}` — browse and install official MUR agents/fleets from the app.mur.run catalog. Install requires `mur auth login`; pro-tier items require an active subscription. Downloads carry an account-bound `OfficialLicense` (stored in `~/.mur/licenses/`); the fleet/agent import paths refuse official-marked bundles without a matching license (anti-sharing gate; expiry gates downloads only, never installed content). See `docs/superpowers/specs/2026-07-20-official-catalog-design.md`.
 - `mur deep-research {setup|""} [question]` — simplified web research UX: `setup` (one-time wizard for model, workers, budget, egress), `""` (status panel), or ask a question (preflight start + guarded run). `provision`/`run` remain as the advanced flag-based path. Egress consent is explicit: `setup`/`provision --grant-egress` only.
 
 For detailed agent / companion / GUI export / runtime internals, read `docs/architecture/runtime-overview.md` only when the task requires it.
@@ -126,7 +126,7 @@ Before changing anything that pins, verifies, or launches an MCP server, read `d
 - `Pattern` implements `Deref<Target = KnowledgeBase>` — access fields directly
 - YAML writes use temp file + rename for atomicity (`store/yaml.rs`)
 - `tracing` for structured logging; enable with `RUST_LOG=debug`
-- Plans live in `plans/` and `docs/superpowers/plans/`. OpenSpec change specs in `openspec/changes/`.
+- Plans live in `docs/superpowers/plans/`. OpenSpec change specs in `openspec/changes/`.
 - **Unified Channel v3a–v3d** implemented on branch `feat/unified-channel-v3b` (v3d on `feat/unified-channel-v3d`):
   - v3a: DAG executor emits attributed `StateChange`/`ToolCall`/`ToolResult` events as `ChannelActor::System`.
   - v3b: Deterministic `idem_key`, `run_id` per workflow run.
