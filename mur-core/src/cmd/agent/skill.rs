@@ -57,6 +57,7 @@ pub fn validate_skill_refs(agent_home: &Path, refs: &[String]) -> Result<()> {
                 "{r}: {} exists but does not load as a skill ({error})",
                 path.display()
             )),
+            SkillRefStatus::CorruptRef { reason } => Some(format!("{r}: corrupted ref — {reason}")),
         })
         .collect();
     if bad.is_empty() {
