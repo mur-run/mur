@@ -161,7 +161,42 @@ fn reject_dead_grant(path_arg: &str) -> Result<()> {
     )
 }
 
+/// Refuse a grant that no sandbox would honour, before it reaches the profile.
+///
+/// Distinct from `reject_dead_grant`, which refuses a path that does not exist
+/// yet. This one refuses paths that must never be granted at all.
+fn reject_ungrantable(name: &str, path_arg: &str, write: bool) -> Result<()> {
+    use mur_agent_runtime::sandbox::launch_chain::{LaunchChain, is_overbroad_grant_root};
+
+    let p = mur_agent_runtime::sandbox::policy::expand_entitlement_path(path_arg);
+    let agent_home = super::resolve_mur_home()?.join("agents").join(name);
+    let chain = LaunchChain::new(&agent_home);
+
+    let hit = if write {
+        chain.protects_write(&p)
+    } else {
+        chain.protects_read(&p)
+    };
+    if let Some(reason) = hit {
+        anyhow::bail!(
+            "{} is part of MUR's launch chain and can never be granted: {reason}",
+            p.display()
+        );
+    }
+
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"));
+    if is_overbroad_grant_root(&p, &home) {
+        anyhow::bail!(
+            "{} is too broad to grant — it covers the whole machine, the whole \
+             home directory, or a volume root. Grant the specific project dir instead.",
+            p.display()
+        );
+    }
+    Ok(())
+}
+
 pub fn cmd_perm_allow_read(name: &str, path_arg: &str) -> Result<()> {
+    reject_ungrantable(name, path_arg, false)?;
     reject_dead_grant(path_arg)?;
     let (path, mut profile) = load_profile_for_edit(name)?;
     if !profile
@@ -183,6 +218,7 @@ pub fn cmd_perm_allow_read(name: &str, path_arg: &str) -> Result<()> {
 }
 
 pub fn cmd_perm_allow_write(name: &str, path_arg: &str) -> Result<()> {
+    reject_ungrantable(name, path_arg, true)?;
     reject_dead_grant(path_arg)?;
     let (path, mut profile) = load_profile_for_edit(name)?;
     if !profile

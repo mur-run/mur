@@ -43,15 +43,12 @@ fn path_within_roots(target: &Path, roots: &[String], home: &Path) -> bool {
 
 /// Refuse to auto-grant an over-broad root: `/`, the user's whole home, or any
 /// path shallower than two normal components (e.g. `/Users`, `/Volumes`, `/tmp`).
+///
+/// One judgement, one home: `launch_chain.rs` holds the union (it also knows
+/// `/usr`, `/opt`, `/opt/homebrew` and volume roots), and the `perm` boundary
+/// refuses with the same helper. See `reject_ungrantable` in `perm.rs`.
 fn is_overbroad_root(p: &Path, home: &Path) -> bool {
-    if p == Path::new("/") || p == home {
-        return true;
-    }
-    let depth = p
-        .components()
-        .filter(|c| matches!(c, std::path::Component::Normal(_)))
-        .count();
-    depth < 2
+    mur_agent_runtime::sandbox::launch_chain::is_overbroad_grant_root(p, home)
 }
 
 /// The git toplevel containing `cwd`, if any.

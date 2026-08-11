@@ -251,3 +251,41 @@ fn allow_write_refuses_a_path_that_does_not_exist() {
             .contains(&missing_s)
     );
 }
+
+#[test]
+fn allow_write_refuses_the_launch_chain_and_overbroad_roots() {
+    let mur_home = TempDir::new().unwrap();
+    let bin_dir = TempDir::new().unwrap();
+    mur_create(mur_home.path(), bin_dir.path(), "agent_x");
+
+    let sibling = mur_home.path().join("agents/other");
+    std::fs::create_dir_all(&sibling).unwrap();
+    let sibling_s = sibling.to_string_lossy().into_owned();
+
+    let out = run(
+        mur_home.path(),
+        &["agent", "perm", "allow-write", "agent_x", &sibling_s],
+    );
+    assert!(!out.status.success(), "sibling agent dir must be refused");
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(err.contains("launch chain"), "error must name the rule: {err}");
+
+    let out = run(mur_home.path(), &["agent", "perm", "allow-write", "agent_x", "/"]);
+    assert!(!out.status.success(), "root must be refused");
+
+    // Negative control: an ordinary existing dir under the same mur_home is
+    // still grantable, so the refusals above are the new rules and not a
+    // blanket failure.
+    let ok_dir = mur_home.path().join("artifacts");
+    std::fs::create_dir_all(&ok_dir).unwrap();
+    let ok_s = ok_dir.to_string_lossy().into_owned();
+    let out = run(
+        mur_home.path(),
+        &["agent", "perm", "allow-write", "agent_x", &ok_s],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
