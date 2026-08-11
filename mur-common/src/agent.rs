@@ -753,6 +753,18 @@ fn default_dns_mode() -> String {
     "system".to_string()
 }
 
+/// Dirs under `<mur_home>` where MUR objects are authored.
+///
+/// The seeded concierge gets read+write on these; without them the one agent a
+/// fresh host has can describe a skill, workflow or fleet but cannot create
+/// one, and every answer ends in "run this command yourself".
+///
+/// Deliberately excludes `agents/`: `self_protected()` only covers an agent's
+/// OWN `profile.yaml` + `identity.key`, so write access there would let an
+/// agent author a sibling with unrestricted entitlements and start it, and
+/// read access would expose every other agent's Ed25519 signing key.
+pub const AUTHORING_DIRS: [&str; 4] = ["skills", "workflows", "fleets", "artifacts"];
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FilesystemEntitlement {
     #[serde(default)]

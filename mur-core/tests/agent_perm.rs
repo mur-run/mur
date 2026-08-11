@@ -98,9 +98,14 @@ fn perm_filesystem_and_spawn_mutators() {
         mur_home.path(),
         &["agent", "perm", "allow-read", "agent_x", "/var/log"],
     );
+    // A grant only takes effect if the path exists when the sandbox profile is
+    // sealed, so `perm` refuses paths that are missing. Use a real dir — that
+    // is the contract now, not test scaffolding.
+    let out_dir = TempDir::new().unwrap();
+    let out = out_dir.path().to_string_lossy().into_owned();
     let _ = run(
         mur_home.path(),
-        &["agent", "perm", "allow-write", "agent_x", "/tmp/out"],
+        &["agent", "perm", "allow-write", "agent_x", &out],
     );
     let _ = run(
         mur_home.path(),
@@ -118,12 +123,7 @@ fn perm_filesystem_and_spawn_mutators() {
             .read
             .contains(&"/var/log".to_string())
     );
-    assert!(
-        p.entitlements
-            .filesystem
-            .write
-            .contains(&"/tmp/out".to_string())
-    );
+    assert!(p.entitlements.filesystem.write.contains(&out));
     assert!(
         p.entitlements
             .filesystem
@@ -192,4 +192,62 @@ fn perm_show_prints_entitlements() {
         "show should print network section: {body}"
     );
     assert!(body.contains("filesystem"));
+}
+
+/// A grant on a path that does not exist is dropped when the sandbox profile is
+/// sealed, so accepting it here produces the worst possible failure: `perm` says
+/// OK, `restart` says applied, and the kernel still returns EPERM with nothing
+/// in between explaining why. Refuse at the door instead.
+#[test]
+fn allow_write_refuses_a_path_that_does_not_exist() {
+    let mur_home = TempDir::new().unwrap();
+    let bin_dir = TempDir::new().unwrap();
+    mur_create(mur_home.path(), bin_dir.path(), "agent_x");
+
+    let missing = mur_home.path().join("artifacts");
+    let missing_s = missing.to_string_lossy().into_owned();
+
+    let out = run(
+        mur_home.path(),
+        &["agent", "perm", "allow-write", "agent_x", &missing_s],
+    );
+    assert!(
+        !out.status.success(),
+        "should have refused; stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        err.contains("does not exist") && err.contains("mkdir -p"),
+        "error must say what to do, got: {err}"
+    );
+    assert!(
+        !read_profile(mur_home.path(), "agent_x")
+            .entitlements
+            .filesystem
+            .write
+            .contains(&missing_s),
+        "refused grant must not be written to the profile"
+    );
+
+    // Negative control: the identical call succeeds once the dir exists, so the
+    // refusal above is about the missing path and not some unrelated failure.
+    std::fs::create_dir_all(&missing).unwrap();
+    let out = run(
+        mur_home.path(),
+        &["agent", "perm", "allow-write", "agent_x", &missing_s],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        read_profile(mur_home.path(), "agent_x")
+            .entitlements
+            .filesystem
+            .write
+            .contains(&missing_s)
+    );
 }

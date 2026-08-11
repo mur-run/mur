@@ -48,8 +48,26 @@ entitlements:
         - "localhost"
         - "127.0.0.1"
   filesystem:
-    read: []
-    write: []
+    # MUR's own authoring dirs. Without these the concierge can talk about
+    # skills/workflows/fleets but cannot create one — every road ends in
+    # "run this command yourself". Listed one by one on purpose: a blanket
+    # `~/.mur` read would expose `agents/*/identity.key` (every other agent's
+    # Ed25519 signing key), and `~/.mur/agents` write would let this agent
+    # author a sibling profile with unrestricted entitlements and start it.
+    # `self_protected()` only covers the agent's OWN profile.yaml + key.
+    # `~/.mur/config.yaml` is deliberately absent: `Config::load_or_default`
+    # never creates it, so on a fresh host the grant would be dropped at seal
+    # time — the exact dead-grant trap this set exists to avoid.
+    read:
+      - "~/.mur/skills"
+      - "~/.mur/workflows"
+      - "~/.mur/fleets"
+      - "~/.mur/artifacts"
+    write:
+      - "~/.mur/skills"
+      - "~/.mur/workflows"
+      - "~/.mur/fleets"
+      - "~/.mur/artifacts"
     deny: []
   processes:
     spawn:

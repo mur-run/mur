@@ -139,7 +139,30 @@ pub fn cmd_perm_list_hosts(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Refuse a filesystem grant the sandbox would silently discard.
+///
+/// `SandboxPolicy::from_entitlements` drops entitlement paths that do not exist
+/// when the profile is sealed (Issue 16 — a dead grant destabilizes unrelated
+/// write checks). Accepting one here is the worst outcome: the CLI reports
+/// success, the profile lists the path, `restart` says it applied, and the
+/// kernel still returns EPERM with nothing in between explaining why.
+fn reject_dead_grant(path_arg: &str) -> Result<()> {
+    let p = mur_agent_runtime::sandbox::policy::expand_entitlement_path(path_arg);
+    if std::fs::metadata(&p).is_ok() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "{} does not exist.\n\
+         The sandbox drops grants for paths that are missing when the agent \
+         starts, so this one would be accepted here and still denied by the \
+         kernel. Create it first, then re-run this command:\n    mkdir -p {}",
+        p.display(),
+        p.display()
+    )
+}
+
 pub fn cmd_perm_allow_read(name: &str, path_arg: &str) -> Result<()> {
+    reject_dead_grant(path_arg)?;
     let (path, mut profile) = load_profile_for_edit(name)?;
     if !profile
         .entitlements
@@ -160,6 +183,7 @@ pub fn cmd_perm_allow_read(name: &str, path_arg: &str) -> Result<()> {
 }
 
 pub fn cmd_perm_allow_write(name: &str, path_arg: &str) -> Result<()> {
+    reject_dead_grant(path_arg)?;
     let (path, mut profile) = load_profile_for_edit(name)?;
     if !profile
         .entitlements

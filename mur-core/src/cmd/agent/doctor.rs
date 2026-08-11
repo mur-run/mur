@@ -3,6 +3,7 @@
 
 use anyhow::{Context as _, Result};
 use mur_common::LockFile;
+use std::path::PathBuf;
 
 use super::{resolve_mur_home, stale};
 
@@ -20,6 +21,51 @@ pub struct AgentRow {
     /// at edit time, and then the discrepancy is invisible — which is how a
     /// grant that "was definitely added" silently fails to apply.
     pub profile_drift: bool,
+}
+
+/// Entitlement paths that do not exist on disk.
+///
+/// The sandbox builder drops a grant whose path is missing when the profile is
+/// sealed (Issue 16), so `profile.yaml` can list a path the kernel never
+/// honored. The runtime says so only at `tracing::warn!` — invisible from the
+/// CLI and the TUI — which leaves the agent hitting a bare EPERM with no way
+/// to tell "not granted" from "granted but dropped". This is the other half of
+/// `profile_drift`: that one catches edits after start, this one catches
+/// grants that never took.
+pub fn dead_grants(fs: &mur_common::agent::FilesystemEntitlement) -> Vec<(&'static str, PathBuf)> {
+    [("read", &fs.read), ("write", &fs.write)]
+        .into_iter()
+        .flat_map(|(kind, list)| {
+            list.iter().filter_map(move |raw| {
+                let p = mur_agent_runtime::sandbox::policy::expand_entitlement_path(raw);
+                std::fs::metadata(&p).is_err().then_some((kind, p))
+            })
+        })
+        .collect()
+}
+
+/// `<mur_home>` authoring dirs the concierge has no write grant covering.
+///
+/// An upgrade deliberately does not widen an existing agent's sandbox, so an
+/// install seeded before those grants existed still has none — and nothing
+/// else tells the user why their concierge can describe a skill but never
+/// create one. Grants are subpath allows in SBPL/Landlock, so a grant on an
+/// ancestor counts.
+pub fn missing_authoring_grants(
+    fs: &mur_common::agent::FilesystemEntitlement,
+    mur_home: &std::path::Path,
+) -> Vec<PathBuf> {
+    mur_common::agent::AUTHORING_DIRS
+        .iter()
+        .map(|d| mur_home.join(d))
+        .filter(|want| {
+            !fs.write.iter().any(|raw| {
+                want.starts_with(mur_agent_runtime::sandbox::policy::expand_entitlement_path(
+                    raw,
+                ))
+            })
+        })
+        .collect()
 }
 
 /// Build a doctor row for a single agent from its parsed lock file.
@@ -110,6 +156,22 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
     // ── Output ──────────────────────────────────────────────────────────────
     let any_stale = rows.iter().any(|r| r.stale);
 
+    // Best effort: a profile that will not load is simply not reported on here,
+    // the row's other checks still stand.
+    let dead = |name: &str| -> Vec<(&'static str, PathBuf)> {
+        super::load_profile_for_edit(name)
+            .map(|(_p, prof)| dead_grants(&prof.entitlements.filesystem))
+            .unwrap_or_default()
+    };
+
+    // Checked outside the rows loop on purpose: `rows` only holds agents with a
+    // running.lock, and "my concierge cannot author anything" is exactly the
+    // question you ask about an agent that is not up.
+    let concierge_gaps: Vec<PathBuf> =
+        super::load_profile_for_edit(mur_common::fleet::CONCIERGE_AGENT)
+            .map(|(_p, prof)| missing_authoring_grants(&prof.entitlements.filesystem, &mur_home))
+            .unwrap_or_default();
+
     if json {
         let arr: Vec<serde_json::Value> = rows
             .iter()
@@ -121,6 +183,13 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
                     "profile_drift": r.profile_drift,
                     "lock_sha": r.lock_sha,
                     "disk_sha": r.disk_sha,
+                    "dead_grants": dead(&r.name)
+                        .iter()
+                        .map(|(kind, p)| serde_json::json!({
+                            "kind": kind,
+                            "path": p.display().to_string(),
+                        }))
+                        .collect::<Vec<_>>(),
                 })
             })
             .collect();
@@ -128,6 +197,28 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
     } else {
         if rows.is_empty() {
             println!("No running agents found.");
+        }
+        // Text only: `--json` is a running-agents array that build.sh greps for
+        // stale counts, and this is a host-level fact about an agent that may
+        // not be running at all. Reshaping the array to carry it would break
+        // that consumer for no gain.
+        if !concierge_gaps.is_empty() {
+            println!(
+                "{}: cannot author MUR objects — no write grant covers:",
+                mur_common::fleet::CONCIERGE_AGENT
+            );
+            for p in &concierge_gaps {
+                println!(
+                    "  {} \u{2192} mur agent perm allow-write {} {}",
+                    p.display(),
+                    mur_common::fleet::CONCIERGE_AGENT,
+                    p.display()
+                );
+            }
+            println!(
+                "  (then: mur agent restart {})",
+                mur_common::fleet::CONCIERGE_AGENT
+            );
         }
         for r in &rows {
             if r.stale {
@@ -144,6 +235,15 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
                 );
             } else {
                 println!("{}: running, current", r.name);
+            }
+            for (kind, p) in dead(&r.name) {
+                println!(
+                    "  {} grant has NO EFFECT: {} does not exist \u{2192} mkdir -p {} && mur agent restart {}",
+                    kind,
+                    p.display(),
+                    p.display(),
+                    r.name
+                );
             }
 
             // Best-effort program-deps preflight — never blocks or fails the
@@ -180,6 +280,65 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
 mod tests {
     use super::*;
     use mur_common::LockFile;
+
+    #[test]
+    fn dead_grants_flags_only_the_missing_paths() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let live = dir.path().join("skills");
+        std::fs::create_dir_all(&live).unwrap();
+        let gone = dir.path().join("artifacts");
+
+        let fs = mur_common::agent::FilesystemEntitlement {
+            read: vec![live.to_string_lossy().into_owned()],
+            write: vec![
+                live.to_string_lossy().into_owned(),
+                gone.to_string_lossy().into_owned(),
+            ],
+            deny: vec![],
+        };
+
+        // Negative control: without the missing entry nothing is reported, so a
+        // green result means "checked and clean", not "check never ran".
+        let clean = mur_common::agent::FilesystemEntitlement {
+            write: vec![live.to_string_lossy().into_owned()],
+            ..fs.clone()
+        };
+        assert!(dead_grants(&clean).is_empty());
+
+        let found = dead_grants(&fs);
+        assert_eq!(found.len(), 1, "got {found:?}");
+        assert_eq!(found[0].0, "write");
+        assert_eq!(found[0].1, gone);
+    }
+
+    #[test]
+    fn missing_authoring_grants_respects_subpath_semantics() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let home = dir.path();
+
+        // Nothing granted: every authoring dir is missing.
+        let none = mur_common::agent::FilesystemEntitlement::default();
+        assert_eq!(
+            missing_authoring_grants(&none, home).len(),
+            mur_common::agent::AUTHORING_DIRS.len()
+        );
+
+        // One exact grant covers exactly one dir.
+        let one = mur_common::agent::FilesystemEntitlement {
+            write: vec![home.join("skills").to_string_lossy().into_owned()],
+            ..Default::default()
+        };
+        let gaps = missing_authoring_grants(&one, home);
+        assert_eq!(gaps.len(), mur_common::agent::AUTHORING_DIRS.len() - 1);
+        assert!(!gaps.contains(&home.join("skills")));
+
+        // Grants are subpath allows, so an ancestor covers all of them.
+        let ancestor = mur_common::agent::FilesystemEntitlement {
+            write: vec![home.to_string_lossy().into_owned()],
+            ..Default::default()
+        };
+        assert!(missing_authoring_grants(&ancestor, home).is_empty());
+    }
 
     fn make_lock(build_sha: &str) -> LockFile {
         LockFile {

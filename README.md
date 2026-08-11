@@ -389,6 +389,16 @@ Agent** wizard offers the same catalog as a source.
   construction: `/`, `/usr`, `/opt`, your home directory and a bare mount point
   are refused, and filesystem and network entitlements still bound whatever
   runs.
+- **A grant that never reached the kernel** — a filesystem entitlement only
+  takes effect if its path exists when the agent starts, so granting a
+  directory you hadn't created yet used to succeed at the CLI, survive a
+  restart, and still fail with a bare `Operation not permitted`. `mur agent
+  perm allow-read` / `allow-write` now refuse a path that doesn't exist and
+  print the `mkdir -p` to run; `mur agent runtime-doctor` reports grants that
+  were dropped, and tells the concierge which of its own authoring dirs it
+  still can't write. A freshly seeded MUR owns
+  `~/.mur/{skills,workflows,fleets,artifacts}`, so it can build the skill,
+  workflow or fleet it just designed instead of handing you a list of commands.
 - **Loop settings that can't quietly mean something else** — a fleet loop ends
   when its job queue drains, when a member emits an agreed marker on a line of
   its own, or when the router judges it done. `mur fleet set-loop` refuses a
