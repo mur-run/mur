@@ -663,6 +663,12 @@ pub(crate) async fn prepare_runtime(
                 "profile.yaml references a skill whose file exists but no longer parses \
                  as a valid skill; re-install or remove it"
             ),
+            SkillRefStatus::CorruptRef { reason } => tracing::warn!(
+                skill_ref = %r,
+                reason = %reason,
+                "profile.yaml holds a corrupted skill ref; the skills it names may well be \
+                 installed — installing anything will not help"
+            ),
         }
     }
     let loaded: Vec<_> = loaded

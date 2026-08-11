@@ -215,6 +215,8 @@ export const zhTW: Table = {
   "detail.skillDeadHint": "這個舊版檔案已無法解析為有效技能——請移除後重新安裝。",
   "detail.skillMissing": "檔案不存在",
   "detail.skillMissingHint": "找不到檔案:{path} — profile.yaml 引用了這個技能,但從未安裝。請安裝(mur agent skill add)或移除此項目。",
+  "detail.skillCorrupt": "項目損毀",
+  "detail.skillCorruptHint": "這是 profile.yaml 裡的單一項目,內含多個被串在一起的引用,並不是一個技能 id,所以沒有檔案對得上。它列出的技能多半已經安裝,再安裝一次沒有用。請在 profile.yaml 裡把它拆成各自獨立的項目,或移除後重新加入。",
   "detail.remove": "移除",
   "detail.addMcp": "新增 MCP 伺服器",
   "detail.discoverMcp": "從其他工具探索",

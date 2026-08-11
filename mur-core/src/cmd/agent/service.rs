@@ -1,11 +1,109 @@
-//! `mur agent install-service` — generate launchd / systemd unit files.
+//! `mur agent install-service` — generate launchd / systemd unit files, and
+//! the stop/remove half that keeps the supervisor in step with the CLI.
+//!
+//! Everything that locates a descriptor goes through [`service_file_in`]. When
+//! install wrote one path and stop looked at another, stop silently did
+//! nothing and still reported success — so the path has exactly one source.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow, bail};
 
 use super::{resolve_bin_dir, resolve_mur_home, write_atomic};
+
+/// The service descriptor's path for `name`, under `base`.
+///
+/// `base` is the home dir on macOS (`~/Library/LaunchAgents/...`) and the
+/// config dir on Linux (`$XDG_CONFIG_HOME/systemd/user/...`), matching what
+/// [`cmd_install_service`] writes.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(super) fn service_file_in(base: &Path, name: &str) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        base.join(format!("Library/LaunchAgents/run.mur.agent.{name}.plist"))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        base.join(format!("systemd/user/mur-agent-{name}.service"))
+    }
+}
+
+/// The installed service descriptor for `name`, if this platform has services
+/// and one is actually on disk.
+pub(super) fn installed_service(name: &str) -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    let base = dirs::home_dir()?;
+    #[cfg(target_os = "linux")]
+    let base = dirs::config_dir()?;
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = name;
+        return None;
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let path = service_file_in(&base, name);
+        path.exists().then_some(path)
+    }
+}
+
+/// Tell the service manager to stop supervising `name`, so it stops respawning
+/// the runtime the moment we signal it. Returns whether a service existed.
+///
+/// Nothing here trusts the exit status: `launchctl bootout` reports failure
+/// when the job simply is not loaded, which is the state we want anyway. The
+/// caller confirms the outcome by looking for a live lock afterwards.
+pub(super) fn stop_service(name: &str) -> bool {
+    let Some(path) = installed_service(name) else {
+        return false;
+    };
+    let _ = path;
+    #[cfg(target_os = "macos")]
+    {
+        let uid = unsafe { libc::getuid() };
+        let _ = std::process::Command::new("launchctl")
+            .args(["bootout", &format!("gui/{uid}/run.mur.agent.{name}")])
+            .output();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "stop", &format!("mur-agent-{name}.service")])
+            .output();
+    }
+    true
+}
+
+/// Stop the service and delete its descriptor. Returns the path removed.
+///
+/// Without this, `mur agent remove` left the descriptor on disk and loaded:
+/// the supervisor kept trying to exec the `mur_agent_<name>` symlink that
+/// remove had just deleted, and reloaded it again at the next login.
+pub(super) fn remove_service(name: &str) -> Option<PathBuf> {
+    let path = installed_service(name)?;
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "disable", "--now"])
+            .arg(format!("mur-agent-{name}.service"))
+            .output();
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        stop_service(name);
+    }
+    if fs::remove_file(&path).is_err() {
+        return None;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .status();
+    }
+    Some(path)
+}
 
 pub fn cmd_install_service(name: &str, dry_run: bool) -> Result<()> {
     // Confirm the agent exists so we fail fast on typos.
@@ -23,9 +121,10 @@ pub fn cmd_install_service(name: &str, dry_run: bool) -> Result<()> {
             print!("{plist}");
             return Ok(());
         }
-        let dest = dirs::home_dir()
-            .ok_or_else(|| anyhow!("no home dir"))?
-            .join(format!("Library/LaunchAgents/run.mur.agent.{name}.plist"));
+        let dest = service_file_in(
+            &dirs::home_dir().ok_or_else(|| anyhow!("no home dir"))?,
+            name,
+        );
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -51,9 +150,10 @@ pub fn cmd_install_service(name: &str, dry_run: bool) -> Result<()> {
             print!("{unit}");
             return Ok(());
         }
-        let dest = dirs::config_dir()
-            .ok_or_else(|| anyhow!("no config dir"))?
-            .join(format!("systemd/user/mur-agent-{name}.service"));
+        let dest = service_file_in(
+            &dirs::config_dir().ok_or_else(|| anyhow!("no config dir"))?,
+            name,
+        );
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -194,5 +294,34 @@ mod tests {
         for dir in LAUNCHD_DEFAULT_PATH_DIRS {
             assert!(path.contains(dir), "missing {dir} in {path}");
         }
+    }
+
+    /// The label `stop_service` boots out is derived separately from the path
+    /// the descriptor lives at, so this pins the pair against the plist that
+    /// `darwin_plist` actually writes. If they ever drift, stop would boot out
+    /// a label nothing runs under and still report success — the exact shape of
+    /// the bug this whole change exists to fix.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn stop_boots_out_the_label_the_installed_plist_declares() {
+        let path = service_file_in(Path::new("/Users/x"), "kelp");
+        assert_eq!(
+            path,
+            Path::new("/Users/x/Library/LaunchAgents/run.mur.agent.kelp.plist")
+        );
+
+        let plist = darwin_plist("kelp", Path::new("/bin/mur_agent_kelp"), "/usr/bin");
+        assert!(
+            plist.contains("<string>run.mur.agent.kelp</string>"),
+            "stop_service boots out gui/<uid>/run.mur.agent.kelp; the plist must declare that label"
+        );
+    }
+
+    /// An agent that never had a service must not turn `remove` into an error,
+    /// and must not make `stop` claim it unloaded something.
+    #[test]
+    fn no_installed_service_is_not_an_error() {
+        assert!(!stop_service("definitely-not-an-agent-abc123"));
+        assert!(remove_service("definitely-not-an-agent-abc123").is_none());
     }
 }
