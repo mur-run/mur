@@ -10,11 +10,32 @@ use crate::tools::{ToolError, ToolExecutor, ToolOutput};
 pub struct EditFileTool {
     pub session_cwd: SessionCwd,
     pub fs: FilesystemEntitlement,
+    /// MUR's own launch chain. Checked before `fs`; no grant can satisfy it.
+    pub chain: crate::sandbox::launch_chain::LaunchChain,
 }
 
 impl EditFileTool {
-    pub fn new(session_cwd: SessionCwd, fs: FilesystemEntitlement) -> Self {
-        Self { session_cwd, fs }
+    pub fn new(
+        session_cwd: SessionCwd,
+        fs: FilesystemEntitlement,
+        chain: crate::sandbox::launch_chain::LaunchChain,
+    ) -> Self {
+        Self {
+            session_cwd,
+            fs,
+            chain,
+        }
+    }
+
+    /// Test-only: construct with an inert launch chain. Production must go
+    /// through `new`, which cannot be called without a real chain.
+    #[cfg(test)]
+    pub fn new_for_test(session_cwd: SessionCwd, fs: FilesystemEntitlement) -> Self {
+        Self::new(
+            session_cwd,
+            fs,
+            crate::sandbox::launch_chain::LaunchChain::inert(),
+        )
     }
 }
 
@@ -64,7 +85,7 @@ impl ToolExecutor for EditFileTool {
                 "edit", &joined, &base, &e,
             ))
         })?;
-        check_write_entitlement(&self.fs, &canonical)?;
+        check_write_entitlement(&self.fs, &canonical, &self.chain)?;
 
         let text = std::fs::read_to_string(&canonical).map_err(|e| {
             ToolError::Execution(crate::tools::fs_policy::format_io_error(
@@ -105,7 +126,7 @@ mod tests {
 
     fn tool(td: &tempfile::TempDir) -> EditFileTool {
         let root = td.path().to_str().unwrap();
-        EditFileTool::new(
+        EditFileTool::new_for_test(
             SessionCwd::new(td.path().into()),
             FilesystemEntitlement {
                 read: vec![],

@@ -115,7 +115,17 @@ pub(crate) fn self_protected(
 pub(crate) fn check_write_entitlement(
     fs: &FilesystemEntitlement,
     canonical: &Path,
+    chain: &crate::sandbox::launch_chain::LaunchChain,
 ) -> Result<(), ToolError> {
+    // Checked first and unconditionally: no entitlement can satisfy this, and
+    // the kernel's bare EPERM reads the same as "not granted", so this is the
+    // only layer that can say which of the two happened.
+    if let Some(reason) = chain.protects_write(canonical) {
+        return Err(ToolError::Execution(format!(
+            "path is part of MUR's launch chain and can never be written: {} ({reason})",
+            canonical.display()
+        )));
+    }
     let under = |roots: &[String]| {
         roots.iter().any(|r| {
             let root = std::fs::canonicalize(r).unwrap_or_else(|_| PathBuf::from(r));
@@ -140,6 +150,40 @@ pub(crate) fn check_write_entitlement(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_chain_beats_an_explicit_write_grant() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Canonical base: the gate compares canonicalized paths, and on macOS
+        // /var is a symlink to /private/var — raw tempdir paths would never
+        // match the canonicalized grant roots the check computes.
+        let home = std::fs::canonicalize(tmp.path()).unwrap();
+        let agents = home.join("agents");
+        let chain = crate::sandbox::launch_chain::LaunchChain::for_test(
+            &agents.join("mur"),
+            &home.join("bin"),
+            &home.join("home"),
+        );
+
+        // The most permissive grant a user could write.
+        let fs = FilesystemEntitlement {
+            write: vec![home.to_string_lossy().into_owned()],
+            ..Default::default()
+        };
+
+        let err = check_write_entitlement(&fs, &agents.join("pm/profile.yaml"), &chain)
+            .expect_err("a sibling profile must be refused even under a grant covering it");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("entitlements"),
+            "error must explain why: {msg}"
+        );
+
+        // Negative control: the same grant still works for a path outside the
+        // set, so the refusal above is the launch chain and not a broken check.
+        check_write_entitlement(&fs, &home.join("skills/x.yaml"), &chain)
+            .expect("unprotected path under the same grant must still be allowed");
+    }
 
     fn eperm() -> std::io::Error {
         std::io::Error::from_raw_os_error(1) // EPERM, "Operation not permitted"
@@ -226,11 +270,23 @@ mod tests {
         let canonical_home = std::fs::canonicalize(&agent_home).unwrap();
         for f in ["profile.yaml", "identity.key"] {
             assert!(
-                check_write_entitlement(&fs, &canonical_home.join(f)).is_err(),
+                check_write_entitlement(
+                    &fs,
+                    &canonical_home.join(f),
+                    &crate::sandbox::launch_chain::LaunchChain::inert(),
+                )
+                .is_err(),
                 "{f} must be write-denied despite the agent-dir grant"
             );
         }
         // The rest of the agent dir stays writable (running.lock etc.).
-        assert!(check_write_entitlement(&fs, &canonical_home.join("running.lock")).is_ok());
+        assert!(
+            check_write_entitlement(
+                &fs,
+                &canonical_home.join("running.lock"),
+                &crate::sandbox::launch_chain::LaunchChain::inert(),
+            )
+            .is_ok()
+        );
     }
 }
