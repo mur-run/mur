@@ -190,6 +190,30 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
         lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
     }
 
+    // Launch chain, in three tiers (spec 2026-08-11). SBPL is last-match-wins,
+    // so ordering is the mechanism: deny the whole agents tree (siblings'
+    // profiles + signing keys, and names not created yet — the regression a
+    // path list cannot catch), re-allow this agent's own home, then re-assert
+    // the self-protection denies on profile.yaml/identity.key — the fs_deny
+    // emission above is overridden by the re-allow and must land last.
+    for path in policy.launch_chain.deny_paths() {
+        let p = sbpl_escape(&path.to_string_lossy());
+        lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
+    }
+    let own = sbpl_escape(&policy.launch_chain.agent_self_home().to_string_lossy());
+    lines.push(format!("(allow file-write* (subpath \"{own}\"))"));
+    for f in crate::sandbox::policy::SELF_PROTECTED_AGENT_FILES {
+        let p = sbpl_escape(
+            &policy
+                .launch_chain
+                .agent_self_home()
+                .join(f)
+                .to_string_lossy(),
+        );
+        lines.push(format!("(deny file-read* (subpath \"{p}\"))"));
+        lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
+    }
+
     // Process-exec restrictions. Under `(allow default)` any binary is
     // spawnable unless explicitly denied. When spawn_mode is not `Any`
     // (i.e. Allowlist, None, or Strict), deny all exec by default and
@@ -335,6 +359,23 @@ mod tests {
         }
     }
 
+    fn policy_with_launch_chain(agent_home: &str) -> SandboxPolicy {
+        let home = PathBuf::from(agent_home);
+        let mur_home = home
+            .parent()
+            .and_then(|p| p.parent())
+            .unwrap_or(&home)
+            .to_path_buf();
+        SandboxPolicy {
+            launch_chain: crate::sandbox::launch_chain::LaunchChain::for_test(
+                &home,
+                &mur_home.join("bin"),
+                &mur_home.join("home"),
+            ),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn writes_are_default_deny_with_baseline() {
         let sbpl = build_sbpl_profile(&policy_with(vec![], vec![]));
@@ -386,6 +427,40 @@ mod tests {
         assert!(
             deny > allow,
             "deny must follow the overlapping allow (last-match-wins):\n{sbpl}"
+        );
+    }
+
+    #[test]
+    fn agents_deny_precedes_the_self_reallow_which_precedes_the_self_file_denies() {
+        let policy = policy_with_launch_chain("/data/.mur/agents/mur");
+        let sbpl = build_sbpl_profile(&policy);
+
+        let agents_deny = sbpl
+            .find(r#"(deny file-write* (subpath "/data/.mur/agents"))"#)
+            .expect("agents deny missing");
+        let self_reallow = sbpl
+            .rfind(r#"(allow file-write* (subpath "/data/.mur/agents/mur"))"#)
+            .expect("self re-allow missing");
+        let self_profile_deny = sbpl
+            .find(r#"(deny file-write* (subpath "/data/.mur/agents/mur/profile.yaml"))"#)
+            .expect("self profile deny missing");
+
+        // SBPL is last-match-wins, so the ordering IS the mechanism. Asserting
+        // the lines merely exist would pass on a profile that grants everything.
+        assert!(
+            agents_deny < self_reallow,
+            "self re-allow must come after the agents deny or the agent cannot write its own home"
+        );
+        assert!(
+            self_reallow < self_profile_deny,
+            "self profile deny must come after the re-allow or self-protection is undone"
+        );
+
+        // Negative control: nothing re-denies the agent's own runtime files
+        // after the re-allow — running.lock stays writable.
+        assert!(
+            !sbpl.contains(r#"(subpath "/data/.mur/agents/mur/running.lock")"#),
+            "own-home runtime files must not be re-denied after the re-allow:\n{sbpl}"
         );
     }
 

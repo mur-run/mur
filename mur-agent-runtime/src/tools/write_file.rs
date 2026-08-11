@@ -9,11 +9,31 @@ use crate::tools::{ToolError, ToolExecutor, ToolOutput};
 pub struct WriteFileTool {
     pub session_cwd: SessionCwd,
     pub fs: FilesystemEntitlement,
+    /// MUR's own launch chain. Checked before `fs`; no grant can satisfy it.
+    pub chain: crate::sandbox::launch_chain::LaunchChain,
 }
 
 impl WriteFileTool {
-    pub fn new(session_cwd: SessionCwd, fs: FilesystemEntitlement) -> Self {
-        Self { session_cwd, fs }
+    pub fn new(
+        session_cwd: SessionCwd,
+        fs: FilesystemEntitlement,
+        chain: crate::sandbox::launch_chain::LaunchChain,
+    ) -> Self {
+        Self {
+            session_cwd,
+            fs,
+            chain,
+        }
+    }
+    /// Test-only: construct with an inert launch chain. Production must go
+    /// through `new`, which cannot be called without a real chain.
+    #[cfg(test)]
+    pub fn new_for_test(session_cwd: SessionCwd, fs: FilesystemEntitlement) -> Self {
+        Self::new(
+            session_cwd,
+            fs,
+            crate::sandbox::launch_chain::LaunchChain::inert(),
+        )
     }
 }
 
@@ -62,7 +82,7 @@ impl ToolExecutor for WriteFileTool {
             .file_name()
             .ok_or_else(|| ToolError::InvalidInput("path has no file name".into()))?;
         let target = canonical_parent.join(file_name);
-        check_write_entitlement(&self.fs, &target)?;
+        check_write_entitlement(&self.fs, &target, &self.chain)?;
         std::fs::write(&target, content).map_err(|e| {
             ToolError::Execution(crate::tools::fs_policy::format_io_error(
                 "write", &target, &base, &e,
@@ -88,7 +108,8 @@ mod tests {
     async fn creates_and_overwrites() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().to_str().unwrap();
-        let t = WriteFileTool::new(SessionCwd::new(td.path().into()), fs_ent(&[root], &[]));
+        let t =
+            WriteFileTool::new_for_test(SessionCwd::new(td.path().into()), fs_ent(&[root], &[]));
         let r = t
             .execute(serde_json::json!({"path": "a.txt", "content": "one"}))
             .await
@@ -107,7 +128,8 @@ mod tests {
     async fn missing_parent_fails_loud() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().to_str().unwrap();
-        let t = WriteFileTool::new(SessionCwd::new(td.path().into()), fs_ent(&[root], &[]));
+        let t =
+            WriteFileTool::new_for_test(SessionCwd::new(td.path().into()), fs_ent(&[root], &[]));
         let err = t
             .execute(serde_json::json!({"path": "no/such/dir/a.txt", "content": "x"}))
             .await
@@ -121,14 +143,16 @@ mod tests {
     async fn write_requires_write_grant_and_deny_wins() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().to_str().unwrap();
-        let none = WriteFileTool::new(SessionCwd::new(td.path().into()), fs_ent(&[], &[]));
+        let none = WriteFileTool::new_for_test(SessionCwd::new(td.path().into()), fs_ent(&[], &[]));
         let err = none
             .execute(serde_json::json!({"path": "a.txt", "content": "x"}))
             .await
             .unwrap_err();
         assert!(err.to_string().contains("not write-entitled"));
-        let denied =
-            WriteFileTool::new(SessionCwd::new(td.path().into()), fs_ent(&[root], &[root]));
+        let denied = WriteFileTool::new_for_test(
+            SessionCwd::new(td.path().into()),
+            fs_ent(&[root], &[root]),
+        );
         let err2 = denied
             .execute(serde_json::json!({"path": "a.txt", "content": "x"}))
             .await

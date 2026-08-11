@@ -400,7 +400,11 @@ Agent** wizard offers the same catalog as a source.
   perm allow-read` / `allow-write` now refuse a path that doesn't exist and
   print the `mkdir -p` to run; `mur agent runtime-doctor` reports grants that
   were dropped, and tells the concierge which of its own authoring dirs it
-  still can't write. A freshly seeded MUR owns
+  still can't write. Some paths can never be granted at all — another agent's
+  directory, the runtime binary, an autostart directory — because they decide
+  what starts next; `allow-read` / `allow-write` refuse them, and
+  `runtime-doctor` names any such grant that was already sitting in a profile.
+  A freshly seeded MUR owns
   `~/.mur/{skills,workflows,fleets,artifacts}`, so it can build the skill,
   workflow or fleet it just designed instead of handing you a list of commands.
 - **Loop settings that can't quietly mean something else** — a fleet loop ends

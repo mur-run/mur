@@ -1,10 +1,20 @@
+use crate::sandbox::launch_chain::LaunchChain;
+use std::path::PathBuf;
+
+// The Landlock/seccomp application path is Linux-only; the module compiles
+// everywhere so `partition_write_grants` (shared with policy.rs, and tested on
+// macOS) is not cfg-gated.
+#[cfg(target_os = "linux")]
 use super::{SandboxPolicy, SandboxStatus};
+#[cfg(target_os = "linux")]
 use anyhow::Context;
+#[cfg(target_os = "linux")]
 use landlock::{
     ABI, Access, AccessFs, AccessNet, NetPort, Ruleset, RulesetAttr, RulesetCreatedAttr,
     RulesetStatus, make_bitflags, path_beneath_rules,
 };
 
+#[cfg(target_os = "linux")]
 pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
     let abi = ABI::V4;
 
@@ -30,9 +40,16 @@ pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
         created = created.add_rules(read_rules).context("add fs_read rules")?;
     }
 
-    // FS read+write paths (superset of read).
-    if !policy.fs_write.is_empty() {
-        let write_rules = path_beneath_rules(policy.fs_write.iter(), AccessFs::from_all(abi));
+    // FS read+write paths (superset of read). Landlock is a pure allow-list,
+    // so a grant that contains a protected launch-chain path cannot be carved
+    // (no deny rule exists to re-close it) — it is dropped whole, fail-closed.
+    // `policy.dropped_grants` already recorded the same computation at profile
+    // build time; this local recomputation also covers paths added after that
+    // (e.g. the media-state extra grants) and keeps the kernel and the report
+    // reading from the same code path.
+    let (writable, _dropped) = partition_write_grants(&policy.fs_write, &policy.launch_chain);
+    if !writable.is_empty() {
+        let write_rules = path_beneath_rules(writable.iter(), AccessFs::from_all(abi));
         created = created
             .add_rules(write_rules)
             .context("add fs_write rules")?;
@@ -78,6 +95,7 @@ pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
 /// To deny a syscall unconditionally (no condition matching), map it to an EMPTY
 /// `Vec<SeccompRule>`. Mapping to a non-empty vec means "deny when a rule matches";
 /// mapping to `vec![]` means "always deny" (matches regardless of arguments).
+#[cfg(target_os = "linux")]
 fn apply_seccomp_denylist() -> anyhow::Result<()> {
     use seccompiler::{BpfProgram, SeccompAction, SeccompFilter, TargetArch};
     use std::collections::BTreeMap;
@@ -122,4 +140,89 @@ fn apply_seccomp_denylist() -> anyhow::Result<()> {
     seccompiler::apply_filter(&prog).context("apply seccomp filter")?;
 
     Ok(())
+}
+
+/// Split write grants into those Landlock can safely install and those it
+/// cannot. Landlock has no deny rule, so a grant that contains a protected
+/// path cannot be carved — it is dropped whole. Fail-closed on purpose: the
+/// alternative is installing a rule that hands over the launch chain.
+///
+/// The agent's own home is exempt: on macOS the SBPL deny of the agents tree
+/// is followed by a re-allow of exactly this directory, and Landlock installs
+/// it as-is (it contains nothing protected — the own profile/identity
+/// self-protection is macOS tier 3 only). Without the exemption the symmetric
+/// overlap test below would also catch the `<mur_home>/agents/<self>`
+/// force-grant and Linux agents would lose their own home.
+pub(crate) fn partition_write_grants(
+    grants: &[PathBuf],
+    chain: &LaunchChain,
+) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let protected = chain.deny_paths();
+    grants.iter().cloned().partition(|g| {
+        if g.starts_with(chain.agent_self_home()) {
+            return true;
+        }
+        !protected
+            .iter()
+            .any(|p| p.starts_with(g) || g.starts_with(p))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chain(tmp: &std::path::Path) -> LaunchChain {
+        LaunchChain::for_test(
+            &tmp.join("agents").join("mur"),
+            &tmp.join("bin"),
+            &tmp.join("home"),
+        )
+    }
+
+    #[test]
+    fn a_write_grant_containing_a_protected_path_is_dropped_not_carved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let agent_home = mur_home.join("agents/mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let skills = mur_home.join("skills");
+        std::fs::create_dir_all(&skills).unwrap();
+
+        let (kept, dropped) = partition_write_grants(
+            &[mur_home.to_path_buf(), skills.clone()],
+            &chain(tmp.path()),
+        );
+
+        // `<mur_home>` contains `<mur_home>/agents`, and Landlock cannot carve it out.
+        assert_eq!(dropped, vec![mur_home.to_path_buf()]);
+        // Negative control: a grant that contains nothing protected survives intact.
+        assert_eq!(kept, vec![skills]);
+    }
+
+    #[test]
+    fn a_write_grant_on_a_sibling_agent_dir_is_dropped_but_own_home_survives() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let agent_home = mur_home.join("agents/mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let skills = mur_home.join("skills");
+        std::fs::create_dir_all(&skills).unwrap();
+
+        let (kept, dropped) = partition_write_grants(
+            &[
+                mur_home.join("agents/pm"),
+                agent_home.clone(),
+                skills.clone(),
+            ],
+            &chain(tmp.path()),
+        );
+
+        // A sibling's home is another agent's launch entry and cannot be
+        // carved — dropped whole.
+        assert_eq!(dropped, vec![mur_home.join("agents/pm")]);
+        // Negative controls: the own-home force-grant and an unrelated grant
+        // survive, so the drop is the launch chain and not a blanket prune.
+        assert_eq!(kept, vec![agent_home, skills]);
+    }
 }

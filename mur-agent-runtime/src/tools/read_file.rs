@@ -21,20 +21,50 @@ pub struct ReadFileTool {
     pub session_cwd: crate::tools::fs_policy::SessionCwd,
     /// Filesystem grants from the agent profile; checked before every read.
     pub fs: FilesystemEntitlement,
+    /// MUR's own launch chain. Checked before `fs`, and no grant can satisfy it.
+    pub chain: crate::sandbox::launch_chain::LaunchChain,
 }
 
 impl ReadFileTool {
     pub fn new(
         session_cwd: crate::tools::fs_policy::SessionCwd,
         fs: FilesystemEntitlement,
+        chain: crate::sandbox::launch_chain::LaunchChain,
     ) -> Self {
-        Self { session_cwd, fs }
+        Self {
+            session_cwd,
+            fs,
+            chain,
+        }
+    }
+
+    /// Test-only: construct with an inert launch chain. Production must go
+    /// through `new`, which cannot be called without a real chain.
+    #[cfg(test)]
+    pub fn new_for_test(
+        session_cwd: crate::tools::fs_policy::SessionCwd,
+        fs: FilesystemEntitlement,
+    ) -> Self {
+        Self::new(
+            session_cwd,
+            fs,
+            crate::sandbox::launch_chain::LaunchChain::inert(),
+        )
     }
 
     /// Prefix-match `path` against the entitlement lists after
     /// canonicalization. `deny` always wins; a read is allowed when the path
     /// falls under any `read` OR `write` grant (write implies read-back).
     fn check_entitlement(&self, canonical: &Path) -> Result<(), ToolError> {
+        // Before the lists, and unconditionally: reading another agent's
+        // signing key is enough to forge its signed events, and no entitlement
+        // may authorise that.
+        if let Some(reason) = self.chain.protects_read(canonical) {
+            return Err(ToolError::Execution(format!(
+                "path is part of MUR's launch chain and can never be read: {} ({reason})",
+                canonical.display()
+            )));
+        }
         let under = |roots: &[String]| {
             roots.iter().any(|r| {
                 let root = std::fs::canonicalize(r).unwrap_or_else(|_| PathBuf::from(r));
@@ -138,6 +168,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn sibling_identity_key_is_refused_even_under_a_read_grant() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Canonical base: the check compares canonicalized paths, and on macOS
+        // /var is a symlink to /private/var — raw tempdir paths would never
+        // match the canonicalized grant roots the check computes.
+        let home = std::fs::canonicalize(tmp.path()).unwrap();
+        let agents = home.join("agents");
+        std::fs::create_dir_all(agents.join("pm")).unwrap();
+        std::fs::write(agents.join("pm/identity.key"), b"SECRET").unwrap();
+        std::fs::write(agents.join("pm/profile.yaml"), b"name: pm\n").unwrap();
+
+        let chain = crate::sandbox::launch_chain::LaunchChain::for_test(
+            &agents.join("mur"),
+            &home.join("bin"),
+            &home.join("home"),
+        );
+        let fs = fs_ent(&[&home.to_string_lossy()], &[], &[]);
+        let tool = ReadFileTool::new(
+            crate::tools::fs_policy::SessionCwd::new(home.clone()),
+            fs,
+            chain,
+        );
+
+        let err = tool
+            .check_entitlement(&agents.join("pm/identity.key"))
+            .expect_err("a sibling signing key must be refused under any read grant");
+        assert!(format!("{err:?}").contains("forge"), "error must say why");
+
+        // Negative control: the same grant still reads a neighbouring file, so
+        // the refusal is the key rule and not a broken read path.
+        tool.check_entitlement(&agents.join("pm/profile.yaml"))
+            .expect("sibling profile.yaml is not read-protected");
+    }
+
     fn write_tmp(dir: &Path, name: &str, content: &str) -> PathBuf {
         let p = dir.join(name);
         std::fs::write(&p, content).unwrap();
@@ -159,7 +224,7 @@ mod tests {
 
         let shared = SessionCwd::new(home.path().into());
         let bash = BashTool::new(home.path().into(), shared.clone());
-        let reader = ReadFileTool::new(
+        let reader = ReadFileTool::new_for_test(
             shared.clone(),
             fs_ent(
                 &[
@@ -203,7 +268,7 @@ mod tests {
     async fn missing_file_error_names_session_cwd() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().to_str().unwrap();
-        let t = ReadFileTool::new(
+        let t = ReadFileTool::new_for_test(
             crate::tools::fs_policy::SessionCwd::new(td.path().into()),
             fs_ent(&[root], &[], &[]),
         );
@@ -217,7 +282,7 @@ mod tests {
     #[tokio::test]
     async fn missing_path_is_invalid_input() {
         let td = tempfile::tempdir().unwrap();
-        let t = ReadFileTool::new(
+        let t = ReadFileTool::new_for_test(
             crate::tools::fs_policy::SessionCwd::new(td.path().into()),
             fs_ent(&[], &[], &[]),
         );
@@ -230,7 +295,7 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         write_tmp(td.path(), "f.txt", "l1\nl2\nl3\nl4");
         let root = td.path().to_str().unwrap();
-        let t = ReadFileTool::new(
+        let t = ReadFileTool::new_for_test(
             crate::tools::fs_policy::SessionCwd::new(td.path().into()),
             fs_ent(&[root], &[], &[]),
         );
@@ -246,7 +311,7 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         write_tmp(td.path(), "f.txt", "hi");
         let root = td.path().to_str().unwrap();
-        let t = ReadFileTool::new(
+        let t = ReadFileTool::new_for_test(
             crate::tools::fs_policy::SessionCwd::new(td.path().into()),
             fs_ent(&[], &[root], &[]),
         );
@@ -264,7 +329,7 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         write_tmp(td.path(), "f.txt", "secret");
         let root = td.path().to_str().unwrap();
-        let t = ReadFileTool::new(
+        let t = ReadFileTool::new_for_test(
             crate::tools::fs_policy::SessionCwd::new(td.path().into()),
             fs_ent(&[root], &[], &[root]),
         );
@@ -279,7 +344,7 @@ mod tests {
     async fn unentitled_path_is_rejected() {
         let td = tempfile::tempdir().unwrap();
         write_tmp(td.path(), "f.txt", "hi");
-        let t = ReadFileTool::new(
+        let t = ReadFileTool::new_for_test(
             crate::tools::fs_policy::SessionCwd::new(td.path().into()),
             fs_ent(&["/nonexistent-grant"], &[], &[]),
         );
@@ -294,7 +359,7 @@ mod tests {
     async fn nonexistent_file_is_execution_error() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().to_str().unwrap();
-        let t = ReadFileTool::new(
+        let t = ReadFileTool::new_for_test(
             crate::tools::fs_policy::SessionCwd::new(td.path().into()),
             fs_ent(&[root], &[], &[]),
         );
