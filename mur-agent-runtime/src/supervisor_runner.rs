@@ -276,16 +276,26 @@ pub async fn build_provider_runner(
         profile.inner.entitlements.filesystem.clone(),
         agent_home,
     );
-    let read_file_exec: Arc<dyn crate::tools::ToolExecutor> = Arc::new(
-        crate::tools::read_file::ReadFileTool::new(session_cwd.clone(), tool_fs.clone()),
-    );
+    // Issue #712 protects this agent's own profile/key. The launch chain
+    // protects every OTHER agent's, plus the binary and the autostart entries
+    // that start them — none of which any entitlement may authorise.
+    let launch_chain = crate::sandbox::launch_chain::LaunchChain::new(agent_home);
+    let read_file_exec: Arc<dyn crate::tools::ToolExecutor> =
+        Arc::new(crate::tools::read_file::ReadFileTool::new(
+            session_cwd.clone(),
+            tool_fs.clone(),
+            launch_chain.clone(),
+        ));
     let read_file_def = read_file_exec.def();
-    let write_file_exec: Arc<dyn crate::tools::ToolExecutor> = Arc::new(
-        crate::tools::write_file::WriteFileTool::new(session_cwd.clone(), tool_fs.clone()),
-    );
+    let write_file_exec: Arc<dyn crate::tools::ToolExecutor> =
+        Arc::new(crate::tools::write_file::WriteFileTool::new(
+            session_cwd.clone(),
+            tool_fs.clone(),
+            launch_chain.clone(),
+        ));
     let write_file_def = write_file_exec.def();
     let edit_file_exec: Arc<dyn crate::tools::ToolExecutor> = Arc::new(
-        crate::tools::edit_file::EditFileTool::new(session_cwd, tool_fs),
+        crate::tools::edit_file::EditFileTool::new(session_cwd, tool_fs, launch_chain),
     );
     let edit_file_def = edit_file_exec.def();
     let tools_policy = profile.inner.entitlements.tools.clone();

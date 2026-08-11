@@ -99,6 +99,16 @@ pub struct SandboxPolicy {
     pub net_allow_hosts: Option<Vec<String>>,
     /// Memory limit in megabytes (for Windows Job Object).
     pub memory_limit_mb: Option<u64>,
+    /// MUR's own launch chain: the files that decide what starts next and
+    /// with what authority (spec 2026-08-11). macOS emits it as three
+    /// ordering tiers in SBPL; Linux drops any overlapping grant fail-closed.
+    /// Set from `agent_home` in `from_entitlements`.
+    pub launch_chain: crate::sandbox::launch_chain::LaunchChain,
+    /// Write grants that overlap the launch chain and were dropped whole,
+    /// fail-closed: Landlock cannot carve them (Linux), so they never reached
+    /// the kernel. Read by `mur agent runtime-doctor` to report what the
+    /// sandbox neutralised (spec 2026-08-11).
+    pub dropped_grants: Vec<PathBuf>,
 }
 
 impl Default for SandboxPolicy {
@@ -116,6 +126,8 @@ impl Default for SandboxPolicy {
             net_loopback_allowed: false,
             net_allow_hosts: None,
             memory_limit_mb: None,
+            launch_chain: crate::sandbox::launch_chain::LaunchChain::default(),
+            dropped_grants: Vec::new(),
         }
     }
 }
@@ -522,6 +534,14 @@ impl SandboxPolicy {
                 NetworkOutboundMode::Off => (Some(vec![]), Some(vec![]), false),
             };
 
+        let launch_chain = crate::sandbox::launch_chain::LaunchChain::new(agent_home);
+        // Linux Landlock cannot carve a protected path out of a grant (pure
+        // allow-list), so any write grant overlapping the launch chain is
+        // dropped whole here, fail-closed — and recorded for the runtime-doctor
+        // (spec 2026-08-11). macOS carries the same field for symmetry; its
+        // SBPL deny/re-allow carve-out needs no drop.
+        let (_, dropped_grants) =
+            crate::sandbox::linux::partition_write_grants(&fs_write, &launch_chain);
         SandboxPolicy {
             fs_read,
             fs_write,
@@ -535,6 +555,8 @@ impl SandboxPolicy {
             net_loopback_allowed,
             net_allow_hosts,
             memory_limit_mb: Some(ent.limits.memory_mb),
+            launch_chain,
+            dropped_grants,
         }
     }
 

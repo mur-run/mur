@@ -203,7 +203,7 @@ mod tests {
     #[tokio::test]
     async fn read_file_tool_included_when_allowed() {
         use crate::tools::read_file::ReadFileTool;
-        let read_file_exec: Arc<dyn ToolExecutor> = Arc::new(ReadFileTool::new(
+        let read_file_exec: Arc<dyn ToolExecutor> = Arc::new(ReadFileTool::new_for_test(
             crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
             mur_common::agent::FilesystemEntitlement::default(),
         ));
@@ -227,7 +227,7 @@ mod tests {
     #[tokio::test]
     async fn read_file_tool_excluded_when_denied() {
         use crate::tools::read_file::ReadFileTool;
-        let read_file_exec: Arc<dyn ToolExecutor> = Arc::new(ReadFileTool::new(
+        let read_file_exec: Arc<dyn ToolExecutor> = Arc::new(ReadFileTool::new_for_test(
             crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
             mur_common::agent::FilesystemEntitlement::default(),
         ));
@@ -257,7 +257,7 @@ mod tests {
     #[tokio::test]
     async fn write_file_tool_included_when_allowed() {
         use crate::tools::write_file::WriteFileTool;
-        let write_file_exec: Arc<dyn ToolExecutor> = Arc::new(WriteFileTool::new(
+        let write_file_exec: Arc<dyn ToolExecutor> = Arc::new(WriteFileTool::new_for_test(
             crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
             mur_common::agent::FilesystemEntitlement::default(),
         ));
@@ -281,7 +281,7 @@ mod tests {
     #[tokio::test]
     async fn write_file_tool_excluded_when_denied() {
         use crate::tools::write_file::WriteFileTool;
-        let write_file_exec: Arc<dyn ToolExecutor> = Arc::new(WriteFileTool::new(
+        let write_file_exec: Arc<dyn ToolExecutor> = Arc::new(WriteFileTool::new_for_test(
             crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
             mur_common::agent::FilesystemEntitlement::default(),
         ));
@@ -311,7 +311,7 @@ mod tests {
     #[tokio::test]
     async fn edit_file_tool_included_when_allowed() {
         use crate::tools::edit_file::EditFileTool;
-        let edit_file_exec: Arc<dyn ToolExecutor> = Arc::new(EditFileTool::new(
+        let edit_file_exec: Arc<dyn ToolExecutor> = Arc::new(EditFileTool::new_for_test(
             crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
             mur_common::agent::FilesystemEntitlement::default(),
         ));
@@ -335,7 +335,7 @@ mod tests {
     #[tokio::test]
     async fn edit_file_tool_excluded_when_denied() {
         use crate::tools::edit_file::EditFileTool;
-        let edit_file_exec: Arc<dyn ToolExecutor> = Arc::new(EditFileTool::new(
+        let edit_file_exec: Arc<dyn ToolExecutor> = Arc::new(EditFileTool::new_for_test(
             crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
             mur_common::agent::FilesystemEntitlement::default(),
         ));
