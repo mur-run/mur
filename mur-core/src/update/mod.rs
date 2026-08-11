@@ -207,16 +207,42 @@ pub(crate) fn warn_stale_compress_writers() {
     }
 }
 
+/// True when `ver` trails `current` by at least a full minor.
+///
+/// Patch-level lag is not worth a notice, and firing on it makes the notice
+/// worthless. Two things guarantee patch lag with nothing wrong:
+///
+/// - `mur-model-gateway` pins `mur-compress` to an exact release tag, so every
+///   release leaves it exactly one patch behind *by construction*. Nothing is
+///   stale; the pin simply cannot lead a release it was cut before.
+/// - The CLI's own earlier buckets from the same day. Upgrading through
+///   2.68.0 → .1 → .2 → .4 in one day left four buckets dated today, and the
+///   first three got reported as "a long-lived service outside this update"
+///   when they were this very binary an hour earlier.
+///
+/// The signal worth keeping is the one that genuinely fired: the gateway
+/// writing as 2.61.0 while the CLI was 2.68.2 — seven minors of drift, and a
+/// real behavioural gap.
+fn lags_by_a_minor(ver: &str, current: &str) -> bool {
+    let (Ok(v), Ok(c)) = (
+        semver::Version::parse(release::strip_v_prefix(ver)),
+        semver::Version::parse(release::strip_v_prefix(current)),
+    ) else {
+        return false; // unparseable bucket key — say nothing rather than guess
+    };
+    (c.major, c.minor) > (v.major, v.minor)
+}
+
 /// Pure core of [`warn_stale_compress_writers`]: versions from the stats
 /// ledger's `buckets[version][date]` slices that recorded compressions on any
-/// of `days` and are strictly older than `current`.
+/// of `days` and trail `current` by at least a minor (see [`lags_by_a_minor`]).
 fn stale_writer_versions(stats: &serde_json::Value, days: &[String], current: &str) -> Vec<String> {
     let Some(buckets) = stats.get("buckets").and_then(|b| b.as_object()) else {
         return Vec::new();
     };
     let mut out: Vec<String> = buckets
         .iter()
-        .filter(|(ver, _)| release::is_newer(ver, current).ok() == Some(true))
+        .filter(|(ver, _)| lags_by_a_minor(ver, current))
         .filter(|(_, per_day)| {
             days.iter().any(|d| {
                 per_day
@@ -273,6 +299,40 @@ mod tests {
         assert_eq!(
             stale_writer_versions(&stats, &days, "2.66.0"),
             vec!["2.61.0".to_string()],
+        );
+    }
+
+    /// `mur-model-gateway` pins `mur-compress` to an exact release tag, so it
+    /// is one patch behind the moment the next release lands — by construction,
+    /// with nothing to fix. Warning about it turned the notice into a fixture
+    /// that appeared after every release and meant nothing.
+    #[test]
+    fn stale_writer_versions_ignores_a_patch_behind() {
+        let stats = serde_json::json!({
+            "buckets": { "2.68.3": { "2026-08-11": { "compressions": 1431 } } }
+        });
+        let days = ["2026-08-11".to_string(), "2026-08-10".to_string()];
+        assert!(stale_writer_versions(&stats, &days, "2.68.4").is_empty());
+    }
+
+    /// Upgrading through 2.68.0 → .1 → .2 → .4 in one day leaves four buckets
+    /// dated today. The first three are this very binary an hour ago, not "a
+    /// long-lived service outside this update".
+    #[test]
+    fn stale_writer_versions_ignores_todays_own_upgrade_path() {
+        let stats = serde_json::json!({
+            "buckets": {
+                "2.68.0": { "2026-08-11": { "compressions": 21 } },
+                "2.68.1": { "2026-08-11": { "compressions": 35 } },
+                "2.68.2": { "2026-08-11": { "compressions": 11 } },
+                "2.61.0": { "2026-08-11": { "compressions": 496 } }
+            }
+        });
+        let days = ["2026-08-11".to_string()];
+        assert_eq!(
+            stale_writer_versions(&stats, &days, "2.68.4"),
+            vec!["2.61.0".to_string()],
+            "the seven-minor drift is the whole point; only the patch noise goes"
         );
     }
 
