@@ -362,7 +362,9 @@ mod tests {
         let bin = mur_home.join("bin");
         let home = mur_home.join("home");
         let chain = mur_agent_runtime::sandbox::launch_chain::LaunchChain::for_test(
-            &agent_home, &bin, &home,
+            &agent_home,
+            &bin,
+            &home,
         );
 
         let fs = mur_common::agent::FilesystemEntitlement {

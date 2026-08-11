@@ -234,7 +234,10 @@ mod tests {
         // Negative control: the agent's own home stays writable. Without this,
         // a predicate that returned Some() for everything would still pass.
         assert!(c.protects_write(&agents.join("mur/running.lock")).is_none());
-        assert!(c.protects_write(&agents.join("mur/skills/x.yaml")).is_none());
+        assert!(
+            c.protects_write(&agents.join("mur/skills/x.yaml"))
+                .is_none()
+        );
     }
 
     #[test]

@@ -268,9 +268,15 @@ fn allow_write_refuses_the_launch_chain_and_overbroad_roots() {
     );
     assert!(!out.status.success(), "sibling agent dir must be refused");
     let err = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert!(err.contains("launch chain"), "error must name the rule: {err}");
+    assert!(
+        err.contains("launch chain"),
+        "error must name the rule: {err}"
+    );
 
-    let out = run(mur_home.path(), &["agent", "perm", "allow-write", "agent_x", "/"]);
+    let out = run(
+        mur_home.path(),
+        &["agent", "perm", "allow-write", "agent_x", "/"],
+    );
     assert!(!out.status.success(), "root must be refused");
 
     // Negative control: an ordinary existing dir under the same mur_home is

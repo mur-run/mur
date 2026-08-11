@@ -108,7 +108,8 @@ mod tests {
     async fn creates_and_overwrites() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().to_str().unwrap();
-        let t = WriteFileTool::new_for_test(SessionCwd::new(td.path().into()), fs_ent(&[root], &[]));
+        let t =
+            WriteFileTool::new_for_test(SessionCwd::new(td.path().into()), fs_ent(&[root], &[]));
         let r = t
             .execute(serde_json::json!({"path": "a.txt", "content": "one"}))
             .await
@@ -127,7 +128,8 @@ mod tests {
     async fn missing_parent_fails_loud() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().to_str().unwrap();
-        let t = WriteFileTool::new_for_test(SessionCwd::new(td.path().into()), fs_ent(&[root], &[]));
+        let t =
+            WriteFileTool::new_for_test(SessionCwd::new(td.path().into()), fs_ent(&[root], &[]));
         let err = t
             .execute(serde_json::json!({"path": "no/such/dir/a.txt", "content": "x"}))
             .await
@@ -147,8 +149,10 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("not write-entitled"));
-        let denied =
-            WriteFileTool::new_for_test(SessionCwd::new(td.path().into()), fs_ent(&[root], &[root]));
+        let denied = WriteFileTool::new_for_test(
+            SessionCwd::new(td.path().into()),
+            fs_ent(&[root], &[root]),
+        );
         let err2 = denied
             .execute(serde_json::json!({"path": "a.txt", "content": "x"}))
             .await

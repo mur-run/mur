@@ -174,7 +174,10 @@ mod tests {
         let err = check_write_entitlement(&fs, &agents.join("pm/profile.yaml"), &chain)
             .expect_err("a sibling profile must be refused even under a grant covering it");
         let msg = format!("{err:?}");
-        assert!(msg.contains("entitlements"), "error must explain why: {msg}");
+        assert!(
+            msg.contains("entitlements"),
+            "error must explain why: {msg}"
+        );
 
         // Negative control: the same grant still works for a path outside the
         // set, so the refusal above is the launch chain and not a broken check.
