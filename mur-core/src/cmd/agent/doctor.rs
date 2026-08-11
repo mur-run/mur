@@ -120,9 +120,6 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
     let mur_home = resolve_mur_home()?;
     let agents_dir = mur_home.join("agents");
 
-    // Compute the on-disk sha ONCE — avoids redundant subprocess calls.
-    let disk_sha = stale::on_disk_sha();
-
     let mut rows: Vec<AgentRow> = Vec::new();
 
     if agents_dir.is_dir() {
@@ -149,6 +146,9 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
             };
             let drift = mur_common::agent_facts::agent_facts(&mur_home, &agent_name)
                 .is_some_and(|f| f.drift);
+            // Per-agent: the baseline is the binary THIS agent's symlink
+            // resolves to, not the runtime next to `mur`. Memoized in `stale`.
+            let disk_sha = stale::on_disk_sha_for(&agent_name);
             rows.push(build_row(&agent_name, &lock, &disk_sha, drift));
         }
     }

@@ -573,8 +573,6 @@ pub fn cmd_list(json: bool) -> Result<()> {
         println!("{}", serde_json::to_string(&rows)?);
     } else {
         let mur_home = resolve_mur_home()?;
-        // Compute on-disk sha ONCE — avoids a subprocess call per agent.
-        let on_disk = super::stale::on_disk_sha();
         println!(
             "{:<20} {:<6} {:<10} {:<20} {:<10} {:<12}",
             "NAME", "EMOJI", "STATUS", "UPTIME", "PID", "CATEGORY"
@@ -593,7 +591,9 @@ pub fn cmd_list(json: bool) -> Result<()> {
                 let stale = mur_common::lock_file::read(&lock_path)
                     .ok()
                     .flatten()
-                    .is_some_and(|lock| super::stale::is_stale(&lock, &on_disk));
+                    .is_some_and(|lock| {
+                        super::stale::is_stale(&lock, &super::stale::on_disk_sha_for(&r.name))
+                    });
                 if stale {
                     format!(" ⚠{STALE_SUFFIX}")
                 } else {
@@ -625,7 +625,7 @@ pub fn cmd_status(name: &str) -> Result<()> {
     );
     // Check for stale runtime when the agent is running.
     let stale_suffix = if row.status == "running" {
-        let on_disk = super::stale::on_disk_sha();
+        let on_disk = super::stale::on_disk_sha_for(name);
         let lock_path = mur_home.join("agents").join(name).join("running.lock");
         let stale = mur_common::lock_file::read(&lock_path)
             .ok()
