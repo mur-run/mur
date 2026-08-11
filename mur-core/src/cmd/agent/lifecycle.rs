@@ -752,6 +752,12 @@ pub fn cmd_stop(name: &str) -> Result<()> {
             .unwrap_or(15)
     };
 
+    // Take the agent out of its supervisor's hands before signalling it.
+    // launchd/systemd restart the runtime the instant it dies (every service
+    // `mur agent install-service` writes sets KeepAlive), so signalling alone
+    // cannot stop a service-managed agent — it only swaps the pid.
+    let had_service = super::service::stop_service(name);
+
     #[cfg(unix)]
     unsafe {
         libc::kill(lock.pid as libc::pid_t, libc::SIGTERM);
@@ -775,8 +781,52 @@ pub fn cmd_stop(name: &str) -> Result<()> {
     // Supervisor normally removes the lock, but after SIGKILL nothing will —
     // or our sleep-fixture has no lock cleanup — so best-effort remove here.
     let _ = fs::remove_file(&lock_path);
-    println!("Stopped agent '{name}'");
+
+    // Confirm, don't assert. Signalling the pid is not the same as the agent
+    // being down: a launchd job with KeepAlive (every service `mur agent
+    // install-service` writes) hands back a fresh pid within a second, and the
+    // old code printed "Stopped agent" regardless — so the arrow read
+    // 17402 → 17597 while the message said success.
+    //
+    // `stop_service` above removes that race for our own services. This loop
+    // catches whatever else might be respawning it, and says so instead of
+    // lying.
+    if let Some(pid) = wait_for_no_live_lock(&lock_path) {
+        bail!(
+            "signalled '{name}' but it is running again as pid {pid} — something is respawning it.{}",
+            if had_service {
+                ""
+            } else {
+                " No mur service is installed for it; check for another supervisor."
+            }
+        );
+    }
+    if had_service {
+        println!("Stopped agent '{name}' and unloaded its service");
+    } else {
+        println!("Stopped agent '{name}'");
+    }
     Ok(())
+}
+
+/// Poll briefly for a *live* `running.lock` to reappear, returning the pid that
+/// holds it. A supervisor that restarts the runtime needs a moment to do it, so
+/// checking once immediately after the kill would always look clean.
+fn wait_for_no_live_lock(lock_path: &Path) -> Option<u32> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let mut seen = None;
+    while std::time::Instant::now() < deadline {
+        seen = fs::read(lock_path)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<LockFile>(&b).ok())
+            .filter(|l| pid_alive(l.pid))
+            .map(|l| l.pid);
+        if seen.is_some() {
+            return seen;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    seen
 }
 
 pub fn cmd_remove(name: &str, purge: bool, force: bool) -> Result<()> {
@@ -800,6 +850,13 @@ pub fn cmd_remove(name: &str, purge: bool, force: bool) -> Result<()> {
     let symlink = bin_dir.join(format!("mur_agent_{name}"));
     if symlink.symlink_metadata().is_ok() {
         fs::remove_file(&symlink).ok();
+    }
+
+    // The symlink above is what the service execs, so leaving the descriptor
+    // behind leaves the supervisor retrying a path that no longer exists — and
+    // loading it again at the next login. Remove goes with it.
+    if let Some(path) = super::service::remove_service(name) {
+        println!("Removed service {}", path.display());
     }
 
     if purge {
