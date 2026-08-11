@@ -7,6 +7,8 @@
 
 use std::path::Path;
 
+use mur_common::agent::AUTHORING_DIRS;
+
 /// True if Mur is already seeded, i.e. `<mur_home>/agents/mur/profile.yaml` exists.
 /// We key off the profile file (not just the directory) so a previously broken
 /// half-seeded `agents/mur` directory is treated as "not seeded" and gets healed.
@@ -291,6 +293,15 @@ pub fn seed_mur_if_missing(template_dir: &Path, mur_home: &Path) -> std::io::Res
 
     let agents = mur_home.join("agents");
     std::fs::create_dir_all(&agents)?;
+
+    // The template grants write on these, but the sandbox drops a grant whose
+    // path does not exist at seal time (policy.rs, Issue 16) — so on a fresh
+    // host the concierge would boot with every authoring grant silently gone.
+    // Create them here, next to the seed that grants them.
+    for d in AUTHORING_DIRS {
+        std::fs::create_dir_all(mur_home.join(d))?;
+    }
+
     let staging = agents.join(".mur.seeding");
     let dst = agents.join("mur");
 
@@ -438,6 +449,68 @@ mod tests {
                 .join("agents/mur/skills/concierge.yaml")
                 .exists()
         );
+    }
+
+    #[test]
+    fn seeds_authoring_dirs_so_the_template_grants_are_not_dead() {
+        let home = TempDir::new().unwrap();
+        let tpl = TempDir::new().unwrap();
+        make_template(tpl.path());
+        assert!(seed_mur_if_missing(tpl.path(), home.path()).unwrap());
+        for d in AUTHORING_DIRS {
+            assert!(
+                home.path().join(d).is_dir(),
+                "<mur_home>/{d} must exist at seed time or the sandbox drops the \
+                 template's write grant for it and the concierge boots unable to author"
+            );
+        }
+    }
+
+    /// The template is YAML and `AUTHORING_DIRS` is Rust; nothing but this test
+    /// stops them drifting into "granted but never created" (the original bug).
+    #[test]
+    fn template_write_grants_match_authoring_dirs() {
+        let tpl = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources/mur-agent-template/profile.yaml");
+        let yaml = std::fs::read_to_string(&tpl).unwrap();
+        let v: serde_yaml_ng::Value = serde_yaml_ng::from_str(&yaml).unwrap();
+        let writes: Vec<String> = v["entitlements"]["filesystem"]["write"]
+            .as_sequence()
+            .expect("template must declare filesystem.write")
+            .iter()
+            .map(|s| s.as_str().unwrap().to_string())
+            .collect();
+        let reads: Vec<String> = v["entitlements"]["filesystem"]["read"]
+            .as_sequence()
+            .expect("template must declare filesystem.read")
+            .iter()
+            .map(|s| s.as_str().unwrap().to_string())
+            .collect();
+
+        let expected: Vec<String> = AUTHORING_DIRS
+            .iter()
+            .map(|d| format!("~/.mur/{d}"))
+            .collect();
+        assert_eq!(writes, expected, "template write grants drifted");
+        assert_eq!(
+            reads, expected,
+            "template read grants drifted — every granted path must be one the \
+             seed creates, or the sandbox drops it at seal time"
+        );
+
+        // A blanket `~/.mur` read hands over every other agent's identity.key
+        // (Ed25519 signing key); `~/.mur/agents` write lets this agent author a
+        // sibling profile with unrestricted entitlements and start it.
+        for bad in ["~/.mur", "~/.mur/agents", "~/.mur/"] {
+            assert!(
+                !reads.contains(&bad.to_string()),
+                "read grant {bad} escapes"
+            );
+            assert!(
+                !writes.contains(&bad.to_string()),
+                "write grant {bad} escapes"
+            );
+        }
     }
 
     fn make_dir_skill_template(dir: &Path) {
