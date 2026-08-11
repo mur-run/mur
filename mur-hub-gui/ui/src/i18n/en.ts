@@ -213,6 +213,8 @@ export const en = {
   "detail.skillDeadHint": "This legacy file no longer parses as a valid skill — remove and re-install it.",
   "detail.skillMissing": "missing",
   "detail.skillMissingHint": "File not found: {path} — profile.yaml references this skill but it was never installed. Install it (mur agent skill add) or remove the entry.",
+  "detail.skillCorrupt": "corrupt entry",
+  "detail.skillCorruptHint": "This is one profile.yaml entry holding several refs run together, not a skill id — so no file matches it. The skills it names are probably installed; installing again will not help. Split it into separate list items in profile.yaml, or remove it and re-add them.",
   "detail.remove": "Remove",
   "detail.addMcp": "Add MCP server",
   "detail.discoverMcp": "Discover from other tools",

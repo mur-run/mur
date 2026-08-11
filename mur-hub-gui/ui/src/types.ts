@@ -55,9 +55,11 @@ export interface SkillView {
   loadable: boolean;
   /**
    * Why: "missing" = the file was never installed (dangling profile.yaml ref),
-   * "malformed" = the file exists but no longer parses (#717).
+   * "malformed" = the file exists but no longer parses (#717), "corrupt" = the
+   * ref itself is not a usable path (several refs concatenated into one entry),
+   * so the skills it names may be installed and installing is not the fix.
    */
-  status: "ok" | "missing" | "malformed";
+  status: "ok" | "missing" | "malformed" | "corrupt";
 }
 
 export interface InstalledAddonView {
