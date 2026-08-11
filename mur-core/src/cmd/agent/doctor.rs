@@ -44,6 +44,29 @@ pub fn dead_grants(fs: &mur_common::agent::FilesystemEntitlement) -> Vec<(&'stat
         .collect()
 }
 
+/// Grants the launch chain now makes inert. Reported, never removed: an
+/// upgrade that rewrites a user's entitlements is exactly the surprise this
+/// work exists to remove.
+pub fn neutralised_grants(
+    fs: &mur_common::agent::FilesystemEntitlement,
+    chain: &mur_agent_runtime::sandbox::launch_chain::LaunchChain,
+) -> Vec<(PathBuf, &'static str)> {
+    let mut out = Vec::new();
+    for raw in &fs.write {
+        let p = mur_agent_runtime::sandbox::policy::expand_entitlement_path(raw);
+        if let Some(reason) = chain.protects_write(&p) {
+            out.push((p, reason));
+        }
+    }
+    for raw in &fs.read {
+        let p = mur_agent_runtime::sandbox::policy::expand_entitlement_path(raw);
+        if let Some(reason) = chain.protects_read(&p) {
+            out.push((p, reason));
+        }
+    }
+    out
+}
+
 /// `<mur_home>` authoring dirs the concierge has no write grant covering.
 ///
 /// An upgrade deliberately does not widen an existing agent's sandbox, so an
@@ -164,6 +187,17 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
             .unwrap_or_default()
     };
 
+    // Grants the launch chain neutralised: profile says granted, sandbox says
+    // never. Same best-effort discipline as `dead` above.
+    let neutralised = |name: &str| -> Vec<(PathBuf, &'static str)> {
+        let chain = mur_agent_runtime::sandbox::launch_chain::LaunchChain::new(
+            &mur_home.join("agents").join(name),
+        );
+        super::load_profile_for_edit(name)
+            .map(|(_p, prof)| neutralised_grants(&prof.entitlements.filesystem, &chain))
+            .unwrap_or_default()
+    };
+
     // Checked outside the rows loop on purpose: `rows` only holds agents with a
     // running.lock, and "my concierge cannot author anything" is exactly the
     // question you ask about an agent that is not up.
@@ -245,6 +279,15 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
                     r.name
                 );
             }
+            for (p, reason) in neutralised(&r.name) {
+                println!("  {}: grant has NO EFFECT: {}", r.name, p.display());
+                println!("    {reason}");
+                println!(
+                    "    remove with: mur agent perm deny-path {} {}",
+                    r.name,
+                    p.display()
+                );
+            }
 
             // Best-effort program-deps preflight — never blocks or fails the
             // doctor. A load/aggregate error is swallowed; the runtime-doctor
@@ -309,6 +352,33 @@ mod tests {
         assert_eq!(found.len(), 1, "got {found:?}");
         assert_eq!(found[0].0, "write");
         assert_eq!(found[0].1, gone);
+    }
+
+    #[test]
+    fn neutralised_grants_reports_all_three_real_world_escapes() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mur_home = tmp.path();
+        let agent_home = mur_home.join("agents/mur");
+        let bin = mur_home.join("bin");
+        let home = mur_home.join("home");
+        let chain = mur_agent_runtime::sandbox::launch_chain::LaunchChain::for_test(
+            &agent_home, &bin, &home,
+        );
+
+        let fs = mur_common::agent::FilesystemEntitlement {
+            write: vec![
+                mur_home.join("agents").to_string_lossy().into_owned(),
+                bin.join("mur-agent-runtime").to_string_lossy().into_owned(),
+                mur_home.join("skills").to_string_lossy().into_owned(),
+            ],
+            ..Default::default()
+        };
+
+        let found = neutralised_grants(&fs, &chain);
+        assert_eq!(found.len(), 2, "got {found:?}");
+        // Negative control: the legitimate authoring grant is not reported, so the
+        // finding count reflects the rules rather than "everything is flagged".
+        assert!(!found.iter().any(|(p, _)| p.ends_with("skills")));
     }
 
     #[test]
