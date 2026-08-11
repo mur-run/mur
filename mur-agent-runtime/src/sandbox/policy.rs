@@ -22,6 +22,23 @@ pub const RESTRICTED_GENERAL_PORTS: [u16; 4] = [80, 443, 8080, 8443];
 /// profile and the file tools deny the same set.
 pub const SELF_PROTECTED_AGENT_FILES: [&str; 2] = ["profile.yaml", "identity.key"];
 
+/// Expand a `~`-relative entitlement path the way the sandbox builder does.
+///
+/// Public because a grant only takes effect if the path exists when the
+/// profile is sealed (see the dead-grant drop below). `mur agent perm ...` and
+/// `mur agent doctor` must test the *same* path the kernel will, or they end
+/// up confidently reporting on a path the sandbox never saw.
+pub fn expand_entitlement_path(s: &str) -> PathBuf {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+    if let Some(rest) = s.strip_prefix("~/") {
+        home.join(rest)
+    } else if s == "~" {
+        home
+    } else {
+        PathBuf::from(s)
+    }
+}
+
 /// Resolved, OS-ready sandbox policy derived from agent entitlements.
 /// All paths are absolute (tilde expanded). All fields are ready to
 /// feed directly to Landlock / SBPL / Job Object APIs.
@@ -106,16 +123,7 @@ impl Default for SandboxPolicy {
 impl SandboxPolicy {
     pub fn from_entitlements(ent: &Entitlements, agent_home: &Path) -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-
-        let expand = |s: &str| -> PathBuf {
-            if let Some(rest) = s.strip_prefix("~/") {
-                home.join(rest)
-            } else if s == "~" {
-                home.clone()
-            } else {
-                PathBuf::from(s)
-            }
-        };
+        let expand = expand_entitlement_path;
 
         // USER-DECLARED read/write entitlement paths are existence-checked at
         // profile-build time and dropped (fail-closed, warned) if missing.
