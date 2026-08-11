@@ -42,6 +42,15 @@ impl LaunchChain {
         Self::build(agent_home, bin_dir, home)
     }
 
+    /// A chain rooted outside any real path, so it never fires.
+    ///
+    /// For tests that exercise something else and just need to construct a
+    /// tool. Tests that exercise the chain build their own with `for_test`.
+    #[cfg(test)]
+    pub fn inert() -> Self {
+        Self::default()
+    }
+
     fn build(agent_home: &Path, bin_dir: &Path, home: &Path) -> Self {
         // `<mur_home>/agents/<name>` — the same derivation policy.rs uses for
         // the channels and open-items force-grants.
@@ -140,6 +149,17 @@ impl LaunchChain {
             })
             .map(|e| e.path())
             .collect()
+    }
+}
+
+impl Default for LaunchChain {
+    /// Rooted outside any real path, so it never fires. Only reachable via
+    /// `SandboxPolicy::default()` (tests and policy-less contexts); every
+    /// real policy is built by `from_entitlements`, which constructs the
+    /// actual chain from `agent_home`.
+    fn default() -> Self {
+        let root = Path::new("/nonexistent-launch-chain-root");
+        Self::build(&root.join("agents/none"), &root.join("bin"), root)
     }
 }
 
