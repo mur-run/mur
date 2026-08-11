@@ -42,7 +42,10 @@ pub enum AgentAction {
         /// Agent name
         name: String,
     },
-    /// Stop a running agent (SIGTERM, then SIGKILL after timeout)
+    /// Stop a running agent and keep it stopped: unloads its launchd/systemd
+    /// service first when one is installed (otherwise KeepAlive respawns it a
+    /// second later), then SIGTERM, then SIGKILL after the timeout. `start`
+    /// loads the service again.
     Stop {
         /// Agent name
         name: String,
@@ -64,7 +67,9 @@ pub enum AgentAction {
         #[arg(long = "dry-run")]
         dry_run: bool,
     },
-    /// Remove an agent (symlink + optionally data)
+    /// Remove an agent: deletes its runtime symlink and its launchd/systemd
+    /// service, and leaves `~/.mur/agents/<name>/` in place unless --purge.
+    /// Stop the agent first — removal refuses while it is running.
     Remove {
         /// Agent name
         name: String,
