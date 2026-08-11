@@ -99,6 +99,11 @@ pub struct SandboxPolicy {
     pub net_allow_hosts: Option<Vec<String>>,
     /// Memory limit in megabytes (for Windows Job Object).
     pub memory_limit_mb: Option<u64>,
+    /// MUR's own launch chain: the files that decide what starts next and
+    /// with what authority (spec 2026-08-11). macOS emits it as three
+    /// ordering tiers in SBPL; Linux drops any overlapping grant fail-closed.
+    /// Set from `agent_home` in `from_entitlements`.
+    pub launch_chain: crate::sandbox::launch_chain::LaunchChain,
 }
 
 impl Default for SandboxPolicy {
@@ -116,6 +121,7 @@ impl Default for SandboxPolicy {
             net_loopback_allowed: false,
             net_allow_hosts: None,
             memory_limit_mb: None,
+            launch_chain: crate::sandbox::launch_chain::LaunchChain::default(),
         }
     }
 }
@@ -535,6 +541,7 @@ impl SandboxPolicy {
             net_loopback_allowed,
             net_allow_hosts,
             memory_limit_mb: Some(ent.limits.memory_mb),
+            launch_chain: crate::sandbox::launch_chain::LaunchChain::new(agent_home),
         }
     }
 
