@@ -140,6 +140,10 @@ mur agent cli coach                           # streaming TUI chat with tool app
 mur agent cli dev qa ops                      # three agents, tiled panes (tmux/zellij/WezTerm/kitty)
                                               #   --resume continues the last conversation
 murmur coach                                  # quick form (murmur symlink), identical to mur agent cli coach
+
+mur agent stop coach                          # stops it for real: unloads the service first, so
+                                              #   the supervisor cannot respawn it a second later
+mur agent remove coach                        # unregisters it — add --purge to delete its data too
 ```
 
 <p align="center"><img src="assets/demo.gif" alt="mur agent cli — streaming TUI chat with a local agent" width="92%" /></p>
@@ -490,8 +494,9 @@ mur dashboard        # terminal TUI dashboard
 ```
 mur
 ├── init / doctor / update / stats / verify
-├── agent        create · cli · send · card · who · export · install · addon · companion ·
-│                voice · pair · schedule · perm · secret · trash · rollback … (40+)
+├── agent        create · start · stop · restart · remove · cli · send · card · who · export ·
+│                install · install-service · addon · companion · voice · pair · schedule ·
+│                perm · secret · trash · rollback … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · run · set-loop · send · jobs   (squads of agents over a shared channel)
 ├── official     list · install   (official agents/fleets from the app.mur.run catalog)
