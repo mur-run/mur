@@ -4,18 +4,29 @@
 //! A running agent is "stale" when the binary on disk has a different
 //! `--build-id` than the sha recorded in its `running.lock`.
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 
 use mur_common::LockFile;
 
-use super::resolve_runtime_target;
+use super::{resolve_bin_dir, resolve_runtime_target};
 
-/// Run `<runtime> --build-id` and return the trimmed stdout, or `"unknown"`
-/// if the binary is missing / the sub-command fails.
-pub fn on_disk_sha() -> String {
-    let runtime = resolve_runtime_target();
-    let out = Command::new(&runtime).arg("--build-id").output();
-    match out {
+/// Run `<bin> --build-id` and return the trimmed stdout, or `"unknown"` if the
+/// binary is missing / the sub-command fails.
+///
+/// Memoized by resolved path: `--stale` asks this once per agent, and on a
+/// normal install every agent's symlink resolves to the same runtime — so the
+/// cache turns N subprocess spawns into one per distinct binary.
+fn build_id(bin: &Path) -> String {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = std::fs::canonicalize(bin).unwrap_or_else(|_| bin.to_path_buf());
+    if let Some(hit) = cache.lock().expect("build-id cache").get(&key) {
+        return hit.clone();
+    }
+    let sha = match Command::new(bin).arg("--build-id").output() {
         Ok(o) if o.status.success() => {
             let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
             if s.is_empty() {
@@ -25,6 +36,37 @@ pub fn on_disk_sha() -> String {
             }
         }
         _ => "unknown".to_string(),
+    };
+    cache
+        .lock()
+        .expect("build-id cache")
+        .insert(key, sha.clone());
+    sha
+}
+
+/// Build-id of the runtime sitting next to the current `mur` binary.
+///
+/// Only correct as a staleness baseline for an agent whose own symlink points
+/// here — prefer [`on_disk_sha_for`], which cannot get that wrong.
+pub fn on_disk_sha() -> String {
+    build_id(&resolve_runtime_target())
+}
+
+/// Build-id of the binary that will *actually* be exec'd for `agent`.
+///
+/// A restart does not run the runtime next to `mur`; it runs the agent's own
+/// `~/.local/bin/mur_agent_<name>` — that path is literally `ProgramArguments[0]`
+/// in the service descriptor, and those symlinks do not all point at the same
+/// runtime (a dev checkout, an older keg, and `mur update`'s copy can coexist).
+/// Comparing every agent against one global runtime therefore answers a question
+/// nobody asked: `--stale` can restart an agent that comes back on the same old
+/// binary, and stay silent about one that is genuinely behind.
+///
+/// Falls back to the global runtime when the agent has no symlink yet.
+pub fn on_disk_sha_for(agent: &str) -> String {
+    match resolve_bin_dir().map(|d| d.join(format!("mur_agent_{agent}"))) {
+        Ok(link) if link.symlink_metadata().is_ok() => build_id(&link),
+        _ => on_disk_sha(),
     }
 }
 

@@ -64,24 +64,19 @@ pub(crate) fn select_targets(
     all: bool,
     stale_only: bool,
 ) -> Result<Vec<String>> {
-    // Only invoke the subprocess that computes the on-disk sha when we actually
-    // need it for the stale filter; pass an empty placeholder otherwise.
-    let on_disk = if stale_only {
-        stale::on_disk_sha()
-    } else {
-        String::new()
-    };
-    select_targets_with_on_disk(home, names, all, stale_only, &on_disk)
+    select_targets_with_on_disk(home, names, all, stale_only, &stale::on_disk_sha_for)
 }
 
-/// Inner implementation that accepts the on-disk sha as a parameter so tests
-/// can inject a synthetic value without needing a real runtime binary.
+/// Inner implementation that accepts the on-disk sha *resolver* so tests can
+/// inject a synthetic value without needing a real runtime binary.
+///
+/// It is a per-agent resolver, not one string: see [`stale::on_disk_sha_for`].
 pub(crate) fn select_targets_with_on_disk(
     home: &Path,
     names: &[&str],
     all: bool,
     stale_only: bool,
-    on_disk: &str,
+    on_disk: &dyn Fn(&str) -> String,
 ) -> Result<Vec<String>> {
     let agents_dir = home.join("agents");
 
@@ -130,7 +125,7 @@ pub(crate) fn select_targets_with_on_disk(
                 Ok(l) => l,
                 Err(_) => continue,
             };
-            if !stale::is_stale(&lock, on_disk) {
+            if !stale::is_stale(&lock, &on_disk(&agent_name)) {
                 continue;
             }
         }
@@ -151,10 +146,11 @@ struct RestartReport {
 /// stopped concierge went unnoticed in the field. Errors and unconfirmed
 /// agents both fail the run — after the table, so the user sees the whole
 /// picture, not the first casualty.
-fn run_restarts(targets: &[String], agents_dir: &Path, on_disk: &str) -> Result<()> {
+fn run_restarts(targets: &[String], agents_dir: &Path) -> Result<()> {
     let mut reports: Vec<(String, RestartReport)> = Vec::new();
     for agent_name in targets {
-        let report = match restart_one(agent_name, agents_dir, on_disk) {
+        let on_disk = stale::on_disk_sha_for(agent_name);
+        let report = match restart_one(agent_name, agents_dir, &on_disk) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("error restarting '{agent_name}': {e:#}");
@@ -204,11 +200,11 @@ pub fn restart_stale_excluding(exclude: &[String]) -> Result<()> {
     }
     if targets.is_empty() {
         println!("No stale agents to restart.");
+        report_unexamined(&agents_dir);
         return Ok(());
     }
 
-    let on_disk = stale::on_disk_sha();
-    run_restarts(&targets, &agents_dir, &on_disk)
+    run_restarts(&targets, &agents_dir)
 }
 
 /// Gracefully restart one or more agents.
@@ -224,15 +220,13 @@ pub fn cmd_restart(names: &[String], all: bool, stale: bool, dry_run: bool) -> R
 
     if targets.is_empty() {
         println!("No agents to restart.");
+        if all || stale {
+            report_unexamined(&agents_dir);
+        }
         return Ok(());
     }
 
     if dry_run {
-        let on_disk = if stale {
-            stale::on_disk_sha()
-        } else {
-            String::new()
-        };
         for t in &targets {
             if stale {
                 let lock_path = agents_dir.join(t).join("running.lock");
@@ -240,17 +234,85 @@ pub fn cmd_restart(names: &[String], all: bool, stale: bool, dry_run: bool) -> R
                 println!(
                     "[dry-run] would restart '{t}' (running={}, on-disk={})",
                     short8(&old_sha),
-                    short8(&on_disk)
+                    short8(&stale::on_disk_sha_for(t))
                 );
             } else {
                 println!("[dry-run] would restart '{t}'");
             }
         }
+        if all || stale {
+            report_unexamined(&agents_dir);
+        }
         return Ok(());
     }
 
-    let on_disk = stale::on_disk_sha();
-    run_restarts(&targets, &agents_dir, &on_disk)
+    run_restarts(&targets, &agents_dir)?;
+    if all || stale {
+        report_unexamined(&agents_dir);
+    }
+    Ok(())
+}
+
+/// Name the agents a bulk selector never looked at.
+///
+/// `--all` / `--stale` only ever consider agents with a `running.lock`, so a
+/// stopped one is silently absent — and "No agents to restart." then reads as
+/// "everything is current". A stopped agent picks up the new binary at its next
+/// start, so this is a reporting gap rather than a staleness one; the exception
+/// is an agent with a service descriptor, which is supposed to be running and
+/// isn't.
+fn report_unexamined(agents_dir: &Path) {
+    let (stopped, should_be_running) = unexamined(agents_dir, &|n| {
+        super::service::installed_service(n).is_some()
+    });
+    if !stopped.is_empty() {
+        println!(
+            "not examined ({} not running): {}",
+            stopped.len(),
+            stopped.join(", ")
+        );
+    }
+    if !should_be_running.is_empty() {
+        println!(
+            "⚠ service installed but not running: {} — start with `mur agent start <name>`",
+            should_be_running.join(", ")
+        );
+    }
+}
+
+/// Split the lock-less agents into `(stopped, should_be_running)`.
+///
+/// `has_service` is injected so this is testable without writing into the real
+/// `~/Library/LaunchAgents`.
+fn unexamined(agents_dir: &Path, has_service: &dyn Fn(&str) -> bool) -> (Vec<String>, Vec<String>) {
+    let Ok(entries) = fs::read_dir(agents_dir) else {
+        return (Vec::new(), Vec::new());
+    };
+    let mut stopped: Vec<String> = Vec::new();
+    let mut should_be_running: Vec<String> = Vec::new();
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        // What makes a directory an agent is its profile — `~/.mur/agents` also
+        // holds non-agent dirs (`.git`, for one), and naming those as "not
+        // running" is its own small lie.
+        if !entry.path().join("profile.yaml").exists() {
+            continue;
+        }
+        if entry.path().join("running.lock").exists() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if has_service(&name) {
+            should_be_running.push(name);
+        } else {
+            stopped.push(name);
+        }
+    }
+    stopped.sort();
+    should_be_running.sort();
+    (stopped, should_be_running)
 }
 
 /// Restart a single agent: SIGTERM, wait for exit, respawn, verify the fresh
@@ -563,6 +625,59 @@ mod tests {
         fs::write(path, serde_json::to_vec(&lock).unwrap()).unwrap();
     }
 
+    /// The staleness baseline is resolved PER AGENT, not once globally.
+    ///
+    /// Two agents on the same lock sha, whose own runtime symlinks resolve to
+    /// different binaries: only the one whose binary actually moved is stale.
+    /// The old single-string baseline could not express this — it had to call
+    /// both stale or neither, which is how a `--stale` run reported success
+    /// while restarting agents straight back onto their old binary.
+    #[test]
+    fn stale_baseline_is_resolved_per_agent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        for name in ["keg", "devtree"] {
+            let dir = home.join("agents").join(name);
+            fs::create_dir_all(&dir).unwrap();
+            write_lock(&dir.join("running.lock"), 1, "oldsha000000");
+        }
+
+        // 'keg' points at an upgraded binary; 'devtree' still resolves to the
+        // very binary it is already running.
+        let per_agent = |agent: &str| match agent {
+            "keg" => "newsha111111".to_string(),
+            _ => "oldsha000000".to_string(),
+        };
+        let targets = select_targets_with_on_disk(home, &[], false, true, &per_agent).unwrap();
+        assert_eq!(targets, vec!["keg".to_string()]);
+
+        // Negative control: with the OLD global baseline (one sha for all),
+        // 'devtree' is dragged in as a false positive.
+        let global = |_: &str| "newsha111111".to_string();
+        let targets = select_targets_with_on_disk(home, &[], false, true, &global).unwrap();
+        assert_eq!(targets, vec!["devtree".to_string(), "keg".to_string()]);
+    }
+
+    /// A bulk selector never looks at an agent without a `running.lock`, so
+    /// those names have to come out somewhere — and one with a service
+    /// descriptor is a different, louder problem than one you stopped.
+    #[test]
+    fn unexamined_separates_stopped_from_should_be_running() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agents = tmp.path().join("agents");
+        for name in ["live", "stopped", "supervised"] {
+            fs::create_dir_all(agents.join(name)).unwrap();
+            fs::write(agents.join(name).join("profile.yaml"), "name: x\n").unwrap();
+        }
+        write_lock(&agents.join("live").join("running.lock"), 1, "sha");
+        // A non-agent directory must not be reported as a stopped agent.
+        fs::create_dir_all(agents.join(".git")).unwrap();
+
+        let (stopped, should_be_running) = unexamined(&agents, &|n| n == "supervised");
+        assert_eq!(stopped, vec!["stopped".to_string()]);
+        assert_eq!(should_be_running, vec!["supervised".to_string()]);
+    }
+
     /// Fix 1: bare `mur agent restart` (no name, no --all, no --stale) must
     /// return an error — never silently enumerate all running agents.
     #[test]
@@ -576,7 +691,7 @@ mod tests {
         fs::create_dir_all(&alpha_dir).unwrap();
         write_lock(&alpha_dir.join("running.lock"), 1111, "somesha");
 
-        let result = select_targets_with_on_disk(home, &[], false, false, "somesha");
+        let result = select_targets_with_on_disk(home, &[], false, false, &|_| "somesha".into());
         assert!(result.is_err(), "bare restart with no selector must error");
         let msg = result.unwrap_err().to_string();
         assert!(
@@ -603,7 +718,9 @@ mod tests {
         fs::create_dir_all(&beta_dir).unwrap();
         write_lock(&beta_dir.join("running.lock"), 2222, "cur000000000");
 
-        let result = select_targets_with_on_disk(home, &[], false, true, "cur000000000").unwrap();
+        let result =
+            select_targets_with_on_disk(home, &[], false, true, &|_| "cur000000000".into())
+                .unwrap();
         assert_eq!(
             result,
             vec!["alpha"],
@@ -632,7 +749,9 @@ mod tests {
         write_lock(&a_dir.join("running.lock"), 1111, "shaaaaaaaaaa");
         write_lock(&b_dir.join("running.lock"), 2222, "shabbbbbbbb");
 
-        let mut result = select_targets_with_on_disk(home, &["a", "b"], false, false, "").unwrap();
+        let mut result =
+            select_targets_with_on_disk(home, &["a", "b"], false, false, &|_| String::new())
+                .unwrap();
         result.sort();
         assert_eq!(result, vec!["a", "b"]);
     }
@@ -648,7 +767,8 @@ mod tests {
         write_lock(&a_dir.join("running.lock"), 1111, "shaaaaaaaaaa");
         // No running.lock for 'b'
 
-        let result = select_targets_with_on_disk(home, &["a", "b"], false, false, "");
+        let result =
+            select_targets_with_on_disk(home, &["a", "b"], false, false, &|_| String::new());
         assert!(
             result.is_err(),
             "must fail-closed when any name isn't running"
@@ -661,7 +781,7 @@ mod tests {
         let home = tmp.path();
         fs::create_dir_all(home.join("agents")).unwrap();
 
-        let result = select_targets_with_on_disk(home, &["a"], true, false, "");
+        let result = select_targets_with_on_disk(home, &["a"], true, false, &|_| String::new());
         assert!(result.is_err(), "names + --all must be rejected");
     }
 
