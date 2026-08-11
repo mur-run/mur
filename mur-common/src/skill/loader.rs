@@ -48,6 +48,17 @@ pub enum SkillRefStatus {
         path: std::path::PathBuf,
         error: String,
     },
+    /// The ref itself cannot name a file — it holds whitespace, which a skill
+    /// id never does. Seen in the wild as several refs concatenated into one
+    /// `profile.yaml` list item (`skills/a - skills/b - skills/b`), growing by
+    /// a segment each time something appended to the string instead of pushing
+    /// a new item.
+    ///
+    /// Separate from `Missing` for the same reason `Missing` is separate from
+    /// `Malformed`: the advice differs. Nothing is missing here — the backing
+    /// skills are installed — so "install it" sends people to run a command
+    /// that cannot help. The entry has to be split or removed.
+    CorruptRef { reason: String },
 }
 
 /// Resolve a `profile.yaml` skill ref to its backing manifest file and report
@@ -74,6 +85,16 @@ pub fn skill_ref_status(agent_home: &Path, rel_ref: &str) -> SkillRefStatus {
         joined
     };
     if !file.is_file() {
+        // Only reclassify once resolution has already failed, and only when the
+        // ref holds whitespace. Anything that resolves today keeps resolving —
+        // this can never turn a working ref into an error.
+        if rel_ref.split_whitespace().count() > 1 {
+            return SkillRefStatus::CorruptRef {
+                reason: "a skill ref cannot contain whitespace; this entry looks like several \
+                         refs concatenated — split it into separate list items, or remove it"
+                    .to_string(),
+            };
+        }
         return SkillRefStatus::Missing { path: file };
     }
     let text = match std::fs::read_to_string(&file) {
@@ -473,6 +494,33 @@ content:
             }
             other => panic!("expected Missing, got {other:?}"),
         }
+    }
+
+    /// Observed on a live concierge: one `profile.yaml` item holding ten refs
+    /// run together, growing by a segment every time something appended to the
+    /// string instead of pushing a new item. Reported as `missing`, which sent
+    /// the user to install skills that were already installed.
+    #[test]
+    fn skill_ref_status_concatenated_refs_are_corrupt_not_missing() {
+        let home = tempdir().unwrap();
+        let ref_ = "skills/pm-spec-handoff - skills/brainstorming - skills/brainstorming";
+        match skill_ref_status(home.path(), ref_) {
+            SkillRefStatus::CorruptRef { reason } => {
+                assert!(reason.contains("whitespace"), "unhelpful reason: {reason}");
+            }
+            other => panic!("expected CorruptRef, got {other:?}"),
+        }
+    }
+
+    /// The regression that matters most: a plain uninstalled ref must keep
+    /// reporting `Missing`, because there "install it" is the right advice.
+    #[test]
+    fn skill_ref_status_plain_absent_ref_stays_missing() {
+        let home = tempdir().unwrap();
+        assert!(matches!(
+            skill_ref_status(home.path(), "skills/never-installed"),
+            SkillRefStatus::Missing { .. }
+        ));
     }
 
     #[test]

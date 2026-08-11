@@ -98,13 +98,17 @@ pub struct SkillView {
 
 /// UI-facing skill-ref status. `Missing` = the resolved manifest file does
 /// not exist (profile.yaml references a skill that was never installed);
-/// `Malformed` = the file exists but no longer parses/validates.
+/// `Malformed` = the file exists but no longer parses/validates; `Corrupt` =
+/// the ref itself is not a usable path (several refs concatenated into one
+/// entry), so the skills it names may be installed and "install it" is the
+/// wrong advice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SkillRefStatusView {
     Ok,
     Missing,
     Malformed,
+    Corrupt,
 }
 
 /// Classify a legacy per-agent skill path via the shared resolver the runtime
@@ -117,6 +121,7 @@ fn skill_ref_view(agent_home: &std::path::Path, rel_path: &str) -> SkillRefStatu
         SkillRefStatus::Loadable => SkillRefStatusView::Ok,
         SkillRefStatus::Missing { .. } => SkillRefStatusView::Missing,
         SkillRefStatus::Malformed { .. } => SkillRefStatusView::Malformed,
+        SkillRefStatus::CorruptRef { .. } => SkillRefStatusView::Corrupt,
     }
 }
 

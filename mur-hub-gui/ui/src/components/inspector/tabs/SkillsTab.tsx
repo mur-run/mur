@@ -244,9 +244,11 @@ export function SkillsTab({
                   <span className={s.loadable ? "badge-loadable" : "badge-dead"}>
                     {s.loadable
                       ? t("detail.skillLoadable")
-                      : s.status === "missing"
-                        ? t("detail.skillMissing")
-                        : t("detail.skillDead")}
+                      : s.status === "corrupt"
+                        ? t("detail.skillCorrupt")
+                        : s.status === "missing"
+                          ? t("detail.skillMissing")
+                          : t("detail.skillDead")}
                   </span>
                   {s.loadable && (
                     <button
@@ -262,9 +264,11 @@ export function SkillsTab({
                 </div>
                 {!s.loadable && (
                   <div className="item-card-desc field-muted" style={{ fontSize: 11 }}>
-                    {s.status === "missing"
-                      ? t("detail.skillMissingHint", { path: s.path })
-                      : t("detail.skillDeadHint")}
+                    {s.status === "corrupt"
+                      ? t("detail.skillCorruptHint")
+                      : s.status === "missing"
+                        ? t("detail.skillMissingHint", { path: s.path })
+                        : t("detail.skillDeadHint")}
                   </div>
                 )}
               </li>
