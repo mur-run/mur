@@ -4,7 +4,8 @@ pub mod launch_chain;
 pub mod policy;
 pub mod reqwest_guard;
 
-#[cfg(target_os = "linux")]
+// Unconditional: `partition_write_grants` is shared with policy.rs on every
+// platform; only the apply path inside is linux-gated.
 mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
