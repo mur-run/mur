@@ -4,7 +4,7 @@
 
 **Goal:** Refuse to spawn `mur-agent-runtime` unless its signature is valid and belongs to MUR's team, gated to release builds.
 
-**Architecture:** A shared helper in `mur-common` (`binary_attestation.rs`) whose build-marker const is set by `build.rs` env, runs `codesign --verify --strict -R "=designated => anchor apple generic and certificate leaf[subject.OU] = \"<TEAM_ID>\""` on macOS release builds and is a no-op otherwise. Mounted at all three spawn paths (CLI detached, launchd/systemd, Hub sidecar). The release pipeline signs the runtime in the matrix job (where the tar.gz is assembled) and in the Hub job, and sets the marker env.
+**Architecture:** A shared helper in `mur-common` (`binary_attestation.rs`) whose build-marker const is set by `build.rs` env, runs `codesign --verify --strict -R "=anchor apple generic and certificate leaf[subject.OU] = \"<TEAM_ID>\""` on macOS release builds and is a no-op otherwise. Mounted at all three spawn paths (CLI detached, launchd/systemd, Hub sidecar). The release pipeline signs the runtime in the matrix job (where the tar.gz is assembled) and in the Hub job, and sets the marker env.
 
 **Tech Stack:** Rust (edition 2024), `codesign` subprocess, GitHub Actions (release.yml + ci.yml).
 
@@ -104,7 +104,7 @@ mod tests {
         let f = dir.join("runtime");
         std::fs::write(&f, b"#!/bin/sh\nexit 0\n").unwrap();
         std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let req = format!("=designated => certificate leaf[subject.OU] = \"{ou}\"");
+        let req = format!("=certificate leaf[subject.OU] = \"{ou}\"");
         let err = verify_with_requirement(&f, &req).expect_err("unsigned must fail");
         assert!(matches!(err, AttestError::VerificationFailed { .. }));
         let _ = std::fs::remove_dir_all(&dir);
@@ -119,7 +119,7 @@ mod tests {
         std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
         let out = std::process::Command::new("codesign").args(["--force", "-s", "-"]).arg(&f).output().unwrap();
         assert!(out.status.success(), "ad-hoc sign failed: {}", String::from_utf8_lossy(&out.stderr));
-        let req = format!("=designated => certificate leaf[subject.OU] = \"{ou}\"");
+        let req = format!("=certificate leaf[subject.OU] = \"{ou}\"");
         let err = verify_with_requirement(&f, &req).expect_err("ad-hoc (no OU) must fail");
         assert!(matches!(err, AttestError::VerificationFailed { .. }));
         let _ = std::fs::remove_dir_all(&dir);
@@ -138,11 +138,11 @@ mod tests {
             .output()
             .unwrap();
         assert!(out.status.success(), "sign failed: {}", String::from_utf8_lossy(&out.stderr));
-        let wrong = format!("=designated => certificate leaf[subject.OU] = \"WRONGTEAM000\"");
+        let wrong = format!("=certificate leaf[subject.OU] = \"WRONGTEAM000\"");
         let err = verify_with_requirement(&f, &wrong).expect_err("wrong OU must fail");
         assert!(matches!(err, AttestError::VerificationFailed { .. }));
         // Positive control: the same signed binary passes with the right OU.
-        let right = format!("=designated => certificate leaf[subject.OU] = \"{ou}\"");
+        let right = format!("=certificate leaf[subject.OU] = \"{ou}\"");
         verify_with_requirement(&f, &right).expect("matching OU must pass");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -177,7 +177,7 @@ pub const APPLE_TEAM_ID: &str = env!("MUR_APPLE_TEAM_ID");
 
 /// The designated requirement used in production: valid signature chaining to
 /// Apple plus a leaf certificate owned by MUR's team.
-/// Note: `=designated => ...` is NOT valid verification syntax (`designated`
+/// Note: `=...` is NOT valid verification syntax (`designated`
 /// is a read-side token only); the plain inline form below is the verified
 /// canonical expression (wrong OU → exit 3, correct OU → exit 0).
 pub(crate) fn production_requirement() -> String {
