@@ -98,14 +98,15 @@ This is the same boundary the launch-chain design accepted for autostart units.
 
 ### Pipeline changes (`.github/workflows/release.yml`)
 
-1. macOS job: add `mur-agent-runtime` to the existing `codesign --force --options
-   runtime --timestamp` invocation that already signs `mur`, `mur-mcp-server`,
-   `murmurd`.
-2. Set `MUR_EMBED_RELEASE_MARKER=1` and `MUR_APPLE_TEAM_ID=$APPLE_TEAM_ID` for
-   the `mur` build in the macOS job and for the Hub `.app` build job (both are
-   spawners).
-3. Verify the Hub `.app`'s sidecar runtime (the copy of `mur-agent-runtime`
-   bundled in the app) is also signed; add it to the signing step if it is not.
+1. `Build (aarch64-apple-darwin)` matrix row: import the Apple certs, sign
+   `target/aarch64-apple-darwin/release/mur-agent-runtime` in place before the
+   tar.gz is assembled (the tar.gz is the brew release asset and carries the
+   signed runtime), and export `MUR_EMBED_RELEASE_MARKER=1` +
+   `MUR_APPLE_TEAM_ID` for the cargo build.
+2. Hub job: export the same two env vars for the sidecar build, and sign the
+   copied `mur-agent-runtime-aarch64-apple-darwin` sidecar before the tauri
+   bundling step.
+3. The PKG/DMG job is unchanged — its pkg-root does not contain the runtime.
 
 ## Testing
 
