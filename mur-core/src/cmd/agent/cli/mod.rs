@@ -24,6 +24,7 @@ mod paste;
 pub mod persist;
 mod recover;
 mod render_card;
+mod settlement;
 mod step;
 mod stream;
 mod suggest;
