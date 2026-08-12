@@ -217,7 +217,21 @@ pub fn cmd_create(
     if symlink.symlink_metadata().is_ok() {
         fs::remove_file(&symlink)?;
     }
-    let target = resolve_runtime_target();
+    // Prefer the canonical runtime that lives in this same bin dir — the copy
+    // `build.sh --install` / `mur update` keep fresh. `resolve_runtime_target()`
+    // points at whatever sits beside the *current* `mur`, which for a Homebrew
+    // install is inside the keg: an absolute symlink into a directory no
+    // installer ever refreshes, so the agent silently never upgrades again.
+    let canonical = bin_dir.join(if cfg!(windows) {
+        "mur-agent-runtime.exe"
+    } else {
+        "mur-agent-runtime"
+    });
+    let target = if canonical.exists() {
+        canonical
+    } else {
+        resolve_runtime_target()
+    };
     #[cfg(unix)]
     std::os::unix::fs::symlink(&target, &symlink)
         .with_context(|| format!("symlink {} -> {}", symlink.display(), target.display()))?;
