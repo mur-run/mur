@@ -51,6 +51,7 @@ mod perm;
 mod prompt;
 mod reconnect;
 mod restart;
+mod restart_confirm;
 mod secret;
 mod service;
 pub mod skill;
