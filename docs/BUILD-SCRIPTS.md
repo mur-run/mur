@@ -19,7 +19,7 @@ Builds `mur-web` (the web dashboard) first, then compiles the `mur` binary with 
 | Flag        | Description                                              |
 |-------------|----------------------------------------------------------|
 | `--release` | Build in release mode *(default if no flag is given)*    |
-| `--install` | Copy the built binary to `/opt/homebrew/bin/mur`         |
+| `--install` | Copy the built binaries to `~/.local/bin` (`MUR_INSTALL_DIR` overrides) |
 
 ### Environment Variables
 
@@ -32,7 +32,7 @@ Builds `mur-web` (the web dashboard) first, then compiles the `mur` binary with 
 1. Runs `npm run build` in the `mur-web` directory
 2. Sets `MUR_WEB_DIST` to `<mur-web>/dist` and runs `cargo build --release`
 3. Prints binary path and size
-4. If `--install`: copies the binary to `/opt/homebrew/bin/mur`
+4. If `--install`: signs, then copies the binaries to `~/.local/bin`, and warns if anything earlier on `PATH` shadows them
 
 ### Example
 
@@ -63,4 +63,4 @@ A one-liner convenience script that runs:
 ./install.sh
 ```
 
-This builds the release binary with the embedded web dashboard and copies it to `/opt/homebrew/bin/mur`.
+This builds the release binary with the embedded web dashboard and copies it to `~/.local/bin`. It never writes into Homebrew's prefix: `/opt/homebrew/bin/mur` is a symlink into the keg, and copying through it silently replaced the packaged build.

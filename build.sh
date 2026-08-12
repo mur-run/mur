@@ -41,10 +41,14 @@ MUR_WEB_DIST="$MUR_WEB_DIR/dist" cargo build $RELEASE
 
 echo "✅ Build complete"
 
+# Honor CARGO_TARGET_DIR: cargo writes there, so hardcoding $SCRIPT_DIR/target
+# made the script look for a binary cargo never put there — and every later
+# `[ -f ... ]` guard then quietly skipped its file.
+TARGET_DIR="${CARGO_TARGET_DIR:-$SCRIPT_DIR/target}"
 if [ "$RELEASE" = "--release" ]; then
-  BINARY="$SCRIPT_DIR/target/release/mur"
+  BINARY="$TARGET_DIR/release/mur"
 else
-  BINARY="$SCRIPT_DIR/target/debug/mur"
+  BINARY="$TARGET_DIR/debug/mur"
 fi
 
 echo "   Binary: $BINARY"
@@ -86,45 +90,70 @@ if $INSTALL; then
     sign "$BIN_DIR/$b"
   done
 
-  echo "📥 Installing to /opt/homebrew/bin/mur..."
-  sudo cp "$BINARY" /opt/homebrew/bin/mur
-  sudo ln -sfn /opt/homebrew/bin/mur /opt/homebrew/bin/murmur
-  echo "Installed murmur -> /opt/homebrew/bin/mur (symlink)"
-
-  MCP_BINARY="$SCRIPT_DIR/target/release/mur-mcp-server"
-  if [ -f "$MCP_BINARY" ]; then
-    sudo cp "$MCP_BINARY" /opt/homebrew/bin/mur-mcp-server
-    echo "Installed mur-mcp-server -> /opt/homebrew/bin/mur-mcp-server"
+  # `mur` is not optional. Every other artifact is guarded by `[ -f ]` because a
+  # partial workspace build legitimately lacks some of them, but if the main
+  # binary is missing then the build did not produce what we are about to claim
+  # we installed — and a run that installs nothing must not print a tick.
+  if [ ! -f "$BINARY" ]; then
+    echo "❌ $BINARY does not exist — nothing to install."
+    echo "   (cargo writes to \$CARGO_TARGET_DIR when set; this script looked in $TARGET_DIR)"
+    exit 1
   fi
 
-  # The research gateway (stdio MCP server for tiered web fetch/search).
-  # Agent sandboxes spawn it by name off PATH, so it must land next to `mur`.
-  GATEWAY_BINARY="$SCRIPT_DIR/target/release/mur-research-gateway"
-  if [ -f "$GATEWAY_BINARY" ]; then
-    sudo cp "$GATEWAY_BINARY" /opt/homebrew/bin/mur-research-gateway
-    echo "Installed mur-research-gateway -> /opt/homebrew/bin/mur-research-gateway"
-  fi
+  # Install into a user-writable dir — never through Homebrew's symlink.
+  #
+  # `/opt/homebrew/bin/mur` is a symlink into the keg, and `cp` follows symlinks,
+  # so `sudo cp` here was silently overwriting
+  # `/opt/homebrew/Cellar/mur/<version>/bin/mur`. Brew never notices (it does not
+  # checksum installed kegs), so `mur --version` kept reporting the released
+  # version while running a local build, and the next `brew upgrade`/`reinstall`
+  # reverted the dev build with no message. Writing to our own directory instead
+  # leaves the package manager's files alone — and needs no sudo at all, which
+  # also removes the password prompt that made `--install` unusable from any
+  # non-interactive shell.
+  INSTALL_DIR="${MUR_INSTALL_DIR:-$HOME/.local/bin}"
+  mkdir -p "$INSTALL_DIR"
+  echo "📥 Installing to $INSTALL_DIR..."
 
-  # The background daemon. `mur daemon start` looks for `murmurd` alongside
-  # `mur`, so install it too — otherwise the daemon (and the Hub/phone voice
-  # path that runs through it) is unavailable on a release install.
-  DAEMON_BINARY="$SCRIPT_DIR/target/release/murmurd"
-  if [ -f "$DAEMON_BINARY" ]; then
-    sudo cp "$DAEMON_BINARY" /opt/homebrew/bin/murmurd
-    echo "Installed murmurd -> /opt/homebrew/bin/murmurd"
-  fi
+  # Atomic cp+mv: a running agent holding the old inode would otherwise give
+  # ETXTBSY. It keeps its process (and its old binary) until restarted.
+  install_bin() {
+    src="$1"; name="$2"
+    [ -f "$src" ] || return 0
+    cp "$src" "$INSTALL_DIR/.$name.new"
+    mv -f "$INSTALL_DIR/.$name.new" "$INSTALL_DIR/$name"
+    echo "Installed $name -> $INSTALL_DIR/$name"
+  }
 
-  # mur-agent-runtime (already built by the workspace build above) is what new
-  # agents symlink to via PATH (resolve_runtime_target). Keep the canonical copy at
-  # ~/.local/bin fresh, else newly-created/restarted agents inherit a STALE runtime
-  # (e.g. one missing channel/delegate). Atomic cp+mv avoids ETXTBSY for agents
-  # running off it; they pick up the new binary on their next restart.
-  RUNTIME_BINARY="$(dirname "$BINARY")/mur-agent-runtime"
-  LOCAL_BIN="$HOME/.local/bin"; mkdir -p "$LOCAL_BIN"
-  if [ -f "$RUNTIME_BINARY" ]; then
-    cp "$RUNTIME_BINARY" "$LOCAL_BIN/.mur-agent-runtime.new"
-    mv -f "$LOCAL_BIN/.mur-agent-runtime.new" "$LOCAL_BIN/mur-agent-runtime"
-    echo "Installed mur-agent-runtime -> $LOCAL_BIN/mur-agent-runtime (canonical; keeps new agents current)"
+  # mur-research-gateway is spawned by name off PATH from inside agent sandboxes,
+  # so $INSTALL_DIR must stay one of `standard_exec_dirs()` in
+  # mur-agent-runtime/src/exec_dirs.rs. mur-agent-runtime is what agent symlinks
+  # resolve to, so a stale copy here means new and restarted agents inherit it.
+  for b in mur mur-mcp-server mur-research-gateway murmurd mur-agent-runtime; do
+    install_bin "$BIN_DIR/$b" "$b"
+  done
+  ln -sfn "$INSTALL_DIR/mur" "$INSTALL_DIR/murmur"
+  echo "Installed murmur -> $INSTALL_DIR/mur (symlink)"
+
+  # An install nothing can reach is not an install. `standard_exec_dirs()` puts
+  # /opt/homebrew/bin BEFORE ~/.local/bin, so a copy left there by an older
+  # `--install` (or by Homebrew) shadows what we just wrote — for the shell AND
+  # for every agent sandbox. Name it rather than let the next upgrade look like
+  # it did nothing.
+  SHADOWED=false
+  for b in mur mur-mcp-server mur-research-gateway murmurd mur-agent-runtime; do
+    [ -f "$INSTALL_DIR/$b" ] || continue
+    winner="$(command -v "$b" 2>/dev/null || true)"
+    if [ -n "$winner" ] && [ "$winner" != "$INSTALL_DIR/$b" ]; then
+      echo "⚠ $b: PATH resolves to $winner, NOT the copy just installed"
+      SHADOWED=true
+    fi
+  done
+  if $SHADOWED; then
+    echo "  Older copies shadow this install. Remove them, e.g.:"
+    echo "    sudo rm /opt/homebrew/bin/{mur,murmur,mur-mcp-server,mur-research-gateway,murmurd,mur-agent-runtime}"
+    echo "  (a Homebrew-managed 'mur' can be restored with: brew link --overwrite mur)"
+    echo "  Then re-check with: command -v mur"
   fi
 
   # Nudge: running agents keep their OLD process until restarted, so they're
@@ -142,5 +171,8 @@ if $INSTALL; then
     echo "  Check that '$CODESIGN_IDENTITY' is in your login keychain, then re-run."
   fi
 
-  echo "✅ Installed: $(mur --version 2>/dev/null || echo 'done')"
+  # Report the version of the copy we actually wrote, not whatever `mur`
+  # happens to resolve to — those differ exactly when the shadow warning above
+  # fired, which is precisely when a wrong version string would mislead.
+  echo "✅ Installed: $("$INSTALL_DIR/mur" --version 2>/dev/null || echo 'done')"
 fi

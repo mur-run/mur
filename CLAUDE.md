@@ -10,7 +10,7 @@ Operational guidance for Claude Code working in this repository. Detailed runtim
 
 # ── Build only ──
 ./build.sh                      # Release build with embedded web dashboard
-./build.sh --install            # Build + install to /opt/homebrew/bin/mur
+./build.sh --install            # Build + install to ~/.local/bin (no sudo; MUR_INSTALL_DIR overrides)
 
 # ── Manual build (without embedded dashboard) ──
 cargo build --workspace         # Debug build
