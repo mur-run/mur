@@ -160,7 +160,7 @@ jobs:
           codesign --force --options runtime --timestamp \
             --sign "Developer ID Application: $APPLE_TEAM_NAME ($APPLE_TEAM_ID)" \
             target/aarch64-apple-darwin/release/mur-agent-runtime
-          codesign --verify --verbose target/aarch64-apple-darwin/release/mur-agent-runtime
+          codesign --verify --verbose -R "=anchor apple generic and certificate leaf[subject.OU] = \"$APPLE_TEAM_ID\"" target/aarch64-apple-darwin/release/mur-agent-runtime
         env:
           APPLE_TEAM_NAME: ${{ secrets.APPLE_TEAM_NAME }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -469,7 +469,7 @@ jobs:
           codesign --force --options runtime --timestamp \
             --sign "Developer ID Application: $APPLE_TEAM_NAME ($APPLE_TEAM_ID)" \
             mur-hub-gui/src-tauri/binaries/mur-agent-runtime-aarch64-apple-darwin
-          codesign --verify --verbose mur-hub-gui/src-tauri/binaries/mur-agent-runtime-aarch64-apple-darwin
+          codesign --verify --verbose -R "=anchor apple generic and certificate leaf[subject.OU] = \"$APPLE_TEAM_ID\"" mur-hub-gui/src-tauri/binaries/mur-agent-runtime-aarch64-apple-darwin
         env:
           APPLE_TEAM_NAME: ${{ secrets.APPLE_TEAM_NAME }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
