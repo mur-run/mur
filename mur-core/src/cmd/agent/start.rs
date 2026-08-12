@@ -22,7 +22,9 @@ use super::{pid_alive, resolve_bin_dir, resolve_mur_home};
 /// /var → /private/var redirect) and verify its signature. Dev builds
 /// verify nothing but still resolve, so a broken target always errors.
 fn verify_runtime_at(symlink: &Path) -> Result<()> {
-    let real = symlink.canonicalize().with_context(|| format!("resolve {}", symlink.display()))?;
+    let real = symlink
+        .canonicalize()
+        .with_context(|| format!("resolve {}", symlink.display()))?;
     mur_common::binary_attestation::verify_runtime_signature(&real)
         .map_err(|e| anyhow::anyhow!("{e}"))
 }
@@ -159,6 +161,9 @@ mod tests {
         // Even in a dev build (where verification is a no-op), a target that
         // cannot be resolved must fail — the mount never spawns blind.
         let err = verify_runtime_at(Path::new("/nonexistent/mur_agent_nope")).unwrap_err();
-        assert!(err.to_string().contains("/nonexistent/mur_agent_nope"), "{err}");
+        assert!(
+            err.to_string().contains("/nonexistent/mur_agent_nope"),
+            "{err}"
+        );
     }
 }
