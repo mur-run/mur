@@ -106,6 +106,7 @@ impl std::error::Error for AttestError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::path::PathBuf;
 
     // Compile-time gates: this binary is built without the release marker in
@@ -130,6 +131,7 @@ mod tests {
     // ── Behavioral matrix (macOS + test identity) ────────────────────────
     // These run only when MUR_TEST_SIGNING_OU is set (CI macOS job runs
     // scripts/test-signing-identity.sh first). Negative controls included.
+    #[cfg(unix)]
     fn test_dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("mur-attest-{}-{}", name, std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
@@ -137,6 +139,7 @@ mod tests {
         d
     }
 
+    #[cfg(unix)]
     fn test_ou() -> Option<String> {
         std::env::var("MUR_TEST_SIGNING_OU").ok()
     }
