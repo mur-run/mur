@@ -384,9 +384,12 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
     // ── No installed service → nothing will respawn us automatically ──
     // Spawn the runtime directly, detached, so the respawn-poll loop below
     // (shared with the service-managed path) has a fresh process to find.
+    // The spawned pid rides along so the confirmation window can liveness-gate
+    // its slow cold start instead of treating it as "not coming back".
+    let mut direct_pid: Option<u32> = None;
     if !has_service {
         println!("agent '{name}' has no service installed; respawning runtime directly");
-        direct_respawn(name, &agent_home)?;
+        direct_pid = Some(direct_respawn(name, &agent_home)?);
     }
 
     // ── Poll for fresh running.lock with a different pid ──────────────
@@ -400,6 +403,7 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
         &lock_path,
         old_pid,
         has_service,
+        direct_pid,
     )?;
 
     Ok(match new_pid {
@@ -433,7 +437,10 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
 }
 
 /// Spawn the runtime directly (detached) for an agent with no service unit.
-pub(super) fn direct_respawn(name: &str, agent_home: &Path) -> Result<()> {
+///
+/// Returns the spawned child's pid so callers can liveness-gate the wait for
+/// its fresh `running.lock` (a slow cold start is a healthy start).
+pub(super) fn direct_respawn(name: &str, agent_home: &Path) -> Result<u32> {
     let target = resolve_runtime_target();
     verify_runtime_at(&target)
         .with_context(|| format!("cannot respawn agent '{name}' — runtime attestation failed"))?;
@@ -449,7 +456,7 @@ pub(super) fn direct_respawn(name: &str, agent_home: &Path) -> Result<()> {
         .append(true)
         .open(&stderr_log)
         .map_err(|e| anyhow::anyhow!("open {} for respawn stderr: {e}", stderr_log.display()))?;
-    Command::new(&target)
+    let child = Command::new(&target)
         .arg("--profile")
         .arg(name)
         .env("MUR_HOME", &mur_home)
@@ -463,7 +470,7 @@ pub(super) fn direct_respawn(name: &str, agent_home: &Path) -> Result<()> {
                 target.display()
             )
         })?;
-    Ok(())
+    Ok(child.id())
 }
 
 /// Wait up to `secs` for `lock_path` to hold a pid different from `old_pid`.
