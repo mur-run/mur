@@ -129,6 +129,12 @@ jobs:
             Add-MpPreference -ExclusionExtension $e -ErrorAction SilentlyContinue
           }
 
+      - name: Set release-marker env (macOS)
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: |
+          echo "MUR_EMBED_RELEASE_MARKER=1" >> "$GITHUB_ENV"
+          echo "MUR_APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}" >> "$GITHUB_ENV"
+
       - name: Build (native)
         if: matrix.target != 'aarch64-unknown-linux-gnu'
         run: cargo build --release --locked --target ${{ matrix.target }}
@@ -140,6 +146,24 @@ jobs:
         run: cross build --release --locked --target ${{ matrix.target }}
         env:
           MUR_WEB_DIST: ${{ github.workspace }}/mur-web-src/dist
+
+      - name: Import Apple signing certs (macOS)
+        if: matrix.target == 'aarch64-apple-darwin'
+        uses: apple-actions/import-codesign-certs@v2
+        with:
+          p12-file-base64: ${{ secrets.APPLE_SIGNING_CERT }}
+          p12-password: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+
+      - name: Sign mur-agent-runtime (macOS)
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: |
+          codesign --force --options runtime --timestamp \
+            --sign "Developer ID Application: $APPLE_TEAM_NAME ($APPLE_TEAM_ID)" \
+            target/aarch64-apple-darwin/release/mur-agent-runtime
+          codesign --verify --verbose -R "=anchor apple generic and certificate leaf[subject.OU] = \"$APPLE_TEAM_ID\"" target/aarch64-apple-darwin/release/mur-agent-runtime
+        env:
+          APPLE_TEAM_NAME: ${{ secrets.APPLE_TEAM_NAME }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
@@ -380,6 +404,9 @@ jobs:
 
       # Build Hub UI and mur sidecars in parallel — both are independent at this point.
       - name: Build Hub UI + mur sidecars (parallel)
+        env:
+          MUR_EMBED_RELEASE_MARKER: '1'
+          MUR_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           (cd mur-hub-gui/ui && npm ci && npm run build) &
           UI_PID=$!
@@ -436,6 +463,16 @@ jobs:
         with:
           p12-file-base64: ${{ secrets.APPLE_SIGNING_CERT }}
           p12-password: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+
+      - name: Sign agent-runtime sidecar
+        run: |
+          codesign --force --options runtime --timestamp \
+            --sign "Developer ID Application: $APPLE_TEAM_NAME ($APPLE_TEAM_ID)" \
+            mur-hub-gui/src-tauri/binaries/mur-agent-runtime-aarch64-apple-darwin
+          codesign --verify --verbose -R "=anchor apple generic and certificate leaf[subject.OU] = \"$APPLE_TEAM_ID\"" mur-hub-gui/src-tauri/binaries/mur-agent-runtime-aarch64-apple-darwin
+        env:
+          APPLE_TEAM_NAME: ${{ secrets.APPLE_TEAM_NAME }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Build, sign, bundle .dmg
         env:

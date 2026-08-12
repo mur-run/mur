@@ -4,6 +4,7 @@ pub mod actor;
 pub mod agent;
 pub mod agent_facts;
 pub mod agent_name;
+pub mod binary_attestation;
 pub mod bridge;
 pub mod build;
 pub mod bundle;
