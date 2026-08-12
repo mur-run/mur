@@ -148,45 +148,77 @@ rationale they never got to read.
 
 ### Cause
 
-Not a scroll — a clip. `chooser_band_height` (ui.rs:253) lets the chooser take
-every row except `MIN_TRANSCRIPT_ROWS = 3`. The reply is a *finished* message,
-but it is still **live** (unflushed), because the flush loop at ui.rs:715 has a
-deliberate guard:
+The text is not lost, and this is not a flush bug. The reply stays live in the
+band by design — the flush planner (ui.rs:680) deliberately measures capacity
+with `chooser_h = 0` (ui.rs:463-473), because a flush is one-way and the chooser
+is transient; flushing to fit it would leave a blank pane above the composer the
+moment it closes. `render_transcript` tail-follows and `PageUp` still reaches
+the text (ui.rs:861-863). All of that is correct and must not change.
 
-```rust
-while end < settled && total > cap && total - u32::from(rows[end - start]) >= cap {
+The actual defect is a wrong constant, and a missing indicator.
+
+`chooser_band_height` (ui.rs:253) reserves `MIN_TRANSCRIPT_ROWS = 3` rows for
+the transcript and gives the chooser everything else. With the Inline viewport
+fixed at `INLINE_VIEWPORT_HEIGHT = 20`:
+
+```
+available = 20 − (input 3 + status 1) − 3          = 13
+full      = 3 items × (label + desc + spacer) + 2  = 11     ≤ 13, so it is used
+transcript= 20 − 3 − 1 − 11 = 5 rows − 2 borders   = 3 content rows
 ```
 
-The third clause refuses to flush a message whose departure would leave the band
-shorter than its capacity — a good rule when the band is the main surface,
-because it prevents a 30-row reply from emptying the screen. But when the
-chooser is open the band is 3 rows and is not the main surface at all, so the
-guard traps the whole reply inside 3 tail-following rows. It never reaches
-native scrollback, so the mouse wheel cannot recover it. Only `PageUp` reaches
-it, which is not discoverable.
+Three rows. And `scroll_page` is set to the visible height, so `PageUp` pages
+through a 20-line reply three lines at a time, through a three-line peephole,
+with nothing on screen saying there is anything above. That is why it reads as
+"it vanished".
+
+The function already degrades gracefully — it has a one-line-per-item `compact`
+form and a `Ctrl+↑/↓` manual resize. It was simply never given a floor worth
+degrading toward.
 
 ### Fix
 
-When the chooser band is open, flush every finished message to scrollback:
+Set the floor correctly and let the existing fallback do the work.
 
-- In the flush planner, when `app.completion` is `Some(state)` with
-  `state.spaced && !state.items.is_empty()`, set `end = settled` — skip the
-  short-band guard entirely.
-- Rationale, to be written into the code as a comment: the guard exists to stop
-  the transcript from emptying. With the chooser occupying the band there is
-  nothing to keep full, and native scrollback is strictly better than a 3-row
-  tail — it scrolls with the mouse and can be selected and copied.
+**`chooser_band_height`** — reserve a readable transcript instead of 3 rows:
 
-`MIN_TRANSCRIPT_ROWS` stays at 3. The 3 remaining rows now show the tail of a
-reply whose full text is one wheel-scroll above, which is the correct behaviour.
+- `floor = max(MIN_TRANSCRIPT_ROWS, total_h * 40 / 100)`.
+- Compute `available` against `floor`. If the result is at least `compact`, use
+  it. If it is not — a short terminal — fall back to reserving
+  `MIN_TRANSCRIPT_ROWS`, as today. The chooser must stay usable; it is the
+  thing the operator has to act on.
+- When `full` does not fit `available`, take exactly `compact` rather than all
+  of `available`. Today the band is padded out to `available` even in compact
+  form, which spends rows on nothing.
+- `chooser_grow` (Ctrl+↑/↓) is unchanged and still expands back to the spaced
+  form on demand.
+
+At `total_h = 20` with three options this yields `floor = 8`, `available = 8`,
+`full = 11 > 8` → compact = 5 rows for the chooser and **9 content rows** for
+the transcript, three times today's, with option descriptions still present in
+their one-line form.
+
+**`render_transcript`** — never hide content silently. When
+`max_scroll > 0`, add a right-aligned title on the transcript's top border:
+`↑ N more · PgUp` when `scroll_back == 0`, and `↑ N · PgDn to follow` when the
+operator has already scrolled. This is independent of the chooser and fixes the
+same silent-hiding for every other cause (a long reply, a grown composer, the
+fleet rail).
+
+The flush planner is not touched.
 
 ### Verification
 
-- Unit on the flush planner: build an `App` with one finished 30-row agent
-  message and a band cap of 3; assert `end == settled` when a spaced chooser is
-  open, and `end == start` (unchanged) when it is not. The negative case is the
-  point — it proves the fix is scoped to the chooser and did not just disable
-  the guard.
+- Unit on `chooser_band_height` at `total_h = 20`, `input_height = 3`, three
+  items with descriptions: assert the returned height is `compact` (5), not 11.
+- Unit at `total_h = 12` (short terminal): assert the chooser still gets at
+  least its compact height — the floor must yield rather than squeeze the
+  chooser out.
+- Unit asserting `chooser_grow = +6` still reaches the spaced height, so the
+  escape hatch survives.
+- Render: paint the transcript with 30 lines into a 5-row band and assert
+  `↑ 25 more · PgUp` appears in the top border row; then with 3 lines into the
+  same band and assert no such marker appears.
 
 ---
 
@@ -196,13 +228,13 @@ Two crates, three call sites, no format or protocol change:
 
 - `mur-agent-runtime/src/turn_ledger.rs` — truncation caps, header rule.
 - `mur-core/src/cmd/agent/cli/ui.rs` — HITL layout split, settlement card
-  rendering, flush planner guard.
+  rendering, chooser floor, transcript scroll indicator.
 - `mur-core/src/cmd/agent/cli/app.rs` — `ChatMsg.settlement` extraction.
 - `mur-core/src/cmd/agent/cli/theme.rs` — one new colour per skin.
 
 Explicitly not in scope: structured settlement events over A2A (the fenced text
-stays the wire format), Hub GUI settlement rendering, and any change to
-`MIN_TRANSCRIPT_ROWS` or the chooser's own sizing.
+stays the wire format), Hub GUI settlement rendering, and the flush planner —
+its chooser-blind capacity rule is deliberate and stays exactly as it is.
 
 ## Deployment note
 
