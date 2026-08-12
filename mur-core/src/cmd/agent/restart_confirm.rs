@@ -47,6 +47,7 @@ pub(super) fn wait_for_confirmed_lock(
     lock_path: &Path,
     old_pid: u32,
     has_service: bool,
+    direct_pid: Option<u32>,
 ) -> anyhow::Result<Option<(u32, String)>> {
     // Passive: launchd KeepAlive=true respawns on process exit; wait for the
     // new lock to appear.
@@ -54,10 +55,13 @@ pub(super) fn wait_for_confirmed_lock(
 
     if new_pid.is_none() {
         // A runnable fresh process that has not written its lock yet is a slow
-        // cold start, not a failure. Kicking it would kill the in-progress
-        // start and restart the clock. Give it real time instead.
-        if has_service && fresh_runnable_process(name, old_pid) {
-            new_pid = poll_while_runnable(name, lock_path, old_pid, SLOW_START_WAIT_SECS);
+        // cold start, not a failure. Kicking / re-spawning it would kill the
+        // in-progress start and restart the clock. Give it real time instead —
+        // whether the fresh process is the service manager's or one we
+        // pre-spawned directly (no service unit).
+        let fresh = fresh_process_pid(managed_pid(name), direct_pid, old_pid);
+        if fresh.is_some() {
+            new_pid = poll_while_runnable(fresh, lock_path, old_pid, SLOW_START_WAIT_SECS);
         }
 
         // No runnable process (or the slow start gave up): the agent is not
@@ -65,16 +69,19 @@ pub(super) fn wait_for_confirmed_lock(
         // service-manager-tracked zombie counts as not-runnable here, so it is
         // kicked instead of being mistaken for a cold start.
         if new_pid.is_none() {
-            if has_service {
+            let fresh_after = if has_service {
                 match kickstart_service(name) {
                     Ok(true) => {
                         println!("agent '{name}': no respawn seen; kicked the service unit");
+                        // The kick restarts the clock from zero, so gate the
+                        // post-kick window on the service manager's new pid.
+                        managed_pid(name)
                     }
                     Ok(false) => {
                         println!(
                             "agent '{name}': service kickstart failed; falling back to direct respawn"
                         );
-                        direct_respawn(name, agent_home)?;
+                        Some(direct_respawn(name, agent_home)?)
                     }
                     Err(e) => {
                         // Attestation failed — fail-closed: do NOT kick the
@@ -86,27 +93,40 @@ pub(super) fn wait_for_confirmed_lock(
                 }
             } else {
                 println!("agent '{name}': no respawn seen; retrying direct respawn");
-                direct_respawn(name, agent_home)?;
+                Some(direct_respawn(name, agent_home)?)
+            };
+            // A kick / fresh spawn is a cold start from zero: give the fresh
+            // process the same liveness-gated slow-start window. Only when no
+            // fresh pid is known (e.g. the kick raced the service manager's
+            // bookkeeping) fall back to the short fixed window.
+            match fresh_after {
+                Some(pid) => {
+                    new_pid =
+                        poll_while_runnable(Some(pid), lock_path, old_pid, SLOW_START_WAIT_SECS);
+                }
+                None => new_pid = poll_new_lock(lock_path, old_pid, RETRY_WAIT_SECS),
             }
-            new_pid = poll_new_lock(lock_path, old_pid, RETRY_WAIT_SECS);
         }
     }
 
     Ok(new_pid)
 }
 
-/// True when a fresh process is alive and able to write the lock: the service
-/// manager's current pid, runnable (not a zombie), and different from the pid
-/// we signalled. A launchd/systemd-tracked zombie keeps `kill(pid, 0)`
-/// succeeding but will never write a lock.
-fn fresh_runnable_process(name: &str, old_pid: u32) -> bool {
-    managed_pid(name).is_some_and(|pid| pid != old_pid && pid_runnable(pid))
+/// The pid of a fresh process alive and able to write the lock: the first of
+/// the service manager's current pid or a pre-spawned direct pid that differs
+/// from the pid we signalled and is runnable (not a zombie). A zombie keeps
+/// `kill(pid, 0)` succeeding but will never write a lock.
+fn fresh_process_pid(managed: Option<u32>, direct: Option<u32>, old_pid: u32) -> Option<u32> {
+    [managed, direct]
+        .into_iter()
+        .flatten()
+        .find(|pid| *pid != old_pid && pid_runnable(*pid))
 }
 
-/// Poll the lock, but only while a runnable fresh process is alive. Fails fast
-/// on a dead process instead of burning the whole window.
+/// Poll the lock, but only while `fresh_pid` is a runnable fresh process.
+/// Fails fast on a dead process instead of burning the whole window.
 fn poll_while_runnable(
-    name: &str,
+    fresh_pid: Option<u32>,
     lock_path: &Path,
     old_pid: u32,
     secs: u64,
@@ -119,7 +139,7 @@ fn poll_while_runnable(
         if std::time::Instant::now() >= deadline {
             return None;
         }
-        if !fresh_runnable_process(name, old_pid) {
+        if !fresh_pid.is_some_and(|pid| pid != old_pid && pid_runnable(pid)) {
             return None;
         }
     }
@@ -210,5 +230,17 @@ mod tests {
     #[test]
     fn ps_state_empty_means_no_such_process() {
         assert!(!ps_state_runnable(""));
+    }
+
+    #[test]
+    fn poll_while_runnable_fails_closed_without_fresh_pid() {
+        // Negative control: with no fresh pid the gate must give up in a
+        // bounded time instead of burning the whole (slow-start) window —
+        // a lock that never appears must not stall the caller.
+        let lock =
+            std::env::temp_dir().join(format!("mur-restart-confirm-none-{}", std::process::id()));
+        let start = std::time::Instant::now();
+        assert_eq!(poll_while_runnable(None, &lock, 1, 1), None);
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
     }
 }
