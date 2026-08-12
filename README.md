@@ -403,7 +403,9 @@ Agent** wizard offers the same catalog as a source.
   still can't write. Some paths can never be granted at all — another agent's
   directory, the runtime binary, an autostart directory — because they decide
   what starts next; `allow-read` / `allow-write` refuse them, and
-  `runtime-doctor` names any such grant that was already sitting in a profile.
+  `runtime-doctor` names any such grant that was already sitting in a profile,
+  and the runtime binary itself is signed by MUR's Developer ID in release
+  builds — a swapped binary is refused at spawn, never run.
   A freshly seeded MUR owns
   `~/.mur/{skills,workflows,fleets,artifacts}`, so it can build the skill,
   workflow or fleet it just designed instead of handing you a list of commands.

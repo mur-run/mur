@@ -17,4 +17,19 @@ fn main() {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=MUR_GIT_SHA={sha}");
+
+    // Without rerun-if-env-changed, flipping the env vars later would keep
+    // the stale consts baked into the crate — a silent attestation gap.
+    println!("cargo:rerun-if-env-changed=MUR_EMBED_RELEASE_MARKER");
+    println!("cargo:rerun-if-env-changed=MUR_APPLE_TEAM_ID");
+    let marker = std::env::var("MUR_EMBED_RELEASE_MARKER").is_ok();
+    let team_id = std::env::var("MUR_APPLE_TEAM_ID").unwrap_or_default();
+    if marker && team_id.is_empty() {
+        panic!("MUR_EMBED_RELEASE_MARKER=1 requires MUR_APPLE_TEAM_ID to be set");
+    }
+    println!(
+        "cargo:rustc-env=MUR_EMBEDDED_RELEASE={}",
+        if marker { "1" } else { "0" }
+    );
+    println!("cargo:rustc-env=MUR_APPLE_TEAM_ID={team_id}");
 }

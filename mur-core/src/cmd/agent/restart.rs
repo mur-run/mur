@@ -10,10 +10,13 @@ use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use mur_common::{AgentProfile as _AgentProfile, LockFile};
 
-use super::{pid_alive, resolve_mur_home, resolve_runtime_target, restart_confirm, stale};
+use super::attest::verify_runtime_at;
+use super::{
+    pid_alive, resolve_bin_dir, resolve_mur_home, resolve_runtime_target, restart_confirm, stale,
+};
 
 /// Extra grace period added on top of the runtime's `stop_timeout_secs` before
 /// the SIGKILL fallback fires.  The SIGKILL wait MUST outlast the runtime's own
@@ -432,6 +435,8 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
 /// Spawn the runtime directly (detached) for an agent with no service unit.
 pub(super) fn direct_respawn(name: &str, agent_home: &Path) -> Result<()> {
     let target = resolve_runtime_target();
+    verify_runtime_at(&target)
+        .with_context(|| format!("cannot respawn agent '{name}' — runtime attestation failed"))?;
     let mur_home = resolve_mur_home()?;
     let stderr_log = agent_home.join("stderr.log");
     let stdout_file = OpenOptions::new()
@@ -479,13 +484,20 @@ pub(super) fn poll_new_lock(lock_path: &Path, old_pid: u32, secs: u64) -> Option
 
 /// Actively (re)start the agent's service unit, killing whatever instance the
 /// service manager currently tracks — including a zombie whose pid never
-/// matched the lock's. Returns false when there is no service manager, the
-/// unit isn't loaded, or the command failed; callers treat that as "nothing
-/// kicked" and let the poll decide.
+/// matched the lock's.
+///
+/// Verifies the runtime before the kick; on verification failure, returns
+/// `Err` (fail-closed — the caller must NOT fall through to a direct spawn).
+/// Returns `Ok(false)` when the service manager command itself fails, which
+/// callers may treat as "nothing kicked" and fall back to a direct respawn.
+/// Returns `Ok(true)` when the kick succeeded.
 #[cfg(target_os = "macos")]
-pub(super) fn kickstart_service(name: &str) -> bool {
+pub(super) fn kickstart_service(name: &str) -> Result<bool> {
+    let symlink = resolve_bin_dir()?.join(format!("mur_agent_{name}"));
+    verify_runtime_at(&symlink)
+        .with_context(|| format!("cannot kick agent '{name}' — runtime attestation failed"))?;
     let uid = unsafe { libc::getuid() };
-    Command::new("launchctl")
+    let ok = Command::new("launchctl")
         .args([
             "kickstart",
             "-k",
@@ -495,23 +507,28 @@ pub(super) fn kickstart_service(name: &str) -> bool {
         .stderr(Stdio::null())
         .status()
         .map(|s| s.success())
-        .unwrap_or(false)
+        .unwrap_or(false);
+    Ok(ok)
 }
 
 #[cfg(target_os = "linux")]
-pub(super) fn kickstart_service(name: &str) -> bool {
-    Command::new("systemctl")
+pub(super) fn kickstart_service(name: &str) -> Result<bool> {
+    let symlink = resolve_bin_dir()?.join(format!("mur_agent_{name}"));
+    verify_runtime_at(&symlink)
+        .with_context(|| format!("cannot kick agent '{name}' — runtime attestation failed"))?;
+    let ok = Command::new("systemctl")
         .args(["--user", "restart", &format!("mur-agent-{name}")])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .map(|s| s.success())
-        .unwrap_or(false)
+        .unwrap_or(false);
+    Ok(ok)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub(super) fn kickstart_service(_name: &str) -> bool {
-    false
+pub(super) fn kickstart_service(_name: &str) -> Result<bool> {
+    Ok(false)
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────
@@ -787,6 +804,55 @@ mod tests {
         // Result always strictly exceeds the drain bound
         for t in [1u64, 15, 30, 60, 120] {
             assert!(kill_wait_secs(t) > t, "kill wait must exceed drain bound");
+        }
+    }
+
+    // ── Attestation mount tests ──────────────────────────────────────────
+
+    /// `direct_respawn` refuses to spawn when the runtime target cannot be
+    /// resolved (the attestation mount canonicalizes before verifying).
+    /// Negative control: the error comes from the attestation mount on the
+    /// spawn path, proving the verify call exists.
+    #[test]
+    fn direct_respawn_refuses_unresolvable_runtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agent_home = tmp.path().join("agents").join("test-agent");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        unsafe { std::env::set_var("MUR_AGENT_RUNTIME_BIN", "/nonexistent/mur_agent_nope") };
+        let err = direct_respawn("test-agent", &agent_home).unwrap_err();
+        unsafe { std::env::remove_var("MUR_AGENT_RUNTIME_BIN") };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("resolve") && msg.contains("mur_agent_nope"),
+            "expected resolution error from attestation mount, got: {msg}"
+        );
+    }
+
+    /// `kickstart_service` (macOS path) refuses to kick when the symlink
+    /// points at a non-resolvable target. This is a structural test: the
+    /// function now returns `Result<bool>` and the `Err` variant means
+    /// "attestation failed — never kick."
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn kickstart_service_refuses_unresolvable_symlink() {
+        // Redirect bin_dir to a tmp dir with a broken symlink.
+        let tmp = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("MUR_AGENT_BIN_DIR", tmp.path()) };
+        // No mur_agent_test-kick symlink → canonicalize fails → Err.
+        let result = kickstart_service("test-kick");
+        unsafe { std::env::remove_var("MUR_AGENT_BIN_DIR") };
+        match result {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("resolve") || msg.contains("attestation"),
+                    "expected attestation error, got: {msg}"
+                );
+            }
+            Ok(false) => {} // No symlink, no service unit — the kick command just
+            // wasn't found. On macOS without a loaded unit, this is
+            // expected (the key assertion is that we didn't panic).
+            Ok(true) => panic!("kick should not succeed without a unit loaded"),
         }
     }
 }

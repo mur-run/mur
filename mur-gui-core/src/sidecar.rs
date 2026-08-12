@@ -236,6 +236,13 @@ fn spawn_runtime(slug: &str, mur_home: &Path) -> Result<Child, String> {
              is available, or run build.sh to install it."
         )
     })?;
+    mur_common::binary_attestation::verify_runtime_signature(&runtime_bin).map_err(|e| {
+        format!(
+            "{e} — the runtime binary may have been swapped (launch-chain \
+             protection covers writes, attestation covers swaps). Fix: mur \
+             update --restart-agents, or reinstall MUR."
+        )
+    })?;
     // Clear any stale lock/socket a previously crashed runtime left behind so
     // the new one binds cleanly.
     clear_runtime_state(mur_home, slug);
@@ -582,5 +589,53 @@ mod tests {
         sup.stop("alpha").await;
         tokio::time::sleep(Duration::from_millis(50)).await;
         sup.shutdown().await;
+    }
+
+    /// A directory is not an executable runtime: the pre-spawn resolution
+    /// (find → verify → spawn) must fail with the human-readable error, never
+    /// panic and never spawn. The signature-verification mount lives in this
+    /// same fail-before-spawn path; its behavior is covered in mur-common
+    /// with a test requirement (Task 1) — this test pins the structural guard.
+    ///
+    /// Env is saved/restored rather than clobbered (tests share one process
+    /// env). PATH keeps every entry except ones that resolve to a real runtime
+    /// binary, so the directory override cannot fall through to an installed
+    /// MUR on PATH — which would spawn a stray runtime instead of failing.
+    #[test]
+    fn spawn_runtime_fails_cleanly_on_invalid_target() {
+        let dir = std::env::temp_dir().join(format!("mur-sidecar-dir-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prev_bin = std::env::var_os("MUR_AGENT_RUNTIME_BIN");
+        let prev_path = std::env::var_os("PATH");
+        #[cfg(target_os = "windows")]
+        let runtime_name = "mur-agent-runtime.exe";
+        #[cfg(not(target_os = "windows"))]
+        let runtime_name = "mur-agent-runtime";
+        let path_without_runtime = prev_path.as_ref().map(|p| {
+            std::env::join_paths(
+                std::env::split_paths(&p).filter(|d| !is_real_binary(&d.join(runtime_name))),
+            )
+            .expect("PATH entries join back together")
+        });
+        unsafe {
+            std::env::set_var("MUR_AGENT_RUNTIME_BIN", &dir);
+            if let Some(p) = &path_without_runtime {
+                std::env::set_var("PATH", p);
+            }
+        }
+        let err = spawn_runtime("attest-test", std::path::Path::new("/tmp")).unwrap_err();
+        match prev_bin {
+            Some(v) => unsafe { std::env::set_var("MUR_AGENT_RUNTIME_BIN", v) },
+            None => unsafe { std::env::remove_var("MUR_AGENT_RUNTIME_BIN") },
+        }
+        match prev_path {
+            Some(v) => unsafe { std::env::set_var("PATH", v) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            err.contains("agent runtime not found"),
+            "unexpected error: {err}"
+        );
     }
 }

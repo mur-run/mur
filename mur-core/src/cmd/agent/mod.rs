@@ -26,6 +26,7 @@ use mur_common::{AgentProfile as _AgentProfile, LockFile};
 
 pub mod addon;
 mod apply;
+pub(crate) mod attest;
 pub mod channel_import;
 pub mod cli;
 mod comm;

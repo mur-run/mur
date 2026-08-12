@@ -156,6 +156,9 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
+      - name: Create test signing identity (macOS)
+        if: runner.os == 'macOS'
+        run: bash scripts/test-signing-identity.sh
       # `cargo nextest run` builds + runs in one cargo invocation; `cargo
       # check --all` was a redundant pre-check whose .rmeta artifacts don't
       # help nextest's downstream test-binary build (different codegen

@@ -15,6 +15,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use mur_common::LockFile;
 
+use super::attest::verify_runtime_at;
 use super::{pid_alive, resolve_bin_dir, resolve_mur_home};
 
 pub fn cmd_start(name: &str) -> Result<()> {
@@ -54,6 +55,7 @@ pub fn cmd_start(name: &str) -> Result<()> {
             .context("no home dir")?
             .join(format!("Library/LaunchAgents/run.mur.agent.{name}.plist"));
         if plist.exists() {
+            verify_runtime_at(&resolve_bin_dir()?.join(format!("mur_agent_{name}")))?;
             let label = format!("run.mur.agent.{name}");
             let uid = unsafe { libc::getuid() };
             let kick = Command::new("launchctl")
@@ -86,6 +88,7 @@ pub fn cmd_start(name: &str) -> Result<()> {
             .context("no config dir")?
             .join(format!("systemd/user/mur-agent-{name}.service"));
         if unit.exists() {
+            verify_runtime_at(&resolve_bin_dir()?.join(format!("mur_agent_{name}")))?;
             let out = Command::new("systemctl")
                 .args(["--user", "start", &format!("mur-agent-{name}.service")])
                 .output()?;
@@ -108,6 +111,7 @@ pub fn cmd_start(name: &str) -> Result<()> {
             symlink.display()
         );
     }
+    verify_runtime_at(&symlink)?;
     let stdout = fs::OpenOptions::new()
         .create(true)
         .append(true)
