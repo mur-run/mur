@@ -344,7 +344,14 @@ pub fn render(ledger: &TurnLedger) -> String {
             };
             let tool = short_tool(&a.tool);
             out.push_str(&format!("  ✘ {tool} · {why}\n"));
-            if !a.target.is_empty() && a.target != tool {
+            // Skip the target line when the reason already names it. Tools that
+            // fail on a path usually quote that path in their message, so this
+            // printed it twice — invisible while `clean_reason` truncated at 80
+            // chars (the cap cut the path back out), obvious once the card
+            // stopped truncating. Fall back to printing it whenever the reason
+            // does not contain it verbatim: repeating the target is a cosmetic
+            // wart, losing it is a missing fact.
+            if !a.target.is_empty() && a.target != tool && !why.contains(a.target.as_str()) {
                 out.push_str(&format!("      {}\n", a.target));
             }
         }
@@ -625,5 +632,41 @@ mod tests {
         );
         assert!(!card.contains("tool execution failed"), "{card}");
         assert!(card.contains("      ls; grep"), "{card}");
+    }
+
+    #[test]
+    fn a_reason_that_already_names_the_target_does_not_repeat_it() {
+        // write_file quotes the offending path in its own message, so the card
+        // was printing that path on the reason line and again as the target.
+        let path = "/tmp/scratchpad/settlement-test.txt";
+        let mut l = TurnLedger::default();
+        l.record(act(
+            "write_file",
+            path,
+            Outcome::Failed(format!(
+                "tool execution failed: path not write-entitled: {path} (grant it via `mur agent perm allow-write`)"
+            )),
+        ));
+        let card = render(&l);
+        assert_eq!(
+            card.matches(path).count(),
+            1,
+            "target printed more than once:\n{card}"
+        );
+    }
+
+    #[test]
+    fn a_reason_that_omits_the_target_still_prints_it() {
+        // Negative control. Without this, "never print the target" would look
+        // like it fixed the duplication while quietly dropping the one fact
+        // that says WHICH file the failure was about.
+        let mut l = TurnLedger::default();
+        l.record(act(
+            "write_file",
+            "/tmp/some/file.txt",
+            Outcome::Failed("disk quota exceeded".into()),
+        ));
+        let card = render(&l);
+        assert!(card.contains("/tmp/some/file.txt"), "target lost:\n{card}");
     }
 }
