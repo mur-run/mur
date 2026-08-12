@@ -38,6 +38,15 @@ security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PASS" "$
 # OU below if the identity is genuinely usable.
 perl -e 'alarm 20; exec @ARGV' security add-trusted-cert -d -r trustRoot -k "$KC" "$KC_DIR/cert.pem" >/dev/null 2>&1 || \
   echo "test-signing-identity: trust settings not installed; behavioral matrix will skip"
+# Save the prior default keychain so it can be restored on exit.
+# security default-keychain outputs "  \"/path/to/keychain\"" (quoted, indented).
+PRIOR_KC=$(security default-keychain 2>/dev/null | xargs 2>/dev/null || echo "")
+if [ -n "$PRIOR_KC" ]; then
+  trap 'security default-keychain -s "$PRIOR_KC" 2>/dev/null || true' EXIT
+fi
+# Keep the temp keychain in the search list so codesign finds the identity
+# mid-run, even when it is not the default.
+security list-keychains -d user -s "$KC" $(security list-keychains -d user 2>/dev/null | tr -d '"' | tr '\n' ' ') 2>/dev/null || true
 security default-keychain -s "$KC"
 security unlock-keychain -p "$PASS" "$KC"
 if security find-identity -v -p codesigning "$KC" | grep -q "Mur Test ($OU)"; then
