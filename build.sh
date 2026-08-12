@@ -52,14 +52,7 @@ echo "   Size: $(du -h "$BINARY" | cut -f1)"
 
 # Step 3: Install if requested
 if $INSTALL; then
-#  echo "📥 Installing to /usr/local/bin/mur..."
-#  cp "$BINARY" /usr/local/bin/mur
-  echo "📥 Installing to /opt/homebrew/bin/mur..."
-  sudo cp "$BINARY" /opt/homebrew/bin/mur
-  # Re-sign: cp can leave a stale ad-hoc code-signing verdict, causing macOS to
-  # silently SIGKILL the freshly installed binary on next launch. Force a fresh sign.
-  #
-  # One-time setup for stable signing identity (avoids TCC re-prompts on every
+  # One-time setup for a stable signing identity (avoids TCC re-prompts on every
   # rebuild): ad-hoc signing (-s -) gives each build a fresh CDHash, so macOS
   # treats it as a new binary and re-prompts for removable-volume access every
   # time. launchd-managed background agents can't show that prompt, so their
@@ -68,16 +61,39 @@ if $INSTALL; then
   # self-signed one is fine for local use), then export its name:
   #   export MUR_CODESIGN_IDENTITY="Your Certificate Name"
   # With that set, rebuilds keep a consistent identity and TCC grants survive
-  # reinstalls. Leave it unset to keep today's ad-hoc signing behavior.
+  # reinstalls. Leave it unset to keep ad-hoc signing behavior.
   CODESIGN_IDENTITY="${MUR_CODESIGN_IDENTITY:--}"
-  sudo codesign --force -s "$CODESIGN_IDENTITY" /opt/homebrew/bin/mur || true
+  SIGN_FAILED=false
+
+  # Sign BEFORE installing, as the invoking user — never under sudo.
+  #
+  # `sudo codesign -s "Developer ID ..."` cannot succeed: it runs as root, and
+  # the identity lives in the *user's* login keychain, so it fails with
+  # errSecInternalComponent every single time. This used to run post-copy under
+  # sudo with `|| true`, so every install silently shipped an ad-hoc signature —
+  # the exact thing MUR_CODESIGN_IDENTITY exists to prevent. A Mach-O signature
+  # is embedded in the file, so the `cp` below preserves it.
+  sign() {
+    [ -f "$1" ] || return 0
+    if ! codesign --force -s "$CODESIGN_IDENTITY" "$1"; then
+      echo "⚠ codesign FAILED for $1 (identity: $CODESIGN_IDENTITY)"
+      SIGN_FAILED=true
+    fi
+  }
+
+  BIN_DIR="$(dirname "$BINARY")"
+  for b in mur mur-mcp-server mur-research-gateway murmurd mur-agent-runtime; do
+    sign "$BIN_DIR/$b"
+  done
+
+  echo "📥 Installing to /opt/homebrew/bin/mur..."
+  sudo cp "$BINARY" /opt/homebrew/bin/mur
   sudo ln -sfn /opt/homebrew/bin/mur /opt/homebrew/bin/murmur
   echo "Installed murmur -> /opt/homebrew/bin/mur (symlink)"
 
   MCP_BINARY="$SCRIPT_DIR/target/release/mur-mcp-server"
   if [ -f "$MCP_BINARY" ]; then
     sudo cp "$MCP_BINARY" /opt/homebrew/bin/mur-mcp-server
-    sudo codesign --force -s "$CODESIGN_IDENTITY" /opt/homebrew/bin/mur-mcp-server || true
     echo "Installed mur-mcp-server -> /opt/homebrew/bin/mur-mcp-server"
   fi
 
@@ -86,7 +102,6 @@ if $INSTALL; then
   GATEWAY_BINARY="$SCRIPT_DIR/target/release/mur-research-gateway"
   if [ -f "$GATEWAY_BINARY" ]; then
     sudo cp "$GATEWAY_BINARY" /opt/homebrew/bin/mur-research-gateway
-    sudo codesign --force -s "$CODESIGN_IDENTITY" /opt/homebrew/bin/mur-research-gateway || true
     echo "Installed mur-research-gateway -> /opt/homebrew/bin/mur-research-gateway"
   fi
 
@@ -96,7 +111,6 @@ if $INSTALL; then
   DAEMON_BINARY="$SCRIPT_DIR/target/release/murmurd"
   if [ -f "$DAEMON_BINARY" ]; then
     sudo cp "$DAEMON_BINARY" /opt/homebrew/bin/murmurd
-    sudo codesign --force -s "$CODESIGN_IDENTITY" /opt/homebrew/bin/murmurd || true
     echo "Installed murmurd -> /opt/homebrew/bin/murmurd"
   fi
 
@@ -109,7 +123,6 @@ if $INSTALL; then
   LOCAL_BIN="$HOME/.local/bin"; mkdir -p "$LOCAL_BIN"
   if [ -f "$RUNTIME_BINARY" ]; then
     cp "$RUNTIME_BINARY" "$LOCAL_BIN/.mur-agent-runtime.new"
-    codesign --force -s "$CODESIGN_IDENTITY" "$LOCAL_BIN/.mur-agent-runtime.new" || true
     mv -f "$LOCAL_BIN/.mur-agent-runtime.new" "$LOCAL_BIN/mur-agent-runtime"
     echo "Installed mur-agent-runtime -> $LOCAL_BIN/mur-agent-runtime (canonical; keeps new agents current)"
   fi
@@ -121,6 +134,12 @@ if $INSTALL; then
     if [ "${STALE:-0}" -gt 0 ]; then
       echo "⚠ $STALE agent(s) are running a stale runtime — run 'mur agent restart --stale' (--dry-run to list)"
     fi
+  fi
+
+  if $SIGN_FAILED; then
+    echo "⚠ installed with an AD-HOC signature — every rebuild looks like a new"
+    echo "  program to macOS, so headless agents can lose keychain/TCC grants."
+    echo "  Check that '$CODESIGN_IDENTITY' is in your login keychain, then re-run."
   fi
 
   echo "✅ Installed: $(mur --version 2>/dev/null || echo 'done')"
