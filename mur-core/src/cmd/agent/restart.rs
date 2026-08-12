@@ -13,23 +13,12 @@ use std::process::{Command, Stdio};
 use anyhow::{Result, bail};
 use mur_common::{AgentProfile as _AgentProfile, LockFile};
 
-use super::{pid_alive, resolve_mur_home, resolve_runtime_target, stale};
+use super::{pid_alive, resolve_mur_home, resolve_runtime_target, restart_confirm, stale};
 
 /// Extra grace period added on top of the runtime's `stop_timeout_secs` before
 /// the SIGKILL fallback fires.  The SIGKILL wait MUST outlast the runtime's own
 /// drain bound so we never abort a turn mid-flight.
 const RESTART_KILL_GRACE_SECS: u64 = 5;
-
-/// Wait to see the respawned lock (no SIGKILL risk here). Generous on purpose:
-/// real launchd respawn latency = the old process's shutdown + ExitTimeOut + any
-/// ThrottleInterval, observed at ~2 min after rapid restarts. A shorter wait
-/// false-warns "did not respawn" on a restart that actually succeeded.
-const RESTART_RESPAWN_WAIT_SECS: u64 = 120;
-
-/// Second, shorter window after the active retry (service kick / re-spawn).
-/// The first window already absorbed the service manager's worst-case respawn
-/// latency; this one only needs to cover a fresh start.
-const RESTART_RETRY_WAIT_SECS: u64 = 30;
 
 /// Fallback `stop_timeout_secs` used when the agent's `profile.yaml` cannot be
 /// read or parsed. Kept as a named const (not a bare literal) so the value
@@ -398,40 +387,17 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
     }
 
     // ── Poll for fresh running.lock with a different pid ──────────────
-    // launchd KeepAlive=true respawns on process exit; we wait up to
-    // RESTART_RESPAWN_WAIT_SECS for the new lock to appear.
-    let mut new_pid = poll_new_lock(&lock_path, old_pid, RESTART_RESPAWN_WAIT_SECS);
-
-    // ── Active retry ──────────────────────────────────────────────────
-    // The passive wait can fail two ways seen in the field: a service
-    // manager still tracking a ZOMBIE instance under a pid that was never
-    // the lock's (so from its side the job is "running" and KeepAlive never
-    // fires), and a direct respawn that died at boot (its stderr is in the
-    // agent's stderr.log). A service kick kills whatever instance the
-    // manager tracks and restarts from the unit; a serviceless agent just
-    // gets one more spawn. One retry, then a shorter window.
-    if new_pid.is_none() {
-        if has_service {
-            if kickstart_service(name) {
-                println!("agent '{name}': no respawn seen; kicked the service unit");
-            } else {
-                // The service manager either has no unit loaded or the kick
-                // command itself failed. Don't leave the agent for dead on
-                // a passive poll alone — fall back to a direct spawn so a
-                // stale/removed unit doesn't strand the agent, and tell the
-                // operator the kick didn't work so they can investigate the
-                // unit if this keeps happening.
-                println!(
-                    "agent '{name}': service kickstart failed; falling back to direct respawn"
-                );
-                direct_respawn(name, &agent_home)?;
-            }
-        } else {
-            println!("agent '{name}': no respawn seen; retrying direct respawn");
-            direct_respawn(name, &agent_home)?;
-        }
-        new_pid = poll_new_lock(&lock_path, old_pid, RESTART_RETRY_WAIT_SECS);
-    }
+    // launchd KeepAlive=true respawns on process exit. Confirmation lives in
+    // `restart_confirm`: it kicks the service only when no runnable fresh
+    // process exists, and gives a slow cold start (sandbox + model load) time
+    // to write the lock instead of killing it mid-start.
+    let new_pid = restart_confirm::wait_for_confirmed_lock(
+        name,
+        &agent_home,
+        &lock_path,
+        old_pid,
+        has_service,
+    )?;
 
     Ok(match new_pid {
         Some((_pid, new_sha)) => {
@@ -452,8 +418,7 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
         }
         None => {
             let line = format!(
-                "'{name}' not confirmed running within {}s — check `mur agent status {name}` and its stderr.log",
-                RESTART_RESPAWN_WAIT_SECS + RESTART_RETRY_WAIT_SECS
+                "'{name}' not confirmed running — check `mur agent status {name}` and its stderr.log"
             );
             eprintln!("✗ {line}");
             RestartReport {
@@ -465,7 +430,7 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
 }
 
 /// Spawn the runtime directly (detached) for an agent with no service unit.
-fn direct_respawn(name: &str, agent_home: &Path) -> Result<()> {
+pub(super) fn direct_respawn(name: &str, agent_home: &Path) -> Result<()> {
     let target = resolve_runtime_target();
     let mur_home = resolve_mur_home()?;
     let stderr_log = agent_home.join("stderr.log");
@@ -497,7 +462,7 @@ fn direct_respawn(name: &str, agent_home: &Path) -> Result<()> {
 }
 
 /// Wait up to `secs` for `lock_path` to hold a pid different from `old_pid`.
-fn poll_new_lock(lock_path: &Path, old_pid: u32, secs: u64) -> Option<(u32, String)> {
+pub(super) fn poll_new_lock(lock_path: &Path, old_pid: u32, secs: u64) -> Option<(u32, String)> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
     loop {
         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -518,7 +483,7 @@ fn poll_new_lock(lock_path: &Path, old_pid: u32, secs: u64) -> Option<(u32, Stri
 /// unit isn't loaded, or the command failed; callers treat that as "nothing
 /// kicked" and let the poll decide.
 #[cfg(target_os = "macos")]
-fn kickstart_service(name: &str) -> bool {
+pub(super) fn kickstart_service(name: &str) -> bool {
     let uid = unsafe { libc::getuid() };
     Command::new("launchctl")
         .args([
@@ -534,7 +499,7 @@ fn kickstart_service(name: &str) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn kickstart_service(name: &str) -> bool {
+pub(super) fn kickstart_service(name: &str) -> bool {
     Command::new("systemctl")
         .args(["--user", "restart", &format!("mur-agent-{name}")])
         .stdout(Stdio::null())
@@ -545,7 +510,7 @@ fn kickstart_service(name: &str) -> bool {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn kickstart_service(_name: &str) -> bool {
+pub(super) fn kickstart_service(_name: &str) -> bool {
     false
 }
 
