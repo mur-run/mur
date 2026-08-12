@@ -44,30 +44,35 @@ fn build_id(bin: &Path) -> String {
     sha
 }
 
-/// Build-id of the runtime sitting next to the current `mur` binary.
-///
-/// Only correct as a staleness baseline for an agent whose own symlink points
-/// here — prefer [`on_disk_sha_for`], which cannot get that wrong.
-pub fn on_disk_sha() -> String {
-    build_id(&resolve_runtime_target())
-}
-
-/// Build-id of the binary that will *actually* be exec'd for `agent`.
+/// The runtime binary that will *actually* be exec'd for `agent`.
 ///
 /// A restart does not run the runtime next to `mur`; it runs the agent's own
 /// `~/.local/bin/mur_agent_<name>` — that path is literally `ProgramArguments[0]`
 /// in the service descriptor, and those symlinks do not all point at the same
 /// runtime (a dev checkout, an older keg, and `mur update`'s copy can coexist).
-/// Comparing every agent against one global runtime therefore answers a question
-/// nobody asked: `--stale` can restart an agent that comes back on the same old
-/// binary, and stay silent about one that is genuinely behind.
+///
+/// This is the single source of truth for "which binary belongs to this agent".
+/// Both the staleness verdict and the direct respawn read it, because when they
+/// each resolved it their own way they disagreed: the verdict measured the
+/// agent's symlink while the respawn exec'd the runtime beside `mur`, so a
+/// restart could relaunch the very binary it had just called stale and still
+/// print a tick.
 ///
 /// Falls back to the global runtime when the agent has no symlink yet.
-pub fn on_disk_sha_for(agent: &str) -> String {
+pub fn runtime_path_for(agent: &str) -> PathBuf {
     match resolve_bin_dir().map(|d| d.join(format!("mur_agent_{agent}"))) {
-        Ok(link) if link.symlink_metadata().is_ok() => build_id(&link),
-        _ => on_disk_sha(),
+        Ok(link) if link.symlink_metadata().is_ok() => link,
+        _ => resolve_runtime_target(),
     }
+}
+
+/// Build-id of the binary that will *actually* be exec'd for `agent`.
+///
+/// Comparing every agent against one global runtime answers a question nobody
+/// asked: `--stale` can restart an agent that comes back on the same old
+/// binary, and stay silent about one that is genuinely behind.
+pub fn on_disk_sha_for(agent: &str) -> String {
+    build_id(&runtime_path_for(agent))
 }
 
 /// Return `true` when the agent whose lock is `lock` is running a stale binary.
