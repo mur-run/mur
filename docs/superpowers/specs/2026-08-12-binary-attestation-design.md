@@ -74,6 +74,9 @@ Team ID is absent, the build **fails to compile** — fail-closed at build time.
 |---|---|---|
 | CLI detached spawn | `mur-core/src/cmd/agent/start.rs` path 3 | before `Command::new(&symlink).spawn()` |
 | launchd / systemd | `mur-core/src/cmd/agent/start.rs` paths 1-2 | before `launchctl kickstart` / `systemctl start` (restart flows through the same paths) |
+| CLI direct respawn | `mur-core/src/cmd/agent/restart.rs` `direct_respawn` | before `Command::new(&target).spawn()` (serviceless agents, `--stale` retry) |
+| Service kick restart | `mur-core/src/cmd/agent/restart.rs` `kickstart_service` | before `launchctl kickstart -k` / `systemctl --user restart` (fail-closed: attestation failure does not fall through to `direct_respawn`) |
+| Ephemeral dial spawn | `mur-core/src/a2a_dial.rs` `dial_ephemeral` | before `Command::new(&runtime).spawn()` (`mur agent send` / `card` on stopped agents) |
 | Hub sidecar supervisor | `mur-gui-core` sidecar spawn | before every spawn |
 
 A failure at any mount point refuses the spawn and returns the attestation error.
