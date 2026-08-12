@@ -16,6 +16,8 @@
 use std::path::Path;
 use std::process::Command;
 
+use anyhow::bail;
+
 use super::restart::{direct_respawn, kickstart_service, poll_new_lock};
 
 /// Passive wait for launchd/systemd's natural respawn. Covers respawn latency
@@ -64,13 +66,23 @@ pub(super) fn wait_for_confirmed_lock(
         // kicked instead of being mistaken for a cold start.
         if new_pid.is_none() {
             if has_service {
-                if kickstart_service(name) {
-                    println!("agent '{name}': no respawn seen; kicked the service unit");
-                } else {
-                    println!(
-                        "agent '{name}': service kickstart failed; falling back to direct respawn"
-                    );
-                    direct_respawn(name, agent_home)?;
+                match kickstart_service(name) {
+                    Ok(true) => {
+                        println!("agent '{name}': no respawn seen; kicked the service unit");
+                    }
+                    Ok(false) => {
+                        println!(
+                            "agent '{name}': service kickstart failed; falling back to direct respawn"
+                        );
+                        direct_respawn(name, agent_home)?;
+                    }
+                    Err(e) => {
+                        // Attestation failed — fail-closed: do NOT kick the
+                        // service manager and do NOT fall through to a direct
+                        // spawn (which would also verify and fail). The runtime
+                        // binary needs repair before the agent can restart.
+                        bail!("{e:#}");
+                    }
                 }
             } else {
                 println!("agent '{name}': no respawn seen; retrying direct respawn");
