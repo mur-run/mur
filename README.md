@@ -568,7 +568,7 @@ cargo nextest run --workspace    # tests (CI uses nextest)
 cargo clippy --workspace -- -D warnings
 
 ./build.sh                       # release build with the embedded web dashboard
-./install.sh                     # build + install to /opt/homebrew/bin/mur
+./install.sh                     # build + install to ~/.local/bin (no sudo; MUR_INSTALL_DIR overrides)
 ```
 
 The two Tauri apps (`mur-hub-gui`, legacy `mur-agent-gui`) build from their own
