@@ -142,6 +142,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // PermissionsExt::from_mode is unix-only (Windows CI compiles this module)
     fn unsigned_file_fails_test_requirement() {
         let Some(ou) = test_ou() else {
             eprintln!("skipping: MUR_TEST_SIGNING_OU not set");
@@ -158,6 +159,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // PermissionsExt::from_mode is unix-only (Windows CI compiles this module)
     fn adhoc_signed_fails_test_requirement() {
         let Some(ou) = test_ou() else {
             eprintln!("skipping");
@@ -184,6 +186,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // PermissionsExt::from_mode is unix-only (Windows CI compiles this module)
     fn wrong_ou_fails_test_requirement() {
         let Some(ou) = test_ou() else {
             eprintln!("skipping");
@@ -212,5 +215,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 }
