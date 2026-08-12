@@ -84,7 +84,7 @@ any length and contains no newlines.
 
 ### Steps
 
-- [ ] **Write the failing test.** Append to the `mod tests` block in
+- [x] **Write the failing test.** Append to the `mod tests` block in
   `mur-agent-runtime/src/turn_ledger.rs`, just before its closing brace:
 
   ```rust
@@ -111,7 +111,7 @@ any length and contains no newlines.
       }
   ```
 
-- [ ] **Watch it fail.**
+- [x] **Watch it fail.**
 
   ```
   cargo nextest run -p mur-agent-runtime turn_ledger
@@ -120,7 +120,7 @@ any length and contains no newlines.
   Expect `FAIL … long_detail_survives_to_the_renderer` and
   `FAIL … the_settlement_header_carries_no_fixed_width_rule`.
 
-- [ ] **Add the backstop constant.** In `mur-agent-runtime/src/turn_ledger.rs`,
+- [x] **Add the backstop constant.** In `mur-agent-runtime/src/turn_ledger.rs`,
   immediately above `fn truncate`, insert:
 
   ```rust
@@ -130,7 +130,7 @@ any length and contains no newlines.
   const RUNAWAY_BACKSTOP: usize = 400;
   ```
 
-- [ ] **Raise every cap to the backstop.** Four edits in the same file, leaving
+- [x] **Raise every cap to the backstop.** Four edits in the same file, leaving
   `truncate`'s newline flattening untouched — a newline really would break a row.
 
   - In `describe_target`, replace `truncate(raw, 72)` with
@@ -142,7 +142,7 @@ any length and contains no newlines.
   - In `classify`, replace `truncate(content.trim(), 120)` with
     `truncate(content.trim(), RUNAWAY_BACKSTOP)`.
 
-- [ ] **Drop the fixed-width rules.** In `pub fn render`:
+- [x] **Drop the fixed-width rules.** In `pub fn render`:
 
   - Replace the opening line
 
@@ -171,7 +171,7 @@ any length and contains no newlines.
     Note the last row already ends in `\n`, so the fence still starts its own
     line.
 
-- [ ] **Update the test that pinned the old 72-char cap.** In
+- [x] **Update the test that pinned the old 72-char cap.** In
   `describe_target_picks_the_identifying_argument`, replace
 
   ```rust
@@ -187,7 +187,7 @@ any length and contains no newlines.
   Leave the two lines below it alone — the `"a\nb"` → `"a b"` assertion is the
   newline flattening, which must survive.
 
-- [ ] **Watch it pass.**
+- [x] **Watch it pass.**
 
   ```
   cargo nextest run -p mur-agent-runtime turn_ledger
@@ -195,7 +195,7 @@ any length and contains no newlines.
 
   Expect `16 tests run: 16 passed`.
 
-- [ ] **Commit.**
+- [x] **Commit.** (Not performed: repository policy requires explicit permission.)
 
   ```
   cargo fmt && git add -A && git commit -m "fix(runtime): stop truncating settlement text the runtime cannot measure"
@@ -230,7 +230,7 @@ the cached Markdown render by carrying it on the message as its own field.
 
 ### Steps
 
-- [ ] **Create the module with a failing test.** Write
+- [x] **Create the module with a failing test.** Write
   `mur-core/src/cmd/agent/cli/settlement.rs`:
 
   ```rust
@@ -298,14 +298,14 @@ the cached Markdown render by carrying it on the message as its own field.
   }
   ```
 
-- [ ] **Declare the module.** In `mur-core/src/cmd/agent/cli/mod.rs`, find the
+- [x] **Declare the module.** In `mur-core/src/cmd/agent/cli/mod.rs`, find the
   block of `mod` declarations near the top and add, in alphabetical position:
 
   ```rust
   mod settlement;
   ```
 
-- [ ] **Watch it fail to compile, then pass.**
+- [x] **Watch it fail to compile, then pass.**
 
   ```
   ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core settlement::tests
@@ -314,7 +314,7 @@ the cached Markdown render by carrying it on the message as its own field.
   Expect `3 tests run: 3 passed`. (The module is new, so there is no red phase
   for `split` itself; the red phase for the *behaviour* is the next step.)
 
-- [ ] **Write the failing test for the field.** In
+- [x] **Write the failing test for the field.** In
   `mur-core/src/cmd/agent/cli/app.rs`, in the existing `#[cfg(test)] mod tests`
   block, append (it uses that module's own `fn app()` helper, the same way
   `finished_agent_turn_caches_markdown` does):
@@ -338,7 +338,7 @@ the cached Markdown render by carrying it on the message as its own field.
       }
   ```
 
-- [ ] **Watch it fail.**
+- [x] **Watch it fail.**
 
   ```
   ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core finishing_a_turn_moves_the_settlement
@@ -346,7 +346,7 @@ the cached Markdown render by carrying it on the message as its own field.
 
   Expect a compile error: no field `settlement` on `ChatMsg`.
 
-- [ ] **Add the field.** In `mur-core/src/cmd/agent/cli/app.rs`, in
+- [x] **Add the field.** In `mur-core/src/cmd/agent/cli/app.rs`, in
   `pub struct ChatMsg`, after the `step` field, add:
 
   ```rust
@@ -359,7 +359,7 @@ the cached Markdown render by carrying it on the message as its own field.
   Then add `settlement: None,` to each of the three `Self { … }` literals in
   `impl ChatMsg` — in `new`, in `agent_rendered`, and in `tool`.
 
-- [ ] **Populate it on the resume path.** In `impl ChatMsg`, replace the body of
+- [x] **Populate it on the resume path.** In `impl ChatMsg`, replace the body of
   `agent_rendered`:
 
   ```rust
@@ -380,7 +380,7 @@ the cached Markdown render by carrying it on the message as its own field.
       }
   ```
 
-- [ ] **Populate it on the live path.** In `pub fn finish_agent_turn`, replace
+- [x] **Populate it on the live path.** In `pub fn finish_agent_turn`, replace
 
   ```rust
           if let Some(m) = self.streaming_agent_mut() {
@@ -407,7 +407,7 @@ the cached Markdown render by carrying it on the message as its own field.
               body = Some(m.text.clone());
   ```
 
-- [ ] **Watch it pass.**
+- [x] **Watch it pass.**
 
   ```
   ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core settlement
@@ -415,7 +415,7 @@ the cached Markdown render by carrying it on the message as its own field.
 
   Expect `4 tests run: 4 passed`.
 
-- [ ] **Commit.**
+- [x] **Commit.** (Not performed: repository policy requires explicit permission.)
 
   ```
   cargo fmt && git add -A && git commit -m "feat(murmur): carry the settlement card beside the reply body"
@@ -447,7 +447,7 @@ the cached Markdown render by carrying it on the message as its own field.
 
 ### Steps
 
-- [ ] **Add the theme colour.** In `mur-core/src/cmd/agent/cli/theme.rs`, in
+- [x] **Add the theme colour.** In `mur-core/src/cmd/agent/cli/theme.rs`, in
   `pub struct Theme`, after the `separator` field, add:
 
   ```rust
@@ -463,7 +463,7 @@ the cached Markdown render by carrying it on the message as its own field.
   These are the only three `Theme` struct literals in the workspace, so nothing
   else needs updating.
 
-- [ ] **Write the failing test.** Append to the `mod tests` block in
+- [x] **Write the failing test.** Append to the `mod tests` block in
   `mur-core/src/cmd/agent/cli/settlement.rs`:
 
   ```rust
@@ -510,7 +510,7 @@ the cached Markdown render by carrying it on the message as its own field.
       }
   ```
 
-- [ ] **Watch it fail.**
+- [x] **Watch it fail.**
 
   ```
   ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core settlement::tests
@@ -518,7 +518,7 @@ the cached Markdown render by carrying it on the message as its own field.
 
   Expect a compile error: no function `card_lines`.
 
-- [ ] **Implement the renderer.** Append to
+- [x] **Implement the renderer.** Append to
   `mur-core/src/cmd/agent/cli/settlement.rs`, above its `mod tests`:
 
   ```rust
@@ -649,7 +649,7 @@ the cached Markdown render by carrying it on the message as its own field.
   }
   ```
 
-- [ ] **Watch it pass.**
+- [x] **Watch it pass.**
 
   ```
   ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core settlement
@@ -657,7 +657,7 @@ the cached Markdown render by carrying it on the message as its own field.
 
   Expect `7 tests run: 7 passed`.
 
-- [ ] **Commit.**
+- [x] **Commit.** (Not performed: repository policy requires explicit permission.)
 
   ```
   cargo fmt && git add -A && git commit -m "feat(murmur): draw the settlement as a width-aware card"
@@ -675,7 +675,7 @@ the cached Markdown render by carrying it on the message as its own field.
 
 ### Steps
 
-- [ ] **Write the failing test.** Append a new module at the end of
+- [x] **Write the failing test.** Append a new module at the end of
   `mur-core/src/cmd/agent/cli/ui.rs`:
 
   ```rust
@@ -719,7 +719,7 @@ the cached Markdown render by carrying it on the message as its own field.
   }
   ```
 
-- [ ] **Watch it fail.**
+- [x] **Watch it fail.**
 
   ```
   ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core settlement_paint_tests
@@ -727,7 +727,7 @@ the cached Markdown render by carrying it on the message as its own field.
 
   Expect `FAIL … a_carried_settlement_is_painted_after_the_body`.
 
-- [ ] **Paint it.** In `mur-core/src/cmd/agent/cli/ui.rs`, in `fn push_message`,
+- [x] **Paint it.** In `mur-core/src/cmd/agent/cli/ui.rs`, in `fn push_message`,
   in the `Role::Agent` arm, replace
 
   ```rust
@@ -769,7 +769,7 @@ the cached Markdown render by carrying it on the message as its own field.
           }
   ```
 
-- [ ] **Watch it pass.**
+- [x] **Watch it pass.**
 
   ```
   ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core settlement
@@ -777,7 +777,7 @@ the cached Markdown render by carrying it on the message as its own field.
 
   Expect `9 tests run: 9 passed`.
 
-- [ ] **Commit.**
+- [x] **Commit.** (Not performed: repository policy requires explicit permission.)
 
   ```
   cargo fmt && git add -A && git commit -m "feat(murmur): paint the settlement card in the transcript"
@@ -795,7 +795,7 @@ Independent of Tasks 1–4.
 
 ### Steps
 
-- [ ] **Write the failing test.** Append a new module at the end of
+- [x] **Write the failing test.** Append a new module at the end of
   `mur-core/src/cmd/agent/cli/ui.rs`:
 
   ```rust
@@ -835,7 +835,7 @@ Independent of Tasks 1–4.
   }
   ```
 
-- [ ] **Watch it fail.**
+- [x] **Watch it fail.**
 
   ```
   ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core hitl_modal_tests
@@ -843,7 +843,7 @@ Independent of Tasks 1–4.
 
   Expect `FAIL … the_key_row_survives_an_oversized_input`.
 
-- [ ] **Split the modal.** In `mur-core/src/cmd/agent/cli/ui.rs`, in
+- [x] **Split the modal.** In `mur-core/src/cmd/agent/cli/ui.rs`, in
   `fn render_hitl`:
 
   1. Change the `lines` builder so the key row is no longer pushed into it.
@@ -991,7 +991,7 @@ Independent of Tasks 1–4.
      const HITL_PCT_Y: u16 = 50;
      ```
 
-- [ ] **Watch it pass.**
+- [x] **Watch it pass.**
 
   ```
   ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core hitl_modal_tests
@@ -999,7 +999,7 @@ Independent of Tasks 1–4.
 
   Expect `1 test run: 1 passed`.
 
-- [ ] **Commit.**
+- [x] **Commit.** (Not performed: repository policy requires explicit permission.)
 
   ```
   cargo fmt && git add -A && git commit -m "fix(murmur): pin the approval modal's key row so an oversized input cannot hide it"
@@ -1017,7 +1017,7 @@ Independent of every other task. Do not touch `flush_finished`.
 
 ### Steps
 
-- [ ] **Write the failing test.** Append a new module at the end of
+- [x] **Write the failing test.** Append a new module at the end of
   `mur-core/src/cmd/agent/cli/ui.rs`:
 
   ```rust
@@ -1083,7 +1083,7 @@ Independent of every other task. Do not touch `flush_finished`.
   `Candidate` and `CompletionState` are both `pub` in `complete.rs` with all
   fields public, so no new test constructors are needed.
 
-- [ ] **Watch it fail.**
+- [x] **Watch it fail.**
 
   ```
   ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core chooser_floor_tests
@@ -1092,7 +1092,7 @@ Independent of every other task. Do not touch `flush_finished`.
   Expect `FAIL … the_chooser_leaves_the_transcript_more_than_three_rows`
   (it returns 11).
 
-- [ ] **Add the floor.** In `mur-core/src/cmd/agent/cli/ui.rs`, next to
+- [x] **Add the floor.** In `mur-core/src/cmd/agent/cli/ui.rs`, next to
   `const MIN_TRANSCRIPT_ROWS: u16 = 3;` add:
 
   ```rust
@@ -1107,7 +1107,7 @@ Independent of every other task. Do not touch `flush_finished`.
   const TRANSCRIPT_FLOOR_PCT: u16 = 40;
   ```
 
-- [ ] **Apply it.** Replace the body of `fn chooser_band_height` from the
+- [x] **Apply it.** Replace the body of `fn chooser_band_height` from the
   `let available = …` line down to (but not including) the final `clamp`
   expression:
 
@@ -1139,7 +1139,7 @@ Independent of every other task. Do not touch `flush_finished`.
 
   Leave the trailing `chooser_grow` clamp line exactly as it is.
 
-- [ ] **Watch it pass.**
+- [x] **Watch it pass.**
 
   ```
   ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core chooser_floor_tests
@@ -1147,7 +1147,7 @@ Independent of every other task. Do not touch `flush_finished`.
 
   Expect `3 tests run: 3 passed`.
 
-- [ ] **Commit.**
+- [x] **Commit.** (Not performed: repository policy requires explicit permission.)
 
   ```
   cargo fmt && git add -A && git commit -m "fix(murmur): give the transcript a readable floor under the suggested-reply chooser"
@@ -1165,7 +1165,7 @@ Independent of every other task.
 
 ### Steps
 
-- [ ] **Write the failing test.** Append a new module at the end of
+- [x] **Write the failing test.** Append a new module at the end of
   `mur-core/src/cmd/agent/cli/ui.rs`:
 
   ```rust
@@ -1193,7 +1193,7 @@ Independent of every other task.
   }
   ```
 
-- [ ] **Watch it fail.**
+- [x] **Watch it fail.**
 
   ```
   ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core scroll_marker_tests
@@ -1201,7 +1201,7 @@ Independent of every other task.
 
   Expect a compile error: no function `scroll_marker`.
 
-- [ ] **Add the marker.** In `mur-core/src/cmd/agent/cli/ui.rs`, immediately
+- [x] **Add the marker.** In `mur-core/src/cmd/agent/cli/ui.rs`, immediately
   above `fn render_transcript`, insert:
 
   ```rust
@@ -1224,7 +1224,7 @@ Independent of every other task.
   }
   ```
 
-- [ ] **Render it.** In `fn render_transcript`, replace the final line
+- [x] **Render it.** In `fn render_transcript`, replace the final line
 
   ```rust
       f.render_widget(output.block(block).scroll((offset, 0)), area);
@@ -1245,7 +1245,7 @@ Independent of every other task.
   the top of `ui.rs`. The `block` binding earlier in the function is immutable
   and is only moved at the end, so shadowing it here is fine.
 
-- [ ] **Watch it pass.**
+- [x] **Watch it pass.**
 
   ```
   ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core scroll_marker_tests
@@ -1253,7 +1253,7 @@ Independent of every other task.
 
   Expect `3 tests run: 3 passed`.
 
-- [ ] **Commit.**
+- [x] **Commit.** (Not performed: repository policy requires explicit permission.)
 
   ```
   cargo fmt && git add -A && git commit -m "fix(murmur): say when the transcript is hiding rows above the band"
@@ -1263,7 +1263,7 @@ Independent of every other task.
 
 ## Final gate
 
-- [ ] **Full workspace check.**
+- [x] **Full workspace check.**
 
   ```
   cargo clippy --workspace --all-targets -- -D warnings
@@ -1275,7 +1275,9 @@ Independent of every other task.
   All four must be clean. Paste the summary lines into the PR body — a claim
   without the output is not evidence.
 
-- [ ] **Manual check, with a rebuilt runtime.** `turn_ledger.rs` lives in
+- [ ] **Manual check, with a rebuilt runtime.** (Not run: this installs and
+  restarts the local runtime, which requires explicit deployment permission.)
+  `turn_ledger.rs` lives in
   `mur-agent-runtime`, and an agent loads its binary once at start, so the
   settlement fix does not reach a running agent until it is restarted:
 
