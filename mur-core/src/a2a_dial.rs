@@ -14,7 +14,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use mur_common::LockFile;
 use serde_json::{Value, json};
 
-use crate::cmd::agent::resolve_runtime_target;
+use crate::cmd::agent::{attest::verify_runtime_at, resolve_runtime_target};
 
 /// Strategy for reaching the target agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -462,6 +462,9 @@ fn dial_ephemeral(
             runtime.display()
         );
     }
+    verify_runtime_at(&runtime).with_context(|| {
+        format!("cannot reach agent '{agent_name}' — runtime attestation failed")
+    })?;
 
     let mut child = std::process::Command::new(&runtime)
         .env("MUR_HOME", home)
@@ -593,7 +596,9 @@ mod tests {
         unsafe { std::env::remove_var("MUR_AGENT_RUNTIME_BIN") };
         let msg = err.to_string();
         assert!(
-            msg.contains("runtime binary not found") || msg.contains("spawn"),
+            msg.contains("runtime binary not found")
+                || msg.contains("spawn")
+                || msg.contains("attestation"),
             "unexpected error: {msg}"
         );
     }
