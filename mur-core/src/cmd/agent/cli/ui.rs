@@ -31,6 +31,10 @@ const MSG_INDENT: &str = "  ";
 const INPUT_H_MIN: u16 = 3;
 const INPUT_H_MAX: u16 = 8;
 
+/// Approval modal size, as a percentage of the viewport.
+const HITL_PCT_X: u16 = 70;
+const HITL_PCT_Y: u16 = 50;
+
 /// Prepend the body indent to an already-styled line (e.g. cached markdown).
 fn indent_line(mut line: Line<'static>) -> Line<'static> {
     line.spans.insert(0, Span::raw(MSG_INDENT));
@@ -250,6 +254,10 @@ fn render_completion(f: &mut Frame, app: &App, input_area: Rect) {
 /// than the space available (the List scrolls the selection into view).
 const MIN_TRANSCRIPT_ROWS: u16 = 3;
 
+/// Share of the viewport the transcript keeps when the chooser is open,
+/// in percent.
+const TRANSCRIPT_FLOOR_PCT: u16 = 40;
+
 fn chooser_band_height(app: &App, total_h: u16, input_height: u16) -> u16 {
     let Some(state) = &app.completion else {
         return 0;
@@ -257,9 +265,7 @@ fn chooser_band_height(app: &App, total_h: u16, input_height: u16) -> u16 {
     if !state.spaced || state.items.is_empty() {
         return 0;
     }
-    let available = total_h
-        .saturating_sub(input_height + 1) // composer + status line
-        .saturating_sub(MIN_TRANSCRIPT_ROWS);
+    let chrome = input_height + 1; // composer + status line
     let full: u16 = state
         .items
         .iter()
@@ -267,10 +273,25 @@ fn chooser_band_height(app: &App, total_h: u16, input_height: u16) -> u16 {
         .sum::<u16>()
         .saturating_add(2); // borders
     let compact = (state.items.len() as u16).saturating_add(2);
-    let auto = full.min(available).max(compact.min(available)).max(3);
+    // Prefer the readable floor; fall back to the hard minimum only when the
+    // floor would squeeze the chooser below its compact form. The chooser is
+    // what the operator must act on, so it never loses this trade.
+    let roomy = total_h
+        .saturating_sub(chrome)
+        .saturating_sub((total_h * TRANSCRIPT_FLOOR_PCT / 100).max(MIN_TRANSCRIPT_ROWS));
+    let tight = total_h.saturating_sub(chrome + MIN_TRANSCRIPT_ROWS);
+    let available = if roomy >= compact { roomy } else { tight };
+    // Take `compact` exactly when the spaced form does not fit — padding the
+    // band out to `available` spends rows on nothing.
+    let auto = if full <= available {
+        full
+    } else {
+        compact.min(available).max(3)
+    };
     // Ctrl+↑/↓ while the chooser is open grows/shrinks the band on top of
     // the auto height, clamped so the transcript keeps its minimum rows.
-    (i32::from(auto) + i32::from(app.chooser_grow)).clamp(3, i32::from(available.max(3))) as u16
+    (i32::from(auto) + i32::from(app.chooser_grow))
+        .clamp(3, i32::from(tight.max(MIN_TRANSCRIPT_ROWS))) as u16
 }
 
 /// Draw the agent chooser into its own layout band. Falls back to compact
@@ -815,6 +836,24 @@ fn blank_wide_char_continuations(buf: &mut ratatui::buffer::Buffer) {
     }
 }
 
+/// Right-hand title for the transcript's top border, or `None` when nothing
+/// is hidden.
+///
+/// A band that silently drops the rows above it is indistinguishable from one
+/// that never had them — which is exactly how a reply behind the suggested-
+/// reply chooser reads as lost. `max_scroll` is the number of rows above the
+/// band; `scroll_back` is how many the operator has already walked up.
+fn scroll_marker(max_scroll: u16, scroll_back: u16) -> Option<String> {
+    if max_scroll == 0 {
+        return None;
+    }
+    Some(if scroll_back == 0 {
+        format!(" ↑ {max_scroll} more · PgUp ")
+    } else {
+        format!(" ↑ {} · PgDn to follow ", max_scroll - scroll_back)
+    })
+}
+
 /// Draws the *live* region only: everything at index `< app.flushed_upto` has
 /// already been flushed into the terminal's own scrollback (see
 /// `flush_finished`), so this is at most the one currently-streaming message
@@ -869,6 +908,10 @@ fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     app.scroll_back = app.scroll_back.min(max_scroll);
     let offset = max_scroll - app.scroll_back;
 
+    let block = match scroll_marker(max_scroll, app.scroll_back) {
+        Some(marker) => block.title(Line::from(marker).right_aligned()),
+        None => block,
+    };
     f.render_widget(output.block(block).scroll((offset, 0)), area);
 }
 
@@ -1032,6 +1075,13 @@ fn push_message(
                 theme,
                 m.rendered.as_ref(),
             ));
+            // Drawn here, not baked into `rendered`: this is the only place
+            // that knows the pane width, and it runs every frame, so the card
+            // reflows on resize for free.
+            if let Some(body) = &m.settlement {
+                let inner = width.saturating_sub(u16::from(theme.inner_padding) * 2);
+                lines.extend(super::settlement::card_lines(body, theme, inner));
+            }
         }
     }
 }
@@ -1223,7 +1273,7 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_hitl(f: &mut Frame, hitl: &super::stream::HitlRequest, grant_confirm: Option<char>) {
-    let area = centered_rect(70, 50, f.area());
+    let area = centered_rect(HITL_PCT_X, HITL_PCT_Y, f.area());
     let input = serde_json::to_string_pretty(&hitl.tool_input).unwrap_or_default();
     let mut lines = vec![
         Line::from(Span::styled(
@@ -1236,23 +1286,25 @@ fn render_hitl(f: &mut Frame, hitl: &super::stream::HitlRequest, grant_confirm: 
             Span::styled(hitl.tool_name.clone(), Style::default().fg(Color::Yellow)),
         ]),
     ];
+    let row_w = area.width.saturating_sub(2) as usize;
     for l in input.lines().take(12) {
-        lines.push(Line::styled(
-            l.to_string(),
-            Style::default().fg(Color::DarkGray),
-        ));
+        let row: String = if l.chars().count() > row_w && row_w > 1 {
+            l.chars().take(row_w - 1).chain(['…']).collect()
+        } else {
+            l.to_string()
+        };
+        lines.push(Line::styled(row, Style::default().fg(Color::DarkGray)));
     }
-    lines.push(Line::default());
     // When a session-wide grant is armed, the modal shows ONLY the confirm
     // instruction: the operator is answering "do you really mean the whole
     // session?", and re-printing the full key row there invites a reflex press.
-    if let Some(c) = grant_confirm {
+    let keys = if let Some(c) = grant_confirm {
         let what = if c == 'a' {
             format!("`{}` for this session", hitl.tool_name)
         } else {
             "ALL tools for this session".to_string()
         };
-        lines.push(Line::from(vec![
+        Line::from(vec![
             Span::styled(
                 format!("press [{c}] again"),
                 Style::default()
@@ -1260,9 +1312,9 @@ fn render_hitl(f: &mut Frame, hitl: &super::stream::HitlRequest, grant_confirm: 
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(format!(" to allow {what} — any other key cancels")),
-        ]));
+        ])
     } else {
-        lines.push(Line::from(vec![
+        Line::from(vec![
             Span::styled(
                 "[y]",
                 Style::default()
@@ -1289,20 +1341,41 @@ fn render_hitl(f: &mut Frame, hitl: &super::stream::HitlRequest, grant_confirm: 
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
             Span::raw(" deny / Esc"),
-        ]));
-    }
+        ])
+    };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow))
         .title(" approve tool call ");
+    let inner = block.inner(area);
     f.render_widget(Clear, area);
-    f.render_widget(
-        Paragraph::new(Text::from(lines))
-            .wrap(Wrap { trim: false })
-            .block(block),
-        area,
-    );
+    f.render_widget(block, area);
+
+    // The key row is the only part of this modal that is never optional, so it
+    // gets its own chunk. Previously it was the last entry in one clipped
+    // Paragraph: a wrapped JSON input pushed it out of the box and left the
+    // operator staring at a blocking gate with no visible way to answer it.
+    let keys_h = Paragraph::new(keys.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(inner.width.max(1)) as u16;
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(keys_h.max(1))])
+        .split(inner);
+
+    // The body truncates rather than wraps, so one input line costs one row and
+    // the height is predictable; when it still overflows, say so on screen.
+    let body_h = chunks[0].height as usize;
+    if lines.len() > body_h && body_h > 0 {
+        lines.truncate(body_h.saturating_sub(1));
+        lines.push(Line::styled(
+            format!("… {} more lines", body_h.saturating_sub(1)),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    f.render_widget(Paragraph::new(Text::from(lines)), chunks[0]);
+    f.render_widget(Paragraph::new(keys).wrap(Wrap { trim: false }), chunks[1]);
 }
 
 /// Format a token count with thousands separator (e.g. 1240 → "1,240").
@@ -1632,5 +1705,159 @@ mod fleet_rail_layout_tests {
                 "mismatch at {blocked} blocked members"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod settlement_paint_tests {
+    use super::super::app::{ChatMsg, Role};
+    use super::super::theme::DARK;
+    use super::push_message;
+
+    #[test]
+    fn a_carried_settlement_is_painted_after_the_body() {
+        let mut m = ChatMsg::for_test(Role::Agent, "did it");
+        m.settlement = Some("  ✔ bash · cargo test".into());
+        let mut lines = Vec::new();
+        push_message(&mut lines, &m, 0, &DARK, false, 60);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(
+            text.iter().any(|l| l.contains("SETTLEMENT")),
+            "card missing: {text:?}"
+        );
+        assert!(
+            text.iter().any(|l| l.contains("cargo test")),
+            "card body missing: {text:?}"
+        );
+    }
+
+    #[test]
+    fn a_message_without_one_paints_nothing_extra() {
+        let m = ChatMsg::for_test(Role::Agent, "did it");
+        let mut lines = Vec::new();
+        push_message(&mut lines, &m, 0, &DARK, false, 60);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(!text.iter().any(|l| l.contains("SETTLEMENT")), "{text:?}");
+    }
+}
+
+#[cfg(test)]
+mod hitl_modal_tests {
+    use super::super::stream::HitlRequest;
+    use super::render_hitl;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    /// A tool input big enough that, wrapped, it fills the modal on its own.
+    fn fat_request() -> HitlRequest {
+        HitlRequest {
+            hitl_id: "h1".into(),
+            step_id: None,
+            tool_name: "bash".into(),
+            tool_input: serde_json::json!({
+                "command": "x".repeat(400),
+                "cwd": "/Volumes/Firecuda4tb/Projects/mur",
+            }),
+            prompt: "Run `bash`?".into(),
+            created_at: std::time::Instant::now(),
+        }
+    }
+
+    #[test]
+    fn the_key_row_survives_an_oversized_input() {
+        let mut term = Terminal::new(TestBackend::new(88, 24)).unwrap();
+        term.draw(|f| render_hitl(f, &fat_request(), None)).unwrap();
+        let dump = term.backend().to_string();
+        assert!(
+            dump.contains("approve"),
+            "the operator cannot answer a gate whose keys are off-screen:\n{dump}"
+        );
+        assert!(dump.contains("deny"), "{dump}");
+    }
+}
+
+#[cfg(test)]
+mod chooser_floor_tests {
+    use super::super::app::App;
+    use super::super::complete::{Candidate, CompletionState};
+    use super::chooser_band_height;
+
+    fn option(display: &str, desc: &str) -> Candidate {
+        Candidate {
+            display: display.into(),
+            insert: display.into(),
+            desc: desc.into(),
+            has_children: false,
+        }
+    }
+
+    /// Three suggested replies, each with a description — the shape from the
+    /// report.
+    fn app_with_three_options() -> App {
+        let mut a = App::test_fixture();
+        a.completion = Some(CompletionState {
+            items: vec![
+                option("open the PR", "wait for CI, then tag"),
+                option("stronger model", "the 4B one fakes tool calls"),
+                option("leave it", "change nothing"),
+            ],
+            selected: 0,
+            spaced: true,
+        });
+        a
+    }
+
+    #[test]
+    fn the_chooser_leaves_the_transcript_more_than_three_rows() {
+        // Inline viewport is 20 rows; composer 3 + status 1 leaves 16.
+        let h = chooser_band_height(&app_with_three_options(), 20, 3);
+        assert!(
+            h <= 8,
+            "chooser took {h} rows, leaving the reply a peephole"
+        );
+    }
+
+    #[test]
+    fn a_short_terminal_still_gets_a_usable_chooser() {
+        // The floor must yield rather than squeeze the chooser out: it is the
+        // thing the operator has to act on.
+        let h = chooser_band_height(&app_with_three_options(), 12, 3);
+        assert!(h >= 5, "chooser unusable at {h} rows");
+    }
+
+    #[test]
+    fn ctrl_up_still_reaches_the_spaced_form() {
+        let mut a = app_with_three_options();
+        a.chooser_grow = 6;
+        assert_eq!(chooser_band_height(&a, 20, 3), 11);
+    }
+}
+
+#[cfg(test)]
+mod scroll_marker_tests {
+    use super::scroll_marker;
+
+    #[test]
+    fn silence_when_everything_fits() {
+        assert_eq!(scroll_marker(0, 0), None);
+    }
+
+    #[test]
+    fn following_the_tail_points_up() {
+        assert_eq!(scroll_marker(25, 0).as_deref(), Some(" ↑ 25 more · PgUp "));
+    }
+
+    #[test]
+    fn scrolled_back_points_the_way_home() {
+        assert_eq!(
+            scroll_marker(25, 10).as_deref(),
+            Some(" ↑ 15 · PgDn to follow ")
+        );
     }
 }

@@ -23,6 +23,7 @@ pub struct Theme {
     pub border: Color,       // transcript + input box borders
     pub border_title: Color, // text inside the border title
     pub separator: Color,    // inter-message separator line
+    pub card_bg: Color,      // settlement card background (one step off the pane)
     // ── status bar ────────────────────────────────────────────────────────────
     pub status_bg: Color, // status bar background
     pub badge_fg: Color,  // agent-name badge foreground
@@ -49,6 +50,7 @@ pub const DARK: Theme = Theme {
     border: Color::Rgb(0x55, 0x55, 0x55),
     border_title: Color::Rgb(0x70, 0x70, 0x70),
     separator: Color::Rgb(0x45, 0x45, 0x45),
+    card_bg: Color::Rgb(0x1e, 0x1e, 0x1e),
     status_bg: Color::Reset,
     badge_fg: Color::Black,
     badge_bg: Color::Cyan,
@@ -73,6 +75,7 @@ pub const LIGHT: Theme = Theme {
     border: Color::Rgb(0xd0, 0xd0, 0xe0),
     border_title: Color::Rgb(0x99, 0x99, 0x99),
     separator: Color::Rgb(0xd8, 0xd8, 0xe8),
+    card_bg: Color::Rgb(0xf1, 0xf1, 0xf7),
     status_bg: Color::Rgb(0xef, 0xef, 0xf5),
     badge_fg: Color::Rgb(0x0e, 0x6b, 0x8c),
     badge_bg: Color::Rgb(0xe0, 0xf0, 0xf8),
@@ -97,6 +100,7 @@ pub const MUR: Theme = Theme {
     border: Color::Rgb(0x50, 0x50, 0x90),
     border_title: Color::Rgb(0x55, 0x55, 0x99),
     separator: Color::Rgb(0x22, 0x22, 0x44),
+    card_bg: Color::Rgb(0x14, 0x14, 0x2c),
     status_bg: Color::Rgb(0x09, 0x09, 0x1a),
     badge_fg: Color::Rgb(0xfb, 0xbf, 0x24),
     badge_bg: Color::Rgb(0x22, 0x1a, 0x06),

@@ -85,6 +85,10 @@ pub struct ChatMsg {
     /// When set, this message renders a tool-call step card instead of text by
     /// role. `None` for ordinary user/agent/system/shell messages.
     pub step: Option<super::step::StepCard>,
+    /// The turn's settlement card, lifted out of `text` so it can be drawn at
+    /// the pane's real width every frame. `rendered` is cached width-free, so
+    /// a card baked into it would keep a stale width across a resize.
+    pub settlement: Option<String>,
 }
 
 impl ChatMsg {
@@ -97,6 +101,7 @@ impl ChatMsg {
             streaming: false,
             rendered: None,
             step: None,
+            settlement: None,
         }
     }
 
@@ -109,6 +114,7 @@ impl ChatMsg {
 
     /// A finished agent message whose markdown is pre-rendered (resume path).
     fn agent_rendered(text: String) -> Self {
+        let (text, settlement) = super::settlement::split(&text);
         let rendered = Some(markdown::render(&text).lines);
         Self {
             role: Role::Agent,
@@ -118,6 +124,7 @@ impl ChatMsg {
             streaming: false,
             rendered,
             step: None,
+            settlement,
         }
     }
 
@@ -131,6 +138,7 @@ impl ChatMsg {
             streaming: false,
             rendered: None,
             step: Some(card),
+            settlement: None,
         }
     }
 }
@@ -830,6 +838,9 @@ impl App {
             if !reply.is_empty() {
                 m.text = reply;
             }
+            let (text, settlement) = super::settlement::split(&m.text);
+            m.text = text;
+            m.settlement = settlement;
             m.streaming = false;
             m.rendered = Some(markdown::render(&m.text).lines);
             body = Some(m.text.clone());
@@ -1633,6 +1644,23 @@ mod tests {
         a.begin_user_turn("hi");
         a.finish_agent_turn("**bold**".into(), Some("t1".into()));
         assert!(a.messages.last().unwrap().rendered.is_some());
+    }
+
+    #[test]
+    fn finishing_a_turn_moves_the_settlement_off_the_body() {
+        let mut a = app();
+        a.begin_user_turn("hi");
+        a.finish_agent_turn(
+            "did it\n\n```\n─ settlement ─\n  ✔ bash · cargo test\n```".to_string(),
+            None,
+        );
+        let m = a.messages.last().expect("a message");
+        assert_eq!(m.text, "did it", "card must not stay in the body");
+        assert_eq!(
+            m.settlement.as_deref(),
+            Some("  ✔ bash · cargo test"),
+            "card must be carried separately so it can be drawn at the pane width"
+        );
     }
 
     #[test]

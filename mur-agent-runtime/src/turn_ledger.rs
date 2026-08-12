@@ -215,7 +215,7 @@ pub fn describe_target(tool: &str, input: &serde_json::Value) -> String {
     if raw == "{}" || raw == "null" {
         return String::new();
     }
-    truncate(raw, 72)
+    truncate(raw, RUNAWAY_BACKSTOP)
 }
 
 /// `mcp__server__tool` → `tool`. The server prefix is routing, not identity —
@@ -242,8 +242,13 @@ fn clean_reason(why: &str) -> String {
         }
         s = t;
     }
-    truncate(s, 80)
+    truncate(s, RUNAWAY_BACKSTOP)
 }
+
+/// The only length limit the runtime still applies. Not a display width — it
+/// exists so one runaway error dump cannot flood the reply. The renderer owns
+/// what fits, because it is the only thing that knows the pane.
+const RUNAWAY_BACKSTOP: usize = 400;
 
 fn truncate(s: &str, max: usize) -> String {
     let cleaned: String = s.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
@@ -259,10 +264,10 @@ fn truncate(s: &str, max: usize) -> String {
 /// `ToolStatus`, not from sniffing the output text for a hint.
 pub fn classify(content: &str, is_error: bool, status: &crate::tools::ToolStatus) -> Outcome {
     if let crate::tools::ToolStatus::Denied { detail } = status {
-        return Outcome::Denied(truncate(detail, 120));
+        return Outcome::Denied(truncate(detail, RUNAWAY_BACKSTOP));
     }
     if is_error {
-        return Outcome::Failed(truncate(content.trim(), 120));
+        return Outcome::Failed(truncate(content.trim(), RUNAWAY_BACKSTOP));
     }
     Outcome::Ok
 }
@@ -282,7 +287,7 @@ const CHANGED_SHOWN: usize = 6;
 /// being reflowed into one paragraph, which is exactly the "alignment the
 /// model would get wrong" that drawing it here was meant to prevent.
 pub fn render(ledger: &TurnLedger) -> String {
-    let mut out = String::from("\n\n```\n─ settlement ─────────────────────────────\n");
+    let mut out = String::from("\n\n```\n─ settlement ─\n");
 
     let verified = ledger.verified();
     if verified.is_empty() {
@@ -329,8 +334,8 @@ pub fn render(ledger: &TurnLedger) -> String {
     let blocked = ledger.blocked();
     if !blocked.is_empty() {
         // Reason on the tool line (transport noise stripped), target on its
-        // own indented line — a 72-char command glued to a 120-char error was
-        // the least readable row this card produced.
+        // own indented line — keeping them separate makes long details easier
+        // for a width-aware renderer to reflow.
         for a in &blocked {
             let why = match &a.outcome {
                 Outcome::Denied(d) => format!("sandbox: {d}"),
@@ -352,7 +357,7 @@ pub fn render(ledger: &TurnLedger) -> String {
             ledger.iterations
         ));
     }
-    out.push_str("──────────────────────────────────────────\n```");
+    out.push_str("```");
     out
 }
 
@@ -545,10 +550,32 @@ mod tests {
         assert!(!describe_target("mcp__media__x", &serde_json::json!({"q": 1})).is_empty());
         // Long commands are cut so the table stays a table.
         let long = serde_json::json!({"command": "x".repeat(200)});
-        assert!(describe_target("bash", &long).chars().count() <= 72);
+        assert!(describe_target("bash", &long).chars().count() <= RUNAWAY_BACKSTOP);
         // Newlines would break the row.
         let multi = serde_json::json!({"command": "a\nb"});
         assert_eq!(describe_target("bash", &multi), "a b");
+    }
+
+    #[test]
+    fn long_detail_survives_to_the_renderer() {
+        // The runtime cannot know the terminal width, so it must not decide
+        // what fits. Only a runaway-dump backstop remains.
+        let mut l = TurnLedger::default();
+        let long = "e".repeat(300);
+        l.record(act("bash", "cargo test", Outcome::Failed(long.clone())));
+        let card = render(&l);
+        assert!(card.contains(&long), "detail was truncated: {card}");
+        assert!(!card.contains('…'), "nothing should be elided here: {card}");
+    }
+
+    #[test]
+    fn the_settlement_header_carries_no_fixed_width_rule() {
+        let mut l = TurnLedger::default();
+        l.record(act("edit_file", "src/lib.rs", Outcome::Ok));
+        let card = render(&l);
+        assert!(card.contains("─ settlement ─\n"), "{card}");
+        // A hard-coded rule cannot match a pane it never measured.
+        assert!(!card.contains("──────────"), "{card}");
     }
 
     #[test]
