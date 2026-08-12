@@ -14,9 +14,7 @@ use anyhow::{Context, Result, bail};
 use mur_common::{AgentProfile as _AgentProfile, LockFile};
 
 use super::attest::verify_runtime_at;
-use super::{
-    pid_alive, resolve_bin_dir, resolve_mur_home, resolve_runtime_target, restart_confirm, stale,
-};
+use super::{pid_alive, resolve_bin_dir, resolve_mur_home, restart_confirm, stale};
 
 /// Extra grace period added on top of the runtime's `stop_timeout_secs` before
 /// the SIGKILL fallback fires.  The SIGKILL wait MUST outlast the runtime's own
@@ -42,7 +40,8 @@ pub(crate) fn kill_wait_secs(stop_timeout_secs: u64) -> u64 {
 /// - `names` non-empty → those agents (each must have a running.lock;
 ///   validated before any restart happens — no partial action)
 /// - `all = true` → all agents with a running.lock
-/// - `stale_only = true` → only running agents where `is_stale(lock, on_disk_sha())`
+/// - `stale_only = true` → only running agents where `is_stale` holds against
+///   [`stale::on_disk_sha_for`] — that agent's OWN runtime, not a global one
 ///
 /// If none of the three selectors is active an error is returned — bare
 /// `mur agent restart` (no args) must never silently restart everything.
@@ -408,14 +407,31 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
 
     Ok(match new_pid {
         Some((_pid, new_sha)) => {
+            let landed = if new_sha.is_empty() {
+                on_disk_sha
+            } else {
+                new_sha.as_str()
+            };
+            if restart_changed_nothing(&old_sha, on_disk_sha, landed) {
+                // The process is alive, so every liveness check passes — and the
+                // binary is the one we were replacing. Reporting this as success
+                // is how an upgrade silently doesn't happen.
+                let line = format!(
+                    "'{name}' came back on the SAME binary ({}) — expected {}; its runtime is {}",
+                    short8(&old_sha),
+                    short8(on_disk_sha),
+                    stale::runtime_path_for(name).display()
+                );
+                eprintln!("✗ {line}");
+                return Ok(RestartReport {
+                    ok: false,
+                    detail: line,
+                });
+            }
             let line = format!(
                 "agent '{name}' restarted ({} → {})",
                 short8(&old_sha),
-                short8(if new_sha.is_empty() {
-                    on_disk_sha
-                } else {
-                    &new_sha
-                }),
+                short8(landed),
             );
             println!("{line}");
             RestartReport {
@@ -441,7 +457,11 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
 /// Returns the spawned child's pid so callers can liveness-gate the wait for
 /// its fresh `running.lock` (a slow cold start is a healthy start).
 pub(super) fn direct_respawn(name: &str, agent_home: &Path) -> Result<u32> {
-    let target = resolve_runtime_target();
+    // The agent's OWN runtime, not the one beside `mur`. These are not always
+    // the same file, and when they differ this path used to relaunch the exact
+    // binary `--stale` had just flagged — a restart that reported success and
+    // changed nothing.
+    let target = stale::runtime_path_for(name);
     verify_runtime_at(&target)
         .with_context(|| format!("cannot respawn agent '{name}' — runtime attestation failed"))?;
     let mur_home = resolve_mur_home()?;
@@ -571,6 +591,20 @@ fn service_unit_path(_name: &str) -> Option<PathBuf> {
 
 fn read_lock(path: &Path) -> std::io::Result<Option<LockFile>> {
     mur_common::lock_file::read(path)
+}
+
+/// Did a restart that was supposed to move the agent onto a new binary fail to?
+///
+/// `true` only when all three are known and the agent was expected to change
+/// (`on_disk != old`) but did not (`landed == old`). A restart of an
+/// already-current agent legitimately lands on the same sha, so that is NOT a
+/// failure — which is exactly why this cannot be written as `landed == old`.
+fn restart_changed_nothing(old: &str, on_disk: &str, landed: &str) -> bool {
+    const UNKNOWN: &str = "unknown";
+    if old.is_empty() || on_disk.is_empty() || old == UNKNOWN || on_disk == UNKNOWN {
+        return false;
+    }
+    on_disk != old && landed == old
 }
 
 fn read_build_sha(lock_path: &Path) -> Option<String> {
@@ -861,5 +895,32 @@ mod tests {
             // expected (the key assertion is that we didn't panic).
             Ok(true) => panic!("kick should not succeed without a unit loaded"),
         }
+    }
+
+    #[test]
+    fn a_restart_that_lands_on_the_same_binary_is_not_a_success() {
+        // The exact shape of the reported bug: --stale picked the agent because
+        // on-disk moved to `new`, but the respawn relaunched `old`.
+        assert!(restart_changed_nothing("old", "new", "old"));
+    }
+
+    #[test]
+    fn restarting_an_already_current_agent_is_still_a_success() {
+        // Negative control. Without this, "landed == old" alone would call every
+        // ordinary restart of an up-to-date agent a failure.
+        assert!(!restart_changed_nothing("same", "same", "same"));
+    }
+
+    #[test]
+    fn a_restart_that_moved_to_the_new_binary_is_a_success() {
+        assert!(!restart_changed_nothing("old", "new", "new"));
+    }
+
+    #[test]
+    fn unknown_shas_never_manufacture_a_failure() {
+        // We cannot tell, so we do not accuse.
+        assert!(!restart_changed_nothing("unknown", "new", "unknown"));
+        assert!(!restart_changed_nothing("old", "unknown", "old"));
+        assert!(!restart_changed_nothing("", "new", ""));
     }
 }
