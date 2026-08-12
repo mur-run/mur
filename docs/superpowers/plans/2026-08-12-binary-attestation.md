@@ -77,7 +77,7 @@ mod tests {
         let req = production_requirement();
         assert!(req.contains("anchor apple generic"), "req: {req}");
         assert!(req.contains("subject.OU"), "req: {req}");
-        assert!(req.starts_with("=designated =>"), "req: {req}");
+        assert!(req.starts_with("=anchor apple generic and"), "req: {req}");
     }
 
     // ── Behavioral matrix (macOS + test identity) ────────────────────────
@@ -177,10 +177,11 @@ pub const APPLE_TEAM_ID: &str = env!("MUR_APPLE_TEAM_ID");
 
 /// The designated requirement used in production: valid signature chaining to
 /// Apple plus a leaf certificate owned by MUR's team.
+/// Note: `=designated => ...` is NOT valid verification syntax (`designated`
+/// is a read-side token only); the plain inline form below is the verified
+/// canonical expression (wrong OU → exit 3, correct OU → exit 0).
 pub(crate) fn production_requirement() -> String {
-    format!(
-        "=designated => anchor apple generic and certificate leaf[subject.OU] = \"{APPLE_TEAM_ID}\""
-    )
+    format!("=anchor apple generic and certificate leaf[subject.OU] = \"{APPLE_TEAM_ID}\"")
 }
 
 /// Verify `path` is a legitimate runtime binary. No-op unless this is a

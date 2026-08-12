@@ -51,11 +51,16 @@ Decision tree (in order):
 2. `!cfg!(target_os = "macos")` → `Ok`. Developer ID is macOS-only. Linux and
    Windows attestation are out of scope (see below).
 3. macOS + embedded release: run
-   `codesign --verify --strict -R "=designated => anchor apple generic and certificate leaf[subject.OU] = \"<TEAM_ID>\"" <path>`.
+   `codesign --verify --strict -R "=anchor apple generic and certificate leaf[subject.OU] = \"<TEAM_ID>\"" <path>`.
    One call binds both properties that matter: the binary has a valid signature
    issued by Apple (Developer ID), and that signature belongs to MUR's team. The
-   `=` prefix makes `-R` a full requirement rather than a named requirement. No
-   unsafe FFI, no signature parsing; `codesign` is present on every macOS install.
+   `=` prefix makes `-R` parse the argument as inline requirement text rather
+   than a named requirement or a file path. (`=designated => ...` is NOT valid
+   verification syntax — `designated` is only a read-side token — and its
+   implication-reading would pass any binary without a designated requirement.
+   Verified empirically 2026-08-12: wrong OU exits 3, unsigned exits 1, correct
+   team OU exits 0.) No unsafe FFI, no signature parsing; `codesign` is present
+   on every macOS install.
 4. Any failure of the `codesign` invocation (nonzero exit, missing binary,
    malformed path) → `Err` (fail-closed).
 
