@@ -346,6 +346,10 @@ pub struct App {
     /// any other key disarms it. `y`/`n` stay single-press — they decide one
     /// call, not the rest of the session.
     pub hitl_grant_confirm: Option<char>,
+    /// Scroll offset into the approval modal's body, in wrapped rows. Reset on
+    /// every new gate so a fresh request always opens at the top; the renderer
+    /// clamps it to the content and hands back what it used.
+    pub hitl_scroll: u16,
     pub session: Session,
     /// Cached live-channel id + state for status bar. Refreshed after each
     /// persisted turn on resume/switch. `None` until first append.
@@ -537,6 +541,7 @@ impl App {
             hitl: None,
             hitl_resolved_at: None,
             hitl_grant_confirm: None,
+            hitl_scroll: 0,
             session,
             channel: None,
             scroll_back: 0,
