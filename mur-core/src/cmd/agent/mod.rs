@@ -241,9 +241,10 @@ pub(crate) fn load_profile_for_edit(name: &str) -> Result<(PathBuf, _AgentProfil
 /// `model:` block is only the fallback for a profile that has no ref. But every
 /// writer of `model_ref` left the old block untouched, so profiles accumulated
 /// a provider / model id that named an endpoint the agent had not dialled in
-/// months — across 27 installed agents the two disagreed on every one, and
-/// during #938 the stale block sent the investigation after a provider-dispatch
-/// bug that did not exist (#940).
+/// months — 10 of 27 installed agents disagreed, three of them across
+/// providers (a block reading `anthropic` for an agent dialling a local
+/// openai-compatible endpoint), and during #938 that stale block sent the
+/// investigation after a provider-dispatch bug that did not exist (#940).
 ///
 /// Best-effort: an unreadable registry or an unknown ref leaves the profile
 /// exactly as it was. This heals a profile on its next save; it never blocks one.
@@ -361,10 +362,10 @@ mod tests {
     }
     /// #940: `model_ref` is what the runtime resolves; the legacy `model:` block
     /// is only a fallback for a profile that has none. Every writer of
-    /// `model_ref` left the old block alone, so across 27 installed agents the
-    /// two disagreed on every single one — and a human reading profile.yaml to
-    /// answer "which model is this agent on" got a provider, a model id, and an
-    /// endpoint that were all wrong.
+    /// `model_ref` left the old block alone, so 10 of 27 installed agents
+    /// disagreed — and a human reading profile.yaml to answer "which model is
+    /// this agent on" got a provider, a model id, and an endpoint that were all
+    /// wrong.
     #[test]
     fn a_saved_profile_cannot_name_a_model_it_does_not_use() {
         use mur_common::model::{ModelEntry, ModelRegistry};
