@@ -64,31 +64,84 @@ use self::persist::Session;
 use self::stream::{StreamMsg, build_params, cancel_task, respond_hitl, spawn_stream};
 use crate::a2a_dial::{DialMode, canonicalize_agent_name, dial_method};
 
-/// Load the agent's model pricing from `~/.mur/models.yaml`. Falls back to
-/// `Pricing::default()` (all `None` fields) on any error or when the agent
-/// uses an inline model rather than a `model_ref:` registry alias. The footer
-/// renderer treats `None` costs/window as "unknown" and shows `—`.
-fn load_pricing(home: &std::path::Path, agent: &str) -> footer::Pricing {
-    let pricing = footer::Pricing::default();
-    let Ok((_, profile)) = crate::cmd::agent::load_profile_for_edit(agent) else {
-        return pricing;
-    };
-    let Some(model_ref) = profile.model_ref else {
-        return pricing;
-    };
-    let reg_path = home.join("models.yaml");
-    let Ok(reg) = mur_common::model::ModelRegistry::load_from(&reg_path) else {
-        return pricing;
-    };
-    let Some(entry) = reg.models.get(&model_ref) else {
-        return pricing;
-    };
-    let (input, output) = entry.effective_costs();
-    footer::Pricing {
-        in_per_1k: input,
-        out_per_1k: output,
-        window: entry.context_window,
+/// Every model the registry knows how to price, plus which one this agent is
+/// configured to use.
+///
+/// Pricing used to be resolved once at startup from `profile.model_ref` and
+/// applied to the whole session. That is only correct while the agent actually
+/// runs the model it was configured with — and the runtime's fallback chain
+/// substitutes a different one whenever a candidate is unreachable, out of
+/// credit, or serving a model id the provider has retired. The footer went on
+/// charging at the configured model's rates, so the `$x est` figure was
+/// confidently wrong and nothing said a substitution had happened. The runtime
+/// already reports which model answered; this book is what lets the footer use
+/// it (#947).
+pub(crate) struct PricingBook {
+    /// Registry key → pricing, for every entry.
+    by_key: std::collections::HashMap<String, footer::Pricing>,
+    /// Provider-side model name → registry key. Populated from each entry's
+    /// `model:` field.
+    key_of_model: std::collections::HashMap<String, String>,
+    /// The key this agent's profile points at, when it uses one.
+    pub configured_key: Option<String>,
+}
+
+impl PricingBook {
+    pub fn pricing_for_key(&self, key: &str) -> footer::Pricing {
+        self.by_key.get(key).cloned().unwrap_or_default()
     }
+
+    /// Registry key for a provider-reported model name.
+    ///
+    /// Exact match first, then the LONGEST registry model id that prefixes the
+    /// reported name — providers append build dates (`claude-haiku-4-5` is
+    /// reported as `claude-haiku-4-5-20251001`). Longest-first matters: a
+    /// shorter, older id would otherwise shadow a newer one that shares its
+    /// prefix.
+    pub fn key_for_model(&self, model: &str) -> Option<&str> {
+        if let Some(k) = self.key_of_model.get(model) {
+            return Some(k.as_str());
+        }
+        self.key_of_model
+            .iter()
+            .filter(|(name, _)| !name.is_empty() && model.starts_with(name.as_str()))
+            .max_by_key(|(name, _)| name.len())
+            .map(|(_, k)| k.as_str())
+    }
+}
+
+/// Build the pricing book and resolve the agent's configured key. Falls back to
+/// an empty book (every lookup → unknown pricing) on any read error.
+fn load_pricing(home: &std::path::Path, agent: &str) -> (footer::Pricing, PricingBook) {
+    let mut book = PricingBook {
+        by_key: Default::default(),
+        key_of_model: Default::default(),
+        configured_key: None,
+    };
+    let Ok(reg) = mur_common::model::ModelRegistry::load_from(&home.join("models.yaml")) else {
+        return (footer::Pricing::default(), book);
+    };
+    for (key, entry) in &reg.models {
+        let (input, output) = entry.effective_costs();
+        book.by_key.insert(
+            key.clone(),
+            footer::Pricing {
+                in_per_1k: input,
+                out_per_1k: output,
+                window: entry.context_window,
+            },
+        );
+        book.key_of_model.insert(entry.model.clone(), key.clone());
+    }
+    book.configured_key = crate::cmd::agent::load_profile_for_edit(agent)
+        .ok()
+        .and_then(|(_, p)| p.model_ref);
+    let current = book
+        .configured_key
+        .as_deref()
+        .map(|k| book.pricing_for_key(k))
+        .unwrap_or_default();
+    (current, book)
 }
 
 /// How many recent conversations `/sessions` lists.
@@ -333,7 +386,9 @@ async fn run_tui(
         app.fleet = Some(fleet_rail::FleetRail::start(f));
     }
     app.skills = complete::load_agent_skills(&agent);
-    app.pricing = load_pricing(&home, &agent);
+    let (initial_pricing, book) = load_pricing(&home, &agent);
+    app.pricing = initial_pricing;
+    app.pricing_book = Some(book);
     if unknown_skin {
         app.push_system(format!(
             "unknown skin '{skin_name}', using dark — valid: dark, light, mur"
@@ -2118,7 +2173,7 @@ fn run_plain(
     use std::io::Write as _;
     let out2 = RefCell::new(io::stdout());
     let mut context: Option<String> = None;
-    let pricing = load_pricing(home, agent);
+    let (pricing, _book) = load_pricing(home, agent);
     // Tools the operator granted with `[a]` this session. Plain mode had no
     // such set, so `[a]lways` approved exactly one call — the prompt said one
     // thing and the code did another.
@@ -2564,5 +2619,191 @@ mod help_coverage_tests {
                 "/{name} works but /help never mentions it"
             );
         }
+    }
+}
+
+/// #947: pricing used to be resolved once at startup from the configured
+/// `model_ref`. The runtime substitutes a different model whenever a candidate
+/// is unreachable, out of credit, or serving a retired id — and the footer went
+/// on charging at the configured rates.
+#[cfg(test)]
+mod pricing_book_tests {
+    use super::PricingBook;
+    use super::footer::Pricing;
+    use std::collections::HashMap;
+
+    fn book() -> PricingBook {
+        let mut by_key = HashMap::new();
+        let mut key_of_model = HashMap::new();
+        by_key.insert(
+            "omlx".to_string(),
+            Pricing {
+                in_per_1k: None,
+                out_per_1k: None,
+                window: Some(32_000),
+            },
+        );
+        key_of_model.insert("Qwen3.5-4B-MLX-4bit".to_string(), "omlx".to_string());
+        by_key.insert(
+            "claude_haiku".to_string(),
+            Pricing {
+                in_per_1k: Some(0.001),
+                out_per_1k: Some(0.005),
+                window: Some(200_000),
+            },
+        );
+        key_of_model.insert("claude-haiku-4-5".to_string(), "claude_haiku".to_string());
+        // A newer id sharing the older one's prefix — the shadowing trap.
+        by_key.insert(
+            "claude_haiku_5".to_string(),
+            Pricing {
+                in_per_1k: Some(0.002),
+                out_per_1k: Some(0.01),
+                window: Some(400_000),
+            },
+        );
+        key_of_model.insert(
+            "claude-haiku-4-5-turbo".to_string(),
+            "claude_haiku_5".to_string(),
+        );
+        PricingBook {
+            by_key,
+            key_of_model,
+            configured_key: Some("omlx".to_string()),
+        }
+    }
+
+    #[test]
+    fn a_provider_build_suffix_still_resolves_to_its_entry() {
+        let b = book();
+        // Exact.
+        assert_eq!(b.key_for_model("claude-haiku-4-5"), Some("claude_haiku"));
+        // Providers append a build date; the entry must still be found.
+        assert_eq!(
+            b.key_for_model("claude-haiku-4-5-20251001"),
+            Some("claude_haiku")
+        );
+    }
+
+    /// Longest prefix wins. A shorter, older id must not shadow a newer one
+    /// that shares its prefix — that mis-prices every call to the new model.
+    #[test]
+    fn the_longest_matching_id_wins_not_the_first() {
+        let b = book();
+        assert_eq!(
+            b.key_for_model("claude-haiku-4-5-turbo-20260101"),
+            Some("claude_haiku_5")
+        );
+    }
+
+    #[test]
+    fn an_unknown_model_resolves_to_nothing_rather_than_the_nearest_guess() {
+        assert_eq!(book().key_for_model("gpt-9-unreleased"), None);
+    }
+}
+
+/// #947: the substitution must reach the user — a silent downgrade changes both
+/// cost and quality with nothing on screen to show it happened.
+#[cfg(test)]
+mod fallback_visibility_tests {
+    use super::PricingBook;
+    use super::app::{App, Role};
+    use super::footer::Pricing;
+    use std::collections::HashMap;
+
+    fn app_with_book() -> App {
+        let mut by_key = HashMap::new();
+        let mut key_of_model = HashMap::new();
+        // Configured: a local model with no price at all.
+        by_key.insert("omlx".to_string(), Pricing::default());
+        key_of_model.insert("Qwen3.5-4B-MLX-4bit".to_string(), "omlx".to_string());
+        // The global fallback: a metered cloud model.
+        by_key.insert(
+            "claude_haiku".to_string(),
+            Pricing {
+                in_per_1k: Some(0.001),
+                out_per_1k: Some(0.005),
+                window: Some(200_000),
+            },
+        );
+        key_of_model.insert("claude-haiku-4-5".to_string(), "claude_haiku".to_string());
+
+        let mut a = App::test_fixture();
+        a.pricing_book = Some(PricingBook {
+            by_key,
+            key_of_model,
+            configured_key: Some("omlx".to_string()),
+        });
+        a.pricing = Pricing::default();
+        a
+    }
+
+    fn usage(model: &str) -> serde_json::Value {
+        serde_json::json!({ "input_tokens": 1000, "output_tokens": 1000, "model_ref": model })
+    }
+
+    fn notices(a: &App) -> usize {
+        a.messages
+            .iter()
+            .filter(|m| m.role == Role::System && m.text.contains("fell back"))
+            .count()
+    }
+
+    /// The exact production shape: a local free model 404s, the chain
+    /// substitutes a metered cloud one, and the footer used to keep pricing it
+    /// as the local model — showing "no price" for a turn that cost money.
+    #[test]
+    fn a_substituted_model_reprices_the_turn_and_says_so() {
+        let mut a = app_with_book();
+        assert!(
+            a.pricing.in_per_1k.is_none(),
+            "configured model is unpriced"
+        );
+
+        a.apply_usage(&usage("claude-haiku-4-5-20251001"));
+
+        assert_eq!(
+            a.pricing.in_per_1k,
+            Some(0.001),
+            "must re-price from the model that actually answered"
+        );
+        assert_eq!(notices(&a), 1, "the substitution must be announced");
+    }
+
+    /// Announced on the change, not on every turn — a long session that fell
+    /// back once must not repeat itself forever.
+    #[test]
+    fn the_notice_does_not_repeat_while_the_substitution_holds() {
+        let mut a = app_with_book();
+        for _ in 0..4 {
+            a.apply_usage(&usage("claude-haiku-4-5"));
+        }
+        assert_eq!(notices(&a), 1);
+    }
+
+    /// Control: answering with the configured model says nothing at all.
+    #[test]
+    fn the_configured_model_answering_is_not_an_event() {
+        let mut a = app_with_book();
+        a.apply_usage(&usage("Qwen3.5-4B-MLX-4bit"));
+        assert_eq!(notices(&a), 0);
+        assert!(a.pricing.in_per_1k.is_none());
+    }
+
+    /// A model the registry cannot price must show "unknown", never inherit the
+    /// configured model's rates — that is the wrong-number bug in miniature.
+    #[test]
+    fn an_unpriceable_answer_does_not_inherit_the_configured_rates() {
+        let mut a = app_with_book();
+        a.pricing = Pricing {
+            in_per_1k: Some(9.99),
+            out_per_1k: Some(9.99),
+            window: Some(1),
+        };
+        a.apply_usage(&usage("some-model-nobody-registered"));
+        assert!(
+            a.pricing.in_per_1k.is_none(),
+            "stale rates must not survive an unpriceable answer"
+        );
     }
 }

@@ -143,14 +143,131 @@ async fn fatal_error_does_not_advance() {
     assert!(matches!(err, LlmError::Http(_))); // returned a's fatal error, never tried b
 }
 
+/// A renamed or retired model id is exactly what a fallback chain is for. It
+/// used to be lumped into the `Http` catch-all and stop the turn outright,
+/// leaving a perfectly good fallback unused.
 #[tokio::test]
-async fn exhaustion_returns_last_error() {
+async fn a_model_not_found_advances_to_the_next_candidate() {
     let mut s = HashMap::new();
-    s.insert("a".into(), vec![Err(LlmError::RateLimit)]);
-    s.insert("b".into(), vec![Err(LlmError::ServerError(503))]);
+    s.insert(
+        "a".into(),
+        vec![Err(LlmError::ModelNotFound("claude-sonnet-4-6".into()))],
+    );
+    s.insert("b".into(), vec![Ok(())]);
+    let fb = FallbackLlmClient::new(vec!["a".into(), "b".into()], factory_for(s), retry0());
+    let resp = fb.generate(LlmRequest::default()).await.unwrap();
+    assert_eq!(resp.text, "b", "the chain must survive a retired model id");
+}
+
+/// ...and it must advance WITHOUT spending the retry budget. A 404 cannot
+/// become a 200 by asking the same endpoint again, so backing off against it
+/// is pure latency. The script makes the difference observable: candidate `a`
+/// would succeed on its second call, so any retry at all returns "a".
+#[tokio::test]
+async fn a_model_not_found_does_not_burn_retries_on_the_same_candidate() {
+    let retry3 = RetryConfig {
+        max_retries: 3,
+        backoff_base_ms: 1,
+        cooldown_secs: 60,
+    };
+    let mut s = HashMap::new();
+    s.insert(
+        "a".into(),
+        vec![Err(LlmError::ModelNotFound("gone".into())), Ok(())],
+    );
+    s.insert("b".into(), vec![Ok(())]);
+    let fb = FallbackLlmClient::new(vec!["a".into(), "b".into()], factory_for(s), retry3);
+    let resp = fb.generate(LlmRequest::default()).await.unwrap();
+    assert_eq!(
+        resp.text, "b",
+        "a retry would have hit a's scripted Ok and returned \"a\""
+    );
+}
+
+/// Control for the two above: auth still stops the chain dead. Falling back
+/// here would re-present the same broken credential to a second provider and
+/// bury a config error the operator has to fix.
+#[tokio::test]
+async fn auth_still_does_not_advance() {
+    let mut s = HashMap::new();
+    s.insert("a".into(), vec![Err(LlmError::Http("status 401".into()))]);
+    s.insert("b".into(), vec![Ok(())]);
     let fb = FallbackLlmClient::new(vec!["a".into(), "b".into()], factory_for(s), retry0());
     let err = fb.generate(LlmRequest::default()).await.unwrap_err();
-    assert!(matches!(err, LlmError::ServerError(503))); // last candidate's error
+    assert!(matches!(err, LlmError::Http(_)), "never tried b");
+}
+
+/// Exhaustion used to return only the LAST candidate's error, which made the
+/// diagnosis an accident of chain order — a wrong API key on the primary was
+/// invisible behind a rate limit on the third candidate. Now every failure is
+/// listed, and the one the operator can actually act on leads.
+#[tokio::test]
+async fn exhaustion_reports_every_candidate_and_leads_with_the_actionable_one() {
+    let mut s = HashMap::new();
+    // All three ADVANCE. An Auth here would short-circuit and never reach
+    // exhaustion at all — that is the next test.
+    s.insert(
+        "a".into(),
+        vec![Err(LlmError::ModelNotFound("claude-sonnet-4-6".into()))],
+    );
+    s.insert("b".into(), vec![Err(LlmError::RateLimit)]); // weather — not fixable
+    s.insert("c".into(), vec![Err(LlmError::ServerError(503))]);
+    let fb = FallbackLlmClient::new(
+        vec!["a".into(), "b".into(), "c".into()],
+        factory_for(s),
+        retry0(),
+    );
+    let err = fb.generate(LlmRequest::default()).await.unwrap_err();
+
+    let LlmError::AllCandidatesFailed { source, summary } = &err else {
+        panic!("expected an aggregate, got {err:?}");
+    };
+    // `a` failed FIRST and `c` failed LAST; `a` leads because a model id that
+    // no longer exists is something the operator can go and fix, and a 503 is
+    // not. Returning the last error made this an accident of chain order.
+    assert!(
+        matches!(**source, LlmError::ModelNotFound(_)),
+        "lead was {source:?}"
+    );
+    for candidate in ["a", "b", "c"] {
+        assert!(
+            summary.contains(candidate),
+            "{candidate} missing: {summary}"
+        );
+    }
+    assert!(
+        summary.contains("rate limit") && summary.contains("503"),
+        "{summary}"
+    );
+}
+
+/// A Stop-class failure on the primary still stops immediately — the aggregate
+/// only exists for a chain that actually ran out.
+#[tokio::test]
+async fn a_single_stop_still_short_circuits_without_an_aggregate() {
+    let mut s = HashMap::new();
+    s.insert("a".into(), vec![Err(LlmError::Auth(401, "bad key".into()))]);
+    s.insert("b".into(), vec![Ok(())]);
+    let fb = FallbackLlmClient::new(vec!["a".into(), "b".into()], factory_for(s), retry0());
+    let err = fb.generate(LlmRequest::default()).await.unwrap_err();
+    assert!(matches!(err, LlmError::Auth(401, _)), "{err:?}");
+}
+
+/// An unrecognised 4xx now advances rather than killing the turn: the set of
+/// reasons an endpoint can refuse one specific candidate is open and growing
+/// (payload too large, unsupported modality, region, tier), while the set that
+/// must never fall back is just auth.
+#[tokio::test]
+async fn an_unrecognised_4xx_advances_to_the_next_candidate() {
+    let mut s = HashMap::new();
+    s.insert(
+        "a".into(),
+        vec![Err(LlmError::Rejected(413, "payload too large".into()))],
+    );
+    s.insert("b".into(), vec![Ok(())]);
+    let fb = FallbackLlmClient::new(vec!["a".into(), "b".into()], factory_for(s), retry0());
+    let resp = fb.generate(LlmRequest::default()).await.unwrap();
+    assert_eq!(resp.text, "b");
 }
 
 #[test]
