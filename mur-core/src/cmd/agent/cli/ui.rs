@@ -35,6 +35,11 @@ const INPUT_H_MAX: u16 = 8;
 const HITL_PCT_X: u16 = 70;
 const HITL_PCT_Y: u16 = 50;
 
+/// Rows one PgUp/PgDn moves the approval modal's body. Fixed rather than
+/// "one screenful" because the key handler decides the step and only the
+/// renderer knows the box height; the renderer clamps whatever it is handed.
+pub(super) const HITL_SCROLL_PAGE: u16 = 5;
+
 /// Prepend the body indent to an already-styled line (e.g. cached markdown).
 fn indent_line(mut line: Line<'static>) -> Line<'static> {
     line.spans.insert(0, Span::raw(MSG_INDENT));
@@ -89,10 +94,18 @@ pub fn render(f: &mut Frame, app: &mut App) {
     // into frozen scrollback while it is still open. Both used to leave the
     // operator with neither surface. The invariant: an open gate always has at
     // least one place the operator can see it.
-    if let Some(hitl) = &app.hitl
-        && !app.hitl_inline_visible(hitl.step_id.as_deref())
+    if let Some(hitl) = app
+        .hitl
+        .clone()
+        .filter(|h| !app.hitl_inline_visible(h.step_id.as_deref()))
     {
-        render_hitl(f, hitl, app.hitl_grant_confirm);
+        app.hitl_scroll = render_hitl(
+            f,
+            &hitl,
+            app.hitl_grant_confirm,
+            app.input_text().is_empty(),
+            app.hitl_scroll,
+        );
     }
 }
 
@@ -1272,10 +1285,48 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn render_hitl(f: &mut Frame, hitl: &super::stream::HitlRequest, grant_confirm: Option<char>) {
+/// Hard-wrap `s` into rows at most `w` display columns wide.
+///
+/// Character-based rather than word-based: the payload is pretty-printed JSON
+/// and shell, where breaking mid-token is honest and dropping the tail is not.
+/// Widths come from `unicode_width` so a CJK argument does not overflow the
+/// border.
+fn wrap_row(s: &str, w: usize) -> Vec<String> {
+    use unicode_width::UnicodeWidthChar;
+    if w == 0 || s.is_empty() {
+        return vec![s.to_string()];
+    }
+    let mut rows = Vec::new();
+    let mut cur = String::new();
+    let mut used = 0usize;
+    for ch in s.chars() {
+        let cw = ch.width().unwrap_or(0);
+        if used + cw > w && !cur.is_empty() {
+            rows.push(std::mem::take(&mut cur));
+            used = 0;
+        }
+        cur.push(ch);
+        used += cw;
+    }
+    rows.push(cur);
+    rows
+}
+
+/// Draw the approval modal and return the scroll offset it actually used —
+/// `scroll` clamped to the content, so the caller's stored offset cannot run
+/// away past the end of a short input.
+fn render_hitl(
+    f: &mut Frame,
+    hitl: &super::stream::HitlRequest,
+    grant_confirm: Option<char>,
+    composer_empty: bool,
+    scroll: u16,
+) -> u16 {
     let area = centered_rect(HITL_PCT_X, HITL_PCT_Y, f.area());
     let input = serde_json::to_string_pretty(&hitl.tool_input).unwrap_or_default();
-    let mut lines = vec![
+    // Header rows stay pinned: scrolling the body must never carry the tool
+    // name off-screen, since "which tool" is half of what is being approved.
+    let head = vec![
         Line::from(Span::styled(
             hitl.prompt.clone(),
             Style::default().add_modifier(Modifier::BOLD),
@@ -1287,13 +1338,14 @@ fn render_hitl(f: &mut Frame, hitl: &super::stream::HitlRequest, grant_confirm: 
         ]),
     ];
     let row_w = area.width.saturating_sub(2) as usize;
-    for l in input.lines().take(12) {
-        let row: String = if l.chars().count() > row_w && row_w > 1 {
-            l.chars().take(row_w - 1).chain(['…']).collect()
-        } else {
-            l.to_string()
-        };
-        lines.push(Line::styled(row, Style::default().fg(Color::DarkGray)));
+    // Wrap every line and keep every line (#939). This modal exists so a human
+    // reads the command before it runs; a destructive suffix past a horizontal
+    // cut, or past a `.take(12)`, is exactly what must not be silently dropped.
+    let mut body: Vec<Line> = Vec::new();
+    for l in input.lines() {
+        for row in wrap_row(l, row_w) {
+            body.push(Line::styled(row, Style::default().fg(Color::DarkGray)));
+        }
     }
     // When a session-wide grant is armed, the modal shows ONLY the confirm
     // instruction: the operator is answering "do you really mean the whole
@@ -1356,7 +1408,35 @@ fn render_hitl(f: &mut Frame, hitl: &super::stream::HitlRequest, grant_confirm: 
     // gets its own chunk. Previously it was the last entry in one clipped
     // Paragraph: a wrapped JSON input pushed it out of the box and left the
     // operator staring at a blocking gate with no visible way to answer it.
-    let keys_h = Paragraph::new(keys.clone())
+    //
+    // While the composer holds text the `composer_empty` guard (#893) makes
+    // y/a/A/n type instead of decide. Say so, and dim the row: advertising a
+    // live key that is inert is how an operator ends up hitting the 5-minute
+    // auto-deny wondering why nothing responds (#939).
+    let keys_inert = !composer_empty && grant_confirm.is_none();
+    let keys_text = if keys_inert {
+        let dimmed = Line::from(
+            keys.spans
+                .iter()
+                .map(|s| {
+                    Span::styled(
+                        s.content.clone(),
+                        s.style.add_modifier(Modifier::DIM).fg(Color::DarkGray),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+        Text::from(vec![
+            dimmed,
+            Line::styled(
+                "these keys type while the composer has text — Ctrl+U clears it",
+                Style::default().fg(Color::Yellow),
+            ),
+        ])
+    } else {
+        Text::from(keys)
+    };
+    let keys_h = Paragraph::new(keys_text.clone())
         .wrap(Wrap { trim: false })
         .line_count(inner.width.max(1)) as u16;
     let chunks = Layout::default()
@@ -1364,18 +1444,35 @@ fn render_hitl(f: &mut Frame, hitl: &super::stream::HitlRequest, grant_confirm: 
         .constraints([Constraint::Min(0), Constraint::Length(keys_h.max(1))])
         .split(inner);
 
-    // The body truncates rather than wraps, so one input line costs one row and
-    // the height is predictable; when it still overflows, say so on screen.
+    // Body = pinned header + a scrolled window over the wrapped input. When it
+    // does not all fit, the notice reports what is HIDDEN — the old message
+    // printed the number of rows kept, so widening the pane made the "hidden"
+    // count go up (#939).
     let body_h = chunks[0].height as usize;
-    if lines.len() > body_h && body_h > 0 {
-        lines.truncate(body_h.saturating_sub(1));
-        lines.push(Line::styled(
-            format!("… {} more lines", body_h.saturating_sub(1)),
-            Style::default().fg(Color::DarkGray),
-        ));
-    }
+    let room = body_h.saturating_sub(head.len());
+    let mut lines = head;
+    let used_scroll = if body.len() > room && room > 1 {
+        let visible = room - 1;
+        let above = (scroll as usize).min(body.len() - visible);
+        let below = body.len() - visible - above;
+        lines.extend(body.into_iter().skip(above).take(visible));
+        let note = if above == 0 {
+            format!("… {below} more lines — PgDn to scroll")
+        } else {
+            format!("… {above} above · {below} below — PgUp/PgDn")
+        };
+        lines.push(Line::styled(note, Style::default().fg(Color::DarkGray)));
+        above as u16
+    } else {
+        lines.extend(body);
+        0
+    };
     f.render_widget(Paragraph::new(Text::from(lines)), chunks[0]);
-    f.render_widget(Paragraph::new(keys).wrap(Wrap { trim: false }), chunks[1]);
+    f.render_widget(
+        Paragraph::new(keys_text).wrap(Wrap { trim: false }),
+        chunks[1],
+    );
+    used_scroll
 }
 
 /// Format a token count with thousands separator (e.g. 1240 → "1,240").
@@ -1772,13 +1869,113 @@ mod hitl_modal_tests {
     #[test]
     fn the_key_row_survives_an_oversized_input() {
         let mut term = Terminal::new(TestBackend::new(88, 24)).unwrap();
-        term.draw(|f| render_hitl(f, &fat_request(), None)).unwrap();
+        term.draw(|f| {
+            render_hitl(f, &fat_request(), None, true, 0);
+        })
+        .unwrap();
         let dump = term.backend().to_string();
         assert!(
             dump.contains("approve"),
             "the operator cannot answer a gate whose keys are off-screen:\n{dump}"
         );
         assert!(dump.contains("deny"), "{dump}");
+    }
+
+    /// #939 §1: the command body must never be cut horizontally. A marker at
+    /// the very end of a long single-line command is the thing a destructive
+    /// suffix would occupy, so it is what the test looks for.
+    #[test]
+    fn a_long_command_is_wrapped_not_truncated() {
+        let req = HitlRequest {
+            tool_input: serde_json::json!({
+                "command": format!("git status {} && rm -rf /tmp/DANGER_MARKER", "-".repeat(120)),
+            }),
+            ..fat_request()
+        };
+        let mut term = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        term.draw(|f| {
+            render_hitl(f, &req, None, true, 0);
+        })
+        .unwrap();
+        let dump = term.backend().to_string().replace(['\n', ' '], "");
+        assert!(
+            dump.contains("DANGER_MARKER"),
+            "the tail of the command was dropped — that is the whole defect:\n{}",
+            term.backend()
+        );
+    }
+
+    /// #939 §2: the notice counts HIDDEN rows. The old code printed the number
+    /// kept, so a taller box reported MORE hidden. Growing the terminal must
+    /// make the number go down, never up.
+    #[test]
+    fn hidden_line_count_falls_as_the_box_grows() {
+        let req = HitlRequest {
+            tool_input: serde_json::json!({ "command": "echo hi\n".repeat(400) }),
+            ..fat_request()
+        };
+        let hidden_at = |h: u16| -> usize {
+            let mut term = Terminal::new(TestBackend::new(100, h)).unwrap();
+            term.draw(|f| {
+                render_hitl(f, &req, None, true, 0);
+            })
+            .unwrap();
+            let dump = term.backend().to_string();
+            let tail = dump.split("… ").nth(1).expect("a residue notice");
+            tail.split_whitespace()
+                .next()
+                .and_then(|n| n.parse::<usize>().ok())
+                .expect("a numeric hidden count")
+        };
+        let small = hidden_at(20);
+        let large = hidden_at(40);
+        assert!(
+            large < small,
+            "a bigger box hid {large} lines vs {small} in a smaller one — \
+             the count is tracking box height, not residual content"
+        );
+    }
+
+    /// #939 §1+§3: scrolling reaches content that is off-screen at rest, and an
+    /// over-large offset is clamped rather than scrolling into blank space.
+    #[test]
+    fn paging_reveals_the_tail_and_clamps_at_the_end() {
+        let req = HitlRequest {
+            tool_input: serde_json::json!({ "command": (0..40).map(|i| format!("step{i}")).collect::<Vec<_>>().join("\n") }),
+            ..fat_request()
+        };
+        let draw = |scroll: u16| {
+            let mut term = Terminal::new(TestBackend::new(100, 20)).unwrap();
+            term.draw(|f| {
+                render_hitl(f, &req, None, true, scroll);
+            })
+            .unwrap();
+            term.backend().to_string()
+        };
+        assert!(
+            !draw(0).contains("step39"),
+            "sanity: the tail starts hidden"
+        );
+        assert!(
+            draw(200).contains("step39"),
+            "an offset past the end must clamp to the last page, not blank the body"
+        );
+    }
+
+    /// #939 §3: while the composer holds text the decision keys type instead of
+    /// deciding, so the modal must say so rather than advertising live keys.
+    #[test]
+    fn a_nonempty_composer_is_announced_on_the_key_row() {
+        let mut term = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        term.draw(|f| {
+            render_hitl(f, &fat_request(), None, false, 0);
+        })
+        .unwrap();
+        let dump = term.backend().to_string().replace('\n', " ");
+        assert!(
+            dump.contains("Ctrl+U"),
+            "the operator gets no hint that y/a/A/n are inert:\n{dump}"
+        );
     }
 }
 
