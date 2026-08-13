@@ -108,7 +108,7 @@ const SPINNER_MS: u64 = 90;
 /// Max chars of an arg hint shown on a step line in `--plain` mode.
 const PLAIN_STEP_HINT_MAX: usize = 120;
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /mcp  /skill  /remember <text> (save a memory)  /memories  /forget <name|last>  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
+const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /open (outstanding items)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /mcp  /skill  /remember <text> (save a memory)  /memories  /forget <name|last>  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
 #[allow(clippy::too_many_arguments)]
@@ -1435,11 +1435,15 @@ fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: boo
             // single tool call and said nothing the card couldn't: it doubled
             // the height of the scrollback for zero extra information.
             (true, true) => {
+                app.saw_hitl_this_turn = true;
                 if let Some(sid) = &req.step_id {
                     app.mark_card_auto_approved(sid);
                 }
             }
-            (true, false) => app.push_success(format!("approved `{}`", req.tool_name)),
+            (true, false) => {
+                app.saw_hitl_this_turn = true;
+                app.push_success(format!("approved `{}`", req.tool_name))
+            }
             (false, _) => app.push_warn(format!("denied `{}`", req.tool_name)),
         }
     }
@@ -1870,7 +1874,8 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
     match msg {
         StreamMsg::Delta { text, thinking, .. } => app.append_delta(&text, thinking),
         StreamMsg::Hitl { req, .. } => {
-            app.saw_hitl_this_turn = true;
+            // NB: `saw_hitl_this_turn` is set in `decide`, on approval — not
+            // here. See its doc comment (#940).
             // Flag the card so it renders the inline approval row. Whether
             // that row is actually VISIBLE is recomputed every frame by the
             // renderer (`ui::inline_row_visible`) rather than cached here: a
@@ -2352,6 +2357,64 @@ mod hitl_key_tests {
         assert!(app.hitl.is_none(), "the gate is answerable again");
     }
 
+    /// #940: after denying a call the transcript advised restarting the agent
+    /// "for the step view" of a tool that never executed. The hint's premise is
+    /// "a tool ran but streamed no step detail" — a deny satisfies the second
+    /// half for free, so the flag now moves at the decision, not at the request.
+    /// Opens the gate the way the runtime does — through `handle_stream`, which
+    /// is where the flag used to be set. Calling `gate()` directly would skip
+    /// the very line under test and pass either way.
+    fn gate_via_stream(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
+        let task_id = "t1".to_string();
+        app.current_task_id = Some(task_id.clone());
+        let req = stream::HitlRequest {
+            hitl_id: "h1".into(),
+            step_id: None,
+            tool_name: "bash".into(),
+            tool_input: serde_json::json!({}),
+            prompt: "approve?".into(),
+            created_at: std::time::Instant::now(),
+        };
+        handle_stream(app, StreamMsg::Hitl { req, task_id }, tx);
+        assert!(app.hitl.is_some(), "the gate opened");
+    }
+
+    #[tokio::test]
+    async fn denying_a_call_does_not_arm_the_old_runtime_hint() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut app = App::test_fixture();
+        app.begin_user_turn("do it");
+        gate_via_stream(&mut app, &tx);
+        handle_event(&mut app, key('n'), &tx).await;
+        assert!(app.hitl.is_none(), "the deny landed");
+        assert!(
+            !app.saw_hitl_this_turn,
+            "a denied call never ran, so nothing is missing a step stream"
+        );
+        app.maybe_step_hint();
+        assert!(
+            !app.messages.iter().any(|m| m.text.contains("restart")),
+            "no restart advice for a tool that did not execute"
+        );
+    }
+
+    /// Control for the above: an *approved* call with no step events is exactly
+    /// the old-runtime case the hint exists for, and must still fire.
+    #[tokio::test]
+    async fn approving_a_call_still_arms_the_old_runtime_hint() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut app = App::test_fixture();
+        app.begin_user_turn("do it");
+        gate_via_stream(&mut app, &tx);
+        handle_event(&mut app, key('y'), &tx).await;
+        assert!(app.saw_hitl_this_turn, "an approved call executes");
+        app.maybe_step_hint();
+        assert!(
+            app.messages.iter().any(|m| m.text.contains("restart")),
+            "the old-runtime hint must survive the #940 fix"
+        );
+    }
+
     /// The bug this guards: typing a message while a gate was open let the
     /// first `a` approve the call AND grant the tool for the whole session,
     /// with the character deleted from the message ("modal" arrived "modl").
@@ -2469,5 +2532,37 @@ mod hitl_key_tests {
 
         // Idempotent: nothing left to retire.
         assert!(!expire_stale_hitl(&mut app));
+    }
+}
+
+/// #940: `/open` worked, the chat footer advertised it, and `/help` did not
+/// list it — so the one place a user goes to learn the command surface was the
+/// one place it was missing.
+#[cfg(test)]
+mod help_coverage_tests {
+    use super::HELP;
+    use super::app::{SlashCmd, parse_slash};
+
+    /// Primary (non-alias) names of every slash command the parser accepts.
+    /// Each entry is fed through the real parser, so this list cannot name a
+    /// command that does not exist; `/help` then has to mention all of them.
+    const COMMANDS: &[&str] = &[
+        "help", "clear", "card", "sessions", "channels", "open", "auto", "verbose", "skin", "mcp",
+        "skill", "remember", "memories", "forget", "panel", "exit",
+    ];
+
+    #[test]
+    fn help_lists_every_command_the_parser_accepts() {
+        for name in COMMANDS {
+            let parsed = parse_slash(&format!("/{name}"));
+            assert!(
+                !matches!(parsed, Some(SlashCmd::Unknown(_)) | None),
+                "/{name} is in the documented list but the parser rejects it: {parsed:?}"
+            );
+            assert!(
+                HELP.contains(&format!("/{name}")),
+                "/{name} works but /help never mentions it"
+            );
+        }
     }
 }

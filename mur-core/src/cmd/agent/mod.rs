@@ -234,6 +234,41 @@ pub(crate) fn load_profile_for_edit(name: &str) -> Result<(PathBuf, _AgentProfil
     Ok((path, profile))
 }
 
+/// Mirror the resolved `model_ref` registry entry back into the legacy
+/// `model:` block so the two cannot disagree.
+///
+/// `model_ref` wins at runtime (`mur_common::model::resolve_model_refs`); the
+/// `model:` block is only the fallback for a profile that has no ref. But every
+/// writer of `model_ref` left the old block untouched, so profiles accumulated
+/// a provider / model id that named an endpoint the agent had not dialled in
+/// months — across 27 installed agents the two disagreed on every one, and
+/// during #938 the stale block sent the investigation after a provider-dispatch
+/// bug that did not exist (#940).
+///
+/// Best-effort: an unreadable registry or an unknown ref leaves the profile
+/// exactly as it was. This heals a profile on its next save; it never blocks one.
+fn sync_model_block(profile: &mut _AgentProfile, reg: &mur_common::model::ModelRegistry) {
+    let Some(key) = profile.model_ref.as_deref() else {
+        return;
+    };
+    let Some(entry) = reg.models.get(key) else {
+        return;
+    };
+    profile.model.provider = entry.provider.clone();
+    profile.model.name = entry.model.clone();
+}
+
+fn sync_model_block_from_disk(profile: &mut _AgentProfile) {
+    if profile.model_ref.is_none() {
+        return;
+    }
+    if let Ok(reg) = mur_common::model::ModelRegistry::default_path()
+        .and_then(|p| mur_common::model::ModelRegistry::load_from(&p))
+    {
+        sync_model_block(profile, &reg);
+    }
+}
+
 pub(crate) fn save_profile(path: &Path, profile: &mut _AgentProfile) -> Result<()> {
     // Fail-closed guard (#717): a profile save must never *introduce* a skill
     // ref that does not resolve to an installed skill under the agent dir.
@@ -255,6 +290,7 @@ pub(crate) fn save_profile(path: &Path, profile: &mut _AgentProfile) -> Result<(
         skill::validate_skill_refs(agent_dir, &added)?;
     }
 
+    sync_model_block_from_disk(profile);
     profile.updated_at = chrono::Utc::now().to_rfc3339();
     let yaml = serde_yaml_ng::to_string(profile).context("serialize profile.yaml")?;
     write_atomic(path, yaml.as_bytes())?;
@@ -322,5 +358,58 @@ mod tests {
     fn non_bundle_path_returns_none() {
         let exe = Path::new("/opt/homebrew/bin/mur");
         assert_eq!(runtime_target_in_bundle(exe, "mur-agent-runtime"), None);
+    }
+    /// #940: `model_ref` is what the runtime resolves; the legacy `model:` block
+    /// is only a fallback for a profile that has none. Every writer of
+    /// `model_ref` left the old block alone, so across 27 installed agents the
+    /// two disagreed on every single one — and a human reading profile.yaml to
+    /// answer "which model is this agent on" got a provider, a model id, and an
+    /// endpoint that were all wrong.
+    #[test]
+    fn a_saved_profile_cannot_name_a_model_it_does_not_use() {
+        use mur_common::model::{ModelEntry, ModelRegistry};
+
+        let mut reg = ModelRegistry::default();
+        reg.models.insert(
+            "omlx".into(),
+            ModelEntry {
+                provider: "openai".into(),
+                model: "Qwen3.5-4B-MLX-4bit".into(),
+                ..Default::default()
+            },
+        );
+
+        let mut p = _AgentProfile::default_for_tests();
+        // The exact drift observed in the field.
+        p.model.provider = "anthropic".into();
+        p.model.name = "claude-sonnet-4-6".into();
+        p.model_ref = Some("omlx".into());
+
+        sync_model_block(&mut p, &reg);
+        assert_eq!(p.model.provider, "openai");
+        assert_eq!(p.model.name, "Qwen3.5-4B-MLX-4bit");
+        assert_eq!(p.model_ref.as_deref(), Some("omlx"), "the ref still rules");
+    }
+
+    /// Fail-open, both ways: no ref means the block IS the source of truth, and
+    /// a ref the registry has never heard of must not blank out the fallback.
+    #[test]
+    fn an_unresolvable_ref_leaves_the_block_untouched() {
+        use mur_common::model::ModelRegistry;
+        let reg = ModelRegistry::default();
+
+        let mut p = _AgentProfile::default_for_tests();
+        p.model.provider = "anthropic".into();
+        p.model.name = "claude-opus-4-7".into();
+
+        let mut no_ref = p.clone();
+        no_ref.model_ref = None;
+        sync_model_block(&mut no_ref, &reg);
+        assert_eq!(no_ref.model.name, "claude-opus-4-7");
+
+        let mut dangling = p.clone();
+        dangling.model_ref = Some("never_registered".into());
+        sync_model_block(&mut dangling, &reg);
+        assert_eq!(dangling.model.name, "claude-opus-4-7");
     }
 }

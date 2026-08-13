@@ -92,9 +92,10 @@ pub fn apply_model_choice(mur_home: &Path, slug: &str, choice: &ModelChoice) -> 
         serde_yaml_ng::from_str(&std::fs::read_to_string(&profile_path)?)
             .with_context(|| format!("parse {}", profile_path.display()))?;
     profile.model_ref = Some(key.clone());
-    let yaml = serde_yaml_ng::to_string(&profile)?;
-    std::fs::write(&profile_path, yaml)
-        .with_context(|| format!("write {}", profile_path.display()))?;
+    // Through the shared saver so the legacy `model:` block is re-synced from
+    // the registry entry we just wrote, instead of being left naming whatever
+    // provider the agent was created with (#940).
+    super::save_profile(&profile_path, &mut profile)?;
 
     Ok(key)
 }
