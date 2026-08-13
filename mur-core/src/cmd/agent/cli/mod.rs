@@ -809,6 +809,21 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                 match key.code {
                     KeyCode::Char('d') if ctrl => request_quit(app, tx),
                     KeyCode::Char('c') if ctrl => decide_hitl(app, tx, false),
+                    // The composer guard above makes y/a/A/n type instead of
+                    // decide whenever the composer holds text, so the way out
+                    // of that state has to keep working. It did not: the
+                    // catch-all below forwarded Ctrl+U into the textarea, which
+                    // deletes one character, leaving no live key that approves
+                    // and only the 5-minute auto-deny to end the gate (#939).
+                    KeyCode::Char('u') if ctrl => app.clear_input(),
+                    // Paging the modal body, which now wraps and keeps the
+                    // whole tool input rather than cutting it (#939).
+                    KeyCode::PageUp => {
+                        app.hitl_scroll = app.hitl_scroll.saturating_sub(ui::HITL_SCROLL_PAGE)
+                    }
+                    KeyCode::PageDown => {
+                        app.hitl_scroll = app.hitl_scroll.saturating_add(ui::HITL_SCROLL_PAGE)
+                    }
                     KeyCode::Char('y') | KeyCode::Char('Y') if composer_empty => {
                         app.hitl_grant_confirm = None;
                         decide_hitl(app, tx, true)
@@ -1888,6 +1903,8 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
                 app.mark_card_auto_approved(sid);
             }
             app.hitl = Some(req);
+            // A new gate always opens at the top of its own input.
+            app.hitl_scroll = 0;
             if auto {
                 decide_hitl_with_note(app, tx, true, true);
             }
@@ -2297,6 +2314,42 @@ mod hitl_key_tests {
         for c in s.chars() {
             handle_event(app, key(c), tx).await;
         }
+    }
+
+    fn ctrl(c: char) -> Event {
+        Event::Key(KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        })
+    }
+
+    /// #939 §3: the composer guard above is right, but it made the composer a
+    /// trap — every decision key became text and `Ctrl+U`, the documented way
+    /// to empty the line, fell through to the textarea and deleted a single
+    /// character instead. With no live key that approves, the only remaining
+    /// exit was the 5-minute auto-deny.
+    #[tokio::test]
+    async fn ctrl_u_clears_the_composer_while_a_gate_is_open() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut app = App::test_fixture();
+        gate(&mut app);
+
+        type_str(&mut app, "why not", &tx).await;
+        assert_eq!(app.input_text(), "why not");
+
+        handle_event(&mut app, ctrl('u'), &tx).await;
+        assert_eq!(
+            app.input_text(),
+            "",
+            "Ctrl+U must clear the whole line, not delete one character"
+        );
+        assert!(app.hitl.is_some(), "clearing the composer must not decide");
+
+        // ...and with the composer empty again the decision keys are live.
+        handle_event(&mut app, key('y'), &tx).await;
+        assert!(app.hitl.is_none(), "the gate is answerable again");
     }
 
     /// The bug this guards: typing a message while a gate was open let the
