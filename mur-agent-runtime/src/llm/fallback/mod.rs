@@ -11,7 +11,7 @@ use mur_common::config::{ModelSwitchConfig, RetryConfig};
 use mur_common::model::{choose_by_difficulty, resolve_model_refs};
 
 use super::{
-    BackgroundKind, LlmClient, LlmError, LlmRequest, LlmResponse, RequestIntent, Retryability,
+    BackgroundKind, Disposition, LlmClient, LlmError, LlmRequest, LlmResponse, RequestIntent,
     RichMessage, classify,
 };
 use crate::telemetry_writer::Event;
@@ -206,7 +206,9 @@ impl FallbackLlmClient {
         req: &LlmRequest,
     ) -> (Result<LlmResponse, LlmError>, RoutingMeta) {
         let now = Instant::now();
-        let mut last: Option<LlmError> = None;
+        // Every candidate's failure, in order. Reporting only the last one
+        // made the diagnosis an accident of chain order (#947).
+        let mut failures: Vec<(String, LlmError)> = Vec::new();
         let candidates = self.candidates_for(req);
 
         // Structural-failure escalation (cascade) is allowed ONLY for
@@ -242,7 +244,10 @@ impl FallbackLlmClient {
             let client = match (self.factory)(model_ref) {
                 Ok(c) => c,
                 Err(e) => {
-                    last = Some(LlmError::Http(format!("build {model_ref}: {e}")));
+                    failures.push((
+                        model_ref.clone(),
+                        LlmError::Http(format!("build {model_ref}: {e}")),
+                    ));
                     continue;
                 }
             };
@@ -259,7 +264,26 @@ impl FallbackLlmClient {
                         return (Ok(resp), meta);
                     }
                     Err(e) => match classify(&e) {
-                        Retryability::Fatal => {
+                        // Permanent for this candidate, plausibly fine on the
+                        // next: skip the retry budget entirely and advance.
+                        // Backing off three times against a model id the
+                        // endpoint does not serve buys nothing but latency.
+                        Disposition::AdvanceNow => {
+                            tracing::info!(
+                                model_ref,
+                                error = %e,
+                                "llm fallback: permanent for this candidate, advancing chain now"
+                            );
+                            // Cool it down so a later request this session does
+                            // not pay the same failing round-trip again.
+                            self.cooldown.mark(
+                                model_ref,
+                                Instant::now() + Duration::from_secs(self.retry.cooldown_secs),
+                            );
+                            failures.push((model_ref.clone(), e));
+                            continue 'candidates;
+                        }
+                        Disposition::Stop => {
                             // Structural failure is escalatable ONLY under
                             // Background+Smart, within the per-call cap.
                             let structural = matches!(e, LlmError::InvalidResponse(_));
@@ -270,7 +294,7 @@ impl FallbackLlmClient {
                                     escalations,
                                     "smart cascade: structural fail, escalating"
                                 );
-                                last = Some(e);
+                                failures.push((model_ref.clone(), e));
                                 continue 'candidates; // advance to next candidate (the better model)
                             }
                             // Interactive / over-cap / non-structural Fatal → surface (Phase-1 boundary).
@@ -282,7 +306,7 @@ impl FallbackLlmClient {
                             };
                             return (Err(e), meta);
                         }
-                        Retryability::Retryable => {
+                        Disposition::RetryThenAdvance => {
                             tracing::info!(model_ref, attempt, error = %e, "llm fallback: retryable failure");
                             if attempt < self.retry.max_retries {
                                 tokio::time::sleep(backoff_delay(
@@ -298,14 +322,14 @@ impl FallbackLlmClient {
                                     model_ref,
                                     "llm fallback: cooling down, advancing chain"
                                 );
-                                last = Some(e);
+                                failures.push((model_ref.clone(), e));
                             }
                         }
                     },
                 }
             }
         }
-        let err = last.unwrap_or_else(|| LlmError::InvalidResponse("no model candidates".into()));
+        let err = crate::llm::all_candidates_failed(failures);
         let meta = RoutingMeta {
             attempts,
             escalations,

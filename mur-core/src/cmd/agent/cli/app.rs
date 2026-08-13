@@ -462,8 +462,19 @@ pub struct App {
     pub turn_out: u64,
     /// Last-known context fill from the runtime's `Task.usage.context_tokens`.
     pub ctx_tokens: u64,
-    /// Agent's model pricing loaded at startup (used by the footer renderer).
+    /// Pricing for the model that answered the LAST turn — not necessarily the
+    /// one this agent is configured with, because the runtime's fallback chain
+    /// substitutes another when a candidate is unreachable, out of credit, or
+    /// serving a retired model id. Re-resolved per turn from `usage.model_ref`.
     pub pricing: super::footer::Pricing,
+    /// Every registry entry's pricing, so a substitution can be re-priced
+    /// without touching disk mid-turn. `None` in tests and in plain mode.
+    pub pricing_book: Option<super::PricingBook>,
+    /// Registry key of the model that answered most recently, once it has
+    /// differed from the configured one. Drives the substitution notice, and
+    /// remembers what we already told the user so a long session does not
+    /// repeat itself every turn.
+    pub answered_key: Option<String>,
     /// Set to `true` when `StepStarted` fires this turn; used by the footer
     /// to distinguish "pure chat" from "agentic" turns.
     pub saw_step_this_turn: bool,
@@ -592,6 +603,8 @@ impl App {
             turn_out: 0,
             ctx_tokens: 0,
             pricing: super::footer::Pricing::default(),
+            pricing_book: None,
+            answered_key: None,
             saw_step_this_turn: false,
             saw_hitl_this_turn: false,
             step_hint_shown: false,
@@ -701,6 +714,44 @@ impl App {
         if let Some(c) = super::footer::context_tokens(usage) {
             self.ctx_tokens = c;
         }
+        // The runtime reports which model actually answered. Despite the field
+        // name this is the provider's model NAME (`LlmResponse.model`), not a
+        // registry key — the runtime writes `resp.model` into it.
+        //
+        // This arrived on every turn and was thrown away here, while the footer
+        // priced the session from the configured `model_ref` looked up once at
+        // startup. So whenever the fallback chain substituted a model, the
+        // `$x est` figure was computed at the wrong rates and nothing said so.
+        if let Some(answered) = usage.get("model_ref").and_then(|v| v.as_str()) {
+            self.apply_answering_model(answered);
+        }
+    }
+
+    /// Re-price from the model that actually answered, and say so once when it
+    /// is not the configured one.
+    fn apply_answering_model(&mut self, answered: &str) {
+        let Some(book) = &self.pricing_book else {
+            return;
+        };
+        let Some(key) = book.key_for_model(answered).map(str::to_string) else {
+            // A model the registry has never heard of: we cannot price it, and
+            // guessing at the configured model's rates is how the wrong number
+            // got shown in the first place.
+            self.pricing = super::footer::Pricing::default();
+            return;
+        };
+        self.pricing = book.pricing_for_key(&key);
+        let configured = book.configured_key.clone();
+        // Announce only on a CHANGE, so a long session substituted once does
+        // not repeat the notice every turn.
+        if Some(&key) != configured.as_ref() && self.answered_key.as_ref() != Some(&key) {
+            let from = configured.as_deref().unwrap_or("the configured model");
+            self.push_system(format!(
+                "⇄ answered by '{key}' ({answered}), not '{from}' — the runtime fell back. \
+                 Cost below is now priced for '{key}'."
+            ));
+        }
+        self.answered_key = Some(key);
     }
 
     /// Reveal suggestions captured this turn: one → ghost placeholder, many →
