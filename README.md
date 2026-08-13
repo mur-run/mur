@@ -162,7 +162,11 @@ mur model add gpt5 --provider openai --model gpt-5.2 --secret env:OPENAI_API_KEY
 mur model list                                # list registered models
 mur model show gpt5                           # provider, model, effective in/out cost, context window
 mur model prices refresh                      # refresh the cached models.dev price catalog
+mur model doctor                              # offline check: dangling model_refs, ids the catalog
+                                              #   never carried, profiles disagreeing with their ref
 ```
+
+Providers rename and retire model ids constantly. The registry key is the stable name your agents point at, so a rename is **one edit to `models.yaml`** and every agent using that key follows — no per-agent migration. `mur model doctor` reports where that indirection has come apart; it is read-only and never rewrites a model id for you, because which model an agent runs is a cost and behaviour decision that shouldn't change silently.
 
 API keys are stored as `SecretRef`s (`env:`, `keychain:`, `file:`, `cmd:`) — never written to config in plaintext. The **MUR Hub** desktop app has a **Model Library** that connects cloud providers (key saved to the macOS Keychain), auto-detects local runtimes (Ollama / MLX / LM Studio), discovers their models via `/v1/models`, and adds them to the registry — no YAML editing required.
 

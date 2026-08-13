@@ -1,0 +1,417 @@
+//! `mur model doctor` — offline, read-only consistency check across the model
+//! registry and every installed agent's profile.
+//!
+//! Providers rename and retire model ids continuously. MUR already absorbs that
+//! well: agents point at a `model_ref` (a stable alias), so a rename is one edit
+//! in `~/.mur/models.yaml` and every agent pointing at that key moves with it.
+//! This command reports where that indirection has come apart. It never
+//! rewrites a model id: which model an agent runs is a cost and behaviour
+//! decision the operator made, and a silent auto-upgrade would change spend and
+//! output quality behind their back.
+//!
+//! ## What the catalog check is, and is not
+//!
+//! It is NOT a deprecation check. models.dev keeps historical entries — at the
+//! time of writing it lists `claude-sonnet-4-6` and `claude-sonnet-5` side by
+//! side — so an id staying in the catalog says nothing about whether the
+//! provider still serves it. Answering that needs a live `/v1/models` call
+//! against each endpoint, which this command deliberately does not make.
+//!
+//! What it does catch is an id the catalog has never carried under any vendor:
+//! a typo, a copied-wrong id, or a `provider:` field used as a vendor name when
+//! it is really a protocol dialect. That last one is common — `deepseek` is
+//! reached over the OpenAI wire protocol, so its registry entry reads
+//! `provider: openai` while the catalog files it under vendor `deepseek`. The
+//! vendor is therefore inferred from `base_url` before falling back to
+//! `provider`, or every openai-compatible third party would be flagged.
+
+use std::path::Path;
+
+use anyhow::{Context, Result};
+use mur_common::model::ModelRegistry;
+
+/// How stale the cached catalog may be and still be worth consulting. Generous
+/// on purpose: this command must work offline, and a month-old catalog still
+/// answers "has this id ever existed" correctly for anything but the newest
+/// releases.
+const CATALOG_TTL_HOURS: u64 = 24 * 30;
+
+/// Catalog vendor names to try for a registry entry, most specific first.
+///
+/// `provider` is a protocol dialect as often as it is a vendor, so the host of
+/// `base_url` is tried too: `https://api.deepseek.com` → `deepseek`. Both are
+/// offered to the catalog and a hit on either clears the entry.
+fn vendor_candidates(provider: &str, base_url: Option<&str>) -> Vec<String> {
+    let mut out = vec![provider.to_string()];
+    if let Some(host) = host_of(base_url) {
+        let label = host.strip_prefix("api.").unwrap_or(&host);
+        if let Some(first) = label.split('.').next()
+            && !first.is_empty()
+            && !out.iter().any(|v| v == first)
+        {
+            out.push(first.to_string());
+        }
+    }
+    out
+}
+
+fn host_of(base_url: Option<&str>) -> Option<String> {
+    let u = base_url?;
+    let host = u
+        .split("//")
+        .nth(1)
+        .unwrap_or(u)
+        .split(['/', ':'])
+        .next()
+        .unwrap_or("");
+    (!host.is_empty()).then(|| host.to_string())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Level {
+    Error,
+    Warn,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Finding {
+    pub level: Level,
+    pub subject: String,
+    pub detail: String,
+}
+
+impl Finding {
+    fn error(subject: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            level: Level::Error,
+            subject: subject.into(),
+            detail: detail.into(),
+        }
+    }
+    fn warn(subject: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            level: Level::Warn,
+            subject: subject.into(),
+            detail: detail.into(),
+        }
+    }
+}
+
+/// A model served from the local machine is never in a public catalog, so
+/// "unknown to models.dev" says nothing about it. Judged by the endpoint rather
+/// than the provider string, because local runtimes advertise themselves as
+/// `openai`-compatible and would otherwise all be flagged.
+fn is_local_endpoint(base_url: Option<&str>) -> bool {
+    let Some(host) = host_of(base_url) else {
+        return false;
+    };
+    matches!(
+        host.as_str(),
+        "localhost" | "127.0.0.1" | "0.0.0.0" | "[::1]" | "::1"
+    )
+}
+
+/// One agent's model facts, as read off disk.
+pub struct AgentModel {
+    pub name: String,
+    pub model_ref: Option<String>,
+    /// The legacy `model:` block: (provider, name).
+    pub block: (String, String),
+}
+
+/// Answers "does the public catalog list this (vendor, model)". Borrowed rather
+/// than owned so the caller keeps the parsed catalog.
+pub type CatalogKnows<'a> = &'a dyn Fn(&str, &str) -> bool;
+
+/// Pure decision core — no I/O, so the whole rule set is testable.
+///
+/// `catalog_knows` answers "does the public catalog list this (provider, model)";
+/// `None` means no catalog was available and the catalog-backed check is skipped
+/// rather than guessed at.
+pub fn audit(
+    reg: &ModelRegistry,
+    agents: &[AgentModel],
+    catalog_knows: Option<CatalogKnows<'_>>,
+) -> Vec<Finding> {
+    let mut out = Vec::new();
+
+    // 1. Registry entries whose model id the catalog has never carried under
+    //    any vendor we can name for them. See the module doc for what this does
+    //    and does not prove.
+    if let Some(knows) = catalog_knows {
+        for (key, e) in &reg.models {
+            if is_local_endpoint(e.base_url.as_deref()) {
+                continue;
+            }
+            let vendors = vendor_candidates(&e.provider, e.base_url.as_deref());
+            if vendors.iter().any(|v| knows(v, &e.model)) {
+                continue;
+            }
+            out.push(Finding::warn(
+                format!("models.yaml/{key}"),
+                format!(
+                    "{} is not in the price catalog under {} — check the id for a \
+                     typo, or that `provider:` names the right vendor. Not a \
+                     deprecation check: the catalog keeps retired ids. If the id \
+                     really moved, edit this one entry and every agent pointing at \
+                     '{key}' follows.",
+                    e.model,
+                    vendors.join(" or ")
+                ),
+            ));
+        }
+    }
+
+    for a in agents {
+        let Some(key) = a.model_ref.as_deref() else {
+            // No ref: the legacy block IS the source of truth here, which is
+            // supported. Nothing to cross-check.
+            continue;
+        };
+        // 2. A ref that resolves to nothing. Fatal at dial time.
+        let Some(e) = reg.models.get(key) else {
+            out.push(Finding::error(
+                format!("agent/{}", a.name),
+                format!("model_ref '{key}' is not in models.yaml — this agent cannot dial"),
+            ));
+            continue;
+        };
+        // 3. The legacy block disagreeing with the ref. Harmless to the runtime,
+        //    which resolves the ref — but `mur agent companion preview` and
+        //    anyone reading profile.yaml believe the block.
+        if (a.block.0.as_str(), a.block.1.as_str()) != (e.provider.as_str(), e.model.as_str()) {
+            out.push(Finding::warn(
+                format!("agent/{}", a.name),
+                format!(
+                    "profile.yaml `model:` says {}/{} but model_ref '{key}' resolves to \
+                     {}/{} — the ref is what runs. Any `mur agent` edit re-syncs the block.",
+                    a.block.0, a.block.1, e.provider, e.model
+                ),
+            ));
+        }
+    }
+
+    out.sort_by(|x, y| x.subject.cmp(&y.subject));
+    out
+}
+
+/// Read every `<mur_home>/agents/*/profile.yaml`. Unreadable or unparseable
+/// profiles are skipped rather than fatal: a doctor that dies on one bad file
+/// tells you nothing about the other twenty-six.
+pub fn read_agents(mur_home: &Path) -> Vec<AgentModel> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(mur_home.join("agents")) else {
+        return out;
+    };
+    let mut dirs: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+    dirs.sort();
+    for dir in dirs {
+        let Ok(yaml) = std::fs::read_to_string(dir.join("profile.yaml")) else {
+            continue;
+        };
+        let Ok(p) = serde_yaml_ng::from_str::<mur_common::AgentProfile>(&yaml) else {
+            continue;
+        };
+        let Some(name) = dir.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        out.push(AgentModel {
+            name: name.to_string(),
+            model_ref: p.model_ref.clone(),
+            block: (p.model.provider.clone(), p.model.name.clone()),
+        });
+    }
+    out
+}
+
+pub fn cmd_model_doctor() -> Result<()> {
+    let mur_home = crate::cmd::agent::resolve_mur_home()?;
+    let reg_path = mur_home.join("models.yaml");
+    let reg = ModelRegistry::load_from(&reg_path)
+        .with_context(|| format!("load {}", reg_path.display()))?;
+    let agents = read_agents(&mur_home);
+
+    let catalog = crate::model_prices::load_cached(&mur_home, CATALOG_TTL_HOURS);
+    if catalog.is_none() {
+        println!(
+            "note: no fresh price catalog cached — skipping the \
+             renamed/retired check. Run `mur model prices refresh` (needs network)."
+        );
+    }
+    let knows = catalog
+        .as_ref()
+        .map(|c| move |p: &str, m: &str| c.knows(p, m));
+    let findings = audit(&reg, &agents, knows.as_ref().map(|f| f as CatalogKnows<'_>));
+
+    if findings.is_empty() {
+        println!(
+            "ok — {} registry entries, {} agents, nothing inconsistent",
+            reg.models.len(),
+            agents.len()
+        );
+        return Ok(());
+    }
+    for f in &findings {
+        let tag = match f.level {
+            Level::Error => "error",
+            Level::Warn => "warn ",
+        };
+        println!("{tag} {}: {}", f.subject, f.detail);
+    }
+    let errors = findings.iter().filter(|f| f.level == Level::Error).count();
+    println!(
+        "\n{} finding(s): {errors} error, {} warning — nothing was changed",
+        findings.len(),
+        findings.len() - errors
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mur_common::model::ModelEntry;
+
+    fn reg_with(entries: &[(&str, &str, &str, Option<&str>)]) -> ModelRegistry {
+        let mut reg = ModelRegistry::default();
+        for (key, provider, model, base) in entries {
+            reg.models.insert(
+                (*key).to_string(),
+                ModelEntry {
+                    provider: (*provider).to_string(),
+                    model: (*model).to_string(),
+                    base_url: base.map(str::to_string),
+                    ..Default::default()
+                },
+            );
+        }
+        reg
+    }
+
+    fn agent(name: &str, r: Option<&str>, provider: &str, model: &str) -> AgentModel {
+        AgentModel {
+            name: name.to_string(),
+            model_ref: r.map(str::to_string),
+            block: (provider.to_string(), model.to_string()),
+        }
+    }
+
+    /// An id no catalog vendor has ever carried: a typo, or a copied-wrong id.
+    #[test]
+    fn an_id_the_catalog_never_carried_is_reported() {
+        let reg = reg_with(&[("typo", "anthropic", "claude-sonnett-5", None)]);
+        let knows = |_p: &str, m: &str| m == "claude-sonnet-5";
+        let f = audit(&reg, &[], Some(&knows));
+        assert_eq!(f.len(), 1, "{f:?}");
+        // It must not claim to have detected a deprecation — the catalog keeps
+        // retired ids, so it cannot know that.
+        assert!(!f[0].detail.contains("retired it"), "{:?}", f[0]);
+        assert!(f[0].detail.contains("typo"), "{:?}", f[0]);
+        // And it points at the one edit that fixes every agent at once.
+        assert!(
+            f[0].detail.contains("every agent pointing at"),
+            "{:?}",
+            f[0]
+        );
+    }
+
+    /// Caught by running the command for real against a live `~/.mur`: both
+    /// DeepSeek entries were flagged as unknown. They were not — the registry's
+    /// `provider: openai` is the *wire protocol*, while the catalog files them
+    /// under vendor `deepseek`. Looking up only `provider` would flag every
+    /// openai-compatible third party and train the operator to ignore this
+    /// command entirely.
+    #[test]
+    fn an_openai_compatible_vendor_is_matched_by_its_endpoint_not_its_dialect() {
+        let reg = reg_with(&[(
+            "deepseek_v4_flash",
+            "openai",
+            "deepseek-v4-flash",
+            Some("https://api.deepseek.com"),
+        )]);
+        // The real catalog shape: filed under `deepseek`, absent from `openai`.
+        let knows = |v: &str, m: &str| v == "deepseek" && m == "deepseek-v4-flash";
+        assert!(audit(&reg, &[], Some(&knows)).is_empty());
+    }
+
+    #[test]
+    fn the_vendor_guess_prefers_provider_then_the_endpoint_host() {
+        assert_eq!(vendor_candidates("anthropic", None), vec!["anthropic"]);
+        assert_eq!(
+            vendor_candidates("openai", Some("https://api.deepseek.com/v1")),
+            vec!["openai", "deepseek"]
+        );
+        // No duplicate when the host already agrees with the provider.
+        assert_eq!(
+            vendor_candidates("openai", Some("https://api.openai.com/v1")),
+            vec!["openai"]
+        );
+    }
+
+    /// A local runtime is in no public catalog, so "unknown" is the normal case
+    /// and flagging it would train the operator to ignore this command.
+    #[test]
+    fn a_local_endpoint_is_never_flagged_as_unknown() {
+        let reg = reg_with(&[(
+            "omlx",
+            "openai",
+            "Qwen3.5-4B-MLX-4bit",
+            Some("http://127.0.0.1:8000/v1"),
+        )]);
+        let knows = |_p: &str, _m: &str| false;
+        assert!(audit(&reg, &[], Some(&knows)).is_empty());
+    }
+
+    /// Without a catalog the check is skipped, not guessed. Reporting every
+    /// entry as unknown when the cache is cold would be worse than silence.
+    #[test]
+    fn no_catalog_means_no_catalog_findings() {
+        let reg = reg_with(&[("claude_sonnet", "anthropic", "claude-sonnet-4-6", None)]);
+        assert!(audit(&reg, &[], None).is_empty());
+    }
+
+    #[test]
+    fn a_dangling_ref_is_an_error_and_a_drifted_block_is_a_warning() {
+        let reg = reg_with(&[("omlx", "openai", "Qwen3.5-4B-MLX-4bit", None)]);
+        let agents = vec![
+            agent("ghost", Some("never_registered"), "anthropic", "x"),
+            agent(
+                "repomanager",
+                Some("omlx"),
+                "anthropic",
+                "claude-sonnet-4-6",
+            ),
+            agent("aligned", Some("omlx"), "openai", "Qwen3.5-4B-MLX-4bit"),
+            agent("legacy", None, "ollama", "qwen3:4b"),
+        ];
+        let f = audit(&reg, &agents, None);
+        assert_eq!(f.len(), 2, "{f:?}");
+
+        let ghost = f.iter().find(|x| x.subject.contains("ghost")).unwrap();
+        assert_eq!(ghost.level, Level::Error);
+        assert!(ghost.detail.contains("cannot dial"));
+
+        let repo = f
+            .iter()
+            .find(|x| x.subject.contains("repomanager"))
+            .unwrap();
+        assert_eq!(repo.level, Level::Warn);
+        assert!(repo.detail.contains("the ref is what runs"), "{repo:?}");
+
+        // An agent whose block already agrees, and one that never had a ref,
+        // are both fine — the legacy block is a supported source of truth when
+        // there is no ref to contradict it.
+        assert!(!f.iter().any(|x| x.subject.contains("aligned")));
+        assert!(!f.iter().any(|x| x.subject.contains("legacy")));
+    }
+
+    #[test]
+    fn local_endpoint_detection_reads_the_host_not_the_scheme() {
+        assert!(is_local_endpoint(Some("http://127.0.0.1:8000/v1")));
+        assert!(is_local_endpoint(Some("http://localhost:11434")));
+        assert!(!is_local_endpoint(Some("https://api.deepseek.com")));
+        // A remote host that merely mentions localhost must not pass.
+        assert!(!is_local_endpoint(Some("https://localhost.evil.com/v1")));
+        assert!(!is_local_endpoint(None));
+    }
+}
