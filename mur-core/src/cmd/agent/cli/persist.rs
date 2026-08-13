@@ -22,12 +22,15 @@ pub struct TurnRecord {
     pub task_id: Option<String>,
 }
 
-/// Live-channel id + state for the CLI status bar.
+/// Live-channel id for the CLI status bar.
+///
+/// Id only. The channel's persisted lifecycle state used to ride along here and
+/// be rendered beside the live turn state, which is a second source for one
+/// fact — and it lost, because it was refreshed at two call sites while the
+/// turn state is refreshed every frame (#940).
 #[derive(Debug, Clone)]
 pub struct ChannelMeta {
     pub id: String,
-    /// kebab-case `ChannelState` string (e.g. "working").
-    pub state: String,
 }
 
 /// Listing entry; `id` is the channel id (was the session file stem).
@@ -80,16 +83,11 @@ impl Session {
         self.channel_id.as_deref()
     }
 
-    /// Read the live channel's id + state for the status bar.
+    /// Read the live channel's id for the status bar.
     /// Returns `None` until the first `append` creates the channel.
     pub fn current(&self) -> Option<ChannelMeta> {
         let id = self.channel_id.clone()?;
-        let ch = self.svc.store().load_manifest(&id).ok()?;
-        let state = serde_json::to_string(&ch.state)
-            .unwrap_or_default()
-            .trim_matches('"')
-            .to_string();
-        Some(ChannelMeta { id, state })
+        Some(ChannelMeta { id })
     }
 
     /// Append one turn, creating the channel on first write. `role` ∈
@@ -259,9 +257,6 @@ mod tests {
         s.append("user", "hi", None, &[]).unwrap();
         let meta = s.current().expect("channel exists after first append");
         assert!(!meta.id.is_empty());
-        assert!(!meta.state.is_empty());
-        // state must not contain JSON quotes — must be bare kebab
-        assert!(!meta.state.contains('"'));
     }
 
     /// #716: options offered via `suggest_replies` must land in the agent

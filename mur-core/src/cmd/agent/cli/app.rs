@@ -467,9 +467,14 @@ pub struct App {
     /// Set to `true` when `StepStarted` fires this turn; used by the footer
     /// to distinguish "pure chat" from "agentic" turns.
     pub saw_step_this_turn: bool,
-    /// A HITL approval arrived this turn (any runtime). Paired with
+    /// A tool was *approved* this turn (any runtime). Paired with
     /// `saw_step_this_turn` to detect an old runtime that ran a tool but
     /// streamed no step events.
+    ///
+    /// Set at the decision, not at the request: a denied call never executes,
+    /// so a missing step stream says nothing about the runtime's age. Setting
+    /// it on arrival made every deny print "this agent ran a tool without
+    /// streaming step detail" about a tool that did not run (#940).
     pub saw_hitl_this_turn: bool,
     /// The "restart for step view" hint has been shown once this session.
     pub step_hint_shown: bool,

@@ -1423,10 +1423,9 @@ impl TaskRunner {
                         }
                     };
                     if !decision.allow {
-                        let reason_str = decision.reason.as_deref().unwrap_or("denied");
                         return Err(task_error(
                             "hitl_denied",
-                            format!("tool call denied: {reason_str}"),
+                            deny_message(decision.reason.as_deref()),
                             false,
                         ));
                     }
@@ -2109,6 +2108,19 @@ fn last_assistant_text(history: &[crate::llm::RichMessage]) -> Option<String> {
 }
 
 /// Build a `TaskError` for a failed task outcome.
+/// Operator-facing text for a refused tool call.
+///
+/// A bare `"denied"` reason — what the CLI sends when the user just presses `n`
+/// — adds nothing the prefix has not already said, and appending it anyway
+/// printed `tool call denied: denied` (#940). Only a reason that carries new
+/// information is appended.
+fn deny_message(reason: Option<&str>) -> String {
+    match reason.map(str::trim) {
+        Some(r) if !r.is_empty() && r != "denied" => format!("tool call denied: {r}"),
+        _ => "tool call denied".to_string(),
+    }
+}
+
 fn task_error(code: &str, message: String, recoverable: bool) -> TaskError {
     TaskError {
         code: code.to_string(),
@@ -3931,5 +3943,32 @@ mod step_tests {
         assert!(truncated);
         assert_eq!(full_len, big.len());
         assert!(out.is_char_boundary(out.len())); // never split a char
+    }
+}
+
+/// #940: the deny path stuttered — `tool call denied: denied`.
+#[cfg(test)]
+mod deny_message_tests {
+    use super::deny_message;
+
+    #[test]
+    fn a_bare_denial_is_not_repeated() {
+        // What the CLI sends for a plain `n` press.
+        assert_eq!(deny_message(Some("denied")), "tool call denied");
+        assert_eq!(deny_message(Some("  denied  ")), "tool call denied");
+        assert_eq!(deny_message(Some("")), "tool call denied");
+        assert_eq!(deny_message(None), "tool call denied");
+    }
+
+    #[test]
+    fn a_reason_that_says_something_survives() {
+        assert_eq!(
+            deny_message(Some("timed out")),
+            "tool call denied: timed out"
+        );
+        assert_eq!(
+            deny_message(Some("no approval channel available")),
+            "tool call denied: no approval channel available"
+        );
     }
 }

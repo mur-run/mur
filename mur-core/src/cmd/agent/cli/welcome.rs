@@ -217,7 +217,15 @@ pub fn welcome_lines(
     }
     lines.push(Line::default());
 
-    // One-line identity: agent · cwd.
+    // One-line identity: agent · shell cwd.
+    //
+    // Labelled "shell:" because that is all it is. This is the directory the
+    // TUI was launched from, handed to the agent as a bash-cwd hint on the
+    // first message — it is NOT the runtime's session cwd, which stays at
+    // `~/.mur/agents/<name>` and is what a relative path in `read_file`
+    // resolves against. Unlabelled it read as "the agent works here", so
+    // relative paths were handed over that could not resolve and the failure
+    // looked like a missing file (#940).
     lines.push(Line::from(vec![
         Span::styled(
             agent.to_string(),
@@ -225,7 +233,7 @@ pub fn welcome_lines(
                 .fg(theme.agent)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled("  ·  ", Style::default().fg(theme.separator)),
+        Span::styled("  ·  shell ", Style::default().fg(theme.separator)),
         Span::styled(pretty_cwd(cwd), Style::default().fg(theme.system)),
     ]));
     lines.push(Line::default());
@@ -354,6 +362,32 @@ mod tests {
         assert_eq!(pretty_cwd(Some(std::path::Path::new("/a/b"))), "/a/b");
         // None renders a neutral placeholder.
         assert_eq!(pretty_cwd(None), "·");
+    }
+
+    /// #940: the identity line printed a bare path that reads as "the agent
+    /// works here". It is the *shell's* cwd, passed along only as a bash hint;
+    /// the runtime's session cwd stays at `~/.mur/agents/<name>`, so a relative
+    /// path handed to `read_file` on the strength of this line cannot resolve.
+    #[test]
+    fn the_identity_line_labels_the_path_as_the_shell_cwd() {
+        let lines = welcome_lines(
+            &super::super::theme::DARK,
+            MascotMode::Off,
+            "repomanager",
+            Some(std::path::Path::new("/a/b/c")),
+            true,
+        );
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(text.contains("repomanager"), "agent name stays: {text}");
+        assert!(text.contains("/a/b/c"), "path stays: {text}");
+        assert!(
+            text.contains("shell"),
+            "the path must be labelled, not left to read as the agent's cwd: {text}"
+        );
     }
 
     #[test]

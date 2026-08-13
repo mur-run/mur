@@ -1201,9 +1201,14 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::raw("  "));
     }
     if let Some(meta) = &app.channel {
+        // Id only. The chip used to append `meta.state`, a persisted channel
+        // lifecycle word refreshed at just two points, next to the live turn
+        // state a few columns to its right — so the bar routinely read
+        // `⏵ 019ff831:working   ready`. Two sources for one fact; the live one
+        // wins and the stale one is gone (#940).
         let short: String = meta.id.chars().take(8).collect();
         spans.push(Span::styled(
-            format!(" ⏵ {}:{} ", short, meta.state),
+            format!(" ⏵ {short} "),
             Style::default().fg(theme.agent),
         ));
         spans.push(Span::raw("  "));
@@ -1534,7 +1539,12 @@ fn footer_segments(
         (Some(c), Some(cap)) => format!("${c:.2} / ${cap:.2}"),
         (Some(c), None) => format!("${c:.3} est"),
         (None, Some(cap)) => format!("/ ${cap:.2}"),
-        (None, None) => "\u{2014}".to_string(), // em dash
+        // No per-token price for this model (local runtimes, and any registry
+        // entry added without `--input-cost`). An em dash in the same slot as
+        // "$0.125 est" read as "this turn was free" rather than "we cannot
+        // price it" — same field, two meanings, no way to tell them apart
+        // (#940).
+        (None, None) => "no price".to_string(),
     };
 
     let ctx = match pricing.window {
@@ -1658,10 +1668,12 @@ mod footer_fmt_tests {
     const WIDE: usize = 200;
 
     #[test]
-    fn shows_tokens_and_dash_cost_when_unpriced() {
+    fn shows_tokens_and_names_the_reason_when_unpriced() {
         let s = footer_segments(1240, 0, 1240, 0, 0, &Pricing::default(), None, WIDE);
         assert!(s.contains("1,240 tok") || s.contains("1240 tok"));
-        assert!(s.contains('\u{2014}')); // em dash — no price
+        // Was an em dash, which sat in the same slot as "$0.125 est" and so
+        // read as a cost of zero rather than an absent price (#940).
+        assert!(s.contains("no price"), "got: {s}");
     }
 
     #[test]
@@ -2055,6 +2067,79 @@ mod scroll_marker_tests {
         assert_eq!(
             scroll_marker(25, 10).as_deref(),
             Some(" ↑ 15 · PgDn to follow ")
+        );
+    }
+}
+
+/// #940: the observability footer must never render a figure whose blank case
+/// is indistinguishable from a real one.
+#[cfg(test)]
+mod footer_cost_tests {
+    use super::super::footer::Pricing;
+    use super::footer_segments;
+
+    /// A model with no per-token price used to render an em dash in the exact
+    /// slot where a priced model renders `$0.125 est` — so "we cannot price
+    /// this" and "this cost nothing" were the same pixel. Two agents side by
+    /// side in a multiplexer is where it bit.
+    #[test]
+    fn an_unpriced_model_says_so_rather_than_going_blank() {
+        let unpriced = Pricing {
+            in_per_1k: None,
+            out_per_1k: None,
+            window: Some(32_000),
+        };
+        let out = footer_segments(10, 20, 100, 200, 3_762, &unpriced, None, 200);
+        assert!(
+            out.contains("no price"),
+            "an unpriced model must name the reason, got: {out}"
+        );
+        assert!(
+            !out.contains('\u{2014}'),
+            "the bare em dash reads as a cost of zero, got: {out}"
+        );
+    }
+
+    /// Control: pricing present still produces a number, so the fix above did
+    /// not simply replace the cost segment.
+    #[test]
+    fn a_priced_model_still_shows_the_estimate() {
+        let priced = Pricing {
+            in_per_1k: Some(3.0),
+            out_per_1k: Some(15.0),
+            window: Some(32_000),
+        };
+        let out = footer_segments(10, 20, 1_000, 1_000, 3_762, &priced, None, 200);
+        assert!(out.contains('$'), "priced model must show a cost: {out}");
+        assert!(!out.contains("no price"), "got: {out}");
+    }
+}
+
+/// #940: the status bar rendered a persisted channel-lifecycle word next to the
+/// live turn state, so it routinely read `⏵ 019ff831:working   ready`.
+#[cfg(test)]
+mod status_chip_tests {
+    use super::super::app::App;
+    use super::super::persist::ChannelMeta;
+    use super::render_status;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    #[test]
+    fn the_channel_chip_states_the_id_and_leaves_the_state_word_to_the_live_one() {
+        let mut app = App::test_fixture();
+        app.channel = Some(ChannelMeta {
+            id: "019ff831dead".into(),
+        });
+        let mut term = Terminal::new(TestBackend::new(120, 1)).unwrap();
+        term.draw(|f| render_status(f, &app, f.area())).unwrap();
+        let dump = term.backend().to_string();
+
+        assert!(dump.contains("019ff831"), "chip must show the id: {dump}");
+        assert!(dump.contains("ready"), "live turn state stays: {dump}");
+        assert!(
+            !dump.contains("019ff831:"),
+            "the chip must not append a second state word: {dump}"
         );
     }
 }
