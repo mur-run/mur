@@ -143,6 +143,60 @@ async fn fatal_error_does_not_advance() {
     assert!(matches!(err, LlmError::Http(_))); // returned a's fatal error, never tried b
 }
 
+/// A renamed or retired model id is exactly what a fallback chain is for. It
+/// used to be lumped into the `Http` catch-all and stop the turn outright,
+/// leaving a perfectly good fallback unused.
+#[tokio::test]
+async fn a_model_not_found_advances_to_the_next_candidate() {
+    let mut s = HashMap::new();
+    s.insert(
+        "a".into(),
+        vec![Err(LlmError::ModelNotFound("claude-sonnet-4-6".into()))],
+    );
+    s.insert("b".into(), vec![Ok(())]);
+    let fb = FallbackLlmClient::new(vec!["a".into(), "b".into()], factory_for(s), retry0());
+    let resp = fb.generate(LlmRequest::default()).await.unwrap();
+    assert_eq!(resp.text, "b", "the chain must survive a retired model id");
+}
+
+/// ...and it must advance WITHOUT spending the retry budget. A 404 cannot
+/// become a 200 by asking the same endpoint again, so backing off against it
+/// is pure latency. The script makes the difference observable: candidate `a`
+/// would succeed on its second call, so any retry at all returns "a".
+#[tokio::test]
+async fn a_model_not_found_does_not_burn_retries_on_the_same_candidate() {
+    let retry3 = RetryConfig {
+        max_retries: 3,
+        backoff_base_ms: 1,
+        cooldown_secs: 60,
+    };
+    let mut s = HashMap::new();
+    s.insert(
+        "a".into(),
+        vec![Err(LlmError::ModelNotFound("gone".into())), Ok(())],
+    );
+    s.insert("b".into(), vec![Ok(())]);
+    let fb = FallbackLlmClient::new(vec!["a".into(), "b".into()], factory_for(s), retry3);
+    let resp = fb.generate(LlmRequest::default()).await.unwrap();
+    assert_eq!(
+        resp.text, "b",
+        "a retry would have hit a's scripted Ok and returned \"a\""
+    );
+}
+
+/// Control for the two above: auth still stops the chain dead. Falling back
+/// here would re-present the same broken credential to a second provider and
+/// bury a config error the operator has to fix.
+#[tokio::test]
+async fn auth_still_does_not_advance() {
+    let mut s = HashMap::new();
+    s.insert("a".into(), vec![Err(LlmError::Http("status 401".into()))]);
+    s.insert("b".into(), vec![Ok(())]);
+    let fb = FallbackLlmClient::new(vec!["a".into(), "b".into()], factory_for(s), retry0());
+    let err = fb.generate(LlmRequest::default()).await.unwrap_err();
+    assert!(matches!(err, LlmError::Http(_)), "never tried b");
+}
+
 #[tokio::test]
 async fn exhaustion_returns_last_error() {
     let mut s = HashMap::new();

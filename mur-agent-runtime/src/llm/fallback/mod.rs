@@ -11,7 +11,7 @@ use mur_common::config::{ModelSwitchConfig, RetryConfig};
 use mur_common::model::{choose_by_difficulty, resolve_model_refs};
 
 use super::{
-    BackgroundKind, LlmClient, LlmError, LlmRequest, LlmResponse, RequestIntent, Retryability,
+    BackgroundKind, Disposition, LlmClient, LlmError, LlmRequest, LlmResponse, RequestIntent,
     RichMessage, classify,
 };
 use crate::telemetry_writer::Event;
@@ -259,7 +259,26 @@ impl FallbackLlmClient {
                         return (Ok(resp), meta);
                     }
                     Err(e) => match classify(&e) {
-                        Retryability::Fatal => {
+                        // Permanent for this candidate, plausibly fine on the
+                        // next: skip the retry budget entirely and advance.
+                        // Backing off three times against a model id the
+                        // endpoint does not serve buys nothing but latency.
+                        Disposition::AdvanceNow => {
+                            tracing::info!(
+                                model_ref,
+                                error = %e,
+                                "llm fallback: permanent for this candidate, advancing chain now"
+                            );
+                            // Cool it down so a later request this session does
+                            // not pay the same failing round-trip again.
+                            self.cooldown.mark(
+                                model_ref,
+                                Instant::now() + Duration::from_secs(self.retry.cooldown_secs),
+                            );
+                            last = Some(e);
+                            continue 'candidates;
+                        }
+                        Disposition::Stop => {
                             // Structural failure is escalatable ONLY under
                             // Background+Smart, within the per-call cap.
                             let structural = matches!(e, LlmError::InvalidResponse(_));
@@ -282,7 +301,7 @@ impl FallbackLlmClient {
                             };
                             return (Err(e), meta);
                         }
-                        Retryability::Retryable => {
+                        Disposition::RetryThenAdvance => {
                             tracing::info!(model_ref, attempt, error = %e, "llm fallback: retryable failure");
                             if attempt < self.retry.max_retries {
                                 tokio::time::sleep(backoff_delay(
