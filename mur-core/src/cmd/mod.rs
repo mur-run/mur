@@ -48,6 +48,7 @@ pub mod media;
 pub(crate) mod migrate_patterns;
 pub(crate) mod misc;
 pub mod model;
+pub mod model_doctor;
 pub(crate) mod murmurd;
 pub mod notes_cmd;
 pub(crate) mod official;
