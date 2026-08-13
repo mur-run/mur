@@ -201,27 +201,70 @@ pub enum LlmError {
     /// kill the turn outright while a perfectly good fallback sat unused.
     #[error("model not found: {0}")]
     ModelNotFound(String),
+    /// Authentication or authorization refused (401/403). The one class that
+    /// must never advance the chain: the operator configured something wrong,
+    /// and routing around it converts a loud, fixable failure into a silent
+    /// permanent one.
+    #[error("auth refused ({0}): {1}")]
+    Auth(u16, String),
+    /// This endpoint refused this request, for a reason that is specific to
+    /// this candidate rather than to the request itself — payload too large
+    /// for its window, unsupported modality, region or tier restriction, or a
+    /// provider-specific 4xx we have not enumerated. Another candidate may
+    /// accept it.
+    #[error("rejected ({0}): {1}")]
+    Rejected(u16, String),
+    /// Every candidate failed. `source` carries the most *actionable* of their
+    /// errors — a configuration error the operator can fix outranks weather
+    /// they cannot — so classification upstream stays correct, while `summary`
+    /// lists what each candidate actually said. Reporting only the last
+    /// candidate's error, which is what this replaces, made the diagnosis an
+    /// accident of chain order.
+    #[error("{summary}")]
+    AllCandidatesFailed {
+        source: Box<LlmError>,
+        summary: String,
+    },
 }
 
 impl LlmError {
-    /// Map a non-success HTTP status into a typed error. Centralises what was
-    /// previously scattered `status == 429` checks + a lumped `Http(String)`.
+    /// Map a non-success HTTP status into a typed error.
+    ///
+    /// The default for an unrecognised 4xx is `Rejected` (advance), not `Http`
+    /// (stop. The set of failures that must NOT fall back is small, closed and
+    /// stable across providers — it is authentication, and nothing else. The
+    /// set that *should* fall back is open and still growing: every provider
+    /// invents its own codes for "too big", "wrong media type", "not enabled
+    /// in your region", "model not in your tier". Enumerating the open set and
+    /// defaulting the tail to stop is what let a renamed model kill turns for
+    /// months while a fallback sat unused.
+    ///
+    /// Enumerate the closed set; default to the open one.
     pub fn from_status(status: u16, body: String) -> LlmError {
         match status {
+            // Closed set: never fall back. Presenting the same broken
+            // credential to a second provider fails identically and buries a
+            // configuration error only the operator can fix.
+            401 | 403 => LlmError::Auth(status, body),
             429 => LlmError::RateLimit,
             402 => LlmError::InsufficientCredit,
             404 => LlmError::ModelNotFound(body),
             408 => LlmError::Timeout,
             500..=599 => LlmError::ServerError(status),
+            // Open set: this endpoint refused this request. Another candidate
+            // — different context window, different modality support,
+            // different region — may well accept it.
+            400..=499 => LlmError::Rejected(status, body),
             _ => LlmError::Http(format!("status {status}: {body}")),
         }
     }
 
     /// Map a reqwest transport error into a typed error. Central rule: an
     /// error without an HTTP status is a transport failure (`Connect`,
-    /// Retryable) — the server never rendered a verdict, so it can't be the
-    /// auth/bad-request class that `Http` reserves Fatal for. Request-builder
-    /// errors (malformed URL/body) stay `Http`: retrying can't fix them.
+    /// retry-then-advance) — the server never rendered a verdict, so it can't
+    /// be the auth/bad-request class. Request-builder errors (malformed
+    /// URL/body) stay `Http`: that is our own bug, and no other candidate will
+    /// like the request any better.
     pub fn from_reqwest(e: &reqwest::Error) -> LlmError {
         if e.is_timeout() {
             LlmError::Timeout
@@ -261,12 +304,53 @@ pub fn classify(e: &LlmError) -> Disposition {
         | LlmError::Timeout
         | LlmError::Connect(_)
         | LlmError::ServerError(_) => Disposition::RetryThenAdvance,
-        // Neither of these gets better by asking the same endpoint again:
-        // an account without credit does not acquire any within three
-        // exponential backoffs, and a model id the endpoint does not serve
-        // will not appear. Both may be fine on the next candidate.
-        LlmError::InsufficientCredit | LlmError::ModelNotFound(_) => Disposition::AdvanceNow,
-        LlmError::Http(_) | LlmError::InvalidResponse(_) => Disposition::Stop,
+        // None of these gets better by asking the same endpoint again: an
+        // account without credit does not acquire any within three backoffs, a
+        // model id the endpoint does not serve will not appear, and a refusal
+        // aimed at this candidate's limits is not a matter of timing. All three
+        // may be fine on the next candidate.
+        LlmError::InsufficientCredit | LlmError::ModelNotFound(_) | LlmError::Rejected(..) => {
+            Disposition::AdvanceNow
+        }
+        // `Auth` is the closed set that must never fall back. `Http` here means
+        // a malformed request we built or a response we could not parse — our
+        // bug, which no other candidate will like any better.
+        LlmError::Auth(..) | LlmError::Http(_) | LlmError::InvalidResponse(_) => Disposition::Stop,
+        // Already exhausted; classify as whatever the operator should act on.
+        LlmError::AllCandidatesFailed { source, .. } => classify(source),
+    }
+}
+
+/// How much the operator can do about a failure. Used to pick which candidate's
+/// error leads when the whole chain is exhausted: a wrong API key is worth
+/// surfacing over a rate limit, whatever order they happened to occur in.
+fn actionability(e: &LlmError) -> u8 {
+    match classify(e) {
+        Disposition::Stop => 2,             // config error / our bug — fix it
+        Disposition::AdvanceNow => 1,       // candidate-specific — maybe fix it
+        Disposition::RetryThenAdvance => 0, // weather — wait it out
+    }
+}
+
+/// Fold every candidate's failure into one error: the most actionable one
+/// leads (so upstream classification is right), and the summary says what each
+/// candidate actually reported.
+pub fn all_candidates_failed(failures: Vec<(String, LlmError)>) -> LlmError {
+    let Some(lead) = failures
+        .iter()
+        .max_by_key(|(_, e)| actionability(e))
+        .map(|(_, e)| e.clone())
+    else {
+        return LlmError::InvalidResponse("no model candidates".into());
+    };
+    let listed = failures
+        .iter()
+        .map(|(r, e)| format!("{r}: {e}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    LlmError::AllCandidatesFailed {
+        source: Box::new(lead),
+        summary: format!("all {} model candidates failed — {listed}", failures.len()),
     }
 }
 
@@ -376,13 +460,15 @@ mod tests {
             LlmError::from_status(503, "x".into()),
             LlmError::ServerError(503)
         ));
+        // 400 is no longer the `Http` catch-all: an unrecognised 4xx is a
+        // refusal by THIS endpoint and may well succeed on the next candidate.
         assert!(matches!(
             LlmError::from_status(400, "x".into()),
-            LlmError::Http(_)
+            LlmError::Rejected(400, _)
         ));
         assert!(matches!(
             LlmError::from_status(401, "x".into()),
-            LlmError::Http(_)
+            LlmError::Auth(401, _)
         ));
     }
 
@@ -458,10 +544,12 @@ mod tests {
             LlmError::from_status(408, String::new()),
             LlmError::Timeout
         ));
-        // 401 stays Http → Stop: auth errors must never advance the chain.
-        let e = LlmError::from_status(401, "unauthorized".into());
-        assert!(matches!(e, LlmError::Http(_)));
-        assert!(matches!(classify(&e), Disposition::Stop));
+        // Auth is the one closed set that must never advance the chain.
+        for status in [401, 403] {
+            let e = LlmError::from_status(status, "unauthorized".into());
+            assert!(matches!(e, LlmError::Auth(..)), "{status}: {e:?}");
+            assert_eq!(classify(&e), Disposition::Stop, "{status}");
+        }
     }
 }
 

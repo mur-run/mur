@@ -206,7 +206,9 @@ impl FallbackLlmClient {
         req: &LlmRequest,
     ) -> (Result<LlmResponse, LlmError>, RoutingMeta) {
         let now = Instant::now();
-        let mut last: Option<LlmError> = None;
+        // Every candidate's failure, in order. Reporting only the last one
+        // made the diagnosis an accident of chain order (#947).
+        let mut failures: Vec<(String, LlmError)> = Vec::new();
         let candidates = self.candidates_for(req);
 
         // Structural-failure escalation (cascade) is allowed ONLY for
@@ -242,7 +244,10 @@ impl FallbackLlmClient {
             let client = match (self.factory)(model_ref) {
                 Ok(c) => c,
                 Err(e) => {
-                    last = Some(LlmError::Http(format!("build {model_ref}: {e}")));
+                    failures.push((
+                        model_ref.clone(),
+                        LlmError::Http(format!("build {model_ref}: {e}")),
+                    ));
                     continue;
                 }
             };
@@ -275,7 +280,7 @@ impl FallbackLlmClient {
                                 model_ref,
                                 Instant::now() + Duration::from_secs(self.retry.cooldown_secs),
                             );
-                            last = Some(e);
+                            failures.push((model_ref.clone(), e));
                             continue 'candidates;
                         }
                         Disposition::Stop => {
@@ -289,7 +294,7 @@ impl FallbackLlmClient {
                                     escalations,
                                     "smart cascade: structural fail, escalating"
                                 );
-                                last = Some(e);
+                                failures.push((model_ref.clone(), e));
                                 continue 'candidates; // advance to next candidate (the better model)
                             }
                             // Interactive / over-cap / non-structural Fatal → surface (Phase-1 boundary).
@@ -317,14 +322,14 @@ impl FallbackLlmClient {
                                     model_ref,
                                     "llm fallback: cooling down, advancing chain"
                                 );
-                                last = Some(e);
+                                failures.push((model_ref.clone(), e));
                             }
                         }
                     },
                 }
             }
         }
-        let err = last.unwrap_or_else(|| LlmError::InvalidResponse("no model candidates".into()));
+        let err = crate::llm::all_candidates_failed(failures);
         let meta = RoutingMeta {
             attempts,
             escalations,
