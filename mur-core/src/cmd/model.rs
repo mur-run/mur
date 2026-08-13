@@ -78,6 +78,11 @@ pub enum ModelCmd {
         #[command(subcommand)]
         sub: RouteSubCmd,
     },
+    /// Offline consistency check: registry ids the price catalog no longer
+    /// lists (a renamed or retired model), agent `model_ref`s that resolve to
+    /// nothing, and legacy `model:` blocks that disagree with their ref.
+    /// Read-only — never rewrites a model id.
+    Doctor,
     /// Manage the cached models.dev price catalog.
     Prices {
         #[command(subcommand)]
@@ -329,6 +334,7 @@ pub fn run(args: ModelArgs) -> anyhow::Result<()> {
         ModelCmd::Migrate { dry_run } => cmd_migrate(dry_run)?,
         ModelCmd::Role { sub } => cmd_role(sub, &mut reg, &path)?,
         ModelCmd::Route { sub } => cmd_route(&sub, &reg)?,
+        ModelCmd::Doctor => crate::cmd::model_doctor::cmd_model_doctor()?,
         ModelCmd::Prices { sub } => {
             let mur_home = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
             cmd_prices(sub, &mur_home, &reg)?;

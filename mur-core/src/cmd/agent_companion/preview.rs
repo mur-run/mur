@@ -280,13 +280,41 @@ fn pick_template_from_list(
 
 // ─── LLM client construction ─────────────────────────────────────────────────
 
+/// The (provider, model) preview should dial for `profile`.
+///
+/// `model_ref` wins, exactly as it does in the runtime
+/// (`mur_common::model::resolve_model_refs`). Preview used to read the legacy
+/// `model:` block and nothing else, so a ref-based agent previewed against
+/// whatever provider that block happened to name — for `repomanager` that was
+/// `anthropic/claude-sonnet-4-6`, a model id that exists in no registry at all,
+/// while the agent itself dialled a local openai-compatible endpoint (#940).
+///
+/// Falls back to the block when there is no ref, or when the ref does not
+/// resolve: an unreadable registry must not make preview worse than it was.
+fn preview_model(
+    profile: &AgentProfile,
+    reg: Option<&mur_common::model::ModelRegistry>,
+) -> (String, String) {
+    let fallback = || (profile.model.provider.clone(), profile.model.name.clone());
+    let (Some(key), Some(reg)) = (profile.model_ref.as_deref(), reg) else {
+        return fallback();
+    };
+    match reg.models.get(key) {
+        Some(e) => (e.provider.clone(), e.model.clone()),
+        None => fallback(),
+    }
+}
+
 fn build_llm_client(profile: &AgentProfile) -> Result<Arc<dyn LlmClient>> {
     use mur_agent_runtime::llm::{
         anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient,
     };
 
-    let provider = profile.model.provider.as_str();
-    let model = profile.model.name.clone();
+    let reg = mur_common::model::ModelRegistry::default_path()
+        .and_then(|p| mur_common::model::ModelRegistry::load_from(&p))
+        .ok();
+    let (provider, model) = preview_model(profile, reg.as_ref());
+    let provider = provider.as_str();
 
     match provider {
         "anthropic" => {
@@ -479,5 +507,63 @@ companion:
             msg.contains("unknown situation"),
             "expected 'unknown situation' in error, got: {msg}"
         );
+    }
+}
+
+/// #940 follow-up: preview built its LLM client from the legacy `model:` block
+/// and had no `model_ref` awareness at all, so a ref-based agent previewed
+/// against whatever provider that block happened to name.
+#[cfg(test)]
+mod preview_model_tests {
+    use super::preview_model;
+    use mur_common::model::{ModelEntry, ModelRegistry};
+
+    fn reg() -> ModelRegistry {
+        let mut r = ModelRegistry::default();
+        r.models.insert(
+            "omlx".into(),
+            ModelEntry {
+                provider: "openai".into(),
+                model: "Qwen3.5-4B-MLX-4bit".into(),
+                ..Default::default()
+            },
+        );
+        r
+    }
+
+    fn profile(reference: Option<&str>, provider: &str, name: &str) -> mur_common::AgentProfile {
+        let mut p = mur_common::AgentProfile::default_for_tests();
+        p.model_ref = reference.map(str::to_string);
+        p.model.provider = provider.into();
+        p.model.name = name.into();
+        p
+    }
+
+    /// The observed case: `repomanager` dials a local openai-compatible
+    /// endpoint while its block still said `anthropic/claude-sonnet-4-6` — an
+    /// id that exists in no registry, so preview could only ever fail.
+    #[test]
+    fn the_ref_wins_over_the_legacy_block() {
+        let p = profile(Some("omlx"), "anthropic", "claude-sonnet-4-6");
+        assert_eq!(
+            preview_model(&p, Some(&reg())),
+            ("openai".to_string(), "Qwen3.5-4B-MLX-4bit".to_string())
+        );
+    }
+
+    /// Fail-open in both directions: no ref means the block is the source of
+    /// truth, and an unreadable registry or a ref the registry never heard of
+    /// must leave preview no worse off than before this change.
+    #[test]
+    fn the_block_still_serves_when_there_is_nothing_better() {
+        let no_ref = profile(None, "ollama", "qwen3:4b");
+        let want = ("ollama".to_string(), "qwen3:4b".to_string());
+        assert_eq!(preview_model(&no_ref, Some(&reg())), want.clone());
+
+        let dangling = profile(Some("never_registered"), "ollama", "qwen3:4b");
+        assert_eq!(preview_model(&dangling, Some(&reg())), want.clone());
+
+        let no_registry = profile(Some("omlx"), "ollama", "qwen3:4b");
+        assert_eq!(preview_model(&no_registry, None), want);
     }
 }

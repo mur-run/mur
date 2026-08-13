@@ -78,15 +78,34 @@ impl Catalog {
         self.lookup_in(vendor, sub)
     }
 
-    fn lookup_in(&self, provider: &str, model: &str) -> Option<PriceInfo> {
+    /// Does the catalog list this `(provider, model)` at all?
+    ///
+    /// Distinct from `lookup(..).is_some()`, which is also `None` for a model
+    /// the catalog knows but prices incompletely. The doctor needs the
+    /// difference: "the provider has never heard of this id" is a renamed or
+    /// retired model, while "listed but unpriced" is only a display gap.
+    pub fn knows(&self, provider: &str, model: &str) -> bool {
+        if self.raw_of(provider, model).is_some() {
+            return true;
+        }
+        match model.split_once('/') {
+            Some((vendor, sub)) => self.raw_of(vendor, sub).is_some(),
+            None => false,
+        }
+    }
+
+    fn raw_of(&self, provider: &str, model: &str) -> Option<&RawModel> {
         let prov = self.providers.get(provider)?;
-        // exact, then case-insensitive
-        let raw = prov.models.get(model).or_else(|| {
+        prov.models.get(model).or_else(|| {
             prov.models
                 .iter()
                 .find(|(k, _)| k.eq_ignore_ascii_case(model))
                 .map(|(_, v)| v)
-        })?;
+        })
+    }
+
+    fn lookup_in(&self, provider: &str, model: &str) -> Option<PriceInfo> {
+        let raw = self.raw_of(provider, model)?;
         let cost = raw.cost.as_ref()?;
         Some(PriceInfo {
             input_per_1k: cost.input? / PER_MILLION,
