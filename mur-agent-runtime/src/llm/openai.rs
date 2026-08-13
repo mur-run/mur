@@ -399,6 +399,20 @@ impl LlmClient for OpenAiClient {
         let mut input_tokens = 0u64;
         let mut output_tokens = 0u64;
         let mut stop_reason = StopReason::EndTurn;
+        // Streamed tool calls arrive as fragments: `id` and `function.name`
+        // usually land once, `function.arguments` is concatenated across any
+        // number of chunks, and `index` is what ties the fragments of one call
+        // together (a turn can open several calls at once). Accumulate by index
+        // and assemble after the stream closes — reading only the final chunk
+        // loses every call, which is how a model's tool call used to vanish and
+        // its narration got returned as the answer (#938).
+        #[derive(Default)]
+        struct PartialToolCall {
+            id: String,
+            name: String,
+            arguments: String,
+        }
+        let mut partial: std::collections::BTreeMap<u64, PartialToolCall> = Default::default();
         while let Some(chunk) = resp.chunk().await.map_err(|e| LlmError::from_reqwest(&e))? {
             buf.extend_from_slice(&chunk);
             while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
@@ -440,6 +454,29 @@ impl LlmClient for OpenAiClient {
                         })
                         .await;
                 }
+                if let Some(calls) = delta["tool_calls"].as_array() {
+                    for tc in calls {
+                        let slot = partial
+                            .entry(tc["index"].as_u64().unwrap_or(0))
+                            .or_default();
+                        // Later fragments carry only `arguments`; never let an
+                        // absent or empty field clobber what an earlier chunk
+                        // already established.
+                        if let Some(id) = tc["id"].as_str()
+                            && !id.is_empty()
+                        {
+                            slot.id = id.to_string();
+                        }
+                        if let Some(name) = tc["function"]["name"].as_str()
+                            && !name.is_empty()
+                        {
+                            slot.name = name.to_string();
+                        }
+                        if let Some(args) = tc["function"]["arguments"].as_str() {
+                            slot.arguments.push_str(args);
+                        }
+                    }
+                }
                 // The final content chunk carries `finish_reason`; surface a
                 // max_tokens cut (`"length"`) so the caller can mark the reply
                 // as truncated instead of passing it off as complete.
@@ -458,7 +495,23 @@ impl LlmClient for OpenAiClient {
                 }
             }
         }
-        if text.is_empty() {
+        // A fragment set with no name never became a usable call (a server that
+        // opened an index and then said nothing more about it); dropping it is
+        // safer than inventing a nameless tool.
+        let tool_calls: Vec<crate::llm::ToolCallResult> = partial
+            .into_values()
+            .filter(|p| !p.name.is_empty())
+            .map(|p| crate::llm::ToolCallResult {
+                call_id: p.id,
+                tool_name: p.name,
+                input: serde_json::from_str(&p.arguments)
+                    .unwrap_or(serde_json::Value::Object(Default::default())),
+            })
+            .collect();
+        // A turn that goes straight to a tool call carries no text at all, and
+        // that is a complete, correct response — only a turn with neither text
+        // nor calls is the blank reply this guard exists to catch.
+        if text.is_empty() && tool_calls.is_empty() {
             return Err(LlmError::InvalidResponse("empty streamed response".into()));
         }
         Ok(LlmResponse {
@@ -466,7 +519,7 @@ impl LlmClient for OpenAiClient {
             input_tokens,
             output_tokens,
             model: self.model.clone(),
-            tool_calls: vec![],
+            tool_calls,
             stop_reason,
         })
     }
