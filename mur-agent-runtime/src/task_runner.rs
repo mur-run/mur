@@ -1725,6 +1725,28 @@ impl TaskRunner {
                 }
             }
 
+            // A provider that reports ToolUse owes us the calls it made, so
+            // both being empty is a contradiction: the model called a tool and
+            // the call was lost inside the provider client. Falling through
+            // would push an empty ToolUse into history and hand `resp.text`
+            // back as the reply — shipping the model's narration ("The exact
+            // output is ...") to the user as though the tool had run.
+            // Fabricated results are worse than a failed turn, so stop here.
+            // Not recoverable: the same request against the same client
+            // reproduces it, so a retry only repeats the lie (#938).
+            if resp.stop_reason == StopReason::ToolUse && resp.tool_calls.is_empty() {
+                return Err(task_error(
+                    "llm_error",
+                    format!(
+                        "model {} reported a tool call but the provider client returned \
+                         none; refusing to pass the model's own narration off as a tool \
+                         result",
+                        resp.model
+                    ),
+                    false,
+                ));
+            }
+
             history.push(RichMessage::ToolUse {
                 text: if resp.text.is_empty() {
                     None
@@ -2519,6 +2541,46 @@ mod tests {
                 assert_eq!(task.state, TaskState::Failed);
                 let err = task.error.expect("Failed task must carry an error");
                 assert_eq!(err.code, "llm_error");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    /// A provider that reports ToolUse but hands back no calls must fail the
+    /// turn rather than deliver the model's narration as though the tool had
+    /// run (#938). The text here is the exact fabrication shape observed in
+    /// the wild: the model states a command's output when no command ran.
+    #[tokio::test]
+    async fn tool_use_stop_without_calls_fails_instead_of_fabricating() {
+        use crate::llm::stub::SequenceLlm;
+        let responses: Vec<crate::llm::LlmResponse> = vec![crate::llm::LlmResponse {
+            text: "The exact output of git rev-list --count HEAD is: 2469".into(),
+            input_tokens: 5,
+            output_tokens: 5,
+            model: "test".into(),
+            tool_calls: vec![],
+            stop_reason: crate::llm::StopReason::ToolUse,
+        }];
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_max_iterations(50),
+        );
+        let outcome = runner.run_sync(loop_spec("fabricate")).await;
+        match outcome {
+            TaskOutcome::Failed(task) => {
+                let rendered = format!("{task:?}");
+                let err = task.error.expect("Failed task must carry an error");
+                assert_eq!(err.code, "llm_error");
+                assert!(
+                    !err.recoverable,
+                    "a call dropped in the provider client reproduces on retry"
+                );
+                assert!(
+                    !rendered.contains("2469"),
+                    "the model's fabricated tool output must never reach the user, got: {rendered}"
+                );
             }
             other => panic!("expected Failed, got {other:?}"),
         }
