@@ -83,7 +83,6 @@ mod tests {
             kind: RunKind::Job,
             label: "fan out 3 jobs".into(),
             pid: std::process::id(),
-            ppid: 1,
             started_at: chrono::Utc::now(),
             last_heartbeat_at: None,
             state: State::Running,
@@ -254,7 +253,6 @@ pub struct RunState {
     /// PID of the orchestrator process (the one inside `execute_dag`), not of
     /// any delegated agent.
     pub pid: u32,
-    pub ppid: u32,
     pub started_at: DateTime<Utc>,
     /// The ONLY field that cannot be rebuilt from the channel. `None` means
     /// "rebuilt" and yields `Liveness::Unknown`, never a guess.
@@ -388,7 +386,7 @@ git commit -m "feat(run-status): run state types and atomic run.json store"
 
 **Interfaces:**
 - Consumes: `run_status::{RunState, State, Liveness}` (Task 1).
-- Produces: `run_status::RunStatus { state: State, liveness: Liveness, run: RunState }`; `run_status::classify(run: RunState, now: DateTime<Utc>, stale_after: chrono::Duration) -> RunStatus`; `run_status::stale_after(cfg: &RunsConfig) -> chrono::Duration`; `mur_common::config::RunsConfig { heartbeat_interval_secs: u64, heartbeat_stale_after_intervals: u32 }` reachable as `config.runs`.
+- Produces: `run_status::RunStatus { state: State, liveness: Liveness, run: RunState }`; `run_status::classify(run: RunState, now: DateTime<Utc>, stale_after: chrono::Duration) -> RunStatus`; `run_status::stale_after(cfg: &RunsConfig) -> chrono::Duration`; `run_status::status_of(mur_home: &Path, run_id: &str) -> anyhow::Result<Option<RunStatus>>`; `mur_common::config::RunsConfig { heartbeat_interval_secs: u64, heartbeat_stale_after_intervals: u32 }` reachable as `config.runs`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -413,7 +411,6 @@ mod tests {
             kind: RunKind::Job,
             label: "l".into(),
             pid,
-            ppid: 1,
             started_at: now - chrono::Duration::seconds(600),
             last_heartbeat_at: heartbeat_age_secs.map(|s| now - chrono::Duration::seconds(s)),
             state,
@@ -583,6 +580,25 @@ pub fn stale_after(cfg: &mur_common::config::RunsConfig) -> chrono::Duration {
         (cfg.heartbeat_interval_secs * u64::from(cfg.heartbeat_stale_after_intervals)) as i64,
     )
 }
+
+/// Load a run and classify it against the configured staleness threshold and
+/// the current clock. `Ok(None)` when no such run was recorded.
+///
+/// Every surface calls THIS, not `classify` directly: it is the only place the
+/// config load, the clock read, and the derivation are assembled, so no caller
+/// can assemble them differently. `classify` stays pure so the table test can
+/// address every cell without a clock or a config file.
+pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Option<RunStatus>> {
+    let Some(record) = store::load(mur_home, run_id)? else {
+        return Ok(None);
+    };
+    let cfg = mur_common::config::Config::load_or_default(mur_home);
+    Ok(Some(classify(
+        record,
+        Utc::now(),
+        stale_after(&cfg.runs),
+    )))
+}
 ```
 
 - [ ] **Step 4: Add the config section**
@@ -680,7 +696,6 @@ mod tests {
                 kind: RunKind::Job,
                 label: "l".into(),
                 pid: std::process::id(),
-                ppid: 1,
                 started_at: chrono::Utc::now(),
                 last_heartbeat_at: None,
                 state: State::Running,
@@ -992,7 +1007,6 @@ In `execute_dag`, immediately after `let mut graph = build_dag(&procedure.steps)
             kind,
             label: opts.run_label.clone(),
             pid: std::process::id(),
-            ppid: std::os::unix::process::parent_id(),
             started_at: now,
             last_heartbeat_at: Some(now),
             state: crate::run_status::State::Running,
@@ -1281,7 +1295,6 @@ pub fn from_channel(mur_home: &Path, run_id: &str, channel_id: &str) -> Result<O
         // the fact. `pid: 0` never matches a live process, so a rebuilt
         // non-terminal run reads as `dead` rather than as healthy.
         pid: 0,
-        ppid: 0,
         started_at,
         last_heartbeat_at: None,
         state,
@@ -1346,7 +1359,6 @@ mod tests {
                 kind: RunKind::Job,
                 label: "l".into(),
                 pid,
-                ppid: 1,
                 started_at: now,
                 last_heartbeat_at: beat.map(|s| now - chrono::Duration::seconds(s)),
                 state,
@@ -1446,14 +1458,8 @@ pub fn visible_in_list(status: &RunStatus) -> bool {
     !status.state.is_terminal()
 }
 
-fn stale_after(mur_home: &Path) -> chrono::Duration {
-    let cfg = mur_common::config::Config::load_or_default(mur_home);
-    crate::run_status::stale_after(&cfg.runs)
-}
-
 fn load_status(mur_home: &Path, run_id: &str) -> Result<Option<RunStatus>> {
-    let now = chrono::Utc::now();
-    Ok(store::load(mur_home, run_id)?.map(|run| classify(run, now, stale_after(mur_home))))
+    crate::run_status::status_of(mur_home, run_id)
 }
 
 fn liveness_label(l: Liveness) -> &'static str {
@@ -1619,6 +1625,18 @@ git commit -m "feat(cli): mur job list/status/stop over run_status"
 
 - [ ] **Step 1: Write the failing test**
 
+`mur-mcp-server` does not depend on `chrono`, and the fixture below needs a
+timestamp. Add it as a **dev**-dependency only — the tool arm itself does not
+touch `chrono`, so the shipped binary's dependency graph is unchanged. In
+`mur-mcp-server/Cargo.toml`, under `[dev-dependencies]`:
+
+```toml
+chrono = { workspace = true }
+tempfile = "3"
+```
+
+(Omit either line if it is already present.)
+
 Add to the test module that already covers tool dispatch in `mur-mcp-server`:
 
 ```rust
@@ -1638,7 +1656,6 @@ Add to the test module that already covers tool dispatch in `mur-mcp-server`:
                 kind: mur_core::run_status::RunKind::Job,
                 label: "two jobs".into(),
                 pid: std::process::id(),
-                ppid: 1,
                 started_at: chrono::Utc::now(),
                 last_heartbeat_at: Some(chrono::Utc::now()),
                 state: mur_core::run_status::State::Running,
@@ -1719,19 +1736,14 @@ Next to the `"parallel_jobs" => {` arm:
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing required parameter: 'run_id' (string)".to_string())?;
 
-            let cfg = mur_common::config::Config::load_or_default(&mur_home);
-            let stale_after = mur_core::run_status::stale_after(&cfg.runs);
-
-            let loaded = mur_core::run_status::store::load(&mur_home, run_id)
+            let loaded = mur_core::run_status::status_of(&mur_home, run_id)
                 .map_err(|e| format!("read run {run_id}: {e}"))?;
-            let Some(record) = loaded else {
+            let Some(status) = loaded else {
                 return Ok(format!(
                     "no run recorded for `{run_id}` — it may predate run recording, or the id may be wrong"
                 ));
             };
 
-            let status =
-                mur_core::run_status::classify(record, chrono::Utc::now(), stale_after);
             let liveness = match status.liveness {
                 mur_core::run_status::Liveness::Alive => "alive",
                 mur_core::run_status::Liveness::Stalled => "STALLED",
