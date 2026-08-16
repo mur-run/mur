@@ -213,6 +213,10 @@ pub struct Config {
     /// `mur update` post-upgrade behavior (`update:`, issue #866).
     #[serde(default)]
     pub update: UpdateConfig,
+
+    /// Job/fleet/workflow run-status heartbeat tuning (`runs:`).
+    #[serde(default)]
+    pub runs: RunsConfig,
 }
 
 /// Post-upgrade settings for `mur update`. Stored under `update:` in
@@ -229,6 +233,37 @@ pub struct UpdateConfig {
     /// Agent names `mur update --restart-agents` must never touch.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub restart_exclude: Vec<String>,
+}
+
+/// Run-status heartbeat tuning. Both values are config, never literals at a
+/// call site: the right interval depends on how long the machine's steps take.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunsConfig {
+    /// How often `execute_dag` stamps `last_heartbeat_at`.
+    #[serde(default = "default_heartbeat_interval_secs")]
+    pub heartbeat_interval_secs: u64,
+    /// How many missed intervals before a live process counts as `stalled`.
+    /// Three tolerates one lost tick plus scheduling jitter without calling a
+    /// healthy run dead.
+    #[serde(default = "default_heartbeat_stale_after_intervals")]
+    pub heartbeat_stale_after_intervals: u32,
+}
+
+fn default_heartbeat_interval_secs() -> u64 {
+    10
+}
+
+fn default_heartbeat_stale_after_intervals() -> u32 {
+    3
+}
+
+impl Default for RunsConfig {
+    fn default() -> Self {
+        Self {
+            heartbeat_interval_secs: default_heartbeat_interval_secs(),
+            heartbeat_stale_after_intervals: default_heartbeat_stale_after_intervals(),
+        }
+    }
 }
 
 /// Authorization gate for the `parallel_jobs` MCP tool. Stored under `parallel_jobs:`
