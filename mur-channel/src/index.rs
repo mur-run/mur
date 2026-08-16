@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use mur_common::channel::Channel;
+use mur_common::channel::{Channel, ChannelEvent, EventKind};
 use rusqlite::Connection;
 
 use crate::store::ChannelStore;
@@ -137,6 +137,48 @@ impl ChannelIndex {
                 ch.updated_at.to_rfc3339(),
                 purpose,
                 agents,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Fold one freshly-appended event into the read model.
+    ///
+    /// Incremental on purpose: rescanning every event on every append is O(n²)
+    /// over a conversation's life. `rebuild_from` is the slow, authoritative
+    /// path when the index is thrown away.
+    pub fn record_event(&self, ch_id: &str, ev: &ChannelEvent) -> Result<()> {
+        let counts = matches!(ev.kind, EventKind::Message);
+        let preview = if counts {
+            ev.payload
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+        } else {
+            ""
+        };
+        let hitl_delta = match ev.kind {
+            EventKind::HitlRequest => Some(1_i64),
+            EventKind::HitlResponse => Some(0_i64),
+            _ => None,
+        };
+        // `ChannelEvent::seq` is 0-indexed in the event log (see
+        // `store::append_event`'s `next_seq`), but `last_seq` here is surfaced
+        // to callers as a 1-indexed "how many events so far" count — store
+        // `seq + 1` so it lines up with `msg_count`.
+        self.conn.execute(
+            "UPDATE channels SET
+               last_seq  = MAX(last_seq, ?2),
+               msg_count = msg_count + ?3,
+               preview   = CASE WHEN ?3 = 1 THEN ?4 ELSE preview END,
+               hitl_pending = COALESCE(?5, hitl_pending)
+             WHERE id = ?1",
+            rusqlite::params![
+                ch_id,
+                (ev.seq + 1) as i64,
+                if counts { 1_i64 } else { 0_i64 },
+                preview,
+                hitl_delta,
             ],
         )?;
         Ok(())

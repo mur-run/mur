@@ -10,6 +10,10 @@ use mur_common::channel::{
 use crate::index::{ChannelIndex, ChannelRow};
 use crate::store::ChannelStore;
 
+/// Shared truncation limit for auto-derived conversation titles. One constant
+/// so TUI, Hub, and mobile cannot disagree about where a title ends.
+pub const TITLE_MAX_CHARS: usize = 48;
+
 /// Typed payload for an [`EventKind::Delegation`] event. The concierge owns
 /// `child_task_id` (the A2A task id it gave the dialed agent) and stamps the
 /// canonical `target_agent` name.
@@ -171,7 +175,10 @@ impl ChannelService {
             .append_event(channel_id, actor, kind, payload, None, None, None)?;
         if let Ok(mut ch) = self.store.load_manifest(channel_id) {
             ch.updated_at = ev.ts;
-            self.refresh_read_model(&ch);
+            if let Some(t) = Self::derived_title(&ch, &ev) {
+                ch.title = t;
+            }
+            self.refresh_read_model(&ch, Some(&ev));
         }
         Ok(ev)
     }
@@ -217,7 +224,10 @@ impl ChannelService {
         )?;
         if let Ok(mut ch) = self.store.load_manifest(channel_id) {
             ch.updated_at = ev.ts;
-            self.refresh_read_model(&ch);
+            if let Some(t) = Self::derived_title(&ch, &ev) {
+                ch.title = t;
+            }
+            self.refresh_read_model(&ch, Some(&ev));
         }
         Ok(ev)
     }
@@ -254,7 +264,10 @@ impl ChannelService {
         )?;
         if let Ok(mut ch) = self.store.load_manifest(channel_id) {
             ch.updated_at = ev.ts;
-            self.refresh_read_model(&ch);
+            if let Some(t) = Self::derived_title(&ch, &ev) {
+                ch.title = t;
+            }
+            self.refresh_read_model(&ch, Some(&ev));
         }
         Ok(ev)
     }
@@ -307,7 +320,10 @@ impl ChannelService {
         if let Ok(mut ch) = self.store.load_manifest(channel_id) {
             ch.state = new_state;
             ch.updated_at = ev.ts;
-            self.refresh_read_model(&ch);
+            if let Some(t) = Self::derived_title(&ch, &ev) {
+                ch.title = t;
+            }
+            self.refresh_read_model(&ch, Some(&ev));
         }
         Ok(ev)
     }
@@ -358,8 +374,7 @@ impl ChannelService {
                 joined_at: Utc::now(),
             });
             ch.updated_at = Utc::now();
-            self.store.save_manifest(&ch)?;
-            self.index.upsert(&ch)?;
+            self.refresh_read_model(&ch, None);
         }
         Ok(())
     }
@@ -372,8 +387,7 @@ impl ChannelService {
             .retain(|p| !matches!(&p.actor, ChannelActor::Agent { id } if id == agent_id));
         if ch.participants.len() != before {
             ch.updated_at = Utc::now();
-            self.store.save_manifest(&ch)?;
-            self.index.upsert(&ch)?;
+            self.refresh_read_model(&ch, None);
         }
         Ok(())
     }
@@ -399,18 +413,46 @@ impl ChannelService {
     /// may be able to write the channel store but not the shared index;
     /// SQLite reports the denied write as "attempt to write a readonly
     /// database" (G3, live fleet run 2026-07-09).
-    fn refresh_read_model(&self, ch: &Channel) {
-        if let Err(e) = self
+    ///
+    /// `ev` is `None` only for manifest-only changes (participant edits), which
+    /// must not touch activity columns.
+    fn refresh_read_model(&self, ch: &Channel, ev: Option<&ChannelEvent>) {
+        let res = self
             .store
             .save_manifest(ch)
             .and_then(|()| self.index.upsert(ch))
-        {
+            .and_then(|()| match ev {
+                Some(e) => self.index.record_event(&ch.id, e),
+                None => Ok(()),
+            });
+        if let Err(e) = res {
             tracing::warn!(
                 channel_id = %ch.id,
                 error = %e,
                 "read-model refresh failed after append (event persisted; index is rebuildable)"
             );
         }
+    }
+
+    /// The title a conversation should take from `ev`, if any.
+    ///
+    /// Only untitled Conversations, only the first human `Message`, only when
+    /// it has text. Fleet/workflow channels keep their minted titles, and an
+    /// attachment-only opener leaves the title empty for the summary layer to
+    /// render as `{agent} · {date}`.
+    fn derived_title(ch: &Channel, ev: &ChannelEvent) -> Option<String> {
+        if crate::purpose::effective_purpose(ch) != ChannelPurpose::Conversation
+            || !ch.title.is_empty()
+            || ev.kind != EventKind::Message
+            || !matches!(ev.actor, ChannelActor::Human { .. })
+        {
+            return None;
+        }
+        let text = ev.payload.get("text")?.as_str()?.trim();
+        if text.is_empty() {
+            return None;
+        }
+        Some(text.chars().take(TITLE_MAX_CHARS).collect())
     }
 }
 
@@ -711,5 +753,217 @@ mod tests {
         );
         // persisted
         assert_eq!(svc.load_events(&ch.id).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn first_human_message_titles_the_conversation() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+
+        svc.append_message(
+            &ch.id,
+            ChannelActor::local_human(),
+            EventKind::Message,
+            "explain this repo",
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            svc.store().load_manifest(&ch.id).unwrap().title,
+            "explain this repo"
+        );
+    }
+
+    #[test]
+    fn the_title_is_set_once_and_never_rewritten() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        for text in ["first question", "second question"] {
+            svc.append_message(
+                &ch.id,
+                ChannelActor::local_human(),
+                EventKind::Message,
+                text,
+                None,
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            svc.store().load_manifest(&ch.id).unwrap().title,
+            "first question"
+        );
+    }
+
+    #[test]
+    fn long_titles_are_truncated_at_the_shared_limit() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        let long = "x".repeat(200);
+        svc.append_message(
+            &ch.id,
+            ChannelActor::local_human(),
+            EventKind::Message,
+            &long,
+            None,
+        )
+        .unwrap();
+
+        let title = svc.store().load_manifest(&ch.id).unwrap().title;
+        assert_eq!(title.chars().count(), TITLE_MAX_CHARS);
+    }
+
+    #[test]
+    fn cjk_titles_truncate_by_character_not_byte() {
+        // Byte-slicing multibyte text panics; this is the regression guard.
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        let long = "說".repeat(200);
+        svc.append_message(
+            &ch.id,
+            ChannelActor::local_human(),
+            EventKind::Message,
+            &long,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            svc.store()
+                .load_manifest(&ch.id)
+                .unwrap()
+                .title
+                .chars()
+                .count(),
+            TITLE_MAX_CHARS
+        );
+    }
+
+    #[test]
+    fn a_fleet_channel_is_never_auto_titled() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let fleet = svc
+            .create_for_fleet("projectx", "lead", &["a".into()])
+            .unwrap();
+        svc.append_message(
+            &fleet.id,
+            ChannelActor::local_human(),
+            EventKind::Message,
+            "go",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            svc.store().load_manifest(&fleet.id).unwrap().title,
+            "fleet: projectx"
+        );
+    }
+
+    #[test]
+    fn appends_advance_preview_count_and_seq() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        svc.append_message(
+            &ch.id,
+            ChannelActor::local_human(),
+            EventKind::Message,
+            "hi",
+            None,
+        )
+        .unwrap();
+        svc.append_message(
+            &ch.id,
+            ChannelActor::Agent { id: "mur".into() },
+            EventKind::Message,
+            "hello back",
+            None,
+        )
+        .unwrap();
+
+        let row = svc
+            .index()
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == ch.id)
+            .unwrap();
+        assert_eq!(row.preview, "hello back");
+        assert_eq!(row.msg_count, 2);
+        assert_eq!(row.last_seq, 2);
+    }
+
+    #[test]
+    fn internal_events_advance_seq_but_do_not_count_as_messages() {
+        // Tool chatter must never inflate a chat's unread badge.
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        svc.append_message(
+            &ch.id,
+            ChannelActor::local_human(),
+            EventKind::Message,
+            "run it",
+            None,
+        )
+        .unwrap();
+        svc.append(
+            &ch.id,
+            ChannelActor::System,
+            EventKind::ToolCall,
+            serde_json::json!({"tool": "bash"}),
+            None,
+        )
+        .unwrap();
+
+        let row = svc
+            .index()
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == ch.id)
+            .unwrap();
+        assert_eq!(row.msg_count, 1, "ToolCall must not count as a message");
+        assert_eq!(row.last_seq, 2, "but it does advance the sequence");
+        assert_eq!(row.preview, "run it", "and must not become the preview");
+    }
+
+    #[test]
+    fn hitl_request_sets_pending_and_response_clears_it() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+
+        svc.append(
+            &ch.id,
+            ChannelActor::System,
+            EventKind::HitlRequest,
+            serde_json::json!({"hitl_id": "h1"}),
+            None,
+        )
+        .unwrap();
+        let row = |svc: &ChannelService| {
+            svc.index()
+                .list(10)
+                .unwrap()
+                .into_iter()
+                .find(|r| r.id == ch.id)
+                .unwrap()
+        };
+        assert!(row(&svc).hitl_pending);
+
+        svc.append(
+            &ch.id,
+            ChannelActor::local_human(),
+            EventKind::HitlResponse,
+            serde_json::json!({"hitl_id": "h1", "approved": true}),
+            None,
+        )
+        .unwrap();
+        assert!(!row(&svc).hitl_pending);
     }
 }
