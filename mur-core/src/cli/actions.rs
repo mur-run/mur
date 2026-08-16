@@ -203,6 +203,15 @@ pub enum ChannelAction {
         #[arg(long)]
         reason: Option<String>,
     },
+    /// Classify legacy channels missing a `purpose` (dry run unless --apply)
+    BackfillPurpose {
+        /// Write the inferred purposes to disk
+        #[arg(long)]
+        apply: bool,
+        /// Maximum channels to process in this batch
+        #[arg(long, default_value_t = 500)]
+        limit: usize,
+    },
 }
 
 #[derive(Subcommand)]
