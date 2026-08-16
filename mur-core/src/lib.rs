@@ -53,6 +53,7 @@ pub mod paths;
 pub mod recommend;
 pub mod retrieve;
 pub mod route;
+pub mod run_status;
 pub mod schedule_status;
 pub mod session;
 pub mod skill_consolidate;
