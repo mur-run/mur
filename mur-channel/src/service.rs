@@ -18,6 +18,9 @@ pub const TITLE_MAX_CHARS: usize = 48;
 /// so this bounds work while keeping every recently-touched channel reachable.
 const SUMMARY_SCAN_LIMIT: usize = 2000;
 
+/// Max full-text matches returned per query.
+const SEARCH_LIMIT: usize = 200;
+
 /// Typed payload for an [`EventKind::Delegation`] event. The concierge owns
 /// `child_task_id` (the A2A task id it gave the dialed agent) and stamps the
 /// canonical `target_agent` name.
@@ -489,6 +492,62 @@ impl ChannelService {
                 updated_at: row.updated_at,
                 hitl_pending: row.hitl_pending,
             });
+        }
+        Ok(out)
+    }
+
+    /// Search channel titles and message bodies, grouped by surface.
+    pub fn search(
+        &self,
+        query: &str,
+        scope: crate::summary::SearchScope,
+    ) -> Result<crate::summary::SearchResults> {
+        use crate::summary::{SearchHit, SearchResults, SearchScope};
+
+        let q = query.trim();
+        let mut out = SearchResults::default();
+        if q.is_empty() {
+            return Ok(out);
+        }
+        let needle = q.to_lowercase();
+
+        // Index rows carry title + purpose + activity; body hits are keyed by id.
+        let rows = self.index.list(SUMMARY_SCAN_LIMIT)?;
+        let body_hits = self.index.search_bodies(q, SEARCH_LIMIT)?;
+
+        for row in rows {
+            if row.msg_count == 0 {
+                continue;
+            }
+            let is_conversation = row.purpose == "conversation";
+            let wanted = match scope {
+                SearchScope::All => true,
+                SearchScope::Conversations => is_conversation,
+                SearchScope::Runs => !is_conversation,
+            };
+            if !wanted {
+                continue;
+            }
+            let body = body_hits.iter().find(|(id, _, _)| *id == row.id);
+            let title_match = row.title.to_lowercase().contains(&needle);
+            let (seq, snippet) = match (body, title_match) {
+                (Some((_, seq, snip)), _) => (*seq as u64, snip.clone()),
+                (None, true) => (0, row.preview.clone()),
+                (None, false) => continue,
+            };
+            let hit = SearchHit {
+                channel_id: row.id,
+                seq,
+                title: row.title,
+                snippet,
+                purpose: row.purpose,
+                updated_at: row.updated_at,
+            };
+            if is_conversation {
+                out.conversations.push(hit);
+            } else {
+                out.runs.push(hit);
+            }
         }
         Ok(out)
     }

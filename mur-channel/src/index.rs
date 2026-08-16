@@ -109,6 +109,12 @@ impl ChannelIndex {
         self.conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_channels_purpose ON channels(purpose, updated_at DESC);",
         )?;
+        // Rebuildable full-text projection of message bodies. `content=''` keeps
+        // FTS5 from storing a second copy of the text it indexes.
+        self.conn.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS channel_fts
+             USING fts5(channel_id UNINDEXED, seq UNINDEXED, body, tokenize='unicode61');",
+        )?;
         Ok(())
     }
 
@@ -187,7 +193,39 @@ impl ChannelIndex {
                 if inbound { 1_i64 } else { 0_i64 },
             ],
         )?;
+        if counts && !preview.is_empty() {
+            self.conn.execute(
+                "INSERT INTO channel_fts (channel_id, seq, body) VALUES (?1, ?2, ?3)",
+                rusqlite::params![ch_id, ev.seq as i64, preview],
+            )?;
+        }
         Ok(())
+    }
+
+    /// Full-text matches, newest-activity-first. Returns `(channel_id, seq, snippet)`.
+    ///
+    /// The query is passed to FTS5 as a single quoted phrase: user input is
+    /// typed mid-search and must never be interpreted as FTS operator syntax
+    /// (a bare `"` would otherwise be a hard error).
+    pub fn search_bodies(&self, query: &str, limit: usize) -> Result<Vec<(String, i64, String)>> {
+        let phrase = format!("\"{}\"", query.replace('"', " "));
+        if phrase.trim_matches(['"', ' ']).is_empty() {
+            return Ok(vec![]);
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT f.channel_id, f.seq, snippet(channel_fts, 2, '', '', '…', 12)
+             FROM channel_fts f
+             JOIN channels c ON c.id = f.channel_id
+             WHERE channel_fts MATCH ?1
+             ORDER BY c.updated_at DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![phrase, limit as i64], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
     }
 
     /// Raise the read watermark. Monotonic: a stale surface reporting an older

@@ -49,6 +49,34 @@ pub struct RunSummary {
     pub hitl_pending: bool,
 }
 
+/// Which surfaces a search should cover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchScope {
+    Conversations,
+    Runs,
+    All,
+}
+
+/// One match, located precisely enough to scroll to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchHit {
+    pub channel_id: String,
+    /// Event sequence of the matching message; `0` when only the title matched.
+    pub seq: u64,
+    pub title: String,
+    pub snippet: String,
+    pub purpose: String,
+    pub updated_at: String,
+}
+
+/// Grouped, never interleaved — a Chats hit and a Work hit mean different
+/// things and are never presented as one undifferentiated list.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SearchResults {
+    pub conversations: Vec<SearchHit>,
+    pub runs: Vec<SearchHit>,
+}
+
 #[cfg(test)]
 mod tests {
     use crate::ChannelService;
@@ -272,6 +300,122 @@ mod tests {
                 active_only: false,
             })
             .unwrap();
+
+        assert_eq!(before, std::fs::read_to_string(&path).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use crate::ChannelService;
+    use crate::summary::SearchScope;
+    use mur_common::channel::{ChannelActor, EventKind};
+    use tempfile::TempDir;
+
+    fn say(svc: &ChannelService, id: &str, text: &str) {
+        svc.append_message(
+            id,
+            ChannelActor::local_human(),
+            EventKind::Message,
+            text,
+            None,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn search_finds_message_text_and_locates_the_exact_event() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        say(&svc, &ch.id, "opening question");
+        say(&svc, &ch.id, "the deploy pipeline broke again");
+
+        let res = svc.search("pipeline", SearchScope::All).unwrap();
+        assert_eq!(res.conversations.len(), 1);
+        assert_eq!(res.conversations[0].channel_id, ch.id);
+        assert_eq!(
+            res.conversations[0].seq, 1,
+            "second message of two; seqs are 0-indexed"
+        );
+        assert!(res.conversations[0].snippet.contains("pipeline"));
+    }
+
+    #[test]
+    fn results_are_grouped_by_surface_not_interleaved() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let chat = svc.create_for_agent("mur").unwrap();
+        say(&svc, &chat.id, "shared keyword here");
+        let fleet = svc
+            .create_for_fleet("projectx", "mur", &["mur".into()])
+            .unwrap();
+        say(&svc, &fleet.id, "shared keyword there");
+
+        let res = svc.search("keyword", SearchScope::All).unwrap();
+        assert_eq!(res.conversations.len(), 1);
+        assert_eq!(res.runs.len(), 1);
+        assert_eq!(res.conversations[0].channel_id, chat.id);
+        assert_eq!(res.runs[0].channel_id, fleet.id);
+    }
+
+    #[test]
+    fn scope_filters_the_result_set() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let chat = svc.create_for_agent("mur").unwrap();
+        say(&svc, &chat.id, "shared keyword here");
+        let fleet = svc
+            .create_for_fleet("projectx", "mur", &["mur".into()])
+            .unwrap();
+        say(&svc, &fleet.id, "shared keyword there");
+
+        let only_chats = svc.search("keyword", SearchScope::Conversations).unwrap();
+        assert_eq!(only_chats.conversations.len(), 1);
+        assert!(only_chats.runs.is_empty());
+    }
+
+    #[test]
+    fn search_matches_titles_as_well_as_bodies() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        say(&svc, &ch.id, "refactor the parser"); // becomes the title
+        say(&svc, &ch.id, "unrelated follow-up");
+
+        let res = svc.search("refactor", SearchScope::Conversations).unwrap();
+        assert_eq!(res.conversations.len(), 1);
+    }
+
+    #[test]
+    fn a_query_with_fts_syntax_characters_does_not_error() {
+        // User input goes straight into a MATCH expression; unescaped quotes
+        // and operators would otherwise be a hard error mid-typing.
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        say(&svc, &ch.id, "quoted \"thing\" and (parens)");
+
+        for q in ["\"", "AND", "a OR", "(", "*", ""] {
+            let res = svc.search(q, SearchScope::All);
+            assert!(res.is_ok(), "query {q:?} must not error: {:?}", res.err());
+        }
+    }
+
+    #[test]
+    fn search_does_not_mutate_manifests() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        say(&svc, &ch.id, "hello world");
+        let path = tmp
+            .path()
+            .join("channels")
+            .join(&ch.id)
+            .join("channel.yaml");
+        let before = std::fs::read_to_string(&path).unwrap();
+
+        let _ = svc.search("hello", SearchScope::All).unwrap();
 
         assert_eq!(before, std::fs::read_to_string(&path).unwrap());
     }

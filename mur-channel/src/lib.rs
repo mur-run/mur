@@ -12,4 +12,6 @@ pub mod watch;
 
 pub use service::ChannelService;
 pub use store::ChannelStore;
-pub use summary::{ConversationQuery, ConversationSummary, RunSummary};
+pub use summary::{
+    ConversationQuery, ConversationSummary, RunSummary, SearchHit, SearchResults, SearchScope,
+};
