@@ -82,6 +82,7 @@ impl ChannelService {
             title: format!("chat with {agent}"),
             goal: Goal::default(),
             state: ChannelState::Working,
+            purpose: None,
             owner: ChannelActor::local_human(),
             participants: vec![
                 Participant {
@@ -141,6 +142,7 @@ impl ChannelService {
             title: format!("fleet: {fleet_name}"),
             goal: Goal::default(),
             state: ChannelState::Working,
+            purpose: None,
             owner: ChannelActor::local_human(),
             participants,
             created_at: now,
@@ -184,6 +186,7 @@ impl ChannelService {
             title: format!("workflow: {skill_name}"),
             goal: Goal::default(),
             state: ChannelState::Working,
+            purpose: None,
             owner: ChannelActor::local_human(),
             participants: vec![],
             created_at: now,

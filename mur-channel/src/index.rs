@@ -152,6 +152,7 @@ mod tests {
             title: id.into(),
             goal: Goal::default(),
             state,
+            purpose: None,
             owner: ChannelActor::Human { name: "me".into() },
             participants: vec![],
             created_at: now,
