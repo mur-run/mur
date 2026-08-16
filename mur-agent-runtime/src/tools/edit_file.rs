@@ -53,7 +53,7 @@ impl ToolExecutor for EditFileTool {
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "File to edit (absolute, or relative to the session cwd)" },
+                    "path": { "type": "string", "description": format!("File to edit ({})", crate::tools::fs_policy::PATH_FORMS) },
                     "old_string": { "type": "string", "description": "Exact literal text to replace" },
                     "new_string": { "type": "string", "description": "Replacement text" },
                     "expected_count": { "type": "integer", "description": "Exact number of occurrences to replace; omit to require exactly one" }

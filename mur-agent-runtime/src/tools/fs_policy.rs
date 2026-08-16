@@ -41,6 +41,21 @@ impl SessionCwd {
     }
 }
 
+/// The accepted `path` forms, worded for tool schemas. Single source of truth
+/// for every path-taking tool's parameter description — do NOT re-word it per
+/// tool.
+///
+/// It lives beside `resolve_path` because it documents exactly what that
+/// function accepts. A schema advertising fewer forms than the resolver
+/// implements is not a cosmetic gap: it made the model expand `~` itself, and
+/// since nothing tells it what `~` is, it invented a username and wrote to
+/// `/Users/i/` and `/Users/lidj/` while the real home was `/Users/david`.
+/// The system prompt's output-locations rule tells agents to write under
+/// `~/.mur/artifacts/`, so hiding `~` here put two MUR-authored strings in
+/// direct contradiction. Enforced by `tools::tests::path_taking_tools_advertise_tilde`.
+pub(crate) const PATH_FORMS: &str = "absolute, `~`-relative (expanded to your real home — write `~` literally, \
+     never guess a home path), or relative to the session cwd";
+
 /// Resolve a tool-supplied path: expand a leading `~`/`~/` to the user's
 /// home, keep absolute paths as-is, and join relative paths onto
 /// `working_dir`. Entitlement checks run on the canonicalized result,
