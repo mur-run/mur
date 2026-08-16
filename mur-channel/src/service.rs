@@ -3,8 +3,8 @@ use std::path::Path;
 use anyhow::Result;
 use chrono::Utc;
 use mur_common::channel::{
-    CHANNEL_SCHEMA_VERSION, Channel, ChannelActor, ChannelEvent, ChannelState, EventKind, Goal,
-    Participant, ParticipantRole,
+    CHANNEL_SCHEMA_VERSION, Channel, ChannelActor, ChannelEvent, ChannelPurpose, ChannelState,
+    EventKind, Goal, Participant, ParticipantRole,
 };
 
 use crate::index::{ChannelIndex, ChannelRow};
@@ -79,10 +79,10 @@ impl ChannelService {
         let ch = Channel {
             v: CHANNEL_SCHEMA_VERSION,
             id: uuid::Uuid::now_v7().to_string(),
-            title: format!("chat with {agent}"),
+            title: String::new(),
             goal: Goal::default(),
             state: ChannelState::Working,
-            purpose: None,
+            purpose: Some(ChannelPurpose::Conversation),
             owner: ChannelActor::local_human(),
             participants: vec![
                 Participant {
@@ -142,7 +142,7 @@ impl ChannelService {
             title: format!("fleet: {fleet_name}"),
             goal: Goal::default(),
             state: ChannelState::Working,
-            purpose: None,
+            purpose: Some(ChannelPurpose::FleetRun),
             owner: ChannelActor::local_human(),
             participants,
             created_at: now,
@@ -186,7 +186,7 @@ impl ChannelService {
             title: format!("workflow: {skill_name}"),
             goal: Goal::default(),
             state: ChannelState::Working,
-            purpose: None,
+            purpose: Some(ChannelPurpose::WorkflowRun),
             owner: ChannelActor::local_human(),
             participants: vec![],
             created_at: now,
@@ -418,6 +418,47 @@ impl ChannelService {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn creation_paths_write_explicit_purpose() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+
+        let chat = svc.create_for_agent("mur").unwrap();
+        assert_eq!(chat.purpose, Some(ChannelPurpose::Conversation));
+
+        let wf = svc.create_for_workflow("release").unwrap();
+        assert_eq!(wf.purpose, Some(ChannelPurpose::WorkflowRun));
+        assert_eq!(
+            wf.title, "workflow: release",
+            "workflow title convention is load-bearing for legacy inference"
+        );
+
+        let fleet = svc
+            .create_for_fleet("projectx", "lead", &["a".into()])
+            .unwrap();
+        assert_eq!(fleet.purpose, Some(ChannelPurpose::FleetRun));
+        assert_eq!(fleet.id, "fleet-projectx");
+    }
+
+    #[test]
+    fn new_conversation_starts_with_an_empty_title() {
+        // The title comes from the first human message (Task 5), not from a
+        // useless "chat with {agent}" placeholder that made every row identical.
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        assert_eq!(ch.title, "");
+    }
+
+    #[test]
+    fn purpose_survives_a_manifest_round_trip() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        let reloaded = svc.store().load_manifest(&ch.id).unwrap();
+        assert_eq!(reloaded.purpose, Some(ChannelPurpose::Conversation));
+    }
 
     #[test]
     fn append_delegation_writes_typed_event() {
