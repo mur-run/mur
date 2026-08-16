@@ -305,6 +305,89 @@ mod tests {
 
         assert_eq!(before, std::fs::read_to_string(&path).unwrap());
     }
+
+    #[test]
+    fn rebuilding_the_index_reproduces_every_summary_field() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let chat = svc.create_for_agent("mur").unwrap();
+        say(&svc, &chat.id, "the deploy pipeline broke");
+        svc.append_message(
+            &chat.id,
+            ChannelActor::Agent { id: "mur".into() },
+            EventKind::Message,
+            "looking now",
+            None,
+        )
+        .unwrap();
+        let fleet = svc
+            .create_for_fleet("projectx", "mur", &["mur".into()])
+            .unwrap();
+        say(&svc, &fleet.id, "run it");
+
+        let q = || ConversationQuery {
+            agent: None,
+            active_only: false,
+        };
+        let before = svc.list_conversations(q()).unwrap();
+        let runs_before = svc.list_runs().unwrap();
+        let search_before = svc
+            .search("pipeline", crate::summary::SearchScope::All)
+            .unwrap();
+
+        let n = svc.index().rebuild_from(svc.store()).unwrap();
+        assert_eq!(n, 2, "both channels rebuilt");
+
+        let after = svc.list_conversations(q()).unwrap();
+        assert_eq!(after.len(), before.len());
+        assert_eq!(after[0].id, before[0].id);
+        assert_eq!(after[0].title, before[0].title);
+        assert_eq!(after[0].preview, before[0].preview);
+        assert_eq!(after[0].turns, before[0].turns);
+        assert_eq!(after[0].unread, before[0].unread);
+
+        assert_eq!(svc.list_runs().unwrap().len(), runs_before.len());
+
+        let search_after = svc
+            .search("pipeline", crate::summary::SearchScope::All)
+            .unwrap();
+        assert_eq!(
+            search_after.conversations.len(),
+            search_before.conversations.len()
+        );
+        assert_eq!(
+            search_after.conversations[0].seq,
+            search_before.conversations[0].seq
+        );
+    }
+
+    #[test]
+    fn rebuilding_preserves_the_read_watermark() {
+        // The watermark is the one derived value events cannot regenerate;
+        // losing it on rebuild would resurface everything as unread.
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        say(&svc, &ch.id, "hi");
+        let last = svc
+            .append_message(
+                &ch.id,
+                ChannelActor::Agent { id: "mur".into() },
+                EventKind::Message,
+                "hello",
+                None,
+            )
+            .unwrap();
+        svc.mark_read(&ch.id, last.seq).unwrap();
+
+        svc.index().rebuild_from(svc.store()).unwrap();
+
+        let q = ConversationQuery {
+            agent: None,
+            active_only: false,
+        };
+        assert_eq!(svc.list_conversations(q).unwrap()[0].unread, 0);
+    }
 }
 
 #[cfg(test)]

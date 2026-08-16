@@ -77,10 +77,27 @@ pub struct ChannelService {
 
 impl ChannelService {
     pub fn open(mur_home: &Path) -> Result<Self> {
-        Ok(Self {
-            store: ChannelStore::new(mur_home),
-            index: ChannelIndex::open(mur_home)?,
-        })
+        let store = ChannelStore::new(mur_home);
+        let index = ChannelIndex::open(mur_home)?;
+        // First open after an upgrade that added the activity columns: every
+        // pre-existing row is still sitting on their SQL defaults (msg_count=0,
+        // preview='', ...), which makes every legacy channel look inactive to
+        // the new contracts. `ChannelIndex::migrate` cannot fix this itself —
+        // it has no `ChannelStore` — so the one-time rebuild happens here,
+        // the only place that holds both. `just_migrated` is true at most once
+        // per DB file (ALTER TABLE ADD COLUMN fails forever after the first
+        // success), so this cannot re-run on every open. A failed rebuild must
+        // never block startup: the index is disposable, so log and carry on
+        // with the stale-but-working rows.
+        if index.just_migrated()
+            && let Err(e) = index.rebuild_from(&store)
+        {
+            tracing::warn!(
+                error = %e,
+                "post-migration channel index rebuild failed; index remains stale but usable"
+            );
+        }
+        Ok(Self { store, index })
     }
 
     /// Create a fresh channel whose participants are the local human (owner)
@@ -627,6 +644,96 @@ mod tests {
             .unwrap();
         assert_eq!(fleet.purpose, Some(ChannelPurpose::FleetRun));
         assert_eq!(fleet.id, "fleet-projectx");
+    }
+
+    #[test]
+    fn opening_over_a_preexisting_v1_index_triggers_a_one_time_rebuild() {
+        // Simulate an install that predates the activity columns: real
+        // channel data on disk (manifest + an event), but an index db that
+        // only has the base v1 schema. The first `ChannelService::open`
+        // must detect the migration and auto-rebuild so the channel isn't
+        // invisible behind the new columns' SQL defaults; a second open
+        // must NOT re-run the rebuild — proven by a hand-diverged row
+        // surviving it.
+        let tmp = TempDir::new().unwrap();
+
+        // Real channel data, written directly via ChannelStore so nothing
+        // has touched the index yet.
+        let store = ChannelStore::new(tmp.path());
+        let now = Utc::now();
+        let ch = Channel {
+            v: CHANNEL_SCHEMA_VERSION,
+            id: "legacy-chat".into(),
+            title: "chat with mur".into(),
+            goal: Goal::default(),
+            state: ChannelState::Working,
+            purpose: Some(ChannelPurpose::Conversation),
+            owner: ChannelActor::local_human(),
+            participants: vec![Participant {
+                actor: ChannelActor::Agent { id: "mur".into() },
+                role: ParticipantRole::Delegate,
+                joined_at: now,
+            }],
+            created_at: now,
+            updated_at: now,
+        };
+        store.create(&ch).unwrap();
+        store
+            .append_event(
+                &ch.id,
+                ChannelActor::local_human(),
+                EventKind::Message,
+                serde_json::json!({"text": "hello from before the upgrade"}),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        // A hand-built v1-schema index db: base columns only, matching what
+        // `migrate_adds_columns_to_a_preexisting_v1_database` in index.rs
+        // uses to simulate a pre-migration DB.
+        let idx_dir = tmp.path().join("index").join("channels");
+        std::fs::create_dir_all(&idx_dir).unwrap();
+        {
+            let conn = rusqlite::Connection::open(idx_dir.join("channels.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE channels (
+                    id TEXT PRIMARY KEY, title TEXT NOT NULL, state TEXT NOT NULL,
+                    owner TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+                 INSERT INTO channels VALUES
+                    ('legacy-chat','chat with mur','working','{}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');",
+            )
+            .unwrap();
+        }
+
+        // First open: migrate() adds the activity columns for the first
+        // time, so open() must auto-rebuild from the manifest + event log.
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let rows = svc.index().list(10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].msg_count, 1, "rebuild must replay the event log");
+        assert_eq!(rows[0].preview, "hello from before the upgrade");
+        drop(svc);
+
+        // Diverge a column by hand. A second automatic rebuild would erase
+        // this; the test proves it does not run.
+        {
+            let idx = ChannelIndex::open(tmp.path()).unwrap();
+            idx.conn_for_test()
+                .execute(
+                    "UPDATE channels SET preview='DIVERGED' WHERE id='legacy-chat'",
+                    [],
+                )
+                .unwrap();
+        }
+
+        let svc2 = ChannelService::open(tmp.path()).unwrap();
+        let rows2 = svc2.index().list(10).unwrap();
+        assert_eq!(
+            rows2[0].preview, "DIVERGED",
+            "second open must not re-run the auto-rebuild"
+        );
     }
 
     #[test]

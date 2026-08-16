@@ -10,6 +10,12 @@ use crate::store::ChannelStore;
 /// rebuildable from the event-log manifests — never the source of truth.
 pub struct ChannelIndex {
     conn: Connection,
+    /// Set by `open()` when this call's `migrate()` added at least one of
+    /// the activity columns for the first time — i.e. this DB predates them
+    /// (or is brand new). Callers with access to a `ChannelStore` (only
+    /// `ChannelService::open`) use this to trigger a one-time rebuild so
+    /// pre-existing channels don't sit invisible behind SQL column defaults.
+    just_migrated: bool,
 }
 
 /// One row of the channel-list / "my work" query.
@@ -75,12 +81,28 @@ impl ChannelIndex {
         // makes the contended connection wait and retry instead of dropping.
         conn.execute_batch("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;")
             .context("configure channels.db concurrency pragmas")?;
-        let me = Self { conn };
-        me.migrate()?;
+        let mut me = Self {
+            conn,
+            just_migrated: false,
+        };
+        me.just_migrated = me.migrate()?;
         Ok(me)
     }
 
-    fn migrate(&self) -> Result<()> {
+    /// True when this `open()` call's `migrate()` added an activity column
+    /// for the first time (fresh DB or one that predates them). See the
+    /// `just_migrated` field doc for who consumes this and why.
+    pub fn just_migrated(&self) -> bool {
+        self.just_migrated
+    }
+
+    /// Returns whether any of the additive columns below were newly added
+    /// by this call — i.e. whether this DB predated them (or is brand new).
+    /// `ADD COLUMN` on an existing column errors ("duplicate column name");
+    /// that per-column success/failure is exactly the "did I just migrate"
+    /// signal, so unlike before this loop inspects it instead of discarding
+    /// it.
+    fn migrate(&self) -> Result<bool> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS channels (
                 id            TEXT PRIMARY KEY,
@@ -93,7 +115,8 @@ impl ChannelIndex {
             CREATE INDEX IF NOT EXISTS idx_channels_updated ON channels(updated_at DESC);",
         )?;
         // Additive columns. `ADD COLUMN` on an existing column errors; that is
-        // the "already migrated" case, so it is ignored deliberately.
+        // the "already migrated" case for that column.
+        let mut migrated = false;
         for ddl in [
             "ALTER TABLE channels ADD COLUMN purpose TEXT NOT NULL DEFAULT 'conversation'",
             "ALTER TABLE channels ADD COLUMN agents TEXT NOT NULL DEFAULT '[]'",
@@ -104,7 +127,9 @@ impl ChannelIndex {
             "ALTER TABLE channels ADD COLUMN hitl_pending INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE channels ADD COLUMN inbound_seqs TEXT NOT NULL DEFAULT '[]'",
         ] {
-            let _ = self.conn.execute(ddl, []);
+            if self.conn.execute(ddl, []).is_ok() {
+                migrated = true;
+            }
         }
         self.conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_channels_purpose ON channels(purpose, updated_at DESC);",
@@ -116,7 +141,7 @@ impl ChannelIndex {
             "CREATE VIRTUAL TABLE IF NOT EXISTS channel_fts
              USING fts5(channel_id UNINDEXED, seq UNINDEXED, body, tokenize='unicode61');",
         )?;
-        Ok(())
+        Ok(migrated)
     }
 
     pub fn upsert(&self, ch: &Channel) -> Result<()> {
@@ -274,15 +299,36 @@ impl ChannelIndex {
         Ok(())
     }
 
-    /// Drop every row and re-derive from the store's manifests.
+    /// Drop every derived row and re-derive from manifests + event logs.
+    ///
+    /// Read watermarks are the exception: nothing in the event log records what
+    /// a human has looked at, so they are carried across rather than lost.
     pub fn rebuild_from(&self, store: &ChannelStore) -> Result<usize> {
-        self.conn.execute("DELETE FROM channels", [])?;
+        let watermarks: Vec<(String, i64)> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id, last_read_seq FROM channels WHERE last_read_seq > 0")?;
+            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        self.conn
+            .execute_batch("DELETE FROM channels; DELETE FROM channel_fts;")?;
+
         let mut n = 0;
         for id in store.list_ids()? {
-            if let Ok(ch) = store.load_manifest(&id) {
-                self.upsert(&ch)?;
-                n += 1;
+            let Ok(ch) = store.load_manifest(&id) else {
+                continue;
+            };
+            self.upsert(&ch)?;
+            for ev in store.load_events(&id).unwrap_or_default() {
+                self.record_event(&id, &ev)?;
             }
+            n += 1;
+        }
+
+        for (id, seq) in watermarks {
+            self.mark_read(&id, seq as u64)?;
         }
         Ok(n)
     }
