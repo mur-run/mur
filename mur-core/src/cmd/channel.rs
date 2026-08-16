@@ -308,6 +308,15 @@ mod backfill_tests {
         .unwrap();
         make_legacy(tmp.path(), &ch.id);
 
+        let index_purpose_before = svc
+            .index()
+            .list(100)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == ch.id)
+            .unwrap()
+            .purpose;
+
         let report = backfill_purpose(tmp.path(), false, 100).unwrap();
 
         assert_eq!(report.would_change, 1);
@@ -316,6 +325,18 @@ mod backfill_tests {
             svc.store().load_manifest(&ch.id).unwrap().purpose,
             None,
             "a dry run must not touch disk"
+        );
+        let index_purpose_after = svc
+            .index()
+            .list(100)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == ch.id)
+            .unwrap()
+            .purpose;
+        assert_eq!(
+            index_purpose_before, index_purpose_after,
+            "a dry run must not touch the SQLite index either"
         );
     }
 
@@ -368,23 +389,24 @@ mod backfill_tests {
     fn an_explicit_purpose_is_never_overwritten() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        // A fleet-shaped id that was explicitly recorded as a conversation.
-        let ch = svc.create_for_agent("mur").unwrap();
-        svc.append_message(
-            &ch.id,
-            ChannelActor::local_human(),
-            EventKind::Message,
-            "hi",
-            None,
-        )
-        .unwrap();
+        // A fleet-shaped id (`fleet-projectx`) that inference would classify
+        // as FleetRun, but whose stored purpose was explicitly recorded as a
+        // conversation. Only this id/purpose mismatch can distinguish "left
+        // alone" from "re-derived and happened to match".
+        let ch = svc
+            .create_for_fleet("projectx", "router", &["worker".to_string()])
+            .unwrap();
+        let mut manifest = svc.store().load_manifest(&ch.id).unwrap();
+        manifest.purpose = Some(ChannelPurpose::Conversation);
+        svc.store().save_manifest(&manifest).unwrap();
 
         let report = backfill_purpose(tmp.path(), true, 100).unwrap();
 
         assert_eq!(report.changed, 0);
         assert_eq!(
             svc.store().load_manifest(&ch.id).unwrap().purpose,
-            Some(ChannelPurpose::Conversation)
+            Some(ChannelPurpose::Conversation),
+            "inference must not reclassify an explicitly-set purpose as FleetRun"
         );
     }
 

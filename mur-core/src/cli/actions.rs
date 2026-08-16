@@ -208,7 +208,7 @@ pub enum ChannelAction {
         /// Write the inferred purposes to disk
         #[arg(long)]
         apply: bool,
-        /// Maximum channels to process in this batch
+        /// Maximum channels to classify and write; already-classified channels are skipped without counting toward it
         #[arg(long, default_value_t = 500)]
         limit: usize,
     },
