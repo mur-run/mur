@@ -43,10 +43,10 @@
 | `mur-common/src/config.rs` | Add `RunsConfig` section (`heartbeat_interval_secs`, `heartbeat_stale_after_intervals`). |
 | `mur-core/src/lib.rs` | `pub mod run_status;` |
 | `mur-core/src/executor/dag.rs` | Write the run record at start, spawn the heartbeat, stamp the terminal state. |
-| `mur-core/src/executor/jobs.rs` | Supply a real `run_id` (+ kind, label). |
-| `mur-core/src/cmd/fleet/run.rs` | Supply a real `run_id` (+ kind, label). |
-| `mur-core/src/cmd/fleet/loop_run.rs` | Supply a real `run_id` (+ kind, label) — the unattended guarded loop. |
-| `mur-core/src/cmd/workflow.rs` | Supply a real `run_id` (+ kind, label). |
+| `mur-core/src/executor/jobs.rs` | Add `run_kind` + `run_label`. Its `run_id` is already correct — do not touch it. |
+| `mur-core/src/cmd/fleet/run.rs` | Add `run_kind` + `run_label`. `run_id` already correct. |
+| `mur-core/src/cmd/fleet/loop_run.rs` | Add `run_kind` + `run_label`. `run_id` already correct, and its uuid nonce is load-bearing — the unattended guarded loop. |
+| `mur-core/src/cmd/workflow.rs` | Add `run_kind` + `run_label`. `run_id` already correct. |
 | `mur-core/src/cli/mod.rs` | `Job { action: JobAction }` command. |
 | `mur-core/src/dispatch.rs` | Dispatch `Commands::Job`. |
 | `mur-mcp-server/src/tools.rs` | `mur_job_status` tool definition + dispatch arm. |
@@ -1039,10 +1039,15 @@ Then, at the point where `execute_dag` computes its final `PipelineStatus` (near
         } else {
             crate::run_status::State::Done
         };
-        // Stop the ticker BEFORE the terminal write, so a beat cannot land
-        // after it and make a finished run look fresh.
+        // Stop the ticker and WAIT for it before the terminal write. `stop()`
+        // is async precisely because flipping a flag is not enough: a beat
+        // already inside `beat_once` has passed the flag check, and its
+        // read-modify-write would clobber the terminal state back to
+        // `running` with a fresh heartbeat — a finished run reported alive
+        // forever. Awaiting guarantees any in-flight beat lands BEFORE this
+        // save, so the terminal write wins.
         if let Some(hb) = heartbeat {
-            hb.stop();
+            hb.stop().await;
         }
         let _ = crate::run_status::store::save(mur_home, &record);
     }
@@ -1050,28 +1055,28 @@ Then, at the point where `execute_dag` computes its final `PipelineStatus` (near
 
 > Use whatever the local variable holding the final status is actually called at that point; `overall_status` is a placeholder for it. If the function has more than one return path, stamp on each — a crashed *return* still must not leave `running` behind when the process is alive.
 
-- [ ] **Step 5: Supply real run ids at all four entry points**
+- [ ] **Step 5: Add `run_kind` and `run_label` at all four entry points — and do NOT touch `run_id`**
 
-`execute_dag` has exactly four callers. All four must identify their run, or
-that path stays invisible:
+`execute_dag` has exactly four callers, and **all four already set a real,
+deliberate `run_id`.** Verified against `main`:
 
-| Call site | `run_kind` | `run_label` | `run_id` |
+| Call site | existing `run_id` — LEAVE IT ALONE | add `run_kind` | add `run_label` |
 |---|---|---|---|
-| `mur-core/src/executor/jobs.rs:141` | `Job` | `format!("{} parallel job(s)", jobs.len())` | `format!("job-{channel_id}")` |
-| `mur-core/src/cmd/fleet/run.rs:392` | `Fleet` | `format!("fleet {}", fleet.name)` | `format!("fleet-{}", fleet.name)` |
-| `mur-core/src/cmd/fleet/loop_run.rs:587` | `Fleet` | `format!("fleet {name} iter {iteration}")` | `format!("fleet-{name}-{iteration}")` |
-| `mur-core/src/cmd/workflow.rs:211` | `Workflow` | the skill name already in scope | `format!("wf-{channel_id}")` |
+| `mur-core/src/executor/jobs.rs:135` | `format!("run-{}", uuid::Uuid::now_v7())` | `Job` | `format!("{} parallel job(s)", jobs.len())` |
+| `mur-core/src/cmd/fleet/run.rs:377` | `run-{uuid_v7}`, bound to a local `run_id` and reused later for job stamping | `Fleet` | `format!("fleet {}", fleet.name)` |
+| `mur-core/src/cmd/fleet/loop_run.rs:582` | `format!("loop-{}-{}-{}", name, uuid::Uuid::now_v7(), iteration)` | `Fleet` | `format!("fleet {name} iter {iteration}")` |
+| `mur-core/src/cmd/workflow.rs:208` | `format!("run-{}", uuid::Uuid::now_v7())` | `Workflow` | `matched.manifest.name.clone()` |
 
-`loop_run.rs` is the one that matters most in practice: it is the guarded loop
-that runs unattended, so it is the path an operator is least able to watch and
-most needs to query.
+**Do not "improve" any of these ids into a deterministic form.** The uuid nonce
+in `loop_run.rs` is load-bearing and its own comment says why: *"uuid nonce so
+concurrent `--loop` runs don't collide on the channel's idempotency-key dedup"*.
+Replacing it would reintroduce exactly the collision that comment prevents. The
+ids are already correct; this task only adds the two new fields.
 
-For each site, add the two new fields to the `DagExecOptions` literal and give
-`run_id` a real value where it is currently empty. Example, for
-`mur-core/src/executor/jobs.rs`:
+Each edit is therefore two added lines on an existing `DagExecOptions` literal.
+For `mur-core/src/executor/jobs.rs`:
 
 ```rust
-        run_id: format!("job-{channel_id}"),
         run_kind: Some(crate::run_status::RunKind::Job),
         run_label: format!("{} parallel job(s)", jobs.len()),
 ```
@@ -1079,18 +1084,17 @@ For each site, add the two new fields to the `DagExecOptions` literal and give
 and for `mur-core/src/cmd/fleet/loop_run.rs`:
 
 ```rust
-        run_id: format!("fleet-{name}-{iteration}"),
         run_kind: Some(crate::run_status::RunKind::Fleet),
         run_label: format!("fleet {name} iter {iteration}"),
 ```
 
-> Ids must be derived from values already in scope at each site, and must be
-> deterministic: the `run_id` doc comment on `DagExecOptions` requires a
-> crash-rerun of the *same* logical run to reuse its id (that is what makes the
-> channel idempotency keys work). Two different runs must not collide — which
-> is why the fleet loop includes its iteration counter and the others include
-> the channel id. If a named variable is not in scope under that exact name,
-> use the equivalent one that is; do not introduce new state to name a run.
+`loop_run.rs` is the site that matters most in practice: it is the guarded loop
+that runs unattended, so it is the path an operator is least able to watch and
+most needs to query.
+
+> If a label expression does not compile because a variable is not in scope
+> under that exact name, use the equivalent one that is — the label is a
+> human-readable string, not a contract. Do not introduce new state to build one.
 
 - [ ] **Step 6: Run tests to verify they pass**
 
