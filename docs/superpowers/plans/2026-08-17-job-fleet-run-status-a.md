@@ -1341,7 +1341,16 @@ git commit -m "feat(run-status): rebuild a run record from its channel, heartbea
 
 - [ ] **Step 1: Write the failing test**
 
-Create `mur-core/src/cmd/job.rs` with only this test module for now:
+First register the module, so the test below is actually compiled and can fail
+for the right reason. A test file the crate never includes reports "no tests to
+run", which is not a red — it is silence. Add to `mur-core/src/cmd/mod.rs`, in
+alphabetical position:
+
+```rust
+pub mod job;
+```
+
+Then create `mur-core/src/cmd/job.rs` with only this test module for now:
 
 ```rust
 #[cfg(test)]
@@ -1561,12 +1570,6 @@ pub fn run(mur_home: &Path, action: JobAction) -> Result<()> {
 ```
 
 - [ ] **Step 4: Register the command**
-
-Add to `mur-core/src/cmd/mod.rs`, in alphabetical position:
-
-```rust
-pub mod job;
-```
 
 Add to the `Commands` enum in `mur-core/src/cli/mod.rs`, following the `Channel { … }` pattern:
 
