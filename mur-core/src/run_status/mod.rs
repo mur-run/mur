@@ -111,3 +111,208 @@ pub struct RunState {
     pub binary_version: String,
     pub build_sha: String,
 }
+
+/// A run's state as reported to any surface. `state` is read from disk;
+/// `liveness` is computed here and nowhere else.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RunStatus {
+    pub state: State,
+    pub liveness: Liveness,
+    pub run: RunState,
+}
+
+/// Derive a run's reportable status. THE single derivation point (spec §4).
+///
+/// `now` and `stale_after` are parameters rather than ambient reads so the
+/// table test can address every cell without sleeping.
+pub fn classify(run: RunState, now: DateTime<Utc>, stale_after: chrono::Duration) -> RunStatus {
+    let liveness = if run.state.is_terminal() {
+        Liveness::NotApplicable
+    } else if !mur_common::lock_file::pid_alive(run.pid) {
+        Liveness::Dead
+    } else {
+        match run.last_heartbeat_at {
+            // Rebuilt from the channel: the heartbeat is not recoverable and
+            // must not be invented.
+            None => Liveness::Unknown,
+            Some(beat) if now.signed_duration_since(beat) <= stale_after => Liveness::Alive,
+            Some(_) => Liveness::Stalled,
+        }
+    };
+    RunStatus {
+        state: run.state,
+        liveness,
+        run,
+    }
+}
+
+/// The heartbeat age past which a live process counts as `stalled`.
+///
+/// Derived here, once, so no surface recomputes `interval × intervals` and
+/// drifts from the others — the same class of bug as two renderers disagreeing
+/// about one fact.
+pub fn stale_after(cfg: &mur_common::config::RunsConfig) -> chrono::Duration {
+    chrono::Duration::seconds(
+        (cfg.heartbeat_interval_secs * u64::from(cfg.heartbeat_stale_after_intervals)) as i64,
+    )
+}
+
+/// Load a run and classify it against the configured staleness threshold and
+/// the current clock. `Ok(None)` when no such run was recorded.
+///
+/// Every surface calls THIS, not `classify` directly: it is the only place the
+/// config load, the clock read, and the derivation are assembled, so no caller
+/// can assemble them differently. `classify` stays pure so the table test can
+/// address every cell without a clock or a config file.
+pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Option<RunStatus>> {
+    let Some(record) = store::load(mur_home, run_id)? else {
+        return Ok(None);
+    };
+    let cfg = mur_common::config::Config::load_or_default(mur_home);
+    Ok(Some(classify(record, Utc::now(), stale_after(&cfg.runs))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STALE_AFTER_SECS: i64 = 30;
+
+    fn stale_after() -> chrono::Duration {
+        chrono::Duration::seconds(STALE_AFTER_SECS)
+    }
+
+    fn run(
+        state: State,
+        pid: u32,
+        heartbeat_age_secs: Option<i64>,
+        now: DateTime<Utc>,
+    ) -> RunState {
+        RunState {
+            schema: RUN_SCHEMA,
+            run_id: "r".into(),
+            channel_id: None,
+            kind: RunKind::Job,
+            label: "l".into(),
+            pid,
+            started_at: now - chrono::Duration::seconds(600),
+            last_heartbeat_at: heartbeat_age_secs.map(|s| now - chrono::Duration::seconds(s)),
+            state,
+            steps: vec![],
+            blocked_on: None,
+            binary_version: "0.0.0-test".into(),
+            build_sha: "deadbee".into(),
+        }
+    }
+
+    /// A pid that is certainly not running: spawn a trivial child, wait for it,
+    /// and reuse its reaped pid. Checking a literal pid would be a guess.
+    fn dead_pid() -> u32 {
+        let mut child = std::process::Command::new("true")
+            .spawn()
+            .expect("spawn `true`");
+        let pid = child.id();
+        child.wait().expect("reap child");
+        pid
+    }
+
+    #[test]
+    fn every_state_liveness_cell() {
+        let now = Utc::now();
+        let live = std::process::id();
+        let dead = dead_pid();
+
+        // Non-terminal + live process + fresh heartbeat => alive.
+        for state in [State::Running, State::Blocked] {
+            let s = classify(run(state, live, Some(1), now), now, stale_after());
+            assert_eq!(s.state, state);
+            assert_eq!(s.liveness, Liveness::Alive, "{state:?} with a fresh beat");
+        }
+
+        // Non-terminal + live process + expired heartbeat => stalled.
+        for state in [State::Running, State::Blocked] {
+            let s = classify(
+                run(state, live, Some(STALE_AFTER_SECS + 1), now),
+                now,
+                stale_after(),
+            );
+            assert_eq!(s.liveness, Liveness::Stalled, "{state:?} with a dead beat");
+        }
+
+        // Non-terminal + no process => dead, whatever the heartbeat said.
+        for state in [State::Running, State::Blocked] {
+            let s = classify(run(state, dead, Some(1), now), now, stale_after());
+            assert_eq!(s.liveness, Liveness::Dead, "{state:?} with no process");
+        }
+
+        // Non-terminal + live process + rebuilt (no heartbeat) => unknown.
+        let s = classify(run(State::Running, live, None, now), now, stale_after());
+        assert_eq!(s.liveness, Liveness::Unknown);
+
+        // Terminal => n/a regardless of process or heartbeat.
+        for state in [State::Done, State::Failed, State::Stopped] {
+            for pid in [live, dead] {
+                for beat in [Some(1), Some(STALE_AFTER_SECS + 1), None] {
+                    let s = classify(run(state, pid, beat, now), now, stale_after());
+                    assert_eq!(
+                        s.liveness,
+                        Liveness::NotApplicable,
+                        "{state:?} must not report liveness"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Negative control for the reported defect. A test that only asserts a
+    /// live process reports `alive` proves nothing: freezing the heartbeat
+    /// while the process stays up MUST flip the verdict.
+    #[test]
+    fn frozen_heartbeat_flips_running_to_stalled() {
+        let now = Utc::now();
+        let live = std::process::id();
+        let fresh = classify(run(State::Running, live, Some(1), now), now, stale_after());
+        let frozen = classify(
+            run(State::Running, live, Some(STALE_AFTER_SECS + 1), now),
+            now,
+            stale_after(),
+        );
+        assert_eq!(fresh.liveness, Liveness::Alive);
+        assert_eq!(frozen.liveness, Liveness::Stalled);
+        assert_ne!(
+            fresh.liveness, frozen.liveness,
+            "heartbeat is not consulted"
+        );
+    }
+
+    /// Negative control: a killed orchestrator must never keep reporting
+    /// `running`/`alive`. `state` stays `running` because nothing wrote a
+    /// terminal state — that pair IS what a crash looks like.
+    #[test]
+    fn killed_orchestrator_reports_dead_not_running() {
+        let now = Utc::now();
+        let s = classify(
+            run(State::Running, dead_pid(), Some(1), now),
+            now,
+            stale_after(),
+        );
+        assert_eq!(
+            s.state,
+            State::Running,
+            "no terminal state was ever written"
+        );
+        assert_eq!(s.liveness, Liveness::Dead);
+        assert!(!s.state.is_terminal(), "a crashed run is not finished");
+    }
+
+    #[test]
+    fn liveness_is_never_persisted() {
+        let now = Utc::now();
+        let json =
+            serde_json::to_string(&run(State::Running, std::process::id(), Some(1), now)).unwrap();
+        assert!(
+            !json.contains("liveness"),
+            "liveness must be derived, never stored: {json}"
+        );
+    }
+}
