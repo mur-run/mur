@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use mur_common::channel::{Channel, ChannelEvent, EventKind};
+use mur_common::channel::{Channel, ChannelActor, ChannelEvent, EventKind};
 use rusqlite::Connection;
 
 use crate::store::ChannelStore;
@@ -33,6 +33,10 @@ pub struct ChannelRow {
     pub last_read_seq: i64,
     /// A HITL request is awaiting a response.
     pub hitl_pending: bool,
+    /// JSON array of the seqs of messages not authored by the local human.
+    /// Small (bounded by message count), trivially rebuildable from the
+    /// event log; makes unread a filter rather than a subtraction.
+    pub inbound_seqs: String,
 }
 
 impl ChannelIndex {
@@ -98,6 +102,7 @@ impl ChannelIndex {
             "ALTER TABLE channels ADD COLUMN last_seq INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE channels ADD COLUMN last_read_seq INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE channels ADD COLUMN hitl_pending INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE channels ADD COLUMN inbound_seqs TEXT NOT NULL DEFAULT '[]'",
         ] {
             let _ = self.conn.execute(ddl, []);
         }
@@ -162,12 +167,16 @@ impl ChannelIndex {
             EventKind::HitlResponse => Some(0_i64),
             _ => None,
         };
+        let inbound = counts && !matches!(ev.actor, ChannelActor::Human { .. });
         self.conn.execute(
             "UPDATE channels SET
                last_seq  = MAX(last_seq, ?2),
                msg_count = msg_count + ?3,
                preview   = CASE WHEN ?3 = 1 THEN ?4 ELSE preview END,
-               hitl_pending = COALESCE(?5, hitl_pending)
+               hitl_pending = COALESCE(?5, hitl_pending),
+               inbound_seqs = CASE WHEN ?6 = 1
+                   THEN json_insert(inbound_seqs, '$[#]', ?2)
+                   ELSE inbound_seqs END
              WHERE id = ?1",
             rusqlite::params![
                 ch_id,
@@ -175,7 +184,18 @@ impl ChannelIndex {
                 if counts { 1_i64 } else { 0_i64 },
                 preview,
                 hitl_delta,
+                if inbound { 1_i64 } else { 0_i64 },
             ],
+        )?;
+        Ok(())
+    }
+
+    /// Raise the read watermark. Monotonic: a stale surface reporting an older
+    /// position can never resurrect already-cleared unread state.
+    pub fn mark_read(&self, ch_id: &str, seq: u64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE channels SET last_read_seq = MAX(last_read_seq, ?2) WHERE id = ?1",
+            rusqlite::params![ch_id, seq as i64],
         )?;
         Ok(())
     }
@@ -183,7 +203,7 @@ impl ChannelIndex {
     /// Newest-first channel list (the Hub left-rail / CLI "my work" inbox).
     pub fn list(&self, limit: usize) -> Result<Vec<ChannelRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id,title,state,updated_at,purpose,agents,preview,msg_count,last_seq,last_read_seq,hitl_pending
+            "SELECT id,title,state,updated_at,purpose,agents,preview,msg_count,last_seq,last_read_seq,hitl_pending,inbound_seqs
              FROM channels ORDER BY updated_at DESC, rowid DESC LIMIT ?1",
         )?;
         let rows = stmt
@@ -200,6 +220,7 @@ impl ChannelIndex {
                     last_seq: r.get(8)?,
                     last_read_seq: r.get(9)?,
                     hitl_pending: r.get::<_, i64>(10)? != 0,
+                    inbound_seqs: r.get(11)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;

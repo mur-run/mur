@@ -412,6 +412,15 @@ impl ChannelService {
         &self.index
     }
 
+    /// Mark everything up to `seq` as read in `channel_id`.
+    ///
+    /// Callers must only do this for a focused view whose tail is actually
+    /// rendered — a background window clearing unread is the bug this rule
+    /// exists to prevent.
+    pub fn mark_read(&self, channel_id: &str, seq: u64) -> Result<()> {
+        self.index.mark_read(channel_id, seq)
+    }
+
     /// Conversation rows for Chats. Ordering is newest-activity-first; empty
     /// channels (created-but-never-sent drafts) are omitted.
     pub fn list_conversations(
@@ -447,7 +456,8 @@ impl ChannelService {
                     seen_agents.push(only.clone());
                 }
             }
-            let unread = (row.last_seq - row.last_read_seq).max(0) as usize;
+            let inbound: Vec<i64> = serde_json::from_str(&row.inbound_seqs).unwrap_or_default();
+            let unread = inbound.iter().filter(|s| **s > row.last_read_seq).count();
             out.push(crate::summary::ConversationSummary {
                 id: row.id,
                 agents,
@@ -1047,5 +1057,138 @@ mod tests {
         )
         .unwrap();
         assert!(!row(&svc).hitl_pending);
+    }
+
+    #[test]
+    fn unread_counts_only_messages_the_human_did_not_write() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+
+        svc.append_message(
+            &ch.id,
+            ChannelActor::local_human(),
+            EventKind::Message,
+            "hi",
+            None,
+        )
+        .unwrap();
+        svc.append_message(
+            &ch.id,
+            ChannelActor::Agent { id: "mur".into() },
+            EventKind::Message,
+            "hello",
+            None,
+        )
+        .unwrap();
+        svc.append(
+            &ch.id,
+            ChannelActor::System,
+            EventKind::ToolCall,
+            serde_json::json!({}),
+            None,
+        )
+        .unwrap();
+
+        let q = crate::summary::ConversationQuery {
+            agent: None,
+            active_only: false,
+        };
+        let row = &svc.list_conversations(q).unwrap()[0];
+        assert_eq!(
+            row.unread, 1,
+            "one agent message; the human's own turn and the tool call do not count"
+        );
+    }
+
+    #[test]
+    fn mark_read_clears_unread() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        svc.append_message(
+            &ch.id,
+            ChannelActor::local_human(),
+            EventKind::Message,
+            "hi",
+            None,
+        )
+        .unwrap();
+        let last = svc
+            .append_message(
+                &ch.id,
+                ChannelActor::Agent { id: "mur".into() },
+                EventKind::Message,
+                "hello",
+                None,
+            )
+            .unwrap();
+
+        svc.mark_read(&ch.id, last.seq).unwrap();
+
+        let q = crate::summary::ConversationQuery {
+            agent: None,
+            active_only: false,
+        };
+        assert_eq!(svc.list_conversations(q).unwrap()[0].unread, 0);
+    }
+
+    #[test]
+    fn the_watermark_never_moves_backwards() {
+        // A background window reporting a stale position must not resurrect
+        // unread state that a focused window already cleared.
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        for _ in 0..3 {
+            svc.append_message(
+                &ch.id,
+                ChannelActor::Agent { id: "mur".into() },
+                EventKind::Message,
+                "x",
+                None,
+            )
+            .unwrap();
+        }
+
+        svc.mark_read(&ch.id, 3).unwrap();
+        svc.mark_read(&ch.id, 1).unwrap(); // stale surface
+
+        let q = crate::summary::ConversationQuery {
+            agent: None,
+            active_only: false,
+        };
+        assert_eq!(svc.list_conversations(q).unwrap()[0].unread, 0);
+    }
+
+    #[test]
+    fn a_new_agent_message_after_reading_is_unread_again() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        let first = svc
+            .append_message(
+                &ch.id,
+                ChannelActor::Agent { id: "mur".into() },
+                EventKind::Message,
+                "a",
+                None,
+            )
+            .unwrap();
+        svc.mark_read(&ch.id, first.seq).unwrap();
+        svc.append_message(
+            &ch.id,
+            ChannelActor::Agent { id: "mur".into() },
+            EventKind::Message,
+            "b",
+            None,
+        )
+        .unwrap();
+
+        let q = crate::summary::ConversationQuery {
+            agent: None,
+            active_only: false,
+        };
+        assert_eq!(svc.list_conversations(q).unwrap()[0].unread, 1);
     }
 }
