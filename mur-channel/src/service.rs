@@ -14,6 +14,10 @@ use crate::store::ChannelStore;
 /// so TUI, Hub, and mobile cannot disagree about where a title ends.
 pub const TITLE_MAX_CHARS: usize = 48;
 
+/// How many index rows a summary query scans. The index is ordered by activity,
+/// so this bounds work while keeping every recently-touched channel reachable.
+const SUMMARY_SCAN_LIMIT: usize = 2000;
+
 /// Typed payload for an [`EventKind::Delegation`] event. The concierge owns
 /// `child_task_id` (the A2A task id it gave the dialed agent) and stamps the
 /// canonical `target_agent` name.
@@ -406,6 +410,77 @@ impl ChannelService {
     }
     pub fn index(&self) -> &ChannelIndex {
         &self.index
+    }
+
+    /// Conversation rows for Chats. Ordering is newest-activity-first; empty
+    /// channels (created-but-never-sent drafts) are omitted.
+    pub fn list_conversations(
+        &self,
+        q: crate::summary::ConversationQuery,
+    ) -> Result<Vec<crate::summary::ConversationSummary>> {
+        let mut out: Vec<crate::summary::ConversationSummary> = Vec::new();
+        let mut seen_agents: Vec<String> = Vec::new();
+        for row in self.index.list(SUMMARY_SCAN_LIMIT)? {
+            if row.purpose != "conversation" || row.msg_count == 0 {
+                continue;
+            }
+            let agents: Vec<String> = serde_json::from_str(&row.agents).unwrap_or_default();
+            // A conversation with no agent participant cannot be chatted with;
+            // legacy workflow channels have this shape. Diagnostics and the
+            // advanced channel tools still reach it.
+            if agents.is_empty() {
+                continue;
+            }
+            if let Some(want) = &q.agent
+                && !agents.iter().any(|a| a == want)
+            {
+                continue;
+            }
+            if q.active_only {
+                // index.list() is newest-first, so the first Direct row an agent
+                // appears in IS its active conversation. Group conversations are
+                // their own row and never consume an agent's slot.
+                if let [only] = agents.as_slice() {
+                    if seen_agents.iter().any(|a| a == only) {
+                        continue;
+                    }
+                    seen_agents.push(only.clone());
+                }
+            }
+            let unread = (row.last_seq - row.last_read_seq).max(0) as usize;
+            out.push(crate::summary::ConversationSummary {
+                id: row.id,
+                agents,
+                title: row.title,
+                preview: row.preview,
+                state: row.state,
+                updated_at: row.updated_at,
+                turns: row.msg_count as usize,
+                unread,
+                hitl_pending: row.hitl_pending,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Fleet and workflow executions for Work. Never returns conversations.
+    pub fn list_runs(&self) -> Result<Vec<crate::summary::RunSummary>> {
+        let mut out = Vec::new();
+        for row in self.index.list(SUMMARY_SCAN_LIMIT)? {
+            if row.purpose == "conversation" {
+                continue;
+            }
+            out.push(crate::summary::RunSummary {
+                id: row.id,
+                title: row.title,
+                kind: row.purpose,
+                state: row.state,
+                agents: serde_json::from_str(&row.agents).unwrap_or_default(),
+                updated_at: row.updated_at,
+                hitl_pending: row.hitl_pending,
+            });
+        }
+        Ok(out)
     }
 
     /// Refresh the manifest + SQLite read-model after a successful event
