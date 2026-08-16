@@ -295,9 +295,25 @@ mod backfill_tests {
 
     #[test]
     fn dry_run_reports_but_writes_nothing() {
+        // The fixture MUST make the index's recorded purpose disagree with
+        // what fresh inference would produce from the (legacy) manifest.
+        // `create_for_agent` + `make_legacy` alone is NOT enough: it strips
+        // `purpose` but leaves a UUID id and a plain title, so
+        // `effective_purpose` still infers `Conversation` — the exact same
+        // string the index already holds ("conversation"). Under that
+        // fixture, a regression that let dry-run call `index().upsert(&ch)`
+        // would recompute "conversation" and write back the identical value,
+        // and the "index unchanged" assertion below would pass with the bug
+        // present. So instead we create a *workflow* channel (index row =
+        // "workflow-run"), then simulate the legacy state by clearing
+        // `purpose` AND stripping the "workflow: " title prefix, so a fresh
+        // inference lands on `Conversation` ("conversation") while the index
+        // still says "workflow-run". Only then does an untouched index prove
+        // dry-run truly wrote nothing — a premature upsert would visibly
+        // flip it to "conversation".
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent("mur").unwrap();
+        let ch = svc.create_for_workflow("release").unwrap();
         svc.append_message(
             &ch.id,
             ChannelActor::local_human(),
@@ -306,7 +322,11 @@ mod backfill_tests {
             None,
         )
         .unwrap();
-        make_legacy(tmp.path(), &ch.id);
+
+        let mut manifest = svc.store().load_manifest(&ch.id).unwrap();
+        manifest.purpose = None;
+        manifest.title = "hello".to_string();
+        svc.store().save_manifest(&manifest).unwrap();
 
         let index_purpose_before = svc
             .index()
@@ -316,6 +336,10 @@ mod backfill_tests {
             .find(|r| r.id == ch.id)
             .unwrap()
             .purpose;
+        assert_eq!(
+            index_purpose_before, "workflow-run",
+            "fixture sanity: the index must still hold the value written at creation"
+        );
 
         let report = backfill_purpose(tmp.path(), false, 100).unwrap();
 
@@ -335,8 +359,10 @@ mod backfill_tests {
             .unwrap()
             .purpose;
         assert_eq!(
-            index_purpose_before, index_purpose_after,
-            "a dry run must not touch the SQLite index either"
+            index_purpose_after, "workflow-run",
+            "a dry run must not touch the SQLite index either — a premature \
+             index.upsert would have recomputed effective_purpose from the \
+             now-legacy manifest and rewritten this to \"conversation\""
         );
     }
 
