@@ -352,12 +352,21 @@ impl ChannelIndex {
         })();
 
         match result {
-            Ok(n) => {
-                self.conn
-                    .execute_batch("COMMIT")
-                    .context("commit rebuild transaction")?;
-                Ok(n)
-            }
+            Ok(n) => match self.conn.execute_batch("COMMIT") {
+                Ok(()) => Ok(n),
+                Err(e) => {
+                    // COMMIT itself failed (e.g. disk full at commit time).
+                    // Without this, `?` would escape with the transaction
+                    // still open, and self.conn would silently queue every
+                    // later write inside it instead of autocommitting —
+                    // worse than the torn-rebuild bug this transaction
+                    // exists to fix. Roll back before propagating, same as
+                    // the Err(e) arm below; a rollback that itself fails
+                    // must not mask the original COMMIT error.
+                    let _ = self.conn.execute_batch("ROLLBACK");
+                    Err(e).context("commit rebuild transaction")
+                }
+            },
             Err(e) => {
                 // Best-effort: if the rollback itself fails, the original
                 // error is still the one worth surfacing, not the rollback
