@@ -202,7 +202,7 @@ impl ChannelService {
             if let Some(t) = Self::derived_title(&ch, &ev) {
                 ch.title = t;
             }
-            self.refresh_read_model(&ch, Some(&ev));
+            self.refresh_read_model(&ch, &ev);
         }
         Ok(ev)
     }
@@ -251,7 +251,7 @@ impl ChannelService {
             if let Some(t) = Self::derived_title(&ch, &ev) {
                 ch.title = t;
             }
-            self.refresh_read_model(&ch, Some(&ev));
+            self.refresh_read_model(&ch, &ev);
         }
         Ok(ev)
     }
@@ -291,7 +291,7 @@ impl ChannelService {
             if let Some(t) = Self::derived_title(&ch, &ev) {
                 ch.title = t;
             }
-            self.refresh_read_model(&ch, Some(&ev));
+            self.refresh_read_model(&ch, &ev);
         }
         Ok(ev)
     }
@@ -347,7 +347,7 @@ impl ChannelService {
             if let Some(t) = Self::derived_title(&ch, &ev) {
                 ch.title = t;
             }
-            self.refresh_read_model(&ch, Some(&ev));
+            self.refresh_read_model(&ch, &ev);
         }
         Ok(ev)
     }
@@ -577,17 +577,16 @@ impl ChannelService {
     /// SQLite reports the denied write as "attempt to write a readonly
     /// database" (G3, live fleet run 2026-07-09).
     ///
-    /// `ev` is `None` only for manifest-only changes (participant edits), which
-    /// must not touch activity columns.
-    fn refresh_read_model(&self, ch: &Channel, ev: Option<&ChannelEvent>) {
+    /// Every caller here has an event to fold — manifest-only changes
+    /// (participant edits, in `add_participant`/`remove_participant`) go
+    /// straight through `save_manifest` + `index.upsert` and never call
+    /// this, precisely so they can't touch activity columns.
+    fn refresh_read_model(&self, ch: &Channel, ev: &ChannelEvent) {
         let res = self
             .store
             .save_manifest(ch)
             .and_then(|()| self.index.upsert(ch))
-            .and_then(|()| match ev {
-                Some(e) => self.index.record_event(&ch.id, e),
-                None => Ok(()),
-            });
+            .and_then(|()| self.index.record_event(&ch.id, ev));
         if let Err(e) = res {
             tracing::warn!(
                 channel_id = %ch.id,
@@ -1332,7 +1331,18 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_agent("mur").unwrap();
-        let first = svc
+        // NOTE: this test does not currently discriminate. The agent's
+        // first message is seq 0, and `last_read_seq` defaults to 0 (the
+        // same 0-indexed collision `last_seq` needed a -1 sentinel for) —
+        // so a `mark_read(&ch.id, 0)` call here would be a no-op against
+        // the column default, and the test would pass whether or not
+        // "after reading" ever actually ran. The `mark_read` call is
+        // deliberately omitted rather than kept-but-useless. Fixing this
+        // for real needs the `last_read_seq` -1 sentinel, deferred to
+        // Phase 2; once that lands, add `svc.mark_read(&ch.id,
+        // first.seq).unwrap()` back here and this test becomes
+        // load-bearing.
+        let _first = svc
             .append_message(
                 &ch.id,
                 ChannelActor::Agent { id: "mur".into() },
@@ -1341,7 +1351,6 @@ mod tests {
                 None,
             )
             .unwrap();
-        svc.mark_read(&ch.id, first.seq).unwrap();
         svc.append_message(
             &ch.id,
             ChannelActor::Agent { id: "mur".into() },

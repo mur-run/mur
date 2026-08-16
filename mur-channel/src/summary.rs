@@ -188,8 +188,18 @@ mod tests {
 
     #[test]
     fn active_only_ignores_the_agents_fleet_channel() {
-        // Regression: `latest_for_agent` scans every channel a participant
-        // appears in, so a recent fleet run used to shadow the real chat.
+        // `latest_for_agent` scans every channel a participant appears in,
+        // so a recent fleet run can shadow the real chat there — and that
+        // is still true on this branch; `latest_for_agent` is unchanged
+        // and remains the live resume path for mobile
+        // (`mur-core/src/mobile.rs`) and Hub chat
+        // (`mur-hub-gui/src-tauri/src/chat.rs`). `list_conversations`
+        // (exercised below) is not susceptible: it filters on
+        // `effective_purpose` rather than participant membership, so a
+        // fleet channel never shadows a conversation here. Phase 2 must
+        // migrate `latest_for_agent`'s callers to `list_conversations` (or
+        // an equivalent purpose-aware query) before this stops being a
+        // live bug for them.
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
         let chat = svc.create_for_agent("mur").unwrap();

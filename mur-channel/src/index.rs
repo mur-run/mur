@@ -235,12 +235,20 @@ impl ChannelIndex {
         // dedup returns the *same* pre-existing event, and calling this again
         // for a seq already folded must be a no-op — otherwise msg_count,
         // inbound_seqs (the unread badge), and the FTS row all get duplicated
-        // per rerun. Seqs are monotonic and folded in increasing order (live
-        // appends and `rebuild_from`'s replay both process seq ascending), so
-        // this also makes the update itself equivalent to a plain assignment
-        // — but MAX is kept as a defensive no-op if that guarantee ever
-        // slips. `changed` (rows affected) doubles as the fold signal for
+        // per rerun. `changed` (rows affected) doubles as the fold signal for
         // the FTS insert below: 0 means this seq was already folded.
+        //
+        // This guarantee is same-process-only. `ChannelStore::append_event`
+        // releases `events.lock` before this fold runs, and the v3d-2
+        // `channel/delegate` path has a second process writing the same
+        // channel — so two processes can fold out of order. When that
+        // happens, `?2 > last_seq` treats the lower, later-arriving seq as
+        // already-stale and silently drops it from the read model: no
+        // count, no preview, no FTS row, so search can never find that
+        // message. Fixing this needs dedup on `(channel_id, seq)`
+        // membership rather than on `>`; that is Phase 2 work. Until then,
+        // `mur internals reindex` (which calls `rebuild_from`, replaying
+        // every event in seq order) recovers any message dropped this way.
         let changed = self.conn.execute(
             "UPDATE channels SET
                last_seq  = MAX(last_seq, ?2),
@@ -332,11 +340,19 @@ impl ChannelIndex {
         Ok(rows)
     }
 
-    /// Delete the read-model row for `id`. Idempotent — no error if not found.
+    /// Delete the read-model row for `id`, plus its `channel_fts` body
+    /// rows — `channel_fts` is a standalone FTS5 table with its own copy
+    /// of the message text, not a view over `channels`, so it survives a
+    /// bare `DELETE FROM channels` and would otherwise keep a deleted
+    /// conversation's text on disk indefinitely. Idempotent — no error if
+    /// not found.
     pub fn remove(&self, id: &str) -> Result<()> {
         self.conn
             .execute("DELETE FROM channels WHERE id = ?1", [id])
             .context("remove channel row")?;
+        self.conn
+            .execute("DELETE FROM channel_fts WHERE channel_id = ?1", [id])
+            .context("remove channel fts rows")?;
         Ok(())
     }
 
@@ -739,5 +755,55 @@ mod tests {
         assert_eq!(row.msg_count, 1);
         assert_eq!(row.inbound_seqs, "[0]");
         assert_eq!(fts_row_count(&idx, "c1"), 1);
+    }
+
+    #[test]
+    fn remove_deletes_the_channels_fts_body_text_too() {
+        // Regression: `remove()` used to delete only the `channels` row.
+        // `channel_fts` is a standalone FTS5 table with its own copy of the
+        // message text, not a view over `channels`, so the body text
+        // survived on disk indefinitely after a user deleted the
+        // conversation. `search_bodies` already can't see the orphan (its
+        // query `JOIN`s `channels`, so a gone channel id yields zero rows
+        // for that reason alone) — that's the review's "search isn't
+        // wrong" observation, but it also means `search_bodies` can't
+        // discriminate this bug either way. The row-count check on
+        // `channel_fts` directly is what actually proves the text is gone,
+        // not merely unreachable via one query path.
+        let tmp = TempDir::new().unwrap();
+        let idx = ChannelIndex::open(tmp.path()).unwrap();
+        let c = ch("c1", ChannelState::Working);
+        idx.upsert(&c).unwrap();
+        let ev = ChannelEvent {
+            seq: 0,
+            ts: Utc::now(),
+            actor: ChannelActor::Agent { id: "mur".into() },
+            kind: EventKind::Message,
+            payload: serde_json::json!({"text": "unobtainium secret plans"}),
+            idempotency_key: None,
+            sig: None,
+            key_version: None,
+        };
+        idx.record_event("c1", &ev).unwrap();
+        assert_eq!(
+            fts_row_count(&idx, "c1"),
+            1,
+            "sanity: indexed before removal"
+        );
+        assert_eq!(
+            idx.search_bodies("unobtainium", 10).unwrap().len(),
+            1,
+            "sanity: findable before removal"
+        );
+
+        idx.remove("c1").unwrap();
+
+        assert_eq!(
+            fts_row_count(&idx, "c1"),
+            0,
+            "channel_fts rows must be deleted alongside the channels row, \
+             not merely hidden by search_bodies's JOIN"
+        );
+        assert!(idx.search_bodies("unobtainium", 10).unwrap().is_empty());
     }
 }
