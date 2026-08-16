@@ -359,6 +359,20 @@ mod tests {
             search_after.conversations[0].seq,
             search_before.conversations[0].seq
         );
+
+        // The assertions above go through `search()`, which dedups to one
+        // hit per channel (`body_hits.iter().find(...)`) — they would pass
+        // identically even if `DELETE FROM channel_fts` were removed from
+        // `rebuild_from` and the replay just appended a second matching row
+        // alongside the untouched stale one. `search_bodies` does not
+        // dedup: it returns one row per FTS match, so a leftover stale row
+        // plus a freshly replayed one shows up as 2 hits, not 1.
+        let fts_hits_after = svc.index().search_bodies("pipeline", 200).unwrap();
+        assert_eq!(
+            fts_hits_after.len(),
+            1,
+            "rebuild must not leave a stale FTS row alongside the replayed one"
+        );
     }
 
     #[test]
