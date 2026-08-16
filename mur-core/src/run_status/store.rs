@@ -74,7 +74,7 @@ pub fn list_ids(mur_home: &Path) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::run_status::{RUN_SCHEMA, RunKind, RunState, State};
+    use crate::run_status::{RUN_SCHEMA, RunKind, RunState, State, StepState};
 
     fn sample(run_id: &str) -> RunState {
         RunState {
@@ -112,17 +112,100 @@ mod tests {
     }
 
     #[test]
-    fn save_leaves_no_temp_file_behind() {
+    fn save_is_atomic_under_concurrent_reads() {
+        use std::thread;
+
+        // A payload with thousands of steps is tens of KB pretty-printed —
+        // large enough that writing it is not a single-page operation, so a
+        // non-atomic save (write straight into `run.json`, no temp file, no
+        // rename) has a real window in which a concurrent reader can observe
+        // a truncated or partially-written file. A tiny payload can pass
+        // this test by luck even against a direct write; this one can't.
+        fn payload(run_id: &str, tag: &str) -> RunState {
+            let mut run = sample(run_id);
+            run.label = tag.to_string();
+            run.steps = (0..3000)
+                .map(|i| StepState {
+                    id: format!("{tag}-{i}"),
+                    member: None,
+                    state: State::Running,
+                    started_at: None,
+                    ended_at: None,
+                })
+                .collect();
+            run
+        }
+
         let tmp = tempfile::tempdir().unwrap();
-        save(tmp.path(), &sample("run-b")).unwrap();
-        let entries: Vec<_> = std::fs::read_dir(runs_dir(tmp.path()).join("run-b"))
+        let mur_home = tmp.path().to_path_buf();
+        let run_id = "run-race";
+        let payload_a = payload(run_id, "a");
+        let payload_b = payload(run_id, "b");
+
+        let writer_home = mur_home.clone();
+        let iterations = 200;
+        let writer = thread::spawn(move || {
+            for i in 0..iterations {
+                let p = if i % 2 == 0 { &payload_a } else { &payload_b };
+                save(&writer_home, p).unwrap();
+            }
+        });
+
+        // Read concurrently while the writer is still looping. Every read
+        // must either see nothing yet, or a complete, internally-consistent
+        // record — never a parse failure, and never a record that mixes both
+        // payloads together.
+        let mut successful_loads = 0usize;
+        while !writer.is_finished() {
+            match load(&mur_home, run_id) {
+                Ok(None) => {}
+                Ok(Some(run)) => {
+                    assert!(
+                        run.steps
+                            .iter()
+                            .all(|s| s.id.starts_with(run.label.as_str())),
+                        "load() returned a run.json whose steps don't all match \
+                         its own label ({}) — save() tore two different writes \
+                         together, which temp-file-plus-rename is supposed to \
+                         make impossible",
+                        run.label
+                    );
+                    successful_loads += 1;
+                }
+                Err(e) => panic!(
+                    "load() failed to parse run.json while save() was \
+                     concurrently writing it — this is exactly the \
+                     half-written record that temp-file-plus-rename exists \
+                     to prevent: {e:#}"
+                ),
+            }
+        }
+        writer.join().unwrap();
+
+        // No leftover run.json.tmp after the dust settles, even under load.
+        let entries: Vec<_> = std::fs::read_dir(runs_dir(&mur_home).join(run_id))
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(
             entries,
             vec!["run.json".to_string()],
-            "temp file left behind"
+            "temp file left behind after concurrent saves"
+        );
+
+        // One more read after the writer is done, so the final state is
+        // checked too.
+        match load(&mur_home, run_id) {
+            Ok(Some(_)) => successful_loads += 1,
+            Ok(None) => panic!("run.json missing after the writer finished"),
+            Err(e) => panic!("final load() failed to parse run.json: {e:#}"),
+        }
+
+        assert!(
+            successful_loads >= 10,
+            "only {successful_loads} concurrent loads observed a complete \
+             record — the reader loop raced past without exercising the \
+             writer, which proves nothing; increase iterations or payload size"
         );
     }
 
