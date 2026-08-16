@@ -1,7 +1,19 @@
 # murmur TUI visibility fixes — design
 
 Date: 2026-08-12
-Status: approved (design), not yet implemented
+Status: implemented (verified 2026-08-17 against `main` @ 78736ae7)
+
+All three sections have shipped. §1 landed with an extra `keys_inert` guard
+(`cmd/agent/cli/ui.rs:1421-1444`) beyond what this design specified. §2's caps
+are now `RUNAWAY_BACKSTOP` (`mur-agent-runtime/src/turn_ledger.rs:218,245,267,270`)
+and the rule is `─ settlement ─` (`:290`), with `ChatMsg.settlement`
+(`cmd/agent/cli/app.rs:91`), `settlement::split()`, and `theme.card_bg` for all
+three skins (`cmd/agent/cli/theme.rs:53,78,103`). §3 is `chooser_band_height`
+(`cmd/agent/cli/ui.rs:274-300`) and `scroll_marker` (`:859-866`).
+
+One deliberate deviation: `ChatMsg.settlement` is `Option<String>` parsed at
+render time by `settlement.rs`, not the `Option<Settlement>` struct this design
+sketched. The rendering contract is unchanged.
 
 Three reported defects in the `murmur` / `mur agent cli` TUI. All three are the
 same class of bug: **something the operator must read is rendered into a region
