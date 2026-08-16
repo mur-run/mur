@@ -19,6 +19,20 @@ pub struct ChannelRow {
     pub title: String,
     pub state: String,
     pub updated_at: String,
+    /// `effective_purpose` resolved at write time, kebab-case.
+    pub purpose: String,
+    /// JSON array of agent participant ids, e.g. `["mur"]`.
+    pub agents: String,
+    /// Text of the most recent human-visible message.
+    pub preview: String,
+    /// Human-visible message count (drives unread, never turn totals).
+    pub msg_count: i64,
+    /// Highest event seq seen.
+    pub last_seq: i64,
+    /// Read watermark (Task 7).
+    pub last_read_seq: i64,
+    /// A HITL request is awaiting a response.
+    pub hitl_pending: bool,
 }
 
 impl ChannelIndex {
@@ -65,26 +79,55 @@ impl ChannelIndex {
     fn migrate(&self) -> Result<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS channels (
-                id          TEXT PRIMARY KEY,
-                title       TEXT NOT NULL,
-                state       TEXT NOT NULL,
-                owner       TEXT NOT NULL,
-                created_at  TEXT NOT NULL,
-                updated_at  TEXT NOT NULL
+                id            TEXT PRIMARY KEY,
+                title         TEXT NOT NULL,
+                state         TEXT NOT NULL,
+                owner         TEXT NOT NULL,
+                created_at    TEXT NOT NULL,
+                updated_at    TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_channels_updated ON channels(updated_at DESC);",
+        )?;
+        // Additive columns. `ADD COLUMN` on an existing column errors; that is
+        // the "already migrated" case, so it is ignored deliberately.
+        for ddl in [
+            "ALTER TABLE channels ADD COLUMN purpose TEXT NOT NULL DEFAULT 'conversation'",
+            "ALTER TABLE channels ADD COLUMN agents TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE channels ADD COLUMN preview TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE channels ADD COLUMN msg_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE channels ADD COLUMN last_seq INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE channels ADD COLUMN last_read_seq INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE channels ADD COLUMN hitl_pending INTEGER NOT NULL DEFAULT 0",
+        ] {
+            let _ = self.conn.execute(ddl, []);
+        }
+        self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_channels_purpose ON channels(purpose, updated_at DESC);",
         )?;
         Ok(())
     }
 
     pub fn upsert(&self, ch: &Channel) -> Result<()> {
         let owner = serde_json::to_string(&ch.owner)?;
+        let purpose = serde_json::to_string(&crate::purpose::effective_purpose(ch))?
+            .trim_matches('"')
+            .to_string();
+        let agents: Vec<&str> = ch
+            .participants
+            .iter()
+            .filter_map(|p| match &p.actor {
+                mur_common::channel::ChannelActor::Agent { id } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let agents = serde_json::to_string(&agents)?;
         self.conn.execute(
-            "INSERT INTO channels (id,title,state,owner,created_at,updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6)
+            "INSERT INTO channels (id,title,state,owner,created_at,updated_at,purpose,agents)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
              ON CONFLICT(id) DO UPDATE SET
                title=excluded.title, state=excluded.state,
-               owner=excluded.owner, updated_at=excluded.updated_at",
+               owner=excluded.owner, updated_at=excluded.updated_at,
+               purpose=excluded.purpose, agents=excluded.agents",
             rusqlite::params![
                 ch.id,
                 ch.title,
@@ -92,6 +135,8 @@ impl ChannelIndex {
                 owner,
                 ch.created_at.to_rfc3339(),
                 ch.updated_at.to_rfc3339(),
+                purpose,
+                agents,
             ],
         )?;
         Ok(())
@@ -100,7 +145,8 @@ impl ChannelIndex {
     /// Newest-first channel list (the Hub left-rail / CLI "my work" inbox).
     pub fn list(&self, limit: usize) -> Result<Vec<ChannelRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id,title,state,updated_at FROM channels ORDER BY updated_at DESC, rowid DESC LIMIT ?1",
+            "SELECT id,title,state,updated_at,purpose,agents,preview,msg_count,last_seq,last_read_seq,hitl_pending
+             FROM channels ORDER BY updated_at DESC, rowid DESC LIMIT ?1",
         )?;
         let rows = stmt
             .query_map([limit as i64], |r| {
@@ -109,6 +155,13 @@ impl ChannelIndex {
                     title: r.get(1)?,
                     state: r.get(2)?,
                     updated_at: r.get(3)?,
+                    purpose: r.get(4)?,
+                    agents: r.get(5)?,
+                    preview: r.get(6)?,
+                    msg_count: r.get(7)?,
+                    last_seq: r.get(8)?,
+                    last_read_seq: r.get(9)?,
+                    hitl_pending: r.get::<_, i64>(10)? != 0,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -135,13 +188,19 @@ impl ChannelIndex {
         }
         Ok(n)
     }
+
+    /// Raw connection, for tests that need to simulate out-of-band writes.
+    #[cfg(test)]
+    pub(crate) fn conn_for_test(&self) -> &Connection {
+        &self.conn
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Utc;
-    use mur_common::channel::{ChannelActor, ChannelState, Goal};
+    use mur_common::channel::{ChannelActor, ChannelState, Goal, Participant, ParticipantRole};
     use tempfile::TempDir;
 
     fn ch(id: &str, state: ChannelState) -> Channel {
@@ -204,5 +263,87 @@ mod tests {
             !old_db.exists(),
             "old-location file must be gone after migration"
         );
+    }
+
+    #[test]
+    fn migrate_adds_columns_to_a_preexisting_v1_database() {
+        // Simulate a DB created before these columns existed, then open the
+        // index over it. ALTER TABLE must run without destroying rows.
+        let tmp = TempDir::new().unwrap();
+        // The index lives at <mur_home>/index/channels/channels.db — NOT
+        // alongside channel data in <mur_home>/channels/.
+        let dir = tmp.path().join("index").join("channels");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("channels.db");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE channels (
+                    id TEXT PRIMARY KEY, title TEXT NOT NULL, state TEXT NOT NULL,
+                    owner TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+                 INSERT INTO channels VALUES ('old','chat with mur','working','{}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');",
+            )
+            .unwrap();
+        }
+
+        let idx = ChannelIndex::open(tmp.path()).expect("must migrate, not fail");
+        let rows = idx.list(10).unwrap();
+        assert_eq!(rows.len(), 1, "existing row must survive migration");
+        assert_eq!(rows[0].id, "old");
+        assert_eq!(
+            rows[0].purpose, "conversation",
+            "column DEFAULT until something re-upserts it"
+        );
+    }
+
+    #[test]
+    fn upsert_writes_purpose_and_agents() {
+        let tmp = TempDir::new().unwrap();
+        let idx = ChannelIndex::open(tmp.path()).unwrap();
+        let mut c = ch("c1", ChannelState::Working);
+        c.purpose = Some(mur_common::channel::ChannelPurpose::Conversation);
+        c.participants = vec![Participant {
+            actor: ChannelActor::Agent { id: "mur".into() },
+            role: ParticipantRole::Delegate,
+            joined_at: Utc::now(),
+        }];
+        idx.upsert(&c).unwrap();
+
+        let rows = idx.list(10).unwrap();
+        assert_eq!(rows[0].purpose, "conversation");
+        assert_eq!(rows[0].agents, r#"["mur"]"#);
+    }
+
+    #[test]
+    fn upsert_infers_purpose_for_a_legacy_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let idx = ChannelIndex::open(tmp.path()).unwrap();
+        let mut c = ch("fleet-projectx", ChannelState::Working);
+        c.purpose = None; // legacy
+        idx.upsert(&c).unwrap();
+        assert_eq!(idx.list(10).unwrap()[0].purpose, "fleet-run");
+    }
+
+    #[test]
+    fn upsert_does_not_clobber_activity_columns() {
+        // Re-upserting a manifest (e.g. a state transition) must not reset the
+        // preview/counters that the append path maintains.
+        let tmp = TempDir::new().unwrap();
+        let idx = ChannelIndex::open(tmp.path()).unwrap();
+        let c = ch("c1", ChannelState::Working);
+        idx.upsert(&c).unwrap();
+        idx.conn_for_test()
+            .execute(
+                "UPDATE channels SET preview='hello', msg_count=3, last_seq=7 WHERE id='c1'",
+                [],
+            )
+            .unwrap();
+
+        idx.upsert(&c).unwrap();
+
+        let r = &idx.list(10).unwrap()[0];
+        assert_eq!(r.preview, "hello");
+        assert_eq!(r.msg_count, 3);
+        assert_eq!(r.last_seq, 7);
     }
 }
