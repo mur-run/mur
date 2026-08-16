@@ -531,8 +531,8 @@ impl ChannelService {
             let body = body_hits.iter().find(|(id, _, _)| *id == row.id);
             let title_match = row.title.to_lowercase().contains(&needle);
             let (seq, snippet) = match (body, title_match) {
-                (Some((_, seq, snip)), _) => (*seq as u64, snip.clone()),
-                (None, true) => (0, row.preview.clone()),
+                (Some((_, seq, snip)), _) => (Some(*seq as u64), snip.clone()),
+                (None, true) => (None, row.preview.clone()),
                 (None, false) => continue,
             };
             let hit = SearchHit {

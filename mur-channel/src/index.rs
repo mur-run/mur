@@ -109,8 +109,9 @@ impl ChannelIndex {
         self.conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_channels_purpose ON channels(purpose, updated_at DESC);",
         )?;
-        // Rebuildable full-text projection of message bodies. `content=''` keeps
-        // FTS5 from storing a second copy of the text it indexes.
+        // Rebuildable full-text projection of message bodies. This is a
+        // standalone (not external-content) FTS5 table, so it stores its own
+        // copy of `body` — that copy is what `snippet()` reads from below.
         self.conn.execute_batch(
             "CREATE VIRTUAL TABLE IF NOT EXISTS channel_fts
              USING fts5(channel_id UNINDEXED, seq UNINDEXED, body, tokenize='unicode61');",

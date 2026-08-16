@@ -61,8 +61,10 @@ pub enum SearchScope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchHit {
     pub channel_id: String,
-    /// Event sequence of the matching message; `0` when only the title matched.
-    pub seq: u64,
+    /// `Some(seq)` locates the matching message (raw, 0-indexed — comparable
+    /// to `last_seq`/`inbound_seqs`); `None` means only the title matched, so
+    /// there is no event to scroll to.
+    pub seq: Option<u64>,
     pub title: String,
     pub snippet: String,
     pub purpose: String,
@@ -335,7 +337,8 @@ mod search_tests {
         assert_eq!(res.conversations.len(), 1);
         assert_eq!(res.conversations[0].channel_id, ch.id);
         assert_eq!(
-            res.conversations[0].seq, 1,
+            res.conversations[0].seq,
+            Some(1),
             "second message of two; seqs are 0-indexed"
         );
         assert!(res.conversations[0].snippet.contains("pipeline"));
@@ -385,6 +388,26 @@ mod search_tests {
 
         let res = svc.search("refactor", SearchScope::Conversations).unwrap();
         assert_eq!(res.conversations.len(), 1);
+    }
+
+    #[test]
+    fn a_title_only_match_reports_no_event_to_scroll_to() {
+        // The fleet title is minted at creation, so "projectx" appears in the
+        // title but in no message body — the one way to reach the title-only arm.
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let fleet = svc
+            .create_for_fleet("projectx", "mur", &["mur".into()])
+            .unwrap();
+        say(&svc, &fleet.id, "run it");
+
+        let res = svc.search("projectx", SearchScope::All).unwrap();
+        assert_eq!(res.runs.len(), 1);
+        assert_eq!(res.runs[0].channel_id, fleet.id);
+        assert_eq!(
+            res.runs[0].seq, None,
+            "title matched; there is no event to scroll to"
+        );
     }
 
     #[test]
