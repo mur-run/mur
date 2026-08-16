@@ -53,17 +53,29 @@ a state.
 
 ## 1. The execution unit
 
-One **run** = one `execute_dag` call. All three entry points already funnel
-through it:
+One **run** = one `execute_dag` call. There are exactly **four** call sites, and
+all four already funnel through it:
 
-- `parallel_jobs` — `mur-core/src/executor/jobs.rs:17`
-- `fleet run` — `mur-core/src/cmd/fleet/run.rs:378-392`
-- `workflow run` — same executor
+- `parallel_jobs` — `mur-core/src/executor/jobs.rs:141`
+- `fleet run` — `mur-core/src/cmd/fleet/run.rs:392`
+- `fleet run --loop` — `mur-core/src/cmd/fleet/loop_run.rs:587` (the unattended
+  guarded loop — the path an operator can least observe and most needs to query)
+- `workflow run` — `mur-core/src/cmd/workflow.rs:211`
 
 `run_id` already exists (`mur-core/src/executor/dag.rs:103`) and already seeds
-the idempotency keys (`dag.rs:163-165`). It defaults to the empty string
-(`dag.rs:130`); **all three entry points must supply it.** A run with an empty
-`run_id` is a bug, not a default.
+the idempotency keys (`dag.rs:163-165`). Although the field defaults to the
+empty string (`dag.rs:130`), **all four call sites already set a real one** —
+three as `run-{uuid_v7}` and the fleet loop as
+`loop-{name}-{uuid_v7}-{iteration}`.
+
+**Those ids are correct as they stand and must not be redesigned.** In
+particular the fleet loop's uuid nonce is load-bearing; its own comment records
+why: concurrent `--loop` runs would otherwise collide on the channel's
+idempotency-key dedup. Recording a run therefore keys off the id that is
+already there, and adds only what the record needs that the executor cannot
+infer — the run's kind and a human-readable label. A run reaching
+`execute_dag` with an empty `run_id` is not recorded at all, which keeps every
+test constructing `DagExecOptions::default()` behaving exactly as before.
 
 Naming: the CLI surface says `job` (the user-facing word); the internal
 identifier stays `run_id`. Do not rename the existing identifier.
