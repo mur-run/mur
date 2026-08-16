@@ -4,7 +4,7 @@
 
 **Goal:** Give `mur-channel` a durable channel *purpose*, an event-derived read model (title, preview, unread, HITL), and the three product contracts (`list_conversations`, `list_runs`, `search`) that Hub, TUI, and mobile will all consume — without changing any surface's UI yet.
 
-**Architecture:** `Channel` gains an additive `purpose: Option<ChannelPurpose>`; every creation path writes it explicitly and one pure `effective_purpose()` resolves legacy `None`. The existing disposable SQLite index (`~/.mur/channels/channels.db`) grows columns for purpose, agents, preview, counts, and read watermark, kept fresh incrementally by the single existing append funnel (`ChannelService::refresh_read_model`) rather than by rescanning events. Reads never mutate manifests: legacy correction is an explicit `mur channel backfill-purpose --dry-run/--apply` command.
+**Architecture:** `Channel` gains an additive `purpose: Option<ChannelPurpose>`; every creation path writes it explicitly and one pure `effective_purpose()` resolves legacy `None`. The existing disposable SQLite index (`~/.mur/index/channels/channels.db`) grows columns for purpose, agents, preview, counts, and read watermark, kept fresh incrementally by the single existing append funnel (`ChannelService::refresh_read_model`) rather than by rescanning events. Reads never mutate manifests: legacy correction is an explicit `mur channel backfill-purpose --dry-run/--apply` command.
 
 **Tech Stack:** Rust 2024, `rusqlite` 0.32 (bundled SQLite, FTS5 verified available), `serde`/`serde_json`, `chrono`, `anyhow`, `tempfile` for tests.
 
@@ -438,7 +438,9 @@ Add to `mur-channel/src/index.rs`'s test module:
         // Simulate a DB created before these columns existed, then open the
         // index over it. ALTER TABLE must run without destroying rows.
         let tmp = TempDir::new().unwrap();
-        let dir = tmp.path().join("channels");
+        // The index lives at <mur_home>/index/channels/channels.db — NOT
+        // alongside channel data in <mur_home>/channels/.
+        let dir = tmp.path().join("index").join("channels");
         std::fs::create_dir_all(&dir).unwrap();
         let db = dir.join("channels.db");
         {
@@ -456,7 +458,7 @@ Add to `mur-channel/src/index.rs`'s test module:
         let rows = idx.list(10).unwrap();
         assert_eq!(rows.len(), 1, "existing row must survive migration");
         assert_eq!(rows[0].id, "old");
-        assert_eq!(rows[0].purpose, "conversation", "legacy row resolves via inference on rebuild");
+        assert_eq!(rows[0].purpose, "conversation", "column DEFAULT until something re-upserts it");
     }
 
     #[test]
@@ -1155,7 +1157,7 @@ mod tests {
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_agent("mur").unwrap();
         say(&svc, &ch.id, "hello");
-        let path = tmp.path().join("channels").join(&ch.id).join("channel.json");
+        let path = tmp.path().join("channels").join(&ch.id).join("channel.yaml");
         let before = std::fs::read_to_string(&path).unwrap();
 
         let _ = svc
@@ -1167,11 +1169,8 @@ mod tests {
 }
 ```
 
-⚠️ Confirm the manifest filename used by the last test before running it:
-
-Run: `grep -n "channel.json\|manifest" mur-channel/src/store.rs | head -5`
-
-Adjust the path in the test to match.
+The manifest path/format above was verified against `mur-channel/src/store.rs`
+before this plan was written: YAML at `<home>/channels/<id>/channel.yaml`.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -1629,7 +1628,7 @@ mod search_tests {
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_agent("mur").unwrap();
         say(&svc, &ch.id, "hello world");
-        let path = tmp.path().join("channels").join(&ch.id).join("channel.json");
+        let path = tmp.path().join("channels").join(&ch.id).join("channel.yaml");
         let before = std::fs::read_to_string(&path).unwrap();
 
         let _ = svc.search("hello", SearchScope::All).unwrap();
@@ -1639,7 +1638,7 @@ mod search_tests {
 }
 ```
 
-⚠️ Use the same manifest filename you confirmed in Task 6 Step 1.
+The manifest is YAML at `<home>/channels/<id>/channel.yaml` (verified).
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -1856,12 +1855,15 @@ mod backfill_tests {
     use tempfile::TempDir;
 
     /// Strip `purpose` from a manifest on disk, simulating a legacy channel.
+    /// Manifests are YAML (`channel.yaml`), written by `ChannelStore::save_manifest`.
     fn make_legacy(home: &std::path::Path, id: &str) {
-        let path = home.join("channels").join(id).join("channel.json");
-        let mut v: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        v.as_object_mut().unwrap().remove("purpose");
-        std::fs::write(&path, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+        let path = home.join("channels").join(id).join("channel.yaml");
+        let mut v: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        v.as_mapping_mut()
+            .unwrap()
+            .remove(serde_yaml::Value::String("purpose".into()));
+        std::fs::write(&path, serde_yaml::to_string(&v).unwrap()).unwrap();
     }
 
     #[test]
@@ -2223,20 +2225,20 @@ Expected: PASS (the full crate suite).
 The index is disposable, so a rebuild against the live home is safe and is the only check that exercises 268 real channels.
 
 ```bash
-cp ~/.mur/channels/channels.db /tmp/channels.db.bak
+cp ~/.mur/index/channels/channels.db /tmp/channels.db.bak
 ORT_STRATEGY=download cargo run -p mur-core -- internals reindex
 ```
 
 Then confirm the rebuild classified real channels:
 
 ```bash
-sqlite3 ~/.mur/channels/channels.db \
+sqlite3 ~/.mur/index/channels/channels.db \
   "SELECT purpose, COUNT(*) FROM channels GROUP BY purpose;"
 ```
 
 Expected: a `conversation` bucket plus `fleet-run`/`workflow-run` buckets — not everything in one bucket. If `internals reindex` does not route to `ChannelIndex::rebuild_from`, say so and rebuild via a one-off test instead of changing reindex in this task.
 
-Restore if anything looks wrong: `cp /tmp/channels.db.bak ~/.mur/channels/channels.db`
+Restore if anything looks wrong: `cp /tmp/channels.db.bak ~/.mur/index/channels/channels.db`
 
 - [ ] **Step 7: Lint and commit**
 
