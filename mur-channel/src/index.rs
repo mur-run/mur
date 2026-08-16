@@ -162,10 +162,6 @@ impl ChannelIndex {
             EventKind::HitlResponse => Some(0_i64),
             _ => None,
         };
-        // `ChannelEvent::seq` is 0-indexed in the event log (see
-        // `store::append_event`'s `next_seq`), but `last_seq` here is surfaced
-        // to callers as a 1-indexed "how many events so far" count — store
-        // `seq + 1` so it lines up with `msg_count`.
         self.conn.execute(
             "UPDATE channels SET
                last_seq  = MAX(last_seq, ?2),
@@ -175,7 +171,7 @@ impl ChannelIndex {
              WHERE id = ?1",
             rusqlite::params![
                 ch_id,
-                (ev.seq + 1) as i64,
+                ev.seq as i64,
                 if counts { 1_i64 } else { 0_i64 },
                 preview,
                 hitl_delta,

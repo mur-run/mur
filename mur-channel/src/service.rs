@@ -374,7 +374,8 @@ impl ChannelService {
                 joined_at: Utc::now(),
             });
             ch.updated_at = Utc::now();
-            self.refresh_read_model(&ch, None);
+            self.store.save_manifest(&ch)?;
+            self.index.upsert(&ch)?;
         }
         Ok(())
     }
@@ -387,7 +388,8 @@ impl ChannelService {
             .retain(|p| !matches!(&p.actor, ChannelActor::Agent { id } if id == agent_id));
         if ch.participants.len() != before {
             ch.updated_at = Utc::now();
-            self.refresh_read_model(&ch, None);
+            self.store.save_manifest(&ch)?;
+            self.index.upsert(&ch)?;
         }
         Ok(())
     }
@@ -894,7 +896,9 @@ mod tests {
             .unwrap();
         assert_eq!(row.preview, "hello back");
         assert_eq!(row.msg_count, 2);
-        assert_eq!(row.last_seq, 2);
+        // `ChannelEvent::seq` is 0-indexed (store::append_event's next_seq
+        // starts at 0), so the highest seq after two events is 1, not 2.
+        assert_eq!(row.last_seq, 1);
     }
 
     #[test]
@@ -928,7 +932,10 @@ mod tests {
             .find(|r| r.id == ch.id)
             .unwrap();
         assert_eq!(row.msg_count, 1, "ToolCall must not count as a message");
-        assert_eq!(row.last_seq, 2, "but it does advance the sequence");
+        assert_eq!(
+            row.last_seq, 1,
+            "but it does advance the sequence (0-indexed: two events -> highest seq 1)"
+        );
         assert_eq!(row.preview, "run it", "and must not become the preview");
     }
 
