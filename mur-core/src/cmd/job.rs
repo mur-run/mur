@@ -70,6 +70,57 @@ fn state_label(s: State) -> &'static str {
     }
 }
 
+/// Render one run's full status — the shared renderer for `mur job status`
+/// AND `mur fleet status`. Spec §4: these two surfaces derive through
+/// `status_of` and render through this ONE function; two renderers is how
+/// two surfaces drift into disagreeing about one fact.
+pub fn print_status(w: &mut dyn std::io::Write, s: &RunStatus) {
+    let _ = writeln!(w, "run       {}", s.run.run_id);
+    let _ = writeln!(w, "kind      {:?}", s.run.kind);
+    let _ = writeln!(w, "label     {}", s.run.label);
+    let _ = writeln!(w, "state     {}", state_label(s.state));
+    let _ = writeln!(w, "liveness  {}", liveness_label(s.liveness));
+    // A rebuilt record carries pid 0 (no process is known), and a bare
+    // `pid 0` reads like a real pid out of context — say what it is. The
+    // signal is the structural one used everywhere else: no heartbeat and
+    // pid 0 together mean "rebuilt from the channel".
+    if s.run.last_heartbeat_at.is_none() && s.run.pid == 0 {
+        let _ = writeln!(w, "pid       unknown (record rebuilt)");
+    } else {
+        let _ = writeln!(w, "pid       {}", s.run.pid);
+    }
+    let _ = writeln!(w, "started   {}", s.run.started_at.to_rfc3339());
+    match s.run.last_heartbeat_at {
+        Some(b) => {
+            let _ = writeln!(w, "heartbeat {}", b.to_rfc3339());
+        }
+        None => {
+            let _ = writeln!(w, "heartbeat unknown (record was rebuilt from the channel)");
+        }
+    }
+    if let Some(c) = &s.run.channel_id {
+        let _ = writeln!(w, "channel   {c}");
+    }
+    if let Some(b) = &s.run.blocked_on {
+        let _ = writeln!(
+            w,
+            "blocked   {} — {} (since {})",
+            b.hitl_id,
+            b.summary,
+            b.since.to_rfc3339()
+        );
+    }
+    for step in &s.run.steps {
+        let _ = writeln!(
+            w,
+            "  step {:<12} {:<9} {}",
+            step.id,
+            state_label(step.state),
+            step.member.as_deref().unwrap_or("-")
+        );
+    }
+}
+
 pub fn run(mur_home: &Path, action: JobAction) -> Result<()> {
     match action {
         JobAction::List { all } => {
@@ -102,36 +153,7 @@ pub fn run(mur_home: &Path, action: JobAction) -> Result<()> {
             let Some(s) = load_status(mur_home, &run_id)? else {
                 anyhow::bail!("no run recorded for `{run_id}` (try `mur job list --all`)");
             };
-            println!("run       {}", s.run.run_id);
-            println!("kind      {:?}", s.run.kind);
-            println!("label     {}", s.run.label);
-            println!("state     {}", state_label(s.state));
-            println!("liveness  {}", liveness_label(s.liveness));
-            println!("pid       {}", s.run.pid);
-            println!("started   {}", s.run.started_at.to_rfc3339());
-            match s.run.last_heartbeat_at {
-                Some(b) => println!("heartbeat {}", b.to_rfc3339()),
-                None => println!("heartbeat unknown (record was rebuilt from the channel)"),
-            }
-            if let Some(c) = &s.run.channel_id {
-                println!("channel   {c}");
-            }
-            if let Some(b) = &s.run.blocked_on {
-                println!(
-                    "blocked   {} — {} (since {})",
-                    b.hitl_id,
-                    b.summary,
-                    b.since.to_rfc3339()
-                );
-            }
-            for step in &s.run.steps {
-                println!(
-                    "  step {:<12} {:<9} {}",
-                    step.id,
-                    state_label(step.state),
-                    step.member.as_deref().unwrap_or("-")
-                );
-            }
+            print_status(&mut std::io::stdout(), &s);
             Ok(())
         }
         JobAction::Stop { run_id } => {
@@ -201,6 +223,49 @@ mod tests {
         let pid = c.id();
         c.wait().unwrap();
         pid
+    }
+
+    /// `print_status` is the shared renderer for `mur job status` AND
+    /// `mur fleet status` (spec §4: one derivation, many renderers — these
+    /// two share even their renderer). Rendering into a writer makes that
+    /// sharing testable: the state/liveness lines must appear verbatim.
+    #[test]
+    fn print_status_renders_state_and_liveness_lines() {
+        let s = status(State::Running, std::process::id(), Some(1));
+        let mut out = Vec::new();
+        print_status(&mut out, &s);
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains("state     running\n"),
+            "missing the state line: {text}"
+        );
+        assert!(
+            text.contains("liveness  alive\n"),
+            "missing the liveness line: {text}"
+        );
+        assert!(
+            text.contains(&format!("pid       {}\n", std::process::id())),
+            "missing the pid line: {text}"
+        );
+    }
+
+    /// A rebuilt record (no heartbeat, pid 0) must not print a bare
+    /// `pid 0`, which reads like a real pid out of context — it must say
+    /// the pid is unknown and why.
+    #[test]
+    fn print_status_renders_a_rebuilt_pid_honestly() {
+        let s = status(State::Running, 0, None);
+        let mut out = Vec::new();
+        print_status(&mut out, &s);
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains("pid       unknown (record rebuilt)\n"),
+            "a rebuilt record did not say the pid is unknown: {text}"
+        );
+        assert!(
+            !text.contains("pid       0\n"),
+            "a rebuilt record printed a bare pid 0: {text}"
+        );
     }
 
     /// A crashed run — `running` on disk with no process — is the single most
