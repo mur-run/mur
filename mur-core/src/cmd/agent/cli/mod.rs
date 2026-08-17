@@ -18,6 +18,7 @@ mod footer;
 mod manage;
 mod markdown;
 mod memory_cmds;
+mod model_cmd;
 mod multiplex;
 mod panel;
 mod paste;
@@ -161,7 +162,7 @@ const SPINNER_MS: u64 = 90;
 /// Max chars of an arg hint shown on a step line in `--plain` mode.
 const PLAIN_STEP_HINT_MAX: usize = 120;
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /open (outstanding items)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /mcp  /skill  /remember <text> (save a memory)  /memories  /forget <name|last>  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
+const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /open (outstanding items)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /model [N|name] (list/switch model)  /mcp  /skill  /remember <text> (save a memory)  /memories  /forget <name|last>  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
 #[allow(clippy::too_many_arguments)]
@@ -1822,6 +1823,60 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
                 app.push_system("verbose OFF — tool cards collapse to a one-line summary");
             }
         }
+        SlashCmd::Model(arg) => {
+            let reg = mur_common::model::ModelRegistry::default_path()
+                .and_then(|p| mur_common::model::ModelRegistry::load_from(&p));
+            let reg = match reg {
+                Ok(r) => r,
+                Err(e) => {
+                    app.push_system(format!("model registry unavailable: {e:#}"));
+                    return;
+                }
+            };
+            let models = model_cmd::ordered_models(&reg);
+            match arg {
+                None => {
+                    let cur = model_cmd::current_model_ref(&app.home, &app.agent);
+                    app.push_system(model_cmd::render_list(&models, cur.as_deref()));
+                }
+                Some(a) => {
+                    let Some(target) = model_cmd::resolve_pick(&models, &a) else {
+                        app.push_system(format!("no such model: {a} — /model to list"));
+                        return;
+                    };
+                    let (h, ag, mref) = (app.home.clone(), app.agent.clone(), target.clone());
+                    let res = tokio::task::spawn_blocking(move || {
+                        dial_method(
+                            &h,
+                            &ag,
+                            "model/set",
+                            serde_json::json!({ "model_ref": mref }),
+                            DialMode::Auto,
+                        )
+                    })
+                    .await;
+                    match res {
+                        Ok(Ok(_)) => app.push_system(format!(
+                            "model → {target} (effective next turn; saved to profile)"
+                        )),
+                        // Runtime without model/set, or agent not running: save
+                        // the pick anyway so the operator's intent lands — a
+                        // restart applies it.
+                        Ok(Err(e)) => {
+                            match model_cmd::write_model_ref(&app.home, &app.agent, &target) {
+                                Ok(()) => app.push_system(format!(
+                                    "couldn't hot-switch ({e:#}); saved {target} to profile — restart the agent to apply"
+                                )),
+                                Err(w) => app.push_system(format!(
+                                    "model switch failed: {e:#}; profile write also failed: {w:#}"
+                                )),
+                            }
+                        }
+                        Err(e) => app.push_system(format!("model task failed: {e}")),
+                    }
+                }
+            }
+        }
         SlashCmd::Mcp(args) => run_manage(app, move |agent| manage::run_mcp(&agent, &args)).await,
         SlashCmd::Skill(args) => {
             run_manage(app, move |agent| manage::run_skill(&agent, &args)).await
@@ -2603,7 +2658,7 @@ mod help_coverage_tests {
     /// command that does not exist; `/help` then has to mention all of them.
     const COMMANDS: &[&str] = &[
         "help", "clear", "card", "sessions", "channels", "open", "auto", "verbose", "skin", "mcp",
-        "skill", "remember", "memories", "forget", "panel", "exit",
+        "skill", "model", "remember", "memories", "forget", "panel", "exit",
     ];
 
     #[test]

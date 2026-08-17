@@ -221,9 +221,10 @@ pub async fn build_provider_runner(
     Arc<TaskRunner>,
     Option<Arc<dyn LlmClient>>,
     Option<Arc<McpPool>>,
+    Option<Arc<crate::llm::switchable::ModelSwitchHandle>>,
 )> {
     if force_echo {
-        return Ok((Arc::new(TaskRunner::new_stub_echo()), None, None));
+        return Ok((Arc::new(TaskRunner::new_stub_echo()), None, None, None));
     }
 
     let resolved = crate::supervisor::resolve_model_entry(&profile.inner);
@@ -427,7 +428,35 @@ pub async fn build_provider_runner(
         // FallbackLlmClient wrapper.
         return Ok(
             match crate::llm::client_builder::build_client_from_entry(&entry, profile, &mur_home) {
-                Ok(client) => build(client),
+                Ok(client) => {
+                    // Hot-switch seam (murmur /model): wrap the client so
+                    // `model/set` can replace it between turns, and hand the
+                    // dispatcher a per-ref builder that reuses the exact boot
+                    // construction path (fresh registry lookup + same profile).
+                    let switchable = crate::llm::switchable::SwitchableLlmClient::new(client);
+                    let profile_for_switch = profile.clone();
+                    let mur_home_for_switch = mur_home.clone();
+                    let build_client: crate::llm::fallback::ClientFactory =
+                        Box::new(move |model_ref: &str| {
+                            let reg = mur_common::model::ModelRegistry::load_from(
+                                &mur_common::model::ModelRegistry::default_path()?,
+                            )?;
+                            let entry = reg.models.get(model_ref).cloned().ok_or_else(|| {
+                                anyhow::anyhow!("model_ref {model_ref:?} not in registry")
+                            })?;
+                            crate::llm::client_builder::build_client_from_entry(
+                                &entry,
+                                &profile_for_switch,
+                                &mur_home_for_switch,
+                            )
+                        });
+                    let handle = Arc::new(crate::llm::switchable::ModelSwitchHandle {
+                        switchable: switchable.clone(),
+                        build_client,
+                    });
+                    let (r, c, p) = build(switchable as Arc<dyn LlmClient>);
+                    (r, c, p, Some(handle))
+                }
                 Err(e) => {
                     // A `guarded_http` build failure is a real error unrelated to
                     // provider support — pre-Task-7 this was a hard `?` straight
@@ -448,6 +477,7 @@ pub async fn build_provider_runner(
                                 Arc::new(TaskRunner::new_stub_echo()),
                                 None,
                                 Some(pool.clone()),
+                                None,
                             )
                         }
                         "openai" => {
@@ -456,6 +486,7 @@ pub async fn build_provider_runner(
                                 Arc::new(TaskRunner::new_stub_echo()),
                                 None,
                                 Some(pool.clone()),
+                                None,
                             )
                         }
                         "echo" => {
@@ -465,6 +496,7 @@ pub async fn build_provider_runner(
                                 Arc::new(TaskRunner::new_stub_echo()),
                                 None,
                                 Some(pool.clone()),
+                                None,
                             )
                         }
                         other => {
@@ -482,6 +514,7 @@ pub async fn build_provider_runner(
                                 Arc::new(TaskRunner::new_stub_misconfigured(msg)),
                                 None,
                                 Some(pool.clone()),
+                                None,
                             )
                         }
                     }
@@ -525,7 +558,8 @@ pub async fn build_provider_runner(
         }
         Arc::new(fb)
     };
-    Ok(build(fallback_client))
+    let (r, c, p) = build(fallback_client);
+    Ok((r, c, p, None))
 }
 
 /// Telemetry writer + notification routing + hook chain + skills loaded once at boot.
