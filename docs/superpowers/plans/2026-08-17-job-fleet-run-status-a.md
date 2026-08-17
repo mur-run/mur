@@ -1531,7 +1531,16 @@ pub enum JobAction {
         /// Run id (from `mur job list`).
         run_id: String,
     },
-    /// Mark a run stopped and signal its orchestrator.
+    /// Mark a run stopped. Does NOT signal or kill the orchestrator process.
+    ///
+    /// The first reason is safety: a record rebuilt from the channel carries
+    /// `pid: 0`, and on Unix `kill(0, sig)` targets the CALLER's entire
+    /// process group — `mur job stop` on a rebuilt run would kill the user's
+    /// own shell. Never pass a `RunState.pid` to a signalling call.
+    /// The second is layering: enforcement belongs with the executor, and
+    /// Plan B makes the run loop honour a `Stopped` record. Until then this
+    /// marks intent, and the CLI must say so rather than implying the work
+    /// has halted.
     Stop {
         /// Run id (from `mur job list`).
         run_id: String,
@@ -1652,8 +1661,12 @@ pub fn run(mur_home: &Path, action: JobAction) -> Result<()> {
                 return Ok(());
             }
             println!("run {run_id} marked stopped");
+            // Do not overstate this. An operator who reads "stopped", walks
+            // away, and leaves the work running is worse off than one who was
+            // told the truth.
             println!(
-                "note: `mur job stop` stops one run. To stop a fleet's loop, use `mur fleet stop <name>`."
+                "note: this marks the run stopped; a running orchestrator is not signalled and \
+                 will continue until it finishes. To stop a fleet's loop, use `mur fleet stop <name>`."
             );
             Ok(())
         }
