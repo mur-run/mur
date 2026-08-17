@@ -385,25 +385,26 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     let hitl_timeout_secs = profile.inner.hitl.timeout_secs;
     let max_iterations = profile.inner.hitl.max_iterations;
     let max_tokens = profile.inner.hitl.max_tokens;
-    let (runner, llm_for_companion, mcp_pool) = crate::supervisor_runner::build_provider_runner(
-        force_echo,
-        &agent_home,
-        &profile,
-        egress_proxy,
-        runtime_skills.clone(),
-        skills_cfg.clone(),
-        &hook_chain,
-        &hook_ctx,
-        &hook_cancel,
-        Some(pending_approvals.clone()),
-        Some(sock_notif_tx.clone()),
-        hitl_timeout_secs,
-        max_iterations,
-        max_tokens,
-        Some(writer.sender()),
-        identity.clone(),
-    )
-    .await?;
+    let (runner, llm_for_companion, mcp_pool, model_switch) =
+        crate::supervisor_runner::build_provider_runner(
+            force_echo,
+            &agent_home,
+            &profile,
+            egress_proxy,
+            runtime_skills.clone(),
+            skills_cfg.clone(),
+            &hook_chain,
+            &hook_ctx,
+            &hook_cancel,
+            Some(pending_approvals.clone()),
+            Some(sock_notif_tx.clone()),
+            hitl_timeout_secs,
+            max_iterations,
+            max_tokens,
+            Some(writer.sender()),
+            identity.clone(),
+        )
+        .await?;
     let dispatcher = Arc::new(build_dispatcher(
         &profile_arc,
         &runner,
@@ -413,6 +414,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         &identity,
         &profile.inner.name,
         profile.inner.identity.key_version,
+        model_switch.map(|h| (h, agent_home.join("profile.yaml"))),
     ));
 
     // 7. Transports
@@ -873,6 +875,10 @@ fn build_dispatcher(
     identity: &Arc<AgentIdentity>,
     agent_name: &str,
     key_version: u32,
+    model_switch: Option<(
+        Arc<crate::llm::switchable::ModelSwitchHandle>,
+        std::path::PathBuf,
+    )>,
 ) -> Dispatcher {
     let mut d = Dispatcher::new();
     d.register("agent/card", Box::new(CardHandler::new(profile.clone())));
@@ -926,6 +932,18 @@ fn build_dispatcher(
             notifier,
         }),
     );
+    // murmur /model hot-switch. Only single-model agents get a handle;
+    // chain/routing and echo agents surface method-not-found and the TUI
+    // degrades to a profile write + restart hint.
+    if let Some((switch, profile_path)) = model_switch {
+        d.register(
+            "model/set",
+            Box::new(crate::protocol::methods::model_set::ModelSetHandler::new(
+                switch,
+                profile_path,
+            )),
+        );
+    }
     d
 }
 
