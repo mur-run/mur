@@ -766,13 +766,20 @@ async fn execute_step(
             agent_id: "mur".into(),
             summary: step.description.clone(),
         };
-        let decision = crate::hitl::gate::gate(mur_home, cid, &req, opts.yes, None)
-            .await
-            .unwrap_or(crate::hitl::gate::GateDecision {
-                allow: false,
-                reason: "gate error".into(),
-                action_hash: String::new(),
-            });
+        let decision = crate::hitl::gate::gate(
+            mur_home,
+            cid,
+            &req,
+            opts.yes,
+            None,
+            Some(opts.run_id.as_str()),
+        )
+        .await
+        .unwrap_or(crate::hitl::gate::GateDecision {
+            allow: false,
+            reason: "gate error".into(),
+            action_hash: String::new(),
+        });
         if !decision.allow {
             eprintln!("  Step {sid}: gate denied ({})", decision.reason);
             emit(StepEventKind::Failed, 0);
