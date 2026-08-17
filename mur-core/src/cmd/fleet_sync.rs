@@ -386,6 +386,16 @@ fn manifest_path(mur_dir: &Path, etype: FleetEntityType) -> PathBuf {
     mur_dir.join(format!(".fleet_manifest_{}.json", etype.path_segment()))
 }
 
+/// Record the pushed content hash and version for each changed entity.
+///
+/// `events_tail` is deliberately reset to 0 here and set afterwards by
+/// `update_skill_events_tail`, the only writer of that field (see the skill
+/// branch of `fleet_push`). Between those two writes the manifest on disk
+/// says "no events pushed yet", so a crash in that window makes the next
+/// push send the whole `events.jsonl` where it would have sent a delta —
+/// see `build_fleet_skill_changes`, which reads `prev_tail` from here.
+/// The zeroing is not a lost-data window; do not "fix" it by carrying the
+/// old tail forward, which would skip events when the log is rewritten.
 fn update_fleet_manifest(path: &Path, changes: &[FleetChange], version: i64) -> Result<()> {
     let mut manifest = load_manifest(path);
     for c in changes {
