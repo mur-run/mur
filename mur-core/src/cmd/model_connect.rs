@@ -12,7 +12,7 @@ use mur_common::model::{ModelEntry, ModelRegistry};
 use mur_common::route::RouteTier;
 use mur_common::secret::SecretRef;
 
-use crate::model_discovery::{self, default_alias};
+use crate::model_discovery::{self, default_alias, wire_protocol_for};
 use crate::model_prices;
 
 /// Keychain service shared with the Hub Model Library — a key stored by
@@ -58,8 +58,10 @@ pub(crate) fn plan_connect(
     base_url: Option<String>,
     catalog_has_vendor: bool,
 ) -> Result<ConnectPlan> {
-    let native = vendor == "anthropic" || vendor == "openai";
-    if native {
+    // "Native" means the runtime has a client for this vendor by name, so the
+    // entry can carry the vendor in `provider:` and omit the endpoint.
+    let protocol = wire_protocol_for(vendor);
+    if protocol == vendor {
         return Ok(ConnectPlan {
             provider: vendor.to_string(),
             vendor: vendor.to_string(),
@@ -74,7 +76,7 @@ pub(crate) fn plan_connect(
         );
     };
     Ok(ConnectPlan {
-        provider: "openai".to_string(),
+        provider: protocol.to_string(),
         vendor: vendor.to_string(),
         base_url: Some(base),
         list: if catalog_has_vendor {
@@ -352,11 +354,7 @@ pub async fn cmd_connect(
             let picked = pick_from(&d.models, all, pick.clone())?;
             // Ollama has a native client; other local runtimes speak the
             // openai protocol. Local tier prices as zero.
-            let provider = if d.key == "ollama" {
-                "ollama"
-            } else {
-                "openai"
-            };
+            let provider = wire_protocol_for(&d.key);
             let (added, skipped) = add_entries(
                 &mut reg,
                 &mur_home,

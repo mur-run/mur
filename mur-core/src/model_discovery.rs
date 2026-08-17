@@ -69,6 +69,29 @@ fn models_url(base_url: &str) -> String {
 
 /// Registry provider key whose API authenticates the non-OpenAI way.
 pub const ANTHROPIC_PROVIDER: &str = "anthropic";
+
+/// The wire protocol the runtime dials to reach `vendor` — which is not the
+/// same thing as the vendor's name.
+///
+/// `models.yaml`'s `provider:` field selects a client implementation, and the
+/// runtime ships exactly four: `local`, `ollama`, `anthropic`, `openai`
+/// (see `client_builder::build_client_from_entry`). Every other vendor —
+/// DeepSeek, Groq, Mistral, xAI, OpenRouter, Google, LM Studio, MLX — is
+/// reached over the OpenAI protocol at its own `base_url`. Writing the vendor
+/// name into `provider:` instead produces an entry the runtime cannot build a
+/// client for, and the agent then answers every message with a
+/// misconfiguration notice.
+///
+/// Keep the vendor name for anything that identifies WHO makes the model
+/// (catalog pricing, alias prefixes); use this for how MUR dials it.
+pub fn wire_protocol_for(vendor: &str) -> &'static str {
+    match vendor {
+        "anthropic" => "anthropic",
+        "ollama" => "ollama",
+        "local" => "local",
+        _ => "openai",
+    }
+}
 /// Anthropic requires a dated API version on every request. Pinned, not
 /// configurable: it selects a wire contract, so it moves with the code that
 /// parses the response, never with user config.
@@ -377,6 +400,29 @@ mod tests {
             }
         });
         format!("http://127.0.0.1:{port}/v1")
+    }
+
+    #[test]
+    fn wire_protocol_maps_vendors_to_the_four_clients_the_runtime_ships() {
+        // Native protocols keep their own client.
+        assert_eq!(wire_protocol_for("anthropic"), "anthropic");
+        assert_eq!(wire_protocol_for("openai"), "openai");
+        assert_eq!(wire_protocol_for("ollama"), "ollama");
+        assert_eq!(wire_protocol_for("local"), "local");
+        // Everything else is OpenAI-protocol-at-its-own-base-url. Writing the
+        // vendor name here is what made Hub-added entries unusable.
+        for vendor in [
+            "deepseek",
+            "groq",
+            "mistral",
+            "xai",
+            "openrouter",
+            "google",
+            "mlx",
+            "lmstudio",
+        ] {
+            assert_eq!(wire_protocol_for(vendor), "openai", "vendor {vendor}");
+        }
     }
 
     const CATALOG_FIXTURE: &str = r#"{

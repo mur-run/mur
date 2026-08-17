@@ -6,7 +6,7 @@
 use mur_common::model::{ModelEntry, ModelRegistry};
 use mur_common::route::RouteTier;
 use mur_common::secret::SecretRef;
-use mur_core::model_discovery::{self, default_alias};
+use mur_core::model_discovery::{self, default_alias, wire_protocol_for};
 use mur_core::model_prices::{self, PriceInfo};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -233,6 +233,34 @@ pub async fn test_provider(
         .collect())
 }
 
+/// Resolve what an entry must carry to be dialable: the wire protocol for
+/// `provider:` and the endpoint for `base_url:`.
+///
+/// The UI names a **vendor** (its preset key: `deepseek`, `groq`, `google`,
+/// `mlx`, …), but `provider:` selects one of the four clients the runtime
+/// ships. Writing the vendor there yields an entry the runtime cannot build,
+/// and the agent answers every message with a misconfiguration notice — so
+/// the vendor is mapped through [`wire_protocol_for`] here, exactly as
+/// `mur model connect` does, and kept only for catalog pricing.
+///
+/// A vendor that maps onto the OpenAI protocol without an endpoint is
+/// rejected rather than written: `provider: openai` with no `base_url` dials
+/// api.openai.com, so a DeepSeek key would be sent to OpenAI and fail with an
+/// error naming the wrong service.
+pub fn resolve_wire_target(
+    vendor: &str,
+    base_url: Option<String>,
+) -> Result<(&'static str, Option<String>), String> {
+    let protocol = wire_protocol_for(vendor);
+    let base = base_url.filter(|u| !u.trim().is_empty());
+    if protocol == "openai" && vendor != "openai" && base.is_none() {
+        return Err(format!(
+            "{vendor} is reached over the OpenAI protocol, so it needs a base URL —              without one the request would go to api.openai.com"
+        ));
+    }
+    Ok((protocol, base))
+}
+
 #[tauri::command]
 pub fn add_models(
     provider: String,
@@ -258,10 +286,14 @@ pub fn add_models(
     let resolved_base_url = base_url
         .clone()
         .or_else(|| provider_base_url(&reg, &provider));
+    // `provider` from the UI is a vendor; the registry field is a protocol.
+    let (wire, resolved_base_url) = resolve_wire_target(&provider, resolved_base_url)?;
     for pick in picks {
+        // Pricing still keys off the VENDOR — models.dev files DeepSeek under
+        // `deepseek`, and knows nothing about the protocol used to reach it.
         let price = model_prices::lookup(&home, &provider, &pick.model, is_local);
         let entry = ModelEntry {
-            provider: provider.clone(),
+            provider: wire.to_string(),
             model: pick.model.clone(),
             base_url: resolved_base_url.clone(),
             secret: secret.clone(),
@@ -351,6 +383,51 @@ mod tests {
         assert_eq!(v.input_cost, Some(0.00125));
         assert_eq!(v.output_cost, Some(0.01));
         assert_eq!(v.context_window, Some(400_000));
+    }
+
+    #[test]
+    fn vendor_presets_are_written_as_the_protocol_the_runtime_can_dial() {
+        // Native: vendor name IS the client name, endpoint optional.
+        assert_eq!(
+            resolve_wire_target("anthropic", None).unwrap(),
+            ("anthropic", None)
+        );
+        assert_eq!(
+            resolve_wire_target("openai", None).unwrap(),
+            ("openai", None)
+        );
+        // Every other Model Library preset is OpenAI-protocol. Writing the
+        // vendor here produced entries the runtime refuses to build a client
+        // for, so the agent replied with a misconfiguration notice instead of
+        // answering.
+        for vendor in ["deepseek", "groq", "mistral", "xai", "openrouter", "google"] {
+            let (protocol, base) =
+                resolve_wire_target(vendor, Some(format!("https://api.{vendor}.test/v1"))).unwrap();
+            assert_eq!(protocol, "openai", "vendor {vendor}");
+            assert!(base.is_some(), "vendor {vendor} must keep its endpoint");
+        }
+        // Local runtimes: only Ollama has its own client.
+        assert_eq!(
+            resolve_wire_target("ollama", Some("http://localhost:11434/v1".into()))
+                .unwrap()
+                .0,
+            "ollama"
+        );
+        assert_eq!(
+            resolve_wire_target("mlx", Some("http://127.0.0.1:8000/v1".into()))
+                .unwrap()
+                .0,
+            "openai"
+        );
+    }
+
+    #[test]
+    fn openai_protocol_vendor_without_an_endpoint_is_refused() {
+        // Would otherwise send a DeepSeek key to api.openai.com.
+        let err = resolve_wire_target("deepseek", None).unwrap_err();
+        assert!(err.contains("base URL"), "{err}");
+        // Blank counts as absent.
+        assert!(resolve_wire_target("groq", Some("   ".into())).is_err());
     }
 
     #[test]
