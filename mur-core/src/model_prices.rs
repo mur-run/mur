@@ -209,6 +209,23 @@ pub fn lookup(
     load_cached(mur_home, u64::MAX).and_then(|cat| cat.lookup(provider, model))
 }
 
+/// Resolve pricing for a registry entry, asking the catalog under every vendor
+/// name the entry implies (see [`ModelEntry::vendor_candidates`]).
+///
+/// Prefer this over [`lookup`] whenever you hold an entry: `provider` alone is
+/// a wire protocol as often as a vendor, so a DeepSeek entry
+/// (`provider: openai`) is priced only when `deepseek` is tried too.
+pub fn lookup_entry(
+    mur_home: &Path,
+    entry: &mur_common::model::ModelEntry,
+    tier_is_local: bool,
+) -> Option<PriceInfo> {
+    entry
+        .vendor_candidates()
+        .into_iter()
+        .find_map(|vendor| lookup(mur_home, &vendor, &entry.model, tier_is_local))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

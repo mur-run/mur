@@ -96,25 +96,32 @@ pub fn probe_local_providers() -> Result<Vec<DetectedLocalView>, String> {
 }
 
 /// Find the stored `SecretRef` to reuse when re-exploring an already-connected
-/// provider: the first registry entry for `provider` that carries a secret.
+/// provider: the first entry belonging to `vendor` that carries a secret.
+///
+/// Matched on vendor candidates, not `provider`: the Library's rail is keyed
+/// by vendor, while the entry records the protocol it is dialed with.
 /// Returns `None` for providers with no stored credential (e.g. local).
-pub fn provider_secret_ref(reg: &ModelRegistry, provider: &str) -> Option<SecretRef> {
+pub fn provider_secret_ref(reg: &ModelRegistry, vendor: &str) -> Option<SecretRef> {
     reg.models
         .values()
-        .find(|e| e.provider == provider && e.secret.is_some())
+        .find(|e| e.secret.is_some() && e.vendor_candidates().iter().any(|v| v == vendor))
         .and_then(|e| e.secret.clone())
 }
 
-/// Base URL already stored for `provider`, if any.
+/// Base URL already stored for `vendor`, if any.
+///
+/// Matched against the entry's vendor candidates, not its `provider` field:
+/// after a DeepSeek entry is written as `provider: openai`, only the recorded
+/// vendor (or its endpoint host) still identifies it as DeepSeek.
 ///
 /// A provider fronted by a proxy (mur-model-gateway, LiteLLM, a self-hosted
 /// relay) has its endpoint in the registry, not at the vendor's canonical
 /// host. Discovery must reuse it or it dials the vendor directly with a
 /// gateway token and gets a 401.
-pub fn provider_base_url(reg: &ModelRegistry, provider: &str) -> Option<String> {
+pub fn provider_base_url(reg: &ModelRegistry, vendor: &str) -> Option<String> {
     reg.models
         .values()
-        .find(|e| e.provider == provider && e.base_url.is_some())
+        .find(|e| e.base_url.is_some() && e.vendor_candidates().iter().any(|v| v == vendor))
         .and_then(|e| e.base_url.clone())
 }
 
@@ -294,6 +301,9 @@ pub fn add_models(
         let price = model_prices::lookup(&home, &provider, &pick.model, is_local);
         let entry = ModelEntry {
             provider: wire.to_string(),
+            // Keep who makes it; `wire` only says how MUR dials it. Recorded
+            // only when it adds information.
+            vendor: (provider != wire).then(|| provider.clone()),
             model: pick.model.clone(),
             base_url: resolved_base_url.clone(),
             secret: secret.clone(),
@@ -428,6 +438,31 @@ mod tests {
         assert!(err.contains("base URL"), "{err}");
         // Blank counts as absent.
         assert!(resolve_wire_target("groq", Some("   ".into())).is_err());
+    }
+
+    #[test]
+    fn stored_credential_and_endpoint_are_found_by_vendor_not_protocol() {
+        // A DeepSeek entry written the correct way: dialed as openai, but the
+        // Library's rail is keyed by vendor, so both lookups must match on it.
+        let mut reg = ModelRegistry::default();
+        reg.models.insert(
+            "deepseek_chat".into(),
+            ModelEntry {
+                provider: "openai".into(),
+                vendor: Some("deepseek".into()),
+                model: "deepseek-chat".into(),
+                base_url: Some("https://api.deepseek.com/v1".into()),
+                secret: Some(SecretRef::Env("DEEPSEEK_KEY".into())),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            provider_base_url(&reg, "deepseek").as_deref(),
+            Some("https://api.deepseek.com/v1")
+        );
+        assert!(provider_secret_ref(&reg, "deepseek").is_some());
+        // And not attributed to OpenAI just because that is the protocol.
+        assert_eq!(provider_base_url(&reg, "anthropic"), None);
     }
 
     #[test]
