@@ -84,11 +84,12 @@ identifier stays `run_id`. Do not rename the existing identifier.
 
 ## 2. State file — a rebuildable cache
 
-`~/.mur/runs/<run_id>/run.json`:
+Two files live in `~/.mur/runs/<run_id>/`:
 
+`run.json`:
 ```
 schema, run_id, channel_id, kind (job|fleet|workflow), label,
-pid, ppid, started_at,
+pid, started_at,
 last_heartbeat_at,      // the ONLY field that cannot be rebuilt
 state,                  // running | blocked | done | failed | stopped
 steps: [{ id, member, state, started_at, ended_at }],
@@ -96,10 +97,38 @@ blocked_on: Option<{ hitl_id, summary, since }>,
 binary_version, build_sha
 ```
 
-**This file is a cache, not a source of truth.** When it is missing or suspect,
-rebuild it by folding `~/.mur/channels/<channel_id>/events.jsonl` — the
-`Delegation`, `StateChange`, `ToolCall`, `ToolResult`, and `HitlRequest` events
-are already written there (`mur-common/src/channel.rs:123-133`).
+`sidecar.json` — the rebuild index, deliberately separate from `run.json` so
+a corrupt cache cannot take the index down with it:
+```
+schema, channel_id, kind, first_seq
+```
+All three fields are FACTS the executor knows at recording time — the channel
+it runs over, the run kind the caller passed in, and the channel event
+sequence number at which this run's first event lands. Nothing in it is
+inferred, because inference is how one run's state gets attributed to another
+(see the run-boundary rule below).
+
+**`run.json` is a cache, not a source of truth.** When it is missing or
+suspect, rebuild it by folding `~/.mur/channels/<channel_id>/events.jsonl`.
+
+**The run boundary is the `run_id` carried inside events.** Channels are
+long-lived and reused — a fleet channel serves every `--loop` iteration, and
+`mur workflow run --channel <id>` can attach to any existing channel. Folding
+"the whole channel" therefore attributes other runs' states to this one. So:
+
+- Every event the executor itself writes — the `Delegation` payloads
+  (`delegation_payload` gains an optional `run_id`) and the `StateChange`
+  payloads (`transition` gains an optional `run_id`, threaded through the
+  executor's calls) — carries the run's `run_id` when a run is being
+  recorded. Both fields are optional additions to free-form JSON payloads;
+  legacy events without them are simply not claimed by any rebuild.
+- A rebuild folds only events with `seq >= first_seq` whose payload's
+  `run_id` equals the run being rebuilt. The run's terminal state is the last
+  matching `StateChange`'s `to` value; its steps come from matching
+  `Delegation` events.
+- Events of OTHER runs on the same channel are never claimed, so a failed run
+  A is never reported `done` because run B later completed on the same
+  channel.
 
 This follows the pattern the codebase already states for itself:
 `mur-common/src/channel.rs:106` describes `Channel` as *"The durable manifest (a
@@ -111,8 +140,17 @@ rebuilt.
 `last_heartbeat_at` is the single exception: it is deliberately not a channel
 event, because a 10-second tick would flood an append-only signed audit log and
 make manual reading (the thing that diagnosed this bug) impossible. A rebuilt
-run therefore carries `heartbeat: unknown` and falls back to pid liveness.
+run therefore carries `heartbeat: unknown` and lets `classify()` fall back.
 **Reporting `unknown` is required; synthesizing a heartbeat is forbidden.**
+
+**Reconciliation: the channel wins even when the cache parses.** A parseable
+cache is accepted for what it says only while the channel has nothing newer to
+say. When the run is non-terminal on disk, `status_of` folds the run's own
+events (same boundary rule) and checks the last matching `StateChange`: if the
+channel reports a terminal state the cache does not, the channel's state is
+reported (with the cache's heartbeat retained — it is still real). This closes
+the sequence "channel Completed succeeds, terminal run.json write fails, cache
+says running forever": the run is reported `done`, not `running` + `dead`.
 
 ---
 
@@ -134,10 +172,22 @@ A background task inside `execute_dag` updates `last_heartbeat_at` every
 failure this design exists to remove.
 
 Freshness threshold: `runs.heartbeat_stale_after_intervals` (config, default 3).
+Both `runs` values are validated at load: a non-positive
+`heartbeat_interval_secs` is clamped to the default (a zero interval makes
+Tokio's ticker panic and makes every live run read `stalled` instantly).
 
 `liveness` is only meaningful while `state` is non-terminal. For `done`,
 `failed`, and `stopped`, `classify()` returns `liveness: n/a` — a finished run's
 absent process is not a fault.
+
+For non-terminal runs the derivation order is fixed: terminal check, then
+**absent heartbeat → `unknown`**, then pid check (`dead`), then staleness
+(`alive`/`stalled`). The heartbeat check precedes the pid check deliberately:
+a rebuilt record carries `pid: 0`, and pid-0 semantics are platform-dependent
+(`kill(0, sig)` targets the caller's own process group on Unix, so it reads
+*alive*; `OpenProcess(0, …)` fails on Windows, so it reads *dead*). Checking
+the absent heartbeat first makes `unknown` the answer on every platform, and
+no recorded run can be affected because recording always stamps a heartbeat.
 
 **A `kill -9`'d orchestrator writes no terminal state**, so its `run.json` stays
 `state: running` forever with `liveness: dead`. That pair — and only that pair —
@@ -173,12 +223,26 @@ Every surface renders its output:
 `running` + `dead` (crashed) — and hides `done` / `failed` / `stopped` unless
 `--all` is given. A crashed run must never be silently filtered out.
 
-`mur job stop <run_id>` writes `state: stopped` and signals the orchestrator
-process; it is the per-run analogue of `mur fleet stop`, which continues to
-operate on the fleet's `.stopped` sentinel
-(`mur-core/src/cmd/fleet/control.rs:14`) and is unchanged. Stopping a run does
-not clear a fleet's kill switch, and stopping a fleet does not require finding
-its run id.
+`mur job stop <run_id>` marks the record `Stopped` and signals NOTHING: a
+rebuilt record's pid is 0, and `kill(0, sig)` would take out the caller's own
+process group. It is the per-run analogue of `mur fleet stop`, which continues
+to operate on the fleet's `.stopped` sentinel
+(`mur-core/src/cmd/fleet/control.rs:14`) and is unchanged. The CLI says
+plainly that a running orchestrator will not stop — enforcement belongs to
+Plan B. Stopping a run does not clear a fleet's kill switch, and stopping a
+fleet does not require finding its run id.
+
+`mur fleet status <name>` reports the fleet's most recent run via the same
+derivation — it finds the run whose sidecar records the fleet's channel and
+renders it exactly as `mur job status` would. It is not a separate status
+computation; it is a lookup plus the same renderer.
+
+**`steps` must answer "what is it doing now".** The executor updates the
+record's `steps` through the existing `on_step` observer (`StepEvent`
+Started/Done/Failed, `dag.rs:112-117`) via the locked `store::update`, so
+`mur job status` and `mur_job_status` show which step is currently running
+while the run is alive — not an empty list. Steps of a finished run need no
+live updates; a rebuilt record's steps come from the boundary rule above.
 
 **Any surface that derives run state on its own is a design violation.** This is
 not stylistic: the Hub has already shipped this exact bug once (status judged
