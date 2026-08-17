@@ -189,6 +189,10 @@ pub async fn run(cli: Cli) -> Result<()> {
             } => {
                 cmd::channel::approve(&channel_id, &hitl_id, deny, reason)?;
             }
+            ChannelAction::BackfillPurpose { apply, limit } => {
+                let home = cmd::agent::resolve_mur_home()?;
+                cmd::channel::backfill_purpose(&home, apply, limit)?;
+            }
         },
         // Deprecated: use `mur internals reindex`
         Commands::Reindex { bootstrap } => {
