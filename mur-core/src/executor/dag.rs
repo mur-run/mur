@@ -902,12 +902,26 @@ pub async fn execute_dag(
             binary_version: env!("CARGO_PKG_VERSION").to_string(),
             build_sha: mur_common::build::SHORT_SHA.to_string(),
         };
-        crate::run_status::store::save(mur_home, &record)?;
-        Some(crate::run_status::heartbeat::Heartbeat::spawn(
-            mur_home.to_path_buf(),
-            opts.run_id.clone(),
-            std::time::Duration::from_secs(cfg.runs.heartbeat_interval_secs),
-        ))
+        // Bookkeeping must never take down real work: a run record that can't
+        // be written (full disk, unwritable ~/.mur/runs/, ...) should not
+        // fail the run before a single step executes. Log and proceed with
+        // no record and no heartbeat ticker — there is nothing for it to
+        // beat against.
+        match crate::run_status::store::save(mur_home, &record) {
+            Ok(()) => Some(crate::run_status::heartbeat::Heartbeat::spawn(
+                mur_home.to_path_buf(),
+                opts.run_id.clone(),
+                std::time::Duration::from_secs(cfg.runs.heartbeat_interval_secs),
+            )),
+            Err(error) => {
+                tracing::warn!(
+                    run_id = %opts.run_id,
+                    %error,
+                    "failed to record run status; continuing without run tracking"
+                );
+                None
+            }
+        }
     } else {
         None
     };
@@ -1716,6 +1730,50 @@ mod tests {
             run.state.is_terminal(),
             "run left non-terminal after execute_dag returned: {:?}",
             run.state
+        );
+    }
+
+    /// A run-status recording failure (e.g. an unwritable `~/.mur/runs/`)
+    /// must not fail the run itself — observability must never take down
+    /// the thing it observes. Force `store::save`'s `create_dir_all` to fail
+    /// deterministically by putting a plain file where the run's directory
+    /// needs to go, then prove `execute_dag` still runs its step to a
+    /// successful conclusion instead of propagating the I/O error.
+    #[tokio::test]
+    async fn execute_dag_survives_a_run_recording_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let run_id = "run-that-cannot-be-recorded";
+
+        // `store::save` does `create_dir_all(<mur_home>/runs/<run_id>)`; a
+        // regular file already sitting at that exact path makes that call
+        // fail every time, deterministically, with no timing dependency.
+        std::fs::create_dir_all(mur_home.join("runs")).unwrap();
+        std::fs::write(mur_home.join("runs").join(run_id), b"not a directory").unwrap();
+
+        let procedure = Procedure {
+            variables: vec![],
+            steps: vec![step("s1", &[], None)],
+        };
+        let opts = DagExecOptions {
+            run_id: run_id.into(),
+            run_kind: Some(crate::run_status::RunKind::Workflow),
+            run_label: "test run".into(),
+            ..Default::default()
+        };
+
+        let output = execute_dag(mur_home, "test-skill", &procedure, &opts)
+            .await
+            .expect(
+                "execute_dag returned Err — a run-status recording failure \
+                 propagated out of the executor instead of being logged and \
+                 ignored, so bookkeeping took down real work",
+            );
+        assert_eq!(
+            output.status,
+            PipelineStatus::Success,
+            "execute_dag did not complete its step after a run-status \
+             recording failure — bookkeeping is taking down real work"
         );
     }
 
