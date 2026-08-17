@@ -455,6 +455,37 @@ mod tests {
         );
     }
 
+    /// The executor's heartbeat ticker and `status_of`'s stale threshold
+    /// both read `Config::load_or_default` — a zero interval must reach
+    /// NEITHER of them. A 0×0 stale threshold would classify a fresh beat
+    /// as STALLED, so `Alive` here is only reachable through the clamped
+    /// 10s×3=30s default.
+    #[test]
+    fn status_of_clamps_a_zero_heartbeat_interval_to_the_default_threshold() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        std::fs::write(
+            mur_home.join("config.yaml"),
+            "runs:\n  heartbeat_interval_secs: 0\n  heartbeat_stale_after_intervals: 0\n",
+        )
+        .unwrap();
+
+        let now = Utc::now();
+        let record = run(State::Running, std::process::id(), Some(5), now);
+        store::save(mur_home, &record).unwrap();
+
+        let status = status_of(mur_home, &record.run_id)
+            .unwrap()
+            .expect("run was just saved");
+        assert_eq!(
+            status.liveness,
+            Liveness::Alive,
+            "a 5s-old heartbeat must read Alive under the clamped 30s \
+             default — Stalled would mean the zero interval leaked into the \
+             stale threshold"
+        );
+    }
+
     /// `status_of` must load `<mur_home>/config.yaml`, not just `mur_home`
     /// itself — `Config::load_or_default` takes a file path, and silently
     /// returns `Config::default()` on any read failure (including "this
