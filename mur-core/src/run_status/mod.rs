@@ -2,9 +2,12 @@
 //!
 //! `~/.mur/runs/<run_id>/run.json` is a CACHE, not a source of truth — every
 //! field except `last_heartbeat_at` is derivable from the run's channel event
-//! log (see `rebuild`). When the two disagree, the channel wins and the cache
-//! is rebuilt. This mirrors `mur_common::channel::Channel`, whose own doc
-//! comment calls it "a cache of state derivable from the event log".
+//! log (see `rebuild`). When the two disagree, the channel wins and the
+//! record is re-derived from it in memory — the cache file is never written
+//! back (a write-back would have to decide what a re-derived heartbeat means,
+//! which is deliberately left unanswered). This mirrors
+//! `mur_common::channel::Channel`, whose own doc comment calls it "a cache of
+//! state derivable from the event log".
 //!
 //! Known limitation: if the whole run directory (`runs/<run_id>/`) is
 //! deleted, the run is unrecoverable by `mur job *` even though its channel
@@ -190,7 +193,8 @@ pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Opt
     Ok(Some(classify(record, Utc::now(), stale_after(&cfg.runs))))
 }
 
-/// Rebuild from the channel via the `channel.id` sidecar. `None` when the
+/// Re-derive the record from the channel via the `channel.id` sidecar, in
+/// memory only — nothing is written back to the cache. `None` when the
 /// sidecar is absent (a run that was never recorded, or whose whole directory
 /// was deleted — the documented limitation) or the channel no longer exists.
 fn rebuild_for(mur_home: &std::path::Path, run_id: &str) -> Option<RunState> {

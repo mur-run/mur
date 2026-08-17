@@ -1804,4 +1804,56 @@ mod tests {
             "recorded a run for an empty run_id"
         );
     }
+
+    /// Pin the executor's own `channel.id` sidecar write — the four-line
+    /// `save_channel_id` call in `execute_dag`'s recording block. A store-level
+    /// round-trip test would pass even if the executor never called it, and
+    /// then a corrupt run.json would silently hide the run: exactly the defect
+    /// the run-status fallback exists to remove, recreated as a testing blind
+    /// spot. This test runs the real executor against a real channel, corrupts
+    /// the cache it just wrote, and proves `status_of` re-derives the record
+    /// from the channel through the sidecar the executor left behind.
+    #[tokio::test]
+    async fn corrupt_run_json_falls_back_via_the_executors_channel_sidecar() {
+        use mur_channel::ChannelService;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let svc = ChannelService::open(mur_home).unwrap();
+        let ch = svc.create_for_workflow("sidecar-wf").unwrap();
+
+        let procedure = Procedure {
+            variables: vec![],
+            steps: vec![step("s1", &[], Some("echo done"))],
+        };
+        let opts = DagExecOptions {
+            run_id: "run-sidecar".into(),
+            run_kind: Some(crate::run_status::RunKind::Workflow),
+            run_label: "sidecar test run".into(),
+            channel_id: Some(ch.id.clone()),
+            ..Default::default()
+        };
+        execute_dag(mur_home, "sidecar-wf", &procedure, &opts)
+            .await
+            .expect("execute_dag failed");
+
+        // Corrupt the cache the executor just wrote. The sidecar must survive
+        // it and carry the rebuild.
+        let run_json = crate::run_status::store::run_path(mur_home, "run-sidecar");
+        assert!(run_json.exists(), "execute_dag never wrote run.json");
+        std::fs::write(&run_json, b"{ this is not json").unwrap();
+
+        let status = crate::run_status::status_of(mur_home, "run-sidecar")
+            .unwrap()
+            .expect("the executor's sidecar must make a corrupt cache fall back to the channel");
+        assert_eq!(
+            status.state,
+            crate::run_status::State::Done,
+            "the channel's Completed transition must be re-derived from its events"
+        );
+        assert!(
+            status.run.last_heartbeat_at.is_none(),
+            "a re-derived record must report an unknown heartbeat, never invent one"
+        );
+    }
 }
