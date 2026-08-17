@@ -880,19 +880,19 @@ pub async fn execute_dag(
     // is acceptable: there is no seq-cursor API, and the load is the only
     // way to learn the next seq.
     let mut first_seq: Option<u64> = None;
-    if let Some(cid) = opts.channel_id.as_deref() {
-        if let Ok(svc) = ChannelService::open(mur_home) {
-            first_seq = match svc.load_events(cid) {
-                Ok(events) => Some(events.last().map(|e| e.seq + 1).unwrap_or(0)),
-                Err(_) => None,
-            };
-            let _ = svc.transition(
-                cid,
-                ChannelState::Working,
-                ChannelActor::System,
-                opts.event_run_id(),
-            );
-        }
+    if let Some(cid) = opts.channel_id.as_deref()
+        && let Ok(svc) = ChannelService::open(mur_home)
+    {
+        first_seq = match svc.load_events(cid) {
+            Ok(events) => Some(events.last().map(|e| e.seq + 1).unwrap_or(0)),
+            Err(_) => None,
+        };
+        let _ = svc.transition(
+            cid,
+            ChannelState::Working,
+            ChannelActor::System,
+            opts.event_run_id(),
+        );
     }
 
     if graph.nodes.is_empty() {
