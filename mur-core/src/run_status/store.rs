@@ -1,9 +1,11 @@
 //! Atomic read/write of `~/.mur/runs/<run_id>/run.json`. Pure I/O — no policy.
 
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use fs2::FileExt;
 
 use super::RunState;
 
@@ -35,6 +37,66 @@ pub fn save(mur_home: &Path, run: &RunState) -> Result<()> {
     std::fs::rename(&tmp_path, &final_path)
         .with_context(|| format!("rename into {}", final_path.display()))?;
     Ok(())
+}
+
+/// Load-modify-save a run record under an exclusive lock, so two independent
+/// writers of the same run — the in-process heartbeat ticker and a separate
+/// `mur job stop <run_id>` process are the two that exist today — cannot
+/// race each other's read-modify-write. `Arc<AtomicBool>`/`JoinHandle`
+/// coordination (see `heartbeat::Heartbeat::stop`) only holds within one
+/// process; this is the mechanism that also holds across a process boundary.
+///
+/// `mutate` runs only if a record already exists; returns `Ok(false)`
+/// without creating anything when it does not — "nothing to update" must
+/// stay a true no-op, not manufacture a run that was never recorded. Do not
+/// call `update` again for the same `run_id` from inside `mutate` — the lock
+/// is not reentrant and it would deadlock.
+pub fn update<F>(mur_home: &Path, run_id: &str, mutate: F) -> Result<bool>
+where
+    F: FnOnce(&mut RunState),
+{
+    let dir = runs_dir(mur_home).join(run_id);
+    // No directory at all ⇒ definitely no record. Return before creating
+    // so much as a lock file for a run that was never saved.
+    if !dir.exists() {
+        return Ok(false);
+    }
+
+    // Serialize concurrent updates (this process's ticker + a separate `mur
+    // job stop` process may write the same run) via a SIDECAR lock file —
+    // never lock run.json itself. On Windows OS file locks are mandatory
+    // (not advisory like flock on macOS/Linux), so holding a lock on the
+    // data file blocks our own read/rename of it (os error 33). Locking a
+    // separate file gives cross-process mutual exclusion while the data
+    // file stays freely readable/writable on every platform. Matches
+    // `mur_channel::store::ChannelStore::append_event`.
+    let lock_path = dir.join(".lock");
+    let lock = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| format!("open {}", lock_path.display()))?;
+    lock.lock_exclusive().context("lock run record")?;
+
+    // The lock guards the whole load-modify-save; released below on every
+    // path (Ok or Err) since it runs after this closure regardless of which
+    // branch inside it returned.
+    let result = (|| -> Result<bool> {
+        let path = run_path(mur_home, run_id);
+        let mut run = match std::fs::read(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
+            Ok(bytes) => serde_json::from_slice::<RunState>(&bytes)
+                .with_context(|| format!("parse {}", path.display()))?,
+        };
+        mutate(&mut run);
+        save(mur_home, &run)?;
+        Ok(true)
+    })();
+
+    FileExt::unlock(&lock).ok();
+    result
 }
 
 /// Read one run record. `Ok(None)` when the file does not exist — a run that
@@ -206,6 +268,112 @@ mod tests {
             "only {successful_loads} concurrent loads observed a complete \
              record — the reader loop raced past without exercising the \
              writer, which proves nothing; increase iterations or payload size"
+        );
+    }
+
+    #[test]
+    fn update_on_missing_run_is_noop_and_creates_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path().to_path_buf();
+        let mut called = false;
+
+        let applied = update(&mur_home, "ghost", |run| {
+            called = true;
+            run.state = State::Done;
+        })
+        .unwrap();
+
+        assert!(!applied, "update on a missing run must report Ok(false)");
+        assert!(
+            !called,
+            "mutate must not run when there is no record to mutate"
+        );
+        assert!(
+            load(&mur_home, "ghost").unwrap().is_none(),
+            "update must not manufacture a run that was never recorded"
+        );
+        assert!(
+            !runs_dir(&mur_home).join("ghost").exists(),
+            "update must not create a directory for a run that doesn't exist"
+        );
+    }
+
+    #[test]
+    fn update_applies_and_persists_the_mutation() {
+        let tmp = tempfile::tempdir().unwrap();
+        save(tmp.path(), &sample("run-a")).unwrap();
+
+        let applied = update(tmp.path(), "run-a", |run| {
+            run.state = State::Done;
+        })
+        .unwrap();
+
+        assert!(applied, "update on an existing run must report Ok(true)");
+        let after = load(tmp.path(), "run-a").unwrap().unwrap();
+        assert_eq!(after.state, State::Done);
+    }
+
+    /// Directly proves the concurrency guarantee `update` exists for: many
+    /// independent writers — real OS threads, so genuinely preemptible on
+    /// every platform, not tokio's single-threaded-by-default test flavor —
+    /// each append one uniquely-identified step. Without mutual exclusion, a
+    /// classic read-modify-write race drops updates whenever two threads
+    /// read the same "before" snapshot and the second writer's save()
+    /// overwrites the first writer's addition. If the lock genuinely
+    /// excludes, all of them land; if it doesn't, this reliably loses some.
+    #[test]
+    fn concurrent_updates_all_land_with_no_lost_writes() {
+        use std::thread;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path().to_path_buf();
+        let run_id = "run-concurrent";
+        save(&mur_home, &sample(run_id)).unwrap();
+
+        let writers = 20;
+        let handles: Vec<_> = (0..writers)
+            .map(|i| {
+                let home = mur_home.clone();
+                thread::spawn(move || {
+                    let applied = update(&home, run_id, |run| {
+                        run.steps.push(StepState {
+                            id: format!("step-{i}"),
+                            member: None,
+                            state: State::Running,
+                            started_at: None,
+                            ended_at: None,
+                        });
+                    })
+                    .unwrap();
+                    assert!(applied, "update on an existing run must apply");
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let after = load(&mur_home, run_id)
+            .unwrap()
+            .expect("record still there");
+        let mut ids: Vec<_> = after.steps.iter().map(|s| s.id.clone()).collect();
+        ids.sort();
+        let mut expected: Vec<_> = (0..writers).map(|i| format!("step-{i}")).collect();
+        expected.sort();
+        assert_eq!(
+            after.steps.len(),
+            writers,
+            "expected exactly {writers} steps, one per concurrent update — a \
+             lost update means two writers raced past the lock instead of \
+             serializing through it"
+        );
+        assert_eq!(ids, expected, "every writer's step id must survive");
+
+        // No leftover .lock cruft mid-run either — best-effort sanity check,
+        // not load-bearing for correctness.
+        assert!(
+            runs_dir(&mur_home).join(run_id).join(".lock").exists(),
+            "lock file should exist (created on first update)"
         );
     }
 

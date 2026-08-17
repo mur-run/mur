@@ -16,15 +16,21 @@ use super::store;
 /// Stamp one beat. Silently does nothing when the record is missing (the run
 /// is gone — do not resurrect it) or terminal (a finished run must stop
 /// looking fresh).
+///
+/// Goes through `store::update` rather than its own load+save pair so the
+/// terminal check and the write happen under the same exclusive lock as
+/// every other writer of this run (in particular a separate `mur job stop
+/// <run_id>` process). A load-then-save outside a lock can always act on a
+/// view that's gone stale by the time it saves; the check has to be made
+/// fresh, inside the locked section, every time — checking before calling
+/// `update` would just move the stale-view window one line earlier.
 pub fn beat_once(mur_home: &Path, run_id: &str, now: DateTime<Utc>) -> Result<()> {
-    let Some(mut run) = store::load(mur_home, run_id)? else {
-        return Ok(());
-    };
-    if run.state.is_terminal() {
-        return Ok(());
-    }
-    run.last_heartbeat_at = Some(now);
-    store::save(mur_home, &run)
+    store::update(mur_home, run_id, |run| {
+        if !run.state.is_terminal() {
+            run.last_heartbeat_at = Some(now);
+        }
+    })?;
+    Ok(())
 }
 
 /// Handle to a background ticker. Dropping it also stops the ticker, so a
@@ -161,6 +167,90 @@ mod tests {
 
         let after = store::load(tmp.path(), "r").unwrap().unwrap();
         assert!(after.last_heartbeat_at.is_none(), "terminal run got a beat");
+    }
+
+    /// The cross-process version of the race Phase 3 closed in-process.
+    /// `Heartbeat::stop().await` only orders things within one Tokio
+    /// runtime; it says nothing about a *separate* `mur job stop <run_id>`
+    /// process racing this one's ticker on the same `run.json`. Since
+    /// `beat_once` now goes through `store::update`, every call — including
+    /// one whose in-memory view was taken before the stopping writer ran —
+    /// re-reads under the same exclusive lock the stopping writer used, so
+    /// its terminal check is always evaluated against current-at-lock-time
+    /// data, never a stale pre-lock snapshot.
+    ///
+    /// That serialization is what makes this deterministic rather than
+    /// probabilistic: `update` performs the full load-check-mutate-save as
+    /// one atomic section, so there is no window in which a `beat_once` call
+    /// can observe pre-`Stopped` state yet still land *after* the `Stopped`
+    /// write — every `update` call on this run has a definite place in one
+    /// total order, and once `Stopped` lands, every later slot's fresh read
+    /// sees it. What is proven here empirically (real OS threads, so
+    /// genuinely preemptible, unlike a single-threaded tokio test) is that
+    /// hammering `beat_once` concurrently with the `Stopped` write cannot
+    /// observably clobber it — not merely "usually doesn't". What is *not*
+    /// proven: an exact, reproduced instant-for-instant interleaving of one
+    /// specific stale read racing one specific write — with a real OS
+    /// scheduler that is not constructible deterministically, only
+    /// statistically pressured for. This test applies that pressure for the
+    /// duration of the run rather than for a single fixed instant.
+    #[test]
+    fn a_beat_once_with_a_stale_view_cannot_undo_a_concurrent_stop() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::thread;
+
+        let tmp = tempfile::tempdir().unwrap();
+        seed(tmp.path(), "r");
+        let mur_home = tmp.path().to_path_buf();
+
+        let stop_beating = Arc::new(AtomicBool::new(false));
+        let beater_flag = stop_beating.clone();
+        let beater_home = mur_home.clone();
+        let beater = thread::spawn(move || {
+            // Hammer beat_once from a separate OS thread — standing in for a
+            // separate `mur job stop` process's writer, which likewise has
+            // no in-process handle to synchronize against, only the file
+            // lock. Each of these calls independently loads a fresh view
+            // under its own `update` lock acquisition, so some of them are
+            // guaranteed to have their in-memory RunState computed before
+            // the main thread's Stopped write is visible on disk — the
+            // "stale view" the test name refers to.
+            while !beater_flag.load(Ordering::Relaxed) {
+                let _ = beat_once(&beater_home, "r", chrono::Utc::now());
+            }
+        });
+
+        // Let the beater accumulate a healthy number of stale-view attempts
+        // before the terminal write lands.
+        thread::sleep(std::time::Duration::from_millis(30));
+
+        let applied = store::update(&mur_home, "r", |run| {
+            run.state = State::Stopped;
+        })
+        .unwrap();
+        assert!(applied, "the seeded record must still be there to update");
+
+        // Give the beater every chance to land a clobbering write after the
+        // Stopped write before we tell it to stop.
+        thread::sleep(std::time::Duration::from_millis(30));
+        stop_beating.store(true, Ordering::Relaxed);
+        beater.join().unwrap();
+
+        let after = store::load(&mur_home, "r").unwrap().unwrap();
+        assert_eq!(
+            after.state,
+            State::Stopped,
+            "a beat_once with a stale view landed after the Stopped write \
+             and reverted it — store::update did not exclude"
+        );
+        let status = classify(after, chrono::Utc::now(), chrono::Duration::seconds(30));
+        assert_ne!(
+            status.liveness,
+            Liveness::Alive,
+            "a stopped run must never classify as alive, no matter how \
+             fresh a racing heartbeat looked"
+        );
     }
 
     #[tokio::test]
