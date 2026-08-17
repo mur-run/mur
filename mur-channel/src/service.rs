@@ -23,6 +23,11 @@ struct DelegationPayload<'a> {
     /// whom. Optional: absent on legacy events and non-goal delegations.
     #[serde(skip_serializing_if = "Option::is_none")]
     goal: Option<&'a str>,
+    /// The run whose execution wrote this event (run-status run boundary).
+    /// Optional: absent on legacy events and on delegations that are not
+    /// part of a recorded run — those are not claimed by any rebuild.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_id: Option<&'a str>,
 }
 
 /// Build the canonical `Delegation` event payload (single-sourced schema). Used
@@ -34,12 +39,14 @@ pub fn delegation_payload(
     target_agent: &str,
     child_task_id: &str,
     goal: Option<&str>,
+    run_id: Option<&str>,
 ) -> serde_json::Value {
     serde_json::to_value(DelegationPayload {
         target_agent,
         child_task_id,
         parent_channel_id,
         goal,
+        run_id,
     })
     .expect("DelegationPayload serializes")
 }
@@ -259,14 +266,17 @@ impl ChannelService {
     /// Append a `Delegation` event (actor `System`) recording that `target_agent`
     /// was handed the sub-goal under `child_task_id`. `idempotency_key` is set by
     /// the caller (deterministic in v3b) but NOT yet de-duplicated (v3c).
+    /// `run_id` stamps the run-status run boundary on the payload (see
+    /// [`delegation_payload`]); pass `None` for delegations outside any run.
     pub fn append_delegation(
         &self,
         channel_id: &str,
         target_agent: &str,
         child_task_id: &str,
         idempotency_key: Option<String>,
+        run_id: Option<&str>,
     ) -> Result<ChannelEvent> {
-        let payload = delegation_payload(channel_id, target_agent, child_task_id, None);
+        let payload = delegation_payload(channel_id, target_agent, child_task_id, None, run_id);
         self.append(
             channel_id,
             ChannelActor::System,
@@ -277,21 +287,27 @@ impl ChannelService {
     }
 
     /// Emit a `StateChange` event and persist the new state on the manifest.
+    /// `run_id` stamps the run-status run boundary on the payload; pass `None`
+    /// for transitions that are not part of a recorded run.
     pub fn transition(
         &self,
         channel_id: &str,
         new_state: ChannelState,
         actor: ChannelActor,
+        run_id: Option<&str>,
     ) -> Result<ChannelEvent> {
         let old_state = self
             .store
             .load_manifest(channel_id)
             .map(|ch| ch.state)
             .unwrap_or(ChannelState::Working);
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "from": state_str(old_state),
             "to":   state_str(new_state),
         });
+        if let Some(run_id) = run_id {
+            payload["run_id"] = serde_json::json!(run_id);
+        }
         let ev = self.store.append_event(
             channel_id,
             actor,
@@ -422,7 +438,7 @@ mod tests {
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_workflow("delegating-wf").unwrap();
         let ev = svc
-            .append_delegation(&ch.id, "qa", "child-task-1", Some("idem-1".into()))
+            .append_delegation(&ch.id, "qa", "child-task-1", Some("idem-1".into()), None)
             .unwrap();
         assert_eq!(ev.kind, EventKind::Delegation);
         assert_eq!(ev.actor, ChannelActor::System);
@@ -451,7 +467,7 @@ mod tests {
         )
         .unwrap();
         let ev = svc
-            .transition(&ch.id, ChannelState::Completed, ChannelActor::System)
+            .transition(&ch.id, ChannelState::Completed, ChannelActor::System, None)
             .unwrap();
         assert_eq!(ev.kind, EventKind::StateChange);
         assert_eq!(ev.payload["from"], "working");
@@ -459,6 +475,57 @@ mod tests {
         assert_eq!(
             svc.store().load_manifest(&ch.id).unwrap().state,
             ChannelState::Completed
+        );
+    }
+
+    #[test]
+    fn delegation_and_transition_payloads_carry_run_id_when_given() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("run-stamped").unwrap();
+
+        let del = svc
+            .append_delegation(&ch.id, "qa", "child-task-9", None, Some("run-9"))
+            .unwrap();
+        assert_eq!(
+            del.payload["run_id"], "run-9",
+            "a delegation written by a run must carry its run_id"
+        );
+
+        let trans = svc
+            .transition(
+                &ch.id,
+                ChannelState::Failed,
+                ChannelActor::System,
+                Some("run-9"),
+            )
+            .unwrap();
+        assert_eq!(
+            trans.payload["run_id"], "run-9",
+            "a state change written by a run must carry its run_id"
+        );
+    }
+
+    #[test]
+    fn payloads_without_run_id_omit_the_field() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("run-unstamped").unwrap();
+
+        let del = svc
+            .append_delegation(&ch.id, "qa", "child-task-9", None, None)
+            .unwrap();
+        assert!(
+            del.payload.get("run_id").is_none(),
+            "legacy writers pass no run_id; the field must be absent, not null"
+        );
+
+        let trans = svc
+            .transition(&ch.id, ChannelState::Completed, ChannelActor::System, None)
+            .unwrap();
+        assert!(
+            trans.payload.get("run_id").is_none(),
+            "non-run transitions must not fabricate a run_id"
         );
     }
 

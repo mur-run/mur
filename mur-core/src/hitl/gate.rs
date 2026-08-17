@@ -112,6 +112,7 @@ pub async fn gate(
                     channel_id,
                     ChannelState::InputRequired,
                     ChannelActor::System,
+                    None,
                 )?;
             }
 
@@ -148,7 +149,12 @@ pub async fn gate(
 
             {
                 let svc = ChannelService::open(mur_home)?;
-                svc.transition(channel_id, ChannelState::Working, ChannelActor::System)?;
+                svc.transition(
+                    channel_id,
+                    ChannelState::Working,
+                    ChannelActor::System,
+                    None,
+                )?;
             }
             Ok(decision)
         }
