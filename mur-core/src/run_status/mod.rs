@@ -232,13 +232,34 @@ pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Opt
     // forever", which otherwise reports `running` + `dead` after exit. Only
     // a non-terminal cache is consulted, and only a terminal channel state
     // overrides it; the cache's heartbeat is retained (it is still real).
-    if !record.state.is_terminal()
-        && let Ok(Some(sidecar)) = store::load_sidecar(mur_home, run_id)
-        && let Ok(Some(channel_state)) = rebuild::run_tail_state(mur_home, &sidecar, run_id)
-        && channel_state.is_terminal()
-        && record.state != channel_state
-    {
-        record.state = channel_state;
+    //
+    // A failed read is warned, never silent: the write path already warns
+    // when a sidecar cannot be recorded, and the read path must match — a
+    // corrupt sidecar silently disabling reconciliation is exactly the kind
+    // of observability gap an operator cannot see.
+    if !record.state.is_terminal() {
+        match store::load_sidecar(mur_home, run_id) {
+            Ok(Some(sidecar)) => match rebuild::run_tail_state(mur_home, &sidecar, run_id) {
+                Ok(Some(channel_state))
+                    if channel_state.is_terminal() && record.state != channel_state =>
+                {
+                    record.state = channel_state;
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(
+                    run_id,
+                    %error,
+                    "reconcile: reading the channel's tail state failed; \
+                     reconciliation skipped"
+                ),
+            },
+            Ok(None) => {}
+            Err(error) => tracing::warn!(
+                run_id,
+                %error,
+                "reconcile: reading sidecar.json failed; reconciliation skipped"
+            ),
+        }
     }
     let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
     Ok(Some(classify(record, Utc::now(), stale_after(&cfg.runs))))
@@ -626,6 +647,83 @@ mod tests {
         assert_eq!(
             status.run.last_heartbeat_at, cached_heartbeat,
             "the cache's real heartbeat is retained, never fabricated"
+        );
+    }
+
+    /// A corrupt sidecar.json must not silently disable reconciliation: the
+    /// operator is told why (a warn on the read — the write path already
+    /// warns, the read must too), and status_of still succeeds with the
+    /// cache's answer.
+    #[test]
+    fn status_of_warns_when_the_reconcile_sidecar_read_fails() {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+
+        // A writer that captures log lines so the warn is asserted, not
+        // assumed.
+        #[derive(Clone)]
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl Write for Capture {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+
+        // The channel's authoritative tail: this run completed.
+        let svc = mur_channel::ChannelService::open(mur_home).unwrap();
+        let ch = svc.create_for_workflow("corrupt-sidecar").unwrap();
+        svc.append_delegation(&ch.id, "pm", "child-1", None, Some("run-s"))
+            .unwrap();
+        svc.transition(
+            &ch.id,
+            mur_common::channel::ChannelState::Completed,
+            mur_common::channel::ChannelActor::System,
+            Some("run-s"),
+        )
+        .unwrap();
+
+        // A parseable, still-running cache — reconciliation would override it
+        // to done, but the sidecar is corrupt, so the channel cannot be
+        // consulted. The cache answer stands, and the operator is told why.
+        let now = Utc::now();
+        let mut record = run(State::Running, std::process::id(), Some(1), now);
+        record.run_id = "run-s".into();
+        store::save(mur_home, &record).unwrap();
+        let dir = store::runs_dir(mur_home).join("run-s");
+        std::fs::write(dir.join("sidecar.json"), b"{ not json").unwrap();
+        assert!(
+            store::load_sidecar(mur_home, "run-s").is_err(),
+            "precondition: the sidecar really is corrupt"
+        );
+
+        let capture = Capture(Arc::new(Mutex::new(Vec::new())));
+        let writer = capture.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        let status = tracing::subscriber::with_default(subscriber, || {
+            status_of(mur_home, "run-s")
+        })
+        .unwrap()
+        .expect("a corrupt sidecar must not fail the status itself");
+        assert_eq!(
+            status.state,
+            State::Running,
+            "without a readable sidecar the cache's answer stands"
+        );
+
+        let logged = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            logged.contains("sidecar"),
+            "the corrupt sidecar read must be warned, not silently skipped: {logged}"
         );
     }
 
