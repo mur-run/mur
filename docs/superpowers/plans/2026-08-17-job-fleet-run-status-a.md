@@ -1239,36 +1239,35 @@ mod tests {
     }
 
     /// Helper: write a channel whose events describe a delegation that moved
-    /// to `failed`. Build it with `mur_channel::ChannelService` rather than by
-    /// hand-writing JSONL, so the test breaks if the event contract changes.
+    /// to `failed`. Built through the REAL `ChannelService` calls the executor
+    /// uses, never by hand-writing payloads — so if the event contract changes
+    /// this test breaks instead of quietly testing a shape nothing emits.
     fn seed_channel_with_a_failed_delegation(mur_home: &std::path::Path) -> String {
-        use mur_common::channel::{ChannelActor, EventKind};
+        use mur_common::channel::{ChannelActor, ChannelState};
         let svc = mur_channel::ChannelService::open(mur_home).unwrap();
         let id = svc
-            .create("rebuild-test", ChannelActor::User)
-            .expect("create channel");
-        svc.append_event(
-            &id,
-            ChannelActor::System,
-            EventKind::Delegation,
-            serde_json::json!({ "step_id": "s1", "target_agent": "pm" }),
-            None,
-        )
-        .unwrap();
-        svc.append_event(
-            &id,
-            ChannelActor::System,
-            EventKind::StateChange,
-            serde_json::json!({ "from": "working", "to": "failed" }),
-            None,
-        )
-        .unwrap();
+            .create_for_workflow("rebuild-test")
+            .expect("create channel")
+            .id;
+        svc.append_delegation(&id, "pm", "child-task-1", None)
+            .expect("append delegation");
+        svc.transition(&id, ChannelState::Failed, ChannelActor::System)
+            .expect("transition to failed");
         id
     }
 }
 ```
 
-> `ChannelService::create` / `append_event` signatures must be read from `mur-channel/src/service.rs` before writing this helper — match them exactly rather than adapting the service to the test.
+> These are the real signatures, verified against `main`:
+> `create_for_workflow(&self, skill_name: &str) -> Result<Channel>` (take `.id`);
+> `append_delegation(&self, channel_id, target_agent, child_task_id, idempotency_key: Option<String>) -> Result<ChannelEvent>`;
+> `transition(&self, channel_id, new_state: ChannelState, actor) -> Result<ChannelEvent>`.
+> There is **no** `ChannelService::create` and **no** `ChannelService::append_event` —
+> `append_event` lives on `ChannelStore` and takes eight arguments. Do not
+> hand-build a `Delegation` or `StateChange` payload: `transition` produces the
+> `{"from", "to"}` shape from `state_str`, and `delegation_payload` produces the
+> delegation shape. Constructing them by hand is how a rebuild test ends up
+> passing against a payload the product never emits.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1316,7 +1315,13 @@ pub fn from_channel(mur_home: &Path, run_id: &str, channel_id: &str) -> Result<O
     for ev in &events {
         match ev.kind {
             EventKind::Delegation => {
-                if let Some(id) = ev.payload.get("step_id").and_then(|v| v.as_str()) {
+                // The payload is built by `mur_channel::service::delegation_payload`
+                // and carries `target_agent`, `child_task_id`, `parent_channel_id`
+                // and `goal` — there is NO `step_id`. The DAG's own step id is
+                // not recoverable from the channel, so a rebuilt step is
+                // identified by its child task id, which IS unique per
+                // delegation. Do not invent a step id.
+                if let Some(id) = ev.payload.get("child_task_id").and_then(|v| v.as_str()) {
                     steps.push(StepState {
                         id: id.to_string(),
                         member: ev
@@ -1331,13 +1336,22 @@ pub fn from_channel(mur_home: &Path, run_id: &str, channel_id: &str) -> Result<O
                 }
             }
             EventKind::StateChange => {
-                // The executor writes channel state as a `to` field; map only
-                // the values it actually emits, and leave anything else alone
-                // rather than inventing a state.
+                // `ChannelService::transition` writes {"from": .., "to": ..}
+                // using `state_str` (mur-channel/src/service.rs:49-60), which
+                // is a CLOSED set of eight values. Map all eight — a missing
+                // arm silently leaves a finished run reporting `running`,
+                // which is the exact defect this module exists to remove.
+                // If `state_str` ever gains a variant, this match must gain
+                // an arm with it.
                 match ev.payload.get("to").and_then(|v| v.as_str()) {
-                    Some("failed") => state = State::Failed,
-                    Some("completed") | Some("done") => state = State::Done,
+                    Some("completed") => state = State::Done,
+                    Some("failed") | Some("rejected") => state = State::Failed,
+                    Some("canceled") => state = State::Stopped,
+                    // A stale channel was abandoned rather than deliberately
+                    // stopped; it did not complete, so it is a failure.
+                    Some("stale") => state = State::Failed,
                     Some("input-required") => state = State::Blocked,
+                    Some("working") | Some("submitted") => state = State::Running,
                     _ => {}
                 }
                 if state.is_terminal() {
