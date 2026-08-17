@@ -46,8 +46,16 @@ pub fn save(mur_home: &Path, run: &RunState) -> Result<()> {
 pub fn save_channel_id(mur_home: &Path, run_id: &str, channel_id: &str) -> Result<()> {
     let dir = runs_dir(mur_home).join(run_id);
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-    std::fs::write(dir.join("channel.id"), format!("{channel_id}\n"))
-        .with_context(|| format!("write {}/channel.id", dir.display()))
+    // Temp-file-plus-rename, same discipline as `save`: a crash mid-write
+    // must leave either the previous sidecar or none at all, never a
+    // truncated one (a truncated sidecar reads as "no sidecar", so the run
+    // silently becomes unrecoverable instead of corrupting).
+    let final_path = dir.join("channel.id");
+    let tmp_path = dir.join("channel.id.tmp");
+    std::fs::write(&tmp_path, format!("{channel_id}\n"))
+        .with_context(|| format!("write {}", tmp_path.display()))?;
+    std::fs::rename(&tmp_path, &final_path)
+        .with_context(|| format!("rename into {}", final_path.display()))
 }
 
 pub fn load_channel_id(mur_home: &Path, run_id: &str) -> std::io::Result<Option<String>> {
