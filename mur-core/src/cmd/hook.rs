@@ -49,6 +49,50 @@ fn is_compressed_envelope(value: &serde_json::Value) -> bool {
 /// Returns `None` when the gate doesn't fire (feature disabled, no
 /// `tool_response`, already a compressed envelope, or compression didn't
 /// pay off) — in which case the caller must print nothing.
+/// True when this event is MUR reading its own compression store, by either
+/// route: the `mur_retrieve` / `mur_compress` MCP tools, or the `mur retrieve`
+/// / `mur compress` CLI run through Bash.
+///
+/// The CLI arm is not redundant. A session without the mur MCP server
+/// connected — a plain Claude Code CLI session is one — has no
+/// `mur_retrieve` tool, so the only way to read a stub back is the binary.
+/// Matching on the MCP tool name alone left that route unexempted, and the
+/// retrieved original was compressed straight back into a stub: the exact
+/// loop the exemption exists to prevent, hit by whoever had the fewest tools
+/// to escape it with.
+///
+/// Deliberately loose — a command that merely mentions `mur retrieve` is
+/// exempted too. Skipping a compression that could have run costs some
+/// context; getting this wrong costs the ability to read the entry at all.
+fn is_own_compress_tool(raw: &serde_json::Value) -> bool {
+    let tool_name = raw
+        .get("tool_name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if tool_name.ends_with("mur_retrieve")
+        || tool_name.ends_with("mur_compress")
+        || tool_name.ends_with("mur_compress_stats")
+    {
+        return true;
+    }
+    let Some(command) = raw
+        .get("tool_input")
+        .and_then(|i| i.get("command"))
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    // `mur retrieve …`, and the same via an absolute or relative path
+    // (./target/debug/mur retrieve …).
+    command
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|w| {
+            (w[0] == "mur" || w[0].ends_with("/mur")) && (w[1] == "retrieve" || w[1] == "compress")
+        })
+}
+
 fn compress_tool_response(
     raw: &serde_json::Value,
     cfg: &AutoCfg,
@@ -60,15 +104,7 @@ fn compress_tool_response(
     // MUR's own compress tools must never be re-compressed: mur_retrieve's
     // whole purpose is returning the large original, so gating it would loop
     // (retrieve → compress → retrieve → …) and make big entries unrecoverable.
-    if raw
-        .get("tool_name")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|n| {
-            n.ends_with("mur_retrieve")
-                || n.ends_with("mur_compress")
-                || n.ends_with("mur_compress_stats")
-        })
-    {
+    if is_own_compress_tool(raw) {
         return None;
     }
     let tool_response = raw.get("tool_response")?;
@@ -777,6 +813,57 @@ mod compress_tool_response_tests {
             assert!(
                 compress_tool_response(&raw, &cfg, &eng).is_none(),
                 "{name} must never be re-compressed"
+            );
+        }
+    }
+
+    /// Without the mur MCP server there is no `mur_retrieve` tool, so a stub
+    /// can only be read back by shelling out. Compressing that output rebuilds
+    /// the stub and the entry is unreadable for the rest of the session.
+    #[test]
+    fn cli_retrieve_through_bash_is_exempt_too() {
+        let (_dir, eng) = engine();
+        let cfg = auto_cfg();
+        let big: Vec<_> = (0..2000)
+            .map(|i| json!({"idx": i, "data": "x".repeat(40)}))
+            .collect();
+        for command in [
+            "mur retrieve abc123",
+            "mur compress --file big.txt",
+            "./target/debug/mur retrieve abc123",
+            "/usr/local/bin/mur retrieve abc123 | tail -40",
+            "MUR_HOME=/tmp/x mur retrieve abc123",
+        ] {
+            let raw = json!({
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+                "tool_response": big,
+            });
+            assert!(
+                compress_tool_response(&raw, &cfg, &eng).is_none(),
+                "must not re-compress: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_bash_output_is_still_compressed() {
+        let (_dir, eng) = engine();
+        let cfg = auto_cfg();
+        let big: Vec<_> = (0..2000)
+            .map(|i| json!({"idx": i, "data": "x".repeat(40)}))
+            .collect();
+        // Neither a bare `mur` subcommand nor an unrelated command may buy
+        // exemption — the guard is loose, not open.
+        for command in ["mur model list", "cat big.json", "murmur"] {
+            let raw = json!({
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+                "tool_response": big.clone(),
+            });
+            assert!(
+                compress_tool_response(&raw, &cfg, &eng).is_some(),
+                "should still compress: {command}"
             );
         }
     }
