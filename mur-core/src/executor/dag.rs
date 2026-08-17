@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::Arc;
 
 use anyhow::Result;
 use mur_channel::ChannelService;
@@ -173,6 +174,37 @@ pub struct StepEvent {
     pub kind: StepEventKind,
     /// Per-step delegate token usage (0 for non-delegate or unknown).
     pub tokens_used: u64,
+}
+
+/// Apply one `StepEvent` to the record's `steps` — insert-or-update by step
+/// id. `Started` (re)arms a step (a retry emits Started again); `Done`/
+/// `Failed` stamp the terminal state. This is the executor's half of "steps
+/// must answer what is it doing now" (spec §4): without it the record's
+/// steps stay `[]` forever, because nothing else writes them.
+fn apply_step_event(record: &mut crate::run_status::RunState, event: &StepEvent) {
+    let now = chrono::Utc::now();
+    let (state, started_at, ended_at) = match event.kind {
+        StepEventKind::Started => (crate::run_status::State::Running, Some(now), None),
+        StepEventKind::Done => (crate::run_status::State::Done, None, Some(now)),
+        StepEventKind::Failed => (crate::run_status::State::Failed, None, Some(now)),
+    };
+    if let Some(step) = record.steps.iter_mut().find(|s| s.id == event.id) {
+        step.state = state;
+        if let Some(ts) = started_at {
+            step.started_at = Some(ts);
+        }
+        if let Some(ts) = ended_at {
+            step.ended_at = Some(ts);
+        }
+        return;
+    }
+    record.steps.push(crate::run_status::StepState {
+        id: event.id.clone(),
+        member: event.agent.clone(),
+        state,
+        started_at,
+        ended_at,
+    });
 }
 
 /// Deterministic idempotency key for a channel event: stable across a
@@ -993,6 +1025,51 @@ pub async fn execute_dag(
         None
     };
 
+    // Live step progress (spec §4): while a run is recorded, mirror every
+    // `StepEvent` into the record's `steps` through an internal observer, so
+    // `mur job status` / `mur_job_status` can answer "what is it doing now?"
+    // instead of showing an empty list. One locked `store::update` per event
+    // is the whole budget — the observer contract says MUST be cheap and
+    // MUST NOT panic, so a failed write is warned once and dropped;
+    // bookkeeping must never take down the run it observes. The caller's
+    // observer is wrapped, not replaced: it still fires exactly as before,
+    // AFTER the record update so a progress renderer that reads the record
+    // sees the just-applied step.
+    let internal_on_step: Option<std::sync::Arc<dyn Fn(StepEvent) + Send + Sync>> =
+        if recorded.is_some() {
+            let home = mur_home.to_path_buf();
+            let rid = opts.run_id.clone();
+            let warn_once = Arc::new(std::sync::Once::new());
+            Some(Arc::new(move |event: StepEvent| {
+                if let Err(error) =
+                    crate::run_status::store::update(&home, &rid, |record| {
+                        apply_step_event(record, &event);
+                    })
+                {
+                    warn_once.call_once(|| {
+                        tracing::warn!(
+                            run_id = %rid,
+                            %error,
+                            "failed to record a step event; `mur job status` steps \
+                             may lag behind the run"
+                        );
+                    });
+                }
+            }))
+        } else {
+            None
+        };
+    let composed_on_step: Option<std::sync::Arc<dyn Fn(StepEvent) + Send + Sync>> =
+        match (opts.on_step.clone(), internal_on_step) {
+            (Some(caller), Some(internal)) => Some(Arc::new(move |e: StepEvent| {
+                internal(e.clone());
+                caller(e);
+            })),
+            (Some(caller), None) => Some(caller),
+            (None, Some(internal)) => Some(internal),
+            (None, None) => None,
+        };
+
     // Closure for terminal StateChange — call before each PipelineOutput return.
     let emit_final = |failed: bool| {
         if let Some(cid) = opts.channel_id.as_deref() {
@@ -1043,7 +1120,7 @@ pub async fn execute_dag(
         let opt_trigger = opts.trigger.to_string();
         let opt_chan_id = opts.channel_id.clone();
         let opt_run_id = opts.run_id.clone();
-        let opt_on_step = opts.on_step.clone();
+        let opt_on_step = composed_on_step.clone();
         let mut handles = Vec::new();
         for &i in &indices {
             // Mutating the graph node (not the local clone) keeps retries
@@ -1797,6 +1874,54 @@ mod tests {
             run.state.is_terminal(),
             "run left non-terminal after execute_dag returned: {:?}",
             run.state
+        );
+    }
+
+    /// THE regression for the review's empty-steps finding: the record is
+    /// written with `steps: []` and nothing ever updates it, so `mur job
+    /// status` cannot answer "what is it doing now?". Drive the real
+    /// executor over a one-step procedure and assert the FINAL record's
+    /// steps reflect the lifecycle the `on_step` observer saw — Started
+    /// stamped, then Done, with both timestamps set. The point is that
+    /// steps are no longer empty.
+    #[tokio::test]
+    async fn recorded_run_steps_reflect_the_step_lifecycle() {
+        use crate::run_status::{State, store};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let procedure = Procedure {
+            variables: vec![],
+            steps: vec![step("s1", &[], Some("echo hi"))],
+        };
+        let opts = DagExecOptions {
+            run_id: "run-with-steps".into(),
+            run_kind: Some(crate::run_status::RunKind::Workflow),
+            run_label: "steps run".into(),
+            ..Default::default()
+        };
+
+        let _ = execute_dag(mur_home, "test-skill", &procedure, &opts).await;
+
+        let run = store::load(mur_home, "run-with-steps")
+            .unwrap()
+            .expect("execute_dag never wrote run.json");
+        assert_eq!(
+            run.steps.len(),
+            1,
+            "the record's steps were never updated — `mur job status` would \
+             show no step rows for a step that ran"
+        );
+        let step0 = &run.steps[0];
+        assert_eq!(step0.id, "s1", "step id must be the DAG step id");
+        assert_eq!(
+            step0.state,
+            State::Done,
+            "the final record must show the step done"
+        );
+        assert!(
+            step0.started_at.is_some() && step0.ended_at.is_some(),
+            "both lifecycle timestamps must be stamped: {step0:?}"
         );
     }
 
