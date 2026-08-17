@@ -68,7 +68,7 @@ pub fn run_tail_state(mur_home: &Path, sidecar: &Sidecar, run_id: &str) -> Resul
         .filter(|ev| ev.kind == EventKind::StateChange)
         .filter_map(|ev| ev.payload.get("to").and_then(|v| v.as_str()))
         .filter_map(channel_state_to_run_state)
-        .last())
+        .next_back())
 }
 
 /// Derive a `RunState` from the sidecar's channel, folding only this run's
@@ -122,7 +122,7 @@ pub fn from_channel(mur_home: &Path, run_id: &str, sidecar: &Sidecar) -> Result<
             .iter()
             .filter(|ev| ev.kind == EventKind::StateChange)
             .map(|ev| ev.ts)
-            .last();
+            .next_back();
         for s in steps.iter_mut().filter(|s| s.ended_at.is_none()) {
             s.state = state;
             s.ended_at = ended_at;
