@@ -122,6 +122,16 @@ pub struct DagExecOptions<'a> {
     pub on_step: Option<std::sync::Arc<dyn Fn(StepEvent) + Send + Sync>>,
 }
 
+impl DagExecOptions<'_> {
+    /// The `run_id` to stamp on the channel events this run writes, so a
+    /// rebuild can claim exactly this run's events on a shared, long-lived
+    /// channel. `None` for the legacy callers with an empty `run_id` — their
+    /// events carry no run_id and are not claimed by any rebuild.
+    pub fn event_run_id(&self) -> Option<&str> {
+        (!self.run_id.is_empty()).then_some(self.run_id.as_str())
+    }
+}
+
 impl<'a> Default for DagExecOptions<'a> {
     fn default() -> Self {
         Self {
@@ -609,6 +619,7 @@ async fn execute_step(
                 &canonical,
                 &child_task_id,
                 Some(&goal_snip),
+                opts.event_run_id(),
             );
             let _ = crate::channel_writer::append_as_writer(
                 &svc,
@@ -862,10 +873,26 @@ pub async fn execute_dag(
 
     let mut graph = build_dag(&procedure.steps)?;
 
-    // Emit start StateChange (Working) if running over a channel.
+    // Emit start StateChange (Working) if running over a channel. `first_seq`
+    // — the seq this run's first event will land on — is computed BEFORE the
+    // transition fires, so the sidecar can bound the rebuild to exactly this
+    // run's events. Full load is O(channel size) once per run start, which
+    // is acceptable: there is no seq-cursor API, and the load is the only
+    // way to learn the next seq.
+    let mut first_seq: Option<u64> = None;
     if let Some(cid) = opts.channel_id.as_deref() {
-        let _ = ChannelService::open(mur_home)
-            .and_then(|svc| svc.transition(cid, ChannelState::Working, ChannelActor::System));
+        if let Ok(svc) = ChannelService::open(mur_home) {
+            first_seq = match svc.load_events(cid) {
+                Ok(events) => Some(events.last().map(|e| e.seq + 1).unwrap_or(0)),
+                Err(_) => None,
+            };
+            let _ = svc.transition(
+                cid,
+                ChannelState::Working,
+                ChannelActor::System,
+                opts.event_run_id(),
+            );
+        }
     }
 
     if graph.nodes.is_empty() {
@@ -909,10 +936,43 @@ pub async fn execute_dag(
         // beat against.
         match crate::run_status::store::save(mur_home, &record) {
             Ok(()) => {
-                // The channel index travels in its own sidecar so a corrupt
-                // run.json cannot take the rebuild path down with it.
+                // The rebuild index travels in its own sidecar so a corrupt
+                // run.json cannot take the rebuild path down with it. Every
+                // sidecar field is a fact known here at recording time —
+                // nothing inferred.
                 if let Some(cid) = opts.channel_id.as_deref() {
-                    let _ = crate::run_status::store::save_channel_id(mur_home, &opts.run_id, cid);
+                    match first_seq {
+                        Some(seq) => {
+                            let sidecar = crate::run_status::Sidecar {
+                                schema: crate::run_status::SIDECAR_SCHEMA,
+                                channel_id: cid.to_string(),
+                                kind,
+                                first_seq: seq,
+                            };
+                            if let Err(error) = crate::run_status::store::save_sidecar(
+                                mur_home,
+                                &opts.run_id,
+                                &sidecar,
+                            ) {
+                                // Not silent: a lost sidecar quietly disables
+                                // the rebuild this run's channel could later
+                                // provide, so say so.
+                                tracing::warn!(
+                                    run_id = %opts.run_id,
+                                    %error,
+                                    "failed to record the run sidecar; \
+                                     rebuilding this run from its channel is disabled"
+                                );
+                            }
+                        }
+                        None => {
+                            tracing::warn!(
+                                run_id = %opts.run_id,
+                                "cannot compute the run's first channel seq; \
+                                 sidecar not written"
+                            );
+                        }
+                    }
                 }
                 Some(crate::run_status::heartbeat::Heartbeat::spawn(
                     mur_home.to_path_buf(),
@@ -942,7 +1002,7 @@ pub async fn execute_dag(
                 ChannelState::Completed
             };
             let _ = ChannelService::open(mur_home)
-                .and_then(|svc| svc.transition(cid, st, ChannelActor::System));
+                .and_then(|svc| svc.transition(cid, st, ChannelActor::System, opts.event_run_id()));
         }
     };
 
@@ -1805,14 +1865,15 @@ mod tests {
         );
     }
 
-    /// Pin the executor's own `channel.id` sidecar write — the four-line
-    /// `save_channel_id` call in `execute_dag`'s recording block. A store-level
-    /// round-trip test would pass even if the executor never called it, and
-    /// then a corrupt run.json would silently hide the run: exactly the defect
-    /// the run-status fallback exists to remove, recreated as a testing blind
-    /// spot. This test runs the real executor against a real channel, corrupts
-    /// the cache it just wrote, and proves `status_of` re-derives the record
-    /// from the channel through the sidecar the executor left behind.
+    /// Pin the executor's own `sidecar.json` write — the `save_sidecar` call
+    /// in `execute_dag`'s recording block. A store-level round-trip test
+    /// would pass even if the executor never called it, and then a corrupt
+    /// run.json would silently hide the run: exactly the defect the
+    /// run-status fallback exists to remove, recreated as a testing blind
+    /// spot. This test runs the real executor against a real channel,
+    /// corrupts the cache it just wrote, and proves `status_of` re-derives
+    /// the record from the channel through the sidecar the executor left
+    /// behind.
     #[tokio::test]
     async fn corrupt_run_json_falls_back_via_the_executors_channel_sidecar() {
         use mur_channel::ChannelService;
