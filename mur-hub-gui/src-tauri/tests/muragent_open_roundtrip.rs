@@ -31,9 +31,11 @@ fn hub_gui_open_muragent_lands_prompt_and_skills() {
     // SAFETY: single-threaded test; trust::mur_home() reads MUR_HOME.
     unsafe { std::env::set_var("MUR_HOME", &home) }
 
-    let receipt =
-        mur_hub_gui_lib::import_muragent::install_muragent_file(pkg.to_string_lossy().into_owned())
-            .expect("Hub GUI install_muragent_file should succeed");
+    // The `install_muragent_file` command only reads the Hub version off an
+    // AppHandle before delegating here; a test has no AppHandle, so it calls
+    // the seam with an explicit version.
+    let receipt = mur_hub_gui_lib::import_muragent::install_inner(&pkg, "0.0.0-test")
+        .expect("Hub GUI install path should succeed");
 
     let agent_dir = home.join("agents").join(&receipt.slug);
     assert_eq!(

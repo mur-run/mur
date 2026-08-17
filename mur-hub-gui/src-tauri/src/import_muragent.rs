@@ -153,7 +153,10 @@ fn inspect_inner(path: &Path) -> anyhow::Result<MuragentInspection> {
     }
 }
 
-fn install_inner(path: &Path, hub_version: &str) -> anyhow::Result<InstallReceipt> {
+/// The install itself, split out from the Tauri command so it is reachable
+/// from a test: the command exists only to read the Hub version off an
+/// `AppHandle`, which a test cannot construct.
+pub fn install_inner(path: &Path, hub_version: &str) -> anyhow::Result<InstallReceipt> {
     let archive =
         MuragentArchive::read(path).map_err(|e| anyhow::anyhow!("read .muragent: {e}"))?;
     let mur_home = trust::mur_home();

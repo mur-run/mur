@@ -121,9 +121,11 @@ mod tests {
         assert!(got.fallback_chain.is_empty());
 
         // Set a valid config → persisted + returned.
-        let mut next = ModelSwitchConfig::default();
-        next.default = Some("claude_sonnet".into());
-        next.fallback_chain = vec!["claude_sonnet".into(), "deepseek_v4_pro".into()];
+        let next = ModelSwitchConfig {
+            default: Some("claude_sonnet".into()),
+            fallback_chain: vec!["claude_sonnet".into(), "deepseek_v4_pro".into()],
+            ..Default::default()
+        };
         let saved = model_switch_set_impl(&home, next.clone()).unwrap();
         assert_eq!(saved.default.as_deref(), Some("claude_sonnet"));
         // Reloading from disk reflects it.
@@ -137,8 +139,10 @@ mod tests {
     #[test]
     fn set_rejects_unknown_ref_and_persists_nothing() {
         let (_d, home) = seed_home();
-        let mut bad = ModelSwitchConfig::default();
-        bad.default = Some("does_not_exist".into());
+        let bad = ModelSwitchConfig {
+            default: Some("does_not_exist".into()),
+            ..Default::default()
+        };
         assert!(model_switch_set_impl(&home, bad).is_err());
         // Nothing persisted.
         assert_eq!(model_switch_get_impl(&home).unwrap().default, None);
@@ -147,13 +151,15 @@ mod tests {
     #[test]
     fn set_validates_routing_and_chain_refs() {
         let (_d, home) = seed_home();
-        let mut cfg = ModelSwitchConfig::default();
-        cfg.routing = RoutingConfig {
-            enabled: true,
-            cheap: Some("claude_sonnet".into()),
-            frontier: Some("nope".into()), // unknown → reject
-            threshold_input_tokens: Some(1000),
-            smart: None,
+        let cfg = ModelSwitchConfig {
+            routing: RoutingConfig {
+                enabled: true,
+                cheap: Some("claude_sonnet".into()),
+                frontier: Some("nope".into()), // unknown → reject
+                threshold_input_tokens: Some(1000),
+                smart: None,
+            },
+            ..Default::default()
         };
         assert!(model_switch_set_impl(&home, cfg).is_err());
     }
