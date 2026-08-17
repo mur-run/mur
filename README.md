@@ -542,7 +542,8 @@ mur
 ├── sync         (16+ AI tools) · status · fleet pull/push/both
 ├── hook         unified hook entry for AI tools (prompt / tool / stop / session-start)
 ├── chat         conversations archive + ask
-├── model        add · list · show · remove · doctor · prices · role · route · default · fallback · migrate
+├── model        connect · import · add · list · show · remove · doctor · prices · role · route ·
+│                default · fallback · migrate   (connect = one key, many models)
 ├── source       external knowledge — Obsidian · Notion · Joplin
 ├── project      index · search   (semantic code search)
 ├── daemon       start · stop · restart · status · serve · sleep
