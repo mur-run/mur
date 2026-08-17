@@ -6,6 +6,8 @@
 export interface ModelOption {
   ref_name: string;
   provider: string;
+  /** Who makes the model, when that differs from the wire protocol. */
+  vendor?: string | null;
   model: string;
   tier?: string;
   input_cost?: number;

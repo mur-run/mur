@@ -420,7 +420,10 @@ fn cmd_prices(
                 .get(&name)
                 .ok_or_else(|| anyhow::anyhow!("not found in registry: {name}"))?;
             let is_local = matches!(entry.tier, Some(RouteTier::Local));
-            match model_prices::lookup(mur_home, &entry.provider, &entry.model, is_local) {
+            // Ask under every vendor the entry implies — `provider` alone is a
+            // protocol, so a DeepSeek entry (`provider: openai`) would report
+            // "no pricing" while the catalog has it under `deepseek`.
+            match model_prices::lookup_entry(mur_home, entry, is_local) {
                 Some(p) => {
                     println!("Pricing for {name} ({}/{}):", entry.provider, entry.model);
                     println!("  input:   ${}/1k tokens", p.input_per_1k);

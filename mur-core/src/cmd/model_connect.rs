@@ -250,6 +250,9 @@ fn add_entries(
         }
         let entry = ModelEntry {
             provider: provider.to_string(),
+            // Only when it adds information: for anthropic/openai/ollama the
+            // protocol already names the vendor.
+            vendor: (vendor != provider).then(|| vendor.to_string()),
             model: model_id.clone(),
             base_url: base_url.map(str::to_string),
             secret: secret.cloned(),

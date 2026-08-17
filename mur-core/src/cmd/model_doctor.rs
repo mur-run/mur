@@ -21,8 +21,9 @@
 //! a typo, a copied-wrong id, or a `provider:` field used as a vendor name when
 //! it is really a protocol dialect. That last one is common — `deepseek` is
 //! reached over the OpenAI wire protocol, so its registry entry reads
-//! `provider: openai` while the catalog files it under vendor `deepseek`. The
-//! vendor is therefore inferred from `base_url` before falling back to
+//! `provider: openai` while the catalog files it under vendor `deepseek`. New
+//! entries record the vendor explicitly; for older ones it is inferred from
+//! `base_url` before falling back to
 //! `provider`, or every openai-compatible third party would be flagged.
 
 use std::path::Path;
@@ -35,25 +36,6 @@ use mur_common::model::ModelRegistry;
 /// answers "has this id ever existed" correctly for anything but the newest
 /// releases.
 const CATALOG_TTL_HOURS: u64 = 24 * 30;
-
-/// Catalog vendor names to try for a registry entry, most specific first.
-///
-/// `provider` is a protocol dialect as often as it is a vendor, so the host of
-/// `base_url` is tried too: `https://api.deepseek.com` → `deepseek`. Both are
-/// offered to the catalog and a hit on either clears the entry.
-fn vendor_candidates(provider: &str, base_url: Option<&str>) -> Vec<String> {
-    let mut out = vec![provider.to_string()];
-    if let Some(host) = host_of(base_url) {
-        let label = host.strip_prefix("api.").unwrap_or(&host);
-        if let Some(first) = label.split('.').next()
-            && !first.is_empty()
-            && !out.iter().any(|v| v == first)
-        {
-            out.push(first.to_string());
-        }
-    }
-    out
-}
 
 fn host_of(base_url: Option<&str>) -> Option<String> {
     let u = base_url?;
@@ -143,7 +125,7 @@ pub fn audit(
             if is_local_endpoint(e.base_url.as_deref()) {
                 continue;
             }
-            let vendors = vendor_candidates(&e.provider, e.base_url.as_deref());
+            let vendors = e.vendor_candidates();
             if vendors.iter().any(|v| knows(v, &e.model)) {
                 continue;
             }
@@ -332,20 +314,6 @@ mod tests {
         // The real catalog shape: filed under `deepseek`, absent from `openai`.
         let knows = |v: &str, m: &str| v == "deepseek" && m == "deepseek-v4-flash";
         assert!(audit(&reg, &[], Some(&knows)).is_empty());
-    }
-
-    #[test]
-    fn the_vendor_guess_prefers_provider_then_the_endpoint_host() {
-        assert_eq!(vendor_candidates("anthropic", None), vec!["anthropic"]);
-        assert_eq!(
-            vendor_candidates("openai", Some("https://api.deepseek.com/v1")),
-            vec!["openai", "deepseek"]
-        );
-        // No duplicate when the host already agrees with the provider.
-        assert_eq!(
-            vendor_candidates("openai", Some("https://api.openai.com/v1")),
-            vec!["openai"]
-        );
     }
 
     /// A local runtime is in no public catalog, so "unknown" is the normal case
