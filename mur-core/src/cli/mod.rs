@@ -108,6 +108,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: ChannelAction,
     },
+    /// Inspect and stop job / fleet / workflow runs
+    Job {
+        #[command(subcommand)]
+        action: crate::cmd::job::JobAction,
+    },
     /// Rebuild index from YAML files
     #[command(hide = true)]
     Reindex {
