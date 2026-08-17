@@ -283,13 +283,35 @@ mod tests {
 
     /// A pid that is certainly not running: spawn a trivial child, wait for it,
     /// and reuse its reaped pid. Checking a literal pid would be a guess.
+    ///
+    /// NEVER call external utilities that may not exist on the target
+    /// platform: `true` does not ship with Windows (a CI workspace gate
+    /// without true.exe would panic before testing classification), so the
+    /// helper is cfg'd — `true` on Unix, the always-present `cmd` on
+    /// Windows.
     fn dead_pid() -> u32 {
-        let mut child = std::process::Command::new("true")
-            .spawn()
-            .expect("spawn `true`");
-        let pid = child.id();
-        child.wait().expect("reap child");
-        pid
+        #[cfg(unix)]
+        {
+            let mut child = std::process::Command::new("true")
+                .spawn()
+                .expect("spawn `true`");
+            let pid = child.id();
+            child.wait().expect("reap child");
+            pid
+        }
+        #[cfg(windows)]
+        {
+            // `cmd /C exit 1` returns immediately and the child is
+            // definitely dead by the time its pid is reused. `cmd` is
+            // guaranteed to exist on every Windows install.
+            let mut child = std::process::Command::new("cmd")
+                .args(["/C", "exit 1"])
+                .spawn()
+                .expect("spawn cmd");
+            let pid = child.id();
+            child.wait().expect("reap child");
+            pid
+        }
     }
 
     #[test]
@@ -438,6 +460,42 @@ mod tests {
             "status_of computed Alive, which is only reachable via the \
              default 30s stale_after — config.yaml at mur_home is not \
              being read, so the configured 1s stale_after never took effect"
+        );
+    }
+
+    /// `status_of` must not pretend a run never existed when the channel it
+    /// could rebuild from is genuinely unreadable: with run.json missing and
+    /// the channel read faulting, the error must surface — not Ok(None).
+    #[test]
+    fn status_of_reports_a_genuine_channel_fault_instead_of_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let svc = mur_channel::ChannelService::open(mur_home).unwrap();
+        let ch = svc.create_for_workflow("faulty-channel").unwrap();
+        let dir = store::runs_dir(mur_home).join("run-x");
+        std::fs::create_dir_all(&dir).unwrap();
+        store::save_sidecar(
+            mur_home,
+            "run-x",
+            &Sidecar {
+                schema: SIDECAR_SCHEMA,
+                channel_id: ch.id.clone(),
+                kind: RunKind::Job,
+                first_seq: 0,
+            },
+        )
+        .unwrap();
+        // No run.json -> the rebuild path is the only route; sabotage it.
+        let chan_dir = mur_home.join("channels").join(&ch.id);
+        std::fs::remove_dir_all(&chan_dir).unwrap();
+        std::fs::write(&chan_dir, b"i am a file").unwrap();
+
+        let err = status_of(mur_home, "run-x")
+            .expect_err("a genuine channel read fault must surface as an error, not Ok(None)");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(&ch.id),
+            "the error must name the channel: {msg}"
         );
     }
 
