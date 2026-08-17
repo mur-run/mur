@@ -5,6 +5,12 @@
 //! log (see `rebuild`). When the two disagree, the channel wins and the cache
 //! is rebuilt. This mirrors `mur_common::channel::Channel`, whose own doc
 //! comment calls it "a cache of state derivable from the event log".
+//!
+//! Known limitation: if the whole run directory (`runs/<run_id>/`) is
+//! deleted, the run is unrecoverable by `mur job *` even though its channel
+//! still exists — the `channel.id` sidecar that indexes the channel lives
+//! inside that directory. Full recovery would require the event stream to
+//! carry `run_id`, which is a channel-contract change out of scope.
 
 pub mod heartbeat;
 pub mod rebuild;
@@ -165,11 +171,33 @@ pub fn stale_after(cfg: &mur_common::config::RunsConfig) -> chrono::Duration {
 /// can assemble them differently. `classify` stays pure so the table test can
 /// address every cell without a clock or a config file.
 pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Option<RunStatus>> {
-    let Some(record) = store::load(mur_home, run_id)? else {
+    let loaded = store::load(mur_home, run_id);
+    let record = match loaded {
+        Ok(Some(record)) => Some(record),
+        Ok(None) => rebuild_for(mur_home, run_id),
+        // Rebuild first; re-propagate the cache error only when there is no
+        // rebuild candidate — a run that has a channel to rebuild from must
+        // not be hidden by a parse failure. The `?` is deliberately on the
+        // `.ok_or(e).map(Some)` result, NOT `.or(loaded?)`: `loaded?` would
+        // be evaluated EAGERLY as `.or`'s argument, and its `return` would
+        // propagate the error before `.or` ever saw the rebuild candidate.
+        Err(e) => rebuild_for(mur_home, run_id).ok_or(e).map(Some)?,
+    };
+    let Some(record) = record else {
         return Ok(None);
     };
     let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
     Ok(Some(classify(record, Utc::now(), stale_after(&cfg.runs))))
+}
+
+/// Rebuild from the channel via the `channel.id` sidecar. `None` when the
+/// sidecar is absent (a run that was never recorded, or whose whole directory
+/// was deleted — the documented limitation) or the channel no longer exists.
+fn rebuild_for(mur_home: &std::path::Path, run_id: &str) -> Option<RunState> {
+    let channel_id = store::load_channel_id(mur_home, run_id).ok().flatten()?;
+    rebuild::from_channel(mur_home, run_id, &channel_id)
+        .ok()
+        .flatten()
 }
 
 #[cfg(test)]
@@ -351,6 +379,51 @@ mod tests {
             "status_of computed Alive, which is only reachable via the \
              default 30s stale_after — config.yaml at mur_home is not \
              being read, so the configured 1s stale_after never took effect"
+        );
+    }
+
+    /// A corrupt run.json must not take the run down with it: the channel.id
+    /// sidecar survives the cache, and status_of must fall back to a rebuilt
+    /// record that honestly reports an unknown heartbeat.
+    #[test]
+    fn status_of_rebuilds_from_the_channel_when_the_cache_is_corrupt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+
+        // A channel with a finished (failed) run's worth of events.
+        let svc = mur_channel::ChannelService::open(mur_home).unwrap();
+        let ch = svc.create_for_workflow("corrupt-cache").unwrap();
+        svc.append_delegation(&ch.id, "pm", "child-1", None)
+            .unwrap();
+        svc.transition(
+            &ch.id,
+            mur_common::channel::ChannelState::Failed,
+            mur_common::channel::ChannelActor::System,
+        )
+        .unwrap();
+
+        // The run directory with the sidecar but a GARBLED run.json.
+        let dir = store::runs_dir(mur_home).join("run-c");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("channel.id"), ch.id.as_bytes()).unwrap();
+        std::fs::write(dir.join("run.json"), b"{ this is not json").unwrap();
+
+        let status = status_of(mur_home, "run-c")
+            .unwrap()
+            .expect("a corrupt cache must fall back to the channel, not return None");
+        assert_eq!(
+            status.state,
+            State::Failed,
+            "rebuilt state must come from the channel"
+        );
+        assert_eq!(
+            status.liveness,
+            Liveness::NotApplicable,
+            "a finished rebuilt run reports no liveness"
+        );
+        assert!(
+            status.run.last_heartbeat_at.is_none(),
+            "rebuilt heartbeat must be unknown"
         );
     }
 }

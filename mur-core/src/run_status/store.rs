@@ -39,6 +39,26 @@ pub fn save(mur_home: &Path, run: &RunState) -> Result<()> {
     Ok(())
 }
 
+/// The `channel.id` sidecar — one line, the channel this run's events live
+/// on. Deliberately separate from `run.json`: a corrupt cache must not take
+/// the channel index down with it. See `status_of`'s fallback and the module
+/// doc's stated limitation.
+pub fn save_channel_id(mur_home: &Path, run_id: &str, channel_id: &str) -> Result<()> {
+    let dir = runs_dir(mur_home).join(run_id);
+    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    std::fs::write(dir.join("channel.id"), format!("{channel_id}\n"))
+        .with_context(|| format!("write {}/channel.id", dir.display()))
+}
+
+pub fn load_channel_id(mur_home: &Path, run_id: &str) -> std::io::Result<Option<String>> {
+    let path = runs_dir(mur_home).join(run_id).join("channel.id");
+    match std::fs::read_to_string(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+        Ok(s) => Ok(Some(s.trim().to_string())),
+    }
+}
+
 /// Load-modify-save a run record under an exclusive lock, so two independent
 /// writers of the same run — the in-process heartbeat ticker and a separate
 /// `mur job stop <run_id>` process are the two that exist today — cannot

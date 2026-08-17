@@ -908,11 +908,18 @@ pub async fn execute_dag(
         // no record and no heartbeat ticker — there is nothing for it to
         // beat against.
         match crate::run_status::store::save(mur_home, &record) {
-            Ok(()) => Some(crate::run_status::heartbeat::Heartbeat::spawn(
-                mur_home.to_path_buf(),
-                opts.run_id.clone(),
-                std::time::Duration::from_secs(cfg.runs.heartbeat_interval_secs),
-            )),
+            Ok(()) => {
+                // The channel index travels in its own sidecar so a corrupt
+                // run.json cannot take the rebuild path down with it.
+                if let Some(cid) = opts.channel_id.as_deref() {
+                    let _ = crate::run_status::store::save_channel_id(mur_home, &opts.run_id, cid);
+                }
+                Some(crate::run_status::heartbeat::Heartbeat::spawn(
+                    mur_home.to_path_buf(),
+                    opts.run_id.clone(),
+                    std::time::Duration::from_secs(cfg.runs.heartbeat_interval_secs),
+                ))
+            }
             Err(error) => {
                 tracing::warn!(
                     run_id = %opts.run_id,
