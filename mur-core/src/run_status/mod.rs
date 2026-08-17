@@ -269,10 +269,12 @@ pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Opt
 /// memory only — nothing is written back to the cache. `Ok(None)` when the
 /// sidecar is absent (a run that was never recorded, or whose whole directory
 /// was deleted — the documented limitation) or the channel no longer exists.
-/// A genuine I/O fault while reading the channel PROPAGATES: `status_of`
-/// must report it instead of pretending the run never existed.
+/// A genuine I/O fault PROPAGATES — from the sidecar read as much as from the
+/// channel read: `status_of` must report it instead of pretending the run
+/// never existed. `load_sidecar` already answers `Ok(None)` for an absent
+/// sidecar, so `?` here costs the absent case nothing.
 fn rebuild_for(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Option<RunState>> {
-    let Some(sidecar) = store::load_sidecar(mur_home, run_id).ok().flatten() else {
+    let Some(sidecar) = store::load_sidecar(mur_home, run_id)? else {
         return Ok(None);
     };
     rebuild::from_channel(mur_home, run_id, &sidecar)
@@ -753,6 +755,29 @@ mod tests {
         assert!(
             logged.contains("sidecar"),
             "the corrupt sidecar read must be warned, not silently skipped: {logged}"
+        );
+    }
+
+    /// An unreadable sidecar on the rebuild path is an I/O fault, not an
+    /// absent run. `load_sidecar` already separates the two; `rebuild_for`
+    /// must not put them back together, or a permission error reads to the
+    /// operator as "no such run".
+    #[test]
+    fn status_of_reports_an_unreadable_sidecar_instead_of_no_such_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+
+        // No `run.json` at all: the cache misses and `status_of` falls to the
+        // rebuild path, where the only index is this corrupt sidecar.
+        let dir = store::runs_dir(mur_home).join("run-u");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("sidecar.json"), b"{ not json").unwrap();
+
+        let error = status_of(mur_home, "run-u")
+            .expect_err("an unreadable sidecar must not be reported as 'no such run'");
+        assert!(
+            format!("{error:#}").contains("sidecar"),
+            "the fault must name the sidecar it could not read: {error:#}"
         );
     }
 

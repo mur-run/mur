@@ -18,9 +18,20 @@ pub fn find_latest_run_for_channel(
     let mut newest: Option<(chrono::DateTime<chrono::Utc>, crate::run_status::RunStatus)> = None;
     for run_id in store::list_ids(mur_home)? {
         // A sidecar read failure skips the candidate — a corrupt index on an
-        // unrelated run must not hide this fleet's runs.
-        let Ok(Some(sidecar)) = store::load_sidecar(mur_home, &run_id) else {
-            continue;
+        // unrelated run must not hide this fleet's runs — but it is warned,
+        // never silent: `load_sidecar` distinguishes "absent" from "unreadable"
+        // and that distinction is the operator's only clue.
+        let sidecar = match store::load_sidecar(mur_home, &run_id) {
+            Ok(Some(sidecar)) => sidecar,
+            Ok(None) => continue,
+            Err(error) => {
+                tracing::warn!(
+                    run_id,
+                    %error,
+                    "unreadable sidecar — skipping this run while looking for the fleet's latest"
+                );
+                continue;
+            }
         };
         if sidecar.channel_id != channel_id {
             continue;
@@ -112,6 +123,61 @@ mod tests {
             parallel: None,
             requires_programs: vec![],
         }
+    }
+
+    /// A corrupt sidecar on an unrelated run must not hide this fleet's runs
+    /// — but it must not vanish either. The skip is warned, so an operator
+    /// who wonders why a run is missing has one line telling them.
+    #[test]
+    fn an_unreadable_sidecar_is_warned_not_silently_skipped() {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl Write for Capture {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let base = chrono::Utc::now();
+
+        // The fleet's real run, plus an unrelated run whose sidecar is corrupt.
+        save_run(mur_home, "run-good", "fleet-x", base);
+        let dir = store::runs_dir(mur_home).join("run-bad");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("sidecar.json"), b"{ not json").unwrap();
+
+        let capture = Capture(Arc::new(Mutex::new(Vec::new())));
+        let writer = capture.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        let found = tracing::subscriber::with_default(subscriber, || {
+            find_latest_run_for_channel(mur_home, "fleet-x")
+        })
+        .unwrap();
+
+        assert_eq!(
+            found
+                .expect("the corrupt neighbour must not hide the good run")
+                .run
+                .run_id,
+            "run-good"
+        );
+        let logged = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            logged.contains("sidecar"),
+            "the unreadable sidecar must be warned, not silently skipped: {logged}"
+        );
     }
 
     /// THE lookup rule: the newest run whose SIDECAR records the fleet's
