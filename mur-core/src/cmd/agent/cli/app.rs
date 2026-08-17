@@ -186,6 +186,8 @@ pub enum SlashCmd {
     Panel(Vec<String>),
     /// `/open` — what is still outstanding, observed and reported kept apart.
     Open,
+    /// `/model [N|name]` — list registry models, or hot-switch to one.
+    Model(Option<String>),
     Quit,
     Unknown(String),
 }
@@ -208,6 +210,7 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
                 follow: args.iter().any(|s| *s == "--follow" || *s == "-f"),
             }
         }
+        "model" => SlashCmd::Model(words.next().map(str::to_string)),
         "auto" => SlashCmd::Auto(match words.next() {
             Some("on") => Some(true),
             Some("off") => Some(false),
@@ -1794,6 +1797,19 @@ mod tests {
         a.start_new_session(s);
         assert!(a.context_task_id.is_none());
         assert_eq!(a.messages.last().unwrap().role, Role::System);
+    }
+
+    #[test]
+    fn parse_slash_model() {
+        assert_eq!(parse_slash("/model"), Some(SlashCmd::Model(None)));
+        assert_eq!(
+            parse_slash("/model 2"),
+            Some(SlashCmd::Model(Some("2".into())))
+        );
+        assert_eq!(
+            parse_slash("/model claude_opus"),
+            Some(SlashCmd::Model(Some("claude_opus".into())))
+        );
     }
 
     #[test]
