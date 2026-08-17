@@ -190,6 +190,10 @@ pub async fn run(cli: Cli) -> Result<()> {
                 cmd::channel::approve(&channel_id, &hitl_id, deny, reason)?;
             }
         },
+        Commands::Job { action } => {
+            let mur_home = crate::paths::mur_root(None);
+            crate::cmd::job::run(&mur_home, action)?
+        }
         // Deprecated: use `mur internals reindex`
         Commands::Reindex { bootstrap } => {
             eprintln!("# mur reindex: use `mur internals reindex`");

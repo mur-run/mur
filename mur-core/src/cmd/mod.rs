@@ -43,6 +43,7 @@ pub(crate) mod init_daemon;
 pub(crate) mod init_local;
 pub(crate) mod inject_cmd;
 pub(crate) mod internals;
+pub mod job;
 pub(crate) mod learn;
 pub mod media;
 pub(crate) mod migrate_patterns;
