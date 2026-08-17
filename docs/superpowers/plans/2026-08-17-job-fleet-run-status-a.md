@@ -990,14 +990,17 @@ And to its `impl Default`:
 
 - [ ] **Step 4: Record, beat, and finalize**
 
-In `execute_dag`, immediately after `let mut graph = build_dag(&procedure.steps)?;`, insert:
+In `execute_dag`, insert this AFTER the empty-procedure guard that returns at
+`dag.rs:864-874` — not right after `build_dag`. A procedure with no nodes
+returns immediately and has nothing to observe, so it must not leave a run
+record behind that no one will ever finalize:
 
 ```rust
     // Record the run so it can be queried while it executes. A run is only
     // recorded when it has both an id and a kind; the legacy callers that
     // pass neither behave exactly as before.
     let recorded = (!opts.run_id.is_empty()).then(|| opts.run_kind).flatten();
-    let heartbeat = if let Some(kind) = recorded {
+    let mut heartbeat = if let Some(kind) = recorded {
         let cfg = mur_common::config::Config::load_or_default(mur_home);
         let now = chrono::Utc::now();
         let record = crate::run_status::RunState {
@@ -1028,32 +1031,91 @@ In `execute_dag`, immediately after `let mut graph = build_dag(&procedure.steps)
 
 > Both paths are verified against `main`: `Config::load_or_default(&Path) -> Self` is at `mur-common/src/config.rs:445`, and `mur_common::build::SHORT_SHA` is at `mur-common/src/build.rs:6` — the same constant `mur-agent-runtime/src/supervisor.rs:605` writes into `LockFile.build_sha`. Use them as written.
 
-Then, at the point where `execute_dag` computes its final `PipelineStatus` (near `dag.rs:1107`) and before it returns, stamp the terminal state:
+**Finalizing: there are three exits, and the codebase already names the hook.**
+
+`execute_dag` returns a `PipelineOutput` at four places: `dag.rs:865` (the
+empty-procedure guard, which is BEFORE the recording insertion above and so
+never has a run to finalize), and `dag.rs:1030`, `dag.rs:1076`, `dag.rs:1111`.
+Those last three each already call `emit_final(...)` immediately beforehand,
+and the closure's own comment states the invariant: *"Closure for terminal
+StateChange — call before each PipelineOutput return."*
+
+Finalize the run at those same three points. Do NOT put the logic inside
+`emit_final` itself: it is a `Fn` closure called three times, whereas stopping
+the heartbeat consumes the `Heartbeat` and must be awaited.
+
+Add this async helper as a free function in the same module:
 
 ```rust
-    if recorded.is_some()
-        && let Ok(Some(mut record)) = crate::run_status::store::load(mur_home, &opts.run_id)
-    {
-        record.state = if overall_status == PipelineStatus::Failed {
+/// Stop the run's heartbeat and stamp its terminal state.
+///
+/// The stop MUST be awaited before the terminal save. `Heartbeat::stop` is
+/// async because flipping its flag is not enough: a beat already inside
+/// `beat_once` has passed the flag check, and its read-modify-write would
+/// clobber the terminal state back to `running` with a fresh heartbeat — a
+/// finished run reported alive forever, which is the exact failure this
+/// module exists to prevent. Awaiting guarantees any in-flight beat lands
+/// BEFORE this save, so the terminal write wins.
+///
+/// Mirrors `emit_final`: call it before every `PipelineOutput` return that
+/// can be reached once a run has been recorded.
+async fn finalize_run(
+    mur_home: &std::path::Path,
+    run_id: &str,
+    recorded: bool,
+    heartbeat: &mut Option<crate::run_status::heartbeat::Heartbeat>,
+    failed: bool,
+) {
+    if !recorded {
+        return;
+    }
+    if let Some(hb) = heartbeat.take() {
+        hb.stop().await;
+    }
+    // `update` holds an exclusive lock across load-modify-save. A bare
+    // load/save pair here would race `mur job stop` in another process, which
+    // does the same read-modify-write on the same file.
+    let _ = crate::run_status::store::update(mur_home, run_id, |record| {
+        record.state = if failed {
             crate::run_status::State::Failed
         } else {
             crate::run_status::State::Done
         };
-        // Stop the ticker and WAIT for it before the terminal write. `stop()`
-        // is async precisely because flipping a flag is not enough: a beat
-        // already inside `beat_once` has passed the flag check, and its
-        // read-modify-write would clobber the terminal state back to
-        // `running` with a fresh heartbeat — a finished run reported alive
-        // forever. Awaiting guarantees any in-flight beat lands BEFORE this
-        // save, so the terminal write wins.
-        if let Some(hb) = heartbeat {
-            hb.stop().await;
-        }
-        let _ = crate::run_status::store::save(mur_home, &record);
-    }
+    });
+}
 ```
 
-> Use whatever the local variable holding the final status is actually called at that point; `overall_status` is a placeholder for it. If the function has more than one return path, stamp on each — a crashed *return* still must not leave `running` behind when the process is alive.
+Then, at each of the three sites, immediately after the existing
+`emit_final(...)` call, add the matching finalize with the SAME `failed`
+argument that `emit_final` was given:
+
+```rust
+        emit_final(true);
+        finalize_run(mur_home, &opts.run_id, recorded.is_some(), &mut heartbeat, true).await;
+```
+
+and at `dag.rs:1110`:
+
+```rust
+    emit_final(overall_exit_code != 0);
+    finalize_run(
+        mur_home,
+        &opts.run_id,
+        recorded.is_some(),
+        &mut heartbeat,
+        overall_exit_code != 0,
+    )
+    .await;
+```
+
+Declare the heartbeat binding as `let mut heartbeat = ...` so `take()` works,
+and note that `finalize_run` is idempotent: the second call finds `None` and a
+record already terminal, and writes the same value.
+
+> Pairing `finalize_run` with `emit_final` is deliberate. Any future exit added
+> to this function must already call `emit_final` per the existing comment, so
+> the run-status stamp travels with an invariant the codebase enforces rather
+> than depending on someone remembering a second, separate rule.
 
 - [ ] **Step 5: Add `run_kind` and `run_label` at all four entry points — and do NOT touch `run_id`**
 
@@ -1555,14 +1617,26 @@ pub fn run(mur_home: &Path, action: JobAction) -> Result<()> {
             Ok(())
         }
         JobAction::Stop { run_id } => {
-            let mut record = store::load(mur_home, &run_id)?
-                .with_context(|| format!("no run recorded for `{run_id}`"))?;
-            if record.state.is_terminal() {
-                println!("run {run_id} already {}", state_label(record.state));
+            // MUST go through `update`, not load + save: the executor process
+            // for this run may still be beating its heartbeat, and a bare
+            // read-modify-write here would be reverted by the next beat —
+            // leaving a stopped run reporting `running` forever.
+            let mut was_terminal = None;
+            let existed = store::update(mur_home, &run_id, |record| {
+                if record.state.is_terminal() {
+                    was_terminal = Some(record.state);
+                    return;
+                }
+                record.state = State::Stopped;
+            })
+            .with_context(|| format!("stop run `{run_id}`"))?;
+            if !existed {
+                anyhow::bail!("no run recorded for `{run_id}`");
+            }
+            if let Some(state) = was_terminal {
+                println!("run {run_id} already {}", state_label(state));
                 return Ok(());
             }
-            record.state = State::Stopped;
-            store::save(mur_home, &record)?;
             println!("run {run_id} marked stopped");
             println!(
                 "note: `mur job stop` stops one run. To stop a fleet's loop, use `mur fleet stop <name>`."
