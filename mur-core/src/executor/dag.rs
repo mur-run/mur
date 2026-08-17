@@ -1041,11 +1041,9 @@ pub async fn execute_dag(
             let rid = opts.run_id.clone();
             let warn_once = Arc::new(std::sync::Once::new());
             Some(Arc::new(move |event: StepEvent| {
-                if let Err(error) =
-                    crate::run_status::store::update(&home, &rid, |record| {
-                        apply_step_event(record, &event);
-                    })
-                {
+                if let Err(error) = crate::run_status::store::update(&home, &rid, |record| {
+                    apply_step_event(record, &event);
+                }) {
                     warn_once.call_once(|| {
                         tracing::warn!(
                             run_id = %rid,
