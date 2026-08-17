@@ -482,7 +482,25 @@ impl Config {
             return Self::default();
         };
         let text = crate::config_migrate::migrate_conversations_yaml(&text).unwrap_or(text);
-        serde_yaml_ng::from_str(&text).unwrap_or_default()
+        let mut cfg: Self = serde_yaml_ng::from_str(&text).unwrap_or_default();
+        cfg.sanitize();
+        cfg
+    }
+
+    /// Clamp values that are legal YAML but illegal at runtime. Called once
+    /// from [`Config::load_or_default`] — never from call sites, so every
+    /// reader (CLI, executor heartbeat ticker, `status_of`'s stale
+    /// threshold) sees the sanitized value.
+    fn sanitize(&mut self) {
+        // A zero interval would make the stale threshold zero (a healthy
+        // run instantly reports STALLED) and `tokio::time::interval` panics
+        // on a zero period — both from one user-edited line.
+        if self.runs.heartbeat_interval_secs == 0 {
+            self.runs.heartbeat_interval_secs = default_heartbeat_interval_secs();
+        }
+        if self.runs.heartbeat_stale_after_intervals == 0 {
+            self.runs.heartbeat_stale_after_intervals = default_heartbeat_stale_after_intervals();
+        }
     }
 }
 
@@ -2477,6 +2495,53 @@ mod skills_config_tests {
         let cfg: Config =
             serde_yaml_ng::from_str("skills:\n  dev_discipline_index: always\n").unwrap();
         assert_eq!(cfg.skills.dev_discipline_index, DevDisciplineIndex::Always);
+    }
+}
+
+#[cfg(test)]
+mod runs_config_tests {
+    use super::*;
+
+    /// A zero `heartbeat_interval_secs` is legal YAML but illegal at runtime:
+    /// it zeroes the stale threshold (every live run instantly reads STALLED)
+    /// and `tokio::time::interval(Duration::ZERO)` panics in the executor's
+    /// ticker. The loader must clamp zeroes to the defaults so one
+    /// user-edited line can neither lie nor crash.
+    #[test]
+    fn zero_heartbeat_values_clamp_to_defaults_at_load() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        std::fs::write(
+            &path,
+            "runs:\n  heartbeat_interval_secs: 0\n  heartbeat_stale_after_intervals: 0\n",
+        )
+        .unwrap();
+
+        let cfg = Config::load_or_default(&path);
+        assert_eq!(
+            cfg.runs.heartbeat_interval_secs, 10,
+            "a zero interval must load as the default, not 0"
+        );
+        assert_eq!(
+            cfg.runs.heartbeat_stale_after_intervals, 3,
+            "a zero interval count must load as the default, not 0"
+        );
+    }
+
+    /// The clamp must not rewrite legitimate tuning: positive values survive.
+    #[test]
+    fn positive_heartbeat_values_survive_the_load() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        std::fs::write(
+            &path,
+            "runs:\n  heartbeat_interval_secs: 60\n  heartbeat_stale_after_intervals: 2\n",
+        )
+        .unwrap();
+
+        let cfg = Config::load_or_default(&path);
+        assert_eq!(cfg.runs.heartbeat_interval_secs, 60);
+        assert_eq!(cfg.runs.heartbeat_stale_after_intervals, 2);
     }
 }
 
