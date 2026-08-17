@@ -218,11 +218,35 @@ mod tests {
         )
     }
 
+    /// A pid that is certainly not running: spawn a trivial child, wait for
+    /// it, and reuse its reaped pid.
+    ///
+    /// NEVER call external utilities that may not exist on the target
+    /// platform: `true` does not ship with Windows (a CI workspace gate
+    /// without true.exe would panic before testing classification), so the
+    /// helper is cfg'd — `true` on Unix, the always-present `cmd` on
+    /// Windows.
     fn dead_pid() -> u32 {
-        let mut c = std::process::Command::new("true").spawn().unwrap();
-        let pid = c.id();
-        c.wait().unwrap();
-        pid
+        #[cfg(unix)]
+        {
+            let mut c = std::process::Command::new("true").spawn().unwrap();
+            let pid = c.id();
+            c.wait().unwrap();
+            pid
+        }
+        #[cfg(windows)]
+        {
+            // `cmd /C exit 1` returns immediately and the child is
+            // definitely dead by the time its pid is reused. `cmd` is
+            // guaranteed to exist on every Windows install.
+            let mut c = std::process::Command::new("cmd")
+                .args(["/C", "exit 1"])
+                .spawn()
+                .unwrap();
+            let pid = c.id();
+            c.wait().unwrap();
+            pid
+        }
     }
 
     /// `print_status` is the shared renderer for `mur job status` AND
