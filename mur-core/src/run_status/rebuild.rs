@@ -58,10 +58,11 @@ fn channel_state_to_run_state(to: &str) -> Option<State> {
 /// implementation, two callers.
 pub fn run_tail_state(mur_home: &Path, sidecar: &Sidecar, run_id: &str) -> Result<Option<State>> {
     let svc = mur_channel::ChannelService::open(mur_home)?;
-    let events = match svc.load_events(&sidecar.channel_id) {
-        Ok(events) => events,
-        Err(_) => return Ok(None),
-    };
+    // A missing channel is `Ok(vec![])` (`load_events` maps NotFound to
+    // empty) and folds to `None` below — absence is not an error. A GENUINE
+    // I/O fault propagates: collapsing it would make `status_of` report the
+    // cache's stale answer as if the channel had nothing newer to say.
+    let events = svc.load_events(&sidecar.channel_id)?;
     Ok(events
         .iter()
         .filter(|ev| matches_run(ev, sidecar, run_id))
@@ -76,10 +77,11 @@ pub fn run_tail_state(mur_home: &Path, sidecar: &Sidecar, run_id: &str) -> Resul
 /// event of this run.
 pub fn from_channel(mur_home: &Path, run_id: &str, sidecar: &Sidecar) -> Result<Option<RunState>> {
     let svc = mur_channel::ChannelService::open(mur_home)?;
-    let events = match svc.load_events(&sidecar.channel_id) {
-        Ok(events) => events,
-        Err(_) => return Ok(None),
-    };
+    // A missing channel is `Ok(vec![])` (`load_events` maps NotFound to
+    // empty) and yields `None` below — absence is not an error. A GENUINE
+    // I/O fault propagates: collapsing it into `Ok(None)` makes `status_of`
+    // pretend the run never existed instead of reporting the failure.
+    let events = svc.load_events(&sidecar.channel_id)?;
     let own: Vec<&ChannelEvent> = events
         .iter()
         .filter(|ev| matches_run(ev, sidecar, run_id))
@@ -245,6 +247,32 @@ mod tests {
             )
             .unwrap()
             .is_none()
+        );
+    }
+
+    /// A missing channel yields `None` — absence is not an error. A GENUINE
+    /// I/O fault (here: the channel directory replaced by a plain file, so
+    /// the events read fails with ENOTDIR) must PROPAGATE — collapsing it
+    /// into `Ok(None)` makes `status_of` pretend the run never existed
+    /// instead of reporting the failure.
+    #[test]
+    fn from_channel_propagates_genuine_channel_read_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let svc = mur_channel::ChannelService::open(mur_home).unwrap();
+        let ch = svc.create_for_workflow("broken-channel").unwrap();
+        // Sabotage: the channel dir becomes a file, so reading
+        // channels/<id>/events.jsonl is an ENOTDIR fault, not an absence.
+        let chan_dir = mur_home.join("channels").join(&ch.id);
+        std::fs::remove_dir_all(&chan_dir).unwrap();
+        std::fs::write(&chan_dir, b"i am a file").unwrap();
+
+        let err = from_channel(mur_home, "run-x", &sidecar(&ch.id, RunKind::Job))
+            .expect_err("a genuine channel read fault must surface as Err, not Ok(None)");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(&ch.id),
+            "the error must name the channel it failed to read: {msg}"
         );
     }
 

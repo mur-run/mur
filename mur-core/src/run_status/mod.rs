@@ -206,14 +206,21 @@ pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Opt
     let loaded = store::load(mur_home, run_id);
     let record = match loaded {
         Ok(Some(record)) => Some(record),
-        Ok(None) => rebuild_for(mur_home, run_id),
+        Ok(None) => rebuild_for(mur_home, run_id)?,
         // Rebuild first; re-propagate the cache error only when there is no
         // rebuild candidate — a run that has a channel to rebuild from must
-        // not be hidden by a parse failure. The `?` is deliberately on the
-        // `.ok_or(e).map(Some)` result, NOT `.or(loaded?)`: `loaded?` would
-        // be evaluated EAGERLY as `.or`'s argument, and its `return` would
-        // propagate the error before `.or` ever saw the rebuild candidate.
-        Err(e) => rebuild_for(mur_home, run_id).ok_or(e).map(Some)?,
+        // not be hidden by a parse failure. A genuine rebuild I/O error is
+        // also reported (chained onto the cache error), never collapsed into
+        // "no run recorded".
+        Err(e) => match rebuild_for(mur_home, run_id) {
+            Ok(Some(record)) => Some(record),
+            Ok(None) => return Err(e),
+            Err(rebuild_err) => {
+                return Err(e.context(format!(
+                    "rebuild from the channel also failed: {rebuild_err:#}"
+                )));
+            }
+        },
     };
     let Some(mut record) = record else {
         return Ok(None);
@@ -238,14 +245,16 @@ pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Opt
 }
 
 /// Re-derive the record from the channel via the `sidecar.json` index, in
-/// memory only — nothing is written back to the cache. `None` when the
+/// memory only — nothing is written back to the cache. `Ok(None)` when the
 /// sidecar is absent (a run that was never recorded, or whose whole directory
 /// was deleted — the documented limitation) or the channel no longer exists.
-fn rebuild_for(mur_home: &std::path::Path, run_id: &str) -> Option<RunState> {
-    let sidecar = store::load_sidecar(mur_home, run_id).ok().flatten()?;
+/// A genuine I/O fault while reading the channel PROPAGATES: `status_of`
+/// must report it instead of pretending the run never existed.
+fn rebuild_for(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Option<RunState>> {
+    let Some(sidecar) = store::load_sidecar(mur_home, run_id).ok().flatten() else {
+        return Ok(None);
+    };
     rebuild::from_channel(mur_home, run_id, &sidecar)
-        .ok()
-        .flatten()
 }
 
 #[cfg(test)]
