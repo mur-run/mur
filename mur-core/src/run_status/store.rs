@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use fs2::FileExt;
 
-use super::RunState;
+use super::{RunState, Sidecar};
 
 /// `<mur_home>/runs`.
 pub fn runs_dir(mur_home: &Path) -> PathBuf {
@@ -39,31 +39,41 @@ pub fn save(mur_home: &Path, run: &RunState) -> Result<()> {
     Ok(())
 }
 
-/// The `channel.id` sidecar — one line, the channel this run's events live
-/// on. Deliberately separate from `run.json`: a corrupt cache must not take
-/// the channel index down with it. See `status_of`'s fallback and the module
-/// doc's stated limitation.
-pub fn save_channel_id(mur_home: &Path, run_id: &str, channel_id: &str) -> Result<()> {
+/// The `sidecar.json` rebuild index — the channel, kind, and first event seq
+/// of this run's events, all facts known at recording time. Deliberately
+/// separate from `run.json`: a corrupt cache must not take the index down
+/// with it. See `status_of`'s fallback and `rebuild`'s boundary rule.
+pub fn save_sidecar(mur_home: &Path, run_id: &str, sidecar: &Sidecar) -> Result<()> {
     let dir = runs_dir(mur_home).join(run_id);
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     // Temp-file-plus-rename, same discipline as `save`: a crash mid-write
     // must leave either the previous sidecar or none at all, never a
     // truncated one (a truncated sidecar reads as "no sidecar", so the run
     // silently becomes unrecoverable instead of corrupting).
-    let final_path = dir.join("channel.id");
-    let tmp_path = dir.join("channel.id.tmp");
-    std::fs::write(&tmp_path, format!("{channel_id}\n"))
-        .with_context(|| format!("write {}", tmp_path.display()))?;
+    let final_path = dir.join("sidecar.json");
+    let tmp_path = dir.join("sidecar.json.tmp");
+    let body = serde_json::to_vec_pretty(sidecar).context("serialize sidecar")?;
+    {
+        let mut f = std::fs::File::create(&tmp_path)
+            .with_context(|| format!("create {}", tmp_path.display()))?;
+        f.write_all(&body)?;
+        f.sync_all()?;
+    }
     std::fs::rename(&tmp_path, &final_path)
         .with_context(|| format!("rename into {}", final_path.display()))
 }
 
-pub fn load_channel_id(mur_home: &Path, run_id: &str) -> std::io::Result<Option<String>> {
-    let path = runs_dir(mur_home).join(run_id).join("channel.id");
-    match std::fs::read_to_string(&path) {
+/// Read the sidecar. `Ok(None)` when it does not exist — like a missing
+/// `run.json`, a never-recorded run is not an error, it is simply not
+/// rebuildable.
+pub fn load_sidecar(mur_home: &Path, run_id: &str) -> Result<Option<Sidecar>> {
+    let path = runs_dir(mur_home).join(run_id).join("sidecar.json");
+    match std::fs::read(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
-        Ok(s) => Ok(Some(s.trim().to_string())),
+        Err(e) => Err(e).with_context(|| format!("read {}", path.display())),
+        Ok(bytes) => Ok(Some(
+            serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?,
+        )),
     }
 }
 
@@ -199,6 +209,35 @@ mod tests {
     fn load_missing_run_is_none_not_error() {
         let tmp = tempfile::tempdir().unwrap();
         assert!(load(tmp.path(), "nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn sidecar_round_trips_every_recorded_fact() {
+        use crate::run_status::{SIDECAR_SCHEMA, Sidecar};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sidecar = Sidecar {
+            schema: SIDECAR_SCHEMA,
+            channel_id: "chan-1".into(),
+            kind: RunKind::Fleet,
+            first_seq: 42,
+        };
+        save_sidecar(tmp.path(), "run-a", &sidecar).unwrap();
+        let back = load_sidecar(tmp.path(), "run-a")
+            .unwrap()
+            .expect("sidecar exists");
+        assert_eq!(
+            back, sidecar,
+            "every recorded fact must survive the round trip"
+        );
+        assert_eq!(back.kind, RunKind::Fleet);
+        assert_eq!(back.first_seq, 42);
+    }
+
+    #[test]
+    fn load_sidecar_missing_is_none_not_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(load_sidecar(tmp.path(), "nope").unwrap().is_none());
     }
 
     #[test]
