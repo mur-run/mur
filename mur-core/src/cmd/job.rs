@@ -80,11 +80,13 @@ pub fn print_status(w: &mut dyn std::io::Write, s: &RunStatus) {
     let _ = writeln!(w, "label     {}", s.run.label);
     let _ = writeln!(w, "state     {}", state_label(s.state));
     let _ = writeln!(w, "liveness  {}", liveness_label(s.liveness));
-    // A rebuilt record carries pid 0 (no process is known), and a bare
-    // `pid 0` reads like a real pid out of context — say what it is. The
-    // signal is the structural one used everywhere else: no heartbeat and
-    // pid 0 together mean "rebuilt from the channel".
-    if s.run.last_heartbeat_at.is_none() && s.run.pid == 0 {
+    // `last_heartbeat_at` is the one field a rebuild cannot recover, so `None`
+    // IS the rebuilt marker (see `RunState`'s field doc). Deriving it once
+    // keeps the pid and heartbeat lines from ever disagreeing about what this
+    // record is — a bare `pid 0` reads like a real pid out of context, and a
+    // record that admits "heartbeat rebuilt" must not print a pid as fact.
+    let rebuilt = s.run.last_heartbeat_at.is_none();
+    if rebuilt {
         let _ = writeln!(w, "pid       unknown (record rebuilt)");
     } else {
         let _ = writeln!(w, "pid       {}", s.run.pid);
@@ -289,6 +291,26 @@ mod tests {
         assert!(
             !text.contains("pid       0\n"),
             "a rebuilt record printed a bare pid 0: {text}"
+        );
+    }
+
+    /// The two rebuilt-record lines must agree. A non-zero pid left in a
+    /// rebuilt record must not make the pid line speak as fact while the
+    /// heartbeat line admits the record was rebuilt — one predicate, one
+    /// story.
+    #[test]
+    fn a_rebuilt_record_never_prints_a_pid_as_fact() {
+        let s = status(State::Running, 4242, None);
+        let mut out = Vec::new();
+        print_status(&mut out, &s);
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains("pid       unknown (record rebuilt)\n"),
+            "a rebuilt record printed its stale pid as fact: {text}"
+        );
+        assert!(
+            !text.contains("pid       4242\n"),
+            "a rebuilt record printed a bare pid: {text}"
         );
     }
 
