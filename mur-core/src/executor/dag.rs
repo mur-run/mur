@@ -885,7 +885,7 @@ pub async fn execute_dag(
     // pass neither behave exactly as before.
     let recorded = (!opts.run_id.is_empty()).then_some(opts.run_kind).flatten();
     let mut heartbeat = if let Some(kind) = recorded {
-        let cfg = mur_common::config::Config::load_or_default(mur_home);
+        let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
         let now = chrono::Utc::now();
         let record = crate::run_status::RunState {
             schema: crate::run_status::RUN_SCHEMA,

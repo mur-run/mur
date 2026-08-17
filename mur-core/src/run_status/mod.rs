@@ -168,7 +168,7 @@ pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Opt
     let Some(record) = store::load(mur_home, run_id)? else {
         return Ok(None);
     };
-    let cfg = mur_common::config::Config::load_or_default(mur_home);
+    let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
     Ok(Some(classify(record, Utc::now(), stale_after(&cfg.runs))))
 }
 
@@ -313,6 +313,44 @@ mod tests {
         assert!(
             !json.contains("liveness"),
             "liveness must be derived, never stored: {json}"
+        );
+    }
+
+    /// `status_of` must load `<mur_home>/config.yaml`, not just `mur_home`
+    /// itself — `Config::load_or_default` takes a file path, and silently
+    /// returns `Config::default()` on any read failure (including "this
+    /// path is a directory"). A wrong path here does not error; it just
+    /// makes every `runs:` setting a dead knob a user can change with no
+    /// observable effect. Prove the config is actually read by giving it a
+    /// `stale_after` far stricter than the default and checking the
+    /// classification only that value can produce.
+    #[test]
+    fn status_of_reads_the_configured_stale_after_not_the_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+
+        // Default stale_after is 10s * 3 = 30s (RunsConfig's defaults).
+        // A 5s-old heartbeat reads `Alive` under that default and `Stalled`
+        // under this 1s config — so the two paths cannot agree by accident.
+        std::fs::write(
+            mur_home.join("config.yaml"),
+            "runs:\n  heartbeat_interval_secs: 1\n  heartbeat_stale_after_intervals: 1\n",
+        )
+        .unwrap();
+
+        let now = Utc::now();
+        let record = run(State::Running, std::process::id(), Some(5), now);
+        store::save(mur_home, &record).unwrap();
+
+        let status = status_of(mur_home, &record.run_id)
+            .unwrap()
+            .expect("run was just saved");
+        assert_eq!(
+            status.liveness,
+            Liveness::Stalled,
+            "status_of computed Alive, which is only reachable via the \
+             default 30s stale_after — config.yaml at mur_home is not \
+             being read, so the configured 1s stale_after never took effect"
         );
     }
 }
