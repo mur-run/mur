@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::time::Duration;
 
 /// Response envelope shapes we support.
@@ -93,17 +94,30 @@ fn auth_headers(provider: &str, api_key: Option<&str>) -> Vec<(&'static str, Str
 
 /// Discover available models via HTTP GET to `{base}/v1/models`, assuming
 /// OpenAI-compatible Bearer auth. Use [`discover_models_for`] when the
-/// provider is known.
+/// provider is known. The empty provider never takes the catalog path, so no
+/// `mur_home` is needed here.
 #[allow(dead_code)]
 pub fn discover_models(
     base_url: &str,
     api_key: Option<&str>,
     timeout_secs: u64,
 ) -> Result<Vec<String>> {
-    discover_models_for("", base_url, api_key, timeout_secs)
+    discover_models_for("", Path::new(""), base_url, api_key, timeout_secs)
 }
 
-/// Discover available models for `provider` via HTTP GET to `{base}/v1/models`.
+/// Discover available models for `provider`.
+///
+/// Vendor-specific protocols (today: `anthropic`) resolve from the models.dev
+/// catalog cache instead of the endpoint: their registry base URL is often a
+/// chat-only proxy (e.g. the local cc-proxy gateway) that only rewrites
+/// `/v1/messages*` and forwards `GET /v1/models` untouched, so a live probe
+/// 401s no matter which key the caller holds. The catalog defines those
+/// vendors' model lists anyway.
+///
+/// Everything else — including the `openai` slug, which in this registry is a
+/// wire protocol, not a vendor (DeepSeek, local runtimes, and real OpenAI keys
+/// all use it) — keeps live HTTP GET to `{base}/v1/models`: only the endpoint
+/// knows which models it actually serves.
 ///
 /// Best-effort with timeout. A non-empty API key is sent with whichever auth
 /// header the provider expects (see [`auth_headers`]).
@@ -111,10 +125,18 @@ pub fn discover_models(
 #[allow(dead_code)]
 pub fn discover_models_for(
     provider: &str,
+    mur_home: &Path,
     base_url: &str,
     api_key: Option<&str>,
     timeout_secs: u64,
 ) -> Result<Vec<String>> {
+    if provider == ANTHROPIC_PROVIDER
+        && let Some(ids) = crate::model_prices::load_or_fetch(mur_home)
+            .and_then(|cat| cat.provider_models(provider))
+            .filter(|ids| !ids.is_empty())
+    {
+        return Ok(ids);
+    }
     let url = models_url(base_url);
     let url_for_err = url.clone();
     let headers = auth_headers(provider, api_key);
@@ -355,6 +377,53 @@ mod tests {
             }
         });
         format!("http://127.0.0.1:{port}/v1")
+    }
+
+    const CATALOG_FIXTURE: &str = r#"{
+      "anthropic": { "models": { "claude-a": {}, "claude-b": {} } },
+      "openai": { "models": { "gpt-x": {} } }
+    }"#;
+
+    fn seed_catalog(home: &Path, json: &str) {
+        let path = crate::model_prices::cache_path(home);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, json).unwrap();
+    }
+
+    #[test]
+    fn anthropic_discovery_reads_catalog_and_never_probes_the_endpoint() {
+        let home = tempfile::TempDir::new().unwrap();
+        seed_catalog(home.path(), CATALOG_FIXTURE);
+        // Unroutable base: a regression back to live probing fails fast here
+        // with a connection error instead of returning the catalog list.
+        let ids = discover_models_for(
+            ANTHROPIC_PROVIDER,
+            home.path(),
+            "http://127.0.0.1:1/v1",
+            Some("irrelevant"),
+            1,
+        )
+        .unwrap();
+        assert_eq!(ids, vec!["claude-a", "claude-b"]);
+    }
+
+    #[test]
+    fn openai_slug_is_a_protocol_and_keeps_live_discovery() {
+        let home = tempfile::TempDir::new().unwrap();
+        // The catalog knows "openai" too — live discovery must still win.
+        seed_catalog(home.path(), CATALOG_FIXTURE);
+        let base = one_shot_server("200 OK", r#"{"data":[{"id":"deepseek-v4"}]}"#);
+        let ids = discover_models_for("openai", home.path(), &base, None, 5).unwrap();
+        assert_eq!(ids, vec!["deepseek-v4"]);
+    }
+
+    #[test]
+    fn anthropic_empty_catalog_entry_falls_back_to_live() {
+        let home = tempfile::TempDir::new().unwrap();
+        seed_catalog(home.path(), r#"{ "anthropic": { "models": {} } }"#);
+        let base = one_shot_server("200 OK", r#"{"data":[{"id":"claude-live"}]}"#);
+        let ids = discover_models_for(ANTHROPIC_PROVIDER, home.path(), &base, None, 5).unwrap();
+        assert_eq!(ids, vec!["claude-live"]);
     }
 
     #[test]
