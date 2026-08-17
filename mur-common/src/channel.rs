@@ -55,6 +55,22 @@ pub enum ChannelState {
     Stale,
 }
 
+/// Why a channel exists. Deliberately smaller than the ways a UI may render a
+/// channel: Direct vs Group is derived from participants, and Companion/HITL
+/// are event-derived states — none of them are purposes.
+///
+/// `Option<ChannelPurpose>` on `Channel`: `None` means "written before this
+/// field existed" and MUST NOT be treated as an explicit `Conversation`.
+/// Resolve it for display with `mur_channel::purpose::effective_purpose`;
+/// correct it on disk only with `mur channel backfill-purpose`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChannelPurpose {
+    Conversation,
+    FleetRun,
+    WorkflowRun,
+}
+
 /// Who produced an event / is a participant. Named `ChannelActor` to avoid
 /// colliding with the pre-existing `mur_common::actor::Actor`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -112,6 +128,9 @@ pub struct Channel {
     #[serde(default)]
     pub goal: Goal,
     pub state: ChannelState,
+    /// Why this channel exists. `None` = legacy manifest; see `ChannelPurpose`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<ChannelPurpose>,
     pub owner: ChannelActor,
     #[serde(default)]
     pub participants: Vec<Participant>,
@@ -219,5 +238,61 @@ mod tests {
         let back: ChannelEvent = serde_json::from_str(old).unwrap();
         assert_eq!(back.sig, None);
         assert_eq!(back.key_version, None);
+    }
+
+    #[test]
+    fn legacy_manifest_without_purpose_deserializes_as_none() {
+        // A manifest written before this field existed. Must still load.
+        let json = r#"{
+            "v": 2,
+            "id": "019ed0af-5e38-7912-b554-dc335a8fc2db",
+            "title": "chat with mur",
+            "state": "working",
+            "owner": {"kind": "human", "name": "david"},
+            "participants": [],
+            "created_at": "2026-08-01T10:00:00Z",
+            "updated_at": "2026-08-01T10:00:00Z"
+        }"#;
+        let ch: Channel = serde_json::from_str(json).expect("legacy manifest must deserialize");
+        assert_eq!(
+            ch.purpose, None,
+            "absent purpose must be None, not a default"
+        );
+    }
+
+    #[test]
+    fn purpose_round_trips_in_kebab_case() {
+        let json = r#"{
+            "v": 2,
+            "id": "x",
+            "title": "t",
+            "state": "working",
+            "owner": {"kind": "system"},
+            "participants": [],
+            "purpose": "fleet-run",
+            "created_at": "2026-08-01T10:00:00Z",
+            "updated_at": "2026-08-01T10:00:00Z"
+        }"#;
+        let ch: Channel = serde_json::from_str(json).unwrap();
+        assert_eq!(ch.purpose, Some(ChannelPurpose::FleetRun));
+
+        let back = serde_json::to_string(&ch).unwrap();
+        assert!(back.contains(r#""purpose":"fleet-run""#), "got: {back}");
+    }
+
+    #[test]
+    fn purpose_is_omitted_when_none() {
+        let json = r#"{
+            "v": 2, "id": "x", "title": "t", "state": "working",
+            "owner": {"kind": "system"}, "participants": [],
+            "created_at": "2026-08-01T10:00:00Z",
+            "updated_at": "2026-08-01T10:00:00Z"
+        }"#;
+        let ch: Channel = serde_json::from_str(json).unwrap();
+        let back = serde_json::to_string(&ch).unwrap();
+        assert!(
+            !back.contains("purpose"),
+            "a None purpose must not be written back as null: {back}"
+        );
     }
 }
