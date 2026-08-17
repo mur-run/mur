@@ -1926,3 +1926,168 @@ git commit -m "feat(mcp): mur_job_status so an agent can ask instead of guessing
 Plan B (`docs/superpowers/plans/…-job-fleet-run-status-b.md`, written after this one lands) carries the behaviour changes that depend on this foundation: non-blocking `parallel_jobs`, HITL block-instead-of-deny writing `blocked_on`, ready-set DAG scheduling so a blocked step stops holding the wave barrier, open-item notification, the Hub Panel renderer, and the attended/unattended budget split.
 
 Spec §5's seam still holds: `2026-08-17-murmur-tui-composer-and-tool-lines-design.md` must be implemented after Plan B, because Plan B changes `hitl::gate::DEFAULT_TIMEOUT`'s semantics and the TUI reads that constant to draw its countdown.
+
+---
+
+## Task 8: Wire the rebuild fallback into `status_of`
+
+**Files:**
+- Modify: `mur-core/src/run_status/store.rs` (save writes a `channel.id` sidecar; add `load_channel_id`)
+- Modify: `mur-core/src/run_status/mod.rs` (`status_of` falls back to `rebuild::from_channel`)
+- Test: inline in both files
+
+**Interfaces:**
+- Consumes: `store::{save, load}`, `rebuild::from_channel` (Task 5), `classify` (Task 2).
+- Produces: `store::load_channel_id(mur_home, run_id) -> std::io::Result<Option<String>>`; a `status_of` that honours the spec §2 promise "missing or suspect → rebuilt from the channel".
+
+**Why a sidecar exists at all.** `from_channel` needs a `channel_id`, and the
+only place it lives today is inside `run.json` — the very file being rebuilt.
+The channel event stream cannot provide it either: no event payload carries
+`run_id` (verified: `delegation_payload` has none; the idempotency_key is a
+SHA-256 hash). So the run directory carries a second file, `channel.id`, one
+line. It is deliberately NOT inside `run.json`, so a corrupt `run.json` cannot
+take the index down with it.
+
+**Known, accepted limitation (state it in code and in the module doc):** if
+the entire run directory is deleted, the run is unrecoverable by `mur job *`
+even though its channel still exists. Full recovery would require the event
+stream to carry `run_id`, which is a channel-contract change — out of scope
+for Plan A.
+
+- [ ] **Step 1: Write the failing test**
+
+In `mur-core/src/run_status/mod.rs`, append to the existing test module:
+
+```rust
+    /// A corrupt run.json must not take the run down with it: the channel.id
+    /// sidecar survives the cache, and status_of must fall back to a rebuilt
+    /// record that honestly reports an unknown heartbeat.
+    #[test]
+    fn status_of_rebuilds_from_the_channel_when_the_cache_is_corrupt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+
+        // A channel with a finished (failed) run's worth of events.
+        let svc = mur_channel::ChannelService::open(mur_home).unwrap();
+        let ch = svc.create_for_workflow("corrupt-cache").unwrap();
+        svc.append_delegation(&ch.id, "pm", "child-1", None).unwrap();
+        svc.transition(&ch.id, mur_common::channel::ChannelState::Failed, mur_common::channel::ChannelActor::System)
+            .unwrap();
+
+        // The run directory with the sidecar but a GARBLED run.json.
+        let dir = store::runs_dir(mur_home).join("run-c");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("channel.id"), ch.id.as_bytes()).unwrap();
+        std::fs::write(dir.join("run.json"), b"{ this is not json").unwrap();
+
+        let status = status_of(mur_home, "run-c")
+            .unwrap()
+            .expect("a corrupt cache must fall back to the channel, not return None");
+        assert_eq!(status.state, State::Failed, "rebuilt state must come from the channel");
+        assert_eq!(status.liveness, Liveness::NotApplicable, "a finished rebuilt run reports no liveness");
+        assert!(status.run.last_heartbeat_at.is_none(), "rebuilt heartbeat must be unknown");
+    }
+```
+
+- [ ] **Step 2: Run it and see it fail**
+
+```bash
+cargo nextest run -p mur-core -E 'test(status_of_rebuilds)'
+```
+
+Expected: FAIL — `status_of` returns `Ok(None)` on the corrupt cache.
+
+- [ ] **Step 3: The sidecar**
+
+In `store.rs`:
+
+```rust
+/// The `channel.id` sidecar — one line, the channel this run's events live
+/// on. Deliberately separate from `run.json`: a corrupt cache must not take
+/// the channel index down with it. See `status_of`'s fallback and the module
+/// doc's stated limitation.
+pub fn save_channel_id(mur_home: &Path, run_id: &str, channel_id: &str) -> Result<()> {
+    let dir = runs_dir(mur_home).join(run_id);
+    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    std::fs::write(dir.join("channel.id"), format!("{channel_id}\n"))
+        .with_context(|| format!("write {}/channel.id", dir.display()))
+}
+
+pub fn load_channel_id(mur_home: &Path, run_id: &str) -> std::io::Result<Option<String>> {
+    let path = runs_dir(mur_home).join(run_id).join("channel.id");
+    match std::fs::read_to_string(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+        Ok(s) => Ok(Some(s.trim().to_string())),
+    }
+}
+```
+
+- [ ] **Step 4: Write it during recording**
+
+In `executor/dag.rs`, immediately after the successful `store::save` inside
+`execute_dag`'s recording block (the `Ok(())` arm, before spawning the
+heartbeat), add:
+
+```rust
+                // The channel index travels in its own sidecar so a corrupt
+                // run.json cannot take the rebuild path down with it.
+                if let Some(cid) = opts.channel_id.as_deref() {
+                    let _ = crate::run_status::store::save_channel_id(mur_home, &opts.run_id, cid);
+                }
+```
+
+- [ ] **Step 5: The fallback**
+
+In `status_of` (`run_status/mod.rs`), replace the early return with a fallback:
+
+```rust
+pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Option<RunStatus>> {
+    let loaded = store::load(mur_home, run_id);
+    let record = match loaded {
+        Ok(Some(record)) => Some(record),
+        Ok(None) => rebuild_for(mur_home, run_id),
+        Err(_) => rebuild_for(mur_home, run_id).or(loaded?),
+    };
+    let Some(record) = record else {
+        return Ok(None);
+    };
+    let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
+    Ok(Some(classify(record, Utc::now(), stale_after(&cfg.runs))))
+}
+
+/// Rebuild from the channel via the `channel.id` sidecar. `None` when the
+/// sidecar is absent (a run that was never recorded, or whose whole directory
+/// was deleted — the documented limitation) or the channel no longer exists.
+fn rebuild_for(mur_home: &std::path::Path, run_id: &str) -> Option<RunState> {
+    let channel_id = store::load_channel_id(mur_home, run_id).ok().flatten()?;
+    rebuild::from_channel(mur_home, run_id, &channel_id).ok().flatten()
+}
+```
+
+Note the `Err(_) => rebuild_for(...).or(loaded?)` arm: a genuine I/O error
+with no sidecar propagates as before; only when a rebuild candidate exists do
+we suppress the cache error. A run that has a channel to rebuild from should
+not be hidden by a parse failure.
+
+- [ ] **Step 6: Run tests to verify they pass**
+
+```bash
+cargo nextest run -p mur-core -E 'test(run_status) or test(job)'
+cargo fmt --check
+cargo clippy -p mur-core --all-targets -- -D warnings
+```
+
+Expected: PASS with a non-zero run count.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add mur-core/src/run_status/ mur-core/src/executor/dag.rs
+git commit -m "feat(run-status): status_of falls back to a channel rebuild via the channel.id sidecar"
+```
+
+> **Operational rules for this task's implementer (from controller, carry
+> verbatim):** poll background builds, never end a turn waiting; a gate is
+> satisfied by a non-zero RUN count; `pgrep -fl "nextest|cargo"` before
+> building; stage only your own files.
