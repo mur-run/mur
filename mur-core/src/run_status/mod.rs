@@ -9,11 +9,14 @@
 //! `mur_common::channel::Channel`, whose own doc comment calls it "a cache of
 //! state derivable from the event log".
 //!
-//! Known limitation: if the whole run directory (`runs/<run_id>/`) is
-//! deleted, the run is unrecoverable by `mur job *` even though its channel
-//! still exists — the `channel.id` sidecar that indexes the channel lives
-//! inside that directory. Full recovery would require the event stream to
-//! carry `run_id`, which is a channel-contract change out of scope.
+//! The events the executor writes carry the run's `run_id`, and the
+//! `sidecar.json` rebuild index records the channel, kind, and first event
+//! seq — so a rebuild folds only THIS run's events even on a long-lived
+//! shared channel. Known limitation: if the whole run directory
+//! (`runs/<run_id>/`) is deleted, the run is still unrecoverable by
+//! `mur job *` even though its channel still exists — the sidecar that
+//! indexes the channel lives inside that directory, and without it there is
+//! no way to know which channel to fold.
 
 pub mod heartbeat;
 pub mod rebuild;
@@ -24,6 +27,9 @@ use serde::{Deserialize, Serialize};
 
 /// Schema version of `run.json`. Bump when a field's meaning changes.
 pub const RUN_SCHEMA: u32 = 1;
+
+/// Schema version of `sidecar.json`. Bump when a field's meaning changes.
+pub const SIDECAR_SCHEMA: u32 = 1;
 
 /// Which entry point produced this run. All three go through `execute_dag`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +56,23 @@ impl State {
     pub fn is_terminal(self) -> bool {
         matches!(self, State::Done | State::Failed | State::Stopped)
     }
+}
+
+/// The rebuild index for one run, stored beside `run.json` as
+/// `sidecar.json` and deliberately separate from it so a corrupt cache
+/// cannot take the index down with it.
+///
+/// Every field is a FACT the executor knows at recording time — the channel
+/// the run executed over, the run kind the caller passed in, and the channel
+/// event sequence number at which this run's first event lands. Nothing in
+/// it is inferred: inference is how one run's terminal state gets attributed
+/// to another (see `rebuild`'s run-boundary rule).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sidecar {
+    pub schema: u32,
+    pub channel_id: String,
+    pub kind: RunKind,
+    pub first_seq: u64,
 }
 
 /// Whether the run is actually progressing. DERIVED — never stored.
@@ -135,15 +158,21 @@ pub struct RunStatus {
 /// `now` and `stale_after` are parameters rather than ambient reads so the
 /// table test can address every cell without sleeping.
 pub fn classify(run: RunState, now: DateTime<Utc>, stale_after: chrono::Duration) -> RunStatus {
+    // The arm order for non-terminal runs is load-bearing (spec §3):
+    // absent heartbeat → `unknown` comes BEFORE the pid check. A rebuilt
+    // record carries pid 0, and pid-0 liveness is platform-dependent
+    // (`kill(0, …)` targets the caller's own process group on Unix, so it
+    // reads *alive*; `OpenProcess(0, …)` fails on Windows, so it reads
+    // *dead*). Checking the absent heartbeat first makes `unknown` the
+    // answer on every platform.
     let liveness = if run.state.is_terminal() {
         Liveness::NotApplicable
-    } else if !mur_common::lock_file::pid_alive(run.pid) {
-        Liveness::Dead
     } else {
         match run.last_heartbeat_at {
             // Rebuilt from the channel: the heartbeat is not recoverable and
             // must not be invented.
             None => Liveness::Unknown,
+            Some(_) if !mur_common::lock_file::pid_alive(run.pid) => Liveness::Dead,
             Some(beat) if now.signed_duration_since(beat) <= stale_after => Liveness::Alive,
             Some(_) => Liveness::Stalled,
         }
@@ -186,20 +215,35 @@ pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Opt
         // propagate the error before `.or` ever saw the rebuild candidate.
         Err(e) => rebuild_for(mur_home, run_id).ok_or(e).map(Some)?,
     };
-    let Some(record) = record else {
+    let Some(mut record) = record else {
         return Ok(None);
     };
+    // Reconciliation (spec §2): the channel wins even when the cache
+    // parses. A parseable cache is accepted for what it says only while the
+    // channel has nothing newer to say — this closes the sequence "channel
+    // Completed succeeds, terminal run.json write fails, cache says running
+    // forever", which otherwise reports `running` + `dead` after exit. Only
+    // a non-terminal cache is consulted, and only a terminal channel state
+    // overrides it; the cache's heartbeat is retained (it is still real).
+    if !record.state.is_terminal()
+        && let Ok(Some(sidecar)) = store::load_sidecar(mur_home, run_id)
+        && let Ok(Some(channel_state)) = rebuild::run_tail_state(mur_home, &sidecar, run_id)
+        && channel_state.is_terminal()
+        && record.state != channel_state
+    {
+        record.state = channel_state;
+    }
     let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
     Ok(Some(classify(record, Utc::now(), stale_after(&cfg.runs))))
 }
 
-/// Re-derive the record from the channel via the `channel.id` sidecar, in
+/// Re-derive the record from the channel via the `sidecar.json` index, in
 /// memory only — nothing is written back to the cache. `None` when the
 /// sidecar is absent (a run that was never recorded, or whose whole directory
 /// was deleted — the documented limitation) or the channel no longer exists.
 fn rebuild_for(mur_home: &std::path::Path, run_id: &str) -> Option<RunState> {
-    let channel_id = store::load_channel_id(mur_home, run_id).ok().flatten()?;
-    rebuild::from_channel(mur_home, run_id, &channel_id)
+    let sidecar = store::load_sidecar(mur_home, run_id).ok().flatten()?;
+    rebuild::from_channel(mur_home, run_id, &sidecar)
         .ok()
         .flatten()
 }
@@ -280,6 +324,17 @@ mod tests {
         // Non-terminal + live process + rebuilt (no heartbeat) => unknown.
         let s = classify(run(State::Running, live, None, now), now, stale_after());
         assert_eq!(s.liveness, Liveness::Unknown);
+
+        // Non-terminal + dead process + rebuilt (no heartbeat) => unknown,
+        // NOT dead: the absent-heartbeat check precedes the pid check, so a
+        // pid whose liveness is platform-dependent (0 on Windows reads
+        // dead via a failing OpenProcess) can never pick the verdict.
+        let s = classify(run(State::Running, dead, None, now), now, stale_after());
+        assert_eq!(
+            s.liveness,
+            Liveness::Unknown,
+            "absent heartbeat must win over a dead pid"
+        );
 
         // Terminal => n/a regardless of process or heartbeat.
         for state in [State::Done, State::Failed, State::Stopped] {
@@ -386,30 +441,42 @@ mod tests {
         );
     }
 
-    /// A corrupt run.json must not take the run down with it: the channel.id
-    /// sidecar survives the cache, and status_of must fall back to a rebuilt
-    /// record that honestly reports an unknown heartbeat.
+    /// A corrupt run.json must not take the run down with it: the
+    /// sidecar.json index survives the cache, and status_of must fall back to
+    /// a rebuilt record that honestly reports an unknown heartbeat.
     #[test]
     fn status_of_rebuilds_from_the_channel_when_the_cache_is_corrupt() {
         let tmp = tempfile::tempdir().unwrap();
         let mur_home = tmp.path();
 
-        // A channel with a finished (failed) run's worth of events.
+        // A channel with a finished (failed) run's worth of events, written
+        // the way the executor writes them — run_id stamped on each payload.
         let svc = mur_channel::ChannelService::open(mur_home).unwrap();
         let ch = svc.create_for_workflow("corrupt-cache").unwrap();
-        svc.append_delegation(&ch.id, "pm", "child-1", None)
+        svc.append_delegation(&ch.id, "pm", "child-1", None, Some("run-c"))
             .unwrap();
         svc.transition(
             &ch.id,
             mur_common::channel::ChannelState::Failed,
             mur_common::channel::ChannelActor::System,
+            Some("run-c"),
         )
         .unwrap();
 
         // The run directory with the sidecar but a GARBLED run.json.
         let dir = store::runs_dir(mur_home).join("run-c");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("channel.id"), ch.id.as_bytes()).unwrap();
+        store::save_sidecar(
+            mur_home,
+            "run-c",
+            &Sidecar {
+                schema: SIDECAR_SCHEMA,
+                channel_id: ch.id.clone(),
+                kind: RunKind::Workflow,
+                first_seq: 0,
+            },
+        )
+        .unwrap();
         std::fs::write(dir.join("run.json"), b"{ this is not json").unwrap();
 
         let status = status_of(mur_home, "run-c")
@@ -428,6 +495,120 @@ mod tests {
         assert!(
             status.run.last_heartbeat_at.is_none(),
             "rebuilt heartbeat must be unknown"
+        );
+    }
+
+    /// THE regression for the review's parseable-cache finding: the channel's
+    /// Completed transition succeeded but the terminal run.json write failed,
+    /// so the cache still says `running` with a fresh heartbeat and a live
+    /// pid. `status_of` must report the channel's `done` — not `running` +
+    /// whatever the pid says — and the heartbeat it reports must be the
+    /// cache's real one, not a fabricated value.
+    #[test]
+    fn status_of_reconciles_a_parseable_running_cache_with_the_channel() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+
+        // The channel's authoritative tail: this run completed.
+        let svc = mur_channel::ChannelService::open(mur_home).unwrap();
+        let ch = svc.create_for_workflow("reconcile").unwrap();
+        svc.append_delegation(&ch.id, "pm", "child-1", None, Some("run-r"))
+            .unwrap();
+        svc.transition(
+            &ch.id,
+            mur_common::channel::ChannelState::Completed,
+            mur_common::channel::ChannelActor::System,
+            Some("run-r"),
+        )
+        .unwrap();
+
+        // The cache: still running, with a real (fresh) heartbeat and live
+        // pid — the exact shape of "channel Completed succeeded, terminal
+        // run.json write failed".
+        let now = Utc::now();
+        let mut record = run(State::Running, std::process::id(), Some(1), now);
+        record.run_id = "run-r".into();
+        record.channel_id = Some(ch.id.clone());
+        let cached_heartbeat = record.last_heartbeat_at;
+        store::save(mur_home, &record).unwrap();
+        store::save_sidecar(
+            mur_home,
+            "run-r",
+            &Sidecar {
+                schema: SIDECAR_SCHEMA,
+                channel_id: ch.id.clone(),
+                kind: RunKind::Workflow,
+                first_seq: 0,
+            },
+        )
+        .unwrap();
+
+        let status = status_of(mur_home, "run-r")
+            .unwrap()
+            .expect("the run was just recorded");
+        assert_eq!(
+            status.state,
+            State::Done,
+            "the channel wins over a parseable cache that still says running"
+        );
+        assert_eq!(
+            status.liveness,
+            Liveness::NotApplicable,
+            "a finished run reports no liveness"
+        );
+        assert_eq!(
+            status.run.last_heartbeat_at, cached_heartbeat,
+            "the cache's real heartbeat is retained, never fabricated"
+        );
+    }
+
+    /// Reconciliation must be bounded to the run: another run's terminal
+    /// state on the same channel (different run_id) must not override this
+    /// run's still-running cache.
+    #[test]
+    fn status_of_reconciliation_ignores_other_runs_on_the_same_channel() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+
+        let svc = mur_channel::ChannelService::open(mur_home).unwrap();
+        let ch = svc.create_for_workflow("reconcile-shared").unwrap();
+        // Run B completed on the shared channel; run R is still running.
+        svc.append_delegation(&ch.id, "pm", "child-b", None, Some("run-b"))
+            .unwrap();
+        svc.transition(
+            &ch.id,
+            mur_common::channel::ChannelState::Completed,
+            mur_common::channel::ChannelActor::System,
+            Some("run-b"),
+        )
+        .unwrap();
+
+        let now = Utc::now();
+        let mut record = run(State::Running, std::process::id(), Some(1), now);
+        record.run_id = "run-r".into();
+        store::save(mur_home, &record).unwrap();
+        store::save_sidecar(
+            mur_home,
+            "run-r",
+            &Sidecar {
+                schema: SIDECAR_SCHEMA,
+                channel_id: ch.id.clone(),
+                kind: RunKind::Workflow,
+                first_seq: 0,
+            },
+        )
+        .unwrap();
+
+        let status = status_of(mur_home, "run-r").unwrap().expect("recorded run");
+        assert_eq!(
+            status.state,
+            State::Running,
+            "B's completion on the same channel must not end R"
+        );
+        assert_eq!(
+            status.liveness,
+            Liveness::Alive,
+            "R is live and healthy; B's state must not leak into its liveness"
         );
     }
 }
