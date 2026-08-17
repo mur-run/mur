@@ -54,6 +54,7 @@ pub async fn gate(
     req: &ActionRequest,
     yes: bool,
     timeout: Option<Duration>,
+    run_id: Option<&str>,
 ) -> Result<GateDecision> {
     let hash = action_hash(
         &req.tool_name,
@@ -108,11 +109,17 @@ pub async fn gate(
                     serde_json::to_value(&request)?,
                     None,
                 )?;
+                // Attributed to the run that paused, like every other executor
+                // event: a rebuild filters BY `run_id`, so an unstamped
+                // transition belongs to no run and is invisible to every
+                // rebuild — a run that loses its cache while waiting on this
+                // gate would come back as `Working`, disagreeing with the
+                // channel about the one state the operator needs to see.
                 svc.transition(
                     channel_id,
                     ChannelState::InputRequired,
                     ChannelActor::System,
-                    None,
+                    run_id,
                 )?;
             }
 
@@ -153,7 +160,7 @@ pub async fn gate(
                     channel_id,
                     ChannelState::Working,
                     ChannelActor::System,
-                    None,
+                    run_id,
                 )?;
             }
             Ok(decision)
@@ -266,10 +273,71 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_workflow("g").unwrap();
-        let d = gate(tmp.path(), &ch.id, &req(RiskTier::Read), false, None)
-            .await
-            .unwrap();
+        let d = gate(
+            tmp.path(),
+            &ch.id,
+            &req(RiskTier::Read),
+            false,
+            None,
+            Some("run-g"),
+        )
+        .await
+        .unwrap();
         assert!(d.allow);
+    }
+
+    /// The gate's two state transitions must carry the run that paused, or a
+    /// rebuild — which filters BY `run_id` — cannot see them. A run whose cache
+    /// is lost while it waits on an approval would then rebuild as `Working`,
+    /// contradicting the channel about the one state the operator came to see.
+    #[tokio::test]
+    async fn gate_transitions_are_stamped_with_the_run_that_paused() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        drop(svc);
+
+        // `yes` auto-approves, so the gate runs to completion and writes BOTH
+        // transitions: into `input-required` and back out to `working`.
+        gate(
+            tmp.path(),
+            &ch.id,
+            &req(RiskTier::Destructive),
+            true,
+            None,
+            Some("run-paused"),
+        )
+        .await
+        .unwrap();
+
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let stamped: Vec<String> = svc
+            .load_events(&ch.id)
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == EventKind::StateChange)
+            .filter(|e| {
+                e.payload
+                    .get("run_id")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|id| id == "run-paused")
+            })
+            .filter_map(|e| {
+                e.payload
+                    .get("to")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+
+        assert!(
+            stamped.iter().any(|to| to == "input-required"),
+            "the pause transition was not attributed to the run: {stamped:?}"
+        );
+        assert!(
+            stamped.iter().any(|to| to == "working"),
+            "the resume transition was not attributed to the run: {stamped:?}"
+        );
     }
 
     #[tokio::test]
@@ -285,7 +353,9 @@ mod tests {
             &r.step_or_call_id,
             &r.agent_id,
         );
-        let d = gate(tmp.path(), &ch.id, &r, true, None).await.unwrap();
+        let d = gate(tmp.path(), &ch.id, &r, true, None, Some("run-g"))
+            .await
+            .unwrap();
         assert!(d.allow, "--yes auto-approves a high tier");
         assert_eq!(d.action_hash, hash);
         // Check the trail via a fresh open.
