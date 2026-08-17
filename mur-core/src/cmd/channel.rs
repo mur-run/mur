@@ -28,7 +28,11 @@ pub struct PendingHitlGate {
 /// Fold every channel's events and return `HitlRequest`s with no matching
 /// `HitlResponse` in the same channel — i.e. gates still waiting on a human.
 /// Read errors on an individual channel are skipped (fail-open: a corrupt or
-/// unreadable channel must not hide gates in every other channel).
+/// unreadable channel must not hide gates in every other channel) but they are
+/// WARNED: `load_events` already answers `Ok(vec![])` for a channel that does
+/// not exist, so an `Err` here is a genuine fault, and dropping an entry from
+/// a LISTING is worse than dropping one from a lookup — nothing else prompts
+/// the operator to go looking for the approval that vanished.
 #[allow(dead_code)] // consumed by mur-hub-gui (workspace-excluded Home inbox)
 pub fn pending_hitl_gates(mur_home: &Path) -> Result<Vec<PendingHitlGate>> {
     let svc = ChannelService::open(mur_home)?;
@@ -36,8 +40,16 @@ pub fn pending_hitl_gates(mur_home: &Path) -> Result<Vec<PendingHitlGate>> {
 
     let mut out = Vec::new();
     for channel_id in ids {
-        let Ok(events) = svc.load_events(&channel_id) else {
-            continue;
+        let events = match svc.load_events(&channel_id) {
+            Ok(events) => events,
+            Err(error) => {
+                tracing::warn!(
+                    %channel_id,
+                    %error,
+                    "unreadable channel — any approval gate waiting in it is not listed"
+                );
+                continue;
+            }
         };
         out.extend(unresolved_gates_in(&channel_id, &events));
     }
@@ -201,6 +213,69 @@ mod pending_hitl_tests {
         assert_eq!(gates[0].channel_id, "chan-a");
         assert_eq!(gates[0].agent, "buildy");
         assert_eq!(gates[0].risk, RiskTier::Write);
+    }
+
+    /// An unreadable channel must not take a waiting approval down with it in
+    /// silence. The gate in the healthy channel still lists, and the failure
+    /// is warned — a listing that quietly shrinks is indistinguishable from
+    /// "nothing is waiting".
+    ///
+    /// Unix-only because it needs a genuine read fault: `load_events` drops
+    /// unparseable LINES silently (`filter_map(.ok())`), so a corrupt line is
+    /// not an `Err` — only an unreadable file is.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_channel_is_warned_not_silently_skipped() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Capture {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+
+        // One healthy channel with a gate still waiting.
+        write_events_jsonl(home, "chan-good", &[hitl_request_event(1, "hitl-open")]);
+        // One channel whose log exists but cannot be read.
+        write_events_jsonl(home, "chan-bad", &[hitl_request_event(1, "hitl-hidden")]);
+        let bad_log = home.join("channels").join("chan-bad").join("events.jsonl");
+        std::fs::set_permissions(&bad_log, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read_to_string(&bad_log).is_ok() {
+            // Running as root, or a filesystem that ignores the mode bits.
+            return;
+        }
+
+        let capture = Capture(Arc::new(Mutex::new(Vec::new())));
+        let writer = capture.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        let gates =
+            tracing::subscriber::with_default(subscriber, || pending_hitl_gates(home)).unwrap();
+
+        assert_eq!(
+            gates.len(),
+            1,
+            "the unreadable neighbour must not hide the healthy channel's gate"
+        );
+        assert_eq!(gates[0].hitl_id, "hitl-open");
+
+        let logged = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            logged.contains("chan-bad"),
+            "the unreadable channel must be named in a warning, not silently skipped: {logged}"
+        );
     }
 
     #[test]
