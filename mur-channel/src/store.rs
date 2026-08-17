@@ -55,6 +55,13 @@ impl ChannelStore {
         serde_yaml::from_str(&s).with_context(|| format!("parse {}", path.display()))
     }
 
+    /// Read a channel's events. A line that fails to parse is skipped so one
+    /// damaged record cannot make a whole channel unreadable — but it is
+    /// COUNTED and WARNED with its line number, because a dropped line is a
+    /// dropped event and every fold above this (run rebuild, pending HITL
+    /// gates, the rail, `mur channel show`) would otherwise be unable to tell
+    /// "that never happened" from "I could not read it". Losing a
+    /// `HitlResponse` silently makes an approved gate read as still waiting.
     pub fn load_events(&self, id: &str) -> Result<Vec<ChannelEvent>> {
         let path = self.events_path(id);
         let content = match fs::read_to_string(&path) {
@@ -62,11 +69,28 @@ impl ChannelStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
         };
-        Ok(content
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .filter_map(|l| serde_json::from_str::<ChannelEvent>(l).ok())
-            .collect())
+        let mut events = Vec::new();
+        let mut damaged = Vec::new();
+        for (idx, line) in content.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<ChannelEvent>(line) {
+                Ok(ev) => events.push(ev),
+                // 1-based: matches what an editor or `sed -n` shows.
+                Err(_) => damaged.push(idx + 1),
+            }
+        }
+        if !damaged.is_empty() {
+            tracing::warn!(
+                channel_id = %id,
+                path = %path.display(),
+                dropped = damaged.len(),
+                lines = ?damaged,
+                "unparseable event line(s) skipped — the events they carried are missing from every fold of this channel"
+            );
+        }
+        Ok(events)
     }
 
     /// Append one event under an advisory lock so `seq` stays monotonic across
@@ -134,7 +158,16 @@ impl ChannelStore {
             .append(true)
             .open(&path)
             .with_context(|| format!("open {}", path.display()))?;
-        writeln!(data, "{line}").with_context(|| format!("write {}", path.display()))?;
+        // ONE `write_all` of the record plus its terminator, not `writeln!`.
+        // `File` is unbuffered, so `writeln!` is two `write(2)` calls: a process
+        // that dies between them leaves a line with no newline, and the next
+        // append (O_APPEND, starting at EOF) glues its JSON onto the orphan —
+        // losing BOTH events, silently, in every reader. A single write cannot
+        // be torn that way by a crash between syscalls.
+        let mut record = line.into_bytes();
+        record.push(b'\n');
+        data.write_all(&record)
+            .with_context(|| format!("write {}", path.display()))?;
         FileExt::unlock(&lock).ok();
         Ok(ev)
     }
@@ -198,6 +231,95 @@ mod tests {
         let got = store.load_manifest("c1").unwrap();
         assert_eq!(got.id, "c1");
         assert_eq!(got.state, ChannelState::Working);
+    }
+
+    /// A damaged line must not take a whole channel down with it, and must not
+    /// leave without saying so. This is the shape a crash mid-append produces:
+    /// a line with no terminator, glued to the next event's JSON, so BOTH
+    /// records are unparseable — silently, under every fold in the product.
+    #[test]
+    fn a_damaged_line_is_skipped_but_warned_with_its_line_number() {
+        use std::io::Write as _;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Capture {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let tmp = TempDir::new().unwrap();
+        let store = ChannelStore::new(tmp.path());
+        store.create(&sample_channel("c1")).unwrap();
+        store
+            .append_event(
+                "c1",
+                ChannelActor::System,
+                EventKind::Message,
+                serde_json::json!({"n": 1}),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        // Line 2: two records glued together — what an interrupted append
+        // leaves behind once the next append writes at EOF.
+        {
+            let path = store.events_path("c1");
+            let mut f = OpenOptions::new().append(true).open(&path).unwrap();
+            f.write_all(br#"{"seq":1,"seq":2}{"seq":3}"#).unwrap();
+            f.write_all(b"\n").unwrap();
+        }
+
+        store
+            .append_event(
+                "c1",
+                ChannelActor::System,
+                EventKind::Message,
+                serde_json::json!({"n": 3}),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let capture = Capture(Arc::new(Mutex::new(Vec::new())));
+        let writer = capture.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        let events =
+            tracing::subscriber::with_default(subscriber, || store.load_events("c1")).unwrap();
+
+        assert_eq!(
+            events.len(),
+            2,
+            "the healthy events on either side of the damage must still load"
+        );
+
+        let logged = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            logged.contains("c1"),
+            "the warning must name the channel: {logged}"
+        );
+        // `lines=[2]`, not a bare "2": the timestamp and the temp path are full
+        // of digits, so a loose match would pass with no line number at all.
+        assert!(
+            logged.contains("dropped\u{1b}[0m\u{1b}[2m=\u{1b}[0m1") || logged.contains("dropped=1"),
+            "the warning must say how many lines were dropped: {logged}"
+        );
+        assert!(
+            logged.contains("[2]"),
+            "the warning must name the damaged line number: {logged}"
+        );
     }
 
     #[test]
