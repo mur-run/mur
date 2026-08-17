@@ -366,11 +366,32 @@ pub fn all_tools() -> Vec<Tool> {
                 required: Some(vec!["jobs".into()]),
             },
         },
+        Tool {
+            name: "mur_job_status".into(),
+            description: "Report the live status of a MUR run (a parallel_jobs dispatch, a fleet run, or a workflow run) by its run_id. Returns both a semantic state (running / blocked / done / failed / stopped) and a liveness verdict (alive / STALLED / DEAD / unknown). Use this after a tool call times out: a timeout means MUR stopped waiting, NOT that the work failed — ask here instead of re-dispatching.".into(),
+            input_schema: ToolInputSchema {
+                schema_type: "object".into(),
+                properties: Some(BTreeMap::from([(
+                    "run_id".into(),
+                    ToolParam {
+                        param_type: "string".into(),
+                        description: "The run id returned when the run was dispatched.".into(),
+                        default: None,
+                    },
+                )])),
+                required: Some(vec!["run_id".into()]),
+            },
+        },
     ]
 }
 
 /// Tool names whose outputs must never be auto-compressed.
-const AUTO_COMPRESS_SKIP: &[&str] = &["mur_compress", "mur_retrieve", "mur_compress_stats"];
+const AUTO_COMPRESS_SKIP: &[&str] = &[
+    "mur_compress",
+    "mur_retrieve",
+    "mur_compress_stats",
+    "mur_job_status",
+];
 
 /// Public entry point: dispatch the tool, then size-gate auto-compress the
 /// result (Surface 1) — the boundary at which the model reads MUR tool output.
@@ -769,6 +790,44 @@ async fn dispatch_tool(name: &str, arguments: &Value) -> Result<Value, String> {
             }))
         }
 
+        "mur_job_status" => {
+            let mur_home = resolve_mur_home().map_err(|e| format!("mur_job_status failed: {e}"))?;
+            let run_id = arguments
+                .get("run_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing required parameter: 'run_id' (string)".to_string())?;
+
+            let loaded = mur_core::run_status::status_of(&mur_home, run_id)
+                .map_err(|e| format!("read run {run_id}: {e}"))?;
+            let Some(status) = loaded else {
+                return Ok(Value::String(format!(
+                    "no run recorded for `{run_id}` — it may predate run recording, or the id may be wrong"
+                )));
+            };
+
+            let liveness = match status.liveness {
+                mur_core::run_status::Liveness::Alive => "alive",
+                mur_core::run_status::Liveness::Stalled => "STALLED",
+                mur_core::run_status::Liveness::Dead => "DEAD",
+                mur_core::run_status::Liveness::Unknown => "unknown",
+                mur_core::run_status::Liveness::NotApplicable => "n/a",
+            };
+            let state = match status.state {
+                mur_core::run_status::State::Running => "running",
+                mur_core::run_status::State::Blocked => "blocked",
+                mur_core::run_status::State::Done => "done",
+                mur_core::run_status::State::Failed => "failed",
+                mur_core::run_status::State::Stopped => "stopped",
+            };
+            Ok(Value::String(format!(
+                "run {} — state: {state}, liveness: {liveness}\nlabel: {}\nstarted: {}\nsteps: {}",
+                status.run.run_id,
+                status.run.label,
+                status.run.started_at.to_rfc3339(),
+                status.run.steps.len()
+            )))
+        }
+
         _ => Err(format!("Unknown tool: {}", name)),
     }
 }
@@ -887,5 +946,92 @@ mod auto_compress_tests {
         let big = big_search_output();
         let out = apply_auto_compress(&eng, &auto, "mur_project_search", &json!({}), big.clone());
         assert_eq!(out, big);
+    }
+}
+
+#[cfg(test)]
+mod job_status_tests {
+    use super::*;
+
+    /// Serializes `MUR_HOME` mutation. `std::env::set_var` is unsafe in
+    /// edition 2024: two threads mutating the environment race, so each
+    /// set-call-remove pair holds this lock and is exclusive. Tokio's mutex
+    /// rather than std's: the guard is deliberately held across the dispatch
+    /// await (the env must stay set for the whole call), and a std guard is
+    /// `!Send` across await points.
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// Invoke a tool with `MUR_HOME` pointed at `mur_home` — the same
+    /// resolution path the running server uses (`resolve_mur_home`).
+    async fn call_tool_in(
+        mur_home: &std::path::Path,
+        name: &str,
+        arguments: Value,
+    ) -> Result<String, String> {
+        let _guard = ENV_LOCK.lock().await;
+        // SAFETY: ENV_LOCK makes this the only thread mutating the env, and
+        // the variable is removed again before the guard is dropped.
+        unsafe { std::env::set_var("MUR_HOME", mur_home) };
+        let out = dispatch_tool(name, &arguments).await;
+        unsafe { std::env::remove_var("MUR_HOME") };
+        match out? {
+            Value::String(s) => Ok(s),
+            other => Err(format!("expected a string tool result, got {other}")),
+        }
+    }
+
+    /// The agent-facing half of the fix. Without this, a tool timeout leaves
+    /// the model with "outcome unknown" and nothing to ask — which is what
+    /// taught agents to re-dispatch work that was still in flight.
+    #[tokio::test]
+    async fn mur_job_status_reports_a_recorded_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        mur_core::run_status::store::save(
+            mur_home,
+            &mur_core::run_status::RunState {
+                schema: mur_core::run_status::RUN_SCHEMA,
+                run_id: "run-1".into(),
+                channel_id: None,
+                kind: mur_core::run_status::RunKind::Job,
+                label: "two jobs".into(),
+                pid: std::process::id(),
+                started_at: chrono::Utc::now(),
+                last_heartbeat_at: Some(chrono::Utc::now()),
+                state: mur_core::run_status::State::Running,
+                steps: vec![],
+                blocked_on: None,
+                binary_version: "0.0.0-test".into(),
+                build_sha: "deadbee".into(),
+            },
+        )
+        .unwrap();
+
+        let out = call_tool_in(
+            mur_home,
+            "mur_job_status",
+            serde_json::json!({ "run_id": "run-1" }),
+        )
+        .await
+        .expect("tool call succeeded");
+
+        assert!(out.contains("running"), "state missing from output: {out}");
+        assert!(out.contains("alive"), "liveness missing from output: {out}");
+    }
+
+    #[tokio::test]
+    async fn mur_job_status_on_an_unknown_run_says_so() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = call_tool_in(
+            tmp.path(),
+            "mur_job_status",
+            serde_json::json!({ "run_id": "ghost" }),
+        )
+        .await
+        .expect("tool call succeeded");
+        assert!(
+            out.contains("no run recorded"),
+            "unhelpful miss message: {out}"
+        );
     }
 }

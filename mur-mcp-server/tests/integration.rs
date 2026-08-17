@@ -78,7 +78,7 @@ fn test_initialize_and_list_tools() {
     );
     let resp = read_response(&mut stdout);
     let tools = resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 19, "Expected 19 tools");
+    assert_eq!(tools.len(), 20, "Expected 20 tools");
 
     // Verify properties is an object (not an array) — MCP spec requires JSON object
     let first_tool_with_props = tools
@@ -112,6 +112,7 @@ fn test_initialize_and_list_tools() {
     assert!(names.contains(&"mur_retrieve"));
     assert!(names.contains(&"mur_compress_stats"));
     assert!(names.contains(&"parallel_jobs"));
+    assert!(names.contains(&"mur_job_status"));
 }
 
 #[test]
