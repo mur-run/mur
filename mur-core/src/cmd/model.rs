@@ -88,6 +88,41 @@ pub enum ModelCmd {
         #[command(subcommand)]
         sub: PricesSubCmd,
     },
+    /// Connect a provider and add its models in bulk: key → Keychain,
+    /// model list from the models.dev catalog (cloud vendors) or the
+    /// endpoint's `/v1/models` (custom). Bare `connect` probes local
+    /// runtimes (Ollama / MLX / LM Studio).
+    Connect {
+        /// Vendor slug (anthropic, openai, deepseek, …). Omit to probe local
+        /// runtimes, or pass --base-url with --name for a custom endpoint.
+        vendor: Option<String>,
+        /// OpenAI-compatible endpoint. Required for non-native vendors.
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Alias prefix (defaults to the vendor slug). Required for
+        /// --base-url without a vendor.
+        #[arg(long)]
+        name: Option<String>,
+        /// Add every listed model without prompting.
+        #[arg(long)]
+        all: bool,
+        /// Non-interactive selection, e.g. "1,3-5".
+        #[arg(long)]
+        pick: Option<String>,
+        /// Skip the API-key prompt (proxy or keyless endpoint).
+        #[arg(long)]
+        no_key: bool,
+    },
+    /// Merge another machine's models.yaml into this one (models + roles).
+    /// Secrets travel as refs, never values — unresolved refs are reported
+    /// so you can re-key on this machine. Never deletes local entries.
+    Import {
+        /// Path to a models.yaml copied from another machine.
+        file: std::path::PathBuf,
+        /// Overwrite aliases/roles that already exist locally.
+        #[arg(long)]
+        force: bool,
+    },
     /// Set the global default model_ref (config.yaml `models.default`).
     /// Used when a profile has no `model_ref`/`model` set. The ref must
     /// already exist in `~/.mur/models.yaml` (fail-closed).
@@ -237,7 +272,7 @@ fn price_age_label(entry: &ModelEntry) -> String {
     }
 }
 
-pub fn run(args: ModelArgs) -> anyhow::Result<()> {
+pub async fn run(args: ModelArgs) -> anyhow::Result<()> {
     let path = ModelRegistry::default_path()?;
     let mut reg = ModelRegistry::load_from(&path)
         .with_context(|| format!("load registry {}", path.display()))?;
@@ -334,6 +369,20 @@ pub fn run(args: ModelArgs) -> anyhow::Result<()> {
         ModelCmd::Migrate { dry_run } => cmd_migrate(dry_run)?,
         ModelCmd::Role { sub } => cmd_role(sub, &mut reg, &path)?,
         ModelCmd::Route { sub } => cmd_route(&sub, &reg)?,
+        ModelCmd::Connect {
+            vendor,
+            base_url,
+            name,
+            all,
+            pick,
+            no_key,
+        } => {
+            crate::cmd::model_connect::cmd_connect(vendor, base_url, name, all, pick, no_key)
+                .await?
+        }
+        ModelCmd::Import { file, force } => {
+            crate::cmd::model_connect::cmd_import(&file, force).await?
+        }
         ModelCmd::Doctor => crate::cmd::model_doctor::cmd_model_doctor()?,
         ModelCmd::Prices { sub } => {
             let mur_home = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
@@ -371,7 +420,10 @@ fn cmd_prices(
                 .get(&name)
                 .ok_or_else(|| anyhow::anyhow!("not found in registry: {name}"))?;
             let is_local = matches!(entry.tier, Some(RouteTier::Local));
-            match model_prices::lookup(mur_home, &entry.provider, &entry.model, is_local) {
+            // Ask under every vendor the entry implies — `provider` alone is a
+            // protocol, so a DeepSeek entry (`provider: openai`) would report
+            // "no pricing" while the catalog has it under `deepseek`.
+            match model_prices::lookup_entry(mur_home, entry, is_local) {
                 Some(p) => {
                     println!("Pricing for {name} ({}/{}):", entry.provider, entry.model);
                     println!("  input:   ${}/1k tokens", p.input_per_1k);

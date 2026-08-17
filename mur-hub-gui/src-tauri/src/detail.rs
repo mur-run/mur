@@ -43,6 +43,11 @@ pub struct AgentDetail {
 pub struct ModelOptionView {
     pub ref_name: String,
     pub provider: String,
+    /// Who makes the model, when that differs from the protocol in
+    /// `provider`. The Library groups by this so OpenAI-compatible vendors
+    /// (DeepSeek, Groq, a local MLX server) do not all collapse into one
+    /// "OpenAI" heading.
+    pub vendor: Option<String>,
     pub model: String,
     pub tier: Option<String>,
     pub input_cost: Option<f64>,
@@ -60,8 +65,15 @@ pub fn list_models() -> Result<Vec<ModelOptionView>, String> {
         .into_iter()
         .map(|(ref_name, entry)| {
             let (input_cost, output_cost) = entry.effective_costs();
+            // Resolve before moving the fields out of `entry`.
+            let vendor = entry
+                .vendor_candidates()
+                .into_iter()
+                .next()
+                .filter(|v| *v != entry.provider);
             ModelOptionView {
                 ref_name,
+                vendor,
                 provider: entry.provider,
                 model: entry.model,
                 tier: entry.tier.map(|t| format!("{t:?}").to_lowercase()),

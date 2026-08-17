@@ -183,6 +183,7 @@ mod tests {
             title: "t".into(),
             goal: Goal::default(),
             state: ChannelState::Working,
+            purpose: None,
             owner: ChannelActor::Human { name: "me".into() },
             participants: vec![],
             created_at: now,

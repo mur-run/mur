@@ -179,14 +179,19 @@ pub fn retrieval_note_with_errors(
 }
 
 /// Model-readable hint describing how to recover the full content.
+///
+/// Names both routes on purpose. The `mur_retrieve` tool exists only where the
+/// mur MCP server is connected; a plain Claude Code CLI session has to shell
+/// out to the binary, and a note that mentions only the tool sends that reader
+/// looking for something it does not have.
 pub fn retrieval_note(hash: Option<&str>, query: Option<&str>) -> String {
     match hash {
         Some(h) => match query {
             Some(q) => format!(
-                "Large output compressed; original stored. Call mur_retrieve with hash=\"{h}\" (optionally query=\"{q}\") for the full result."
+                "Large output compressed; original stored. Call mur_retrieve with hash=\"{h}\" (optionally query=\"{q}\"), or run `mur retrieve {h}`, for the full result."
             ),
             None => format!(
-                "Large output compressed; original stored. Call mur_retrieve with hash=\"{h}\" for the full result."
+                "Large output compressed; original stored. Call mur_retrieve with hash=\"{h}\", or run `mur retrieve {h}`, for the full result."
             ),
         },
         None => "Output densified in place; nothing offloaded.".to_string(),
