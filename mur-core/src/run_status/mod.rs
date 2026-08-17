@@ -740,11 +740,9 @@ mod tests {
             .with_writer(move || writer.clone())
             .with_max_level(tracing::Level::WARN)
             .finish();
-        let status = tracing::subscriber::with_default(subscriber, || {
-            status_of(mur_home, "run-s")
-        })
-        .unwrap()
-        .expect("a corrupt sidecar must not fail the status itself");
+        let status = tracing::subscriber::with_default(subscriber, || status_of(mur_home, "run-s"))
+            .unwrap()
+            .expect("a corrupt sidecar must not fail the status itself");
         assert_eq!(
             status.state,
             State::Running,
