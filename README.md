@@ -148,23 +148,35 @@ mur agent remove coach                        # unregisters it — add --purge t
 
 <p align="center"><img src="assets/demo.gif" alt="mur agent cli — streaming TUI chat with a local agent" width="92%" /></p>
 
-In the chat, type `/` to open a completion menu of slash commands (with their subcommands) and the agent's skills — `↑↓` to move, `Tab`/`Enter` to accept, `Esc` to dismiss. And when the agent offers you choices, they appear as `Tab`-to-fill suggestions right in the input: a single one as greyed ghost text, several as a picker.
+In the chat, `/model` lists your registered models and switches the agent to another one mid-conversation — no restart. Type `/` to open a completion menu of slash commands (with their subcommands) and the agent's skills — `↑↓` to move, `Tab`/`Enter` to accept, `Esc` to dismiss. And when the agent offers you choices, they appear as `Tab`-to-fill suggestions right in the input: a single one as greyed ghost text, several as a picker.
 
 ### Models & providers
 
 Agents draw from a local provider/model registry at `~/.mur/models.yaml`:
 
 ```bash
+mur model connect anthropic                   # one key, many models: prompts for the API key (stored
+                                              #   in the Keychain), lists the vendor's models, adds
+                                              #   the ones you pick — with pricing already filled in
+mur model connect deepseek --base-url https://api.deepseek.com
+mur model connect                             # no vendor: probe local runtimes (Ollama / MLX / LM Studio)
+
 mur model add gpt5 --provider openai --model gpt-5.2 --secret env:OPENAI_API_KEY
-                                              # input/output pricing + context window are auto-filled
-                                              #   from the models.dev catalog (--no-fetch to skip, or
-                                              #   --input-cost/--output-cost to set them by hand)
+                                              # add one model by hand; pricing + context window are
+                                              #   auto-filled from the models.dev catalog (--no-fetch
+                                              #   to skip, --input-cost/--output-cost to set by hand)
 mur model list                                # list registered models
 mur model show gpt5                           # provider, model, effective in/out cost, context window
 mur model prices refresh                      # refresh the cached models.dev price catalog
 mur model doctor                              # offline check: dangling model_refs, ids the catalog
                                               #   never carried, profiles disagreeing with their ref
+mur model import ~/from-laptop/models.yaml    # merge another machine's registry (never deletes;
+                                              #   reports which secret refs need a key here)
 ```
+
+Setting up a second machine is copying `models.yaml` and running `mur model import`: the file holds
+secret *references*, never key material, so it is safe to move around — and the import tells you
+exactly which refs still need a key on the new machine.
 
 Providers rename and retire model ids constantly. The registry key is the stable name your agents point at, so a rename is **one edit to `models.yaml`** and every agent using that key follows — no per-agent migration. `mur model doctor` reports where that indirection has come apart; it is read-only and never rewrites a model id for you, because which model an agent runs is a cost and behaviour decision that shouldn't change silently.
 
@@ -538,7 +550,8 @@ mur
 ├── sync         (16+ AI tools) · status · fleet pull/push/both
 ├── hook         unified hook entry for AI tools (prompt / tool / stop / session-start)
 ├── chat         conversations archive + ask
-├── model        add · list · show · remove · doctor · prices · role · route · default · fallback · migrate
+├── model        connect · import · add · list · show · remove · doctor · prices · role · route ·
+│                default · fallback · migrate   (connect = one key, many models)
 ├── source       external knowledge — Obsidian · Notion · Joplin
 ├── project      index · search   (semantic code search)
 ├── daemon       start · stop · restart · status · serve · sleep

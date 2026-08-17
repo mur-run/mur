@@ -351,10 +351,13 @@ jobs:
         run: cd mur-hub-gui/ui && npm run build
       - name: cargo check
         run: cargo check --manifest-path mur-hub-gui/src-tauri/Cargo.toml
-      - name: cargo test --lib
-        run: cargo test --manifest-path mur-hub-gui/src-tauri/Cargo.toml --lib
+      # Not --lib: the integration test in tests/ went unnoticed for months
+      # after a signature change stopped it compiling, because nothing built
+      # that target.
+      - name: cargo test
+        run: cargo test --manifest-path mur-hub-gui/src-tauri/Cargo.toml
       - name: cargo clippy
-        run: cargo clippy --manifest-path mur-hub-gui/src-tauri/Cargo.toml --lib -- -D warnings
+        run: cargo clippy --manifest-path mur-hub-gui/src-tauri/Cargo.toml --all-targets -- -D warnings
 
   e2e_quick:
     name: E2E orchestration smoke (quick mode)
