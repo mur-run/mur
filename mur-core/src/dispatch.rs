@@ -467,6 +467,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                     )
                     .await?;
                 }
+                FleetAction::Status { name } => {
+                    cmd::fleet::status::cmd_fleet_status(&mur_home, &name, &mut std::io::stdout())?
+                }
             }
         }
         Commands::Capability { action } => match action {
