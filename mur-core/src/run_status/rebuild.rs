@@ -158,6 +158,11 @@ mod tests {
             Some("pm"),
             "the rebuild is not reconstructing steps: step member must be the delegation's target_agent"
         );
+        assert_eq!(
+            rebuilt.kind,
+            RunKind::Workflow,
+            "a channel minted by create_for_workflow must NOT be misread as Fleet — the derivation must be two-sided, not a function that always returns Fleet"
+        );
 
         let status = classify(rebuilt, chrono::Utc::now(), chrono::Duration::seconds(30));
         assert_eq!(
@@ -238,5 +243,45 @@ mod tests {
         svc.transition(&id, ChannelState::Working, ChannelActor::System)
             .expect("transition to working");
         id
+    }
+
+    /// `create_for_fleet` is the only site that mints a `fleet-{name}`
+    /// channel id — `from_channel`'s Fleet derivation is coupled to that
+    /// exact format (`mur-channel/src/service.rs:140`), and every other test
+    /// in this file seeds through `create_for_workflow`, so without this
+    /// test the Fleet branch never executes at all. Calls the real
+    /// constructor rather than fabricating a `fleet-…` id by hand, so this
+    /// breaks loudly if `create_for_fleet` ever changes its id format
+    /// instead of silently drifting out of sync with `from_channel`.
+    #[test]
+    fn rebuild_of_a_fleet_channel_reports_fleet_kind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let channel_id = seed_fleet_channel(mur_home);
+
+        let rebuilt = from_channel(mur_home, "run-x", &channel_id)
+            .unwrap()
+            .expect("channel exists, so a record must be derivable");
+
+        assert_eq!(
+            rebuilt.kind,
+            RunKind::Fleet,
+            "a channel minted by create_for_fleet must rebuild as RunKind::Fleet, not fall through to the Workflow default"
+        );
+    }
+
+    /// Helper: write a channel through the real `create_for_fleet`
+    /// constructor, then append one delegation so the channel has at least
+    /// one event (`create_for_fleet` itself writes none — confirmed by
+    /// `create_for_fleet_sets_roles_and_id` in mur-channel's own test suite,
+    /// which asserts zero events right after creation).
+    fn seed_fleet_channel(mur_home: &std::path::Path) -> String {
+        let svc = mur_channel::ChannelService::open(mur_home).unwrap();
+        let ch = svc
+            .create_for_fleet("rebuild-test", "mur", &["pm".to_string()])
+            .expect("create fleet channel");
+        svc.append_delegation(&ch.id, "pm", "child-task-3", None)
+            .expect("append delegation");
+        ch.id
     }
 }
