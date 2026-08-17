@@ -101,6 +101,11 @@ pub struct DagExecOptions<'a> {
     /// `idempotency_key`s for channel events. v3b sets keys; v3c enforces dedup,
     /// at which point a crash-rerun MUST reuse the same `run_id`. Empty = none.
     pub run_id: String,
+    /// What kind of run this is, for `~/.mur/runs/<run_id>/run.json`. `None`
+    /// (or an empty `run_id`) means "do not record" — the legacy path.
+    pub run_kind: Option<crate::run_status::RunKind>,
+    /// Human-readable label for the run, shown by `mur job list`.
+    pub run_label: String,
     /// Cap on the number of steps running concurrently across the whole DAG.
     /// `None` = unbounded (every same-rank step spawned at once — prior
     /// behaviour). `Some(n)` bounds total in-flight steps to `n.max(1)` via a
@@ -128,6 +133,8 @@ impl<'a> Default for DagExecOptions<'a> {
             trigger: "manual",
             channel_id: None,
             run_id: String::new(),
+            run_kind: None,
+            run_label: String::new(),
             max_concurrency: None,
             on_step: None,
         }
@@ -873,6 +880,38 @@ pub async fn execute_dag(
         });
     }
 
+    // Record the run so it can be queried while it executes. A run is only
+    // recorded when it has both an id and a kind; the legacy callers that
+    // pass neither behave exactly as before.
+    let recorded = (!opts.run_id.is_empty()).then_some(opts.run_kind).flatten();
+    let mut heartbeat = if let Some(kind) = recorded {
+        let cfg = mur_common::config::Config::load_or_default(mur_home);
+        let now = chrono::Utc::now();
+        let record = crate::run_status::RunState {
+            schema: crate::run_status::RUN_SCHEMA,
+            run_id: opts.run_id.clone(),
+            channel_id: opts.channel_id.clone(),
+            kind,
+            label: opts.run_label.clone(),
+            pid: std::process::id(),
+            started_at: now,
+            last_heartbeat_at: Some(now),
+            state: crate::run_status::State::Running,
+            steps: vec![],
+            blocked_on: None,
+            binary_version: env!("CARGO_PKG_VERSION").to_string(),
+            build_sha: mur_common::build::SHORT_SHA.to_string(),
+        };
+        crate::run_status::store::save(mur_home, &record)?;
+        Some(crate::run_status::heartbeat::Heartbeat::spawn(
+            mur_home.to_path_buf(),
+            opts.run_id.clone(),
+            std::time::Duration::from_secs(cfg.runs.heartbeat_interval_secs),
+        ))
+    } else {
+        None
+    };
+
     // Closure for terminal StateChange — call before each PipelineOutput return.
     let emit_final = |failed: bool| {
         if let Some(cid) = opts.channel_id.as_deref() {
@@ -955,6 +994,13 @@ pub async fn execute_dag(
                     trigger: &tr,
                     channel_id: chan_id,
                     run_id,
+                    // Per-step sub-options, not a run of their own: this
+                    // clone drives one `execute_step` call inside the rank
+                    // loop, not a recursive `execute_dag`, so it never reads
+                    // `run_kind`/`run_label`. Neutralized the same way
+                    // `max_concurrency` already is on this line.
+                    run_kind: None,
+                    run_label: String::new(),
                     max_concurrency: None,
                     on_step,
                 };
@@ -1027,6 +1073,14 @@ pub async fn execute_dag(
                             result.exit_code
                         );
                         emit_final(true);
+                        finalize_run(
+                            mur_home,
+                            &opts.run_id,
+                            recorded.is_some(),
+                            &mut heartbeat,
+                            true,
+                        )
+                        .await;
                         return Ok(PipelineOutput {
                             workflow_id: skill_name.to_string(),
                             status: PipelineStatus::Failed,
@@ -1073,6 +1127,14 @@ pub async fn execute_dag(
                                 let _retry_code = retry_result.exit_code;
                                 eprintln!("  Step {sid} retry exhausted, aborting workflow");
                                 emit_final(true);
+                                finalize_run(
+                                    mur_home,
+                                    &opts.run_id,
+                                    recorded.is_some(),
+                                    &mut heartbeat,
+                                    true,
+                                )
+                                .await;
                                 return Ok(PipelineOutput {
                                     workflow_id: skill_name.to_string(),
                                     status: PipelineStatus::Failed,
@@ -1108,6 +1170,14 @@ pub async fn execute_dag(
     };
 
     emit_final(overall_exit_code != 0);
+    finalize_run(
+        mur_home,
+        &opts.run_id,
+        recorded.is_some(),
+        &mut heartbeat,
+        overall_exit_code != 0,
+    )
+    .await;
     Ok(PipelineOutput {
         workflow_id: skill_name.to_string(),
         status,
@@ -1117,6 +1187,43 @@ pub async fn execute_dag(
         duration_ms,
         tokens_used: overall_tokens,
     })
+}
+
+/// Stop the run's heartbeat and stamp its terminal state.
+///
+/// The stop MUST be awaited before the terminal save. `Heartbeat::stop` is
+/// async because flipping its flag is not enough: a beat already inside
+/// `beat_once` has passed the flag check, and its read-modify-write would
+/// clobber the terminal state back to `running` with a fresh heartbeat — a
+/// finished run reported alive forever, which is the exact failure this
+/// module exists to prevent. Awaiting guarantees any in-flight beat lands
+/// BEFORE this save, so the terminal write wins.
+///
+/// Mirrors `emit_final`: call it before every `PipelineOutput` return that
+/// can be reached once a run has been recorded.
+async fn finalize_run(
+    mur_home: &std::path::Path,
+    run_id: &str,
+    recorded: bool,
+    heartbeat: &mut Option<crate::run_status::heartbeat::Heartbeat>,
+    failed: bool,
+) {
+    if !recorded {
+        return;
+    }
+    if let Some(hb) = heartbeat.take() {
+        hb.stop().await;
+    }
+    // `update` holds an exclusive lock across load-modify-save. A bare
+    // load/save pair here would race `mur job stop` in another process, which
+    // does the same read-modify-write on the same file.
+    let _ = crate::run_status::store::update(mur_home, run_id, |record| {
+        record.state = if failed {
+            crate::run_status::State::Failed
+        } else {
+            crate::run_status::State::Done
+        };
+    });
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -1571,6 +1678,65 @@ mod tests {
         assert!(
             unbounded_peak >= 3,
             "unbounded peak {unbounded_peak} should exceed the cap (cap not lifted / steps not parallel)"
+        );
+    }
+
+    /// A run with an id must be observable from disk while it executes, and
+    /// must land on a terminal state when it finishes. Without this, a
+    /// timeout is the only signal a caller ever gets — which is the defect.
+    #[tokio::test]
+    async fn execute_dag_records_and_finalizes_a_run() {
+        use crate::run_status::store;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let procedure = Procedure {
+            variables: vec![],
+            steps: vec![step("s1", &[], None)],
+        };
+        let opts = DagExecOptions {
+            run_id: "run-under-test".into(),
+            run_kind: Some(crate::run_status::RunKind::Workflow),
+            run_label: "test run".into(),
+            ..Default::default()
+        };
+
+        let _ = execute_dag(mur_home, "test-skill", &procedure, &opts).await;
+
+        let run = store::load(mur_home, "run-under-test")
+            .unwrap()
+            .expect("execute_dag never wrote run.json");
+        assert_eq!(run.run_id, "run-under-test");
+        assert_eq!(
+            run.pid,
+            std::process::id(),
+            "must record the orchestrator pid"
+        );
+        assert!(
+            run.state.is_terminal(),
+            "run left non-terminal after execute_dag returned: {:?}",
+            run.state
+        );
+    }
+
+    /// An empty `run_id` is the legacy default. It must not create a
+    /// directory called "" under runs/.
+    #[tokio::test]
+    async fn execute_dag_without_a_run_id_records_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let procedure = Procedure {
+            variables: vec![],
+            steps: vec![step("s1", &[], None)],
+        };
+        let opts = DagExecOptions::default();
+
+        let _ = execute_dag(tmp.path(), "test-skill", &procedure, &opts).await;
+
+        assert!(
+            crate::run_status::store::list_ids(tmp.path())
+                .unwrap()
+                .is_empty(),
+            "recorded a run for an empty run_id"
         );
     }
 }
