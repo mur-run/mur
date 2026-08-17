@@ -420,6 +420,14 @@ Agent** wizard offers the same catalog as a source.
   `--max-iterations 0` is not zero, and a cron expression that can never fire is
   not a schedule. Unattended auto-run still needs an explicit budget, and
   `mur fleet stop` still ends everything.
+- **A run status that can't outlive the run** — every fleet or workflow run
+  writes one record, and `mur job status` / `mur fleet status` both read that
+  one record through one derivation. A run whose orchestrator died reports
+  **dead** the moment you ask instead of claiming to be running until a timeout
+  expires; a long run is not falsely failed while it is still working; and a
+  record rebuilt from the channel admits its heartbeat is unknown rather than
+  printing a stale pid as fact. An unreadable record is reported as unreadable,
+  never as a run that never existed.
 - **Settlement** — a turn that changed anything ends with a card the runtime
   draws from its own tool records, not from the model's summary: what was
   **verified** (a command ran and passed), what was **changed** (files edited,
@@ -518,7 +526,7 @@ mur
 │                install · install-service · addon · companion · voice · pair · schedule ·
 │                perm · secret · trash · rollback … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
-├── fleet        create · list · show · run · set-loop · send · jobs   (squads of agents over a shared channel)
+├── fleet        create · list · show · status · run · set-loop · send · jobs   (squads of agents over a shared channel)
 ├── official     list · install   (official agents/fleets from the app.mur.run catalog)
 ├── deep-research  setup · status · ask   (web research with wizard UX)
 ├── skill        install · search · show · doctor · generate · suggest · evolve · recombine ·
