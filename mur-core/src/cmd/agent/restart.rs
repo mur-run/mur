@@ -535,6 +535,31 @@ pub(super) fn kickstart_service(name: &str) -> Result<bool> {
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
+    if ok {
+        return Ok(true);
+    }
+    // kickstart can only kick a job launchd is tracking. After a manual
+    // `launchctl bootout` (or an unload that outlived a login) the plist is
+    // still on disk but not loaded — returning Ok(false) here sent the caller
+    // to an UNSUPERVISED direct respawn, the exact state a service install
+    // exists to prevent, and the operator's only way back was
+    // `mur agent install-service`. Mirror `mur agent start`: `load -w`
+    // re-registers the job and RunAtLoad brings it up by itself.
+    let Some(home) = dirs::home_dir() else {
+        return Ok(false);
+    };
+    let plist = super::service::service_file_in(&home, name);
+    if !plist.exists() {
+        return Ok(false);
+    }
+    let ok = Command::new("launchctl")
+        .args(["load", "-w"])
+        .arg(&plist)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
     Ok(ok)
 }
 
