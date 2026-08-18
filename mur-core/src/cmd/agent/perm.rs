@@ -93,6 +93,7 @@ pub fn cmd_perm_set_mode(name: &str, key: &str, value: &str) -> Result<()> {
 }
 
 pub fn cmd_perm_allow_host(name: &str, glob: &str) -> Result<()> {
+    validate_host_pattern(name, glob)?;
     let (path, mut profile) = load_profile_for_edit(name)?;
     if !profile
         .entitlements
@@ -111,6 +112,45 @@ pub fn cmd_perm_allow_host(name: &str, glob: &str) -> Result<()> {
     }
     save_profile(&path, &mut profile)?;
     warn_if_running(name);
+    Ok(())
+}
+
+/// Refuse patterns the matcher can never match, at write time.
+///
+/// `mur_common::net::host_matches_pattern` compares PORTLESS hosts — exact,
+/// `*.suffix`, or legacy `.suffix`. Anything else written into `allow_hosts`
+/// is silently inert: it round-trips through `list-hosts` looking configured
+/// while matching nothing (field report: `allow-host 'IP:3306'` accepted, the
+/// connection still blocked, no warning anywhere). `deny-host` is left
+/// unvalidated on purpose — it must be able to REMOVE junk entries.
+fn validate_host_pattern(name: &str, glob: &str) -> Result<()> {
+    let g = glob.trim();
+    if g.is_empty() {
+        bail!("empty host pattern");
+    }
+    if g.contains("://") || g.contains('/') || g.contains(char::is_whitespace) {
+        bail!(
+            "'{glob}' is not a hostname — pass a bare host (`api.example.com`), a wildcard (`*.example.com`), or an IP"
+        );
+    }
+    // host:port (incl. `[v6]:port`). A per-host PORT is not expressible
+    // today: the OS sandbox restricts by port only (host stays `*`), and
+    // every allow_hosts consumer strips the port before matching. Refuse
+    // rather than write a rule nothing reads.
+    let single_colon_port = g.bytes().filter(|&b| b == b':').count() == 1
+        && g.rsplit_once(':')
+            .is_some_and(|(_, p)| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    if g.starts_with('[') || single_colon_port {
+        let host = g.rsplit_once(':').map(|(h, _)| h).unwrap_or(g);
+        let ports = mur_agent_runtime::sandbox::policy::RESTRICTED_GENERAL_PORTS
+            .map(|p| p.to_string())
+            .join("/");
+        bail!(
+            "'{glob}' looks like host:port, which would have NO effect — allow_hosts matches hostnames only, and in `restricted` mode the sandbox opens ports {ports} to any host regardless.\n\
+             To reach {host} on a non-web port today: `mur agent perm set-mode {name} unrestricted` (opens all ports).\n\
+             To allow the HOST for web traffic: `mur agent perm allow-host {name} {host}`"
+        );
+    }
     Ok(())
 }
 
@@ -391,4 +431,46 @@ pub fn cmd_perm_list_tools(name: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_host_pattern;
+
+    #[test]
+    fn patterns_the_matcher_can_match_are_accepted() {
+        for ok in [
+            "api.example.com",
+            "*.example.com",
+            ".example.com",
+            "10.0.0.5",
+            "2001:db8::1", // bare IPv6: multiple colons, not host:port
+        ] {
+            assert!(validate_host_pattern("a1", ok).is_ok(), "{ok} must pass");
+        }
+    }
+
+    #[test]
+    fn inert_patterns_are_refused_with_guidance() {
+        for bad in [
+            "35.229.166.236:3306",
+            "example.com:443",
+            "[::1]:8080",
+            "https://example.com",
+            "example.com/path",
+            "two hosts",
+            "",
+        ] {
+            assert!(
+                validate_host_pattern("a1", bad).is_err(),
+                "{bad:?} must be refused"
+            );
+        }
+        // The field-report case names the real remedy, with the agent's name.
+        let err = validate_host_pattern("data-ml", "35.229.166.236:3306")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("NO effect"), "{err}");
+        assert!(err.contains("set-mode data-ml unrestricted"), "{err}");
+    }
 }
