@@ -117,6 +117,49 @@ pub fn audit(
 ) -> Vec<Finding> {
     let mut out = Vec::new();
 
+    // 0. Secrets that live on disk as plaintext.
+    //
+    //    Reported, never blocking (design decision, 2026-08-18): `file:` is the
+    //    only backend that works on a headless Linux box with no Secret
+    //    Service daemon, it is what `mur model import` carries between
+    //    machines, and containers materialise secrets as files on purpose. A
+    //    check that failed those would be a gate for something the user cannot
+    //    fix — and this repo already learned where that ends, in eval.yml: a
+    //    gate that fires for things you cannot fix is a gate that gets switched
+    //    off.
+    //
+    //    So the defect this addresses is not that `file:` exists. It is that
+    //    nothing said a plaintext ref was plaintext, which made it look like a
+    //    choice rather than a default nobody revisited.
+    for (key, e) in &reg.models {
+        if let Some(mur_common::secret::SecretRef::File(path)) = &e.secret {
+            // Only name a `connect` target when the candidate actually looks
+            // like a vendor. `vendor_candidates` falls back to the endpoint
+            // host, so an entry pointed at a local gateway yields "127" and
+            // the suggestion becomes `mur model connect 127` — a command that
+            // does nothing, printed with the authority of advice. Caught by
+            // running this against a real registry rather than a fixture.
+            let vendor = e
+                .vendor_candidates()
+                .into_iter()
+                .find(|v| v.chars().all(|c| c.is_ascii_alphabetic() || c == '-'));
+            let fix = match vendor {
+                Some(v) => format!(
+                    "`mur model connect {v}`, or set `secret: keychain:<service>/<account>`"
+                ),
+                None => "set `secret: keychain:<service>/<account>`".to_string(),
+            };
+            out.push(Finding::warn(
+                key.clone(),
+                format!(
+                    "secret is plaintext on disk at {} — readable by anything that can read the path. \
+                     Move it to the keychain: {fix}",
+                    path.display(),
+                ),
+            ));
+        }
+    }
+
     // 1. Registry entries whose model id the catalog has never carried under
     //    any vendor we can name for them. See the module doc for what this does
     //    and does not prove.
@@ -268,6 +311,62 @@ mod tests {
             );
         }
         reg
+    }
+
+    /// A `file:` ref is plaintext on disk. Nothing said so before, which made
+    /// six of them on a real machine look like a choice rather than a default
+    /// nobody revisited.
+    #[test]
+    fn a_plaintext_secret_is_named_with_the_path_and_the_fix() {
+        let mut reg = reg_with(&[("anth", "anthropic", "claude-sonnet-5", None)]);
+        reg.models.get_mut("anth").unwrap().secret = Some(mur_common::secret::SecretRef::File(
+            "/Users/x/.mur/secrets/anthropic.key".into(),
+        ));
+
+        let f = audit(&reg, &[], None);
+        let hit = f
+            .iter()
+            .find(|f| f.subject == "anth")
+            .expect("no finding for the plaintext secret");
+        assert_eq!(
+            hit.level,
+            Level::Warn,
+            "must warn, never error — see the comment in audit"
+        );
+        assert!(
+            hit.detail.contains("/Users/x/.mur/secrets/anthropic.key"),
+            "{}",
+            hit.detail
+        );
+        assert!(
+            hit.detail.contains("mur model connect"),
+            "no fix offered: {}",
+            hit.detail
+        );
+    }
+
+    /// Keychain and env refs are not on disk and must not be flagged —
+    /// otherwise the warning appears on a correctly-configured machine and
+    /// stops meaning anything.
+    #[test]
+    fn a_keychain_or_env_secret_is_not_flagged() {
+        let mut reg = reg_with(&[
+            ("kc", "anthropic", "claude-sonnet-5", None),
+            ("ev", "anthropic", "claude-sonnet-5", None),
+        ]);
+        reg.models.get_mut("kc").unwrap().secret = Some(mur_common::secret::SecretRef::Keychain {
+            service: "mur".into(),
+            account: "anthropic".into(),
+        });
+        reg.models.get_mut("ev").unwrap().secret = Some(mur_common::secret::SecretRef::Env(
+            "ANTHROPIC_API_KEY".into(),
+        ));
+
+        let f = audit(&reg, &[], None);
+        assert!(
+            !f.iter().any(|f| f.detail.contains("plaintext")),
+            "flagged a secret that is not on disk: {f:?}"
+        );
     }
 
     fn agent(name: &str, r: Option<&str>, provider: &str, model: &str) -> AgentModel {
