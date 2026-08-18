@@ -14,9 +14,29 @@ pub struct HookStats {
     pub latency_p50_ms: Option<u64>,
     pub latency_p95_ms: Option<u64>,
     pub latency_p99_ms: Option<u64>,
+    /// The window these numbers actually describe. `None` when no record in
+    /// the file carries a timestamp — which is every record written before
+    /// #982, and is why this is reported rather than assumed.
+    pub window_start: Option<chrono::DateTime<chrono::Utc>>,
+    pub window_end: Option<chrono::DateTime<chrono::Utc>>,
+    /// Records with no `recorded_at`. They still count toward every other
+    /// number here; they simply cannot say when they happened.
+    pub undated: usize,
 }
 
 #[allow(dead_code)] // called from cmd::hook_stats in Task 3
+/// Compute over records, keeping the write-time window. `compute` is retained
+/// for callers that have only events and therefore cannot describe a window.
+pub fn compute_records(records: &[crate::inject::queue::QueueRecord]) -> HookStats {
+    let events: Vec<NormalizedEvent> = records.iter().map(|r| r.event.clone()).collect();
+    let mut stats = compute(&events);
+    let dated: Vec<_> = records.iter().filter_map(|r| r.recorded_at).collect();
+    stats.undated = records.len() - dated.len();
+    stats.window_start = dated.iter().min().copied();
+    stats.window_end = dated.iter().max().copied();
+    stats
+}
+
 pub fn compute(events: &[NormalizedEvent]) -> HookStats {
     let mut by_kind: HashMap<String, usize> = HashMap::new();
     let mut by_provider: HashMap<String, usize> = HashMap::new();
@@ -66,6 +86,11 @@ pub fn compute(events: &[NormalizedEvent]) -> HookStats {
         latency_p50_ms: percentile(&durations, 50.0),
         latency_p95_ms: percentile(&durations, 95.0),
         latency_p99_ms: percentile(&durations, 99.0),
+        // `compute` sees events only, so it cannot know the window. Filled in
+        // by `compute_records`, which has the write-time metadata.
+        window_start: None,
+        window_end: None,
+        undated: 0,
     }
 }
 
@@ -74,6 +99,25 @@ pub fn format_stats(stats: &HookStats, queue_path: &str) -> String {
     if stats.total == 0 {
         return format!("No hook events recorded yet.\nQueue: {queue_path}\n");
     }
+
+    // Say what these numbers cover. Without this the totals are "since
+    // whenever this file started", which the file cannot tell you — and after
+    // rotation they would silently describe a different, also-unstated window.
+    let window = match (stats.window_start, stats.window_end) {
+        (Some(a), Some(b)) if stats.undated == 0 => {
+            format!("Window: {} .. {}\n", a.to_rfc3339(), b.to_rfc3339())
+        }
+        (Some(a), Some(b)) => format!(
+            "Window: {} .. {} (+{} undated record(s) written before timestamping)\n",
+            a.to_rfc3339(),
+            b.to_rfc3339(),
+            stats.undated
+        ),
+        _ => format!(
+            "Window: unknown — none of the {} record(s) carries a timestamp\n",
+            stats.undated
+        ),
+    };
 
     // Compute column width from the widest label we'll print
     let kinds = ["Prompt", "Tool", "Stop", "SessionStart"];
@@ -89,6 +133,7 @@ pub fn format_stats(stats: &HookStats, queue_path: &str) -> String {
 
     let mut out = String::new();
     out.push_str(&format!("Hook events  ({})\n", queue_path));
+    out.push_str(&format!("  {window}"));
     out.push_str(&format!("  Total:     {}\n", stats.total));
     out.push_str(&format!("  Sessions:  {}\n", stats.unique_sessions));
 
@@ -137,6 +182,88 @@ pub fn format_stats(stats: &HookStats, queue_path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #979: the totals used to be "since whenever this file started", which
+    /// the file could not tell you — and after rotation they would describe a
+    /// different, equally unstated window. The report has to say what it
+    /// covers, including when it cannot.
+    #[test]
+    fn the_report_states_the_window_it_covers() {
+        use crate::inject::queue::QueueRecord;
+        let t0 = chrono::Utc::now() - chrono::Duration::hours(3);
+        let t1 = chrono::Utc::now();
+        let recs = vec![
+            QueueRecord {
+                recorded_at: Some(t0),
+                event: prompt_ev("a"),
+            },
+            QueueRecord {
+                recorded_at: Some(t1),
+                event: prompt_ev("b"),
+            },
+        ];
+        let out = format_stats(&compute_records(&recs), "/tmp/q.jsonl");
+        assert!(out.contains("Window:"), "{out}");
+        assert!(out.contains(&t0.to_rfc3339()), "start missing:\n{out}");
+        assert!(!out.contains("undated"), "nothing is undated here:\n{out}");
+    }
+
+    /// Records written before stamping existed carry no time. They must be
+    /// counted and named, not quietly folded into a window they are not in.
+    #[test]
+    fn undated_records_are_named_not_hidden() {
+        use crate::inject::queue::QueueRecord;
+        let recs = vec![
+            QueueRecord {
+                recorded_at: Some(chrono::Utc::now()),
+                event: prompt_ev("a"),
+            },
+            QueueRecord {
+                recorded_at: None,
+                event: prompt_ev("b"),
+            },
+        ];
+        let out = format_stats(&compute_records(&recs), "/tmp/q.jsonl");
+        assert!(out.contains("1 undated record"), "{out}");
+    }
+
+    /// And when NOTHING is dated — the shape of every queue that predates
+    /// #982 — the report says the window is unknown rather than printing a
+    /// number that looks like a measurement.
+    #[test]
+    fn a_wholly_undated_queue_reports_an_unknown_window() {
+        use crate::inject::queue::QueueRecord;
+        let recs = vec![
+            QueueRecord {
+                recorded_at: None,
+                event: prompt_ev("a"),
+            },
+            QueueRecord {
+                recorded_at: None,
+                event: prompt_ev("b"),
+            },
+        ];
+        let out = format_stats(&compute_records(&recs), "/tmp/q.jsonl");
+        assert!(out.contains("Window: unknown"), "{out}");
+        assert!(out.contains("2 record(s)"), "{out}");
+    }
+
+    fn prompt_ev(q: &str) -> NormalizedEvent {
+        NormalizedEvent {
+            kind: EventKind::Prompt,
+            tool_provider: "claude".into(),
+            query: Some(q.into()),
+            tool_called: None,
+            tool_input: None,
+            stop_reason: None,
+            session_id: Some("s".into()),
+            transcript_path: None,
+            tool_response: None,
+            cwd: None,
+            duration_ms: None,
+            is_duration_record: false,
+        }
+    }
     use crate::inject::event::{EventKind, NormalizedEvent};
 
     fn ev(
