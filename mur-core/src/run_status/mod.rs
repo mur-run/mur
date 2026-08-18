@@ -549,9 +549,16 @@ mod tests {
         )
         .unwrap();
         // No run.json -> the rebuild path is the only route; sabotage it.
+        // Portable sabotage: `events.jsonl` becomes a DIRECTORY, so reading it
+        // fails with a non-`NotFound` error on every platform (EISDIR on Unix,
+        // ERROR_ACCESS_DENIED on Windows). Replacing the channel DIR with a
+        // file does NOT work: Windows maps the resulting path error to
+        // `NotFound`, which `load_events` legitimately reads as absence, so
+        // the fault this test exists to catch would be swallowed there.
         let chan_dir = mur_home.join("channels").join(&ch.id);
-        std::fs::remove_dir_all(&chan_dir).unwrap();
-        std::fs::write(&chan_dir, b"i am a file").unwrap();
+        let events = chan_dir.join("events.jsonl");
+        let _ = std::fs::remove_file(&events);
+        std::fs::create_dir_all(&events).unwrap();
 
         let err = status_of(mur_home, "run-x")
             .expect_err("a genuine channel read fault must surface as an error, not Ok(None)");
