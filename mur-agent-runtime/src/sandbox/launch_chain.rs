@@ -145,6 +145,18 @@ impl LaunchChain {
         if path == self.mur_home.join("identity.key") {
             return Some("the host signing key");
         }
+        if path == self.mur_home.join("commander").join("signing.key") {
+            return Some("the commander's signing key — governance authority");
+        }
+        if path == self.mur_home.join("mobile").join("pair-token") {
+            return Some("the phone pairing token");
+        }
+        if path.starts_with(self.mur_home.join("actions-runner")) {
+            return Some(
+                "a self-hosted CI runner's credentials — they authenticate as \
+                 that runner against the whole repository host",
+            );
+        }
         None
     }
 
@@ -189,6 +201,9 @@ impl LaunchChain {
             self.mur_home.join("secrets"),
             self.mur_home.join("auth.json"),
             self.mur_home.join("identity.key"),
+            self.mur_home.join("commander").join("signing.key"),
+            self.mur_home.join("mobile").join("pair-token"),
+            self.mur_home.join("actions-runner"),
         ]
     }
 
@@ -344,6 +359,10 @@ mod tests {
             mur.join("secrets").join("anthropic.key"),
             mur.join("auth.json"),
             mur.join("identity.key"),
+            mur.join("commander").join("signing.key"),
+            mur.join("mobile").join("pair-token"),
+            mur.join("actions-runner"),
+            mur.join("actions-runner").join(".credentials"),
         ] {
             assert!(
                 chain.protects_read(&p).is_some(),
@@ -365,10 +384,17 @@ mod tests {
         let mur = tmp.path().to_path_buf();
         let chain =
             LaunchChain::for_test(&mur.join("agents").join("alice"), &mur.join("bin"), &mur);
+        // Includes the non-secret NEIGHBOURS of the new denies: `commander/`
+        // holds the constitution and the audit log, `mobile/` holds the paired
+        // device list. Denying a whole directory to reach one credential
+        // inside it is the mistake this guards against.
         for p in [
             mur.join("skills"),
             mur.join("channels"),
             mur.join("workflows"),
+            mur.join("commander"),
+            mur.join("commander").join("constitution.toml"),
+            mur.join("mobile").join("paired.json"),
         ] {
             assert!(
                 chain.protects_read(&p).is_none(),

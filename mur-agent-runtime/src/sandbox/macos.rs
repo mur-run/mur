@@ -464,7 +464,14 @@ mod tests {
         let policy = policy_with_launch_chain(&agents.join("alice").to_string_lossy());
         let sbpl = build_sbpl_profile(&policy);
 
-        for p in ["secrets", "auth.json", "identity.key"] {
+        for p in [
+            "secrets",
+            "auth.json",
+            "identity.key",
+            "commander/signing.key",
+            "mobile/pair-token",
+            "actions-runner",
+        ] {
             let full = tmp.path().join(p);
             for verb in ["file-read*", "file-write*"] {
                 assert!(
