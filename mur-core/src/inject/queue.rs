@@ -13,7 +13,18 @@ pub fn enqueue(event: &NormalizedEvent) -> Result<()> {
 }
 
 pub fn enqueue_to(event: &NormalizedEvent, path: &Path) -> Result<()> {
-    let line = serde_json::to_string(event)? + "\n";
+    // Redact before the line reaches disk (#979). This file records shell
+    // command lines verbatim, so anything ever typed on one — an API key in an
+    // argument, an Authorization header, a token in an env assignment — landed
+    // here in plain text. B0 rule 9's "telemetry sink redaction" covers the
+    // runtime's own writer and never saw this one.
+    //
+    // Walk the JSON rather than regexing the serialised line: a replacement
+    // then lands inside a string and cannot break the structure around it.
+    // Same shape the telemetry writer has always used, now shared.
+    let mut value = serde_json::to_value(event)?;
+    mur_common::redact::redact_value(&mut value);
+    let line = serde_json::to_string(&value)? + "\n";
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -64,6 +75,39 @@ mod tests {
             duration_ms: None,
             is_duration_record: false,
         }
+    }
+
+    /// #979: this file records shell command lines verbatim, so a credential
+    /// typed on one used to land here in plain text. The chokepoint is
+    /// `enqueue_to` — every producer goes through it, so nothing has to
+    /// remember to redact.
+    #[test]
+    fn a_secret_in_a_command_line_never_reaches_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("events.jsonl");
+
+        let mut ev = make_event("hello");
+        ev.tool_called = Some("Bash".into());
+        ev.tool_input = Some(serde_json::json!({
+            "command": "curl -H 'Authorization: Bearer x' https://api.example.com",
+            "key": "sk-ant-abcdefghij0123456789klmnopqrst",
+        }));
+        enqueue_to(&ev, &path).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !written.contains("sk-ant-abcdefghij0123456789klmnopqrst"),
+            "the API key reached disk:\n{written}"
+        );
+        assert!(
+            written.contains("[REDACTED:"),
+            "nothing was redacted at all:\n{written}"
+        );
+        // Still a valid JSON line — redacting a string leaf must not break the
+        // structure around it, which is why this walks the value rather than
+        // regexing the serialised line.
+        let parsed: serde_json::Value = serde_json::from_str(written.trim()).unwrap();
+        assert_eq!(parsed["tool_called"], "Bash");
     }
 
     #[test]

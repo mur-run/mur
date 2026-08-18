@@ -156,76 +156,20 @@ pub fn scan_for_secrets(body: &str) -> Option<&'static str> {
 ///
 /// Returns `Cow::Borrowed` when nothing matched so the common
 /// hot path (no secrets present) avoids any allocation.
+/// Replace credential-shaped substrings with `[REDACTED:<kind>]`.
+///
+/// Thin forwarder: the implementation moved to `mur_common::redact` so the
+/// CLI's capture queue writer can share it (#979). B0 rule 9 is named
+/// "telemetry sink redaction" and used to cover only this crate's writer.
 pub fn redact_secrets(input: &str) -> std::borrow::Cow<'_, str> {
-    // TODO(M1): collapse into mur-common::skill::scan::secrets
-    use regex::Regex;
-    use std::borrow::Cow;
-    use std::sync::OnceLock;
-
-    static REDACT_PATTERNS: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
-    let patterns = REDACT_PATTERNS.get_or_init(|| {
-        vec![
-            // OpenAI / Anthropic API keys
-            (Regex::new(r"\bsk-[a-zA-Z0-9]{20,}\b").unwrap(), "openai_key"),
-            (Regex::new(r"\bsk-ant-[a-zA-Z0-9-]{20,}\b").unwrap(), "anthropic_key"),
-            // AWS access keys
-            (Regex::new(r"\bAKIA[0-9A-Z]{16}\b").unwrap(), "aws_access_key"),
-            (Regex::new(r"\baws_secret_access_key\s*[:=]\s*[A-Za-z0-9/+=]{40}\b").unwrap(), "aws_secret_key"),
-            // GitHub PAT
-            (Regex::new(r"\bghp_[A-Za-z0-9]{36}\b").unwrap(), "github_pat"),
-            (Regex::new(r"\bghs_[A-Za-z0-9]{36}\b").unwrap(), "github_app_token"),
-            // GCP service account / API key
-            (Regex::new(r"\bAIza[0-9A-Za-z_-]{35}\b").unwrap(), "gcp_api_key"),
-            // JWT (3 base64url segments separated by dots)
-            (Regex::new(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b").unwrap(), "jwt"),
-            // PEM private key
-            (Regex::new(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----").unwrap(), "pem_private_key"),
-            // Slack webhook
-            (Regex::new(r"\bhooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]+\b").unwrap(), "slack_webhook"),
-            // Generic .env-style assignment with high-entropy value
-            (Regex::new(r"(?i)\b(api_key|api_secret|secret_key|access_token|password|token)\s*[:=]\s*[A-Za-z0-9_\-./+=]{20,}\b").unwrap(), "env_assignment"),
-        ]
-    });
-
-    let mut out: Cow<'_, str> = Cow::Borrowed(input);
-    for (rx, label) in patterns {
-        if rx.is_match(&out) {
-            let replacement = format!("[REDACTED:{label}]");
-            out = Cow::Owned(rx.replace_all(&out, replacement.as_str()).into_owned());
-        }
-    }
-    out
+    mur_common::redact::redact_secrets(input)
 }
 
-/// Replace home-directory-style absolute paths with `~/`. Catches
-/// macOS `/Users/<user>/`, Linux `/home/<user>/`, and Windows
-/// `C:\Users\<user>\` so error messages don't leak the OS user
-/// account name in telemetry. Conservative: only the username
-/// portion is collapsed; the trailing path is preserved so
-/// debugging context survives.
+/// Replace home-directory-style absolute paths with `~/`.
+///
+/// Thin forwarder — see `redact_secrets`.
 pub fn redact_home_path(input: &str) -> std::borrow::Cow<'_, str> {
-    use regex::Regex;
-    use std::borrow::Cow;
-    use std::sync::OnceLock;
-
-    static RE_UNIX: OnceLock<Regex> = OnceLock::new();
-    static RE_MAC: OnceLock<Regex> = OnceLock::new();
-    static RE_WIN: OnceLock<Regex> = OnceLock::new();
-
-    let unix = RE_UNIX.get_or_init(|| Regex::new(r"/home/[^/\s]+/").unwrap());
-    let mac = RE_MAC.get_or_init(|| Regex::new(r"/Users/[^/\s]+/").unwrap());
-    let win = RE_WIN.get_or_init(|| Regex::new(r"(?i)[A-Z]:\\Users\\[^\\\s]+\\").unwrap());
-
-    let mut out: Cow<'_, str> = Cow::Borrowed(input);
-    for rx in [unix, mac] {
-        if rx.is_match(&out) {
-            out = Cow::Owned(rx.replace_all(&out, "~/").into_owned());
-        }
-    }
-    if win.is_match(&out) {
-        out = Cow::Owned(win.replace_all(&out, "~\\").into_owned());
-    }
-    out
+    mur_common::redact::redact_home_path(input)
 }
 
 #[cfg(test)]
