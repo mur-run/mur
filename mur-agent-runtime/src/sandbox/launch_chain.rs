@@ -151,6 +151,17 @@ impl LaunchChain {
         if path == self.mur_home.join("mobile").join("pair-token") {
             return Some("the phone pairing token");
         }
+        // `.env` under `<mur_home>` is a credential file by convention, and
+        // `commander/.env` really does hold SLACK_BOT_TOKEN,
+        // SLACK_SIGNING_SECRET, SLACK_APP_TOKEN and ANTHROPIC_API_KEY. Denying
+        // `commander/signing.key` alone missed it — the third time this list
+        // proved incomplete.
+        if path.file_name().is_some_and(|n| n == ".env") && path.starts_with(&self.mur_home) {
+            return Some("a .env file under MUR's home — credentials by convention");
+        }
+        if path == self.mur_home.join("runtime").join("vlc.json") {
+            return Some("the VLC control password");
+        }
         if path.starts_with(self.mur_home.join("actions-runner")) {
             return Some(
                 "a self-hosted CI runner's credentials — they authenticate as \
@@ -244,6 +255,8 @@ impl LaunchChain {
             self.mur_home.join("conversations"),
             self.mur_home.join("telemetry"),
             self.mur_home.join("traces"),
+            self.mur_home.join("commander").join(".env"),
+            self.mur_home.join("runtime").join("vlc.json"),
         ]
     }
 
@@ -409,6 +422,8 @@ mod tests {
             mur.join("conversations"),
             mur.join("telemetry"),
             mur.join("traces"),
+            mur.join("commander").join(".env"),
+            mur.join("runtime").join("vlc.json"),
         ] {
             assert!(
                 chain.protects_read(&p).is_some(),
