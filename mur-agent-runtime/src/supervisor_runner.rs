@@ -640,20 +640,26 @@ pub(crate) async fn prepare_runtime(
     let telemetry_emitter: Arc<dyn TelemetryEmitter> =
         Arc::new(WriterTelemetryEmitter::new(writer.sender()));
     let hook_chain = crate::hooks::builder::build_chain(&profile.inner, agent_home, &mur_home);
-    let mcp_server_binaries: Vec<std::path::PathBuf> = profile
-        .inner
-        .mcp_servers
-        .iter()
-        .filter_map(|s| {
-            // PATH-resolve so the B0 signature/pin checks (rules 6 & 11) inspect
-            // the same binary `Command::new` will spawn. A bare `node`/`npx`
-            // taken verbatim is a CWD-relative path that doesn't exist, which
-            // silently skips both checks. Unresolvable → drop (treated as
-            // "uninstalled", matching the soft-fail behaviour in rule 6).
-            let prog = s.command.split_whitespace().next().unwrap_or(&s.command);
-            mur_common::exec::resolve_command(prog).ok()
-        })
-        .collect();
+    let mcp_server_binaries: Vec<std::path::PathBuf> = {
+        // Resolve against the same AUGMENTED PATH the spawn uses
+        // (`mcp_client::spawn`), so the B0 signature/pin checks (rules 6 & 11)
+        // inspect the same binary `Command::new` will exec — including under a
+        // Hub-spawned sidecar whose ambient GUI PATH lacks the standard
+        // install dirs. A bare `node`/`npx` taken verbatim is a CWD-relative
+        // path that doesn't exist, which silently skips both checks.
+        // Unresolvable → drop (treated as "uninstalled", matching the
+        // soft-fail behaviour in rule 6).
+        let aug_path = mur_common::exec::augmented_path_var();
+        profile
+            .inner
+            .mcp_servers
+            .iter()
+            .filter_map(|s| {
+                let prog = s.command.split_whitespace().next().unwrap_or(&s.command);
+                mur_common::exec::resolve_command_in(&aug_path, prog).ok()
+            })
+            .collect()
+    };
 
     // B0 rules 11 + 6: MCP supply-chain admission control. Runs BEFORE the
     // hook chain because it must be able to abort startup — `on_startup` is an

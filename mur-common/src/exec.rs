@@ -150,15 +150,23 @@ pub fn is_interpreter_command(command: &str) -> bool {
 ///
 /// Returns an error if the binary can't be located.
 pub fn resolve_command(command: &str) -> Result<PathBuf> {
+    let path_var = std::env::var_os("PATH")
+        .ok_or_else(|| anyhow::anyhow!("PATH env var unset; cannot resolve `{command}`"))?;
+    resolve_command_in(&path_var, command)
+}
+
+/// [`resolve_command`] against an explicit PATH value instead of the ambient
+/// env. The runtime resolves MCP commands against [`augmented_path_var`] for
+/// BOTH the B0 admission checks and the actual spawn, so the file that gets
+/// hashed is provably the file that gets exec'd.
+pub fn resolve_command_in(path_var: &std::ffi::OsStr, command: &str) -> Result<PathBuf> {
     let p = Path::new(command);
     if p.is_absolute() || command.contains('/') || command.contains('\\') {
         return p
             .canonicalize()
             .with_context(|| format!("canonicalize {command}"));
     }
-    let path_var = std::env::var_os("PATH")
-        .ok_or_else(|| anyhow::anyhow!("PATH env var unset; cannot resolve `{command}`"))?;
-    for dir in std::env::split_paths(&path_var) {
+    for dir in std::env::split_paths(path_var) {
         let candidate = dir.join(command);
         if candidate.is_file() {
             return candidate
@@ -176,6 +184,35 @@ pub fn resolve_command(command: &str) -> Result<PathBuf> {
         }
     }
     bail!("could not find `{command}` on PATH");
+}
+
+/// The ambient PATH plus the well-known install dirs that GUI/launchd parents
+/// omit (`/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`).
+///
+/// MCP entries store the command as the user typed it (`node`, `uvx`,
+/// `python3`); which binary that names must not depend on WHO spawned the
+/// runtime. A terminal hands it the user's full PATH and
+/// `mur agent install-service` derives a rich one into the unit file — but a
+/// Hub-spawned sidecar inherits the GUI's minimal PATH, which is how
+/// `command: node` works in a shell and dies under the Hub with nothing
+/// pointing here. Ambient entries keep priority; only missing standard dirs
+/// are appended, so an explicit PATH override still wins.
+pub fn augmented_path_var() -> std::ffi::OsString {
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    let mut dirs_list: Vec<PathBuf> = std::env::split_paths(&current).collect();
+    let mut extras: Vec<PathBuf> = vec![
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ];
+    if let Some(home) = dirs::home_dir() {
+        extras.push(home.join(".local/bin"));
+    }
+    for e in extras {
+        if !dirs_list.contains(&e) {
+            dirs_list.push(e);
+        }
+    }
+    std::env::join_paths(dirs_list).unwrap_or(current)
 }
 
 #[cfg(test)]
@@ -240,6 +277,45 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let resolved = resolve_command(tmp.path().to_str().unwrap()).unwrap();
         assert!(resolved.is_absolute());
+    }
+
+    #[test]
+    fn augmented_path_appends_standard_dirs_without_reordering_ambient() {
+        // Read-only against the ambient env (other tests resolve on PATH in
+        // parallel, so no set_var here).
+        let ambient: Vec<PathBuf> =
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
+        let aug: Vec<PathBuf> = std::env::split_paths(&augmented_path_var()).collect();
+        assert!(
+            aug.starts_with(&ambient),
+            "ambient PATH must keep priority: {aug:?}"
+        );
+        for d in ["/opt/homebrew/bin", "/usr/local/bin"] {
+            let d = PathBuf::from(d);
+            let in_ambient = ambient.iter().filter(|x| **x == d).count();
+            let in_aug = aug.iter().filter(|x| **x == d).count();
+            // Appended when absent; an ambient PATH that already lists it
+            // (even more than once) is passed through untouched.
+            assert_eq!(
+                in_aug,
+                in_ambient.max(1),
+                "{d:?}: expected append-only-when-absent"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_command_in_uses_the_given_path_not_the_env() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("fake-mcp");
+        std::fs::write(&exe, b"#!/bin/sh\n").unwrap();
+        let var = std::env::join_paths([dir.path().to_path_buf()]).unwrap();
+        let found = resolve_command_in(&var, "fake-mcp").unwrap();
+        assert_eq!(found, exe.canonicalize().unwrap());
+        assert!(
+            resolve_command_in(std::ffi::OsStr::new(""), "fake-mcp").is_err(),
+            "an empty path var must not fall back to the ambient PATH"
+        );
     }
 
     #[test]
