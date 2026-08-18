@@ -108,11 +108,61 @@ configuration choice rather than a default nobody revisited.
 That check is worth building even if neither migration is: it turns "we have a
 deny list" into "here is what is still exposed and why".
 
-## Decisions
+## Decisions — settled
 
-1. **(B) first, or (A) first, or neither?**
-2. **Does `mur model connect` keep offering `file:` at all**, or does it become
-   keychain-only with `file:` accepted for import and immediately migrated?
-3. **Does the doctor check block anything**, or only report? Blocking a working
-   setup because its secret is a file is the kind of gate that gets switched
-   off.
+### 1. (B) first, then (A). Settled.
+
+### 2. `file:` stays. The defect is that it is silent, not that it exists.
+
+Half of this was already true in the code: **`mur model connect` writes
+`SecretRef::Keychain`** (`cmd/model_connect.rs:207`) and never offers `file:`.
+The six `file:` refs on this machine came from `model add` or a hand-edit, not
+from `connect`.
+
+And `file:` cannot be removed, for reasons that are checkable rather than
+hypothetical:
+
+- `keyring` v3 is built with `apple-native`, `linux-native`,
+  `sync-secret-service`, `windows-native` — cross-platform, but a **headless
+  Linux box with no Secret Service daemon has no keyring at all**. `file:` is
+  the only backend that works there.
+- `mur model import` carries refs from another machine; a ref format the
+  importer cannot represent breaks that path.
+- Containers and CI materialise secrets as files by convention — Vault agent,
+  SOPS, a k8s secret mount. Those are files on purpose.
+
+Removing the variant leaves those with no substitute.
+
+So the rule is **loud, not absent**:
+
+- `model add` warns at the moment it accepts a `file:` ref, naming the
+  `keychain:` equivalent. Warn, not refuse — see decision 3.
+- `model doctor` reports standing ones (below).
+- The migration in (B) moves the ones that can move, and leaves the rest with
+  the warning attached.
+
+What changes is that a plaintext ref becomes a **stated choice** instead of a
+default nobody revisited.
+
+### 3. Report. Never block — and the repo already argued this.
+
+`cmd_model_doctor` returns `Ok(())` on every path, prints
+`"nothing was changed"`, and already has a `Level::Warn` / error split in its
+output. It is a read-only reporter by contract; making it fail would change
+what the command *is*, not just what it says.
+
+The reasoning is already written down in this repo, in `.github/workflows/eval.yml`:
+
+> A gate that fires for things you cannot fix is a gate that gets switched off,
+> and then the replacement never gets built.
+
+A `file:` ref on headless Linux is precisely a thing the user cannot fix. A
+check that fails it teaches people to stop running the check.
+
+So: a new `Level::Warn` finding per `SecretRef::File`, with the exact
+`keychain:` command to run. **No change to the exit code**, which stays zero.
+
+If enforcement is ever wanted — a CI job asserting no plaintext secrets — it
+belongs behind an explicit opt-in (`--fail-on-plaintext`) chosen by someone who
+knows their environment can satisfy it. Default useful, strict mode available,
+and the strict mode is never the thing that greets a new user.
