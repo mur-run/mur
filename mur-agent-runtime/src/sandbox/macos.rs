@@ -404,6 +404,44 @@ mod tests {
         }
     }
 
+    /// A directory under `agents/` that is not a valid agent name must never
+    /// reach the profile text. The profile is assembled by string
+    /// concatenation and `fail_closed_on_sandbox_error` defaults to TRUE, so a
+    /// name that broke SBPL would not brick one agent — it would stop every
+    /// agent on the machine from starting, because they all enumerate the same
+    /// directory.
+    #[test]
+    fn a_malformed_entry_under_agents_is_skipped_not_emitted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agents = tmp.path().join("agents");
+        std::fs::create_dir_all(agents.join("alice")).unwrap();
+        std::fs::create_dir_all(agents.join("bob")).unwrap();
+        // Hand-made junk: a quote would terminate the SBPL string literal.
+        std::fs::create_dir_all(agents.join("we\"ird")).unwrap();
+        // A plain file is not an agent either.
+        std::fs::write(agents.join("notes.txt"), b"x").unwrap();
+
+        let policy = policy_with_launch_chain(&agents.join("alice").to_string_lossy());
+        let sbpl = build_sbpl_profile(&policy);
+
+        assert!(
+            sbpl.contains("bob/identity.key"),
+            "the well-formed sibling should still be denied:\n{sbpl}"
+        );
+        // Assert on the tail, which escaping does not touch: `sbpl_escape`
+        // renders the quote as `we\\"ird`, so searching for the raw name
+        // passes whether or not the entry was skipped — a test that proves
+        // escaping works, not that the filter does.
+        assert!(
+            !sbpl.contains("ird/identity.key"),
+            "a malformed directory name reached the profile text:\n{sbpl}"
+        );
+        assert!(
+            !sbpl.contains("notes.txt"),
+            "a plain file was treated as an agent home:\n{sbpl}"
+        );
+    }
+
     /// The deny must NOT extend to a peer's verification material. Resolving a
     /// peer's pubkey reads `identity.pub` and `rotations.jsonl` from that
     /// peer's home, and verify-on-fold is per-actor — denying them would
