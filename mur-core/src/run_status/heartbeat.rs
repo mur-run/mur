@@ -281,6 +281,43 @@ mod tests {
         );
     }
 
+    /// `Drop` without a prior `stop().await` is the panic / early-return path.
+    /// It is documented as best-effort — it flips the flag but cannot await
+    /// the task — and the safety argument for that rests on the ticker
+    /// actually stopping. Nothing pinned it, so a later change that dropped
+    /// the flag write would leave an orphan task beating a record forever
+    /// while its process went down.
+    #[tokio::test]
+    async fn dropping_without_stop_still_ends_the_ticker() {
+        let tmp = tempfile::tempdir().unwrap();
+        seed(tmp.path(), "r");
+
+        {
+            let _hb = Heartbeat::spawn(
+                tmp.path().to_path_buf(),
+                "r".into(),
+                std::time::Duration::from_millis(20),
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+            let while_running = store::load(tmp.path(), "r").unwrap().unwrap();
+            assert!(
+                while_running.last_heartbeat_at.is_some(),
+                "ticker never beat"
+            );
+        } // dropped here — no `stop().await`
+
+        // `Drop` cannot await, so a beat already in flight may still land.
+        // Let it, then take the reading everything after must match.
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        let after_drop = store::load(tmp.path(), "r").unwrap().unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        let later = store::load(tmp.path(), "r").unwrap().unwrap();
+        assert_eq!(
+            after_drop.last_heartbeat_at, later.last_heartbeat_at,
+            "ticker kept beating after being dropped without stop()"
+        );
+    }
+
     /// Reproduces the exact failure this module exists to prevent: if
     /// `stop()` only flipped the flag and returned immediately (the old
     /// fire-and-forget version), a beat already in flight when the caller
