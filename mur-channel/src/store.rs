@@ -12,6 +12,30 @@ pub struct ChannelStore {
     root: PathBuf,
 }
 
+/// What a `NotFound` on a channel's event log actually means.
+///
+/// Normally: genuine absence — no such channel, or a channel with no events
+/// yet. But `NotFound` also covers a BROKEN PATH on Windows, which maps "a
+/// component of the path is not a directory" to `NotFound` where Unix reports
+/// `ENOTDIR`. Left alone, a corrupted channel directory reads as an error on
+/// Unix and as "no such run" on Windows — the same lying-absence defect the
+/// run-status work exists to remove, reintroduced one platform at a time.
+///
+/// A free function, not an inline check, so the decision is testable on EVERY
+/// platform: on Unix the corrupted case never reaches the `NotFound` arm, so
+/// an end-to-end test there exercises the ENOTDIR path and proves nothing
+/// about this one.
+fn check_absence_is_not_corruption(dir: &Path) -> Result<()> {
+    if fs::metadata(dir).is_ok_and(|m| !m.is_dir()) {
+        anyhow::bail!(
+            "channel path {} exists but is not a directory — its event log cannot be \
+             read, and this is NOT an absent channel",
+            dir.display()
+        );
+    }
+    Ok(())
+}
+
 impl ChannelStore {
     pub fn new(mur_home: &Path) -> Self {
         Self {
@@ -66,7 +90,18 @@ impl ChannelStore {
         let path = self.events_path(id);
         let content = match fs::read_to_string(&path) {
             Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            // `NotFound` normally means genuine absence: no such channel, or a
+            // channel with no events yet. But it ALSO covers a broken path on
+            // Windows, which maps "a component of the path is not a directory"
+            // to `NotFound` where Unix reports `ENOTDIR`. Without this check a
+            // corrupted channel directory reads as an error on Unix and as
+            // "no such run" on Windows — the same defect this module exists to
+            // remove, reintroduced per-platform. Only reached on the miss path,
+            // so it costs one `stat` on a read that already failed.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                check_absence_is_not_corruption(&self.channel_dir(id))?;
+                return Ok(Vec::new());
+            }
             Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
         };
         let mut events = Vec::new();
@@ -320,6 +355,83 @@ mod tests {
         assert!(
             logged.contains("[2]"),
             "the warning must name the damaged line number: {logged}"
+        );
+    }
+
+    /// The decision Windows depends on, tested directly. An end-to-end test
+    /// cannot cover it on Unix: there the corrupted case fails with ENOTDIR
+    /// and never reaches the `NotFound` arm at all, so it would pass with this
+    /// logic deleted. Calling the function is the only way to exercise on this
+    /// platform the branch Windows will actually take.
+    #[test]
+    fn check_absence_is_not_corruption_rejects_a_non_directory_only() {
+        let tmp = TempDir::new().unwrap();
+
+        // A path that is not there at all: genuine absence.
+        check_absence_is_not_corruption(&tmp.path().join("never-created"))
+            .expect("a missing channel dir is absence, not corruption");
+
+        // A real directory: genuine absence of the log inside it.
+        let dir = tmp.path().join("a-real-dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        check_absence_is_not_corruption(&dir)
+            .expect("an existing channel dir with no log is absence, not corruption");
+
+        // A file where the directory should be: corruption.
+        let file = tmp.path().join("a-file");
+        std::fs::write(&file, b"not a directory").unwrap();
+        let err = check_absence_is_not_corruption(&file)
+            .expect_err("a channel path that is a FILE must not read as absence");
+        assert!(
+            format!("{err:#}").contains("a-file"),
+            "the error must name the path: {err:#}"
+        );
+    }
+
+    /// A channel directory replaced by a FILE is corruption, not absence — and
+    /// it must read the same way on every platform. Unix reports ENOTDIR here
+    /// and propagates; Windows maps the same condition to `NotFound`, which
+    /// the absence arm would otherwise swallow into `Ok(vec![])`. On Unix this
+    /// test passes through the ENOTDIR path, so it pins the end-to-end
+    /// behaviour but does NOT prove the Windows branch — see the test above
+    /// for that one.
+    #[test]
+    fn a_channel_path_that_is_not_a_directory_is_an_error_not_an_absence() {
+        let tmp = TempDir::new().unwrap();
+        let store = ChannelStore::new(tmp.path());
+        store.create(&sample_channel("c1")).unwrap();
+
+        let dir = tmp.path().join("channels").join("c1");
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::write(&dir, b"i am a file, not a channel").unwrap();
+
+        let err = store
+            .load_events("c1")
+            .expect_err("a channel path that is not a directory must not read as an empty log");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("c1"),
+            "the error must name the channel it could not read: {msg}"
+        );
+    }
+
+    /// The absence arm must still mean absence: a channel that was never
+    /// created, and a created channel with no events yet, are both `Ok(vec![])`
+    /// — the check above must not turn ordinary emptiness into a failure.
+    #[test]
+    fn genuine_absence_still_reads_as_an_empty_log() {
+        let tmp = TempDir::new().unwrap();
+        let store = ChannelStore::new(tmp.path());
+
+        assert!(
+            store.load_events("never-created").unwrap().is_empty(),
+            "a channel that does not exist is empty, not an error"
+        );
+
+        store.create(&sample_channel("c1")).unwrap();
+        assert!(
+            store.load_events("c1").unwrap().is_empty(),
+            "a created channel with no events yet is empty, not an error"
         );
     }
 
