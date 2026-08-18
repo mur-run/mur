@@ -194,6 +194,10 @@ pub async fn run(cli: Cli) -> Result<()> {
                 cmd::channel::backfill_purpose(&home, apply, limit)?;
             }
         },
+        Commands::Job { action } => {
+            let mur_home = crate::paths::mur_root(None);
+            crate::cmd::job::run(&mur_home, action)?
+        }
         // Deprecated: use `mur internals reindex`
         Commands::Reindex { bootstrap } => {
             eprintln!("# mur reindex: use `mur internals reindex`");
@@ -466,6 +470,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                         yes,
                     )
                     .await?;
+                }
+                FleetAction::Status { name } => {
+                    cmd::fleet::status::cmd_fleet_status(&mur_home, &name, &mut std::io::stdout())?
                 }
             }
         }

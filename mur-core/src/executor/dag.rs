@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::Arc;
 
 use anyhow::Result;
 use mur_channel::ChannelService;
@@ -101,6 +102,11 @@ pub struct DagExecOptions<'a> {
     /// `idempotency_key`s for channel events. v3b sets keys; v3c enforces dedup,
     /// at which point a crash-rerun MUST reuse the same `run_id`. Empty = none.
     pub run_id: String,
+    /// What kind of run this is, for `~/.mur/runs/<run_id>/run.json`. `None`
+    /// (or an empty `run_id`) means "do not record" — the legacy path.
+    pub run_kind: Option<crate::run_status::RunKind>,
+    /// Human-readable label for the run, shown by `mur job list`.
+    pub run_label: String,
     /// Cap on the number of steps running concurrently across the whole DAG.
     /// `None` = unbounded (every same-rank step spawned at once — prior
     /// behaviour). `Some(n)` bounds total in-flight steps to `n.max(1)` via a
@@ -117,6 +123,16 @@ pub struct DagExecOptions<'a> {
     pub on_step: Option<std::sync::Arc<dyn Fn(StepEvent) + Send + Sync>>,
 }
 
+impl DagExecOptions<'_> {
+    /// The `run_id` to stamp on the channel events this run writes, so a
+    /// rebuild can claim exactly this run's events on a shared, long-lived
+    /// channel. `None` for the legacy callers with an empty `run_id` — their
+    /// events carry no run_id and are not claimed by any rebuild.
+    pub fn event_run_id(&self) -> Option<&str> {
+        (!self.run_id.is_empty()).then_some(self.run_id.as_str())
+    }
+}
+
 impl<'a> Default for DagExecOptions<'a> {
     fn default() -> Self {
         Self {
@@ -128,6 +144,8 @@ impl<'a> Default for DagExecOptions<'a> {
             trigger: "manual",
             channel_id: None,
             run_id: String::new(),
+            run_kind: None,
+            run_label: String::new(),
             max_concurrency: None,
             on_step: None,
         }
@@ -156,6 +174,37 @@ pub struct StepEvent {
     pub kind: StepEventKind,
     /// Per-step delegate token usage (0 for non-delegate or unknown).
     pub tokens_used: u64,
+}
+
+/// Apply one `StepEvent` to the record's `steps` — insert-or-update by step
+/// id. `Started` (re)arms a step (a retry emits Started again); `Done`/
+/// `Failed` stamp the terminal state. This is the executor's half of "steps
+/// must answer what is it doing now" (spec §4): without it the record's
+/// steps stay `[]` forever, because nothing else writes them.
+fn apply_step_event(record: &mut crate::run_status::RunState, event: &StepEvent) {
+    let now = chrono::Utc::now();
+    let (state, started_at, ended_at) = match event.kind {
+        StepEventKind::Started => (crate::run_status::State::Running, Some(now), None),
+        StepEventKind::Done => (crate::run_status::State::Done, None, Some(now)),
+        StepEventKind::Failed => (crate::run_status::State::Failed, None, Some(now)),
+    };
+    if let Some(step) = record.steps.iter_mut().find(|s| s.id == event.id) {
+        step.state = state;
+        if let Some(ts) = started_at {
+            step.started_at = Some(ts);
+        }
+        if let Some(ts) = ended_at {
+            step.ended_at = Some(ts);
+        }
+        return;
+    }
+    record.steps.push(crate::run_status::StepState {
+        id: event.id.clone(),
+        member: event.agent.clone(),
+        state,
+        started_at,
+        ended_at,
+    });
 }
 
 /// Deterministic idempotency key for a channel event: stable across a
@@ -602,6 +651,7 @@ async fn execute_step(
                 &canonical,
                 &child_task_id,
                 Some(&goal_snip),
+                opts.event_run_id(),
             );
             let _ = crate::channel_writer::append_as_writer(
                 &svc,
@@ -855,10 +905,26 @@ pub async fn execute_dag(
 
     let mut graph = build_dag(&procedure.steps)?;
 
-    // Emit start StateChange (Working) if running over a channel.
-    if let Some(cid) = opts.channel_id.as_deref() {
-        let _ = ChannelService::open(mur_home)
-            .and_then(|svc| svc.transition(cid, ChannelState::Working, ChannelActor::System));
+    // Emit start StateChange (Working) if running over a channel. `first_seq`
+    // — the seq this run's first event will land on — is computed BEFORE the
+    // transition fires, so the sidecar can bound the rebuild to exactly this
+    // run's events. Full load is O(channel size) once per run start, which
+    // is acceptable: there is no seq-cursor API, and the load is the only
+    // way to learn the next seq.
+    let mut first_seq: Option<u64> = None;
+    if let Some(cid) = opts.channel_id.as_deref()
+        && let Ok(svc) = ChannelService::open(mur_home)
+    {
+        first_seq = match svc.load_events(cid) {
+            Ok(events) => Some(events.last().map(|e| e.seq + 1).unwrap_or(0)),
+            Err(_) => None,
+        };
+        let _ = svc.transition(
+            cid,
+            ChannelState::Working,
+            ChannelActor::System,
+            opts.event_run_id(),
+        );
     }
 
     if graph.nodes.is_empty() {
@@ -873,6 +939,135 @@ pub async fn execute_dag(
         });
     }
 
+    // Record the run so it can be queried while it executes. A run is only
+    // recorded when it has both an id and a kind; the legacy callers that
+    // pass neither behave exactly as before.
+    let recorded = (!opts.run_id.is_empty()).then_some(opts.run_kind).flatten();
+    let mut heartbeat = if let Some(kind) = recorded {
+        let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
+        let now = chrono::Utc::now();
+        let record = crate::run_status::RunState {
+            schema: crate::run_status::RUN_SCHEMA,
+            run_id: opts.run_id.clone(),
+            channel_id: opts.channel_id.clone(),
+            kind,
+            label: opts.run_label.clone(),
+            pid: std::process::id(),
+            started_at: now,
+            last_heartbeat_at: Some(now),
+            state: crate::run_status::State::Running,
+            steps: vec![],
+            blocked_on: None,
+            binary_version: env!("CARGO_PKG_VERSION").to_string(),
+            build_sha: mur_common::build::SHORT_SHA.to_string(),
+        };
+        // Bookkeeping must never take down real work: a run record that can't
+        // be written (full disk, unwritable ~/.mur/runs/, ...) should not
+        // fail the run before a single step executes. Log and proceed with
+        // no record and no heartbeat ticker — there is nothing for it to
+        // beat against.
+        match crate::run_status::store::save(mur_home, &record) {
+            Ok(()) => {
+                // The rebuild index travels in its own sidecar so a corrupt
+                // run.json cannot take the rebuild path down with it. Every
+                // sidecar field is a fact known here at recording time —
+                // nothing inferred.
+                if let Some(cid) = opts.channel_id.as_deref() {
+                    match first_seq {
+                        Some(seq) => {
+                            let sidecar = crate::run_status::Sidecar {
+                                schema: crate::run_status::SIDECAR_SCHEMA,
+                                channel_id: cid.to_string(),
+                                kind,
+                                first_seq: seq,
+                            };
+                            if let Err(error) = crate::run_status::store::save_sidecar(
+                                mur_home,
+                                &opts.run_id,
+                                &sidecar,
+                            ) {
+                                // Not silent: a lost sidecar quietly disables
+                                // the rebuild this run's channel could later
+                                // provide, so say so.
+                                tracing::warn!(
+                                    run_id = %opts.run_id,
+                                    %error,
+                                    "failed to record the run sidecar; \
+                                     rebuilding this run from its channel is disabled"
+                                );
+                            }
+                        }
+                        None => {
+                            tracing::warn!(
+                                run_id = %opts.run_id,
+                                "cannot compute the run's first channel seq; \
+                                 sidecar not written"
+                            );
+                        }
+                    }
+                }
+                Some(crate::run_status::heartbeat::Heartbeat::spawn(
+                    mur_home.to_path_buf(),
+                    opts.run_id.clone(),
+                    std::time::Duration::from_secs(cfg.runs.heartbeat_interval_secs),
+                ))
+            }
+            Err(error) => {
+                tracing::warn!(
+                    run_id = %opts.run_id,
+                    %error,
+                    "failed to record run status; continuing without run tracking"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Live step progress (spec §4): while a run is recorded, mirror every
+    // `StepEvent` into the record's `steps` through an internal observer, so
+    // `mur job status` / `mur_job_status` can answer "what is it doing now?"
+    // instead of showing an empty list. One locked `store::update` per event
+    // is the whole budget — the observer contract says MUST be cheap and
+    // MUST NOT panic, so a failed write is warned once and dropped;
+    // bookkeeping must never take down the run it observes. The caller's
+    // observer is wrapped, not replaced: it still fires exactly as before,
+    // AFTER the record update so a progress renderer that reads the record
+    // sees the just-applied step.
+    let internal_on_step: Option<std::sync::Arc<dyn Fn(StepEvent) + Send + Sync>> =
+        if recorded.is_some() {
+            let home = mur_home.to_path_buf();
+            let rid = opts.run_id.clone();
+            let warn_once = Arc::new(std::sync::Once::new());
+            Some(Arc::new(move |event: StepEvent| {
+                if let Err(error) = crate::run_status::store::update(&home, &rid, |record| {
+                    apply_step_event(record, &event);
+                }) {
+                    warn_once.call_once(|| {
+                        tracing::warn!(
+                            run_id = %rid,
+                            %error,
+                            "failed to record a step event; `mur job status` steps \
+                             may lag behind the run"
+                        );
+                    });
+                }
+            }))
+        } else {
+            None
+        };
+    let composed_on_step: Option<std::sync::Arc<dyn Fn(StepEvent) + Send + Sync>> =
+        match (opts.on_step.clone(), internal_on_step) {
+            (Some(caller), Some(internal)) => Some(Arc::new(move |e: StepEvent| {
+                internal(e.clone());
+                caller(e);
+            })),
+            (Some(caller), None) => Some(caller),
+            (None, Some(internal)) => Some(internal),
+            (None, None) => None,
+        };
+
     // Closure for terminal StateChange — call before each PipelineOutput return.
     let emit_final = |failed: bool| {
         if let Some(cid) = opts.channel_id.as_deref() {
@@ -882,7 +1077,7 @@ pub async fn execute_dag(
                 ChannelState::Completed
             };
             let _ = ChannelService::open(mur_home)
-                .and_then(|svc| svc.transition(cid, st, ChannelActor::System));
+                .and_then(|svc| svc.transition(cid, st, ChannelActor::System, opts.event_run_id()));
         }
     };
 
@@ -923,7 +1118,7 @@ pub async fn execute_dag(
         let opt_trigger = opts.trigger.to_string();
         let opt_chan_id = opts.channel_id.clone();
         let opt_run_id = opts.run_id.clone();
-        let opt_on_step = opts.on_step.clone();
+        let opt_on_step = composed_on_step.clone();
         let mut handles = Vec::new();
         for &i in &indices {
             // Mutating the graph node (not the local clone) keeps retries
@@ -955,6 +1150,13 @@ pub async fn execute_dag(
                     trigger: &tr,
                     channel_id: chan_id,
                     run_id,
+                    // Per-step sub-options, not a run of their own: this
+                    // clone drives one `execute_step` call inside the rank
+                    // loop, not a recursive `execute_dag`, so it never reads
+                    // `run_kind`/`run_label`. Neutralized the same way
+                    // `max_concurrency` already is on this line.
+                    run_kind: None,
+                    run_label: String::new(),
                     max_concurrency: None,
                     on_step,
                 };
@@ -1027,6 +1229,14 @@ pub async fn execute_dag(
                             result.exit_code
                         );
                         emit_final(true);
+                        finalize_run(
+                            mur_home,
+                            &opts.run_id,
+                            recorded.is_some(),
+                            &mut heartbeat,
+                            true,
+                        )
+                        .await;
                         return Ok(PipelineOutput {
                             workflow_id: skill_name.to_string(),
                             status: PipelineStatus::Failed,
@@ -1073,6 +1283,14 @@ pub async fn execute_dag(
                                 let _retry_code = retry_result.exit_code;
                                 eprintln!("  Step {sid} retry exhausted, aborting workflow");
                                 emit_final(true);
+                                finalize_run(
+                                    mur_home,
+                                    &opts.run_id,
+                                    recorded.is_some(),
+                                    &mut heartbeat,
+                                    true,
+                                )
+                                .await;
                                 return Ok(PipelineOutput {
                                     workflow_id: skill_name.to_string(),
                                     status: PipelineStatus::Failed,
@@ -1108,6 +1326,14 @@ pub async fn execute_dag(
     };
 
     emit_final(overall_exit_code != 0);
+    finalize_run(
+        mur_home,
+        &opts.run_id,
+        recorded.is_some(),
+        &mut heartbeat,
+        overall_exit_code != 0,
+    )
+    .await;
     Ok(PipelineOutput {
         workflow_id: skill_name.to_string(),
         status,
@@ -1117,6 +1343,43 @@ pub async fn execute_dag(
         duration_ms,
         tokens_used: overall_tokens,
     })
+}
+
+/// Stop the run's heartbeat and stamp its terminal state.
+///
+/// The stop MUST be awaited before the terminal save. `Heartbeat::stop` is
+/// async because flipping its flag is not enough: a beat already inside
+/// `beat_once` has passed the flag check, and its read-modify-write would
+/// clobber the terminal state back to `running` with a fresh heartbeat — a
+/// finished run reported alive forever, which is the exact failure this
+/// module exists to prevent. Awaiting guarantees any in-flight beat lands
+/// BEFORE this save, so the terminal write wins.
+///
+/// Mirrors `emit_final`: call it before every `PipelineOutput` return that
+/// can be reached once a run has been recorded.
+async fn finalize_run(
+    mur_home: &std::path::Path,
+    run_id: &str,
+    recorded: bool,
+    heartbeat: &mut Option<crate::run_status::heartbeat::Heartbeat>,
+    failed: bool,
+) {
+    if !recorded {
+        return;
+    }
+    if let Some(hb) = heartbeat.take() {
+        hb.stop().await;
+    }
+    // `update` holds an exclusive lock across load-modify-save. A bare
+    // load/save pair here would race `mur job stop` in another process, which
+    // does the same read-modify-write on the same file.
+    let _ = crate::run_status::store::update(mur_home, run_id, |record| {
+        record.state = if failed {
+            crate::run_status::State::Failed
+        } else {
+            crate::run_status::State::Done
+        };
+    });
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -1571,6 +1834,210 @@ mod tests {
         assert!(
             unbounded_peak >= 3,
             "unbounded peak {unbounded_peak} should exceed the cap (cap not lifted / steps not parallel)"
+        );
+    }
+
+    /// A run with an id must be observable from disk while it executes, and
+    /// must land on a terminal state when it finishes. Without this, a
+    /// timeout is the only signal a caller ever gets — which is the defect.
+    #[tokio::test]
+    async fn execute_dag_records_and_finalizes_a_run() {
+        use crate::run_status::store;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let procedure = Procedure {
+            variables: vec![],
+            steps: vec![step("s1", &[], None)],
+        };
+        let opts = DagExecOptions {
+            run_id: "run-under-test".into(),
+            run_kind: Some(crate::run_status::RunKind::Workflow),
+            run_label: "test run".into(),
+            ..Default::default()
+        };
+
+        let _ = execute_dag(mur_home, "test-skill", &procedure, &opts).await;
+
+        let run = store::load(mur_home, "run-under-test")
+            .unwrap()
+            .expect("execute_dag never wrote run.json");
+        assert_eq!(run.run_id, "run-under-test");
+        assert_eq!(
+            run.pid,
+            std::process::id(),
+            "must record the orchestrator pid"
+        );
+        assert!(
+            run.state.is_terminal(),
+            "run left non-terminal after execute_dag returned: {:?}",
+            run.state
+        );
+    }
+
+    /// THE regression for the review's empty-steps finding: the record is
+    /// written with `steps: []` and nothing ever updates it, so `mur job
+    /// status` cannot answer "what is it doing now?". Drive the real
+    /// executor over a one-step procedure and assert the FINAL record's
+    /// steps reflect the lifecycle the `on_step` observer saw — Started
+    /// stamped, then Done, with both timestamps set. The point is that
+    /// steps are no longer empty.
+    #[tokio::test]
+    async fn recorded_run_steps_reflect_the_step_lifecycle() {
+        use crate::run_status::{State, store};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let procedure = Procedure {
+            variables: vec![],
+            steps: vec![step("s1", &[], Some("echo hi"))],
+        };
+        let opts = DagExecOptions {
+            run_id: "run-with-steps".into(),
+            run_kind: Some(crate::run_status::RunKind::Workflow),
+            run_label: "steps run".into(),
+            ..Default::default()
+        };
+
+        let _ = execute_dag(mur_home, "test-skill", &procedure, &opts).await;
+
+        let run = store::load(mur_home, "run-with-steps")
+            .unwrap()
+            .expect("execute_dag never wrote run.json");
+        assert_eq!(
+            run.steps.len(),
+            1,
+            "the record's steps were never updated — `mur job status` would \
+             show no step rows for a step that ran"
+        );
+        let step0 = &run.steps[0];
+        assert_eq!(step0.id, "s1", "step id must be the DAG step id");
+        assert_eq!(
+            step0.state,
+            State::Done,
+            "the final record must show the step done"
+        );
+        assert!(
+            step0.started_at.is_some() && step0.ended_at.is_some(),
+            "both lifecycle timestamps must be stamped: {step0:?}"
+        );
+    }
+
+    /// A run-status recording failure (e.g. an unwritable `~/.mur/runs/`)
+    /// must not fail the run itself — observability must never take down
+    /// the thing it observes. Force `store::save`'s `create_dir_all` to fail
+    /// deterministically by putting a plain file where the run's directory
+    /// needs to go, then prove `execute_dag` still runs its step to a
+    /// successful conclusion instead of propagating the I/O error.
+    #[tokio::test]
+    async fn execute_dag_survives_a_run_recording_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let run_id = "run-that-cannot-be-recorded";
+
+        // `store::save` does `create_dir_all(<mur_home>/runs/<run_id>)`; a
+        // regular file already sitting at that exact path makes that call
+        // fail every time, deterministically, with no timing dependency.
+        std::fs::create_dir_all(mur_home.join("runs")).unwrap();
+        std::fs::write(mur_home.join("runs").join(run_id), b"not a directory").unwrap();
+
+        let procedure = Procedure {
+            variables: vec![],
+            steps: vec![step("s1", &[], None)],
+        };
+        let opts = DagExecOptions {
+            run_id: run_id.into(),
+            run_kind: Some(crate::run_status::RunKind::Workflow),
+            run_label: "test run".into(),
+            ..Default::default()
+        };
+
+        let output = execute_dag(mur_home, "test-skill", &procedure, &opts)
+            .await
+            .expect(
+                "execute_dag returned Err — a run-status recording failure \
+                 propagated out of the executor instead of being logged and \
+                 ignored, so bookkeeping took down real work",
+            );
+        assert_eq!(
+            output.status,
+            PipelineStatus::Success,
+            "execute_dag did not complete its step after a run-status \
+             recording failure — bookkeeping is taking down real work"
+        );
+    }
+
+    /// An empty `run_id` is the legacy default. It must not create a
+    /// directory called "" under runs/.
+    #[tokio::test]
+    async fn execute_dag_without_a_run_id_records_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let procedure = Procedure {
+            variables: vec![],
+            steps: vec![step("s1", &[], None)],
+        };
+        let opts = DagExecOptions::default();
+
+        let _ = execute_dag(tmp.path(), "test-skill", &procedure, &opts).await;
+
+        assert!(
+            crate::run_status::store::list_ids(tmp.path())
+                .unwrap()
+                .is_empty(),
+            "recorded a run for an empty run_id"
+        );
+    }
+
+    /// Pin the executor's own `sidecar.json` write — the `save_sidecar` call
+    /// in `execute_dag`'s recording block. A store-level round-trip test
+    /// would pass even if the executor never called it, and then a corrupt
+    /// run.json would silently hide the run: exactly the defect the
+    /// run-status fallback exists to remove, recreated as a testing blind
+    /// spot. This test runs the real executor against a real channel,
+    /// corrupts the cache it just wrote, and proves `status_of` re-derives
+    /// the record from the channel through the sidecar the executor left
+    /// behind.
+    #[tokio::test]
+    async fn corrupt_run_json_falls_back_via_the_executors_channel_sidecar() {
+        use mur_channel::ChannelService;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let svc = ChannelService::open(mur_home).unwrap();
+        let ch = svc.create_for_workflow("sidecar-wf").unwrap();
+
+        let procedure = Procedure {
+            variables: vec![],
+            steps: vec![step("s1", &[], Some("echo done"))],
+        };
+        let opts = DagExecOptions {
+            run_id: "run-sidecar".into(),
+            run_kind: Some(crate::run_status::RunKind::Workflow),
+            run_label: "sidecar test run".into(),
+            channel_id: Some(ch.id.clone()),
+            ..Default::default()
+        };
+        execute_dag(mur_home, "sidecar-wf", &procedure, &opts)
+            .await
+            .expect("execute_dag failed");
+
+        // Corrupt the cache the executor just wrote. The sidecar must survive
+        // it and carry the rebuild.
+        let run_json = crate::run_status::store::run_path(mur_home, "run-sidecar");
+        assert!(run_json.exists(), "execute_dag never wrote run.json");
+        std::fs::write(&run_json, b"{ this is not json").unwrap();
+
+        let status = crate::run_status::status_of(mur_home, "run-sidecar")
+            .unwrap()
+            .expect("the executor's sidecar must make a corrupt cache fall back to the channel");
+        assert_eq!(
+            status.state,
+            crate::run_status::State::Done,
+            "the channel's Completed transition must be re-derived from its events"
+        );
+        assert!(
+            status.run.last_heartbeat_at.is_none(),
+            "a re-derived record must report an unknown heartbeat, never invent one"
         );
     }
 }

@@ -580,6 +580,8 @@ pub async fn run_guarded(
             // uuid nonce so concurrent `--loop` runs don't collide on the
             // channel's idempotency-key dedup (the iteration stays for readability).
             run_id: format!("loop-{}-{}-{}", name, uuid::Uuid::now_v7(), iteration),
+            run_kind: Some(crate::run_status::RunKind::Fleet),
+            run_label: format!("fleet {name} iter {iteration}"),
             on_step: Some(on_step),
             ..Default::default()
         };

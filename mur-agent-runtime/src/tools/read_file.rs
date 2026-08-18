@@ -102,7 +102,7 @@ Relative paths resolve against the shared session working directory (the same ba
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "File to read (absolute, or relative to the agent working dir)" },
+                    "path": { "type": "string", "description": format!("File to read ({})", crate::tools::fs_policy::PATH_FORMS) },
                     "offset": { "type": "integer", "description": "1-indexed first line to return" },
                     "limit": { "type": "integer", "description": "Maximum number of lines to return" }
                 },

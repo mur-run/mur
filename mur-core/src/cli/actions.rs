@@ -502,6 +502,13 @@ pub enum FleetAction {
         /// Fleet name
         name: String,
     },
+    /// Report the fleet's most recent run, rendered exactly as `mur job
+    /// status` would (spec §4) — a lookup keyed by the fleet's channel plus
+    /// the shared renderer, not a separate status computation.
+    Status {
+        /// Fleet name
+        name: String,
+    },
     /// Run a fleet: one iteration, or `--loop` for a guarded loop
     Run {
         /// Fleet name

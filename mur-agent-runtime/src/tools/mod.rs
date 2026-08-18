@@ -67,3 +67,52 @@ pub trait ToolExecutor: Send + Sync {
     fn def(&self) -> ToolDef;
     async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::fs_policy::SessionCwd;
+    use mur_common::agent::FilesystemEntitlement;
+
+    fn cwd() -> SessionCwd {
+        SessionCwd::new(std::path::PathBuf::from("/tmp"))
+    }
+
+    fn ent() -> FilesystemEntitlement {
+        FilesystemEntitlement {
+            read: vec![],
+            write: vec![],
+            deny: vec![],
+        }
+    }
+
+    /// Every path-taking tool must advertise every form `fs_policy::resolve_path`
+    /// actually accepts — including `~`.
+    ///
+    /// When the schema lists fewer forms than the resolver implements, the model
+    /// expands `~` itself; and since nothing tells it what `~` is, it invents a
+    /// username. Observed in the wild: agents wrote to `/Users/i/.mur/...` and
+    /// `/Users/lidj/.mur/...` while the real home was `/Users/david`. The
+    /// output-locations rule in the system prompt tells the model to write under
+    /// `~/.mur/artifacts/`, so a schema that hides `~` puts two MUR-authored
+    /// strings in direct contradiction.
+    #[test]
+    fn path_taking_tools_advertise_tilde() {
+        let defs = [
+            write_file::WriteFileTool::new_for_test(cwd(), ent()).def(),
+            read_file::ReadFileTool::new_for_test(cwd(), ent()).def(),
+            edit_file::EditFileTool::new_for_test(cwd(), ent()).def(),
+        ];
+        for d in defs {
+            let desc = d.input_schema["properties"]["path"]["description"]
+                .as_str()
+                .unwrap_or_default();
+            assert!(
+                desc.contains('~'),
+                "{}: path description hides `~` support, so the model will expand \
+                 it itself and guess a home directory: {desc:?}",
+                d.name
+            );
+        }
+    }
+}

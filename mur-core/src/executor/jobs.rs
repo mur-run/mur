@@ -135,6 +135,8 @@ pub async fn run_parallel_jobs(
         trigger: "agent",
         channel_id: Some(channel_id.clone()),
         run_id: format!("run-{}", uuid::Uuid::now_v7()),
+        run_kind: Some(crate::run_status::RunKind::Job),
+        run_label: format!("{} parallel job(s)", jobs.len()),
         max_concurrency,
         ..Default::default()
     };
