@@ -299,8 +299,10 @@ pub enum AgentAction {
         fingerprint: String,
     },
     /// Run prereq checks for export targets (no build, just diagnostics).
-    /// With NAME, runs per-agent health checks (model_ref, MCP command
-    /// resolution, entitlements) instead.
+    /// With NAME, runs per-agent health checks instead: model_ref, MCP command
+    /// resolution, and filesystem grants that do not exist and will therefore
+    /// be dropped when the sandbox seals. For stale runtime BINARIES across
+    /// every running agent, use `mur agent runtime-doctor`.
     Doctor {
         /// Agent name to run per-agent health checks for. Omit for the
         /// existing export-prereq checks.
@@ -313,7 +315,9 @@ pub enum AgentAction {
         json: bool,
     },
     /// Check running agents for stale runtime binaries (build-sha compare).
-    /// Exits non-zero if any agent is stale.
+    /// Exits non-zero if any agent is stale. This is the FLEET-wide binary
+    /// check; for one agent's health — model, MCP servers, and filesystem
+    /// grants the kernel will drop — use `mur agent doctor <name>`.
     #[command(name = "runtime-doctor")]
     RuntimeDoctor {
         /// Emit JSON array instead of human text
