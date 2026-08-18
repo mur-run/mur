@@ -217,6 +217,46 @@ pub struct Config {
     /// Job/fleet/workflow run-status heartbeat tuning (`runs:`).
     #[serde(default)]
     pub runs: RunsConfig,
+
+    /// Capture-queue rotation (`capture:`).
+    #[serde(default)]
+    pub capture: CaptureConfig,
+}
+
+/// Rotation for `~/.mur/queue/events.jsonl`, in the shape FreeBSD's
+/// `newsyslog(8)` uses: rotate past a size, keep a bounded number of
+/// generations, compress all but the newest, drop the oldest.
+///
+/// The point of generations is that nobody has to decide to delete anything.
+/// A 934 MB queue becomes `.0`, then `.1.gz`, and ages out on a policy the
+/// user set rather than on a judgement call someone makes once.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CaptureConfig {
+    /// Rotate once the live file passes this. 64 MB keeps `mur hook stats`
+    /// responsive — parsing is O(file), and 934 MB took minutes.
+    #[serde(default = "default_rotate_at_mb")]
+    pub rotate_at_mb: u64,
+    /// How many rotated generations to keep. `.0` stays uncompressed like
+    /// newsyslog's, the rest are gzipped.
+    #[serde(default = "default_keep_generations")]
+    pub keep_generations: u32,
+}
+
+fn default_rotate_at_mb() -> u64 {
+    64
+}
+
+fn default_keep_generations() -> u32 {
+    5
+}
+
+impl Default for CaptureConfig {
+    fn default() -> Self {
+        Self {
+            rotate_at_mb: default_rotate_at_mb(),
+            keep_generations: default_keep_generations(),
+        }
+    }
 }
 
 /// Post-upgrade settings for `mur update`. Stored under `update:` in
@@ -497,6 +537,10 @@ impl Config {
         // on a zero period — both from one user-edited line.
         if self.runs.heartbeat_interval_secs == 0 {
             self.runs.heartbeat_interval_secs = default_heartbeat_interval_secs();
+        }
+        // A zero rotate size would rotate on every single append.
+        if self.capture.rotate_at_mb == 0 {
+            self.capture.rotate_at_mb = default_rotate_at_mb();
         }
         if self.runs.heartbeat_stale_after_intervals == 0 {
             self.runs.heartbeat_stale_after_intervals = default_heartbeat_stale_after_intervals();
