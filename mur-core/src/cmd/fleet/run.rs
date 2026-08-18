@@ -383,6 +383,8 @@ pub async fn cmd_fleet_run(
         yes: false,
         channel_id: Some(fleet.channel_id.clone()),
         run_id: run_id.clone(),
+        run_kind: Some(crate::run_status::RunKind::Fleet),
+        run_label: format!("fleet {}", fleet.name),
         // Cap fan-out so N worktree agents don't cascade past API rate limits.
         max_concurrency: exec_parallel.then(|| fanout_cap(proc.steps.len())),
         ..Default::default()
