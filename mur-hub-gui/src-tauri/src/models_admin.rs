@@ -6,7 +6,7 @@
 use mur_common::model::{ModelEntry, ModelRegistry};
 use mur_common::route::RouteTier;
 use mur_common::secret::SecretRef;
-use mur_core::model_discovery::{self, default_alias};
+use mur_core::model_discovery::{self, default_alias, wire_protocol_for};
 use mur_core::model_prices::{self, PriceInfo};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -96,25 +96,32 @@ pub fn probe_local_providers() -> Result<Vec<DetectedLocalView>, String> {
 }
 
 /// Find the stored `SecretRef` to reuse when re-exploring an already-connected
-/// provider: the first registry entry for `provider` that carries a secret.
+/// provider: the first entry belonging to `vendor` that carries a secret.
+///
+/// Matched on vendor candidates, not `provider`: the Library's rail is keyed
+/// by vendor, while the entry records the protocol it is dialed with.
 /// Returns `None` for providers with no stored credential (e.g. local).
-pub fn provider_secret_ref(reg: &ModelRegistry, provider: &str) -> Option<SecretRef> {
+pub fn provider_secret_ref(reg: &ModelRegistry, vendor: &str) -> Option<SecretRef> {
     reg.models
         .values()
-        .find(|e| e.provider == provider && e.secret.is_some())
+        .find(|e| e.secret.is_some() && e.vendor_candidates().iter().any(|v| v == vendor))
         .and_then(|e| e.secret.clone())
 }
 
-/// Base URL already stored for `provider`, if any.
+/// Base URL already stored for `vendor`, if any.
+///
+/// Matched against the entry's vendor candidates, not its `provider` field:
+/// after a DeepSeek entry is written as `provider: openai`, only the recorded
+/// vendor (or its endpoint host) still identifies it as DeepSeek.
 ///
 /// A provider fronted by a proxy (mur-model-gateway, LiteLLM, a self-hosted
 /// relay) has its endpoint in the registry, not at the vendor's canonical
 /// host. Discovery must reuse it or it dials the vendor directly with a
 /// gateway token and gets a 401.
-pub fn provider_base_url(reg: &ModelRegistry, provider: &str) -> Option<String> {
+pub fn provider_base_url(reg: &ModelRegistry, vendor: &str) -> Option<String> {
     reg.models
         .values()
-        .find(|e| e.provider == provider && e.base_url.is_some())
+        .find(|e| e.base_url.is_some() && e.vendor_candidates().iter().any(|v| v == vendor))
         .and_then(|e| e.base_url.clone())
 }
 
@@ -207,11 +214,18 @@ pub async fn test_provider(
     }
 
     let home = mur_home();
+    let home_for_discovery = home.clone();
     let prov = provider.clone();
     let prov2 = provider.clone();
     // discover_models uses reqwest::blocking — run it off the async runtime.
     let ids = tokio::task::spawn_blocking(move || {
-        model_discovery::discover_models_for(&prov2, &base, key.as_deref(), DISCOVER_TIMEOUT_SECS)
+        model_discovery::discover_models_for(
+            &prov2,
+            &home_for_discovery,
+            &base,
+            key.as_deref(),
+            DISCOVER_TIMEOUT_SECS,
+        )
     })
     .await
     .map_err(|e| format!("discovery task failed: {e}"))?
@@ -224,6 +238,34 @@ pub async fn test_provider(
             EnrichedModelView::build(&prov, &m, price)
         })
         .collect())
+}
+
+/// Resolve what an entry must carry to be dialable: the wire protocol for
+/// `provider:` and the endpoint for `base_url:`.
+///
+/// The UI names a **vendor** (its preset key: `deepseek`, `groq`, `google`,
+/// `mlx`, …), but `provider:` selects one of the four clients the runtime
+/// ships. Writing the vendor there yields an entry the runtime cannot build,
+/// and the agent answers every message with a misconfiguration notice — so
+/// the vendor is mapped through [`wire_protocol_for`] here, exactly as
+/// `mur model connect` does, and kept only for catalog pricing.
+///
+/// A vendor that maps onto the OpenAI protocol without an endpoint is
+/// rejected rather than written: `provider: openai` with no `base_url` dials
+/// api.openai.com, so a DeepSeek key would be sent to OpenAI and fail with an
+/// error naming the wrong service.
+pub fn resolve_wire_target(
+    vendor: &str,
+    base_url: Option<String>,
+) -> Result<(&'static str, Option<String>), String> {
+    let protocol = wire_protocol_for(vendor);
+    let base = base_url.filter(|u| !u.trim().is_empty());
+    if protocol == "openai" && vendor != "openai" && base.is_none() {
+        return Err(format!(
+            "{vendor} is reached over the OpenAI protocol, so it needs a base URL —              without one the request would go to api.openai.com"
+        ));
+    }
+    Ok((protocol, base))
 }
 
 #[tauri::command]
@@ -251,10 +293,17 @@ pub fn add_models(
     let resolved_base_url = base_url
         .clone()
         .or_else(|| provider_base_url(&reg, &provider));
+    // `provider` from the UI is a vendor; the registry field is a protocol.
+    let (wire, resolved_base_url) = resolve_wire_target(&provider, resolved_base_url)?;
     for pick in picks {
+        // Pricing still keys off the VENDOR — models.dev files DeepSeek under
+        // `deepseek`, and knows nothing about the protocol used to reach it.
         let price = model_prices::lookup(&home, &provider, &pick.model, is_local);
         let entry = ModelEntry {
-            provider: provider.clone(),
+            provider: wire.to_string(),
+            // Keep who makes it; `wire` only says how MUR dials it. Recorded
+            // only when it adds information.
+            vendor: (provider != wire).then(|| provider.clone()),
             model: pick.model.clone(),
             base_url: resolved_base_url.clone(),
             secret: secret.clone(),
@@ -344,6 +393,76 @@ mod tests {
         assert_eq!(v.input_cost, Some(0.00125));
         assert_eq!(v.output_cost, Some(0.01));
         assert_eq!(v.context_window, Some(400_000));
+    }
+
+    #[test]
+    fn vendor_presets_are_written_as_the_protocol_the_runtime_can_dial() {
+        // Native: vendor name IS the client name, endpoint optional.
+        assert_eq!(
+            resolve_wire_target("anthropic", None).unwrap(),
+            ("anthropic", None)
+        );
+        assert_eq!(
+            resolve_wire_target("openai", None).unwrap(),
+            ("openai", None)
+        );
+        // Every other Model Library preset is OpenAI-protocol. Writing the
+        // vendor here produced entries the runtime refuses to build a client
+        // for, so the agent replied with a misconfiguration notice instead of
+        // answering.
+        for vendor in ["deepseek", "groq", "mistral", "xai", "openrouter", "google"] {
+            let (protocol, base) =
+                resolve_wire_target(vendor, Some(format!("https://api.{vendor}.test/v1"))).unwrap();
+            assert_eq!(protocol, "openai", "vendor {vendor}");
+            assert!(base.is_some(), "vendor {vendor} must keep its endpoint");
+        }
+        // Local runtimes: only Ollama has its own client.
+        assert_eq!(
+            resolve_wire_target("ollama", Some("http://localhost:11434/v1".into()))
+                .unwrap()
+                .0,
+            "ollama"
+        );
+        assert_eq!(
+            resolve_wire_target("mlx", Some("http://127.0.0.1:8000/v1".into()))
+                .unwrap()
+                .0,
+            "openai"
+        );
+    }
+
+    #[test]
+    fn openai_protocol_vendor_without_an_endpoint_is_refused() {
+        // Would otherwise send a DeepSeek key to api.openai.com.
+        let err = resolve_wire_target("deepseek", None).unwrap_err();
+        assert!(err.contains("base URL"), "{err}");
+        // Blank counts as absent.
+        assert!(resolve_wire_target("groq", Some("   ".into())).is_err());
+    }
+
+    #[test]
+    fn stored_credential_and_endpoint_are_found_by_vendor_not_protocol() {
+        // A DeepSeek entry written the correct way: dialed as openai, but the
+        // Library's rail is keyed by vendor, so both lookups must match on it.
+        let mut reg = ModelRegistry::default();
+        reg.models.insert(
+            "deepseek_chat".into(),
+            ModelEntry {
+                provider: "openai".into(),
+                vendor: Some("deepseek".into()),
+                model: "deepseek-chat".into(),
+                base_url: Some("https://api.deepseek.com/v1".into()),
+                secret: Some(SecretRef::Env("DEEPSEEK_KEY".into())),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            provider_base_url(&reg, "deepseek").as_deref(),
+            Some("https://api.deepseek.com/v1")
+        );
+        assert!(provider_secret_ref(&reg, "deepseek").is_some());
+        // And not attributed to OpenAI just because that is the protocol.
+        assert_eq!(provider_base_url(&reg, "anthropic"), None);
     }
 
     #[test]

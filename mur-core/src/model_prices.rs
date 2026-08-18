@@ -113,6 +113,15 @@ impl Catalog {
             context_window: raw.limit.as_ref().and_then(|l| l.context),
         })
     }
+
+    /// All model ids the catalog lists under `provider`, sorted.
+    /// `None` when the catalog has no such provider.
+    pub fn provider_models(&self, provider: &str) -> Option<Vec<String>> {
+        let prov = self.providers.get(provider)?;
+        let mut ids: Vec<String> = prov.models.keys().cloned().collect();
+        ids.sort();
+        Some(ids)
+    }
 }
 
 /// Return the path where the catalog cache should be stored.
@@ -131,6 +140,15 @@ pub fn load_cached(mur_home: &Path, ttl_hours: u64) -> Option<Catalog> {
     }
     let body = std::fs::read_to_string(&path).ok()?;
     parse_catalog(&body).ok()
+}
+
+/// Best-effort catalog handle: fresh cache → network fetch (+cache) → stale
+/// cache. Unlike [`lookup`], the ladder stops at the first *catalog*, not the
+/// first hit — a fresh cache that lacks one model does not trigger a refetch.
+pub fn load_or_fetch(mur_home: &Path) -> Option<Catalog> {
+    load_cached(mur_home, TTL_HOURS)
+        .or_else(|| fetch_and_cache(mur_home))
+        .or_else(|| load_cached(mur_home, u64::MAX))
 }
 
 /// Fetch the catalog from the network and write it to the cache.
@@ -189,6 +207,23 @@ pub fn lookup(
     }
     // Fall back to stale cache
     load_cached(mur_home, u64::MAX).and_then(|cat| cat.lookup(provider, model))
+}
+
+/// Resolve pricing for a registry entry, asking the catalog under every vendor
+/// name the entry implies (see [`ModelEntry::vendor_candidates`]).
+///
+/// Prefer this over [`lookup`] whenever you hold an entry: `provider` alone is
+/// a wire protocol as often as a vendor, so a DeepSeek entry
+/// (`provider: openai`) is priced only when `deepseek` is tried too.
+pub fn lookup_entry(
+    mur_home: &Path,
+    entry: &mur_common::model::ModelEntry,
+    tier_is_local: bool,
+) -> Option<PriceInfo> {
+    entry
+        .vendor_candidates()
+        .into_iter()
+        .find_map(|vendor| lookup(mur_home, &vendor, &entry.model, tier_is_local))
 }
 
 #[cfg(test)]
