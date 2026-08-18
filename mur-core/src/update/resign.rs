@@ -120,17 +120,28 @@ mod macos {
     use super::{SIGN_TARGETS, is_adhoc_output, pick_identity};
 
     /// Re-sign every installed MUR binary with the configured identity. No
-    /// identity configured → warn loudly and leave the install ad-hoc.
+    /// identity configured → warn loudly and leave signatures as shipped.
     pub(super) fn resign_installed_binaries(fresh_runtime: Option<&Path>) -> Result<()> {
         let identity = pick_identity(
             config_identity().as_deref(),
             std::env::var("MUR_CODESIGN_IDENTITY").ok().as_deref(),
         );
 
+        // Refresh the launchd runtime copy BEFORE the identity gate: shipping
+        // the freshly downloaded runtime must not depend on whether a signing
+        // identity is configured. With none configured (the default), the old
+        // order discarded the release runtime entirely and left every service
+        // on the previous — possibly ad-hoc — binary across every update.
+        let mut targets = discover_targets();
+        refresh_local_runtime_copy(&mut targets, fresh_runtime);
+
         let Some(id) = identity else {
-            println!("⚠ No codesign identity configured — installed binaries stay ad-hoc signed.");
             println!(
-                "  macOS keychain grants will NOT survive this upgrade: agents using \
+                "⚠ No codesign identity configured — installed binaries keep their current \
+                 signatures."
+            );
+            println!(
+                "  macOS keychain grants will NOT survive an ad-hoc rebuild: agents using \
                  `keychain:` secrets"
             );
             println!(
@@ -143,19 +154,47 @@ mod macos {
             return Ok(());
         };
 
-        let mut targets = discover_targets();
-        refresh_local_runtime_copy(&mut targets, fresh_runtime);
         if targets.is_empty() {
             println!("⚠ no installed MUR binaries found to re-sign");
             return Ok(());
         }
-        sign_all(&id, &targets)?;
-        verify_not_adhoc(&targets)?;
-        println!(
-            "✓ re-signed {} binaries with '{id}' — keychain grants survive this upgrade",
-            targets.len()
-        );
+        let (release_signed, to_sign) = split_release_signed(targets);
+        if !release_signed.is_empty() {
+            println!(
+                "✓ kept the MUR Developer ID signature on {} binaries (a local re-sign would \
+                 break runtime attestation)",
+                release_signed.len()
+            );
+        }
+        if !to_sign.is_empty() {
+            sign_all(&id, &to_sign)?;
+            verify_not_adhoc(&to_sign)?;
+            println!(
+                "✓ re-signed {} binaries with '{id}' — keychain grants survive this upgrade",
+                to_sign.len()
+            );
+        }
         Ok(())
+    }
+
+    /// Partition `targets` into (already release-signed, needs local re-sign).
+    ///
+    /// A binary that already satisfies the MUR Developer ID requirement is
+    /// strictly better than anything a local identity produces: it is stable
+    /// across upgrades (all the re-sign feature exists to guarantee) AND it
+    /// passes runtime attestation. `codesign --force`-ing it with a local
+    /// identity would strip the team signature and fail every later
+    /// `mur agent start/restart` / A2A dial on release builds. Dev builds
+    /// embed no team ID (`verify_runtime_signature` vacuously passes), so
+    /// there everything stays eligible for re-signing.
+    fn split_release_signed(targets: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>) {
+        use mur_common::binary_attestation as attest;
+        if !attest::IS_EMBEDDED_RELEASE {
+            return (Vec::new(), targets);
+        }
+        targets
+            .into_iter()
+            .partition(|p| attest::verify_runtime_signature(p).is_ok())
     }
 
     fn config_identity() -> Option<String> {
@@ -223,7 +262,16 @@ mod macos {
             return;
         };
         if !copy.exists() {
-            return; // this machine doesn't use the copy layout
+            // This machine doesn't use the copy layout (keg installs run the
+            // keg binary, refreshed by `brew upgrade`) — but say so instead of
+            // silently discarding a runtime we were handed.
+            if fresh_runtime.is_some() {
+                println!(
+                    "ℹ no runtime copy at {} — this install runs the keg/sibling binary directly",
+                    copy.display()
+                );
+            }
+            return;
         }
         let source: Option<PathBuf> = fresh_runtime.map(PathBuf::from).or_else(|| {
             targets
@@ -329,6 +377,20 @@ mod macos {
             replace_file(&src, &dst).unwrap();
             assert_eq!(std::fs::read(&dst).unwrap(), b"NEW");
             assert!(!dir.path().join("mur-agent-runtime.new").exists());
+        }
+
+        #[test]
+        fn dev_builds_never_treat_targets_as_release_signed() {
+            // Without an embedded team ID, `verify_runtime_signature` passes
+            // vacuously on EVERY path — which must not be read as "already
+            // release-signed", or dev builds would skip re-signing entirely.
+            if mur_common::binary_attestation::IS_EMBEDDED_RELEASE {
+                return; // release CI exercises the real partition
+            }
+            let t = vec![std::path::PathBuf::from("/bin/ls")];
+            let (release_signed, to_sign) = super::split_release_signed(t.clone());
+            assert!(release_signed.is_empty());
+            assert_eq!(to_sign, t);
         }
     }
 }
