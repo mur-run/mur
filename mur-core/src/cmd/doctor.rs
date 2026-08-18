@@ -481,6 +481,36 @@ pub fn agent_doctor(mur_home: &std::path::Path, name: &str) -> Result<Vec<Check>
         None => out.push(Check::new("model_ref", true, "inline model (no ref)")),
     }
 
+    // The runtime resolves model + secret at start and silently degrades to
+    // an echo stub when either fails (`client_builder` logs a warning nobody
+    // sees and carries on) — a dead keychain entry produces a "working" agent
+    // that parrots its input back. Run the exact same resolution here, where
+    // a human is watching. NOTE: on macOS a `keychain:` ref may pop the
+    // authorization prompt; doctor is interactive, which is the right place
+    // for that prompt to happen.
+    match mur_agent_runtime::supervisor::resolve_model_entry(&profile) {
+        Ok(entry) => match &entry.secret {
+            Some(sref) => match sref.resolve_blocking() {
+                Ok(_) => out.push(Check::new("secret", true, format!("'{sref}' resolves"))),
+                Err(e) => out.push(Check::new(
+                    "secret",
+                    false,
+                    format!(
+                        "'{sref}' does NOT resolve ({e}) — at start the runtime silently \
+                         falls back to an echo stub. Fix the secret (`mur agent secret \
+                         {name} set …` or `mur model connect`), then restart the agent."
+                    ),
+                )),
+            },
+            None => out.push(Check::new("secret", true, "model needs no secret")),
+        },
+        Err(e) => out.push(Check::new(
+            "model",
+            false,
+            format!("model resolution failed ({e:#}) — the runtime will start as an echo stub"),
+        )),
+    }
+
     for server in &profile.mcp_servers {
         let check_name = format!("mcp:{}", server.name);
         match crate::cmd::agent_mcp_pin::resolve_command(&server.command) {
@@ -672,6 +702,14 @@ mod tests {
         assert!(
             report.iter().any(|c| c.name == "model_ref" && !c.ok),
             "expected a failing model_ref check, got: {report:?}"
+        );
+        // The dangling ref also fails model resolution, which at runtime
+        // silently becomes an echo stub — doctor must say so.
+        assert!(
+            report
+                .iter()
+                .any(|c| c.name == "model" && !c.ok && c.detail.contains("echo stub")),
+            "expected a failing model-resolution check naming the echo fallback, got: {report:?}"
         );
     }
 }
