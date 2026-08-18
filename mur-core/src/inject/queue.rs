@@ -47,6 +47,42 @@ pub fn enqueue_to(event: &NormalizedEvent, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// One line of the queue: the event the hook reported, plus the metadata the
+/// queue itself added when it wrote the line.
+///
+/// `recorded_at` is `None` for records written before stamping existed (#982).
+/// Absence means "before stamping", never "error" — treating it as an error
+/// would make the first report after that change cover nothing.
+#[derive(Debug, Clone)]
+pub struct QueueRecord {
+    pub recorded_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub event: NormalizedEvent,
+}
+
+/// Read the queue as records, keeping the write-time metadata that
+/// `read_all_events` drops. Malformed lines are skipped, as there.
+pub fn read_all_records(path: &Path) -> Vec<QueueRecord> {
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return Vec::new(),
+    };
+    std::io::BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|line| {
+            let value: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+            let recorded_at = value
+                .get("recorded_at")
+                .and_then(|v| v.as_str())
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc));
+            let event: NormalizedEvent = serde_json::from_value(value).ok()?;
+            Some(QueueRecord { recorded_at, event })
+        })
+        .collect()
+}
+
 /// Read all events from the queue file. Returns an empty Vec if the file
 /// does not exist or cannot be read. Malformed JSON lines are silently skipped
 /// so a corrupt line never crashes the stats command.

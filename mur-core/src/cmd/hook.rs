@@ -517,8 +517,10 @@ pub(crate) async fn cmd_hook_session_start(tool: &str) -> Result<()> {
 pub(crate) fn cmd_hook_stats() -> Result<()> {
     let home = dirs::home_dir().context("could not determine home directory")?;
     let queue_path = home.join(".mur").join("queue").join("events.jsonl");
-    let events = crate::inject::queue::read_all_events(&queue_path);
-    let stats = crate::inject::stats::compute(&events);
+    // Records, not events: the write-time metadata is what lets the report say
+    // which window it covers (#979).
+    let records = crate::inject::queue::read_all_records(&queue_path);
+    let stats = crate::inject::stats::compute_records(&records);
     let output = crate::inject::stats::format_stats(&stats, &queue_path.display().to_string());
     print!("{output}");
     Ok(())
