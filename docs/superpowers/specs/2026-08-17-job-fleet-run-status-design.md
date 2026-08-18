@@ -1,7 +1,7 @@
 # Job / fleet run status and lifecycle — design
 
 Date: 2026-08-17
-Status: approved (design), not yet implemented
+Status: implemented — #963 (waves A+B), #968 (follow-ups), #970
 
 MUR can start work it cannot observe. `parallel_jobs`, `fleet run`, and
 `workflow run` all execute through the same DAG executor, and none of them
@@ -21,6 +21,93 @@ was still alive while its work was already dead, so process liveness alone would
 have reported `running`.
 
 ---
+
+## The defects this removes
+
+Written as a separate design pass (PR #962) and folded in here so the
+motivation lives with the design instead of in a closed PR. Each defect was
+verified in code at the time; all seven are addressed by the sections below
+and were fixed in #963 / #968.
+
+A fleet's work has three interested surfaces — CLI, murmur TUI, Hub — and no
+shared answer to the four questions a user actually asks: *is it running, what
+is it doing, what did it cost, what happened last time?* Each surface derives
+its own partial answer from a different store, and several of those answers
+are provably wrong. This is the same disease the murmur UX batch diagnosed
+(A1–A7): one fact, told differently by every interface that touches it.
+
+Concrete defects, each verified in code:
+
+### 1. A crashed run's job lies for six hours, then lies differently
+
+`reconcile_running` (`jobs.rs:88-125`) has a channel-truth arm that adopts the
+channel's terminal state for a zombie `running` job — but it is gated on
+`job.run_id.is_some()`, and **no production write path ever produces a
+`running` job with a `run_id`**. Both writers stamp `run_id` in the same save
+as the terminal status (`run.rs:405-407`, `loop_run.rs:591-593`);
+`resolve_run_goal`/`iteration_goal` save the `Running` transition without it
+(`run.rs:181-185`, `loop_run.rs:235-239`). The arm is unreachable. The unit
+test that covers it fabricates the state by hand
+(`mur-core/src/cmd/agent/cli/fleet_rail/tests.rs`, lines 433-436) — it
+passes while proving nothing about the production flow.
+
+Consequence: every crashed run takes the fallback path — six hours of
+`RUNNING_GRACE_SECS` (`jobs.rs:16`) showing `running`, then
+`failed (orphaned)` — **even when the channel recorded `completed`** before
+the crash.
+
+### 2. A live run longer than six hours is falsely failed mid-flight
+
+The orphan rule has no liveness signal, only wall clock. A legitimate 7-hour
+loop (deadline `12h`) produces channel activity but no terminal `StateChange`
+until the end, so at hour six the reconciler flips its job to
+`failed (orphaned)` while the run is still working; the end-of-run stamp later
+overwrites it back. Status flip-flops through states that were never true.
+
+### 3. A standing-goal run is invisible
+
+`mur fleet list` derives ▶ running from job records (`list.rs:63-71`), and the
+Hub does the same. Goal-mode runs never touch the job store, so a fleet
+mid-run shows ● idle everywhere except the murmur TUI — which patched this
+locally with `run_in_flight`, knowledge only the invoking TUI has
+(`fleet_rail.rs:207-238`). A run started by the daemon or another terminal is
+invisible to everyone.
+
+### 4. The loop path still tells the #10 lie, and can leave jobs running
+
+`run.rs` learned (#10) that a DAG can return `Ok` while the channel ended
+`failed`, so it reads the channel back before stamping the job
+(`run.rs:394-448`). The loop never got the fix: it stamps `Done`
+unconditionally (`loop_run.rs:590-597`), and on an execution error the `?` at
+`loop_run.rs:586-588` propagates before any stamp — the claimed job stays
+`Running` and waits for defect 1's six-hour path.
+
+### 5. Three run identities, zero joins
+
+A single run mints `run-<uuidv7>` (`run.rs:377`); each loop iteration mints
+`loop-<name>-<uuidv7>-<iter>` (`loop_run.rs:582`); the progress file mints a
+third, bare UUID (`loop_run.rs:390`). None of them can be recovered from the
+channel: `run_id` goes into idempotency keys only as a SHA-256 input
+(`idem_key`, `mur-core/src/executor/dag.rs`, lines 163-165). Given a job's
+`run_id` there is nowhere to look
+it up; given a channel there is no way to slice it into runs except a seq
+cursor someone remembered at the time.
+
+### 6. There is no run history, and nothing reads what little exists
+
+`.run_progress.json` is loop-only, overwritten by the next run
+(`progress.rs:9-11`); single runs write nothing (no progress, no `on_step`
+observer). No CLI command reads it — its only consumer is the deep-research
+panel. The loop's stop reason (`converged` / `budget` / `stuck` …) reaches
+exactly one place: the invoker's stdout. For a daemon-triggered loop, that is
+a log line in `tracing` and nothing else.
+
+### 7. The Hub's "last run" is a scheduler cursor, not a fact
+
+The Hub renders `.last_run` (`hub fleet.rs:81-88`) — a file written only by
+the daemon's `fleet_tick` as its due-check cursor. Manual, Hub-invoked, and
+TUI-invoked runs never update it, so "last run" in the Hub is wrong for every
+run the user started themselves.
 
 ## 0. What exists today (verified against `main` @ 78736ae7)
 
