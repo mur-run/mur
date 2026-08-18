@@ -240,8 +240,55 @@ pub fn cmd_create(
         .with_context(|| format!("copy {} to {}", target.display(), symlink.display()))?;
 
     println!("Created agent '{}' at {}", name, agent_home.display());
+    // Say what it bound to. `--model` accepts a registry key, a bare model id
+    // and `provider/model`, and a value that misses a registry key by one
+    // character silently becomes an ollama binding for a model ollama does not
+    // have — an agent that looks created and answers nothing.
+    match &profile.model_ref {
+        Some(r) => println!(
+            "Model: {}/{} via registry key '{r}'",
+            profile.model.provider, profile.model.name
+        ),
+        None => {
+            println!(
+                "Model: {}/{} (no registry key — no stored credential)",
+                profile.model.provider, profile.model.name
+            );
+            if let Some(near) = near_registry_key(&mur_home, &profile.model.name)? {
+                println!("       did you mean the registry key '{near}'? (`mur model list`)");
+            }
+        }
+    }
     println!("Symlink: {} -> {}", symlink.display(), target.display());
     Ok(())
+}
+
+/// A registry key that differs from `typed` only in punctuation or case —
+/// `anthropic_claude_opus5` for `anthropic_claude_opus_5`. Returns `Some` only
+/// when exactly one key matches, so the hint is never a guess between two.
+fn near_registry_key(mur_home: &Path, typed: &str) -> Result<Option<String>> {
+    use mur_common::model::ModelRegistry;
+
+    let squash = |s: &str| -> String {
+        s.chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .map(|c| c.to_ascii_lowercase())
+            .collect()
+    };
+    let target = squash(typed);
+    if target.is_empty() {
+        return Ok(None);
+    }
+    let reg_path = mur_home.join("models.yaml");
+    let Ok(reg) = ModelRegistry::load_from(&reg_path) else {
+        return Ok(None);
+    };
+    let mut hits = reg.models.keys().filter(|k| squash(k) == target);
+    let first = hits.next().cloned();
+    Ok(match hits.next() {
+        Some(_) => None,
+        None => first,
+    })
 }
 
 /// Look up an exact registry key match for a bare `--model` value (e.g.
@@ -1029,6 +1076,64 @@ mod tests_resolve_model_ref_for_create {
             .unwrap();
 
         assert_eq!(mr, Some("claude_sonnet".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod tests_near_registry_key {
+    use super::*;
+    use mur_common::model::{ModelEntry, ModelRegistry};
+
+    fn seed(home: &std::path::Path, keys: &[&str]) {
+        let mut reg = ModelRegistry::default();
+        for k in keys {
+            reg.models.insert((*k).into(), ModelEntry::default());
+        }
+        reg.save_to(&home.join("models.yaml")).unwrap();
+    }
+
+    /// A one-character miss on a registry key used to produce an ollama agent
+    /// bound to a model ollama does not have, reported as a success.
+    #[test]
+    fn names_the_key_only_when_it_is_unambiguous() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        seed(home, &["anthropic_claude_opus_5", "omlx"]);
+
+        // Missing underscore, wrong case, no separators — all the same key.
+        for typed in [
+            "anthropic_claude_opus5",
+            "Anthropic-Claude-Opus-5",
+            "anthropicclaudeopus5",
+        ] {
+            assert_eq!(
+                near_registry_key(home, typed).unwrap().as_deref(),
+                Some("anthropic_claude_opus_5"),
+                "typed {typed}"
+            );
+        }
+        // A genuine ollama model id must not be dressed up as a typo.
+        assert_eq!(near_registry_key(home, "llama3.2:3b").unwrap(), None);
+        assert_eq!(near_registry_key(home, "").unwrap(), None);
+    }
+
+    #[test]
+    fn stays_silent_when_two_keys_collide() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        // Both reduce to "gpt5".
+        seed(home, &["gpt_5", "gpt-5"]);
+        assert_eq!(
+            near_registry_key(home, "gpt5").unwrap(),
+            None,
+            "a hint that has to pick between two keys is a guess"
+        );
+    }
+
+    #[test]
+    fn missing_registry_is_not_an_error() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert_eq!(near_registry_key(tmp.path(), "anything").unwrap(), None);
     }
 }
 

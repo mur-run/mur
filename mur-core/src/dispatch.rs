@@ -189,6 +189,10 @@ pub async fn run(cli: Cli) -> Result<()> {
             } => {
                 cmd::channel::approve(&channel_id, &hitl_id, deny, reason)?;
             }
+            ChannelAction::BackfillPurpose { apply, limit } => {
+                let home = cmd::agent::resolve_mur_home()?;
+                cmd::channel::backfill_purpose(&home, apply, limit)?;
+            }
         },
         Commands::Job { action } => {
             let mur_home = crate::paths::mur_root(None);
@@ -598,7 +602,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             eprintln!("# mur serve: use `mur daemon serve`");
             cmd::server_cmd::cmd_serve(port, open, readonly).await?
         }
-        Commands::Model(args) => cmd::model::run(args)?,
+        Commands::Model(args) => cmd::model::run(args).await?,
         Commands::Migrate { patterns } => {
             if patterns {
                 cmd::migrate_patterns::cmd_migrate_patterns()?;

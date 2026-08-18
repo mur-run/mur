@@ -58,6 +58,7 @@ const COMMANDS: &[(&str, &str, &[&str])] = &[
             "registry-add",
         ],
     ),
+    ("model", "list or hot-switch the model", &[]),
     (
         "panel",
         "companion window (MUR Hub)",

@@ -22,6 +22,19 @@ use std::path::{Path, PathBuf};
 pub struct ModelEntry {
     #[serde(default)]
     pub provider: String,
+    /// Who makes this model — the models.dev catalog vendor (`deepseek`,
+    /// `groq`, `mistral`, …).
+    ///
+    /// Distinct from `provider`, which is the wire protocol MUR dials: a
+    /// DeepSeek entry is `provider: openai` + `vendor: deepseek`, because the
+    /// runtime reaches it over the OpenAI protocol while the catalog files it
+    /// under DeepSeek. Only recorded when the two differ — for Anthropic,
+    /// OpenAI and Ollama the protocol already names the vendor.
+    ///
+    /// `None` on entries written before this field existed; readers should go
+    /// through [`ModelEntry::vendor_candidates`] rather than reading it raw.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vendor: Option<String>,
     #[serde(default)]
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -61,6 +74,23 @@ pub struct ModelEntry {
     pub priced_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// Vendor label implied by an endpoint host: `https://api.deepseek.com/v1` →
+/// `deepseek`. Best-effort — a host that does not carry the vendor's name
+/// (Google's `generativelanguage.googleapis.com`) yields the wrong label,
+/// which is why `vendor` is recorded explicitly on new entries.
+fn vendor_label_of_url(base_url: Option<&str>) -> Option<String> {
+    let host = base_url?
+        .split("//")
+        .nth(1)
+        .unwrap_or(base_url?)
+        .split(['/', ':'])
+        .next()
+        .unwrap_or("");
+    let label = host.strip_prefix("api.").unwrap_or(host);
+    let first = label.split('.').next().unwrap_or("");
+    (!first.is_empty()).then(|| first.to_string())
+}
+
 impl ModelEntry {
     /// Resolve effective per-1k rates as `(input, output)`.
     ///
@@ -70,6 +100,33 @@ impl ModelEntry {
         let output = self.output_cost_per_1k.or(self.cost_per_1k_tokens);
         let input = self.input_cost_per_1k.or(self.cost_per_1k_tokens);
         (input, output)
+    }
+
+    /// Catalog vendor names to try for this entry, most specific first.
+    ///
+    /// The recorded `vendor` wins. Failing that — legacy entries, or anything
+    /// written by hand — the host of `base_url` is tried
+    /// (`https://api.deepseek.com` → `deepseek`), then `provider`, which names
+    /// the vendor only when the vendor happens to have its own client.
+    ///
+    /// Every caller that asks an external catalog about an entry must go
+    /// through this. Asking with `provider` alone reports every
+    /// OpenAI-compatible third party as unknown.
+    pub fn vendor_candidates(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::with_capacity(3);
+        let mut push = |v: &str| {
+            if !v.is_empty() && !out.iter().any(|e| e == v) {
+                out.push(v.to_string());
+            }
+        };
+        if let Some(v) = self.vendor.as_deref() {
+            push(v);
+        }
+        if let Some(label) = vendor_label_of_url(self.base_url.as_deref()) {
+            push(&label);
+        }
+        push(&self.provider);
+        out
     }
 
     /// Whether this entry carries any rate at all.
@@ -255,6 +312,63 @@ pub fn pick_cheap_model(reg: &ModelRegistry, exclude: Option<&str>) -> Option<St
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn vendor_candidates_prefer_the_recorded_vendor_then_the_host_then_provider() {
+        // Recorded vendor wins — this is what new entries carry.
+        let e = ModelEntry {
+            provider: "openai".into(),
+            vendor: Some("deepseek".into()),
+            base_url: Some("https://api.deepseek.com/v1".into()),
+            ..Default::default()
+        };
+        assert_eq!(e.vendor_candidates(), vec!["deepseek", "openai"]);
+
+        // Legacy entry with no vendor: the endpoint host still identifies it,
+        // which is how registries written before the field keep working.
+        let legacy = ModelEntry {
+            provider: "openai".into(),
+            base_url: Some("https://api.deepseek.com/v1".into()),
+            ..Default::default()
+        };
+        assert_eq!(legacy.vendor_candidates(), vec!["deepseek", "openai"]);
+
+        // Nothing to infer: provider is all there is.
+        let bare = ModelEntry {
+            provider: "anthropic".into(),
+            ..Default::default()
+        };
+        assert_eq!(bare.vendor_candidates(), vec!["anthropic"]);
+
+        // No duplicate when host and provider agree.
+        let same = ModelEntry {
+            provider: "openai".into(),
+            base_url: Some("https://api.openai.com/v1".into()),
+            ..Default::default()
+        };
+        assert_eq!(same.vendor_candidates(), vec!["openai"]);
+    }
+
+    #[test]
+    fn vendor_is_omitted_from_yaml_when_absent_and_round_trips_when_set() {
+        let bare = ModelEntry {
+            provider: "anthropic".into(),
+            model: "claude-opus-5".into(),
+            ..Default::default()
+        };
+        let y = serde_yaml_ng::to_string(&bare).unwrap();
+        assert!(!y.contains("vendor"), "{y}");
+
+        let tagged = ModelEntry {
+            provider: "openai".into(),
+            vendor: Some("groq".into()),
+            model: "llama-3.3".into(),
+            ..Default::default()
+        };
+        let y = serde_yaml_ng::to_string(&tagged).unwrap();
+        let back: ModelEntry = serde_yaml_ng::from_str(&y).unwrap();
+        assert_eq!(back.vendor.as_deref(), Some("groq"));
+    }
     use super::*;
 
     #[test]
@@ -305,6 +419,7 @@ models:
                 output_cost_per_1k: None,
                 context_window: None,
                 priced_at: None,
+                ..Default::default()
             },
         );
         let s = serde_yaml_ng::to_string(&r).unwrap();
@@ -365,6 +480,7 @@ roles:
                 output_cost_per_1k: None,
                 context_window: None,
                 priced_at: None,
+                ..Default::default()
             },
         );
         reg.roles.insert(
@@ -396,6 +512,7 @@ roles:
                 output_cost_per_1k: None,
                 context_window: None,
                 priced_at: None,
+                ..Default::default()
             },
         );
         reg.roles.insert(
@@ -451,6 +568,7 @@ models:
                 output_cost_per_1k: None,
                 context_window: None,
                 priced_at: None,
+                ..Default::default()
             },
         );
         let yaml = serde_yaml_ng::to_string(&r2).unwrap();
@@ -596,6 +714,7 @@ mod io_tests {
                 output_cost_per_1k: None,
                 context_window: None,
                 priced_at: None,
+                ..Default::default()
             },
         );
         r.save_to(&p).unwrap();

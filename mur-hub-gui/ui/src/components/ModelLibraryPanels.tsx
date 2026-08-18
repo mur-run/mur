@@ -407,7 +407,9 @@ export function ConnectedPanel({
     providerKey.charAt(0).toUpperCase() + providerKey.slice(1);
   const color = providerColor(providerKey);
 
-  const provModels = registryModels.filter((m) => m.provider === providerKey);
+  const provModels = registryModels.filter(
+    (m) => (m.vendor || m.provider) === providerKey,
+  );
   const suggested = useSuggestedBaseUrl(providerKey);
 
   const [baseUrlEdit, setBaseUrlEdit] = useState<string | null>(null);
@@ -555,7 +557,9 @@ export function LocalPanel({
 }) {
   const { t } = useT();
   const color = providerColor(detected.key);
-  const provModels = registryModels.filter((m) => m.provider === detected.key);
+  const provModels = registryModels.filter(
+    (m) => (m.vendor || m.provider) === detected.key,
+  );
   const [picks, setPicks] = useState<Set<string>>(
     new Set(
       detected.models.filter((m) => registrySet.has(m.model)).map((m) => m.model)

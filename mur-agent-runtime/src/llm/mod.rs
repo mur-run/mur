@@ -9,6 +9,7 @@ pub mod fallback;
 pub mod ollama;
 pub mod openai;
 pub mod stub;
+pub mod switchable;
 
 /// Shared reqwest builder for the agent's LLM clients. Built with `.no_proxy()`
 /// so an LLM client NEVER inherits an ambient `HTTP_PROXY`/`HTTPS_PROXY` — its

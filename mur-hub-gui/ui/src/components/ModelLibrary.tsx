@@ -34,7 +34,10 @@ interface ConnectedProvider {
 function deriveConnected(models: ModelOption[]): ConnectedProvider[] {
   const map = new Map<string, number>();
   for (const m of models) {
-    map.set(m.provider, (map.get(m.provider) ?? 0) + 1);
+    // Group by who makes the model, not by the protocol used to reach it:
+    // DeepSeek, Groq and a local MLX server are all `provider: openai`.
+    const key = m.vendor || m.provider;
+    map.set(key, (map.get(key) ?? 0) + 1);
   }
   return Array.from(map.entries()).map(([key, count]) => ({
     key,
