@@ -215,6 +215,13 @@ fn derive_service_path() -> String {
 }
 
 #[cfg(target_os = "macos")]
+/// Where the launchd unit sends the runtime's stderr — single source for the
+/// plist below and for `mur agent start`'s "where to look" hint.
+pub(crate) fn service_stderr_log(name: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(format!("/tmp/mur-agent-{name}.err.log"))
+}
+
+#[cfg(target_os = "macos")]
 fn darwin_plist(name: &str, symlink: &Path, service_path: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -238,7 +245,7 @@ fn darwin_plist(name: &str, symlink: &Path, service_path: &str) -> String {
         <string>{path}</string>
     </dict>
     <key>StandardErrorPath</key>
-    <string>/tmp/mur-agent-{name}.err.log</string>
+    <string>{err}</string>
     <key>StandardOutPath</key>
     <string>/tmp/mur-agent-{name}.out.log</string>
 </dict>
@@ -246,6 +253,7 @@ fn darwin_plist(name: &str, symlink: &Path, service_path: &str) -> String {
 "#,
         sym = symlink.display(),
         path = service_path,
+        err = service_stderr_log(name).display(),
     )
 }
 
