@@ -136,6 +136,35 @@ impl LaunchChain {
     /// Symlinks present now. One created later is not listed, which is
     /// acceptable: a new symlink only matters if something starts it, and
     /// that needs a profile (denied) or an autostart entry (denied) or a human.
+    /// Sibling signing keys, as concrete paths for backends that need a list
+    /// rather than a predicate. The rule is `protects_read`'s; this is the
+    /// enforcement side of it, which until now had no caller — the predicate
+    /// was consulted at GRANT time (`mur agent perm`) and never emitted into a
+    /// sandbox profile, so the kernel never enforced it (#850).
+    ///
+    /// KNOWN GAP, deliberate: this enumerates the agents that exist when the
+    /// policy is sealed. An agent created afterwards is not in the list, and
+    /// stays readable to an already-running agent until that one restarts.
+    /// The write side avoids this by denying the whole `agents` subtree, which
+    /// the read side cannot do: verifying a peer's signed events must read
+    /// `identity.pub` and `rotations.jsonl` from that peer's home, so a
+    /// blanket read-deny would fail-close every multi-agent channel. Closing
+    /// the gap properly means moving private keys out of the agents tree —
+    /// see docs/superpowers/specs/2026-08-18-agent-read-confinement-audit.md.
+    pub fn sibling_signing_keys(&self) -> Vec<PathBuf> {
+        let agents = self.mur_home.join("agents");
+        let Ok(entries) = std::fs::read_dir(&agents) else {
+            return Vec::new();
+        };
+        entries
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p != &self.agent_home)
+            .map(|p| p.join("identity.key"))
+            .filter(|p| self.protects_read(p).is_some())
+            .collect()
+    }
+
     fn existing_agent_symlinks(&self) -> Vec<PathBuf> {
         let Ok(entries) = std::fs::read_dir(&self.bin_dir) else {
             return Vec::new();
