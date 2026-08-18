@@ -403,6 +403,59 @@ impl Check {
 /// Per-agent health checks: `model_ref` resolves in `models.yaml`, each
 /// MCP server's `command` resolves on PATH, and entitlements parsed
 /// cleanly (implied by `load_profile_for_edit` succeeding).
+/// Report filesystem grants the kernel will silently drop.
+///
+/// A filesystem entitlement only reaches the sandbox if its path EXISTS when
+/// the agent starts. A grant for a path that is not there is accepted by the
+/// profile, dropped when the policy is sealed, and then shows up as a bare
+/// errno in some later, unrelated operation — `perm show` lists it, so the
+/// profile and the kernel disagree with nobody to say so.
+///
+/// `perm allow-read` / `allow-write` refuse a missing path at grant time, but
+/// that cannot help a grant made before the check existed, or one whose
+/// directory was removed afterwards. This is the reporting half.
+///
+/// `deny` entries are not checked: denying a path that does not exist costs
+/// nothing and is a reasonable thing to write ahead of time.
+fn check_filesystem_entitlements(fs: &mur_common::agent::FilesystemEntitlement) -> Check {
+    let mut missing: Vec<String> = Vec::new();
+    let mut granted = 0usize;
+
+    for (kind, paths) in [("read", &fs.read), ("write", &fs.write)] {
+        for raw in paths {
+            granted += 1;
+            let p = mur_agent_runtime::sandbox::policy::expand_entitlement_path(raw);
+            // `metadata`, which FOLLOWS symlinks — the same call
+            // `reject_dead_grant` uses at grant time (`cmd/agent/perm.rs`).
+            // The two halves must agree on what "exists" means, or `perm`
+            // accepts a path this then reports as broken. Following also
+            // catches a dangling symlink, whose link exists but whose target
+            // does not, and which the sandbox can no more grant than a path
+            // that was never there.
+            if std::fs::metadata(&p).is_err() {
+                missing.push(format!("{kind} {}", p.display()));
+            }
+        }
+    }
+
+    if missing.is_empty() {
+        return Check::new(
+            "entitlements",
+            true,
+            format!("{granted} filesystem grant(s), all present"),
+        );
+    }
+    Check::new(
+        "entitlements",
+        false,
+        format!(
+            "{} of {granted} filesystem grant(s) will be DROPPED at start — the path does not exist: {}. Create them (mkdir -p) and restart the agent.",
+            missing.len(),
+            missing.join(", ")
+        ),
+    )
+}
+
 pub fn agent_doctor(mur_home: &std::path::Path, name: &str) -> Result<Vec<Check>> {
     let (_path, profile) = crate::cmd::agent::load_profile_for_edit(name)?;
     let mut out = Vec::new();
@@ -436,7 +489,9 @@ pub fn agent_doctor(mur_home: &std::path::Path, name: &str) -> Result<Vec<Check>
         }
     }
 
-    out.push(Check::new("entitlements", true, "parsed"));
+    out.push(check_filesystem_entitlements(
+        &profile.entitlements.filesystem,
+    ));
 
     Ok(out)
 }
@@ -509,6 +564,84 @@ mod tests {
             arch.status,
             CheckStatus::Ok | CheckStatus::Skipped
         ));
+    }
+
+    /// The check that used to be `Check::new("entitlements", true, "parsed")`
+    /// — unconditionally true, never looking at a path. A grant the kernel
+    /// will drop must make it FALSE, and must name the path, because the only
+    /// other signal the user gets is an unrelated errno much later.
+    #[test]
+    fn entitlements_check_names_a_grant_the_kernel_will_drop() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let present = tmp.path().join("exists");
+        std::fs::create_dir_all(&present).unwrap();
+        let absent = tmp.path().join("not-there");
+
+        let fs = mur_common::agent::FilesystemEntitlement {
+            read: vec![present.display().to_string()],
+            write: vec![absent.display().to_string()],
+            deny: vec![],
+        };
+        let c = check_filesystem_entitlements(&fs);
+
+        assert!(!c.ok, "a droppable grant must fail the check: {}", c.detail);
+        assert!(
+            c.detail.contains("not-there"),
+            "the missing path must be named: {}",
+            c.detail
+        );
+        assert!(
+            !c.detail.contains("exists"),
+            "a grant that IS present must not be reported as dropped: {}",
+            c.detail
+        );
+    }
+
+    /// All grants present is the ordinary case and must stay green — and the
+    /// detail must say how many were actually looked at, so "ok" is not the
+    /// same message whether it checked five paths or none.
+    #[test]
+    fn entitlements_check_passes_when_every_granted_path_exists() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let a = tmp.path().join("a");
+        let b = tmp.path().join("b");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+
+        let fs = mur_common::agent::FilesystemEntitlement {
+            read: vec![a.display().to_string()],
+            write: vec![b.display().to_string()],
+            // A deny for a path that does not exist is fine and must be ignored.
+            deny: vec![tmp.path().join("never").display().to_string()],
+        };
+        let c = check_filesystem_entitlements(&fs);
+
+        assert!(c.ok, "all-present grants must pass: {}", c.detail);
+        assert!(
+            c.detail.contains('2'),
+            "the detail must say how many grants were checked: {}",
+            c.detail
+        );
+    }
+
+    /// A dangling symlink is a path the sandbox cannot grant either: the link
+    /// exists, its target does not. Only a FOLLOWING stat sees that, which is
+    /// why this check uses `metadata` and not `symlink_metadata` — and it is
+    /// also what `perm allow-*` uses, so both halves agree on "exists".
+    #[cfg(unix)]
+    #[test]
+    fn entitlements_check_catches_a_dangling_symlink() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let link = tmp.path().join("dangling");
+        std::os::unix::fs::symlink(tmp.path().join("no-such-target"), &link).unwrap();
+
+        let fs = mur_common::agent::FilesystemEntitlement {
+            read: vec![link.display().to_string()],
+            write: vec![],
+            deny: vec![],
+        };
+        let c = check_filesystem_entitlements(&fs);
+        assert!(!c.ok, "a dangling symlink grant must fail: {}", c.detail);
     }
 
     #[test]
