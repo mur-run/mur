@@ -157,6 +157,41 @@ impl LaunchChain {
                  that runner against the whole repository host",
             );
         }
+        if let Some(reason) = self.protects_capture_store(path) {
+            return Some(reason);
+        }
+        None
+    }
+
+    /// The capture stores, which record what was DONE rather than what was
+    /// configured — and record it verbatim.
+    ///
+    /// `queue/events.jsonl` is the CLI hook pipeline's event log: every tool
+    /// call, including shell command lines as typed. It is not redacted —
+    /// `inject::queue::enqueue_to` serialises the event and appends it, and
+    /// nothing in `capture/` filters first. The redaction chokepoint that does
+    /// exist (`telemetry_writer::redact_envelope`, B0 rule 9) is a DIFFERENT
+    /// writer, on the runtime's own telemetry path, and never sees this file.
+    ///
+    /// So any credential that ever appeared on a command line is in here in
+    /// plain text. A 200 MB sample of a real 934 MB queue matched 21 lines of
+    /// `sk-ant-` shape, 12 of `ghp_`, 8 of `AKIA`, and 180 Authorization
+    /// headers.
+    ///
+    /// `session/`, `conversations/`, `telemetry/` and `traces/` are the same
+    /// class: a recording of the user's work, not state an agent operates on.
+    ///
+    /// Nothing in the agent runtime reads any of them.
+    fn protects_capture_store(&self, path: &Path) -> Option<&'static str> {
+        const STORES: [&str; 5] = ["queue", "session", "conversations", "telemetry", "traces"];
+        for s in STORES {
+            if path.starts_with(self.mur_home.join(s)) {
+                return Some(
+                    "a capture store — an unredacted verbatim record of every \
+                     command run, which no agent reads and any agent could mine",
+                );
+            }
+        }
         None
     }
 
@@ -204,6 +239,11 @@ impl LaunchChain {
             self.mur_home.join("commander").join("signing.key"),
             self.mur_home.join("mobile").join("pair-token"),
             self.mur_home.join("actions-runner"),
+            self.mur_home.join("queue"),
+            self.mur_home.join("session"),
+            self.mur_home.join("conversations"),
+            self.mur_home.join("telemetry"),
+            self.mur_home.join("traces"),
         ]
     }
 
@@ -363,6 +403,12 @@ mod tests {
             mur.join("mobile").join("pair-token"),
             mur.join("actions-runner"),
             mur.join("actions-runner").join(".credentials"),
+            mur.join("queue"),
+            mur.join("queue").join("events.jsonl"),
+            mur.join("session").join("recordings"),
+            mur.join("conversations"),
+            mur.join("telemetry"),
+            mur.join("traces"),
         ] {
             assert!(
                 chain.protects_read(&p).is_some(),
