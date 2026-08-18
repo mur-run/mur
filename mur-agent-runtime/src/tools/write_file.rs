@@ -51,7 +51,7 @@ impl ToolExecutor for WriteFileTool {
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Target file (absolute, or relative to the session cwd)" },
+                    "path": { "type": "string", "description": format!("Target file ({})", crate::tools::fs_policy::PATH_FORMS) },
                     "content": { "type": "string", "description": "Full file contents to write" }
                 },
                 "required": ["path", "content"]

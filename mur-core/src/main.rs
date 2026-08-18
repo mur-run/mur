@@ -60,6 +60,11 @@ mod paths;
 mod recommend;
 mod retrieve;
 mod route;
+// The recording side (save/update/Heartbeat) is exercised by execute_dag;
+// the query/classify side (status_of, classify, RunStatus, Liveness, ...)
+// has no bin subcommand yet, so the bin target sees it as unused.
+#[allow(dead_code)]
+mod run_status;
 // wired via dispatch in the lib crate; this bin re-declaration is unused.
 #[allow(dead_code)]
 mod schedule_status;

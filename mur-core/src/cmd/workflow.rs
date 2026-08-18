@@ -206,6 +206,8 @@ pub(crate) async fn cmd_workflow_run(
                                 trigger: "manual",
                                 channel_id,
                                 run_id: format!("run-{}", uuid::Uuid::now_v7()),
+                                run_kind: Some(crate::run_status::RunKind::Workflow),
+                                run_label: matched.manifest.name.clone(),
                                 ..Default::default()
                             };
                             let output = crate::executor::dag::execute_dag(
