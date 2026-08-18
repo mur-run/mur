@@ -417,6 +417,52 @@ impl Check {
 ///
 /// `deny` entries are not checked: denying a path that does not exist costs
 /// nothing and is a reasonable thing to write ahead of time.
+/// Report write grants the sandbox drops WHOLE for overlapping the launch chain.
+///
+/// Distinct from `check_filesystem_entitlements`, which reports grants dropped
+/// because their path does not exist. This one is about grants whose path is
+/// fine but whose SCOPE is not: Landlock is a pure allow-list, so a protected
+/// path inside a grant cannot be carved out — the grant is dropped entire,
+/// fail-closed.
+///
+/// `SandboxPolicy::dropped_grants` has recorded exactly this since the launch
+/// chain landed, with a comment saying it is "recorded for the runtime-doctor".
+/// Nothing ever read it. So an agent could be granted a directory, silently
+/// lose the whole grant on Linux, and find out from an errno.
+fn check_dropped_launch_chain_grants(
+    fs: &mur_common::agent::FilesystemEntitlement,
+    agent_home: &std::path::Path,
+) -> Check {
+    let chain = mur_agent_runtime::sandbox::launch_chain::LaunchChain::new(agent_home);
+    let expanded: Vec<std::path::PathBuf> = fs
+        .write
+        .iter()
+        .map(|s| mur_agent_runtime::sandbox::policy::expand_entitlement_path(s))
+        .collect();
+    let (_kept, dropped) = chain.partition_grants(&expanded);
+
+    if dropped.is_empty() {
+        return Check::new(
+            "grant_scope",
+            true,
+            format!(
+                "{} write grant(s), none overlap the launch chain",
+                expanded.len()
+            ),
+        );
+    }
+    let names: Vec<String> = dropped.iter().map(|p| p.display().to_string()).collect();
+    Check::new(
+        "grant_scope",
+        false,
+        format!(
+            "{} write grant(s) contain a launch-chain path and are DROPPED WHOLE by the sandbox (Landlock cannot carve one out): {}. Grant the specific subdirectory instead.",
+            dropped.len(),
+            names.join(", ")
+        ),
+    )
+}
+
 fn check_filesystem_entitlements(fs: &mur_common::agent::FilesystemEntitlement) -> Check {
     let mut missing: Vec<String> = Vec::new();
     let mut granted = 0usize;
@@ -488,6 +534,11 @@ pub fn agent_doctor(mur_home: &std::path::Path, name: &str) -> Result<Vec<Check>
             Err(e) => out.push(Check::new(check_name, false, e.to_string())),
         }
     }
+
+    out.push(check_dropped_launch_chain_grants(
+        &profile.entitlements.filesystem,
+        &mur_home.join("agents").join(name),
+    ));
 
     out.push(check_filesystem_entitlements(
         &profile.entitlements.filesystem,
@@ -564,6 +615,54 @@ mod tests {
             arch.status,
             CheckStatus::Ok | CheckStatus::Skipped
         ));
+    }
+
+    /// `SandboxPolicy::dropped_grants` recorded this from the day the launch
+    /// chain landed, with a comment saying it was "recorded for the
+    /// runtime-doctor". Nothing ever read it. A grant whose SCOPE overlaps the
+    /// launch chain is dropped WHOLE — Landlock has no deny rule to carve one
+    /// out — so an agent could lose an entire grant and learn about it from an
+    /// errno.
+    #[test]
+    fn a_grant_that_swallows_the_launch_chain_is_reported() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mur_home = tmp.path();
+        let agent_home = mur_home.join("agents").join("alice");
+        std::fs::create_dir_all(&agent_home).unwrap();
+
+        let fs = mur_common::agent::FilesystemEntitlement {
+            read: vec![],
+            // Contains <mur_home>/agents, which is launch-chain protected.
+            write: vec![mur_home.display().to_string()],
+            deny: vec![],
+        };
+        let c = check_dropped_launch_chain_grants(&fs, &agent_home);
+        assert!(
+            !c.ok,
+            "a swallowing grant must fail the check: {}",
+            c.detail
+        );
+        assert!(c.detail.contains("DROPPED WHOLE"), "{}", c.detail);
+    }
+
+    /// A grant that does not reach the launch chain is installed as written,
+    /// and must not be reported — a check that fires on a correct setup is a
+    /// check people stop reading.
+    #[test]
+    fn an_ordinary_project_grant_is_not_reported() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let agent_home = tmp.path().join("agents").join("alice");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let proj = tmp.path().join("code").join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+
+        let fs = mur_common::agent::FilesystemEntitlement {
+            read: vec![],
+            write: vec![proj.display().to_string()],
+            deny: vec![],
+        };
+        let c = check_dropped_launch_chain_grants(&fs, &agent_home);
+        assert!(c.ok, "an ordinary grant was reported: {}", c.detail);
     }
 
     /// The check that used to be `Check::new("entitlements", true, "parsed")`
