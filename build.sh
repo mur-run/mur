@@ -169,6 +169,13 @@ if $INSTALL; then
     echo "⚠ installed with an AD-HOC signature — every rebuild looks like a new"
     echo "  program to macOS, so headless agents can lose keychain/TCC grants."
     echo "  Check that '$CODESIGN_IDENTITY' is in your login keychain, then re-run."
+  elif [ "$CODESIGN_IDENTITY" = "-" ]; then
+    # The default identity IS ad-hoc; the SIGN_FAILED branch above only fires
+    # when codesign errored, so without this the common case says nothing.
+    echo "⚠ installed with AD-HOC signatures (default). Every rebuild gets a new"
+    echo "  identity, so keychain/TCC grants die on each install and agent runtime"
+    echo "  attestation treats the binaries as unsigned. For a stable identity:"
+    echo "    MUR_CODESIGN_IDENTITY='Developer ID Application: …' ./build.sh --release --install"
   fi
 
   # Report the version of the copy we actually wrote, not whatever `mur`
