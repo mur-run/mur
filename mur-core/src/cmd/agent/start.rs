@@ -10,7 +10,9 @@
 //!    sidecar — the process runs UNSUPERVISED (no auto-restart).
 
 use std::fs;
+use std::io::{Read as _, Seek as _, SeekFrom};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use mur_common::LockFile;
@@ -63,7 +65,7 @@ pub fn cmd_start(name: &str) -> Result<()> {
                 .output()?;
             if kick.status.success() {
                 println!("started '{name}' via launchd ({label})");
-                return Ok(());
+                return confirm_startup(name, &agent_home, &service_log_hint(name));
             }
             // Not loaded (e.g. after a manual bootout) — load brings it up
             // by itself thanks to RunAtLoad.
@@ -73,7 +75,7 @@ pub fn cmd_start(name: &str) -> Result<()> {
                 .output()?;
             if load.status.success() {
                 println!("loaded + started '{name}' via launchd ({label})");
-                return Ok(());
+                return confirm_startup(name, &agent_home, &service_log_hint(name));
             }
             bail!(
                 "launchd refused to start '{name}': kickstart: {} / load: {}",
@@ -99,7 +101,7 @@ pub fn cmd_start(name: &str) -> Result<()> {
                 );
             }
             println!("started '{name}' via systemd --user");
-            return Ok(());
+            return confirm_startup(name, &agent_home, &service_log_hint(name));
         }
     }
 
@@ -130,12 +132,131 @@ pub fn cmd_start(name: &str) -> Result<()> {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0); // detach from our session so it survives us
     }
-    let child = cmd
+    let mut child = cmd
         .spawn()
         .with_context(|| format!("spawn {}", symlink.display()))?;
-    println!(
-        "started '{name}' (pid {}) — UNSUPERVISED: no auto-restart on crash or login.\nFor a persistent service run: mur agent install-service {name}",
-        child.id()
-    );
-    Ok(())
+    let pid = child.id();
+    // Don't report success off a successful fork: a runtime that dies one
+    // second in (failed MCP admission, attestation, sandbox fail-closed)
+    // otherwise still printed "started" and the only evidence landed in a log
+    // nobody is told about. The lock is the runtime's own liveness claim; an
+    // exit inside the window is a verdict and surfaces the log tail.
+    let stderr_log = agent_home.join("stderr.log");
+    let deadline = Instant::now() + CONFIRM_WINDOW;
+    loop {
+        if let Some(lock_pid) = live_lock_pid(&agent_home) {
+            println!(
+                "started '{name}' (pid {lock_pid}) — UNSUPERVISED: no auto-restart on crash or login.\nFor a persistent service run: mur agent install-service {name}"
+            );
+            return Ok(());
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            bail!(
+                "agent '{name}' exited during startup ({status}).\n--- last lines of {} ---\n{}",
+                stderr_log.display(),
+                tail_of(&stderr_log, 4096)
+            );
+        }
+        if Instant::now() >= deadline {
+            println!(
+                "launching '{name}' (pid {pid}) — not confirmed within {}s; slow starts are normal.\nCheck `mur agent status {name}` or `tail {}`.\nUNSUPERVISED: no auto-restart on crash or login. For a persistent service run: mur agent install-service {name}",
+                CONFIRM_WINDOW.as_secs(),
+                stderr_log.display()
+            );
+            return Ok(());
+        }
+        std::thread::sleep(CONFIRM_POLL);
+    }
+}
+
+/// How long `mur agent start` waits for the runtime to write a live
+/// `running.lock`. Long enough to catch an immediate crash, short enough not
+/// to stall the CLI: heavy starts (local model load) legitimately take 60s+
+/// (the install-service startup window), so elapsing this window means
+/// "not confirmed yet" — never "failed".
+const CONFIRM_WINDOW: Duration = Duration::from_secs(8);
+const CONFIRM_POLL: Duration = Duration::from_millis(250);
+
+/// The pid from a live `running.lock`, if the runtime has written one and
+/// that pid is still alive. Same check as cmd_start's "already running" leg.
+fn live_lock_pid(agent_home: &std::path::Path) -> Option<u32> {
+    let bytes = fs::read(agent_home.join("running.lock")).ok()?;
+    let lock = serde_json::from_slice::<LockFile>(&bytes).ok()?;
+    pid_alive(lock.pid).then_some(lock.pid)
+}
+
+/// Shared post-start confirmation for the service paths (no child handle to
+/// watch there): wait for a live `running.lock`, and on timeout say where to
+/// look instead of guessing a verdict.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn confirm_startup(name: &str, agent_home: &std::path::Path, log_hint: &str) -> Result<()> {
+    let deadline = Instant::now() + CONFIRM_WINDOW;
+    loop {
+        if let Some(pid) = live_lock_pid(agent_home) {
+            println!("✓ '{name}' is up (pid {pid})");
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            println!(
+                "ℹ start not confirmed within {}s — slow starts are normal; check `mur agent status {name}` or {log_hint}",
+                CONFIRM_WINDOW.as_secs()
+            );
+            return Ok(());
+        }
+        std::thread::sleep(CONFIRM_POLL);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn service_log_hint(name: &str) -> String {
+    format!(
+        "`tail {}`",
+        super::service::service_stderr_log(name).display()
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn service_log_hint(name: &str) -> String {
+    format!("`journalctl --user -u mur-agent-{name}.service`")
+}
+
+/// Last `max_bytes` of `path`, trimmed to whole lines (at most 20) — the
+/// failure evidence lives at the end of an append-forever log.
+fn tail_of(path: &std::path::Path, max_bytes: u64) -> String {
+    let Ok(mut f) = fs::File::open(path) else {
+        return "(log not readable)".into();
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let _ = f.seek(SeekFrom::Start(len.saturating_sub(max_bytes)));
+    let mut raw = Vec::new();
+    let _ = f.read_to_end(&mut raw);
+    let text = String::from_utf8_lossy(&raw);
+    let lines: Vec<&str> = text.lines().collect();
+    let keep = lines.len().saturating_sub(20);
+    lines[keep..].join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tail_of;
+
+    #[test]
+    fn tail_of_returns_last_lines_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("stderr.log");
+        let body: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(&p, body).unwrap();
+        let tail = tail_of(&p, 4096);
+        assert!(tail.ends_with("line 30"));
+        assert!(!tail.contains("line 1\n"), "must trim to the last 20 lines");
+        assert_eq!(tail.lines().count(), 20);
+    }
+
+    #[test]
+    fn tail_of_missing_log_says_so() {
+        assert_eq!(
+            tail_of(std::path::Path::new("/nonexistent/stderr.log"), 4096),
+            "(log not readable)"
+        );
+    }
 }
