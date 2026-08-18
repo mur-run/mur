@@ -77,8 +77,12 @@ never heard of MUR.
 - **Marginal cost ≈ 0.** Inference runs on your hardware. Everything local is
   free, with no per-token meter.
 - **Privacy is structural, not a setting.** Memory, recordings, telemetry, and
-  voice stay under `~/.mur/`. Logs pass through a redaction chokepoint before
-  they touch disk, and a compile-time test forbids the companion module from
+  voice stay under `~/.mur/`. One redaction chokepoint sits in front of disk —
+  the same code for the runtime's telemetry and for the CLI's hook capture log,
+  so a credential that appears on a command line is `[REDACTED:…]` in both.
+  Agents cannot read the credential store or the capture logs at all: those are
+  refused at the grant gate and denied in the kernel sandbox, not merely absent
+  from a grant. And a compile-time test forbids the companion module from
   importing network clients.
 
 ### How MUR compares
@@ -169,7 +173,8 @@ mur model list                                # list registered models
 mur model show gpt5                           # provider, model, effective in/out cost, context window
 mur model prices refresh                      # refresh the cached models.dev price catalog
 mur model doctor                              # offline check: dangling model_refs, ids the catalog
-                                              #   never carried, profiles disagreeing with their ref
+                                              #   never carried, profiles disagreeing with their ref,
+                                              #   and secrets sitting in plaintext on disk
 mur model import ~/from-laptop/models.yaml    # merge another machine's registry (never deletes;
                                               #   reports which secret refs need a key here)
 ```
@@ -414,12 +419,14 @@ Agent** wizard offers the same catalog as a source.
   directory you hadn't created yet used to succeed at the CLI, survive a
   restart, and still fail with a bare `Operation not permitted`. `mur agent
   perm allow-read` / `allow-write` now refuse a path that doesn't exist and
-  print the `mkdir -p` to run; `mur agent runtime-doctor` reports grants that
-  were dropped, and tells the concierge which of its own authoring dirs it
-  still can't write. Some paths can never be granted at all — another agent's
-  directory, the runtime binary, an autostart directory — because they decide
-  what starts next; `allow-read` / `allow-write` refuse them, and
-  `runtime-doctor` names any such grant that was already sitting in a profile,
+  print the `mkdir -p` to run. `mur agent doctor <name>` reports the two ways a
+  grant goes missing, which have different fixes: a path that doesn't exist and
+  will be dropped when the sandbox seals, and a grant whose *scope* swallows a
+  protected path — Landlock cannot carve one out, so that grant is dropped
+  whole. Some paths can never be granted at all — another agent's signing key,
+  the runtime binary, an autostart directory, and your credential store
+  (`~/.mur/secrets`, `auth.json`, a `.env`) — because they decide what starts
+  next or are the keys themselves; `allow-read` / `allow-write` refuse them,
   and the runtime binary itself is signed by MUR's Developer ID in release
   builds — a swapped binary is refused at spawn, never run.
   A freshly seeded MUR owns
