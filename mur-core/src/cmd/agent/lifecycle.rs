@@ -706,21 +706,65 @@ pub fn cmd_status(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Why a directory under `agents/` is not a loadable agent, said in a way that
+/// tells the reader what to do about it.
+fn describe_unloadable(dir: &std::path::Path) -> String {
+    let legacy = dir.join("agent.yaml").exists();
+    let has_key = dir.join("identity.key").exists();
+    let what = match (legacy, has_key) {
+        (true, true) => "has a legacy agent.yaml and still holds a signing key",
+        (true, false) => "has a legacy agent.yaml",
+        (false, true) => "has no profile.yaml but still holds a signing key",
+        (false, false) => "has no profile.yaml",
+    };
+    format!(
+        "is not a loadable agent: it {what} — not listed, not running, and not covered by anything that iterates agents"
+    )
+}
+
 fn collect_agents() -> Result<Vec<AgentRow>> {
     let mur_home = resolve_mur_home()?;
     let agents_dir = mur_home.join("agents");
     let mut rows = Vec::new();
     let entries = match fs::read_dir(&agents_dir) {
         Ok(e) => e,
-        Err(_) => return Ok(rows),
+        // An unreadable agents dir is not an empty fleet. Returning `Ok(rows)`
+        // silently printed "no agents" to someone who has 29 of them.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(rows),
+        Err(e) => {
+            eprintln!(
+                "warning: cannot read {} ({e}) — this listing is empty because \
+                 the directory could not be read, not because there are no agents",
+                agents_dir.display()
+            );
+            return Ok(rows);
+        }
     };
     for entry in entries.flatten() {
         let dir = entry.path();
         if !dir.is_dir() {
             continue;
         }
+        // `agents/` is itself a git repo (the profile version store), so `.git`
+        // lives here. Dot-directories are infrastructure, not stray agents —
+        // warning about them every run would train the reader to ignore the
+        // warning that matters.
+        if dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with('.'))
+        {
+            continue;
+        }
         let profile_path = dir.join("profile.yaml");
         if !profile_path.exists() {
+            // The two arms below warn when a profile cannot be read or parsed;
+            // a MISSING profile used to be the one skipped in silence. A
+            // directory here without one is still an agent's worth of state —
+            // typically a legacy `agent.yaml` layout, and often still holding a
+            // signing key. Invisible in `mur agent list`, it is a key nobody
+            // rotates and a directory nobody cleans up.
+            eprintln!("warning: {} {}", dir.display(), describe_unloadable(&dir));
             continue;
         }
         let yaml = match fs::read_to_string(&profile_path) {
@@ -1173,5 +1217,40 @@ mod tests_remove_unread_guard {
         write_inbox_unread(tmp.path(), "msg-002");
         write_inbox_acked(tmp.path(), "msg-003");
         assert_eq!(count_unread_companion_inbox(tmp.path()), 2);
+    }
+}
+
+#[cfg(test)]
+mod tests_unloadable_agent_dirs {
+    use super::describe_unloadable;
+
+    /// The message has to say which of the four situations it is, because the
+    /// remedy differs: a legacy layout wants migrating, a stray directory
+    /// wants deleting, and either one still holding a signing key wants that
+    /// key dealt with first.
+    #[test]
+    fn the_message_names_a_signing_key_and_a_legacy_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let legacy_with_key = tmp.path().join("Author");
+        std::fs::create_dir_all(&legacy_with_key).unwrap();
+        std::fs::write(legacy_with_key.join("agent.yaml"), b"name: Author").unwrap();
+        std::fs::write(legacy_with_key.join("identity.key"), b"k").unwrap();
+        let m = describe_unloadable(&legacy_with_key);
+        assert!(m.contains("legacy agent.yaml"), "{m}");
+        assert!(m.contains("signing key"), "{m}");
+
+        let stray_with_key = tmp.path().join("orphan");
+        std::fs::create_dir_all(&stray_with_key).unwrap();
+        std::fs::write(stray_with_key.join("identity.key"), b"k").unwrap();
+        let m = describe_unloadable(&stray_with_key);
+        assert!(m.contains("signing key"), "{m}");
+        assert!(!m.contains("legacy"), "{m}");
+
+        let empty = tmp.path().join("wztest");
+        std::fs::create_dir_all(empty.join("outbox")).unwrap();
+        let m = describe_unloadable(&empty);
+        assert!(m.contains("no profile.yaml"), "{m}");
+        assert!(!m.contains("signing key"), "{m}");
     }
 }
