@@ -471,6 +471,13 @@ mod tests {
             "commander/signing.key",
             "mobile/pair-token",
             "actions-runner",
+            "queue",
+            "session",
+            "conversations",
+            "telemetry",
+            "traces",
+            "commander/.env",
+            "runtime/vlc.json",
         ] {
             let full = tmp.path().join(p);
             for verb in ["file-read*", "file-write*"] {
