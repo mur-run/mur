@@ -260,6 +260,33 @@ impl LaunchChain {
         ]
     }
 
+    /// Split write grants into those the sandbox can install and those it must
+    /// drop whole.
+    ///
+    /// Lives here rather than in `sandbox::linux` because it is pure launch-chain
+    /// path logic that every platform needs — the module comment there already
+    /// said as much ("shared with policy.rs on every platform; only the apply
+    /// path inside is linux-gated"). Being private to that module is also why
+    /// `mur agent doctor` could not report what it computes.
+    ///
+    /// The agent's own home is exempt: on macOS the SBPL deny of the agents tree
+    /// is followed by a re-allow of exactly this directory, and Landlock installs
+    /// it as-is (it contains nothing protected — the own profile/identity
+    /// self-protection is macOS tier 3 only). Without the exemption the symmetric
+    /// overlap test below would also catch the `<mur_home>/agents/<self>`
+    /// force-grant and Linux agents would lose their own home.
+    pub fn partition_grants(&self, grants: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
+        let protected = self.deny_paths();
+        grants.iter().cloned().partition(|g| {
+            if g.starts_with(self.agent_self_home()) {
+                return true;
+            }
+            !protected
+                .iter()
+                .any(|p| p.starts_with(g) || g.starts_with(p))
+        })
+    }
+
     /// Sibling signing keys, as concrete paths for backends that need a list
     /// rather than a predicate. The rule is `protects_read`'s; this is the
     /// enforcement side of it, which until now had no caller — the predicate
