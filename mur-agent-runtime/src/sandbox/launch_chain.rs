@@ -92,17 +92,69 @@ impl LaunchChain {
         if self.autostart.iter().any(|d| path.starts_with(d)) {
             return Some("an OS autostart directory — entries here run outside any sandbox");
         }
+        if let Some(reason) = self.protects_credential(path) {
+            return Some(reason);
+        }
         None
     }
 
-    /// Why `path` may never be read. Only sibling signing keys: whoever reads
-    /// one can forge that agent's channel events with no write at all, and
-    /// verify-on-fold accepts them because the key on disk is untouched.
+    /// Why `path` may never be read.
+    ///
+    /// Two families, both "reading this is equivalent to holding a credential":
+    /// a sibling's signing key, and the user's own credential store. Neither
+    /// is expressible as an entitlement — an agent that could be granted them
+    /// could impersonate another agent or the user, so no grant may authorise
+    /// it and the gate sits before the allow/deny lists.
     pub fn protects_read(&self, path: &Path) -> Option<&'static str> {
         if self.is_other_agent(path) && path.file_name().is_some_and(|n| n == "identity.key") {
             return Some(
                 "another agent's signing key — reading it is enough to forge \
                  that agent's signed channel events",
+            );
+        }
+        if let Some(reason) = self.protects_credential(path) {
+            return Some(reason);
+        }
+        None
+    }
+
+    /// The user's credentials, which no agent has a reason to read.
+    ///
+    /// `secrets/` holds provider API keys and the commander token in plain
+    /// text; `auth.json` holds the account access + refresh tokens; the
+    /// top-level `identity.key` is the host key. An agent reaches its model
+    /// through the runtime's own client, which resolves credentials before the
+    /// sandbox is sealed — it never needs the files.
+    ///
+    /// This is deliberately BOTH read and write: writing `secrets/` swaps the
+    /// key an unrelated agent will use, and writing `auth.json` is a session
+    /// takeover.
+    fn protects_credential(&self, path: &Path) -> Option<&'static str> {
+        if path.starts_with(self.mur_home.join("secrets")) {
+            return Some(
+                "MUR's credential store — provider API keys and the commander \
+                 token, which no agent needs and any agent could exfiltrate",
+            );
+        }
+        if path == self.mur_home.join("auth.json") {
+            return Some(
+                "the account's access and refresh tokens — reading them is a \
+                 session takeover, not a file read",
+            );
+        }
+        if path == self.mur_home.join("identity.key") {
+            return Some("the host signing key");
+        }
+        if path == self.mur_home.join("commander").join("signing.key") {
+            return Some("the commander's signing key — governance authority");
+        }
+        if path == self.mur_home.join("mobile").join("pair-token") {
+            return Some("the phone pairing token");
+        }
+        if path.starts_with(self.mur_home.join("actions-runner")) {
+            return Some(
+                "a self-hosted CI runner's credentials — they authenticate as \
+                 that runner against the whole repository host",
             );
         }
         None
@@ -136,6 +188,25 @@ impl LaunchChain {
     /// Symlinks present now. One created later is not listed, which is
     /// acceptable: a new symlink only matters if something starts it, and
     /// that needs a profile (denied) or an autostart entry (denied) or a human.
+    /// The credential paths, as concrete paths for the SBPL emitter. Same set
+    /// `protects_credential` refuses at grant time; this is the kernel side,
+    /// so a read that never goes through the file tools (a spawned process, an
+    /// MCP server, a library doing raw I/O) is stopped too.
+    ///
+    /// Unlike sibling keys these are FIXED paths, so there is no enumeration
+    /// and no after-seal gap: a `secrets/` file created later is still under
+    /// the denied subtree.
+    pub fn credential_paths(&self) -> Vec<PathBuf> {
+        vec![
+            self.mur_home.join("secrets"),
+            self.mur_home.join("auth.json"),
+            self.mur_home.join("identity.key"),
+            self.mur_home.join("commander").join("signing.key"),
+            self.mur_home.join("mobile").join("pair-token"),
+            self.mur_home.join("actions-runner"),
+        ]
+    }
+
     /// Sibling signing keys, as concrete paths for backends that need a list
     /// rather than a predicate. The rule is `protects_read`'s; this is the
     /// enforcement side of it, which until now had no caller — the predicate
@@ -272,6 +343,66 @@ pub fn is_overbroad_grant_root(path: &Path, home: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The published docs say `mur agent perm allow-read` / `allow-write`
+    /// refuse these. Before #850 they did not — `protects_read` matched only a
+    /// sibling `identity.key`, so a grant covering the credential store was
+    /// accepted, and two live agents held one. This pins the claim.
+    #[test]
+    fn the_grant_gates_refuse_the_credential_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur = tmp.path().to_path_buf();
+        let chain =
+            LaunchChain::for_test(&mur.join("agents").join("alice"), &mur.join("bin"), &mur);
+        for p in [
+            mur.join("secrets"),
+            mur.join("secrets").join("anthropic.key"),
+            mur.join("auth.json"),
+            mur.join("identity.key"),
+            mur.join("commander").join("signing.key"),
+            mur.join("mobile").join("pair-token"),
+            mur.join("actions-runner"),
+            mur.join("actions-runner").join(".credentials"),
+        ] {
+            assert!(
+                chain.protects_read(&p).is_some(),
+                "read grant not refused: {}",
+                p.display()
+            );
+            assert!(
+                chain.protects_write(&p).is_some(),
+                "write grant not refused: {}",
+                p.display()
+            );
+        }
+    }
+
+    /// ...and must not swallow the ordinary stores an agent legitimately uses.
+    #[test]
+    fn the_grant_gates_still_allow_the_ordinary_stores() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur = tmp.path().to_path_buf();
+        let chain =
+            LaunchChain::for_test(&mur.join("agents").join("alice"), &mur.join("bin"), &mur);
+        // Includes the non-secret NEIGHBOURS of the new denies: `commander/`
+        // holds the constitution and the audit log, `mobile/` holds the paired
+        // device list. Denying a whole directory to reach one credential
+        // inside it is the mistake this guards against.
+        for p in [
+            mur.join("skills"),
+            mur.join("channels"),
+            mur.join("workflows"),
+            mur.join("commander"),
+            mur.join("commander").join("constitution.toml"),
+            mur.join("mobile").join("paired.json"),
+        ] {
+            assert!(
+                chain.protects_read(&p).is_none(),
+                "an ordinary store was refused: {}",
+                p.display()
+            );
+        }
+    }
 
     /// `<tmp>/agents/mur` as agent_home, so mur_home is `<tmp>`.
     fn chain(tmp: &Path) -> LaunchChain {
