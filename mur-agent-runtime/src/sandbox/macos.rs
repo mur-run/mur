@@ -225,6 +225,15 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
     // reopen them. Deliberately NOT a subtree deny on `agents`: verifying a
     // peer's events reads `identity.pub` and `rotations.jsonl` from that peer's
     // home, and denying those fail-closes every multi-agent channel.
+    // The user's credential store (#850). Fixed subtrees, so unlike the
+    // sibling keys below there is no enumeration and no after-seal gap.
+    // Emitted with the same last-match-wins reasoning: after every allow.
+    for p in policy.launch_chain.credential_paths() {
+        let p = sbpl_escape(&p.to_string_lossy());
+        lines.push(format!("(deny file-read* (subpath \"{p}\"))"));
+        lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
+    }
+
     for key in policy.launch_chain.sibling_signing_keys() {
         let p = sbpl_escape(&key.to_string_lossy());
         lines.push(format!("(deny file-read* (subpath \"{p}\"))"));
@@ -440,6 +449,30 @@ mod tests {
             !sbpl.contains("notes.txt"),
             "a plain file was treated as an agent home:\n{sbpl}"
         );
+    }
+
+    /// #850: the user's credential store is not an entitlement question. An
+    /// agent reaches its model through the runtime's own client, which
+    /// resolves credentials before the sandbox is sealed, so it never needs
+    /// these files — and reading them is exfiltrating the user's API keys or
+    /// taking over their account session.
+    #[test]
+    fn the_credential_store_is_denied_read_and_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agents = tmp.path().join("agents");
+        std::fs::create_dir_all(agents.join("alice")).unwrap();
+        let policy = policy_with_launch_chain(&agents.join("alice").to_string_lossy());
+        let sbpl = build_sbpl_profile(&policy);
+
+        for p in ["secrets", "auth.json", "identity.key"] {
+            let full = tmp.path().join(p);
+            for verb in ["file-read*", "file-write*"] {
+                assert!(
+                    sbpl.contains(&format!("(deny {verb} (subpath \"{}\"))", full.display())),
+                    "{p} is not {verb}-denied:\n{sbpl}"
+                );
+            }
+        }
     }
 
     /// The deny must NOT extend to a peer's verification material. Resolving a
