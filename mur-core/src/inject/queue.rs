@@ -7,9 +7,104 @@ use super::event::NormalizedEvent;
 #[allow(dead_code)] // called from cmd::hook in Task 4
 pub fn enqueue(event: &NormalizedEvent) -> Result<()> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?;
-    let queue_dir = home.join(".mur").join("queue");
+    let mur_home = home.join(".mur");
+    let queue_dir = mur_home.join("queue");
     std::fs::create_dir_all(&queue_dir)?;
-    enqueue_to(event, &queue_dir.join("events.jsonl"))
+    let path = queue_dir.join("events.jsonl");
+
+    // Checked here rather than inside `enqueue_to` so the pure write path stays
+    // testable without a config, and so rotation reads config exactly once per
+    // append instead of once per test fixture.
+    let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
+    // A failed rotation must not lose the event that triggered it: warn and
+    // append anyway. The file being too large is a worse day than the file
+    // being too large AND missing this record.
+    if let Err(error) = rotate_if_needed(
+        &path,
+        cfg.capture.rotate_at_mb,
+        cfg.capture.keep_generations,
+    ) {
+        tracing::warn!(%error, "capture queue rotation failed; appending anyway");
+    }
+
+    enqueue_to(event, &path)
+}
+
+/// Rotate the queue when it outgrows its budget, in the shape `newsyslog(8)`
+/// uses: `events.jsonl` → `.0`, `.0` → `.1.gz`, oldest dropped.
+///
+/// No signal to any writer is needed, and that is not an accident of this
+/// implementation — `enqueue_to` opens with `O_APPEND`, writes, and closes
+/// within the call, so nothing holds a descriptor across a rename. A process
+/// that is mid-append keeps writing to the renamed inode, so its line lands in
+/// `.0` rather than being lost.
+///
+/// Two processes deciding to rotate at once WOULD race, so the decision is
+/// taken under a sidecar lock — the same idiom `mur-channel` uses for its
+/// event log, and for the same reason.
+///
+/// Compression does not make the old records safe, only smaller: a rotated
+/// generation still holds whatever was written before redaction existed.
+/// `~/.mur/queue` is denied to agents wholesale (#978), which covers the
+/// generations too — but a backup of `~/.mur` carries them.
+fn rotate_if_needed(path: &Path, rotate_at_mb: u64, keep: u32) -> Result<()> {
+    use std::io::Write as _;
+
+    let len = match std::fs::metadata(path) {
+        Ok(m) => m.len(),
+        Err(_) => return Ok(()),
+    };
+    if len < rotate_at_mb.saturating_mul(1024 * 1024) {
+        return Ok(());
+    }
+
+    let dir = path.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let lock_path = dir.join("rotate.lock");
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)?;
+    fs2::FileExt::lock_exclusive(&lock)?;
+
+    // Re-check under the lock: another process may have rotated while we
+    // waited, and rotating twice would throw away a generation for nothing.
+    let still_big = std::fs::metadata(path)
+        .map(|m| m.len() >= rotate_at_mb.saturating_mul(1024 * 1024))
+        .unwrap_or(false);
+    if !still_big {
+        fs2::FileExt::unlock(&lock).ok();
+        return Ok(());
+    }
+
+    let gen_path = |n: u32| -> std::path::PathBuf {
+        if n == 0 {
+            path.with_extension("jsonl.0")
+        } else {
+            path.with_extension(format!("jsonl.{n}.gz"))
+        }
+    };
+
+    // Drop the oldest, then shift each generation up one.
+    let _ = std::fs::remove_file(gen_path(keep));
+    for n in (1..keep).rev() {
+        let _ = std::fs::rename(gen_path(n), gen_path(n + 1));
+    }
+    // `.0` is uncompressed (newsyslog keeps the newest that way); compress it
+    // as it becomes `.1.gz`.
+    if gen_path(0).exists() && keep >= 1 {
+        let raw = std::fs::read(gen_path(0))?;
+        let f = std::fs::File::create(gen_path(1))?;
+        let mut enc = flate2::write::GzEncoder::new(f, flate2::Compression::default());
+        enc.write_all(&raw)?;
+        enc.finish()?;
+        let _ = std::fs::remove_file(gen_path(0));
+    }
+    std::fs::rename(path, gen_path(0))?;
+
+    fs2::FileExt::unlock(&lock).ok();
+    Ok(())
 }
 
 pub fn enqueue_to(event: &NormalizedEvent, path: &Path) -> Result<()> {
@@ -188,6 +283,96 @@ mod tests {
         let back = read_all_events(&path);
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].query.as_deref(), Some("hi"));
+    }
+
+    /// The newsyslog shape: past the threshold the live file becomes `.0` and
+    /// a fresh one starts. Nothing is signalled, because nothing holds a
+    /// descriptor across the rename.
+    #[test]
+    fn rotation_moves_the_live_file_aside_and_starts_a_new_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("events.jsonl");
+        std::fs::write(&path, vec![b'x'; 2 * 1024 * 1024]).unwrap();
+
+        rotate_if_needed(&path, 1, 5).unwrap();
+
+        assert!(!path.exists(), "the live file should have been moved aside");
+        assert!(path.with_extension("jsonl.0").exists(), "no .0 generation");
+
+        // And the writer just carries on, creating a fresh file.
+        enqueue_to(&make_event("after"), &path).unwrap();
+        assert_eq!(read_all_events(&path).len(), 1);
+    }
+
+    /// Under the threshold nothing happens — rotation must not be a surprise
+    /// that fires on an ordinary append.
+    #[test]
+    fn a_small_queue_is_left_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("events.jsonl");
+        enqueue_to(&make_event("small"), &path).unwrap();
+
+        rotate_if_needed(&path, 64, 5).unwrap();
+
+        assert!(path.exists());
+        assert!(!path.with_extension("jsonl.0").exists());
+    }
+
+    /// Generations shift up and the oldest is dropped, so total disk is
+    /// bounded by `keep` — the property that makes "when do we delete the
+    /// 934 MB" a policy rather than a decision.
+    #[test]
+    fn generations_shift_up_and_the_oldest_is_dropped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("events.jsonl");
+        let big = vec![b'x'; 2 * 1024 * 1024];
+
+        for _ in 0..4 {
+            std::fs::write(&path, &big).unwrap();
+            rotate_if_needed(&path, 1, 2).unwrap();
+        }
+
+        assert!(path.with_extension("jsonl.0").exists(), "no .0");
+        assert!(
+            path.with_extension("jsonl.1.gz").exists(),
+            ".1 should be gzipped"
+        );
+        assert!(
+            !path.with_extension("jsonl.3.gz").exists(),
+            "kept more generations than configured"
+        );
+    }
+
+    /// `.1` onward is gzipped, and the bytes must survive the round trip —
+    /// a rotated generation nobody can read back is just a slower delete.
+    #[test]
+    fn a_compressed_generation_still_holds_its_records() {
+        use std::io::Read as _;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("events.jsonl");
+
+        enqueue_to(&make_event("keep-me"), &path).unwrap();
+        let pad = vec![b'\n'; 2 * 1024 * 1024];
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(&pad)
+            .unwrap();
+
+        rotate_if_needed(&path, 1, 3).unwrap(); // live -> .0
+        std::fs::write(&path, vec![b'y'; 2 * 1024 * 1024]).unwrap();
+        rotate_if_needed(&path, 1, 3).unwrap(); // .0 -> .1.gz
+
+        let gz = std::fs::File::open(path.with_extension("jsonl.1.gz")).unwrap();
+        let mut text = String::new();
+        flate2::read::GzDecoder::new(gz)
+            .read_to_string(&mut text)
+            .unwrap();
+        assert!(
+            text.contains("keep-me"),
+            "the record did not survive compression"
+        );
     }
 
     #[test]
