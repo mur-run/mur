@@ -24,6 +24,20 @@ pub fn enqueue_to(event: &NormalizedEvent, path: &Path) -> Result<()> {
     // Same shape the telemetry writer has always used, now shared.
     let mut value = serde_json::to_value(event)?;
     mur_common::redact::redact_value(&mut value);
+    // Stamp WHEN this was recorded (#979). Deliberately added here rather than
+    // as a `NormalizedEvent` field: the event models what the hook reported,
+    // the time models when the queue wrote it — different owners. Keeping it
+    // out of the struct also leaves the 23 literal constructions alone.
+    //
+    // Without it nothing in 454,874 records knows when it happened, so
+    // rotation cannot be age-based and `mur hook stats` cannot say what period
+    // it covers. Stamped after redaction, so it can never itself be redacted.
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "recorded_at".to_string(),
+            serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
+        );
+    }
     let line = serde_json::to_string(&value)? + "\n";
     let mut f = std::fs::OpenOptions::new()
         .create(true)
@@ -31,6 +45,42 @@ pub fn enqueue_to(event: &NormalizedEvent, path: &Path) -> Result<()> {
         .open(path)?;
     f.write_all(line.as_bytes())?;
     Ok(())
+}
+
+/// One line of the queue: the event the hook reported, plus the metadata the
+/// queue itself added when it wrote the line.
+///
+/// `recorded_at` is `None` for records written before stamping existed (#982).
+/// Absence means "before stamping", never "error" — treating it as an error
+/// would make the first report after that change cover nothing.
+#[derive(Debug, Clone)]
+pub struct QueueRecord {
+    pub recorded_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub event: NormalizedEvent,
+}
+
+/// Read the queue as records, keeping the write-time metadata that
+/// `read_all_events` drops. Malformed lines are skipped, as there.
+pub fn read_all_records(path: &Path) -> Vec<QueueRecord> {
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return Vec::new(),
+    };
+    std::io::BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|line| {
+            let value: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+            let recorded_at = value
+                .get("recorded_at")
+                .and_then(|v| v.as_str())
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc));
+            let event: NormalizedEvent = serde_json::from_value(value).ok()?;
+            Some(QueueRecord { recorded_at, event })
+        })
+        .collect()
 }
 
 /// Read all events from the queue file. Returns an empty Vec if the file
@@ -108,6 +158,36 @@ mod tests {
         // regexing the serialised line.
         let parsed: serde_json::Value = serde_json::from_str(written.trim()).unwrap();
         assert_eq!(parsed["tool_called"], "Bash");
+    }
+
+    /// #979: an append-only log whose records do not know when they happened
+    /// cannot be rotated by age, and its stats command cannot say what period
+    /// it covers. Stamped by the WRITER, after redaction so the timestamp
+    /// itself can never be redacted away.
+    #[test]
+    fn every_written_record_carries_when_it_was_recorded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("events.jsonl");
+        enqueue_to(&make_event("hello"), &path).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(written.trim()).unwrap();
+        let ts = v["recorded_at"].as_str().expect("no recorded_at");
+        chrono::DateTime::parse_from_rfc3339(ts)
+            .unwrap_or_else(|e| panic!("recorded_at is not RFC3339: {ts} ({e})"));
+    }
+
+    /// The reader must not care that the writer adds a field it does not model
+    /// — otherwise stamping the record would break every existing consumer.
+    #[test]
+    fn the_reader_still_parses_a_stamped_record() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("events.jsonl");
+        enqueue_to(&make_event("hi"), &path).unwrap();
+
+        let back = read_all_events(&path);
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].query.as_deref(), Some("hi"));
     }
 
     #[test]
