@@ -476,6 +476,8 @@ mod tests {
             "conversations",
             "telemetry",
             "traces",
+            "commander/.env",
+            "runtime/vlc.json",
         ] {
             let full = tmp.path().join(p);
             for verb in ["file-read*", "file-write*"] {
