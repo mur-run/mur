@@ -252,7 +252,7 @@ mod tests {
 
     /// A missing channel yields `None` — absence is not an error. A GENUINE
     /// I/O fault (here: the channel directory replaced by a plain file, so
-    /// the events read fails with ENOTDIR) must PROPAGATE — collapsing it
+    /// the events read fails with a non-NotFound error) must PROPAGATE — collapsing it
     /// into `Ok(None)` makes `status_of` pretend the run never existed
     /// instead of reporting the failure.
     #[test]
@@ -262,10 +262,16 @@ mod tests {
         let svc = mur_channel::ChannelService::open(mur_home).unwrap();
         let ch = svc.create_for_workflow("broken-channel").unwrap();
         // Sabotage: the channel dir becomes a file, so reading
-        // channels/<id>/events.jsonl is an ENOTDIR fault, not an absence.
+        // Portable sabotage: `events.jsonl` becomes a DIRECTORY, so reading it
+        // fails with a non-`NotFound` error on every platform (EISDIR on Unix,
+        // ERROR_ACCESS_DENIED on Windows). Replacing the channel DIR with a
+        // file does NOT work: Windows maps the resulting path error to
+        // `NotFound`, which `load_events` legitimately reads as absence, so
+        // the fault this test exists to catch would be swallowed there.
         let chan_dir = mur_home.join("channels").join(&ch.id);
-        std::fs::remove_dir_all(&chan_dir).unwrap();
-        std::fs::write(&chan_dir, b"i am a file").unwrap();
+        let events = chan_dir.join("events.jsonl");
+        let _ = std::fs::remove_file(&events);
+        std::fs::create_dir_all(&events).unwrap();
 
         let err = from_channel(mur_home, "run-x", &sidecar(&ch.id, RunKind::Job))
             .expect_err("a genuine channel read fault must surface as Err, not Ok(None)");

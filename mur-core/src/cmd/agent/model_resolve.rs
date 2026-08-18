@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use mur_common::model::{ModelEntry, ModelRegistry};
+use mur_common::model::ModelRegistry;
 use mur_common::model_resolve::Hardware;
 use serde::{Deserialize, Serialize};
 
@@ -71,20 +71,25 @@ pub fn apply_model_choice(mur_home: &Path, slug: &str, choice: &ModelChoice) -> 
     let reg_path = ModelRegistry::default_path()?;
     let mut reg = ModelRegistry::load_from(&reg_path)?;
     let key = choice_ref_name(choice);
-    reg.models.insert(
-        key.clone(),
-        ModelEntry {
-            provider: choice.provider.clone(),
-            model: choice.model.clone(),
-            base_url: choice.base_url.clone(),
-            secret: choice.secret.as_deref().map(|s| s.parse()).transpose()?,
-            capabilities: vec![],
-            params: serde_json::Value::Null,
-            tier: None,
-            cost_per_1k_tokens: None,
-            ..Default::default()
-        },
-    );
+    // Update in place when the key already exists. A `ModelChoice` carries
+    // four fields; a registry entry also holds pricing, the context window,
+    // the vendor and the tier. Replacing it wholesale dropped those — the
+    // agent kept running while its cost footer and `mur model prices show`
+    // went blank, with nothing to point at as the cause.
+    //
+    // `None` on the choice means "unchanged", not "clear it": re-pointing an
+    // agent at a model it already uses must not strip the endpoint or the
+    // credential that made it reachable.
+    let mut entry = reg.models.get(&key).cloned().unwrap_or_default();
+    entry.provider = choice.provider.clone();
+    entry.model = choice.model.clone();
+    if choice.base_url.is_some() {
+        entry.base_url = choice.base_url.clone();
+    }
+    if let Some(secret) = choice.secret.as_deref() {
+        entry.secret = Some(secret.parse()?);
+    }
+    reg.models.insert(key.clone(), entry);
     reg.save_to(&reg_path)?;
 
     // 2. Point the agent at it.
@@ -193,6 +198,66 @@ mod tests {
             serde_yaml_ng::from_str(&std::fs::read_to_string(home.join("profile.yaml")).unwrap())
                 .unwrap();
         assert_eq!(reloaded.model_ref.as_deref(), Some("ollama_llama3_2_3b"));
+    }
+
+    /// A registry entry is more than (provider, model): `mur model connect`
+    /// fills in pricing, the context window and the vendor. Pointing an agent
+    /// at an existing key must not cost the entry that metadata — the agent
+    /// would keep working while the cost footer and `mur model prices show`
+    /// silently went blank.
+    #[test]
+    fn applying_a_choice_over_an_existing_key_keeps_its_metadata() {
+        use mur_common::model::{ModelEntry, ModelRegistry};
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mur_home = tmp.path().to_path_buf();
+        let agent = mur_home.join("agents").join("coach");
+        std::fs::create_dir_all(&agent).unwrap();
+        let p = mur_common::AgentProfile::default_for_tests();
+        std::fs::write(
+            agent.join("profile.yaml"),
+            serde_yaml_ng::to_string(&p).unwrap(),
+        )
+        .unwrap();
+        unsafe {
+            std::env::set_var("MUR_HOME", &mur_home);
+        }
+
+        // As `mur model connect deepseek --base-url …` would leave it.
+        let reg_path = ModelRegistry::default_path().unwrap();
+        let mut reg = ModelRegistry::default();
+        reg.models.insert(
+            "openai_deepseek_chat".into(),
+            ModelEntry {
+                provider: "openai".into(),
+                vendor: Some("deepseek".into()),
+                model: "deepseek-chat".into(),
+                base_url: Some("https://api.deepseek.com/v1".into()),
+                input_cost_per_1k: Some(0.00014),
+                output_cost_per_1k: Some(0.00028),
+                context_window: Some(1_000_000),
+                ..Default::default()
+            },
+        );
+        reg.save_to(&reg_path).unwrap();
+
+        // What `apply_model_ref_override` reconstructs from that entry: four
+        // fields, which is all a ModelChoice carries.
+        let choice = ModelChoice {
+            provider: "openai".into(),
+            model: "deepseek-chat".into(),
+            base_url: Some("https://api.deepseek.com/v1".into()),
+            secret: None,
+        };
+        let key = apply_model_choice(&mur_home, "coach", &choice).unwrap();
+        assert_eq!(key, "openai_deepseek_chat", "same key — it is an update");
+
+        let after = ModelRegistry::load_from(&reg_path).unwrap();
+        let e = &after.models[&key];
+        assert_eq!(e.input_cost_per_1k, Some(0.00014), "pricing must survive");
+        assert_eq!(e.output_cost_per_1k, Some(0.00028), "pricing must survive");
+        assert_eq!(e.context_window, Some(1_000_000));
+        assert_eq!(e.vendor.as_deref(), Some("deepseek"));
     }
 
     #[test]
