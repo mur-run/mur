@@ -209,20 +209,35 @@ impl StdioMcpClient {
     ) -> Result<Self, McpError> {
         // Resolve a bare `mur-mcp-server` command to the bundled absolute path
         // (ensured under ~/.mur/mcp-servers by the supervisor's self-heal) so it
-        // launches on installs where only `mur` is on PATH. Falls back to the
-        // command as-written when there is no bundled copy to point at.
+        // launches on installs where only `mur` is on PATH. Every other bare
+        // command resolves against the AUGMENTED PATH — the ambient one plus
+        // the standard install dirs a GUI/launchd parent omits — so which
+        // binary `command: node` names does not depend on who spawned the
+        // runtime (terminal vs service vs Hub sidecar), and matches what the
+        // B0 admission checks hashed (`supervisor_runner::mcp_server_binaries`
+        // resolves against the same augmented PATH). Falls back to the
+        // command as-written when nothing resolves, preserving the
+        // add-before-install workflow: the spawn then fails with the OS error.
         let bundled = mur_common::exec::bundled_mcp_server_path();
+        let aug_path = mur_common::exec::augmented_path_var();
         let resolved: std::borrow::Cow<'_, str> =
             if std::path::Path::new(&entry.command).file_name() == bundled.file_name()
                 && bundled.is_file()
             {
                 bundled.to_string_lossy().into_owned().into()
             } else {
-                std::borrow::Cow::Borrowed(entry.command.as_str())
+                match mur_common::exec::resolve_command_in(&aug_path, &entry.command) {
+                    Ok(p) => p.to_string_lossy().into_owned().into(),
+                    Err(_) => std::borrow::Cow::Borrowed(entry.command.as_str()),
+                }
             };
         let mut std_cmd = std::process::Command::new(resolved.as_ref());
         std_cmd
             .args(&entry.args)
+            // The server's own subprocesses (`npx` re-execing node, a shell
+            // step) must resolve identically, so the child gets the augmented
+            // PATH too — ambient entries keep priority.
+            .env("PATH", &aug_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
