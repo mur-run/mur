@@ -153,11 +153,43 @@ impl LaunchChain {
     /// see docs/superpowers/specs/2026-08-18-agent-read-confinement-audit.md.
     pub fn sibling_signing_keys(&self) -> Vec<PathBuf> {
         let agents = self.mur_home.join("agents");
-        let Ok(entries) = std::fs::read_dir(&agents) else {
-            return Vec::new();
+        let entries = match std::fs::read_dir(&agents) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+            Err(error) => {
+                // Never silently: an unreadable agents dir means the profile
+                // is built WITHOUT these denies, i.e. weaker than intended,
+                // and nothing else would say so.
+                tracing::warn!(
+                    dir = %agents.display(),
+                    %error,
+                    "cannot enumerate sibling agents — their signing keys will \
+                     NOT be read-denied in this sandbox profile"
+                );
+                return Vec::new();
+            }
         };
         entries
             .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            // Only well-formed agent names reach the profile text. Names are
+            // `[A-Za-z0-9_-]` by construction (`validate_agent_name`), so this
+            // is normally a no-op — but the profile is assembled by string
+            // concatenation and `fail_closed_on_sandbox_error` defaults to
+            // true, so one hand-made directory with an odd name could
+            // otherwise produce a profile that fails to compile and stop
+            // EVERY agent from starting. Skip it instead, loudly.
+            .filter(|e| match e.file_name().to_str() {
+                Some(n) if mur_common::validate_agent_name(n).is_ok() => true,
+                other => {
+                    tracing::warn!(
+                        entry = ?other,
+                        "skipping malformed entry under agents/ when building \
+                         the sibling-key deny list"
+                    );
+                    false
+                }
+            })
             .map(|e| e.path())
             .filter(|p| p != &self.agent_home)
             .map(|p| p.join("identity.key"))
