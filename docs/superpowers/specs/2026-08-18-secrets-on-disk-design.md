@@ -1,7 +1,7 @@
 # Secrets on disk: replace the deny list with a rule
 
 **Date:** 2026-08-18
-**Status:** design, decision requested — nothing implemented
+**Status:** design, decisions settled — nothing implemented
 **Issues:** #850 (read confinement), #979 (unredacted capture)
 **Follows:** #975, #976, #978
 
