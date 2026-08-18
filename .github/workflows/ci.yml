@@ -179,7 +179,18 @@ jobs:
     needs: changes
     if: github.event_name == 'push' || needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Headroom, because 45 proved too tight to recover from — NOT because a
+    # cold build costs 45 minutes (measured: a cold run takes ~11 min).
+    # Three runs in a row were killed at the 45m mark with "No cache found"
+    # (main @962ac841 and two on #968) while a fourth cold run of the SAME
+    # Rust code finished in 10m41s. Whatever slows a run down that far is
+    # unexplained — runner contention is the suspicion, not a finding. What
+    # made it stick was the feedback loop: a killed job never runs
+    # rust-cache's save step, so every retry starts cold too, and re-running
+    # can't clear it. The extra budget buys a bad run the chance to finish
+    # and leave a cache behind. Still far below the 6h default, so a
+    # genuinely hung build is still caught.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
