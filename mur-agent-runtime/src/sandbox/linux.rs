@@ -147,25 +147,11 @@ fn apply_seccomp_denylist() -> anyhow::Result<()> {
 /// path cannot be carved — it is dropped whole. Fail-closed on purpose: the
 /// alternative is installing a rule that hands over the launch chain.
 ///
-/// The agent's own home is exempt: on macOS the SBPL deny of the agents tree
-/// is followed by a re-allow of exactly this directory, and Landlock installs
-/// it as-is (it contains nothing protected — the own profile/identity
-/// self-protection is macOS tier 3 only). Without the exemption the symmetric
-/// overlap test below would also catch the `<mur_home>/agents/<self>`
-/// force-grant and Linux agents would lose their own home.
 pub(crate) fn partition_write_grants(
     grants: &[PathBuf],
     chain: &LaunchChain,
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let protected = chain.deny_paths();
-    grants.iter().cloned().partition(|g| {
-        if g.starts_with(chain.agent_self_home()) {
-            return true;
-        }
-        !protected
-            .iter()
-            .any(|p| p.starts_with(g) || g.starts_with(p))
-    })
+    chain.partition_grants(grants)
 }
 
 #[cfg(test)]
