@@ -131,6 +131,7 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
                 .map(|_| tmp_runtime);
         swap::swap(&tmp_bin, &target)?;
         println!("Updated to v{latest}");
+        refresh_siblings(asset_name, &bin_bytes, &target);
         resign::post_upgrade(opts.restart_agents, fresh_runtime.as_deref())?;
     }
     #[cfg(windows)]
@@ -145,6 +146,56 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
 
     drop(tmp_dir);
     Ok(())
+}
+
+/// Binaries that ship in the same tarball as `mur` and must move with it.
+///
+/// `mur-agent-runtime` is deliberately absent: `resign::post_upgrade` owns
+/// that one, because it also has to reach the launchd copy and the brew keg,
+/// not just the sibling next to `mur`.
+#[cfg(unix)]
+const SIBLING_BINARIES: &[&str] = &["murmurd", "mur-mcp-server", "mur-research-gateway"];
+
+/// Replace every installed sibling of `mur` from this release.
+///
+/// Without this, `mur update` swapped ONLY `mur`: the daemon, the MCP server
+/// and the research gateway stayed on whatever version first installed them,
+/// forever. Version skew across binaries that share on-disk formats and a
+/// protocol is not a theoretical risk — a gateway pinned to an old crate is
+/// how `mur hook stats` ended up bucketing records under a version nobody was
+/// running.
+///
+/// Only files that ALREADY exist next to `mur` are touched: a machine that
+/// never installed the research gateway must not silently gain one.
+/// Failures are reported and skipped — a sibling that cannot be replaced must
+/// not turn a completed `mur` upgrade into an error.
+#[cfg(unix)]
+fn refresh_siblings(asset_name: &str, bin_bytes: &[u8], target: &std::path::Path) {
+    let Some(dir) = target.parent() else {
+        return;
+    };
+    for name in SIBLING_BINARIES {
+        let dest = dir.join(name);
+        if !dest.is_file() {
+            continue;
+        }
+        // Stage INSIDE the install dir, not the temp dir: `rename(2)` is only
+        // atomic within one filesystem, and $TMPDIR is not guaranteed to share
+        // one with the install prefix.
+        let staged = dir.join(format!(".{name}.new"));
+        match release::extract_binary(asset_name, bin_bytes, name, &staged)
+            .and_then(|()| swap::swap(&staged, &dest))
+        {
+            Ok(()) => println!("  updated {}", dest.display()),
+            Err(e) => {
+                let _ = std::fs::remove_file(&staged);
+                eprintln!(
+                    "warning: could not update {} ({e:#}) — it stays on the previous version",
+                    dest.display()
+                );
+            }
+        }
+    }
 }
 
 /// Best-effort: if MUR Hub is installed and older than `cli_version`, return a
@@ -261,6 +312,8 @@ fn stale_writer_versions(stats: &serde_json::Value, days: &[String], current: &s
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::refresh_siblings;
     use super::{stale_hub_nudge_from, stale_writer_versions};
 
     const HOST_PATH: &str = "/Applications/MUR Hub.app/Contents/MacOS/mur-hub-gui\n2.26.0";
@@ -343,5 +396,93 @@ mod tests {
         assert!(
             stale_writer_versions(&serde_json::json!({"buckets": 3}), &days, "2.66.0").is_empty()
         );
+    }
+
+    /// `mur update` used to swap only `mur`, leaving `murmurd` /
+    /// `mur-mcp-server` / `mur-research-gateway` on whatever version first
+    /// installed them. Siblings that ARE installed must move with it — and
+    /// ones that are not must stay absent, so an update never installs a
+    /// binary the user never chose.
+    #[cfg(unix)]
+    #[test]
+    fn siblings_are_replaced_in_place_and_never_created() {
+        fn tgz(files: &[(&str, &[u8])]) -> Vec<u8> {
+            let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            {
+                let mut tar = tar::Builder::new(&mut gz);
+                for (name, data) in files {
+                    let mut h = tar::Header::new_gnu();
+                    h.set_size(data.len() as u64);
+                    h.set_mode(0o755);
+                    h.set_cksum();
+                    tar.append_data(&mut h, name, *data).unwrap();
+                }
+                tar.finish().unwrap();
+            }
+            gz.finish().unwrap()
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let mur = dir.path().join("mur");
+        std::fs::write(&mur, b"NEW-MUR").unwrap();
+        // Installed → must be replaced.
+        std::fs::write(dir.path().join("murmurd"), b"OLD").unwrap();
+        std::fs::write(dir.path().join("mur-mcp-server"), b"OLD").unwrap();
+        // NOT installed → must stay that way.
+        let gateway = dir.path().join("mur-research-gateway");
+
+        let bytes = tgz(&[
+            ("mur", b"NEW-MUR"),
+            ("murmurd", b"NEW-DAEMON"),
+            ("mur-mcp-server", b"NEW-MCP"),
+            ("mur-research-gateway", b"NEW-GATEWAY"),
+        ]);
+        refresh_siblings("mur.tar.gz", &bytes, &mur);
+
+        assert_eq!(
+            std::fs::read(dir.path().join("murmurd")).unwrap(),
+            b"NEW-DAEMON"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("mur-mcp-server")).unwrap(),
+            b"NEW-MCP"
+        );
+        assert!(!gateway.exists(), "must not install what was never there");
+        assert!(
+            !dir.path().join(".murmurd.new").exists(),
+            "staging file must not survive"
+        );
+    }
+
+    /// A sibling missing from the archive must not delete or truncate the
+    /// installed copy — the upgrade leaves it alone and says so.
+    #[cfg(unix)]
+    #[test]
+    fn a_sibling_absent_from_the_archive_is_left_intact() {
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        {
+            let mut tar = tar::Builder::new(&mut gz);
+            let data = b"NEW-MUR";
+            let mut h = tar::Header::new_gnu();
+            h.set_size(data.len() as u64);
+            h.set_mode(0o755);
+            h.set_cksum();
+            tar.append_data(&mut h, "mur", &data[..]).unwrap();
+            tar.finish().unwrap();
+        }
+        let bytes = gz.finish().unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let mur = dir.path().join("mur");
+        std::fs::write(&mur, b"NEW-MUR").unwrap();
+        std::fs::write(dir.path().join("murmurd"), b"KEEP-ME").unwrap();
+
+        refresh_siblings("mur.tar.gz", &bytes, &mur);
+
+        assert_eq!(
+            std::fs::read(dir.path().join("murmurd")).unwrap(),
+            b"KEEP-ME"
+        );
+        assert!(!dir.path().join(".murmurd.new").exists());
     }
 }
