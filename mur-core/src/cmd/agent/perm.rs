@@ -31,27 +31,107 @@ pub(super) fn warn_if_running(name: &str) {
     }
 }
 
-/// Note the ONE thing this entitlement list does not express: granularity.
+/// Render an agent's COMPLETE outbound picture: what the runtime itself may
+/// reach, and what each MCP server may reach.
 ///
-/// The policy above does reach the MCP servers this agent spawns — children
-/// inherit it (Landlock on Linux, a seatbelt sandbox across fork+exec on
-/// macOS). What it cannot do is give one server a NARROWER cage than the
-/// agent itself, so every server here can reach everything listed above.
-///
-/// Printed to STDERR, and only when the agent actually spawns children:
-/// `perm show` output is YAML that callers pipe into a parser, and a caveat
-/// that corrupts the data it qualifies is not an improvement.
-fn warn_shared_scope(profile: &mur_common::AgentProfile) {
-    let n = profile.mcp_servers.len();
-    if n == 0 {
-        return;
-    }
-    eprintln!(
-        "note: this policy is per-AGENT. The {n} MCP server(s) below inherit it \
-         in full — there is no way to give one a narrower cage than the agent \
-         itself. Scope a server's network reach with `mur agent mcp \
-         set-network`, and treat installing one as granting it everything above."
+/// These are different subjects enforced by different machinery, and showing
+/// only one of them is how a user comes to believe `perm allow-host` scopes
+/// their MCP servers. It does not: that list is an in-process guard on the
+/// runtime's own HTTP client (plus the B0 gate on the agent's `network.*`
+/// tools), and a spawned server runs neither.
+fn print_outbound_picture(profile: &mur_common::AgentProfile) {
+    print!("{}", outbound_picture(profile));
+}
+
+/// Testable core of [`print_outbound_picture`].
+fn outbound_picture(profile: &mur_common::AgentProfile) -> String {
+    use mur_common::agent::{McpNetMode, NetworkOutboundMode};
+    use std::fmt::Write as _;
+
+    let mut o = String::new();
+    let out = &profile.entitlements.network.outbound;
+
+    let _ = writeln!(o, "runtime's own traffic — {:?}", out.mode);
+    let _ = writeln!(
+        o,
+        "  (in-process DNS guard + the B0 gate on `network.*` tools)"
     );
+    match out.mode {
+        NetworkOutboundMode::Off => {
+            let _ = writeln!(o, "  no outbound");
+        }
+        NetworkOutboundMode::Unrestricted => {
+            let _ = writeln!(o, "  any host, any port");
+        }
+        _ => {
+            if out.allow_hosts.is_empty() {
+                let _ = writeln!(
+                    o,
+                    "  allow_hosts: (none — only the configured model's host)"
+                );
+            } else {
+                let _ = writeln!(o, "  allow_hosts:");
+                for h in &out.allow_hosts {
+                    let _ = writeln!(o, "    {h}");
+                }
+                let _ = writeln!(o, "  plus the configured model's own host, always allowed");
+            }
+        }
+    }
+
+    if profile.mcp_servers.is_empty() {
+        return o;
+    }
+    let _ = writeln!(o);
+    let _ = writeln!(o, "MCP servers — {}", profile.mcp_servers.len());
+    let mut any_inherit = false;
+    for m in &profile.mcp_servers {
+        let mode = m.network.as_ref().map(|n| n.mode).unwrap_or_default();
+        let detail = match mode {
+            // The load-bearing line: `inherit` does NOT pick up allow_hosts.
+            McpNetMode::Inherit => {
+                any_inherit = true;
+                "NOT bounded by allow_hosts above — only by the OS sandbox, which \
+                 restricts ports, not hosts"
+                    .to_string()
+            }
+            McpNetMode::Restricted => {
+                let hosts = m
+                    .network
+                    .as_ref()
+                    .map(|n| n.allow_hosts.join(", "))
+                    .unwrap_or_default();
+                if hosts.is_empty() {
+                    "via the egress proxy; no hosts allowed (denies all)".to_string()
+                } else {
+                    format!("via the egress proxy; allows {hosts}")
+                }
+            }
+            McpNetMode::BroadAudited => {
+                let deny = m
+                    .network
+                    .as_ref()
+                    .map(|n| n.deny_hosts.join(", "))
+                    .unwrap_or_default();
+                if deny.is_empty() {
+                    "via the egress proxy; ALL hosts, audited".to_string()
+                } else {
+                    format!("via the egress proxy; all hosts except {deny}, audited")
+                }
+            }
+            McpNetMode::Off => "no outbound".to_string(),
+        };
+        let label = format!("{mode:?}").to_lowercase();
+        let _ = writeln!(o, "  {:<20} {:<11} {detail}", m.name, label);
+    }
+    if any_inherit {
+        let _ = writeln!(o);
+        let _ = writeln!(
+            o,
+            "  Bound a server by host: mur agent mcp set-network <agent> <server> --allow-host <host>"
+        );
+    }
+    o
 }
 
 pub fn cmd_perm_show(name: &str, section: Option<&str>) -> Result<()> {
@@ -77,7 +157,15 @@ pub fn cmd_perm_show(name: &str, section: Option<&str>) -> Result<()> {
     } else {
         print!("{v}");
     }
-    warn_shared_scope(&profile);
+    if !profile.mcp_servers.is_empty() {
+        eprintln!();
+        eprintln!("# outbound scope (`mur agent perm list-hosts {name}` for detail)");
+        eprintln!(
+            "# allow_hosts above governs the RUNTIME only; the {} MCP server(s) \
+             have their own policy.",
+            profile.mcp_servers.len()
+        );
+    }
     Ok(())
 }
 
@@ -193,13 +281,10 @@ pub fn cmd_perm_deny_host(name: &str, glob: &str) -> Result<()> {
 
 pub fn cmd_perm_list_hosts(name: &str) -> Result<()> {
     let (_path, profile) = load_profile_for_edit(name)?;
-    println!(
-        "# allow_hosts ({:?})",
-        profile.entitlements.network.outbound.mode
-    );
-    for h in &profile.entitlements.network.outbound.allow_hosts {
-        println!("{h}");
-    }
+    // The whole picture, not just the agent-level list: printing one of two
+    // policies that both call themselves `allow_hosts` is what taught users
+    // that this command scopes their MCP servers.
+    print_outbound_picture(&profile);
     Ok(())
 }
 
@@ -459,7 +544,71 @@ pub fn cmd_perm_list_tools(name: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_host_pattern;
+    use super::{outbound_picture, validate_host_pattern};
+
+    fn profile_with(
+        servers: Vec<(&str, Option<mur_common::agent::McpNetMode>)>,
+    ) -> mur_common::AgentProfile {
+        use mur_common::agent::{McpServerEntry, McpServerNetwork};
+        let mut p = mur_common::AgentProfile::default_for_tests();
+        p.entitlements.network.outbound.allow_hosts = vec!["api.example.com".into()];
+        for (name, mode) in servers {
+            p.mcp_servers.push(McpServerEntry {
+                name: name.into(),
+                command: "npx".into(),
+                network: mode.map(|m| McpServerNetwork {
+                    mode: m,
+                    allow_hosts: vec!["db.internal".into()],
+                    deny_hosts: vec![],
+                    authorization: None,
+                }),
+                ..Default::default()
+            });
+        }
+        p
+    }
+
+    /// The whole point of the view: an `inherit` server must be shown as NOT
+    /// covered by the agent's allow_hosts. Believing otherwise is what sent
+    /// someone chasing a MySQL connection that the host list never governed.
+    #[test]
+    fn inherit_servers_are_shown_as_not_bounded_by_allow_hosts() {
+        let p = profile_with(vec![("media", None)]);
+        let out = outbound_picture(&p);
+        assert!(out.contains("api.example.com"), "{out}");
+        assert!(
+            out.contains("NOT bounded by allow_hosts"),
+            "an inherit server must be called out: {out}"
+        );
+        assert!(
+            out.contains("ports, not hosts"),
+            "must name what DOES bound it: {out}"
+        );
+        assert!(out.contains("set-network"), "must name the remedy: {out}");
+    }
+
+    /// A restricted server is genuinely host-bounded — it must NOT carry the
+    /// warning, or the warning becomes noise and stops being read.
+    #[test]
+    fn restricted_servers_show_their_own_hosts_without_the_warning() {
+        let p = profile_with(vec![(
+            "db",
+            Some(mur_common::agent::McpNetMode::Restricted),
+        )]);
+        let out = outbound_picture(&p);
+        assert!(out.contains("db.internal"), "{out}");
+        assert!(!out.contains("NOT bounded by allow_hosts"), "{out}");
+        assert!(!out.contains("set-network"), "no remedy needed: {out}");
+    }
+
+    /// With no MCP servers there is only one policy, and nothing to disambiguate.
+    #[test]
+    fn no_servers_means_no_server_section() {
+        let p = profile_with(vec![]);
+        let out = outbound_picture(&p);
+        assert!(out.contains("runtime's own traffic"), "{out}");
+        assert!(!out.contains("MCP servers"), "{out}");
+    }
 
     #[test]
     fn patterns_the_matcher_can_match_are_accepted() {
