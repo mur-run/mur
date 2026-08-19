@@ -139,13 +139,16 @@ export function McpTab({
             <input
               className="input"
               value={command}
-              placeholder="/usr/local/bin/my-mcp-server"
+              placeholder="npx"
               onChange={(e) => setCommand(e.target.value)}
             />
             <button className="toolbar-btn" onClick={browseCommand} disabled={busy}>
               {t("detail.browse")}
             </button>
           </div>
+          <p className="field-muted" style={{ fontSize: 12 }}>
+            {t("detail.mcpCommandHint")}
+          </p>
           <label className="field-label">{t("detail.mcpArgs")}</label>
           <input
             className="input"
