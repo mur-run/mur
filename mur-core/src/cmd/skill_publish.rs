@@ -163,16 +163,32 @@ pub fn cmd_publish(path: &str) -> Result<()> {
 
 fn resolve_publisher_identity() -> Result<AgentIdentity> {
     let home = dirs::home_dir().ok_or_else(|| anyhow!("cannot determine home directory"))?;
-    let key_path = home.join(".mur").join("publisher-identity.key");
-    if key_path.exists() {
-        AgentIdentity::load(&home.join(".mur")).map_err(|e| anyhow!("load publisher identity: {e}"))
+    resolve_publisher_identity_in(&home.join(".mur"))
+}
+
+/// Split out from `resolve_publisher_identity` so the thing that matters can be
+/// asserted: that this never writes `<mur_home>/identity.key`. The version that
+/// read `dirs::home_dir()` directly could not be tested at all, which is part of
+/// why #1011 sat there.
+fn resolve_publisher_identity_in(mur_home: &std::path::Path) -> Result<AgentIdentity> {
+    // Its OWN directory (#1011). This used to guard on
+    // `~/.mur/publisher-identity.key` while `AgentIdentity::save`/`load` join
+    // `identity.key` — so the guard tested a file nothing ever created, always
+    // took the else branch, and overwrote `~/.mur/identity.key`: the HOST key,
+    // with no `.prev` and no rotation attestation to recover from.
+    //
+    // A separate directory keeps `save`/`load` usable as-is and makes a
+    // collision structurally impossible rather than merely unlikely.
+    let dir = mur_home.join("publisher");
+    if dir.join("identity.key").exists() {
+        AgentIdentity::load(&dir).map_err(|e| anyhow!("load publisher identity: {e}"))
     } else {
         let identity = AgentIdentity::generate();
-        std::fs::create_dir_all(key_path.parent().unwrap())?;
+        std::fs::create_dir_all(&dir)?;
         identity
-            .save(&home.join(".mur"))
+            .save(&dir)
             .map_err(|e| anyhow!("save publisher identity: {e}"))?;
-        eprintln!("ℹ Generated new publisher identity at ~/.mur/");
+        eprintln!("ℹ Generated new publisher identity at ~/.mur/publisher/");
         Ok(identity)
     }
 }
@@ -186,4 +202,53 @@ fn current_gh_user() -> Result<String> {
         bail!("failed to get GitHub username. Run `gh auth login` first");
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #1011: resolving a publisher identity must never touch the HOST key.
+    ///
+    /// The old code guarded on `publisher-identity.key` — a file nothing ever
+    /// created — while `save`/`load` join `identity.key`. So the guard was
+    /// always false, the else branch always ran, and `fs::write` truncated
+    /// `~/.mur/identity.key`. Unrecoverable: no `.prev`, and no rotation
+    /// attestation to bridge the swap.
+    #[test]
+    fn resolving_a_publisher_identity_never_touches_the_host_key() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mur_home = tmp.path();
+        std::fs::create_dir_all(mur_home).unwrap();
+
+        // A host key, exactly as a real ~/.mur has.
+        let host = AgentIdentity::generate();
+        host.save(mur_home).unwrap();
+        let host_bytes = std::fs::read(mur_home.join("identity.key")).unwrap();
+
+        let publisher = resolve_publisher_identity_in(mur_home).unwrap();
+
+        assert_eq!(
+            std::fs::read(mur_home.join("identity.key")).unwrap(),
+            host_bytes,
+            "the host key was overwritten"
+        );
+        assert_ne!(
+            publisher.pubkey_text(),
+            host.pubkey_text(),
+            "the publisher identity must not BE the host key"
+        );
+        assert!(mur_home.join("publisher").join("identity.key").exists());
+    }
+
+    /// ...and it is stable: a second call returns the same identity rather than
+    /// minting a new one, which is what makes published signatures verifiable
+    /// across releases.
+    #[test]
+    fn resolving_twice_returns_the_same_publisher_identity() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let first = resolve_publisher_identity_in(tmp.path()).unwrap();
+        let second = resolve_publisher_identity_in(tmp.path()).unwrap();
+        assert_eq!(first.pubkey_text(), second.pubkey_text());
+    }
 }
