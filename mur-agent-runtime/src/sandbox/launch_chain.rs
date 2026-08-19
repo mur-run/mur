@@ -654,7 +654,10 @@ mod tests {
     fn peer_public_material_skips_a_malformed_agent_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let mur = tmp.path().to_path_buf();
-        let bad = mur.join("agents").join("we ird\"name");
+        // A space is rejected by `validate_agent_name` ([A-Za-z0-9_-]) and is
+        // legal on every filesystem — unlike a quote, which Windows refuses to
+        // create, making the test panic before it asserts anything.
+        let bad = mur.join("agents").join("we ird");
         std::fs::create_dir_all(&bad).unwrap();
         std::fs::write(bad.join("identity.pub"), b"pub").unwrap();
         let chain =
