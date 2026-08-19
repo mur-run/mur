@@ -182,7 +182,17 @@ async fn main() -> Result<()> {
     loop {
         poll.tick().await;
         let (events, new_offset) = consumer::drain_new(&queue_file, offset)?;
-        let had_events = new_offset > offset;
+        // `!=`, not `>`. After the capture queue rotates (#983) `drain_new`
+        // restarts from zero, so the new offset is SMALLER than the one we
+        // held — a `>` test reads that as "nothing happened", never persists
+        // the reset, and re-processes the same records every tick forever
+        // while `queue/offset` stays pinned to the pre-rotation value.
+        //
+        // Observed on a real machine: after the first rotation of a 976 MB
+        // queue the daemon looped on the same handful of events once a second
+        // and the offset file never moved. #996 fixed the seek; this is the
+        // half that persists it.
+        let had_events = consumer::should_persist(offset, new_offset);
         if had_events {
             consumer::write_offset(&offset_file, new_offset)?;
             offset = new_offset;

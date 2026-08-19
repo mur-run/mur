@@ -36,6 +36,20 @@ pub fn write_offset(path: &Path, offset: u64) -> Result<()> {
     Ok(())
 }
 
+/// Whether the drained offset is worth persisting.
+///
+/// `!=`, deliberately not `>`. After the capture queue rotates (#983)
+/// `drain_new` restarts from zero, so the new offset is SMALLER than the one
+/// held — a `>` test reads that as "nothing happened", never persists the
+/// reset, and leaves the daemon re-processing the same records every tick
+/// while `queue/offset` stays pinned to the pre-rotation value.
+///
+/// Named and separate so it can be tested; as an inline comparison in the
+/// event loop it was neither.
+pub fn should_persist(previous: u64, drained: u64) -> bool {
+    previous != drained
+}
+
 /// Read all new events from `queue_file` starting at `start_offset`.
 /// Returns (new_events, new_offset).
 pub fn drain_new(queue_file: &Path, start_offset: u64) -> Result<(Vec<NormalizedEvent>, u64)> {
@@ -119,6 +133,23 @@ mod tests {
             duration_ms: None,
             is_duration_record: false,
         }
+    }
+
+    /// The regression that survived #996: the seek was fixed, the decision to
+    /// PERSIST the reset was not, so the daemon read the right records and
+    /// then threw the new offset away every second.
+    #[test]
+    fn a_backwards_offset_after_rotation_is_still_worth_persisting() {
+        // Pre-rotation: consumed 976 MB. Post-rotation: 17 KB of a fresh file.
+        assert!(
+            should_persist(976_071_950, 17_060),
+            "a rotation reset must be persisted — `>` said no and pinned the offset forever"
+        );
+        assert!(should_persist(100, 200), "ordinary forward progress");
+        assert!(
+            !should_persist(500, 500),
+            "nothing drained, nothing to write"
+        );
     }
 
     /// #983 rotates the queue: the live file is renamed away and a fresh one
