@@ -459,7 +459,9 @@ mod tests {
         assert_eq!(profile.name, "clone-x");
         assert_ne!(profile.id, source_id, "clone must get a new profile.id");
         assert!(
-            clone_dir.join("identity.key").exists(),
+            mur_common::identity::private_key_dir(&clone_dir)
+                .join("identity.key")
+                .exists(),
             "clone must have a freshly minted identity.key"
         );
         assert!(clone_dir.join("identity.pub").exists());

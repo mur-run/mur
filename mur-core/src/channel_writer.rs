@@ -115,7 +115,9 @@ mod tests {
         let agent_home = home.join("agents").join("mur");
         std::fs::create_dir_all(&agent_home).unwrap();
         AgentIdentity::generate().save(&agent_home).unwrap();
-        let key = agent_home.join("identity.key");
+        // The private half lives under `keys/<name>/` for an agent home
+        // (#850 option (c)), so chmod the file where it actually is.
+        let key = mur_common::identity::private_key_dir(&agent_home).join("identity.key");
         let svc = ChannelService::open(home).unwrap();
         let ch = svc.create_for_workflow("g").unwrap();
 
