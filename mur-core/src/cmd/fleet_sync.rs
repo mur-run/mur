@@ -211,7 +211,13 @@ pub fn apply_fleet_pull(
                 std::fs::create_dir_all(&dir)?;
                 write_atomic(&dir.join("profile.yaml"), body.as_bytes())?;
                 report.written += 1;
-                if !dir.join("identity.key").exists() {
+                // The private half moved to `keys/<name>/` (#850 option (c));
+                // checking the old path here would report every migrated agent
+                // as keyless and try to mint a second identity for it.
+                if !mur_common::identity::private_key_dir(&dir)
+                    .join("identity.key")
+                    .exists()
+                {
                     generate_device_identity_key(&dir)?;
                     report.keys_generated += 1;
                 }
@@ -635,7 +641,11 @@ mod tests {
         let report = apply_fleet_pull(mur.path(), FleetEntityType::AgentProfile, &[ent]).unwrap();
 
         assert!(mur.path().join("agents/scout/profile.yaml").exists());
-        assert!(mur.path().join("agents/scout/identity.key").exists());
+        assert!(
+            mur_common::identity::private_key_dir(&mur.path().join("agents/scout"))
+                .join("identity.key")
+                .exists()
+        );
         assert_eq!(report.written, 1);
     }
 

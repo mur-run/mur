@@ -806,8 +806,12 @@ mod tests {
         let pm2 = home.join("agents").join("pm");
         assert!(pm2.join("profile.yaml").is_file());
         // fresh identity generated — key must NOT be the same bytes as the source
-        let src_key = std::fs::read(pm_dir.join("identity.key")).unwrap();
-        let dst_key = std::fs::read(pm2.join("identity.key")).unwrap();
+        let src_key =
+            std::fs::read(mur_common::identity::private_key_dir(&pm_dir).join("identity.key"))
+                .unwrap();
+        let dst_key =
+            std::fs::read(mur_common::identity::private_key_dir(&pm2).join("identity.key"))
+                .unwrap();
         assert_ne!(
             src_key, dst_key,
             "import must regenerate identity, not copy the private key"
@@ -872,7 +876,8 @@ mod tests {
         let original_key = {
             let id = mur_common::identity::AgentIdentity::generate();
             id.save(&existing_pm).unwrap();
-            std::fs::read(existing_pm.join("identity.key")).unwrap()
+            std::fs::read(mur_common::identity::private_key_dir(&existing_pm).join("identity.key"))
+                .unwrap()
         };
 
         cmd_fleet_import(
@@ -893,7 +898,9 @@ mod tests {
             "existing agent must not be overwritten"
         );
         // identity key must NOT be overwritten
-        let key_after = std::fs::read(existing_pm.join("identity.key")).unwrap();
+        let key_after =
+            std::fs::read(mur_common::identity::private_key_dir(&existing_pm).join("identity.key"))
+                .unwrap();
         assert_eq!(
             original_key, key_after,
             "existing identity must not be overwritten"

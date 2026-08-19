@@ -50,6 +50,41 @@ impl std::fmt::Debug for AgentIdentity {
     }
 }
 
+/// Where an agent's PRIVATE key lives: `<mur_home>/keys/<name>/identity.key`
+/// for a directory of the form `<mur_home>/agents/<name>`, and `dir` itself for
+/// anything else.
+///
+/// #850 option (c). Both sandbox rules that protect or expose key material work
+/// by ENUMERATING `agents/*` — the sibling-key deny (#975) and the peer-public
+/// grant (#1006) — so both miss an agent created after the policy sealed.
+/// Neither backend can express "a file with this name under any agent home", so
+/// the rule has to become a subtree, and that means the private half cannot
+/// share a directory with the public half.
+///
+/// The narrow mapping is deliberate. Three callers pass a directory that is NOT
+/// under `agents/` and must be left alone, each already covered as a fixed path
+/// by `credential_paths()`:
+///
+/// - `<mur_home>/commander` (commander signing identity)
+/// - `<mur_home>/publisher` (skill publisher identity, #1013)
+/// - `<mur_home>` itself (the host key)
+///
+/// Keying off "parent is literally `agents`" is what keeps those out.
+pub fn private_key_dir(dir: &Path) -> PathBuf {
+    let is_agent_home = dir
+        .parent()
+        .and_then(|p| p.file_name())
+        .is_some_and(|n| n == "agents");
+    if !is_agent_home {
+        return dir.to_path_buf();
+    }
+    let (Some(name), Some(mur_home)) = (dir.file_name(), dir.parent().and_then(|p| p.parent()))
+    else {
+        return dir.to_path_buf();
+    };
+    mur_home.join("keys").join(name)
+}
+
 impl AgentIdentity {
     /// Generate a fresh Ed25519 keypair using OS CSPRNG.
     pub fn generate() -> Self {
@@ -73,7 +108,13 @@ impl AgentIdentity {
     /// host key on every machine that had one (#1011).
     pub fn save(&self, dir: &Path) -> Result<(), IdentityError> {
         fs::create_dir_all(dir)?;
-        let priv_path = dir.join("identity.key");
+        // Private half goes to `keys/<name>/` for an agent home, `dir` itself
+        // otherwise (#850 option (c), step 1). Public half never moves — it is
+        // what peers read to verify, and `agents/` staying public-only is the
+        // whole point.
+        let key_dir = private_key_dir(dir);
+        fs::create_dir_all(&key_dir)?;
+        let priv_path = key_dir.join("identity.key");
         let pub_path = dir.join("identity.pub");
 
         // `exists()` is the right call here despite #1010: a false from a
@@ -101,7 +142,21 @@ impl AgentIdentity {
     /// (since we can derive pubkey from it); but also validates that a
     /// present `identity.pub` matches.
     pub fn load(dir: &Path) -> Result<Self, IdentityError> {
-        let priv_path = dir.join("identity.key");
+        // Read the new location first, then fall back to the legacy one
+        // in-place under `agents/`. The fallback is not optional: `mur update`
+        // restarts agents one at a time, so during a rollout some agents are
+        // still on code that wrote the key to the old path. Without the
+        // fallback, the first agent to restart after a move would fail to
+        // start. It is removed only once the migration (step 2) has run
+        // everywhere.
+        let key_dir = private_key_dir(dir);
+        let new_path = key_dir.join("identity.key");
+        let legacy_path = dir.join("identity.key");
+        let priv_path = if new_path != legacy_path && fs::metadata(&new_path).is_ok() {
+            new_path
+        } else {
+            legacy_path
+        };
         // `Path::exists()` cannot be used here: it answers false for ANY stat
         // failure, so a sandbox deny is indistinguishable from a missing file
         // and the caller's "no key yet" branch runs when the truth is "you may
@@ -666,6 +721,91 @@ mod identity_readability_tests {
         assert!(
             matches!(unstattable, IdentityError::Denied(_)),
             "a key that cannot be STATted must be Denied, not NotFound, got {unstattable:?}"
+        );
+    }
+
+    /// An agent home's private key moves; its public half does not.
+    #[test]
+    fn an_agent_key_moves_and_the_public_half_stays() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur = tmp.path();
+        let agent = mur.join("agents").join("pm");
+        AgentIdentity::generate().save(&agent).unwrap();
+
+        assert!(
+            mur.join("keys").join("pm").join("identity.key").exists(),
+            "private key must live under keys/"
+        );
+        assert!(
+            !agent.join("identity.key").exists(),
+            "the agents tree must hold no private key"
+        );
+        assert!(
+            agent.join("identity.pub").exists(),
+            "the public half must stay where peers read it"
+        );
+    }
+
+    /// The three callers that pass a directory outside `agents/` must be left
+    /// exactly as they are — the spec named this as the main correctness risk.
+    #[test]
+    fn non_agent_identities_are_not_remapped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur = tmp.path();
+        for dir in [
+            mur.to_path_buf(),     // host key
+            mur.join("commander"), // commander signing identity
+            mur.join("publisher"), // skill publisher identity (#1013)
+        ] {
+            assert_eq!(
+                private_key_dir(&dir),
+                dir,
+                "{} must not be remapped",
+                dir.display()
+            );
+            AgentIdentity::generate().save(&dir).unwrap();
+            assert!(
+                dir.join("identity.key").exists(),
+                "{} lost its key to the remap",
+                dir.display()
+            );
+        }
+    }
+
+    /// A key still in the legacy location must load, because `mur update`
+    /// restarts agents ONE AT A TIME. Without this, the first agent to restart
+    /// after the move would fail to start mid-rollout.
+    #[test]
+    fn a_legacy_key_still_loads_from_the_agents_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agent = tmp.path().join("agents").join("legacy");
+        std::fs::create_dir_all(&agent).unwrap();
+        let id = AgentIdentity::generate();
+        // Write it the OLD way, bypassing `save`.
+        std::fs::write(agent.join("identity.key"), id.signing.to_bytes()).unwrap();
+
+        let loaded = AgentIdentity::load(&agent).expect("legacy key must still load");
+        assert_eq!(loaded.pubkey_text(), id.pubkey_text());
+    }
+
+    /// ...and when both exist, the new location wins, so a completed migration
+    /// is authoritative even if a stale file is left behind.
+    #[test]
+    fn the_new_location_wins_over_a_leftover_legacy_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur = tmp.path();
+        let agent = mur.join("agents").join("dual");
+        let current = AgentIdentity::generate();
+        current.save(&agent).unwrap();
+        let stale = AgentIdentity::generate();
+        std::fs::create_dir_all(&agent).unwrap();
+        std::fs::write(agent.join("identity.key"), stale.signing.to_bytes()).unwrap();
+
+        let loaded = AgentIdentity::load(&agent).unwrap();
+        assert_eq!(
+            loaded.pubkey_text(),
+            current.pubkey_text(),
+            "the migrated key must win over the leftover"
         );
     }
 

@@ -39,7 +39,12 @@ fn stub_bridge_creates_expected_layout() {
     let dir = mur_home.join("agents/stub_bridge");
     assert!(dir.join("profile.yaml").exists(), "profile.yaml missing");
     assert!(dir.join("routes.yaml").exists(), "routes.yaml missing");
-    assert!(dir.join("identity.key").exists(), "identity.key missing");
+    assert!(
+        mur_common::identity::private_key_dir(&dir)
+            .join("identity.key")
+            .exists(),
+        "identity.key missing"
+    );
     assert!(dir.join("identity.pub").exists(), "identity.pub missing");
 
     let p = std::fs::read_to_string(dir.join("profile.yaml")).unwrap();
