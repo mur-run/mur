@@ -9,8 +9,8 @@
 //! What the corpus turned out to be, once each case was made to declare how it
 //! drives the chain (`b0_surface`):
 //!
-//! - **7 cases** reach a real B0 surface and assert a real decision.
-//! - **8 cases** cannot. Five are model-behaviour ("does the LLM obey this
+//! - **11 cases** reach a real B0 surface and assert a real decision.
+//! - **5 cases** cannot. Five are model-behaviour ("does the LLM obey this
 //!   jailbreak", "does it echo the system prompt") — there is no tool call for
 //!   B0 to gate, and measuring them needs a model, which is what the real-LLM
 //!   track is for. One (rule 11) is a startup supply-chain check rather than a
@@ -40,6 +40,7 @@ struct Case {
     input: Option<serde_json::Value>,
     expect: Option<String>,
     rule: Option<u8>,
+    untrusted_source: Option<String>,
 }
 
 fn load_corpus() -> Vec<Case> {
@@ -81,6 +82,7 @@ fn load_corpus() -> Vec<Case> {
                     .get("b0_rule")
                     .and_then(|v| v.as_u64())
                     .map(|n| n as u8),
+                untrusted_source: get("b0_untrusted_source"),
             }
         })
         .collect()
@@ -210,6 +212,85 @@ async fn every_drivable_case_is_refused_by_the_real_chain() {
                     ));
                 }
             }
+            "composed" => {
+                // Rule 4: the only surface here that drives a JOIN rather than
+                // a single hook. The turn flag comes from what
+                // `on_prompt_submit` ACTUALLY emitted, never hand-written.
+                //
+                // Honest about what that buys. I expected this to close a gap
+                // — that breaking either half would slip past the two existing
+                // tests — and CHECKED: it does not. Neutering the emission
+                // fails `b0_after_card_import_deny`; neutering the read fails
+                // `b0_side_effect_deny`. Both sides are pinned by matching
+                // literals.
+                //
+                // What it adds is the whole path under one realistic payload:
+                // ledger entry -> wrapper -> flag -> gate. A break that leaves
+                // both literals intact — the ledger ceasing to yield entries,
+                // say — shows up here and in neither of them.
+                // Seed the provenance LEDGER, because that — not the message
+                // list — is what raises the rule-4 flag. `b0.rs` gates it on
+                // `has_multimodal` deliberately: "tool-result-only turns don't
+                // trigger Rule 4". Driving this with a tool message was the
+                // fourth fixture error the real chain caught.
+                let source = case
+                    .untrusted_source
+                    .as_deref()
+                    .expect("composed case needs b0_untrusted_source");
+                std::fs::create_dir_all(home.path().join("telemetry/inputs")).unwrap();
+                let sha = "f".repeat(64);
+                mur_common::multimodal::ProvenanceLedger::new(
+                    home.path().join("telemetry/inputs.jsonl"),
+                )
+                .append(&mur_common::multimodal::ProvenanceEntry {
+                    sha256: sha.clone(),
+                    source: source.to_string(),
+                    decoder_version: format!("{source}/v1"),
+                    ocr_engine_version: None,
+                    turn_id: 1,
+                    recorded_at: chrono::Utc::now(),
+                })
+                .unwrap();
+                std::fs::write(
+                    home.path()
+                        .join("telemetry/inputs")
+                        .join(format!("{sha}.txt")),
+                    &case.prompt,
+                )
+                .unwrap();
+
+                let patch = hook
+                    .on_prompt_submit(&ctx, &PromptView::empty(), &cancel)
+                    .await
+                    .unwrap();
+                assert!(
+                    !patch.turn_flags.is_empty(),
+                    "{:?}: on_prompt_submit raised no turn flag, so the gate \
+                     below would prove nothing",
+                    case.description
+                );
+                let mut gated = HookCtx::for_test_with_entitlements(
+                    home.path().to_path_buf(),
+                    1,
+                    strict_entitlements(),
+                );
+                gated.turn_flags = patch.turn_flags.clone();
+
+                let tool = case.tool.as_deref().expect("composed case needs b0_tool");
+                let input = case.input.clone().expect("composed case needs b0_input");
+                let decision = hook
+                    .pre_tool_use(&gated, &ToolCall::test(tool, input), &cancel)
+                    .await
+                    .unwrap();
+                driven += 1;
+                if matches!(decision, Decision::Allow) {
+                    failures.push(format!(
+                        "{:?}: side-effect tool allowed on the same turn as \
+                         untrusted input (emitted flags: {:?})",
+                        case.description, patch.turn_flags
+                    ));
+                }
+            }
             "post_tool_use" => {
                 // Rule 8 redacts memory.* OUTPUT; it does not deny the call.
                 // Getting this wrong is what the first run of this harness
@@ -279,7 +360,7 @@ fn corpus_coverage_is_declared_not_implied() {
         .collect();
 
     // What the corpus reaches today. Changing this set is a deliberate act.
-    let expected: std::collections::BTreeSet<u8> = [1, 2, 3, 5, 7, 8].into_iter().collect();
+    let expected: std::collections::BTreeSet<u8> = [1, 2, 3, 4, 5, 7, 8].into_iter().collect();
     assert_eq!(
         covered, expected,
         "adversarial corpus coverage changed. If a case was added, extend the \
@@ -292,7 +373,7 @@ fn corpus_coverage_is_declared_not_implied() {
     let uncovered: Vec<u8> = (1u8..=12).filter(|r| !covered.contains(r)).collect();
     assert_eq!(
         uncovered,
-        vec![4, 6, 9, 10, 11, 12],
+        vec![6, 9, 10, 11, 12],
         "the uncovered set is recorded so this pass cannot be read as full \
          B0 coverage; update it deliberately when a case lands"
     );
@@ -303,7 +384,7 @@ fn corpus_coverage_is_declared_not_implied() {
 #[test]
 fn no_case_is_silently_skipped() {
     let cases = load_corpus();
-    assert_eq!(cases.len(), 15, "corpus size changed");
+    assert_eq!(cases.len(), 16, "corpus size changed");
     let undrivable: Vec<&str> = cases
         .iter()
         .filter(|c| c.surface == "none")
