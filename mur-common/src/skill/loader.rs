@@ -2,7 +2,7 @@
 //! resolves trust level, checks drift, returns one flat Vec.
 
 use crate::skill::types::TrustLevel;
-use crate::skill::{DriftStatus, SkillManifest, content_sha256, drift_status, local};
+use crate::skill::{SkillManifest, content_hash_for_trust, local};
 use crate::trust::skills::SkillTrustStore;
 use std::path::Path;
 
@@ -149,7 +149,7 @@ pub struct LoadedSkill {
 }
 
 pub fn load_all(mur_home: &Path, agent_name: &str) -> Vec<LoadedSkill> {
-    let trust = SkillTrustStore::load(mur_home).unwrap_or_default();
+    let trust = load_trust_migrated(mur_home);
     let mut out: Vec<LoadedSkill> = Vec::new();
     let mut seen_names: std::collections::HashSet<String> = Default::default();
 
@@ -241,6 +241,35 @@ pub fn load_all(mur_home: &Path, agent_name: &str) -> Vec<LoadedSkill> {
     out
 }
 
+/// Load the trust store, re-keying it into the trust-hash domain on first use.
+///
+/// The migration runs here rather than in a separate command because this is
+/// the one path every agent start goes through, so a store never stays stale
+/// long enough for the loss to be noticed. It is a no-op once the schema is
+/// current, and it is fail-soft in both directions: if the re-key cannot be
+/// saved the in-memory store is still correct for this run, and if a skill is
+/// missing from disk its entry is kept untouched.
+fn load_trust_migrated(mur_home: &Path) -> SkillTrustStore {
+    let mut trust = SkillTrustStore::load(mur_home).unwrap_or_default();
+    let Some(rekeyed) =
+        trust.migrate_to_trust_hash(|name| local::load_installed(mur_home, name).ok())
+    else {
+        return trust; // already current — the common case, no write
+    };
+    {
+        match trust.save(mur_home) {
+            Ok(()) => tracing::info!(
+                rekeyed,
+                "skill trust store migrated to the trust-hash domain"
+            ),
+            // Not fatal: the in-memory store is already correct, so this run
+            // resolves trust properly and the next start retries the write.
+            Err(e) => tracing::warn!(error = %e, "could not persist trust-store migration"),
+        }
+    }
+    trust
+}
+
 fn load_one<F>(
     mur_home: &Path,
     name: &str,
@@ -270,21 +299,27 @@ where
             return None;
         }
     };
-    let hash = match content_sha256(&manifest) {
+    // `content_hash_for_trust`, not `content_sha256`: this is the trust-store
+    // key, and the trust hash excludes `transfer_chain` / `evolution_log` so a
+    // transfer or a generation increment does not silently re-key an already
+    // trusted skill. Using the plain content hash here is what made every
+    // transfer- and fleet-import-installed skill (which key by the trust hash)
+    // miss its entry and load as Sandboxed regardless of its recorded level.
+    let hash = match content_hash_for_trust(&manifest) {
         Ok(h) => h,
         Err(e) => {
             tracing::warn!(skill = %name, error = %e, "skill hash failed; skipping");
             return None;
         }
     };
-    // Drift check: if there's a pinned hash for this skill in the trust store
-    // and it disagrees, refuse to load.
+    // No separate drift check: the entry is KEYED by the content hash, so
+    // finding one is already proof the content matches the pinned bytes. The
+    // check that used to sit here compared `content_sha256(&manifest)` against
+    // a hash derived from the same manifest — a value against itself, which
+    // could never report drift. Worse, once the key became the trust hash the
+    // two would differ by construction and every skill would refuse to load.
     let entry = trust.entries.get(&hash);
     if let Some(pinned) = entry {
-        if let Ok(DriftStatus::Drift { expected, actual }) = drift_status(&manifest, Some(&hash)) {
-            tracing::warn!(skill = %name, expected, actual, "skill drift detected; skipping");
-            return None;
-        }
         if trust.is_revoked(&hash) {
             tracing::warn!(skill = %name, "skill hash revoked; skipping");
             return None;
@@ -315,6 +350,114 @@ mod tests {
     use super::*;
     use crate::skill::{parse_canonical, write_to_dir};
     use tempfile::tempdir;
+
+    /// The bug this domain unification fixes, stated as a test.
+    ///
+    /// A skill whose `evolution_log` grows — which happens during ordinary use —
+    /// keeps the same `content_hash_for_trust` but gets a NEW `content_sha256`.
+    /// The loader used to key on the latter, so the trust entry written at
+    /// install stopped matching and the skill silently dropped to `Sandboxed`.
+    #[test]
+    fn a_generation_increment_does_not_lose_the_recorded_trust_level() {
+        use crate::trust::skills::{SkillTrustStore, TrustEntry};
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        let mut m = make("evolving");
+        let sdir = home
+            .join("agents")
+            .join("a1")
+            .join("skills")
+            .join("evolving");
+        write_to_dir(&sdir, &m).unwrap();
+
+        // Trust recorded at install time, keyed by the trust hash.
+        let key = crate::skill::content_hash_for_trust(&m).unwrap();
+        let mut trust = SkillTrustStore::default();
+        trust.insert(
+            key.clone(),
+            TrustEntry {
+                name: "evolving".into(),
+                version: m.version.clone(),
+                level: TrustLevel::Trusted,
+                installed_at: "2026-08-19T00:00:00Z".into(),
+                ..Default::default()
+            },
+        );
+        trust.save(home).unwrap();
+
+        // The skill evolves in place: plain content hash moves, trust hash does not.
+        let before_plain = crate::skill::content_sha256(&m).unwrap();
+        m.evolution_log
+            .push(crate::skill::evolution::EvolutionEvent::initial_human(
+                "t", "1.0.0",
+            ));
+        write_to_dir(&sdir, &m).unwrap();
+        let after_plain = crate::skill::content_sha256(&m).unwrap();
+        assert_ne!(
+            before_plain, after_plain,
+            "precondition: an evolution entry must move the plain content hash"
+        );
+        assert_eq!(
+            key,
+            crate::skill::content_hash_for_trust(&m).unwrap(),
+            "precondition: the trust hash must be stable across a generation increment"
+        );
+
+        let loaded = load_all(home, "a1");
+        let s = loaded.iter().find(|s| s.name == "evolving").unwrap();
+        assert_eq!(
+            s.trust,
+            TrustLevel::Trusted,
+            "the recorded trust level was lost when the skill evolved"
+        );
+    }
+
+    /// A v1 store (keys from `content_sha256`) is re-keyed on first load, so an
+    /// existing install keeps its trust level across the upgrade instead of
+    /// silently reverting to Sandboxed.
+    #[test]
+    fn a_legacy_store_is_migrated_on_load() {
+        use crate::trust::skills::SkillTrustStore;
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        // The two domains differ only once a skill carries an evolution log or a
+        // transfer chain — for a pristine skill they are the same hash, which is
+        // why this migration touches far fewer entries than it might appear to.
+        let mut m = make("legacy");
+        m.evolution_log
+            .push(crate::skill::evolution::EvolutionEvent::initial_human(
+                "t", "1.0.0",
+            ));
+        write_to_dir(&home.join("skills").join("legacy"), &m).unwrap();
+
+        // v1: keyed by the plain content hash, and no schema field on disk.
+        let legacy_key = crate::skill::content_sha256(&m).unwrap();
+        let trust_key = crate::skill::content_hash_for_trust(&m).unwrap();
+        assert_ne!(
+            legacy_key, trust_key,
+            "precondition: the two domains must differ for this to be a migration"
+        );
+        let json = format!(
+            r#"{{"entries":{{"{legacy_key}":{{"name":"legacy","version":"{}","level":"trusted","installed_at":"2026-08-19T00:00:00Z"}}}},"revoked":[]}}"#,
+            m.version
+        );
+        std::fs::create_dir_all(home.join("trust")).unwrap();
+        std::fs::write(SkillTrustStore::path(home), json).unwrap();
+
+        let loaded = load_all(home, "a1");
+        let s = loaded.iter().find(|s| s.name == "legacy").unwrap();
+        assert_eq!(
+            s.trust,
+            TrustLevel::Trusted,
+            "a v1 entry must survive the domain change"
+        );
+
+        // ...and the migration is persisted, so it runs once.
+        let reloaded = SkillTrustStore::load(home).unwrap();
+        assert_eq!(reloaded.schema, crate::trust::skills::TRUST_STORE_SCHEMA);
+        assert!(reloaded.entries.contains_key(&trust_key));
+        assert!(!reloaded.entries.contains_key(&legacy_key));
+    }
 
     #[test]
     fn load_all_sets_agent_skill_dir() {

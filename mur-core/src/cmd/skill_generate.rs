@@ -3,7 +3,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use mur_common::llm::LlmClient;
 use mur_common::skill::{
-    SkillManifest, TrustLevel, content_sha256, global_skill_dir, scan::scan_skill,
+    SkillManifest, TrustLevel, content_hash_for_trust, global_skill_dir, scan::scan_skill,
     serialize_canonical, write_to_dir,
 };
 use mur_common::trust::skills::{SkillTrustStore, TrustEntry};
@@ -85,7 +85,8 @@ pub async fn cmd_generate<L: LlmClient + 'static>(
             eprintln!("    {line}");
         }
     }
-    let hash = content_sha256(&manifest)?;
+    // Trust-store key: the trust hash (see `content_hash_for_trust`).
+    let hash = content_hash_for_trust(&manifest)?;
     let mut trust = SkillTrustStore::load(home).map_err(|e| anyhow!("load trust: {e}"))?;
     trust.insert(
         hash,
