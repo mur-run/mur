@@ -51,8 +51,17 @@ pub struct ConsentInfo {
     pub signer_trust: String,
     /// Raw YAML body of the resolved skill file (for Hub preview / consent display).
     pub body: String,
-    /// SHA-256 hex of the resolved skill YAML file (pinned at install; used for rug-pull detection).
+    /// SHA-256 hex of the resolved skill YAML **file bytes**. This is the value
+    /// the registry index carries and `verify_skill_install` compares against —
+    /// a transport-integrity check ("did I get the exact file the index
+    /// promised"). NOT the trust-store key; see `trust_sha256`.
     pub resolved_sha256: String,
+    /// SHA-256 hex in the TRUST domain (`content_hash_for_trust`): canonical
+    /// YAML with `transfer_chain` / `evolution_log` excluded. This is what the
+    /// trust store keys and compares on, so it must be the value pinned as the
+    /// drift baseline — `resolved_sha256` is a different hash of a different
+    /// thing and comparing the two reports drift on every install.
+    pub trust_sha256: String,
     /// Short human description of detected drift since the last install:
     /// `"content changed"`, `"publisher changed"`, `"downgrade X → Y"`, or `None`.
     /// When set, `needs_ack` is also `true` (in `resolve_consent`; not in `resolve_consent_in`
@@ -207,6 +216,12 @@ pub fn resolve_consent_in(
         hex::encode(Sha256::digest(text.as_bytes()))
     };
 
+    // Trust-domain hash — what the trust store keys and compares on. Distinct
+    // from `resolved_sha256` above: that one is over the raw file bytes for the
+    // index check, this one is over the canonical manifest.
+    let trust_sha256 = mur_common::skill::content_hash_for_trust(&manifest)
+        .map_err(|e| anyhow::anyhow!("trust hash: {e}"))?;
+
     let outcome: VerifyOutcome = verify_skill_install(&manifest, &text, &entry.content_sha256);
     let signer = classify_signer(&outcome.signature, keyring);
     // Fold publisher keyring trust into the gate flags:
@@ -238,6 +253,7 @@ pub fn resolve_consent_in(
         signer_trust: signer.as_str().to_string(),
         body: text,
         resolved_sha256,
+        trust_sha256,
         // Drift is computed only by resolve_consent (has mur_home) and
         // cmd_skill_registry_add; left None here (test seam has no trust store).
         drift: None,
@@ -308,7 +324,10 @@ pub fn resolve_consent(mur_home: &Path, skill: &str, version: Option<&str>) -> R
     let (drift_desc, _) = drift_status(
         mur_home,
         &consent.name,
-        &consent.resolved_sha256,
+        // Trust domain on both sides: the stored baseline is `trust_sha256`,
+        // so comparing `resolved_sha256` (raw file bytes) here would report
+        // "content changed" on every single install.
+        &consent.trust_sha256,
         new_signer_fp.as_deref(),
         &consent.version,
     );
@@ -352,7 +371,10 @@ pub async fn cmd_skill_registry_add(
     let (_, drift_decision) = drift_status(
         &mur_home,
         &consent.name,
-        &consent.resolved_sha256,
+        // Trust domain on both sides: the stored baseline is `trust_sha256`,
+        // so comparing `resolved_sha256` (raw file bytes) here would report
+        // "content changed" on every single install.
+        &consent.trust_sha256,
         new_signer_fp.as_deref(),
         &consent.version,
     );
@@ -402,7 +424,7 @@ pub async fn cmd_skill_registry_add(
                 } else {
                     Some(consent.publisher.clone())
                 },
-                content_sha256: consent.resolved_sha256.clone(),
+                content_sha256: consent.trust_sha256.clone(),
                 signer_key_fp: if consent.signature.key_fp.is_empty() {
                     None
                 } else {
@@ -657,6 +679,7 @@ mcp_requirements:
             signer_trust: "trusted".into(),
             body: "".into(),
             resolved_sha256: "aabbcc".into(),
+            trust_sha256: "ddeeff".into(),
             drift: None,
         }
     }

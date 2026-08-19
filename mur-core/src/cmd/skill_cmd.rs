@@ -446,7 +446,8 @@ pub fn cmd_audit(name: &str) -> Result<()> {
         println!("Content scan: clean");
     }
 
-    let hash = mur_common::skill::content_sha256(&m)?;
+    // Trust-store key: must match what the loader looks up.
+    let hash = mur_common::skill::content_hash_for_trust(&m)?;
     let trust = mur_common::trust::skills::SkillTrustStore::load(&home)
         .map_err(|e| anyhow!("load trust store: {e}"))?;
     match trust.lookup(&hash) {
@@ -472,7 +473,8 @@ pub fn cmd_trust(name: &str, level_str: &str) -> Result<()> {
     let home = resolve_mur_home()?;
     let m =
         local::load_installed(&home, name).map_err(|_| anyhow!("skill '{name}' not installed"))?;
-    let hash = mur_common::skill::content_sha256(&m)?;
+    // Trust-store key: must match what the loader looks up.
+    let hash = mur_common::skill::content_hash_for_trust(&m)?;
 
     let mut trust = mur_common::trust::skills::SkillTrustStore::load(&home)
         .map_err(|e| anyhow!("load trust store: {e}"))?;
