@@ -16,6 +16,13 @@ use std::os::unix::fs::PermissionsExt;
 pub enum IdentityError {
     #[error("identity files not found")]
     NotFound,
+    /// Refused to overwrite a key that is already there. `save` is
+    /// write-if-absent by contract: a private key has no `.prev` and no
+    /// rotation attestation behind it, so clobbering one is unrecoverable.
+    /// Callers that legitimately replace a key (`mur agent rekey`) write to a
+    /// scratch directory and rename.
+    #[error("refusing to overwrite an existing identity key at {0}")]
+    Exists(String),
     /// The key is there but this process may not read it — a sandbox deny, or
     /// wrong ownership. Distinct from `NotFound` on purpose: callers that treat
     /// an absent key as "not signed yet" must NOT treat an unreadable one the
@@ -53,10 +60,29 @@ impl AgentIdentity {
 
     /// Write both halves of the keypair to the given directory.
     /// Private key is mode 0600 on Unix.
+    ///
+    /// **Write-if-absent.** Refuses when `identity.key` already exists, because
+    /// `fs::write` truncates and a private key has nothing behind it to restore
+    /// from — no `.prev`, and no rotation attestation to bridge the swap, so
+    /// every event the old key signed silently stops attributing. A caller that
+    /// means to replace a key writes to a scratch directory and renames, which
+    /// is what `mur agent rekey` does.
+    ///
+    /// This is not hypothetical caution: `mur skill publish` guarded on
+    /// `publisher-identity.key` and wrote `identity.key`, so it overwrote the
+    /// host key on every machine that had one (#1011).
     pub fn save(&self, dir: &Path) -> Result<(), IdentityError> {
         fs::create_dir_all(dir)?;
         let priv_path = dir.join("identity.key");
         let pub_path = dir.join("identity.pub");
+
+        // `exists()` is the right call here despite #1010: a false from a
+        // denied stat means we are about to fail the write anyway, and the
+        // conservative reading (treat unknown as "might exist") would block
+        // legitimate first-time saves under a sandbox.
+        if priv_path.exists() {
+            return Err(IdentityError::Exists(priv_path.display().to_string()));
+        }
 
         fs::write(&priv_path, self.signing.to_bytes())?;
         #[cfg(unix)]
@@ -640,6 +666,47 @@ mod identity_readability_tests {
         assert!(
             matches!(unstattable, IdentityError::Denied(_)),
             "a key that cannot be STATted must be Denied, not NotFound, got {unstattable:?}"
+        );
+    }
+
+    /// `save` must never clobber an existing private key.
+    ///
+    /// This is the mechanism that would have turned #1011 into a loud failure:
+    /// `mur skill publish` called `save` on a directory that already held the
+    /// HOST key, and `fs::write` truncated it. There is no `.prev` and no
+    /// rotation attestation for such a swap, so the old key's signatures stop
+    /// attributing with nothing to restore from.
+    #[test]
+    fn save_refuses_to_overwrite_an_existing_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = AgentIdentity::generate();
+        first.save(dir.path()).unwrap();
+        let original = std::fs::read(dir.path().join("identity.key")).unwrap();
+
+        let err = AgentIdentity::generate().save(dir.path()).unwrap_err();
+
+        assert!(
+            matches!(err, IdentityError::Exists(_)),
+            "expected Exists, got {err:?}"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("identity.key")).unwrap(),
+            original,
+            "the existing key was modified despite the refusal"
+        );
+    }
+
+    /// ...but a first save into a fresh directory still works, which is every
+    /// legitimate caller (agent create, export minting a missing key, rekey
+    /// writing to its scratch dir).
+    #[test]
+    fn save_into_an_empty_directory_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = AgentIdentity::generate();
+        id.save(dir.path()).unwrap();
+        assert_eq!(
+            AgentIdentity::load(dir.path()).unwrap().pubkey_text(),
+            id.pubkey_text()
         );
     }
 
