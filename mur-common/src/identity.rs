@@ -85,6 +85,89 @@ pub fn private_key_dir(dir: &Path) -> PathBuf {
     mur_home.join("keys").join(name)
 }
 
+/// Move one agent's private key out of the agents tree (#850 option (c), step 2).
+///
+/// Scoped to a SINGLE agent on purpose. Every agent runs this for its own key at
+/// startup, so 27 agents starting together never contend — no two of them touch
+/// the same file. A sweep that migrated everyone from whichever process got
+/// there first would have that race for no gain.
+///
+/// Runs at startup rather than from `mur update` because `mur update` is not the
+/// only upgrade path: `build.sh --install` + `mur agent restart --stale` never
+/// invokes it, and neither does `brew upgrade`. A migration hooked there simply
+/// would not run on those machines.
+///
+/// Refuses rather than overwrites when the destination already holds a
+/// DIFFERENT key. Silently picking one would change the agent's identity, which
+/// forges attribution on every channel it has ever written to, and there is no
+/// `.prev` and no rotation attestation to undo it with.
+///
+/// Returns `Ok(true)` when a key was moved. Idempotent: a second call finds
+/// nothing. Never an error for "nothing to migrate".
+pub fn migrate_private_key(agent_dir: &Path) -> Result<bool, IdentityError> {
+    let key_dir = private_key_dir(agent_dir);
+    if key_dir == agent_dir {
+        return Ok(false); // not an agent home — commander, publisher, host key
+    }
+    let legacy = agent_dir.join("identity.key");
+    let target = key_dir.join("identity.key");
+
+    let legacy_bytes = match fs::read(&legacy) {
+        Ok(b) => b,
+        // Nothing to move. Note this deliberately does NOT distinguish denied
+        // from absent: a migration that cannot read the source has nothing to
+        // do either way, and the load path (which does distinguish) is what
+        // reports the problem.
+        Err(_) => return Ok(false),
+    };
+
+    if let Ok(existing) = fs::read(&target) {
+        if existing == legacy_bytes {
+            // Already migrated, with a leftover copy behind. Remove the copy —
+            // leaving a private key in the agents tree is the exposure this
+            // whole change exists to remove.
+            let _ = fs::remove_file(&legacy);
+            return Ok(false);
+        }
+        return Err(IdentityError::Exists(format!(
+            "{} already holds a DIFFERENT key than {}; refusing to migrate —              resolve by hand, because picking one silently changes this agent's              identity",
+            target.display(),
+            legacy.display()
+        )));
+    }
+
+    fs::create_dir_all(&key_dir)?;
+    // Copy-then-remove rather than rename: `keys/` and `agents/` are both under
+    // mur_home so a rename would normally work, but a bind-mounted or symlinked
+    // agents dir would make it cross-device, and a failed rename there would
+    // leave the key nowhere.
+    fs::write(&target, &legacy_bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600))?;
+    }
+    // Only now is it safe to drop the original.
+    fs::remove_file(&legacy)?;
+
+    // `.prev` follows its key if present; rekey writes it beside the private
+    // half, so leaving it behind would strand a usable old key in the tree.
+    let legacy_prev = agent_dir.join("identity.key.prev");
+    if let Ok(prev) = fs::read(&legacy_prev) {
+        let target_prev = key_dir.join("identity.key.prev");
+        if fs::metadata(&target_prev).is_err() {
+            fs::write(&target_prev, &prev)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&target_prev, fs::Permissions::from_mode(0o600))?;
+            }
+        }
+        let _ = fs::remove_file(&legacy_prev);
+    }
+    Ok(true)
+}
+
 impl AgentIdentity {
     /// Generate a fresh Ed25519 keypair using OS CSPRNG.
     pub fn generate() -> Self {
@@ -807,6 +890,95 @@ mod identity_readability_tests {
             current.pubkey_text(),
             "the migrated key must win over the leftover"
         );
+    }
+
+    /// The migration moves the key and leaves nothing behind.
+    #[test]
+    fn migration_moves_the_key_out_of_the_agents_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur = tmp.path();
+        let agent = mur.join("agents").join("pm");
+        std::fs::create_dir_all(&agent).unwrap();
+        let id = AgentIdentity::generate();
+        std::fs::write(agent.join("identity.key"), id.signing.to_bytes()).unwrap();
+
+        assert!(migrate_private_key(&agent).unwrap());
+
+        assert!(!agent.join("identity.key").exists(), "key left in agents/");
+        assert!(mur.join("keys/pm/identity.key").exists());
+        assert_eq!(
+            AgentIdentity::load(&agent).unwrap().pubkey_text(),
+            id.pubkey_text(),
+            "the same identity must load after the move"
+        );
+    }
+
+    /// Idempotent: a second run finds nothing to do.
+    #[test]
+    fn migration_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agent = tmp.path().join("agents").join("pm");
+        AgentIdentity::generate().save(&agent).unwrap(); // already in keys/
+        assert!(!migrate_private_key(&agent).unwrap());
+        assert!(!migrate_private_key(&agent).unwrap());
+    }
+
+    /// The property that protects an unrecoverable file: when the destination
+    /// holds a DIFFERENT key, refuse and touch nothing. Picking one silently
+    /// would change the agent's identity and forge attribution on every channel
+    /// it has written to.
+    #[test]
+    fn migration_refuses_when_the_destination_differs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur = tmp.path();
+        let agent = mur.join("agents").join("pm");
+        let migrated = AgentIdentity::generate();
+        migrated.save(&agent).unwrap();
+        let stray = AgentIdentity::generate();
+        std::fs::write(agent.join("identity.key"), stray.signing.to_bytes()).unwrap();
+
+        let err = migrate_private_key(&agent).unwrap_err();
+
+        assert!(matches!(err, IdentityError::Exists(_)), "got {err:?}");
+        assert_eq!(
+            std::fs::read(mur.join("keys/pm/identity.key")).unwrap(),
+            migrated.signing.to_bytes().to_vec(),
+            "the destination key was modified despite the refusal"
+        );
+        assert!(
+            agent.join("identity.key").exists(),
+            "the source was removed despite the refusal"
+        );
+    }
+
+    /// An identical leftover copy is cleaned up rather than refused — leaving a
+    /// private key in the agents tree is the exposure being removed.
+    #[test]
+    fn migration_clears_an_identical_leftover() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agent = tmp.path().join("agents").join("pm");
+        let id = AgentIdentity::generate();
+        id.save(&agent).unwrap();
+        std::fs::write(agent.join("identity.key"), id.signing.to_bytes()).unwrap();
+
+        assert!(!migrate_private_key(&agent).unwrap());
+        assert!(!agent.join("identity.key").exists());
+    }
+
+    /// The three non-agent identities must never be migrated.
+    #[test]
+    fn migration_skips_non_agent_identities() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur = tmp.path();
+        for dir in [
+            mur.to_path_buf(),
+            mur.join("commander"),
+            mur.join("publisher"),
+        ] {
+            AgentIdentity::generate().save(&dir).unwrap();
+            assert!(!migrate_private_key(&dir).unwrap());
+            assert!(dir.join("identity.key").exists(), "{}", dir.display());
+        }
     }
 
     /// `save` must never clobber an existing private key.
