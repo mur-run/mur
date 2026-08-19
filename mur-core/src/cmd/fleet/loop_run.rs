@@ -591,6 +591,9 @@ pub async fn run_guarded(
             // (No risk tier on fan-out steps today; this guards future
             // router-emitted risk steps. Best-practice audit / OWASP ASI06.)
             yes: false,
+            // Fleet-declared approval policy (`hitl.mode`); `None` keeps the
+            // TTY-derived default. Tightening only — nothing here approves.
+            hitl_unanswered: fleet.hitl.as_ref().and_then(|h| h.mode),
             channel_id: Some(fleet.channel_id.clone()),
             // uuid nonce so concurrent `--loop` runs don't collide on the
             // channel's idempotency-key dedup (the iteration stays for readability).
@@ -1025,6 +1028,7 @@ mod tests {
             skills: vec![],
             loop_cfg: None,
             parallel: None,
+            hitl: None,
             requires_programs: vec![],
         };
         // default when nothing set
@@ -1097,6 +1101,7 @@ mod tests {
             skills: vec![],
             loop_cfg: None,
             parallel: None,
+            hitl: None,
             requires_programs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
@@ -1141,6 +1146,7 @@ mod tests {
             skills: vec![],
             loop_cfg: None,
             parallel: None,
+            hitl: None,
             requires_programs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
@@ -1189,6 +1195,7 @@ mod tests {
             skills: vec![],
             loop_cfg: None,
             parallel: None,
+            hitl: None,
             requires_programs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
@@ -1270,6 +1277,7 @@ mod tests {
                 done_when: super::super::done_policy::DONE_WHEN_QUEUE_EMPTY.into(),
             }),
             parallel: None,
+            hitl: None,
             requires_programs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
@@ -1305,6 +1313,7 @@ mod tests {
                 done_when: String::new(), // router policy — the fallback for empty/legacy values
             }),
             parallel: None,
+            hitl: None,
             requires_programs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
@@ -1343,6 +1352,7 @@ mod tests {
                 done_when: super::super::done_policy::DONE_WHEN_QUEUE_EMPTY.into(),
             }),
             parallel: None,
+            hitl: None,
             requires_programs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();

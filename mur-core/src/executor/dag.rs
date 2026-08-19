@@ -87,13 +87,14 @@ pub struct DagExecOptions<'a> {
     pub input: Option<PipelineOutput>,
     /// `--yes` flag: auto-approve all `needs_approval` steps.
     pub yes: bool,
-    /// What an unanswered risk-tiered gate does. `Some(true)` parks the request
-    /// and marks the step blocked; `Some(false)` waits (polling) for the gate
-    /// timeout. `None` = auto: defer when stdin is not a TTY, because an
-    /// unattended run (daemon tick, schedule, cron, fleet loop) has nobody to
-    /// answer inside the wait window — waiting there only converts the whole
-    /// window into a denial, and kills a request a human could still answer.
-    pub hitl_defer: Option<bool>,
+    /// What an unanswered risk-tiered gate does. `None` = auto: defer when
+    /// stdin is not a TTY, wait when it is — because an unattended run (daemon
+    /// tick, schedule, cron, fleet loop) has nobody to answer inside the wait
+    /// window, and waiting there only converts the whole window into a denial
+    /// while killing a request a human could still have answered. Set it
+    /// explicitly (fleet.yaml `hitl.mode`) when the TTY is a poor proxy for
+    /// "somebody is watching".
+    pub hitl_unanswered: Option<mur_common::hitl::Unanswered>,
     /// Explicit override of the env classification (P4-ready).
     pub env_class_override: Option<&'a str>,
     /// Variable substitutions: `(name, value)` pairs for `{{name}}` in commands.
@@ -145,7 +146,7 @@ impl<'a> Default for DagExecOptions<'a> {
         Self {
             input: None,
             yes: false,
-            hitl_defer: None,
+            hitl_unanswered: None,
             env_class_override: None,
             variables: vec![],
             device_id: "cli".to_string(),
@@ -180,12 +181,17 @@ pub enum StepEventKind {
     Blocked,
 }
 
-/// True when nothing can answer an approval prompt in the next few minutes:
-/// no TTY on stdin. Daemon ticks, schedules, cron and the fleet loop all land
-/// here, which is exactly where waiting out a gate timeout converts the whole
-/// window into an automatic denial.
-fn unattended() -> bool {
-    !std::io::IsTerminal::is_terminal(&std::io::stdin())
+/// The default policy when the caller did not state one: nothing can answer an
+/// approval prompt in the next few minutes if stdin has no TTY. Daemon ticks,
+/// schedules, cron and the fleet loop all land here, which is exactly where
+/// waiting out a gate timeout converts the whole window into an automatic
+/// denial.
+fn default_unanswered() -> mur_common::hitl::Unanswered {
+    if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        mur_common::hitl::Unanswered::Wait
+    } else {
+        mur_common::hitl::Unanswered::Defer
+    }
 }
 
 /// Display-only step lifecycle event for progress observers. The callback
@@ -814,7 +820,7 @@ async fn execute_step(
             cid,
             &req,
             opts.yes,
-            opts.hitl_defer.unwrap_or_else(unattended),
+            opts.hitl_unanswered.unwrap_or_else(default_unanswered),
             None,
             Some(opts.run_id.as_str()),
         )
@@ -1240,9 +1246,9 @@ pub async fn execute_dag(
         // Concurrent: spawn each step in this rank.
         // Extract owned values from opts for the spawned tasks.
         let opt_yes = opts.yes;
-        // Resolve once per rank, not per step: `unattended()` probes the TTY,
+        // Resolve once per rank, not per step: the default probes the TTY,
         // and every step in a run must agree on whether a human is watching.
-        let opt_hitl_defer = Some(opts.hitl_defer.unwrap_or_else(unattended));
+        let opt_hitl_unanswered = Some(opts.hitl_unanswered.unwrap_or_else(default_unanswered));
         let opt_input = opts.input.clone();
         let opt_env_override = opts.env_class_override.map(|s| s.to_string());
         let opt_vars = opts.variables.clone();
@@ -1275,7 +1281,7 @@ pub async fn execute_dag(
                 };
                 let opts_clone = DagExecOptions {
                     yes: opt_yes,
-                    hitl_defer: opt_hitl_defer,
+                    hitl_unanswered: opt_hitl_unanswered,
                     input: inp,
                     env_class_override: env_override.as_deref(),
                     variables: vars,
