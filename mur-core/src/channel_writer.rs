@@ -53,11 +53,43 @@ pub fn append_as_writer(
     idem: Option<String>,
 ) -> anyhow::Result<ChannelEvent> {
     let agent_home = home.join("agents").join(router_agent);
-    if let Ok(id) = mur_common::identity::AgentIdentity::load(&agent_home) {
-        let kv = read_key_version(&agent_home);
-        return svc.append_signed(channel_id, &id, kv, actor, kind, payload, idem);
+    match mur_common::identity::AgentIdentity::load(&agent_home) {
+        Ok(id) => {
+            let kv = read_key_version(&agent_home);
+            svc.append_signed(channel_id, &id, kv, actor, kind, payload, idem)
+        }
+        // No key at all: the legitimate bootstrap case (a fresh home, a test,
+        // a workflow channel with no agent behind it). Unsigned is correct.
+        Err(mur_common::identity::IdentityError::NotFound) => {
+            svc.append(channel_id, actor, kind, payload, idem)
+        }
+        // The key is THERE and we may not read it — a sandbox deny (a spawned
+        // `mur` cannot read a sibling's signing key since #975). Falling back
+        // to unsigned here is a silent security downgrade: the event was meant
+        // to be signed, and with `require_sig` off the reader accepts it, so
+        // the whole v3d signing guarantee lapses with nothing to show for it.
+        // The mirror of the read-side fix in `channel_verify::verify_event`.
+        Err(e) => {
+            if crate::channel_verify::require_sig_from_env() {
+                // The reader would reject an unsigned event anyway; fail here,
+                // where the cause is still legible, instead of at verification.
+                anyhow::bail!(
+                    "refusing to write an unsigned event to '{channel_id}': the \
+                     writer key for '{router_agent}' is unreadable ({e}), and \
+                     MUR_CHANNEL_REQUIRE_SIG is set"
+                );
+            }
+            tracing::warn!(
+                channel_id,
+                router_agent,
+                error = %e,
+                "writer signing key is present but unreadable — writing this \
+                 event UNSIGNED. Signature verification is not protecting this \
+                 channel while that holds."
+            );
+            svc.append(channel_id, actor, kind, payload, idem)
+        }
     }
-    svc.append(channel_id, actor, kind, payload, idem)
 }
 
 #[cfg(test)]
@@ -65,6 +97,57 @@ mod tests {
     use super::*;
     use mur_common::identity::AgentIdentity;
     use tempfile::TempDir;
+
+    /// An UNREADABLE writer key must not silently produce an unsigned event.
+    ///
+    /// This is the write-side mirror of `channel_verify::verify_event`: there,
+    /// an unreadable key must not pass as an absent signature; here, it must
+    /// not pass as "no key, so unsigned is fine". A sandboxed `mur` cannot read
+    /// a sibling's signing key (#975), so before this every channel event such
+    /// a process wrote was unsigned — and with `require_sig` off the reader
+    /// accepted it, so the signing guarantee lapsed with no signal anywhere.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_writer_key_does_not_silently_write_unsigned() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        let agent_home = home.join("agents").join("mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        AgentIdentity::generate().save(&agent_home).unwrap();
+        let key = agent_home.join("identity.key");
+        let svc = ChannelService::open(home).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+
+        // Precondition: with the key readable, the event IS signed.
+        let signed = append_as_writer(
+            &svc,
+            home,
+            &ch.id,
+            "mur",
+            ChannelActor::System,
+            EventKind::Message,
+            serde_json::json!({"text": "before"}),
+            None,
+        )
+        .unwrap();
+        assert!(signed.sig.is_some(), "precondition: signing works");
+
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // MUR_CHANNEL_REQUIRE_SIG is not set in the test env, so this takes the
+        // warn-and-write path — the event is unsigned, but LOUDLY so. What is
+        // asserted here is the discrimination itself: the loader must report
+        // this as Denied, not NotFound, which is what makes the warning
+        // possible at all.
+        let err = mur_common::identity::AgentIdentity::load(&agent_home).unwrap_err();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert!(
+            matches!(err, mur_common::identity::IdentityError::Denied(_)),
+            "an unreadable writer key must be distinguishable from an absent \
+             one, or the unsigned fallback stays silent: {err:?}"
+        );
+    }
 
     #[test]
     fn unsigned_when_identity_absent() {
