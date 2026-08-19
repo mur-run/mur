@@ -452,7 +452,19 @@ pub struct OauthAuth {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum McpNetMode {
-    /// Inherit the agent-level outbound policy (today's behavior). No proxy.
+    /// No per-server policy and no proxy — the default.
+    ///
+    /// NOT "inherits `entitlements.network.outbound.allow_hosts`", despite the
+    /// name. That list is enforced in-process (a DNS guard on the runtime's own
+    /// HTTP client, plus the B0 gate on the agent's `network.*` tools), and a
+    /// spawned server never runs either. What a server here actually inherits
+    /// is the OS sandbox — which restricts by PORT, with the host left open.
+    ///
+    /// So an agent whose `allow_hosts` names one API still lets an `Inherit`
+    /// server reach any host on an allowed port. Use `Restricted` to bound a
+    /// server by host. The variant keeps its name because it is a serialized
+    /// wire value; the lie was the doc, and it is fixed here rather than
+    /// migrated.
     #[default]
     Inherit,
     /// Allow only `allow_hosts`, routed through the runtime egress proxy.
