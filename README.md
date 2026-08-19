@@ -432,6 +432,16 @@ Agent** wizard offers the same catalog as a source.
   A freshly seeded MUR owns
   `~/.mur/{skills,workflows,fleets,artifacts}`, so it can build the skill,
   workflow or fleet it just designed instead of handing you a list of commands.
+- **Settings that were accepted and then did nothing** — `mur agent perm
+  allow-host` took `10.0.0.5:3306`, listed it back, and matched nothing: host
+  allowlists compare portless hosts, and the OS sandbox restricts by port with
+  the host left as `*`. It now refuses that form and names what would actually
+  take effect. Same family, different surface: an agent whose secret or model
+  reference failed to resolve used to start anyway and answer as an echo stub —
+  a "working" agent that parrots you back. `mur agent doctor <name>` now runs
+  the same resolution the runtime does and reports it, and `mur agent start`
+  waits for the runtime to claim it is up instead of reporting success the
+  instant the process forks.
 - **Loop settings that can't quietly mean something else** — a fleet loop ends
   when its job queue drains, when a member emits an agreed marker on a line of
   its own, or when the router judges it done. `mur fleet set-loop` refuses a
@@ -439,6 +449,23 @@ Agent** wizard offers the same catalog as a source.
   `--max-iterations 0` is not zero, and a cron expression that can never fire is
   not a schedule. Unattended auto-run still needs an explicit budget, and
   `mur fleet stop` still ends everything.
+- **Approvals that wait for you, not the other way round** — a run nobody is
+  watching used to spend the full five-minute approval window discovering
+  exactly that, then fail the step and kill the request, so approving it the
+  next morning released nothing. Now the request is parked: the step is
+  **blocked** rather than failed, independent branches still finish, and the
+  loop stops instead of re-asking the same question every iteration. Approve
+  whenever you get to it — Hub's *Needs You* card or `mur channel approve` —
+  and the next run continues from there, because approvals are matched on the
+  action's content hash, not a per-call id. Change the action and the old
+  approval no longer covers it. A fleet can state its own policy in
+  `fleet.yaml`: `hitl.mode: defer | wait | deny`, and
+  `hitl.auto_approve_tiers: [write]` to take standing responsibility for a
+  tier — capped at `write`, because spend, destructive and privileged actions
+  cost more than noticing afterwards can undo. Your explicit *no* to an action
+  outranks a standing grant for its tier, and every auto-approval is still
+  written to the channel, so "what did it do without asking me?" always has an
+  answer.
 - **A run status that can't outlive the run** — every fleet or workflow run
   writes one record, and `mur job status` / `mur fleet status` both read that
   one record through one derivation. A run whose orchestrator died reports
