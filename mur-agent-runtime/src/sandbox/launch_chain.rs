@@ -287,6 +287,71 @@ impl LaunchChain {
         })
     }
 
+    /// Every agent's PUBLIC verification material: `identity.pub` and
+    /// `rotations.jsonl`, for each agent home including this one.
+    ///
+    /// These are the two files `mur_channel::sign::resolve_writer_pubkey` reads
+    /// to check a peer's signed channel events. They are public by
+    /// construction — the published counterpart of the `identity.key` that
+    /// `sibling_signing_keys` denies — so granting them is not a widening.
+    ///
+    /// Needed because Landlock is deny-by-default and `<mur_home>/agents/` is
+    /// in no Linux read grant. Without these a sandboxed `mur` (fleet-enabled
+    /// agents get `spawn(mur)`) cannot resolve any peer key, and
+    /// `channel_verify::verify_event` then treats every event as unverifiable.
+    /// The whole agents subtree cannot simply be granted instead: Landlock has
+    /// no deny rule, so that would hand out every sibling's `identity.key` —
+    /// exactly what #975 closed.
+    ///
+    /// Enumerated at seal time, so it carries the same after-seal gap as
+    /// `sibling_signing_keys`: an agent created later is not listed, and its
+    /// events stay unverifiable to an already-running agent until that one
+    /// restarts. Closing that properly is the same fix — move private keys out
+    /// of the agents tree so the subtree can be granted whole
+    /// (docs/superpowers/specs/2026-08-18-agent-read-confinement-audit.md).
+    pub fn peer_public_key_material(&self) -> Vec<PathBuf> {
+        let agents = self.mur_home.join("agents");
+        let entries = match std::fs::read_dir(&agents) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+            Err(error) => {
+                // Never silently: without these grants signature verification
+                // cannot succeed, and its failure mode is quiet.
+                tracing::warn!(
+                    dir = %agents.display(),
+                    %error,
+                    "cannot enumerate agents — peer public keys will NOT be \
+                     readable, so signed channel events cannot be verified"
+                );
+                return Vec::new();
+            }
+        };
+        entries
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            // Same guard as `sibling_signing_keys`: a hand-made directory with
+            // an odd name must not reach a generated profile.
+            .filter(|e| match e.file_name().to_str() {
+                Some(n) if mur_common::validate_agent_name(n).is_ok() => true,
+                other => {
+                    tracing::warn!(
+                        entry = ?other,
+                        "skipping malformed entry under agents/ when building \
+                         the peer public-key read list"
+                    );
+                    false
+                }
+            })
+            .flat_map(|e| {
+                let dir = e.path();
+                [dir.join("identity.pub"), dir.join("rotations.jsonl")]
+            })
+            // Landlock drops a rule on a path that does not exist; keep the
+            // list to what is actually there so the grant set is honest.
+            .filter(|p| std::fs::metadata(p).is_ok())
+            .collect()
+    }
+
     /// The paths no read grant may reach: the user's credential store and
     /// sibling signing keys.
     ///
@@ -533,6 +598,69 @@ mod tests {
                 p.display()
             );
         }
+    }
+
+    /// Peer PUBLIC material is enumerated; the PRIVATE key next to it is not.
+    /// The pair is the whole point: verification needs one and must never get
+    /// the other, and they live in the same directory.
+    #[test]
+    fn peer_public_material_is_listed_and_the_private_key_is_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur = tmp.path().to_path_buf();
+        for name in ["alice", "pm"] {
+            let d = mur.join("agents").join(name);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("identity.pub"), b"pub").unwrap();
+            std::fs::write(d.join("rotations.jsonl"), b"{}").unwrap();
+            std::fs::write(d.join("identity.key"), b"secret").unwrap();
+        }
+        let chain =
+            LaunchChain::for_test(&mur.join("agents").join("alice"), &mur.join("bin"), &mur);
+
+        let listed = chain.peer_public_key_material();
+
+        for name in ["alice", "pm"] {
+            let d = mur.join("agents").join(name);
+            assert!(listed.contains(&d.join("identity.pub")), "{listed:?}");
+            assert!(listed.contains(&d.join("rotations.jsonl")), "{listed:?}");
+        }
+        assert!(
+            !listed.iter().any(|p| p.ends_with("identity.key")),
+            "a signing key must never be granted: {listed:?}"
+        );
+    }
+
+    /// Only files that exist are listed — Landlock silently drops a rule on a
+    /// missing path, so listing one would overstate what was granted.
+    #[test]
+    fn peer_public_material_skips_files_that_do_not_exist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur = tmp.path().to_path_buf();
+        let d = mur.join("agents").join("pm");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("identity.pub"), b"pub").unwrap(); // no rotations.jsonl
+        let chain =
+            LaunchChain::for_test(&mur.join("agents").join("alice"), &mur.join("bin"), &mur);
+
+        let listed = chain.peer_public_key_material();
+
+        assert_eq!(listed, vec![d.join("identity.pub")]);
+    }
+
+    /// A hand-made directory with a name the profile text cannot carry is
+    /// skipped rather than allowed to break every agent's startup — same guard
+    /// as `sibling_signing_keys`.
+    #[test]
+    fn peer_public_material_skips_a_malformed_agent_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur = tmp.path().to_path_buf();
+        let bad = mur.join("agents").join("we ird\"name");
+        std::fs::create_dir_all(&bad).unwrap();
+        std::fs::write(bad.join("identity.pub"), b"pub").unwrap();
+        let chain =
+            LaunchChain::for_test(&mur.join("agents").join("alice"), &mur.join("bin"), &mur);
+
+        assert!(chain.peer_public_key_material().is_empty());
     }
 
     /// A read grant wide enough to contain the credential store is dropped

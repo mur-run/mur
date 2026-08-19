@@ -263,14 +263,82 @@ no macOS canary.
 
 ### Still open after this
 
-1. **Linux cannot read peer public key material.** `<mur_home>/agents/` is in
-   no Linux read grant, so a spawned `mur` verifying a peer's signed events
-   would fail-close. macOS handles it (`macos.rs` re-allows `identity.pub` and
-   `rotations.jsonl`); Landlock has no equivalent grant. Not fixed here: it
-   needs enumeration (with the same after-seal gap as `sibling_signing_keys`),
-   and in practice it requires `spawn(mur)`, which #850 withdrew. Worth a
-   canary before building.
+1. ~~**Linux cannot read peer public key material.**~~ **Fixed — see §10.**
+   The reasoning recorded here was wrong on two counts, both corrected below:
+   it does NOT require an opt-in `spawn(mur)`, and it does not fail *closed*.
 2. **macOS read-deny on the central stores** (`skills/`, `index/`, `inbox/`)
    — deliberately out of scope, per §8.
 3. **Option (c)**, moving private keys out of the agents tree — still the only
    variant that closes the after-seal enumeration gap.
+
+## 10. Linux peer public key material — and the fail-open it was hiding
+
+§9 listed this as open and argued it could wait because it "requires
+`spawn(mur)`, which #850 withdrew". Both halves of that were wrong.
+
+### It is not opt-in
+
+`policy.rs` adds `mur` to the spawn allowlist for any `fleet_run`-enabled
+agent:
+
+```rust
+if fleet_run_enabled && !spawn_names.iter().any(|n| n == "mur") {
+    spawn_names.push("mur".to_string());
+}
+```
+
+That carve-in exists for the fleet runner, independently of #850. What #850
+withdrew was *adding `mur` to spawn allowlists as a fix for the read gap* — not
+the pre-existing grant. So on Linux a fleet agent spawns `mur fleet run`, that
+child inherits the Landlock sandbox, and it reaches the HITL gate, which calls
+`channel_verify::verify_event` (`hitl/gate.rs:340`, `:366`, `:418`).
+
+### It fails OPEN, not closed
+
+```rust
+match actor_pubkey(mur_home, &ev.actor, ev.key_version) {
+    Some(pk) => verify_one(channel_id, ev, &pk, require_sig),
+    None     => !require_sig,        // <- the defect
+}
+```
+
+`verify_one` is careful: a **present** signature is always checked
+cryptographically, and only an **absent** one falls back to `!require_sig`.
+`verify_event` never got that far. With the key directory unreadable —
+the normal state under deny-by-default — `actor_pubkey` returns `None` and the
+event is accepted, because `require_sig` defaults off.
+
+So the sandbox did not break verification. **It silently switched it off**, and
+a forged event was indistinguishable from a genuine one. That is worse than the
+fail-closed breakage §9 predicted, and it is why this stopped being a "worth a
+canary" item.
+
+### The fix, both halves
+
+**(1) An unreadable key is not an absent signature.** `verify_event` now
+returns `false` for a signed event whose actor key cannot be resolved, and logs
+why. The migration-safety rule is preserved exactly where it applies: an
+*unsigned* event still follows `require_sig`.
+
+**(2) Grant the public material so verification can succeed.**
+`LaunchChain::peer_public_key_material()` enumerates every agent's
+`identity.pub` and `rotations.jsonl` — existence-checked, malformed directory
+names skipped — and `policy.rs` adds them to `fs_read`.
+
+Granting `agents/` wholesale is not an option: Landlock has no deny rule, so it
+would hand out every sibling's `identity.key`, which is exactly what #975
+closed. Per-file grants also do not confer directory listing, and
+`resolve_writer_pubkey` never lists — it opens the two paths directly.
+
+(1) without (2) would turn a silent accept into approvals being ignored on
+Linux — the gate would defer forever. (2) without (1) leaves the fail-open in
+place for any peer the enumeration misses. Same coupling as §8.
+
+### The after-seal gap, inherited
+
+Enumeration happens at seal time, so an agent created afterwards is not listed
+and its signed events are unverifiable to an already-running agent until that
+one restarts. This is now **fail-closed** rather than silently accepted, which
+is the correct behaviour, but it is still a gap. It is the same gap
+`sibling_signing_keys` has, and it has the same real fix: option (c), move
+private keys out of the agents tree so the subtree can be granted whole.
