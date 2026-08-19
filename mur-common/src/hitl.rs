@@ -61,6 +61,28 @@ pub enum Unanswered {
     Deny,
 }
 
+impl Default for Unanswered {
+    /// The strict end of the three: a policy built without stating a mode must
+    /// never be the one that waits or lets something through.
+    fn default() -> Self {
+        Unanswered::Defer
+    }
+}
+
+/// May a run's owner take standing responsibility for this tier in config —
+/// i.e. pre-approve it once instead of being asked every time?
+///
+/// Capped at `Write` deliberately. A standing grant is real authority handed
+/// to an unattended process, so widening it is a decision to make in code with
+/// its reasoning written down, never something a user acquires by typing one
+/// more word into a YAML file. `Spend`, `Destructive` and `Privileged` are
+/// exactly the actions whose cost a human cannot undo by noticing later, and
+/// `NetworkEgress` is how data leaves — none of them belongs behind a config
+/// line today.
+pub fn tier_may_be_granted(tier: RiskTier) -> bool {
+    matches!(tier, RiskTier::Read | RiskTier::Write)
+}
+
 /// `EventKind::HitlRequest` payload: the durable, pinned approval request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HitlRequest {
@@ -117,5 +139,18 @@ mod tests {
         let back: HitlRequest = serde_json::from_str(&s).unwrap();
         assert_eq!(back.tier, RiskTier::Destructive);
         assert_eq!(back.action_hash, "abc");
+    }
+
+    /// The grantable ceiling. Widening this list is a security decision that
+    /// belongs in a commit message, not a YAML typo — the test exists so the
+    /// reviewer has to read the reasoning right here.
+    #[test]
+    fn tier_grant_ceiling_is_write() {
+        assert!(tier_may_be_granted(RiskTier::Read));
+        assert!(tier_may_be_granted(RiskTier::Write));
+        assert!(!tier_may_be_granted(RiskTier::NetworkEgress));
+        assert!(!tier_may_be_granted(RiskTier::Spend));
+        assert!(!tier_may_be_granted(RiskTier::Destructive));
+        assert!(!tier_may_be_granted(RiskTier::Privileged));
     }
 }

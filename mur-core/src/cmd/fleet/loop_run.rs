@@ -594,6 +594,11 @@ pub async fn run_guarded(
             // Fleet-declared approval policy (`hitl.mode`); `None` keeps the
             // TTY-derived default. Tightening only — nothing here approves.
             hitl_unanswered: fleet.hitl.as_ref().and_then(|h| h.mode),
+            hitl_auto_approve_tiers: fleet
+                .hitl
+                .as_ref()
+                .map(|h| h.auto_approve_tiers.clone())
+                .unwrap_or_default(),
             channel_id: Some(fleet.channel_id.clone()),
             // uuid nonce so concurrent `--loop` runs don't collide on the
             // channel's idempotency-key dedup (the iteration stays for readability).

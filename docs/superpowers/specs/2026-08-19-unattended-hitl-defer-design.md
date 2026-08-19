@@ -81,26 +81,47 @@ both directions. A monitored ops fleet running headless has a human on Hub and
 wants `wait`; a fleet that must never reach for a person wants `deny` so the
 failure is immediate and legible instead of a request nobody will answer.
 
-**Not shipped: scoped standing grants.** The approval-fatigue answer proper —
-named grants (tool class × path scope × per-run cap × TTL), signed with the
-fleet bundle, evaluated in pure code with a model able to narrow or escalate
-but never widen. Two things must be decided first, and both are the owner's
-call, not the implementer's:
+**Shipped (P1b): tier-keyed standing grants, capped at `write`.**
 
-1. **What is grantable at the DAG gate.** The gate's `tool_name` is `sh` or
-   `intent`, not `write_file` — those are *runtime* tool-gate names. So a
-   fleet-level grant must key on something else: a risk tier ("write is fine
-   here, destructive still asks"), a step id, or a command pattern. Command
-   patterns are the leakiest of the three (`git status; rm -rf /`) and should
-   not be the first shape built.
-2. **Whether a standing grant may cover Ask tier at all**, which is a
-   deliberate loosening of the posture CLAUDE.md pins today ("never
-   blanket-approve risk-tiered steps"). Tier-scoped and fleet-scoped is
-   narrower than `--yes`, but it is still a posture change.
+```yaml
+hitl:
+  mode: defer
+  auto_approve_tiers: [read, write]   # owner takes standing responsibility
+```
 
-Approval TTL stays a constant (7 days, `HITL_APPROVAL_TTL_SECS`) until someone
-needs otherwise: the pin already bounds *content* staleness, and a
-configurable clock adds a knob with no demand behind it.
+Decisions recorded from the owner's answers to the two open questions:
+
+- **Grant key = risk tier**, the owner's explicit choice (2026-08-19). It is
+  the only key a model cannot widen by rewriting its own input: a command
+  pattern is evadable with `git status; rm -rf /`, and step ids rotate as
+  workflows change. A tier says what *kind* of action is pre-approved, which
+  is exactly the property a standing grant should have.
+- **A standing grant may cover `write` and below.** `tier_may_be_granted`
+  (`mur-common/src/hitl.rs`) is the hard ceiling: `Spend`/`Destructive`/
+  `Privileged` are the actions whose cost a human cannot undo by noticing
+  later, and `NetworkEgress` is how data leaves — none behind a config line
+  today. Widening the list is a code change with a reviewer, not a YAML
+  value.
+
+Enforcement is defense-in-depth, all three layers:
+
+1. `FleetHitl::validate()` refuses an out-of-ceiling tier at `load_fleet` —
+   loud, so a user who wrote `destructive` learns it did NOT take effect.
+2. `GatePolicy::grants()` re-checks `tier_may_be_granted` inside the gate, so
+   a hand-edited fleet.yaml that skipped validation still cannot grant.
+3. Ordering inside the Ask tier, strictest first: `Deny` floor → a settled
+   human decision for this exact action → the tier grant → park-or-wait. A
+   human's explicit "no" therefore outranks a standing grant (locked in by
+   `a_human_denial_outranks_a_tier_grant`).
+
+Every grant-driven approval is still **audited**: the gate writes the
+request+response pair to the channel with `surface: "policy"` and a reason
+naming the pre-approved tier, so "what did this unattended run do without
+asking me?" stays answerable after the fact.
+
+Approval TTL stays a constant (7 days, `HITL_APPROVAL_TTL_SECS`): the pin
+already bounds *content* staleness, and a configurable clock is a knob with
+no demand behind it.
 
 ### Layer 2 — Divert, don't block (structure) [P0 park; P2 divert]
 

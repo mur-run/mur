@@ -385,6 +385,11 @@ pub async fn cmd_fleet_run(
         // keeps the TTY-derived default. It can only tighten: there is no
         // value here that approves anything.
         hitl_unanswered: fleet.hitl.as_ref().and_then(|h| h.mode),
+        hitl_auto_approve_tiers: fleet
+            .hitl
+            .as_ref()
+            .map(|h| h.auto_approve_tiers.clone())
+            .unwrap_or_default(),
         channel_id: Some(fleet.channel_id.clone()),
         run_id: run_id.clone(),
         run_kind: Some(crate::run_status::RunKind::Fleet),
