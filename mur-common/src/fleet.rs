@@ -54,6 +54,41 @@ pub struct FleetHitl {
     /// even headless; a fleet that must never reach for a human wants `deny`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<crate::hitl::Unanswered>,
+    /// Risk tiers this fleet's owner has taken standing responsibility for:
+    /// the gate approves them without asking, and records the auto-approval on
+    /// the channel so the run is still auditable.
+    ///
+    /// An explicit LIST, not a ceiling — `RiskTier`'s ordering would make
+    /// `up_to: spend` quietly cover `network-egress` too, and a grant nobody
+    /// meant to write is the whole failure mode this feature has to avoid.
+    /// [`crate::hitl::tier_may_be_granted`] bounds what may appear here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auto_approve_tiers: Vec<crate::hitl::RiskTier>,
+}
+
+impl FleetHitl {
+    /// Reject a policy that grants more than config is allowed to grant.
+    ///
+    /// Loud at load time rather than silently ignored at the gate: a user who
+    /// wrote `destructive` here believes it took effect, and the gap between
+    /// that belief and the truth is where the damage lives.
+    pub fn validate(&self) -> Result<(), String> {
+        let bad: Vec<String> = self
+            .auto_approve_tiers
+            .iter()
+            .filter(|t| !crate::hitl::tier_may_be_granted(**t))
+            .map(|t| format!("{t:?}").to_lowercase())
+            .collect();
+        if bad.is_empty() {
+            return Ok(());
+        }
+        Err(format!(
+            "hitl.auto_approve_tiers may not include {} — standing approval is capped at `write`. \
+             Those actions have to be approved per-run (`mur channel approve`), because their cost \
+             cannot be undone by noticing afterwards.",
+            bad.join(", ")
+        ))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -261,6 +296,32 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// `auto_approve_tiers` parses; `validate` accepts write-and-below and
+    /// refuses everything above — loudly, because a user who wrote
+    /// `destructive` believes it took effect, and the gap between that belief
+    /// and the truth is where the damage lives.
+    #[test]
+    fn auto_approve_tiers_parse_and_validate_against_the_ceiling() {
+        let f: Fleet = serde_yaml::from_str(
+            "name: dev\nchannel_id: fleet-dev\nhitl:\n  auto_approve_tiers: [read, write]\n",
+        )
+        .unwrap();
+        let hitl = f.hitl.as_ref().unwrap();
+        assert_eq!(
+            hitl.auto_approve_tiers,
+            vec![crate::hitl::RiskTier::Read, crate::hitl::RiskTier::Write]
+        );
+        assert!(hitl.validate().is_ok());
+
+        let f: Fleet = serde_yaml::from_str(
+            "name: dev\nchannel_id: fleet-dev\nhitl:\n  auto_approve_tiers: [write, destructive]\n",
+        )
+        .unwrap();
+        let err = f.hitl.as_ref().unwrap().validate().unwrap_err();
+        assert!(err.contains("destructive"), "{err}");
+        assert!(err.contains("write"), "the ceiling must be named: {err}");
     }
 
     #[test]
