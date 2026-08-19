@@ -205,9 +205,16 @@ fn rotate_files_atomic(
     new_identity: &AgentIdentity,
     attestation: &RotationAttestation,
 ) -> Result<()> {
-    let key_path = agent_dir.join("identity.key");
+    // Private halves follow the key dir (#850 option (c)); public halves and
+    // the attestation stay in the agent home, which is what peers read.
+    // Writing these to `agent_dir` would silently un-migrate the agent on
+    // every rekey.
+    let key_dir = mur_common::identity::private_key_dir(agent_dir);
+    std::fs::create_dir_all(&key_dir)
+        .with_context(|| format!("create key dir {}", key_dir.display()))?;
+    let key_path = key_dir.join("identity.key");
     let pub_path = agent_dir.join("identity.pub");
-    let key_prev = agent_dir.join("identity.key.prev");
+    let key_prev = key_dir.join("identity.key.prev");
     let pub_prev = agent_dir.join("identity.pub.prev");
     let att_path = agent_dir.join("identity.attestation.json");
     let att_new = agent_dir.join("identity.attestation.new.json");
