@@ -31,6 +31,32 @@ pub(super) fn warn_if_running(name: &str) {
     }
 }
 
+/// Warn that these entitlements stop at the runtime on macOS.
+///
+/// SBPL is not inherited across `exec`, so an MCP server the runtime spawns
+/// runs with the user's full privileges — the policy printed above does not
+/// reach it. (Linux children DO inherit Landlock, so this is macOS-only.)
+///
+/// Printed to STDERR, and only when the agent actually spawns children:
+/// `perm show` output is YAML that callers pipe into a parser, and a caveat
+/// that corrupts the data it qualifies is not an improvement.
+fn warn_children_unconfined(profile: &mur_common::AgentProfile) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let n = profile.mcp_servers.len();
+    if n == 0 {
+        return;
+    }
+    eprintln!(
+        "note: on macOS these entitlements confine the agent runtime, not the \
+         {n} MCP server(s) it spawns — SBPL is not inherited across exec, so \
+         those child processes run unconfined. Linux children do inherit \
+         Landlock. Scope what a server can reach with `mur agent mcp \
+         set-network`, and treat installing one as the trust decision it is."
+    );
+}
+
 pub fn cmd_perm_show(name: &str, section: Option<&str>) -> Result<()> {
     let (_path, profile) = load_profile_for_edit(name)?;
     let v = serde_yaml_ng::to_string(&profile.entitlements).context("serialize entitlements")?;
@@ -54,6 +80,7 @@ pub fn cmd_perm_show(name: &str, section: Option<&str>) -> Result<()> {
     } else {
         print!("{v}");
     }
+    warn_children_unconfined(&profile);
     Ok(())
 }
 

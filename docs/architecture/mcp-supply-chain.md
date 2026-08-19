@@ -98,6 +98,8 @@ It is a command rather than a startup check because it costs a full reinstall. R
 
 **"The same code", never "safe code".** What bounds the damage from a compromised MCP server is the agent's entitlements and sandbox, not its hash. A vendored, signed, provenance-carrying server still runs with everything that agent was granted.
 
+**And on macOS, that bound does not exist for MCP servers at all.** SBPL is not inherited across `exec`, so a server the runtime spawns runs with the *user's* privileges — not the agent's entitlements. Linux is different in kind, not degree: Landlock and seccomp ARE inherited, so there the child really does run under the agent's policy. Until the pre-fork launcher lands (`mur-agent-runtime/src/sandbox/child.rs` names the design and the one call to activate), installing an MCP server on macOS is a trust decision about the whole machine, and no amount of pinning changes that. `mur agent perm show` and `mur agent doctor <name>` both say so rather than letting the entitlement list imply otherwise.
+
 The open follow-on is to connect the two: a server whose provenance cannot be verified is a reason to suggest narrower entitlements at install time — protection that still works when detection fails.
 
 ---
