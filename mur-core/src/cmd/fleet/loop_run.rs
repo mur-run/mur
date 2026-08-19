@@ -57,6 +57,11 @@ pub enum LoopStop {
     /// `done_when: queue-empty` and an iteration found no queued job — the
     /// fleet's work is done because there is none left.
     QueueDrained,
+    /// An iteration stopped at an action awaiting human approval. Looping past
+    /// it would re-spend router and member LLM calls every iteration to arrive
+    /// at the same unanswered question, so the loop stops and hands the
+    /// decision back to a person.
+    AwaitingApproval,
 }
 
 /// Parse a humantime-ish duration: `30s`, `5m`, `2h`, `1d`, or a bare integer
@@ -310,6 +315,7 @@ fn outcome_label(stop: LoopStop) -> &'static str {
         LoopStop::Stopped => "stopped",
         LoopStop::CommanderKilled => "commander-killed",
         LoopStop::QueueDrained => "queue-drained",
+        LoopStop::AwaitingApproval => "awaiting-approval",
     }
 }
 
@@ -538,6 +544,15 @@ pub async fn run_guarded(
                     sp.state = StepState::Running;
                     sp.started_at = Some(now);
                 }
+                StepEventKind::Blocked => {
+                    // Waiting on a human. Not Running (nothing is executing)
+                    // and not Failed (nothing went wrong): park it back at
+                    // Pending, which is what it is — work still to do — and
+                    // say so on its own line so the rail is not silent about
+                    // why the fleet stopped short.
+                    sp.state = StepState::Pending;
+                    println!("⏸ {} awaiting approval", sp.id);
+                }
                 StepEventKind::Done | StepEventKind::Failed => {
                     let done = e.kind == StepEventKind::Done;
                     sp.state = if done {
@@ -589,6 +604,22 @@ pub async fn run_guarded(
             crate::executor::dag::execute_dag(mur_home, &format!("fleet:{name}"), &proc, &opts)
                 .await?;
         iteration += 1;
+        // A blocked iteration reached an action that needs a human and stopped
+        // there. Mark the job blocked (not Done — nothing finished) and leave
+        // the loop: the next iteration would re-run the same steps, re-spend
+        // the same tokens, and arrive at the same unanswered question. The
+        // parked request stays in the channel, so approving it and re-running
+        // picks up where this left off.
+        let blocked = out.status == mur_common::pipeline::PipelineStatus::Skipped;
+        if blocked && let Some(job) = active_job.as_mut() {
+            job.run_id = Some(opts.run_id.clone());
+            job.status = JobStatus::Blocked;
+            job.error = Some("awaiting approval".to_string());
+            let _ = super::jobs::save_job(mur_home, name, job);
+        }
+        if blocked {
+            break LoopStop::AwaitingApproval;
+        }
         // Terminal stamp: mark the queued job Done with the result of this iteration.
         if let Some(job) = active_job.as_mut() {
             job.run_id = Some(opts.run_id.clone());
