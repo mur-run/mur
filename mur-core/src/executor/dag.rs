@@ -87,6 +87,13 @@ pub struct DagExecOptions<'a> {
     pub input: Option<PipelineOutput>,
     /// `--yes` flag: auto-approve all `needs_approval` steps.
     pub yes: bool,
+    /// What an unanswered risk-tiered gate does. `Some(true)` parks the request
+    /// and marks the step blocked; `Some(false)` waits (polling) for the gate
+    /// timeout. `None` = auto: defer when stdin is not a TTY, because an
+    /// unattended run (daemon tick, schedule, cron, fleet loop) has nobody to
+    /// answer inside the wait window — waiting there only converts the whole
+    /// window into a denial, and kills a request a human could still answer.
+    pub hitl_defer: Option<bool>,
     /// Explicit override of the env classification (P4-ready).
     pub env_class_override: Option<&'a str>,
     /// Variable substitutions: `(name, value)` pairs for `{{name}}` in commands.
@@ -138,6 +145,7 @@ impl<'a> Default for DagExecOptions<'a> {
         Self {
             input: None,
             yes: false,
+            hitl_defer: None,
             env_class_override: None,
             variables: vec![],
             device_id: "cli".to_string(),
@@ -152,12 +160,32 @@ impl<'a> Default for DagExecOptions<'a> {
     }
 }
 
+/// How a DAG run ended. `Blocked` is deliberately not a failure: nothing went
+/// wrong, the run simply reached an action that needs a human and stopped
+/// there. It is also not terminal — an approval resumes it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum RunOutcome {
+    Done,
+    Failed,
+    Blocked,
+}
+
 /// Step-lifecycle event kind for `DagExecOptions.on_step`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum StepEventKind {
     Started,
     Done,
     Failed,
+    /// Waiting on a human: the step did not run, and it did not fail.
+    Blocked,
+}
+
+/// True when nothing can answer an approval prompt in the next few minutes:
+/// no TTY on stdin. Daemon ticks, schedules, cron and the fleet loop all land
+/// here, which is exactly where waiting out a gate timeout converts the whole
+/// window into an automatic denial.
+fn unattended() -> bool {
+    !std::io::IsTerminal::is_terminal(&std::io::stdin())
 }
 
 /// Display-only step lifecycle event for progress observers. The callback
@@ -187,6 +215,9 @@ fn apply_step_event(record: &mut crate::run_status::RunState, event: &StepEvent)
         StepEventKind::Started => (crate::run_status::State::Running, Some(now), None),
         StepEventKind::Done => (crate::run_status::State::Done, None, Some(now)),
         StepEventKind::Failed => (crate::run_status::State::Failed, None, Some(now)),
+        // Not ended: a blocked step is expected to run once approved, so it
+        // keeps no end stamp (`mur job status` shows it as still outstanding).
+        StepEventKind::Blocked => (crate::run_status::State::Blocked, None, None),
     };
     if let Some(step) = record.steps.iter_mut().find(|s| s.id == event.id) {
         step.state = state;
@@ -390,6 +421,10 @@ struct StepResult {
     duration_ms: u64,
     failed_step: Option<String>,
     success: bool,
+    /// The step did not run and did not fail: it is waiting on a human. Kept
+    /// distinct from `success` because a blocked step must neither trigger
+    /// `on_failure` handling nor let dependents proceed as if it had run.
+    blocked: bool,
     /// Real LLM tokens (input + output) this step consumed — non-zero only for
     /// delegate steps, read from the specialist's `Task.usage`. Summed into the
     /// run's `PipelineOutput.tokens_used` for real fleet budget accounting.
@@ -450,6 +485,7 @@ async fn execute_step_inner(
                             duration_ms: start.elapsed().as_millis() as u64,
                             failed_step: Some(step.description.clone()),
                             success: false,
+                            blocked: false,
                             tokens_used: 0,
                         };
                     }
@@ -464,6 +500,7 @@ async fn execute_step_inner(
                             duration_ms: start.elapsed().as_millis() as u64,
                             failed_step: Some(step.description.clone()),
                             success: false,
+                            blocked: false,
                             tokens_used: 0,
                         };
                     }
@@ -482,6 +519,7 @@ async fn execute_step_inner(
                             duration_ms: start.elapsed().as_millis() as u64,
                             failed_step: Some(step.description.clone()),
                             success: false,
+                            blocked: false,
                             tokens_used: 0,
                         };
                     }
@@ -513,6 +551,7 @@ async fn execute_step_inner(
                 None
             },
             success: exit_code == 0,
+            blocked: false,
             tokens_used: 0,
         }
     } else {
@@ -532,6 +571,7 @@ async fn execute_step_inner(
             duration_ms: start.elapsed().as_millis() as u64,
             failed_step: None,
             success: true,
+            blocked: false,
             tokens_used: 0,
         }
     }
@@ -618,6 +658,7 @@ async fn execute_step(
                 duration_ms: 0,
                 failed_step: None,
                 success: true,
+                blocked: false,
                 tokens_used: 0,
             };
         }
@@ -701,6 +742,7 @@ async fn execute_step(
                         None
                     },
                     success: !empty,
+                    blocked: false,
                     // Real tokens the specialist's turn consumed, from Task.usage.
                     tokens_used: extract_usage_tokens(&task),
                 }
@@ -727,6 +769,7 @@ async fn execute_step(
                     duration_ms: start.elapsed().as_millis() as u64,
                     failed_step: Some(step.description.clone()),
                     success: false,
+                    blocked: false,
                     tokens_used: 0,
                 }
             }
@@ -771,15 +814,37 @@ async fn execute_step(
             cid,
             &req,
             opts.yes,
+            opts.hitl_defer.unwrap_or_else(unattended),
             None,
             Some(opts.run_id.as_str()),
         )
         .await
         .unwrap_or(crate::hitl::gate::GateDecision {
             allow: false,
+            deferred: false,
             reason: "gate error".into(),
             action_hash: String::new(),
         });
+        if decision.deferred {
+            // Parked, not refused: the request is durable in the channel and
+            // any surface can answer it later. Report blocked so the run stops
+            // here without burning the wait window or failing work a human
+            // never got to see.
+            eprintln!(
+                "  Step {sid}: awaiting approval — {} (approve: mur channel approve {cid} <hitl_id>)",
+                decision.reason
+            );
+            emit(StepEventKind::Blocked, 0);
+            return StepResult {
+                exit_code: 0,
+                output_text: decision.reason.clone(),
+                duration_ms: start.elapsed().as_millis() as u64,
+                failed_step: None,
+                success: false,
+                blocked: true,
+                tokens_used: 0,
+            };
+        }
         if !decision.allow {
             eprintln!("  Step {sid}: gate denied ({})", decision.reason);
             emit(StepEventKind::Failed, 0);
@@ -789,6 +854,7 @@ async fn execute_step(
                 duration_ms: start.elapsed().as_millis() as u64,
                 failed_step: Some(step.description.clone()),
                 success: false,
+                blocked: false,
                 tokens_used: 0,
             };
         }
@@ -803,6 +869,7 @@ async fn execute_step(
                 duration_ms: start.elapsed().as_millis() as u64,
                 failed_step: Some(step.description.clone()),
                 success: false,
+                blocked: false,
                 tokens_used: 0,
             };
         }
@@ -825,16 +892,31 @@ async fn execute_step(
             false
         };
         if !approved {
+            // NOT success. Reporting an unapproved step as done let every
+            // dependent run on a prerequisite that never happened, and the run
+            // as a whole reported success — the same silent-skip-as-success
+            // shape the audit found elsewhere. Unattended (no TTY) it is
+            // blocked; interactively it is a refusal the human just gave.
+            let refused = std::io::IsTerminal::is_terminal(&std::io::stdin());
             eprintln!(
-                "  Step {sid}: needs_approval, skipped (yields true) — use `--yes` to auto-approve"
+                "  Step {sid}: needs_approval and {} — not run. Re-run interactively, or with `--yes` to auto-approve.",
+                if refused { "declined" } else { "nobody to ask" }
             );
-            emit(StepEventKind::Done, 0);
+            emit(
+                if refused {
+                    StepEventKind::Failed
+                } else {
+                    StepEventKind::Blocked
+                },
+                0,
+            );
             return StepResult {
-                exit_code: 0,
-                output_text: String::new(),
+                exit_code: if refused { 1 } else { 0 },
+                output_text: "needs_approval: not approved".into(),
                 duration_ms: 0,
-                failed_step: None,
-                success: true,
+                failed_step: refused.then(|| step.description.clone()),
+                success: false,
+                blocked: !refused,
                 tokens_used: 0,
             };
         }
@@ -1076,13 +1158,17 @@ pub async fn execute_dag(
         };
 
     // Closure for terminal StateChange — call before each PipelineOutput return.
-    let emit_final = |failed: bool| {
+    let emit_final = |outcome: RunOutcome| {
+        // Blocked is NOT terminal: the channel is already `InputRequired`
+        // (the gate put it there) and must stay that way, or the surfaces that
+        // read channel state would show a finished run while a human still
+        // owes it an answer.
+        let st = match outcome {
+            RunOutcome::Blocked => return,
+            RunOutcome::Failed => ChannelState::Failed,
+            RunOutcome::Done => ChannelState::Completed,
+        };
         if let Some(cid) = opts.channel_id.as_deref() {
-            let st = if failed {
-                ChannelState::Failed
-            } else {
-                ChannelState::Completed
-            };
             let _ = ChannelService::open(mur_home)
                 .and_then(|svc| svc.transition(cid, st, ChannelActor::System, opts.event_run_id()));
         }
@@ -1105,6 +1191,12 @@ pub async fn execute_dag(
     // step id → output_text of successfully completed steps, so later ranks
     // can thread dependency outputs into their delegated sub-goals.
     let mut completed_outputs: HashMap<String, String> = HashMap::new();
+    // Step ids waiting on a human, plus everything downstream of them. A
+    // dependent must not run on a prerequisite that has not happened yet —
+    // but unlike a failure this is not an abort: independent branches in the
+    // same and later ranks still run to completion, so an unattended run gets
+    // as far as it legitimately can before it needs someone.
+    let mut blocked_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for rank in 0..=max_rank {
         let indices: Vec<usize> = (0..graph.nodes.len())
@@ -1115,9 +1207,42 @@ pub async fn execute_dag(
             continue;
         }
 
+        // Inherit blocked-ness before spawning: a step whose dependency is
+        // waiting on a human cannot run. Ranks execute in dependency order, so
+        // checking direct `depends_on` here transitively covers the subgraph —
+        // each rank marks the next.
+        let (indices, deferred_indices): (Vec<usize>, Vec<usize>) =
+            indices.into_iter().partition(|i| {
+                !graph.nodes[*i]
+                    .step
+                    .depends_on
+                    .iter()
+                    .any(|d| blocked_ids.contains(d))
+            });
+        for i in deferred_indices {
+            let step = &graph.nodes[i].step;
+            let sid = step.id.clone().unwrap_or_else(|| format!("step{i}"));
+            eprintln!("  Step {sid}: not run — depends on a step awaiting approval");
+            if let Some(cb) = composed_on_step.as_ref() {
+                cb(StepEvent {
+                    id: sid.clone(),
+                    agent: step.delegate_to.clone(),
+                    kind: StepEventKind::Blocked,
+                    tokens_used: 0,
+                });
+            }
+            blocked_ids.insert(sid);
+        }
+        if indices.is_empty() {
+            continue;
+        }
+
         // Concurrent: spawn each step in this rank.
         // Extract owned values from opts for the spawned tasks.
         let opt_yes = opts.yes;
+        // Resolve once per rank, not per step: `unattended()` probes the TTY,
+        // and every step in a run must agree on whether a human is watching.
+        let opt_hitl_defer = Some(opts.hitl_defer.unwrap_or_else(unattended));
         let opt_input = opts.input.clone();
         let opt_env_override = opts.env_class_override.map(|s| s.to_string());
         let opt_vars = opts.variables.clone();
@@ -1150,6 +1275,7 @@ pub async fn execute_dag(
                 };
                 let opts_clone = DagExecOptions {
                     yes: opt_yes,
+                    hitl_defer: opt_hitl_defer,
                     input: inp,
                     env_class_override: env_override.as_deref(),
                     variables: vars,
@@ -1183,6 +1309,7 @@ pub async fn execute_dag(
                         duration_ms: 0,
                         failed_step: Some("(task)".to_string()),
                         success: false,
+                        blocked: false,
                         tokens_used: 0,
                     });
                 }
@@ -1194,6 +1321,19 @@ pub async fn execute_dag(
             let result = &results[ri];
             let step = &graph.nodes[indices[ri]].step;
             overall_tokens = overall_tokens.saturating_add(result.tokens_used);
+
+            // A blocked step is neither a success to record nor a failure to
+            // act on: register it so dependents inherit, and skip the ledger +
+            // on_failure handling entirely. It never happened; the run will
+            // simply end short of it.
+            if result.blocked {
+                blocked_ids.insert(
+                    step.id
+                        .clone()
+                        .unwrap_or_else(|| format!("step{}", indices[ri])),
+                );
+                continue;
+            }
 
             // Write run-ledger record.
             let stderr_for_ledger = if !result.success && result.output_text.is_empty() {
@@ -1235,13 +1375,13 @@ pub async fn execute_dag(
                             "  Step {sid} failed (exit {}), aborting workflow",
                             result.exit_code
                         );
-                        emit_final(true);
+                        emit_final(RunOutcome::Failed);
                         finalize_run(
                             mur_home,
                             &opts.run_id,
                             recorded.is_some(),
                             &mut heartbeat,
-                            true,
+                            RunOutcome::Failed,
                         )
                         .await;
                         return Ok(PipelineOutput {
@@ -1289,13 +1429,13 @@ pub async fn execute_dag(
                             } else if attempt + 1 == max_retries {
                                 let _retry_code = retry_result.exit_code;
                                 eprintln!("  Step {sid} retry exhausted, aborting workflow");
-                                emit_final(true);
+                                emit_final(RunOutcome::Failed);
                                 finalize_run(
                                     mur_home,
                                     &opts.run_id,
                                     recorded.is_some(),
                                     &mut heartbeat,
-                                    true,
+                                    RunOutcome::Failed,
                                 )
                                 .await;
                                 return Ok(PipelineOutput {
@@ -1326,19 +1466,46 @@ pub async fn execute_dag(
     }
 
     let duration_ms = start.elapsed().as_millis() as u64;
-    let status = if overall_exit_code == 0 {
-        PipelineStatus::Success
+    // Blocked outranks a clean exit code: every blocked step exits 0 (nothing
+    // ran, nothing failed), so reading the exit code alone would report a run
+    // waiting on a human as a success.
+    let outcome = if overall_exit_code != 0 {
+        RunOutcome::Failed
+    } else if !blocked_ids.is_empty() {
+        RunOutcome::Blocked
     } else {
-        PipelineStatus::Failed
+        RunOutcome::Done
     };
+    let status = match outcome {
+        RunOutcome::Done => PipelineStatus::Success,
+        RunOutcome::Failed => PipelineStatus::Failed,
+        // ponytail: `Skipped` is the closest existing variant — it does not
+        // claim success and needs no change to a serialized enum. Add a
+        // `Blocked` variant if a consumer ever needs to tell the two apart;
+        // the run record (State::Blocked) and the channel (InputRequired)
+        // already carry the precise state.
+        RunOutcome::Blocked => PipelineStatus::Skipped,
+    };
+    if outcome == RunOutcome::Blocked {
+        let mut ids: Vec<&String> = blocked_ids.iter().collect();
+        ids.sort();
+        eprintln!(
+            "\n⏸ Run stopped: {} step(s) awaiting approval ({}).\n   Approve with `mur channel approve <channel_id> <hitl_id>` (or the Hub's Needs You card), then re-run — completed steps are skipped.",
+            ids.len(),
+            ids.iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
 
-    emit_final(overall_exit_code != 0);
+    emit_final(outcome);
     finalize_run(
         mur_home,
         &opts.run_id,
         recorded.is_some(),
         &mut heartbeat,
-        overall_exit_code != 0,
+        outcome,
     )
     .await;
     Ok(PipelineOutput {
@@ -1369,7 +1536,7 @@ async fn finalize_run(
     run_id: &str,
     recorded: bool,
     heartbeat: &mut Option<crate::run_status::heartbeat::Heartbeat>,
-    failed: bool,
+    outcome: RunOutcome,
 ) {
     if !recorded {
         return;
@@ -1381,10 +1548,10 @@ async fn finalize_run(
     // load/save pair here would race `mur job stop` in another process, which
     // does the same read-modify-write on the same file.
     let _ = crate::run_status::store::update(mur_home, run_id, |record| {
-        record.state = if failed {
-            crate::run_status::State::Failed
-        } else {
-            crate::run_status::State::Done
+        record.state = match outcome {
+            RunOutcome::Failed => crate::run_status::State::Failed,
+            RunOutcome::Blocked => crate::run_status::State::Blocked,
+            RunOutcome::Done => crate::run_status::State::Done,
         };
     });
 }
