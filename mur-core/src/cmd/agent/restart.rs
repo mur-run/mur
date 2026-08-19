@@ -264,8 +264,12 @@ fn report_unexamined(agents_dir: &Path) {
         );
     }
     if !should_be_running.is_empty() {
+        // Not an anomaly to fix, and deliberately NOT auto-started: this is
+        // exactly the state `mur agent stop` leaves behind (bootout / systemctl
+        // stop, descriptor left in place), so starting these would override a
+        // stop the user asked for. Say what will actually happen instead.
         println!(
-            "⚠ service installed but not running: {} — start with `mur agent start <name>`",
+            "not running, service still installed: {} — each starts again at your next login; `mur agent start <name>` to bring one up now",
             should_be_running.join(", ")
         );
     }
