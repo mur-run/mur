@@ -5,8 +5,8 @@ use std::path::Path;
 
 use mur_common::skill::credit::{CreditEntry, CreditEvidence, CreditKind};
 use mur_common::skill::{
-    SkillLock, SkillManifest, TrustLevel, content_hash_for_trust, content_sha256, global_skill_dir,
-    lockfile, scan::scan_skill, write_to_dir,
+    SkillLock, SkillManifest, TrustLevel, content_hash_for_trust, global_skill_dir, lockfile,
+    scan::scan_skill, write_to_dir,
 };
 use mur_common::trust::skills::{SkillTrustStore, TrustEntry};
 
@@ -206,22 +206,52 @@ fn install_resolved_node(home: &Path, registry_dir: &Path, node: &ResolvedNode) 
         stamp_registry_origin(&mut manifest);
     }
     write_to_dir(&dir, &manifest)?;
-    let hash = content_sha256(&node.manifest)?;
+    // Trust-store key: the trust hash, so a later transfer or generation
+    // increment does not re-key this entry (see `content_hash_for_trust`).
+    let hash = content_hash_for_trust(&node.manifest)?;
     let mut trust = SkillTrustStore::load(home).map_err(|e| anyhow::anyhow!("load trust: {e}"))?;
     let level = if report.has_blocking_findings() {
         TrustLevel::Sandboxed
     } else {
         TrustLevel::Verified
     };
+    let installed_at = chrono::Utc::now().to_rfc3339();
+    let publisher = Some(node.manifest.publisher.clone());
     trust.insert(
-        hash,
+        hash.clone(),
         TrustEntry {
             name: node.name.clone(),
             version: node.version.to_string(),
             level,
-            installed_at: chrono::Utc::now().to_rfc3339(),
-            publisher: Some(node.manifest.publisher.clone()),
+            installed_at: installed_at.clone(),
+            publisher: publisher.clone(),
+            // Hash-keyed entry: the KEY is the content hash, so the field would
+            // only repeat it. The drift baseline is the name-keyed entry below.
             ..Default::default()
+        },
+    );
+    // Drift baseline, keyed by NAME (#960). The hash-keyed entry above is the
+    // load-time allow-list: it answers "is this exact content trusted", and by
+    // construction it can never notice that the content changed — a new version
+    // simply lands under a new key. Comparing against the LAST install needs an
+    // entry that survives the version change, which is what keying by name buys.
+    //
+    // `content_sha256` is populated in the trust domain, matching what
+    // `registry-add` pins, so the two install paths compare like with like. No
+    // signer fingerprint: this path has the security scan but not a verified
+    // publisher signature, so a publisher-change claim would be unfounded.
+    // `check_drift` skips the publisher comparison when it is absent and still
+    // performs the content and rollback checks.
+    trust.entries.insert(
+        node.name.clone(),
+        TrustEntry {
+            name: node.name.clone(),
+            version: node.version.to_string(),
+            level,
+            installed_at,
+            publisher,
+            content_sha256: hash,
+            signer_key_fp: None,
         },
     );
     trust
@@ -557,6 +587,88 @@ mod tests {
     async fn block_on_isolated_runs_inside_ambient_runtime() {
         let out = block_on_isolated(|| async { 1 + 1 }).expect("no panic inside runtime");
         assert_eq!(out, 2);
+    }
+
+    fn node(name: &str, version: &str) -> ResolvedNode {
+        let yaml = format!(
+            "name: {name}\nversion: {version}\npublisher: human:t\ndescription: d\ncategory: context\ncontent:\n  abstract: a\n"
+        );
+        ResolvedNode {
+            name: name.into(),
+            version: semver::Version::parse(version).unwrap(),
+            yaml_path: std::path::PathBuf::from("/nonexistent/skill.yaml"),
+            manifest: mur_common::skill::parse_canonical(&yaml).unwrap(),
+        }
+    }
+
+    /// #960 option 1: `mur skill install` must leave a drift baseline keyed by
+    /// NAME, not only the hash-keyed allow-list entry.
+    ///
+    /// The hash-keyed entry cannot detect drift by construction — a changed
+    /// skill simply lands under a different key, so there is nothing to compare
+    /// against. Only an entry that survives the version change can answer "did
+    /// this change since last time", which is what keying by name buys.
+    #[test]
+    fn install_writes_a_name_keyed_drift_baseline() {
+        let tmp = tempdir().unwrap();
+        let home = tmp.path();
+        let n = node("demo", "1.0.0");
+        let registry = home.join("registry");
+        std::fs::create_dir_all(&registry).unwrap();
+
+        install_resolved_node(home, &registry, &n).unwrap();
+
+        let trust = SkillTrustStore::load(home).unwrap();
+        let hash = content_hash_for_trust(&n.manifest).unwrap();
+
+        // Load-time allow-list entry, keyed by content hash.
+        assert!(
+            trust.entries.contains_key(&hash),
+            "hash-keyed entry missing: {:?}",
+            trust.entries.keys().collect::<Vec<_>>()
+        );
+
+        // Drift baseline, keyed by name, carrying a COMPARABLE content hash.
+        let baseline = trust
+            .entries
+            .get("demo")
+            .expect("no name-keyed drift baseline was written");
+        assert_eq!(
+            baseline.content_sha256, hash,
+            "the baseline must pin the trust-domain hash, or it cannot be \
+             compared against what registry-add pins"
+        );
+        assert_eq!(baseline.version, "1.0.0");
+    }
+
+    /// ...and the baseline is what makes a later content change detectable.
+    /// Same name, same version, different content — previously invisible.
+    #[test]
+    fn the_baseline_makes_a_later_content_change_detectable() {
+        let tmp = tempdir().unwrap();
+        let home = tmp.path();
+        let registry = home.join("registry");
+        std::fs::create_dir_all(&registry).unwrap();
+
+        let first = node("demo", "1.0.0");
+        install_resolved_node(home, &registry, &first).unwrap();
+        let baseline = SkillTrustStore::load(home)
+            .unwrap()
+            .entries
+            .get("demo")
+            .unwrap()
+            .content_sha256
+            .clone();
+
+        // The publisher rewrites the skill body without bumping the version.
+        let mut second = node("demo", "1.0.0");
+        second.manifest.description = "something else entirely".into();
+        let new_hash = content_hash_for_trust(&second.manifest).unwrap();
+
+        assert_ne!(
+            baseline, new_hash,
+            "a content rewrite must move the trust hash, or drift is undetectable"
+        );
     }
 
     #[test]
