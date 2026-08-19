@@ -171,6 +171,27 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // 3a. Load agent identity (Ed25519 keypair) for Noise-XK TCP transport.
     //     If missing, fall back to an ephemeral identity and warn that
     //     cross-host TCP won't work (peers can't verify our static key).
+    // #850 option (c) step 2: move THIS agent's private key out of the agents
+    // tree, before it is loaded. Runs here rather than from `mur update`
+    // because that is not the only upgrade path — `build.sh --install` +
+    // `mur agent restart --stale` never invokes it. Scoped to one key, so
+    // concurrent agent starts cannot contend.
+    //
+    // Advisory: a failure leaves the key where it is, and step 1's fallback
+    // still loads it. What must NOT happen is starting anyway after a refusal
+    // to overwrite a different key — that case is reported loudly and the key
+    // is left untouched, so the next start retries.
+    match mur_common::identity::migrate_private_key(&agent_home) {
+        Ok(true) => info!("private key migrated out of the agents tree"),
+        Ok(false) => {}
+        Err(e) => warn!(
+            error = %e,
+            "could not migrate the private key; it stays where it is and still \
+             loads, but this agent's key remains readable to siblings created \
+             after the sandbox sealed"
+        ),
+    }
+
     let identity = Arc::new(match AgentIdentity::load(&agent_home) {
         Ok(id) => id,
         Err(e) => {
