@@ -16,6 +16,12 @@ use std::os::unix::fs::PermissionsExt;
 pub enum IdentityError {
     #[error("identity files not found")]
     NotFound,
+    /// The key is there but this process may not read it — a sandbox deny, or
+    /// wrong ownership. Distinct from `NotFound` on purpose: callers that treat
+    /// an absent key as "not signed yet" must NOT treat an unreadable one the
+    /// same way, or a deny silently downgrades signing to unsigned.
+    #[error("identity key exists but is not readable: {0}")]
+    Denied(String),
     #[error("io error: {0}")]
     Io(#[from] io::Error),
     #[error("invalid key material: {0}")]
@@ -70,10 +76,23 @@ impl AgentIdentity {
     /// present `identity.pub` matches.
     pub fn load(dir: &Path) -> Result<Self, IdentityError> {
         let priv_path = dir.join("identity.key");
-        if !priv_path.exists() {
-            return Err(IdentityError::NotFound);
+        // `Path::exists()` cannot be used here: it answers false for ANY stat
+        // failure, so a sandbox deny is indistinguishable from a missing file
+        // and the caller's "no key yet" branch runs when the truth is "you may
+        // not read this key". Ask for the metadata and keep the error kind.
+        if let Err(e) = fs::metadata(&priv_path) {
+            return Err(match e.kind() {
+                io::ErrorKind::NotFound => IdentityError::NotFound,
+                _ => IdentityError::Denied(format!("{}: {e}", priv_path.display())),
+            });
         }
-        let bytes = fs::read(&priv_path)?;
+        let bytes = fs::read(&priv_path).map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => IdentityError::NotFound,
+            io::ErrorKind::PermissionDenied => {
+                IdentityError::Denied(format!("{}: {e}", priv_path.display()))
+            }
+            _ => IdentityError::Io(e),
+        })?;
         if bytes.len() != SECRET_KEY_LENGTH {
             return Err(IdentityError::InvalidKey(format!(
                 "expected {SECRET_KEY_LENGTH} bytes, got {}",
@@ -569,6 +588,70 @@ fn write_canonical(out: &mut Vec<u8>, v: &serde_json::Value) {
             }
             out.push(b'}');
         }
+    }
+}
+
+#[cfg(test)]
+mod identity_readability_tests {
+    use super::*;
+
+    /// A key that exists but cannot be read must NOT report as absent.
+    ///
+    /// `Path::exists()` answers false for any stat failure, so before this the
+    /// two were indistinguishable and every caller's "no key yet" branch ran
+    /// when the truth was "you may not read this key" — which is exactly what
+    /// a sandbox deny produces.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_key_is_denied_not_notfound() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        AgentIdentity::generate().save(dir.path()).unwrap();
+        let key = dir.path().join("identity.key");
+
+        // Precondition: readable right now, so the assert below is about the
+        // permission change and nothing else.
+        assert!(AgentIdentity::load(dir.path()).is_ok());
+
+        // Case 1 — the file is unreadable but still STATtable (chmod 000).
+        // `exists()` says true here, so this exercises the read mapping.
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = AgentIdentity::load(dir.path()).unwrap_err();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(
+            matches!(unreadable, IdentityError::Denied(_)),
+            "an unreadable key must be Denied, got {unreadable:?}"
+        );
+
+        // Case 2 — the file cannot even be STATted, because the directory
+        // holding it is not searchable. THIS is what a sandbox deny looks
+        // like, and it is the case `Path::exists()` gets wrong: it answers
+        // false, so the old code reported NotFound and every caller's
+        // "no key yet" branch ran.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unstattable = AgentIdentity::load(dir.path()).unwrap_err();
+        let exists_lies = !key.exists();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            exists_lies,
+            "precondition: Path::exists() must be answering false here, or this \
+             case is not reproducing a sandbox deny"
+        );
+        assert!(
+            matches!(unstattable, IdentityError::Denied(_)),
+            "a key that cannot be STATted must be Denied, not NotFound, got {unstattable:?}"
+        );
+    }
+
+    /// ...and a genuinely absent key still reports NotFound, because callers
+    /// legitimately treat that as "nothing signed yet".
+    #[test]
+    fn a_missing_key_is_still_notfound() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            AgentIdentity::load(dir.path()).unwrap_err(),
+            IdentityError::NotFound
+        ));
     }
 }
 
