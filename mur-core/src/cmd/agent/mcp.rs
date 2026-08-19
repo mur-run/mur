@@ -380,7 +380,26 @@ pub fn cmd_mcp_set_network(
         save_profile(&path, &mut profile)?;
     }
 
-    println!("Updated egress policy for '{server_id}'. Restart the agent to apply.");
+    // Name the resulting state, not just "updated". Clearing the policy is the
+    // case that misleads: it reads as "inherit the agent's allow_hosts", and it
+    // is not — that list is enforced in-process and a spawned server never runs
+    // the code that enforces it.
+    let srv = profile
+        .mcp_servers
+        .iter()
+        .find(|s| s.name == server_id)
+        .expect("server was just edited");
+    match srv.network.as_ref().map(|n| n.mode).unwrap_or_default() {
+        McpNetMode::Inherit => println!(
+            "Cleared the egress policy for '{server_id}': it is now bounded only by the OS \
+             sandbox, which restricts PORTS, not hosts — the agent's `allow_hosts` does NOT \
+             apply to it. To bound it by host: mur agent mcp set-network {agent} {server_id} \
+             --allow-host <host>"
+        ),
+        McpNetMode::Off => println!("'{server_id}' now has no outbound access."),
+        _ => println!("Updated egress policy for '{server_id}'."),
+    }
+    println!("Restart the agent to apply.");
     Ok(())
 }
 
@@ -433,7 +452,8 @@ mod tests {
 
     #[test]
     fn network_policy_from_args_maps_modes() {
-        // Empty + !off → clear (inherit agent policy).
+        // Empty + !off → clear: no per-server policy, so the server is bounded
+        // by the OS sandbox (ports) alone — NOT by the agent's allow_hosts.
         assert_eq!(network_policy_from_args(vec![], false), None);
         // off → Off, regardless of hosts.
         assert_eq!(
