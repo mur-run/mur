@@ -1,6 +1,8 @@
 # Unattended HITL: Defer, Don't Time Out
 
-**Status**: P0 in progress (this PR series). P1–P3 designed, not started.
+**Status**: P0 shipped (#993). P1a shipped (#1000), P1b shipped (#1001).
+**P2 withdrawn as specced** — the original design cannot be built safely; see Layer 2.
+P3 designed, not started, and blocked on data that does not exist yet.
 **Issue thread**: system-audit follow-on (PR series #986–#991); field report: unattended fleet runs burn the 300 s HITL window and fail, and the request dies with the run.
 
 ## Problem
@@ -123,19 +125,57 @@ Approval TTL stays a constant (7 days, `HITL_APPROVAL_TTL_SECS`): the pin
 already bounds *content* staleness, and a configurable clock is a knob with
 no demand behind it.
 
-### Layer 2 — Divert, don't block (structure) [P0 park; P2 divert]
+### Layer 2 — Divert, don't block (structure) [P0 park; P2 WITHDRAWN as specced]
 
 For `ask` outcomes:
 
-- **Isolatable actions** (file writes) → P2: execute speculatively in an
-  isolated git worktree (the `MUR_PARALLEL_EXEC` machinery); the
-  `HitlRequest` carries the **resulting diff**; approval = merge. The human
-  reviews bytes, not intentions — and pin drift is impossible because the
-  approved artifact is the change itself.
 - **Irreversible actions** (external POST, spend, non-compensable deletes) →
   P0: park immediately. The step is `blocked`, independent branches continue,
   and the run terminates as `blocked(waiting_approval)` — a first-class,
   non-failed outcome that `--loop` treats as "stop, don't burn budget".
+
+#### P2 as originally specced is unsafe — do not build it
+
+The original P2 read: *isolatable actions (file writes) execute speculatively
+in an isolated git worktree (the `MUR_PARALLEL_EXEC` machinery); the
+`HitlRequest` carries the resulting diff; approval = merge.* Two facts,
+verified 2026-08-19, make that unbuildable as written:
+
+1. **The DAG executor has no sandbox.** A command step is
+   `tokio::process::Command::new("sh").arg("-c")` (`executor/dag.rs`),
+   running inside the `mur` CLI process. The sandbox lives in
+   `mur-agent-runtime` — a different process. Workflow shell steps therefore
+   run with the user's full privileges.
+2. **The worktree machinery is advisory.** `inject_worktree_routing`
+   (`cmd/fleet/run.rs`) appends prose to a step's intent — *"you are in an
+   ISOLATED worktree, pass cwd=… on EVERY bash call, edit only files under
+   it"* — and its own comment says **"Tier 1: no runtime change, best-effort
+   isolation"**. It applies only to delegate steps of a `parallel:` fleet.
+
+So: producing the diff requires running the command, and running a
+risk-tiered command **before approval, unsandboxed, as the user** is precisely
+what the gate exists to prevent. Changing the cwd does not stop
+`curl -X POST …`. There is also no typed file-write at this layer to
+speculate on — a `Step` carries `command` / `intent` / `delegate_to`, so
+"this step only touches the filesystem" is not a decidable property.
+
+#### The safe inversion: gate the MERGE, not the execution
+
+Keep P2's actual goal — *review bytes, not intentions* — by moving the gate
+one step later:
+
+- An isolated track's agent does its work and commits **inside its own
+  worktree**. That work was authorized when the track was created.
+- What needs approval is **landing it**: the gate goes on the merge
+  (`mur fleet merge` / cherry), where a real diff already exists.
+- Nothing unapproved is ever executed, the human reviews actual bytes, and
+  pin drift is structurally impossible because the approved artifact *is* the
+  change.
+
+**Not scheduled.** The safe version hangs off parallel tracks, which is still
+experimental and default-OFF (`MUR_PARALLEL_EXEC=1`). Building a governance
+layer for an experimental feature is the wrong order. Revisit when parallel
+tracks graduates, or when it is used for real work.
 
 ### Layer 3 — The human, asynchronously (escalation ladder) [P0 surfaces; P1 ladder]
 
@@ -153,6 +193,13 @@ Approval history is training data. When a class of action is approved N
 consecutive times, the harvest pipeline **proposes** a standing grant into the
 `mur out` inbox. A human review turns repeated Layer-3 labor into Layer-1
 policy. Proposals are never auto-activated.
+
+**Not startable yet, and the reason is not effort.** It mines approval history,
+and P1b — which creates the grants a proposal would target — shipped on
+2026-08-19. There is no history to mine. Building the miner first would mean
+tuning `N` and the similarity rule against imagined data, which is how a
+heuristic ends up fitted to nothing. Revisit after a few weeks of real
+unattended runs, when the channel actually holds decisions to learn from.
 
 ## P0 mechanics (this implementation)
 
