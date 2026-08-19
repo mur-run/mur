@@ -1,7 +1,7 @@
 # B0 adversarial harness: run the real chain at PR time
 
 **Date:** 2026-08-18
-**Status:** design, not implemented — decision requested before building
+**Status:** built (#809) — see §"Built" at the end for two corrections to this design
 **Issue:** #809
 
 ## What this closes
@@ -136,3 +136,64 @@ per-rule default. This is the same explicit-versus-inferred choice as below.
 The stub-LLM agentdojo track. It exercises the case loader, the JSONL contract
 and the report path, which this does not, and the workflow header already
 describes honestly what it is and is not. It stays.
+
+---
+
+## Built — and two things this design got wrong
+
+Shipped as `mur-agent-runtime/tests/b0_adversarial_corpus.rs`. Decisions taken:
+driver first with the gap as test data; explicit per-case declaration; the
+promptfoo job and `provider.py` deleted.
+
+### 1. "promptfoo … 15 cases, tagged per B0 rule" — seven are
+
+Counted from the file: rule headers exist for cases 1–7 (rules 1, 2, 3, 5, 7,
+8, 11). The other eight are OWASP/jailbreak categories. Of those, three could be
+mapped to a rule anyway (`chain_read_exfil` → 2, `card_name_injection` and
+`bridge_injection` → 3), and **five cannot be driven at all**:
+
+| case | why B0 cannot rule on it |
+|---|---|
+| `direct_prompt_injection` | asserts whether the model obeys — no tool call |
+| `jailbreak_roleplay` | same |
+| `system_prompt_leak` | asserts what the model says |
+| `xss_output` | asserts the model's output text |
+| `unsigned_mcp_injection` | rule 11 is a startup supply-chain check, not a per-turn hook |
+
+This is the same structural objection this design raised against agentdojo —
+"it measures a model's susceptibility" — and a third of the promptfoo corpus has
+it too. Those five are declared `b0_surface: none` with a reason rather than
+skipped, and a test asserts the count, so the gap stays visible.
+
+### 2. "on_prompt_submit → pre_tool_use" — there are four surfaces
+
+The rules do not share an entry point:
+
+| rule | surface |
+|---|---|
+| 1, 2, 5 | `pre_tool_use` |
+| 3 | `on_prompt_submit` (wrapping) |
+| 7 | `on_message_send` (drops the message) |
+| 8 | `post_tool_use` (redacts output) |
+| 11 | `verify_mcp_supply_chain` — startup, not a hook |
+
+So the case must declare its surface, not just its tool. Which is decision 2
+arriving by a second route: inference would have been wrong four times here.
+
+### What the harness caught immediately — in itself
+
+Three fixture errors, on first run, each a place where the design's model of a
+rule differed from the code:
+
+1. rule 8 modelled as a `pre_tool_use` denial; it is a `post_tool_use` redaction
+2. rule 7 asserted on `set_body`; it sets `drop` + `drop_reason`
+3. the undrivable-case count was wrong (5, not 8)
+
+A keyword classifier grading a corpus it was written alongside cannot produce
+that kind of disagreement — which is the whole argument for this change, and it
+showed up before the harness had reviewed a single line of production code.
+
+### Negative control
+
+Neutering `pre_tool_use` to `Ok(Decision::Allow)` fails the harness. The
+deleted promptfoo job would not have noticed.
