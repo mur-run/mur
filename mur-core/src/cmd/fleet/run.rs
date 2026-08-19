@@ -438,6 +438,19 @@ pub async fn cmd_fleet_run(
             }
             // Channel said nothing terminal (empty DAG, no channel routing, or a
             // hard crash before emit): fall back to the exec_result.
+            //
+            // A blocked run lands here BY DESIGN: it deliberately writes no
+            // terminal StateChange, leaving the channel `input-required` so
+            // every surface keeps showing that a human still owes it an
+            // answer. Without this arm it would fall into the `Ok` case below
+            // and be recorded as `done` — claiming work that never ran.
+            (_, Ok(out)) if out.status == mur_common::pipeline::PipelineStatus::Skipped => {
+                job.status = JobStatus::Blocked;
+                job.error = Some(
+                    "awaiting approval — approve the pending request(s), then re-run this fleet"
+                        .to_string(),
+                );
+            }
             (_, Ok(out)) => {
                 job.status = JobStatus::Done;
                 job.result = out.output_text.clone().filter(|t| !t.is_empty());

@@ -1,0 +1,214 @@
+# Unattended HITL: Defer, Don't Time Out
+
+**Status**: P0 in progress (this PR series). P1–P3 designed, not started.
+**Issue thread**: system-audit follow-on (PR series #986–#991); field report: unattended fleet runs burn the 300 s HITL window and fail, and the request dies with the run.
+
+## Problem
+
+MUR's HITL gates are correct in direction (fail-closed, hash-pinned, signed) but
+modeled on an attended operator. Two layers, same assumption:
+
+1. **DAG executor gate** (`mur-core/src/hitl/gate.rs`): writes a `HitlRequest`
+   channel event, then **polls for a `HitlResponse` for 300 s** and denies on
+   timeout. The step fails, the run fails, and — because `hitl_id` is minted
+   fresh per call — the request the human eventually sees is already dead. A
+   later approval has nothing to attach to; the only recovery is a full re-run
+   that mints yet another request.
+2. **Member-runtime tool gate** (`mur-agent-runtime/src/task_runner.rs`): the
+   fleet delegation path passes an empty HITL callback
+   (`loop_run.rs`: `|_hitl| {}`), so the request is discarded and auto-denied
+   after `hitl.timeout_secs`.
+
+The unattended consequences: every gate burns its full window before failing;
+`--loop` re-burns it every iteration; approvals cannot arrive late; and the
+operator learns about all of it the next morning from a failed run. The
+second-order cost is worse: a gate this painful teaches users to run
+`set-mode unrestricted` or demand a blanket `--yes` — the pressure to bypass
+is itself a security cost.
+
+There is also a latent truthfulness bug in the no-channel path
+(`executor/dag.rs`): `needs_approval` + non-TTY + no `--yes` **skips the step
+and reports it successful** (`exit_code: 0`, `StepEventKind::Done`).
+
+## Prior art (checked 2026-08-19)
+
+- **LangGraph** `interrupt()` / `Command(resume)`: a pause is checkpointed
+  state, indefinite, survives process death.
+- **Temporal** signal + durable timer: the official pattern is an escalation
+  ladder (notify → remind → escalate → expiry default), i.e. timeout is a
+  business decision, not an infrastructure constant.
+- **OpenAI Agents SDK** `needsApproval` (optionally a dynamic predicate):
+  run pauses, state serializes for days, `approve()`/`reject()` then resume.
+- **AWS Bedrock** Return of Control: the pending call is handed back up the
+  delegation chain with an invocation id.
+- **A2A v0.3**: `input-required` is a standard **non-terminal** task state; the
+  client re-engages the same task later. MUR's channel already models exactly
+  this (`ChannelState::InputRequired`), so defer is protocol-aligned.
+- **OWASP Agentic (ASI06)**: least privilege, tiered autonomy, HITL only for
+  consequential actions, and explicit warnings about approval fatigue.
+
+Convergent shape everywhere: **a pending approval is durable state, not a
+countdown**, and the human's attention is the scarce resource the architecture
+must budget.
+
+## Design: a three-layer funnel
+
+Every risk-tiered action flows through three layers; each layer exists to
+spend less of the next layer's budget. Consent is never removed — it moves to
+the time and granularity where a human can actually give it.
+
+### Layer 1 — Policy first (consent given earlier) [P1]
+
+Named standing grants in `fleet.yaml`, signed with the fleet bundle:
+
+```yaml
+hitl:
+  mode: defer            # defer | deny | wait   (unattended default: defer)
+  approval_ttl_days: 7
+  grants:
+    - tools: ["write_file", "edit_file"]
+      paths: ["./sandbox/**"]
+      max_uses_per_run: 20
+      expires: 2026-09-19
+```
+
+Evaluation is pure code (scope + counter checks). A model may **narrow or
+escalate** a decision, never widen it. Routine actions die here; this layer is
+the approval-fatigue answer.
+
+### Layer 2 — Divert, don't block (structure) [P0 park; P2 divert]
+
+For `ask` outcomes:
+
+- **Isolatable actions** (file writes) → P2: execute speculatively in an
+  isolated git worktree (the `MUR_PARALLEL_EXEC` machinery); the
+  `HitlRequest` carries the **resulting diff**; approval = merge. The human
+  reviews bytes, not intentions — and pin drift is impossible because the
+  approved artifact is the change itself.
+- **Irreversible actions** (external POST, spend, non-compensable deletes) →
+  P0: park immediately. The step is `blocked`, independent branches continue,
+  and the run terminates as `blocked(waiting_approval)` — a first-class,
+  non-failed outcome that `--loop` treats as "stop, don't burn budget".
+
+### Layer 3 — The human, asynchronously (escalation ladder) [P0 surfaces; P1 ladder]
+
+`HitlRequest` events already reach the Hub "Needs You" inbox
+(`hitl_pending_list`) and phones (the daemon's `watch_channels` broadcasts
+`channel.updated` on every event append). P0 adds precise CLI hints
+(`mur channel approve <cid> <hitl_id>`) at the point of deferral and in
+`mur job/fleet status`. P1 adds the Temporal-style ladder: push (companion /
+mobile / Slack) → remind at T+x → per-fleet expiry action (`deny` default,
+`escalate` optional).
+
+### The learning loop [P3]
+
+Approval history is training data. When a class of action is approved N
+consecutive times, the harvest pipeline **proposes** a standing grant into the
+`mur out` inbox. A human review turns repeated Layer-3 labor into Layer-1
+policy. Proposals are never auto-activated.
+
+## P0 mechanics (this implementation)
+
+### Gate: `Deferred` outcome + durable matching
+
+`gate()` gains a defer mode and, in **both** modes, a resume scan:
+
+1. Compute `action_hash` (tool, input, channel, step, agent — deterministic).
+2. **Resume scan**: newest valid `HitlResponse` whose *payload*
+   `action_hash` matches, signature verifies per-actor, and age ≤ TTL
+   (7 days, `HITL_APPROVAL_TTL`) → return its allow/deny immediately. No new
+   request. This is what lets a re-run (or the next loop iteration) pass a
+   gate approved overnight — and what stops a denied action from re-asking
+   every iteration.
+3. **Dedup scan** (defer mode): an unanswered `HitlRequest` with the same
+   `action_hash` → return `Deferred` with the *existing* `hitl_id`; do not
+   write a duplicate. (Fixes the pile-of-duplicates bug: `hitl_id` is minted
+   per call, so matching must be by `action_hash`, never by `hitl_id`.)
+4. Otherwise write the `HitlRequest` + `InputRequired` transition (existing
+   code) and either poll (wait mode, unchanged 300 s semantics) or return
+   `Deferred` (defer mode).
+
+`GateDecision` gains `deferred: bool` (invariant: `deferred ⇒ !allow`).
+Mode selection: `DagExecOptions.hitl_defer: Option<bool>`; `None` = auto —
+defer when stdin is not a TTY (unattended by definition: daemon ticks,
+schedules, cron), wait when interactive. Explicit config lands in P1's
+`fleet.yaml` `hitl.mode`.
+
+Security invariants preserved: responses verify per-actor signatures
+(v3d-2); the execute boundary still re-verifies the pin (`hitl_drift`
+fail-closed); a resumed approval only ever matches the **exact** action bytes
+it approved; TTL bounds temporal staleness; `--yes` remains unreachable from
+unattended fleet paths.
+
+### Executor: blocked is a first-class outcome
+
+- A `Deferred` gate returns a `StepResult` marked `blocked` — **not** a
+  failure: `on_failure` handling does not fire, and the abort path is not
+  taken.
+- Dependents of a blocked step are transitively marked blocked without
+  executing (rank-order makes a direct-dependency check sufficient).
+  Independent branches run to completion.
+- Terminal accounting: any blocked step and no failed step → the run record
+  is `State::Blocked` (which already exists, renders as "blocked", and is
+  non-terminal), and the channel **stays** `InputRequired` (the gate's own
+  transition; the `Completed`/`Failed` finalizer is skipped).
+- The no-channel `needs_approval` skip-as-success path now reports the step
+  as skipped-not-approved instead of silently succeeding.
+
+### Loop: stop on blocked
+
+A `--loop` iteration whose run ends blocked stops the loop with the pending
+approval ids and the approve command. Rationale: with defer the gate itself is
+nearly free, but each iteration still burns router/member LLM calls; looping
+against an unanswered gate converts budget into nothing. The human approves,
+then re-runs (`mur fleet run` / next schedule tick); the v3c resume cursor
+skips completed steps and the resume scan releases the gate.
+
+### Runtime tool gate (fleet members)
+
+Unchanged in P0 (a mid-turn LLM pause is a checkpointing problem — P2 at the
+earliest). P0 relies on: requests remain visible via the A2A stream to any
+attached surface, and `hitl.timeout_secs` is per-profile tunable. The P1
+ladder gives these requests a push surface within their window.
+
+## Rejected
+
+- **Blanket `--yes` reachable from unattended paths** — stays rejected
+  (`fleet/run.rs` fail-closed comment; OWASP ASI06).
+- **LLM as final approver** — re-introduces the failure class it gates; models
+  may deny or escalate only.
+- **Adopting an external workflow engine** (Temporal et al.) — the signed
+  channel event log already is the durable state; local-first stays.
+- **Timeout-deny as the only mechanism** — burns the window, kills the
+  request, and teaches users to disable the gate entirely.
+
+## Where this lives in code (P0)
+
+| Concern | Location |
+|---|---|
+| Defer mode, resume/dedup scans, TTL | `mur-core/src/hitl/gate.rs` — `gate(.., defer, ..)`, `scan_prior`, `within_approval_ttl` |
+| Blocked propagation, terminal accounting | `mur-core/src/executor/dag.rs` — `RunOutcome`, `StepResult.blocked`, `StepEventKind::Blocked` |
+| Auto mode selection (TTY) | `mur-core/src/executor/dag.rs` — `unattended()`, `DagExecOptions.hitl_defer` |
+| Job status truthfulness | `mur-common/src/fleet.rs` — `JobStatus::Blocked` (non-terminal); `cmd/fleet/run.rs` |
+| Loop stop-on-blocked | `mur-core/src/cmd/fleet/loop_run.rs` — `LoopStop::AwaitingApproval` |
+| Status rendering | `run_status::State::Blocked` (pre-existing), `cmd/job.rs` |
+
+## P0 implementation notes (deviations worth knowing)
+
+- **`PipelineStatus` gained no variant.** A blocked run reports `Skipped` —
+  it does not claim success, and no serialized enum changed. The precise state
+  lives in the run record (`State::Blocked`), the channel (`InputRequired`),
+  and the job (`JobStatus::Blocked`). Add a `Blocked` variant only if a
+  consumer needs to tell "skipped" from "blocked" through that type.
+- **`JobStatus::Blocked` IS new** and deliberately non-terminal
+  (`is_terminal() == false`), because an approval resumes the job. Without it
+  a blocked fleet run fell through to the `Ok(_)` arm in `cmd/fleet/run.rs`
+  and was recorded `done` — claiming work that never ran.
+- **Blocked-ness is inherited per rank**, by checking each step's direct
+  `depends_on` against the blocked set before the rank spawns. Ranks execute
+  in dependency order, so this transitively covers the subgraph without a
+  separate closure pass.
+- **`unattended()` is resolved once per rank**, not per step: every step in a
+  run must agree on whether a human is watching.
+- **The runtime tool gate is unchanged in P0** — see above.
+

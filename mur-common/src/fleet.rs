@@ -88,12 +88,17 @@ pub fn fleet_name_from_channel_id(channel_id: &str) -> Option<&str> {
     valid_fleet_name(name).then_some(name)
 }
 
-/// Job status lifecycle: queued → running → {done, failed, canceled}.
+/// Job status lifecycle: queued → running → {done, failed, canceled}, with
+/// `blocked` as a non-terminal detour: the run reached an action that needs a
+/// human and stopped there. An approval resumes it, so it is deliberately NOT
+/// terminal — reporting it as done would claim work nobody did, and reporting
+/// it as failed would claim a fault that did not occur.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum JobStatus {
     Queued,
     Running,
+    Blocked,
     Done,
     Failed,
     Canceled,
@@ -115,6 +120,7 @@ impl JobStatus {
         match self {
             JobStatus::Queued => "queued",
             JobStatus::Running => "running",
+            JobStatus::Blocked => "blocked",
             JobStatus::Done => "done",
             JobStatus::Failed => "failed",
             JobStatus::Canceled => "canceled",
