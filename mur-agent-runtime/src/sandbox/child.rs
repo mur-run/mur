@@ -51,8 +51,21 @@ fn spawn_impl(mut cmd: Command, policy: &SandboxPolicy) -> io::Result<Child> {
 
     // cage.spawn(birdcage_cmd) would enforce the policy above, but requires
     // a dedicated single-threaded pre-fork process (see module docs).
-    // For now the cage is built to document intent; the supervisor's
-    // inherited restrictions (Landlock/SBPL) cover the child at the kernel level.
+    // For now the cage is built to document intent.
+    //
+    // What actually confines the child differs by platform, and the
+    // difference is NOT cosmetic:
+    //
+    // - Linux: Landlock and seccomp ARE inherited across `exec`, so the
+    //   child really does run under the supervisor's policy.
+    // - macOS: SBPL is NOT inherited across `exec`. The child runs with the
+    //   user's full privileges — this policy does not reach it at all.
+    //
+    // An earlier version of this comment claimed "the supervisor's inherited
+    // restrictions (Landlock/SBPL) cover the child at the kernel level",
+    // which is true on Linux and false on macOS. Sitting three lines from
+    // `drop(cage)`, it was exactly where a reader stops and concludes this is
+    // fine. Stating both halves is the point.
     drop(cage);
     cmd.spawn()
 }
