@@ -109,6 +109,10 @@ pub struct SandboxPolicy {
     /// the kernel. Read by `mur agent runtime-doctor` to report what the
     /// sandbox neutralised (spec 2026-08-11).
     pub dropped_grants: Vec<PathBuf>,
+    /// Read grants dropped whole for overlapping the credential store or a
+    /// sibling's signing key. Read counterpart of `dropped_grants`; same
+    /// fail-closed rule, reported by `mur agent doctor`.
+    pub dropped_read_grants: Vec<PathBuf>,
 }
 
 impl Default for SandboxPolicy {
@@ -128,6 +132,7 @@ impl Default for SandboxPolicy {
             memory_limit_mb: None,
             launch_chain: crate::sandbox::launch_chain::LaunchChain::default(),
             dropped_grants: Vec::new(),
+            dropped_read_grants: Vec::new(),
         }
     }
 }
@@ -149,7 +154,7 @@ impl SandboxPolicy {
         // dead path recreated or removed from entitlements). Mirrors the
         // fail-closed discipline `resolve_binary_path`/`is_executable_file`
         // already apply to `spawn_allowed_paths` below.
-        let mut fs_read: Vec<PathBuf> = ent
+        let fs_read: Vec<PathBuf> = ent
             .filesystem
             .read
             .iter()
@@ -168,6 +173,33 @@ impl SandboxPolicy {
                 }
             })
             .collect();
+        // Drop any user-declared read grant that reaches the credential store
+        // or a sibling's signing key, BEFORE anything else is added (#850).
+        //
+        // Only the user-declared set is partitioned: everything appended below
+        // — the fleet_run carve-in, the runtime's own central-store reads, the
+        // system paths — is chosen by this function and must never be dropped.
+        // Partitioning the finished list instead would silently discard e.g.
+        // `/private/tmp` whenever `mur_home` happens to nest under a system
+        // read path, which is exactly what a test run surfaced.
+        //
+        // Landlock has no deny rule, so an overlapping grant cannot be carved
+        // and is dropped whole, fail-closed. macOS reaches the same posture the
+        // other way: it installs the grant and re-closes those paths with
+        // `deny file-read*` clauses emitted after every allow (last-match-wins).
+        let launch_chain = crate::sandbox::launch_chain::LaunchChain::new(agent_home);
+        let (kept_reads, dropped_read_grants) =
+            crate::sandbox::linux::partition_read_grants(&fs_read, &launch_chain);
+        for p in &dropped_read_grants {
+            tracing::warn!(
+                path = %p.display(),
+                "filesystem READ entitlement reaches the credential store or a \
+                 sibling signing key; the whole grant is dropped (a protected \
+                 path inside a grant cannot be carved out)"
+            );
+        }
+        let mut fs_read = kept_reads;
+
         let mut fs_write: Vec<PathBuf> = ent
             .filesystem
             .write
@@ -309,6 +341,31 @@ impl SandboxPolicy {
                 }
             }
             for p in [mur_home.join("models.yaml"), mur_home.join("cache")] {
+                if std::fs::metadata(&p).is_ok() && !fs_read.contains(&p) {
+                    fs_read.push(p);
+                }
+            }
+        }
+
+        // The runtime's OWN central-store reads. macOS is allow-default so this
+        // is a no-op there; on Linux Landlock is deny-by-default and WITHOUT
+        // these the runtime cannot read its own configuration —
+        // `Config::load_or_default` silently returns defaults (so the agent
+        // runs on the wrong model), the compress hook never engages, and
+        // `channel/delegate` cannot read a fleet definition. The failure is
+        // silent in every case, which is why it went unnoticed.
+        //
+        // This is not a widening of the trust boundary: these are reads the
+        // runtime already performs unconditionally, enumerated in the audit
+        // (docs/superpowers/specs/2026-08-18-agent-read-confinement-audit.md
+        // §7.1). Existence-checked like every other grant (Issue 16).
+        if let Some(mur_home) = agent_home.parent().and_then(|p| p.parent()) {
+            for p in [
+                mur_home.join("config.yaml"),
+                mur_home.join("compress.yaml"),
+                mur_home.join("compress"),
+                mur_home.join("fleets"),
+            ] {
                 if std::fs::metadata(&p).is_ok() && !fs_read.contains(&p) {
                     fs_read.push(p);
                 }
@@ -534,7 +591,6 @@ impl SandboxPolicy {
                 NetworkOutboundMode::Off => (Some(vec![]), Some(vec![]), false),
             };
 
-        let launch_chain = crate::sandbox::launch_chain::LaunchChain::new(agent_home);
         // Linux Landlock cannot carve a protected path out of a grant (pure
         // allow-list), so any write grant overlapping the launch chain is
         // dropped whole here, fail-closed — and recorded for the runtime-doctor
@@ -557,6 +613,7 @@ impl SandboxPolicy {
             memory_limit_mb: Some(ent.limits.memory_mb),
             launch_chain,
             dropped_grants,
+            dropped_read_grants,
         }
     }
 
@@ -856,6 +913,122 @@ mod tests {
         // Only those two files are denied — the rest of agent_home
         // (running.lock, running.sentinel, stderr.log) stays writable.
         assert!(policy.fs_write.contains(&agent_home));
+    }
+
+    /// The runtime reads `config.yaml` unconditionally (model switch, skills,
+    /// remember, fleet_run). On Linux Landlock is deny-by-default, so without a
+    /// read grant `Config::load_or_default` silently returns DEFAULTS and the
+    /// agent runs on the wrong model with no error anywhere. Same for
+    /// `compress.yaml` (hook never engages) and `fleets/` (delegation cannot
+    /// resolve a fleet). Audit §7.1.
+    #[test]
+    fn the_runtimes_own_central_store_reads_are_granted() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mur_home = tmp.path();
+        let agent_home = mur_home.join("agents").join("mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        std::fs::write(mur_home.join("config.yaml"), "").unwrap();
+        std::fs::write(mur_home.join("compress.yaml"), "").unwrap();
+        std::fs::create_dir_all(mur_home.join("compress")).unwrap();
+        std::fs::create_dir_all(mur_home.join("fleets")).unwrap();
+
+        let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+
+        for name in ["config.yaml", "compress.yaml", "compress", "fleets"] {
+            assert!(
+                policy.fs_read.contains(&mur_home.join(name)),
+                "{name} must be readable or the runtime silently degrades: {:?}",
+                policy.fs_read
+            );
+        }
+    }
+
+    /// ...and the grant is existence-checked like every other one (Issue 16):
+    /// a rule on a path that does not exist destabilizes the profile, so an
+    /// absent `compress.yaml` must not be emitted.
+    #[test]
+    fn absent_central_store_paths_are_not_granted() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mur_home = tmp.path();
+        let agent_home = mur_home.join("agents").join("mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        // Nothing created: no config.yaml, no compress.yaml, no fleets/.
+
+        let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+
+        for name in ["config.yaml", "compress.yaml", "compress", "fleets"] {
+            assert!(
+                !policy.fs_read.contains(&mur_home.join(name)),
+                "{name} does not exist and must not be granted"
+            );
+        }
+    }
+
+    /// The paths the builder itself adds must survive the read partition.
+    ///
+    /// Partitioning the FINISHED `fs_read` instead of just the user-declared
+    /// part silently dropped `/private/tmp` whenever `mur_home` nested under
+    /// it — which is every temp-dir test, and would be a real agent under a
+    /// relocated MUR home. Only a human-declared grant may be dropped, because
+    /// only a human can fix it.
+    #[test]
+    fn the_builders_own_read_paths_survive_an_overbroad_user_grant() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mur_home = tmp.path();
+        let agent_home = mur_home.join("agents").join("mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        std::fs::create_dir_all(mur_home.join("secrets")).unwrap();
+        std::fs::write(mur_home.join("config.yaml"), "").unwrap();
+
+        let mut ent = minimal_entitlements();
+        // Overbroad: contains <mur_home>/secrets, so it is dropped.
+        ent.filesystem.read = vec![mur_home.to_string_lossy().into_owned()];
+        let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
+
+        assert!(policy.dropped_read_grants.contains(&mur_home.to_path_buf()));
+        // ...but the builder's own additions are still there.
+        assert!(
+            policy.fs_read.contains(&mur_home.join("config.yaml")),
+            "the runtime's own config read was collateral damage: {:?}",
+            policy.fs_read
+        );
+        for sys in system_read_paths() {
+            assert!(
+                policy.fs_read.contains(&sys),
+                "system read path {} was dropped: {:?}",
+                sys.display(),
+                policy.fs_read
+            );
+        }
+    }
+
+    /// A read grant that reaches the credential store is dropped whole and
+    /// RECORDED, so `mur agent doctor` can say so instead of the agent finding
+    /// out from an errno.
+    #[test]
+    fn an_overbroad_read_grant_is_recorded_as_dropped() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mur_home = tmp.path();
+        let agent_home = mur_home.join("agents").join("mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        std::fs::create_dir_all(mur_home.join("secrets")).unwrap();
+        let skills = mur_home.join("skills");
+        std::fs::create_dir_all(&skills).unwrap();
+
+        let mut ent = minimal_entitlements();
+        ent.filesystem.read = vec![
+            mur_home.to_string_lossy().into_owned(),
+            skills.to_string_lossy().into_owned(),
+        ];
+        let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
+
+        assert!(
+            policy.dropped_read_grants.contains(&mur_home.to_path_buf()),
+            "{:?}",
+            policy.dropped_read_grants
+        );
+        // Negative control: the narrow grant is not dropped.
+        assert!(!policy.dropped_read_grants.contains(&skills));
     }
 
     #[test]
