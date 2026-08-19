@@ -43,6 +43,28 @@ pub fn drain_new(queue_file: &Path, start_offset: u64) -> Result<(Vec<Normalized
         return Ok((vec![], start_offset));
     }
     let mut f = std::fs::File::open(queue_file)?;
+
+    // The queue rotates (mur-run/mur#983): past a size cap the live file is
+    // renamed to `.0` and a fresh one starts at zero bytes. A stored offset
+    // then points past the end of the new file — and seeking past EOF is
+    // LEGAL, so the read simply returns nothing. The daemon would consume
+    // silently forever, with no error to notice.
+    //
+    // A file shorter than the offset we hold means it was rotated or
+    // truncated under us; either way the only correct position is the start.
+    // This also covers a manual `> events.jsonl`.
+    let len = f.metadata()?.len();
+    let start_offset = if len < start_offset {
+        tracing::info!(
+            stored_offset = start_offset,
+            file_len = len,
+            "capture queue is shorter than the stored offset — rotated or truncated; resuming from the start"
+        );
+        0
+    } else {
+        start_offset
+    };
+
     f.seek(SeekFrom::Start(start_offset))?;
 
     let mut events = Vec::new();
@@ -97,6 +119,51 @@ mod tests {
             duration_ms: None,
             is_duration_record: false,
         }
+    }
+
+    /// #983 rotates the queue: the live file is renamed away and a fresh one
+    /// starts at zero. A stored offset then points past the end — and seeking
+    /// past EOF is LEGAL, so without this the daemon reads nothing, forever,
+    /// with no error anywhere. It would look exactly like an idle machine.
+    #[test]
+    fn a_rotated_queue_is_read_from_the_start_not_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let q = dir.path().join("events.jsonl");
+
+        // A large "pre-rotation" file, consumed to its end.
+        write_events(&q, &[make_event("old-1"), make_event("old-2")]);
+        let (_first, offset) = drain_new(&q, 0).unwrap();
+        assert!(offset > 0, "nothing was consumed to establish an offset");
+
+        // Rotation: the live file is replaced by a fresh, shorter one.
+        std::fs::remove_file(&q).unwrap();
+        write_events(&q, &[make_event("after-rotation")]);
+
+        let (events, new_offset) = drain_new(&q, offset).unwrap();
+        assert_eq!(
+            events.len(),
+            1,
+            "the post-rotation record was skipped — this is the silent-forever case"
+        );
+        assert_eq!(events[0].query.as_deref(), Some("after-rotation"));
+        assert!(new_offset > 0 && new_offset <= std::fs::metadata(&q).unwrap().len());
+    }
+
+    /// And an unrotated queue must still resume where it left off — resetting
+    /// on every call would re-consume the whole file each tick.
+    #[test]
+    fn an_unrotated_queue_still_resumes_from_the_offset() {
+        let dir = tempfile::tempdir().unwrap();
+        let q = dir.path().join("events.jsonl");
+
+        write_events(&q, &[make_event("one")]);
+        let (_a, offset) = drain_new(&q, 0).unwrap();
+
+        write_events(&q, &[make_event("two")]);
+        let (events, _) = drain_new(&q, offset).unwrap();
+
+        assert_eq!(events.len(), 1, "resumed from the wrong place");
+        assert_eq!(events[0].query.as_deref(), Some("two"));
     }
 
     #[test]
