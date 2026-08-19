@@ -907,7 +907,17 @@ pub fn cmd_stop(name: &str) -> Result<()> {
         );
     }
     if had_service {
-        println!("Stopped agent '{name}' and unloaded its service");
+        // "unloaded its service" read as permanent, and it is not: the
+        // descriptor stays on disk with RunAtLoad and is not disabled, so the
+        // next login starts the agent again. Say that here, where the user
+        // forms the belief, instead of letting them discover it after a
+        // reboot.
+        println!("Stopped agent '{name}' and unloaded its service for this session");
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        println!(
+            "  It starts again at your next login. To keep it stopped: {}",
+            super::service::lasting_stop_hint(name)
+        );
     } else {
         println!("Stopped agent '{name}'");
     }
