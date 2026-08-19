@@ -381,6 +381,10 @@ pub async fn cmd_fleet_run(
         // router-emitted DAG with risk steps must fail-closed, never auto-approve
         // unattended. See the best-practice audit (OWASP Agentic ASI06).
         yes: false,
+        // Fleet-declared approval policy (`hitl.mode` in fleet.yaml); `None`
+        // keeps the TTY-derived default. It can only tighten: there is no
+        // value here that approves anything.
+        hitl_unanswered: fleet.hitl.as_ref().and_then(|h| h.mode),
         channel_id: Some(fleet.channel_id.clone()),
         run_id: run_id.clone(),
         run_kind: Some(crate::run_status::RunKind::Fleet),

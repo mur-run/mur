@@ -540,6 +540,7 @@ mod tests {
             loop_cfg: None,
             team_id: None,
             parallel: None,
+            hitl: None,
             requires_programs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
@@ -775,6 +776,7 @@ mod tests {
             loop_cfg: None,
             team_id: None,
             parallel: None,
+            hitl: None,
             requires_programs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(s, &fleet).unwrap();
@@ -843,6 +845,7 @@ mod tests {
             loop_cfg: None,
             team_id: None,
             parallel: None,
+            hitl: None,
             requires_programs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(s, &fleet).unwrap();
@@ -1467,6 +1470,7 @@ mod tests {
             loop_cfg: None,
             team_id: None,
             parallel: None,
+            hitl: None,
             requires_programs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(s, &fleet).unwrap();
@@ -1554,6 +1558,7 @@ mod tests {
             loop_cfg: None,
             team_id: None,
             parallel: None,
+            hitl: None,
             requires_programs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(s, &fleet).unwrap();
