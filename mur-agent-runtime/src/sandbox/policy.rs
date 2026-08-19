@@ -372,6 +372,19 @@ impl SandboxPolicy {
             }
         }
 
+        // Peer PUBLIC key material (`identity.pub` + `rotations.jsonl`), so a
+        // sandboxed process can verify signed channel events. macOS already
+        // allows these (allow-default, and the launch chain denies only
+        // `identity.key`); Landlock grants nothing it is not told about, so
+        // without this every peer key is unresolvable and verification
+        // degrades silently — `verify_event` cannot tell "no key" from "no
+        // signature". Public by construction, so this widens nothing.
+        for p in launch_chain.peer_public_key_material() {
+            if !fs_read.contains(&p) {
+                fs_read.push(p);
+            }
+        }
+
         // Standard system read paths: libraries, certs, DNS config.
         let system_read = system_read_paths();
         for p in system_read {
@@ -962,6 +975,36 @@ mod tests {
                 "{name} does not exist and must not be granted"
             );
         }
+    }
+
+    /// Peer public key material reaches `fs_read`, so a sandboxed process can
+    /// actually resolve a peer's key. On Linux this is the difference between
+    /// signature verification working and it silently having nothing to check.
+    #[test]
+    fn peer_public_key_material_is_readable() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mur_home = tmp.path();
+        let agent_home = mur_home.join("agents").join("mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let pm = mur_home.join("agents").join("pm");
+        std::fs::create_dir_all(&pm).unwrap();
+        std::fs::write(pm.join("identity.pub"), b"pub").unwrap();
+        std::fs::write(pm.join("rotations.jsonl"), b"{}").unwrap();
+        std::fs::write(pm.join("identity.key"), b"secret").unwrap();
+
+        let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+
+        assert!(
+            policy.fs_read.contains(&pm.join("identity.pub")),
+            "{:?}",
+            policy.fs_read
+        );
+        assert!(policy.fs_read.contains(&pm.join("rotations.jsonl")));
+        // ...and the private key beside them is still not readable.
+        assert!(
+            !policy.fs_read.contains(&pm.join("identity.key")),
+            "a sibling signing key was granted"
+        );
     }
 
     /// The paths the builder itself adds must survive the read partition.
