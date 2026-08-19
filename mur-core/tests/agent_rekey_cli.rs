@@ -79,7 +79,9 @@ fn rekey_advances_key_version_and_writes_prev() {
 
     // .prev files exist
     assert!(
-        agent_dir.join("identity.key.prev").exists(),
+        mur_common::identity::private_key_dir(&agent_dir)
+            .join("identity.key.prev")
+            .exists(),
         "identity.key.prev missing"
     );
     assert!(

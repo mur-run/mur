@@ -29,7 +29,9 @@ fn agent_create_generates_identity_and_writes_into_profile() {
 
     let agent_dir = mur_home.path().join("agents/test_identity_agent");
     assert!(
-        agent_dir.join("identity.key").exists(),
+        mur_common::identity::private_key_dir(&agent_dir)
+            .join("identity.key")
+            .exists(),
         "identity.key missing"
     );
     assert!(
