@@ -239,6 +239,8 @@ export const zhTW: Table = {
   "installInbox.deny": "拒絕",
   "detail.mcpId": "伺服器 ID",
   "detail.mcpCommand": "指令",
+  "detail.mcpCommandHint":
+    "直接填指令名即可（node、npx、uvx、python3），不需要絕對路徑。只有在 PATH 找不到時才需要「瀏覽…」。",
   "detail.mcpArgs": "參數（以空格分隔）",
   "detail.browse": "瀏覽…",
   "detail.add": "新增",

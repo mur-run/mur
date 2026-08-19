@@ -237,6 +237,8 @@ export const en = {
   "installInbox.deny": "Deny",
   "detail.mcpId": "Server ID",
   "detail.mcpCommand": "Command",
+  "detail.mcpCommandHint":
+    "A bare command works — node, npx, uvx, python3 — no absolute path needed. Browse… only if it is somewhere PATH does not reach.",
   "detail.mcpArgs": "Arguments (space-separated)",
   "detail.browse": "Browse…",
   "detail.add": "Add",
