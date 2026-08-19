@@ -95,6 +95,11 @@ pub struct DagExecOptions<'a> {
     /// explicitly (fleet.yaml `hitl.mode`) when the TTY is a poor proxy for
     /// "somebody is watching".
     pub hitl_unanswered: Option<mur_common::hitl::Unanswered>,
+    /// Risk tiers the run's owner pre-approved (fleet.yaml
+    /// `hitl.auto_approve_tiers`). Empty = every Ask-tier action still needs a
+    /// person. Capped at `write` by `mur_common::hitl::tier_may_be_granted`,
+    /// re-checked inside the gate.
+    pub hitl_auto_approve_tiers: Vec<mur_common::hitl::RiskTier>,
     /// Explicit override of the env classification (P4-ready).
     pub env_class_override: Option<&'a str>,
     /// Variable substitutions: `(name, value)` pairs for `{{name}}` in commands.
@@ -147,6 +152,7 @@ impl<'a> Default for DagExecOptions<'a> {
             input: None,
             yes: false,
             hitl_unanswered: None,
+            hitl_auto_approve_tiers: Vec::new(),
             env_class_override: None,
             variables: vec![],
             device_id: "cli".to_string(),
@@ -819,8 +825,11 @@ async fn execute_step(
             mur_home,
             cid,
             &req,
-            opts.yes,
-            opts.hitl_unanswered.unwrap_or_else(default_unanswered),
+            &crate::hitl::gate::GatePolicy {
+                yes: opts.yes,
+                unanswered: opts.hitl_unanswered.unwrap_or_else(default_unanswered),
+                auto_approve_tiers: opts.hitl_auto_approve_tiers.clone(),
+            },
             None,
             Some(opts.run_id.as_str()),
         )
@@ -1248,6 +1257,7 @@ pub async fn execute_dag(
         let opt_yes = opts.yes;
         // Resolve once per rank, not per step: the default probes the TTY,
         // and every step in a run must agree on whether a human is watching.
+        let opt_hitl_tiers = opts.hitl_auto_approve_tiers.clone();
         let opt_hitl_unanswered = Some(opts.hitl_unanswered.unwrap_or_else(default_unanswered));
         let opt_input = opts.input.clone();
         let opt_env_override = opts.env_class_override.map(|s| s.to_string());
@@ -1271,6 +1281,7 @@ pub async fn execute_dag(
             let chan_id = opt_chan_id.clone();
             let run_id = opt_run_id.clone();
             let on_step = opt_on_step.clone();
+            let hitl_tiers = opt_hitl_tiers.clone();
             let sem = sem.clone();
             let mh = mur_home.to_path_buf();
             handles.push(tokio::task::spawn(async move {
@@ -1282,6 +1293,7 @@ pub async fn execute_dag(
                 let opts_clone = DagExecOptions {
                     yes: opt_yes,
                     hitl_unanswered: opt_hitl_unanswered,
+                    hitl_auto_approve_tiers: hitl_tiers,
                     input: inp,
                     env_class_override: env_override.as_deref(),
                     variables: vars,

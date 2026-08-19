@@ -50,7 +50,19 @@ pub fn load_fleet(mur_home: &Path, name: &str) -> Result<Fleet> {
     let path = fleet_path(mur_home, name);
     let raw = std::fs::read_to_string(&path)
         .with_context(|| format!("fleet '{name}' not found at {}", path.display()))?;
-    serde_yaml::from_str(&raw).with_context(|| format!("parse fleet '{name}'"))
+    let fleet: Fleet =
+        serde_yaml::from_str(&raw).with_context(|| format!("parse fleet '{name}'"))?;
+    // Reject a policy that grants more than config is allowed to grant, at
+    // the moment a run (or daemon tick) would trust it — a fleet that sits on
+    // disk with an invalid grant must not stay silent until the gate quietly
+    // ignores it.
+    fleet
+        .hitl
+        .as_ref()
+        .map(|h| h.validate())
+        .transpose()
+        .map_err(anyhow::Error::msg)?;
+    Ok(fleet)
 }
 
 /// List the names of all persisted fleets (sorted).

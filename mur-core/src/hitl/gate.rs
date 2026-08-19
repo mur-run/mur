@@ -36,6 +36,7 @@ pub struct ActionRequest {
 /// `allow: false`) means nobody answered AND nobody was made to wait: the
 /// request is parked durably in the channel and the caller should mark the
 /// step blocked — not failed — so a later approval can release it.
+#[derive(Debug)]
 pub struct GateDecision {
     pub allow: bool,
     pub deferred: bool,
@@ -62,8 +63,33 @@ pub(crate) fn within_approval_ttl(
     (now - event_ts).num_seconds() <= HITL_APPROVAL_TTL_SECS
 }
 
-/// Gate an action. `yes` auto-approves Ask-tier actions (records an `auto`
-/// HitlResponse for the audit trail). Read tier returns `allow` immediately.
+/// Everything the gate needs to know about the run's approval posture.
+///
+/// Bundled rather than passed as loose arguments so a future knob cannot be
+/// added at a call site without the other two being considered — this is the
+/// struct that decides whether an unattended process acts without a human.
+#[derive(Debug, Clone, Default)]
+pub struct GatePolicy {
+    /// `--yes`: auto-approve every Ask-tier action. Interactive/explicit only;
+    /// unattended fleet paths pass `false` and must keep doing so.
+    pub yes: bool,
+    /// What happens when nobody has answered yet.
+    pub unanswered: Unanswered,
+    /// Tiers the run's owner pre-approved in config. Filtered through
+    /// [`mur_common::hitl::tier_may_be_granted`] on the way in AND checked
+    /// again here, so a hand-edited fleet.yaml that skipped validation still
+    /// cannot grant `destructive`.
+    pub auto_approve_tiers: Vec<RiskTier>,
+}
+
+impl GatePolicy {
+    /// Has this tier been pre-approved for this run?
+    fn grants(&self, tier: RiskTier) -> bool {
+        mur_common::hitl::tier_may_be_granted(tier) && self.auto_approve_tiers.contains(&tier)
+    }
+}
+
+/// Gate an action. Read tier returns `allow` immediately.
 ///
 /// `unanswered` selects what happens when an Ask-tier action has no answer
 /// yet: `Wait` blocks the caller polling for up to `timeout` (attended),
@@ -76,12 +102,16 @@ pub(crate) fn within_approval_ttl(
 ///
 /// Takes `mur_home: &Path` rather than `&ChannelService` so `ChannelService` is
 /// never held across `.await` — keeping the returned future `Send`.
+/// Ordering inside the Ask tier, strictest first: the `Deny` floor, then a
+/// settled human decision for this exact action, then a standing tier grant,
+/// then park-or-wait. A human's explicit "no" therefore outranks a standing
+/// grant — a decision someone actually made about this action beats a blanket
+/// one made in advance about its category.
 pub async fn gate(
     mur_home: &Path,
     channel_id: &str,
     req: &ActionRequest,
-    yes: bool,
-    unanswered: Unanswered,
+    policy: &GatePolicy,
     timeout: Option<Duration>,
     run_id: Option<&str>,
 ) -> Result<GateDecision> {
@@ -110,7 +140,7 @@ pub async fn gate(
             // Policy floor: refuse before looking anything up, so an approval
             // recorded under a looser policy cannot release a gate the fleet
             // has since declared off-limits.
-            if unanswered == Unanswered::Deny {
+            if policy.unanswered == Unanswered::Deny {
                 return Ok(GateDecision {
                     allow: false,
                     deferred: false,
@@ -119,6 +149,11 @@ pub async fn gate(
                 });
             }
             let timeout = timeout.unwrap_or(DEFAULT_TIMEOUT);
+            // Pre-approved by config for this tier. Computed before the scan so
+            // it can also skip a stale pending request left over from before
+            // the grant was written — but deliberately NOT before the scan's
+            // `Settled` arm, so a human's explicit denial still outranks it.
+            let granted = policy.grants(req.tier);
             // Resolve signature-enforcement ONCE here (not deep in the poll
             // loop) so `wait_for_response` is pure w.r.t. config and tests never
             // race on a process-global env var. Only explicit truthy values
@@ -139,7 +174,9 @@ pub async fn gate(
                 Prior::Settled(d) => return Ok(d),
                 // Already parked and unanswered: point at the EXISTING
                 // request rather than writing a second one.
-                Prior::Pending(existing_id) if unanswered == Unanswered::Defer => {
+                Prior::Pending(existing_id)
+                    if !granted && policy.unanswered == Unanswered::Defer =>
+                {
                     return Ok(GateDecision {
                         allow: false,
                         deferred: true,
@@ -194,8 +231,9 @@ pub async fn gate(
             // Park instead of polling. The request is durable and the channel
             // stays `InputRequired`, so the answer can arrive at any time from
             // any surface — nobody is made to wait 5 minutes to learn that
-            // nobody is watching.
-            if unanswered == Unanswered::Defer {
+            // nobody is watching. A granted tier skips this: it has an answer
+            // already, given in advance.
+            if !granted && policy.unanswered == Unanswered::Defer {
                 return Ok(GateDecision {
                     allow: false,
                     deferred: true,
@@ -204,13 +242,22 @@ pub async fn gate(
                 });
             }
 
-            let decision = if yes {
+            let decision = if policy.yes || granted {
+                // Record the auto-approval on the channel even though no human
+                // saw it: "what did this unattended run do without asking me?"
+                // has to be answerable afterwards, and the request+response
+                // pair is where that answer lives.
+                let why = if policy.yes {
+                    "--yes".to_string()
+                } else {
+                    format!("fleet policy: {:?} tier pre-approved", req.tier).to_lowercase()
+                };
                 let resp = HitlResponse {
                     hitl_id: hitl_id.clone(),
                     action_hash: hash.clone(),
                     allow: true,
-                    reason: "--yes".into(),
-                    surface: "auto".into(),
+                    reason: why.clone(),
+                    surface: if policy.yes { "auto" } else { "policy" }.into(),
                 };
                 {
                     let svc = ChannelService::open(mur_home)?;
@@ -228,7 +275,7 @@ pub async fn gate(
                 GateDecision {
                     allow: true,
                     deferred: false,
-                    reason: "auto-approved (--yes)".into(),
+                    reason: format!("auto-approved ({why})"),
                     action_hash: hash.clone(),
                 }
             } else {
@@ -446,8 +493,11 @@ mod tests {
             tmp.path(),
             &ch.id,
             &req(RiskTier::Read),
-            false,
-            Unanswered::Wait,
+            &GatePolicy {
+                yes: false,
+                unanswered: Unanswered::Wait,
+                auto_approve_tiers: vec![],
+            },
             None,
             Some("run-g"),
         )
@@ -473,8 +523,11 @@ mod tests {
             tmp.path(),
             &ch.id,
             &req(RiskTier::Destructive),
-            true,
-            Unanswered::Wait,
+            &GatePolicy {
+                yes: true,
+                unanswered: Unanswered::Wait,
+                auto_approve_tiers: vec![],
+            },
             None,
             Some("run-paused"),
         )
@@ -528,8 +581,11 @@ mod tests {
             tmp.path(),
             &ch.id,
             &r,
-            true,
-            Unanswered::Wait,
+            &GatePolicy {
+                yes: true,
+                unanswered: Unanswered::Wait,
+                auto_approve_tiers: vec![],
+            },
             None,
             Some("run-g"),
         )
@@ -777,8 +833,11 @@ mod tests {
             tmp.path(),
             &ch.id,
             &req(RiskTier::Destructive),
-            false,
-            Unanswered::Defer,
+            &GatePolicy {
+                yes: false,
+                unanswered: Unanswered::Defer,
+                auto_approve_tiers: vec![],
+            },
             None,
             Some("run-1"),
         )
@@ -808,8 +867,11 @@ mod tests {
             tmp.path(),
             &ch.id,
             &req(RiskTier::Destructive),
-            false,
-            Unanswered::Defer,
+            &GatePolicy {
+                yes: false,
+                unanswered: Unanswered::Defer,
+                auto_approve_tiers: vec![],
+            },
             None,
             Some("run-1"),
         )
@@ -825,8 +887,11 @@ mod tests {
             tmp.path(),
             &ch.id,
             &req(RiskTier::Destructive),
-            false,
-            Unanswered::Defer,
+            &GatePolicy {
+                yes: false,
+                unanswered: Unanswered::Defer,
+                auto_approve_tiers: vec![],
+            },
             None,
             Some("run-2"),
         )
@@ -853,8 +918,11 @@ mod tests {
             tmp.path(),
             &ch.id,
             &req(RiskTier::Destructive),
-            false,
-            Unanswered::Defer,
+            &GatePolicy {
+                yes: false,
+                unanswered: Unanswered::Defer,
+                auto_approve_tiers: vec![],
+            },
             None,
             Some("run-1"),
         )
@@ -867,8 +935,11 @@ mod tests {
             tmp.path(),
             &ch.id,
             &req(RiskTier::Destructive),
-            false,
-            Unanswered::Defer,
+            &GatePolicy {
+                yes: false,
+                unanswered: Unanswered::Defer,
+                auto_approve_tiers: vec![],
+            },
             None,
             Some("run-2"),
         )
@@ -896,8 +967,11 @@ mod tests {
                 tmp.path(),
                 &ch.id,
                 &req(RiskTier::Destructive),
-                false,
-                Unanswered::Defer,
+                &GatePolicy {
+                    yes: false,
+                    unanswered: Unanswered::Defer,
+                    auto_approve_tiers: vec![],
+                },
                 None,
                 Some(&format!("run-{run}")),
             )
@@ -926,8 +1000,11 @@ mod tests {
             tmp.path(),
             &ch.id,
             &req(RiskTier::Destructive),
-            false,
-            Unanswered::Defer,
+            &GatePolicy {
+                yes: false,
+                unanswered: Unanswered::Defer,
+                auto_approve_tiers: vec![],
+            },
             None,
             Some("run-1"),
         )
@@ -942,8 +1019,11 @@ mod tests {
             tmp.path(),
             &ch.id,
             &other,
-            false,
-            Unanswered::Defer,
+            &GatePolicy {
+                yes: false,
+                unanswered: Unanswered::Defer,
+                auto_approve_tiers: vec![],
+            },
             None,
             Some("run-2"),
         )
@@ -971,8 +1051,11 @@ mod tests {
             tmp.path(),
             &ch.id,
             &req(RiskTier::Destructive),
-            false,
-            Unanswered::Defer,
+            &GatePolicy {
+                yes: false,
+                unanswered: Unanswered::Defer,
+                auto_approve_tiers: vec![],
+            },
             None,
             Some("run-1"),
         )
@@ -986,8 +1069,11 @@ mod tests {
             tmp.path(),
             &ch.id,
             &req(RiskTier::Destructive),
-            false,
-            Unanswered::Deny,
+            &GatePolicy {
+                yes: false,
+                unanswered: Unanswered::Deny,
+                auto_approve_tiers: vec![],
+            },
             None,
             Some("run-2"),
         )
@@ -1016,8 +1102,11 @@ mod tests {
             tmp.path(),
             &ch.id,
             &req(RiskTier::Destructive),
-            true,
-            Unanswered::Deny,
+            &GatePolicy {
+                yes: true,
+                unanswered: Unanswered::Deny,
+                auto_approve_tiers: vec![],
+            },
             None,
             Some("run-1"),
         )
@@ -1040,5 +1129,133 @@ mod tests {
             now - chrono::Duration::seconds(HITL_APPROVAL_TTL_SECS + 1),
             now
         ));
+    }
+
+    // ── Standing tier grants (P1b) ────────────────────────────────────────
+
+    fn write_policy(grant: bool) -> GatePolicy {
+        GatePolicy {
+            yes: false,
+            unanswered: Unanswered::Defer,
+            auto_approve_tiers: if grant {
+                vec![RiskTier::Write]
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
+    /// A granted tier runs without a human — but the run must stay answerable:
+    /// the auto-approval is recorded on the channel as a request+response pair,
+    /// so "what did this unattended run do without asking me?" has an answer.
+    #[tokio::test]
+    async fn granted_write_tier_runs_and_is_audited() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        drop(svc);
+
+        let mut r = req(RiskTier::Write);
+        r.tool_input = serde_json::json!({ "cmd": "touch ./x" });
+        let d = gate(
+            tmp.path(),
+            &ch.id,
+            &r,
+            &write_policy(true),
+            None,
+            Some("run-1"),
+        )
+        .await
+        .unwrap();
+        assert!(d.allow, "granted tier must not ask: {d:?}");
+        assert!(!d.deferred);
+
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let responses: Vec<HitlResponse> = svc
+            .load_events(&ch.id)
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == EventKind::HitlResponse)
+            .filter_map(|e| serde_json::from_value(e.payload.clone()).ok())
+            .collect();
+        assert_eq!(
+            responses.len(),
+            1,
+            "the auto-approval must be on the channel"
+        );
+        assert!(responses[0].allow);
+        assert!(
+            responses[0].reason.contains("pre-approved"),
+            "reason must say WHERE the authority came from: {:?}",
+            responses[0].reason
+        );
+    }
+
+    /// A human's explicit "no" to THIS action outranks a standing grant for its
+    /// tier — a decision someone actually made beats a blanket one made in
+    /// advance.
+    #[tokio::test]
+    async fn a_human_denial_outranks_a_tier_grant() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        drop(svc);
+
+        // Ask under a no-grant policy, and get denied.
+        gate(
+            tmp.path(),
+            &ch.id,
+            &req(RiskTier::Write),
+            &write_policy(false),
+            None,
+            Some("run-1"),
+        )
+        .await
+        .unwrap();
+        let id = pending_request_ids(tmp.path(), &ch.id).pop().unwrap();
+        answer(tmp.path(), &ch.id, &id, false);
+
+        // Same action, now under a write grant.
+        let d = gate(
+            tmp.path(),
+            &ch.id,
+            &req(RiskTier::Write),
+            &write_policy(true),
+            None,
+            Some("run-2"),
+        )
+        .await
+        .unwrap();
+        assert!(!d.allow, "the human said no; the grant must not override");
+    }
+
+    /// The ceiling is enforced inside the gate too, so a hand-edited
+    /// fleet.yaml that skipped validation still cannot grant `destructive`.
+    #[tokio::test]
+    async fn an_ungrantable_tier_is_ignored_even_if_listed() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        drop(svc);
+
+        let policy = GatePolicy {
+            yes: false,
+            unanswered: Unanswered::Defer,
+            auto_approve_tiers: vec![RiskTier::Destructive],
+        };
+        let d = gate(
+            tmp.path(),
+            &ch.id,
+            &req(RiskTier::Destructive),
+            &policy,
+            None,
+            Some("run-1"),
+        )
+        .await
+        .unwrap();
+        assert!(
+            d.deferred && !d.allow,
+            "destructive must still wait for a person, not honor the config line"
+        );
     }
 }
