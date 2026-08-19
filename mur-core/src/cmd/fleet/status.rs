@@ -121,6 +121,7 @@ mod tests {
             skills: vec![],
             loop_cfg: None,
             parallel: None,
+            hitl: None,
             requires_programs: vec![],
         }
     }

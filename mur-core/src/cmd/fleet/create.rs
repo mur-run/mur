@@ -52,6 +52,9 @@ pub fn cmd_fleet_create(
         skills: vec![],
         loop_cfg: None,
         parallel,
+        // No approval policy stated at creation: the TTY-derived default
+        // applies until someone writes `hitl.mode` into fleet.yaml.
+        hitl: None,
         requires_programs: vec![],
     };
     store::save_fleet(mur_home, &fleet)?;
