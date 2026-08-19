@@ -32,9 +32,13 @@ pub struct ActionRequest {
 }
 
 /// The gate's verdict. `action_hash` is the pin the caller MUST re-verify just
-/// before executing (fail-closed on mismatch).
+/// before executing (fail-closed on mismatch). `deferred: true` (which implies
+/// `allow: false`) means nobody answered AND nobody was made to wait: the
+/// request is parked durably in the channel and the caller should mark the
+/// step blocked — not failed — so a later approval can release it.
 pub struct GateDecision {
     pub allow: bool,
+    pub deferred: bool,
     pub reason: String,
     pub action_hash: String,
 }
@@ -43,8 +47,29 @@ pub struct GateDecision {
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Approvals and denials settle a gate for this long. Content staleness is
+/// already handled by the hash pin (any input change = a different hash); the
+/// TTL bounds TIME staleness, so a weeks-old approval cannot release a gate
+/// nobody remembers granting.
+pub(crate) const HITL_APPROVAL_TTL_SECS: i64 = 7 * 24 * 60 * 60;
+
+/// Pure TTL predicate — split out so the boundary is testable without
+/// backdating channel events.
+pub(crate) fn within_approval_ttl(
+    event_ts: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    (now - event_ts).num_seconds() <= HITL_APPROVAL_TTL_SECS
+}
+
 /// Gate an action. `yes` auto-approves Ask-tier actions (records an `auto`
 /// HitlResponse for the audit trail). Read tier returns `allow` immediately.
+///
+/// `defer` selects what happens when an Ask-tier action has no answer yet:
+/// `false` blocks the caller polling for up to `timeout` (attended);
+/// `true` parks the request and returns `deferred` at once (unattended).
+/// Either way a settled decision for the same `action_hash` — from any earlier
+/// run, inside the TTL — releases the gate without asking again.
 ///
 /// Takes `mur_home: &Path` rather than `&ChannelService` so `ChannelService` is
 /// never held across `.await` — keeping the returned future `Send`.
@@ -53,6 +78,7 @@ pub async fn gate(
     channel_id: &str,
     req: &ActionRequest,
     yes: bool,
+    defer: bool,
     timeout: Option<Duration>,
     run_id: Option<&str>,
 ) -> Result<GateDecision> {
@@ -67,22 +93,50 @@ pub async fn gate(
     match default_mode(req.tier) {
         HitlMode::Auto => Ok(GateDecision {
             allow: true,
+            deferred: false,
             reason: "read-tier: auto".into(),
             action_hash: hash,
         }),
         HitlMode::Deny => Ok(GateDecision {
             allow: false,
+            deferred: false,
             reason: "policy: deny".into(),
             action_hash: hash,
         }),
         HitlMode::Ask => {
-            let hitl_id = format!("hitl-{}", uuid::Uuid::now_v7());
             let timeout = timeout.unwrap_or(DEFAULT_TIMEOUT);
             // Resolve signature-enforcement ONCE here (not deep in the poll
             // loop) so `wait_for_response` is pure w.r.t. config and tests never
             // race on a process-global env var. Only explicit truthy values
             // enable enforcement: `=0` / `=false` must NOT turn it on.
             let require_sig = crate::channel_verify::require_sig_from_env();
+
+            // What does this channel already say about THIS EXACT action?
+            // Keyed on `action_hash`, never on `hitl_id`: the id is minted
+            // fresh on every call, so an id-keyed lookup can never see the
+            // answer a human gave to the previous run — the defect that made
+            // late approval impossible and piled up duplicate requests, one
+            // per loop iteration, all asking the same question.
+            match scan_prior(mur_home, channel_id, &hash, require_sig)? {
+                // Settled (approved or denied) and still inside the TTL:
+                // release the gate now. This is what lets an overnight
+                // approval be picked up by the next run, and what stops a
+                // denial from re-asking every iteration.
+                Prior::Settled(d) => return Ok(d),
+                // Already parked and unanswered: point at the EXISTING
+                // request rather than writing a second one.
+                Prior::Pending(existing_id) if defer => {
+                    return Ok(GateDecision {
+                        allow: false,
+                        deferred: true,
+                        reason: format!("awaiting approval ({existing_id})"),
+                        action_hash: hash,
+                    });
+                }
+                _ => {}
+            }
+
+            let hitl_id = format!("hitl-{}", uuid::Uuid::now_v7());
             let request = HitlRequest {
                 hitl_id: hitl_id.clone(),
                 action_hash: hash.clone(),
@@ -123,6 +177,19 @@ pub async fn gate(
                 )?;
             }
 
+            // Park instead of polling. The request is durable and the channel
+            // stays `InputRequired`, so the answer can arrive at any time from
+            // any surface — nobody is made to wait 5 minutes to learn that
+            // nobody is watching.
+            if defer {
+                return Ok(GateDecision {
+                    allow: false,
+                    deferred: true,
+                    reason: format!("awaiting approval ({hitl_id})"),
+                    action_hash: hash,
+                });
+            }
+
             let decision = if yes {
                 let resp = HitlResponse {
                     hitl_id: hitl_id.clone(),
@@ -146,6 +213,7 @@ pub async fn gate(
                 }
                 GateDecision {
                     allow: true,
+                    deferred: false,
                     reason: "auto-approved (--yes)".into(),
                     action_hash: hash.clone(),
                 }
@@ -165,6 +233,90 @@ pub async fn gate(
             }
             Ok(decision)
         }
+    }
+}
+
+/// What the channel already knows about one specific action.
+enum Prior {
+    /// A human (or `--yes`) settled this exact action, recently enough to count.
+    Settled(GateDecision),
+    /// A request for this exact action is parked and unanswered.
+    Pending(String),
+    /// Never asked — or asked and answered too long ago to still count.
+    None,
+}
+
+/// Look up prior HITL traffic for `hash` in one pass over the channel log.
+///
+/// Matching is on `action_hash`, the deterministic function of
+/// (tool, input, channel, step, agent) — NOT on `hitl_id`, which is minted
+/// per call and therefore cannot connect a run to the answer given to an
+/// earlier one. Two consequences fall out of that choice, both wanted:
+/// re-running a workflow picks up an approval granted overnight, and changing
+/// the action's input changes the hash, so no approval is ever replayed
+/// against bytes a human did not see.
+///
+/// Responses are verified per-actor (v3d-2) before they count; an unverifiable
+/// response is ignored exactly as the wait loop ignores it. A response outside
+/// the TTL leaves the action `None` (ask again), not `Pending` — its request is
+/// answered, just too long ago to act on.
+fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str, require_sig: bool) -> Result<Prior> {
+    let svc = ChannelService::open(mur_home)?;
+    let events = svc.load_events(channel_id)?;
+    drop(svc);
+
+    let now = chrono::Utc::now();
+    let mut responded: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut settled: Option<GateDecision> = None;
+    let mut pending_id: Option<String> = None;
+
+    for e in &events {
+        match e.kind {
+            EventKind::HitlResponse => {
+                let Ok(r) = serde_json::from_value::<HitlResponse>(e.payload.clone()) else {
+                    continue;
+                };
+                if !crate::channel_verify::verify_event(mur_home, channel_id, e, require_sig) {
+                    continue;
+                }
+                // Answered — even if it later fails the TTL check, so the
+                // request it answers is not re-reported as still pending.
+                responded.insert(r.hitl_id.clone());
+                if r.action_hash == hash && within_approval_ttl(e.ts, now) {
+                    // Later events overwrite earlier ones: the newest decision
+                    // for an action is the one that counts.
+                    settled = Some(GateDecision {
+                        allow: r.allow,
+                        deferred: false,
+                        reason: if r.allow {
+                            format!("approved earlier ({})", r.hitl_id)
+                        } else {
+                            format!("denied earlier ({})", r.hitl_id)
+                        },
+                        action_hash: hash.to_string(),
+                    });
+                }
+            }
+            EventKind::HitlRequest => {
+                let Ok(q) = serde_json::from_value::<HitlRequest>(e.payload.clone()) else {
+                    continue;
+                };
+                if q.action_hash == hash
+                    && crate::channel_verify::verify_event(mur_home, channel_id, e, require_sig)
+                {
+                    pending_id = Some(q.hitl_id);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(d) = settled {
+        return Ok(Prior::Settled(d));
+    }
+    match pending_id {
+        Some(id) if !responded.contains(&id) => Ok(Prior::Pending(id)),
+        _ => Ok(Prior::None),
     }
 }
 
@@ -222,6 +374,7 @@ async fn wait_for_response(
             if echoed != expected_hash {
                 return Ok(GateDecision {
                     allow: false,
+                    deferred: false,
                     reason: "hitl_drift: response action_hash mismatch".into(),
                     action_hash: expected_hash.to_string(),
                 });
@@ -233,6 +386,7 @@ async fn wait_for_response(
                 .unwrap_or(false);
             return Ok(GateDecision {
                 allow,
+                deferred: false,
                 reason: if allow {
                     "approved".into()
                 } else {
@@ -244,6 +398,7 @@ async fn wait_for_response(
         if start.elapsed() >= timeout {
             return Ok(GateDecision {
                 allow: false,
+                deferred: false,
                 reason: "hitl timeout".into(),
                 action_hash: expected_hash.to_string(),
             });
@@ -278,6 +433,7 @@ mod tests {
             &ch.id,
             &req(RiskTier::Read),
             false,
+            false,
             None,
             Some("run-g"),
         )
@@ -304,6 +460,7 @@ mod tests {
             &ch.id,
             &req(RiskTier::Destructive),
             true,
+            false,
             None,
             Some("run-paused"),
         )
@@ -353,7 +510,7 @@ mod tests {
             &r.step_or_call_id,
             &r.agent_id,
         );
-        let d = gate(tmp.path(), &ch.id, &r, true, None, Some("run-g"))
+        let d = gate(tmp.path(), &ch.id, &r, true, false, None, Some("run-g"))
             .await
             .unwrap();
         assert!(d.allow, "--yes auto-approves a high tier");
@@ -538,5 +695,249 @@ mod tests {
             !d.allow,
             "unsigned response must not release when signatures are required"
         );
+    }
+
+    // ── Defer / durable-approval behaviour (unattended HITL, P0) ────────────
+
+    /// Read back the ids of every HitlRequest in a channel, oldest first.
+    fn pending_request_ids(home: &Path, ch: &str) -> Vec<String> {
+        let svc = ChannelService::open(home).unwrap();
+        svc.load_events(ch)
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == EventKind::HitlRequest)
+            .filter_map(|e| serde_json::from_value::<HitlRequest>(e.payload.clone()).ok())
+            .map(|r| r.hitl_id)
+            .collect()
+    }
+
+    /// Answer a parked request the way `mur channel approve` does: echo the
+    /// request's own `action_hash` so the pin re-verify passes.
+    fn answer(home: &Path, ch: &str, hitl_id: &str, allow: bool) {
+        let svc = ChannelService::open(home).unwrap();
+        let req: HitlRequest = svc
+            .load_events(ch)
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == EventKind::HitlRequest)
+            .filter_map(|e| serde_json::from_value::<HitlRequest>(e.payload.clone()).ok())
+            .find(|r| r.hitl_id == hitl_id)
+            .expect("request exists");
+        let resp = HitlResponse {
+            hitl_id: req.hitl_id,
+            action_hash: req.action_hash,
+            allow,
+            reason: "test".into(),
+            surface: "cli".into(),
+        };
+        svc.append(
+            ch,
+            ChannelActor::System,
+            EventKind::HitlResponse,
+            serde_json::to_value(&resp).unwrap(),
+            None,
+        )
+        .unwrap();
+    }
+
+    /// Unattended, an unanswered gate must park immediately — not spend the
+    /// wait window discovering that nobody is watching. Elapsed time is the
+    /// assertion: the old path would sit here for the full 300 s timeout.
+    #[tokio::test]
+    async fn defer_parks_immediately_instead_of_waiting() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        drop(svc);
+
+        let t0 = Instant::now();
+        let d = gate(
+            tmp.path(),
+            &ch.id,
+            &req(RiskTier::Destructive),
+            false,
+            true,
+            None,
+            Some("run-1"),
+        )
+        .await
+        .unwrap();
+
+        assert!(d.deferred && !d.allow, "parked, and never allowed");
+        assert!(
+            t0.elapsed() < Duration::from_secs(5),
+            "must not wait out the gate timeout: {:?}",
+            t0.elapsed()
+        );
+        assert_eq!(pending_request_ids(tmp.path(), &ch.id).len(), 1);
+    }
+
+    /// The point of the whole feature: an approval given AFTER the run gave up
+    /// still releases the gate on the next run. The second run mints a fresh
+    /// `hitl_id`, so this only works because matching is on `action_hash`.
+    #[tokio::test]
+    async fn approval_from_an_earlier_run_releases_a_later_one() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        drop(svc);
+
+        let first = gate(
+            tmp.path(),
+            &ch.id,
+            &req(RiskTier::Destructive),
+            false,
+            true,
+            None,
+            Some("run-1"),
+        )
+        .await
+        .unwrap();
+        assert!(first.deferred);
+
+        // A human answers hours later, from any surface.
+        let id = pending_request_ids(tmp.path(), &ch.id).pop().unwrap();
+        answer(tmp.path(), &ch.id, &id, true);
+
+        let second = gate(
+            tmp.path(),
+            &ch.id,
+            &req(RiskTier::Destructive),
+            false,
+            true,
+            None,
+            Some("run-2"),
+        )
+        .await
+        .unwrap();
+        assert!(second.allow, "the earlier approval must release this run");
+        assert!(!second.deferred);
+        assert_eq!(
+            second.action_hash, first.action_hash,
+            "same action ⇒ same pin"
+        );
+    }
+
+    /// A denial is also durable: re-asking every iteration would be nagging,
+    /// and worse, would let a run eventually catch a distracted "yes".
+    #[tokio::test]
+    async fn denial_persists_and_is_not_re_asked() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        drop(svc);
+
+        gate(
+            tmp.path(),
+            &ch.id,
+            &req(RiskTier::Destructive),
+            false,
+            true,
+            None,
+            Some("run-1"),
+        )
+        .await
+        .unwrap();
+        let id = pending_request_ids(tmp.path(), &ch.id).pop().unwrap();
+        answer(tmp.path(), &ch.id, &id, false);
+
+        let d = gate(
+            tmp.path(),
+            &ch.id,
+            &req(RiskTier::Destructive),
+            false,
+            true,
+            None,
+            Some("run-2"),
+        )
+        .await
+        .unwrap();
+        assert!(!d.allow && !d.deferred, "denied, and not asked again");
+        assert_eq!(
+            pending_request_ids(tmp.path(), &ch.id).len(),
+            1,
+            "no second request written"
+        );
+    }
+
+    /// A loop re-running the same blocked step must not write one request per
+    /// iteration; the human should see the question once.
+    #[tokio::test]
+    async fn repeated_defers_reuse_the_parked_request() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        drop(svc);
+
+        for run in 0..3 {
+            let d = gate(
+                tmp.path(),
+                &ch.id,
+                &req(RiskTier::Destructive),
+                false,
+                true,
+                None,
+                Some(&format!("run-{run}")),
+            )
+            .await
+            .unwrap();
+            assert!(d.deferred);
+        }
+        assert_eq!(
+            pending_request_ids(tmp.path(), &ch.id).len(),
+            1,
+            "three iterations, one question"
+        );
+    }
+
+    /// An approval covers the bytes a human saw. Change the action and the
+    /// hash changes, so the old approval cannot carry it — the gate asks again
+    /// rather than executing something nobody agreed to.
+    #[tokio::test]
+    async fn an_approval_does_not_carry_to_a_different_action() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        drop(svc);
+
+        gate(
+            tmp.path(),
+            &ch.id,
+            &req(RiskTier::Destructive),
+            false,
+            true,
+            None,
+            Some("run-1"),
+        )
+        .await
+        .unwrap();
+        let id = pending_request_ids(tmp.path(), &ch.id).pop().unwrap();
+        answer(tmp.path(), &ch.id, &id, true);
+
+        let mut other = req(RiskTier::Destructive);
+        other.tool_input = serde_json::json!({ "cmd": "rm -rf /" });
+        let d = gate(tmp.path(), &ch.id, &other, false, true, None, Some("run-2"))
+            .await
+            .unwrap();
+        assert!(
+            d.deferred && !d.allow,
+            "a different action must be asked separately"
+        );
+    }
+
+    /// The TTL bounds how long a decision keeps releasing a gate. Content
+    /// staleness is the pin's job; this is the clock's half.
+    #[test]
+    fn approval_ttl_boundary() {
+        let now = chrono::Utc::now();
+        assert!(within_approval_ttl(now, now));
+        assert!(within_approval_ttl(
+            now - chrono::Duration::seconds(HITL_APPROVAL_TTL_SECS - 1),
+            now
+        ));
+        assert!(!within_approval_ttl(
+            now - chrono::Duration::seconds(HITL_APPROVAL_TTL_SECS + 1),
+            now
+        ));
     }
 }
