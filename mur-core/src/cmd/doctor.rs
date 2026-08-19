@@ -600,22 +600,20 @@ pub fn agent_doctor(mur_home: &std::path::Path, name: &str) -> Result<Vec<Check>
         &profile.entitlements.filesystem,
     ));
 
-    #[cfg(target_os = "macos")]
     if !profile.mcp_servers.is_empty() {
-        // Not a fault in this agent — a platform limit that the entitlement
+        // Not a fault in this agent — a granularity limit that the entitlement
         // list does not advertise. It belongs in doctor because this is where
-        // someone lands after asking "why did my MCP server reach a host my
-        // allowlist forbids?", and the honest answer is that the allowlist
-        // never applied to it. `ok: true` on purpose: nothing here is
-        // fixable by the user, and a permanent red would train them to
-        // ignore the whole report.
+        // someone lands after asking "which of my MCP servers can reach what?",
+        // and the answer is "all of them, everything this agent can".
+        // `ok: true` on purpose: nothing here is fixable by the user, and a
+        // permanent red would train them to ignore the whole report.
         out.push(Check::new(
             "sandbox_scope",
             true,
             format!(
-                "entitlements confine the runtime, NOT the {} MCP server(s) it spawns \
-                 — macOS does not inherit SBPL across exec, so those run unconfined \
-                 (Linux inherits Landlock). Scope them with `mur agent mcp set-network`.",
+                "policy is per-agent: all {} MCP server(s) inherit it in full — \
+                 none can be given a narrower cage than the agent itself. \
+                 Scope network reach per server with `mur agent mcp set-network`.",
                 profile.mcp_servers.len()
             ),
         ));
@@ -883,15 +881,13 @@ mod tests {
         );
     }
 
-    /// macOS does not inherit SBPL across `exec`, so an agent's entitlements
-    /// stop at the runtime and its MCP servers run unconfined. Doctor has to
-    /// say so — it is where someone lands after asking why a server reached a
-    /// host the allowlist forbids. Reported as OK, not a failure: it is a
-    /// platform limit the user cannot fix, and a permanent red trains people
-    /// to ignore the report.
-    #[cfg(target_os = "macos")]
+    /// A spawned MCP server inherits the agent's sandbox in full, so the
+    /// policy is per-agent and not per-server. Doctor has to say so — it is
+    /// where someone lands after asking which of their servers can reach what.
+    /// Reported as OK, not a failure: it is a granularity limit the user
+    /// cannot fix, and a permanent red trains people to ignore the report.
     #[test]
-    fn agent_doctor_states_that_mcp_children_are_unconfined() {
+    fn agent_doctor_states_that_policy_is_per_agent_not_per_server() {
         let tmp = tempfile::TempDir::new().unwrap();
         let mur_home = tmp.path().to_path_buf();
         let agent_dir = mur_home.join("agents").join("scoped");
@@ -917,17 +913,16 @@ mod tests {
             .iter()
             .find(|c| c.name == "sandbox_scope")
             .expect("expected a sandbox_scope check");
-        assert!(c.ok, "a platform limit is not this agent's fault");
+        assert!(c.ok, "a granularity limit is not this agent's fault");
         assert!(
-            c.detail.contains("unconfined"),
-            "must name the actual state: {}",
+            c.detail.contains("per-agent") && c.detail.contains("narrower"),
+            "must name the actual limit — shared scope, not absent scope: {}",
             c.detail
         );
     }
 
     /// No MCP servers, nothing spawned, nothing to warn about — the note must
     /// not become background noise on every agent.
-    #[cfg(target_os = "macos")]
     #[test]
     fn agent_doctor_is_silent_about_scope_without_mcp_servers() {
         let tmp = tempfile::TempDir::new().unwrap();

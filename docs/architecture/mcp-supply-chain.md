@@ -98,7 +98,11 @@ It is a command rather than a startup check because it costs a full reinstall. R
 
 **"The same code", never "safe code".** What bounds the damage from a compromised MCP server is the agent's entitlements and sandbox, not its hash. A vendored, signed, provenance-carrying server still runs with everything that agent was granted.
 
-**And on macOS, that bound does not exist for MCP servers at all.** SBPL is not inherited across `exec`, so a server the runtime spawns runs with the *user's* privileges — not the agent's entitlements. Linux is different in kind, not degree: Landlock and seccomp ARE inherited, so there the child really does run under the agent's policy. Until the pre-fork launcher lands (`mur-agent-runtime/src/sandbox/child.rs` names the design and the one call to activate), installing an MCP server on macOS is a trust decision about the whole machine, and no amount of pinning changes that. `mur agent perm show` and `mur agent doctor <name>` both say so rather than letting the entitlement list imply otherwise.
+**And the bound is per-AGENT, not per-server.** A spawned MCP server inherits the agent's sandbox in full — Landlock/seccomp on Linux, a seatbelt sandbox across `fork`+`exec` on macOS (the mechanism `sandbox-exec(1)` is built on; verified empirically, see `mur-agent-runtime/src/sandbox/child.rs`). Ordering holds it: the supervisor seals before the MCP pool is built, and the pool spawns lazily on first tool use.
+
+What does not exist is granularity: no server can be given a *narrower* cage than the agent itself, because that needs a second `sandbox_init` in the child — the pre-fork launcher tracked in `child.rs`. So installing an MCP server grants it everything that agent was granted, and no amount of pinning changes that. `mur agent perm show` and `mur agent doctor <name>` both say so rather than letting the entitlement list imply per-server scoping.
+
+> An earlier revision of this section claimed macOS children were unconfined. That was wrong — it restated a code comment nobody had tested. The empirical check is in `child.rs`; re-run it before restating either way.
 
 The open follow-on is to connect the two: a server whose provenance cannot be verified is a reason to suggest narrower entitlements at install time — protection that still works when detection fails.
 

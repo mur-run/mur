@@ -14,18 +14,39 @@ use std::process::{Child, Command};
 ///    so the assert would fire.  Children inherit the supervisor's own
 ///    Landlock / seccomp restrictions (B1 Tasks 2–3).
 ///
-/// 2. **macOS**: SBPL (`sandbox_init`/`sandbox_init_with_parameters`) is NOT
-///    inherited across `exec`.  Unlike Landlock on Linux, the SBPL policy
-///    applied to the supervisor is not propagated to spawned children.
-///    **macOS children spawned here are therefore unconfined.**  `cage.spawn`
-///    is not used because it calls `sandbox_init()` on the *calling* process
-///    (re-initialising the already-applied supervisor policy, which is
-///    undefined behaviour).  A dedicated pre-fork single-threaded launcher
-///    subprocess is required to confine macOS children at spawn time; that
-///    work is tracked as a follow-up.
+/// 2. **macOS**: `cage.spawn` would call `sandbox_init()` on the *calling*
+///    process, re-initialising the policy `sandbox::apply` already applied to
+///    the supervisor — undefined behaviour. So the spawn is a plain
+///    `cmd.spawn()`, and the child is confined by INHERITANCE.
 ///
-/// When the supervisor adopts a pre-fork single-threaded launcher subprocess
-/// the `cage.spawn(birdcage_cmd)` call below can be activated.
+/// Children are confined on both platforms, by the supervisor's own policy:
+/// Landlock/seccomp are inherited on Linux, and a macOS seatbelt sandbox is
+/// inherited across `fork` + `exec` (the mechanism `sandbox-exec(1)` is built
+/// on — it sandboxes itself, then execs). Verified empirically:
+///
+/// ```text
+/// $ sandbox-exec -p '(version 1)(allow default)(deny network-outbound)' \
+///     /bin/sh -c 'curl -s -m5 -o /dev/null -w "%{http_code}" https://example.com; echo'
+/// 000          # blocked, through sh's fork AND curl's exec
+/// $ /bin/sh -c 'curl ... ; echo'
+/// 200          # same shape, no sandbox
+/// ```
+///
+/// Ordering makes this hold here: `sandbox::apply` seals the supervisor
+/// (`supervisor.rs`) before the MCP pool is built, and the pool spawns lazily
+/// on first tool use — every MCP server starts after the seal.
+///
+/// **What is actually missing is per-child policy.** A child cannot be given a
+/// NARROWER cage than the agent itself, because that needs a second
+/// `sandbox_init` in the child — hence the pre-fork single-threaded launcher
+/// tracked as a follow-up, after which `cage.spawn(birdcage_cmd)` below can be
+/// activated. Until then the granularity is per-agent, not per-server; the
+/// confinement itself is real.
+///
+/// An earlier version of this doc said macOS children were "unconfined". That
+/// was wrong, and the error escaped into `mur agent perm show`, `mur agent
+/// doctor` and `docs/architecture/mcp-supply-chain.md` before the empirical
+/// check above was run. Do not restate it without re-running that check.
 pub fn spawn_sandboxed(cmd: Command, policy: &SandboxPolicy) -> io::Result<Child> {
     spawn_impl(cmd, policy)
 }
@@ -53,19 +74,10 @@ fn spawn_impl(mut cmd: Command, policy: &SandboxPolicy) -> io::Result<Child> {
     // a dedicated single-threaded pre-fork process (see module docs).
     // For now the cage is built to document intent.
     //
-    // What actually confines the child differs by platform, and the
-    // difference is NOT cosmetic:
-    //
-    // - Linux: Landlock and seccomp ARE inherited across `exec`, so the
-    //   child really does run under the supervisor's policy.
-    // - macOS: SBPL is NOT inherited across `exec`. The child runs with the
-    //   user's full privileges — this policy does not reach it at all.
-    //
-    // An earlier version of this comment claimed "the supervisor's inherited
-    // restrictions (Landlock/SBPL) cover the child at the kernel level",
-    // which is true on Linux and false on macOS. Sitting three lines from
-    // `drop(cage)`, it was exactly where a reader stops and concludes this is
-    // fine. Stating both halves is the point.
+    // The child IS confined — by inheritance, on both platforms: Landlock and
+    // seccomp on Linux, and a macOS seatbelt sandbox across fork+exec (see the
+    // module docs for the empirical check). What the dropped cage would have
+    // added is a NARROWER, per-child policy, which needs the pre-fork launcher.
     drop(cage);
     cmd.spawn()
 }

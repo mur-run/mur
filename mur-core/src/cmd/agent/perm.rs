@@ -31,29 +31,26 @@ pub(super) fn warn_if_running(name: &str) {
     }
 }
 
-/// Warn that these entitlements stop at the runtime on macOS.
+/// Note the ONE thing this entitlement list does not express: granularity.
 ///
-/// SBPL is not inherited across `exec`, so an MCP server the runtime spawns
-/// runs with the user's full privileges — the policy printed above does not
-/// reach it. (Linux children DO inherit Landlock, so this is macOS-only.)
+/// The policy above does reach the MCP servers this agent spawns — children
+/// inherit it (Landlock on Linux, a seatbelt sandbox across fork+exec on
+/// macOS). What it cannot do is give one server a NARROWER cage than the
+/// agent itself, so every server here can reach everything listed above.
 ///
 /// Printed to STDERR, and only when the agent actually spawns children:
 /// `perm show` output is YAML that callers pipe into a parser, and a caveat
 /// that corrupts the data it qualifies is not an improvement.
-fn warn_children_unconfined(profile: &mur_common::AgentProfile) {
-    if !cfg!(target_os = "macos") {
-        return;
-    }
+fn warn_shared_scope(profile: &mur_common::AgentProfile) {
     let n = profile.mcp_servers.len();
     if n == 0 {
         return;
     }
     eprintln!(
-        "note: on macOS these entitlements confine the agent runtime, not the \
-         {n} MCP server(s) it spawns — SBPL is not inherited across exec, so \
-         those child processes run unconfined. Linux children do inherit \
-         Landlock. Scope what a server can reach with `mur agent mcp \
-         set-network`, and treat installing one as the trust decision it is."
+        "note: this policy is per-AGENT. The {n} MCP server(s) below inherit it \
+         in full — there is no way to give one a narrower cage than the agent \
+         itself. Scope a server's network reach with `mur agent mcp \
+         set-network`, and treat installing one as granting it everything above."
     );
 }
 
@@ -80,7 +77,7 @@ pub fn cmd_perm_show(name: &str, section: Option<&str>) -> Result<()> {
     } else {
         print!("{v}");
     }
-    warn_children_unconfined(&profile);
+    warn_shared_scope(&profile);
     Ok(())
 }
 
