@@ -287,6 +287,49 @@ impl LaunchChain {
         })
     }
 
+    /// The paths no read grant may reach: the user's credential store and
+    /// sibling signing keys.
+    ///
+    /// Deliberately NOT `deny_paths()`. That contains the whole `agents/`
+    /// subtree, and a blanket read-deny there fail-closes every multi-agent
+    /// channel — verifying a peer's signed events reads `identity.pub` and
+    /// `rotations.jsonl` from that peer's home (audit §2). This set is exactly
+    /// what macOS emits as `deny file-read*`, so the two backends refuse the
+    /// same reads instead of diverging.
+    ///
+    /// Inherits `sibling_signing_keys`' after-seal gap: an agent created later
+    /// is not enumerated here either. Same reason, same fix (move private keys
+    /// out of the agents tree).
+    fn read_protected_paths(&self) -> Vec<PathBuf> {
+        let mut out = self.credential_paths();
+        out.extend(self.sibling_signing_keys());
+        out
+    }
+
+    /// Split READ grants into those the sandbox can install and those it must
+    /// drop whole — the counterpart of [`Self::partition_grants`].
+    ///
+    /// Same Landlock reasoning as the write side: a pure allow-list has no deny
+    /// rule, so a protected path inside a grant cannot be carved out and the
+    /// grant is dropped entire, fail-closed. Without this a broad `fs_read`
+    /// (`~/.mur`, or `~` itself) hands an agent the credential store outright,
+    /// while the identical write grant is refused — the divergence #850 names.
+    ///
+    /// The agent's own home is exempt, as on the write side: it must read its
+    /// own profile and state. macOS tier-3 self-protection (own `identity.key`
+    /// / `profile.yaml`) is emitted separately and is unaffected.
+    pub fn partition_read_grants(&self, grants: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
+        let protected = self.read_protected_paths();
+        grants.iter().cloned().partition(|g| {
+            if g.starts_with(self.agent_self_home()) {
+                return true;
+            }
+            !protected
+                .iter()
+                .any(|p| p.starts_with(g) || g.starts_with(p))
+        })
+    }
+
     /// Sibling signing keys, as concrete paths for backends that need a list
     /// rather than a predicate. The rule is `protects_read`'s; this is the
     /// enforcement side of it, which until now had no caller — the predicate
@@ -490,6 +533,71 @@ mod tests {
                 p.display()
             );
         }
+    }
+
+    /// A read grant wide enough to contain the credential store is dropped
+    /// whole, exactly as the write side already drops it. Before #850 the two
+    /// diverged: `fs_write: [~/.mur]` was refused and `fs_read: [~/.mur]` was
+    /// installed, handing out every API key on a backend with no deny rule.
+    #[test]
+    fn a_read_grant_containing_the_credential_store_is_dropped_not_carved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur = tmp.path().to_path_buf();
+        let chain =
+            LaunchChain::for_test(&mur.join("agents").join("alice"), &mur.join("bin"), &mur);
+        let skills = mur.join("skills");
+
+        let (kept, dropped) = chain.partition_read_grants(&[mur.clone(), skills.clone()]);
+
+        // `<mur_home>` contains `<mur_home>/secrets`, and Landlock cannot carve it out.
+        assert_eq!(dropped, vec![mur], "{kept:?}");
+        // Negative control: a grant that contains nothing protected survives intact.
+        assert_eq!(kept, vec![skills]);
+    }
+
+    /// The §2 constraint, as a test: denying a sibling's PRIVATE key must not
+    /// take its PUBLIC verification material with it. `identity.pub` and
+    /// `rotations.jsonl` are what every multi-agent channel reads to verify a
+    /// peer's signed events — dropping those grants fail-closes delegation.
+    #[test]
+    fn a_read_grant_on_peer_public_material_survives_the_signing_key_deny() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur = tmp.path().to_path_buf();
+        let pm = mur.join("agents").join("pm");
+        std::fs::create_dir_all(&pm).unwrap();
+        // sibling_signing_keys() enumerates what is on disk, so the key must exist.
+        std::fs::write(pm.join("identity.key"), b"k").unwrap();
+        let chain =
+            LaunchChain::for_test(&mur.join("agents").join("alice"), &mur.join("bin"), &mur);
+
+        let (kept, dropped) = chain.partition_read_grants(&[
+            pm.join("identity.key"),
+            pm.join("identity.pub"),
+            pm.join("rotations.jsonl"),
+        ]);
+
+        assert_eq!(dropped, vec![pm.join("identity.key")]);
+        assert_eq!(
+            kept,
+            vec![pm.join("identity.pub"), pm.join("rotations.jsonl")],
+            "public verification material must stay readable or every signed \
+             channel fails closed"
+        );
+    }
+
+    /// The agent's own home is exempt, as on the write side — it must read its
+    /// own profile and state.
+    #[test]
+    fn a_read_grant_on_the_agents_own_home_survives() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur = tmp.path().to_path_buf();
+        let own = mur.join("agents").join("alice");
+        let chain = LaunchChain::for_test(&own, &mur.join("bin"), &mur);
+
+        let (kept, dropped) = chain.partition_read_grants(std::slice::from_ref(&own));
+
+        assert_eq!(kept, vec![own]);
+        assert!(dropped.is_empty());
     }
 
     /// `<tmp>/agents/mur` as agent_home, so mur_home is `<tmp>`.

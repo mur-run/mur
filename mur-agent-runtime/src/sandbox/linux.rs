@@ -35,6 +35,10 @@ pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
     let mut created = ruleset.create().context("create Landlock ruleset")?;
 
     // FS read-only paths. path_beneath_rules() silently skips non-existent paths.
+    // Already partitioned at profile-build time against the credential store
+    // and sibling signing keys (#850) — and partitioned THERE rather than here
+    // because only the user-declared grants may be dropped; the system read
+    // paths in this list are chosen by the builder and must always survive.
     if !policy.fs_read.is_empty() {
         let read_rules = path_beneath_rules(policy.fs_read.iter(), AccessFs::from_read(abi));
         created = created.add_rules(read_rules).context("add fs_read rules")?;
@@ -152,6 +156,15 @@ pub(crate) fn partition_write_grants(
     chain: &LaunchChain,
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
     chain.partition_grants(grants)
+}
+
+/// Read counterpart of [`partition_write_grants`]. Same shape, different
+/// protected set — see `LaunchChain::partition_read_grants`.
+pub(crate) fn partition_read_grants(
+    grants: &[PathBuf],
+    chain: &LaunchChain,
+) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    chain.partition_read_grants(grants)
 }
 
 #[cfg(test)]

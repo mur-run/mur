@@ -434,31 +434,57 @@ fn check_dropped_launch_chain_grants(
     agent_home: &std::path::Path,
 ) -> Check {
     let chain = mur_agent_runtime::sandbox::launch_chain::LaunchChain::new(agent_home);
-    let expanded: Vec<std::path::PathBuf> = fs
-        .write
-        .iter()
-        .map(|s| mur_agent_runtime::sandbox::policy::expand_entitlement_path(s))
-        .collect();
-    let (_kept, dropped) = chain.partition_grants(&expanded);
+    let expand = |v: &Vec<String>| -> Vec<std::path::PathBuf> {
+        v.iter()
+            .map(|s| mur_agent_runtime::sandbox::policy::expand_entitlement_path(s))
+            .collect()
+    };
+    let writes = expand(&fs.write);
+    let reads = expand(&fs.read);
+    let (_kept, dropped) = chain.partition_grants(&writes);
+    // Reads are partitioned against a DIFFERENT protected set (the credential
+    // store and sibling signing keys, not the launch chain), so a path may be
+    // fine to write-grant and refused to read-grant. Reported together because
+    // the user-visible consequence is identical: the grant silently vanishes.
+    let (_kept_r, dropped_reads) = chain.partition_read_grants(&reads);
 
-    if dropped.is_empty() {
+    if dropped.is_empty() && dropped_reads.is_empty() {
         return Check::new(
             "grant_scope",
             true,
             format!(
-                "{} write grant(s), none overlap the launch chain",
-                expanded.len()
+                "{} write + {} read grant(s), none overlap a protected path",
+                writes.len(),
+                reads.len()
             ),
         );
     }
-    let names: Vec<String> = dropped.iter().map(|p| p.display().to_string()).collect();
+    let mut parts: Vec<String> = Vec::new();
+    if !dropped.is_empty() {
+        let names: Vec<String> = dropped.iter().map(|p| p.display().to_string()).collect();
+        parts.push(format!(
+            "{} write grant(s) contain a launch-chain path: {}",
+            dropped.len(),
+            names.join(", ")
+        ));
+    }
+    if !dropped_reads.is_empty() {
+        let names: Vec<String> = dropped_reads
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        parts.push(format!(
+            "{} read grant(s) contain the credential store or a sibling signing key: {}",
+            dropped_reads.len(),
+            names.join(", ")
+        ));
+    }
     Check::new(
         "grant_scope",
         false,
         format!(
-            "{} write grant(s) contain a launch-chain path and are DROPPED WHOLE by the sandbox (Landlock cannot carve one out): {}. Grant the specific subdirectory instead.",
-            dropped.len(),
-            names.join(", ")
+            "{} and are DROPPED WHOLE by the sandbox (Landlock cannot carve one out). Grant the specific subdirectory instead.",
+            parts.join("; ")
         ),
     )
 }
@@ -672,6 +698,30 @@ mod tests {
             "a swallowing grant must fail the check: {}",
             c.detail
         );
+        assert!(c.detail.contains("DROPPED WHOLE"), "{}", c.detail);
+    }
+
+    /// The read side of the same check. A read grant reaching the credential
+    /// store is dropped by the sandbox exactly as an overbroad write grant is,
+    /// and the user needs to be told — before #850 nothing reported it, and on
+    /// Linux nothing stopped it either.
+    #[test]
+    fn a_read_grant_that_reaches_the_credential_store_is_reported() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mur_home = tmp.path();
+        let agent_home = mur_home.join("agents").join("alice");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        std::fs::create_dir_all(mur_home.join("secrets")).unwrap();
+
+        let fs = mur_common::agent::FilesystemEntitlement {
+            // Contains <mur_home>/secrets.
+            read: vec![mur_home.display().to_string()],
+            write: vec![],
+            deny: vec![],
+        };
+        let c = check_dropped_launch_chain_grants(&fs, &agent_home);
+        assert!(!c.ok, "an overbroad read grant must fail: {}", c.detail);
+        assert!(c.detail.contains("read grant"), "{}", c.detail);
         assert!(c.detail.contains("DROPPED WHOLE"), "{}", c.detail);
     }
 
