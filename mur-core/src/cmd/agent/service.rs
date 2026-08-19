@@ -54,6 +54,14 @@ pub(super) fn installed_service(name: &str) -> Option<PathBuf> {
 /// Nothing here trusts the exit status: `launchctl bootout` reports failure
 /// when the job simply is not loaded, which is the state we want anyway. The
 /// caller confirms the outcome by looking for a live lock afterwards.
+///
+/// The stop lasts until the next login, not forever: `bootout` (and
+/// `systemctl --user stop`) unload the job from the CURRENT session without
+/// disabling it, and the descriptor stays on disk with `RunAtLoad`, so the
+/// login after this brings the agent back. That is the right default for a
+/// supervised service — but callers must say so rather than let "stopped"
+/// read as permanent. [`lasting_stop_hint`] is the command that does make it
+/// permanent.
 pub(super) fn stop_service(name: &str) -> bool {
     let Some(path) = installed_service(name) else {
         return false;
@@ -103,6 +111,24 @@ pub(super) fn remove_service(name: &str) -> Option<PathBuf> {
             .status();
     }
     Some(path)
+}
+
+/// The command that makes a stop outlive the next login, for the message that
+/// tells the user their stop does not. There is no `mur` subcommand for this
+/// on purpose: disabling is a launchd/systemd-level statement about the job,
+/// and `mur agent remove` (which deletes the descriptor) is the only MUR verb
+/// that currently ends a service for good.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(super) fn lasting_stop_hint(name: &str) -> String {
+    #[cfg(target_os = "macos")]
+    {
+        let uid = unsafe { libc::getuid() };
+        format!("launchctl disable gui/{uid}/run.mur.agent.{name}")
+    }
+    #[cfg(target_os = "linux")]
+    {
+        format!("systemctl --user disable mur-agent-{name}.service")
+    }
 }
 
 pub fn cmd_install_service(name: &str, dry_run: bool) -> Result<()> {
