@@ -32,10 +32,28 @@ pub struct Fleet {
     pub loop_cfg: Option<FleetLoop>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parallel: Option<ParallelConfig>,
+    /// How this fleet handles risk-tiered approvals. Absent → auto: defer when
+    /// nothing can answer (no TTY), wait when a terminal is attached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hitl: Option<FleetHitl>,
     /// External programs this artifact needs at runtime (portable-deps spec).
     /// Absent → empty; resolved by `mur agent/fleet doctor` + `install-deps`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires_programs: Vec<ProgramDep>,
+}
+
+/// Per-fleet approval policy. A floor, never a grant: every field here can only
+/// make an outcome stricter or change WHO waits — none of them approves
+/// anything, and there is deliberately no "auto-approve" knob (that is what
+/// `--yes` is, and it stays unreachable from unattended fleet paths).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FleetHitl {
+    /// What an unanswered Ask-tier gate does. Absent → auto: defer when no TTY
+    /// is attached, wait when one is. Set it explicitly when the TTY is a bad
+    /// proxy for "somebody is watching" — a monitored ops fleet wants `wait`
+    /// even headless; a fleet that must never reach for a human wants `deny`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<crate::hitl::Unanswered>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -208,6 +226,43 @@ mod tests {
         assert!(f.loop_cfg.is_none());
     }
 
+    /// `hitl.mode` must survive a round-trip and stay absent when unset — an
+    /// absent policy means "use the TTY-derived default", which is a different
+    /// statement from any of the three explicit modes.
+    #[test]
+    fn fleet_hitl_mode_parses_and_defaults_to_absent() {
+        let bare: Fleet = serde_yaml::from_str("name: dev\nchannel_id: fleet-dev\n").unwrap();
+        assert!(bare.hitl.is_none(), "no policy stated ⇒ auto");
+
+        let declared: Fleet =
+            serde_yaml::from_str("name: dev\nchannel_id: fleet-dev\nhitl:\n  mode: deny\n")
+                .unwrap();
+        assert_eq!(
+            declared.hitl.as_ref().and_then(|h| h.mode),
+            Some(crate::hitl::Unanswered::Deny)
+        );
+
+        for (yaml, want) in [
+            ("defer", crate::hitl::Unanswered::Defer),
+            ("wait", crate::hitl::Unanswered::Wait),
+            ("deny", crate::hitl::Unanswered::Deny),
+        ] {
+            let f: Fleet = serde_yaml::from_str(&format!(
+                "name: dev\nchannel_id: fleet-dev\nhitl:\n  mode: {yaml}\n"
+            ))
+            .unwrap();
+            assert_eq!(f.hitl.and_then(|h| h.mode), Some(want));
+        }
+
+        // An unknown mode is a typo, not a silent fallback to something looser.
+        assert!(
+            serde_yaml::from_str::<Fleet>(
+                "name: dev\nchannel_id: fleet-dev\nhitl:\n  mode: yolo\n"
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn fleet_yaml_roundtrip_and_router_default() {
         let f = Fleet {
@@ -222,6 +277,7 @@ mod tests {
             skills: vec![],
             loop_cfg: None,
             parallel: None,
+            hitl: None,
             requires_programs: vec![],
         };
         assert_eq!(f.router_or_concierge(), CONCIERGE_AGENT);

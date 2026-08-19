@@ -38,6 +38,29 @@ pub fn default_mode(tier: RiskTier) -> HitlMode {
     }
 }
 
+/// What an Ask-tier gate does when nobody has answered yet.
+///
+/// This is a policy floor, chosen by the run's owner — it may only tighten the
+/// outcome, never approve anything. `Deny` short-circuits before any lookup so
+/// a fleet declared free of risk-tiered work stays that way even if some older
+/// approval for the same action is still on the channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Unanswered {
+    /// Park the request durably and report the step blocked. Nobody waits; an
+    /// approval arriving later releases the gate on a subsequent run. The
+    /// default when no human is watching.
+    Defer,
+    /// Block the caller, polling until the gate timeout. The default when a
+    /// terminal is attached, and the right choice for an unattended run that
+    /// somebody IS watching on another surface.
+    Wait,
+    /// Refuse every Ask-tier action outright, without writing a request. For a
+    /// run that must never reach for a human — the failure is immediate and
+    /// legible instead of a request nobody will answer.
+    Deny,
+}
+
 /// `EventKind::HitlRequest` payload: the durable, pinned approval request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HitlRequest {
