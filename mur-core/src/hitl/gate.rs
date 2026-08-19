@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use mur_channel::ChannelService;
 use mur_common::channel::{ChannelActor, ChannelState, EventKind};
-use mur_common::hitl::{HitlMode, HitlRequest, HitlResponse, RiskTier, default_mode};
+use mur_common::hitl::{HitlMode, HitlRequest, HitlResponse, RiskTier, Unanswered, default_mode};
 
 use crate::channel_writer::ROUTER_AGENT;
 use crate::hitl::pin::action_hash;
@@ -65,10 +65,13 @@ pub(crate) fn within_approval_ttl(
 /// Gate an action. `yes` auto-approves Ask-tier actions (records an `auto`
 /// HitlResponse for the audit trail). Read tier returns `allow` immediately.
 ///
-/// `defer` selects what happens when an Ask-tier action has no answer yet:
-/// `false` blocks the caller polling for up to `timeout` (attended);
-/// `true` parks the request and returns `deferred` at once (unattended).
-/// Either way a settled decision for the same `action_hash` — from any earlier
+/// `unanswered` selects what happens when an Ask-tier action has no answer
+/// yet: `Wait` blocks the caller polling for up to `timeout` (attended),
+/// `Defer` parks the request and returns `deferred` at once (unattended), and
+/// `Deny` refuses without writing a request at all. `Deny` is a policy floor,
+/// so it short-circuits before any lookup — a run declared free of risk-tiered
+/// work stays that way even if an older approval for the same action exists.
+/// Otherwise a settled decision for the same `action_hash` — from any earlier
 /// run, inside the TTL — releases the gate without asking again.
 ///
 /// Takes `mur_home: &Path` rather than `&ChannelService` so `ChannelService` is
@@ -78,7 +81,7 @@ pub async fn gate(
     channel_id: &str,
     req: &ActionRequest,
     yes: bool,
-    defer: bool,
+    unanswered: Unanswered,
     timeout: Option<Duration>,
     run_id: Option<&str>,
 ) -> Result<GateDecision> {
@@ -104,6 +107,17 @@ pub async fn gate(
             action_hash: hash,
         }),
         HitlMode::Ask => {
+            // Policy floor: refuse before looking anything up, so an approval
+            // recorded under a looser policy cannot release a gate the fleet
+            // has since declared off-limits.
+            if unanswered == Unanswered::Deny {
+                return Ok(GateDecision {
+                    allow: false,
+                    deferred: false,
+                    reason: "policy: approvals disabled for this run".into(),
+                    action_hash: hash,
+                });
+            }
             let timeout = timeout.unwrap_or(DEFAULT_TIMEOUT);
             // Resolve signature-enforcement ONCE here (not deep in the poll
             // loop) so `wait_for_response` is pure w.r.t. config and tests never
@@ -125,7 +139,7 @@ pub async fn gate(
                 Prior::Settled(d) => return Ok(d),
                 // Already parked and unanswered: point at the EXISTING
                 // request rather than writing a second one.
-                Prior::Pending(existing_id) if defer => {
+                Prior::Pending(existing_id) if unanswered == Unanswered::Defer => {
                     return Ok(GateDecision {
                         allow: false,
                         deferred: true,
@@ -181,7 +195,7 @@ pub async fn gate(
             // stays `InputRequired`, so the answer can arrive at any time from
             // any surface — nobody is made to wait 5 minutes to learn that
             // nobody is watching.
-            if defer {
+            if unanswered == Unanswered::Defer {
                 return Ok(GateDecision {
                     allow: false,
                     deferred: true,
@@ -433,7 +447,7 @@ mod tests {
             &ch.id,
             &req(RiskTier::Read),
             false,
-            false,
+            Unanswered::Wait,
             None,
             Some("run-g"),
         )
@@ -460,7 +474,7 @@ mod tests {
             &ch.id,
             &req(RiskTier::Destructive),
             true,
-            false,
+            Unanswered::Wait,
             None,
             Some("run-paused"),
         )
@@ -510,9 +524,17 @@ mod tests {
             &r.step_or_call_id,
             &r.agent_id,
         );
-        let d = gate(tmp.path(), &ch.id, &r, true, false, None, Some("run-g"))
-            .await
-            .unwrap();
+        let d = gate(
+            tmp.path(),
+            &ch.id,
+            &r,
+            true,
+            Unanswered::Wait,
+            None,
+            Some("run-g"),
+        )
+        .await
+        .unwrap();
         assert!(d.allow, "--yes auto-approves a high tier");
         assert_eq!(d.action_hash, hash);
         // Check the trail via a fresh open.
@@ -756,7 +778,7 @@ mod tests {
             &ch.id,
             &req(RiskTier::Destructive),
             false,
-            true,
+            Unanswered::Defer,
             None,
             Some("run-1"),
         )
@@ -787,7 +809,7 @@ mod tests {
             &ch.id,
             &req(RiskTier::Destructive),
             false,
-            true,
+            Unanswered::Defer,
             None,
             Some("run-1"),
         )
@@ -804,7 +826,7 @@ mod tests {
             &ch.id,
             &req(RiskTier::Destructive),
             false,
-            true,
+            Unanswered::Defer,
             None,
             Some("run-2"),
         )
@@ -832,7 +854,7 @@ mod tests {
             &ch.id,
             &req(RiskTier::Destructive),
             false,
-            true,
+            Unanswered::Defer,
             None,
             Some("run-1"),
         )
@@ -846,7 +868,7 @@ mod tests {
             &ch.id,
             &req(RiskTier::Destructive),
             false,
-            true,
+            Unanswered::Defer,
             None,
             Some("run-2"),
         )
@@ -875,7 +897,7 @@ mod tests {
                 &ch.id,
                 &req(RiskTier::Destructive),
                 false,
-                true,
+                Unanswered::Defer,
                 None,
                 Some(&format!("run-{run}")),
             )
@@ -905,7 +927,7 @@ mod tests {
             &ch.id,
             &req(RiskTier::Destructive),
             false,
-            true,
+            Unanswered::Defer,
             None,
             Some("run-1"),
         )
@@ -916,13 +938,92 @@ mod tests {
 
         let mut other = req(RiskTier::Destructive);
         other.tool_input = serde_json::json!({ "cmd": "rm -rf /" });
-        let d = gate(tmp.path(), &ch.id, &other, false, true, None, Some("run-2"))
-            .await
-            .unwrap();
+        let d = gate(
+            tmp.path(),
+            &ch.id,
+            &other,
+            false,
+            Unanswered::Defer,
+            None,
+            Some("run-2"),
+        )
+        .await
+        .unwrap();
         assert!(
             d.deferred && !d.allow,
             "a different action must be asked separately"
         );
+    }
+
+    /// `deny` is a policy floor, not a preference: it must refuse even when
+    /// the channel carries a fresh, valid approval for exactly this action.
+    /// If an old approval could out-rank the current policy, declaring a fleet
+    /// off-limits would be advisory only.
+    #[tokio::test]
+    async fn deny_mode_outranks_an_existing_approval() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        drop(svc);
+
+        // Park a request and approve it under the permissive policy.
+        gate(
+            tmp.path(),
+            &ch.id,
+            &req(RiskTier::Destructive),
+            false,
+            Unanswered::Defer,
+            None,
+            Some("run-1"),
+        )
+        .await
+        .unwrap();
+        let id = pending_request_ids(tmp.path(), &ch.id).pop().unwrap();
+        answer(tmp.path(), &ch.id, &id, true);
+
+        // Same action, now under `deny`.
+        let d = gate(
+            tmp.path(),
+            &ch.id,
+            &req(RiskTier::Destructive),
+            false,
+            Unanswered::Deny,
+            None,
+            Some("run-2"),
+        )
+        .await
+        .unwrap();
+        assert!(!d.allow, "policy floor must outrank a prior approval");
+        assert!(!d.deferred, "deny is a verdict, not a parked question");
+        assert_eq!(
+            pending_request_ids(tmp.path(), &ch.id).len(),
+            1,
+            "deny must not write a request nobody can answer"
+        );
+    }
+
+    /// `deny` also must not out-rank `--yes`… by accident in the other
+    /// direction: `yes` is unreachable from unattended fleet paths, but if a
+    /// caller passes both, the floor still wins.
+    #[tokio::test]
+    async fn deny_mode_outranks_yes() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        drop(svc);
+
+        let d = gate(
+            tmp.path(),
+            &ch.id,
+            &req(RiskTier::Destructive),
+            true,
+            Unanswered::Deny,
+            None,
+            Some("run-1"),
+        )
+        .await
+        .unwrap();
+        assert!(!d.allow, "a floor that --yes can lift is not a floor");
     }
 
     /// The TTL bounds how long a decision keeps releasing a gate. Content

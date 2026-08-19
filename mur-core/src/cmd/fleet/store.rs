@@ -98,6 +98,7 @@ mod tests {
             loop_cfg: None,
             team_id: None,
             parallel: None,
+            hitl: None,
             requires_programs: vec![],
         };
         let err = save_fleet(home, &bad).unwrap_err();
@@ -128,6 +129,7 @@ mod tests {
             skills: vec![],
             loop_cfg: None,
             parallel: None,
+            hitl: None,
             requires_programs: vec![],
         };
         save_fleet(home, &f).unwrap();

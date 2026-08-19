@@ -57,24 +57,50 @@ Every risk-tiered action flows through three layers; each layer exists to
 spend less of the next layer's budget. Consent is never removed — it moves to
 the time and granularity where a human can actually give it.
 
-### Layer 1 — Policy first (consent given earlier) [P1]
+### Layer 1 — Policy first (consent given earlier) [P1: mode shipped; grants open]
 
-Named standing grants in `fleet.yaml`, signed with the fleet bundle:
+**Shipped (P1a).** `fleet.yaml` declares what an unanswered gate does:
 
 ```yaml
 hitl:
-  mode: defer            # defer | deny | wait   (unattended default: defer)
-  approval_ttl_days: 7
-  grants:
-    - tools: ["write_file", "edit_file"]
-      paths: ["./sandbox/**"]
-      max_uses_per_run: 20
-      expires: 2026-09-19
+  mode: defer            # defer | wait | deny   (absent = auto by TTY)
 ```
 
-Evaluation is pure code (scope + counter checks). A model may **narrow or
-escalate** a decision, never widen it. Routine actions die here; this layer is
-the approval-fatigue answer.
+`Unanswered::{Defer, Wait, Deny}` (`mur-common/src/hitl.rs`) is a **policy
+floor**: every value either tightens the outcome or changes *who waits*. None
+of them approves anything, and there is deliberately no `auto_approve` knob —
+that is what `--yes` is, and it stays unreachable from unattended fleet paths.
+`Deny` short-circuits **before** the resume scan, so a fleet declared free of
+risk-tiered work stays that way even if the channel still carries a valid
+approval for the same action (locked in by
+`deny_mode_outranks_an_existing_approval` and `deny_mode_outranks_yes`).
+
+Why `mode` at all, when P0's TTY detection already picks correctly for the
+common cases: a TTY is a proxy for "somebody is watching", and it is wrong in
+both directions. A monitored ops fleet running headless has a human on Hub and
+wants `wait`; a fleet that must never reach for a person wants `deny` so the
+failure is immediate and legible instead of a request nobody will answer.
+
+**Not shipped: scoped standing grants.** The approval-fatigue answer proper —
+named grants (tool class × path scope × per-run cap × TTL), signed with the
+fleet bundle, evaluated in pure code with a model able to narrow or escalate
+but never widen. Two things must be decided first, and both are the owner's
+call, not the implementer's:
+
+1. **What is grantable at the DAG gate.** The gate's `tool_name` is `sh` or
+   `intent`, not `write_file` — those are *runtime* tool-gate names. So a
+   fleet-level grant must key on something else: a risk tier ("write is fine
+   here, destructive still asks"), a step id, or a command pattern. Command
+   patterns are the leakiest of the three (`git status; rm -rf /`) and should
+   not be the first shape built.
+2. **Whether a standing grant may cover Ask tier at all**, which is a
+   deliberate loosening of the posture CLAUDE.md pins today ("never
+   blanket-approve risk-tiered steps"). Tier-scoped and fleet-scoped is
+   narrower than `--yes`, but it is still a posture change.
+
+Approval TTL stays a constant (7 days, `HITL_APPROVAL_TTL_SECS`) until someone
+needs otherwise: the pin already bounds *content* staleness, and a
+configurable clock adds a knob with no demand behind it.
 
 ### Layer 2 — Divert, don't block (structure) [P0 park; P2 divert]
 
