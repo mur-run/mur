@@ -130,6 +130,15 @@ impl LaunchChain {
     /// key an unrelated agent will use, and writing `auth.json` is a session
     /// takeover.
     fn protects_credential(&self, path: &Path) -> Option<&'static str> {
+        // Every agent's private key (#850 option (c)). A subtree test, so a
+        // key created after the policy was built is covered — which the
+        // `sibling_signing_keys` enumeration this replaced could not do.
+        if path.starts_with(self.mur_home.join("keys")) {
+            return Some(
+                "an agent's private signing key — reading it is enough to forge \
+                 that agent's signed channel events",
+            );
+        }
         if path.starts_with(self.mur_home.join("secrets")) {
             return Some(
                 "MUR's credential store — provider API keys and the commander \
@@ -244,6 +253,16 @@ impl LaunchChain {
     /// the denied subtree.
     pub fn credential_paths(&self) -> Vec<PathBuf> {
         vec![
+            // Every agent's private key, as ONE subtree (#850 option (c)).
+            // This replaces the `sibling_signing_keys()` enumeration, and with
+            // it the after-seal gap: a key created here after the policy was
+            // sealed is still inside the denied subpath, whereas an enumerated
+            // list could never name it.
+            //
+            // No re-allow for the agent's own key, and none is needed: the
+            // runtime loads its identity at supervisor.rs:174 and seals the
+            // sandbox at :314, so nothing reads a private key after the seal.
+            self.mur_home.join("keys"),
             self.mur_home.join("secrets"),
             self.mur_home.join("auth.json"),
             self.mur_home.join("identity.key"),
@@ -286,72 +305,6 @@ impl LaunchChain {
                 .any(|p| p.starts_with(g) || g.starts_with(p))
         })
     }
-
-    /// Every agent's PUBLIC verification material: `identity.pub` and
-    /// `rotations.jsonl`, for each agent home including this one.
-    ///
-    /// These are the two files `mur_channel::sign::resolve_writer_pubkey` reads
-    /// to check a peer's signed channel events. They are public by
-    /// construction — the published counterpart of the `identity.key` that
-    /// `sibling_signing_keys` denies — so granting them is not a widening.
-    ///
-    /// Needed because Landlock is deny-by-default and `<mur_home>/agents/` is
-    /// in no Linux read grant. Without these a sandboxed `mur` (fleet-enabled
-    /// agents get `spawn(mur)`) cannot resolve any peer key, and
-    /// `channel_verify::verify_event` then treats every event as unverifiable.
-    /// The whole agents subtree cannot simply be granted instead: Landlock has
-    /// no deny rule, so that would hand out every sibling's `identity.key` —
-    /// exactly what #975 closed.
-    ///
-    /// Enumerated at seal time, so it carries the same after-seal gap as
-    /// `sibling_signing_keys`: an agent created later is not listed, and its
-    /// events stay unverifiable to an already-running agent until that one
-    /// restarts. Closing that properly is the same fix — move private keys out
-    /// of the agents tree so the subtree can be granted whole
-    /// (docs/superpowers/specs/2026-08-18-agent-read-confinement-audit.md).
-    pub fn peer_public_key_material(&self) -> Vec<PathBuf> {
-        let agents = self.mur_home.join("agents");
-        let entries = match std::fs::read_dir(&agents) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
-            Err(error) => {
-                // Never silently: without these grants signature verification
-                // cannot succeed, and its failure mode is quiet.
-                tracing::warn!(
-                    dir = %agents.display(),
-                    %error,
-                    "cannot enumerate agents — peer public keys will NOT be \
-                     readable, so signed channel events cannot be verified"
-                );
-                return Vec::new();
-            }
-        };
-        entries
-            .filter_map(Result::ok)
-            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-            // Same guard as `sibling_signing_keys`: a hand-made directory with
-            // an odd name must not reach a generated profile.
-            .filter(|e| match e.file_name().to_str() {
-                Some(n) if mur_common::validate_agent_name(n).is_ok() => true,
-                other => {
-                    tracing::warn!(
-                        entry = ?other,
-                        "skipping malformed entry under agents/ when building \
-                         the peer public-key read list"
-                    );
-                    false
-                }
-            })
-            .flat_map(|e| {
-                let dir = e.path();
-                [dir.join("identity.pub"), dir.join("rotations.jsonl")]
-            })
-            // Landlock drops a rule on a path that does not exist; keep the
-            // list to what is actually there so the grant set is honest.
-            .filter(|p| std::fs::metadata(p).is_ok())
-            .collect()
-    }
-
     /// The paths no read grant may reach: the user's credential store and
     /// sibling signing keys.
     ///
@@ -362,13 +315,14 @@ impl LaunchChain {
     /// what macOS emits as `deny file-read*`, so the two backends refuse the
     /// same reads instead of diverging.
     ///
-    /// Inherits `sibling_signing_keys`' after-seal gap: an agent created later
-    /// is not enumerated here either. Same reason, same fix (move private keys
-    /// out of the agents tree).
+    /// No after-seal gap any more: `keys/` is a fixed subtree in
+    /// `credential_paths()`, so a private key created after the policy sealed
+    /// is inside it by construction. That is what the move bought.
     fn read_protected_paths(&self) -> Vec<PathBuf> {
-        let mut out = self.credential_paths();
-        out.extend(self.sibling_signing_keys());
-        out
+        // Just the credential paths now: `keys/` is one of them, so every
+        // agent's private key is covered as a subtree with no enumeration and
+        // no after-seal gap (#850 option (c) step 3).
+        self.credential_paths()
     }
 
     /// Split READ grants into those the sandbox can install and those it must
@@ -394,68 +348,6 @@ impl LaunchChain {
                 .any(|p| p.starts_with(g) || g.starts_with(p))
         })
     }
-
-    /// Sibling signing keys, as concrete paths for backends that need a list
-    /// rather than a predicate. The rule is `protects_read`'s; this is the
-    /// enforcement side of it, which until now had no caller — the predicate
-    /// was consulted at GRANT time (`mur agent perm`) and never emitted into a
-    /// sandbox profile, so the kernel never enforced it (#850).
-    ///
-    /// KNOWN GAP, deliberate: this enumerates the agents that exist when the
-    /// policy is sealed. An agent created afterwards is not in the list, and
-    /// stays readable to an already-running agent until that one restarts.
-    /// The write side avoids this by denying the whole `agents` subtree, which
-    /// the read side cannot do: verifying a peer's signed events must read
-    /// `identity.pub` and `rotations.jsonl` from that peer's home, so a
-    /// blanket read-deny would fail-close every multi-agent channel. Closing
-    /// the gap properly means moving private keys out of the agents tree —
-    /// see docs/superpowers/specs/2026-08-18-agent-read-confinement-audit.md.
-    pub fn sibling_signing_keys(&self) -> Vec<PathBuf> {
-        let agents = self.mur_home.join("agents");
-        let entries = match std::fs::read_dir(&agents) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
-            Err(error) => {
-                // Never silently: an unreadable agents dir means the profile
-                // is built WITHOUT these denies, i.e. weaker than intended,
-                // and nothing else would say so.
-                tracing::warn!(
-                    dir = %agents.display(),
-                    %error,
-                    "cannot enumerate sibling agents — their signing keys will \
-                     NOT be read-denied in this sandbox profile"
-                );
-                return Vec::new();
-            }
-        };
-        entries
-            .filter_map(Result::ok)
-            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-            // Only well-formed agent names reach the profile text. Names are
-            // `[A-Za-z0-9_-]` by construction (`validate_agent_name`), so this
-            // is normally a no-op — but the profile is assembled by string
-            // concatenation and `fail_closed_on_sandbox_error` defaults to
-            // true, so one hand-made directory with an odd name could
-            // otherwise produce a profile that fails to compile and stop
-            // EVERY agent from starting. Skip it instead, loudly.
-            .filter(|e| match e.file_name().to_str() {
-                Some(n) if mur_common::validate_agent_name(n).is_ok() => true,
-                other => {
-                    tracing::warn!(
-                        entry = ?other,
-                        "skipping malformed entry under agents/ when building \
-                         the sibling-key deny list"
-                    );
-                    false
-                }
-            })
-            .map(|e| e.path())
-            .filter(|p| p != &self.agent_home)
-            .map(|p| p.join("identity.key"))
-            .filter(|p| self.protects_read(p).is_some())
-            .collect()
-    }
-
     fn existing_agent_symlinks(&self) -> Vec<PathBuf> {
         let Ok(entries) = std::fs::read_dir(&self.bin_dir) else {
             return Vec::new();
@@ -600,70 +492,54 @@ mod tests {
         }
     }
 
-    /// Peer PUBLIC material is enumerated; the PRIVATE key next to it is not.
-    /// The pair is the whole point: verification needs one and must never get
-    /// the other, and they live in the same directory.
+    /// The whole point of the move: a key created AFTER the policy was sealed
+    /// is still protected, because `keys/` is a subtree rather than a list.
+    ///
+    /// The enumeration this replaced could not do that — `sibling_signing_keys`
+    /// listed what was on disk at seal time, so a sibling created a minute
+    /// later stayed readable until the reader restarted. That gap is gone, and
+    /// this test is what proves it rather than the comment claiming it.
     #[test]
-    fn peer_public_material_is_listed_and_the_private_key_is_not() {
+    fn a_key_created_after_the_seal_is_still_protected() {
         let tmp = tempfile::tempdir().unwrap();
         let mur = tmp.path().to_path_buf();
-        for name in ["alice", "pm"] {
-            let d = mur.join("agents").join(name);
-            std::fs::create_dir_all(&d).unwrap();
-            std::fs::write(d.join("identity.pub"), b"pub").unwrap();
-            std::fs::write(d.join("rotations.jsonl"), b"{}").unwrap();
-            std::fs::write(d.join("identity.key"), b"secret").unwrap();
-        }
         let chain =
             LaunchChain::for_test(&mur.join("agents").join("alice"), &mur.join("bin"), &mur);
 
-        let listed = chain.peer_public_key_material();
+        // Nothing exists yet — an enumeration built now would be empty.
+        let latecomer = mur.join("keys").join("created-later").join("identity.key");
 
-        for name in ["alice", "pm"] {
-            let d = mur.join("agents").join(name);
-            assert!(listed.contains(&d.join("identity.pub")), "{listed:?}");
-            assert!(listed.contains(&d.join("rotations.jsonl")), "{listed:?}");
-        }
         assert!(
-            !listed.iter().any(|p| p.ends_with("identity.key")),
-            "a signing key must never be granted: {listed:?}"
+            chain.protects_read(&latecomer).is_some(),
+            "a key under keys/ must be refused even though it did not exist \
+             when the chain was built"
         );
+        assert!(chain.protects_write(&latecomer).is_some());
     }
 
-    /// Only files that exist are listed — Landlock silently drops a rule on a
-    /// missing path, so listing one would overstate what was granted.
+    /// ...and the agents tree is now ordinary. Peers read `identity.pub` and
+    /// `rotations.jsonl` there to verify signed events; refusing those
+    /// fail-closes every multi-agent channel (audit §2).
     #[test]
-    fn peer_public_material_skips_files_that_do_not_exist() {
+    fn the_agents_tree_holds_nothing_read_protected_any_more() {
         let tmp = tempfile::tempdir().unwrap();
         let mur = tmp.path().to_path_buf();
-        let d = mur.join("agents").join("pm");
-        std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(d.join("identity.pub"), b"pub").unwrap(); // no rotations.jsonl
         let chain =
             LaunchChain::for_test(&mur.join("agents").join("alice"), &mur.join("bin"), &mur);
+        let pm = mur.join("agents").join("pm");
 
-        let listed = chain.peer_public_key_material();
-
-        assert_eq!(listed, vec![d.join("identity.pub")]);
-    }
-
-    /// A hand-made directory with a name the profile text cannot carry is
-    /// skipped rather than allowed to break every agent's startup — same guard
-    /// as `sibling_signing_keys`.
-    #[test]
-    fn peer_public_material_skips_a_malformed_agent_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mur = tmp.path().to_path_buf();
-        // A space is rejected by `validate_agent_name` ([A-Za-z0-9_-]) and is
-        // legal on every filesystem — unlike a quote, which Windows refuses to
-        // create, making the test panic before it asserts anything.
-        let bad = mur.join("agents").join("we ird");
-        std::fs::create_dir_all(&bad).unwrap();
-        std::fs::write(bad.join("identity.pub"), b"pub").unwrap();
-        let chain =
-            LaunchChain::for_test(&mur.join("agents").join("alice"), &mur.join("bin"), &mur);
-
-        assert!(chain.peer_public_key_material().is_empty());
+        for p in [
+            pm.join("identity.pub"),
+            pm.join("rotations.jsonl"),
+            pm.join("profile.yaml"),
+            mur.join("agents"),
+        ] {
+            assert!(
+                chain.protects_read(&p).is_none(),
+                "{} must be readable — peers verify from it",
+                p.display()
+            );
+        }
     }
 
     /// A read grant wide enough to contain the credential store is dropped
@@ -701,13 +577,16 @@ mod tests {
         let chain =
             LaunchChain::for_test(&mur.join("agents").join("alice"), &mur.join("bin"), &mur);
 
+        // The private key now lives under `keys/pm/`, not beside the public
+        // material — that separation is what lets the deny be a subtree.
+        let pm_key = mur.join("keys").join("pm").join("identity.key");
         let (kept, dropped) = chain.partition_read_grants(&[
-            pm.join("identity.key"),
+            pm_key.clone(),
             pm.join("identity.pub"),
             pm.join("rotations.jsonl"),
         ]);
 
-        assert_eq!(dropped, vec![pm.join("identity.key")]);
+        assert_eq!(dropped, vec![pm_key]);
         assert_eq!(
             kept,
             vec![pm.join("identity.pub"), pm.join("rotations.jsonl")],
