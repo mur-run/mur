@@ -666,6 +666,52 @@ mod tests {
         assert!(chain.peer_public_key_material().is_empty());
     }
 
+    /// Every path the SBPL emitter denies must ALSO be refused by the
+    /// predicate, and vice versa.
+    ///
+    /// `protects_credential`/`protects_capture_store` (predicates) and
+    /// `credential_paths()` (the concrete list the macOS emitter walks) are two
+    /// implementations of one rule. They are consulted by different callers —
+    /// the predicate by the file tools and `mur agent perm`, the list by the
+    /// kernel profile — so a divergence means a path is denied by one and
+    /// allowed by the other, with nothing saying so.
+    ///
+    /// This is not hypothetical: adding `keys/` to the list alone (#850 option
+    /// (c) step 3) left `protects_read` still permitting it, and only a
+    /// behaviour test caught it. Neutering this test the same way reproduces
+    /// that failure exactly.
+    ///
+    /// LIMIT, deliberate: this checks one direction only — list ⊆ predicate.
+    /// The reverse (a predicate branch with no emitted path) cannot be
+    /// enumerated, because the predicates match by prefix and family rather
+    /// than by a closed set. A gap that way is also less severe: the file
+    /// tools still refuse, so the kernel is merely less strict than the tools,
+    /// not the other way round.
+    #[test]
+    fn every_emitted_credential_path_is_also_refused_by_the_predicate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur = tmp.path().to_path_buf();
+        let chain =
+            LaunchChain::for_test(&mur.join("agents").join("alice"), &mur.join("bin"), &mur);
+
+        let mut gaps: Vec<String> = Vec::new();
+        for p in chain.credential_paths() {
+            if chain.protects_read(&p).is_none() {
+                gaps.push(format!("{} (read)", p.display()));
+            }
+            if chain.protects_write(&p).is_none() {
+                gaps.push(format!("{} (write)", p.display()));
+            }
+        }
+
+        assert!(
+            gaps.is_empty(),
+            "the SBPL emitter denies these but the predicate permits them, so \
+             the file tools and `mur agent perm` disagree with the kernel: {}",
+            gaps.join(", ")
+        );
+    }
+
     /// A read grant wide enough to contain the credential store is dropped
     /// whole, exactly as the write side already drops it. Before #850 the two
     /// diverged: `fs_write: [~/.mur]` was refused and `fs_read: [~/.mur]` was
