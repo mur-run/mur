@@ -379,9 +379,17 @@ impl SandboxPolicy {
         // without this every peer key is unresolvable and verification
         // degrades silently — `verify_event` cannot tell "no key" from "no
         // signature". Public by construction, so this widens nothing.
-        for p in launch_chain.peer_public_key_material() {
-            if !fs_read.contains(&p) {
-                fs_read.push(p);
+        // `agents/` WHOLE, not two files per agent (#850 option (c) step 3).
+        // Now that private keys live under `keys/`, the agents tree holds only
+        // public material — profiles, `identity.pub`, `rotations.jsonl`, run
+        // state — so granting it entire is the same posture macOS has always
+        // had under `(allow default)`, and it has no after-seal gap: an agent
+        // created later is inside the subtree, where an enumerated pair of
+        // files per agent could never have named it.
+        if let Some(mur_home) = agent_home.parent().and_then(|p| p.parent()) {
+            let agents = mur_home.join("agents");
+            if std::fs::metadata(&agents).is_ok() && !fs_read.contains(&agents) {
+                fs_read.push(agents);
             }
         }
 
@@ -977,33 +985,31 @@ mod tests {
         }
     }
 
-    /// Peer public key material reaches `fs_read`, so a sandboxed process can
-    /// actually resolve a peer's key. On Linux this is the difference between
-    /// signature verification working and it silently having nothing to check.
+    /// The agents tree is granted WHOLE now, not two files per agent — so a
+    /// peer created after the seal is readable and signature verification does
+    /// not silently degrade (#850 option (c) step 3).
     #[test]
-    fn peer_public_key_material_is_readable() {
+    fn the_agents_tree_is_readable_as_one_grant() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mur_home = tmp.path();
         let agent_home = mur_home.join("agents").join("mur");
         std::fs::create_dir_all(&agent_home).unwrap();
-        let pm = mur_home.join("agents").join("pm");
-        std::fs::create_dir_all(&pm).unwrap();
-        std::fs::write(pm.join("identity.pub"), b"pub").unwrap();
-        std::fs::write(pm.join("rotations.jsonl"), b"{}").unwrap();
-        std::fs::write(pm.join("identity.key"), b"secret").unwrap();
+        std::fs::create_dir_all(mur_home.join("agents").join("pm")).unwrap();
 
         let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
 
         assert!(
-            policy.fs_read.contains(&pm.join("identity.pub")),
-            "{:?}",
+            policy.fs_read.contains(&mur_home.join("agents")),
+            "agents/ must be readable as one grant: {:?}",
             policy.fs_read
         );
-        assert!(policy.fs_read.contains(&pm.join("rotations.jsonl")));
-        // ...and the private key beside them is still not readable.
+        // ...and no private key is inside it to be exposed by that grant.
         assert!(
-            !policy.fs_read.contains(&pm.join("identity.key")),
-            "a sibling signing key was granted"
+            !policy
+                .fs_read
+                .iter()
+                .any(|p| p.starts_with(mur_home.join("keys"))),
+            "keys/ must never appear in a read grant"
         );
     }
 

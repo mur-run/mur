@@ -225,21 +225,18 @@ impl AgentIdentity {
     /// (since we can derive pubkey from it); but also validates that a
     /// present `identity.pub` matches.
     pub fn load(dir: &Path) -> Result<Self, IdentityError> {
-        // Read the new location first, then fall back to the legacy one
-        // in-place under `agents/`. The fallback is not optional: `mur update`
-        // restarts agents one at a time, so during a rollout some agents are
-        // still on code that wrote the key to the old path. Without the
-        // fallback, the first agent to restart after a move would fail to
-        // start. It is removed only once the migration (step 2) has run
-        // everywhere.
-        let key_dir = private_key_dir(dir);
-        let new_path = key_dir.join("identity.key");
-        let legacy_path = dir.join("identity.key");
-        let priv_path = if new_path != legacy_path && fs::metadata(&new_path).is_ok() {
-            new_path
-        } else {
-            legacy_path
-        };
+        // One location only (#850 option (c) step 3). The legacy fallback is
+        // gone because the migration runs at startup, in the same binary,
+        // BEFORE this load — so a key still in `agents/` gets moved and then
+        // found here. A machine upgrading straight past step 2 is covered for
+        // the same reason: the migration is cumulative, not a one-release
+        // window.
+        //
+        // What this does change: if the migration could not move the key, the
+        // load now fails instead of quietly reading the old path. That is the
+        // intent — an unmigrated key is one that is still readable to every
+        // sibling, and it should be loud.
+        let priv_path = private_key_dir(dir).join("identity.key");
         // `Path::exists()` cannot be used here: it answers false for ANY stat
         // failure, so a sandbox deny is indistinguishable from a missing file
         // and the caller's "no key yet" branch runs when the truth is "you may
@@ -855,20 +852,36 @@ mod identity_readability_tests {
         }
     }
 
-    /// A key still in the legacy location must load, because `mur update`
-    /// restarts agents ONE AT A TIME. Without this, the first agent to restart
-    /// after the move would fail to start mid-rollout.
+    /// A key left in the legacy location no longer loads on its own — and that
+    /// is the point of step 3. It becomes loadable by MIGRATING it, which is
+    /// what every agent does at startup before this call.
+    ///
+    /// This replaces step 1's fallback test. Keeping the fallback would have
+    /// meant a private key could sit in the agents tree indefinitely, readable
+    /// to every sibling, with nothing ever saying so.
     #[test]
-    fn a_legacy_key_still_loads_from_the_agents_tree() {
+    fn a_legacy_key_loads_only_after_migration() {
         let tmp = tempfile::tempdir().unwrap();
         let agent = tmp.path().join("agents").join("legacy");
         std::fs::create_dir_all(&agent).unwrap();
         let id = AgentIdentity::generate();
-        // Write it the OLD way, bypassing `save`.
         std::fs::write(agent.join("identity.key"), id.signing.to_bytes()).unwrap();
 
-        let loaded = AgentIdentity::load(&agent).expect("legacy key must still load");
-        assert_eq!(loaded.pubkey_text(), id.pubkey_text());
+        // Before migration: not found at the only location that is consulted.
+        assert!(
+            matches!(
+                AgentIdentity::load(&agent).unwrap_err(),
+                IdentityError::NotFound
+            ),
+            "a key in the legacy location must not be silently honoured"
+        );
+
+        // Startup migrates, then loads — the real sequence.
+        assert!(migrate_private_key(&agent).unwrap());
+        assert_eq!(
+            AgentIdentity::load(&agent).unwrap().pubkey_text(),
+            id.pubkey_text()
+        );
     }
 
     /// ...and when both exist, the new location wins, so a completed migration

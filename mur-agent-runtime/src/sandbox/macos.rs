@@ -234,12 +234,6 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
         lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
     }
 
-    for key in policy.launch_chain.sibling_signing_keys() {
-        let p = sbpl_escape(&key.to_string_lossy());
-        lines.push(format!("(deny file-read* (subpath \"{p}\"))"));
-        lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
-    }
-
     // Process-exec restrictions. Under `(allow default)` any binary is
     // spawnable unless explicitly denied. When spawn_mode is not `Any`
     // (i.e. Allowlist, None, or Strict), deny all exec by default and
@@ -385,69 +379,27 @@ mod tests {
         }
     }
 
-    /// #850: a sibling's signing key must be read-denied. Before this, the
-    /// launch chain denied WRITES on the agents tree and read-denied only the
-    /// agent's OWN protected files — so alice could not read her own
-    /// `identity.key` and could read bob's, which is enough to forge bob's
-    /// signed channel events without writing anything.
+    /// #850 option (c): every agent's private key is denied by ONE subtree
+    /// A malformed directory under `agents/` can no longer reach the profile
+    /// text at all — there is nothing to enumerate.
+    ///
+    /// The guard this replaces skipped odd names so one hand-made directory
+    /// could not produce a profile that fails to compile and stops EVERY agent
+    /// starting. Under a subtree rule that failure mode does not exist, which
+    /// is strictly better than guarding against it.
     #[test]
-    fn a_siblings_signing_key_is_read_denied() {
-        let tmp = tempfile::tempdir().unwrap();
-        let agents = tmp.path().join("agents");
-        for name in ["alice", "bob", "carol"] {
-            std::fs::create_dir_all(agents.join(name)).unwrap();
-            std::fs::write(agents.join(name).join("identity.key"), b"k").unwrap();
-        }
-        let policy = policy_with_launch_chain(&agents.join("alice").to_string_lossy());
-        let sbpl = build_sbpl_profile(&policy);
-
-        for sibling in ["bob", "carol"] {
-            let key = agents.join(sibling).join("identity.key");
-            assert!(
-                sbpl.contains(&format!(
-                    "(deny file-read* (subpath \"{}\"))",
-                    key.display()
-                )),
-                "{sibling}'s signing key is readable:\n{sbpl}"
-            );
-        }
-    }
-
-    /// A directory under `agents/` that is not a valid agent name must never
-    /// reach the profile text. The profile is assembled by string
-    /// concatenation and `fail_closed_on_sandbox_error` defaults to TRUE, so a
-    /// name that broke SBPL would not brick one agent — it would stop every
-    /// agent on the machine from starting, because they all enumerate the same
-    /// directory.
-    #[test]
-    fn a_malformed_entry_under_agents_is_skipped_not_emitted() {
+    fn a_malformed_entry_under_agents_cannot_reach_the_profile() {
         let tmp = tempfile::tempdir().unwrap();
         let agents = tmp.path().join("agents");
         std::fs::create_dir_all(agents.join("alice")).unwrap();
-        std::fs::create_dir_all(agents.join("bob")).unwrap();
-        // Hand-made junk: a quote would terminate the SBPL string literal.
-        std::fs::create_dir_all(agents.join("we\"ird")).unwrap();
-        // A plain file is not an agent either.
-        std::fs::write(agents.join("notes.txt"), b"x").unwrap();
+        std::fs::create_dir_all(agents.join("we ird")).unwrap();
 
         let policy = policy_with_launch_chain(&agents.join("alice").to_string_lossy());
         let sbpl = build_sbpl_profile(&policy);
 
         assert!(
-            sbpl.contains("bob/identity.key"),
-            "the well-formed sibling should still be denied:\n{sbpl}"
-        );
-        // Assert on the tail, which escaping does not touch: `sbpl_escape`
-        // renders the quote as `we\\"ird`, so searching for the raw name
-        // passes whether or not the entry was skipped — a test that proves
-        // escaping works, not that the filter does.
-        assert!(
-            !sbpl.contains("ird/identity.key"),
-            "a malformed directory name reached the profile text:\n{sbpl}"
-        );
-        assert!(
-            !sbpl.contains("notes.txt"),
-            "a plain file was treated as an agent home:\n{sbpl}"
+            !sbpl.contains("we ird"),
+            "a malformed agent name reached the profile:\n{sbpl}"
         );
     }
 
