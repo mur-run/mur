@@ -136,24 +136,73 @@ fn running_binary_is_adhoc() -> Option<bool> {
     None
 }
 
-/// How many `keychain:` secret refs the model registry holds.
+/// How many secrets on this machine live in the Keychain.
+///
+/// TWO stores, not one — counting only the first is how the first cut of this
+/// probe reported "nothing to warn about" on a machine that was, at that
+/// moment, failing with
+/// `keychain backend error reading mur-agent/mur/ANTHROPIC_API_KEY`:
+///
+/// 1. `models.yaml` — `SecretRef::Keychain` per model entry.
+/// 2. Per-agent credentials under the `mur-agent` Keychain service, keyed
+///    `<agent>/ANTHROPIC_API_KEY` (`cmd/agent/secret.rs`,
+///    `llm/anthropic.rs::from_agent_credentials`). These appear in NO config
+///    file — the account name is derived from the agent's name at resolve
+///    time, so the only way to count them is to ask the Keychain per agent.
 fn keychain_secret_count() -> usize {
     let Some(home) = dirs::home_dir() else {
         return 0;
     };
-    let path = home.join(".mur").join("models.yaml");
-    let Ok(reg) = mur_common::model::ModelRegistry::load_from(&path) else {
+    let mur = home.join(".mur");
+    let mut n = 0usize;
+
+    if let Ok(reg) = mur_common::model::ModelRegistry::load_from(&mur.join("models.yaml")) {
+        n += reg
+            .models
+            .values()
+            .filter(|m| {
+                matches!(
+                    m.secret,
+                    Some(mur_common::secret::SecretRef::Keychain { .. })
+                )
+            })
+            .count();
+    }
+
+    n += agent_keychain_credential_count(&mur);
+    n
+}
+
+/// Per-agent Keychain credentials, counted by asking the Keychain.
+///
+/// A lookup that fails for ANY reason counts as absent. That is deliberate: a
+/// denied read here is indistinguishable from "no such item" without inspecting
+/// the error, and the caller only needs to know whether there is something to
+/// lose. Under-counting makes the warning quieter, never louder — the safe
+/// direction for a check whose false positives would get it ignored.
+fn agent_keychain_credential_count(mur_home: &std::path::Path) -> usize {
+    const KEYS: [&str; 1] = ["ANTHROPIC_API_KEY"];
+    let Ok(entries) = std::fs::read_dir(mur_home.join("agents")) else {
         return 0;
     };
-    reg.models
-        .values()
-        .filter(|m| {
-            matches!(
-                m.secret,
-                Some(mur_common::secret::SecretRef::Keychain { .. })
-            )
+    entries
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| e.file_name().to_str().map(String::from))
+        .map(|agent| {
+            KEYS.iter()
+                .filter(|k| {
+                    let account = format!("{agent}/{k}");
+                    mur_common::secret::SecretRef::Keychain {
+                        service: "mur-agent".to_string(),
+                        account,
+                    }
+                    .resolve_to_string_blocking()
+                    .is_some()
+                })
+                .count()
         })
-        .count()
+        .sum()
 }
 
 /// Warn when BOTH halves of the #866 failure are present: an ad-hoc binary and
