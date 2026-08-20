@@ -225,6 +225,16 @@ impl SecretRef {
     /// uses block_in_place; inside a current-thread runtime (where
     /// block_in_place panics) it hops to a fresh thread; otherwise it spins
     /// a current-thread runtime.
+    /// The pre-seal cached value for this ref, if any — WITHOUT falling back
+    /// to the backend.
+    ///
+    /// For callers that reach a backend directly rather than through
+    /// `resolve_blocking`, so they can honour the cache without changing what
+    /// they do when it misses.
+    pub fn resolve_preseal_cached(&self) -> Option<SecretString> {
+        preseal_lookup(self)
+    }
+
     pub fn resolve_blocking(&self) -> Result<SecretString, SecretError> {
         // A value cached before the sandbox sealed wins. Without this, a `file:`
         // ref inside the denied credential store is unreadable post-seal and the
@@ -920,6 +930,40 @@ mod resolve_blocking_tests {
             r.resolve_blocking().is_err(),
             "an uncached ref must not resolve once its path is gone"
         );
+    }
+
+    /// `resolve_preseal_cached` returns the cached value and NEVER reaches a
+    /// backend — the property the per-agent Keychain path depends on.
+    ///
+    /// That path (`from_agent_credentials`) calls `keychain_get` directly
+    /// rather than going through `resolve_blocking`, so the first cut of the
+    /// pre-seal fix did not cover it at all: an agent whose model entry has no
+    /// `secret:` of its own still broke on every upgrade.
+    #[test]
+    fn preseal_cached_lookup_does_not_touch_the_backend() {
+        let r = SecretRef::Keychain {
+            service: "mur-agent-test-nonexistent".into(),
+            account: "no-such-agent/NO_SUCH_KEY".into(),
+        };
+        // Never cached, and the backend has no such item: a miss, not a hang
+        // and not an error.
+        assert!(r.resolve_preseal_cached().is_none());
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.key");
+        std::fs::write(&path, "sk-agent").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let f = SecretRef::File(path.clone());
+        cache_before_seal(&f).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        use secrecy::ExposeSecret;
+        let got = f.resolve_preseal_cached().expect("cached hit");
+        assert_eq!(got.expose_secret(), "sk-agent");
     }
 
     /// Caching is idempotent and does not grow on repeat calls.
