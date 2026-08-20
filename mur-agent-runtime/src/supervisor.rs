@@ -331,6 +331,41 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         } else {
             None
         };
+    // Resolve provider secrets while the paths are still reachable.
+    //
+    // The client that needs them is built at `prepare_runtime` below — AFTER
+    // the seal — so a `file:` ref inside `~/.mur/secrets/` (a denied credential
+    // path) could not be read, and the caller fell through to a per-agent
+    // Keychain lookup. On a real install both were broken at once, each hiding
+    // the other (#866). Same ordering the identity keypair already relies on.
+    //
+    // Best-effort: a secret that will not resolve here is simply not cached,
+    // and the later lookup fails exactly as it did before. Warn rather than
+    // abort, because an agent with an unreachable secret still starts and its
+    // other candidates may work.
+    {
+        let reg = mur_common::model::ModelRegistry::load_from(&mur_home.join("models.yaml"))
+            .unwrap_or_default();
+        let mut cached = 0usize;
+        for entry in reg.models.values() {
+            if let Some(r) = entry.secret.as_ref() {
+                match mur_common::secret::cache_before_seal(r) {
+                    Ok(()) => cached += 1,
+                    Err(e) => warn!(
+                        secret = %r,
+                        error = %e,
+                        "could not resolve a provider secret before sealing; it \
+                         will be unreachable if its path is inside the sandbox's \
+                         denied credential store"
+                    ),
+                }
+            }
+        }
+        if cached > 0 {
+            info!(cached, "provider secrets resolved before sandbox seal");
+        }
+    }
+
     let loopback_ports: Vec<u16> = egress_proxy.iter().map(|h| h.addr.port()).collect();
     match crate::sandbox::apply(
         &profile.inner.entitlements,

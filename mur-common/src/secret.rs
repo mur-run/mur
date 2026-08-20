@@ -44,6 +44,56 @@ pub enum SecretError {
     Parse(String),
 }
 
+/// Values resolved BEFORE a sandbox seals, for reading after it has.
+///
+/// The problem this exists for: an agent's provider secret is resolved when the
+/// LLM client is built (`supervisor.rs:384`), which is AFTER
+/// `sandbox::apply` (`:314`). A `file:` ref pointing inside `~/.mur/secrets/`
+/// is therefore unreadable — that directory is a denied credential path — and
+/// the caller silently falls back to a per-agent Keychain lookup, which is the
+/// #866 failure. Both paths were broken at once on a real install, each hiding
+/// the other.
+///
+/// The identity key already solves this by ordering: loaded at
+/// `supervisor.rs:174`, before the seal. This gives secrets the same treatment.
+/// The agent ends up holding the VALUE and never the path, so the `secrets/`
+/// deny is not weakened at all — it stays a directory no agent may open.
+///
+/// Deliberately a value cache and not a path cache: nothing here lets a
+/// post-seal caller learn where a secret came from, only what it was.
+static PRESEAL_CACHE: std::sync::OnceLock<std::sync::Mutex<Vec<(SecretRef, SecretString)>>> =
+    std::sync::OnceLock::new();
+
+fn preseal_cache() -> &'static std::sync::Mutex<Vec<(SecretRef, SecretString)>> {
+    PRESEAL_CACHE.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+/// Resolve `r` now and remember it, so a later `resolve_blocking` succeeds even
+/// once the path is unreachable. Call before sealing. Errors are the caller's
+/// to report — a secret that cannot be resolved pre-seal is not cached, and the
+/// later lookup fails exactly as it would have.
+pub fn cache_before_seal(r: &SecretRef) -> Result<(), SecretError> {
+    let v = r.resolve_blocking()?;
+    let mut c = preseal_cache().lock().unwrap_or_else(|e| e.into_inner());
+    if !c.iter().any(|(k, _)| k == r) {
+        c.push((r.clone(), v));
+    }
+    Ok(())
+}
+
+/// How many secrets are cached. For tests and diagnostics.
+pub fn preseal_cached_count() -> usize {
+    preseal_cache()
+        .lock()
+        .map(|c| c.len())
+        .unwrap_or_else(|e| e.into_inner().len())
+}
+
+fn preseal_lookup(r: &SecretRef) -> Option<SecretString> {
+    let c = preseal_cache().lock().unwrap_or_else(|e| e.into_inner());
+    c.iter().find(|(k, _)| k == r).map(|(_, v)| v.clone())
+}
+
 impl std::fmt::Display for SecretRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -176,6 +226,13 @@ impl SecretRef {
     /// block_in_place panics) it hops to a fresh thread; otherwise it spins
     /// a current-thread runtime.
     pub fn resolve_blocking(&self) -> Result<SecretString, SecretError> {
+        // A value cached before the sandbox sealed wins. Without this, a `file:`
+        // ref inside the denied credential store is unreadable post-seal and the
+        // caller falls through to a per-agent Keychain lookup (#866). See
+        // `cache_before_seal`.
+        if let Some(v) = preseal_lookup(self) {
+            return Ok(v);
+        }
         fn fresh_runtime_resolve(r: &SecretRef) -> Result<SecretString, SecretError> {
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -819,6 +876,71 @@ mod keychain_helpers_tests {
 
 #[cfg(test)]
 mod resolve_blocking_tests {
+    /// A secret cached before the seal resolves afterwards even when the path
+    /// has become unreachable — which is what a sandboxed agent faces for a
+    /// `file:` ref inside the denied credential store (#866).
+    ///
+    /// Simulated by deleting the file after caching: post-seal the path is gone
+    /// as far as the process is concerned, exactly as a deny makes it.
+    #[test]
+    fn a_cached_secret_survives_its_path_becoming_unreachable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("provider.key");
+        std::fs::write(&path, "sk-test-value").unwrap();
+        // `file:` refs require 0600 — group/world access is refused outright.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let r = SecretRef::File(path.clone());
+
+        cache_before_seal(&r).expect("resolves while the path is reachable");
+        std::fs::remove_file(&path).unwrap();
+
+        use secrecy::ExposeSecret;
+        let got = r
+            .resolve_blocking()
+            .expect("cached value must still resolve");
+        assert_eq!(got.expose_secret(), "sk-test-value");
+    }
+
+    /// Negative control for the above: WITHOUT caching, the same ref fails once
+    /// the path is unreachable. That is the pre-fix behaviour, and it is what
+    /// made the caller fall through to a Keychain lookup.
+    #[test]
+    fn an_uncached_secret_fails_when_its_path_is_unreachable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("uncached.key");
+        std::fs::write(&path, "sk-other-value").unwrap();
+        let r = SecretRef::File(path.clone());
+        std::fs::remove_file(&path).unwrap();
+
+        assert!(
+            r.resolve_blocking().is_err(),
+            "an uncached ref must not resolve once its path is gone"
+        );
+    }
+
+    /// Caching is idempotent and does not grow on repeat calls.
+    #[test]
+    fn caching_the_same_ref_twice_stores_one_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dup.key");
+        std::fs::write(&path, "v").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let r = SecretRef::File(path);
+
+        let before = preseal_cached_count();
+        cache_before_seal(&r).unwrap();
+        cache_before_seal(&r).unwrap();
+        assert_eq!(preseal_cached_count(), before + 1);
+    }
+
     use super::*;
 
     #[test]
