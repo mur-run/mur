@@ -154,13 +154,33 @@ jobs:
           p12-file-base64: ${{ secrets.APPLE_SIGNING_CERT }}
           p12-password: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
 
-      - name: Sign mur-agent-runtime (macOS)
+      # Every binary in the tarball, not just the runtime. Measured on v2.70.0:
+      # `mur`, `murmurd` and `mur-mcp-server` shipped `flags=0x20002(adhoc,
+      # linker-signed)` — the Rust linker's default when nothing signs them —
+      # while only mur-agent-runtime carried a Developer ID.
+      #
+      # That matters beyond tidiness: a Keychain Always-Allow grant binds to the
+      # signing IDENTITY, and an ad-hoc signature has none, so the identity
+      # degenerates to the binary's hash and every upgrade reads as a different
+      # app. A background agent cannot re-prompt, so the secret silently
+      # resolves to nothing (#866).
+      #
+      # Keep this list in step with the `tar czf` below — signing a binary that
+      # is not shipped is harmless, but shipping one that is not signed is the
+      # bug this fixes.
+      - name: Sign macOS binaries
         if: matrix.target == 'aarch64-apple-darwin'
         run: |
-          codesign --force --options runtime --timestamp \
-            --sign "Developer ID Application: $APPLE_TEAM_NAME ($APPLE_TEAM_ID)" \
-            target/aarch64-apple-darwin/release/mur-agent-runtime
-          codesign --verify --verbose -R "=anchor apple generic and certificate leaf[subject.OU] = \"$APPLE_TEAM_ID\"" target/aarch64-apple-darwin/release/mur-agent-runtime
+          set -euo pipefail
+          for b in mur mur-mcp-server murmurd mur-agent-runtime; do
+            p="target/aarch64-apple-darwin/release/$b"
+            codesign --force --options runtime --timestamp \
+              --sign "Developer ID Application: $APPLE_TEAM_NAME ($APPLE_TEAM_ID)" \
+              "$p"
+            codesign --verify --verbose \
+              -R "=anchor apple generic and certificate leaf[subject.OU] = \"$APPLE_TEAM_ID\"" \
+              "$p"
+          done
         env:
           APPLE_TEAM_NAME: ${{ secrets.APPLE_TEAM_NAME }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
