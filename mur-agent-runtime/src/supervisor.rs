@@ -361,6 +361,25 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                 }
             }
         }
+        // Per-agent credentials too. These are NOT in models.yaml — the account
+        // name is derived from the agent's name at resolve time
+        // (`llm/anthropic.rs::from_agent_credentials`), so an entry with no
+        // `secret:` of its own falls through to them. Missing this is why the
+        // first cut of the pre-seal fix left that path still broken after an
+        // upgrade.
+        //
+        // Absent credentials are the normal case (most agents use a model
+        // secret), so a miss here is silent — only a resolvable one is cached.
+        for key in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"] {
+            let r = mur_common::secret::SecretRef::Keychain {
+                service: "mur-agent".to_string(),
+                account: format!("{}/{}", profile.inner.name, key),
+            };
+            if mur_common::secret::cache_before_seal(&r).is_ok() {
+                cached += 1;
+            }
+        }
+
         if cached > 0 {
             info!(cached, "provider secrets resolved before sandbox seal");
         }
