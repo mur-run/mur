@@ -98,6 +98,122 @@ pub(crate) fn cmd_stats() -> Result<()> {
     Ok(())
 }
 
+/// Is the running binary ad-hoc signed?
+///
+/// `None` when the question does not apply (not macOS) or cannot be answered
+/// (no `codesign`, unreadable exe) — the caller stays quiet rather than
+/// guessing, because a false "your grants will die" is worse than silence.
+///
+/// The marker is `codesign -dv`'s `Signature=adhoc` / `flags=0x2(adhoc)`, both
+/// on stderr. A Developer ID binary prints `flags=0x0(none)` and a real
+/// `Signature size=…`. Verified against both shapes on a real machine rather
+/// than read off the man page.
+#[cfg(target_os = "macos")]
+fn running_binary_is_adhoc() -> Option<bool> {
+    let exe = std::env::current_exe().ok()?;
+    let out = std::process::Command::new("codesign")
+        .args(["-dv", "--"])
+        .arg(&exe)
+        .output()
+        .ok()?;
+    // codesign writes the description to stderr, and exits non-zero for an
+    // UNSIGNED binary — which is ad-hoc's problem too (no stable identity), so
+    // treat "not signed at all" the same way rather than skipping it.
+    let text = String::from_utf8_lossy(&out.stderr);
+    if text.contains("code object is not signed") {
+        return Some(true);
+    }
+    if !out.status.success() {
+        return None;
+    }
+    Some(text.contains("Signature=adhoc") || text.contains("(adhoc)"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn running_binary_is_adhoc() -> Option<bool> {
+    // Keychain ACLs binding to a signing identity is an Apple mechanism; there
+    // is nothing to warn about elsewhere.
+    None
+}
+
+/// How many `keychain:` secret refs the model registry holds.
+fn keychain_secret_count() -> usize {
+    let Some(home) = dirs::home_dir() else {
+        return 0;
+    };
+    let path = home.join(".mur").join("models.yaml");
+    let Ok(reg) = mur_common::model::ModelRegistry::load_from(&path) else {
+        return 0;
+    };
+    reg.models
+        .values()
+        .filter(|m| {
+            matches!(
+                m.secret,
+                Some(mur_common::secret::SecretRef::Keychain { .. })
+            )
+        })
+        .count()
+}
+
+/// Warn when BOTH halves of the #866 failure are present: an ad-hoc binary and
+/// at least one `keychain:` secret.
+///
+/// Either alone is fine. Keychain Always-Allow binds to the code-signing
+/// identity, and an ad-hoc signature has no certificate — so the identity
+/// degenerates to the binary's CDHash and every upgrade looks like a different
+/// app. A foreground run can re-prompt; a Hub- or launchd-spawned agent cannot,
+/// so the ref resolves to `None` and the caller falls through silently. That
+/// silence is what this replaces.
+fn check_keychain_survives_upgrade() {
+    let keychain_refs = keychain_secret_count();
+    match keychain_verdict(keychain_refs, running_binary_is_adhoc()) {
+        KeychainVerdict::Silent => {}
+        KeychainVerdict::DiesOnUpgrade => {
+            println!("⚠️  Keychain secrets ({keychain_refs}) will NOT survive the next upgrade");
+            println!(
+                "     this binary is ad-hoc signed, so Keychain grants bind to its hash, not an identity."
+            );
+            println!("     Background agents cannot re-prompt, so they lose the secret silently.");
+            println!(
+                "     After each upgrade: run one agent in the FOREGROUND once and click Allow,"
+            );
+            println!("     or use `secret: file:`/`env:` refs for service-launched agents.");
+        }
+        KeychainVerdict::Survives => {
+            println!("✅ Keychain secrets ({keychain_refs}): grants survive upgrades");
+        }
+    }
+}
+
+/// What `mur doctor` should say about Keychain durability.
+#[derive(Debug, PartialEq, Eq)]
+enum KeychainVerdict {
+    /// Say nothing: no keychain refs to lose, or signing state unknown.
+    Silent,
+    /// Signed with a real identity — grants outlive the binary.
+    Survives,
+    /// Ad-hoc (or unsigned) AND keychain refs present: the #866 failure.
+    DiesOnUpgrade,
+}
+
+/// Pure decision, so all four combinations are testable without a Keychain, a
+/// signing cert, or this machine's particular configuration — which happens to
+/// have zero keychain refs and so exercises exactly one of them.
+fn keychain_verdict(keychain_refs: usize, adhoc: Option<bool>) -> KeychainVerdict {
+    if keychain_refs == 0 {
+        // Nothing is bound to a signing identity. The common local-model path.
+        return KeychainVerdict::Silent;
+    }
+    match adhoc {
+        Some(true) => KeychainVerdict::DiesOnUpgrade,
+        Some(false) => KeychainVerdict::Survives,
+        // Cannot tell (no codesign, not macOS, unreadable exe). Silence beats a
+        // guess: a false "your grants will die" is worse than saying nothing.
+        None => KeychainVerdict::Silent,
+    }
+}
+
 pub(crate) fn cmd_doctor() -> Result<()> {
     use mur_common::llm::is_reasoning_model;
 
@@ -140,6 +256,9 @@ pub(crate) fn cmd_doctor() -> Result<()> {
             "⚠️  LLM model: {model} (not ideal for session analysis — consider claude-opus-5, chatgpt-5.4, gemini-pro-3.5)"
         );
     }
+
+    // #866: Keychain grants die on upgrade for ad-hoc-signed binaries.
+    check_keychain_survives_upgrade();
 
     // Check embedding provider (semantic search silently degrades without it)
     let emb = &config.embedding;
@@ -415,5 +534,36 @@ mod doctor_tests {
             Some("127.0.0.1:11434"),
             "ollama with no endpoint should resolve to default localhost:11434"
         );
+    }
+}
+
+#[cfg(test)]
+mod keychain_verdict_tests {
+    use super::*;
+
+    /// #866: the warning fires only when BOTH halves are present. Either alone
+    /// is a working setup, and a false "your grants will die" is worse than
+    /// silence — it teaches people to ignore the check.
+    #[test]
+    fn only_adhoc_plus_keychain_refs_warns() {
+        assert_eq!(
+            keychain_verdict(3, Some(true)),
+            KeychainVerdict::DiesOnUpgrade
+        );
+        // Signed with a real identity: grants outlive the binary.
+        assert_eq!(keychain_verdict(3, Some(false)), KeychainVerdict::Survives);
+        // No keychain refs: nothing is bound to a signing identity. This is the
+        // only combination THIS machine exercises (6 file: refs, 0 keychain),
+        // which is why the decision is tested rather than eyeballed.
+        assert_eq!(keychain_verdict(0, Some(true)), KeychainVerdict::Silent);
+        assert_eq!(keychain_verdict(0, Some(false)), KeychainVerdict::Silent);
+    }
+
+    /// Unknown signing state must stay quiet even with keychain refs present —
+    /// not macOS, no `codesign`, or an unreadable exe.
+    #[test]
+    fn unknown_signing_state_says_nothing() {
+        assert_eq!(keychain_verdict(3, None), KeychainVerdict::Silent);
+        assert_eq!(keychain_verdict(0, None), KeychainVerdict::Silent);
     }
 }
