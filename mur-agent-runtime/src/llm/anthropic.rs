@@ -142,6 +142,17 @@ impl AnthropicClient {
     /// the env var — masking those would defeat the whole purpose.
     pub async fn from_agent_credentials(agent_name: &str, model: String) -> Result<Self, LlmError> {
         let account = format!("{agent_name}/ANTHROPIC_API_KEY");
+        // Through `SecretRef`, so a value cached before the sandbox sealed is
+        // used. Reaching the backend here is what fails after an upgrade: the
+        // Keychain grant binds to the signing identity and a background agent
+        // cannot re-prompt (#866). The supervisor pre-caches this exact ref.
+        let pre = mur_common::secret::SecretRef::Keychain {
+            service: MUR_AGENT_KEYCHAIN_SERVICE.to_string(),
+            account: account.clone(),
+        };
+        if let Some(v) = pre.resolve_preseal_cached() {
+            return Ok(Self::from_secret_string(&v, model, None));
+        }
         match mur_common::secret::keychain_get(MUR_AGENT_KEYCHAIN_SERVICE, &account).await {
             Ok(Some(secret)) => Ok(Self::from_secret_string(&secret, model, None)),
             Ok(None) => Self::from_env(model),
@@ -185,6 +196,17 @@ impl AnthropicClient {
         http: reqwest::Client,
     ) -> Result<Self, LlmError> {
         let account = format!("{agent_name}/ANTHROPIC_API_KEY");
+        // Through `SecretRef`, so a value cached before the sandbox sealed is
+        // used. Reaching the backend here is what fails after an upgrade: the
+        // Keychain grant binds to the signing identity and a background agent
+        // cannot re-prompt (#866). The supervisor pre-caches this exact ref.
+        let pre = mur_common::secret::SecretRef::Keychain {
+            service: MUR_AGENT_KEYCHAIN_SERVICE.to_string(),
+            account: account.clone(),
+        };
+        if let Some(v) = pre.resolve_preseal_cached() {
+            return Ok(Self::from_secret_string_with_http(&v, model, None, http));
+        }
         match mur_common::secret::keychain_get(MUR_AGENT_KEYCHAIN_SERVICE, &account).await {
             Ok(Some(secret)) => Ok(Self::from_secret_string_with_http(
                 &secret, model, None, http,
