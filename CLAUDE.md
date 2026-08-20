@@ -151,7 +151,7 @@ Before changing anything that pins, verifies, or launches an MCP server, read `d
 
 ## Release Process
 
-`main` is protected, so the version bump goes through a PR and the tag is pushed only after the bump lands on `main`. Full step-by-step (both Cargo.lock files, the macOS `sed` trap, why never `git push origin main --tags`): the **`mur-release`** skill (`.claude/skills/mur-release/`).
+`main` is protected, so the whole release is one PR: **merging the version bump to `main` IS the release.** `tag.yml` tags the merge commit and dispatches `release.yml` automatically — there is no manual tag step, so review the bump PR as the release approval. Full step-by-step (both Cargo.lock files, the macOS `sed` trap, why a hand-pushed `git push origin main --tags` is still the one thing never to do): the **`mur-release`** skill (`.claude/skills/mur-release/`).
 
 ## Documentation Checklist
 
