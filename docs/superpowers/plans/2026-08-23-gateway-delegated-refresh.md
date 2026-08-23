@@ -405,7 +405,7 @@ mod tests {
     async fn disabled_probe_is_skipped() {
         reset_probe_state();
         assert_eq!(
-            refresh_via_owner(&AuthProbe::Disabled, Some(1)).await,
+            refresh_via_owner_with(&AuthProbe::Disabled, Some(1), || Some(2)).await,
             ProbeOutcome::Skipped
         );
     }
@@ -417,7 +417,7 @@ mod tests {
         reset_probe_state();
         let probe = AuthProbe::Command("/usr/bin/true".into());
         assert_eq!(
-            refresh_via_owner(&probe, Some(i64::MAX)).await,
+            refresh_via_owner_with(&probe, Some(1_000), || Some(1_000)).await,
             ProbeOutcome::NoChange
         );
     }
@@ -428,12 +428,59 @@ mod tests {
         // every CACHE_TTL forever.
         reset_probe_state();
         let probe = AuthProbe::Command("/usr/bin/true".into());
-        assert_eq!(refresh_via_owner(&probe, Some(i64::MAX)).await, ProbeOutcome::NoChange);
         assert_eq!(
-            refresh_via_owner(&probe, Some(i64::MAX)).await,
-            ProbeOutcome::Skipped,
-            "second call within the cooldown must not spawn again"
+            refresh_via_owner_with(&probe, Some(1_000), || Some(1_000)).await,
+            ProbeOutcome::NoChange
         );
+        assert_eq!(
+            refresh_via_owner_with(&probe, Some(1_000), || Some(9_999)).await,
+            ProbeOutcome::Skipped,
+            "second call within the cooldown must not spawn again — note the              read would report a refresh, so only the cooldown can produce Skipped"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_moved_expiry_reports_refreshed() {
+        // The happy path, and the only test that would catch an inverted or
+        // dropped comparison. Without it every assertion here is NoChange or
+        // Skipped, which a `fn(..) -> NoChange` stub would satisfy.
+        reset_probe_state();
+        let probe = AuthProbe::Command("/usr/bin/true".into());
+        let outcome =
+            refresh_via_owner_with(&probe, Some(1_000), || Some(2_000)).await;
+        assert_eq!(outcome, ProbeOutcome::Refreshed);
+    }
+
+    #[tokio::test]
+    async fn an_expiry_that_moves_backwards_is_not_a_refresh() {
+        // Strictly-greater, not merely different: a store that rolled back is
+        // not a successful refresh.
+        reset_probe_state();
+        let probe = AuthProbe::Command("/usr/bin/true".into());
+        assert_eq!(
+            refresh_via_owner_with(&probe, Some(2_000), || Some(1_000)).await,
+            ProbeOutcome::NoChange
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refresh_clears_a_previously_armed_cooldown() {
+        // Arm the cooldown with a fruitless probe, then prove a real refresh
+        // releases it — otherwise one failure would suppress probes for 15
+        // minutes even after the credential was repaired.
+        reset_probe_state();
+        let probe = AuthProbe::Command("/usr/bin/true".into());
+        assert_eq!(
+            refresh_via_owner_with(&probe, Some(1), || None).await,
+            ProbeOutcome::NoChange
+        );
+        assert!(cooldown_active(), "fruitless probe must arm the cooldown");
+        reset_probe_state();
+        assert_eq!(
+            refresh_via_owner_with(&probe, Some(1), || Some(2)).await,
+            ProbeOutcome::Refreshed
+        );
+        assert!(!cooldown_active(), "a refresh must clear the cooldown");
     }
 
     #[tokio::test]
@@ -443,7 +490,7 @@ mod tests {
         reset_probe_state();
         let probe = AuthProbe::Command("/nonexistent/claude".into());
         assert_eq!(
-            refresh_via_owner(&probe, Some(1)).await,
+            refresh_via_owner_with(&probe, Some(1), || Some(2)).await,
             ProbeOutcome::NoChange
         );
     }
@@ -491,16 +538,29 @@ pub enum ProbeOutcome {
     Skipped,
 }
 
-/// Serialises probes and remembers the last fruitless one. Held across the
-/// child's execution so concurrent 401s queue behind one probe rather than
-/// each spawning their own — the same single-flight shape as
-/// `codex::refreshed_access_token`. `tokio::sync::Mutex` is deliberate: a
-/// waiter yields instead of parking a worker thread, and there is no
-/// poisoning to propagate.
-static PROBE_LOCK: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+/// Serialises probes: held across the child's execution so concurrent 401s
+/// queue behind one probe rather than each spawning their own — the same
+/// single-flight shape as `codex::refreshed_access_token`. `tokio::sync::Mutex`
+/// is deliberate: a waiter yields instead of parking a worker thread, and there
+/// is no poisoning to propagate.
+static PROBE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
-fn lock() -> &'static Mutex<Option<Instant>> {
-    PROBE_LOCK.get_or_init(|| Mutex::new(None))
+/// When the last fruitless probe ran. Deliberately a `std::sync::Mutex`, NOT
+/// part of `PROBE_LOCK`: `reset_probe_state` is a sync fn called from
+/// `#[tokio::test]` bodies, and `blocking_lock()` on a tokio mutex panics
+/// inside a runtime. Never hold this across an await — take it, read or write,
+/// drop it.
+static COOLDOWN: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+
+fn probe_lock() -> &'static Mutex<()> {
+    PROBE_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn cooldown_active() -> bool {
+    COOLDOWN
+        .lock()
+        .unwrap()
+        .is_some_and(|at| at.elapsed() < PROBE_COOLDOWN)
 }
 
 /// Ask the owner CLI to refresh, then report whether the stored expiry moved.
@@ -568,15 +628,46 @@ pub async fn refresh_via_owner(probe: &AuthProbe, before_ms: Option<i64>) -> Pro
 }
 
 /// Clear the cooldown. Test-only: the state is process-global and would
-/// otherwise leak between tests in the same binary.
+/// otherwise leak between tests in the same binary. Sync, and touches only
+/// `COOLDOWN`, so it is safe to call from inside a `#[tokio::test]`.
 pub fn reset_probe_state() {
-    if let Some(m) = PROBE_LOCK.get() {
-        *m.blocking_lock() = None;
-    }
+    *COOLDOWN.lock().unwrap() = None;
 }
 ```
 
-Note: the re-read must bypass the 60s cache to see a fresh write. `read_claude_code_credential` is cached, so add a cache-busting reset in `src/keychain.rs` and call it before the re-read:
+**The credential re-read is injectable.** `refresh_via_owner` is the feature's
+core decision — it decides whether the gateway retries and whether it arms a
+15-minute cooldown — and every outcome except one depends on what the re-read
+returns. Reading the machine's real keychain directly would leave the
+`Refreshed` path with no test at all. So split it:
+
+```rust
+/// Ask the owner CLI to refresh, then report whether the stored expiry moved.
+pub async fn refresh_via_owner(probe: &AuthProbe, before_ms: Option<i64>) -> ProbeOutcome {
+    refresh_via_owner_with(probe, before_ms, || {
+        // Bypass the 60s memoise: the child just rewrote the store, and a
+        // cached read would return the token we already know is dead.
+        keychain::invalidate_cache();
+        keychain::read_claude_code_credential()
+            .ok()
+            .flatten()
+            .and_then(|c| c.expires_at_ms)
+    })
+    .await
+}
+
+/// The body, with the post-probe credential read injected. Tests drive every
+/// outcome through this; production goes through the wrapper above.
+pub(crate) async fn refresh_via_owner_with(
+    probe: &AuthProbe,
+    before_ms: Option<i64>,
+    read_after: impl FnOnce() -> Option<i64>,
+) -> ProbeOutcome {
+    // …body as below, calling `read_after()` where the re-read happens…
+}
+```
+
+Note: the re-read must bypass the 60s cache to see a fresh write. `read_claude_code_credential` is cached, so add a cache-busting reset in `src/keychain.rs`:
 
 ```rust
 /// Drop the memoised read so the next call hits the store. Used after an
@@ -586,7 +677,7 @@ pub fn invalidate_cache() {
 }
 ```
 
-Call `keychain::invalidate_cache();` immediately before the `read_claude_code_credential()` above.
+That reset is called from the `refresh_via_owner` wrapper shown above, not from the injectable body — tests must not touch the real keychain.
 
 Register the module in `src/lib.rs`:
 
