@@ -225,18 +225,38 @@ The probe spawns a real binary and can rewrite the user's Claude Code credential
     #[test]
     fn auth_probe_is_disabled_in_every_constructor() {
         // Mirrors token_source_codex: a test-side AppState must be unable to
-        // spawn the real `claude`, not merely unlikely to.
-        // Same construction the existing `token_source_for_picks_per_provider`
-        // test uses — `new` takes the three upstreams and a token source.
-        let s = AppState::new(
+        // spawn the real `claude`, not merely unlikely to. Both constructors
+        // are checked — the safety property is that NO path out of this impl
+        // block leaves the probe armed, so testing only `new` would let
+        // `with_version` regress silently.
+        let by_new = AppState::new(
             "https://a.test",
             "https://o.test",
             "https://g.test",
             TokenSource::Disabled,
         )
         .unwrap();
-        assert_eq!(s.auth_probe, AuthProbe::Disabled);
+        assert_eq!(by_new.auth_probe, AuthProbe::Disabled, "AppState::new");
+
+        let by_version = AppState::with_version(
+            "https://a.test",
+            "https://o.test",
+            "https://g.test",
+            TokenSource::Disabled,
+            std::sync::Arc::new(cc_version::VersionCache::default()),
+        )
+        .unwrap();
+        assert_eq!(
+            by_version.auth_probe,
+            AuthProbe::Disabled,
+            "AppState::with_version"
+        );
     }
+
+**If `cc_version::VersionCache` has no `Default`,** build it the way the crate's
+own tests or `main.rs` build one — the point of the assertion is the
+constructor, not how the cache is made.
+
 
     #[test]
     fn kill_switch_keeps_the_probe_disabled() {
