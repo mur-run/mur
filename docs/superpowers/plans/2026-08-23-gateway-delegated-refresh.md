@@ -729,8 +729,9 @@ Create `tests/auth_probe_retry.rs`:
 //! future means the token was revoked upstream, and no refresh can help — so
 //! the gateway must not spawn anything.
 
-use mur_model_gateway::{Provider, anthropic_retry_eligible};
+use mur_model_gateway::{Provider, TokenSource, anthropic_retry_eligible};
 use reqwest::StatusCode;
+use std::sync::Arc;
 
 const NOW_MS: i64 = 1_787_000_000_000;
 
@@ -739,6 +740,45 @@ fn expired_token_is_eligible() {
     assert!(anthropic_retry_eligible(
         Provider::Anthropic,
         StatusCode::UNAUTHORIZED,
+        &TokenSource::Keychain,
+        Some(NOW_MS - 1),
+        NOW_MS
+    ));
+}
+
+#[test]
+fn a_source_claude_code_does_not_own_is_never_eligible() {
+    // A raw key from the environment, or a test's Static token, is not
+    // something `claude auth status` can refresh — asking it to would spawn a
+    // process that cannot possibly help. Same principle as the Codex arm's
+    // ApiKey case: a 401 on a key means the key is rejected, and resending it
+    // cannot succeed.
+    for src in [
+        TokenSource::EnvVar("ANTHROPIC_API_KEY".into()),
+        TokenSource::Static(Arc::new("sk-ant-raw".to_string())),
+        TokenSource::Disabled,
+    ] {
+        assert!(
+            !anthropic_retry_eligible(
+                Provider::Anthropic,
+                StatusCode::UNAUTHORIZED,
+                &src,
+                Some(NOW_MS - 1),
+                NOW_MS
+            ),
+            "{src:?} must not be eligible"
+        );
+    }
+}
+
+#[test]
+fn a_credentials_file_source_is_eligible() {
+    // The Linux and Windows install shape: Claude Code owns the file, so a
+    // delegated refresh is exactly as applicable as it is for the keychain.
+    assert!(anthropic_retry_eligible(
+        Provider::Anthropic,
+        StatusCode::UNAUTHORIZED,
+        &TokenSource::CredentialsFile("/tmp/creds.json".into()),
         Some(NOW_MS - 1),
         NOW_MS
     ));
@@ -750,6 +790,7 @@ fn revoked_token_is_not_eligible() {
     assert!(!anthropic_retry_eligible(
         Provider::Anthropic,
         StatusCode::UNAUTHORIZED,
+        &TokenSource::Keychain,
         Some(NOW_MS + 60_000),
         NOW_MS
     ));
@@ -762,6 +803,7 @@ fn unknown_expiry_is_eligible_once() {
     assert!(anthropic_retry_eligible(
         Provider::Anthropic,
         StatusCode::UNAUTHORIZED,
+        &TokenSource::Keychain,
         None,
         NOW_MS
     ));
@@ -772,6 +814,7 @@ fn non_401_is_never_eligible() {
     assert!(!anthropic_retry_eligible(
         Provider::Anthropic,
         StatusCode::INTERNAL_SERVER_ERROR,
+        &TokenSource::Keychain,
         Some(NOW_MS - 1),
         NOW_MS
     ));
@@ -784,6 +827,7 @@ fn other_providers_are_never_eligible() {
         assert!(!anthropic_retry_eligible(
             p,
             StatusCode::UNAUTHORIZED,
+            &TokenSource::Keychain,
             Some(NOW_MS - 1),
             NOW_MS
         ));
@@ -810,12 +854,37 @@ Beside `codex_retry_eligible` in `src/lib.rs`:
 pub fn anthropic_retry_eligible(
     provider: Provider,
     status: reqwest::StatusCode,
+    source: &TokenSource,
     expires_at_ms: Option<i64>,
     now_ms: i64,
 ) -> bool {
+    // Only a store Claude Code owns can be repaired by asking Claude Code to
+    // refresh. A raw key from the environment is rejected on its own merits.
+    let claude_owned = matches!(
+        source,
+        TokenSource::Keychain | TokenSource::CredentialsFile(_)
+    );
     provider == Provider::Anthropic
         && status == reqwest::StatusCode::UNAUTHORIZED
+        && claude_owned
         && expires_at_ms.is_none_or(|exp| exp <= now_ms)
+}
+
+/// The stored expiry for Anthropic, read from **the same source the token came
+/// from**. Reading the keychain unconditionally would be wrong on every Linux
+/// and Windows install, where Claude Code writes
+/// `~/.claude/.credentials.json` and there is no keychain to read — the expiry
+/// would come back unknown on every request and the probe would fire on every
+/// 401.
+fn anthropic_credential_expiry(state: &AppState) -> Option<i64> {
+    let cred = match state.token_source_for(Provider::Anthropic) {
+        TokenSource::Keychain => keychain::read_claude_code_credential().ok().flatten(),
+        TokenSource::CredentialsFile(p) => {
+            keychain::read_credentials_file_credential(p).ok().flatten()
+        }
+        _ => None,
+    };
+    cred.and_then(|c| c.expires_at_ms)
 }
 ```
 
@@ -824,20 +893,24 @@ Then add a second retry arm after the existing Codex one (~line 579). It mirrors
 ```rust
     // Anthropic: the owner CLI holds the refresh token, so ask it to refresh
     // rather than redeeming the token here. One retry only, same as Codex.
-    let anthropic_expiry = keychain::read_claude_code_credential()
-        .ok()
-        .flatten()
-        .and_then(|c| c.expires_at_ms);
+    let anthropic_expiry = anthropic_credential_expiry(state);
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
-    if anthropic_retry_eligible(provider, upstream_resp.status(), anthropic_expiry, now_ms)
+    if anthropic_retry_eligible(
+        provider,
+        upstream_resp.status(),
+        state.token_source_for(Provider::Anthropic),
+        anthropic_expiry,
+        now_ms,
+    )
         && auth_probe::refresh_via_owner(&state.auth_probe, anthropic_expiry).await
             == auth_probe::ProbeOutcome::Refreshed
     {
         // …rebuild the request exactly as the Codex arm does, with the token
-        // from a fresh `keychain::read_claude_code_credential()`, send once,
+        // from a fresh read of the SAME source (`anthropic_credential_expiry`'s
+        // match arm shows which), send once,
         // and use that response.
     }
 ```
@@ -848,6 +921,84 @@ Read the Codex arm immediately above and mirror its header-forwarding verbatim; 
 
 Run: `cargo test --test auth_probe_retry && cargo test`
 Expected: PASS, and every pre-existing test still green — especially `tests/codex.rs`, which pins the Codex arm's behaviour.
+
+- [ ] **Step 4b: Prove the whole arm works, not just the predicate**
+
+The predicate tests above cover the decision. Nothing yet covers the *arm* —
+401 → probe → re-read → retry → 200 — which is the entire point of the task.
+`TokenSource::CredentialsFile` makes that testable without touching a real
+keychain or a real `claude`.
+
+Create `tests/anthropic_retry_arm.rs`:
+
+```rust
+//! The delegated-refresh arm end to end: an expired credential in a file, a
+//! fake `claude` that rewrites it, and an upstream that 401s once then serves.
+
+use std::io::Write;
+
+fn blob(expires_at_ms: i64) -> String {
+    format!(r#"{{"claudeAiOauth":{{"accessToken":"sk-ant-oat01-x","expiresAt":{expires_at_ms}}}}}"#)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_expired_credential_is_refreshed_and_the_request_retried() {
+    let dir = tempfile::tempdir().unwrap();
+    let creds = dir.path().join("creds.json");
+    let past = 1_000_i64;
+    let future = 9_999_999_999_999_i64;
+    std::fs::write(&creds, blob(past)).unwrap();
+
+    // A fake `claude` that does what the real one does for our purposes:
+    // rewrite the credential with a later expiry.
+    let fake = dir.path().join("claude");
+    let mut f = std::fs::File::create(&fake).unwrap();
+    writeln!(
+        f,
+        "#!/bin/sh
+cat > '{}' <<'EOF'
+{}
+EOF",
+        creds.display(),
+        blob(future)
+    )
+    .unwrap();
+    drop(f);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let server = httpmock::MockServer::start_async().await;
+    // Assert on call counts at the end: the first attempt must 401 and the
+    // retry must succeed, so exactly two requests reach the upstream.
+    let m = server
+        .mock_async(|when, then| {
+            when.any_request();
+            then.status(401).body("expired");
+        })
+        .await;
+
+    // …build an AppState pointed at `server.base_url()` with
+    // `TokenSource::CredentialsFile(creds.clone())` and
+    // `auth_probe: AuthProbe::Command(fake)`, drive one request through
+    // `proxy`, and assert:
+    //   * the upstream saw 2 requests (m.hits_async().await == 2)
+    //   * the credential file now holds `future`, i.e. the probe ran
+    //   * the second attempt carried the refreshed token
+    //
+    // Follow `tests/codex.rs` for how this crate stands up an AppState against
+    // httpmock and issues a request — mirror its setup rather than inventing
+    // one, and reuse whatever seam it uses to override upstreams.
+    let _ = (m, past);
+}
+```
+
+Read `tests/codex.rs` first and mirror its harness. If the crate has no seam
+that lets a test drive `proxy` directly, say so in your report and cover as
+much of the arm as the existing seams allow rather than adding new public
+surface to make the test possible.
 
 - [ ] **Step 5: Commit**
 
