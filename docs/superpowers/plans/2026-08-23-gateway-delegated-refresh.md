@@ -284,8 +284,12 @@ cargo add --dev temp-env
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cargo test --lib auth_probe`
+Run: `cargo test --lib -- auth_probe kill_switch`
 Expected: FAIL — `cannot find type 'AuthProbe'`.
+
+Both test names are listed because `kill_switch_keeps_the_probe_disabled`
+contains no `auth_probe` substring — filtering on `auth_probe` alone would
+silently run one of the two and still report success.
 
 - [ ] **Step 3: Add the policy**
 
@@ -351,8 +355,8 @@ In `src/main.rs`, chain it where `with_default_codex_source` is already called:
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `cargo test --lib auth_probe`
-Expected: PASS (2 tests).
+Run: `cargo test --lib -- auth_probe kill_switch`
+Expected: PASS (2 tests) — confirm the count, not just the exit code.
 
 - [ ] **Step 5: Commit**
 
