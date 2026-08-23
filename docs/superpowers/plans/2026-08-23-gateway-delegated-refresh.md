@@ -1034,19 +1034,48 @@ Append to `tests/auth_probe_retry.rs`:
 
 ```rust
 #[test]
-fn error_body_names_the_store_and_the_fix() {
-    let b = mur_model_gateway::anthropic_auth_error_body(true);
-    assert!(b.contains("Claude Code-credentials"), "names the store: {b}");
+fn error_body_names_the_fix() {
+    let b = mur_model_gateway::anthropic_auth_error_body(&TokenSource::Keychain, true);
     assert!(b.contains("/login anthropic"), "names the fix: {b}");
+    assert!(b.contains("claude auth login"), "names the CLI fallback: {b}");
+}
+
+#[test]
+fn error_body_names_the_store_the_token_came_from() {
+    // A file-backed install must not be told to look in a keychain it does not
+    // have. This is the fourth place in this plan where hardcoding the keychain
+    // would have been wrong.
+    let b = mur_model_gateway::anthropic_auth_error_body(
+        &TokenSource::CredentialsFile("/home/u/.claude/.credentials.json".into()),
+        true,
+    );
+    assert!(b.contains("/home/u/.claude/.credentials.json"), "{b}");
+    assert!(
+        !b.contains("Claude Code-credentials"),
+        "must not name the keychain for a file source: {b}"
+    );
 }
 
 #[test]
 fn revoked_body_does_not_promise_a_refresh() {
     // Re-running a refresh cannot fix a revoked credential; saying so would
     // send the user in circles.
-    let b = mur_model_gateway::anthropic_auth_error_body(false);
+    let b = mur_model_gateway::anthropic_auth_error_body(&TokenSource::Keychain, false);
     assert!(b.contains("revoked"), "{b}");
     assert!(!b.contains("expired"), "{b}");
+}
+
+#[test]
+fn error_body_never_contains_the_token() {
+    // describe_credential_store falls through to `{other:?}` for the remaining
+    // variants, and TokenSource::Static holds a real token. The redacting Debug
+    // added in Task 4 is what keeps this true — this test is its guard from the
+    // other side.
+    let b = mur_model_gateway::anthropic_auth_error_body(
+        &TokenSource::Static(std::sync::Arc::new("sk-ant-secret-value".to_string())),
+        true,
+    );
+    assert!(!b.contains("sk-ant-secret-value"), "token leaked into an error body: {b}");
 }
 ```
 
@@ -1060,20 +1089,61 @@ Expected: FAIL — `cannot find function 'anthropic_auth_error_body'`.
 ```rust
 /// A 401 the caller can act on. The upstream body names no location, which is
 /// what left users guessing which credential had gone stale.
-pub fn anthropic_auth_error_body(expired: bool) -> String {
+///
+/// The store is derived from the source the token actually came from — NOT a
+/// hardcoded keychain string. On a Linux or Windows install the credential
+/// lives in a file, and an error that confidently names the wrong store sends
+/// the reader to a place that does not exist. This is the same mistake the
+/// expiry read made in three separate places earlier in this plan; do not
+/// reintroduce it here.
+pub fn anthropic_auth_error_body(source: &TokenSource, expired: bool) -> String {
     let what = if expired {
         "Anthropic OAuth expired and an automatic refresh did not resolve it"
     } else {
         "Anthropic OAuth was revoked (the stored credential has not aged out)"
     };
     format!(
-        "{what} — credential: keychain \"Claude Code-credentials\". \
-         Fix: run `/login anthropic` in murmur, or `claude auth login`."
+        "{what} — credential: {}. \
+         Fix: run `/login anthropic` in murmur, or `claude auth login`.",
+        describe_credential_store(source)
     )
+}
+
+/// Where a reader should go to look at the credential, in words. Never prints
+/// the credential itself — `TokenSource`'s own `Debug` redacts, and this must
+/// not become a way around that.
+fn describe_credential_store(source: &TokenSource) -> String {
+    match source {
+        TokenSource::Keychain => {
+            if cfg!(target_os = "macos") {
+                "keychain \"Claude Code-credentials\"".to_string()
+            } else {
+                // The non-macOS fallback `resolve_credential` uses.
+                format!(
+                    "{}",
+                    keychain::default_credentials_path()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "~/.claude/.credentials.json".to_string())
+                )
+            }
+        }
+        TokenSource::CredentialsFile(p) => p.display().to_string(),
+        other => format!("{other:?}"),
+    }
 }
 ```
 
 Return it in place of the raw upstream body when the Anthropic 401 was not repaired. Preserve the 401 status code — only the body changes.
+
+**Then prove it reaches the client.** The pure-function tests above cover the
+wording; nothing yet covers the wiring, and every task in this plan that tested
+only its predicate turned out to have an untested arm. `tests/anthropic_retry_arm.rs`
+is already ungated and already stands up an `AppState` against httpmock, so add
+a case there rather than building a new harness: an eligible 401 whose probe
+does **not** repair the credential (a fake `claude` that changes nothing) must
+return 401 to the client with a body containing `/login anthropic` — not the
+upstream's original body. Assert the upstream saw exactly two hits, so the case
+is genuinely the post-retry path and not an early return.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
