@@ -957,7 +957,10 @@ fn request_login_handover(app: &mut crate::cmd::agent::cli::app::App, p: Provide
 }
 ```
 
-`HandoverRequest` and `App::pending_handover` are added in Task 7. Implement Task 7 next; the tree will not build until then.
+`HandoverRequest` and `App::pending_handover` come from Task 7. **Implement Task 7
+first** — it is pure infrastructure and compiles standalone with the flag simply
+never set, whereas doing this task first leaves the tree uncompilable, which in
+turn makes it unreviewable. Dispatch order for this plan is 1, 2, 3, 4, 5, 7, 6, 8.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
