@@ -202,52 +202,123 @@ pub fn parse_claude_status(json: &str) -> OwnerStatus {
 }
 
 /// Parses `codex login status`. There is no `--json` form, so this reads the
-/// human-readable text — anchored on line start and case-sensitive so "Not
-/// logged in" can never match a `starts_with("Logged in")` check.
+/// human-readable text — matched case-insensitively (a capitalisation change
+/// upstream must not silently start reporting "not logged in") and per line
+/// (so a preamble line before the status line can't hide it either).
+/// `identity` is set to the matching line only, trimmed — never the whole
+/// blob — so it stays a single "identity line" as the field above documents.
+///
+/// `starts_with`, not `contains`: "Not logged in" contains the substring
+/// "logged in" and must not match.
+// Exercised directly by the tests below; only reached from prod code through
+// `owner_status`, which nothing calls until Task 4 — same `cfg_attr` idiom as
+// `parse_claude_status` above.
 #[cfg_attr(not(test), expect(dead_code))]
 pub fn parse_codex_status(text: &str) -> OwnerStatus {
-    let logged_in = text
+    let line = text
         .lines()
-        .any(|l| l.trim_start().starts_with("Logged in"));
-    OwnerStatus {
-        logged_in,
-        identity: logged_in.then(|| text.trim().to_string()),
-        cli_present: true,
+        .find(|l| l.trim_start().to_ascii_lowercase().starts_with("logged in"));
+    match line {
+        Some(l) => OwnerStatus {
+            logged_in: true,
+            identity: Some(l.trim().to_string()),
+            cli_present: true,
+        },
+        None => OwnerStatus::unknown(),
     }
 }
 
 /// Timeout for a single owner-CLI status call. These calls are local and
 /// answer immediately when the CLI is healthy; the bound exists so a wedged
-/// CLI cannot freeze the TUI.
-// Not enforced here — Task 5 wraps the `owner_status` call with it. Nothing
-// reads it until then.
-#[expect(dead_code)]
+/// CLI cannot freeze the TUI that calls [`owner_status`].
+// Enforced in `run_capture` below, not deferred to Task 5: Task 4 wires
+// `owner_status` into the live `/login` command via `spawn_blocking` with no
+// timeout of its own, so deferring this would open a real hang window
+// between Task 4 landing and Task 5 landing. It stays a separate constant
+// because it is also the documented bound callers can rely on.
 const STATUS_TIMEOUT_SECS: u64 = 15;
 
-/// Runs `bin args...` and returns its stdout, or `None` if the process could
-/// not be started at all (most commonly: `bin` is not installed).
+/// Runs `bin args...` and returns its stdout.
 ///
-/// A non-zero exit is deliberately NOT treated as "absent" — some CLIs use it
-/// for "not logged in" and still print a parseable status to stdout. The
-/// parse functions above degrade unparseable or empty output on their own, so
-/// there is no need to inspect the exit code here.
-#[expect(dead_code)]
-fn run_capture(bin: &str, args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new(bin).args(args).output().ok()?;
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+/// `None` only if the process could not be started at all (most commonly:
+/// `bin` is not installed) — the one case `owner_status` maps to
+/// [`OwnerStatus::absent`]. If the process does not exit within `timeout`, it
+/// is killed and this still returns `Some` (whatever partial output it wrote,
+/// or an empty string) rather than `None`: the CLI *is* present, it just
+/// would not answer, so it must degrade through the same path as an empty or
+/// malformed response — see `parse_claude_status`/`parse_codex_status` —
+/// never through "not installed".
+///
+/// A non-zero exit is deliberately NOT treated as failure either — some CLIs
+/// use it for "not logged in" and still print a parseable status to stdout.
+// Called directly (with a short injected timeout, not the real
+// `STATUS_TIMEOUT_SECS`) by the test below on every platform, so it shares
+// `parse_claude_status`'s reachability: live under `cfg(test)`, dead in the
+// non-test build until Task 4 calls `owner_status`.
+#[cfg_attr(not(test), expect(dead_code))]
+fn run_capture(bin: &str, args: &[&str], timeout: std::time::Duration) -> Option<String> {
+    use std::io::Read;
+
+    let mut child = std::process::Command::new(bin)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+
+    // Drain stdout on its own thread: the wait loop below polls rather than
+    // blocking on the child, and an unread pipe can fill and stall the child
+    // before it ever gets a chance to exit.
+    let mut stdout = child.stdout.take()?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = stdout.read_to_string(&mut buf);
+        let _ = tx.send(buf);
+    });
+
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Ok(None) => {
+                // Wedged: kill so the reader thread's pipe closes, then fall
+                // through to the same `Some(..)` return as a normal exit —
+                // degrade like an empty response, not like "not installed".
+                let _ = child.kill();
+                let _ = child.wait();
+                break;
+            }
+            Err(_) => return None,
+        }
+    }
+
+    // A 1s safety net, not a second real timeout: once the child has exited
+    // (or been killed) its pipe closes, so the reader thread's
+    // `read_to_string` returns almost immediately.
+    Some(
+        rx.recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap_or_default(),
+    )
 }
 
 /// Ask the owner CLI whether its credential is healthy.
 ///
-/// Runs synchronously with no timeout of its own — a caller on a UI thread
-/// should bound it with [`STATUS_TIMEOUT_SECS`].
+/// Bounded by [`STATUS_TIMEOUT_SECS`] so a wedged CLI cannot freeze the TUI
+/// that calls this.
+// Task 4 is the first caller, dispatching this from the live `/login`
+// command.
 #[expect(dead_code)]
 pub fn owner_status(p: Provider) -> OwnerStatus {
+    let timeout = std::time::Duration::from_secs(STATUS_TIMEOUT_SECS);
     match p {
-        Provider::Anthropic => run_capture("claude", &["auth", "status", "--json"])
+        Provider::Anthropic => run_capture("claude", &["auth", "status", "--json"], timeout)
             .map(|out| parse_claude_status(&out))
             .unwrap_or_else(OwnerStatus::absent),
-        Provider::Chatgpt => run_capture("codex", &["login", "status"])
+        Provider::Chatgpt => run_capture("codex", &["login", "status"], timeout)
             .map(|out| parse_codex_status(&out))
             .unwrap_or_else(OwnerStatus::absent),
     }
@@ -365,5 +436,41 @@ mod tests {
         assert_eq!(in_.identity.as_deref(), Some("Logged in using ChatGPT"));
         let out = parse_codex_status("Not logged in");
         assert_eq!(out.identity, None);
+    }
+
+    #[test]
+    fn codex_status_is_case_insensitive() {
+        // Pins the union design: a capitalisation change upstream (the
+        // brief's own concern) must not silently start reporting "not
+        // logged in". Fails under the old case-sensitive `starts_with`.
+        let s = parse_codex_status("logged in using ChatGPT");
+        assert!(s.logged_in);
+        assert_eq!(s.identity.as_deref(), Some("logged in using ChatGPT"));
+    }
+
+    #[test]
+    fn run_capture_kills_a_wedged_process_and_degrades_like_empty_output() {
+        // A real subprocess, not a mock: proves the kill-on-timeout path
+        // itself, not just that a `Duration` value got threaded through.
+        let (bin, args): (&str, &[&str]) = if cfg!(windows) {
+            (
+                "powershell",
+                &["-NoProfile", "-Command", "Start-Sleep -Seconds 5"],
+            )
+        } else {
+            ("/bin/sleep", &["5"])
+        };
+        let start = std::time::Instant::now();
+        let out = run_capture(bin, args, std::time::Duration::from_millis(200));
+        // The value alone doesn't prove the timeout fired: a `sleep 5` that
+        // ran to completion would *also* eventually return `Some("")`, since
+        // sleep prints nothing. The elapsed bound is what actually
+        // distinguishes "killed at ~200ms" from "waited out the full sleep".
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(3),
+            "did not time out promptly: {:?}",
+            start.elapsed()
+        );
+        assert_eq!(out, Some(String::new()));
     }
 }
