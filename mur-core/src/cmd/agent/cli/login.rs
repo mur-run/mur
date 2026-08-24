@@ -257,6 +257,7 @@ fn run_capture(bin: &str, args: &[&str], timeout: std::time::Duration) -> Option
 
     let mut child = std::process::Command::new(bin)
         .args(args)
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()

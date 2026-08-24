@@ -727,6 +727,27 @@ async fn event_loop(
         // loop owns `terminal` and `events`.
         if let Some(req) = app.pending_handover.take() {
             app.push_system(format!("{}: handing over the terminal…", req.label));
+            // `push_system` just made the transcript non-empty. The welcome
+            // check above (`want_h`, this same pass) already ran against the
+            // empty transcript and left `viewport_h` at welcome height — left
+            // alone, `handover::run` would reanchor there, scrolling the
+            // child's own output almost entirely off-screen, and the NEXT
+            // pass would then see `want_h` (normal height) disagree with
+            // `viewport_h` (welcome height) and route it through
+            // `purge_and_reanchor` — `Clear(ClearType::Purge)` erasing the
+            // very transcript this module exists to protect. Recompute and
+            // reanchor ourselves right now instead of setting
+            // `wants_screen_wipe`: `handover::run` already does its own
+            // no-purge reanchor, so a leftover wipe request would just purge
+            // that transcript right back out next pass.
+            viewport_h = viewport_h_for(last_size.height, false);
+            app.flushed_upto = 0;
+            app.flushed_bytes = 0;
+            app.wants_screen_wipe = false;
+            // Paint the "handing over" line before we suspend — otherwise it
+            // only appears after the child exits, alongside the result.
+            ui::flush_finished(terminal, app, viewport_h)?;
+            terminal.draw(|f| ui::render(f, app))?;
             // The EventStream owns stdin; the child must have it to itself.
             drop(events);
             let outcome = handover::run(terminal, viewport_h, &req);

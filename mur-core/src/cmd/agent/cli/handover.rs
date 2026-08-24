@@ -4,7 +4,7 @@
 //! (see `TerminalGuard::enter`), so the child's output lands naturally in
 //! scrollback above the viewport — no alternate screen is involved.
 //!
-//! Three things here are load-bearing and easy to get wrong:
+//! Four things here are load-bearing and easy to get wrong:
 //!
 //! * The caller MUST drop the `EventStream` first. It owns stdin, and a child
 //!   inheriting stdin would race murmur for the user's keystrokes — the paste
@@ -14,6 +14,12 @@
 //! * Re-anchoring must NOT purge. `purge_and_reanchor` clears scrollback,
 //!   which would erase the login transcript — including the URL the user still
 //!   needs and any failure message.
+//! * Ctrl-C must reach the child, not murmur. `begin` disables raw mode, so
+//!   Ctrl-C becomes a real SIGINT to the whole foreground process group —
+//!   which includes murmur, since nothing here calls `setpgid`. Unix ignores
+//!   it in the parent and resets it to default in the child (`pre_exec`, see
+//!   `Suspended::begin`/`Drop` and `run`); Windows has neither mechanism, so
+//!   Ctrl-C during a handover still kills murmur there.
 
 use anyhow::{Context, Result};
 use crossterm::cursor;
@@ -27,6 +33,8 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use std::io::{self, Stdout, Write};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::process::ExitStatus;
 use std::sync::atomic::Ordering;
 
@@ -74,14 +82,50 @@ struct Suspended {
     was_alt: bool,
     /// Whether keyboard enhancement was active, so resume can re-push it.
     kbd_enhanced: bool,
+    /// SIGINT's disposition before `begin` ignored it, so `Drop` restores
+    /// exactly that rather than assuming SIG_DFL. Unix only — Windows has no
+    /// `pre_exec`, so the child shares murmur's console and Ctrl-C during a
+    /// handover still kills murmur there (see the module doc comment).
+    #[cfg(unix)]
+    old_sigint: libc::sighandler_t,
 }
 
 impl Suspended {
     /// Give the terminal back to the shell. Mirrors `TerminalGuard::drop`.
+    ///
+    /// Captures everything `Drop` needs and constructs `Self` FIRST, before
+    /// any of the fallible or mutating work below runs. `Self` existing (even
+    /// just bound to a local) is what makes `Drop` fire on an early `?`
+    /// return — construct-after-mutate would leave keyboard enhancement
+    /// popped, `ON_ALT` cleared, and SIGINT ignored with no guard left to
+    /// undo any of it for the rest of the session. Every individual restore
+    /// in `Drop` is idempotent (see its doc comment), so constructing early
+    /// and mutating after is safe even though `Drop` may then "restore"
+    /// something this function never got around to changing.
     fn begin(viewport_h: u16) -> Result<Self> {
         let kbd_enhanced = keyboard_enhancement_active();
+        let was_alt = ON_ALT.load(Ordering::Relaxed);
+        // Ignore SIGINT here in the parent so a Ctrl-C during the child's
+        // lifetime doesn't also terminate murmur — nothing calls `setpgid`,
+        // so parent and child share a process group and the terminal signals
+        // both (see the module doc comment; `run` resets this to default in
+        // the child before exec). `libc::signal` atomically reads the old
+        // disposition and installs the new one, so this doubles as the
+        // capture for `Drop`. SIG_IGN can only fail on an invalid or
+        // uncatchable signal number, neither of which applies to SIGINT —
+        // practically infallible, same class of call as the `ON_ALT.load`
+        // above it.
+        #[cfg(unix)]
+        let old_sigint = unsafe { libc::signal(libc::SIGINT, libc::SIG_IGN) };
+        let suspended = Self {
+            was_alt,
+            kbd_enhanced,
+            #[cfg(unix)]
+            old_sigint,
+        };
+
         pop_keyboard_enhancement(kbd_enhanced);
-        let was_alt = ON_ALT.swap(false, Ordering::Relaxed);
+        ON_ALT.store(false, Ordering::Relaxed);
         if was_alt {
             let _ = execute!(io::stdout(), LeaveAlternateScreen);
         }
@@ -99,10 +143,7 @@ impl Suspended {
         )
         .context("release terminal modes")?;
         disable_raw_mode().context("disable raw mode")?;
-        Ok(Self {
-            was_alt,
-            kbd_enhanced,
-        })
+        Ok(suspended)
     }
 }
 
@@ -115,11 +156,23 @@ impl Drop for Suspended {
             ON_ALT.store(true, Ordering::Relaxed);
         }
         push_keyboard_enhancement(self.kbd_enhanced);
+        // Put SIGINT's disposition back to whatever it was before `begin`,
+        // rather than assuming SIG_DFL — a defensive default in case
+        // something upstream had already customized it.
+        #[cfg(unix)]
+        unsafe {
+            libc::signal(libc::SIGINT, self.old_sigint);
+        }
     }
 }
 
 /// Run `req` with the terminal handed over. The caller must have dropped the
 /// `EventStream` and must recreate it afterwards.
+///
+/// On Unix, Ctrl-C during the child's lifetime is ignored by murmur and reset
+/// to default in the child before exec, so it reaches only the child (see the
+/// module doc comment and `Suspended::begin`). This crate installs no such
+/// guard on Windows, so Ctrl-C there kills murmur along with the child.
 pub fn run(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     viewport_h: u16,
@@ -130,10 +183,21 @@ pub fn run(
     let status = {
         let _suspended = Suspended::begin(viewport_h)?;
         // Inherit all three handles: this is an interactive flow.
-        std::process::Command::new(prog)
-            .args(args)
-            .status()
-            .with_context(|| format!("run {prog}"))?
+        let mut cmd = std::process::Command::new(prog);
+        cmd.args(args);
+        // `begin` ignores SIGINT in the parent (see its doc comment); SIG_IGN
+        // is inherited across exec, so without this the child would silently
+        // ignore Ctrl-C too. Reset to the default disposition right before
+        // exec so the child reacts to Ctrl-C normally. Unix only: Windows has
+        // no `pre_exec` — see the module doc comment.
+        #[cfg(unix)]
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::signal(libc::SIGINT, libc::SIG_DFL);
+                Ok(())
+            });
+        }
+        cmd.status().with_context(|| format!("run {prog}"))?
         // `_suspended` drops here — raw mode is back on before we redraw,
         // and stays restored even if `status()` returned Err above.
     };
