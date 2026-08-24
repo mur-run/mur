@@ -6,6 +6,7 @@
 //! gateway is the only component that holds a credential, and it re-reads it
 //! per request — so nothing here needs to restart an agent.
 
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 /// Keychain service name Claude Code stores its credential under.
@@ -131,6 +132,127 @@ pub fn store_stamp(p: Provider) -> Option<StoreStamp> {
     }
 }
 
+/// Health of a provider's credential, as reported by the CLI that owns it.
+///
+/// murmur never reads the token itself — this is the owner CLI's own
+/// account-status output, reduced to what the TUI needs to render.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnerStatus {
+    pub logged_in: bool,
+    /// Display-only identity line, e.g. `"a@b.c (max)"`. Never a token.
+    pub identity: Option<String>,
+    /// False when the owner CLI itself could not be run — a supported state:
+    /// a transplanted credential still works through the gateway, but murmur
+    /// cannot repair it here without the CLI that owns it.
+    pub cli_present: bool,
+}
+
+impl OwnerStatus {
+    /// The CLI ran and answered, but said (or implied) "not logged in".
+    // Called from both parse fns below, so it shares their reachability: live
+    // under `cfg(test)` (their tests reach it transitively), dead in the
+    // non-test build until Task 4/5 call `owner_status`.
+    #[cfg_attr(not(test), expect(dead_code))]
+    fn unknown() -> Self {
+        Self {
+            logged_in: false,
+            identity: None,
+            cli_present: true,
+        }
+    }
+
+    /// The CLI could not be run at all (not installed, or not on `PATH`).
+    // Only reached from `owner_status`'s `run_capture` miss, and no test
+    // exercises that subprocess path — dead in every build until Task 4.
+    #[expect(dead_code)]
+    fn absent() -> Self {
+        Self {
+            logged_in: false,
+            identity: None,
+            cli_present: false,
+        }
+    }
+}
+
+/// Parses `claude auth status --json`. Total: any shape surprise (a CLI
+/// upgrade, a truncated pipe) degrades to "not logged in" rather than
+/// panicking inside a running TUI.
+// Exercised directly by the tests below; only reached from prod code through
+// `owner_status`, which nothing calls until Task 4 — same `cfg_attr` idiom as
+// `file_stamp` above, for the same reason.
+#[cfg_attr(not(test), expect(dead_code))]
+pub fn parse_claude_status(json: &str) -> OwnerStatus {
+    let Ok(v) = serde_json::from_str::<Value>(json) else {
+        return OwnerStatus::unknown();
+    };
+    if !v.get("loggedIn").and_then(Value::as_bool).unwrap_or(false) {
+        return OwnerStatus::unknown();
+    }
+    let email = v.get("email").and_then(Value::as_str);
+    let sub = v.get("subscriptionType").and_then(Value::as_str);
+    let identity = email.map(|e| match sub {
+        Some(s) => format!("{e} ({s})"),
+        None => e.to_string(),
+    });
+    OwnerStatus {
+        logged_in: true,
+        identity,
+        cli_present: true,
+    }
+}
+
+/// Parses `codex login status`. There is no `--json` form, so this reads the
+/// human-readable text — anchored on line start and case-sensitive so "Not
+/// logged in" can never match a `starts_with("Logged in")` check.
+#[cfg_attr(not(test), expect(dead_code))]
+pub fn parse_codex_status(text: &str) -> OwnerStatus {
+    let logged_in = text
+        .lines()
+        .any(|l| l.trim_start().starts_with("Logged in"));
+    OwnerStatus {
+        logged_in,
+        identity: logged_in.then(|| text.trim().to_string()),
+        cli_present: true,
+    }
+}
+
+/// Timeout for a single owner-CLI status call. These calls are local and
+/// answer immediately when the CLI is healthy; the bound exists so a wedged
+/// CLI cannot freeze the TUI.
+// Not enforced here — Task 5 wraps the `owner_status` call with it. Nothing
+// reads it until then.
+#[expect(dead_code)]
+const STATUS_TIMEOUT_SECS: u64 = 15;
+
+/// Runs `bin args...` and returns its stdout, or `None` if the process could
+/// not be started at all (most commonly: `bin` is not installed).
+///
+/// A non-zero exit is deliberately NOT treated as "absent" — some CLIs use it
+/// for "not logged in" and still print a parseable status to stdout. The
+/// parse functions above degrade unparseable or empty output on their own, so
+/// there is no need to inspect the exit code here.
+#[expect(dead_code)]
+fn run_capture(bin: &str, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new(bin).args(args).output().ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Ask the owner CLI whether its credential is healthy.
+///
+/// Runs synchronously with no timeout of its own — a caller on a UI thread
+/// should bound it with [`STATUS_TIMEOUT_SECS`].
+#[expect(dead_code)]
+pub fn owner_status(p: Provider) -> OwnerStatus {
+    match p {
+        Provider::Anthropic => run_capture("claude", &["auth", "status", "--json"])
+            .map(|out| parse_claude_status(&out))
+            .unwrap_or_else(OwnerStatus::absent),
+        Provider::Chatgpt => run_capture("codex", &["login", "status"])
+            .map(|out| parse_codex_status(&out))
+            .unwrap_or_else(OwnerStatus::absent),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +308,62 @@ mod tests {
             file_stamp(std::path::Path::new("/nonexistent/auth.json")),
             None
         );
+    }
+
+    #[test]
+    fn claude_status_logged_in() {
+        let json = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"a@b.c","subscriptionType":"max"}"#;
+        let s = parse_claude_status(json);
+        assert!(s.logged_in);
+        assert_eq!(s.identity.as_deref(), Some("a@b.c (max)"));
+        assert!(s.cli_present);
+    }
+
+    #[test]
+    fn claude_status_logged_out() {
+        let s = parse_claude_status(r#"{"loggedIn":false}"#);
+        assert!(!s.logged_in);
+        assert_eq!(s.identity, None);
+    }
+
+    #[test]
+    fn claude_status_without_subscription_still_shows_the_email() {
+        let s = parse_claude_status(r#"{"loggedIn":true,"email":"a@b.c"}"#);
+        assert_eq!(s.identity.as_deref(), Some("a@b.c"));
+    }
+
+    #[test]
+    fn claude_status_logged_out_ignores_identity_fields_when_present() {
+        // `{"loggedIn":false}` alone can't tell whether the empty identity
+        // came from the early return or from email/sub simply being absent.
+        // Carry them anyway: a stale-but-present email must not leak into
+        // the identity line once loggedIn says false.
+        let s =
+            parse_claude_status(r#"{"loggedIn":false,"email":"a@b.c","subscriptionType":"max"}"#);
+        assert!(!s.logged_in);
+        assert_eq!(s.identity, None);
+    }
+
+    #[test]
+    fn malformed_claude_status_is_not_a_panic() {
+        // A CLI upgrade could change the shape. Degrade to "unknown", never crash.
+        let s = parse_claude_status("not json at all");
+        assert!(!s.logged_in);
+        assert_eq!(s.identity, None);
+    }
+
+    #[test]
+    fn codex_status_variants() {
+        assert!(parse_codex_status("Logged in using ChatGPT").logged_in);
+        assert!(!parse_codex_status("Not logged in").logged_in);
+        assert!(!parse_codex_status("").logged_in);
+    }
+
+    #[test]
+    fn codex_identity_is_the_status_line_only_when_logged_in() {
+        let in_ = parse_codex_status("Logged in using ChatGPT");
+        assert_eq!(in_.identity.as_deref(), Some("Logged in using ChatGPT"));
+        let out = parse_codex_status("Not logged in");
+        assert_eq!(out.identity, None);
     }
 }
