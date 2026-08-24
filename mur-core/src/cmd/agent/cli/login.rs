@@ -213,18 +213,31 @@ impl OwnerStatus {
 /// Longest identity murmur will echo from an owner CLI into the transcript.
 ///
 /// Wide enough for `email (subscription)` and for `codex login status`'s one
-/// line, short enough that a surprise from upstream stays one row on a normal
-/// terminal.
+/// line. NOT a one-row bound: at 80 columns this is two wrapped rows, three
+/// if the text is CJK. It is a damage bound, not a layout bound — the job is
+/// to stop an upstream surprise from pasting a screenful into a
+/// credential-adjacent UI, and the transcript wraps rather than truncating,
+/// so a couple of rows is a cost worth paying to keep a long-but-legitimate
+/// identity readable.
 const MAX_IDENTITY_CHARS: usize = 120;
 
 /// Bound an owner CLI's text before it becomes a transcript row.
 ///
 /// The identity line is upstream output murmur does not control, and it ends
 /// up in the transcript and then in the terminal's own scrollback. Two things
-/// are therefore taken off it: control characters (a stray `ESC` reaching a
-/// ratatui cell is terminal injection, not a formatting quirk) and unbounded
-/// length. `codex login status` has no `--json`, so there is no field to
-/// select and no shape to validate — bounding the damage is what is left.
+/// are therefore taken off it: unbounded length, and the characters
+/// `char::is_control` matches — Unicode `Cc`, which is the class that carries
+/// the real hazard (a stray `ESC` reaching a ratatui cell is terminal
+/// injection, not a formatting quirk).
+///
+/// Deliberately narrower than "sanitised". Bidi and format characters
+/// (`U+202E`, `U+200F`, the `Cf` class generally) are NOT stripped: they can
+/// make a line display misleadingly, but they reach the terminal as ordinary
+/// text and cannot drive it. Widening the filter is a behaviour change, not a
+/// comment fix, so it is named here rather than quietly implied.
+///
+/// `codex login status` has no `--json`, so there is no field to select and
+/// no shape to validate — bounding the damage is what is left.
 fn sanitize_identity(line: &str) -> String {
     let clean: String = line.trim().chars().filter(|c| !c.is_control()).collect();
     match clean.char_indices().nth(MAX_IDENTITY_CHARS) {
@@ -296,15 +309,23 @@ const STATUS_TIMEOUT_SECS: u64 = 15;
 
 /// Runs `bin args...` and returns its stdout.
 ///
-/// `None` **only** if the process could not be started at all (most commonly:
-/// `bin` is not installed) — the one case `owner_status` maps to
-/// [`OwnerStatus::absent`]. Once the spawn has succeeded this returns `Some`
-/// no matter what happens next: whatever partial output was written, or an
-/// empty string. The CLI *is* present, so it must degrade through the same
-/// path as an empty or malformed response — see
+/// `None` essentially always means the process could not be started at all
+/// (most commonly: `bin` is not installed) — the one case `owner_status` maps
+/// to [`OwnerStatus::absent`]. Once the spawn has succeeded, every *wait*
+/// outcome returns `Some`: whatever partial output was written, or an empty
+/// string. The CLI *is* present, so it must degrade through the same path as
+/// an empty or malformed response — see
 /// `parse_claude_status`/`parse_codex_status` — never through "not
 /// installed", which becomes `Rung::NoOwnerCli` and tells the user to install
 /// a CLI that is already there.
+///
+/// "essentially", not "only": `child.stdout.take()?` below is one more
+/// `?`-to-`None` after a successful spawn, and it drops the child without
+/// reaping it. It is unreachable as written — `Stdio::piped()` guarantees the
+/// handle is there and nothing takes it first — so it is left alone rather
+/// than given a fourth code path to keep in step with the other three. It is
+/// named here so the sentence above is not read as a guarantee the code does
+/// not make.
 ///
 /// A non-zero exit is deliberately NOT treated as failure either — some CLIs
 /// use it for "not logged in" and still print a parseable status to stdout.

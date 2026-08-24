@@ -765,7 +765,17 @@ async fn event_loop(
             let want_h = prepare_handover(app, &req.label, last_size.height);
             // The EventStream owns stdin: the child must have it to itself,
             // and the re-anchor below reads the terminal's cursor-position
-            // reply from it.
+            // reply from it — `Terminal::with_options(Inline(..))` issues a
+            // cursor query and needs crossterm's reader lock, which the
+            // EventStream's background thread holds. So this drop is required
+            // here, not merely tidy.
+            //
+            // Behaviour change from moving it above the flush and the draw:
+            // keystrokes typed during those two calls used to die with the
+            // dropped EventStream and are now left in the terminal's own
+            // input buffer for the child to read. That is the improvement —
+            // the window is short, but anything typed in it was the user
+            // answering the login prompt, and swallowing it was never right.
             drop(events);
             // Re-anchor the REAL terminal, not just this local: the draw
             // below and `Suspended::begin`'s clear would otherwise be working
