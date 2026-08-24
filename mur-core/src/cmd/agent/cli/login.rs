@@ -454,11 +454,92 @@ pub async fn dispatch_repair(app: &mut crate::cmd::agent::cli::app::App, p: Prov
     }
 }
 
-/// Stub: rung 3 needs a real login. A later task adds the headless check and
-/// the handover flow itself (`HandoverRequest` / `App::pending_handover`);
-/// this task only routes here and says so.
+/// The environment signals that decide whether a browser can open here.
+/// Taken as data so the matrix is testable without touching the real env.
+#[derive(Debug, Clone, Copy)]
+pub struct BrowserEnv {
+    pub macos: bool,
+    /// `DISPLAY` or `WAYLAND_DISPLAY` is set.
+    pub display: bool,
+    /// `SSH_CONNECTION` is set.
+    pub ssh: bool,
+}
+
+impl BrowserEnv {
+    pub fn detect() -> Self {
+        Self::detect_with(cfg!(target_os = "macos"), |name| {
+            std::env::var_os(name).is_some()
+        })
+    }
+
+    /// `detect`'s body with the environment lookup injected, so a test can pin
+    /// **which variable names are read** and how each maps onto a field.
+    ///
+    /// `has_browser` is pure and fully covered by its matrix, but that matrix
+    /// is handed a `BrowserEnv` already built — it cannot see this function at
+    /// all. Swap `DISPLAY` and `SSH_CONNECTION` here and every existing test
+    /// still passes, while a headless SSH box is told it has a browser and a
+    /// local desktop is told it does not.
+    pub(crate) fn detect_with(macos: bool, has_var: impl Fn(&str) -> bool) -> Self {
+        Self {
+            macos,
+            display: has_var("DISPLAY") || has_var("WAYLAND_DISPLAY"),
+            ssh: has_var("SSH_CONNECTION"),
+        }
+    }
+}
+
+/// Heuristic, not proof — `--print-only` and `--force-browser` exist because
+/// this can be wrong in both directions.
+pub fn has_browser(env: &BrowserEnv) -> bool {
+    if env.display {
+        // An X/Wayland display works even when forwarded over SSH.
+        return true;
+    }
+    env.macos && !env.ssh
+}
+
+/// What to do when no browser can open here. These are the paths the owner
+/// CLIs document for exactly this case; murmur only relays them.
+pub fn print_only_instructions(p: Provider) -> String {
+    match p {
+        Provider::Anthropic => "\
+No browser available here. Two ways in:
+
+  1. Long-lived token (needs a Claude subscription):
+       claude setup-token
+
+  2. Log in where a browser exists, then copy the credential over:
+       ~/.claude/.credentials.json
+     The gateway reads that path directly on Linux and Windows installs."
+            .to_string(),
+        Provider::Chatgpt => "\
+No browser available here. Two ways in:
+
+  1. Inject a credential from stdin:
+       printenv OPENAI_API_KEY | codex login --with-api-key
+       printenv CODEX_ACCESS_TOKEN | codex login --with-access-token
+
+  2. Log in where a browser exists, then copy the credential over:
+       ~/.codex/auth.json"
+            .to_string(),
+    }
+}
+
+/// Rung 3. Only reached when nothing cheaper worked.
 fn request_login_handover(app: &mut crate::cmd::agent::cli::app::App, p: Provider) {
-    app.push_system(format!("{}: needs a full login (not wired yet)", p.label()));
+    if !has_browser(&BrowserEnv::detect()) {
+        app.push_system(format!("{}:\n{}", p.label(), print_only_instructions(p)));
+        return;
+    }
+    let argv = match p {
+        Provider::Anthropic => vec!["claude".into(), "auth".into(), "login".into()],
+        Provider::Chatgpt => vec!["codex".into(), "login".into()],
+    };
+    app.pending_handover = Some(crate::cmd::agent::cli::app::HandoverRequest {
+        argv,
+        label: p.label().to_string(),
+    });
 }
 
 #[cfg(test)]

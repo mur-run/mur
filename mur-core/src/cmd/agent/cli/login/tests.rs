@@ -337,3 +337,73 @@ fn a_missing_owner_cli_cannot_be_repaired() {
     };
     assert_eq!(classify_repair(None, None, &absent), Rung::NoOwnerCli);
 }
+
+#[test]
+fn browser_detection_matrix() {
+    let m = |macos, display, ssh| {
+        has_browser(&BrowserEnv {
+            macos,
+            display,
+            ssh,
+        })
+    };
+    // Local macOS desktop: always has a browser.
+    assert!(m(true, false, false));
+    // macOS reached over SSH: no usable browser on this end.
+    assert!(!m(true, false, true));
+    // Linux desktop.
+    assert!(m(false, true, false));
+    // Linux over SSH with X forwarding still works.
+    assert!(m(false, true, true));
+    // Headless Linux box.
+    assert!(!m(false, false, false));
+}
+
+#[test]
+fn detect_reads_the_variable_names_it_claims_to() {
+    // Pins the NAMES and the mapping, which `browser_detection_matrix`
+    // structurally cannot: it is handed a BrowserEnv already built.
+    // Acceptance criterion is a mutation — swap DISPLAY and
+    // SSH_CONNECTION inside `detect_with` and confirm this goes red.
+    let only = |want: &'static str| move |name: &str| name == want;
+
+    let e = BrowserEnv::detect_with(false, only("SSH_CONNECTION"));
+    assert!(e.ssh, "SSH_CONNECTION must set ssh");
+    assert!(!e.display, "SSH_CONNECTION must not set display");
+
+    let e = BrowserEnv::detect_with(false, only("DISPLAY"));
+    assert!(e.display, "DISPLAY must set display");
+    assert!(!e.ssh, "DISPLAY must not set ssh");
+
+    // Wayland is the second display variable, not a third field.
+    let e = BrowserEnv::detect_with(false, only("WAYLAND_DISPLAY"));
+    assert!(e.display, "WAYLAND_DISPLAY must set display");
+    assert!(!e.ssh);
+
+    // An unrelated variable must move nothing.
+    let e = BrowserEnv::detect_with(false, only("EDITOR"));
+    assert!(!e.display);
+    assert!(!e.ssh);
+
+    // `macos` comes from the caller, never from the environment.
+    assert!(BrowserEnv::detect_with(true, |_| false).macos);
+    assert!(!BrowserEnv::detect_with(false, |_| true).macos);
+}
+
+#[test]
+fn headless_instructions_name_a_command_that_works_without_a_browser() {
+    let a = print_only_instructions(Provider::Anthropic);
+    assert!(a.contains("claude setup-token"), "{a}");
+    let c = print_only_instructions(Provider::Chatgpt);
+    assert!(
+        c.contains("--with-access-token") || c.contains("--with-api-key"),
+        "{c}"
+    );
+}
+
+#[test]
+fn headless_instructions_mention_transplanting_a_credential() {
+    // The other supported path: log in where a browser exists, copy it over.
+    let a = print_only_instructions(Provider::Anthropic);
+    assert!(a.contains(".credentials.json"), "{a}");
+}
