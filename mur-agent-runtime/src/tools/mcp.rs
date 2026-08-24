@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use super::{ToolError, ToolExecutor, ToolOutput};
+use super::{ToolError, ToolExecutor, ToolImage, ToolOutput};
 use crate::llm::ToolDef;
 use crate::mcp::pool::McpPool;
 use crate::protocol::mcp_client::McpClient;
@@ -47,6 +47,34 @@ pub fn render_mcp_result(result: &Value) -> String {
         }
     }
     out.trim_end().to_string()
+}
+
+/// Pull the image blocks out of an MCP `tools/call` result.
+///
+/// MCP image content is `{"type":"image","data":<base64>,"mimeType":…}`;
+/// the Messages API wants `source.media_type`, so the rename happens here and
+/// nowhere else. [`render_mcp_result`] still writes an `[image]` placeholder
+/// into the text for the same block — that is deliberate, and it is what an
+/// adapter without vision tool results shows the model.
+///
+/// Unsupported media types and oversize images are dropped
+/// ([`ToolImage::is_supported`]): a provider rejects the whole turn over one
+/// bad image, so losing the picture beats losing the turn.
+pub fn extract_mcp_images(result: &Value) -> Vec<ToolImage> {
+    let Some(content) = result.get("content").and_then(|c| c.as_array()) else {
+        return Vec::new();
+    };
+    content
+        .iter()
+        .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("image"))
+        .filter_map(|b| {
+            Some(ToolImage {
+                media_type: b.get("mimeType").and_then(|m| m.as_str())?.to_string(),
+                data: b.get("data").and_then(|d| d.as_str())?.to_string(),
+            })
+        })
+        .filter(ToolImage::is_supported)
+        .collect()
 }
 
 /// A [`ToolExecutor`] backed by a single MCP tool, dispatched via the shared pool.
@@ -106,9 +134,13 @@ impl ToolExecutor for McpToolExecutor {
             .unwrap_or(false);
         let text = render_mcp_result(&result);
         if is_error {
+            // An error result carries no images: the error path is a String,
+            // and a failed call has nothing to show.
             Err(ToolError::Execution(text))
         } else {
-            Ok(text.into())
+            let mut out: ToolOutput = text.into();
+            out.images = extract_mcp_images(&result);
+            Ok(out)
         }
     }
 }
@@ -145,5 +177,28 @@ mod tests {
     fn render_fallback_json() {
         let r = json!({"notContent": "foo"});
         assert!(!render_mcp_result(&r).is_empty());
+    }
+
+    /// MCP names the field `mimeType`; the Messages API wants `media_type`.
+    /// The rename happens in `extract_mcp_images` and nowhere else, so this
+    /// pins it — and pins that junk media types are dropped rather than sent
+    /// (a provider rejects the entire turn over one bad image).
+    #[test]
+    fn extracts_mcp_images_and_drops_unusable_ones() {
+        let r = json!({"content": [
+            {"type": "text", "text": "here"},
+            {"type": "image", "data": "QUJD", "mimeType": "image/png"},
+            {"type": "image", "data": "QUJD", "mimeType": "image/tiff"},
+            {"type": "image", "data": "QUJD"}
+        ]});
+        let imgs = extract_mcp_images(&r);
+        assert_eq!(imgs.len(), 1, "only the supported, well-formed image");
+        assert_eq!(imgs[0].media_type, "image/png");
+        assert_eq!(imgs[0].data, "QUJD");
+
+        // Negative control: a result with no image block yields nothing,
+        // so the filter above is real and not "always returns one".
+        let text_only = json!({"content": [{"type": "text", "text": "hi"}]});
+        assert!(extract_mcp_images(&text_only).is_empty());
     }
 }

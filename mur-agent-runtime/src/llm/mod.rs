@@ -85,6 +85,11 @@ pub struct ToolResultEntry {
     pub is_error: bool,
     #[serde(default)]
     pub status: crate::tools::ToolStatus,
+    /// Images this tool call produced. Rendered as real `image` blocks inside
+    /// the provider's `tool_result` where the provider supports it, so an
+    /// agent can look at what its own tool fetched.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<crate::tools::ToolImage>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
