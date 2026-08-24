@@ -247,6 +247,7 @@ mod tests {
         let req = crate::cmd::agent::cli::app::HandoverRequest {
             argv: vec!["claude".into(), "auth".into(), "login".into()],
             label: "Anthropic".into(),
+            _lock: None,
         };
         let (prog, args) = split_argv(&req).expect("non-empty argv");
         assert_eq!(prog, "claude");
@@ -258,6 +259,7 @@ mod tests {
         let req = crate::cmd::agent::cli::app::HandoverRequest {
             argv: vec![],
             label: "x".into(),
+            _lock: None,
         };
         assert!(split_argv(&req).is_none());
     }

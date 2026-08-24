@@ -324,11 +324,12 @@ pub enum RenderMode {
 
 /// An interactive child the main loop must run with the terminal handed over.
 /// Set by a slash command; taken and cleared by the loop.
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HandoverRequest {
     pub argv: Vec<String>,
     /// What to name in the before/after system messages.
     pub label: String,
+    /// Held for the child's lifetime; dropped with the request.
+    pub _lock: Option<crate::cmd::agent::cli::login::LoginLock>,
 }
 
 /// All mutable TUI state.

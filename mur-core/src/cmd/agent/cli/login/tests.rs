@@ -407,3 +407,18 @@ fn headless_instructions_mention_transplanting_a_credential() {
     let a = print_only_instructions(Provider::Anthropic);
     assert!(a.contains(".credentials.json"), "{a}");
 }
+
+#[test]
+fn a_second_login_lock_is_refused_while_the_first_is_held() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = acquire_login_lock(dir.path()).expect("first lock");
+    assert!(
+        acquire_login_lock(dir.path()).is_none(),
+        "a second flow must be refused while the first holds the lock"
+    );
+    drop(first);
+    assert!(
+        acquire_login_lock(dir.path()).is_some(),
+        "the lock must be released on drop"
+    );
+}

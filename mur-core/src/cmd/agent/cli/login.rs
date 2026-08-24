@@ -526,12 +526,41 @@ No browser available here. Two ways in:
     }
 }
 
+/// Held for the duration of an interactive login. The advisory lock is
+/// released when the file closes on drop — including on panic — so a crashed
+/// pane cannot wedge the others out, which a pid-file scheme could not promise.
+pub struct LoginLock(#[expect(dead_code)] std::fs::File);
+
+/// Take the cross-pane login lock, or `None` if another pane holds it.
+///
+/// `fs2`, not `libc::flock`: this crate runs on Windows CI (two matrices in
+/// `.github/workflows/ci.yml`), `fs2` is already a `mur-core` dependency, and
+/// `fs2::FileExt` is already how this crate locks files — see
+/// `inject/queue.rs`, `cmd/agent_companion/init.rs`, and
+/// `cross_agent/propagate/mod.rs`.
+pub fn acquire_login_lock(home: &Path) -> Option<LoginLock> {
+    use fs2::FileExt;
+    let path = home.join("login.lock");
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .ok()?;
+    f.try_lock_exclusive().ok()?;
+    Some(LoginLock(f))
+}
+
 /// Rung 3. Only reached when nothing cheaper worked.
 fn request_login_handover(app: &mut crate::cmd::agent::cli::app::App, p: Provider) {
     if !has_browser(&BrowserEnv::detect()) {
         app.push_system(format!("{}:\n{}", p.label(), print_only_instructions(p)));
         return;
     }
+    let Some(lock) = acquire_login_lock(&app.home) else {
+        app.push_error("another murmur pane is already running a login — finish that one first");
+        return;
+    };
     let argv = match p {
         Provider::Anthropic => vec!["claude".into(), "auth".into(), "login".into()],
         Provider::Chatgpt => vec!["codex".into(), "login".into()],
@@ -539,6 +568,7 @@ fn request_login_handover(app: &mut crate::cmd::agent::cli::app::App, p: Provide
     app.pending_handover = Some(crate::cmd::agent::cli::app::HandoverRequest {
         argv,
         label: p.label().to_string(),
+        _lock: Some(lock),
     });
 }
 
