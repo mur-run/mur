@@ -192,6 +192,16 @@ Linux, always true on macOS, `SSH_CONNECTION` as a negative signal). This
 is a heuristic, so `--print-only` forces the same output anywhere and
 `--force-browser` overrides a false negative.
 
+> **Deferred (2026-08-23): both override flags.** As shipped, `/login` takes
+> a provider and nothing else — the heuristic decides, with no way to
+> override it in either direction. `has_browser` is where they would attach
+> and its doc comment says the same. They were dropped from the plan for
+> want of evidence that the heuristic is wrong in practice; the first field
+> report of a false negative (a viable browser this misses) or a false
+> positive (a display that cannot actually open one) is what should bring
+> them back. Nothing else in this section is deferred: the credential-
+> injection and transplant paths below all ship.
+
 With no browser, print the credential-injection path rather than launching
 a flow that cannot complete:
 
