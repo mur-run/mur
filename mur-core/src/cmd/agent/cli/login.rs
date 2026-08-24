@@ -18,11 +18,6 @@ pub enum Provider {
     Chatgpt,
 }
 
-// Task 4 is the first caller of every item here (`Provider::parse` resolves
-// the `/login <word>` argument, `.label()` renders it, `Provider::ALL` drives
-// the no-argument status view) — until then the bin target (unlike the lib,
-// which blankets `cmd` with `#[allow(dead_code)]`) sees this impl as unused.
-#[expect(dead_code)]
 impl Provider {
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
@@ -40,7 +35,6 @@ impl Provider {
         }
     }
 
-    // Task 4 iterates this to render a status line per provider.
     pub const ALL: [Provider; 2] = [Provider::Anthropic, Provider::Chatgpt];
 }
 
@@ -55,28 +49,21 @@ pub fn keychain_stamp_args() -> Vec<&'static str> {
     vec!["find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE]
 }
 
-// `dirs::home_dir()` — the crate mur-core already depends on, and the same
-// resolution the runtime sandbox uses (see `cli/access.rs`). NOT
-// `directories::BaseDirs`, which this crate does not depend on.
-fn claude_credentials_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".claude/.credentials.json"))
+// `dirs::home_dir()` resolution happens once, in `store_stamp` below — the
+// crate mur-core already depends on `dirs`, and this is the same resolution
+// the runtime sandbox uses (see `cli/access.rs`). NOT `directories::BaseDirs`,
+// which this crate does not depend on. These two helpers just join the
+// per-provider suffix onto an already-resolved home, so `store_stamp_in`
+// (below) can be driven with a temp-dir home in tests.
+fn claude_credentials_path(home: &Path) -> PathBuf {
+    home.join(".claude/.credentials.json")
 }
 
-// Only reached through `store_stamp`, which nothing calls until Task 4.
-#[expect(dead_code)]
-fn codex_auth_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".codex/auth.json"))
+fn codex_auth_path(home: &Path) -> PathBuf {
+    home.join(".codex/auth.json")
 }
 
 /// mtime of a credential file, as an opaque stamp.
-// Exercised directly by the tests below, but only reached from prod code
-// through `store_stamp` — dead in the non-test bin build until Task 4 wires
-// `store_stamp` in. The unit tests below call it directly, so `dead_code`
-// never fires for it in a `#[cfg(test)]` build — only `cfg_attr(not(test),
-// ...)` it, matching the existing idiom (`cmd/hook.rs::should_skip`,
-// `server/mod.rs::build_router`), or a bare `#[expect]` goes unfulfilled and
-// `-D warnings` hard-errors on `lib test` / `bin "mur" test`.
-#[cfg_attr(not(test), expect(dead_code))]
 fn file_stamp(p: &Path) -> Option<StoreStamp> {
     let m = std::fs::metadata(p).ok()?.modified().ok()?;
     let d = m.duration_since(std::time::UNIX_EPOCH).ok()?;
@@ -85,8 +72,6 @@ fn file_stamp(p: &Path) -> Option<StoreStamp> {
 
 /// The keychain item's `mdat` line, verbatim. `security` prints it without
 /// `-w`, so no secret is read.
-// Only reached through `store_stamp`, which nothing calls until Task 4.
-#[expect(dead_code)]
 #[cfg(target_os = "macos")]
 fn keychain_stamp() -> Option<StoreStamp> {
     let out = std::process::Command::new("security")
@@ -101,10 +86,32 @@ fn keychain_stamp() -> Option<StoreStamp> {
         .map(|l| StoreStamp(l.trim().to_string()))
 }
 
-#[expect(dead_code)]
 #[cfg(not(target_os = "macos"))]
 fn keychain_stamp() -> Option<StoreStamp> {
     None
+}
+
+/// [`store_stamp`]'s routing, with its two real-world inputs — the home
+/// directory and the (macOS-only, machine-global) keychain probe — injected.
+/// `store_stamp` is the thin production wrapper that resolves both for real
+/// and delegates here.
+///
+/// This is the seam that closes `store_stamp`'s own test gap: before this,
+/// nothing drove the function with a controllable home directory, so a test
+/// could not tell "Anthropic reads the claude store" apart from "Anthropic
+/// reads whatever store the Chatgpt arm happens to read" — swapping the two
+/// match arms below passed every test in the file. `keychain` is forced
+/// rather than shelled out to the real `security` binary: the real keychain
+/// is machine-global state a test cannot control (and, on a box that has
+/// ever logged into Claude Code, would make the Anthropic arm return a real
+/// stamp regardless of `home`, masking exactly the bug this seam exists to
+/// catch).
+fn store_stamp_in(p: Provider, home: &Path, keychain: Option<StoreStamp>) -> Option<StoreStamp> {
+    match p {
+        // macOS keeps it in the keychain; Linux/Windows installs write a file.
+        Provider::Anthropic => keychain.or_else(|| file_stamp(&claude_credentials_path(home))),
+        Provider::Chatgpt => file_stamp(&codex_auth_path(home)),
+    }
 }
 
 /// Current stamp for a provider's credential store, or `None` when there is
@@ -118,18 +125,16 @@ fn keychain_stamp() -> Option<StoreStamp> {
 /// `classify_repair` falls through to the owner CLI's own health report — but
 /// it is a real limitation, not an oversight, and `no_stamp_degrades_to_the_cli_report`
 /// pins the degradation.
-// Task 4 is the first caller (`store_stamp(p).is_some()` per provider); Task
-// 5's `classify_repair` is the second. Remove this attribute once Task 4
-// lands.
-#[expect(dead_code)]
 pub fn store_stamp(p: Provider) -> Option<StoreStamp> {
-    match p {
-        // macOS keeps it in the keychain; Linux/Windows installs write a file.
-        Provider::Anthropic => {
-            keychain_stamp().or_else(|| claude_credentials_path().as_deref().and_then(file_stamp))
-        }
-        Provider::Chatgpt => codex_auth_path().as_deref().and_then(file_stamp),
-    }
+    let home = dirs::home_dir()?;
+    // Only shell out to `security` for the provider that could actually be
+    // in the keychain — matches the laziness the pre-split code had inside
+    // its Anthropic match arm.
+    let keychain = match p {
+        Provider::Anthropic => keychain_stamp(),
+        Provider::Chatgpt => None,
+    };
+    store_stamp_in(p, &home, keychain)
 }
 
 /// Health of a provider's credential, as reported by the CLI that owns it.
@@ -148,11 +153,12 @@ pub struct OwnerStatus {
 }
 
 impl OwnerStatus {
-    /// The CLI ran and answered, but said (or implied) "not logged in".
-    // Called from both parse fns below, so it shares their reachability: live
-    // under `cfg(test)` (their tests reach it transitively), dead in the
-    // non-test build until Task 4/5 call `owner_status`.
-    #[cfg_attr(not(test), expect(dead_code))]
+    /// The CLI ran and answered, but said (or implied) "not logged in" — OR
+    /// the status check never got an answer at all because [`run_capture`]
+    /// hit [`STATUS_TIMEOUT_SECS`] and killed a wedged process. Both
+    /// collapse to this exact same value; nothing downstream of
+    /// `run_capture` can tell them apart. `render_status_line` words its
+    /// logged-out row to not overclaim, given that.
     fn unknown() -> Self {
         Self {
             logged_in: false,
@@ -162,9 +168,6 @@ impl OwnerStatus {
     }
 
     /// The CLI could not be run at all (not installed, or not on `PATH`).
-    // Only reached from `owner_status`'s `run_capture` miss, and no test
-    // exercises that subprocess path — dead in every build until Task 4.
-    #[expect(dead_code)]
     fn absent() -> Self {
         Self {
             logged_in: false,
@@ -177,10 +180,6 @@ impl OwnerStatus {
 /// Parses `claude auth status --json`. Total: any shape surprise (a CLI
 /// upgrade, a truncated pipe) degrades to "not logged in" rather than
 /// panicking inside a running TUI.
-// Exercised directly by the tests below; only reached from prod code through
-// `owner_status`, which nothing calls until Task 4 — same `cfg_attr` idiom as
-// `file_stamp` above, for the same reason.
-#[cfg_attr(not(test), expect(dead_code))]
 pub fn parse_claude_status(json: &str) -> OwnerStatus {
     let Ok(v) = serde_json::from_str::<Value>(json) else {
         return OwnerStatus::unknown();
@@ -210,10 +209,6 @@ pub fn parse_claude_status(json: &str) -> OwnerStatus {
 ///
 /// `starts_with`, not `contains`: "Not logged in" contains the substring
 /// "logged in" and must not match.
-// Exercised directly by the tests below; only reached from prod code through
-// `owner_status`, which nothing calls until Task 4 — same `cfg_attr` idiom as
-// `parse_claude_status` above.
-#[cfg_attr(not(test), expect(dead_code))]
 pub fn parse_codex_status(text: &str) -> OwnerStatus {
     let line = text
         .lines()
@@ -251,11 +246,6 @@ const STATUS_TIMEOUT_SECS: u64 = 15;
 ///
 /// A non-zero exit is deliberately NOT treated as failure either — some CLIs
 /// use it for "not logged in" and still print a parseable status to stdout.
-// Called directly (with a short injected timeout, not the real
-// `STATUS_TIMEOUT_SECS`) by the test below on every platform, so it shares
-// `parse_claude_status`'s reachability: live under `cfg(test)`, dead in the
-// non-test build until Task 4 calls `owner_status`.
-#[cfg_attr(not(test), expect(dead_code))]
 fn run_capture(bin: &str, args: &[&str], timeout: std::time::Duration) -> Option<String> {
     use std::io::Read;
 
@@ -309,9 +299,6 @@ fn run_capture(bin: &str, args: &[&str], timeout: std::time::Duration) -> Option
 ///
 /// Bounded by [`STATUS_TIMEOUT_SECS`] so a wedged CLI cannot freeze the TUI
 /// that calls this.
-// Task 4 is the first caller, dispatching this from the live `/login`
-// command.
-#[expect(dead_code)]
 pub fn owner_status(p: Provider) -> OwnerStatus {
     let timeout = std::time::Duration::from_secs(STATUS_TIMEOUT_SECS);
     match p {
@@ -322,6 +309,56 @@ pub fn owner_status(p: Provider) -> OwnerStatus {
             .map(|out| parse_codex_status(&out))
             .unwrap_or_else(OwnerStatus::absent),
     }
+}
+
+/// One provider's line in the `/login` table.
+///
+/// The `!logged_in && cli_present` branch cannot distinguish "the CLI
+/// answered and said not logged in" from "the status check ran out of time"
+/// — see [`OwnerStatus::unknown`]. Rather than assert a confident "not
+/// logged in" that might actually be a wedged CLI, the wording hedges; the
+/// repair hint (`/login <provider>`) is the right next step either way.
+pub fn render_status_line(p: Provider, s: &OwnerStatus, stamped: bool) -> String {
+    let label = p.label();
+    if !s.cli_present {
+        return format!(
+            "  {label:<10} owner CLI not installed — credential cannot be repaired here"
+        );
+    }
+    if s.logged_in {
+        let who = s.identity.as_deref().unwrap_or("logged in");
+        let store = if stamped {
+            ""
+        } else {
+            "  (no credential store found)"
+        };
+        return format!("  {label:<10} ✓ {who}{store}");
+    }
+    let arg = match p {
+        Provider::Anthropic => "anthropic",
+        Provider::Chatgpt => "chatgpt",
+    };
+    format!("  {label:<10} not logged in (or the check timed out) — /login {arg}")
+}
+
+/// The whole table. Blocking (shells out per provider via [`owner_status`]
+/// and, on macOS, [`store_stamp`]) — dispatch off the UI task.
+pub fn render_status_all() -> String {
+    let mut out = String::from("OAuth providers:\n");
+    for p in Provider::ALL {
+        let s = owner_status(p);
+        out.push_str(&render_status_line(p, &s, store_stamp(p).is_some()));
+        out.push('\n');
+    }
+    out.push_str(
+        "\n(unrelated to `mur auth login`, which signs in to mur.run for the official catalog)",
+    );
+    out
+}
+
+/// Repair one provider. Filled in by the escalating-repair task.
+pub async fn dispatch_repair(app: &mut crate::cmd::agent::cli::app::App, p: Provider) {
+    app.push_system(format!("{}: repair not implemented yet", p.label()));
 }
 
 #[cfg(test)]
@@ -472,5 +509,105 @@ mod tests {
             start.elapsed()
         );
         assert_eq!(out, Some(String::new()));
+    }
+
+    #[test]
+    fn store_stamp_reads_each_providers_own_file_not_the_others() {
+        // Regression pin for the acceptance criterion on `store_stamp`: this
+        // must fail if the function's two match arms are swapped (Anthropic
+        // wired to the codex file, Chatgpt to the claude file) — that swap
+        // previously passed every test in this file. `keychain: None` drives
+        // the Anthropic arm through its file fallback only; see
+        // `store_stamp_in`'s doc comment for why the real keychain can't be
+        // used here.
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        std::fs::write(home.join(".claude/.credentials.json"), "claude").unwrap();
+        let expected_claude = file_stamp(&home.join(".claude/.credentials.json")).expect("stamp");
+
+        // A real, measurable mtime gap — otherwise two writes issued back to
+        // back could land on the same filesystem-reported instant and the
+        // two "expected" stamps below could coincide, letting the test pass
+        // even after a swap.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(home.join(".codex/auth.json"), "codex").unwrap();
+        let expected_codex = file_stamp(&home.join(".codex/auth.json")).expect("stamp");
+
+        assert_ne!(
+            expected_claude, expected_codex,
+            "test setup must produce distinguishable stamps"
+        );
+
+        assert_eq!(
+            store_stamp_in(Provider::Anthropic, home, None),
+            Some(expected_claude),
+            "Anthropic must read the claude store, not the codex one"
+        );
+        assert_eq!(
+            store_stamp_in(Provider::Chatgpt, home, None),
+            Some(expected_codex),
+            "Chatgpt must read the codex store, not the claude one"
+        );
+    }
+
+    #[test]
+    fn store_stamp_prefers_the_keychain_probe_over_the_file_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        // A claude file exists too, so a precedence *reversal* (file-then-
+        // keychain instead of keychain-then-file) would surface as a
+        // mismatch here, not just as a param-ignored bug.
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        std::fs::write(home.join(".claude/.credentials.json"), "{}").unwrap();
+
+        let from_keychain = StoreStamp("keychain-mdat-line".into());
+        assert_eq!(
+            store_stamp_in(Provider::Anthropic, home, Some(from_keychain.clone())),
+            Some(from_keychain),
+            "a keychain hit must win over the file fallback, even when a file exists too"
+        );
+    }
+
+    #[test]
+    fn status_line_shows_identity_when_logged_in() {
+        let s = OwnerStatus {
+            logged_in: true,
+            identity: Some("a@b.c (max)".into()),
+            cli_present: true,
+        };
+        let line = render_status_line(Provider::Anthropic, &s, true);
+        assert!(line.contains("Anthropic"), "{line}");
+        assert!(line.contains("a@b.c (max)"), "{line}");
+    }
+
+    #[test]
+    fn status_line_names_the_repair_when_logged_out() {
+        let s = OwnerStatus {
+            logged_in: false,
+            identity: None,
+            cli_present: true,
+        };
+        let line = render_status_line(Provider::Chatgpt, &s, false);
+        assert!(line.contains("/login chatgpt"), "must name the fix: {line}");
+    }
+
+    #[test]
+    fn status_line_flags_a_missing_owner_cli() {
+        // A transplanted credential can work while being unrepairable here.
+        let s = OwnerStatus {
+            logged_in: false,
+            identity: None,
+            cli_present: false,
+        };
+        let line = render_status_line(Provider::Anthropic, &s, true);
+        assert!(line.contains("not installed"), "{line}");
+        assert!(
+            !line.contains("/login anthropic"),
+            "cannot repair without the CLI: {line}"
+        );
     }
 }
