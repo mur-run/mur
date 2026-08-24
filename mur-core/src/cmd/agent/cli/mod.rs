@@ -610,6 +610,36 @@ fn rebuild_after_resize(
     Ok(h)
 }
 
+/// The app-state half of starting a terminal handover: push the notice, cancel
+/// any pending screen wipe, and report the viewport height the handover needs.
+/// Split out from the loop so the policy — most of which is a *refusal* to do
+/// something — is testable at all.
+///
+/// **It must not touch `flushed_upto`/`flushed_bytes`.** `rebuild_after_resize`
+/// (above) and `App::start_new_session` both reset them, but each erases what
+/// is already on screen first — `purge_and_reanchor` in one, `messages.clear()`
+/// in the other — which is what makes re-emitting from index 0 a redraw. The
+/// handover path purges nothing on purpose: `handover::reanchor` is the
+/// no-`Purge` variant precisely so the login transcript survives. Resetting the
+/// cursors here would make the next `flush_finished` take `start = 0` and
+/// `insert_before` the whole settled transcript a second time, burying the
+/// login transcript under a duplicate of the conversation.
+///
+/// The height is recomputed **after** the notice lands, not before: the notice
+/// is what makes the transcript non-empty, and `viewport_h_for` gives the
+/// full-window welcome height while it is empty. Computing first and handing
+/// that height to `handover::run` would scroll the child's own output almost
+/// entirely off-screen.
+///
+/// `wants_screen_wipe` is cleared for the same reason the reset is skipped: a
+/// wipe left pending would run `purge_and_reanchor` on the pass after the
+/// child exits and take the transcript with it.
+fn prepare_handover(app: &mut App, label: &str, term_rows: u16) -> u16 {
+    app.push_system(format!("{label}: handing over the terminal…"));
+    app.wants_screen_wipe = false;
+    viewport_h_for(term_rows, app.messages.is_empty())
+}
+
 /// Wipe the screen AND scrollback, then re-anchor a fresh Inline viewport
 /// of height `h` anchored at the BOTTOM of the screen. Shared by the resize
 /// rebuild and the /clear / channel-switch screen wipe. Caller must drop any
@@ -724,32 +754,31 @@ async fn event_loop(
         }
         // A slash command (`/login`'s escalating repair) asked for the real
         // terminal. Handled here, not in `handle_slash`, because only the
-        // loop owns `terminal` and `events`.
-        if let Some(req) = app.pending_handover.take() {
-            app.push_system(format!("{}: handing over the terminal…", req.label));
-            // `push_system` just made the transcript non-empty. The welcome
-            // check above (`want_h`, this same pass) already ran against the
-            // empty transcript and left `viewport_h` at welcome height — left
-            // alone, `handover::run` would reanchor there, scrolling the
-            // child's own output almost entirely off-screen, and the NEXT
-            // pass would then see `want_h` (normal height) disagree with
-            // `viewport_h` (welcome height) and route it through
-            // `purge_and_reanchor` — `Clear(ClearType::Purge)` erasing the
-            // very transcript this module exists to protect. Recompute and
-            // reanchor ourselves right now instead of setting
-            // `wants_screen_wipe`: `handover::run` already does its own
-            // no-purge reanchor, so a leftover wipe request would just purge
-            // that transcript right back out next pass.
-            viewport_h = viewport_h_for(last_size.height, false);
-            app.flushed_upto = 0;
-            app.flushed_bytes = 0;
-            app.wants_screen_wipe = false;
+        // loop owns `terminal` and `events`. Guarded on Inline like the three
+        // blocks above it: everything below assumes an Inline viewport, and
+        // re-anchoring one while the alt-screen is up would anchor it against
+        // the wrong surface. Leaving the request in place is correct — it is
+        // taken on the pass after the overlay closes, not dropped.
+        if app.render_mode == RenderMode::Inline
+            && let Some(req) = app.pending_handover.take()
+        {
+            let want_h = prepare_handover(app, &req.label, last_size.height);
+            // The EventStream owns stdin: the child must have it to itself,
+            // and the re-anchor below reads the terminal's cursor-position
+            // reply from it.
+            drop(events);
+            // Re-anchor the REAL terminal, not just this local: the draw
+            // below and `Suspended::begin`'s clear would otherwise be working
+            // from two different geometries. Fail-open on Err, like the resize
+            // path — keeping the old height costs a cosmetic mis-anchor,
+            // bailing costs the session.
+            if want_h != viewport_h && handover::reanchor(terminal, want_h).is_ok() {
+                viewport_h = want_h;
+            }
             // Paint the "handing over" line before we suspend — otherwise it
             // only appears after the child exits, alongside the result.
             ui::flush_finished(terminal, app, viewport_h)?;
             terminal.draw(|f| ui::render(f, app))?;
-            // The EventStream owns stdin; the child must have it to itself.
-            drop(events);
             let outcome = handover::run(terminal, viewport_h, &req);
             events = EventStream::new();
             match outcome {
@@ -2243,7 +2272,8 @@ fn notify_unfocused(title: &str, message: &str) {
 
 #[cfg(test)]
 mod viewport_tests {
-    use super::{INLINE_VIEWPORT_HEIGHT, viewport_h_for};
+    use super::app::App;
+    use super::{INLINE_VIEWPORT_HEIGHT, prepare_handover, viewport_h_for};
 
     /// The welcome and the chat surface want opposite things, and only one of
     /// them is safe at full height: nothing is ever flushed to scrollback while
@@ -2259,6 +2289,69 @@ mod viewport_tests {
         // Absurdly short: a floor beats a zero-height viewport.
         assert_eq!(viewport_h_for(2, true), 5);
         assert_eq!(viewport_h_for(2, false), 5);
+    }
+
+    /// The handover purges nothing (`handover::reanchor` is the no-`Purge`
+    /// variant, so the login transcript survives), and `flush_finished` emits
+    /// `messages[flushed_upto..]`. Rewinding the cursor here therefore does not
+    /// "replay" anything — it hands `insert_before` the whole settled
+    /// transcript a second time, on top of the copy already in scrollback,
+    /// immediately before the child runs.
+    #[test]
+    fn a_handover_does_not_rewind_the_flush_cursor() {
+        let mut app = App::test_fixture();
+        app.flushed_upto = 3;
+        app.flushed_bytes = 17;
+
+        prepare_handover(&mut app, "Anthropic", 60);
+
+        assert_eq!(
+            app.flushed_upto, 3,
+            "rewinding re-emits the settled transcript into scrollback"
+        );
+        assert_eq!(app.flushed_bytes, 17, "same, for the partial-message tail");
+    }
+
+    /// Order, not arithmetic: the notice is what makes the transcript
+    /// non-empty, so the height must be read after it lands. Computed first,
+    /// this returns the full-window welcome height and `handover::run` would
+    /// clear — and re-anchor — a viewport almost the size of the screen,
+    /// scrolling the child's own output off it.
+    #[test]
+    fn a_handover_recomputes_the_height_after_its_notice_lands() {
+        let mut app = App::test_fixture();
+        app.messages.clear();
+
+        let h = prepare_handover(&mut app, "Anthropic", 60);
+
+        assert_eq!(
+            h, INLINE_VIEWPORT_HEIGHT,
+            "the welcome height must not survive the handover notice"
+        );
+        assert_ne!(
+            h,
+            viewport_h_for(60, true),
+            "…and the two heights really are different at this size"
+        );
+        assert!(
+            app.messages
+                .last()
+                .is_some_and(|m| m.text.contains("Anthropic")),
+            "the notice itself must be in the transcript before the child runs"
+        );
+    }
+
+    /// A wipe left pending runs `purge_and_reanchor` on the pass after the
+    /// child exits — `Clear(ClearType::Purge)` taking the login transcript
+    /// with it.
+    #[test]
+    fn a_handover_cancels_a_pending_screen_wipe() {
+        let mut app = App::test_fixture();
+        app.wants_screen_wipe = true;
+
+        prepare_handover(&mut app, "Anthropic", 60);
+
+        assert!(!app.wants_screen_wipe);
     }
 }
 

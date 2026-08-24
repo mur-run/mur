@@ -68,9 +68,14 @@ pub fn split_argv(req: &HandoverRequest) -> Option<(&str, &[String])> {
 ///   expects — and the child here is an OAuth flow where the user pastes a
 ///   code, which is the worst possible place for mangled input.
 /// * **The alternate screen.** `sync_surface` puts murmur on the alt-screen for
-///   heavy overlays (Ctrl+O, `/mcp`, `/skill`). If `/login` is invoked while
-///   one is open, a child that draws there has its output discarded the moment
-///   the screen is left — including the authorisation URL the user needs.
+///   heavy overlays (Ctrl+O, `/mcp`, `/skill`). A child that draws there has
+///   its output discarded the moment the screen is left — including the
+///   authorisation URL the user needs. Today `/login` cannot actually be
+///   reached from an overlay (`RenderMode::Fullscreen` is set only by
+///   `scrollback_dump`, and the overlay owns every keypress while it is open),
+///   so this is defence in depth against a future overlay that does accept
+///   slash input, not a path with a live caller — but it is `ON_ALT` that
+///   decides, not an assumption about which overlays exist.
 ///
 /// `pop_keyboard_enhancement` and `ON_ALT` live in `cli/mod.rs` and are
 /// `pub(super)` so they can be reused here rather than duplicated — two
@@ -202,29 +207,51 @@ pub fn run(
         // and stays restored even if `status()` returned Err above.
     };
 
-    // Make room below whatever the child printed, then anchor a fresh inline
-    // viewport there. No Clear(All), no Clear(Purge): the login transcript
-    // stays in scrollback where the user can still read it.
+    reanchor(terminal, viewport_h)?;
+    Ok(status)
+}
+
+/// Anchor a fresh Inline viewport of height `h` at the bottom of the screen
+/// **without purging scrollback**.
+///
+/// This is the non-purging counterpart to `cli::purge_and_reanchor`, and the
+/// difference is the whole point of the module: `Clear(ClearType::Purge)`
+/// would erase the login transcript — the URL the user still needs, the code
+/// prompt, any failure message.
+///
+/// Two callers, and they must stay the same code:
+///
+/// * `run`, above, once the child has exited; and
+/// * the main loop, *before* the handover, when the notice it just pushed
+///   changed the viewport height (welcome height → chat height). Updating only
+///   the loop's local `viewport_h` there would leave `terminal` anchored where
+///   it was, so the draw would land on one geometry and `Suspended::begin`
+///   would clear another.
+///
+/// The leading newlines make room: after the child, they push its output up so
+/// the viewport does not land on top of it; before it, they do the same for
+/// whatever murmur had already painted.
+pub(super) fn reanchor(terminal: &mut Terminal<CrosstermBackend<Stdout>>, h: u16) -> Result<()> {
     let mut out = io::stdout();
-    for _ in 0..viewport_h {
+    for _ in 0..h {
         writeln!(out)?;
     }
     out.flush()?;
 
     let rows = crossterm::terminal::size()?.1;
-    execute!(out, cursor::MoveTo(0, rows.saturating_sub(viewport_h)))?;
+    execute!(out, cursor::MoveTo(0, rows.saturating_sub(h)))?;
 
     let mut last_err = None;
     for _ in 0..REANCHOR_RETRIES {
         match Terminal::with_options(
             CrosstermBackend::new(io::stdout()),
             ratatui::TerminalOptions {
-                viewport: ratatui::Viewport::Inline(viewport_h),
+                viewport: ratatui::Viewport::Inline(h),
             },
         ) {
             Ok(t) => {
                 *terminal = t;
-                return Ok(status);
+                return Ok(());
             }
             Err(e) => {
                 last_err = Some(e);
@@ -233,7 +260,7 @@ pub fn run(
         }
     }
     Err(anyhow::anyhow!(
-        "could not re-anchor the viewport after handover: {}",
+        "could not re-anchor the inline viewport: {}",
         last_err.map_or_else(|| "unknown".to_string(), |e| e.to_string())
     ))
 }

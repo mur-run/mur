@@ -324,6 +324,11 @@ pub enum RenderMode {
 
 /// An interactive child the main loop must run with the terminal handed over.
 /// Set by a slash command; taken and cleared by the loop.
+///
+/// `Debug` is derived and leaks nothing: the only non-trivial field is a
+/// `LoginLock`, whose `std::fs::File` prints a descriptor and path, never
+/// contents. A `tracing::debug!(?req)` should not be a compile error.
+#[derive(Debug)]
 pub struct HandoverRequest {
     pub argv: Vec<String>,
     /// What to name in the before/after system messages.
