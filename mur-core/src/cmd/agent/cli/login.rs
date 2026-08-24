@@ -744,8 +744,18 @@ mod tests {
     }
 
     #[test]
-    fn no_store_at_all_needs_a_real_login() {
-        assert_eq!(classify_repair(None, None, &st(false)), Rung::NeedsLogin);
+    fn a_vanished_store_is_not_reported_as_a_refresh() {
+        // `before != after` alone is also true when the store disappeared
+        // between the two stamps (Some -> None) — but vanishing is not
+        // evidence of a repair. Only the `after.is_some()` conjunct in
+        // `classify_repair`'s guard rules that out; deleting it would report
+        // RefreshedByProbe here instead of falling through to the CLI status.
+        let before = Some(StoreStamp("a".into()));
+        assert_eq!(
+            classify_repair(before.clone(), None, &st(true)),
+            Rung::AlreadyHealthy
+        );
+        assert_eq!(classify_repair(before, None, &st(false)), Rung::NeedsLogin);
     }
 
     #[test]
