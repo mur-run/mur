@@ -325,10 +325,11 @@ mod tests {
         }
         // Replicate the parsing logic from KokoroTts::new
         let mut style_matrix = [[0f32; 256]; 5];
-        for (i, chunk) in blob.chunks_exact(4).enumerate() {
+        let (quads, _rest) = blob.as_chunks::<4>();
+        for (i, chunk) in quads.iter().enumerate() {
             let row = i / 256;
             let col = i % 256;
-            style_matrix[row][col] = f32::from_le_bytes(chunk.try_into().unwrap());
+            style_matrix[row][col] = f32::from_le_bytes(*chunk);
         }
         for (row, row_vals) in style_matrix.iter().enumerate() {
             for (col, val) in row_vals.iter().enumerate() {
