@@ -36,10 +36,8 @@ pub fn transcribe(mur_home: &Path, pcm_f32le: &[u8]) -> SttOutcome {
         return SttOutcome::ModelsMissing;
     };
 
-    let samples: Vec<f32> = pcm_f32le
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-        .collect();
+    let (quads, _rest) = pcm_f32le.as_chunks::<4>();
+    let samples: Vec<f32> = quads.iter().copied().map(f32::from_le_bytes).collect();
     match stt.transcribe(&samples) {
         Ok(t) if !t.is_empty() => SttOutcome::Text(t),
         Ok(_) => SttOutcome::Empty,

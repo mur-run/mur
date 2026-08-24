@@ -5,7 +5,7 @@
 //! kernel denial, and so file access is visible to per-tool policy instead
 //! of hiding inside `bash`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use mur_common::agent::FilesystemEntitlement;
 
@@ -65,19 +65,15 @@ impl ReadFileTool {
                 canonical.display()
             )));
         }
-        let under = |roots: &[String]| {
-            roots.iter().any(|r| {
-                let root = std::fs::canonicalize(r).unwrap_or_else(|_| PathBuf::from(r));
-                canonical.starts_with(&root)
-            })
-        };
-        if under(&self.fs.deny) {
+        if crate::tools::fs_policy::under_any(&self.fs.deny, canonical) {
             return Err(ToolError::Execution(format!(
                 "path denied by entitlement: {}",
                 canonical.display()
             )));
         }
-        if under(&self.fs.read) || under(&self.fs.write) {
+        if crate::tools::fs_policy::under_any(&self.fs.read, canonical)
+            || crate::tools::fs_policy::under_any(&self.fs.write, canonical)
+        {
             return Ok(());
         }
         Err(ToolError::Execution(format!(
@@ -159,6 +155,7 @@ Relative paths resolve against the shared session working directory (the same ba
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn fs_ent(read: &[&str], write: &[&str], deny: &[&str]) -> FilesystemEntitlement {
         FilesystemEntitlement {
