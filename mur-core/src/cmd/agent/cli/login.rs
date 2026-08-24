@@ -12,6 +12,17 @@ use std::path::{Path, PathBuf};
 /// Keychain service name Claude Code stores its credential under.
 const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 
+/// Where Claude Code writes its credential when it is not using a keychain
+/// (Linux and Windows installs), relative to the home directory. Named once:
+/// `claude_credentials_path` joins it and `print_only_instructions` quotes it
+/// to the user, and those two drifting apart would send someone to a path the
+/// stamp never reads.
+const CLAUDE_CREDENTIALS_REL: &str = ".claude/.credentials.json";
+
+/// Where Codex writes its credential, relative to the home directory. Same
+/// two consumers as [`CLAUDE_CREDENTIALS_REL`].
+const CODEX_AUTH_REL: &str = ".codex/auth.json";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
     Anthropic,
@@ -35,6 +46,16 @@ impl Provider {
         }
     }
 
+    /// The CLI that owns this provider's credential: what murmur shells out
+    /// to for health ([`owner_status`]), what it hands the terminal to at
+    /// rung 3, and what [`render_status_line`] names when it is missing.
+    pub fn owner_cli(self) -> &'static str {
+        match self {
+            Self::Anthropic => "claude",
+            Self::Chatgpt => "codex",
+        }
+    }
+
     pub const ALL: [Provider; 2] = [Provider::Anthropic, Provider::Chatgpt];
 }
 
@@ -49,18 +70,18 @@ pub fn keychain_stamp_args() -> Vec<&'static str> {
     vec!["find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE]
 }
 
-// `dirs::home_dir()` resolution happens once, in `store_stamp` below — the
-// crate mur-core already depends on `dirs`, and this is the same resolution
-// the runtime sandbox uses (see `cli/access.rs`). NOT `directories::BaseDirs`,
-// which this crate does not depend on. These two helpers just join the
-// per-provider suffix onto an already-resolved home, so `store_stamp_in`
-// (below) can be driven with a temp-dir home in tests.
+// These two helpers just join the per-provider suffix onto an already-resolved
+// home, so `store_stamp_in` (below) can be driven with a temp-dir home in
+// tests. `dirs::home_dir` is the resolver production hands in — the crate
+// mur-core already depends on `dirs`, and this is the same resolution the
+// runtime sandbox uses (see `cli/access.rs`). NOT `directories::BaseDirs`,
+// which this crate does not depend on.
 fn claude_credentials_path(home: &Path) -> PathBuf {
-    home.join(".claude/.credentials.json")
+    home.join(CLAUDE_CREDENTIALS_REL)
 }
 
 fn codex_auth_path(home: &Path) -> PathBuf {
-    home.join(".codex/auth.json")
+    home.join(CODEX_AUTH_REL)
 }
 
 /// mtime of a credential file, as an opaque stamp.
@@ -91,26 +112,46 @@ fn keychain_stamp() -> Option<StoreStamp> {
     None
 }
 
-/// [`store_stamp`]'s routing, with its two real-world inputs — the home
-/// directory and the (macOS-only, machine-global) keychain probe — injected.
-/// `store_stamp` is the thin production wrapper that resolves both for real
-/// and delegates here.
+/// The whole of [`store_stamp`]'s behaviour, with its two real-world inputs
+/// — the home directory and the (macOS-only, machine-global) keychain probe —
+/// injected **as thunks**, not as values.
 ///
-/// This is the seam that closes `store_stamp`'s own test gap: before this,
-/// nothing drove the function with a controllable home directory, so a test
-/// could not tell "Anthropic reads the claude store" apart from "Anthropic
-/// reads whatever store the Chatgpt arm happens to read" — swapping the two
-/// match arms below passed every test in the file. `keychain` is forced
-/// rather than shelled out to the real `security` binary: the real keychain
-/// is machine-global state a test cannot control (and, on a box that has
-/// ever logged into Claude Code, would make the Anthropic arm return a real
-/// stamp regardless of `home`, masking exactly the bug this seam exists to
-/// catch).
-fn store_stamp_in(p: Provider, home: &Path, keychain: Option<StoreStamp>) -> Option<StoreStamp> {
+/// Thunks, because laziness is part of the routing and therefore has to live
+/// on this side of the seam:
+///
+/// * the Chatgpt arm must never run the keychain probe (that shells out to
+///   `security`), and
+/// * a keychain hit must not need the home directory resolved at all, so a
+///   box where `home_dir()` fails still gets a stamp.
+///
+/// An earlier version composed those two rules in the production wrapper
+/// instead, which left the wrapper passing `keychain: None` unconditionally:
+/// the `keychain` arm here became dead in production, the test that pinned it
+/// pinned a path production never took, and `store_stamp` itself — the thing
+/// actually called — had no test at all. Everything that decides *which store
+/// a provider reads* now lives in this one `match`, under test
+/// (`store_stamp_reads_each_providers_own_file_not_the_others` reddens if the
+/// arms are swapped; `the_seam_resolves_only_what_it_needs` reddens if either
+/// thunk is forced eagerly). What is left in `store_stamp` is a two-argument
+/// delegation whose arguments cannot be transposed — they have different
+/// return types.
+///
+/// The keychain is forced here rather than shelled out to for real in tests:
+/// the real keychain is machine-global state a test cannot control (and, on a
+/// box that has ever logged into Claude Code, would make the Anthropic arm
+/// return a real stamp regardless of `home`, masking exactly the bug this seam
+/// exists to catch).
+fn store_stamp_in(
+    p: Provider,
+    home: impl FnOnce() -> Option<PathBuf>,
+    keychain: impl FnOnce() -> Option<StoreStamp>,
+) -> Option<StoreStamp> {
     match p {
         // macOS keeps it in the keychain; Linux/Windows installs write a file.
-        Provider::Anthropic => keychain.or_else(|| file_stamp(&claude_credentials_path(home))),
-        Provider::Chatgpt => file_stamp(&codex_auth_path(home)),
+        Provider::Anthropic => {
+            keychain().or_else(move || file_stamp(&claude_credentials_path(&home()?)))
+        }
+        Provider::Chatgpt => file_stamp(&codex_auth_path(&home()?)),
     }
 }
 
@@ -126,21 +167,7 @@ fn store_stamp_in(p: Provider, home: &Path, keychain: Option<StoreStamp>) -> Opt
 /// it is a real limitation, not an oversight, and `no_stamp_degrades_to_the_cli_report`
 /// pins the degradation.
 pub fn store_stamp(p: Provider) -> Option<StoreStamp> {
-    // Keychain first, and lazily: `dirs::home_dir()` is only resolved if
-    // the keychain doesn't already answer, matching the laziness the
-    // pre-split code had inside its Anthropic match arm. Resolving
-    // `home_dir()` unconditionally ahead of this check — an earlier
-    // version of this function did exactly that — is a behavioral change,
-    // not a refactor: it would return `None` whenever `home_dir()` fails
-    // even though the keychain could still have answered. That never
-    // surfaces as a false "not logged in" (the UI already hedges that
-    // case — see `render_status_line`), only as a spurious "(no
-    // credential store found)" next to an otherwise-correct "✓ ...".
-    let keychain = match p {
-        Provider::Anthropic => keychain_stamp(),
-        Provider::Chatgpt => None,
-    };
-    keychain.or_else(|| store_stamp_in(p, &dirs::home_dir()?, None))
+    store_stamp_in(p, dirs::home_dir, keychain_stamp)
 }
 
 /// Health of a provider's credential, as reported by the CLI that owns it.
@@ -183,6 +210,29 @@ impl OwnerStatus {
     }
 }
 
+/// Longest identity murmur will echo from an owner CLI into the transcript.
+///
+/// Wide enough for `email (subscription)` and for `codex login status`'s one
+/// line, short enough that a surprise from upstream stays one row on a normal
+/// terminal.
+const MAX_IDENTITY_CHARS: usize = 120;
+
+/// Bound an owner CLI's text before it becomes a transcript row.
+///
+/// The identity line is upstream output murmur does not control, and it ends
+/// up in the transcript and then in the terminal's own scrollback. Two things
+/// are therefore taken off it: control characters (a stray `ESC` reaching a
+/// ratatui cell is terminal injection, not a formatting quirk) and unbounded
+/// length. `codex login status` has no `--json`, so there is no field to
+/// select and no shape to validate — bounding the damage is what is left.
+fn sanitize_identity(line: &str) -> String {
+    let clean: String = line.trim().chars().filter(|c| !c.is_control()).collect();
+    match clean.char_indices().nth(MAX_IDENTITY_CHARS) {
+        Some((i, _)) => format!("{}…", &clean[..i]),
+        None => clean,
+    }
+}
+
 /// Parses `claude auth status --json`. Total: any shape surprise (a CLI
 /// upgrade, a truncated pipe) degrades to "not logged in" rather than
 /// panicking inside a running TUI.
@@ -195,9 +245,13 @@ pub fn parse_claude_status(json: &str) -> OwnerStatus {
     }
     let email = v.get("email").and_then(Value::as_str);
     let sub = v.get("subscriptionType").and_then(Value::as_str);
-    let identity = email.map(|e| match sub {
-        Some(s) => format!("{e} ({s})"),
-        None => e.to_string(),
+    // Selected fields, but still upstream strings — same bound as the codex
+    // path, so there is one answer to "what can reach the transcript".
+    let identity = email.map(|e| {
+        sanitize_identity(&match sub {
+            Some(s) => format!("{e} ({s})"),
+            None => e.to_string(),
+        })
     });
     OwnerStatus {
         logged_in: true,
@@ -210,8 +264,9 @@ pub fn parse_claude_status(json: &str) -> OwnerStatus {
 /// human-readable text — matched case-insensitively (a capitalisation change
 /// upstream must not silently start reporting "not logged in") and per line
 /// (so a preamble line before the status line can't hide it either).
-/// `identity` is set to the matching line only, trimmed — never the whole
-/// blob — so it stays a single "identity line" as the field above documents.
+/// `identity` is the matching line only, never the whole blob, and passed
+/// through [`sanitize_identity`] so an arbitrary upstream line cannot reach
+/// the transcript verbatim.
 ///
 /// `starts_with`, not `contains`: "Not logged in" contains the substring
 /// "logged in" and must not match.
@@ -222,7 +277,7 @@ pub fn parse_codex_status(text: &str) -> OwnerStatus {
     match line {
         Some(l) => OwnerStatus {
             logged_in: true,
-            identity: Some(l.trim().to_string()),
+            identity: Some(sanitize_identity(l)),
             cli_present: true,
         },
         None => OwnerStatus::unknown(),
@@ -241,14 +296,15 @@ const STATUS_TIMEOUT_SECS: u64 = 15;
 
 /// Runs `bin args...` and returns its stdout.
 ///
-/// `None` only if the process could not be started at all (most commonly:
+/// `None` **only** if the process could not be started at all (most commonly:
 /// `bin` is not installed) — the one case `owner_status` maps to
-/// [`OwnerStatus::absent`]. If the process does not exit within `timeout`, it
-/// is killed and this still returns `Some` (whatever partial output it wrote,
-/// or an empty string) rather than `None`: the CLI *is* present, it just
-/// would not answer, so it must degrade through the same path as an empty or
-/// malformed response — see `parse_claude_status`/`parse_codex_status` —
-/// never through "not installed".
+/// [`OwnerStatus::absent`]. Once the spawn has succeeded this returns `Some`
+/// no matter what happens next: whatever partial output was written, or an
+/// empty string. The CLI *is* present, so it must degrade through the same
+/// path as an empty or malformed response — see
+/// `parse_claude_status`/`parse_codex_status` — never through "not
+/// installed", which becomes `Rung::NoOwnerCli` and tells the user to install
+/// a CLI that is already there.
 ///
 /// A non-zero exit is deliberately NOT treated as failure either — some CLIs
 /// use it for "not logged in" and still print a parseable status to stdout.
@@ -281,15 +337,19 @@ fn run_capture(bin: &str, args: &[&str], timeout: std::time::Duration) -> Option
             Ok(None) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
-            Ok(None) => {
-                // Wedged: kill so the reader thread's pipe closes, then fall
-                // through to the same `Some(..)` return as a normal exit —
-                // degrade like an empty response, not like "not installed".
+            // Wedged past the deadline, or `try_wait` itself failed so we can
+            // no longer tell whether it is alive. One arm, because the two
+            // need the identical handling and a separate `Err` arm is exactly
+            // where they drifted: returning `None` here both misreported a
+            // running CLI as "not installed" and leaked the child and the
+            // reader thread. Kill so the reader thread's pipe closes, reap,
+            // then fall through to the same `Some(..)` return as a normal
+            // exit.
+            Ok(None) | Err(_) => {
                 let _ = child.kill();
                 let _ = child.wait();
                 break;
             }
-            Err(_) => return None,
         }
     }
 
@@ -308,11 +368,12 @@ fn run_capture(bin: &str, args: &[&str], timeout: std::time::Duration) -> Option
 /// that calls this.
 pub fn owner_status(p: Provider) -> OwnerStatus {
     let timeout = std::time::Duration::from_secs(STATUS_TIMEOUT_SECS);
+    let bin = p.owner_cli();
     match p {
-        Provider::Anthropic => run_capture("claude", &["auth", "status", "--json"], timeout)
+        Provider::Anthropic => run_capture(bin, &["auth", "status", "--json"], timeout)
             .map(|out| parse_claude_status(&out))
             .unwrap_or_else(OwnerStatus::absent),
-        Provider::Chatgpt => run_capture("codex", &["login", "status"], timeout)
+        Provider::Chatgpt => run_capture(bin, &["login", "status"], timeout)
             .map(|out| parse_codex_status(&out))
             .unwrap_or_else(OwnerStatus::absent),
     }
@@ -328,8 +389,17 @@ pub fn owner_status(p: Provider) -> OwnerStatus {
 pub fn render_status_line(p: Provider, s: &OwnerStatus, stamped: bool) -> String {
     let label = p.label();
     if !s.cli_present {
+        // Deliberately not worded as a failure. Bare `/login` lists every
+        // provider the gateway can reach, not the ones this agent uses (the
+        // spec: an agent's model can change mid-session), so most users will
+        // always see one row for a provider they have never touched — and
+        // "credential cannot be repaired here" read like an error report for
+        // a provider that is simply not in play. State the observation and
+        // stop: no ✗, and no `/login <provider>` hint murmur could not honour
+        // without the CLI anyway.
         return format!(
-            "  {label:<10} owner CLI not installed — credential cannot be repaired here"
+            "  {label:<10} — `{}` not installed, so nothing to check here",
+            p.owner_cli()
         );
     }
     if s.logged_in {
@@ -502,19 +572,25 @@ pub fn has_browser(env: &BrowserEnv) -> bool {
 
 /// What to do when no browser can open here. These are the paths the owner
 /// CLIs document for exactly this case; murmur only relays them.
+///
+/// The credential paths are interpolated from the same constants
+/// [`claude_credentials_path`] and [`codex_auth_path`] join, so what the user
+/// is told to copy a file to is by construction the file the stamp reads.
 pub fn print_only_instructions(p: Provider) -> String {
     match p {
-        Provider::Anthropic => "\
+        Provider::Anthropic => format!(
+            "\
 No browser available here. Two ways in:
 
   1. Long-lived token (needs a Claude subscription):
        claude setup-token
 
   2. Log in where a browser exists, then copy the credential over:
-       ~/.claude/.credentials.json
+       ~/{CLAUDE_CREDENTIALS_REL}
      The gateway reads that path directly on Linux and Windows installs."
-            .to_string(),
-        Provider::Chatgpt => "\
+        ),
+        Provider::Chatgpt => format!(
+            "\
 No browser available here. Two ways in:
 
   1. Inject a credential from stdin:
@@ -522,24 +598,46 @@ No browser available here. Two ways in:
        printenv CODEX_ACCESS_TOKEN | codex login --with-access-token
 
   2. Log in where a browser exists, then copy the credential over:
-       ~/.codex/auth.json"
-            .to_string(),
+       ~/{CODEX_AUTH_REL}"
+        ),
     }
 }
 
 /// Held for the duration of an interactive login. The advisory lock is
 /// released when the file closes on drop — including on panic — so a crashed
 /// pane cannot wedge the others out, which a pid-file scheme could not promise.
+///
+/// `Debug` is derived and prints nothing sensitive: `std::fs::File`'s own
+/// `Debug` shows a descriptor and path, never contents.
+#[derive(Debug)]
 pub struct LoginLock(#[expect(dead_code)] std::fs::File);
 
-/// Take the cross-pane login lock, or `None` if another pane holds it.
+/// Why an interactive login could not take the cross-pane lock.
+///
+/// The two are not interchangeable, and collapsing them was a dead-end
+/// diagnosis: "another pane is already running a login" sends the user to look
+/// for a login nobody started.
+#[derive(Debug)]
+pub enum LockDenied {
+    /// Another murmur pane holds the lock. Real contention; wait it out.
+    Busy,
+    /// The lock could not be taken at all — a read-only `~/.mur`, a
+    /// filesystem with no advisory locking. Nothing is holding anything.
+    Unavailable(std::io::Error),
+}
+
+/// Take the cross-pane login lock.
 ///
 /// `fs2`, not `libc::flock`: this crate runs on Windows CI (two matrices in
 /// `.github/workflows/ci.yml`), `fs2` is already a `mur-core` dependency, and
 /// `fs2::FileExt` is already how this crate locks files — see
 /// `inject/queue.rs`, `cmd/agent_companion/init.rs`, and
 /// `cross_agent/propagate/mod.rs`.
-pub fn acquire_login_lock(home: &Path) -> Option<LoginLock> {
+///
+/// Contention is told apart from failure by the OS error code `fs2` itself
+/// uses for a contended lock (`fs2::lock_contended_error`), rather than by
+/// `io::ErrorKind`, which maps differently per platform.
+pub fn acquire_login_lock(home: &Path) -> Result<LoginLock, LockDenied> {
     use fs2::FileExt;
     let path = home.join("login.lock");
     let f = std::fs::OpenOptions::new()
@@ -547,9 +645,14 @@ pub fn acquire_login_lock(home: &Path) -> Option<LoginLock> {
         .write(true)
         .truncate(false)
         .open(path)
-        .ok()?;
-    f.try_lock_exclusive().ok()?;
-    Some(LoginLock(f))
+        .map_err(LockDenied::Unavailable)?;
+    match f.try_lock_exclusive() {
+        Ok(()) => Ok(LoginLock(f)),
+        Err(e) if e.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
+            Err(LockDenied::Busy)
+        }
+        Err(e) => Err(LockDenied::Unavailable(e)),
+    }
 }
 
 /// Rung 3. Only reached when nothing cheaper worked.
@@ -558,18 +661,35 @@ fn request_login_handover(app: &mut crate::cmd::agent::cli::app::App, p: Provide
         app.push_system(format!("{}:\n{}", p.label(), print_only_instructions(p)));
         return;
     }
-    let Some(lock) = acquire_login_lock(&app.home) else {
-        app.push_error("another murmur pane is already running a login — finish that one first");
-        return;
+    let lock = match acquire_login_lock(&app.home) {
+        Ok(l) => Some(l),
+        Err(LockDenied::Busy) => {
+            app.push_error(
+                "another murmur pane is already running a login — finish that one first",
+            );
+            return;
+        }
+        Err(LockDenied::Unavailable(e)) => {
+            // Nothing is holding anything, so refusing would be a dead end of
+            // its own — on a filesystem without advisory locking the user
+            // could never log in from murmur at all. The lock only serialises
+            // panes; losing it degrades to the behaviour that shipped before
+            // it existed, so warn and continue.
+            app.push_warn(format!(
+                "login lock unavailable ({e}) — continuing without it; \
+                 don't start a second login in another pane"
+            ));
+            None
+        }
     };
     let argv = match p {
-        Provider::Anthropic => vec!["claude".into(), "auth".into(), "login".into()],
-        Provider::Chatgpt => vec!["codex".into(), "login".into()],
+        Provider::Anthropic => vec![p.owner_cli().into(), "auth".into(), "login".into()],
+        Provider::Chatgpt => vec![p.owner_cli().into(), "login".into()],
     };
     app.pending_handover = Some(crate::cmd::agent::cli::app::HandoverRequest {
         argv,
         label: p.label().to_string(),
-        _lock: Some(lock),
+        _lock: lock,
     });
 }
 
