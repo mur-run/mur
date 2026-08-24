@@ -15,6 +15,7 @@ mod dump;
 mod fleet_rail;
 mod follow;
 mod footer;
+mod login;
 mod manage;
 mod markdown;
 mod memory_cmds;
