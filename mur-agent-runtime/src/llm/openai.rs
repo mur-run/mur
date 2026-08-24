@@ -194,6 +194,15 @@ fn rich_messages_to_openai(msgs: &[RichMessage]) -> Vec<serde_json::Value> {
             }
             RichMessage::ToolResults { results } => {
                 for r in results {
+                    // `r.images` is dropped here, deliberately. The OpenAI
+                    // `role: "tool"` message takes a plain string — the
+                    // multimodal `image_url` block is only valid on a user
+                    // message, so there is no in-protocol place to put a tool's
+                    // image. The tool's text still describes it (`[image …]`),
+                    // which is why the placeholder in `render_mcp_result` and
+                    // `read_file` is text and not an empty string. To give an
+                    // OpenAI-backed agent real vision, send the image as a user
+                    // turn (`RichMessage::ImageText`, handled below) instead.
                     result.push(json!({
                         "role": "tool",
                         "tool_call_id": r.call_id,
@@ -630,6 +639,7 @@ mod tests {
                     content: "hi\n".into(),
                     is_error: false,
                     status: crate::tools::ToolStatus::Ok,
+                    images: Vec::new(),
                 }],
             },
         ];
