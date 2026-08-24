@@ -152,7 +152,7 @@ mur agent remove coach                        # unregisters it — add --purge t
 
 <p align="center"><img src="assets/demo.gif" alt="mur agent cli — streaming TUI chat with a local agent" width="92%" /></p>
 
-In the chat, `/model` lists your registered models and switches the agent to another one mid-conversation — no restart. Type `/` to open a completion menu of slash commands (with their subcommands) and the agent's skills — `↑↓` to move, `Tab`/`Enter` to accept, `Esc` to dismiss. And when the agent offers you choices, they appear as `Tab`-to-fill suggestions right in the input: a single one as greyed ghost text, several as a picker.
+In the chat, `/model` lists your registered models and switches the agent to another one mid-conversation — no restart. `/login` shows OAuth health for every provider and re-authenticates one without leaving the TUI: it re-reads the credential, asks the owner CLI to refresh, and only falls back to a real browser login if neither worked. Type `/` to open a completion menu of slash commands (with their subcommands) and the agent's skills — `↑↓` to move, `Tab`/`Enter` to accept, `Esc` to dismiss. And when the agent offers you choices, they appear as `Tab`-to-fill suggestions right in the input: a single one as greyed ghost text, several as a picker.
 
 ### Models & providers
 

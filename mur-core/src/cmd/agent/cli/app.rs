@@ -188,6 +188,9 @@ pub enum SlashCmd {
     Open,
     /// `/model [N|name]` — list registry models, or hot-switch to one.
     Model(Option<String>),
+    /// `/login [anthropic|chatgpt]` — show OAuth health, or repair one provider.
+    /// Unrelated to `mur auth login`, which signs in to mur.run.
+    Login(Option<String>),
     Quit,
     Unknown(String),
 }
@@ -211,6 +214,7 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
             }
         }
         "model" => SlashCmd::Model(words.next().map(str::to_string)),
+        "login" => SlashCmd::Login(words.next().map(str::to_string)),
         "auto" => SlashCmd::Auto(match words.next() {
             Some("on") => Some(true),
             Some("off") => Some(false),
@@ -316,6 +320,21 @@ pub fn overlay_key_action(code: KeyCode, modifiers: KeyModifiers) -> OverlayKeyA
 pub enum RenderMode {
     Inline,
     Fullscreen,
+}
+
+/// An interactive child the main loop must run with the terminal handed over.
+/// Set by a slash command; taken and cleared by the loop.
+///
+/// `Debug` is derived and leaks nothing: the only non-trivial field is a
+/// `LoginLock`, whose `std::fs::File` prints a descriptor and path, never
+/// contents. A `tracing::debug!(?req)` should not be a compile error.
+#[derive(Debug)]
+pub struct HandoverRequest {
+    pub argv: Vec<String>,
+    /// What to name in the before/after system messages.
+    pub label: String,
+    /// Held for the child's lifetime; dropped with the request.
+    pub _lock: Option<crate::cmd::agent::cli::login::LoginLock>,
 }
 
 /// All mutable TUI state.
@@ -542,6 +561,11 @@ pub struct App {
     /// rail/follow, so its `StepCompleted` can close them out. `None` when no
     /// delegated fleet run is executing.
     pub auto_fleet_step: Option<String>,
+    /// Set by a slash command (`/login`'s escalating repair) that needs the
+    /// real terminal for an interactive child, e.g. `claude auth login`. The
+    /// main loop takes and clears this — `handle_slash` has no access to
+    /// `terminal`/`events` to run the handover itself.
+    pub pending_handover: Option<HandoverRequest>,
 }
 
 impl App {
@@ -629,6 +653,7 @@ impl App {
             panel_input_deadline: None,
             fleet: None,
             auto_fleet_step: None,
+            pending_handover: None,
         }
     }
 
@@ -1809,6 +1834,25 @@ mod tests {
         assert_eq!(
             parse_slash("/model claude_opus"),
             Some(SlashCmd::Model(Some("claude_opus".into())))
+        );
+    }
+
+    #[test]
+    fn parse_slash_login() {
+        assert_eq!(parse_slash("/login"), Some(SlashCmd::Login(None)));
+        assert_eq!(
+            parse_slash("/login anthropic"),
+            Some(SlashCmd::Login(Some("anthropic".into())))
+        );
+        assert_eq!(
+            parse_slash("/login chatgpt"),
+            Some(SlashCmd::Login(Some("chatgpt".into())))
+        );
+        // The word is kept verbatim: an unknown provider is reported with the
+        // spelling the user typed, not silently dropped.
+        assert_eq!(
+            parse_slash("/login bogus"),
+            Some(SlashCmd::Login(Some("bogus".into())))
         );
     }
 

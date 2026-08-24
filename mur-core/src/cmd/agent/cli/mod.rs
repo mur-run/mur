@@ -15,6 +15,8 @@ mod dump;
 mod fleet_rail;
 mod follow;
 mod footer;
+mod handover;
+mod login;
 mod manage;
 mod markdown;
 mod memory_cmds;
@@ -162,7 +164,7 @@ const SPINNER_MS: u64 = 90;
 /// Max chars of an arg hint shown on a step line in `--plain` mode.
 const PLAIN_STEP_HINT_MAX: usize = 120;
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /open (outstanding items)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /model [N|name] (list/switch model)  /mcp  /skill  /remember <text> (save a memory)  /memories  /forget <name|last>  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
+const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /open (outstanding items)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /model [N|name] (list/switch model)  /login [anthropic|chatgpt] (OAuth health / re-authenticate — unrelated to mur auth login, which signs in to mur.run for the official catalog)  /mcp  /skill  /remember <text> (save a memory)  /memories  /forget <name|last>  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
 #[allow(clippy::too_many_arguments)]
@@ -262,7 +264,7 @@ pub async fn cmd_cli(
 // successfully), so pop never has to re-derive that itself.
 static KB_ENHANCEMENT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-fn push_keyboard_enhancement(supported: bool) {
+pub(super) fn push_keyboard_enhancement(supported: bool) {
     if supported
         && execute!(
             io::stdout(),
@@ -275,28 +277,42 @@ fn push_keyboard_enhancement(supported: bool) {
 }
 
 // Callers pass their own cached `supports_keyboard_enhancement()` result (see
-// `TerminalGuard`/panic hook/`scrollback_dump`) purely so *they* don't have to
-// re-query the terminal — but the actual decision to pop is driven by
-// `KB_ENHANCEMENT_ACTIVE`, not by that flag. Deliberately does NOT call
-// `supports_keyboard_enhancement()` itself: that sends a second terminal
-// query-and-wait (up to crossterm's 2s timeout). If the reply arrives after
-// we've already disabled raw mode / left the alternate screen, nothing reads
-// it — the raw escape bytes fall through to the shell's cooked-mode stdin and
-// get echoed as garbage (e.g. `^[[?1u^[[?62;22;52c`). We already know from the
-// push above whether the protocol is actually active, so just use that.
-fn pop_keyboard_enhancement(_supported: bool) {
+// `TerminalGuard`/panic hook/`scrollback_dump`/`handover::Suspended`) purely
+// so *they* don't have to re-query the terminal — but the actual decision to
+// pop is driven by `KB_ENHANCEMENT_ACTIVE`, not by that flag. Deliberately
+// does NOT call `supports_keyboard_enhancement()` itself: that sends a second
+// terminal query-and-wait (up to crossterm's 2s timeout). If the reply
+// arrives after we've already disabled raw mode / left the alternate screen,
+// nothing reads it — the raw escape bytes fall through to the shell's
+// cooked-mode stdin and get echoed as garbage (e.g.
+// `^[[?1u^[[?62;22;52c`). We already know from the push above whether the
+// protocol is actually active, so just use that.
+pub(super) fn pop_keyboard_enhancement(_supported: bool) {
     if KB_ENHANCEMENT_ACTIVE.swap(false, Ordering::Relaxed) {
         let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
     }
 }
 
+/// A pure read of whether keyboard enhancement is currently pushed — unlike
+/// `pop_keyboard_enhancement`, this does not clear `KB_ENHANCEMENT_ACTIVE`.
+/// `handover::Suspended::begin` needs the state remembered for a later
+/// re-push on resume, so it peeks here first and lets `pop_keyboard_enhancement`
+/// do the actual (destructive) pop right after — a read and a mutation kept as
+/// two honestly-named steps instead of one function trying to do both.
+pub(super) fn keyboard_enhancement_active() -> bool {
+    KB_ENHANCEMENT_ACTIVE.load(Ordering::Relaxed)
+}
+
 /// Tracks whether the physical terminal is currently on the alternate screen.
-/// Owned here (not inside `sync_surface`) so the RAII guard's `Drop` and the
-/// panic hook can decide whether a `LeaveAlternateScreen` is actually needed —
-/// Inline mode never entered the alt-screen, so leaving it would corrupt the
-/// user's scrollback on exit. `sync_surface` is the only writer during normal
-/// operation; the guard/panic paths only read.
-static ON_ALT: AtomicBool = AtomicBool::new(false);
+/// Owned here (not inside `sync_surface`) so the RAII guard's `Drop`, the
+/// panic hook, and the terminal-handover guard (`handover::Suspended`) can all
+/// decide whether a `LeaveAlternateScreen`/`EnterAlternateScreen` is actually
+/// needed — Inline mode never entered the alt-screen, so leaving it would
+/// corrupt the user's scrollback on exit. `sync_surface` and
+/// `handover::Suspended` are the only writers (the latter only for the
+/// duration of a handover, always restoring what it found); the guard/panic
+/// paths only read.
+pub(super) static ON_ALT: AtomicBool = AtomicBool::new(false);
 
 /// RAII terminal restore — runs on every exit path including unwind.
 struct TerminalGuard {
@@ -594,6 +610,36 @@ fn rebuild_after_resize(
     Ok(h)
 }
 
+/// The app-state half of starting a terminal handover: push the notice, cancel
+/// any pending screen wipe, and report the viewport height the handover needs.
+/// Split out from the loop so the policy — most of which is a *refusal* to do
+/// something — is testable at all.
+///
+/// **It must not touch `flushed_upto`/`flushed_bytes`.** `rebuild_after_resize`
+/// (above) and `App::start_new_session` both reset them, but each erases what
+/// is already on screen first — `purge_and_reanchor` in one, `messages.clear()`
+/// in the other — which is what makes re-emitting from index 0 a redraw. The
+/// handover path purges nothing on purpose: `handover::reanchor` is the
+/// no-`Purge` variant precisely so the login transcript survives. Resetting the
+/// cursors here would make the next `flush_finished` take `start = 0` and
+/// `insert_before` the whole settled transcript a second time, burying the
+/// login transcript under a duplicate of the conversation.
+///
+/// The height is recomputed **after** the notice lands, not before: the notice
+/// is what makes the transcript non-empty, and `viewport_h_for` gives the
+/// full-window welcome height while it is empty. Computing first and handing
+/// that height to `handover::run` would scroll the child's own output almost
+/// entirely off-screen.
+///
+/// `wants_screen_wipe` is cleared for the same reason the reset is skipped: a
+/// wipe left pending would run `purge_and_reanchor` on the pass after the
+/// child exits and take the transcript with it.
+fn prepare_handover(app: &mut App, label: &str, term_rows: u16) -> u16 {
+    app.push_system(format!("{label}: handing over the terminal…"));
+    app.wants_screen_wipe = false;
+    viewport_h_for(term_rows, app.messages.is_empty())
+}
+
 /// Wipe the screen AND scrollback, then re-anchor a fresh Inline viewport
 /// of height `h` anchored at the BOTTOM of the screen. Shared by the resize
 /// rebuild and the /clear / channel-switch screen wipe. Caller must drop any
@@ -705,6 +751,57 @@ async fn event_loop(
             drop(events);
             let _ = purge_and_reanchor(terminal, viewport_h);
             events = EventStream::new();
+        }
+        // A slash command (`/login`'s escalating repair) asked for the real
+        // terminal. Handled here, not in `handle_slash`, because only the
+        // loop owns `terminal` and `events`. Guarded on Inline like the three
+        // blocks above it: everything below assumes an Inline viewport, and
+        // re-anchoring one while the alt-screen is up would anchor it against
+        // the wrong surface. Leaving the request in place is correct — it is
+        // taken on the pass after the overlay closes, not dropped.
+        if app.render_mode == RenderMode::Inline
+            && let Some(req) = app.pending_handover.take()
+        {
+            let want_h = prepare_handover(app, &req.label, last_size.height);
+            // The EventStream owns stdin: the child must have it to itself,
+            // and the re-anchor below reads the terminal's cursor-position
+            // reply from it — `Terminal::with_options(Inline(..))` issues a
+            // cursor query and needs crossterm's reader lock, which the
+            // EventStream's background thread holds. So this drop is required
+            // here, not merely tidy.
+            //
+            // Behaviour change from moving it above the flush and the draw:
+            // keystrokes typed during those two calls used to die with the
+            // dropped EventStream and are now left in the terminal's own
+            // input buffer for the child to read. That is the improvement —
+            // the window is short, but anything typed in it was the user
+            // answering the login prompt, and swallowing it was never right.
+            drop(events);
+            // Re-anchor the REAL terminal, not just this local: the draw
+            // below and `Suspended::begin`'s clear would otherwise be working
+            // from two different geometries. Fail-open on Err, like the resize
+            // path — keeping the old height costs a cosmetic mis-anchor,
+            // bailing costs the session.
+            if want_h != viewport_h && handover::reanchor(terminal, want_h).is_ok() {
+                viewport_h = want_h;
+            }
+            // Paint the "handing over" line before we suspend — otherwise it
+            // only appears after the child exits, alongside the result.
+            ui::flush_finished(terminal, app, viewport_h)?;
+            terminal.draw(|f| ui::render(f, app))?;
+            let outcome = handover::run(terminal, viewport_h, &req);
+            events = EventStream::new();
+            match outcome {
+                Ok(s) if s.success() => {
+                    app.push_system(format!(
+                        "{}: logged in ✓ — no restart needed, the gateway re-reads per request",
+                        req.label
+                    ));
+                }
+                Ok(s) => app.push_error(format!("{}: login exited with {s}", req.label)),
+                Err(e) => app.push_error(format!("{}: handover failed: {e:#}", req.label)),
+            }
+            app.needs_full_redraw = true;
         }
         arm_input_debounce(app, StdInstant::now());
         // Flush the live band's overflow into native scrollback BEFORE the
@@ -1877,6 +1974,15 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
                 }
             }
         }
+        SlashCmd::Login(arg) => match arg {
+            None => run_manage(app, move |_agent| Ok(login::render_status_all())).await,
+            Some(word) => match login::Provider::parse(&word) {
+                None => app.push_error(format!(
+                    "unknown provider {word:?} — try anthropic or chatgpt"
+                )),
+                Some(p) => login::dispatch_repair(app, p).await,
+            },
+        },
         SlashCmd::Mcp(args) => run_manage(app, move |agent| manage::run_mcp(&agent, &args)).await,
         SlashCmd::Skill(args) => {
             run_manage(app, move |agent| manage::run_skill(&agent, &args)).await
@@ -2176,7 +2282,8 @@ fn notify_unfocused(title: &str, message: &str) {
 
 #[cfg(test)]
 mod viewport_tests {
-    use super::{INLINE_VIEWPORT_HEIGHT, viewport_h_for};
+    use super::app::App;
+    use super::{INLINE_VIEWPORT_HEIGHT, prepare_handover, viewport_h_for};
 
     /// The welcome and the chat surface want opposite things, and only one of
     /// them is safe at full height: nothing is ever flushed to scrollback while
@@ -2192,6 +2299,69 @@ mod viewport_tests {
         // Absurdly short: a floor beats a zero-height viewport.
         assert_eq!(viewport_h_for(2, true), 5);
         assert_eq!(viewport_h_for(2, false), 5);
+    }
+
+    /// The handover purges nothing (`handover::reanchor` is the no-`Purge`
+    /// variant, so the login transcript survives), and `flush_finished` emits
+    /// `messages[flushed_upto..]`. Rewinding the cursor here therefore does not
+    /// "replay" anything — it hands `insert_before` the whole settled
+    /// transcript a second time, on top of the copy already in scrollback,
+    /// immediately before the child runs.
+    #[test]
+    fn a_handover_does_not_rewind_the_flush_cursor() {
+        let mut app = App::test_fixture();
+        app.flushed_upto = 3;
+        app.flushed_bytes = 17;
+
+        prepare_handover(&mut app, "Anthropic", 60);
+
+        assert_eq!(
+            app.flushed_upto, 3,
+            "rewinding re-emits the settled transcript into scrollback"
+        );
+        assert_eq!(app.flushed_bytes, 17, "same, for the partial-message tail");
+    }
+
+    /// Order, not arithmetic: the notice is what makes the transcript
+    /// non-empty, so the height must be read after it lands. Computed first,
+    /// this returns the full-window welcome height and `handover::run` would
+    /// clear — and re-anchor — a viewport almost the size of the screen,
+    /// scrolling the child's own output off it.
+    #[test]
+    fn a_handover_recomputes_the_height_after_its_notice_lands() {
+        let mut app = App::test_fixture();
+        app.messages.clear();
+
+        let h = prepare_handover(&mut app, "Anthropic", 60);
+
+        assert_eq!(
+            h, INLINE_VIEWPORT_HEIGHT,
+            "the welcome height must not survive the handover notice"
+        );
+        assert_ne!(
+            h,
+            viewport_h_for(60, true),
+            "…and the two heights really are different at this size"
+        );
+        assert!(
+            app.messages
+                .last()
+                .is_some_and(|m| m.text.contains("Anthropic")),
+            "the notice itself must be in the transcript before the child runs"
+        );
+    }
+
+    /// A wipe left pending runs `purge_and_reanchor` on the pass after the
+    /// child exits — `Clear(ClearType::Purge)` taking the login transcript
+    /// with it.
+    #[test]
+    fn a_handover_cancels_a_pending_screen_wipe() {
+        let mut app = App::test_fixture();
+        app.wants_screen_wipe = true;
+
+        prepare_handover(&mut app, "Anthropic", 60);
+
+        assert!(!app.wants_screen_wipe);
     }
 }
 
@@ -2646,24 +2816,89 @@ mod hitl_key_tests {
 }
 
 /// #940: `/open` worked, the chat footer advertised it, and `/help` did not
-/// list it — so the one place a user goes to learn the command surface was the
-/// one place it was missing.
+/// list it — so the one place a user goes to learn the command surface was
+/// the one place it was missing. A hand-maintained list of "documented"
+/// names (the original fix here) can catch a name that is present but
+/// wrong; it can never catch a command the list simply forgot to include —
+/// which is exactly what let `/login` go unlisted despite being fully
+/// wired up. `help_name` below replaces that list with a `match` over
+/// `SlashCmd` itself, with no wildcard arm: adding a new variant to
+/// `SlashCmd` fails this test build until it is given an explicit line
+/// here. Same lever as `#[expect]` over `#[allow]` — "someone must
+/// remember" becomes "the build stops."
 #[cfg(test)]
 mod help_coverage_tests {
     use super::HELP;
     use super::app::{SlashCmd, parse_slash};
 
-    /// Primary (non-alias) names of every slash command the parser accepts.
-    /// Each entry is fed through the real parser, so this list cannot name a
-    /// command that does not exist; `/help` then has to mention all of them.
-    const COMMANDS: &[&str] = &[
-        "help", "clear", "card", "sessions", "channels", "open", "auto", "verbose", "skin", "mcp",
-        "skill", "model", "remember", "memories", "forget", "panel", "exit",
-    ];
+    /// Canonical `/name` for a `SlashCmd` variant that must show up in
+    /// `/help`, or `None` for a variant that legitimately has none.
+    /// `Unknown` (the parser's not-a-command fallback) is the only such
+    /// variant today. No `_` arm on purpose: a new `SlashCmd` variant must
+    /// get an explicit answer here before this module compiles.
+    fn help_name(cmd: &SlashCmd) -> Option<&'static str> {
+        match cmd {
+            SlashCmd::Help => Some("help"),
+            SlashCmd::Clear => Some("clear"),
+            SlashCmd::Card => Some("card"),
+            SlashCmd::Sessions => Some("sessions"),
+            SlashCmd::Channels { .. } => Some("channels"),
+            SlashCmd::Auto(_) => Some("auto"),
+            SlashCmd::Verbose(_) => Some("verbose"),
+            SlashCmd::Mcp(_) => Some("mcp"),
+            SlashCmd::Skill(_) => Some("skill"),
+            SlashCmd::Remember(_) => Some("remember"),
+            SlashCmd::Memories => Some("memories"),
+            SlashCmd::Forget(_) => Some("forget"),
+            SlashCmd::Skin(_) => Some("skin"),
+            SlashCmd::Panel(_) => Some("panel"),
+            SlashCmd::Open => Some("open"),
+            SlashCmd::Model(_) => Some("model"),
+            SlashCmd::Login(_) => Some("login"),
+            SlashCmd::Quit => Some("exit"),
+            SlashCmd::Unknown(_) => None,
+        }
+    }
+
+    /// One concrete instance per `SlashCmd` variant, to drive the
+    /// round-trip check below. If a variant is missing from this list,
+    /// `help_name`'s match above still refuses to compile once that
+    /// variant is added to `SlashCmd` — this list only chooses which
+    /// instance exercises the parser/HELP check, it is not what makes the
+    /// coverage exhaustive.
+    fn one_of_each() -> Vec<SlashCmd> {
+        vec![
+            SlashCmd::Help,
+            SlashCmd::Clear,
+            SlashCmd::Card,
+            SlashCmd::Sessions,
+            SlashCmd::Channels {
+                n: None,
+                follow: false,
+            },
+            SlashCmd::Auto(None),
+            SlashCmd::Verbose(None),
+            SlashCmd::Mcp(vec![]),
+            SlashCmd::Skill(vec![]),
+            SlashCmd::Remember(vec![]),
+            SlashCmd::Memories,
+            SlashCmd::Forget(None),
+            SlashCmd::Skin(None),
+            SlashCmd::Panel(vec![]),
+            SlashCmd::Open,
+            SlashCmd::Model(None),
+            SlashCmd::Login(None),
+            SlashCmd::Quit,
+            SlashCmd::Unknown("x".into()),
+        ]
+    }
 
     #[test]
     fn help_lists_every_command_the_parser_accepts() {
-        for name in COMMANDS {
+        for cmd in one_of_each() {
+            let Some(name) = help_name(&cmd) else {
+                continue;
+            };
             let parsed = parse_slash(&format!("/{name}"));
             assert!(
                 !matches!(parsed, Some(SlashCmd::Unknown(_)) | None),
