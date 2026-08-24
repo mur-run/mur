@@ -188,6 +188,9 @@ pub enum SlashCmd {
     Open,
     /// `/model [N|name]` — list registry models, or hot-switch to one.
     Model(Option<String>),
+    /// `/login [anthropic|chatgpt]` — show OAuth health, or repair one provider.
+    /// Unrelated to `mur auth login`, which signs in to mur.run.
+    Login(Option<String>),
     Quit,
     Unknown(String),
 }
@@ -211,6 +214,7 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
             }
         }
         "model" => SlashCmd::Model(words.next().map(str::to_string)),
+        "login" => SlashCmd::Login(words.next().map(str::to_string)),
         "auto" => SlashCmd::Auto(match words.next() {
             Some("on") => Some(true),
             Some("off") => Some(false),
@@ -1809,6 +1813,25 @@ mod tests {
         assert_eq!(
             parse_slash("/model claude_opus"),
             Some(SlashCmd::Model(Some("claude_opus".into())))
+        );
+    }
+
+    #[test]
+    fn parse_slash_login() {
+        assert_eq!(parse_slash("/login"), Some(SlashCmd::Login(None)));
+        assert_eq!(
+            parse_slash("/login anthropic"),
+            Some(SlashCmd::Login(Some("anthropic".into())))
+        );
+        assert_eq!(
+            parse_slash("/login chatgpt"),
+            Some(SlashCmd::Login(Some("chatgpt".into())))
+        );
+        // The word is kept verbatim: an unknown provider is reported with the
+        // spelling the user typed, not silently dropped.
+        assert_eq!(
+            parse_slash("/login bogus"),
+            Some(SlashCmd::Login(Some("bogus".into())))
         );
     }
 
