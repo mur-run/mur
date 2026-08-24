@@ -85,10 +85,11 @@ impl KokoroTts {
             style_bytes.len(),
         );
 
-        let floats: Vec<f32> = style_bytes
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-            .collect();
+        // `as_chunks` over `chunks_exact`: the length is already pinned by the
+        // `ensure!` above, and fixed-size chunks hand `from_le_bytes` its
+        // `[u8; 4]` directly instead of re-indexing four times.
+        let (quads, _rest) = style_bytes.as_chunks::<4>();
+        let floats: Vec<f32> = quads.iter().copied().map(f32::from_le_bytes).collect();
         let mut style = Vec::with_capacity(N_VOICES);
         for v in 0..N_VOICES {
             let mut rows = Vec::with_capacity(STYLE_ROWS);
