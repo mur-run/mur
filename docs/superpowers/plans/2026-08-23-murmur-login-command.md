@@ -703,6 +703,30 @@ The common failure is an access token that aged out while the refresh token is s
     }
 
     #[test]
+    fn cheap_repair_stamps_after_the_probe_not_before() {
+        // The stamp only changes once the probe has run — exactly what a real
+        // refresh looks like. An implementation that takes both stamps up
+        // front sees "a" twice, reports the store unmoved, and falls through
+        // to the CLI's report instead of RefreshedByProbe.
+        use std::cell::Cell;
+        let probed = Cell::new(false);
+        let stamp = |_p: Provider| {
+            Some(StoreStamp(
+                if probed.get() { "after" } else { "before" }.to_string(),
+            ))
+        };
+        let status = |_p: Provider| {
+            probed.set(true);
+            st(true)
+        };
+        assert_eq!(
+            cheap_repair_in(Provider::Anthropic, stamp, status),
+            Rung::RefreshedByProbe,
+            "the second stamp must be taken after the probe, not before"
+        );
+    }
+
+    #[test]
     fn a_missing_owner_cli_cannot_be_repaired() {
         let absent = OwnerStatus { logged_in: false, identity: None, cli_present: false };
         assert_eq!(classify_repair(None, None, &absent), Rung::NoOwnerCli);
@@ -754,13 +778,38 @@ pub fn classify_repair(
 
 /// Rungs 1 and 2: re-read, then ask the owner CLI to refresh. Blocking.
 /// Never opens a browser and never touches the terminal.
+///
+/// The **order** is the whole point: stamp, *then* probe, *then* stamp again.
+/// Taking both stamps before the probe would compare a store against itself
+/// and report `AlreadyHealthy`/`NeedsLogin` for a credential the probe just
+/// repaired. `classify_repair`'s tests cannot see that — they are handed the
+/// two stamps already taken — so the sequence gets its own seam and its own
+/// test.
 pub fn cheap_repair(p: Provider) -> Rung {
-    let before = store_stamp(p);
-    let status = owner_status(p);
-    let after = store_stamp(p);
+    cheap_repair_in(p, store_stamp, owner_status)
+}
+
+/// `cheap_repair`'s body with its two effects injected, so a test can control
+/// what the store looks like before and after the probe. Production passes the
+/// real `store_stamp`/`owner_status`; nothing else should call this.
+pub(crate) fn cheap_repair_in(
+    p: Provider,
+    stamp: impl Fn(Provider) -> Option<StoreStamp>,
+    status: impl Fn(Provider) -> OwnerStatus,
+) -> Rung {
+    let before = stamp(p);
+    let status = status(p);
+    let after = stamp(p);
     classify_repair(before, after, &status)
 }
 ```
+
+**Acceptance criterion, stated as a mutation.** `store_stamp`'s routing bug in
+Task 2 survived six tests because only its parts were covered; this is the same
+shape one level up. The test below must **fail if both stamps are taken before
+the probe** — move `let after = stamp(p);` above `let status = status(p);` and
+confirm it goes red before you trust it. A test that merely passes today does
+not close this.
 
 Then replace the `dispatch_repair` stub from Task 4. Rungs 1–2 run off the UI task; rung 3 sets the handover flag consumed in Task 7:
 
