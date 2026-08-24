@@ -294,10 +294,34 @@ fn rich_messages_to_anthropic(
                 let parts: Vec<serde_json::Value> = results
                     .iter()
                     .map(|r| {
+                        // `content` stays a bare string when there is no image,
+                        // so the overwhelmingly common shape is byte-identical
+                        // to what this adapter always sent — a tool result that
+                        // gained an empty `images` vec must not change the
+                        // request (and must not break the prompt cache).
+                        let content = if r.images.is_empty() {
+                            json!(r.content)
+                        } else {
+                            let mut blocks = vec![json!({
+                                "type": "text",
+                                "text": r.content,
+                            })];
+                            blocks.extend(r.images.iter().map(|img| {
+                                json!({
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": img.media_type,
+                                        "data": img.data,
+                                    },
+                                })
+                            }));
+                            json!(blocks)
+                        };
                         json!({
                             "type": "tool_result",
                             "tool_use_id": r.call_id,
-                            "content": r.content,
+                            "content": content,
                             "is_error": r.is_error,
                         })
                     })
@@ -803,6 +827,7 @@ mod tests {
                     content: "hi\n".into(),
                     is_error: false,
                     status: crate::tools::ToolStatus::Ok,
+                    images: Vec::new(),
                 }],
             },
         ];
@@ -821,6 +846,56 @@ mod tests {
         let result_content = result_msg["content"].as_array().unwrap();
         assert_eq!(result_content[0]["type"], "tool_result");
         assert_eq!(result_content[0]["tool_use_id"], "id1");
+    }
+
+    /// The whole point of the feature: an image on a tool result must reach
+    /// the wire as a real `image` block inside `tool_result.content`, because
+    /// that is the only shape the model can actually see.
+    #[test]
+    fn tool_result_image_becomes_a_wire_image_block() {
+        let msgs = vec![RichMessage::ToolResults {
+            results: vec![ToolResultEntry {
+                call_id: "id1".into(),
+                content: "[image /tmp/car.jpg — image/jpeg, 9 bytes]".into(),
+                is_error: false,
+                status: Default::default(),
+                images: vec![crate::tools::ToolImage {
+                    media_type: "image/jpeg".into(),
+                    data: "QUJD".into(),
+                }],
+            }],
+        }];
+        let (_sys, convo, _) = rich_messages_to_anthropic(&msgs);
+        let content = convo[0]["content"][0]["content"]
+            .as_array()
+            .expect("with an image, tool_result.content must be a block array, not a bare string");
+        assert_eq!(content[0]["type"], "text", "text block leads");
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[1]["source"]["type"], "base64");
+        assert_eq!(content[1]["source"]["media_type"], "image/jpeg");
+        assert_eq!(content[1]["source"]["data"], "QUJD");
+    }
+
+    /// Negative control for the test above, and a compatibility guard: with no
+    /// image the request must be byte-identical to what this adapter always
+    /// sent — a bare string, not a one-element block array. A silent change
+    /// here would invalidate every cached prefix in the wild.
+    #[test]
+    fn tool_result_without_images_stays_a_bare_string() {
+        let msgs = vec![RichMessage::ToolResults {
+            results: vec![ToolResultEntry {
+                call_id: "id1".into(),
+                content: "15 degrees".into(),
+                is_error: false,
+                status: Default::default(),
+                images: vec![],
+            }],
+        }];
+        let (_sys, convo, _) = rich_messages_to_anthropic(&msgs);
+        assert_eq!(
+            convo[0]["content"][0]["content"], "15 degrees",
+            "no image must mean no shape change"
+        );
     }
 
     #[test]
@@ -881,6 +956,7 @@ mod tests {
                     content: "ok".into(),
                     is_error: false,
                     status: crate::tools::ToolStatus::Ok,
+                    images: Vec::new(),
                 }],
             },
             RichMessage::Text {

@@ -50,6 +50,43 @@ pub enum ToolStatus {
 pub struct ToolOutput {
     pub text: String,
     pub status: ToolStatus,
+    /// Images the tool produced, handed to the model as real vision input
+    /// rather than described in prose.
+    ///
+    /// Before this existed a tool could only return text, so an agent that
+    /// fetched a photo had no way to show it to its own model — the runtime
+    /// was the missing link between MCP (whose results already carry image
+    /// content) and the Messages API (whose `tool_result` already accepts
+    /// image blocks). Adapters that cannot express images in a tool result
+    /// drop these and keep `text`; see `llm::openai`.
+    pub images: Vec<ToolImage>,
+}
+
+/// One image carried out of a tool call.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ToolImage {
+    /// e.g. "image/jpeg" — passed through to the provider unchanged.
+    pub media_type: String,
+    /// Base64-encoded bytes, with no `data:` prefix.
+    pub data: String,
+}
+
+/// Media types a vision model will accept. A tool that produces anything
+/// else keeps it as text: handing the provider an unsupported media type
+/// fails the whole turn, which is worse than losing the picture.
+pub const SUPPORTED_IMAGE_MEDIA_TYPES: [&str; 4] =
+    ["image/jpeg", "image/png", "image/gif", "image/webp"];
+
+/// Ceiling on a single decoded image, mirroring the provider's own limit.
+/// Base64 inflates by 4/3, so this lands just under the 5 MB wire cap.
+pub const MAX_IMAGE_BYTES: usize = 3_750_000;
+
+impl ToolImage {
+    /// True when this image is small enough and of a type the provider takes.
+    pub fn is_supported(&self) -> bool {
+        SUPPORTED_IMAGE_MEDIA_TYPES.contains(&self.media_type.as_str())
+            && self.data.len() <= MAX_IMAGE_BYTES.div_ceil(3) * 4
+    }
 }
 
 impl From<String> for ToolOutput {
@@ -57,6 +94,7 @@ impl From<String> for ToolOutput {
         ToolOutput {
             text,
             status: ToolStatus::Ok,
+            images: Vec::new(),
         }
     }
 }

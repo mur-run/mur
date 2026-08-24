@@ -309,6 +309,7 @@ Commands are killed after `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {
         Ok(ToolOutput {
             text: combined,
             status,
+            images: Vec::new(),
         })
     }
 }

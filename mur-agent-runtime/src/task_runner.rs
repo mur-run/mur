@@ -1279,6 +1279,7 @@ impl TaskRunner {
                 status: crate::tools::ToolStatus::Denied {
                     detail: format!("unknown tool: {}", call.tool_name),
                 },
+                images: Vec::new(),
             });
         }
 
@@ -1314,6 +1315,7 @@ impl TaskRunner {
                         status: crate::tools::ToolStatus::Denied {
                             detail: format!("Tool `{}` is denied by policy.", call.tool_name),
                         },
+                        images: Vec::new(),
                     });
                 }
                 ToolPolicy::Allow => {
@@ -1334,14 +1336,16 @@ impl TaskRunner {
                             .await;
                     }
                     let t0 = std::time::Instant::now();
-                    let (output, status, is_error) = match tool.execute(call.input.clone()).await {
-                        Ok(out) => (out.text, out.status, false),
-                        Err(e) => (
-                            format!("tool error: {e}"),
-                            crate::tools::ToolStatus::Failed { exit_code: -1 },
-                            true,
-                        ),
-                    };
+                    let (output, status, is_error, images) =
+                        match tool.execute(call.input.clone()).await {
+                            Ok(out) => (out.text, out.status, false, out.images),
+                            Err(e) => (
+                                format!("tool error: {e}"),
+                                crate::tools::ToolStatus::Failed { exit_code: -1 },
+                                true,
+                                Vec::new(),
+                            ),
+                        };
                     if let Some(ref n) = step_notifier {
                         let (out, truncated, full_len) = cap_step_output(&output);
                         let _ = n
@@ -1370,6 +1374,7 @@ impl TaskRunner {
                         content: output,
                         is_error,
                         status,
+                        images,
                     });
                 }
                 ToolPolicy::Ask => {
@@ -1451,12 +1456,13 @@ impl TaskRunner {
                 .await;
         }
         let t0_ask = std::time::Instant::now();
-        let (output, status, is_error) = match tool.execute(call.input.clone()).await {
-            Ok(out) => (out.text, out.status, false),
+        let (output, status, is_error, images) = match tool.execute(call.input.clone()).await {
+            Ok(out) => (out.text, out.status, false, out.images),
             Err(e) => (
                 format!("tool error: {e}"),
                 crate::tools::ToolStatus::Failed { exit_code: -1 },
                 true,
+                Vec::new(),
             ),
         };
         if let Some(ref n) = step_notifier {
@@ -1491,6 +1497,7 @@ impl TaskRunner {
             content: output,
             is_error,
             status,
+            images,
         })
     }
 
@@ -1500,6 +1507,12 @@ impl TaskRunner {
     /// `compress.yaml` `auto.min_tokens`) or B0 rule 8 PII redaction.
     /// Mutates in place; no-op when no chain is wired or every hook returns
     /// `None`. Closes the M7.6 gap where the patch was computed but discarded.
+    ///
+    /// `entry.images` is deliberately untouched: a hook patches the model-facing
+    /// TEXT, and the compress path in particular offloads text by size — an
+    /// image is not counted in that budget and swapping its bytes for a digest
+    /// would leave the model looking at nothing. A hook that must suppress an
+    /// image should deny the tool call, not blank the result.
     async fn apply_post_tool_use(
         &self,
         calls: &[crate::llm::ToolCallResult],
@@ -2037,6 +2050,7 @@ fn sanitize_dangling_tool_uses(
                     content: format!("[stopped: {}]", reason.as_str()),
                     is_error: true,
                     status: crate::tools::ToolStatus::Ok,
+                    images: Vec::new(),
                 })
                 .collect();
             if !missing.is_empty() {
@@ -2318,12 +2332,14 @@ mod tests {
                 content: "this is a large tool output".into(),
                 is_error: false,
                 status: crate::tools::ToolStatus::Ok,
+                images: Vec::new(),
             },
             ToolResultEntry {
                 call_id: "c2".into(),
                 content: "ok".into(),
                 is_error: false,
                 status: crate::tools::ToolStatus::Ok,
+                images: Vec::new(),
             },
         ];
         runner.apply_post_tool_use(&calls, &mut results).await;

@@ -12,6 +12,23 @@ use mur_common::agent::FilesystemEntitlement;
 use crate::llm::ToolDef;
 use crate::tools::{ToolError, ToolExecutor, ToolOutput};
 
+/// The image media type for a path's extension, or `None` for everything else.
+///
+/// Deliberately narrower than the runtime's general extension→MIME map: this
+/// gates what gets handed to a vision model, so it lists only types a provider
+/// accepts. `image/svg+xml` is absent on purpose — it is markup, and reading it
+/// as text is the more useful answer.
+fn image_media_type(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
 /// Hard ceiling on returned bytes so a huge file cannot blow up the turn.
 const MAX_RETURN_BYTES: usize = 512 * 1024;
 
@@ -92,7 +109,8 @@ impl ToolExecutor for ReadFileTool {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "read_file".into(),
-            description: "Read a UTF-8 text file. Optional 1-indexed `offset`/`limit` select a line window. \
+            description: "Read a UTF-8 text file, or an image you want to LOOK AT. \
+PNG/JPEG/GIF/WebP are returned as real image input you can see — use this rather than describing a picture you have not been shown. Optional 1-indexed `offset`/`limit` select a line window (text only). \
 Relative paths resolve against the shared session working directory (the same base the `bash` tool uses, moved only by passing `bash` an explicit `cwd`); reads are checked against the agent's filesystem entitlements."
                 .into(),
             input_schema: serde_json::json!({
@@ -125,6 +143,37 @@ Relative paths resolve against the shared session working directory (the same ba
                 "read", &canonical, &base, &e,
             ))
         })?;
+        // An image is returned AS an image, not as its bytes decoded into
+        // mojibake. Before this branch existed a vision-capable agent that
+        // fetched a photo could only read it as text and then guess at what
+        // it "saw" — the model has no way to signal that it never got a
+        // picture, so the guess came back with a confidence score attached.
+        if let Some(media_type) = image_media_type(&canonical) {
+            if bytes.len() > crate::tools::MAX_IMAGE_BYTES {
+                return Err(ToolError::Execution(format!(
+                    "image is {} bytes, over the {} byte limit a vision request accepts: {}. \
+                     Resize it before reading, or read it with `bash` if you only need the bytes.",
+                    bytes.len(),
+                    crate::tools::MAX_IMAGE_BYTES,
+                    canonical.display()
+                )));
+            }
+            use base64::Engine as _;
+            return Ok(ToolOutput {
+                text: format!(
+                    "[image {} — {}, {} bytes]",
+                    canonical.display(),
+                    media_type,
+                    bytes.len()
+                ),
+                status: crate::tools::ToolStatus::Ok,
+                images: vec![crate::tools::ToolImage {
+                    media_type: media_type.to_string(),
+                    data: base64::engine::general_purpose::STANDARD.encode(&bytes),
+                }],
+            });
+        }
+
         let text = String::from_utf8_lossy(&bytes);
 
         let offset = input["offset"].as_i64().filter(|v| *v >= 1);
@@ -163,6 +212,52 @@ mod tests {
             write: write.iter().map(|s| s.to_string()).collect(),
             deny: deny.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    /// A 1x1 PNG read through the tool must come back as image input, not as
+    /// its bytes lossily decoded into text — the exact failure that made a
+    /// vision-capable agent invent a car model it had never been shown.
+    #[test]
+    fn image_file_returns_image_input_not_mojibake() {
+        use base64::Engine as _;
+        let tmp = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(tmp.path()).unwrap();
+        // Smallest valid PNG header bytes; content does not matter here,
+        // only that the tool routes on the extension and preserves bytes.
+        let png: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        let path = home.join("shot.png");
+        std::fs::write(&path, png).unwrap();
+
+        let tool = ReadFileTool::new_for_test(
+            crate::tools::fs_policy::SessionCwd::new(home.clone()),
+            fs_ent(&[&home.to_string_lossy()], &[], &[]),
+        );
+        let out = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(tool.execute(serde_json::json!({"path": path.to_str().unwrap()})))
+            .expect("read must succeed");
+
+        assert_eq!(out.images.len(), 1, "the png must arrive as image input");
+        assert_eq!(out.images[0].media_type, "image/png");
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&out.images[0].data)
+                .unwrap(),
+            png,
+            "bytes must survive the round trip intact"
+        );
+
+        // Negative control: a text file under the same grant still returns
+        // text and carries no images, so the branch above is the extension
+        // routing and not "everything is an image now".
+        let txt = home.join("notes.txt");
+        std::fs::write(&txt, "hello").unwrap();
+        let out = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(tool.execute(serde_json::json!({"path": txt.to_str().unwrap()})))
+            .expect("read must succeed");
+        assert!(out.images.is_empty(), "text file must not produce images");
+        assert_eq!(out.text, "hello");
     }
 
     #[test]
