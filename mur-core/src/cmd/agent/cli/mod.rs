@@ -15,6 +15,7 @@ mod dump;
 mod fleet_rail;
 mod follow;
 mod footer;
+mod handover;
 mod login;
 mod manage;
 mod markdown;
@@ -263,7 +264,7 @@ pub async fn cmd_cli(
 // successfully), so pop never has to re-derive that itself.
 static KB_ENHANCEMENT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-fn push_keyboard_enhancement(supported: bool) {
+pub(super) fn push_keyboard_enhancement(supported: bool) {
     if supported
         && execute!(
             io::stdout(),
@@ -276,28 +277,42 @@ fn push_keyboard_enhancement(supported: bool) {
 }
 
 // Callers pass their own cached `supports_keyboard_enhancement()` result (see
-// `TerminalGuard`/panic hook/`scrollback_dump`) purely so *they* don't have to
-// re-query the terminal — but the actual decision to pop is driven by
-// `KB_ENHANCEMENT_ACTIVE`, not by that flag. Deliberately does NOT call
-// `supports_keyboard_enhancement()` itself: that sends a second terminal
-// query-and-wait (up to crossterm's 2s timeout). If the reply arrives after
-// we've already disabled raw mode / left the alternate screen, nothing reads
-// it — the raw escape bytes fall through to the shell's cooked-mode stdin and
-// get echoed as garbage (e.g. `^[[?1u^[[?62;22;52c`). We already know from the
-// push above whether the protocol is actually active, so just use that.
-fn pop_keyboard_enhancement(_supported: bool) {
+// `TerminalGuard`/panic hook/`scrollback_dump`/`handover::Suspended`) purely
+// so *they* don't have to re-query the terminal — but the actual decision to
+// pop is driven by `KB_ENHANCEMENT_ACTIVE`, not by that flag. Deliberately
+// does NOT call `supports_keyboard_enhancement()` itself: that sends a second
+// terminal query-and-wait (up to crossterm's 2s timeout). If the reply
+// arrives after we've already disabled raw mode / left the alternate screen,
+// nothing reads it — the raw escape bytes fall through to the shell's
+// cooked-mode stdin and get echoed as garbage (e.g.
+// `^[[?1u^[[?62;22;52c`). We already know from the push above whether the
+// protocol is actually active, so just use that.
+pub(super) fn pop_keyboard_enhancement(_supported: bool) {
     if KB_ENHANCEMENT_ACTIVE.swap(false, Ordering::Relaxed) {
         let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
     }
 }
 
+/// A pure read of whether keyboard enhancement is currently pushed — unlike
+/// `pop_keyboard_enhancement`, this does not clear `KB_ENHANCEMENT_ACTIVE`.
+/// `handover::Suspended::begin` needs the state remembered for a later
+/// re-push on resume, so it peeks here first and lets `pop_keyboard_enhancement`
+/// do the actual (destructive) pop right after — a read and a mutation kept as
+/// two honestly-named steps instead of one function trying to do both.
+pub(super) fn keyboard_enhancement_active() -> bool {
+    KB_ENHANCEMENT_ACTIVE.load(Ordering::Relaxed)
+}
+
 /// Tracks whether the physical terminal is currently on the alternate screen.
-/// Owned here (not inside `sync_surface`) so the RAII guard's `Drop` and the
-/// panic hook can decide whether a `LeaveAlternateScreen` is actually needed —
-/// Inline mode never entered the alt-screen, so leaving it would corrupt the
-/// user's scrollback on exit. `sync_surface` is the only writer during normal
-/// operation; the guard/panic paths only read.
-static ON_ALT: AtomicBool = AtomicBool::new(false);
+/// Owned here (not inside `sync_surface`) so the RAII guard's `Drop`, the
+/// panic hook, and the terminal-handover guard (`handover::Suspended`) can all
+/// decide whether a `LeaveAlternateScreen`/`EnterAlternateScreen` is actually
+/// needed — Inline mode never entered the alt-screen, so leaving it would
+/// corrupt the user's scrollback on exit. `sync_surface` and
+/// `handover::Suspended` are the only writers (the latter only for the
+/// duration of a handover, always restoring what it found); the guard/panic
+/// paths only read.
+pub(super) static ON_ALT: AtomicBool = AtomicBool::new(false);
 
 /// RAII terminal restore — runs on every exit path including unwind.
 struct TerminalGuard {
@@ -706,6 +721,27 @@ async fn event_loop(
             drop(events);
             let _ = purge_and_reanchor(terminal, viewport_h);
             events = EventStream::new();
+        }
+        // A slash command (`/login`'s escalating repair) asked for the real
+        // terminal. Handled here, not in `handle_slash`, because only the
+        // loop owns `terminal` and `events`.
+        if let Some(req) = app.pending_handover.take() {
+            app.push_system(format!("{}: handing over the terminal…", req.label));
+            // The EventStream owns stdin; the child must have it to itself.
+            drop(events);
+            let outcome = handover::run(terminal, viewport_h, &req);
+            events = EventStream::new();
+            match outcome {
+                Ok(s) if s.success() => {
+                    app.push_system(format!(
+                        "{}: logged in ✓ — no restart needed, the gateway re-reads per request",
+                        req.label
+                    ));
+                }
+                Ok(s) => app.push_error(format!("{}: login exited with {s}", req.label)),
+                Err(e) => app.push_error(format!("{}: handover failed: {e:#}", req.label)),
+            }
+            app.needs_full_redraw = true;
         }
         arm_input_debounce(app, StdInstant::now());
         // Flush the live band's overflow into native scrollback BEFORE the

@@ -322,6 +322,15 @@ pub enum RenderMode {
     Fullscreen,
 }
 
+/// An interactive child the main loop must run with the terminal handed over.
+/// Set by a slash command; taken and cleared by the loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandoverRequest {
+    pub argv: Vec<String>,
+    /// What to name in the before/after system messages.
+    pub label: String,
+}
+
 /// All mutable TUI state.
 pub struct App {
     pub home: PathBuf,
@@ -546,6 +555,11 @@ pub struct App {
     /// rail/follow, so its `StepCompleted` can close them out. `None` when no
     /// delegated fleet run is executing.
     pub auto_fleet_step: Option<String>,
+    /// Set by a slash command (`/login`'s escalating repair) that needs the
+    /// real terminal for an interactive child, e.g. `claude auth login`. The
+    /// main loop takes and clears this — `handle_slash` has no access to
+    /// `terminal`/`events` to run the handover itself.
+    pub pending_handover: Option<HandoverRequest>,
 }
 
 impl App {
@@ -633,6 +647,7 @@ impl App {
             panel_input_deadline: None,
             fleet: None,
             auto_fleet_step: None,
+            pending_handover: None,
         }
     }
 
