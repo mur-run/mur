@@ -395,10 +395,9 @@ fn headless_instructions_name_a_command_that_works_without_a_browser() {
     let a = print_only_instructions(Provider::Anthropic);
     assert!(a.contains("claude setup-token"), "{a}");
     let c = print_only_instructions(Provider::Chatgpt);
-    assert!(
-        c.contains("--with-access-token") || c.contains("--with-api-key"),
-        "{c}"
-    );
+    // Both lines ship; `||` would stay green with either one deleted.
+    assert!(c.contains("--with-api-key"), "{c}");
+    assert!(c.contains("--with-access-token"), "{c}");
 }
 
 #[test]
@@ -406,6 +405,8 @@ fn headless_instructions_mention_transplanting_a_credential() {
     // The other supported path: log in where a browser exists, copy it over.
     let a = print_only_instructions(Provider::Anthropic);
     assert!(a.contains(".credentials.json"), "{a}");
+    let c = print_only_instructions(Provider::Chatgpt);
+    assert!(c.contains(".codex/auth.json"), "{c}");
 }
 
 #[test]

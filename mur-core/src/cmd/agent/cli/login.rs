@@ -489,8 +489,9 @@ impl BrowserEnv {
     }
 }
 
-/// Heuristic, not proof — `--print-only` and `--force-browser` exist because
-/// this can be wrong in both directions.
+/// Heuristic, not proof — it can be wrong in both directions (a display that
+/// won't actually open a usable browser, or a viable one this misses), so a
+/// user would need a way to override it. No override exists yet.
 pub fn has_browser(env: &BrowserEnv) -> bool {
     if env.display {
         // An X/Wayland display works even when forwarded over SSH.
