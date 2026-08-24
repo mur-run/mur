@@ -126,15 +126,21 @@ fn store_stamp_in(p: Provider, home: &Path, keychain: Option<StoreStamp>) -> Opt
 /// it is a real limitation, not an oversight, and `no_stamp_degrades_to_the_cli_report`
 /// pins the degradation.
 pub fn store_stamp(p: Provider) -> Option<StoreStamp> {
-    let home = dirs::home_dir()?;
-    // Only shell out to `security` for the provider that could actually be
-    // in the keychain — matches the laziness the pre-split code had inside
-    // its Anthropic match arm.
+    // Keychain first, and lazily: `dirs::home_dir()` is only resolved if
+    // the keychain doesn't already answer, matching the laziness the
+    // pre-split code had inside its Anthropic match arm. Resolving
+    // `home_dir()` unconditionally ahead of this check — an earlier
+    // version of this function did exactly that — is a behavioral change,
+    // not a refactor: it would return `None` whenever `home_dir()` fails
+    // even though the keychain could still have answered. That never
+    // surfaces as a false "not logged in" (the UI already hedges that
+    // case — see `render_status_line`), only as a spurious "(no
+    // credential store found)" next to an otherwise-correct "✓ ...".
     let keychain = match p {
         Provider::Anthropic => keychain_stamp(),
         Provider::Chatgpt => None,
     };
-    store_stamp_in(p, &home, keychain)
+    keychain.or_else(|| store_stamp_in(p, &dirs::home_dir()?, None))
 }
 
 /// Health of a provider's credential, as reported by the CLI that owns it.

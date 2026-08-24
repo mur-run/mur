@@ -163,7 +163,7 @@ const SPINNER_MS: u64 = 90;
 /// Max chars of an arg hint shown on a step line in `--plain` mode.
 const PLAIN_STEP_HINT_MAX: usize = 120;
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /open (outstanding items)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /model [N|name] (list/switch model)  /login [anthropic|chatgpt] (OAuth health / re-authenticate — not mur auth login)  /mcp  /skill  /remember <text> (save a memory)  /memories  /forget <name|last>  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
+const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /open (outstanding items)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /model [N|name] (list/switch model)  /login [anthropic|chatgpt] (OAuth health / re-authenticate — unrelated to mur auth login, which signs in to mur.run for the official catalog)  /mcp  /skill  /remember <text> (save a memory)  /memories  /forget <name|last>  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
 #[allow(clippy::too_many_arguments)]
@@ -2656,24 +2656,89 @@ mod hitl_key_tests {
 }
 
 /// #940: `/open` worked, the chat footer advertised it, and `/help` did not
-/// list it — so the one place a user goes to learn the command surface was the
-/// one place it was missing.
+/// list it — so the one place a user goes to learn the command surface was
+/// the one place it was missing. A hand-maintained list of "documented"
+/// names (the original fix here) can catch a name that is present but
+/// wrong; it can never catch a command the list simply forgot to include —
+/// which is exactly what let `/login` go unlisted despite being fully
+/// wired up. `help_name` below replaces that list with a `match` over
+/// `SlashCmd` itself, with no wildcard arm: adding a new variant to
+/// `SlashCmd` fails this test build until it is given an explicit line
+/// here. Same lever as `#[expect]` over `#[allow]` — "someone must
+/// remember" becomes "the build stops."
 #[cfg(test)]
 mod help_coverage_tests {
     use super::HELP;
     use super::app::{SlashCmd, parse_slash};
 
-    /// Primary (non-alias) names of every slash command the parser accepts.
-    /// Each entry is fed through the real parser, so this list cannot name a
-    /// command that does not exist; `/help` then has to mention all of them.
-    const COMMANDS: &[&str] = &[
-        "help", "clear", "card", "sessions", "channels", "open", "auto", "verbose", "skin",
-        "model", "login", "mcp", "skill", "remember", "memories", "forget", "panel", "exit",
-    ];
+    /// Canonical `/name` for a `SlashCmd` variant that must show up in
+    /// `/help`, or `None` for a variant that legitimately has none.
+    /// `Unknown` (the parser's not-a-command fallback) is the only such
+    /// variant today. No `_` arm on purpose: a new `SlashCmd` variant must
+    /// get an explicit answer here before this module compiles.
+    fn help_name(cmd: &SlashCmd) -> Option<&'static str> {
+        match cmd {
+            SlashCmd::Help => Some("help"),
+            SlashCmd::Clear => Some("clear"),
+            SlashCmd::Card => Some("card"),
+            SlashCmd::Sessions => Some("sessions"),
+            SlashCmd::Channels { .. } => Some("channels"),
+            SlashCmd::Auto(_) => Some("auto"),
+            SlashCmd::Verbose(_) => Some("verbose"),
+            SlashCmd::Mcp(_) => Some("mcp"),
+            SlashCmd::Skill(_) => Some("skill"),
+            SlashCmd::Remember(_) => Some("remember"),
+            SlashCmd::Memories => Some("memories"),
+            SlashCmd::Forget(_) => Some("forget"),
+            SlashCmd::Skin(_) => Some("skin"),
+            SlashCmd::Panel(_) => Some("panel"),
+            SlashCmd::Open => Some("open"),
+            SlashCmd::Model(_) => Some("model"),
+            SlashCmd::Login(_) => Some("login"),
+            SlashCmd::Quit => Some("exit"),
+            SlashCmd::Unknown(_) => None,
+        }
+    }
+
+    /// One concrete instance per `SlashCmd` variant, to drive the
+    /// round-trip check below. If a variant is missing from this list,
+    /// `help_name`'s match above still refuses to compile once that
+    /// variant is added to `SlashCmd` — this list only chooses which
+    /// instance exercises the parser/HELP check, it is not what makes the
+    /// coverage exhaustive.
+    fn one_of_each() -> Vec<SlashCmd> {
+        vec![
+            SlashCmd::Help,
+            SlashCmd::Clear,
+            SlashCmd::Card,
+            SlashCmd::Sessions,
+            SlashCmd::Channels {
+                n: None,
+                follow: false,
+            },
+            SlashCmd::Auto(None),
+            SlashCmd::Verbose(None),
+            SlashCmd::Mcp(vec![]),
+            SlashCmd::Skill(vec![]),
+            SlashCmd::Remember(vec![]),
+            SlashCmd::Memories,
+            SlashCmd::Forget(None),
+            SlashCmd::Skin(None),
+            SlashCmd::Panel(vec![]),
+            SlashCmd::Open,
+            SlashCmd::Model(None),
+            SlashCmd::Login(None),
+            SlashCmd::Quit,
+            SlashCmd::Unknown("x".into()),
+        ]
+    }
 
     #[test]
     fn help_lists_every_command_the_parser_accepts() {
-        for name in COMMANDS {
+        for cmd in one_of_each() {
+            let Some(name) = help_name(&cmd) else {
+                continue;
+            };
             let parsed = parse_slash(&format!("/{name}"));
             assert!(
                 !matches!(parsed, Some(SlashCmd::Unknown(_)) | None),
