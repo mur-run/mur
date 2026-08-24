@@ -70,24 +70,38 @@ impl Drop for RuntimeGuard {
     }
 }
 
-fn boot_runtime(home: &std::path::Path, agent: &str, runtime_bin: &str) -> RuntimeGuard {
+fn boot_runtime(
+    home: &std::path::Path,
+    agent: &str,
+    runtime_bin: &str,
+    sock_path: &str,
+) -> RuntimeGuard {
     let child = Command::new(runtime_bin)
         .env("MUR_HOME", home)
         .args(["--profile", agent])
         .spawn()
         .expect("spawn runtime");
-    // Wait for running.lock to be written with valid content. The macOS
-    // SBPL sandbox may kill the runtime mid-startup; a zero-byte lock
-    // file signals the runtime was killed before binding its socket.
+    // Two conditions, both waited for rather than assumed:
+    //
+    //   running.lock non-empty — the runtime came up at all. The macOS SBPL
+    //   sandbox may kill it mid-startup, and a zero-byte lock is that signal.
+    //
+    //   the socket exists — it is actually reachable. This used to be a flat
+    //   `sleep(100ms)` after the lock appeared, which is a bet, not a wait: on
+    //   a loaded CI runner the bind had not happened yet and the test died
+    //   later with `connect …/alice.sock: No such file or directory`, pointing
+    //   at the install path instead of at startup. Waiting on the real
+    //   indicator also returns as soon as it is ready, so the common case is
+    //   faster than the fixed sleep it replaces.
     let lock = home.join("agents").join(agent).join("running.lock");
+    let sock = std::path::Path::new(sock_path);
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut found = false;
     while Instant::now() < deadline {
         if let Ok(meta) = std::fs::metadata(&lock)
             && meta.len() > 0
+            && sock.exists()
         {
-            // Brief settle — let the runtime finish binding.
-            std::thread::sleep(Duration::from_millis(100));
             found = true;
             break;
         }
@@ -95,7 +109,12 @@ fn boot_runtime(home: &std::path::Path, agent: &str, runtime_bin: &str) -> Runti
     }
     assert!(
         found,
-        "runtime did not write valid running.lock within 5s (sandbox may have killed it)"
+        "runtime did not come up within 5s: running.lock non-empty = {}, socket {sock_path} present = {} \
+         (sandbox may have killed it mid-startup)",
+        std::fs::metadata(&lock)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false),
+        sock.exists()
     );
     RuntimeGuard { child }
 }
@@ -132,7 +151,7 @@ content:
     let bob_profile = write_profile(home.path(), "bob", None);
 
     // Boot alice; her runtime serves `skills/get` on the unix socket.
-    let _alice = boot_runtime(home.path(), "alice", runtime_str);
+    let _alice = boot_runtime(home.path(), "alice", runtime_str, &sock_path);
 
     // Install. SAFETY: env mutation isn't thread-safe across parallel tests.
     // This test file must be run with `--test-threads=1`.
@@ -220,7 +239,7 @@ fn wire_install_propagates_handler_error_for_missing_skill() {
     let home = TempDir::new().unwrap();
     let sock_path = home.path().join("eve.sock").to_str().unwrap().to_string();
     write_profile(home.path(), "eve", Some(&sock_path));
-    let _eve = boot_runtime(home.path(), "eve", runtime_str);
+    let _eve = boot_runtime(home.path(), "eve", runtime_str, &sock_path);
 
     unsafe { std::env::set_var("MUR_AGENT_RUNTIME_BIN", runtime_str) };
     let err = cmd_install(
