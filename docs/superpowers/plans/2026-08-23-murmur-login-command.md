@@ -175,12 +175,19 @@ mod tests {
     }
 
     #[test]
-    fn stamp_compares_by_equality_only() {
-        let a = StoreStamp("20260823070925Z".into());
-        let b = StoreStamp("20260823070925Z".into());
-        let c = StoreStamp("20260823150000Z".into());
-        assert_eq!(a, b);
-        assert_ne!(a, c);
+    fn stamp_tracks_the_store_not_the_clock() {
+        // Deliberately NOT `StoreStamp("a") == StoreStamp("a")` — that would
+        // exercise `#[derive(PartialEq)]` and would still pass if `store_stamp`
+        // returned a constant. Drive the real function instead: the same
+        // untouched store must stamp identically, and a changed one must not.
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("auth.json");
+        std::fs::write(&f, "{}").unwrap();
+        let first = file_stamp(&f).expect("stamp");
+        assert_eq!(file_stamp(&f).expect("stamp"), first, "unchanged store");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&f, "{\"a\":1}").unwrap();
+        assert_ne!(file_stamp(&f).expect("stamp"), first, "changed store");
     }
 
     #[test]
@@ -304,7 +311,16 @@ fn keychain_stamp() -> Option<StoreStamp> {
 }
 
 /// Current stamp for a provider's credential store, or `None` when there is
-/// no store to stamp (never logged in, or a platform without one).
+/// no store to stamp.
+///
+/// **Known gap.** On Linux the credential can live in a keychain (the gateway
+/// reads it through `keyring`'s linux-native backend), and murmur has no way
+/// to stamp that without taking a dependency on the secret store itself. There
+/// `store_stamp` returns `None`, so rung 2 can never report
+/// `RefreshedByProbe`. That degrades correctly rather than lying —
+/// `classify_repair` falls through to the owner CLI's own health report — but
+/// it is a real limitation, not an oversight, and `no_stamp_degrades_to_the_cli_report`
+/// pins the degradation.
 pub fn store_stamp(p: Provider) -> Option<StoreStamp> {
     match p {
         // macOS keeps it in the keychain; Linux/Windows installs write a file.
@@ -673,6 +689,16 @@ The common failure is an access token that aged out while the refresh token is s
 
     #[test]
     fn no_store_at_all_needs_a_real_login() {
+        assert_eq!(classify_repair(None, None, &st(false)), Rung::NeedsLogin);
+    }
+
+    #[test]
+    fn no_stamp_degrades_to_the_cli_report() {
+        // A Linux box whose credential lives in a keychain yields no stamp at
+        // all. The repair must fall through to what the owner CLI says rather
+        // than inventing a verdict — and in particular must NOT report
+        // RefreshedByProbe on the strength of two `None`s comparing equal.
+        assert_eq!(classify_repair(None, None, &st(true)), Rung::AlreadyHealthy);
         assert_eq!(classify_repair(None, None, &st(false)), Rung::NeedsLogin);
     }
 
@@ -1268,15 +1294,20 @@ Expected: FAIL — `cannot find function 'acquire_login_lock'`.
 - [ ] **Step 3: Implement**
 
 ```rust
-/// Held for the duration of an interactive login. Released on drop, including
-/// on panic, so a crashed pane cannot wedge the others out.
+/// Held for the duration of an interactive login. The advisory lock is
+/// released when the file closes on drop — including on panic — so a crashed
+/// pane cannot wedge the others out, which a pid-file scheme could not promise.
 pub struct LoginLock(std::fs::File);
 
 /// Take the cross-pane login lock, or `None` if another pane holds it.
-/// Advisory `flock`: the OS releases it if the process dies, which a
-/// pid-file scheme would not.
+///
+/// `fs2`, not `libc::flock`: this crate runs on Windows CI (two matrices in
+/// `.github/workflows/ci.yml`), `fs2` is already a `mur-core` dependency, and
+/// `fs2::FileExt` is already how this crate locks files — see
+/// `inject/queue.rs`, `cmd/agent_companion/init.rs`, and
+/// `cross_agent/propagate/mod.rs`.
 pub fn acquire_login_lock(home: &Path) -> Option<LoginLock> {
-    use std::os::unix::io::AsRawFd;
+    use fs2::FileExt;
     let path = home.join("login.lock");
     let f = std::fs::OpenOptions::new()
         .create(true)
@@ -1284,13 +1315,12 @@ pub fn acquire_login_lock(home: &Path) -> Option<LoginLock> {
         .truncate(false)
         .open(path)
         .ok()?;
-    // SAFETY: flock on a live fd this function owns.
-    let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    (rc == 0).then_some(LoginLock(f))
+    f.try_lock_exclusive().ok()?;
+    Some(LoginLock(f))
 }
 ```
 
-Confirm `libc` is a dependency of `mur-core`; add it if not (`cargo add libc -p mur-core`).
+`fs2` is already in `mur-core`'s dependencies — do not add anything.
 
 Take the lock in `request_login_handover`, before setting the flag, and thread it into `HandoverRequest` so it is held for the child's lifetime — add a field:
 
