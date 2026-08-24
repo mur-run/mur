@@ -362,9 +362,102 @@ pub fn render_status_all() -> String {
     out
 }
 
-/// Repair one provider. Filled in by the escalating-repair task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rung {
+    /// Nothing was wrong, or something else had already fixed it.
+    AlreadyHealthy,
+    /// The owner CLI refreshed the credential. No browser, no handover.
+    RefreshedByProbe,
+    /// Only a real login will do — case B in the spec.
+    NeedsLogin,
+    /// The owner CLI is not installed; murmur cannot repair this here.
+    NoOwnerCli,
+}
+
+/// Decide which rung the repair stopped at.
+///
+/// The stamp moving is positive proof the owner rewrote the credential. An
+/// unmoved stamp is ambiguous on its own, so the owner's own health report
+/// breaks the tie.
+pub fn classify_repair(
+    before: Option<StoreStamp>,
+    after: Option<StoreStamp>,
+    status_after: &OwnerStatus,
+) -> Rung {
+    if !status_after.cli_present {
+        return Rung::NoOwnerCli;
+    }
+    if before != after && after.is_some() {
+        return Rung::RefreshedByProbe;
+    }
+    if status_after.logged_in {
+        Rung::AlreadyHealthy
+    } else {
+        Rung::NeedsLogin
+    }
+}
+
+/// Rungs 1 and 2: re-read, then ask the owner CLI to refresh. Blocking.
+/// Never opens a browser and never touches the terminal.
+///
+/// The **order** is the whole point: stamp, *then* probe, *then* stamp again.
+/// Taking both stamps before the probe would compare a store against itself
+/// and report `AlreadyHealthy`/`NeedsLogin` for a credential the probe just
+/// repaired. `classify_repair`'s tests cannot see that — they are handed the
+/// two stamps already taken — so the sequence gets its own seam and its own
+/// test.
+pub fn cheap_repair(p: Provider) -> Rung {
+    cheap_repair_in(p, store_stamp, owner_status)
+}
+
+/// `cheap_repair`'s body with its two effects injected, so a test can control
+/// what the store looks like before and after the probe. Production passes the
+/// real `store_stamp`/`owner_status`; nothing else should call this.
+pub(crate) fn cheap_repair_in(
+    p: Provider,
+    stamp: impl Fn(Provider) -> Option<StoreStamp>,
+    status: impl Fn(Provider) -> OwnerStatus,
+) -> Rung {
+    let before = stamp(p);
+    let status = status(p);
+    let after = stamp(p);
+    classify_repair(before, after, &status)
+}
+
+/// Repair one provider, escalating only as far as needed. Rungs 1-2
+/// (`cheap_repair`) shell out, so they run off the UI task via
+/// `spawn_blocking` — the same pattern `run_manage` uses for the rest of
+/// `/login`'s profile-management calls.
 pub async fn dispatch_repair(app: &mut crate::cmd::agent::cli::app::App, p: Provider) {
-    app.push_system(format!("{}: repair not implemented yet", p.label()));
+    let rung = match tokio::task::spawn_blocking(move || cheap_repair(p)).await {
+        Ok(r) => r,
+        Err(e) => {
+            app.push_error(format!("login check failed: {e}"));
+            return;
+        }
+    };
+    match rung {
+        Rung::AlreadyHealthy => app.push_system(format!(
+            "{}: already authenticated — nothing to do",
+            p.label()
+        )),
+        Rung::RefreshedByProbe => app.push_system(format!(
+            "{}: refreshed ✓ — no restart needed, the gateway re-reads per request",
+            p.label()
+        )),
+        Rung::NoOwnerCli => app.push_error(format!(
+            "{}: owner CLI not installed — cannot re-authenticate from here",
+            p.label()
+        )),
+        Rung::NeedsLogin => request_login_handover(app, p),
+    }
+}
+
+/// Stub: rung 3 needs a real login. A later task adds the headless check and
+/// the handover flow itself (`HandoverRequest` / `App::pending_handover`);
+/// this task only routes here and says so.
+fn request_login_handover(app: &mut crate::cmd::agent::cli::app::App, p: Provider) {
+    app.push_system(format!("{}: needs a full login (not wired yet)", p.label()));
 }
 
 #[cfg(test)]
@@ -615,5 +708,87 @@ mod tests {
             !line.contains("/login anthropic"),
             "cannot repair without the CLI: {line}"
         );
+    }
+
+    fn st(logged_in: bool) -> OwnerStatus {
+        OwnerStatus {
+            logged_in,
+            identity: None,
+            cli_present: true,
+        }
+    }
+
+    #[test]
+    fn a_moved_stamp_means_the_probe_repaired_it() {
+        let before = Some(StoreStamp("a".into()));
+        let after = Some(StoreStamp("b".into()));
+        assert_eq!(
+            classify_repair(before, after, &st(true)),
+            Rung::RefreshedByProbe
+        );
+    }
+
+    #[test]
+    fn an_unmoved_stamp_with_a_healthy_status_was_already_fine() {
+        let s = Some(StoreStamp("a".into()));
+        assert_eq!(
+            classify_repair(s.clone(), s, &st(true)),
+            Rung::AlreadyHealthy
+        );
+    }
+
+    #[test]
+    fn an_unmoved_stamp_with_an_unhealthy_status_needs_a_real_login() {
+        let s = Some(StoreStamp("a".into()));
+        assert_eq!(classify_repair(s.clone(), s, &st(false)), Rung::NeedsLogin);
+    }
+
+    #[test]
+    fn no_store_at_all_needs_a_real_login() {
+        assert_eq!(classify_repair(None, None, &st(false)), Rung::NeedsLogin);
+    }
+
+    #[test]
+    fn no_stamp_degrades_to_the_cli_report() {
+        // A Linux box whose credential lives in a keychain yields no stamp at
+        // all. The repair must fall through to what the owner CLI says rather
+        // than inventing a verdict — and in particular must NOT report
+        // RefreshedByProbe on the strength of two `None`s comparing equal.
+        assert_eq!(classify_repair(None, None, &st(true)), Rung::AlreadyHealthy);
+        assert_eq!(classify_repair(None, None, &st(false)), Rung::NeedsLogin);
+    }
+
+    #[test]
+    fn cheap_repair_stamps_after_the_probe_not_before() {
+        // The stamp only changes once the probe has run — exactly what a real
+        // refresh looks like. An implementation that takes both stamps up
+        // front sees "a" twice, reports the store unmoved, and falls through
+        // to the CLI's report instead of RefreshedByProbe.
+        use std::cell::Cell;
+        let probed = Cell::new(false);
+        let stamp = |_p: Provider| {
+            Some(StoreStamp(
+                if probed.get() { "after" } else { "before" }.to_string(),
+            ))
+        };
+        let status = |_p: Provider| {
+            probed.set(true);
+            st(true)
+        };
+        assert_eq!(
+            cheap_repair_in(Provider::Anthropic, stamp, status),
+            Rung::RefreshedByProbe,
+            "the second stamp must be taken after the probe, not before"
+        );
+    }
+
+    #[test]
+    fn a_missing_owner_cli_cannot_be_repaired() {
+        let absent = OwnerStatus {
+            logged_in: false,
+            identity: None,
+            cli_present: false,
+        };
+        assert_eq!(classify_repair(None, None, &absent), Rung::NoOwnerCli);
     }
 }
