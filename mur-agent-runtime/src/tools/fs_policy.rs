@@ -127,6 +127,24 @@ pub(crate) fn self_protected(
     fs
 }
 
+/// True when `canonical` falls under any of `roots`.
+///
+/// Roots go through the SAME `~` expansion the sandbox builder applies
+/// ([`crate::sandbox::policy::expand_entitlement_path`]) before
+/// canonicalization. Without it the two layers disagreed about one grant:
+/// the kernel policy expanded `~/...` and let the access through, while this
+/// gate compared a literal `~/...` root (whose `canonicalize` always fails,
+/// falling back to the un-expanded string) and answered "not entitled".
+/// A `~`-written *deny* entry — the very form `detect_warnings` suggests for
+/// `~/.ssh` — was silently inert here for the same reason.
+pub(crate) fn under_any(roots: &[String], canonical: &Path) -> bool {
+    roots.iter().any(|r| {
+        let expanded = crate::sandbox::policy::expand_entitlement_path(r);
+        let root = std::fs::canonicalize(&expanded).unwrap_or(expanded);
+        canonical.starts_with(&root)
+    })
+}
+
 pub(crate) fn check_write_entitlement(
     fs: &FilesystemEntitlement,
     canonical: &Path,
@@ -141,19 +159,13 @@ pub(crate) fn check_write_entitlement(
             canonical.display()
         )));
     }
-    let under = |roots: &[String]| {
-        roots.iter().any(|r| {
-            let root = std::fs::canonicalize(r).unwrap_or_else(|_| PathBuf::from(r));
-            canonical.starts_with(&root)
-        })
-    };
-    if under(&fs.deny) {
+    if under_any(&fs.deny, canonical) {
         return Err(ToolError::Execution(format!(
             "path denied by entitlement: {}",
             canonical.display()
         )));
     }
-    if under(&fs.write) {
+    if under_any(&fs.write, canonical) {
         return Ok(());
     }
     Err(ToolError::Execution(format!(
@@ -198,6 +210,53 @@ mod tests {
         // set, so the refusal above is the launch chain and not a broken check.
         check_write_entitlement(&fs, &home.join("skills/x.yaml"), &chain)
             .expect("unprotected path under the same grant must still be allowed");
+    }
+
+    /// The regression this helper exists for: a `~`-written grant must cover
+    /// the expanded path, because the sandbox builder already expands it. The
+    /// probe dir deliberately does NOT exist, so `canonicalize` fails on both
+    /// sides and the assertion turns purely on the expansion — no dependency
+    /// on the test host's home layout.
+    #[test]
+    fn tilde_grant_is_expanded_like_the_sandbox() {
+        let home = dirs::home_dir().expect("home dir");
+        let chain = crate::sandbox::launch_chain::LaunchChain::inert();
+        let fs = FilesystemEntitlement {
+            write: vec!["~/mur-tilde-grant-probe".to_string()],
+            ..Default::default()
+        };
+
+        check_write_entitlement(&fs, &home.join("mur-tilde-grant-probe/photo.jpg"), &chain)
+            .expect("a ~ grant must cover the path it expands to");
+
+        // Negative control: expansion must not widen the grant to everything,
+        // or the assertion above would pass on a helper that always says yes.
+        check_write_entitlement(
+            &fs,
+            Path::new("/tmp/mur-tilde-grant-probe/photo.jpg"),
+            &chain,
+        )
+        .expect_err("grant must stay scoped to the expanded root");
+    }
+
+    /// Same expansion, deny side. `detect_warnings` tells users to deny
+    /// `~/.ssh`; before this helper that entry was inert at the tool gate.
+    #[test]
+    fn tilde_deny_is_expanded_too() {
+        let home = dirs::home_dir().expect("home dir");
+        let chain = crate::sandbox::launch_chain::LaunchChain::inert();
+        let fs = FilesystemEntitlement {
+            write: vec![home.to_string_lossy().into_owned()],
+            deny: vec!["~/.ssh".to_string()],
+            ..Default::default()
+        };
+
+        check_write_entitlement(&fs, &home.join(".ssh/id_ed25519"), &chain)
+            .expect_err("a ~ deny entry must outrank a grant covering it");
+
+        // Negative control: the surrounding grant still works.
+        check_write_entitlement(&fs, &home.join("notes.md"), &chain)
+            .expect("the write grant itself must still hold");
     }
 
     fn eperm() -> std::io::Error {
