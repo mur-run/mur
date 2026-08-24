@@ -903,6 +903,37 @@ unmoved stamp is ambiguous, so the owner's own health report breaks the tie."
     }
 
     #[test]
+    fn detect_reads_the_variable_names_it_claims_to() {
+        // Pins the NAMES and the mapping, which `browser_detection_matrix`
+        // structurally cannot: it is handed a BrowserEnv already built.
+        // Acceptance criterion is a mutation — swap DISPLAY and
+        // SSH_CONNECTION inside `detect_with` and confirm this goes red.
+        let only = |want: &'static str| move |name: &str| name == want;
+
+        let e = BrowserEnv::detect_with(false, only("SSH_CONNECTION"));
+        assert!(e.ssh, "SSH_CONNECTION must set ssh");
+        assert!(!e.display, "SSH_CONNECTION must not set display");
+
+        let e = BrowserEnv::detect_with(false, only("DISPLAY"));
+        assert!(e.display, "DISPLAY must set display");
+        assert!(!e.ssh, "DISPLAY must not set ssh");
+
+        // Wayland is the second display variable, not a third field.
+        let e = BrowserEnv::detect_with(false, only("WAYLAND_DISPLAY"));
+        assert!(e.display, "WAYLAND_DISPLAY must set display");
+        assert!(!e.ssh);
+
+        // An unrelated variable must move nothing.
+        let e = BrowserEnv::detect_with(false, only("EDITOR"));
+        assert!(!e.display);
+        assert!(!e.ssh);
+
+        // `macos` comes from the caller, never from the environment.
+        assert!(BrowserEnv::detect_with(true, |_| false).macos);
+        assert!(!BrowserEnv::detect_with(false, |_| true).macos);
+    }
+
+    #[test]
     fn headless_instructions_name_a_command_that_works_without_a_browser() {
         let a = print_only_instructions(Provider::Anthropic);
         assert!(a.contains("claude setup-token"), "{a}");
@@ -939,11 +970,24 @@ pub struct BrowserEnv {
 
 impl BrowserEnv {
     pub fn detect() -> Self {
+        Self::detect_with(cfg!(target_os = "macos"), |name| {
+            std::env::var_os(name).is_some()
+        })
+    }
+
+    /// `detect`'s body with the environment lookup injected, so a test can pin
+    /// **which variable names are read** and how each maps onto a field.
+    ///
+    /// `has_browser` is pure and fully covered by its matrix, but that matrix
+    /// is handed a `BrowserEnv` already built — it cannot see this function at
+    /// all. Swap `DISPLAY` and `SSH_CONNECTION` here and every existing test
+    /// still passes, while a headless SSH box is told it has a browser and a
+    /// local desktop is told it does not.
+    pub(crate) fn detect_with(macos: bool, has_var: impl Fn(&str) -> bool) -> Self {
         Self {
-            macos: cfg!(target_os = "macos"),
-            display: std::env::var_os("DISPLAY").is_some()
-                || std::env::var_os("WAYLAND_DISPLAY").is_some(),
-            ssh: std::env::var_os("SSH_CONNECTION").is_some(),
+            macos,
+            display: has_var("DISPLAY") || has_var("WAYLAND_DISPLAY"),
+            ssh: has_var("SSH_CONNECTION"),
         }
     }
 }
