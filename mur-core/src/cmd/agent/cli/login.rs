@@ -21,7 +21,7 @@ pub enum Provider {
 // the `/login <word>` argument, `.label()` renders it, `Provider::ALL` drives
 // the no-argument status view) — until then the bin target (unlike the lib,
 // which blankets `cmd` with `#[allow(dead_code)]`) sees this impl as unused.
-#[allow(dead_code)]
+#[expect(dead_code)]
 impl Provider {
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
@@ -62,7 +62,7 @@ fn claude_credentials_path() -> Option<PathBuf> {
 }
 
 // Only reached through `store_stamp`, which nothing calls until Task 4.
-#[allow(dead_code)]
+#[expect(dead_code)]
 fn codex_auth_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".codex/auth.json"))
 }
@@ -70,8 +70,12 @@ fn codex_auth_path() -> Option<PathBuf> {
 /// mtime of a credential file, as an opaque stamp.
 // Exercised directly by the tests below, but only reached from prod code
 // through `store_stamp` — dead in the non-test bin build until Task 4 wires
-// `store_stamp` in.
-#[allow(dead_code)]
+// `store_stamp` in. The unit tests below call it directly, so `dead_code`
+// never fires for it in a `#[cfg(test)]` build — only `cfg_attr(not(test),
+// ...)` it, matching the existing idiom (`cmd/hook.rs::should_skip`,
+// `server/mod.rs::build_router`), or a bare `#[expect]` goes unfulfilled and
+// `-D warnings` hard-errors on `lib test` / `bin "mur" test`.
+#[cfg_attr(not(test), expect(dead_code))]
 fn file_stamp(p: &Path) -> Option<StoreStamp> {
     let m = std::fs::metadata(p).ok()?.modified().ok()?;
     let d = m.duration_since(std::time::UNIX_EPOCH).ok()?;
@@ -81,7 +85,7 @@ fn file_stamp(p: &Path) -> Option<StoreStamp> {
 /// The keychain item's `mdat` line, verbatim. `security` prints it without
 /// `-w`, so no secret is read.
 // Only reached through `store_stamp`, which nothing calls until Task 4.
-#[allow(dead_code)]
+#[expect(dead_code)]
 #[cfg(target_os = "macos")]
 fn keychain_stamp() -> Option<StoreStamp> {
     let out = std::process::Command::new("security")
@@ -96,7 +100,7 @@ fn keychain_stamp() -> Option<StoreStamp> {
         .map(|l| StoreStamp(l.trim().to_string()))
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 #[cfg(not(target_os = "macos"))]
 fn keychain_stamp() -> Option<StoreStamp> {
     None
@@ -116,7 +120,7 @@ fn keychain_stamp() -> Option<StoreStamp> {
 // Task 4 is the first caller (`store_stamp(p).is_some()` per provider); Task
 // 5's `classify_repair` is the second. Remove this attribute once Task 4
 // lands.
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub fn store_stamp(p: Provider) -> Option<StoreStamp> {
     match p {
         // macOS keeps it in the keychain; Linux/Windows installs write a file.
@@ -174,19 +178,6 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(20));
         std::fs::write(&f, "{\"a\":1}").unwrap();
         assert_ne!(file_stamp(&f).expect("stamp"), first, "changed store");
-    }
-
-    #[test]
-    fn file_stamp_changes_when_the_file_is_touched() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = dir.path().join("auth.json");
-        std::fs::write(&f, "{}").unwrap();
-        let first = file_stamp(&f).expect("stamp");
-        // mtime resolution can be coarse; write different content after a
-        // beat so the change is unambiguous.
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        std::fs::write(&f, "{\"a\":1}").unwrap();
-        assert_ne!(first, file_stamp(&f).expect("stamp"));
     }
 
     #[test]
