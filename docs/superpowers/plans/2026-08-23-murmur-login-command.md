@@ -1147,11 +1147,42 @@ pub fn split_argv(req: &HandoverRequest) -> Option<(&str, &[String])> {
 
 /// Restores raw mode and the terminal's mode set on drop, so an early return
 /// or a panic inside the handover cannot leave the user in a broken shell.
-struct Suspended;
+///
+/// **This must reverse everything `TerminalGuard::enter` set, not just raw
+/// mode.** Two of the four are easy to miss and both bite the login flow
+/// specifically:
+///
+/// * **Keyboard enhancement.** murmur pushes
+///   `DISAMBIGUATE_ESCAPE_CODES` when the terminal supports it. Leaving it
+///   pushed means the child reads a different escape-sequence dialect than it
+///   expects — and the child here is an OAuth flow where the user pastes a
+///   code, which is the worst possible place for mangled input.
+/// * **The alternate screen.** `sync_surface` puts murmur on the alt-screen for
+///   heavy overlays (Ctrl+O, `/mcp`, `/skill`). If `/login` is invoked while
+///   one is open, a child that draws there has its output discarded the moment
+///   the screen is left — including the authorisation URL the user needs.
+///
+/// `pop_keyboard_enhancement` and `ON_ALT` live in `cli/mod.rs`; make them
+/// `pub(super)` rather than duplicating their state here — two sources of
+/// truth for "is the alt-screen on" is how the panic hook and the guard would
+/// start disagreeing.
+struct Suspended {
+    /// Whether the alt-screen was on when we suspended, so resume can restore
+    /// it. Read from `ON_ALT`, not re-derived.
+    was_alt: bool,
+    /// Whether keyboard enhancement was active, so resume can re-push it.
+    kbd_enhanced: bool,
+}
 
 impl Suspended {
     /// Give the terminal back to the shell. Mirrors `TerminalGuard::drop`.
     fn begin(viewport_h: u16) -> Result<Self> {
+        let kbd_enhanced = keyboard_enhancement_active();
+        pop_keyboard_enhancement(kbd_enhanced);
+        let was_alt = ON_ALT.swap(false, Ordering::Relaxed);
+        if was_alt {
+            let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        }
         // Move below the inline viewport so the child does not paint over it,
         // then clear only the visible rows from there down. FromCursorDown
         // does not touch scrollback.
@@ -1166,7 +1197,7 @@ impl Suspended {
         )
         .context("release terminal modes")?;
         disable_raw_mode().context("disable raw mode")?;
-        Ok(Self)
+        Ok(Self { was_alt, kbd_enhanced })
     }
 }
 
@@ -1174,6 +1205,11 @@ impl Drop for Suspended {
     fn drop(&mut self) {
         let _ = enable_raw_mode();
         let _ = execute!(io::stdout(), EnableBracketedPaste, EnableFocusChange);
+        if self.was_alt {
+            let _ = execute!(io::stdout(), EnterAlternateScreen);
+            ON_ALT.store(true, Ordering::Relaxed);
+        }
+        push_keyboard_enhancement(self.kbd_enhanced);
     }
 }
 
