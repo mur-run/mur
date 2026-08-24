@@ -9,7 +9,34 @@
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+// The next two items are live ONLY on macOS and under `cfg(test)`: their sole
+// non-test consumer is `keychain_stamp`, which is `#[cfg(target_os = "macos")]`.
+// Off macOS the stub replaces it and nothing outside the test module reads
+// either one, so both need `dead_code` suppression — but only exactly there,
+// hence `cfg_attr` rather than a bare attribute.
+//
+// Three things about that gate, each learned the hard way:
+//
+// * `not(test)` is load-bearing. The `-w` guard test calls
+//   `keychain_stamp_args`, so under `cfg(test)` the items ARE live and an
+//   unconditional `expect` is *unfulfilled* — which `-D warnings` rejects via
+//   `unfulfilled_lint_expectations`, failing `lib test` and `bin "mur" test`.
+// * `expect`, not `allow`: if either ever gains a non-macOS caller, the
+//   expectation fails the build and asks to be removed. An `allow` would sit
+//   here forever.
+// * It is the **bin** target that reports this, not the lib — inside a binary
+//   nothing is externally reachable, so `pub` grants no reprieve. A
+//   `cargo clippy --lib` on a non-macOS host is clean and proves nothing;
+//   reproducing this needs `--all-targets`.
+
 /// Keychain service name Claude Code stores its credential under.
+#[cfg_attr(
+    all(not(target_os = "macos"), not(test)),
+    expect(
+        dead_code,
+        reason = "read only by `keychain_stamp_args`, which is itself dead off macOS"
+    )
+)]
 const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 
 /// Where Claude Code writes its credential when it is not using a keychain
@@ -66,6 +93,14 @@ pub struct StoreStamp(String);
 
 /// Arguments for the metadata read. Split out so a test can assert that `-w`
 /// — the flag that would print the password itself — is never present.
+#[cfg_attr(
+    all(not(target_os = "macos"), not(test)),
+    expect(
+        dead_code,
+        reason = "the only non-test caller is the macOS-only `keychain_stamp`, \
+                  which is not compiled here"
+    )
+)]
 pub fn keychain_stamp_args() -> Vec<&'static str> {
     vec!["find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE]
 }
