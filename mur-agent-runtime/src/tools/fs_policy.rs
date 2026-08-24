@@ -137,6 +137,12 @@ pub(crate) fn self_protected(
 /// falling back to the un-expanded string) and answered "not entitled".
 /// A `~`-written *deny* entry — the very form `detect_warnings` suggests for
 /// `~/.ssh` — was silently inert here for the same reason.
+///
+/// Windows note: `canonicalize` returns a `\\?\` UNC path and succeeds only
+/// for a path that exists, so a present root canonicalizes to a different
+/// spelling than an absent one. Callers pass an already-canonical path, so a
+/// live grant matches; a grant naming a missing path fails closed — and
+/// `mur agent perm` rejects those up front (`reject_dead_grant`).
 pub(crate) fn under_any(roots: &[String], canonical: &Path) -> bool {
     roots.iter().any(|r| {
         let expanded = crate::sandbox::policy::expand_entitlement_path(r);
@@ -241,21 +247,29 @@ mod tests {
 
     /// Same expansion, deny side. `detect_warnings` tells users to deny
     /// `~/.ssh`; before this helper that entry was inert at the tool gate.
+    /// Every path here sits under a probe dir that does NOT exist, grant and
+    /// deny alike. That is not tidiness: on Windows `canonicalize` succeeds
+    /// only for a real path and returns a `\\?\` UNC prefix, so an earlier
+    /// version of this test that mixed a real root (UNC) with an absent one
+    /// (verbatim) compared two spellings of the same place — it passed on
+    /// Unix and failed on Windows CI. Keeping both sides absent makes the
+    /// assertion turn on the tilde expansion, which is what it is about.
     #[test]
     fn tilde_deny_is_expanded_too() {
         let home = dirs::home_dir().expect("home dir");
         let chain = crate::sandbox::launch_chain::LaunchChain::inert();
         let fs = FilesystemEntitlement {
-            write: vec![home.to_string_lossy().into_owned()],
-            deny: vec!["~/.ssh".to_string()],
+            write: vec!["~/mur-deny-probe".to_string()],
+            deny: vec!["~/mur-deny-probe/keys".to_string()],
             ..Default::default()
         };
 
-        check_write_entitlement(&fs, &home.join(".ssh/id_ed25519"), &chain)
-            .expect_err("a ~ deny entry must outrank a grant covering it");
+        check_write_entitlement(&fs, &home.join("mur-deny-probe/keys/id_ed25519"), &chain)
+            .expect_err("a ~ deny entry must outrank a ~ grant covering it");
 
-        // Negative control: the surrounding grant still works.
-        check_write_entitlement(&fs, &home.join("notes.md"), &chain)
+        // Negative control: the surrounding grant still works, so the refusal
+        // above is the deny entry and not a grant that never matched.
+        check_write_entitlement(&fs, &home.join("mur-deny-probe/notes.md"), &chain)
             .expect("the write grant itself must still hold");
     }
 
