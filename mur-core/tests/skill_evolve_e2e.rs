@@ -92,9 +92,8 @@ async fn evolve_writes_new_version_and_log_entry() {
     // 3. Scripted LLM: diagnosis then optimized YAML.
     let responses = vec![
         r#"[{"dimension":"Tool","severity":0.9,"finding":"wrong.tool not found","suggested_fix":"replace wrong.tool with correct.tool","evidence":["t1"]}]"#.to_string(),
-        format!(
-            "name: broken-skill\nversion: 0.1.1\npublisher: human:test\ndescription: test skill\ncategory: context\nhosts:\n  - mur-agent\ncontent:\n  abstract: test\n  context: \"Use correct.tool.\"\nevolution_log:\n  - version: 0.1.1\n    generation: 1\n    source: agent:evolver\n    changes: replace wrong.tool with correct.tool\n    quality_score: 0.0\n    timestamp: 2026-05-25T00:00:00Z\n"
-        ),
+        "name: broken-skill\nversion: 0.1.1\npublisher: human:test\ndescription: test skill\ncategory: context\nhosts:\n  - mur-agent\ncontent:\n  abstract: test\n  context: \"Use correct.tool.\"\nevolution_log:\n  - version: 0.1.1\n    generation: 1\n    source: agent:evolver\n    changes: replace wrong.tool with correct.tool\n    quality_score: 0.0\n    timestamp: 2026-05-25T00:00:00Z\n"
+            .to_string(),
     ];
     let llm = ScriptedChatBackend::new(responses);
 
