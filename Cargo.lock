@@ -6513,6 +6513,7 @@ dependencies = [
  "hex",
  "hostname",
  "http-body-util",
+ "iana-time-zone",
  "keyring",
  "lancedb",
  "libc",
