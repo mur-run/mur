@@ -1727,7 +1727,12 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                         println!("Installed {id} onto '{name}'. Restart the agent to load it.");
                     }
                 } else {
-                    cmd::agent::cmd_skill_add(&name, &source)?
+                    // Same confirmation as the URL branch above — a local-file
+                    // install used to print nothing at all, so the user had no
+                    // way to see the id it registered (which comes from the
+                    // manifest name, not the filename).
+                    let id = cmd::agent::cmd_skill_add(&name, &source)?;
+                    println!("Installed {id} onto '{name}'. Restart the agent to load it.");
                 }
             }
             AgentSkillAction::Remove { name, skill_id } => {
