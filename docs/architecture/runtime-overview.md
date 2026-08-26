@@ -362,7 +362,7 @@ mcp_requirements:
 
 ### Per-Server MCP Egress
 
-By default an agent's outbound network policy (`entitlements.network.outbound`) applies to the whole agent; MCP server subprocesses inherit the OS sandbox (port-level on Linux; unconfined on macOS — `sandbox/child.rs`). A single MCP server can additionally be scoped to a **host allowlist**:
+By default an agent's outbound network policy (`entitlements.network.outbound`) applies to the whole agent; MCP server subprocesses inherit the agent's sandbox in full — Landlock/seccomp on Linux, a seatbelt sandbox across `fork`+`exec` on macOS (verified empirically; the check is in `mur-agent-runtime/src/sandbox/child.rs`). What does not exist is granularity: no server can be given a *narrower* cage than the agent itself. A single MCP server can additionally be scoped to a **host allowlist**:
 
 ```bash
 mur agent mcp set-network <agent> <server> --allow-host example.com --allow-host '*.api.example.com'
@@ -375,7 +375,7 @@ This sets `McpServerEntry.network` (`mode: restricted|off`, `allow_hosts`). When
 The loopback egress proxy starts **before** the B1 kernel sandbox seals, and its listener port is carved into the sandbox profile as a loopback-only rule (`remote tcp "localhost:PORT"` on macOS SBPL; a port-scoped `NetPort ConnectTcp` rule on Linux Landlock, which cannot scope by host) — otherwise sandboxed MCP children could not dial the proxy their `HTTPS_PROXY` points at and every scoped grant would be silently dead.
 
 - **Isolation:** the proxy env is set ONLY on the policied child's process — never the runtime's. The agent's own LLM clients are built with `.no_proxy()` (`llm::llm_client_builder`), so LLM traffic (and a debug cc-proxy, configured via `base_url`) is never captured by the egress proxy. `NO_PROXY` covers loopback on the child.
-- **Threat model — ADVISORY.** This constrains a *cooperating* tool that honors `HTTP_PROXY`. A tool that ignores it can still reach the network directly, because the OS sandbox filters by port, not host. Airtight containment requires Linux network-namespace isolation + a macOS pre-fork launcher (the `sandbox/child.rs` macOS limitation) — out of scope. Use this for scoping/accident-prevention/audit of trusted tools, not to contain a malicious server.
+- **Threat model — ADVISORY.** This constrains a *cooperating* tool that honors `HTTP_PROXY`. A tool that ignores it can still reach the network directly, because the OS sandbox filters by port, not host. Airtight containment requires Linux network-namespace isolation + a macOS pre-fork launcher (the `mur-agent-runtime/src/sandbox/child.rs` macOS limitation) — out of scope. Use this for scoping/accident-prevention/audit of trusted tools, not to contain a malicious server.
 - **Opt-in:** a server with no `network` policy is spawned exactly as before; with no policied server, no proxy starts.
 
 ### Remote MCP (Streamable HTTP + OAuth 2.1)
