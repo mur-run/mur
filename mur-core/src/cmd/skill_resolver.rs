@@ -2,7 +2,9 @@
 //! semver constraint matching, leaves-first install ordering.
 
 use anyhow::Result;
-use mur_common::skill::{Constraint, ConstraintError, SkillManifest, parse_canonical, validate};
+use mur_common::skill::{
+    Constraint, ConstraintError, SkillManifest, parse_canonical, parse_markdown, validate,
+};
 use semver::Version;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -98,7 +100,23 @@ fn load_root(input: &ResolverInput, src: ResolveSource<'_>) -> Result<ResolvedNo
 
 fn load_from_path(path: &Path) -> Result<ResolvedNode, ResolveError> {
     let text = std::fs::read_to_string(path).map_err(|e| ResolveError::Other(e.into()))?;
-    let m = parse_canonical(&text).map_err(|e| ResolveError::BadManifest(e.to_string()))?;
+    // Pick the parser by extension, matching `mur agent skill add`: `.yaml`/
+    // `.yml` are canonical manifests, anything else is markdown-with-frontmatter.
+    // Without this, `mur skill install foo.md` failed with the canonical
+    // parser's "missing field `content`" — a message about the YAML schema for
+    // a file that was never YAML — while the per-agent install of the same file
+    // succeeded.
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let parsed = if ext == "yaml" || ext == "yml" {
+        parse_canonical(&text)
+    } else {
+        parse_markdown(&text)
+    };
+    let m = parsed.map_err(|e| ResolveError::BadManifest(e.to_string()))?;
     validate(&m).map_err(|e| ResolveError::BadManifest(e.to_string()))?;
     let v = Version::parse(&m.version)
         .map_err(|e| ResolveError::BadManifest(format!("version: {e}")))?;
@@ -172,6 +190,42 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    /// A `.md` skill file must resolve, not die on the canonical parser.
+    /// `mur agent skill add` has always accepted markdown; `mur skill install`
+    /// rejected the same file with "missing field `content`" — a YAML-schema
+    /// error about a file that was never YAML.
+    #[test]
+    fn local_markdown_source_resolves() {
+        let tmp = tempdir().unwrap();
+        let md = tmp.path().join("my-file.md");
+        fs::write(
+            &md,
+            "---\nname: from-markdown\nversion: 1.0.0\npublisher: human:test\n\
+             description: markdown source\ncategory: context\n---\n\n\
+             # from-markdown\n\nbody text\n",
+        )
+        .unwrap();
+
+        let node = load_from_path(&md).expect("markdown source should resolve");
+        // Named from the manifest, not the filename ("my-file").
+        assert_eq!(node.name, "from-markdown");
+        assert_eq!(node.version.to_string(), "1.0.0");
+    }
+
+    /// Negative control: `.yaml` still goes through the canonical parser, so a
+    /// real YAML schema error is still reported as one.
+    #[test]
+    fn local_yaml_source_still_uses_canonical_parser() {
+        let tmp = tempdir().unwrap();
+        let y = tmp.path().join("broken.yaml");
+        fs::write(&y, "name: broken\nversion: 1.0.0\n").unwrap();
+        let err = load_from_path(&y).expect_err("incomplete yaml must fail");
+        assert!(
+            matches!(err, ResolveError::BadManifest(_)),
+            "expected BadManifest, got: {err}"
+        );
+    }
 
     fn write_skill(reg_dir: &Path, name: &str, version: &str, requires: &[(&str, &str)]) {
         let vdir = reg_dir.join("skills").join(name).join("versions");

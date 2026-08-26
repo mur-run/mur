@@ -84,7 +84,14 @@ pub fn cmd_skill_list(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_skill_add(name: &str, source: &str) -> Result<()> {
+/// Install a skill onto an agent. Returns the installed skill's id
+/// (`skills/<manifest name>`) — the same string written into `profile.skills`.
+///
+/// Callers must not re-derive this id: the subdir and the profile entry are
+/// named from the MANIFEST's `name`, which need not match the source
+/// filename. The Hub used to compute `skills/<file basename>` for its result
+/// and so reported an id no profile ever contained.
+pub fn cmd_skill_add(name: &str, source: &str) -> Result<String> {
     let src = PathBuf::from(source);
     if !src.exists() {
         bail!("skill source '{source}' not found");
@@ -141,9 +148,10 @@ pub fn cmd_skill_add(name: &str, source: &str) -> Result<()> {
 
     let skill_id = format!("skills/{skill_name}");
     if !profile.skills.iter().any(|s| s == &skill_id) {
-        profile.skills.push(skill_id);
+        profile.skills.push(skill_id.clone());
     }
-    save_profile(&path, &mut profile)
+    save_profile(&path, &mut profile)?;
+    Ok(skill_id)
 }
 
 /// Convert a legacy path-style skill ref (`profile.skills`) into a structured
@@ -560,5 +568,57 @@ updated_at: \"2026-04-22T10:00:00+08:00\"
         let p: _AgentProfile = serde_yaml_ng::from_str(&yaml).unwrap();
         assert!(!p.skills.iter().any(|s| s == "skills/concierge"));
         assert!(!home.join("agents/mur/skills/concierge").exists());
+    }
+}
+
+#[cfg(test)]
+mod add_id_tests {
+    use super::*;
+
+    /// The installed id comes from the MANIFEST's `name`, never the source
+    /// filename — the two need not match. The Hub used to compute
+    /// `skills/<basename>` for its own result and so reported an id that no
+    /// profile contained. Returning the real id removes the second derivation.
+    #[test]
+    fn add_returns_the_id_it_registered_not_the_filename() {
+        let home = tempfile::tempdir().unwrap();
+        let agent_dir = home.path().join("agents").join("a1");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let mut profile = mur_common::AgentProfile::default_for_tests();
+        profile.name = "a1".into();
+        save_profile(&agent_dir.join("profile.yaml"), &mut profile).unwrap();
+
+        // Filename and manifest name deliberately disagree.
+        let src = home.path().join("totally-different-filename.md");
+        std::fs::write(
+            &src,
+            "---\nname: real-skill-name\nversion: 1.0.0\npublisher: human:test\n\
+             description: id derivation probe\ncategory: context\n---\n\n\
+             # real-skill-name\n\nbody\n",
+        )
+        .unwrap();
+
+        // SAFETY: nextest runs each test in its own process.
+        unsafe { std::env::set_var("MUR_HOME", home.path()) };
+
+        let id = cmd_skill_add("a1", src.to_str().unwrap()).expect("add should succeed");
+        assert_eq!(id, "skills/real-skill-name");
+        assert_ne!(id, "skills/totally-different-filename.md");
+
+        // The profile holds exactly what was returned.
+        let (_, saved) = load_profile_for_edit("a1").unwrap();
+        assert!(
+            saved.skills.contains(&id),
+            "profile.skills {:?} should contain the returned id {id}",
+            saved.skills
+        );
+        // And the files landed under that same name.
+        assert!(
+            agent_dir
+                .join("skills")
+                .join("real-skill-name")
+                .join("skill.yaml")
+                .is_file()
+        );
     }
 }

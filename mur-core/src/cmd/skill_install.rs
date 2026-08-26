@@ -516,7 +516,7 @@ pub fn cmd_update_cli(name: &str) -> Result<()> {
 /// where `Handle::block_on` panics ("Cannot start a runtime from within a
 /// runtime"). The future is built and driven entirely on the worker thread, so
 /// it need not be `Send`; only the captured references cross the boundary.
-fn block_on_isolated<B, F, T>(build: B) -> Result<T>
+pub(crate) fn block_on_isolated<B, F, T>(build: B) -> Result<T>
 where
     B: FnOnce() -> F + Send,
     F: std::future::Future<Output = T>,
