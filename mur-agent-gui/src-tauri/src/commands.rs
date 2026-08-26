@@ -89,7 +89,9 @@ pub fn skill_show(query: String) -> Result<String, String> {
 
 #[tauri::command]
 pub fn skill_add(source: String) -> Result<(), String> {
-    agent_admin::skill::add(&agent_name(), &source).map_err(err)
+    agent_admin::skill::add(&agent_name(), &source)
+        .map(|_id| ())
+        .map_err(err)
 }
 
 #[tauri::command]

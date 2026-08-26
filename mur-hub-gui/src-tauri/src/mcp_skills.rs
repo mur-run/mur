@@ -27,14 +27,11 @@ pub fn agent_skill_install(
     name: String,
     source_path: String,
 ) -> Result<SkillInstallResult, String> {
-    cmd_skill_add(&name, &source_path).map_err(|e| format!("{e:#}"))?;
-    // Mirror `cmd_skill_add`'s id derivation: the source basename, registered
-    // under `skills/<basename>`. Computed only after a successful add.
-    let installed_id = std::path::Path::new(&source_path)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .map(|b| format!("skills/{b}"))
-        .unwrap_or_else(|| source_path.clone());
+    // Use the id `cmd_skill_add` actually registered. It is named from the
+    // MANIFEST's `name`, which need not match the source filename — deriving
+    // it here from the basename reported ids (`skills/my-file.md`) that no
+    // profile ever contained.
+    let installed_id = cmd_skill_add(&name, &source_path).map_err(|e| format!("{e:#}"))?;
     let detail = get_agent_detail(name)?;
     Ok(SkillInstallResult {
         detail,
