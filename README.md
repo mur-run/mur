@@ -692,3 +692,5 @@ cargo nextest run --workspace && cargo clippy --workspace -- -D warnings
 <sub><b>Local first. Native Rust. Yours.</b></sub><br/>
 <sub><a href="https://mur.run">mur.run</a> · <a href="https://app.mur.run/docs/core">Docs</a> · <a href="https://github.com/mur-run/mur/releases">Releases</a> · <a href="https://github.com/mur-run/mur/issues">Issues</a></sub>
 </div>
+
+<!-- ci-trigger-probe: delete me -->
