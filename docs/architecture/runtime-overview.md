@@ -13,7 +13,7 @@ This document holds detail moved out of `CLAUDE.md` to keep the per-session cont
 - **`community.rs`** — Community pattern browser
 - **`dashboard.rs`** — Terminal overview
 - **`interactive.rs`** — `dialoguer`-powered interactive pattern creation
-- **`migrate/`** — legacy schema migration (rarely needed)
+- **`cmd/migrate_patterns.rs`** — one-shot data migrations (`mur migrate --patterns`)
 - **`auth.rs`** — Trust levels for community patterns
 
 ## Ambient capture & harvest (2026-06-11)
@@ -172,12 +172,12 @@ Phase (`Probe | Research | Verify | Synthesize | Other`) is a display-only keywo
 
 The third format. Produces a click-to-launch desktop app (`MyAgent.app` / `MyAgent.AppImage` / `MyAgent.exe`) bundling a single agent. Built on Tauri 2 + React 18 + Vite + Tailwind 4. The `mur-agent-gui` crate is **workspace-EXCLUDED** in the root `Cargo.toml` so default `cargo build --workspace` doesn't pull WebKitGTK / Cocoa / WebView2 toolchains.
 
-- **`mur-agent-gui/`** — Tauri 2 main + React frontend. Sidecar manager (`src/sidecar.rs`), bootstrap (`src/bootstrap.rs`), theme loader (`src/theme.rs`), Tauri commands (`src/commands.rs`) that wrap `mur_core::agent_admin::*`. 5 built-in themes (light / dark / high-contrast / solarized / cyberpunk) with WCAG AA contrast validation enforced at build time.
+- **`mur-agent-gui/`** — Tauri 2 main + React frontend. Sidecar manager (`mur-gui-core/src/sidecar.rs`), bootstrap (`mur-agent-gui/src-tauri/src/bootstrap.rs`), theme loader (`mur-agent-gui/src-tauri/src/theme.rs`), Tauri commands (`mur-agent-gui/src-tauri/src/commands.rs`) that wrap `mur_core::agent_admin::*`. 5 built-in themes (light / dark / high-contrast / solarized / cyberpunk) with WCAG AA contrast validation enforced at build time.
 - **`mur-core/src/agent_admin/`** — Public library façade over the existing CLI verbs. `perm`, `mcp`, `skill`, `prompt`, `lifecycle`, `observability` modules each expose mutators (delegating to `cmd::agent::cmd_*`) plus typed read views (StatusView / Entitlements / Vec<McpServerEntry> / etc.) for callers that need structured data instead of stdout.
 - **`mur-core/src/cmd/agent_export_gui.rs`** — 13-phase pipeline: prereq_check → prepare_payload → prepare_theme → rewrite_tauri_conf → build_sidecar → build_frontend → tauri_build → codesign → notarize → staple → assess → package → move_to_out. RAII guard restores `tauri.conf.json` on any exit path.
 - **CLI flags:** `--theme {light|dark|high-contrast|solarized|cyberpunk}`, `--icon /path/to.png`, `--clone-identity` (embed identity, recipient rekeys on launch; default = template mode mints fresh keys), `--skip-notarize` (testing only).
 - **Spec:** `docs/superpowers/specs/2026-04-29-mur-agent-gui-export-design.md`
-- **Plan:** `docs/superpowers/plans/2026-04-29-mur-agent-gui-export-plan.md` + `-COMPLETE.md`
+- **Plan:** `docs/superpowers/plans/archive/2026-04-29-mur-agent-gui-export-plan-COMPLETE.md` + `-COMPLETE.md`
 - **Cookbook:** `docs/cookbook/multi-platform-export.md`, `docs/cookbook/harness-office-12-gui-export.md`
 - **E2E runner:** `scripts/e2e/p1-export-gui.sh` (quick or `FULL_E2E=1` mode)
 - **CI matrix template:** `scripts/templates/agent-export-multi-platform.yml`
@@ -196,7 +196,7 @@ cd mur-agent-gui/src-tauri && cargo tauri dev          # 6-tab settings window o
 
 ## murmur Panel (Hub GUI data tabs, P1–P5)
 
-The Hub's per-agent detail panel surfaces read-only operational data alongside the chat/CLI view. P2 (2026-07) shipped five tabs: **Information** (git status/branch + cost/token usage), **Activities** (recent tool calls/events), **Preview**, **Notifications** (pending workflow proposals), and **Schedule** (unified view across agent/workflow/fleet schedulers). Data flows from `mur-core` command output parsed into typed frames (`mur-core/src/panel.rs` — `frames_round_trip`/`unknown_frames_are_none` tests cover forward-compat with unrecognized frame kinds); the Hub calls `mur-core` directly rather than shelling out. Refresh is poll-based (~30s) with fail-soft rendering on missing/partial data.
+The Hub's per-agent detail panel surfaces read-only operational data alongside the chat/CLI view. P2 (2026-07) shipped five tabs: **Information** (git status/branch + cost/token usage), **Activities** (recent tool calls/events), **Preview**, **Notifications** (pending workflow proposals), and **Schedule** (unified view across agent/workflow/fleet schedulers). Data flows from `mur-core` command output parsed into typed frames (`mur-common/src/panel.rs` — `frames_round_trip`/`unknown_frames_are_none` tests cover forward-compat with unrecognized frame kinds); the Hub calls `mur-core` directly rather than shelling out. Refresh is poll-based (~30s) with fail-soft rendering on missing/partial data.
 
 P3 (2026-07) filled the **Preview** tab: `/panel preview <path|url>` renders a Markdown file (via the shared `Markdown` component), an HTML file (sandboxed `srcDoc`, scripts only), or a localhost dev-server URL (sandboxed iframe, host restricted to `localhost`/`127.0.0.1`/`[::1]`). File previews auto-reload via a single-slot `notify` watcher on the file's parent directory (`mur-hub-gui/src-tauri/src/panel/preview.rs`, emitting `panel-preview-changed`); reads are capped at 2 MiB.
 
@@ -216,8 +216,7 @@ P6 (input-driven suggestions): murmur debounces the message input (200 ms) and p
 
 The per-agent supervisor lives in `mur-agent-runtime/`. Each agent has a directory under `~/.mur/agents/<name>/` (`profile.yaml`, `sys_prompt.md`, `skills/`, `running.lock`, `telemetry/<date>.jsonl`) and a symlink in `MUR_AGENT_BIN_DIR` (default `~/.local/bin`) named `mur_agent_<name>`. The symlink is the runtime binary; argv[0] tells it which profile to load.
 
-- **Spec:** `docs/superpowers/specs/2026-04-22-murmur-p0a-agent-runtime-design.md`
-- **Plan:** `docs/superpowers/plans/2026-04-22-murmur-p0a-agent-runtime-plan.md` (+ `-part2.md`, `-COMPLETE.md`, `-e2e-coverage.md`)
+- **Plan:** `docs/superpowers/plans/archive/2026-04-22-murmur-p0a-agent-runtime-plan.md` (+ `-part2.md`, `-COMPLETE.md`, `-e2e-coverage.md`)
 - **Crate README:** `mur-agent-runtime/README.md`
 - **E2E runner:** `scripts/e2e/run-all.sh`
 
@@ -226,7 +225,7 @@ The per-agent supervisor lives in `mur-agent-runtime/`. Each agent has a directo
 ### P0a.5 additions (identity + TCP Noise + commander integration)
 
 - **`mur-common` schema** — `AgentProfile.identity` (Ed25519 pubkey + owner), `transport.tcp` (Noise XK bind + pattern, default off), `lifecycle.{execution,schedule}` (daemon vs on-demand + cron), `file_transfer` caps, `deployment` (laptop / vm / docker / k8s / lambda).
-- **`mur-agent-runtime` TCP transport** — `transport/tcp.rs` + `transport/noise.rs`: Noise_XK_25519_ChaChaPoly_BLAKE2s handshake over length-prefixed 4-byte BE JSON-RPC frames (16 MiB cap). Supervisor spawns the listener only when `transport.tcp.enabled && entitlements.network.inbound.ports` contains the bind port.
+- **`mur-agent-runtime` TCP transport** — `mur-agent-runtime/src/transport/tcp.rs` + `mur-agent-runtime/src/transport/noise.rs`: Noise_XK_25519_ChaChaPoly_BLAKE2s handshake over length-prefixed 4-byte BE JSON-RPC frames (16 MiB cap). Supervisor spawns the listener only when `transport.tcp.enabled && entitlements.network.inbound.ports` contains the bind port.
 - **Agent Card extensions** — now publishes `pubkey`, `endpoints[]` (ordered `tcp+noise` → `unix-socket` → `stdio`, each with `transport`/`url`/`reachability`), and `deployment`.
 - **`mur agent create`** — generates `identity.key` (0600) and `identity.pub` (multibase base58btc, `z…` prefix) under the agent directory and writes the pubkey into `profile.yaml`.
 - **mur-commander integration (cross-repo; see `~/Projects/mur-commander` branch `feat/murmur-bridge`):**
@@ -234,7 +233,7 @@ The per-agent supervisor lives in `mur-agent-runtime/`. Each agent has a directo
   - `engine::a2a::server` — aliases `message/send`→`tasks/send`, `message/stream`→`tasks/send`, plus a new `tasks/list` handler.
   - `engine::remote::murmur_bridge` — notify-based watcher on `~/.mur/agents/*/running.lock`; upserts/marks-offline `RegisteredAgent` entries tagged `"murmur"`. Daemon boots it alongside the existing service manager.
   - `engine::observability` — `redaction` (full / redacted / metadata-only), `spool` (disk-backed JSONL with rollover), `collector` (tails `telemetry/*.jsonl`, filters telemetry/task-progress notifications, redacts, spools). No hub upstream yet — that lands in P1.
-- **Plan:** `docs/superpowers/plans/2026-04-23-murmur-p0a5-implementation-plan.md` (+ `-COMPLETE.md`)
+- **Plan:** `docs/superpowers/plans/archive/2026-04-23-murmur-p0a5-implementation-plan.md` (+ `-COMPLETE.md`)
 - **E2E runner:** `scripts/e2e/p0a5-full.sh` (wraps `p0a5-identity-handshake.sh` + `p0a5-commander-autoregister.sh`).
 
 ### P0a.6 additions (`mur agent rekey` — identity rotation)
@@ -262,7 +261,7 @@ On every supervisor startup, an expired `grace_expires_at` triggers `shred -u id
 **TcpConnector** (M3.2) — `dial_with_fallback(addr, identity, &[primary, prev])` lets peers retry a Noise handshake against either pubkey during the grace window. Agent Card (M3.1) publishes `previous_pubkey` + `grace_expires_at` while grace is active.
 
 - **Spec:** `docs/superpowers/specs/2026-04-24-murmur-agent-rekey-design.md`
-- **Plan:** `docs/superpowers/plans/2026-04-24-murmur-agent-rekey-plan.md` (+ `-COMPLETE.md`)
+- **Plan:** `docs/superpowers/plans/archive/2026-04-24-murmur-agent-rekey-plan.md` (+ `-COMPLETE.md`)
 - **PRs:** `mur-run/mur#30` (mur side: M1, M3, M4.1, M5.1, M6.1, M6.3) + `mur-run/mur-commander#12` (commander side: M2, M4.2/4.3, M5.2, M6.2)
 
 ---
@@ -287,7 +286,7 @@ Submodules:
 - **`telemetry.rs`** — frozen `OutboxEvent` ledger schema (13 variants)
 
 - **Spec:** `docs/superpowers/specs/2026-04-29-mur-companion-phase-1-1-design.md`
-- **Plan:** `docs/superpowers/plans/2026-04-29-companion-phase-1-1-plan.md`
+- **Plan:** `docs/superpowers/plans/archive/2026-04-29-companion-phase-1-1-plan.md`
 
 ---
 
@@ -300,7 +299,6 @@ Key modules:
 - **`mur-common/src/skill/`** — Shared types and validation: `SkillManifest` (schema v2.1), `Skill` wrapper, `Content`, `Procedure`, `Trigger`, `Category`, `TrustLevel`, plus `scan_skill()` security scanning.
 - **`mur-core/src/cmd/skill_cmd.rs`** — `mur skill` CLI handlers (validate, fmt, list, show, remove, search, info, audit, trust).
 - **`mur-core/src/cmd/skill_doctor.rs`** — `mur skill doctor` checks: deprecated fields, missing abstract, untrusted skills, trigger coverage, MCP requirements coverage, MCP capability availability.
-- **`mur-core/src/cmd/skill_from_pattern.rs`** — `mur skill from-pattern`: promote a Stable/Canonical pattern to a skill, with optional LLM polish.
 - **`mur-core/src/skill_index/`** — Vector embedding (LanceDB) and BM25 index for `mur skill search`.
 - **`mur-core/src/cmd/skill_registry.rs`** — Remote registry fetch + search.
 - **`mur-core/src/skill_llm/`** — LLM-augmented skill maintenance (M6c). Provides `maintenance_call()` with content-hash caching (30d TTL), per-day budget tracking ($0.50 default), and role-resolution from the model registry. Three LLM-backed checks: api-drift, coverage-gap, and contradiction adjudication.
@@ -370,7 +368,7 @@ mur agent mcp set-network <agent> <server> --off       # deny all outbound for t
 mur agent mcp set-network <agent> <server>             # clear → inherit the agent policy
 ```
 
-This sets `McpServerEntry.network` (`mode: restricted|off`, `allow_hosts`). When any server is `restricted`, the supervisor starts a loopback **egress proxy** (`sandbox/egress_proxy.rs`); that server's child is spawned with `HTTP_PROXY`/`HTTPS_PROXY` pointing at it (with a per-server token), and the proxy CONNECT-tunnels only to allowlisted hosts (logging every allow/deny for audit). Restart the agent to apply.
+This sets `McpServerEntry.network` (`mode: restricted|off`, `allow_hosts`). When any server is `restricted`, the supervisor starts a loopback **egress proxy** (`mur-agent-runtime/src/sandbox/egress_proxy.rs`); that server's child is spawned with `HTTP_PROXY`/`HTTPS_PROXY` pointing at it (with a per-server token), and the proxy CONNECT-tunnels only to allowlisted hosts (logging every allow/deny for audit). Restart the agent to apply.
 
 The loopback egress proxy starts **before** the B1 kernel sandbox seals, and its listener port is carved into the sandbox profile as a loopback-only rule (`remote tcp "localhost:PORT"` on macOS SBPL; a port-scoped `NetPort ConnectTcp` rule on Linux Landlock, which cannot scope by host) — otherwise sandboxed MCP children could not dial the proxy their `HTTPS_PROXY` points at and every scoped grant would be silently dead.
 
