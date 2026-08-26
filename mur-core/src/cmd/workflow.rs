@@ -4,6 +4,7 @@ use mur_common::pattern::*;
 use std::io::{self, Write};
 
 use crate::evolve;
+use crate::retrieve::skill_candidates::LoadedSkill;
 use crate::store::workflow_yaml::WorkflowYamlStore;
 
 /// Confirm before executing a workflow resolved by fuzzy match (semantic / keyword
@@ -42,6 +43,67 @@ fn confirm_fuzzy_run(
         eprintln!("Aborted.");
     }
     ok
+}
+
+/// Exact-name lookup for a workflow skill that can run unattended: `category:
+/// Workflow` with a `content.procedure` to execute.
+///
+/// `workflow run` and `workflow schedule set` share this so a name that can be
+/// scheduled is a name that will actually run. Deliberately exact-match only —
+/// the fuzzy paths in `cmd_workflow_run` need a human to confirm, which a cron
+/// or launchd fire has no way to obtain.
+fn find_workflow_skill(mur_dir: &std::path::Path, name: &str) -> Option<LoadedSkill> {
+    crate::retrieve::skill_candidates::load_skill_candidates(&mur_dir.join("skills"), mur_dir)
+        .ok()?
+        .into_iter()
+        .find(|s| {
+            s.manifest.name == name
+                && s.manifest.category == mur_common::skill::types::Category::Workflow
+                && s.manifest.content.procedure.is_some()
+        })
+}
+
+/// Execute a workflow skill's DAG procedure.
+async fn run_workflow_skill(
+    mur_dir: &std::path::Path,
+    skill: &LoadedSkill,
+    yes: bool,
+    channel: Option<String>,
+    channel_new: bool,
+) -> Result<()> {
+    let Some(procedure) = &skill.manifest.content.procedure else {
+        eprintln!(
+            "Skill `{}` is category:Workflow but has no `content.procedure`",
+            skill.manifest.name
+        );
+        return Ok(());
+    };
+    // Resolve channel_id: --channel-new creates a fresh channel,
+    // --channel uses an existing one.
+    let channel_id = if channel_new {
+        let svc = mur_channel::ChannelService::open(mur_dir)?;
+        let ch = svc.create_for_workflow(&skill.manifest.name)?;
+        eprintln!("# channel: {}", ch.id);
+        Some(ch.id)
+    } else {
+        channel
+    };
+    let opts = crate::executor::dag::DagExecOptions {
+        yes,
+        device_id: "cli".to_string(),
+        trigger: "manual",
+        channel_id,
+        run_id: format!("run-{}", uuid::Uuid::now_v7()),
+        run_kind: Some(crate::run_status::RunKind::Workflow),
+        run_label: skill.manifest.name.clone(),
+        ..Default::default()
+    };
+    let output =
+        crate::executor::dag::execute_dag(mur_dir, &skill.manifest.name, procedure, &opts).await?;
+    if output.exit_code != 0 {
+        std::process::exit(output.exit_code);
+    }
+    Ok(())
 }
 
 /// Run a workflow — output as executable prompt for AI consumption.
@@ -91,6 +153,19 @@ pub(crate) async fn cmd_workflow_run(
             if output.exit_code != 0 {
                 std::process::exit(output.exit_code);
             }
+        }
+        return Ok(());
+    }
+
+    // Exact workflow-skill match, BEFORE the fuzzy searches below. A scheduled
+    // run has no TTY, so if semantic search claimed this name first the fuzzy
+    // confirm would refuse it and the fire would be a silent no-op.
+    let mur_dir = crate::paths::mur_root(None);
+    if let Some(skill) = find_workflow_skill(&mur_dir, query) {
+        if prompt {
+            eprintln!("# {} — {}", skill.manifest.name, skill.manifest.description);
+        } else {
+            run_workflow_skill(&mur_dir, &skill, yes, channel, channel_new).await?;
         }
         return Ok(());
     }
@@ -154,81 +229,29 @@ pub(crate) async fn cmd_workflow_run(
             }
         }
         None => {
-            // Fallback: scan skills directory for a category:Workflow skill.
-            // (This is a new search path; failure here prints the old
-            // "available workflows" message.)
-            let mur_dir = crate::paths::mur_root(None);
-            let skills_dir = mur_dir.join("skills");
-            if skills_dir.exists() {
-                let candidates =
-                    crate::retrieve::skill_candidates::load_skill_candidates(&skills_dir, &mur_dir)
-                        .unwrap_or_default();
-                if let Some(matched) = candidates.iter().find(|s| {
-                    s.manifest.name == query
-                        || s.manifest.name.contains(query)
-                        || query.contains(&s.manifest.name)
-                }) {
-                    if prompt {
-                        eprintln!(
-                            "# {} — {}",
-                            matched.manifest.name, matched.manifest.description
-                        );
-                        return Ok(());
-                    }
-                    // Confirm before executing a non-exact (fuzzy) skill match.
-                    if matched.manifest.name != query
-                        && !confirm_fuzzy_run(
-                            query,
-                            &matched.manifest.name,
-                            "skill match",
-                            None,
-                            yes,
-                        )
-                    {
-                        return Ok(());
-                    }
-                    // Only execute Workflow-category skills.
-                    if matched.manifest.category == mur_common::skill::types::Category::Workflow {
-                        if let Some(procedure) = &matched.manifest.content.procedure {
-                            // Resolve channel_id: --channel-new creates a fresh channel,
-                            // --channel uses an existing one.
-                            let channel_id = if channel_new {
-                                let svc = mur_channel::ChannelService::open(&mur_dir)?;
-                                let ch = svc.create_for_workflow(&matched.manifest.name)?;
-                                eprintln!("# channel: {}", ch.id);
-                                Some(ch.id)
-                            } else {
-                                channel
-                            };
-                            let opts = crate::executor::dag::DagExecOptions {
-                                yes,
-                                device_id: "cli".to_string(),
-                                trigger: "manual",
-                                channel_id,
-                                run_id: format!("run-{}", uuid::Uuid::now_v7()),
-                                run_kind: Some(crate::run_status::RunKind::Workflow),
-                                run_label: matched.manifest.name.clone(),
-                                ..Default::default()
-                            };
-                            let output = crate::executor::dag::execute_dag(
-                                &mur_dir,
-                                &matched.manifest.name,
-                                procedure,
-                                &opts,
-                            )
-                            .await?;
-                            if output.exit_code != 0 {
-                                std::process::exit(output.exit_code);
-                            }
-                        } else {
-                            eprintln!(
-                                "Skill `{}` is category:Workflow but has no `content.procedure`",
-                                matched.manifest.name
-                            );
-                        }
-                        return Ok(());
-                    }
+            // Fuzzy fallback: a category:Workflow skill whose name overlaps the
+            // query. Exact matches already returned above.
+            let candidates = crate::retrieve::skill_candidates::load_skill_candidates(
+                &mur_dir.join("skills"),
+                &mur_dir,
+            )
+            .unwrap_or_default();
+            if let Some(matched) = candidates.iter().find(|s| {
+                s.manifest.category == mur_common::skill::types::Category::Workflow
+                    && (s.manifest.name.contains(query) || query.contains(&s.manifest.name))
+            }) {
+                if prompt {
+                    eprintln!(
+                        "# {} — {}",
+                        matched.manifest.name, matched.manifest.description
+                    );
+                    return Ok(());
                 }
+                if !confirm_fuzzy_run(query, &matched.manifest.name, "skill match", None, yes) {
+                    return Ok(());
+                }
+                run_workflow_skill(&mur_dir, matched, yes, channel, channel_new).await?;
+                return Ok(());
             }
 
             // No skill match either.
@@ -932,8 +955,16 @@ pub(crate) fn cmd_schedule_list() -> Result<()> {
 
     if !active.is_empty() {
         println!("🔄 Active schedules:\n");
+        // Show the zone the schedule will ACTUALLY fire in, not the stored
+        // label: launchd and crontab both read the cron expression as local
+        // time regardless of what `timezone` says. Entries written before this
+        // was fixed all carry a hardcoded "UTC" that never applied.
+        let local_tz = iana_time_zone::get_timezone().unwrap_or_else(|_| "local".to_string());
         for s in &active {
-            println!("  {} — `{}` ({})", s.workflow, s.cron, s.timezone);
+            println!("  {} — `{}` ({})", s.workflow, s.cron, local_tz);
+            if s.timezone != local_tz {
+                println!("     stored timezone: {} (not used locally)", s.timezone);
+            }
             if !s.user_id.is_empty() {
                 println!("     user: {}", s.user_id);
             }
@@ -988,29 +1019,45 @@ pub(crate) fn cmd_schedule_set(name: &str, cron: &str) -> Result<()> {
         );
     }
 
-    // Verify workflow exists
+    // Verify the name resolves to something the scheduler can actually fire.
+    // A schedule runs `mur run <name>`, which resolves flat workflows AND
+    // exact-named workflow skills — so both are valid here.
     let store = WorkflowYamlStore::default_store()?;
-    let _ = store
-        .get(name)
-        .with_context(|| format!("Workflow '{}' not found", name))?;
+    if store.get(name).is_err()
+        && find_workflow_skill(&crate::paths::mur_root(None), name).is_none()
+    {
+        anyhow::bail!(
+            "Workflow '{}' not found — no ~/.mur/workflows/{}.yaml, and no `category: Workflow` \
+             skill of that name with a `content.procedure`.",
+            name,
+            name
+        );
+    }
 
     // Determine executor: Commander if running, otherwise system cron
     let executor = mur_common::schedule_claim::auto_detect_executor();
 
     let mut schedules = load_schedules()?;
 
+    // Both executors interpret the cron expression in LOCAL time: launchd's
+    // StartCalendarInterval and crontab both do. Record the real IANA zone —
+    // labelling every schedule "UTC" told users their `20 23 * * *` fired at
+    // 23:20 UTC when it actually fires at 23:20 local, an 8-hour lie in +08:00.
+    let timezone = iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string());
+
     // Update existing or add new
     if let Some(existing) = schedules.iter_mut().find(|s| s.workflow == name) {
         existing.cron = cron.to_string();
         existing.enabled = true;
         existing.executor = executor.clone();
+        existing.timezone = timezone;
     } else {
         schedules.push(Schedule {
             id: uuid::Uuid::new_v4().to_string(),
             user_id: String::new(),
             workflow: name.to_string(),
             cron: cron.to_string(),
-            timezone: "UTC".to_string(),
+            timezone,
             enabled: true,
             notify: ScheduleNotify::default(),
             variables: Default::default(),
@@ -1143,6 +1190,102 @@ pub fn create_draft_workflow(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The smallest flat workflow YAML that loads. Everything else in
+    /// `KnowledgeBase` carries a serde default — including `schema`, which
+    /// fills in as 3. Pinned as a test because hand-writing this file is
+    /// otherwise a guessing game against a `#[serde(flatten)]` struct.
+    #[test]
+    fn minimal_flat_workflow_yaml_loads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("workflows");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("probe.yaml"),
+            "name: probe\n\
+             description: two shell steps\n\
+             content: what this workflow is for\n\
+             steps:\n\
+             - order: 1\n  description: first\n  command: echo one\n\
+             - order: 2\n  description: second\n  command: echo two\n",
+        )
+        .unwrap();
+
+        let store = WorkflowYamlStore::new(dir).unwrap();
+        let w = store.get("probe").unwrap();
+        assert_eq!(w.steps.len(), 2);
+        assert_eq!(w.base.schema, 3, "schema defaults, it is not required");
+        assert_eq!(w.steps[0].command.as_deref(), Some("echo one"));
+    }
+
+    /// Negative control: what the user actually sees when a required field is
+    /// missing. `#[serde(flatten)]` is known to degrade serde's missing-field
+    /// messages, so assert the message still names the field.
+    #[test]
+    fn missing_required_field_names_the_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("workflows");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("probe.yaml"),
+            "name: probe\ndescription: d\nsteps:\n- order: 1\n  description: s\n",
+        )
+        .unwrap();
+
+        let err = format!(
+            "{:#}",
+            WorkflowYamlStore::new(dir)
+                .unwrap()
+                .get("probe")
+                .unwrap_err()
+        );
+        assert!(
+            err.contains("content"),
+            "error should name the missing field, got: {err}"
+        );
+    }
+
+    /// Write a skill.yaml under `<home>/skills/<name>/`.
+    fn write_skill(home: &std::path::Path, name: &str, category: &str, procedure: bool) {
+        let dir = home.join("skills").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let proc_block = if procedure {
+            "\n  procedure:\n    steps:\n    - description: echo hi\n      id: s1\n      command: echo hi\n"
+        } else {
+            "\n"
+        };
+        std::fs::write(
+            dir.join("skill.yaml"),
+            format!(
+                "name: {name}\nversion: 1.0.0\npublisher: human:test\n\
+                 description: test skill\ncategory: {category}\nprovenance: human\n\
+                 content:\n  abstract: t{proc_block}"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn find_workflow_skill_matches_exact_runnable_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        write_skill(home, "nightly-scan", "workflow", true);
+        write_skill(home, "no-procedure", "workflow", false);
+        write_skill(home, "not-a-workflow", "context", true);
+
+        // A runnable workflow skill resolves.
+        assert!(find_workflow_skill(home, "nightly-scan").is_some());
+        // category:Workflow without a procedure has nothing to execute.
+        assert!(find_workflow_skill(home, "no-procedure").is_none());
+        // Other categories are not workflows.
+        assert!(find_workflow_skill(home, "not-a-workflow").is_none());
+        // Exact only — a schedule fires without a TTY, and a fuzzy match
+        // would be refused at run time, making the schedule a silent no-op.
+        assert!(find_workflow_skill(home, "nightly").is_none());
+        assert!(find_workflow_skill(home, "nightly-scan-extra").is_none());
+        // Missing skills dir is not an error.
+        assert!(find_workflow_skill(tmp.path().join("nope").as_path(), "x").is_none());
+    }
 
     #[test]
     fn create_draft_workflow_persists_draft() {

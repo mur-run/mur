@@ -12,6 +12,27 @@ fn mur_binary() -> String {
         .unwrap_or_else(|_| "mur".to_string())
 }
 
+/// PATH to give scheduled runs.
+///
+/// launchd and cron start with a bare `/usr/bin:/bin:/usr/sbin:/sbin`, so a
+/// workflow step calling `mysql`, `gh`, `node` — anything from Homebrew, mise,
+/// or a language version manager — fails at fire time while working perfectly
+/// when the user runs it by hand. Freeze the PATH from the shell that set the
+/// schedule: that is the environment the user just proved the steps work in.
+fn scheduler_path() -> String {
+    std::env::var("PATH")
+        .ok()
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| "/usr/bin:/bin:/usr/sbin:/sbin".to_string())
+}
+
+/// Minimal XML escaping for values interpolated into the plist.
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 /// Install a system schedule for a workflow.
 pub fn install(workflow_name: &str, cron_expr: &str) -> Result<()> {
     if cfg!(target_os = "macos") {
@@ -94,6 +115,7 @@ fn install_launchd(workflow_name: &str, cron_expr: &str) -> Result<()> {
     let calendar = cron_to_calendar_interval(cron_expr);
     let log_dir = dirs::home_dir().unwrap_or_default().join(".mur/logs");
     std::fs::create_dir_all(&log_dir)?;
+    let path_env = xml_escape(&scheduler_path());
 
     let plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -108,6 +130,11 @@ fn install_launchd(workflow_name: &str, cron_expr: &str) -> Result<()> {
     <string>run</string>
     <string>{workflow_name}</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{path_env}</string>
+  </dict>
   <key>StartCalendarInterval</key>
 {calendar}
   <key>StandardOutPath</key>
@@ -121,6 +148,7 @@ fn install_launchd(workflow_name: &str, cron_expr: &str) -> Result<()> {
         label = label,
         mur = mur,
         workflow_name = workflow_name,
+        path_env = path_env,
         calendar = calendar,
         log_dir = log_dir.display(),
     );
@@ -194,9 +222,18 @@ pub struct SystemSchedule {
 fn install_crontab(workflow_name: &str, cron_expr: &str) -> Result<()> {
     let mur = mur_binary();
     let tag = format!("{}{}", CRON_TAG_PREFIX, workflow_name);
+    // cron runs the command through /bin/sh with a bare PATH; prefix the real
+    // one so steps can reach Homebrew/mise binaries (see `scheduler_path`).
+    // Quoted — a PATH entry containing a space would otherwise split the
+    // command and cron would try to exec the wrong token.
     let entry = format!(
-        "{} {} run {} >> ~/.mur/logs/schedule-{}.log 2>&1 {}",
-        cron_expr, mur, workflow_name, workflow_name, tag
+        "{} PATH=\"{}\" {} run {} >> ~/.mur/logs/schedule-{}.log 2>&1 {}",
+        cron_expr,
+        scheduler_path(),
+        mur,
+        workflow_name,
+        workflow_name,
+        tag
     );
 
     // Read existing crontab
@@ -354,6 +391,24 @@ fn list_crontab() -> Vec<(String, String)> {
 #[cfg(test)]
 mod p2_tests {
     use super::*;
+
+    #[test]
+    fn scheduler_path_prefers_the_installing_shells_path() {
+        // SAFETY: nextest runs each test in its own process.
+        unsafe { std::env::set_var("PATH", "/opt/homebrew/bin:/usr/bin:/bin") };
+        assert_eq!(scheduler_path(), "/opt/homebrew/bin:/usr/bin:/bin");
+
+        // An empty PATH must not produce an empty PATH= in the plist/crontab —
+        // that would leave the scheduled run unable to find anything at all.
+        unsafe { std::env::set_var("PATH", "") };
+        assert_eq!(scheduler_path(), "/usr/bin:/bin:/usr/sbin:/sbin");
+    }
+
+    #[test]
+    fn xml_escape_protects_the_plist() {
+        assert_eq!(xml_escape("/a&b/bin:/c<d>"), "/a&amp;b/bin:/c&lt;d&gt;");
+        assert_eq!(xml_escape("/usr/bin:/bin"), "/usr/bin:/bin");
+    }
 
     #[test]
     fn calendar_interval_round_trips_cron() {

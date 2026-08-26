@@ -44,6 +44,7 @@ reqwest = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
+iana-time-zone = "0.1"  # real local tz for schedule labels (launchd/cron fire in local time)
 uuid = { workspace = true }
 anyhow = { workspace = true }
 toml = "0.8"
