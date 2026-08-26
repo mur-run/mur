@@ -449,6 +449,14 @@ Agent** wizard offers the same catalog as a source.
   `--max-iterations 0` is not zero, and a cron expression that can never fire is
   not a schedule. Unattended auto-run still needs an explicit budget, and
   `mur fleet stop` still ends everything.
+- **Schedules that fire when they say they will** — `mur workflow schedule set`
+  takes a flat workflow *or* a workflow skill, and resolves the name against
+  both when you create the schedule, so a name it accepts is a name that will
+  run. The listed zone is the one launchd and cron actually use — local, not a
+  hardcoded `UTC` label that had people shift a working schedule by their own
+  offset. And the job inherits the `PATH` of the shell that created it, so a
+  step calling `mysql` or `gh` reaches the binaries you just tested it against
+  rather than the four directories a scheduler hands out.
 - **Approvals that wait for you, not the other way round** — a run nobody is
   watching used to spend the full five-minute approval window discovering
   exactly that, then fail the step and kill the request, so approving it the
