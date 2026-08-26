@@ -172,7 +172,7 @@ jobs:
         if: matrix.target == 'aarch64-apple-darwin'
         run: |
           set -euo pipefail
-          for b in mur mur-mcp-server murmurd mur-agent-runtime; do
+          for b in mur mur-mcp-server murmurd mur-agent-runtime mur-research-gateway; do
             p="target/aarch64-apple-darwin/release/$b"
             codesign --force --options runtime --timestamp \
               --sign "Developer ID Application: $APPLE_TEAM_NAME ($APPLE_TEAM_ID)" \
@@ -193,14 +193,21 @@ jobs:
           # resolve_runtime_target finds the sibling and `brew upgrade` keeps the
           # runtime in sync. Without it, brew CLI users have no runtime and running
           # agents drift on a stale one (the runtime otherwise ships only in the Hub .app).
-          tar czf ../../../${{ matrix.name }}.tar.gz mur mur-mcp-server murmurd mur-agent-runtime
+          #
+          # mur-research-gateway for the same reason: `update::SIBLING_BINARIES`
+          # lists it, so `mur update` looks for it here and warns that it "stays
+          # on the previous version" when it is absent, and deep-research mounts
+          # it as an MCP server by name (`GATEWAY_MCP_COMMAND`) with no fallback
+          # if the binary is missing. It was never in this list, so only
+          # `build.sh --install` ever produced it.
+          tar czf ../../../${{ matrix.name }}.tar.gz mur mur-mcp-server murmurd mur-agent-runtime mur-research-gateway
           cd ../../..
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path target/${{ matrix.target }}/release/mur.exe,target/${{ matrix.target }}/release/mur-mcp-server.exe,target/${{ matrix.target }}/release/murmurd.exe,target/${{ matrix.target }}/release/mur-agent-runtime.exe -DestinationPath ${{ matrix.name }}.zip
+          Compress-Archive -Path target/${{ matrix.target }}/release/mur.exe,target/${{ matrix.target }}/release/mur-mcp-server.exe,target/${{ matrix.target }}/release/murmurd.exe,target/${{ matrix.target }}/release/mur-agent-runtime.exe,target/${{ matrix.target }}/release/mur-research-gateway.exe -DestinationPath ${{ matrix.name }}.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
