@@ -267,6 +267,12 @@ jobs:
           p12-file-base64: ${{ secrets.APPLE_SIGNING_CERT }}
           p12-password: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
 
+      # NOTE: this stages only mur, mur-mcp-server and murmurd — no
+      # mur-agent-runtime and no mur-research-gateway, so a .pkg install can
+      # run the CLI but cannot start an agent. That may be deliberate (the
+      # identifier is `run.mur.cli` and postinstall says only "Run 'mur init'"),
+      # but it is worth an explicit decision rather than an accident, since the
+      # tarball above ships both.
       - name: Stage pkg-root
         run: |
           mkdir -p pkg-root/usr/local/bin
