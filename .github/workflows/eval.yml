@@ -313,13 +313,32 @@ jobs:
           git push origin HEAD:main || true
 
   # ── Llama-Guard nightly re-grade ─────────────────────────────────
-  # Grades every JSONL response with Llama-Guard-3-8B running locally
-  # via Ollama. Only runs on self-hosted runners that have Ollama with
-  # llama-guard3:8b pulled. Soft-fails if Ollama is unavailable.
+  # Grades every JSONL response with Llama-Guard-3-8B running locally via
+  # Ollama, on a self-hosted runner that has `llama-guard3:8b` pulled.
+  #
+  # Gated on the `OLLAMA_RUNNER_ONLINE` repository variable, because a job
+  # asking for a runner label nobody has does not fail — it queues, for the
+  # 24h maximum, and every nightly schedule adds another. The eight runs
+  # before this gate went in were all queued/cancelled: the job had never
+  # once executed, while making the workflow look permanently in progress.
+  #
+  # To turn it back on: register a runner with the `self-hosted` + `ollama`
+  # labels, `ollama pull llama-guard3:8b` on it, then set the variable —
+  #   gh variable set OLLAMA_RUNNER_ONLINE --body true
+  # Unset it (or set anything else) when that runner goes away.
+  #
+  # Note there is no soft-fail here despite what this comment used to
+  # claim: `ollama pull` has no `continue-on-error`, so an unreachable
+  # Ollama fails the job. That is the right behaviour now that the gate
+  # means the job only runs when the operator has asserted the runner is
+  # up — a silent pass would hide a broken grader.
   llama-guard-nightly:
     name: Llama-Guard nightly re-grade
     runs-on: [self-hosted, ollama]
-    if: github.event_name == 'schedule' && github.event.schedule == '0 17 * * *'
+    if: >-
+      github.event_name == 'schedule'
+      && github.event.schedule == '0 17 * * *'
+      && vars.OLLAMA_RUNNER_ONLINE == 'true'
     needs: real-llm
     steps:
       - uses: actions/checkout@v6
@@ -336,7 +355,7 @@ jobs:
           merge-multiple: true
       - name: Grade all runners
         run: |
-          find /tmp/eval-results -name "*.jsonl" | while read f; do
+          find /tmp/eval-results -name "*.jsonl" | while read -r f; do
             python3 scripts/eval/llama_guard/grade.py \
               --jsonl "$f" \
               --output "${f%.jsonl}.graded.jsonl"
