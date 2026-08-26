@@ -293,6 +293,12 @@ keychain-backed secrets, cron schedules, webhook receiver, and a rotating Ed2551
 identity. `mur agent` exposes 40+ subcommands for the full lifecycle — create,
 chat, export, schedule, permissions, telemetry, trash, rollback.
 
+Its tools can hand back images, not just text. Point `read_file` at a
+screenshot, a photo, a rendered chart, and a vision-capable agent *looks* at it;
+an MCP server that returns image content reaches the model the same way. Before
+this the bytes were decoded as text and the model — with no way to say it never
+saw a picture — described one anyway.
+
 ### 🧠 Learn — and forget — like a teammate
 
 ```mermaid
@@ -428,7 +434,11 @@ Agent** wizard offers the same catalog as a source.
   (`~/.mur/secrets`, `auth.json`, a `.env`) — because they decide what starts
   next or are the keys themselves; `allow-read` / `allow-write` refuse them,
   and the runtime binary itself is signed by MUR's Developer ID in release
-  builds — a swapped binary is refused at spawn, never run.
+  builds — a swapped binary is refused at spawn, never run. A grant written with
+  `~` now holds at every layer: the kernel policy always expanded it, the
+  in-process tool gate did not, so the sandbox allowed a read that the tool then
+  refused as `path not entitled` — and a `~/.ssh` *deny* entry, the form MUR
+  itself suggests, was inert at that gate.
   A freshly seeded MUR owns
   `~/.mur/{skills,workflows,fleets,artifacts}`, so it can build the skill,
   workflow or fleet it just designed instead of handing you a list of commands.
