@@ -32,6 +32,29 @@ content:
       workflow or trigger a workflow skill by name.
     - `mur workflow list` — enumerate saved flat workflows.
 
+    ## Flat workflow schema
+    `mur workflow new` WRITES every field of the struct, so a generated
+    file looks like it has a dozen required keys. It does not. Only these
+    are required — everything else (`schema`, which fills in as 3,
+    `tier`, `importance`, `tags`, `evidence`, timestamps, …) has a
+    default:
+    ```
+    name: probe                     # must match the filename stem
+    description: two shell steps
+    content: what this workflow is for
+    steps:
+      - order: 1                    # 1-based; order + description required
+        description: first
+        command: echo one           # optional: omit for a prompt-only step
+      - order: 2
+        description: second
+        command: echo two
+    ```
+    Save as `~/.mur/workflows/<name>.yaml`. A missing required field is
+    reported by name (`missing field \`content\``), so read the error
+    rather than guessing — and note `steps` uses `order` + `description`,
+    NOT the DAG procedure's `id` + `kind`.
+
     ## DAG procedure schema
     A workflow-skill DAG procedure is expressed as:
     ```
@@ -51,11 +74,17 @@ content:
     agent over A2A (see the delegation companion doc).
 
     ## Schedule
-    Flat workflows and workflow skills can both be scheduled:
-    - `mur workflow schedule <name> --cron "<expr>"` — recurring runs.
-    - `mur workflow schedule <name> --at <time>` — one-shot run.
-    Scheduled runs execute non-interactively; any approval node in a
-    scheduled workflow skill still pauses and waits, so scheduling a
+    Flat workflows and workflow skills can both be scheduled, by EXACT
+    name. Cron only — there is no one-shot `--at`:
+    - `mur workflow schedule set <name> "<cron expr>"` — recurring runs.
+    - `mur workflow schedule {list | remove <name> | enable <name> |
+      disable <name>}`.
+    A schedule fires `mur run <name>`, which resolves an exact flat
+    workflow or an exact `category: Workflow` skill. A near-miss name
+    resolves by fuzzy search instead, and fuzzy matches are refused
+    without a TTY — so a typo in a schedule is a silent no-op, not an
+    error. Scheduled runs execute non-interactively; any approval node in
+    a scheduled workflow skill still pauses and waits, so scheduling a
     workflow with unresolved HITL gates just defers the wait, not the
     approval itself.
 
