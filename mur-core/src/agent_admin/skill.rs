@@ -7,7 +7,10 @@ use crate::cmd::agent;
 
 // ─── mutators ─────────────────────────────────────────────────────
 
-pub fn add(name: &str, source: &str) -> Result<()> {
+/// Install a skill onto an agent; returns the installed id
+/// (`skills/<manifest name>`), which is not necessarily derived from the
+/// source filename.
+pub fn add(name: &str, source: &str) -> Result<String> {
     agent::cmd_skill_add(name, source)
 }
 

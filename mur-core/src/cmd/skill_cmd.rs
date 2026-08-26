@@ -269,16 +269,17 @@ pub fn cmd_remove(name: &str) -> Result<()> {
     local::remove_installed(&home, name).map_err(|e| anyhow!("failed to remove '{name}': {e}"))?;
 
     // Best-effort: remove the skill's embedding from LanceDB.
-    let _ = tokio::runtime::Handle::try_current().map(|handle| {
-        handle.block_on(async {
-            let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
-            let index_dir = home.join("lance");
-            if let Ok(store) =
-                crate::store::vector::factory::get_vector_store(&cfg, &index_dir).await
-            {
-                let _ = crate::skill_index::delete(name, &*store).await;
-            }
-        })
+    //
+    // Driven on an isolated runtime: `mur` runs its whole CLI inside a tokio
+    // runtime, so `Handle::current().block_on()` here panicked with "Cannot
+    // start a runtime from within a runtime" — AFTER the files were already
+    // deleted, so the removal looked like a crash and printed no confirmation.
+    let _ = crate::cmd::skill_install::block_on_isolated(|| async {
+        let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
+        let index_dir = home.join("lance");
+        if let Ok(store) = crate::store::vector::factory::get_vector_store(&cfg, &index_dir).await {
+            let _ = crate::skill_index::delete(name, &*store).await;
+        }
     });
 
     println!("removed: {name}");
@@ -1149,5 +1150,34 @@ content:
             "context must survive yaml→md→yaml on disk"
         );
         assert_eq!(roundtripped.tags, original.tags);
+    }
+}
+
+#[cfg(test)]
+mod remove_tests {
+    use super::*;
+
+    /// `mur` drives its whole CLI inside a tokio runtime, so the embedding
+    /// cleanup in `cmd_remove` must not call `Handle::block_on` — that panics
+    /// with "Cannot start a runtime from within a runtime", and it panicked
+    /// AFTER the files were deleted, so the user saw a crash and no
+    /// confirmation for an operation that had actually succeeded.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remove_inside_a_tokio_runtime_does_not_panic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("skills").join("probe-skill");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("skill.yaml"),
+            "name: probe-skill\nversion: 1.0.0\npublisher: human:test\n\
+             description: probe\ncategory: context\ncontent:\n  abstract: a\n  context: b\n",
+        )
+        .unwrap();
+
+        // SAFETY: nextest runs each test in its own process.
+        unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
+
+        cmd_remove("probe-skill").expect("remove must succeed inside a runtime");
+        assert!(!dir.exists(), "skill dir should be gone");
     }
 }
