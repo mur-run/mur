@@ -52,6 +52,14 @@ jobs:
     env:
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
+      # The shipped binary set, declared ONCE. The sign loop, the tarball and
+      # the Windows zip below all read this — they used to carry three separate
+      # copies of the list, and every copy drifted at least once: #1027 signed
+      # one of four, and mur-research-gateway was packaged by none of them
+      # while `update::SIBLING_BINARIES` already listed it.
+      # The Homebrew formula is deliberately NOT a fourth copy: it installs
+      # whatever the tarball contains (`bin.install Dir["*"]`).
+      BINARIES: mur mur-mcp-server murmurd mur-agent-runtime mur-research-gateway
     strategy:
       fail-fast: false
       matrix:
@@ -165,14 +173,13 @@ jobs:
       # app. A background agent cannot re-prompt, so the secret silently
       # resolves to nothing (#866).
       #
-      # Keep this list in step with the `tar czf` below — signing a binary that
-      # is not shipped is harmless, but shipping one that is not signed is the
-      # bug this fixes.
+      # Signs $BINARIES, the same list the `tar czf` below ships — shipping a
+      # binary that is not signed is the bug this fixes.
       - name: Sign macOS binaries
         if: matrix.target == 'aarch64-apple-darwin'
         run: |
           set -euo pipefail
-          for b in mur mur-mcp-server murmurd mur-agent-runtime; do
+          for b in $BINARIES; do
             p="target/aarch64-apple-darwin/release/$b"
             codesign --force --options runtime --timestamp \
               --sign "Developer ID Application: $APPLE_TEAM_NAME ($APPLE_TEAM_ID)" \
@@ -193,14 +200,32 @@ jobs:
           # resolve_runtime_target finds the sibling and `brew upgrade` keeps the
           # runtime in sync. Without it, brew CLI users have no runtime and running
           # agents drift on a stale one (the runtime otherwise ships only in the Hub .app).
-          tar czf ../../../${{ matrix.name }}.tar.gz mur mur-mcp-server murmurd mur-agent-runtime
+          #
+          # mur-research-gateway for the same reason: `update::SIBLING_BINARIES`
+          # lists it, so `mur update` looks for it here and warns that it "stays
+          # on the previous version" when it is absent, and deep-research mounts
+          # it as an MCP server by name (`GATEWAY_MCP_COMMAND`) with no fallback
+          # if the binary is missing. It was never packaged here, so only
+          # `build.sh --install` ever produced it.
+          # Unquoted on purpose: $BINARIES is a space-separated list to split.
+          # shellcheck disable=SC2086
+          tar czf ../../../${{ matrix.name }}.tar.gz $BINARIES
           cd ../../..
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path target/${{ matrix.target }}/release/mur.exe,target/${{ matrix.target }}/release/mur-mcp-server.exe,target/${{ matrix.target }}/release/murmurd.exe,target/${{ matrix.target }}/release/mur-agent-runtime.exe -DestinationPath ${{ matrix.name }}.zip
+          # Deliberately plain: quote $env:BINARIES into a string before
+          # .Split (`$env:X.Split(...)` is ambiguous to the variable-path
+          # parser) and concatenate rather than interpolate. A `*.exe` glob
+          # would be shorter but would also sweep up stub_gateway.exe and
+          # every other workspace binary.
+          $paths = @()
+          foreach ($b in "$env:BINARIES".Split(' ')) {
+            $paths += "target/${{ matrix.target }}/release/" + $b + ".exe"
+          }
+          Compress-Archive -Path $paths -DestinationPath ${{ matrix.name }}.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -242,6 +267,12 @@ jobs:
           p12-file-base64: ${{ secrets.APPLE_SIGNING_CERT }}
           p12-password: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
 
+      # NOTE: this stages only mur, mur-mcp-server and murmurd — no
+      # mur-agent-runtime and no mur-research-gateway, so a .pkg install can
+      # run the CLI but cannot start an agent. That may be deliberate (the
+      # identifier is `run.mur.cli` and postinstall says only "Run 'mur init'"),
+      # but it is worth an explicit decision rather than an accident, since the
+      # tarball above ships both.
       - name: Stage pkg-root
         run: |
           mkdir -p pkg-root/usr/local/bin
@@ -648,10 +679,11 @@ jobs:
             end
 
             def install
-              bin.install "mur"
-              bin.install "mur-mcp-server"
-              bin.install "murmurd"
-              bin.install "mur-agent-runtime"
+              # Whatever the tarball ships — the `build` job's $BINARIES and
+              # nothing else is in it. Naming them here made the formula a
+              # second copy of that list, and it drifted: mur-research-gateway
+              # was added to the tarball while brew kept discarding it.
+              bin.install Dir["*"]
               bin.install_symlink "mur" => "murmur"
             end
 

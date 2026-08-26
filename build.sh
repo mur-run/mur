@@ -56,6 +56,12 @@ echo "   Size: $(du -h "$BINARY" | cut -f1)"
 
 # Step 3: Install if requested
 if $INSTALL; then
+  # The binary set, declared once — the sign loop, the install loop and the
+  # PATH-shadow check below all read it. They used to carry three copies of
+  # the same list; release.yml carried three more, and one of those was how
+  # mur-research-gateway ended up shipping from here and nowhere else.
+  BINS="mur mur-mcp-server mur-research-gateway murmurd mur-agent-runtime"
+
   # One-time setup for a stable signing identity (avoids TCC re-prompts on every
   # rebuild): ad-hoc signing (-s -) gives each build a fresh CDHash, so macOS
   # treats it as a new binary and re-prompts for removable-volume access every
@@ -86,7 +92,7 @@ if $INSTALL; then
   }
 
   BIN_DIR="$(dirname "$BINARY")"
-  for b in mur mur-mcp-server mur-research-gateway murmurd mur-agent-runtime; do
+  for b in $BINS; do
     sign "$BIN_DIR/$b"
   done
 
@@ -129,7 +135,7 @@ if $INSTALL; then
   # so $INSTALL_DIR must stay one of `standard_exec_dirs()` in
   # mur-agent-runtime/src/exec_dirs.rs. mur-agent-runtime is what agent symlinks
   # resolve to, so a stale copy here means new and restarted agents inherit it.
-  for b in mur mur-mcp-server mur-research-gateway murmurd mur-agent-runtime; do
+  for b in $BINS; do
     install_bin "$BIN_DIR/$b" "$b"
   done
   ln -sfn "$INSTALL_DIR/mur" "$INSTALL_DIR/murmur"
@@ -141,7 +147,7 @@ if $INSTALL; then
   # for every agent sandbox. Name it rather than let the next upgrade look like
   # it did nothing.
   SHADOWED=false
-  for b in mur mur-mcp-server mur-research-gateway murmurd mur-agent-runtime; do
+  for b in $BINS; do
     [ -f "$INSTALL_DIR/$b" ] || continue
     winner="$(command -v "$b" 2>/dev/null || true)"
     if [ -n "$winner" ] && [ "$winner" != "$INSTALL_DIR/$b" ]; then
