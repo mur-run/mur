@@ -72,8 +72,23 @@ fn binary_drift_fails_startup_with_inspect_hint() {
 
     let msg = verify_mcp_supply_chain(&[], &profile).expect_err("drift should fail startup");
     assert!(msg.contains("B0 rule 6"), "got {msg}");
-    assert!(msg.contains("mur agent mcp inspect weather"), "got {msg}");
-    assert!(msg.contains("mur agent mcp pin weather"), "got {msg}");
+    assert!(
+        msg.contains("mur agent mcp inspect agent_a --server weather"),
+        "got {msg}"
+    );
+    assert!(
+        msg.contains("mur agent mcp pin agent_a weather"),
+        "got {msg}"
+    );
+    assert!(
+        msg.contains("mur agent mcp remove agent_a weather"),
+        "got {msg}"
+    );
+    // Regression: dropping <NAME> makes every hint exit 2 when pasted.
+    assert!(
+        !msg.contains("mcp pin weather"),
+        "agent name missing: {msg}"
+    );
 }
 
 #[test]
@@ -169,7 +184,11 @@ fn vendored_package_refuses_startup_when_the_tree_changed() {
         .expect_err("a changed vendored tree must refuse startup");
     assert!(msg.contains("vendored MCP `fetch-mcp`"), "got {msg}");
     assert!(msg.contains("@yawlabs/fetch-mcp@0.3.6"), "got {msg}");
-    assert!(msg.contains("mur agent mcp vendor"), "got {msg}");
+    assert!(
+        msg.contains("mur agent mcp vendor agent_a fetch-mcp"),
+        "got {msg}"
+    );
+    assert!(!msg.contains("<agent>"), "placeholder left in hint: {msg}");
 }
 
 /// Deleting the install must not lock the user out of their own agent: the
