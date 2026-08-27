@@ -17,7 +17,11 @@ pub fn list_installed(mur_home: &Path) -> Result<Vec<String>, StoreError> {
         .filter_map(|e| {
             let e = e.ok()?;
             if e.file_type().ok()?.is_dir() {
-                e.file_name().to_str().map(|s| s.to_string())
+                let name = e.file_name().to_str()?.to_string();
+                // ponytail: skip, don't migrate. Pre-fix fleet runs ledgered to
+                // skills/fleet:<name>/ (see event_log_path); those directories
+                // hold run history, never a manifest, and are not skills.
+                (!name.starts_with("fleet:")).then_some(name)
             } else {
                 None
             }
@@ -191,6 +195,17 @@ tags: [test, {name}]
         write_to_dir(&global_skill_dir(dir.path(), "rm-me"), &sample("rm-me")).unwrap();
         remove_installed(dir.path(), "rm-me").unwrap();
         assert!(list_installed(dir.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_installed_ignores_legacy_fleet_ledgers() {
+        let dir = tempdir().unwrap();
+        write_to_dir(&global_skill_dir(dir.path(), "real"), &sample("real")).unwrap();
+        // Pre-fix debris: a run ledger, no manifest.
+        let legacy = dir.path().join("skills").join("fleet:builder");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("events.jsonl"), "{}\n").unwrap();
+        assert_eq!(list_installed(dir.path()).unwrap(), vec!["real"]);
     }
 
     #[test]
