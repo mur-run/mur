@@ -975,8 +975,9 @@ pub fn cmd_remove(name: &str, purge: bool, force: bool) -> Result<()> {
     }
 
     if purge {
-        fs::remove_dir_all(&agent_home)
-            .with_context(|| format!("remove_dir_all {}", agent_home.display()))?;
+        if let Some(key_dir) = purge_agent_state(&agent_home)? {
+            println!("Removed private key {}", key_dir.display());
+        }
         println!("Purged agent '{name}'");
     } else {
         println!(
@@ -985,6 +986,36 @@ pub fn cmd_remove(name: &str, purge: bool, force: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Remove everything `--purge` promises: the agent home **and** the private key
+/// that has lived outside it since #850 option (c) moved keys to
+/// `<mur_home>/keys/<name>/`. Returns the key directory removed, if any, so the
+/// caller can report it.
+///
+/// Removing only the agent home is what this fixes: `--purge` says it deletes
+/// the agent's data, but a 32-byte Ed25519 private key kept outliving its
+/// agent. Those orphans are invisible — nothing enumerates them — and they
+/// accumulate silently, one per purge.
+///
+/// The key goes FIRST on purpose. If it fails the agent home is still intact
+/// and the command can be retried; the reverse order fails into exactly the
+/// state being fixed — a key with no agent to own it.
+fn purge_agent_state(agent_home: &Path) -> Result<Option<PathBuf>> {
+    // `private_key_dir` returns its argument unchanged for directories that are
+    // not an agent home (commander, publisher, the host key). Comparing guards
+    // against deleting the agent home twice in that case.
+    let key_dir = mur_common::identity::private_key_dir(agent_home);
+    let removed = if key_dir != agent_home && key_dir.is_dir() {
+        fs::remove_dir_all(&key_dir)
+            .with_context(|| format!("remove_dir_all {}", key_dir.display()))?;
+        Some(key_dir)
+    } else {
+        None
+    };
+    fs::remove_dir_all(agent_home)
+        .with_context(|| format!("remove_dir_all {}", agent_home.display()))?;
+    Ok(removed)
 }
 
 pub fn cmd_rename(old: &str, new: &str) -> Result<()> {
@@ -1227,6 +1258,56 @@ mod tests_remove_unread_guard {
         write_inbox_unread(tmp.path(), "msg-002");
         write_inbox_acked(tmp.path(), "msg-003");
         assert_eq!(count_unread_companion_inbox(tmp.path()), 2);
+    }
+}
+
+#[cfg(test)]
+mod tests_purge_removes_private_key {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// The regression: `--purge` deleted the agent home and left
+    /// `<mur_home>/keys/<name>/identity.key` behind. Nothing enumerates that
+    /// tree, so the orphans were only found by counting `keys/` against
+    /// `agents/` by hand.
+    #[test]
+    fn purge_removes_the_key_that_lives_outside_the_agent_home() {
+        let tmp = TempDir::new().unwrap();
+        let agent_home = tmp.path().join("agents").join("gone");
+        let key_dir = tmp.path().join("keys").join("gone");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        std::fs::create_dir_all(&key_dir).unwrap();
+        std::fs::write(key_dir.join("identity.key"), b"not-a-real-key").unwrap();
+
+        let removed = purge_agent_state(&agent_home).unwrap();
+
+        assert_eq!(removed.as_deref(), Some(key_dir.as_path()));
+        assert!(!agent_home.exists(), "agent home survived the purge");
+        assert!(!key_dir.exists(), "private key outlived its agent");
+    }
+
+    /// An agent whose key was never created must still purge cleanly rather
+    /// than failing on a missing directory.
+    #[test]
+    fn purge_succeeds_when_the_agent_never_had_a_key() {
+        let tmp = TempDir::new().unwrap();
+        let agent_home = tmp.path().join("agents").join("keyless");
+        std::fs::create_dir_all(&agent_home).unwrap();
+
+        assert!(purge_agent_state(&agent_home).unwrap().is_none());
+        assert!(!agent_home.exists());
+    }
+
+    /// A directory that is not under `agents/` maps to itself, and must not be
+    /// removed twice — `private_key_dir` deliberately passes those through.
+    #[test]
+    fn purge_does_not_double_remove_a_non_agent_directory() {
+        let tmp = TempDir::new().unwrap();
+        let stray = tmp.path().join("commander");
+        std::fs::create_dir_all(&stray).unwrap();
+
+        assert!(purge_agent_state(&stray).unwrap().is_none());
+        assert!(!stray.exists());
     }
 }
 
