@@ -200,6 +200,13 @@ tags: [test, {name}]
         assert!(list_installed(dir.path()).unwrap().is_empty());
     }
 
+    // Unix-only, and not as a workaround: the filter keys on a `fleet:` name
+    // prefix, so exercising it means creating a directory whose name contains a
+    // colon. Windows reads `:` as the start of an NTFS alternate data stream, so
+    // `create_dir_all` fails there with ERROR_DIRECTORY (os error 267). The same
+    // rule means the debris this skips can never exist on Windows either, so
+    // there is no coverage to lose — the filter is inert on that platform.
+    #[cfg(unix)]
     #[test]
     fn list_installed_ignores_legacy_fleet_ledgers() {
         let dir = tempdir().unwrap();
