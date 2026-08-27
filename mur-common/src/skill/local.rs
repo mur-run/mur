@@ -21,6 +21,9 @@ pub fn list_installed(mur_home: &Path) -> Result<Vec<String>, StoreError> {
                 // ponytail: skip, don't migrate. Pre-fix fleet runs ledgered to
                 // skills/fleet:<name>/ (see event_log_path); those directories
                 // hold run history, never a manifest, and are not skills.
+                // The other pre-fix offender, a bare `parallel-jobs`, is left
+                // visible on purpose: `mur skill remove` is the right advice
+                // for an ephemeral fan-out log nothing reads.
                 (!name.starts_with("fleet:")).then_some(name)
             } else {
                 None
