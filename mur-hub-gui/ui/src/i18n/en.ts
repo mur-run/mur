@@ -804,4 +804,11 @@ export const en = {
   "home.upgrade.dismiss": "Dismiss",
   "home.hitl.approve": "Approve",
   "home.hitl.deny": "Deny",
+  "home.inbox.hitlTitle": "{agent}: approval needed",
+  "home.inbox.hitlRisk": "Risk: {risk}",
+  "home.inbox.installTitle": "Install request: {type}",
+  "home.inbox.installFrom": "From {publisher}",
+  "home.inbox.companionTitle": "MUR companion message",
+  "home.inbox.upgradeTitle": "Skill \"{name}\" upgrade blocked",
+  "home.inbox.upgradeSubtitle": "Local {local} modified; latest is {latest}",
 } as const;

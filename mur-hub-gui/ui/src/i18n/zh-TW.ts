@@ -806,4 +806,11 @@ export const zhTW: Table = {
   "home.upgrade.dismiss": "忽略",
   "home.hitl.approve": "核准",
   "home.hitl.deny": "拒絕",
+  "home.inbox.hitlTitle": "{agent}：需要核准",
+  "home.inbox.hitlRisk": "風險等級：{risk}",
+  "home.inbox.installTitle": "安裝請求：{type}",
+  "home.inbox.installFrom": "來自 {publisher}",
+  "home.inbox.companionTitle": "MUR 夥伴訊息",
+  "home.inbox.upgradeTitle": "技能「{name}」無法升級",
+  "home.inbox.upgradeSubtitle": "本機 {local} 已修改；最新版是 {latest}",
 };

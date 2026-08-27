@@ -21,7 +21,7 @@ describe("hitlToItem", () => {
   };
 
   it("maps a valid record", () => {
-    const item = hitlToItem(valid);
+    const item = hitlToItem(valid, "en");
     expect(item).not.toBeNull();
     expect(item?.kind).toBe("hitl");
     expect(item?.id).toBe("chan-1:hitl-1");
@@ -29,10 +29,19 @@ describe("hitlToItem", () => {
     expect(item?.title).toContain("quill");
   });
 
+  it("localises the title", () => {
+    expect(hitlToItem(valid, "zh-TW")?.title).toBe("quill：需要核准");
+  });
+
+  it("falls back to the risk tier when there is no summary", () => {
+    const item = hitlToItem({ ...valid, summary: "" }, "en");
+    expect(item?.subtitle).toBe("Risk: write");
+  });
+
   it("returns null for a malformed record", () => {
-    expect(hitlToItem({} as RawHitl)).toBeNull();
-    expect(hitlToItem(null as unknown as RawHitl)).toBeNull();
-    expect(hitlToItem({ ...valid, hitl_id: undefined } as unknown as RawHitl)).toBeNull();
+    expect(hitlToItem({} as RawHitl, "en")).toBeNull();
+    expect(hitlToItem(null as unknown as RawHitl, "en")).toBeNull();
+    expect(hitlToItem({ ...valid, hitl_id: undefined } as unknown as RawHitl, "en")).toBeNull();
   });
 });
 
@@ -47,7 +56,7 @@ describe("installToItem", () => {
   };
 
   it("maps a valid record", () => {
-    const item = installToItem(valid);
+    const item = installToItem(valid, "en");
     expect(item).not.toBeNull();
     expect(item?.kind).toBe("install");
     expect(item?.id).toBe("req-1");
@@ -56,9 +65,9 @@ describe("installToItem", () => {
   });
 
   it("returns null for a malformed record", () => {
-    expect(installToItem({} as RawInstall)).toBeNull();
-    expect(installToItem(undefined as unknown as RawInstall)).toBeNull();
-    expect(installToItem({ ...valid, id: 5 } as unknown as RawInstall)).toBeNull();
+    expect(installToItem({} as RawInstall, "en")).toBeNull();
+    expect(installToItem(undefined as unknown as RawInstall, "en")).toBeNull();
+    expect(installToItem({ ...valid, id: 5 } as unknown as RawInstall, "en")).toBeNull();
   });
 });
 
@@ -74,7 +83,7 @@ describe("companionToItem", () => {
   };
 
   it("maps a valid record", () => {
-    const item = companionToItem(valid);
+    const item = companionToItem(valid, "en");
     expect(item).not.toBeNull();
     expect(item?.kind).toBe("companion");
     expect(item?.id).toBe("evt-1");
@@ -83,10 +92,10 @@ describe("companionToItem", () => {
   });
 
   it("returns null for a malformed record", () => {
-    expect(companionToItem({} as RawCompanionEvent)).toBeNull();
-    expect(companionToItem(null as unknown as RawCompanionEvent)).toBeNull();
+    expect(companionToItem({} as RawCompanionEvent, "en")).toBeNull();
+    expect(companionToItem(null as unknown as RawCompanionEvent, "en")).toBeNull();
     expect(
-      companionToItem({ ...valid, generated_at: "not-a-date" } as RawCompanionEvent),
+      companionToItem({ ...valid, generated_at: "not-a-date" } as RawCompanionEvent, "en"),
     ).toBeNull();
   });
 });
@@ -100,7 +109,7 @@ describe("blockedToItem", () => {
   };
 
   it("maps a valid record", () => {
-    const item = blockedToItem(valid);
+    const item = blockedToItem(valid, "en");
     expect(item).not.toBeNull();
     expect(item?.kind).toBe("upgrade_blocked");
     expect(item?.id).toBe("my-skill");
@@ -108,8 +117,8 @@ describe("blockedToItem", () => {
   });
 
   it("returns null for a malformed record", () => {
-    expect(blockedToItem({} as RawBlockedItem)).toBeNull();
-    expect(blockedToItem(undefined as unknown as RawBlockedItem)).toBeNull();
-    expect(blockedToItem({ ...valid, name: "" } as RawBlockedItem)).toBeNull();
+    expect(blockedToItem({} as RawBlockedItem, "en")).toBeNull();
+    expect(blockedToItem(undefined as unknown as RawBlockedItem, "en")).toBeNull();
+    expect(blockedToItem({ ...valid, name: "" } as RawBlockedItem, "en")).toBeNull();
   });
 });

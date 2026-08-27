@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAgents } from "../../context/AgentContext";
+import { translate, useT } from "../../i18n";
 import { mergeInbox, type InboxItem } from "./inbox";
 
 const POLL_INTERVAL_MS = 30_000;
@@ -57,7 +58,7 @@ function parseTs(value: unknown): number | null {
 }
 
 /** Pure adapter: `RawHitl` -> `InboxItem`. Returns null on malformed input (fail-open). */
-export function hitlToItem(raw: RawHitl): InboxItem | null {
+export function hitlToItem(raw: RawHitl, lang: string): InboxItem | null {
   if (!raw || typeof raw !== "object") return null;
   const { channel_id, hitl_id, agent, summary, risk, ts } = raw;
   if (
@@ -77,14 +78,14 @@ export function hitlToItem(raw: RawHitl): InboxItem | null {
     kind: "hitl",
     id: `${channel_id}:${hitl_id}`,
     ts: tsValue,
-    title: `${agent}: approval needed`,
-    subtitle: summary || `Risk: ${risk}`,
+    title: translate(lang, "home.inbox.hitlTitle", { agent }),
+    subtitle: summary || translate(lang, "home.inbox.hitlRisk", { risk }),
     payload: raw,
   };
 }
 
 /** Pure adapter: `RawInstall` -> `InboxItem`. Returns null on malformed input (fail-open). */
-export function installToItem(raw: RawInstall): InboxItem | null {
+export function installToItem(raw: RawInstall, lang: string): InboxItem | null {
   if (!raw || typeof raw !== "object") return null;
   const { install_type, id, publisher, requested_at } = raw;
   if (
@@ -101,14 +102,14 @@ export function installToItem(raw: RawInstall): InboxItem | null {
     kind: "install",
     id,
     ts: tsValue,
-    title: `Install request: ${install_type}`,
-    subtitle: `From ${publisher}`,
+    title: translate(lang, "home.inbox.installTitle", { type: install_type }),
+    subtitle: translate(lang, "home.inbox.installFrom", { publisher }),
     payload: raw,
   };
 }
 
 /** Pure adapter: `RawCompanionEvent` -> `InboxItem`. Returns null on malformed input (fail-open). */
-export function companionToItem(raw: RawCompanionEvent): InboxItem | null {
+export function companionToItem(raw: RawCompanionEvent, lang: string): InboxItem | null {
   if (!raw || typeof raw !== "object") return null;
   const { id, situation, body, generated_at } = raw;
   if (typeof id !== "string" || !id || typeof body !== "string") return null;
@@ -118,14 +119,17 @@ export function companionToItem(raw: RawCompanionEvent): InboxItem | null {
     kind: "companion",
     id,
     ts: tsValue,
-    title: situation && typeof situation === "string" ? situation : "MUR companion message",
+    title:
+      situation && typeof situation === "string"
+        ? situation
+        : translate(lang, "home.inbox.companionTitle"),
     subtitle: body,
     payload: raw,
   };
 }
 
 /** Pure adapter: `RawBlockedItem` -> `InboxItem`. Returns null on malformed input (fail-open). */
-export function blockedToItem(raw: RawBlockedItem): InboxItem | null {
+export function blockedToItem(raw: RawBlockedItem, lang: string): InboxItem | null {
   if (!raw || typeof raw !== "object") return null;
   const { name, local_version, latest_version } = raw;
   if (
@@ -140,8 +144,11 @@ export function blockedToItem(raw: RawBlockedItem): InboxItem | null {
     kind: "upgrade_blocked",
     id: name,
     ts: 0,
-    title: `Skill "${name}" upgrade blocked`,
-    subtitle: `Local ${local_version} modified; latest is ${latest_version}`,
+    title: translate(lang, "home.inbox.upgradeTitle", { name }),
+    subtitle: translate(lang, "home.inbox.upgradeSubtitle", {
+      local: local_version,
+      latest: latest_version,
+    }),
     payload: raw,
   };
 }
@@ -158,6 +165,7 @@ function filterNulls<T>(items: (T | null)[]): T[] {
  */
 export function useInbox(): { items: InboxItem[]; refresh: () => void } {
   const { agents } = useAgents();
+  const { lang } = useT();
   const [hitlItems, setHitlItems] = useState<InboxItem[]>([]);
   const [installItems, setInstallItems] = useState<InboxItem[]>([]);
   const [companionItems, setCompanionItems] = useState<InboxItem[]>([]);
@@ -167,15 +175,15 @@ export function useInbox(): { items: InboxItem[]; refresh: () => void } {
 
   const refreshHitl = useCallback(() => {
     invoke<RawHitl[]>("hitl_pending_list")
-      .then((raw) => setHitlItems(filterNulls(raw.map(hitlToItem))))
+      .then((raw) => setHitlItems(filterNulls(raw.map((r) => hitlToItem(r, lang)))))
       .catch(() => {});
-  }, []);
+  }, [lang]);
 
   const refreshInstall = useCallback(() => {
     invoke<RawInstall[]>("install_inbox_list")
-      .then((raw) => setInstallItems(filterNulls(raw.map(installToItem))))
+      .then((raw) => setInstallItems(filterNulls(raw.map((r) => installToItem(r, lang)))))
       .catch(() => {});
-  }, []);
+  }, [lang]);
 
   const refreshCompanion = useCallback(() => {
     Promise.all(
@@ -183,15 +191,17 @@ export function useInbox(): { items: InboxItem[]; refresh: () => void } {
         invoke<RawCompanionEvent[]>("companion_bridge_pending", { agent }).catch(() => []),
       ),
     )
-      .then((perAgent) => setCompanionItems(filterNulls(perAgent.flat().map(companionToItem))))
+      .then((perAgent) =>
+        setCompanionItems(filterNulls(perAgent.flat().map((r) => companionToItem(r, lang)))),
+      )
       .catch(() => {});
-  }, []);
+  }, [lang]);
 
   const refreshBlocked = useCallback(() => {
     invoke<RawBlockedItem[]>("skill_upgrade_status")
-      .then((raw) => setBlockedItems(filterNulls(raw.map(blockedToItem))))
+      .then((raw) => setBlockedItems(filterNulls(raw.map((r) => blockedToItem(r, lang)))))
       .catch(() => {});
-  }, []);
+  }, [lang]);
 
   const refresh = useCallback(() => {
     refreshHitl();
@@ -201,8 +211,7 @@ export function useInbox(): { items: InboxItem[]; refresh: () => void } {
   }, [refreshHitl, refreshInstall, refreshCompanion, refreshBlocked]);
 
   useEffect(() => {
-    refresh();
-
+    // No initial refresh() here — the [lang] effect below covers mount too.
     const unlistenHitl = listen("hitl-approval-needed", () => refreshHitl());
     const interval = setInterval(() => {
       refreshInstall();
@@ -213,8 +222,16 @@ export function useInbox(): { items: InboxItem[]; refresh: () => void } {
       unlistenHitl.then((fn) => fn()).catch(() => {});
       clearInterval(interval);
     };
+    // Re-subscribe on a language switch: the listener and the interval close
+    // over the refresh callbacks, which bake `lang` into the card strings. With
+    // `[]` the poll would keep restoring the pre-switch language.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [lang]);
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lang]);
 
   const agentIdentityKey = agents
     .map((a) => a.name)
