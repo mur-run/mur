@@ -105,10 +105,16 @@ pub fn verify_mcp_supply_chain(
                 Ok(_) => {
                     return Err(format!(
                         "B0 rule 6: vendored MCP `{}` ({}@{}) no longer matches the tree \
-                         installed at approval time — re-run `mur agent mcp vendor <agent> {}` \
-                         to reinstall and re-approve, or `mur agent mcp remove <agent> {}` \
+                         installed at approval time — re-run `mur agent mcp vendor {} {}` \
+                         to reinstall and re-approve, or `mur agent mcp remove {} {}` \
                          to uninstall.",
-                        entry.name, pkg.name, pkg.version, entry.name, entry.name,
+                        entry.name,
+                        pkg.name,
+                        pkg.version,
+                        profile.name,
+                        entry.name,
+                        profile.name,
+                        entry.name,
                     ));
                 }
                 Err(reason) => {
@@ -127,7 +133,7 @@ pub fn verify_mcp_supply_chain(
         }
         let Some(expected) = &entry.binary_sha256 else {
             // Pre-M9 entry — skip silently; the cookbook documents
-            // `mur agent mcp pin <name>` as the migration verb.
+            // `mur agent mcp pin <name> <server-id>` as the migration verb.
             continue;
         };
         // An interpreter-launched server (`npx @scope/pkg`, `python -m …`) pins
@@ -170,10 +176,16 @@ pub fn verify_mcp_supply_chain(
             Err(crate::hooks::b0_helpers::PinDriftReason::BinaryDrift { .. }) => {
                 return Err(format!(
                     "B0 rule 6: MCP `{}` changed since install — \
-                     run `mur agent mcp inspect {}` to review the \
-                     drift and `mur agent mcp pin {}` to re-approve, \
-                     or `mur agent mcp remove {}` to uninstall.",
-                    entry.name, entry.name, entry.name, entry.name,
+                     run `mur agent mcp inspect {} --server {}` to review the \
+                     drift and `mur agent mcp pin {} {}` to re-approve, \
+                     or `mur agent mcp remove {} {}` to uninstall.",
+                    entry.name,
+                    profile.name,
+                    entry.name,
+                    profile.name,
+                    entry.name,
+                    profile.name,
+                    entry.name,
                 ));
             }
             Err(soft @ crate::hooks::b0_helpers::PinDriftReason::BinaryMissing { .. })

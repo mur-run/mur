@@ -89,6 +89,19 @@ impl SkillEvent {
 }
 
 pub fn event_log_path(mur_home: &Path, skill_name: &str) -> PathBuf {
+    // A fleet run is ledgered under the same call, but `fleet:<name>` is not a
+    // skill id. Writing it into skills/ minted a manifest-less directory that
+    // `mur skill list` then flagged as invalid and told the user to
+    // `mur skill remove` — i.e. to delete the fleet's own run history.
+    if let Some(fleet) = skill_name.strip_prefix("fleet:") {
+        return mur_home.join("fleets").join(fleet).join("events.jsonl");
+    }
+    // Same for an ephemeral fan-out (`parallel_jobs`): a run, not a skill.
+    // Not `runs/` — that store is keyed by run_id (`runs/<run_id>/run.json`),
+    // and a name dropped in there would be the same category error again.
+    if let Some(job) = skill_name.strip_prefix("job:") {
+        return mur_home.join("jobs").join(job).join("events.jsonl");
+    }
     mur_home
         .join("skills")
         .join(skill_name)
@@ -254,6 +267,55 @@ pub fn resolve_manifest_lww(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn fleet_run_ledger_stays_out_of_the_skill_store() {
+        let tmp = tempdir().unwrap();
+        record_run(
+            tmp.path(),
+            "fleet:builder",
+            "cli",
+            &RunRecord {
+                success: true,
+                duration_ms: Some(10),
+                exit_code: Some(0),
+                stderr: None,
+                failed_step: None,
+                trigger: "manual",
+                env_class_override: None,
+            },
+        )
+        .unwrap();
+        assert!(tmp.path().join("fleets/builder/events.jsonl").exists());
+        // The regression: a manifest-less dir here is what `mur skill list`
+        // told the user to `mur skill remove`.
+        assert!(!tmp.path().join("skills/fleet:builder").exists());
+    }
+
+    #[test]
+    fn ephemeral_job_ledger_stays_out_of_the_skill_store() {
+        let tmp = tempdir().unwrap();
+        record_run(
+            tmp.path(),
+            "job:parallel-jobs",
+            "cli",
+            &RunRecord {
+                success: true,
+                duration_ms: Some(10),
+                exit_code: Some(0),
+                stderr: None,
+                failed_step: None,
+                trigger: "agent",
+                env_class_override: None,
+            },
+        )
+        .unwrap();
+        assert!(tmp.path().join("jobs/parallel-jobs/events.jsonl").exists());
+        // `runs/` belongs to the run_status store, keyed by run_id.
+        assert!(!tmp.path().join("runs").exists());
+        assert!(!tmp.path().join("skills/parallel-jobs").exists());
+        assert!(!tmp.path().join("skills/job:parallel-jobs").exists());
+    }
 
     #[test]
     fn record_run_classifies_and_appends() {

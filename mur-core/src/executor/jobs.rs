@@ -140,7 +140,9 @@ pub async fn run_parallel_jobs(
         max_concurrency,
         ..Default::default()
     };
-    let out = execute_dag(mur_home, "parallel-jobs", &proc, &opts)
+    // `job:` keeps the run ledger out of the skill store — this fan-out is
+    // ephemeral and owns no skill.yaml. See `skill::event_log::event_log_path`.
+    let out = execute_dag(mur_home, "job:parallel-jobs", &proc, &opts)
         .await
         .map_err(|e| anyhow::anyhow!("parallel_jobs run on channel {channel_id} failed: {e}"))?;
     Ok((channel_id, out))

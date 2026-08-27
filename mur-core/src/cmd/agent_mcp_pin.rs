@@ -279,7 +279,7 @@ pub fn binary_status(entry: &mur_common::agent::McpServerEntry) -> InspectStatus
 /// Print pinned vs current state for one MCP entry. Returns the
 /// exit-code-shaped status; `cmd_mcp_inspect` lifts that to
 /// `std::process::exit` after running through the dispatch.
-pub fn inspect_one(entry: &mur_common::agent::McpServerEntry) -> InspectStatus {
+pub fn inspect_one(agent: &str, entry: &mur_common::agent::McpServerEntry) -> InspectStatus {
     println!("MCP server: {}", entry.name);
     println!("  command:        {}", entry.command);
     if !entry.args.is_empty() {
@@ -345,8 +345,8 @@ pub fn inspect_one(entry: &mur_common::agent::McpServerEntry) -> InspectStatus {
         } else {
             println!("  status:         TREE DRIFT");
             println!(
-                "  hint:           `mur agent mcp vendor <agent> {}` to reinstall and re-approve",
-                entry.name,
+                "  hint:           `mur agent mcp vendor {} {}` to reinstall and re-approve",
+                agent, entry.name,
             );
             InspectStatus::BinaryDrift
         };
@@ -355,8 +355,8 @@ pub fn inspect_one(entry: &mur_common::agent::McpServerEntry) -> InspectStatus {
     let Some(expected) = &entry.binary_sha256 else {
         println!("  pin status:     <unpinned> (pre-M9 entry)");
         println!(
-            "  hint:           run `mur agent mcp pin {}` to start enforcing rule 6",
-            entry.name,
+            "  hint:           run `mur agent mcp pin {} {}` to start enforcing rule 6",
+            agent, entry.name,
         );
         return InspectStatus::MissingPin;
     };
@@ -402,7 +402,10 @@ pub fn inspect_one(entry: &mur_common::agent::McpServerEntry) -> InspectStatus {
         println!("  pinned descr:   {d}");
         println!("                  (pass --probe to verify against live MCP)");
     } else {
-        println!("  pinned descr:   <none — re-pin with `mur agent mcp pin` to capture>");
+        println!(
+            "  pinned descr:   <none — re-pin with `mur agent mcp pin {} {}` to capture>",
+            agent, entry.name,
+        );
     }
 
     if actual.eq_ignore_ascii_case(expected) {
@@ -411,9 +414,9 @@ pub fn inspect_one(entry: &mur_common::agent::McpServerEntry) -> InspectStatus {
     } else {
         println!("  status:         BINARY DRIFT");
         println!(
-            "  hint:           `mur agent mcp pin {}` to re-approve, \
-             or `mur agent mcp remove {}` to uninstall",
-            entry.name, entry.name,
+            "  hint:           `mur agent mcp pin {} {}` to re-approve, \
+             or `mur agent mcp remove {} {}` to uninstall",
+            agent, entry.name, agent, entry.name,
         );
         InspectStatus::BinaryDrift
     }
@@ -424,12 +427,13 @@ pub fn inspect_one(entry: &mur_common::agent::McpServerEntry) -> InspectStatus {
 /// Lights up the `DescriptionDrift` and `BothDrifted` exit codes that
 /// M9.4 reserved.
 pub async fn inspect_one_probed(
+    agent: &str,
     entry: &mur_common::agent::McpServerEntry,
     timeout: std::time::Duration,
 ) -> InspectStatus {
     // Run the binary-side inspect synchronously first so its output
     // appears before the probe results in the user-facing report.
-    let binary_status = inspect_one(entry);
+    let binary_status = inspect_one(agent, entry);
 
     // Skip the probe entirely if the entry has no pinned description
     // hash — there's nothing to compare against.
@@ -458,9 +462,9 @@ pub async fn inspect_one_probed(
                 println!(
                     "  hint:           the MCP's tools/list changed since install; \
                      review the new tool descriptions then \
-                     `mur agent mcp pin {}` to re-approve, \
-                     or `mur agent mcp remove {}` to uninstall",
-                    entry.name, entry.name,
+                     `mur agent mcp pin {} {}` to re-approve, \
+                     or `mur agent mcp remove {} {}` to uninstall",
+                    agent, entry.name, agent, entry.name,
                 );
                 match binary_status {
                     InspectStatus::Clean => InspectStatus::DescriptionDrift,
@@ -510,11 +514,14 @@ pub fn cmd_mcp_inspect(
         }
         let status = if probe {
             tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current()
-                    .block_on(inspect_one_probed(entry, probe_timeout()))
+                tokio::runtime::Handle::current().block_on(inspect_one_probed(
+                    name,
+                    entry,
+                    probe_timeout(),
+                ))
             }) as u8
         } else {
-            inspect_one(entry) as u8
+            inspect_one(name, entry) as u8
         };
         worst = worst.max(status);
 
@@ -938,7 +945,7 @@ mod tests {
             ),
             ..Default::default()
         };
-        assert_eq!(inspect_one(&entry), InspectStatus::Clean);
+        assert_eq!(inspect_one("a1", &entry), InspectStatus::Clean);
     }
 
     #[test]
@@ -954,7 +961,7 @@ mod tests {
             ),
             ..Default::default()
         };
-        assert_eq!(inspect_one(&entry), InspectStatus::BinaryDrift);
+        assert_eq!(inspect_one("a1", &entry), InspectStatus::BinaryDrift);
     }
 
     #[test]
@@ -968,7 +975,7 @@ mod tests {
             // No pin → pre-M9 entry.
             ..Default::default()
         };
-        assert_eq!(inspect_one(&entry), InspectStatus::MissingPin);
+        assert_eq!(inspect_one("a1", &entry), InspectStatus::MissingPin);
     }
 
     #[test]
@@ -980,7 +987,7 @@ mod tests {
             binary_sha256: Some("deadbeef".repeat(8)),
             ..Default::default()
         };
-        assert_eq!(inspect_one(&entry), InspectStatus::BinaryMissing);
+        assert_eq!(inspect_one("a1", &entry), InspectStatus::BinaryMissing);
     }
 
     #[test]

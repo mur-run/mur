@@ -1,99 +1,98 @@
 use anyhow::Result;
-// KnowledgeBase removed: was only used by cmd_analyze (now deleted)
-use mur_common::pattern::*;
 
 use crate::store::yaml::YamlStore;
 
+/// `mur stats` — a roll-up of the skill store.
+///
+/// Reported Patterns until workflow-engine v2 removed that pipeline, after
+/// which it printed a wall of zeroes on a machine with 74 skills installed.
+/// Skills are the knowledge object now, so they are what it counts.
 pub(crate) fn cmd_stats() -> Result<()> {
-    use mur_common::knowledge::Maturity;
+    use mur_common::skill::{LifecycleState, SkillStats, local};
 
-    let store = YamlStore::default_store()?;
-    let patterns = store.list_all()?;
+    let home = crate::cmd::agent::resolve_mur_home()?;
+    let names = local::list_installed(&home)?;
+    let total = names.len();
 
-    let total = patterns.len();
-    let mut session_count = 0;
-    let mut project_count = 0;
-    let mut core_count = 0;
-    let mut active_count = 0;
-    let mut deprecated_count = 0;
-    let mut archived_count = 0;
-    let mut draft_count = 0;
-    let mut emerging_count = 0;
-    let mut stable_count = 0;
-    let mut canonical_count = 0;
-    let mut total_importance = 0.0;
-    let mut total_effectiveness = 0.0;
-    let mut tracked_count = 0u64;
-    let mut total_injections = 0u64;
+    // ponytail: 6 counters beat deriving Ord on a shared enum for one report.
+    let mut counts = [0usize; 6];
+    let slot = |st: LifecycleState| match st {
+        LifecycleState::Draft => 0,
+        LifecycleState::Emerging => 1,
+        LifecycleState::Stable => 2,
+        LifecycleState::Canonical => 3,
+        LifecycleState::Deprecated => 4,
+        _ => 5, // Archived and the terminal post-sweep state
+    };
+    let mut runs = 0u64;
+    let mut successes = 0u64;
+    let mut used = 0usize;
+    let mut top: Option<(String, u64)> = None;
 
-    for p in &patterns {
-        match p.tier {
-            Tier::Session => session_count += 1,
-            Tier::Project => project_count += 1,
-            Tier::Core => core_count += 1,
-        }
-        match p.lifecycle.status {
-            LifecycleStatus::Active => active_count += 1,
-            LifecycleStatus::Deprecated => deprecated_count += 1,
-            LifecycleStatus::Archived => archived_count += 1,
-        }
-        match p.maturity {
-            Maturity::Draft => draft_count += 1,
-            Maturity::Emerging => emerging_count += 1,
-            Maturity::Stable => stable_count += 1,
-            Maturity::Canonical => canonical_count += 1,
-        }
-        total_importance += p.importance;
-        total_injections += p.evidence.injection_count;
-        if p.evidence.injection_count > 0 {
-            tracked_count += 1;
-            total_effectiveness += p.evidence.effectiveness();
+    for name in &names {
+        // No stats file = installed but never run, which is exactly Draft.
+        let st = SkillStats::load(&SkillStats::path(&home, name))
+            .ok()
+            .flatten();
+        let Some(st) = st else {
+            counts[slot(LifecycleState::Draft)] += 1;
+            continue;
+        };
+        counts[slot(st.lifecycle_state)] += 1;
+        runs += st.usage_count;
+        successes += st.success_count;
+        if st.usage_count > 0 {
+            used += 1;
+            if top.as_ref().is_none_or(|(_, n)| st.usage_count > *n) {
+                top = Some((name.clone(), st.usage_count));
+            }
         }
     }
 
-    let avg_importance = if total > 0 {
-        total_importance / total as f64
-    } else {
-        0.0
-    };
-    let avg_effectiveness = if tracked_count > 0 {
-        total_effectiveness / tracked_count as f64
-    } else {
-        0.0
+    let pct = |n: usize| {
+        if total > 0 {
+            n as f64 / total as f64 * 100.0
+        } else {
+            0.0
+        }
     };
 
-    println!("📊 MUR Core v2 Statistics");
-    println!("─────────────────────────");
-    println!("Total patterns:     {}", total);
+    println!("📊 MUR Skill Statistics");
+    println!("───────────────────────");
+    println!("Total skills:       {total}");
     println!();
-    println!("By tier:");
-    println!("  📝 Session:       {}", session_count);
-    println!("  📁 Project:       {}", project_count);
-    println!("  ⭐ Core:          {}", core_count);
+    println!("By lifecycle:");
+    // Padding is baked into the labels: `{:<w}` counts chars, and every one of
+    // these emoji is one char that renders two columns wide.
+    for (i, label) in [
+        "📝 Draft          ",
+        "🌱 Emerging       ",
+        "✅ Stable         ",
+        "⭐ Canonical      ",
+        "⚠️ Deprecated     ",
+        "📦 Archived       ",
+    ]
+    .iter()
+    .enumerate()
+    {
+        println!("  {label}{}", counts[i]);
+    }
     println!();
-    println!("By status:");
-    println!("  ✅ Active:        {}", active_count);
-    println!("  ⚠️  Deprecated:    {}", deprecated_count);
-    println!("  📦 Archived:      {}", archived_count);
-    println!();
+    println!("Usage:");
+    println!("  Total runs:       {runs}");
     println!(
-        "By maturity:        Draft: {} | Emerging: {} | Stable: {} | Canonical: {}",
-        draft_count, emerging_count, stable_count, canonical_count
-    );
-    println!();
-    println!("Avg importance:     {:.0}%", avg_importance * 100.0);
-    println!("Total injections:   {}", total_injections);
-    println!(
-        "Tracked patterns:   {} / {} ({:.0}%)",
-        tracked_count,
-        total,
-        if total > 0 {
-            tracked_count as f64 / total as f64 * 100.0
+        "  Success rate:     {:.0}%",
+        if runs > 0 {
+            successes as f64 / runs as f64 * 100.0
         } else {
             0.0
         }
     );
-    println!("Avg effectiveness:  {:.0}%", avg_effectiveness * 100.0);
+    println!("  Ever used:        {used} / {total} ({:.0}%)", pct(used));
+    match top {
+        Some((name, n)) => println!("  Most used:        {name} ({n} runs)"),
+        None => println!("  Most used:        —"),
+    }
 
     Ok(())
 }
@@ -276,23 +275,21 @@ pub(crate) fn cmd_doctor() -> Result<()> {
         println!("❌ MUR directory not found. Run `mur init` first.");
     }
 
-    // Check skills
-    let skills_dir = mur_dir.join("skills");
-    let skill_count = if skills_dir.exists() {
-        std::fs::read_dir(&skills_dir)?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_dir())
-            .count()
-    } else {
-        0
-    };
+    // Check skills. Counted through the same helper `mur skill list` uses, so
+    // the two surfaces cannot disagree about what a skill is.
+    let skill_count = mur_common::skill::local::list_installed(&mur_dir)
+        .map(|n| n.len())
+        .unwrap_or(0);
     if skill_count > 0 {
         println!("✅ Skills (installed): {skill_count}");
         if skill_count < 5 {
             println!("  ⚠ Few skills installed. Run `mur skill install <name>` to add more.");
         }
     } else {
-        println!("  ⚠ No skills found in {}", skills_dir.display());
+        println!(
+            "  ⚠ No skills found in {}",
+            mur_dir.join("skills").display()
+        );
     }
 
     // Check LLM config
