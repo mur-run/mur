@@ -57,11 +57,13 @@ triggers:
     assert_eq!(loaded.len(), 2);
 
     let runtime = RuntimeSkills::build(loaded);
+    let runtime = runtime.snapshot();
 
     // (1) Layer 2 contains house-rules, not find-price (no session_start).
     let inj = inject_layer2(
         &runtime.loaded,
         &SkillsConfig::default(),
+        &mur_common::config::MemoryConfig::default(),
         0.0,
         &HashSet::new(),
         None,

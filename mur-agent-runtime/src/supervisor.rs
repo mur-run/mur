@@ -435,6 +435,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         hook_cancel,
         runtime_skills,
         skills_cfg,
+        memory_cfg,
     ) = crate::supervisor_runner::prepare_runtime(&agent_home, &profile, socket_enabled).await?;
 
     // 5. Acquire running.lock
@@ -468,6 +469,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             egress_proxy,
             runtime_skills.clone(),
             skills_cfg.clone(),
+            memory_cfg.clone(),
             &hook_chain,
             &hook_ctx,
             &hook_cancel,
@@ -490,6 +492,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         &profile.inner.name,
         profile.inner.identity.key_version,
         model_switch.map(|h| (h, agent_home.join("profile.yaml"))),
+        runtime_skills.clone(),
     ));
 
     // 7. Transports
@@ -954,6 +957,7 @@ fn build_dispatcher(
         Arc<crate::llm::switchable::ModelSwitchHandle>,
         std::path::PathBuf,
     )>,
+    runtime_skills: Arc<crate::skills::RuntimeSkills>,
 ) -> Dispatcher {
     let mut d = Dispatcher::new();
     d.register("agent/card", Box::new(CardHandler::new(profile.clone())));
@@ -1019,6 +1023,12 @@ fn build_dispatcher(
             )),
         );
     }
+    // murmur `/remember` and `/forget` run in the CLI process; this is how they
+    // tell the running agent its memory set changed.
+    d.register(
+        "memory/reload",
+        Box::new(crate::protocol::methods::memory_reload::MemoryReloadHandler::new(runtime_skills)),
+    );
     d
 }
 

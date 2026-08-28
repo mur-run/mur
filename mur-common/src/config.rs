@@ -352,12 +352,31 @@ impl Default for SnapshotConfig {
 #[serde(default)]
 pub struct MemoryConfig {
     pub capture: CaptureMode,
+    /// How many memories may enter the system prompt per turn. Deliberately
+    /// NOT `skills.max_skills_in_prompt`: sharing that budget means saving a
+    /// memory silently evicts a skill, and five is a plausible number of
+    /// standing preferences for one user to have.
+    #[serde(default = "default_memory_in_prompt")]
+    pub max_in_prompt: usize,
+    /// Character ceiling for the whole memory block, spent before skills.
+    #[serde(default = "default_memory_chars")]
+    pub max_chars: usize,
+}
+
+fn default_memory_in_prompt() -> usize {
+    20
+}
+
+fn default_memory_chars() -> usize {
+    1500
 }
 
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             capture: CaptureMode::AutoAnnounce,
+            max_in_prompt: default_memory_in_prompt(),
+            max_chars: default_memory_chars(),
         }
     }
 }
