@@ -152,6 +152,7 @@ pub fn build_runner(
     base_system_prompt: Option<String>,
     skills: Arc<RuntimeSkills>,
     skills_cfg: SkillsConfig,
+    memory_cfg: mur_common::config::MemoryConfig,
     hook_chain: Option<Arc<HookChain>>,
     hook_ctx: Option<HookCtx>,
     hook_cancel: Option<CancellationToken>,
@@ -168,6 +169,7 @@ pub fn build_runner(
         .with_system_prompt(base_system_prompt)
         .with_skills(skills)
         .with_skills_cfg(skills_cfg)
+        .with_memory_cfg(memory_cfg)
         .with_hitl_timeout_secs(hitl_timeout_secs)
         .with_tools(tools)
         .with_tools_policy(tools_policy)
@@ -200,6 +202,7 @@ pub async fn build_provider_runner(
     egress_proxy: Option<crate::sandbox::egress_proxy::EgressProxyHandle>,
     runtime_skills: Arc<RuntimeSkills>,
     skills_cfg: SkillsConfig,
+    memory_cfg: mur_common::config::MemoryConfig,
     hook_chain: &HookChain,
     hook_ctx: &HookCtx,
     hook_cancel: &CancellationToken,
@@ -363,6 +366,7 @@ pub async fn build_provider_runner(
                     mur_home: mur_home.clone(),
                     agent_name: profile.inner.name.clone(),
                     identity: identity.clone(),
+                    skills: runtime_skills.clone(),
                 }),
             );
         }
@@ -393,6 +397,7 @@ pub async fn build_provider_runner(
             system_prompt_with_memory.clone(),
             runtime_skills.clone(),
             skills_cfg.clone(),
+            memory_cfg.clone(),
             Some(Arc::new(hook_chain.clone())),
             Some(hook_ctx.clone()),
             Some(hook_cancel.clone()),
@@ -577,6 +582,7 @@ pub(crate) async fn prepare_runtime(
     CancellationToken,
     Arc<RuntimeSkills>,
     SkillsConfig,
+    mur_common::config::MemoryConfig,
 )> {
     let (writer, notif_rx) = TelemetryWriter::new(
         agent_home.join("telemetry"),
@@ -690,9 +696,14 @@ pub(crate) async fn prepare_runtime(
     // swallows into `Config::default()` — so every `skills:` setting the user
     // wrote was silently ignored here. Compare the correct call above, which
     // joins "config.yaml".
-    let skills_cfg =
-        mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).skills;
-    let loaded = mur_common::skill::loader::load_all(&mur_home, &profile.inner.name);
+    let prompt_cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
+    let skills_cfg = prompt_cfg.skills.clone();
+    let memory_cfg = prompt_cfg.memory.clone();
+    let loaded = crate::skills::drop_forgotten_notes(
+        &mur_home,
+        &profile.inner.name,
+        mur_common::skill::loader::load_all(&mur_home, &profile.inner.name),
+    );
     // #717: surface profile.yaml skill refs that don't resolve, distinguishing
     // missing (ref written but files never installed) from malformed (files
     // exist but no longer parse) so the log names the actual root cause.
@@ -721,11 +732,20 @@ pub(crate) async fn prepare_runtime(
             ),
         }
     }
-    let loaded: Vec<_> = loaded
-        .into_iter()
-        .filter(|s| profile.inner.skill_enabled(&s.name))
-        .collect();
-    let runtime_skills = Arc::new(RuntimeSkills::build(loaded));
+    // The profile denylist, captured once so reloads apply the same gate the
+    // boot load did. Cloned out of the profile because a reload can fire long
+    // after this borrow ends.
+    // The whole profile, not a hand-picked subset: `skill_enabled` reads a
+    // denylist AND an add-on group's enabled flag today, and rebuilding a
+    // partial `AgentProfile` here would silently stop gating on whatever it
+    // learns to read next. Boot-time snapshot, like every other profile read
+    // in the runtime — editing profile.yaml still needs a restart.
+    let gate_profile = profile.inner.clone();
+    let enabled: Box<dyn Fn(&str) -> bool + Send + Sync> =
+        Box::new(move |name: &str| gate_profile.skill_enabled(name));
+    let loaded: Vec<_> = loaded.into_iter().filter(|s| enabled(&s.name)).collect();
+    let runtime_skills =
+        Arc::new(RuntimeSkills::build(loaded).reloadable(&mur_home, &profile.inner.name, enabled));
 
     Ok((
         writer,
@@ -737,6 +757,7 @@ pub(crate) async fn prepare_runtime(
         hook_cancel,
         runtime_skills,
         skills_cfg,
+        memory_cfg,
     ))
 }
 

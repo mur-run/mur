@@ -1,7 +1,7 @@
-use mur_common::config::SkillsConfig;
+use mur_common::config::{MemoryConfig, SkillsConfig};
 use mur_common::skill::TriggerKind;
 use mur_common::skill::loader::LoadedSkill;
-use mur_common::skill::types::{HostId, Priority};
+use mur_common::skill::types::{Category, HostId, Priority};
 use std::collections::HashSet;
 
 fn priority_val(p: &Priority) -> u8 {
@@ -20,9 +20,15 @@ pub struct InjectionResult {
     pub budget_skipped: bool,
 }
 
+// ponytail: 8 args, one over clippy's threshold. The honest fix is bundling
+// `active_fleet`/`active_project`/`active_team` into one `Scope` struct — they
+// always travel together — but that is mechanical churn across every call site
+// and belongs in its own commit, not this bug fix.
+#[allow(clippy::too_many_arguments)]
 pub fn inject_layer2(
     skills: &[LoadedSkill],
     cfg: &SkillsConfig,
+    mem: &MemoryConfig,
     context_fill_ratio: f64,
     recently_fired: &HashSet<String>,
     active_fleet: Option<&str>,
@@ -40,8 +46,9 @@ pub fn inject_layer2(
         }
     }
 
-    // Filter: must have at least one `SessionStart` trigger.
-    let mut candidates: Vec<&LoadedSkill> = skills
+    // Host + scope + not-on-demand. Split below into memories (always-on) and
+    // trigger-gated skills.
+    let visible: Vec<&LoadedSkill> = skills
         .iter()
         .filter(|s| {
             s.manifest.hosts.is_empty()
@@ -49,12 +56,6 @@ pub fn inject_layer2(
                     .hosts
                     .iter()
                     .any(|h| matches!(h, HostId::All | HostId::MurAgent))
-        })
-        .filter(|s| {
-            s.manifest
-                .triggers
-                .iter()
-                .any(|t| matches!(t.kind, TriggerKind::SessionStart))
         })
         // Scope: fleet/project-scoped skills inject only when the active scope
         // matches (fail-closed); user/enterprise always pass. active_project is
@@ -72,6 +73,35 @@ pub fn inject_layer2(
             )
         })
         .filter(|s| s.manifest.visibility != mur_common::skill::manifest::Visibility::OnDemand)
+        .collect();
+
+    // Memories (`Category::Note`, written by the `remember` tool, `/remember`
+    // and `mur notes create`) are always-on: the user stated them outright, so
+    // they carry no `SessionStart` trigger and must not compete for skill
+    // slots. Without this split they were written to disk and never reached a
+    // prompt — the agent ignored its own saved rules and reported an empty
+    // memory when asked.
+    // ponytail: capped by max_skills_in_prompt, same as skills; give notes
+    // their own config knob only if a real memory list starves.
+    let mut notes: Vec<&LoadedSkill> = visible
+        .iter()
+        .copied()
+        .filter(|s| s.manifest.category == Category::Note)
+        .collect();
+    notes.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut mem_dropped = notes.len().saturating_sub(mem.max_in_prompt);
+    notes.truncate(mem.max_in_prompt);
+
+    // Filter: must have at least one `SessionStart` trigger.
+    let mut candidates: Vec<&LoadedSkill> = visible
+        .into_iter()
+        .filter(|s| s.manifest.category != Category::Note)
+        .filter(|s| {
+            s.manifest
+                .triggers
+                .iter()
+                .any(|t| matches!(t.kind, TriggerKind::SessionStart))
+        })
         .collect();
 
     // Sort: trust desc, recent-fired boost, then priority asc, then name for determinism.
@@ -104,8 +134,38 @@ pub fn inject_layer2(
         .max(100);
 
     let mut spent = 0usize;
-    let mut lines = Vec::new();
     let mut names = Vec::new();
+
+    // Memories draw on their OWN character budget. Sharing the skill budget
+    // would mean saving a memory silently evicts a bound skill.
+    let mut mem_spent = 0usize;
+    let mut mem_lines = Vec::new();
+    for s in notes {
+        let body = s
+            .manifest
+            .content
+            .note
+            .as_deref()
+            .unwrap_or(&s.manifest.content.r#abstract);
+        let line = format!("- {}: {}", s.name, body.trim());
+        if mem_spent + line.len() + 1 > mem.max_chars {
+            mem_dropped += 1;
+            continue;
+        }
+        mem_spent += line.len() + 1;
+        mem_lines.push(line);
+        names.push(s.name.clone());
+    }
+    // No silent caps: a memory the user saved and cannot see in the prompt is
+    // indistinguishable from one that was never saved.
+    if mem_dropped > 0 {
+        mem_lines.push(format!(
+            "- ({mem_dropped} more memories not shown here — the user can list \
+             them all with /memories)"
+        ));
+    }
+
+    let mut lines = Vec::new();
     for s in candidates {
         let line = format!(
             "[Skill: {} ({:?})] {}",
@@ -120,11 +180,29 @@ pub fn inject_layer2(
         lines.push(line);
         names.push(s.name.clone());
     }
-    if lines.is_empty() {
+    if lines.is_empty() && mem_lines.is_empty() {
         return InjectionResult::default();
     }
+    let mut system_addendum = String::new();
+    if !lines.is_empty() {
+        system_addendum.push_str(&format!(
+            "\n--- Bound Skills ---\n{}\n---\n",
+            lines.join("\n")
+        ));
+    }
+    // Memory goes LAST, for two independent reasons that agree: standing user
+    // instructions win the recency end of a long prompt, and a block that
+    // changes when a memory is saved invalidates less of the cached prefix
+    // sitting in front of it.
+    if !mem_lines.is_empty() {
+        system_addendum.push_str(&format!(
+            "\n--- Memory (durable facts and rules you saved for this user; \
+             /memories lists them, /forget <name> removes one) ---\n{}\n---\n",
+            mem_lines.join("\n")
+        ));
+    }
     InjectionResult {
-        system_addendum: format!("\n--- Bound Skills ---\n{}\n---\n", lines.join("\n")),
+        system_addendum,
         injected_names: names,
         budget_skipped: false,
     }
@@ -133,6 +211,62 @@ pub fn inject_layer2(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The exact artifact the `remember` tool writes — built by the production
+    /// note builder, not a hand-rolled yaml — must reach the prompt even though
+    /// notes carry no `SessionStart` trigger. Negative control: an ordinary
+    /// trigger-less skill still stays out.
+    #[test]
+    fn memory_notes_inject_without_a_session_start_trigger() {
+        use mur_common::skill::note::{NoteSpec, note_manifest};
+
+        let note = LoadedSkill {
+            name: "reply-in-zh-tw".into(),
+            manifest: note_manifest(&NoteSpec {
+                name: "reply-in-zh-tw",
+                description: "使用者要求一律以繁體中文回覆",
+                body: "以後所有回覆都用繁體中文。",
+                kind: mur_common::skill::lifecycle::NoteKind::Rule,
+                publisher: "agent:mur",
+            }),
+            // Reality check: a `remember`-written note is never in the trust
+            // store, so the loader gives it Sandboxed. Asserting on Verified
+            // would have tested a state that never occurs.
+            trust: TrustLevel::Sandboxed,
+            scope: SkillScope::Agent,
+            content_hash: String::new(),
+            dir: std::path::PathBuf::new(),
+        };
+        assert!(
+            note.manifest.triggers.is_empty(),
+            "precondition: the real note artifact has no triggers"
+        );
+        let untriggered_skill = loaded("plain", "not a memory", TrustLevel::Verified, "");
+
+        let r = inject_layer2(
+            &[note, untriggered_skill],
+            &SkillsConfig::default(),
+            &MemoryConfig::default(),
+            0.0,
+            &HashSet::new(),
+            None,
+            None,
+            None,
+        );
+        assert!(
+            r.system_addendum.contains("以後所有回覆都用繁體中文"),
+            "memory body must be injected, got: {}",
+            r.system_addendum
+        );
+        assert!(
+            r.injected_names.contains(&"reply-in-zh-tw".to_string()),
+            "memory must be reported as injected"
+        );
+        assert!(
+            !r.injected_names.contains(&"plain".to_string()),
+            "negative control: a trigger-less non-note skill must stay out"
+        );
+    }
     use mur_common::skill::loader::SkillScope;
     use mur_common::skill::parse_canonical;
     use mur_common::skill::types::TrustLevel;
@@ -183,6 +317,7 @@ content:
             inject_layer2(
                 &skills,
                 &SkillsConfig::default(),
+                &MemoryConfig::default(),
                 0.0,
                 &HashSet::new(),
                 None,
@@ -211,6 +346,7 @@ content:
         let result = inject_layer2(
             &[s],
             &SkillsConfig::default(),
+            &MemoryConfig::default(),
             0.0,
             &HashSet::new(),
             None,
@@ -244,6 +380,7 @@ content:
             inject_layer2(
                 &skills,
                 &SkillsConfig::default(),
+                &MemoryConfig::default(),
                 0.0,
                 &HashSet::new(),
                 active_fleet,
@@ -272,6 +409,7 @@ content:
         let result = inject_layer2(
             &[s],
             &SkillsConfig::default(),
+            &MemoryConfig::default(),
             0.0,
             &HashSet::new(),
             None,
@@ -299,6 +437,7 @@ content:
         let result = inject_layer2(
             &[a, b],
             &SkillsConfig::default(),
+            &MemoryConfig::default(),
             0.0,
             &HashSet::new(),
             None,
@@ -325,7 +464,16 @@ content:
             }),
             ..SkillsConfig::default()
         };
-        let result = inject_layer2(&[s], &cfg, 0.85, &HashSet::new(), None, None, None);
+        let result = inject_layer2(
+            &[s],
+            &cfg,
+            &MemoryConfig::default(),
+            0.85,
+            &HashSet::new(),
+            None,
+            None,
+            None,
+        );
         assert!(result.budget_skipped);
         assert!(result.injected_names.is_empty());
     }
@@ -346,7 +494,16 @@ content:
             max_skills_in_prompt: 2,
             ..SkillsConfig::default()
         };
-        let result = inject_layer2(&skills, &cfg, 0.0, &HashSet::new(), None, None, None);
+        let result = inject_layer2(
+            &skills,
+            &cfg,
+            &MemoryConfig::default(),
+            0.0,
+            &HashSet::new(),
+            None,
+            None,
+            None,
+        );
         assert_eq!(result.injected_names.len(), 2);
     }
 
@@ -373,6 +530,7 @@ content:
             inject_layer2(
                 &skills,
                 &SkillsConfig::default(),
+                &MemoryConfig::default(),
                 0.0,
                 &HashSet::new(),
                 None,
@@ -407,6 +565,7 @@ content:
         let result = inject_layer2(
             &[s],
             &SkillsConfig::default(),
+            &MemoryConfig::default(),
             0.0,
             &HashSet::new(),
             None,
@@ -438,6 +597,7 @@ content:
         let result = inject_layer2(
             &[a, b],
             &SkillsConfig::default(),
+            &MemoryConfig::default(),
             0.0,
             &fired,
             None,
