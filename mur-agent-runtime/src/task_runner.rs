@@ -157,6 +157,7 @@ pub struct TaskRunner {
     last_activity_at: Arc<AtomicI64>,
     skills: Option<Arc<RuntimeSkills>>,
     skills_cfg: SkillsConfig,
+    memory_cfg: mur_common::config::MemoryConfig,
     recently_fired: Mutex<VecDeque<(u64, String)>>,
     turn_counter: AtomicU64,
     cumulative_input_tokens: AtomicU64,
@@ -303,6 +304,7 @@ impl TaskRunner {
             last_activity_at: Arc::new(AtomicI64::new(0)),
             skills: None,
             skills_cfg: SkillsConfig::default(),
+            memory_cfg: Default::default(),
             recently_fired: Mutex::new(VecDeque::new()),
             turn_counter: AtomicU64::new(0),
             cumulative_input_tokens: AtomicU64::new(0),
@@ -437,6 +439,11 @@ impl TaskRunner {
         self
     }
 
+    pub fn with_memory_cfg(mut self, cfg: mur_common::config::MemoryConfig) -> Self {
+        self.memory_cfg = cfg;
+        self
+    }
+
     pub fn with_skills_cfg(mut self, cfg: SkillsConfig) -> Self {
         self.skills_cfg = cfg;
         self
@@ -536,6 +543,9 @@ impl TaskRunner {
         let Some(skills) = &self.skills else {
             return (base, vec![]);
         };
+        // One snapshot for the whole assembly: a reload landing mid-function
+        // must not give the injector and the trigger matcher different sets.
+        let skills = skills.snapshot();
 
         let turn = self
             .turn_counter
@@ -580,6 +590,7 @@ impl TaskRunner {
         let injection = inject_layer2(
             &skills.loaded,
             &self.skills_cfg,
+            &self.memory_cfg,
             ctx_fill,
             &recently,
             active_fleet,
@@ -1173,10 +1184,13 @@ impl TaskRunner {
                     let skill_events: Vec<Event> = fired
                         .iter()
                         .filter_map(|name| {
-                            let loaded = self
-                                .skills
-                                .as_ref()
-                                .and_then(|s| s.loaded.iter().find(|l| &l.name == name))?;
+                            let loaded = self.skills.as_ref().and_then(|s| {
+                                s.snapshot()
+                                    .loaded
+                                    .iter()
+                                    .find(|l| &l.name == name)
+                                    .cloned()
+                            })?;
                             Some(Event::SkillExecuted {
                                 trace_id: task_id.to_string(),
                                 task_id: task_id.to_string(),
@@ -3403,6 +3417,7 @@ mod tests {
             None,
             Arc::new(RuntimeSkills::build(vec![])),
             SkillsConfig::default(),
+            Default::default(),
             None,
             None,
             None,
@@ -3910,6 +3925,48 @@ mod tests {
         const _: () = assert!(RATE_LIMIT_BACKOFF_BASE.as_millis() >= 1);
         let max_delay = rate_limit_backoff_delay(MAX_RATE_LIMIT_RETRIES);
         assert!(max_delay <= std::time::Duration::from_secs(60));
+    }
+
+    /// The user's actual failure mode, at the last mile before the LLM: a
+    /// saved memory must appear in the system prompt the model receives.
+    /// Tested here rather than only in the injector because the injector
+    /// returning the right string proves nothing if the addendum never
+    /// reaches `assemble_system_prompt`'s output.
+    #[test]
+    fn saved_memory_reaches_the_system_prompt() {
+        use mur_common::skill::loader::{LoadedSkill, SkillScope};
+        use mur_common::skill::note::{NoteSpec, note_manifest};
+        use mur_common::skill::types::TrustLevel;
+
+        let note = LoadedSkill {
+            name: "reply-in-zh-tw".into(),
+            manifest: note_manifest(&NoteSpec {
+                name: "reply-in-zh-tw",
+                description: "reply in Traditional Chinese",
+                body: "ALWAYS-REPLY-IN-ZH-TW",
+                kind: mur_common::skill::lifecycle::NoteKind::Rule,
+                publisher: "agent:mur",
+            }),
+            // What the loader really assigns an agent-written note: it is
+            // never in the trust store, so it loads Sandboxed.
+            trust: TrustLevel::Sandboxed,
+            scope: SkillScope::Agent,
+            content_hash: String::new(),
+            dir: std::path::PathBuf::new(),
+        };
+        let runner = TaskRunner::new_stub_echo()
+            .with_system_prompt(Some("BASE PROMPT".into()))
+            .with_skills(Arc::new(RuntimeSkills::build(vec![note])));
+
+        let (sys, _fired) = runner.assemble_system_prompt("hello", None, None);
+        assert!(
+            sys.contains("ALWAYS-REPLY-IN-ZH-TW"),
+            "the saved memory must reach the model's system prompt; got:\n{sys}"
+        );
+        assert!(
+            sys.starts_with("BASE PROMPT"),
+            "the agent's own prompt still leads"
+        );
     }
 
     #[test]

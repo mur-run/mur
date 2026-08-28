@@ -164,6 +164,34 @@ const SPINNER_MS: u64 = 90;
 /// Max chars of an arg hint shown on a step line in `--plain` mode.
 const PLAIN_STEP_HINT_MAX: usize = 120;
 
+/// Tell the running agent its memory set changed.
+///
+/// `/remember` and `/forget` write to disk from the CLI process; the agent
+/// serves a snapshot, so without this dial the change only took effect on the
+/// next restart. Same `RuntimeSkills::reload` the in-process `remember` tool
+/// calls — one mechanism, two triggers.
+///
+/// Returns a suffix for the confirmation line. A stopped agent, or one built
+/// before `memory/reload` existed, is not an error: the write already landed
+/// and its next start picks it up.
+async fn push_memory_reload(home: &std::path::Path, agent: &str) -> String {
+    let (h, ag) = (home.to_path_buf(), agent.to_string());
+    let res = tokio::task::spawn_blocking(move || {
+        dial_method(
+            &h,
+            &ag,
+            "memory/reload",
+            serde_json::json!({}),
+            DialMode::Auto,
+        )
+    })
+    .await;
+    match res {
+        Ok(Ok(_)) => String::new(),
+        _ => " (the running agent will pick this up on its next start)".into(),
+    }
+}
+
 const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /open (outstanding items)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /model [N|name] (list/switch model)  /login [anthropic|chatgpt] (OAuth health / re-authenticate — unrelated to mur auth login, which signs in to mur.run for the official catalog)  /mcp  /skill  /remember <text> (save a memory)  /memories  /forget <name|last>  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
@@ -1987,16 +2015,22 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
         SlashCmd::Skill(args) => {
             run_manage(app, move |agent| manage::run_skill(&agent, &args)).await
         }
-        SlashCmd::Remember(args) => {
-            let msg = memory_cmds::remember(&app.home, &app.agent, &args)
-                .unwrap_or_else(|e| format!("remember failed: {e}"));
-            app.push_system(msg);
-        }
+        SlashCmd::Remember(args) => match memory_cmds::remember(&app.home, &app.agent, &args) {
+            Ok(msg) => {
+                let note = push_memory_reload(&app.home, &app.agent).await;
+                app.push_system(format!("{msg}{note}"));
+            }
+            Err(e) => app.push_system(format!("remember failed: {e}")),
+        },
         SlashCmd::Memories => app.push_system(memory_cmds::memories(&app.home, &app.agent)),
         SlashCmd::Forget(target) => {
-            let msg = memory_cmds::forget(&app.home, &app.agent, target.as_deref())
-                .unwrap_or_else(|e| format!("forget failed: {e}"));
-            app.push_system(msg);
+            match memory_cmds::forget(&app.home, &app.agent, target.as_deref()) {
+                Ok(msg) => {
+                    let note = push_memory_reload(&app.home, &app.agent).await;
+                    app.push_system(format!("{msg}{note}"));
+                }
+                Err(e) => app.push_system(format!("forget failed: {e}")),
+            }
         }
         SlashCmd::Skin(name_opt) => match name_opt {
             None => {

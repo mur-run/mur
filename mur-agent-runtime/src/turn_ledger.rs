@@ -295,7 +295,12 @@ pub fn render(ledger: &TurnLedger) -> String {
         // most useful line here: it is the difference between "changed nine
         // files" and "it works", and leaving the row out lets the reader
         // assume the latter.
-        out.push_str("  ✔ verified   (nothing ran — no evidence this works)\n");
+        // `⚠`, not `✔`: the TUI colours settlement rows by their lead glyph
+        // (`settlement.rs::row_style`), so a success glyph painted this row
+        // GREEN and the parenthetical lost the argument to the colour. Not
+        // `✘` either — verification was not attempted and failed, it was
+        // never run, which is a warning about the evidence, not a failure.
+        out.push_str("  ⚠ verified   nothing ran — no evidence this works\n");
     } else {
         // One line per action: the glyph carries "verified"; a group header
         // would only push the content into a second indent level.
@@ -507,6 +512,13 @@ mod tests {
         // not read as success.
         assert!(card.contains("nothing ran"), "{card}");
         assert!(card.contains("1 file(s)"), "{card}");
+        // The bug was the GLYPH, not the words: `✔` is painted with
+        // `theme.success`, so the row rendered green while denying it works.
+        assert!(
+            card.contains("⚠ verified"),
+            "an unverified turn must not carry the success glyph: {card}"
+        );
+        assert!(!card.contains("✔ verified"), "{card}");
     }
 
     #[test]

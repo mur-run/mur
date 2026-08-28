@@ -55,6 +55,10 @@ pub struct RememberTool {
     /// identity after the sandbox applies). Signs the memory proposal at the
     /// drop so review can verify who proposed it (P2c-2).
     pub identity: std::sync::Arc<mur_common::identity::AgentIdentity>,
+    /// The live skill set, reloaded after a write so the note is in the very
+    /// next prompt. Without this the tool's own "effective next turn" was a
+    /// lie: the boot-time snapshot served until a restart.
+    pub skills: std::sync::Arc<crate::skills::RuntimeSkills>,
 }
 
 #[async_trait::async_trait]
@@ -124,12 +128,23 @@ impl ToolExecutor for RememberTool {
         }
 
         let dir = agent_skill_dir(&self.mur_home, &self.agent_name).join(&name);
-        if dir.join("skill.yaml").exists() {
-            return Err(ToolError::InvalidInput(format!(
-                "memory '{name}' already exists — pick a different name, or tell the user to \
-                 inspect it with /memories"
-            )));
+        // Restating a preference is reinforcement, not a name collision. The
+        // old hard error turned a perfectly correct user action ("以後都用中文")
+        // into a red failure card, and left the agent reporting a problem
+        // where there was none. Upsert instead.
+        let existing = mur_common::skill::read_from_dir(&dir).ok();
+        if existing.as_ref().is_some_and(|m| {
+            m.content.note.as_deref() == Some(content.as_str()) && m.description == description
+        }) {
+            // Byte-identical restatement: no write, and no second federation
+            // proposal for a memory the reviewer has already seen.
+            return Ok(format!(
+                "'{name}' is already remembered with exactly this content — nothing changed. \
+                 Tell the user in ONE line, in their language, that it was already saved."
+            )
+            .into());
         }
+        let updating = existing.is_some();
 
         // Same canonical shape as `mur notes create` / TUI `/remember` —
         // one builder (mur_common::skill::note), agent-local write target.
@@ -146,9 +161,22 @@ impl ToolExecutor for RememberTool {
             .map_err(|e| ToolError::Execution(format!("write memory note: {e}")))?;
 
         // Fresh stats: Draft, zero usage. Written next to the manifest so the
-        // lifecycle sweep and loader see a complete agent-local skill.
-        let stats = SkillStats::new(&name, "1.0.0", "", chrono::Utc::now());
+        // lifecycle sweep and loader see a complete agent-local skill. On an
+        // update the existing stats stay: restating a preference must not
+        // reset the usage history that earned it its maturity — and a note the
+        // user had forgotten is deliberately revived, since re-saying it is
+        // the clearest possible instruction to bring it back.
         let stats_path = SkillStats::path_agent(&self.mur_home, &self.agent_name, &name);
+        let revive = updating
+            .then(|| SkillStats::load(&stats_path).ok().flatten())
+            .flatten()
+            .map(|mut st| {
+                st.lifecycle_state = mur_common::skill::stats::LifecycleState::Draft;
+                st.lifecycle_changed_at = chrono::Utc::now();
+                st
+            });
+        let stats =
+            revive.unwrap_or_else(|| SkillStats::new(&name, "1.0.0", "", chrono::Utc::now()));
         let json = serde_json::to_string(&stats)
             .map_err(|e| ToolError::Execution(format!("serialize stats: {e}")))?;
         std::fs::write(&stats_path, json)
@@ -170,10 +198,22 @@ impl ToolExecutor for RememberTool {
             tracing::warn!(error = %e, "memory proposal drop failed (agent-local copy is safe)");
         }
 
+        // Make it true. The set this process injects from is a snapshot; without
+        // this the note sat on disk until a restart while the tool claimed it
+        // was live. Best-effort: the note is already durable, so a reload
+        // failure downgrades the promise rather than failing the save.
+        let effective = match self.skills.reload() {
+            Ok(_) => "effective from your next turn",
+            Err(e) => {
+                tracing::warn!(error = %e, "memory saved but the live skill set did not reload");
+                "saved, but it will only take effect after the agent restarts"
+            }
+        };
+        let verb = if updating { "updated" } else { "remembered" };
         Ok(format!(
-            "remembered '{name}' (kind={kind:?}, state=Draft, agent-local; effective next \
-             turn; queued for the user's `mur session out` review). Now tell the user in \
-             ONE line, in their language, what you saved and that /forget {name} undoes it."
+            "{verb} '{name}' (kind={kind:?}, agent-local; {effective}; queued for the \
+             user's `mur session out` review). Now tell the user in ONE line, in their \
+             language, what you saved and that /forget {name} undoes it."
         )
         .into())
     }
@@ -188,6 +228,7 @@ mod tests {
             mur_home: home.to_path_buf(),
             agent_name: "w1".into(),
             identity: std::sync::Arc::new(mur_common::identity::AgentIdentity::generate()),
+            skills: std::sync::Arc::new(crate::skills::RuntimeSkills::build(vec![])),
         }
     }
 
@@ -248,13 +289,68 @@ mod tests {
         );
     }
 
+    /// Restating the SAME preference is reinforcement, not an error. This
+    /// replaces `duplicate_name_is_a_clear_error`, which encoded the bug: the
+    /// user saying "以後都用中文" twice got a red failure card.
     #[tokio::test]
-    async fn duplicate_name_is_a_clear_error() {
+    async fn restating_an_identical_memory_succeeds_without_rewriting() {
         let tmp = tempfile::TempDir::new().unwrap();
         let t = tool(tmp.path());
         t.execute(input("dup", "fact")).await.unwrap();
-        let err = t.execute(input("dup", "fact")).await.unwrap_err();
-        assert!(format!("{err:?}").contains("already exists"));
+        let out = t
+            .execute(input("dup", "fact"))
+            .await
+            .expect("restating a memory must not be an error");
+        assert!(format!("{out:?}").contains("already remembered"), "{out:?}");
+    }
+
+    /// Same name, new content: the memory is updated in place rather than
+    /// refused, and the stored note holds the NEW body.
+    #[tokio::test]
+    async fn restating_with_new_content_updates_the_note() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let t = tool(home);
+        t.execute(input("lang", "rule")).await.unwrap();
+
+        let mut changed = input("lang", "rule");
+        changed["content"] = serde_json::json!("always reply in zh-TW, never English");
+        let out = t.execute(changed).await.expect("update must succeed");
+        assert!(format!("{out:?}").contains("updated"), "{out:?}");
+
+        let dir = mur_common::skill::store::agent_skill_dir(home, "w1").join("lang");
+        let m = mur_common::skill::read_from_dir(&dir).unwrap();
+        assert_eq!(
+            m.content.note.as_deref(),
+            Some("always reply in zh-TW, never English"),
+            "the stored note must hold the new body"
+        );
+    }
+
+    /// A forgotten memory that the user states again comes back: re-saying it
+    /// is the clearest instruction there is to revive it.
+    #[tokio::test]
+    async fn restating_a_forgotten_memory_revives_it() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let t = tool(home);
+        t.execute(input("lang", "rule")).await.unwrap();
+
+        let path = SkillStats::path_agent(home, "w1", "lang");
+        let mut st = SkillStats::load(&path).unwrap().unwrap();
+        st.lifecycle_state = mur_common::skill::stats::LifecycleState::Destroyed;
+        std::fs::write(&path, serde_json::to_string(&st).unwrap()).unwrap();
+
+        let mut changed = input("lang", "rule");
+        changed["content"] = serde_json::json!("zh-TW only");
+        t.execute(changed).await.unwrap();
+
+        let after = SkillStats::load(&path).unwrap().unwrap();
+        assert_eq!(
+            after.lifecycle_state,
+            mur_common::skill::stats::LifecycleState::Draft,
+            "a re-stated memory must not stay Destroyed"
+        );
     }
 
     #[tokio::test]
