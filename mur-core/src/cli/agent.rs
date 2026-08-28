@@ -116,6 +116,22 @@ pub enum AgentAction {
         /// Agent name
         name: String,
     },
+    /// Call any A2A method on a running agent and print the raw JSON result.
+    ///
+    /// The operator escape hatch: `send` and `card` cover two of the runtime's
+    /// methods, and everything else was reachable only from inside murmur or
+    /// not at all. Examples: `memory/reload` (re-read skills and memories after
+    /// changing them on disk), `tasks/list`, `tasks/cancel`, `turn/steer`,
+    /// `model/set`. Methods are passed through as typed — the agent's own
+    /// handler decides what it will answer.
+    Dial {
+        /// Agent name
+        name: String,
+        /// A2A method, e.g. `memory/reload`
+        method: String,
+        /// JSON params object. Defaults to `{}`.
+        params: Option<String>,
+    },
     /// Set, show, or clear an agent's per-turn effort
     /// (low | medium | high | xhigh | max). Unset means the API default, high.
     Effort {
