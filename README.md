@@ -345,7 +345,9 @@ it knows). Notes come in two kinds with matched decay: `rule` (behavioral
 guidance, fast half-life) and `fact` (environment truth, slow half-life). A
 reserved injection slot keeps fresh notes from being permanently outbid by
 mature skills. Say it again and the note is updated in place rather than
-colliding — and one you had forgotten comes back. Off switch / confirm-first:
+colliding — and one you had forgotten comes back. Ask an agent what it knows and
+it answers from its own `recall`, reading the very set its prompt was built from;
+`mur notes list --agent <name>` shows you the same thing. Off switch / confirm-first:
 `memory.capture` in `~/.mur/config.yaml`.
 
 **None of it waits for a restart.** A note saved mid-chat is in the very next
