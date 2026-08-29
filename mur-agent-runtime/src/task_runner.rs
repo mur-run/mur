@@ -1311,19 +1311,8 @@ impl TaskRunner {
 
         // 1b. Policy gate: check before executing.
         {
-            use mur_common::agent::{ToolPolicy, resolve_tool_policy_opt};
-            let policy = if crate::tools::suggest::suggest_replies_allowed(&call.tool_name) {
-                ToolPolicy::Allow
-            } else {
-                // issue #3: dispatch/spend tools (parallel_jobs, fleet_run,
-                // delegate_to) must ask BEFORE executing. The HITL gate below
-                // is now a pre-execution gate (execute happens only after an
-                // Allow decision), so `Ask` provides real spend protection and
-                // fleet_run no longer needs its old `None => Allow` special
-                // case. Unknown tools fall through to `ToolPolicy::default()`,
-                // which is `Ask` — fail-closed.
-                resolve_tool_policy_opt(&self.tools_policy, &call.tool_name).unwrap_or_default()
-            };
+            use mur_common::agent::ToolPolicy;
+            let policy = effective_tool_policy(&self.tools_policy, &call.tool_name);
             match policy {
                 ToolPolicy::Deny => {
                     return Ok(ToolResultEntry {
@@ -2197,6 +2186,37 @@ fn user_message(input: &Message) -> crate::llm::RichMessage {
             role: input.role.clone(),
             content: text,
         },
+    }
+}
+
+/// Effective policy for one tool call.
+///
+/// Extracted from the gate so the ordering is testable: an inline
+/// `if A || (B && C)` compiled fine with the `&& C` removed, which would have
+/// let an exemption silently override an operator's explicit `deny`.
+///
+/// Order is the whole content:
+/// 1. `suggest_replies` is a no-op the model uses to offer choices.
+/// 2. An explicit rule always wins — exemptions set defaults, never overrides.
+/// 3. `recall` defaults to Allow: a pure read of this agent's own snapshot,
+///    which cannot surface anything the injector would not have injected given
+///    more budget. Under `Ask` it parks for `hitl.timeout_secs` on every path
+///    with no human to answer.
+/// 4. Everything else falls to `ToolPolicy::default()` — `Ask`, fail-closed.
+///    Dispatch/spend tools (`parallel_jobs`, `fleet_run`, `delegate_to`) must
+///    ask BEFORE executing, which is what makes `Ask` real spend protection.
+fn effective_tool_policy(
+    rules: &[mur_common::agent::ToolRule],
+    tool_name: &str,
+) -> mur_common::agent::ToolPolicy {
+    use mur_common::agent::{ToolPolicy, resolve_tool_policy_opt};
+    if crate::tools::suggest::suggest_replies_allowed(tool_name) {
+        return ToolPolicy::Allow;
+    }
+    match resolve_tool_policy_opt(rules, tool_name) {
+        Some(explicit) => explicit,
+        None if crate::tools::recall::recall_needs_no_approval(tool_name) => ToolPolicy::Allow,
+        None => ToolPolicy::default(),
     }
 }
 
@@ -4046,6 +4066,70 @@ mod deny_message_tests {
         assert_eq!(
             deny_message(Some("no approval channel available")),
             "tool call denied: no approval channel available"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tool_policy_tests {
+    use super::effective_tool_policy;
+    use mur_common::agent::{ToolPolicy, ToolRule};
+
+    fn rule(pattern: &str, policy: ToolPolicy) -> ToolRule {
+        ToolRule {
+            pattern: pattern.into(),
+            policy,
+            risk: Default::default(),
+        }
+    }
+
+    /// The fix: with no rule, `recall` runs instead of parking for
+    /// `hitl.timeout_secs` on a path where nothing can approve.
+    #[test]
+    fn recall_defaults_to_allow() {
+        assert_eq!(effective_tool_policy(&[], "recall"), ToolPolicy::Allow);
+    }
+
+    /// The guard that matters. An exemption sets a DEFAULT; an operator's
+    /// explicit rule must still decide. Written at the call site because the
+    /// earlier inline form compiled fine with this half deleted.
+    #[test]
+    fn an_explicit_rule_beats_the_exemption() {
+        assert_eq!(
+            effective_tool_policy(&[rule("recall", ToolPolicy::Deny)], "recall"),
+            ToolPolicy::Deny
+        );
+        assert_eq!(
+            effective_tool_policy(&[rule("rec*", ToolPolicy::Deny)], "recall"),
+            ToolPolicy::Deny,
+            "a wildcard rule counts as explicit too"
+        );
+    }
+
+    /// Control: everything else stays fail-closed. If this flips, the
+    /// exemption has leaked into a general "allow unknown tools".
+    #[test]
+    fn unknown_tools_still_ask() {
+        for name in [
+            "bash",
+            "remember",
+            "fleet_run",
+            "parallel_jobs",
+            "recall_all",
+        ] {
+            assert_eq!(
+                effective_tool_policy(&[], name),
+                ToolPolicy::Ask,
+                "{name} must stay gated"
+            );
+        }
+    }
+
+    #[test]
+    fn suggest_replies_is_still_exempt() {
+        assert_eq!(
+            effective_tool_policy(&[], "suggest_replies"),
+            ToolPolicy::Allow
         );
     }
 }
