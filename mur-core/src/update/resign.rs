@@ -61,6 +61,22 @@ pub fn post_upgrade(restart_agents: bool, fresh_runtime: Option<&std::path::Path
     agents_result
 }
 
+/// The agent leg of [`post_upgrade`], without any binary work.
+///
+/// `mur update --restart-agents` on an already-current CLI used to return
+/// before reaching a single agent, so the flag was silently a no-op. The
+/// version of the CLI and the build an agent is *running* are different facts:
+/// a restart that did not take, an agent that was stopped during the previous
+/// update, or a supervisor that never got the signal each leave one behind, and
+/// this is the command someone reaches for in exactly that situation.
+///
+/// Shares `restart_exclusions()` with the post-upgrade path on purpose, so a
+/// user's `update.restart_exclude` cannot be honoured on one route and ignored
+/// on the other.
+pub fn restart_agents_only() -> Result<()> {
+    crate::cmd::agent::restart_stale_excluding(&restart_exclusions())
+}
+
 fn load_config() -> mur_common::config::Config {
     let home = crate::paths::mur_root(None);
     mur_common::config::Config::load_or_default(&home.join("config.yaml"))
