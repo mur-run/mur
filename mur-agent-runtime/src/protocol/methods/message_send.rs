@@ -72,6 +72,14 @@ impl MethodHandler for MessageSendHandler {
         let p = params.ok_or_else(|| HandlerError::InvalidParams("missing params".into()))?;
         let message: Message = serde_json::from_value(p["message"].clone())
             .map_err(|e| HandlerError::InvalidParams(format!("message: {e}")))?;
+        // Whether a human is reading this connection and can answer an approval
+        // prompt. Absent means yes — every client that predates this field is
+        // an interactive one, and defaulting the other way would make them all
+        // start refusing gated tools. `mur agent send` passes false.
+        let can_approve = p
+            .get("can_approve")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
         let context_task_id = p
             .get("context")
             .and_then(|c| c.get("task_id"))
@@ -118,7 +126,7 @@ impl MethodHandler for MessageSendHandler {
                 // connection (looked up by task id inside the runner).
                 if let Some(tid) = &turn_task_id {
                     self.runner
-                        .register_client_notifier(tid, notifier.clone())
+                        .register_client_notifier(tid, notifier.clone(), can_approve)
                         .await;
                 }
                 // Steering channel: only when this turn has a task id to address

@@ -11,7 +11,11 @@ pub fn cmd_send(name: &str, message_json: &str, output_artifact_path: Option<&st
     let msg: serde_json::Value =
         serde_json::from_str(message_json).context("parse --message JSON")?;
     let home = resolve_mur_home()?;
-    let mut params = serde_json::json!({"message": msg});
+    // One-shot send: the caller is a script or a shell, not a person watching
+    // for a prompt. Saying so lets the runtime refuse a gated tool at once
+    // instead of holding the turn open for `hitl.timeout_secs` waiting on an
+    // approval nobody is there to give.
+    let mut params = serde_json::json!({"message": msg, "can_approve": false});
     if let Some(path) = output_artifact_path {
         params["output_artifact_path"] = serde_json::json!(path);
     }
