@@ -25,6 +25,22 @@ pub struct RecallTool {
     pub skills: Arc<RuntimeSkills>,
 }
 
+/// `recall` never needs an approval gate.
+///
+/// It is a pure read of this agent's own in-memory snapshot — no filesystem, no
+/// network, no spend, no side effect — and it cannot surface anything the
+/// injector would not have injected given more budget. Gating it gates the
+/// agent's own context, and the default policy is `Ask`, so on any path without
+/// a human to answer (`mur agent send`, a cron fire, a fleet step) the call
+/// parks for `hitl.timeout_secs` and then fails.
+///
+/// Same shape as `suggest_replies_allowed`: registration is already gated —
+/// here by `memory.capture` — so the tool policy has nothing left to protect.
+/// An explicit `deny` rule still wins; this only changes the default.
+pub fn recall_needs_no_approval(name: &str) -> bool {
+    name == RECALL
+}
+
 #[async_trait::async_trait]
 impl ToolExecutor for RecallTool {
     fn name(&self) -> &str {
@@ -135,6 +151,18 @@ mod tests {
         RecallTool {
             skills: Arc::new(RuntimeSkills::build(loaded)),
         }
+    }
+
+    /// The default is `Ask`, so without this exemption every path with no human
+    /// to answer — `mur agent send`, a cron fire, a fleet step — parks for
+    /// `hitl.timeout_secs` and then fails. `recall` has nothing for a gate to
+    /// protect: it reads the snapshot the prompt was already built from.
+    #[test]
+    fn recall_is_exempt_but_only_by_name() {
+        assert!(recall_needs_no_approval(RECALL));
+        assert!(!recall_needs_no_approval("remember"));
+        assert!(!recall_needs_no_approval("bash"));
+        assert!(!recall_needs_no_approval("recall_all"));
     }
 
     /// The gap this closes: an agent could not read its OWN memories. The MCP
