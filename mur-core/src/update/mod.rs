@@ -59,6 +59,16 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
         if let Some(nudge) = hub_staleness_nudge(current) {
             println!("{nudge}");
         }
+        // "Already up to date" is a claim about this binary, not about the
+        // system. Agents can sit on an older build for reasons that have
+        // nothing to do with the CLI's version, and `--restart-agents` is what
+        // someone reaches for then — so consult the flag here instead of
+        // returning past it. The pass reports what it found, including
+        // "No stale agents to restart.", which is the point: a skip the user
+        // asked against should be visible rather than silent.
+        if opts.restart_agents {
+            return resign::restart_agents_only();
+        }
         return Ok(());
     }
 
