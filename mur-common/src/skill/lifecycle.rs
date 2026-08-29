@@ -289,6 +289,27 @@ pub fn next_state(
 /// look. `Human`/`Hybrid` skills, curated skills, and a disabled gate all
 /// pass `proposed` through unchanged. States at or below `Emerging` are
 /// never raised.
+/// Whether decay may demote this item.
+///
+/// Decay arrived on 2026-02-25 as "Pattern Maturity + Automatic Decay" — the
+/// filter that made *automatic mining* survivable, because most of what a miner
+/// produces is noise and something had to prune it. The pattern pipeline was
+/// removed in #404 and notes inherited the machinery, but not the condition it
+/// depended on: a note holds what a human said or wrote, and an explicit
+/// statement does not become less true because nothing retrieved it this month.
+///
+/// So decay prunes exactly the set the promotion gate holds back — machine
+/// proposals no human has stood behind yet. `Human` and `Hybrid` are authored
+/// or reviewed by a person; a curated `Llm` item has been endorsed. None of
+/// them decay.
+///
+/// This governs demotion only. Evidence of actual failure (the broken-workflow
+/// fast path) still demotes anything, because that is a measurement, not a
+/// guess about staleness.
+pub fn decay_may_demote(provenance: Provenance, curated: bool) -> bool {
+    provenance == Provenance::Llm && !curated
+}
+
 pub fn cap_for_provenance(
     proposed: LifecycleState,
     provenance: Provenance,
