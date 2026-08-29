@@ -94,7 +94,7 @@ Tier half-lives: session=14d, project=90d, core=365d. Scoring floor 0.42 (config
 
 All data at `~/.mur/`:
 
-- `skills/<name>/skill.yaml` — skills (source of truth)
+- `skills/<name>/skill.yaml` — skills (source of truth). A running agent re-reads the tree when its fingerprint changes, so an edit, install, or removal lands on that agent's next turn with no restart and nothing to notify it — see `skills_fingerprint` in `mur-agent-runtime/src/skills/mod.rs` for why this is derived from disk rather than bumped by writers.
 - `workflows/*.yaml` — multi-step workflow definitions
 - `inbox/workflow-proposals/*.yaml` — harvest proposals pending review (`mur out`)
 - `session/recordings/<id>.jsonl` — append-only event log (ambient capture)
