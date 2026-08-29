@@ -592,6 +592,30 @@ fn push_live(lines: &mut Vec<Line<'static>>, app: &App, m: &ChatMsg, skip: usize
 /// short by exactly the lines markdown folded away, with no way to pull them
 /// back out of scrollback. Measuring settled means the band is exactly full
 /// after the turn; while streaming it simply tail-follows, as it always has.
+/// Whether a gap row goes before this message.
+///
+/// A gap means "the speaker changed". A step card is a step *inside* the turn
+/// that precedes it, so a run of ten tool calls used to cost ten gap rows and
+/// read as ten unrelated events — twenty rows of scrollback for ten facts.
+/// Suppressing the gap there is what turns vertical rhythm into grouping
+/// instead of uniform repetition: every remaining gap now marks a real
+/// boundary.
+fn wants_gap_before(m: &super::app::ChatMsg) -> bool {
+    m.step.is_none()
+}
+
+/// The gap row itself — a rule when the skin asks for one, otherwise a blank.
+fn gap_row(theme: &'static super::theme::Theme) -> Line<'static> {
+    if theme.show_separator {
+        Line::styled(
+            "─".repeat(SEPARATOR_WIDTH),
+            Style::default().fg(theme.separator),
+        )
+    } else {
+        Line::default()
+    }
+}
+
 fn push_live_measured(lines: &mut Vec<Line<'static>>, app: &App, m: &ChatMsg, skip: usize) {
     push_live_inner(lines, app, m, skip, true)
 }
@@ -756,15 +780,8 @@ pub fn flush_finished<B: Backend>(
             let msg_skip = if i == start { skip } else { 0 };
             // Separator between messages — never before a continuation, which
             // resumes a message whose head is already in scrollback.
-            if i > 0 && msg_skip == 0 {
-                if theme.show_separator {
-                    lines.push(Line::styled(
-                        "─".repeat(SEPARATOR_WIDTH),
-                        Style::default().fg(theme.separator),
-                    ));
-                } else {
-                    lines.push(Line::default());
-                }
+            if i > 0 && msg_skip == 0 && wants_gap_before(&app.messages[i]) {
+                lines.push(gap_row(theme));
             }
             push_live(&mut lines, app, &app.messages[i], msg_skip);
         }
@@ -796,14 +813,10 @@ pub fn flush_finished<B: Backend>(
         let mut lines: Vec<Line<'static>> = Vec::new();
         if skip == 0 {
             if app.flushed_upto > 0 {
-                if theme.show_separator {
-                    lines.push(Line::styled(
-                        "─".repeat(SEPARATOR_WIDTH),
-                        Style::default().fg(theme.separator),
-                    ));
-                } else {
-                    lines.push(Line::default());
-                }
+                // This path only ever emits an agent turn's own body, which
+                // always opens a turn — no `wants_gap_before` test needed, but
+                // the row itself comes from the one builder.
+                lines.push(gap_row(theme));
             }
             lines.push(Line::from(Span::styled(
                 "● agent".to_string(),
@@ -2141,5 +2154,60 @@ mod status_chip_tests {
             !dump.contains("019ff831:"),
             "the chip must not append a second state word: {dump}"
         );
+    }
+}
+
+#[cfg(test)]
+mod gap_tests {
+    use super::super::app::{ChatMsg, Role};
+    use super::super::step::StepCard;
+    use super::super::theme::{DARK, MUR};
+    use super::{gap_row, wants_gap_before};
+
+    fn card_msg() -> ChatMsg {
+        ChatMsg::tool_for_test(StepCard::new(
+            "s".into(),
+            "bash".into(),
+            serde_json::json!({"command": "ls"}),
+        ))
+    }
+
+    /// The whole point: a run of tool calls is one block of work, not N
+    /// separate events. Ten calls used to cost ten gap rows.
+    #[test]
+    fn a_tool_call_does_not_open_a_gap() {
+        assert!(!wants_gap_before(&card_msg()));
+    }
+
+    /// Control — if this ever flips, gaps stop marking anything at all.
+    #[test]
+    fn a_spoken_turn_still_opens_a_gap() {
+        assert!(wants_gap_before(&ChatMsg::for_test(Role::User, "hi")));
+        assert!(wants_gap_before(&ChatMsg::for_test(Role::Agent, "hello")));
+        assert!(wants_gap_before(&ChatMsg::for_test(Role::System, "note")));
+    }
+
+    /// One builder for the row, so the two emit paths cannot drift into
+    /// different-looking gaps.
+    #[test]
+    fn the_gap_row_follows_the_skin() {
+        let blank: String = gap_row(&DARK)
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(
+            blank.trim().is_empty(),
+            "dark skin uses a blank row: {blank:?}"
+        );
+
+        let ruled: String = gap_row(&MUR)
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        if MUR.show_separator {
+            assert!(ruled.contains('─'), "a ruled skin draws a rule: {ruled:?}");
+        }
     }
 }
