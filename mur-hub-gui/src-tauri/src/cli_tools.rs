@@ -58,6 +58,7 @@ pub fn install_cli_tools() -> Result<String, String> {
 /// `install_cli_tools` still writes to `install_dir`'s choice — that decision
 /// is about where to put a binary, not about which one is in front.
 fn path_mur(home: &Path) -> Option<PathBuf> {
+    #[cfg(unix)]
     if let Some(p) = shell_path_mur() {
         return Some(p);
     }
@@ -78,7 +79,9 @@ fn path_mur(home: &Path) -> Option<PathBuf> {
 /// covers `.zprofile`/`.profile`, and people put it in either.
 ///
 /// `None` on any failure so the caller falls back rather than reporting
-/// nothing.
+/// nothing. Unix only: `$SHELL` and `-ilc` are POSIX conventions, and Windows
+/// has no equivalent question to ask — the probe list stands there.
+#[cfg(unix)]
 fn shell_path_mur() -> Option<PathBuf> {
     let shell = std::env::var("SHELL").ok()?;
     let out = Command::new(shell)
@@ -159,6 +162,7 @@ mod tests {
     /// took Homebrew because it was listed first, and the Hub reported a skew
     /// that did not exist — telling the user to `brew upgrade mur` when their
     /// CLI was already newer than the Hub.
+    #[cfg(unix)]
     #[test]
     fn the_shell_decides_which_mur_not_the_probe_order() {
         let dir = tempfile::tempdir().unwrap();
@@ -194,6 +198,7 @@ mod tests {
     /// from, PATH is exported at `.zshrc:74`, which a login shell never reads:
     /// `-lc` resolved to the stale Homebrew copy and `-ic` to the current one.
     /// A future tidy-up that drops `-i` would silently restore the bug.
+    #[cfg(unix)]
     #[test]
     fn a_path_set_in_an_interactive_rc_is_invisible_without_i() {
         let home = tempfile::tempdir().unwrap();
