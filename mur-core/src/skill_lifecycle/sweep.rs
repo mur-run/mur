@@ -222,13 +222,16 @@ pub fn run_sweep(home: &Path, opts: SweepOptions) -> Result<SweepReport> {
                 curated,
                 opts.require_human_curation_before_stable,
             );
-            // Decay prunes what a machine proposed, never what a person stated.
-            // Without this a `mur skill sweep` walks a user-authored note down
-            // to Archived and, once the grace period passes, the destroy pass
-            // above deletes its directory outright. Promotion is untouched —
-            // only the downward move is held.
+            // Decay ends at Archived, Archived ends at `remove_dir_all`, and
+            // that is only survivable for content MUR can reinstall. A missing
+            // manifest reads as MUR-owned: there is no file with content to
+            // lose, and orphaned stats should still be cleanable.
+            let publisher = manifest
+                .as_ref()
+                .map(|m| m.publisher.as_str())
+                .unwrap_or("human:mur");
             if rank(capped) < rank(current.lifecycle_state)
-                && !mur_common::skill::lifecycle::decay_may_demote(provenance, curated)
+                && !mur_common::skill::lifecycle::decay_may_demote(publisher, provenance, curated)
             {
                 current.lifecycle_state
             } else {
@@ -837,12 +840,23 @@ mod tests {
         std::fs::write(&path, serde_json::to_string(&s).unwrap()).unwrap();
     }
 
-    fn write_human_note(home: &std::path::Path, name: &str) {
+    /// A note as `mur notes create` writes it: `human:local`, which MUR cannot
+    /// put back.
+    fn write_user_note(home: &std::path::Path, name: &str) {
+        write_note_with_publisher(home, name, "human:local");
+    }
+
+    /// A note MUR shipped. Recoverable with `mur sync`, so decay may have it.
+    fn write_mur_note(home: &std::path::Path, name: &str) {
+        write_note_with_publisher(home, name, "human:mur");
+    }
+
+    fn write_note_with_publisher(home: &std::path::Path, name: &str, publisher: &str) {
         std::fs::create_dir_all(home.join("skills").join(name)).unwrap();
         std::fs::write(
             home.join("skills").join(name).join("skill.yaml"),
             format!(
-                "name: {name}\nversion: \"1\"\npublisher: me\ndescription: d\n\
+                "name: {name}\nversion: \"1\"\npublisher: {publisher}\ndescription: d\n\
                  category: note\ncontent:\n  abstract: a\n  note: |\n    always reply in zh-TW\n"
             ),
         )
@@ -861,14 +875,14 @@ mod tests {
         }
     }
 
-    /// A note a person wrote must not be walked down by decay. Decay exists to
-    /// prune what a miner guessed; this is what the user said.
+    /// A note the USER wrote must not be walked down by decay — MUR cannot put
+    /// it back.
     #[test]
-    fn decay_does_not_demote_a_human_authored_note() {
+    fn decay_does_not_demote_a_user_authored_note() {
         let tmp = tempfile::TempDir::new().unwrap();
         let home = tmp.path();
         let now = Utc::now();
-        write_human_note(home, "reply-in-zh-tw");
+        write_user_note(home, "reply-in-zh-tw");
         decayed_grade_stats(home, "reply-in-zh-tw", now, LifecycleState::Stable);
 
         run_sweep(home, sweep_opts(now)).unwrap();
@@ -879,7 +893,31 @@ mod tests {
         assert_eq!(
             after.lifecycle_state,
             LifecycleState::Stable,
-            "a human-authored note must hold its state under decay"
+            "a note the user wrote must hold its state under decay"
+        );
+    }
+
+    /// The control that separates "replaceable" from "human wrote it": a note
+    /// MUR shipped decays like anything else, because `mur sync` reinstalls it.
+    /// Without this the rule would read as "notes never decay", which is not
+    /// what was chosen — a builtin you never use SHOULD be deprioritised.
+    #[test]
+    fn decay_still_demotes_a_mur_published_note() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let now = Utc::now();
+        write_mur_note(home, "shipped-note");
+        decayed_grade_stats(home, "shipped-note", now, LifecycleState::Stable);
+
+        run_sweep(home, sweep_opts(now)).unwrap();
+
+        let after = SkillStats::load(&SkillStats::path(home, "shipped-note"))
+            .unwrap()
+            .unwrap();
+        assert!(
+            rank(after.lifecycle_state) < rank(LifecycleState::Stable),
+            "a MUR-published note is recoverable and must still decay; got {:?}",
+            after.lifecycle_state
         );
     }
 
@@ -910,11 +948,11 @@ mod tests {
     /// of anything that reaches Archived. A human-authored note must never get
     /// there by decay, so its files must still exist after a sweep.
     #[test]
-    fn a_human_note_survives_the_destroy_pass() {
+    fn a_user_note_survives_the_destroy_pass() {
         let tmp = tempfile::TempDir::new().unwrap();
         let home = tmp.path();
         let now = Utc::now();
-        write_human_note(home, "kept-note");
+        write_user_note(home, "kept-note");
         decayed_grade_stats(home, "kept-note", now, LifecycleState::Draft);
 
         // Enough rounds for the demotion chain (Draft → Deprecated → Archived)

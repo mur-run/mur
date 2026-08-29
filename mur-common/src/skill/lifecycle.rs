@@ -293,21 +293,29 @@ pub fn next_state(
 ///
 /// Decay arrived on 2026-02-25 as "Pattern Maturity + Automatic Decay" — the
 /// filter that made *automatic mining* survivable, because most of what a miner
-/// produces is noise and something had to prune it. The pattern pipeline was
-/// removed in #404 and notes inherited the machinery, but not the condition it
-/// depended on: a note holds what a human said or wrote, and an explicit
-/// statement does not become less true because nothing retrieved it this month.
+/// produces is noise. The pattern pipeline was removed in #404 and notes
+/// inherited the machinery, but not the condition it depended on.
 ///
-/// So decay prunes exactly the set the promotion gate holds back — machine
-/// proposals no human has stood behind yet. `Human` and `Hybrid` are authored
-/// or reviewed by a person; a curated `Llm` item has been endorsed. None of
-/// them decay.
+/// The axis is not human-versus-machine, which conflates MUR's own shipped
+/// builtins with what you wrote: deprecating a builtin you never use is
+/// correct, and `mur sync` puts it back. The axis is **replaceability**. Decay
+/// ends at `Archived`, `Archived` ends at `remove_dir_all`, and that is
+/// survivable only for content MUR can reinstall.
 ///
-/// This governs demotion only. Evidence of actual failure (the broken-workflow
-/// fast path) still demotes anything, because that is a measurement, not a
-/// guess about staleness.
-pub fn decay_may_demote(provenance: Provenance, curated: bool) -> bool {
-    provenance == Provenance::Llm && !curated
+/// So: machine proposals decay wherever they came from, MUR-published content
+/// decays because it is recoverable, and everything else — a `mur notes create`
+/// note, an agent memory, a skill you authored — does not.
+///
+/// Demotion only. Evidence of actual failure (the broken-workflow fast path)
+/// still demotes anything, because that is a measurement rather than a guess
+/// about staleness.
+pub fn decay_may_demote(publisher: &str, provenance: Provenance, curated: bool) -> bool {
+    // A machine proposal is noise until something proves otherwise, whoever
+    // published it.
+    if provenance == Provenance::Llm && !curated {
+        return true;
+    }
+    crate::skill::types::is_mur_owned_publisher(publisher)
 }
 
 pub fn cap_for_provenance(
