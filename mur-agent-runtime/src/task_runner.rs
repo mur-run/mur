@@ -145,6 +145,13 @@ impl ConversationStore {
     }
 }
 
+/// Where a turn's approval prompt goes, and whether anyone there can answer it.
+///
+/// The bool is the half that matters: a one-shot `mur agent send` receives
+/// deltas and step events perfectly well, so the sink alone cannot tell it from
+/// a murmur TUI with a human watching.
+type ApprovalSink = (tokio::sync::mpsc::Sender<serde_json::Value>, bool);
+
 pub struct TaskRunner {
     backend: RunnerBackend,
     registry: Arc<Mutex<HashMap<String, TaskState>>>,
@@ -199,9 +206,7 @@ pub struct TaskRunner {
     /// client — deltas and step events reach it fine — but nobody is reading
     /// for a `y`. Without this the gate could not tell the two apart and waited
     /// the full `hitl.timeout_secs` for an answer that was never coming.
-    client_notifiers: Arc<
-        tokio::sync::Mutex<HashMap<String, (tokio::sync::mpsc::Sender<serde_json::Value>, bool)>>,
-    >,
+    client_notifiers: Arc<tokio::sync::Mutex<HashMap<String, ApprovalSink>>>,
     /// Per-turn steering channels keyed by task id. A running agentic loop
     /// holds the receiver; `turn/steer` pushes a user interjection here and the
     /// loop picks it up at the next iteration boundary.
