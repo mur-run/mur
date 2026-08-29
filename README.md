@@ -291,7 +291,10 @@ Each agent owns its model binding (Ollama, MLX, Anthropic, OpenAI, … via the
 `~/.mur/models.yaml` registry), system prompt, MCP servers, skills,
 keychain-backed secrets, cron schedules, webhook receiver, and a rotating Ed25519
 identity. `mur agent` exposes 40+ subcommands for the full lifecycle — create,
-chat, export, schedule, permissions, telemetry, trash, rollback.
+chat, export, schedule, permissions, telemetry, trash, rollback. When you need
+to reach past them, `mur agent dial <name> <method> [json]` calls any A2A method
+on a running agent and prints the raw result — `memory/reload`, `tasks/list`,
+`turn/steer`, `model/set`.
 
 Its tools can hand back images, not just text. Point `read_file` at a
 screenshot, a photo, a rendered chart, and a vision-capable agent *looks* at it;
@@ -341,8 +344,15 @@ you so, in one line, with `/forget` as the undo (`/memories` lists everything
 it knows). Notes come in two kinds with matched decay: `rule` (behavioral
 guidance, fast half-life) and `fact` (environment truth, slow half-life). A
 reserved injection slot keeps fresh notes from being permanently outbid by
-mature skills. Off switch / confirm-first: `memory.capture` in
-`~/.mur/config.yaml`.
+mature skills. Say it again and the note is updated in place rather than
+colliding — and one you had forgotten comes back. Off switch / confirm-first:
+`memory.capture` in `~/.mur/config.yaml`.
+
+**None of it waits for a restart.** A note saved mid-chat is in the very next
+turn's prompt, and so is anything you change from another terminal — a skill
+installed, a note removed, a `skill.yaml` edited in vim. The running agent
+compares the tree against what it loaded and re-reads only when they differ, so
+nothing has to notify it and an agent started later needs no catching up.
 
 What an agent remembers **stays its own until you say otherwise**: each
 remember also files a proposal into your `mur out` review lane — accept and
@@ -586,9 +596,9 @@ mur dashboard        # terminal TUI dashboard
 ```
 mur
 ├── init / doctor / update / stats / verify
-├── agent        create · start · stop · restart · remove · cli · send · card · who · export ·
-│                install · install-service · addon · companion · voice · pair · schedule ·
-│                perm · secret · trash · rollback … (40+)
+├── agent        create · start · stop · restart · remove · cli · send · card · dial · who ·
+│                export · install · install-service · addon · companion · voice · pair ·
+│                schedule · perm · secret · trash · rollback … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · status · run · set-loop · send · jobs   (squads of agents over a shared channel)
 ├── official     list · install   (official agents/fleets from the app.mur.run catalog)
