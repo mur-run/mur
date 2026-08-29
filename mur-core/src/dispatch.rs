@@ -985,9 +985,14 @@ pub async fn run(cli: Cli) -> Result<()> {
             crate::cli::notes::NotesAction::Search { query, limit } => {
                 cmd::notes_cmd::cmd_search(&query, limit)?
             }
-            crate::cli::notes::NotesAction::List { maturity, limit } => {
-                cmd::notes_cmd::cmd_list(maturity.as_deref(), limit)?
+            crate::cli::notes::NotesAction::Remove { name, agent } => {
+                cmd::notes_cmd::cmd_remove(&name, agent.as_deref())?
             }
+            crate::cli::notes::NotesAction::List {
+                maturity,
+                limit,
+                agent,
+            } => cmd::notes_cmd::cmd_list(maturity.as_deref(), limit, agent.as_deref())?,
             crate::cli::notes::NotesAction::Show { name } => cmd::notes_cmd::cmd_show(&name)?,
         },
         // Deprecated: use `mur skill exchange`

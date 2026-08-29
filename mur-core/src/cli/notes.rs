@@ -35,6 +35,17 @@ pub enum NotesAction {
         limit: usize,
     },
 
+    /// Remove a note. Global by default; `--agent` targets that agent's own
+    /// memory instead.
+    Remove {
+        /// Note name.
+        name: String,
+
+        /// Remove this agent's own memory rather than a global note.
+        #[arg(long)]
+        agent: Option<String>,
+    },
+
     /// List notes, optionally filtered by maturity.
     List {
         /// Filter by lifecycle maturity: draft|emerging|stable|canonical|deprecated|archived.
@@ -44,6 +55,12 @@ pub enum NotesAction {
         /// Maximum notes to print.
         #[arg(long, default_value_t = 50)]
         limit: usize,
+
+        /// Also show this agent's own memories, labelled by scope. Without it
+        /// the listing covers global notes only — an agent's own memories live
+        /// under its home and are invisible here.
+        #[arg(long)]
+        agent: Option<String>,
     },
 
     /// Print a single note's body and maturity (records a retrieval).

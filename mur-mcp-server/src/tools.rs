@@ -465,10 +465,25 @@ async fn dispatch_tool(name: &str, arguments: &Value) -> Result<Value, String> {
                 })
                 .collect();
 
-            Ok(json!({
+            // Say what was searched. `do_search` reads the GLOBAL note store
+            // (`~/.mur/skills`) and never an agent's own memories, so a bare
+            // `count: 0` reads as "you remember nothing" when it means "nothing
+            // global matched". An agent asking what it remembers should use its
+            // built-in `recall`, which reads the set its own prompt was built
+            // from.
+            let mut out = json!({
                 "results": items,
                 "count": items.len(),
-            }))
+                "scope": "global notes only (~/.mur/skills)",
+            });
+            if items.is_empty() {
+                out["note"] = json!(
+                    "No GLOBAL note matched. This does not cover an agent's own memories — \
+                     an agent should call its built-in `recall` tool instead; from the CLI, \
+                     `mur notes list --agent <name>`."
+                );
+            }
+            Ok(out)
         }
 
         "mur_notes_show" => {

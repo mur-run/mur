@@ -369,6 +369,18 @@ pub async fn build_provider_runner(
                     skills: runtime_skills.clone(),
                 }),
             );
+            // Registered with `remember`, under the same capture gate: an agent
+            // allowed to save memories should be able to read them back, and
+            // one with capture off has none of its own to read.
+            use crate::tools::recall::{RECALL, RecallTool};
+            if resolve_tool_policy(&tools_policy, RECALL) != ToolPolicy::Deny {
+                tool_map.insert(
+                    RECALL.to_string(),
+                    Arc::new(RecallTool {
+                        skills: runtime_skills.clone(),
+                    }),
+                );
+            }
         }
     }
     let tools: Vec<Arc<dyn crate::tools::ToolExecutor>> = tool_map.into_values().collect();

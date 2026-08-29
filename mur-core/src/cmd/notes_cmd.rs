@@ -84,7 +84,10 @@ pub fn cmd_search(query: &str, limit: usize) -> Result<()> {
     let home = resolve_mur_home()?;
     let ranked = do_search(&home, query, limit)?;
     if ranked.is_empty() {
-        println!("No notes match '{query}'.");
+        println!(
+            "No global notes match '{query}'. (This searches global notes only; an agent's \
+             own memories live under its home — see `mur notes list --agent <name>`.)"
+        );
         return Ok(());
     }
     for (i, sp) in ranked.iter().enumerate() {
@@ -152,12 +155,27 @@ pub fn record_retrieval(mur_home: &Path, skill_name: &str, now: DateTime<Utc>) -
 }
 
 /// Top-level `mur notes list` handler.
-pub fn cmd_list(maturity: Option<&str>, limit: usize) -> Result<()> {
+pub fn cmd_list(maturity: Option<&str>, limit: usize, agent: Option<&str>) -> Result<()> {
     let home = resolve_mur_home()?;
+    // `--agent` reuses the `/memories` renderer rather than growing a second
+    // one: the TUI already labels agent-local · federated · shared correctly,
+    // and two listings of one fact are how they start disagreeing.
+    if let Some(a) = agent {
+        println!(
+            "{}",
+            crate::cmd::agent::cli::memory_cmds::memories(&home, a)
+        );
+        return Ok(());
+    }
     let filter = maturity.map(parse_maturity).transpose()?;
     let rows = do_list(&home, filter, limit)?;
     if rows.is_empty() {
-        println!("No notes found.");
+        // Naming the scope matters: an agent's own memories live under its
+        // home and are invisible here, so a bare "No notes found." reads as
+        // "you have no memories" when it means "none are global".
+        println!(
+            "No global notes found. (An agent's own memories are not listed here — try `mur notes list --agent <name>`.)"
+        );
         return Ok(());
     }
     for r in &rows {
@@ -220,6 +238,38 @@ pub fn parse_maturity(s: &str) -> Result<LifecycleState> {
              (expected draft|emerging|stable|canonical|deprecated|archived)"
         ),
     }
+}
+
+/// `mur notes remove <name> [--agent <a>]`.
+///
+/// A note IS a `category: note` skill, so removing a global one has always been
+/// possible — as `mur skill remove`. That is true, discoverable nowhere, and
+/// the command everyone reaches for first (`mur notes remove`) failed with
+/// `unrecognized subcommand`. Agent-local memories route to the same demotion
+/// `/forget` performs, so a memory removed from the CLI and one removed from a
+/// chat pane end in the same state rather than two.
+pub fn cmd_remove(name: &str, agent: Option<&str>) -> Result<()> {
+    let home = resolve_mur_home()?;
+    match agent {
+        Some(a) => {
+            let msg = crate::cmd::agent::cli::memory_cmds::forget(&home, a, Some(name))?;
+            println!("{msg}");
+        }
+        None => {
+            let dir = global_skill_dir(&home, name);
+            let manifest = read_from_dir(&dir).map_err(|_| anyhow!("note '{name}' not found"))?;
+            if manifest.category != Category::Note {
+                bail!(
+                    "'{name}' is not a note (category: {:?}) — use `mur skill remove` if you \
+                     meant to uninstall the skill",
+                    manifest.category
+                );
+            }
+            std::fs::remove_dir_all(&dir).with_context(|| format!("remove {}", dir.display()))?;
+            println!("removed note '{name}'");
+        }
+    }
+    Ok(())
 }
 
 /// A note rendered for `mur notes show`.

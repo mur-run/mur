@@ -19,7 +19,7 @@ mod handover;
 mod login;
 mod manage;
 mod markdown;
-mod memory_cmds;
+pub mod memory_cmds;
 mod model_cmd;
 mod multiplex;
 mod panel;
