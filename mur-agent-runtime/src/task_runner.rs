@@ -543,6 +543,10 @@ impl TaskRunner {
         let Some(skills) = &self.skills else {
             return (base, vec![]);
         };
+        // Pick up skills and memories that another process changed on disk
+        // (`mur skill remove`, `mur notes create`, a hand-edited skill.yaml)
+        // before building the prompt.
+        skills.refresh_if_changed();
         // One snapshot for the whole assembly: a reload landing mid-function
         // must not give the injector and the trigger matcher different sets.
         let skills = skills.snapshot();
