@@ -236,6 +236,12 @@ mod tests {
 
     /// `read_cli_version` must read the binary it was handed, so the two copies
     /// are distinguishable at all.
+    ///
+    /// Unix-only for the fixture, not the behaviour: it writes a `#!/bin/sh`
+    /// script and runs it, which Windows cannot execute. Gating the two tests
+    /// that SPAWN a shell was not enough — this one merely executes a script
+    /// file, the same dependency wearing a different shape.
+    #[cfg(unix)]
     #[test]
     fn the_version_comes_from_the_binary_given() {
         let dir = tempfile::tempdir().unwrap();
