@@ -288,6 +288,31 @@ fn hint_field(card: &StepCard) -> Option<&str> {
 /// that differs between two otherwise-identical commands) survives instead
 /// of being the first thing cut. Uses `floor_char_boundary`/
 /// `ceil_char_boundary` so multi-byte chars (CJK, emoji) can't be split.
+/// Keep the HEAD, cut at a word boundary.
+///
+/// For a shell command the identifying part is the front — the program and its
+/// first arguments — and the tail is routinely a branch that did not run.
+/// Middle-elision at 80 columns turned
+/// `grep -m1 '^version' Cargo.toml 2>/dev/null || head -20 Cargo.toml`
+/// into `grep -m1 '^version'… head -20 Cargo.toml`, which reads as though the
+/// fallback executed. At 60 it produced `grep -m1 '^…0 Cargo.toml`.
+///
+/// Cutting at the last space keeps the hint from ending mid-token, unless that
+/// would throw away most of the budget on a single long word.
+fn elide_tail_at_word(s: &str, budget: usize) -> String {
+    if s.len() <= budget {
+        return s.to_string();
+    }
+    let keep = budget.saturating_sub(ELLIPSIS_OVERHEAD);
+    let end = s.floor_char_boundary(keep);
+    let cut = match s[..end].rfind(' ') {
+        // Backing up past half the budget costs more than the ragged edge.
+        Some(i) if i * 2 >= end => i,
+        _ => end,
+    };
+    format!("{}…", s[..cut].trim_end())
+}
+
 fn elide_middle(s: &str, budget: usize) -> String {
     if s.len() <= budget {
         return s.to_string();
@@ -307,20 +332,24 @@ fn elide_middle(s: &str, budget: usize) -> String {
 }
 
 /// Compact arg hint for the header line (e.g. bash command, file path, query).
-/// For bash, strips a leading `cd <path> && ` segment first since it is
-/// session state repeated on every row and carries no distinguishing
-/// information. Elides the middle rather than the tail so truncation never
-/// eats the part that differs between two otherwise-similar calls.
+///
+/// Which end survives truncation depends on where the identity lives. Two calls
+/// to a file tool differ in the FILENAME, so paths elide the middle and keep
+/// both ends. Two `bash` calls differ in the PROGRAM and its first arguments,
+/// and a command's tail is routinely `|| fallback` or `2>/dev/null` — keeping
+/// it while dropping the front reports a branch that never ran.
+///
+/// Bash also loses a leading `cd <path> && `: session state repeated on every
+/// row, carrying nothing that distinguishes one call from the next.
 fn arg_hint(card: &StepCard, budget: usize) -> String {
     let Some(raw) = hint_field(card) else {
         return String::new();
     };
-    let s = if card.name.eq_ignore_ascii_case("bash") {
-        strip_cd_prefix(raw)
+    if card.name.eq_ignore_ascii_case("bash") {
+        elide_tail_at_word(strip_cd_prefix(raw), budget)
     } else {
-        raw
-    };
-    elide_middle(s, budget)
+        elide_middle(raw, budget)
+    }
 }
 
 #[cfg(test)]
@@ -375,6 +404,96 @@ mod tests {
         );
         assert!(text.contains("8ms"), "expected '8ms' in: {text}");
         assert!(text.contains('✔'), "expected '✔' in: {text}");
+    }
+
+    /// The real line from a real session, at the 80-column design baseline.
+    /// Middle-elision produced `grep -m1 '^version'… head -20 Cargo.toml`,
+    /// which reads as though the `||` fallback ran. It did not — grep
+    /// succeeded.
+    #[test]
+    fn a_shell_command_keeps_the_branch_that_ran() {
+        let cmd = "grep -m1 '^version' Cargo.toml 2>/dev/null || head -20 Cargo.toml";
+        let mut card = StepCard::new(
+            "s".into(),
+            "bash".into(),
+            serde_json::json!({ "command": cmd }),
+        );
+        card.state = crate::cmd::agent::cli::step::StepState::Done;
+
+        for width in [60u16, 80, 92] {
+            let hint = super::arg_hint(&card, super::hint_budget(width));
+            assert!(
+                hint.starts_with("grep -m1"),
+                "width {width}: the program must survive: {hint}"
+            );
+            assert!(
+                !hint.contains("head -20"),
+                "width {width}: reported a fallback branch that never ran: {hint}"
+            );
+        }
+    }
+
+    /// No half-tokens. Middle-elision produced `Cargo…ull` at 92 columns and
+    /// `'^…0` at 60 — fragments that mean nothing.
+    #[test]
+    fn a_truncated_command_never_ends_mid_token() {
+        let cmd = "grep -m1 '^version' Cargo.toml 2>/dev/null || head -20 Cargo.toml";
+        for budget in [24usize, 30, 40, 52] {
+            let hint = super::elide_tail_at_word(cmd, budget);
+            let body = hint.trim_end_matches('…');
+            assert!(
+                cmd.starts_with(body),
+                "budget {budget}: not a prefix of the command: {hint}"
+            );
+            assert!(
+                cmd[body.len()..].starts_with(' ') || body.len() == cmd.len(),
+                "budget {budget}: cut mid-token: {hint}"
+            );
+        }
+    }
+
+    /// Negative control on the ROUTING: a path must still elide the middle, so
+    /// two file calls differing only in the filename stay distinguishable.
+    /// Flipping paths to head-keep would render them identically.
+    #[test]
+    fn two_paths_differing_only_in_filename_stay_distinct() {
+        let hint_for = |path: &str| {
+            let mut card = StepCard::new(
+                "s".into(),
+                "read_file".into(),
+                serde_json::json!({ "path": path }),
+            );
+            card.state = crate::cmd::agent::cli::step::StepState::Done;
+            super::arg_hint(&card, 24)
+        };
+        let a = hint_for("mur-core/src/cmd/agent/cli/alpha.rs");
+        let b = hint_for("mur-core/src/cmd/agent/cli/omega.rs");
+        assert!(a.contains('…'), "expected elision at this budget: {a}");
+        assert_ne!(
+            a, b,
+            "two file calls must not render identically: {a} / {b}"
+        );
+    }
+
+    /// The cost of head-keep, stated rather than hidden: two commands that
+    /// differ only in their tail DO collapse to the same hint. That is accepted
+    /// — the header is a hint and expanding shows the full command, whereas
+    /// keeping the tail actively reports a branch that never ran.
+    #[test]
+    fn head_keep_trades_tail_detail_for_an_honest_front() {
+        let hint_for = |cmd: &str| {
+            let mut card = StepCard::new(
+                "s".into(),
+                "bash".into(),
+                serde_json::json!({ "command": cmd }),
+            );
+            card.state = crate::cmd::agent::cli::step::StepState::Done;
+            super::arg_hint(&card, 30)
+        };
+        let a = hint_for("grep -m1 '^version' Cargo.toml 2>/dev/null || head -20 a.toml");
+        let b = hint_for("grep -m1 '^version' Cargo.toml 2>/dev/null || head -20 b.toml");
+        assert_eq!(a, b, "documented trade-off");
+        assert!(a.starts_with("grep -m1"), "{a}");
     }
 
     #[test]
