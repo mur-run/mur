@@ -1175,8 +1175,9 @@ const NEW_DEV_SKILL_NAMES: &[&str] = &[
     "mur-skill-authoring",
 ];
 
-/// Publishers whose on-disk copies we own and may update in place.
-const MUR_OFFICIAL_PUBLISHERS: &[&str] = &["human:mur-official", "human:mur"];
+/// Publishers whose on-disk copies we own and may update in place. Shared with
+/// the lifecycle sweep, which asks the same question about deletion.
+use mur_common::skill::types::MUR_OWNED_PUBLISHERS as MUR_OFFICIAL_PUBLISHERS;
 
 /// Never-shadow (spec 2026-07-23 §6): true when `name` is a dev-discipline
 /// builtin AND `dir/skill.yaml` exists but was not published by MUR.

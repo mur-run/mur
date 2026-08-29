@@ -46,6 +46,21 @@ pub enum Category {
     Media,
 }
 
+/// Publishers whose on-disk copies MUR owns and may replace: the shipped
+/// builtins and the official catalog. Everything else — `human:local` from
+/// `mur notes create`, `agent:<name>` from the `remember` tool, a `human:<you>`
+/// skill you authored — is yours, and MUR cannot get it back if it removes it.
+///
+/// The list already existed in `sync_cmd` for "may I overwrite this?"; the
+/// lifecycle sweep needs the same question for "may I delete this?", and two
+/// copies of one list is how the answers start disagreeing.
+pub const MUR_OWNED_PUBLISHERS: &[&str] = &["human:mur-official", "human:mur"];
+
+/// Whether MUR published this and can therefore reinstall it.
+pub fn is_mur_owned_publisher(publisher: &str) -> bool {
+    MUR_OWNED_PUBLISHERS.contains(&publisher)
+}
+
 /// Where a skill came from. Drives the curation gate: `Llm`-authored skills
 /// cannot auto-promote past `Emerging` until a human curates them
 /// (amendment A1, `2026-05-28-mur-workflow-engine-design-v2.md`).
