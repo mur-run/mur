@@ -616,6 +616,41 @@ fn gap_row(theme: &'static super::theme::Theme) -> Line<'static> {
     }
 }
 
+/// Lines for one message, including the gap that precedes it.
+///
+/// One function for all three callers — the viewport, the scrollback emit, and
+/// the row measurement that decides where to cut between them. They disagreed
+/// in two ways that both showed:
+///
+/// * the viewport drew no gaps at all, so the same transcript was dense on
+///   screen and spaced once it scrolled up — the reader's spatial map changed
+///   with no action from the reader;
+/// * the measurement summed message rows without the gap rows, so the band was
+///   taller than the number the flush decision was made from.
+///
+/// Attributing each gap to the message it precedes is what lets one function
+/// serve both: a measured block and a rendered block are the same rows.
+fn message_block(
+    app: &App,
+    idx: usize,
+    m: &super::app::ChatMsg,
+    skip: usize,
+    measured: bool,
+) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    // Never before a continuation: `skip > 0` resumes a message whose head is
+    // already committed above.
+    if idx > 0 && skip == 0 && wants_gap_before(m) {
+        lines.push(gap_row(app.theme));
+    }
+    if measured {
+        push_live_measured(&mut lines, app, m, skip);
+    } else {
+        push_live(&mut lines, app, m, skip);
+    }
+    lines
+}
+
 fn push_live_measured(lines: &mut Vec<Line<'static>>, app: &App, m: &ChatMsg, skip: usize) {
     push_live_inner(lines, app, m, skip, true)
 }
@@ -755,8 +790,7 @@ pub fn flush_finished<B: Backend>(
         .iter()
         .enumerate()
         .map(|(n, m)| {
-            let mut lines = Vec::new();
-            push_live_measured(&mut lines, app, m, if n == 0 { skip } else { 0 });
+            let lines = message_block(app, start + n, m, if n == 0 { skip } else { 0 }, true);
             band_rows(theme, lines, width)
         })
         .collect();
@@ -778,12 +812,7 @@ pub fn flush_finished<B: Backend>(
         let mut lines: Vec<Line<'static>> = Vec::new();
         for i in start..end {
             let msg_skip = if i == start { skip } else { 0 };
-            // Separator between messages — never before a continuation, which
-            // resumes a message whose head is already in scrollback.
-            if i > 0 && msg_skip == 0 && wants_gap_before(&app.messages[i]) {
-                lines.push(gap_row(theme));
-            }
-            push_live(&mut lines, app, &app.messages[i], msg_skip);
+            lines.extend(message_block(app, i, &app.messages[i], msg_skip, false));
         }
         emit(terminal, lines, pad, width)?;
         app.flushed_upto = end;
@@ -905,7 +934,13 @@ fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let skip = effective_skip(app);
     let mut lines: Vec<Line> = Vec::new();
     for (n, m) in app.messages[start..].iter().enumerate() {
-        push_live(&mut lines, app, m, if n == 0 { skip } else { 0 });
+        lines.extend(message_block(
+            app,
+            start + n,
+            m,
+            if n == 0 { skip } else { 0 },
+            false,
+        ));
     }
 
     if lines.is_empty() && start == 0 {
@@ -2209,5 +2244,75 @@ mod gap_tests {
         if MUR.show_separator {
             assert!(ruled.contains('─'), "a ruled skin draws a rule: {ruled:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod block_tests {
+    use super::super::app::{App, ChatMsg, Role};
+    use super::super::step::StepCard;
+    use super::message_block;
+
+    fn card() -> ChatMsg {
+        ChatMsg::tool_for_test(StepCard::new(
+            "s".into(),
+            "bash".into(),
+            serde_json::json!({"command": "ls"}),
+        ))
+    }
+
+    fn text(lines: &[ratatui::text::Line<'static>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
+    }
+
+    fn is_gap(l: &str) -> bool {
+        l.trim().is_empty() || l.chars().all(|c| c == '─')
+    }
+
+    /// The bug: the viewport and the emit path disagreed. Same message, same
+    /// index — the rows must be identical, gap included.
+    #[test]
+    fn measured_and_rendered_blocks_agree() {
+        let app = App::test_fixture();
+        let m = ChatMsg::for_test(Role::Agent, "hello");
+        let rendered = text(&message_block(&app, 3, &m, 0, false));
+        let measured = text(&message_block(&app, 3, &m, 0, true));
+        assert_eq!(
+            rendered.iter().filter(|l| is_gap(l)).count(),
+            measured.iter().filter(|l| is_gap(l)).count(),
+            "the row the flush decision counts must be the row that gets drawn"
+        );
+    }
+
+    /// A tool call is a step inside the turn before it.
+    #[test]
+    fn a_step_card_opens_no_gap() {
+        let app = App::test_fixture();
+        let lines = text(&message_block(&app, 3, &card(), 0, false));
+        assert!(!lines.first().is_some_and(|l| is_gap(l)), "{lines:?}");
+    }
+
+    /// Control — if this flips, gaps stop marking anything.
+    #[test]
+    fn a_spoken_turn_opens_a_gap() {
+        let app = App::test_fixture();
+        let m = ChatMsg::for_test(Role::User, "hi");
+        let lines = text(&message_block(&app, 3, &m, 0, false));
+        assert!(lines.first().is_some_and(|l| is_gap(l)), "{lines:?}");
+    }
+
+    /// Nothing opens the transcript with a blank row, and a continuation
+    /// resumes a message whose head is already committed above.
+    #[test]
+    fn the_first_message_and_continuations_open_no_gap() {
+        let app = App::test_fixture();
+        let m = ChatMsg::for_test(Role::User, "hi");
+        let first = text(&message_block(&app, 0, &m, 0, false));
+        assert!(!first.first().is_some_and(|l| is_gap(l)), "{first:?}");
+        let resumed = text(&message_block(&app, 3, &m, 2, false));
+        assert!(!resumed.first().is_some_and(|l| is_gap(l)), "{resumed:?}");
     }
 }
