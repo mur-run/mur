@@ -145,6 +145,13 @@ impl ConversationStore {
     }
 }
 
+/// Where a turn's approval prompt goes, and whether anyone there can answer it.
+///
+/// The bool is the half that matters: a one-shot `mur agent send` receives
+/// deltas and step events perfectly well, so the sink alone cannot tell it from
+/// a murmur TUI with a human watching.
+type ApprovalSink = (tokio::sync::mpsc::Sender<serde_json::Value>, bool);
+
 pub struct TaskRunner {
     backend: RunnerBackend,
     registry: Arc<Mutex<HashMap<String, TaskState>>>,
@@ -193,8 +200,13 @@ pub struct TaskRunner {
     /// Per-turn client notifiers keyed by task id, registered by `message/send`
     /// so a tool-approval prompt is routed to the connection that issued the
     /// turn instead of broadcast to every client. Falls back to `notifier`.
-    client_notifiers:
-        Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::mpsc::Sender<serde_json::Value>>>>,
+    ///
+    /// The flag is whether that connection can actually answer an approval
+    /// prompt. A one-shot `mur agent send` supplies a sink like any other
+    /// client — deltas and step events reach it fine — but nobody is reading
+    /// for a `y`. Without this the gate could not tell the two apart and waited
+    /// the full `hitl.timeout_secs` for an answer that was never coming.
+    client_notifiers: Arc<tokio::sync::Mutex<HashMap<String, ApprovalSink>>>,
     /// Per-turn steering channels keyed by task id. A running agentic loop
     /// holds the receiver; `turn/steer` pushes a user interjection here and the
     /// loop picks it up at the next iteration boundary.
@@ -473,15 +485,19 @@ impl TaskRunner {
 
     /// Register the connection sink that should receive this turn's HITL
     /// approval prompts, keyed by the turn's task id.
+    /// `can_approve` says whether a human is reading this connection and able
+    /// to answer an approval prompt. `false` makes the gate deny at once
+    /// instead of waiting out `hitl.timeout_secs` for nobody.
     pub async fn register_client_notifier(
         &self,
         task_id: &str,
         tx: tokio::sync::mpsc::Sender<serde_json::Value>,
+        can_approve: bool,
     ) {
         self.client_notifiers
             .lock()
             .await
-            .insert(task_id.to_string(), tx);
+            .insert(task_id.to_string(), (tx, can_approve));
     }
 
     /// Drop the per-turn HITL sink once the turn completes.
@@ -1304,7 +1320,12 @@ impl TaskRunner {
         // Resolve step notifier once (route by task id, fall back to baked notifier).
         // Used for step/started + step/completed in both Allow and Ask arms.
         let step_notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>> = {
-            let routed = self.client_notifiers.lock().await.get(task_id).cloned();
+            let routed = self
+                .client_notifiers
+                .lock()
+                .await
+                .get(task_id)
+                .map(|(tx, _)| tx.clone());
             routed.or_else(|| self.notifier.clone())
         };
         let step_id = uuid::Uuid::now_v7().to_string();
@@ -1391,9 +1412,20 @@ impl TaskRunner {
                     // broadcast. fail-closed: with no approval sink wired
                     // (pending_approvals or notifier missing) the decision is
                     // DENY, so dispatch/spend tools cannot run unattended.
-                    let routed = self.client_notifiers.lock().await.get(task_id).cloned();
+                    let entry = self.client_notifiers.lock().await.get(task_id).cloned();
+                    // A connection that declared it cannot approve is not an
+                    // approval sink, however well it receives everything else.
+                    // Waiting on it burns `hitl.timeout_secs` and then returns
+                    // the same denial — and the silence in between reads as
+                    // "the agent had nothing to say", which is how this cost me
+                    // a misdiagnosis rather than five minutes.
+                    let shortcut =
+                        decide_without_asking(entry.as_ref().map(|(_, ok)| *ok), &call.tool_name);
+                    let routed = entry.map(|(tx, _)| tx);
                     let effective_notifier = routed.as_ref().or(self.notifier.as_ref());
-                    let decision = if let (Some(pa), Some(notifier)) =
+                    let decision = if let Some(d) = shortcut {
+                        d
+                    } else if let (Some(pa), Some(notifier)) =
                         (&self.pending_approvals, effective_notifier)
                     {
                         let hitl_id = uuid::Uuid::now_v7().to_string();
@@ -2135,6 +2167,37 @@ fn last_assistant_text(history: &[crate::llm::RichMessage]) -> Option<String> {
 /// — adds nothing the prefix has not already said, and appending it anyway
 /// printed `tool call denied: denied` (#940). Only a reason that carries new
 /// information is appended.
+/// The answer the gate already knows, before it sends a prompt to anyone.
+///
+/// `Some(false)` means the caller told us it cannot answer an approval prompt —
+/// a one-shot `mur agent send`, a cron fire, a script. Waiting on it burns the
+/// whole `hitl.timeout_secs` and then returns this same denial, and the silence
+/// in between reads as "the agent had nothing to say". That cost a
+/// misdiagnosis, not just five minutes: the turn came back with no agent
+/// message and nothing naming approval as the cause.
+///
+/// `Some(true)` and `None` both fall through to asking — an interactive client,
+/// or no routed entry at all, where the existing no-sink handling applies.
+///
+/// Extracted because the same shape as an inline condition was untestable: a
+/// test of the map that carries the flag says nothing about whether the gate
+/// reads it.
+fn decide_without_asking(
+    can_approve: Option<bool>,
+    tool_name: &str,
+) -> Option<crate::hitl::HitlDecision> {
+    if can_approve != Some(false) {
+        return None;
+    }
+    Some(crate::hitl::HitlDecision {
+        allow: false,
+        reason: Some(format!(
+            "`{tool_name}` needs approval and this caller cannot give one — run it from \
+             `murmur`, or allow the tool with `mur agent perm tool-allow <agent> {tool_name}`"
+        )),
+    })
+}
+
 fn deny_message(reason: Option<&str>) -> String {
     match reason.map(str::trim) {
         Some(r) if !r.is_empty() && r != "denied" => format!("tool call denied: {r}"),
@@ -4131,5 +4194,88 @@ mod tool_policy_tests {
             effective_tool_policy(&[], "suggest_replies"),
             ToolPolicy::Allow
         );
+    }
+}
+
+#[cfg(test)]
+mod approver_tests {
+    use super::TaskRunner;
+    use std::sync::Arc;
+
+    fn runner() -> Arc<TaskRunner> {
+        Arc::new(TaskRunner::new_stub_echo())
+    }
+
+    /// The fix: a caller that cannot approve gets the denial immediately,
+    /// instead of after `hitl.timeout_secs` of silence.
+    #[test]
+    fn a_caller_that_cannot_approve_is_denied_at_once() {
+        let d = super::decide_without_asking(Some(false), "remember").expect("must short-circuit");
+        assert!(!d.allow);
+        let why = d.reason.unwrap_or_default();
+        assert!(why.contains("remember"), "must name the tool: {why}");
+        assert!(
+            why.contains("murmur"),
+            "must name where it can be approved: {why}"
+        );
+        assert!(
+            why.contains("tool-allow"),
+            "must name the other way out: {why}"
+        );
+    }
+
+    /// Controls. An interactive caller must still be asked, and no routed entry
+    /// must still reach the existing no-sink handling — this shortcut is only
+    /// for a caller that told us it cannot answer.
+    #[test]
+    fn everyone_else_is_still_asked() {
+        assert!(super::decide_without_asking(Some(true), "remember").is_none());
+        assert!(super::decide_without_asking(None, "remember").is_none());
+    }
+
+    /// A caller that declared it cannot approve must be distinguishable from
+    /// one that can, at the map the gate reads. Before this the two were the
+    /// same entry and the gate waited on both.
+    #[tokio::test]
+    async fn the_gate_can_tell_the_two_callers_apart() {
+        let r = runner();
+        let (tx, _rx) = tokio::sync::mpsc::channel(4);
+        r.register_client_notifier("t-interactive", tx.clone(), true)
+            .await;
+        r.register_client_notifier("t-oneshot", tx, false).await;
+
+        let map = r.client_notifiers.lock().await;
+        assert_eq!(map.get("t-interactive").map(|(_, ok)| *ok), Some(true));
+        assert_eq!(map.get("t-oneshot").map(|(_, ok)| *ok), Some(false));
+    }
+
+    /// Step events still reach a caller that cannot approve — it is not a
+    /// second-class client, it just has nobody to answer a prompt. If this
+    /// breaks, `mur agent send` goes silent about tool progress too.
+    #[tokio::test]
+    async fn a_non_approving_caller_still_receives_notifications() {
+        let r = runner();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        r.register_client_notifier("t1", tx, false).await;
+
+        let sink = {
+            let map = r.client_notifiers.lock().await;
+            map.get("t1").map(|(tx, _)| tx.clone())
+        };
+        sink.expect("sink must still be routed")
+            .send(serde_json::json!({"method": "step/started"}))
+            .await
+            .expect("send must reach the client");
+        assert!(rx.recv().await.is_some());
+    }
+
+    /// Unregistering clears both halves.
+    #[tokio::test]
+    async fn unregister_removes_the_entry() {
+        let r = runner();
+        let (tx, _rx) = tokio::sync::mpsc::channel(4);
+        r.register_client_notifier("t1", tx, false).await;
+        r.unregister_client_notifier("t1").await;
+        assert!(r.client_notifiers.lock().await.get("t1").is_none());
     }
 }
