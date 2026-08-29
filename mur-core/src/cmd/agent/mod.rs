@@ -75,7 +75,7 @@ pub mod stats;
 pub use apply::cmd_agent_apply;
 #[allow(unused_imports)]
 pub use cli::cmd_cli;
-pub use comm::{cmd_card, cmd_send};
+pub use comm::{cmd_card, cmd_dial, cmd_send};
 #[allow(unused_imports)]
 pub use doctor::cmd_doctor;
 pub use effort::cmd_effort;
