@@ -1105,7 +1105,18 @@ pub async fn run(cli: Cli) -> Result<()> {
                             }))?
                         );
                     } else {
-                        print!("{}", crate::open_items::render(&visible, &matched));
+                        let (fresh, stale) =
+                            crate::open_items::split_stale(visible, chrono::Utc::now());
+                        // `--all` suspends this policy too: stale items come
+                        // back into the list rather than being counted in a
+                        // footer. Oldest last, which the split already gives.
+                        let (shown, hidden) = if all {
+                            ([fresh, stale].concat(), 0)
+                        } else {
+                            let n = stale.len();
+                            (fresh, n)
+                        };
+                        print!("{}", crate::open_items::render(&shown, &matched, hidden));
                     }
                 }
             }

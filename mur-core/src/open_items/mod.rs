@@ -70,9 +70,22 @@ pub fn partition(items: Vec<OpenItem>, muted: &[String]) -> (Vec<OpenItem>, Vec<
 /// `None` when there is nothing open, because the alternative is telling the
 /// user "0 open items" after every single turn, which is how a surface earns
 /// its way into the part of the screen people stop reading.
-pub fn summary_line(items: &[OpenItem]) -> Option<String> {
+/// Split off the items that have aged out of the default view.
+///
+/// Returns `(fresh, stale)` preserving `collect`'s ordering within each half.
+pub fn split_stale(
+    items: Vec<OpenItem>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> (Vec<OpenItem>, Vec<OpenItem>) {
+    items.into_iter().partition(|i| !i.is_stale_at(now))
+}
+
+pub fn summary_line(items: &[OpenItem], stale: usize) -> Option<String> {
     if items.is_empty() {
-        return None;
+        // Stale items are demoted, not gone. Dropping the line entirely here
+        // would make them invisible, which is worse than the accumulation
+        // this ageing exists to fix.
+        return (stale > 0).then(|| format!("{stale} stale — mur open --all"));
     }
     let observed = items
         .iter()
@@ -87,10 +100,15 @@ pub fn summary_line(items: &[OpenItem]) -> Option<String> {
         parts.push(format!("{reported} reported"));
     }
     Some(format!(
-        "{} open item{} ({}) — /open",
+        "{} open item{} ({}){} — /open",
         items.len(),
         if items.len() == 1 { "" } else { "s" },
-        parts.join(", ")
+        parts.join(", "),
+        if stale > 0 {
+            format!(" · {stale} stale")
+        } else {
+            String::new()
+        }
     ))
 }
 
@@ -113,7 +131,7 @@ pub fn fingerprint(items: &[OpenItem]) -> u64 {
 
 /// Render for a terminal. Groups by source with the marker legend, because an
 /// unlabelled mixed list is the thing this module exists to avoid.
-pub fn render(items: &[OpenItem], muted: &[String]) -> String {
+pub fn render(items: &[OpenItem], muted: &[String], stale: usize) -> String {
     let mut out = if items.is_empty() {
         "No open items.\n".to_string()
     } else {
@@ -151,11 +169,61 @@ pub fn render(items: &[OpenItem], muted: &[String]) -> String {
             muted.join(", ")
         ));
     }
+    // Same trade as the mute footer above: one line versus N, never
+    // show-versus-hide. A reader must not have to wonder what aged out.
+    if stale > 0 {
+        out.push_str(&format!(
+            "\n{stale} stale item{} not shown — mur open --all\n",
+            if stale == 1 { "" } else { "s" }
+        ));
+    }
     out
 }
 
 #[cfg(test)]
 mod tests {
+    fn old(source: ItemSource, days: i64) -> OpenItem {
+        item(source, "aged", Utc::now() - chrono::Duration::days(days))
+    }
+
+    #[test]
+    fn split_keeps_observed_fresh_and_moves_only_aged_reports() {
+        let n = mur_open_items::REPORTED_STALE_AFTER_DAYS + 1;
+        let (fresh, stale) = split_stale(
+            vec![
+                old(ItemSource::Observed, n),
+                old(ItemSource::Reported, n),
+                item(ItemSource::Reported, "new", Utc::now()),
+            ],
+            Utc::now(),
+        );
+        assert_eq!(fresh.len(), 2, "observed and the recent report stay");
+        assert_eq!(stale.len(), 1);
+    }
+
+    #[test]
+    fn summary_appends_the_stale_count_and_omits_it_at_zero() {
+        let one = vec![item(ItemSource::Reported, "a", Utc::now())];
+        assert!(summary_line(&one, 3).unwrap().contains("3 stale"));
+        assert!(!summary_line(&one, 0).unwrap().contains("stale"));
+    }
+
+    /// Demoted, not deleted. If everything aged out, the line must still say
+    /// so — silence here would be the accumulation bug traded for a worse one.
+    #[test]
+    fn summary_still_speaks_when_every_item_is_stale() {
+        let s = summary_line(&[], 4).expect("4 hidden items cannot be silent");
+        assert!(s.contains("4 stale"), "{s}");
+        assert!(s.contains("--all"), "must name the way to see them: {s}");
+    }
+
+    #[test]
+    fn render_footer_names_what_aged_out_and_how_to_see_it() {
+        let out = render(&[item(ItemSource::Observed, "a", Utc::now())], &[], 2);
+        assert!(out.contains("2 stale items not shown"), "{out}");
+        assert!(out.contains("mur open --all"), "{out}");
+    }
+
     use super::*;
     use chrono::{DateTime, Utc};
 
@@ -193,6 +261,7 @@ mod tests {
                 item(ItemSource::Reported, "b", Utc::now()),
             ],
             &[],
+            0,
         );
         assert!(out.contains("observed"), "{out}");
         assert!(out.contains("reported"), "{out}");
@@ -201,7 +270,7 @@ mod tests {
 
     #[test]
     fn empty_says_so_rather_than_printing_a_bare_header() {
-        assert_eq!(render(&[], &[]), "No open items.\n");
+        assert_eq!(render(&[], &[], 0), "No open items.\n");
     }
 
     /// A permanent mute is only safe if the list always says something is
@@ -211,6 +280,7 @@ mod tests {
         let out = render(
             &[item(ItemSource::Observed, "visible", Utc::now())],
             &["inbox".to_string(), "fleet:old".to_string()],
+            0,
         );
         assert!(out.contains("2 sources muted"), "{out}");
         assert!(out.contains("inbox"), "{out}");
@@ -220,7 +290,7 @@ mod tests {
 
     #[test]
     fn no_footer_when_nothing_is_muted() {
-        let out = render(&[item(ItemSource::Observed, "a", Utc::now())], &[]);
+        let out = render(&[item(ItemSource::Observed, "a", Utc::now())], &[], 0);
         assert!(!out.contains("muted"), "{out}");
     }
 
@@ -228,7 +298,7 @@ mod tests {
     /// difference has to be visible.
     #[test]
     fn everything_muted_still_shows_the_footer() {
-        let out = render(&[], &["inbox".to_string()]);
+        let out = render(&[], &["inbox".to_string()], 0);
         assert!(out.contains("1 source muted"), "{out}");
         assert!(out.contains("No open items"), "{out}");
     }
@@ -237,16 +307,19 @@ mod tests {
     /// turn is how a surface trains people to stop reading it.
     #[test]
     fn summary_is_silent_when_nothing_is_open() {
-        assert_eq!(summary_line(&[]), None);
+        assert_eq!(summary_line(&[], 0), None);
     }
 
     #[test]
     fn summary_counts_each_source_separately() {
-        let s = summary_line(&[
-            item(ItemSource::Observed, "a", Utc::now()),
-            item(ItemSource::Observed, "b", Utc::now()),
-            item(ItemSource::Reported, "c", Utc::now()),
-        ])
+        let s = summary_line(
+            &[
+                item(ItemSource::Observed, "a", Utc::now()),
+                item(ItemSource::Observed, "b", Utc::now()),
+                item(ItemSource::Reported, "c", Utc::now()),
+            ],
+            0,
+        )
         .unwrap();
         assert!(s.contains("3 open items"), "{s}");
         assert!(s.contains("2 observed"), "{s}");

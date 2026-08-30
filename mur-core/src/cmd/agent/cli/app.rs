@@ -982,12 +982,13 @@ impl App {
             crate::open_items::collect(&self.home),
             &self.muted_origins(),
         );
+        let (visible, stale) = crate::open_items::split_stale(visible, chrono::Utc::now());
         let fp = crate::open_items::fingerprint(&visible);
         if self.open_items_fp == Some(fp) {
             return;
         }
         self.open_items_fp = Some(fp);
-        if let Some(line) = crate::open_items::summary_line(&visible) {
+        if let Some(line) = crate::open_items::summary_line(&visible, stale.len()) {
             self.push_system(line);
         }
     }
