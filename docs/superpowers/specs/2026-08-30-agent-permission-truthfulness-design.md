@@ -255,6 +255,17 @@ the network half of the same question. B is deliberately second: it is a
 display layer, and building it on a source that cannot distinguish granted from
 effective would render the `cc-proxy` grant as "granted" in a nicer font.
 
+B starts from a worse position than "nothing", which this document originally
+recorded. `mur-hub-gui/ui/src/components/inspector/tabs/PermissionsTab.tsx`
+exists — 41 lines showing the agent's capability strings, its MCP server count
+and its skill count. No filesystem grant, no network reach, nothing the sandbox
+enforces. So a user looking for "what may this agent write" finds a tab named
+**Permissions**, reads it, and reasonably concludes MUR does not track that.
+
+An empty space invites the question; a tab that answers it wrongly closes it.
+B therefore has to correct a claim, not just fill a gap — and the correction is
+the more urgent half, because it is the part that actively misleads.
+
 **Issue #1085** — bridge liveness is classified from a `running.lock` mtime that
 nothing refreshes. Found while auditing the lock for C1, unrelated to it, and
 fixed separately. It does constrain C1 in one way: whatever #1085 chooses must
