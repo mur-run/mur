@@ -2683,7 +2683,7 @@ mod tests {
     async fn tool_use_stop_without_calls_fails_instead_of_fabricating() {
         use crate::llm::stub::SequenceLlm;
         let responses: Vec<crate::llm::LlmResponse> = vec![crate::llm::LlmResponse {
-            text: "The exact output of git rev-list --count HEAD is: 2469".into(),
+            text: "The exact output of git rev-list --count HEAD is: FABRICATED-2469".into(),
             input_tokens: 5,
             output_tokens: 5,
             model: "test".into(),
@@ -2699,7 +2699,23 @@ mod tests {
         let outcome = runner.run_sync(loop_spec("fabricate")).await;
         match outcome {
             TaskOutcome::Failed(task) => {
-                let rendered = format!("{task:?}");
+                // Search the MESSAGES, not the whole Debug rendering: that
+                // includes the task id, and a v7 UUID ending in the sentinel
+                // digits failed this on CI at roughly 1-in-65k per run. The
+                // sentinel is now prefixed for the same reason — four bare
+                // digits are something a UUID can produce by chance, and a
+                // test that fails on a coin flip teaches people to re-run
+                // rather than to read.
+                let delivered: String = task
+                    .messages
+                    .iter()
+                    .flat_map(|m| m.parts.iter())
+                    .filter_map(|p| match p {
+                        mur_common::a2a::MessagePart::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 let err = task.error.expect("Failed task must carry an error");
                 assert_eq!(err.code, "llm_error");
                 assert!(
@@ -2707,8 +2723,8 @@ mod tests {
                     "a call dropped in the provider client reproduces on retry"
                 );
                 assert!(
-                    !rendered.contains("2469"),
-                    "the model's fabricated tool output must never reach the user, got: {rendered}"
+                    !delivered.contains("FABRICATED-2469"),
+                    "the model's fabricated tool output must never reach the user, got: {delivered}"
                 );
             }
             other => panic!("expected Failed, got {other:?}"),
