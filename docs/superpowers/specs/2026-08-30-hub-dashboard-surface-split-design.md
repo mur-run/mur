@@ -173,6 +173,42 @@ A link into a dead port is worse than no link. This is a precondition, not a
 detail: the server is not running by default, and had to be started by hand to
 take the measurements in this document.
 
+### D5 — reaching the Dashboard from the Hub
+
+D3c leaves a link to `localhost:3847` conditional on the target being reachable.
+That condition is general — it applies to every Hub → Dashboard link, not just
+the schedule one — so it is specified here rather than inside D3.
+
+**The check must identify MUR, not the port.** `GET /api/v1/health` returns
+`{"source":"local","status":"ok","version":"2.71.9"}`. A TCP connect is not
+enough, and neither is a 200: this server answers 200 with the SPA for any
+unmatched path, and an unrelated process can hold 3847. The check is: health
+responds, parses as JSON, and reports `status: "ok"`.
+
+Three states, three behaviours:
+
+| state | what the Hub does |
+|---|---|
+| health answers `ok` | open the browser |
+| port closed | start the server, wait for health, then open — with a visible "starting…", not a frozen click |
+| port held, not MUR | **do not open.** Say what is on the port |
+
+The third row is the one that is easy to omit and expensive to get wrong:
+without it the Hub opens a browser onto a stranger's server, which is worse than
+the blank page this exists to prevent.
+
+**Whoever starts it, stops it.** If the Hub started the server, the Hub shuts it
+down when it quits; a listening socket the user never asked for should not
+outlive the app that opened it. If it was already running, leave it alone —
+someone else owns it.
+
+**On demand, not at launch.** Opening a port when the Hub starts is a surprise,
+and the kind of thing this project keeps deliberately opt-in. The trigger is the
+user asking for the Dashboard.
+
+The Hub already supervises child processes (`mur-gui-core/src/sidecar.rs`), so
+this needs a new client of existing machinery rather than new machinery.
+
 ### D4 — one describer, one next-fire calculator
 
 `mur-web/src/lib/schedule-parser.ts` is 288 lines carrying natural-language →
