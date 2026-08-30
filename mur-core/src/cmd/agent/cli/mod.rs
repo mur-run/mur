@@ -2058,9 +2058,10 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
         SlashCmd::Open => {
             let items = crate::open_items::collect(&app.home);
             let (visible, muted) = crate::open_items::partition(items, &app.muted_origins());
+            let (visible, stale) = crate::open_items::split_stale(visible, chrono::Utc::now());
             app.open_items_fp = Some(crate::open_items::fingerprint(&visible));
             app.push_system(
-                crate::open_items::render(&visible, &muted)
+                crate::open_items::render(&visible, &muted, stale.len())
                     .trim()
                     .to_string(),
             );
