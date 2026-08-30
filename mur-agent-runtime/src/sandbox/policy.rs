@@ -1454,20 +1454,31 @@ mod tests {
         ent.filesystem.write = vec![gone.display().to_string()];
         let p = SandboxPolicy::from_entitlements(&ent, home.path());
 
-        let verbs: Vec<&str> = p.dropped.iter().map(|d| d.verb.as_str()).collect();
+        // Only the grant under test: the fixture's own paths are
+        // environment-dependent, so an assertion over the whole list would be
+        // about the CI runner rather than about this code.
+        let mine: Vec<_> = p
+            .dropped
+            .iter()
+            .filter(|d| d.path == gone.display().to_string())
+            .collect();
+        let verbs: Vec<&str> = mine.iter().map(|d| d.verb.as_str()).collect();
         assert!(verbs.contains(&"read"), "{:?}", p.dropped);
         assert!(verbs.contains(&"write"), "{:?}", p.dropped);
         assert!(
-            p.dropped.iter().all(
-                |d| d.path == gone.display().to_string() && d.reason.contains("does not exist")
-            ),
+            mine.iter().all(|d| d.reason.contains("does not exist")),
             "{:?}",
             p.dropped
         );
     }
 
-    /// The control: a healthy profile records nothing, so a non-empty list on a
-    /// real agent always means something actually went missing.
+    /// The control: a grant whose path is present is never recorded as dropped.
+    ///
+    /// Asserts about *this* grant rather than an empty list, because the
+    /// fixture's own entitlements are environment-dependent — `~/Documents`
+    /// exists on the macOS runner and not on a bare Ubuntu one, so a global
+    /// emptiness assertion passes locally and fails in CI for a reason that has
+    /// nothing to do with what this test is about.
     #[test]
     fn a_live_grant_records_no_drop() {
         let home = tempfile::tempdir().unwrap();
@@ -1476,7 +1487,13 @@ mod tests {
         let mut ent = minimal_entitlements();
         ent.filesystem.write = vec![live.display().to_string()];
         let p = SandboxPolicy::from_entitlements(&ent, home.path());
-        assert!(p.dropped.is_empty(), "{:?}", p.dropped);
+        assert!(
+            !p.dropped
+                .iter()
+                .any(|d| d.path == live.display().to_string()),
+            "a grant whose path exists must never be recorded as dropped: {:?}",
+            p.dropped
+        );
     }
 
     #[test]
