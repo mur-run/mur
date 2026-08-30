@@ -28,6 +28,8 @@ pub enum ScheduleItem {
         message: String,
         next_fires: Vec<String>,
         status: String,
+        description: String,
+        next_note: Option<String>,
     },
     AgentIdle {
         owner: String,
@@ -35,12 +37,16 @@ pub enum ScheduleItem {
         cooldown_secs: u64,
         message: String,
         status: String,
+        description: String,
+        next_note: Option<String>,
     },
     Workflow {
         owner: String,
         expr: Option<String>,
         next_fires: Vec<String>,
         status: String,
+        description: String,
+        next_note: Option<String>,
     },
     Fleet {
         owner: String,
@@ -49,6 +55,8 @@ pub enum ScheduleItem {
         status: String,
         budget_usd: f64,
         autorun_env: bool,
+        description: String,
+        next_note: Option<String>,
     },
 }
 
@@ -74,6 +82,90 @@ pub fn schedule_status(mur_home: &Path, agent_filter: Option<&str>) -> ScheduleS
         schedules,
         warnings,
     }
+}
+
+/// Human phrasing for a cron expression.
+///
+/// Computed here, not in each client: cron → English is a real derivation, and
+/// a second implementation of it eventually disagrees with this one. The
+/// Dashboard already carries such a second implementation
+/// (`mur-web/src/lib/schedule-parser.ts`), which is what this is working
+/// toward retiring.
+///
+/// Only the shapes that actually occur are phrased; anything else falls back to
+/// the raw expression. A wrong sentence is worse than a cron string a reader can
+/// look up, so the fallback is deliberate rather than a gap to be filled in
+/// later with guesses.
+pub fn describe_cron(expr: &str) -> String {
+    let f: Vec<&str> = expr.split_whitespace().collect();
+    if f.len() != 5 {
+        return expr.to_string();
+    }
+    let (min, hour, dom, mon, dow) = (f[0], f[1], f[2], f[3], f[4]);
+    let every_day = dom == "*" && mon == "*";
+    let at = |h: &str, m: &str| -> Option<String> {
+        let (h, m) = (h.parse::<u32>().ok()?, m.parse::<u32>().ok()?);
+        (h < 24 && m < 60).then(|| format!("{h:02}:{m:02}"))
+    };
+    match (min, hour, dow) {
+        (m, "*", "*") if every_day => {
+            if let Some(n) = m.strip_prefix("*/").and_then(|n| n.parse::<u32>().ok()) {
+                return format!("every {n} minutes");
+            }
+            if m == "*" {
+                return "every minute".into();
+            }
+            if m.parse::<u32>().is_ok() {
+                return "hourly".into();
+            }
+            expr.to_string()
+        }
+        (m, h, "*") if every_day => match at(h, m) {
+            Some(t) => format!("daily at {t}"),
+            None => expr.to_string(),
+        },
+        (m, h, "1-5") if every_day => match at(h, m) {
+            Some(t) => format!("weekdays at {t}"),
+            None => expr.to_string(),
+        },
+        _ => expr.to_string(),
+    }
+}
+
+/// Human phrasing for a fleet loop trigger (`cron:…`, `interval:…`, `manual`).
+fn describe_trigger(trigger: &str) -> String {
+    if let Some(expr) = trigger.strip_prefix("cron:") {
+        return describe_cron(expr);
+    }
+    if let Some(every) = trigger.strip_prefix("interval:") {
+        return format!("every {every}");
+    }
+    if trigger == "manual" {
+        return "manual — runs only when started".into();
+    }
+    trigger.to_string()
+}
+
+/// Why an item has no next fire.
+///
+/// The invariant this exists for: **an empty `next_fires` always carries a
+/// note.** A blank "Next" column is indistinguishable from "will not run
+/// again", and one of the things it currently hides is a fleet that runs every
+/// thirty minutes.
+fn trigger_note(trigger: &str) -> Option<String> {
+    if trigger == "manual" {
+        return Some("no timetable — this runs only when something starts it".into());
+    }
+    if trigger.starts_with("interval:") {
+        // `.last_run` is named by `schedule_status`'s own comment and by
+        // `cmd/fleet/export.rs` as the state this would need — and nothing in
+        // the tree writes it, so the gap is permanent until something does.
+        return Some(
+            "not tracked — an interval fires relative to its last run, which is not recorded"
+                .into(),
+        );
+    }
+    Some(format!("could not read a schedule from `{trigger}`"))
 }
 
 fn fires(expr: &str) -> Vec<String> {
@@ -115,11 +207,16 @@ fn collect_agents(
         };
 
         for s in &profile.lifecycle.schedule {
+            let next_fires = fires(&s.cron);
             out.push(ScheduleItem::AgentCron {
                 owner: name.clone(),
                 expr: s.cron.clone(),
                 message: s.message.clone(),
-                next_fires: fires(&s.cron),
+                description: describe_cron(&s.cron),
+                next_note: next_fires
+                    .is_empty()
+                    .then(|| format!("could not read a schedule from `{}`", s.cron)),
+                next_fires,
                 status: "enabled".into(),
             });
         }
@@ -129,6 +226,10 @@ fn collect_agents(
                 after_secs: t.after_secs,
                 cooldown_secs: t.cooldown_secs,
                 message: t.message.clone(),
+                description: format!("after {}s idle", t.after_secs),
+                // Not a failure to compute: an idle trigger has no clock to
+                // read. Saying so beats a blank that reads as "never".
+                next_note: Some("no fixed time — fires once the agent has been idle".into()),
                 status: "enabled".into(),
             });
         }
@@ -138,11 +239,22 @@ fn collect_agents(
 fn collect_workflows(out: &mut Vec<ScheduleItem>) {
     for s in list_system_schedules_detailed() {
         let next_fires = s.cron.as_deref().map(fires).unwrap_or_default();
+        let description = s
+            .cron
+            .as_deref()
+            .map(describe_cron)
+            .unwrap_or_else(|| "manual — runs only when started".into());
+        let next_note = next_fires.is_empty().then(|| match s.cron.as_deref() {
+            Some(expr) => format!("could not read a schedule from `{expr}`"),
+            None => "no timetable — this runs only when something starts it".into(),
+        });
         out.push(ScheduleItem::Workflow {
             owner: s.workflow,
             expr: s.cron,
             next_fires,
             status: "enabled".into(),
+            description,
+            next_note,
         });
     }
 }
@@ -182,6 +294,11 @@ fn collect_fleets(home: &Path, out: &mut Vec<ScheduleItem>, warnings: &mut Vec<S
             .strip_prefix("cron:")
             .map(fires)
             .unwrap_or_default();
+        let description = describe_trigger(&loop_cfg.trigger);
+        let next_note = next_fires
+            .is_empty()
+            .then(|| trigger_note(&loop_cfg.trigger))
+            .flatten();
         out.push(ScheduleItem::Fleet {
             owner: fleet.name,
             trigger: loop_cfg.trigger,
@@ -189,12 +306,131 @@ fn collect_fleets(home: &Path, out: &mut Vec<ScheduleItem>, warnings: &mut Vec<S
             status: if stopped { "stopped" } else { "enabled" }.into(),
             budget_usd: loop_cfg.budget_usd,
             autorun_env: std::env::var("MUR_FLEET_AUTORUN").is_ok_and(|v| v == "1"),
+            description,
+            next_note,
         });
     }
 }
 
 #[cfg(test)]
 mod tests {
+    /// `(has a next fire, note explaining why not)` for any item.
+    fn next_state(it: &ScheduleItem) -> (bool, Option<&str>) {
+        match it {
+            ScheduleItem::AgentCron {
+                next_fires,
+                next_note,
+                ..
+            }
+            | ScheduleItem::Workflow {
+                next_fires,
+                next_note,
+                ..
+            }
+            | ScheduleItem::Fleet {
+                next_fires,
+                next_note,
+                ..
+            } => (!next_fires.is_empty(), next_note.as_deref()),
+            ScheduleItem::AgentIdle { next_note, .. } => (false, next_note.as_deref()),
+        }
+    }
+
+    /// The invariant the whole change exists for: a blank "Next" is never an
+    /// acceptable resting state. Either there is a fire time, or there is a
+    /// sentence saying why there is not — never neither.
+    #[test]
+    fn every_item_either_has_a_next_fire_or_says_why_not() {
+        let home = tempfile::tempdir().unwrap();
+        let fleets = home.path().join("fleets");
+        for (name, trigger) in [
+            ("timed", "cron:*/15 * * * *"),
+            ("paced", "interval:30m"),
+            ("handstart", "manual"),
+            ("garbled", "whenever-i-feel-like-it"),
+        ] {
+            let d = fleets.join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(
+                d.join("fleet.yaml"),
+                format!(
+                    "name: {name}\nchannel_id: fleet-{name}\nloop:\n  trigger: \"{trigger}\"\n"
+                ),
+            )
+            .unwrap();
+        }
+        let st = schedule_status(home.path(), None);
+        assert_eq!(st.schedules.len(), 4, "{:?}", st.schedules);
+        for it in &st.schedules {
+            let (has_fire, note) = next_state(it);
+            assert!(
+                has_fire != note.is_some(),
+                "exactly one of a fire time and a note, got ({has_fire}, {note:?}) for {it:?}"
+            );
+        }
+    }
+
+    /// The row from the report: a fleet running every half hour rendered as
+    /// "—", which reads as "will not run again".
+    #[test]
+    fn an_interval_fleet_says_why_it_has_no_next_time() {
+        let home = tempfile::tempdir().unwrap();
+        let d = home.path().join("fleets/smoke");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(
+            d.join("fleet.yaml"),
+            "name: smoke\nchannel_id: fleet-smoke\nloop:\n  trigger: \"interval:30m\"\n",
+        )
+        .unwrap();
+        let st = schedule_status(home.path(), None);
+        let ScheduleItem::Fleet {
+            description,
+            next_note,
+            ..
+        } = &st.schedules[0]
+        else {
+            panic!("{:?}", st.schedules)
+        };
+        assert_eq!(description, "every 30m");
+        assert!(
+            next_note.as_deref().unwrap().contains("last run"),
+            "{next_note:?}"
+        );
+    }
+
+    #[test]
+    fn cron_is_phrased_for_the_shapes_that_occur() {
+        for (expr, want) in [
+            ("*/15 * * * *", "every 15 minutes"),
+            ("* * * * *", "every minute"),
+            ("0 * * * *", "hourly"),
+            ("30 9 * * *", "daily at 09:30"),
+            ("0 3 * * *", "daily at 03:00"),
+            ("30 9 * * 1-5", "weekdays at 09:30"),
+        ] {
+            assert_eq!(describe_cron(expr), want, "for {expr}");
+        }
+    }
+
+    /// A cron string a reader can look up beats a sentence that is wrong, so
+    /// anything unrecognised must come back verbatim rather than guessed at.
+    #[test]
+    fn an_unrecognised_cron_shape_is_returned_verbatim() {
+        for expr in ["0 9 1 * *", "15 2 * 6 3", "not a cron", "0 9 * *"] {
+            assert_eq!(describe_cron(expr), expr, "must not invent a phrasing");
+        }
+    }
+
+    #[test]
+    fn trigger_phrasing_covers_all_three_forms() {
+        assert_eq!(describe_trigger("cron:0 * * * *"), "hourly");
+        assert_eq!(describe_trigger("interval:2h"), "every 2h");
+        assert_eq!(
+            describe_trigger("manual"),
+            "manual — runs only when started"
+        );
+    }
+
     use super::*;
     use std::fs;
 
