@@ -43,16 +43,56 @@ pub fn install_cli_tools() -> Result<String, String> {
     Ok(dst.display().to_string())
 }
 
-/// The PATH `mur` the user would invoke in a terminal. GUI apps don't inherit
-/// the shell PATH, so we probe the canonical install locations directly (the
-/// same two `install_cli_tools` targets, which also cover brew + build.sh).
+/// The PATH `mur` the user would invoke in a terminal.
+///
+/// A GUI app does not inherit the shell PATH, so this used to probe two known
+/// install dirs and take the first that existed — Homebrew first. That is not
+/// what a terminal does. With a stale `/opt/homebrew/bin/mur` beside a current
+/// `~/.local/bin/mur` earlier on PATH, the Hub read the copy the user never
+/// runs and reported a version skew that did not exist, telling them to
+/// `brew upgrade mur` when their actual CLI was already newer than the Hub.
+///
+/// So ask the user's shell, which is the only thing that knows the answer.
+/// Falling back to the old probe keeps this working where no shell is
+/// configured, and
+/// `install_cli_tools` still writes to `install_dir`'s choice — that decision
+/// is about where to put a binary, not about which one is in front.
 fn path_mur(home: &Path) -> Option<PathBuf> {
+    #[cfg(unix)]
+    if let Some(p) = shell_path_mur() {
+        return Some(p);
+    }
     [
         PathBuf::from("/opt/homebrew/bin/mur"),
         home.join(".local/bin/mur"),
     ]
     .into_iter()
     .find(|p| p.exists())
+}
+
+/// `$SHELL -ilc 'command -v mur'`, the resolution a terminal actually performs.
+///
+/// Both flags are load-bearing and `-l` alone is not enough: on the machine
+/// this was reported from, PATH is exported at `.zshrc:74`, which only an
+/// INTERACTIVE shell reads — a login shell resolved to the stale Homebrew copy,
+/// exactly like the probe it replaced. `-i` covers `.zshrc`/`.bashrc`, `-l`
+/// covers `.zprofile`/`.profile`, and people put it in either.
+///
+/// `None` on any failure so the caller falls back rather than reporting
+/// nothing. Unix only: `$SHELL` and `-ilc` are POSIX conventions, and Windows
+/// has no equivalent question to ask — the probe list stands there.
+#[cfg(unix)]
+fn shell_path_mur() -> Option<PathBuf> {
+    let shell = std::env::var("SHELL").ok()?;
+    let out = Command::new(shell)
+        .args(["-ilc", "command -v mur"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let p = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    p.is_file().then_some(p)
 }
 
 /// `mur --version` → "mur X.Y.Z" → "X.Y.Z".
@@ -116,6 +156,113 @@ pub fn cli_version_skew(app: tauri::AppHandle) -> Option<CliSkew> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bug: a stale Homebrew copy beside a current `~/.local/bin` one
+    /// earlier on PATH. The shell resolves to the current one; the old probe
+    /// took Homebrew because it was listed first, and the Hub reported a skew
+    /// that did not exist — telling the user to `brew upgrade mur` when their
+    /// CLI was already newer than the Hub.
+    #[cfg(unix)]
+    #[test]
+    fn the_shell_decides_which_mur_not_the_probe_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let brew = dir.path().join("brew-bin");
+        let local = dir.path().join("local-bin");
+        std::fs::create_dir_all(&brew).unwrap();
+        std::fs::create_dir_all(&local).unwrap();
+        for d in [&brew, &local] {
+            let f = d.join("mur");
+            std::fs::write(&f, "#!/bin/sh\necho mur 0.0.0\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        // `local` first, exactly like the reporting user's PATH.
+        let path = format!("{}:{}", local.display(), brew.display());
+        let out = Command::new("/bin/sh")
+            .env("PATH", &path)
+            .args(["-c", "command -v mur"])
+            .output()
+            .unwrap();
+        let resolved = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim().to_string());
+        assert_eq!(
+            resolved,
+            local.join("mur"),
+            "PATH order decides; the probe's hardcoded Homebrew-first does not"
+        );
+    }
+
+    /// `-i` is load-bearing, not decoration. On the machine this was reported
+    /// from, PATH is exported at `.zshrc:74`, which a login shell never reads:
+    /// `-lc` resolved to the stale Homebrew copy and `-ic` to the current one.
+    /// A future tidy-up that drops `-i` would silently restore the bug.
+    #[cfg(unix)]
+    #[test]
+    fn a_path_set_in_an_interactive_rc_is_invisible_without_i() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("marker"), "").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(bin.join("marker"), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        // The PATH addition lives ONLY in the interactive rc, exactly like the
+        // `.zshrc:74` that caused this.
+        std::fs::write(
+            home.path().join(".bashrc"),
+            format!("export PATH=\"{}:$PATH\"\n", bin.display()),
+        )
+        .unwrap();
+
+        let found = |flags: &str| {
+            Command::new("/bin/bash")
+                .env("HOME", home.path())
+                .args([flags, "command -v marker"])
+                .output()
+                .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+                .unwrap_or(false)
+        };
+        assert!(!found("-c"), "a non-interactive shell must not see .bashrc");
+        assert!(
+            found("-ic"),
+            "an interactive shell must see it — this is why the flag is there"
+        );
+    }
+
+    /// `read_cli_version` must read the binary it was handed, so the two copies
+    /// are distinguishable at all.
+    ///
+    /// Unix-only for the fixture, not the behaviour: it writes a `#!/bin/sh`
+    /// script and runs it, which Windows cannot execute. Gating the two tests
+    /// that SPAWN a shell was not enough — this one merely executes a script
+    /// file, the same dependency wearing a different shape.
+    #[cfg(unix)]
+    #[test]
+    fn the_version_comes_from_the_binary_given() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("mur");
+        std::fs::write(&f, "#!/bin/sh\necho mur 9.9.9\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(read_cli_version(&f).as_deref(), Some("9.9.9"));
+    }
+
+    /// Control on the direction: equal versions are not a skew, and the banner
+    /// only fires when the CLI is genuinely behind.
+    #[test]
+    fn equal_versions_are_not_a_skew() {
+        assert!(!is_older("2.71.7", "2.71.7"));
+        assert!(is_older("2.71.3", "2.71.7"));
+        assert!(!is_older("2.71.7", "2.71.3"));
+    }
 
     #[test]
     fn prefers_homebrew_when_writable() {
