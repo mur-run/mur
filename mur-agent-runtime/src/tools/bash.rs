@@ -1,7 +1,7 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
-use mur_common::agent_facts::{agent_facts, who_can_exec};
+use mur_common::agent_facts::who_can_exec;
 
 use super::denial::{
     classify_write_denial, spawn_denied_hint, spawn_denied_path, write_denied_hint,
@@ -59,6 +59,14 @@ pub struct BashTool {
     /// denial, to name the delegation route in the error. `None` (tests,
     /// embedded uses) just omits the hint.
     pub agent: Option<(PathBuf, String)>,
+    /// The agent's filesystem write grants, as the supervisor resolved them.
+    ///
+    /// Passed in rather than read back from `profile.yaml`, because the agent
+    /// **cannot read its own profile** — the sandbox denies it unconditionally
+    /// (`SELF_PROTECTED_AGENT_FILES`, issue #712), so a lookup here returns
+    /// `None` inside every real agent and silently costs the explanation this
+    /// exists to give.
+    pub write_grants: Vec<PathBuf>,
 }
 
 /// Resolve the effective timeout (in seconds) from the tool input's optional
@@ -79,12 +87,38 @@ impl BashTool {
             working_dir,
             session_cwd,
             agent: None,
+            write_grants: Vec::new(),
         }
     }
 
     /// Attach the agent identity used to resolve a spawn-denial route.
     pub fn with_agent(mut self, mur_home: PathBuf, agent_name: String) -> Self {
         self.agent = Some((mur_home, agent_name));
+        self
+    }
+
+    /// The advisory for a filesystem denial in `stderr`, if this can account
+    /// for one.
+    ///
+    /// Separated from `execute` so it is testable, because the way it broke is
+    /// not otherwise reachable from a test: it used to look the agent's grants
+    /// up from `profile.yaml`, which every real agent is forbidden to read
+    /// (issue #712) and every test process can read fine. It passed everywhere
+    /// and worked nowhere.
+    fn explain_write_denial(&self, stderr: &str, working_dir: &Path) -> Option<String> {
+        let denied = write_denied_path(stderr, working_dir)?;
+        let (mur_home, agent) = self.agent.as_ref()?;
+        let kind = classify_write_denial(
+            &self.write_grants,
+            &denied,
+            &mur_home.join("agents").join(agent),
+        )?;
+        Some(write_denied_hint(&denied, agent, &kind))
+    }
+
+    /// Attach the write grants used to explain a filesystem denial.
+    pub fn with_write_grants(mut self, grants: Vec<PathBuf>) -> Self {
+        self.write_grants = grants;
         self
     }
 }
@@ -226,16 +260,7 @@ Commands are killed after `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {
                 let hint = spawn_denied_hint(&bin, agent, &routes);
                 combined.push_str(&hint);
                 status = ToolStatus::Denied { detail: hint };
-            } else if let Some(denied) = write_denied_path(&stderr, &working_dir)
-                && let Some((mur_home, agent)) = &self.agent
-                && let Some(facts) = agent_facts(mur_home, agent)
-                && let Some(kind) = classify_write_denial(
-                    &facts.writes,
-                    &denied,
-                    &mur_home.join("agents").join(agent),
-                )
-            {
-                let hint = write_denied_hint(&denied, agent, &kind);
+            } else if let Some(hint) = self.explain_write_denial(&stderr, &working_dir) {
                 combined.push_str(&hint);
                 status = ToolStatus::Denied { detail: hint };
             } else {
@@ -253,6 +278,65 @@ Commands are killed after `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {
 
 #[cfg(test)]
 mod tests {
+    /// The regression that shipped: the advisory looked the grants up from
+    /// `profile.yaml`, which no real agent may read. A `mur_home` with no
+    /// profile in it stands in for that — if anything here reads the file, it
+    /// finds nothing and stays silent, exactly as it did in production.
+    #[test]
+    fn the_advisory_does_not_depend_on_reading_the_agents_profile() {
+        let empty_home = tempfile::tempdir().unwrap(); // no agents/<name>/profile.yaml
+        let tool = BashTool::new(
+            PathBuf::from("/repo"),
+            crate::tools::fs_policy::SessionCwd::new(PathBuf::from("/repo")),
+        )
+        .with_agent(empty_home.path().to_path_buf(), "mur".into())
+        .with_write_grants(vec![PathBuf::from("/granted")]);
+
+        // The exact line a shell redirect produces under a seatbelt denial.
+        let hint = tool
+            .explain_write_denial(
+                "bash: /Users/d/Documents/probe.txt: Operation not permitted\n",
+                Path::new("/repo"),
+            )
+            .expect("a denial outside every grant must be explained");
+        assert!(hint.contains("[sandbox]"), "{hint}");
+        assert!(hint.contains("perm allow-write"), "{hint}");
+    }
+
+    /// Without grants there is nothing to compare against, so nothing is said —
+    /// the embedded/test construction must not start inventing verdicts.
+    #[test]
+    fn no_grants_means_no_verdict_not_a_guess() {
+        let empty_home = tempfile::tempdir().unwrap();
+        let tool = BashTool::new(
+            PathBuf::from("/repo"),
+            crate::tools::fs_policy::SessionCwd::new(PathBuf::from("/repo")),
+        )
+        .with_agent(empty_home.path().to_path_buf(), "mur".into());
+        // No `with_write_grants`: every path is "not granted", which is true
+        // but useless, so the hint still names the grant command rather than
+        // claiming the path is forbidden.
+        let hint = tool.explain_write_denial(
+            "bash: /x/y.txt: Operation not permitted\n",
+            Path::new("/repo"),
+        );
+        assert!(hint.is_some_and(|h| h.contains("perm allow-write")));
+    }
+
+    /// An ordinary failure still collects nothing, with grants attached.
+    #[test]
+    fn a_plain_failure_is_still_left_alone() {
+        let tool = BashTool::new(
+            PathBuf::from("/repo"),
+            crate::tools::fs_policy::SessionCwd::new(PathBuf::from("/repo")),
+        )
+        .with_agent(PathBuf::from("/nowhere"), "mur".into())
+        .with_write_grants(vec![PathBuf::from("/granted")]);
+        assert_eq!(
+            tool.explain_write_denial("error: could not compile\n", Path::new("/repo")),
+            None
+        );
+    }
 
     use super::*;
     use crate::tools::ToolExecutor;
