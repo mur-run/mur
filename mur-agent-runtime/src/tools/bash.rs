@@ -191,6 +191,16 @@ Commands are killed after `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "What you are doing and why, 5-10 words, active voice, \
+                            no trailing period. The command is shown underneath, so do not \
+                            restate it: say the intent it cannot show. \
+                            Good: \"Checking whether the tag already exists\". \
+                            Good: \"Finding which module owns the retry logic\". \
+                            Bad: \"Running git tag\" (the command says that). \
+                            Bad: \"Executing a shell command\" (says nothing)."
+                    },
                     "command": {
                         "type": "string",
                         "description": "The bash command to execute"

@@ -37,11 +37,21 @@ pub fn card_lines(
     };
 
     // ── Header: glyph · name · arg-hint · duration ───────────────────────────
+    //
+    // With a `description` the card splits in two: the intent on the header
+    // line, the command indented under a `⎿`. A command says what ran and
+    // cannot say what for, and the model is the only thing that knows —
+    // deriving a subject from the command text would just restate the line
+    // below it in worse words.
     let dur = card
         .duration_ms
         .map(|ms| format!(" · {ms}ms"))
         .unwrap_or_default();
-    let header = format!("{} {} {}", card.glyph(), card.name, arg_hint(card, budget));
+    let subject = tool_description(card);
+    let header = match &subject {
+        Some(d) => format!("{} {}", card.glyph(), d),
+        None => format!("{} {} {}", card.glyph(), card.name, arg_hint(card, budget)),
+    };
     let auto_tag = if card.auto_approved {
         Span::styled(
             " [auto]",
@@ -56,9 +66,11 @@ pub fn card_lines(
         header,
         Style::default().fg(accent).add_modifier(Modifier::BOLD),
     )];
-    // Collapsed: fold a one-line result gist into the header so the whole card
-    // is a single scannable line (unless there's a detailed error to show).
-    if !expanded
+    // Without a subject the gist folds into the header, keeping the whole card
+    // one scannable line. With one it belongs on the `⎿` row beside the command
+    // it came from.
+    if subject.is_none()
+        && !expanded
         && card.error.is_none()
         && let Some(gist) = result_gist(card, budget)
     {
@@ -67,9 +79,48 @@ pub fn card_lines(
             Style::default().fg(theme.system),
         ));
     }
-    header_spans.push(Span::styled(dur, Style::default().fg(theme.system)));
+    if subject.is_none() {
+        header_spans.push(Span::styled(dur.clone(), Style::default().fg(theme.system)));
+    }
     header_spans.push(auto_tag);
     out.push(Line::from(header_spans));
+
+    // The command row. Dim throughout: the subject above is what the eye should
+    // land on, and this is the receipt underneath it.
+    if subject.is_some() {
+        let mut row = vec![
+            Span::styled(
+                "  ⎿ ",
+                Style::default()
+                    .fg(theme.system)
+                    .add_modifier(Modifier::DIM),
+            ),
+            Span::styled(
+                arg_hint(card, budget),
+                Style::default()
+                    .fg(theme.system)
+                    .add_modifier(Modifier::DIM),
+            ),
+        ];
+        if !expanded
+            && card.error.is_none()
+            && let Some(gist) = result_gist(card, budget)
+        {
+            row.push(Span::styled(
+                format!("  → {gist}"),
+                Style::default()
+                    .fg(theme.system)
+                    .add_modifier(Modifier::DIM),
+            ));
+        }
+        row.push(Span::styled(
+            dur,
+            Style::default()
+                .fg(theme.system)
+                .add_modifier(Modifier::DIM),
+        ));
+        out.push(Line::from(row));
+    }
 
     // Collapsed cards stop after the header (plus any error / HITL rows below).
     if !expanded {
@@ -341,6 +392,15 @@ fn elide_middle(s: &str, budget: usize) -> String {
 ///
 /// Bash also loses a leading `cd <path> && `: session state repeated on every
 /// row, carrying nothing that distinguishes one call from the next.
+/// The model's own one-line account of why it is running this, when it gave one.
+///
+/// Blank or whitespace reads as absent: a card that renders an empty subject
+/// line is worse than one that never split.
+fn tool_description(card: &StepCard) -> Option<String> {
+    let d = card.args.as_object()?.get("description")?.as_str()?.trim();
+    (!d.is_empty()).then(|| d.to_string())
+}
+
 fn arg_hint(card: &StepCard, budget: usize) -> String {
     let Some(raw) = hint_field(card) else {
         return String::new();
@@ -406,10 +466,71 @@ mod tests {
         assert!(text.contains('✔'), "expected '✔' in: {text}");
     }
 
+    fn done_card(args: serde_json::Value) -> StepCard {
+        let mut c = StepCard::new("s".into(), "bash".into(), args);
+        c.state = crate::cmd::agent::cli::step::StepState::Done;
+        c.output = "version = \"2.71.7\"".into();
+        c.duration_ms = Some(21);
+        c
+    }
+
+    fn rows(card: &StepCard) -> Vec<String> {
+        super::card_lines(card, &theme::DARK, false, TEST_WIDTH)
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
+    }
+
+    /// With a description the card splits: intent on top, command underneath.
+    #[test]
+    fn a_description_puts_the_intent_first_and_the_command_under_it() {
+        let r = rows(&done_card(serde_json::json!({
+            "description": "Checking the workspace version",
+            "command": "grep -m1 '^version' Cargo.toml"
+        })));
+        assert!(
+            r[0].contains("Checking the workspace version"),
+            "intent must lead: {r:?}"
+        );
+        assert!(!r[0].contains("grep"), "the command belongs below: {r:?}");
+        assert!(r[1].contains('⎿'), "expected a command row: {r:?}");
+        assert!(r[1].contains("grep -m1"), "{r:?}");
+        assert!(
+            r[1].contains("21ms"),
+            "timing rides with the command: {r:?}"
+        );
+    }
+
+    /// Control — every tool that sends no description renders exactly as before.
+    /// This is what makes the change additive rather than a rewrite.
+    #[test]
+    fn without_a_description_the_card_is_unchanged() {
+        let r = rows(&done_card(serde_json::json!({
+            "command": "grep -m1 '^version' Cargo.toml"
+        })));
+        assert_eq!(r.len(), 1, "still one line: {r:?}");
+        assert!(r[0].contains("bash"), "{r:?}");
+        assert!(r[0].contains("grep -m1"), "{r:?}");
+        assert!(r[0].contains("21ms"), "{r:?}");
+    }
+
+    /// An empty or whitespace description is absent, not a blank subject line.
+    #[test]
+    fn a_blank_description_does_not_split_the_card() {
+        for d in ["", "   "] {
+            let r = rows(&done_card(serde_json::json!({
+                "description": d,
+                "command": "ls"
+            })));
+            assert_eq!(r.len(), 1, "description {d:?} should not split: {r:?}");
+        }
+    }
+
     /// The real line from a real session, at the 80-column design baseline.
     /// Middle-elision produced `grep -m1 '^version'… head -20 Cargo.toml`,
     /// which reads as though the `||` fallback ran. It did not — grep
     /// succeeded.
+
     #[test]
     fn a_shell_command_keeps_the_branch_that_ran() {
         let cmd = "grep -m1 '^version' Cargo.toml 2>/dev/null || head -20 Cargo.toml";
