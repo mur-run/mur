@@ -98,17 +98,46 @@ pub fn cmd_stats(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Where a runtime's stderr can land. Two launch paths write two *different*
+/// files: `mur agent start` writes into the agent home, while the service
+/// supervisor redirects to /tmp (macOS) or the journal (Linux, no file). So
+/// `logs` cannot assume which supervisor is in charge — it takes whichever
+/// candidate was written last.
+fn log_candidates(agent_home: &Path, name: &str) -> Vec<std::path::PathBuf> {
+    let mut v = vec![agent_home.join("stderr.log")];
+    #[cfg(target_os = "macos")]
+    v.push(super::service::service_stderr_log(name));
+    #[cfg(not(target_os = "macos"))]
+    let _ = name;
+    v
+}
+
+fn newest_log(agent_home: &Path, name: &str) -> Option<std::path::PathBuf> {
+    log_candidates(agent_home, name)
+        .into_iter()
+        .filter_map(|p| Some((fs::metadata(&p).ok()?.modified().ok()?, p)))
+        .max_by_key(|(mtime, _)| *mtime)
+        .map(|(_, p)| p)
+}
+
 pub fn cmd_logs(name: &str, tail: usize) -> Result<()> {
     let mur_home = resolve_mur_home()?;
     let dir = mur_home.join("agents").join(name);
     if !dir.exists() {
         bail!("agent '{name}' not found");
     }
-    let log_path = dir.join("stderr.log");
-    if !log_path.exists() {
-        eprintln!("(no stderr.log for '{name}' yet)");
+    let Some(log_path) = newest_log(&dir, name) else {
+        eprintln!("(no log file for '{name}' yet)");
+        if cfg!(target_os = "linux") {
+            eprintln!(
+                "  a service-managed agent logs to the journal, not a file:\n    journalctl --user -u mur-agent-{name}.service"
+            );
+        }
         return Ok(());
-    }
+    };
+    // Name the source: two launch paths write two files, and the one this
+    // picked may be days stale if the agent moved to the other path.
+    eprintln!("── {} ──", log_path.display());
     let body =
         fs::read_to_string(&log_path).with_context(|| format!("read {}", log_path.display()))?;
     let lines: Vec<&str> = body.lines().collect();
@@ -121,6 +150,65 @@ pub fn cmd_logs(name: &str, tail: usize) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, SystemTime};
+
+    fn touch(p: &std::path::Path, ago: u64) {
+        std::fs::write(p, "x").unwrap();
+        let f = std::fs::OpenOptions::new().write(true).open(p).unwrap();
+        f.set_modified(SystemTime::now() - Duration::from_secs(ago))
+            .unwrap();
+    }
+
+    #[test]
+    fn newest_log_is_none_when_no_launch_path_has_written() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(
+            super::newest_log(home.path(), "nobody-has-run-me"),
+            None,
+            "no candidate exists, so there is nothing honest to show"
+        );
+    }
+
+    /// The bug: `mur agent start` writes `<agent>/stderr.log`, the launchd unit
+    /// writes /tmp. Reading only the first showed days-stale lines as if live.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn newest_log_prefers_the_service_path_when_it_is_fresher() {
+        let home = tempfile::tempdir().unwrap();
+        // Unique name so the hardcoded /tmp path cannot collide with a real agent.
+        let name = format!("mur-test-{}", std::process::id());
+        let svc = super::super::service::service_stderr_log(&name);
+        touch(&home.path().join("stderr.log"), 86_400); // yesterday
+        touch(&svc, 1); // a second ago
+        let picked = super::newest_log(home.path(), &name);
+        let _ = std::fs::remove_file(&svc);
+        assert_eq!(picked, Some(svc), "the fresher of the two must win");
+    }
+
+    /// ...and the preference is by mtime, not by a fixed ranking of the paths.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn newest_log_prefers_the_agent_home_when_it_is_fresher() {
+        let home = tempfile::tempdir().unwrap();
+        let name = format!("mur-test-rev-{}", std::process::id());
+        let svc = super::super::service::service_stderr_log(&name);
+        let own = home.path().join("stderr.log");
+        touch(&svc, 86_400);
+        touch(&own, 1);
+        let picked = super::newest_log(home.path(), &name);
+        let _ = std::fs::remove_file(&svc);
+        assert_eq!(picked, Some(own), "mtime decides, not candidate order");
+    }
+
+    /// Non-macOS has no second file at all (systemd logs to the journal), so
+    /// the candidate list must not grow a path nothing ever writes.
+    #[test]
+    fn candidate_count_matches_what_this_platform_actually_writes() {
+        let home = tempfile::tempdir().unwrap();
+        let n = super::log_candidates(home.path(), "a").len();
+        assert_eq!(n, if cfg!(target_os = "macos") { 2 } else { 1 });
+    }
+
     use super::*;
 
     #[test]
