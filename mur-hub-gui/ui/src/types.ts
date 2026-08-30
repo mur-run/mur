@@ -148,7 +148,8 @@ export type DetailTab =
   | "inbox"
   | "mobile"
   | "memory"
-  | "plugins";
+  | "plugins"
+  | "schedule";
 
 export const ALL_DETAIL_TABS: DetailTab[] = [
   "persona",
@@ -161,6 +162,7 @@ export const ALL_DETAIL_TABS: DetailTab[] = [
   "mobile",
   "memory",
   "plugins",
+  "schedule",
 ];
 
 export interface NotifConfig {
@@ -190,6 +192,7 @@ export const TAB_LABELS: Record<DetailTab, string> = {
   mobile: "Mobile",
   memory: "Memory",
   plugins: "Plugins",
+  schedule: "Schedule",
 };
 
 export interface MemoryView {

@@ -32,6 +32,7 @@ import { SkillsTab } from "./tabs/SkillsTab";
 import { McpTab } from "./tabs/McpTab";
 import { PluginsTab } from "./tabs/PluginsTab";
 import { PermissionsTab } from "./tabs/PermissionsTab";
+import { ScheduleTab } from "./tabs/ScheduleTab";
 
 // Tab → i18n key map (replaces the hardcoded TAB_LABELS lookup).
 const TAB_LABEL_KEYS: Record<DetailTab, TranslationKey> = {
@@ -45,6 +46,7 @@ const TAB_LABEL_KEYS: Record<DetailTab, TranslationKey> = {
   mobile: "detail.mobile",
   memory: "detail.memory",
   plugins: "detail.plugins",
+  schedule: "detail.schedule",
 };
 
 interface Props {
@@ -300,6 +302,7 @@ export function AgentInspector({ agentName, agents, runtime, onClose }: Props) {
         {activeTab === "mobile" && <MobileTab agentName={agentName} />}
         {activeTab === "memory" && <MemoryTab agentName={agentName} />}
         {activeTab === "plugins" && <PluginsTab detail={detail} onSaved={handleSaved} />}
+        {activeTab === "schedule" && <ScheduleTab agentName={agentName} />}
       </div>
     </aside>
   );
