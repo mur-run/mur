@@ -103,13 +103,19 @@ pub fn cmd_stats(name: &str) -> Result<()> {
 /// supervisor redirects to /tmp (macOS) or the journal (Linux, no file). So
 /// `logs` cannot assume which supervisor is in charge — it takes whichever
 /// candidate was written last.
+#[cfg(target_os = "macos")]
 fn log_candidates(agent_home: &Path, name: &str) -> Vec<std::path::PathBuf> {
-    let mut v = vec![agent_home.join("stderr.log")];
-    #[cfg(target_os = "macos")]
-    v.push(super::service::service_stderr_log(name));
-    #[cfg(not(target_os = "macos"))]
-    let _ = name;
-    v
+    vec![
+        agent_home.join("stderr.log"),
+        super::service::service_stderr_log(name),
+    ]
+}
+
+/// The systemd unit sets no `StandardError=`, so the runtime's stderr goes to
+/// the journal and there is no second file to consider.
+#[cfg(not(target_os = "macos"))]
+fn log_candidates(agent_home: &Path, _name: &str) -> Vec<std::path::PathBuf> {
+    vec![agent_home.join("stderr.log")]
 }
 
 fn newest_log(agent_home: &Path, name: &str) -> Option<std::path::PathBuf> {
