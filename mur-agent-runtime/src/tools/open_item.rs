@@ -20,6 +20,44 @@ pub const OPEN_ITEM: &str = "open_item";
 /// it is dumping, and a panel that can be flooded is a panel nobody reads.
 const MAX_TITLE_LEN: usize = 200;
 
+/// Whether a title reads as having a due time.
+///
+/// An agent asked to remember "remind me at 10:00 tomorrow" reaches for this
+/// tool because it is the one in hand, and writes an item that can only ever
+/// expire — `mur agent schedule` is the surface that fires. This does not
+/// block that; it appends one advisory sentence so the agent can correct
+/// itself in the same turn.
+///
+/// Deliberately narrow, and in both languages these agents are used in. A miss
+/// costs nothing (the item is still recorded exactly as before); a false
+/// positive costs one sentence.
+fn looks_time_bound(title: &str) -> bool {
+    const WORDS: &[&str] = &[
+        "tomorrow",
+        "tonight",
+        "next week",
+        "remind me",
+        "o'clock",
+        "明天",
+        "後天",
+        "今晚",
+        "下週",
+        "下星期",
+        "提醒",
+        "鬧鐘",
+    ];
+    let lower = title.to_lowercase();
+    if WORDS.iter().any(|w| lower.contains(w)) {
+        return true;
+    }
+    // A clock time: `10:00`, or `10 點` in the CJK form. Whitespace is stripped
+    // first — `8 點` is written with a space at least as often as without.
+    let c: Vec<char> = title.chars().filter(|c| !c.is_whitespace()).collect();
+    c.windows(3)
+        .any(|w| w[0].is_ascii_digit() && w[1] == ':' && w[2].is_ascii_digit())
+        || c.windows(2).any(|w| w[0].is_ascii_digit() && w[1] == '點')
+}
+
 pub struct OpenItemTool {
     pub mur_home: std::path::PathBuf,
     pub agent_name: String,
@@ -37,8 +75,9 @@ impl ToolExecutor for OpenItemTool {
             description: "Record something left unfinished, so the user still sees it after this \
 conversation scrolls away. Use for work you agreed to and did not complete, a blocker you hit, or \
 a decision you are waiting on — not for things you just did, and not for what MUR already tracks \
-(queued jobs and pending proposals are surfaced automatically). Pass `resolve` with an id from a \
-previous call to clear one."
+(queued jobs and pending proposals are surfaced automatically). This list has no clock: nothing \
+recorded here ever fires, so a request with a due time belongs in `mur agent schedule` as well. \
+Pass `resolve` with an id from a previous call to clear one."
                 .into(),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -98,7 +137,14 @@ previous call to clear one."
 
         Ok(format!(
             "Recorded as {id}. The user sees it under \"reported\" in `mur open`, marked as your \
-unverified claim."
+unverified claim.{}",
+            if looks_time_bound(title) {
+                " This title reads as time-bound, and open items have no clock — nothing here \
+fires. If something must happen at a time, set it with `mur agent schedule` too; this item only \
+records that you owe it."
+            } else {
+                ""
+            }
         )
         .into())
     }
@@ -106,6 +152,39 @@ unverified claim."
 
 #[cfg(test)]
 mod tests {
+    /// The item from #1075, verbatim. It sat for three weeks and expired.
+    #[test]
+    fn the_reminder_that_could_never_fire_is_flagged() {
+        assert!(looks_time_bound("明天早上 10:00 提醒使用者吃早餐"));
+    }
+
+    #[test]
+    fn time_bound_titles_are_caught_in_both_languages() {
+        for t in [
+            "remind me to check the deploy",
+            "ping the team tomorrow",
+            "call at 09:30",
+            "後天要回覆",
+            "晚上 8 點開始跑",
+        ] {
+            assert!(looks_time_bound(t), "missed: {t}");
+        }
+    }
+
+    /// The control that matters: ordinary unfinished work must not collect an
+    /// irrelevant sentence about scheduling on every single call.
+    #[test]
+    fn ordinary_work_items_are_not_flagged() {
+        for t in [
+            "Commit and push the signing-cert bump",
+            "等 pm 交出重做版統一聊天 IA 設計規格",
+            "write the tests for the merge path",
+            "確認 drs-ux 產出 design2.md",
+        ] {
+            assert!(!looks_time_bound(t), "false positive: {t}");
+        }
+    }
+
     use super::*;
 
     fn tool(home: &std::path::Path) -> OpenItemTool {
