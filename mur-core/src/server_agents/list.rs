@@ -103,6 +103,7 @@ pub(crate) mod tests {
             capabilities: vec!["a2a.message.send".to_string()],
             build_sha: String::new(),
             proto_version: 0,
+            sandbox: None,
         }
     }
 

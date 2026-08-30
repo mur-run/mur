@@ -386,7 +386,9 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     }
 
     let loopback_ports: Vec<u16> = egress_proxy.iter().map(|h| h.addr.port()).collect();
-    match crate::sandbox::apply(
+    let granted_digest =
+        mur_common::agent::filesystem_grants_digest(&profile.inner.entitlements.filesystem);
+    let sandbox_record = match crate::sandbox::apply(
         &profile.inner.entitlements,
         &agent_home,
         &extra_ports,
@@ -407,8 +409,15 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                 platform = %status.platform,
                 effective_abi = ?status.effective_abi,
                 enforcing = status.enforcing,
+                dropped = status.dropped.len(),
                 "B1 sandbox applied"
             );
+            Some(mur_common::agent::SandboxRecord {
+                enforcing: status.enforcing,
+                mode: status.platform,
+                granted_digest,
+                dropped: status.dropped,
+            })
         }
         Err(e) => {
             if fail_closed {
@@ -419,8 +428,17 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                 ));
             }
             tracing::warn!(error = %e, "B1 sandbox::apply failed; running advisory-only (B0 remains active)");
+            // No policy was installed, so there is nothing to have dropped.
+            // `enforcing: false` is the finding here, and it subsumes the rest:
+            // the agent has MORE access than its profile grants, not less.
+            Some(mur_common::agent::SandboxRecord {
+                enforcing: false,
+                mode: "advisory-only".into(),
+                granted_digest,
+                dropped: Vec::new(),
+            })
         }
-    }
+    };
 
     // 4–4a. Telemetry writer, hook chain, skills — extracted to prepare_runtime.
     let socket_enabled = profile.inner.transport.socket.enabled
@@ -684,6 +702,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         capabilities: profile.inner.capabilities.clone(),
         build_sha: mur_common::build::SHORT_SHA.to_string(),
         proto_version: mur_common::build::A2A_PROTO_VERSION,
+        sandbox: sandbox_record,
     };
     write_lock(&lock_path, &lock)?;
     info!("agent {} ({}) ready", profile.inner.name, profile.inner.id);

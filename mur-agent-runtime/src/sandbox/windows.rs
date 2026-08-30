@@ -73,5 +73,6 @@ pub fn apply_windows(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
         platform: "windows-job-object".to_string(),
         effective_abi: None,
         enforcing: true,
+        dropped: Vec::new(),
     })
 }

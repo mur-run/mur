@@ -31,6 +31,13 @@ pub struct SandboxStatus {
     pub platform: String,
     pub effective_abi: Option<u32>,
     pub enforcing: bool,
+    /// Filesystem grants the policy discarded while being built, so they never
+    /// reached the kernel however they read in `profile.yaml`.
+    ///
+    /// Platform backends leave this empty — they receive an already-built
+    /// policy and never see what was discarded producing it. [`apply`] fills it
+    /// from the policy immediately after they return.
+    pub dropped: Vec<mur_common::agent::DroppedGrant>,
 }
 
 /// Apply the kernel sandbox derived from `entitlements` to the current process.
@@ -57,7 +64,9 @@ pub fn apply(
     // …and to write the shared runtime media state it owns (co-watching:
     // watch.json + VLC snapshot dir), which lives outside agent_home.
     policy.allow_extra_write_paths(extra_write_paths);
-    let status = apply_policy(&policy)?;
+    let dropped = policy.dropped.clone();
+    let mut status = apply_policy(&policy)?;
+    status.dropped = dropped;
     // Store for attestation. OnceLock: if called twice, second call is ignored.
     let _ = SANDBOX_STATUS.set(status.clone());
     Ok(status)
@@ -84,6 +93,7 @@ fn apply_policy(_policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
         platform: "unsupported".to_string(),
         effective_abi: None,
         enforcing: false,
+        dropped: Vec::new(),
     })
 }
 

@@ -673,6 +673,7 @@ mod tests {
             capabilities: vec![],
             build_sha: build_sha.to_string(),
             proto_version: 1,
+            sandbox: None,
         };
         fs::write(path, serde_json::to_vec(&lock).unwrap()).unwrap();
     }

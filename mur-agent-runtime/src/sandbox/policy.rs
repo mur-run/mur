@@ -44,6 +44,9 @@ pub fn expand_entitlement_path(s: &str) -> PathBuf {
 /// feed directly to Landlock / SBPL / Job Object APIs.
 #[derive(Debug, Clone)]
 pub struct SandboxPolicy {
+    /// Filesystem grants that were discarded while building this policy, so
+    /// the kernel never received them however they read in `profile.yaml`.
+    pub dropped: Vec<mur_common::agent::DroppedGrant>,
     /// Paths the process may read (not write).
     pub fs_read: Vec<PathBuf>,
     /// Paths the process may read AND write.
@@ -131,6 +134,7 @@ impl Default for SandboxPolicy {
             net_allow_hosts: None,
             memory_limit_mb: None,
             launch_chain: crate::sandbox::launch_chain::LaunchChain::default(),
+            dropped: Vec::new(),
             dropped_grants: Vec::new(),
             dropped_read_grants: Vec::new(),
         }
@@ -141,6 +145,9 @@ impl SandboxPolicy {
     pub fn from_entitlements(ent: &Entitlements, agent_home: &Path) -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
         let expand = expand_entitlement_path;
+        // Every grant discarded below is recorded, not just warned about: a
+        // WARN in a 30MB log is not an answer to "what can this agent write".
+        let mut dropped: Vec<mur_common::agent::DroppedGrant> = Vec::new();
 
         // USER-DECLARED read/write entitlement paths are existence-checked at
         // profile-build time and dropped (fail-closed, warned) if missing.
@@ -169,6 +176,11 @@ impl SandboxPolicy {
                          agent will NOT have read access to it (dropping dead grant \
                          to avoid destabilizing the sandbox profile — Issue 16)"
                     );
+                    dropped.push(mur_common::agent::DroppedGrant {
+                        path: p.display().to_string(),
+                        verb: "read".into(),
+                        reason: "path does not exist on disk".into(),
+                    });
                     false
                 }
             })
@@ -197,6 +209,11 @@ impl SandboxPolicy {
                  sibling signing key; the whole grant is dropped (a protected \
                  path inside a grant cannot be carved out)"
             );
+            dropped.push(mur_common::agent::DroppedGrant {
+                path: p.display().to_string(),
+                verb: "read".into(),
+                reason: "reaches the credential store or a sibling signing key".into(),
+            });
         }
         let mut fs_read = kept_reads;
 
@@ -215,6 +232,11 @@ impl SandboxPolicy {
                          agent will NOT have write access to it (dropping dead grant \
                          to avoid destabilizing the sandbox profile — Issue 16)"
                     );
+                    dropped.push(mur_common::agent::DroppedGrant {
+                        path: p.display().to_string(),
+                        verb: "write".into(),
+                        reason: "path does not exist on disk".into(),
+                    });
                     false
                 }
             })
@@ -619,7 +641,21 @@ impl SandboxPolicy {
         // SBPL deny/re-allow carve-out needs no drop.
         let (_, dropped_grants) =
             crate::sandbox::linux::partition_write_grants(&fs_write, &launch_chain);
+        // Only where the drop actually happens. Landlock cannot carve a grant,
+        // so Linux drops it whole; macOS keeps the grant and re-closes the
+        // overlap with `deny file-read*` clauses emitted after the allows
+        // (last-match-wins), so the grant IS installed there. Recording these
+        // on macOS would report a loss of access that did not occur.
+        #[cfg(target_os = "linux")]
+        for pth in &dropped_grants {
+            dropped.push(mur_common::agent::DroppedGrant {
+                path: pth.display().to_string(),
+                verb: "write".into(),
+                reason: "overlaps MUR's launch chain and cannot be carved (Landlock)".into(),
+            });
+        }
         SandboxPolicy {
+            dropped,
             fs_read,
             fs_write,
             fs_deny,
@@ -1403,6 +1439,61 @@ mod tests {
         let resolved =
             resolve_binary_path("definitely-does-not-exist", &[tmp.path().to_path_buf()]);
         assert_eq!(resolved, None);
+    }
+
+    /// The pairing that makes the drop *knowable*. Dropping a dead grant is
+    /// already covered by the test below; this pins that the drop is also
+    /// recorded, because a WARN in a log is not an answer to "what can this
+    /// agent write".
+    #[test]
+    fn a_dropped_dead_grant_is_recorded_with_its_verb_and_reason() {
+        let home = tempfile::tempdir().unwrap();
+        let gone = home.path().join("not-here");
+        let mut ent = minimal_entitlements();
+        ent.filesystem.read = vec![gone.display().to_string()];
+        ent.filesystem.write = vec![gone.display().to_string()];
+        let p = SandboxPolicy::from_entitlements(&ent, home.path());
+
+        // Only the grant under test: the fixture's own paths are
+        // environment-dependent, so an assertion over the whole list would be
+        // about the CI runner rather than about this code.
+        let mine: Vec<_> = p
+            .dropped
+            .iter()
+            .filter(|d| d.path == gone.display().to_string())
+            .collect();
+        let verbs: Vec<&str> = mine.iter().map(|d| d.verb.as_str()).collect();
+        assert!(verbs.contains(&"read"), "{:?}", p.dropped);
+        assert!(verbs.contains(&"write"), "{:?}", p.dropped);
+        assert!(
+            mine.iter().all(|d| d.reason.contains("does not exist")),
+            "{:?}",
+            p.dropped
+        );
+    }
+
+    /// The control: a grant whose path is present is never recorded as dropped.
+    ///
+    /// Asserts about *this* grant rather than an empty list, because the
+    /// fixture's own entitlements are environment-dependent — `~/Documents`
+    /// exists on the macOS runner and not on a bare Ubuntu one, so a global
+    /// emptiness assertion passes locally and fails in CI for a reason that has
+    /// nothing to do with what this test is about.
+    #[test]
+    fn a_live_grant_records_no_drop() {
+        let home = tempfile::tempdir().unwrap();
+        let live = home.path().join("tree");
+        std::fs::create_dir(&live).unwrap();
+        let mut ent = minimal_entitlements();
+        ent.filesystem.write = vec![live.display().to_string()];
+        let p = SandboxPolicy::from_entitlements(&ent, home.path());
+        assert!(
+            !p.dropped
+                .iter()
+                .any(|d| d.path == live.display().to_string()),
+            "a grant whose path exists must never be recorded as dropped: {:?}",
+            p.dropped
+        );
     }
 
     #[test]

@@ -1152,6 +1152,66 @@ fn default_env() -> Option<String> {
     Some("dev".into())
 }
 
+/// One filesystem grant the sandbox refused to install, and why.
+///
+/// The grant stays in `profile.yaml` — this records that it did not reach the
+/// kernel, which is otherwise knowable only from a WARN line in a log nobody
+/// queries.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DroppedGrant {
+    pub path: String,
+    /// `"read"` or `"write"`.
+    pub verb: String,
+    pub reason: String,
+}
+
+/// Digest of the filesystem half of a profile's entitlements.
+///
+/// Narrower than `card_digest` on purpose: that one moves whenever any profile
+/// field does, so using it to flag "grants changed since this agent started"
+/// would raise a false alarm on an unrelated edit — and a status line that
+/// cries wolf is one people stop reading.
+pub fn filesystem_grants_digest(fs: &FilesystemEntitlement) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    for (label, list) in [("r", &fs.read), ("w", &fs.write), ("d", &fs.deny)] {
+        let mut sorted = list.clone();
+        sorted.sort();
+        for p in sorted {
+            h.update(label.as_bytes());
+            h.update(b"\0");
+            h.update(p.as_bytes());
+            h.update(b"\0");
+        }
+    }
+    format!("sha256:{:x}", h.finalize())
+}
+
+/// What the sandbox actually installed, recorded at the moment it sealed.
+///
+/// A seatbelt profile cannot be widened after `sandbox_init`, so this is fixed
+/// for the process's lifetime — the same lifetime as the lock file it rides in.
+/// Without it, `profile.yaml` is the only readable account of an agent's
+/// permissions, and it describes what was asked for rather than what took
+/// effect.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SandboxRecord {
+    /// False means the kernel sandbox is NOT installed and only advisory hooks
+    /// remain — the agent then has MORE access than its profile grants, which
+    /// is the opposite of every other failure here and the one worth shouting.
+    pub enforcing: bool,
+    /// `"macos-sbpl"`, `"linux-landlock"`, `"advisory-only"`, …
+    pub mode: String,
+    /// Digest of `entitlements.filesystem` as sealed. Comparing it against the
+    /// profile on disk answers "were grants changed since this agent started"
+    /// without anyone tracking that — and unlike `card_digest` it does not move
+    /// when an unrelated field does, so it cannot raise a false alarm.
+    pub granted_digest: String,
+    /// Grants that did not reach the kernel. Empty is the normal case.
+    #[serde(default)]
+    pub dropped: Vec<DroppedGrant>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LockFile {
     pub schema: u32,
@@ -1172,6 +1232,10 @@ pub struct LockFile {
     /// 0 = an old lock; the dial gates versioned methods on it.
     #[serde(default)]
     pub proto_version: u32,
+    /// What the sandbox installed at seal time. `None` = a lock written before
+    /// this field existed, or a platform that installs no sandbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<SandboxRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1719,6 +1783,78 @@ impl AgentProfile {
 
 #[cfg(test)]
 mod tests {
+    /// Order must not matter: the same grants written in a different order are
+    /// the same grants, and a digest that disagreed would report "restart to
+    /// apply" after a cosmetic profile edit.
+    #[test]
+    fn grants_digest_ignores_order_but_not_content() {
+        let a = FilesystemEntitlement {
+            read: vec!["/a".into(), "/b".into()],
+            write: vec!["/w".into()],
+            deny: vec![],
+        };
+        let reordered = FilesystemEntitlement {
+            read: vec!["/b".into(), "/a".into()],
+            ..a.clone()
+        };
+        let changed = FilesystemEntitlement {
+            write: vec!["/w".into(), "/x".into()],
+            ..a.clone()
+        };
+        assert_eq!(
+            filesystem_grants_digest(&a),
+            filesystem_grants_digest(&reordered)
+        );
+        assert_ne!(
+            filesystem_grants_digest(&a),
+            filesystem_grants_digest(&changed)
+        );
+    }
+
+    /// A read grant and a write grant for the same path are different grants.
+    #[test]
+    fn grants_digest_separates_the_verbs() {
+        let r = FilesystemEntitlement {
+            read: vec!["/p".into()],
+            write: vec![],
+            deny: vec![],
+        };
+        let w = FilesystemEntitlement {
+            read: vec![],
+            write: vec!["/p".into()],
+            deny: vec![],
+        };
+        assert_ne!(filesystem_grants_digest(&r), filesystem_grants_digest(&w));
+    }
+
+    /// A lock written before this field existed must still load — every agent
+    /// running at upgrade time wrote one.
+    #[test]
+    fn a_lock_without_the_sandbox_block_still_deserialises() {
+        let old = r#"{"schema":1,"uuid":"u","name":"n","pid":1,"ppid":0,
+            "started_at":"t","binary_version":"v",
+            "transports":{"stdio":true},"card_digest":"d","capabilities":[]}"#;
+        let lf: LockFile = serde_json::from_str(old).expect("old lock must load");
+        assert!(lf.sandbox.is_none());
+    }
+
+    #[test]
+    fn the_sandbox_block_round_trips() {
+        let rec = SandboxRecord {
+            enforcing: false,
+            mode: "advisory-only".into(),
+            granted_digest: "sha256:x".into(),
+            dropped: vec![DroppedGrant {
+                path: "/gone".into(),
+                verb: "write".into(),
+                reason: "path does not exist on disk".into(),
+            }],
+        };
+        let back: SandboxRecord =
+            serde_json::from_str(&serde_json::to_string(&rec).unwrap()).unwrap();
+        assert_eq!(back, rec);
+    }
+
     use super::*;
 
     #[test]

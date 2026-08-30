@@ -90,6 +90,7 @@ pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
         platform: "linux-landlock-v4".to_string(),
         effective_abi: None, // landlock 0.4 does not expose effective ABI in RestrictionStatus
         enforcing,
+        dropped: Vec::new(),
     })
 }
 
