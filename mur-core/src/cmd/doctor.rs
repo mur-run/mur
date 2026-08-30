@@ -459,34 +459,65 @@ fn check_dropped_launch_chain_grants(
             ),
         );
     }
+    let (ok, detail) = grant_scope_verdict(&dropped, &dropped_reads, cfg!(target_os = "linux"));
+    Check::new("grant_scope", ok, detail)
+}
+
+/// Verdict and wording for overlapping grants.
+///
+/// `landlock` is the platform difference, taken as a parameter rather than read
+/// from `cfg!` so both answers are reachable from a test on either host. The
+/// bug this replaces was a single sentence asserting Linux's behaviour
+/// everywhere, and no test could see it from macOS.
+fn grant_scope_verdict(
+    dropped: &[std::path::PathBuf],
+    dropped_reads: &[std::path::PathBuf],
+    landlock: bool,
+) -> (bool, String) {
     let mut parts: Vec<String> = Vec::new();
     if !dropped.is_empty() {
         let names: Vec<String> = dropped.iter().map(|p| p.display().to_string()).collect();
-        parts.push(format!(
-            "{} write grant(s) contain a launch-chain path: {}",
-            dropped.len(),
-            names.join(", ")
-        ));
+        // The two halves do not share a fate. Landlock has no deny rule, so it
+        // discards an overlapping write grant whole; macOS installs the grant
+        // and re-closes the launch-chain paths inside it with `deny` clauses
+        // emitted after the allows. Telling a macOS user their grant was
+        // dropped sends them to narrow one that is working.
+        parts.push(if landlock {
+            format!(
+                "{} write grant(s) contain a launch-chain path and are DROPPED WHOLE (Landlock \
+                 cannot carve one out) — grant the specific subdirectory instead: {}",
+                dropped.len(),
+                names.join(", ")
+            )
+        } else {
+            format!(
+                "{} write grant(s) contain a launch-chain path, so those paths stay denied inside \
+                 them and the grant covers less than it reads as: {}",
+                dropped.len(),
+                names.join(", ")
+            )
+        });
     }
     if !dropped_reads.is_empty() {
         let names: Vec<String> = dropped_reads
             .iter()
             .map(|p| p.display().to_string())
             .collect();
+        // The read half IS dropped whole on both platforms: `from_entitlements`
+        // keeps only the partition's surviving reads, unlike the write side
+        // where the kept set is discarded.
         parts.push(format!(
-            "{} read grant(s) contain the credential store or a sibling signing key: {}",
+            "{} read grant(s) contain the credential store or a sibling signing key and are \
+             DROPPED WHOLE: {}",
             dropped_reads.len(),
             names.join(", ")
         ));
     }
-    Check::new(
-        "grant_scope",
-        false,
-        format!(
-            "{} and are DROPPED WHOLE by the sandbox (Landlock cannot carve one out). Grant the specific subdirectory instead.",
-            parts.join("; ")
-        ),
-    )
+    // A write-only overlap is not a failure where the grant is installed.
+    // Reporting it as one is how a check earns its way into the part of the
+    // screen people stop reading.
+    let ok = dropped_reads.is_empty() && !dropped.is_empty() && !landlock;
+    (ok, parts.join("; "))
 }
 
 fn check_filesystem_entitlements(fs: &mur_common::agent::FilesystemEntitlement) -> Check {
@@ -662,6 +693,45 @@ pub fn run_agent(name: &str, json: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    fn pb(p: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(p)
+    }
+
+    /// Landlock cannot carve a grant, so the whole thing is discarded and the
+    /// user must narrow it.
+    #[test]
+    fn under_landlock_an_overlapping_write_grant_is_reported_as_lost() {
+        let (ok, detail) = grant_scope_verdict(&[pb("/home/d/.mur")], &[], true);
+        assert!(!ok, "{detail}");
+        assert!(detail.contains("DROPPED WHOLE"), "{detail}");
+        assert!(detail.contains("specific subdirectory"), "{detail}");
+    }
+
+    /// The bug this replaces: the same sentence fired on macOS, where the grant
+    /// IS installed and only the launch-chain paths inside it are re-denied.
+    /// Telling the user it was dropped sends them to narrow a working grant.
+    #[test]
+    fn without_landlock_the_same_grant_is_installed_and_not_called_lost() {
+        let (ok, detail) = grant_scope_verdict(&[pb("/Users/d/.mur")], &[], false);
+        assert!(ok, "an installed grant is not a failure: {detail}");
+        assert!(
+            !detail.contains("DROPPED WHOLE"),
+            "must not claim a loss of access that did not happen: {detail}"
+        );
+        // Still named — the grant covers less than it reads as, on both.
+        assert!(detail.contains("launch-chain path"), "{detail}");
+    }
+
+    /// The read half IS dropped whole everywhere, so it fails on both.
+    #[test]
+    fn a_read_overlap_fails_on_either_platform() {
+        for landlock in [true, false] {
+            let (ok, detail) = grant_scope_verdict(&[], &[pb("/x/.mur")], landlock);
+            assert!(!ok, "landlock={landlock}: {detail}");
+            assert!(detail.contains("DROPPED WHOLE"), "{detail}");
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -712,12 +782,24 @@ mod tests {
             deny: vec![],
         };
         let c = check_dropped_launch_chain_grants(&fs, &agent_home);
-        assert!(
-            !c.ok,
-            "a swallowing grant must fail the check: {}",
-            c.detail
-        );
-        assert!(c.detail.contains("DROPPED WHOLE"), "{}", c.detail);
+        // Named on every platform — the user has to know the grant is not doing
+        // what it reads as.
+        assert!(c.detail.contains("launch-chain path"), "{}", c.detail);
+        // The verdict differs because the kernels do. Landlock cannot carve, so
+        // Linux discards the grant; macOS installs it and re-denies the
+        // protected paths inside it, which is not a failure and must not be
+        // reported as one.
+        if cfg!(target_os = "linux") {
+            assert!(!c.ok, "Linux discards the grant: {}", c.detail);
+            assert!(c.detail.contains("DROPPED WHOLE"), "{}", c.detail);
+        } else {
+            assert!(c.ok, "the grant IS installed here: {}", c.detail);
+            assert!(
+                !c.detail.contains("DROPPED WHOLE"),
+                "must not claim a loss of access that did not happen: {}",
+                c.detail
+            );
+        }
     }
 
     /// The read side of the same check. A read grant reaching the credential
