@@ -143,6 +143,7 @@ mod tests {
             working_dir: std::path::PathBuf::from("/tmp"),
             session_cwd: crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
             agent: None,
+            write_grants: Vec::new(),
         });
         let bash_def = bash_exec.def();
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
@@ -176,6 +177,7 @@ mod tests {
             working_dir: std::path::PathBuf::from("/tmp"),
             session_cwd: crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
             agent: None,
+            write_grants: Vec::new(),
         });
         let bash_def = bash_exec.def();
         let rules = vec![ToolRule {

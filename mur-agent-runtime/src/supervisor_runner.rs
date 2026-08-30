@@ -271,7 +271,20 @@ pub async fn build_provider_runner(
     let session_cwd = crate::tools::fs_policy::SessionCwd::new(agent_home.to_path_buf());
     let bash_exec: Arc<dyn crate::tools::ToolExecutor> = Arc::new(
         BashTool::new(agent_home.to_path_buf(), session_cwd.clone())
-            .with_agent(mur_home.clone(), profile.inner.name.clone()),
+            .with_agent(mur_home.clone(), profile.inner.name.clone())
+            // From the profile already in memory: the agent cannot read its own
+            // profile.yaml back (issue #712), so anything that re-reads it here
+            // returns nothing and the denial goes unexplained.
+            .with_write_grants(
+                profile
+                    .inner
+                    .entitlements
+                    .filesystem
+                    .write
+                    .iter()
+                    .map(|w| crate::sandbox::policy::expand_entitlement_path(w))
+                    .collect(),
+            ),
     );
     let bash_def = bash_exec.def();
     // Issue #712: the file tools must never touch the agent's own
