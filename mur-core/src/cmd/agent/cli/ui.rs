@@ -918,12 +918,22 @@ fn scroll_marker(max_scroll: u16, scroll_back: u16) -> Option<String> {
 /// `scroll_back`-driven view of the complete `app.messages`).
 fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme;
+    // Top border only, and no title.
+    //
+    // The name was already in the status-bar badge, so ` chat · mur ` spent a
+    // full-width rule restating it. The bottom border marked the same seam as
+    // the composer's own titled top border directly beneath it — two rules for
+    // one boundary, and the composer's is the one carrying the key hints a
+    // reader acts on.
+    //
+    // The top rule stays: it is where the live band begins, which is the line a
+    // resize reflows from, and it still hosts the right-aligned scroll marker
+    // when rows are hidden above.
     let block = Block::default()
-        .borders(Borders::TOP | Borders::BOTTOM)
+        .borders(Borders::TOP)
         .border_type(theme.border_type)
         .border_style(Style::default().fg(theme.border))
         .padding(Padding::horizontal(theme.inner_padding as u16))
-        .title(format!(" chat · {} ", app.agent))
         .title_style(Style::default().fg(theme.border_title));
     let inner = block.inner(area);
     let inner_width = inner.width;
@@ -2314,5 +2324,61 @@ mod block_tests {
         assert!(!first.first().is_some_and(|l| is_gap(l)), "{first:?}");
         let resumed = text(&message_block(&app, 3, &m, 2, false));
         assert!(!resumed.first().is_some_and(|l| is_gap(l)), "{resumed:?}");
+    }
+}
+
+#[cfg(test)]
+mod transcript_chrome_tests {
+    use super::super::app::App;
+    use super::render_transcript;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn painted() -> String {
+        let mut app = App::test_fixture();
+        let mut term = Terminal::new(TestBackend::new(60, 10)).unwrap();
+        term.draw(|f| {
+            let area = f.area();
+            render_transcript(f, &mut app, area);
+        })
+        .unwrap();
+        term.backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<Vec<_>>()
+            .chunks(60)
+            .map(|row| row.concat())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The agent name is already in the status-bar badge. A full-width rule
+    /// spent restating it is the clearest kind of cell that has not earned its
+    /// place.
+    #[test]
+    fn the_transcript_border_carries_no_title() {
+        let out = painted();
+        assert!(!out.contains("chat ·"), "title is back:\n{out}");
+    }
+
+    /// One rule, not two. The composer's own titled top border marks the same
+    /// seam directly beneath this block, and it is the one carrying the key
+    /// hints a reader acts on.
+    #[test]
+    fn only_the_top_edge_is_drawn() {
+        let out = painted();
+        let ruled: Vec<usize> = out
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.chars().filter(|c| *c == '─').count() > 10)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            ruled,
+            vec![0],
+            "expected a top rule and nothing else: {ruled:?}\n{out}"
+        );
     }
 }
