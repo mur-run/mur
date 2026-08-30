@@ -97,6 +97,30 @@ pub struct OpenItem {
     pub at: chrono::DateTime<chrono::Utc>,
 }
 
+/// How long a reported item may sit unresolved before it stops crowding the
+/// default list.
+///
+/// 14 days is the `Draft` half-life the skill lifecycle already uses for "a
+/// claim that has not proved itself yet" — the same judgement, so it gets the
+/// same interval rather than a second number to keep in sync.
+pub const REPORTED_STALE_AFTER_DAYS: i64 = 14;
+
+impl OpenItem {
+    /// Whether this item has aged out of the default list.
+    ///
+    /// Stale means *demoted*, never deleted: the claim may still be real, and
+    /// removing what a person recorded because a timer said so is the failure
+    /// this codebase already fixed once on the decay side.
+    ///
+    /// Only `Reported` items age. An `Observed` one is re-derived from state
+    /// MUR holds every time it is listed, so it clears itself when it stops
+    /// being true — ageing it out would hide a fact that still holds.
+    pub fn is_stale_at(&self, now: chrono::DateTime<chrono::Utc>) -> bool {
+        self.source == ItemSource::Reported
+            && now.signed_duration_since(self.at).num_days() >= REPORTED_STALE_AFTER_DAYS
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Record {
@@ -249,6 +273,34 @@ fn item_id(agent: &str, title: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    fn aged(source: ItemSource, days: i64) -> OpenItem {
+        OpenItem {
+            title: "t".into(),
+            next: None,
+            source,
+            origin: "agent:mur".into(),
+            at: chrono::Utc::now() - chrono::Duration::days(days),
+        }
+    }
+
+    #[test]
+    fn a_reported_item_goes_stale_once_past_the_threshold() {
+        let now = chrono::Utc::now();
+        assert!(aged(ItemSource::Reported, REPORTED_STALE_AFTER_DAYS + 1).is_stale_at(now));
+        assert!(!aged(ItemSource::Reported, REPORTED_STALE_AFTER_DAYS - 1).is_stale_at(now));
+    }
+
+    /// The policy that keeps this from hiding true things: an observed item is
+    /// re-derived from state on every listing, so age says nothing about it.
+    #[test]
+    fn an_observed_item_never_goes_stale_however_old() {
+        assert!(
+            !aged(ItemSource::Observed, REPORTED_STALE_AFTER_DAYS * 100)
+                .is_stale_at(chrono::Utc::now()),
+            "ageing out a derived fact would hide something still true"
+        );
+    }
+
     use super::*;
 
     fn home() -> tempfile::TempDir {
