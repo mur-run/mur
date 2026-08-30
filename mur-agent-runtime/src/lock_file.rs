@@ -158,6 +158,7 @@ mod tests {
             capabilities: vec![],
             build_sha: String::new(),
             proto_version: 0,
+            sandbox: None,
         }
     }
 
