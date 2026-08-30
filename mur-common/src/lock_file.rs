@@ -176,6 +176,7 @@ mod tests {
             capabilities: vec!["a2a.message.send".into()],
             build_sha: String::new(),
             proto_version: 0,
+            sandbox: None,
         }
     }
 

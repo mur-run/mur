@@ -44,6 +44,7 @@ pub fn apply_macos(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
             platform: "macos-sbpl-failed".to_string(),
             effective_abi: None,
             enforcing: false,
+            dropped: Vec::new(),
         });
     }
 
@@ -51,6 +52,7 @@ pub fn apply_macos(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
         platform: "macos-sbpl".to_string(),
         effective_abi: None,
         enforcing: true,
+        dropped: Vec::new(),
     })
 }
 

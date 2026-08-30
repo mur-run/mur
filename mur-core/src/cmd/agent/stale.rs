@@ -122,6 +122,7 @@ mod tests {
             capabilities: vec![],
             build_sha: build_sha.to_string(),
             proto_version: 1,
+            sandbox: None,
         }
     }
 
