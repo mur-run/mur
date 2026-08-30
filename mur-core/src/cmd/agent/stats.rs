@@ -156,9 +156,10 @@ pub fn cmd_logs(name: &str, tail: usize) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, SystemTime};
-
+    /// Only the two-candidate tests below need this, and they are macOS-only.
+    #[cfg(target_os = "macos")]
     fn touch(p: &std::path::Path, ago: u64) {
+        use std::time::{Duration, SystemTime};
         std::fs::write(p, "x").unwrap();
         let f = std::fs::OpenOptions::new().write(true).open(p).unwrap();
         f.set_modified(SystemTime::now() - Duration::from_secs(ago))
