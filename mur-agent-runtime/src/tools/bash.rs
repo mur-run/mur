@@ -1,9 +1,12 @@
 use std::path::PathBuf;
 use tokio::process::Command;
 
-use mur_common::agent_facts::{ExecRoutes, agent_facts, who_can_exec};
+use mur_common::agent_facts::{agent_facts, who_can_exec};
 
-use super::denial::{classify_write_denial, write_denied_hint, write_denied_path};
+use super::denial::{
+    classify_write_denial, spawn_denied_hint, spawn_denied_path, write_denied_hint,
+    write_denied_path,
+};
 
 use super::{ToolError, ToolExecutor, ToolOutput, ToolStatus};
 use crate::exec_dirs;
@@ -84,96 +87,6 @@ impl BashTool {
         self.agent = Some((mur_home, agent_name));
         self
     }
-}
-
-/// The binary path bash refused to exec, when the SANDBOX denied it.
-///
-/// bash reports `…: <path>: Operation not permitted` and exits **126**
-/// ("found but not executable") — which under a sealed profile means the
-/// binary is outside `entitlements.processes.spawn.allowed`. A write EPERM
-/// exits 1 and a missing binary exits 127, so neither is mistaken for this.
-///
-/// Verified against real Seatbelt, not inferred:
-/// `sandbox-exec -p '(version 1)(allow default)(deny process-exec* (subpath "/opt"))' \
-///   /bin/bash -c '/opt/homebrew/bin/git --version'`
-/// → `/bin/bash: /opt/homebrew/bin/git: Operation not permitted`, exit 126.
-fn spawn_denied_path(exit_code: Option<i32>, stderr: &str) -> Option<String> {
-    if exit_code != Some(126) {
-        return None;
-    }
-    stderr.lines().rev().find_map(|line| {
-        let path = line
-            .trim_end()
-            .strip_suffix(": Operation not permitted")?
-            .rsplit(": ")
-            .next()?;
-        path.starts_with('/').then(|| path.to_string())
-    })
-}
-
-/// Turn an opaque kernel EPERM into a route that can actually resolve it. The
-/// sandbox is compiled at process start and enforced in-kernel, so no runtime
-/// prompt is possible (HITL is per-TOOL, not per-binary) — without this the
-/// model just sees "Operation not permitted" and hands the command back to the
-/// user, which is the one outcome delegation exists to avoid.
-///
-/// `routes` comes from [`mur_common::agent_facts::who_can_exec`], so the fleets
-/// named here are the ones that provably hold this binary, best (least
-/// privileged, right working directory) first. Only `ready` routes are
-/// mentioned: naming fleets the agent may NOT use would hand a prompt-injected
-/// agent a map of the more powerful things on this machine. The user learns
-/// about those from `mur agent who`, where it is a grant path rather than a
-/// target list.
-fn spawn_denied_hint(bin: &str, agent: &str, routes: &ExecRoutes) -> String {
-    let name = std::path::Path::new(bin)
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| bin.to_string());
-    let route = if routes.ready.is_empty() {
-        format!("No authorized fleet can run `{name}`, so this one needs the user.")
-    } else {
-        let named: Vec<String> = routes
-            .ready
-            .iter()
-            .map(|f| {
-                let via: Vec<&str> = f
-                    .members_with(bin)
-                    .iter()
-                    .map(|m| m.name.as_str())
-                    .collect();
-                format!("\"{}\" (via {})", f.name, via.join(", "))
-            })
-            .collect();
-        format!(
-            "DELEGATE it instead of asking the user: \
-             fleet_run(fleet={}, goal=<this exact command, with absolute paths>). \
-             Best first: {}.",
-            format_args!("\"{}\"", routes.ready[0].name),
-            named.join(", ")
-        )
-    };
-    let drift: Vec<String> = routes
-        .ready
-        .iter()
-        .flat_map(|f| f.members_with(bin))
-        .filter(|m| m.drift)
-        .map(|m| m.name.clone())
-        .collect();
-    let drift_note = if drift.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "\nNote: {} started before its profile was last edited, so it may not have \
-             the grant yet — report that if the delegation fails.",
-            drift.join(", ")
-        )
-    };
-    format!(
-        "\n\n[sandbox] `{name}` is not in agent '{agent}''s spawn allowlist, so the kernel \
-         refused to exec it. This is decided when the agent starts — there is no approval \
-         prompt for it. {route}{drift_note}\nTo grant it here instead, the user runs: \
-         `mur agent perm allow-spawn {agent} {name}` and restarts the agent."
-    )
 }
 
 #[async_trait::async_trait]
@@ -536,74 +449,5 @@ mod tests {
             "spawned shell's PATH should include the standard dirs, got: {}",
             out.text
         );
-    }
-
-    const DENIED: &str = "bash: line 1: /Users/d/.cargo/bin/cargo: Operation not permitted";
-
-    #[test]
-    fn spawn_denied_path_matches_only_the_kernel_exec_denial() {
-        assert_eq!(
-            spawn_denied_path(Some(126), DENIED).as_deref(),
-            Some("/Users/d/.cargo/bin/cargo")
-        );
-        // Same text, but a write EPERM (exit 1) or a missing binary (127) —
-        // neither is a spawn-allowlist denial, so neither gets the hint.
-        assert_eq!(spawn_denied_path(Some(1), DENIED), None);
-        assert_eq!(spawn_denied_path(Some(127), DENIED), None);
-        // 126 without the signature (e.g. a real non-executable file).
-        assert_eq!(
-            spawn_denied_path(Some(126), "bash: ./x: Permission denied"),
-            None
-        );
-        // A relative/garbled path is not a usable route — don't guess.
-        assert_eq!(
-            spawn_denied_path(Some(126), "bash: cargo: Operation not permitted"),
-            None
-        );
-    }
-
-    #[test]
-    fn spawn_denied_hint_names_the_route_and_the_grant() {
-        use mur_common::agent::NetworkOutboundMode;
-        use mur_common::agent_facts::{AgentFacts, ExecFacts, FleetFacts};
-
-        let member = AgentFacts {
-            name: "rustsmith".into(),
-            role: String::new(),
-            exec: ExecFacts::Allowlist(vec!["cargo".into()]),
-            writes: vec![PathBuf::from("/repo")],
-            net: NetworkOutboundMode::Restricted,
-            skills: vec![],
-            model_ref: String::new(),
-            effort: None,
-            running: true,
-            drift: false,
-        };
-        let routes = ExecRoutes {
-            ready: vec![FleetFacts {
-                name: "builder".into(),
-                members: vec![member.clone()],
-                budget_usd: 1.0,
-                authorized: true,
-            }],
-            // An unauthorized-but-capable fleet must NEVER be named to the
-            // model — that list is an attack map, not a route.
-            blocked: vec![FleetFacts {
-                name: "secret-powerful".into(),
-                members: vec![member],
-                budget_usd: 0.0,
-                authorized: false,
-            }],
-        };
-        let h = spawn_denied_hint("/Users/d/.cargo/bin/cargo", "mur", &routes);
-        assert!(h.contains("fleet_run(fleet=\"builder\""), "{h}");
-        assert!(h.contains("via rustsmith"), "{h}");
-        assert!(h.contains("mur agent perm allow-spawn mur cargo"), "{h}");
-        assert!(!h.contains("secret-powerful"), "blocked fleet leaked: {h}");
-
-        // No usable route → never invent one.
-        let h = spawn_denied_hint("/usr/bin/git", "solo", &ExecRoutes::default());
-        assert!(!h.contains("fleet_run("), "{h}");
-        assert!(h.contains("allow-spawn solo git"), "{h}");
     }
 }
