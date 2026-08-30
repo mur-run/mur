@@ -29,6 +29,8 @@ type ScheduleItem =
       message: string;
       next_fires: string[];
       status: string;
+      description: string;
+      next_note: string | null;
     }
   | {
       kind: "agent_idle";
@@ -37,6 +39,8 @@ type ScheduleItem =
       cooldown_secs: number;
       message: string;
       status: string;
+      description: string;
+      next_note: string | null;
     }
   | {
       kind: "workflow";
@@ -44,6 +48,8 @@ type ScheduleItem =
       expr?: string | null;
       next_fires: string[];
       status: string;
+      description: string;
+      next_note: string | null;
     }
   | {
       kind: "fleet";
@@ -53,6 +59,8 @@ type ScheduleItem =
       status: string;
       budget_usd: number;
       autorun_env: boolean;
+      description: string;
+      next_note: string | null;
     };
 
 type ScheduleStatus = { schedules: ScheduleItem[]; warnings: string[] };
@@ -98,25 +106,43 @@ type Activities = { channels: ChannelSummary[]; hitl: HitlRequestView[] };
 
 const POLL_MS = 30000;
 
-function scheduleWhen(s: ScheduleItem): string {
+/// The raw expression, kept as a tooltip: the phrasing is for reading, the
+/// expression is for editing, and a reader who wants to change it needs both.
+function scheduleExpr(s: ScheduleItem): string {
   switch (s.kind) {
     case "agent_cron":
       return s.expr;
     case "agent_idle":
-      return `every ${s.after_secs}s idle`;
+      return `after ${s.after_secs}s idle`;
     case "workflow":
-      return s.expr ?? "";
+      return s.expr ?? "manual";
     case "fleet":
       return s.trigger;
   }
 }
 
-function scheduleNext(s: ScheduleItem): { text: string; title: string } {
+/// Which agent this row belongs to.
+///
+/// A pure mapping over `kind`, so it lives here rather than in the aggregator:
+/// it is a label, not a derivation, and four constants cannot drift. Fleet and
+/// workflow schedules are machine-wide — the panel is scoped to one agent, and
+/// showing them unlabelled is what makes a five-row table look like five of
+/// this agent's schedules.
+function scheduleScope(s: ScheduleItem): "agent" | "global" {
+  return s.kind === "agent_cron" || s.kind === "agent_idle" ? "agent" : "global";
+}
+
+function scheduleNext(s: ScheduleItem): { text: string; title: string; muted: boolean } {
   const fires = "next_fires" in s ? s.next_fires : [];
-  if (!fires.length) return { text: "—", title: "" };
+  if (!fires.length) {
+    // Never a bare dash. A blank here reads as "will not run again", and one of
+    // the things it used to hide was a fleet running every thirty minutes. The
+    // backend guarantees a note whenever there is no fire time.
+    return { text: s.next_note ?? "not scheduled", title: s.next_note ?? "", muted: true };
+  }
   const first = new Date(fires[0]);
   const text = Number.isNaN(first.getTime()) ? fires[0] : first.toLocaleString();
-  return { text, title: fires.join("\n") };
+  return { text, title: fires.join("\n"), muted: false };
 }
 
 export function PanelWindow() {
@@ -444,7 +470,7 @@ export function PanelWindow() {
             <table className="panel-table">
               <thead>
                 <tr>
-                  <th>Kind</th>
+                  <th>Scope</th>
                   <th>Owner</th>
                   <th>When</th>
                   <th>Next</th>
@@ -456,10 +482,26 @@ export function PanelWindow() {
                   const next = scheduleNext(s);
                   return (
                     <tr key={i}>
-                      <td>{s.kind}</td>
+                      <td
+                        className={
+                          scheduleScope(s) === "global" ? "panel-muted" : undefined
+                        }
+                        title={
+                          scheduleScope(s) === "global"
+                            ? "machine-wide — not specific to this agent"
+                            : "this agent"
+                        }
+                      >
+                        {scheduleScope(s) === "global" ? "all agents" : "this agent"}
+                      </td>
                       <td>{s.owner}</td>
-                      <td>{scheduleWhen(s)}</td>
-                      <td title={next.title}>{next.text}</td>
+                      <td title={scheduleExpr(s)}>{s.description}</td>
+                      <td
+                        className={next.muted ? "panel-muted" : undefined}
+                        title={next.title}
+                      >
+                        {next.text}
+                      </td>
                       <td>
                         <span
                           className={
