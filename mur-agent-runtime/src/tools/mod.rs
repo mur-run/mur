@@ -1,4 +1,5 @@
 pub mod bash;
+mod denial;
 pub mod edit_file;
 pub mod fleet_run;
 pub(crate) mod fs_policy;

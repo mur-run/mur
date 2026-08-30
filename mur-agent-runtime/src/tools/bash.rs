@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 use tokio::process::Command;
 
-use mur_common::agent_facts::{ExecRoutes, who_can_exec};
+use mur_common::agent_facts::{ExecRoutes, agent_facts, who_can_exec};
+
+use super::denial::{classify_write_denial, write_denied_hint, write_denied_path};
 
 use super::{ToolError, ToolExecutor, ToolOutput, ToolStatus};
 use crate::exec_dirs;
@@ -311,6 +313,18 @@ Commands are killed after `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {
                 let hint = spawn_denied_hint(&bin, agent, &routes);
                 combined.push_str(&hint);
                 status = ToolStatus::Denied { detail: hint };
+            } else if let Some(denied) = write_denied_path(&stderr, &working_dir)
+                && let Some((mur_home, agent)) = &self.agent
+                && let Some(facts) = agent_facts(mur_home, agent)
+                && let Some(kind) = classify_write_denial(
+                    &facts.writes,
+                    &denied,
+                    &mur_home.join("agents").join(agent),
+                )
+            {
+                let hint = write_denied_hint(&denied, agent, &kind);
+                combined.push_str(&hint);
+                status = ToolStatus::Denied { detail: hint };
             } else {
                 status = ToolStatus::Failed { exit_code: code };
             }
@@ -326,6 +340,7 @@ Commands are killed after `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::tools::ToolExecutor;
 
