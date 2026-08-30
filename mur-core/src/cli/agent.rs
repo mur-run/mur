@@ -759,6 +759,8 @@ pub enum AgentPermAction {
     DenyHost { name: String, glob: String },
     /// Print the outbound host allow / deny lists
     ListHosts { name: String },
+    /// Print the filesystem grants and what the sandbox actually installed
+    ListPaths { name: String },
     /// Allow filesystem read on a path
     AllowRead { name: String, path: String },
     /// Allow filesystem write on a path
