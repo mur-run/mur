@@ -216,7 +216,9 @@ mod tests {
     }
 
     fn at(s: &str) -> DateTime<Local> {
-        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Local)
+        DateTime::parse_from_rfc3339(s)
+            .unwrap()
+            .with_timezone(&Local)
     }
 
     #[test]
@@ -243,7 +245,10 @@ mod tests {
     #[test]
     fn the_firing_after_the_bound_retires_the_entry() {
         assert!(
-            bound_exhausted(at("2027-09-01T10:00:00+08:00"), Some("2026-09-01T10:00:00+08:00")),
+            bound_exhausted(
+                at("2027-09-01T10:00:00+08:00"),
+                Some("2026-09-01T10:00:00+08:00")
+            ),
             "cron has no year, so a dated request recurs annually — the bound is \
              the only thing that stops next September from firing too (#1119)"
         );
