@@ -2060,6 +2060,15 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 message,
                 sends_to,
             } => cmd::agent_schedule::cmd_schedule_add(&name, &cron, &message, sends_to)?,
+            AgentScheduleAction::Proposals { name } => {
+                cmd::agent_schedule::cmd_schedule_proposals(&name)?
+            }
+            AgentScheduleAction::Accept { name, id } => {
+                cmd::agent_schedule::cmd_schedule_accept(&name, &id)?
+            }
+            AgentScheduleAction::Decline { name, id } => {
+                cmd::agent_schedule::cmd_schedule_decline(&name, &id)?
+            }
             AgentScheduleAction::List { name } => cmd::agent_schedule::cmd_schedule_list(&name)?,
             AgentScheduleAction::Remove { name, index } => {
                 cmd::agent_schedule::cmd_schedule_remove(&name, index)?

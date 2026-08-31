@@ -634,6 +634,12 @@ pub enum AgentScheduleAction {
         #[arg(long, default_value_t = 5)]
         count: usize,
     },
+    /// Schedules this agent has asked for and not been granted
+    Proposals { name: String },
+    /// Grant a proposed schedule — it becomes a real entry and fires
+    Accept { name: String, id: String },
+    /// Refuse a proposed schedule
+    Decline { name: String, id: String },
     /// Add an idle trigger that fires when the agent has been idle for N seconds
     IdleAdd {
         /// Agent name

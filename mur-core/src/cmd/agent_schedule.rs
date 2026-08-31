@@ -28,6 +28,90 @@ pub fn cmd_schedule_add(
     Ok(())
 }
 
+/// Where an agent leaves schedules it wants but cannot create.
+fn proposal_dir(name: &str) -> std::path::PathBuf {
+    crate::paths::mur_root(None)
+        .join("agents")
+        .join(name)
+        .join(mur_common::agent::SCHEDULE_PROPOSAL_DIR)
+}
+
+fn read_proposals(name: &str) -> Vec<(String, mur_common::agent::ScheduleProposal)> {
+    let Ok(entries) = std::fs::read_dir(proposal_dir(name)) else {
+        return Vec::new();
+    };
+    let mut out: Vec<_> = entries
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "yaml"))
+        .filter_map(|e| {
+            let id = e.path().file_stem()?.to_string_lossy().into_owned();
+            let body = std::fs::read_to_string(e.path()).ok()?;
+            Some((
+                id,
+                serde_yaml_ng::from_str::<mur_common::agent::ScheduleProposal>(&body).ok()?,
+            ))
+        })
+        .collect();
+    out.sort_by(|a, b| a.1.proposed_at.cmp(&b.1.proposed_at));
+    out
+}
+
+/// List the schedules this agent has asked for and not been granted.
+pub fn cmd_schedule_proposals(name: &str) -> Result<()> {
+    let proposals = read_proposals(name);
+    if proposals.is_empty() {
+        println!("agent '{name}' has not asked for any schedules");
+        return Ok(());
+    }
+    for (id, p) in &proposals {
+        println!("{id}  {}  →  {}", p.cron, p.message);
+        // The cron is not reviewable on its own — the question being asked is
+        // whether it matches what was said, so what was said is printed.
+        if let Some(asked) = &p.asked_for {
+            println!("      asked for: {asked}");
+        }
+        match mur_agent_runtime::scheduler::next_n_fires(&p.cron, 1) {
+            Ok(f) if !f.is_empty() => println!("      would first fire: {}", f[0]),
+            _ => println!("      would first fire: never — this cron matches no time"),
+        }
+    }
+    println!("\naccept one with: mur agent schedule accept {name} <id>");
+    Ok(())
+}
+
+/// Grant a proposed schedule: the same write `add` performs, then the proposal
+/// is gone.
+///
+/// Deliberately the same call rather than a second writer — a second path into
+/// `lifecycle.schedule` is a second place for its validation to drift out of.
+pub fn cmd_schedule_accept(name: &str, id: &str) -> Result<()> {
+    let (_, p) = read_proposals(name)
+        .into_iter()
+        .find(|(pid, _)| pid == id)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no proposal {id:?} for agent '{name}' — see `mur agent schedule proposals {name}`"
+            )
+        })?;
+    cmd_schedule_add(name, &p.cron, &p.message, None)?;
+    std::fs::remove_file(proposal_dir(name).join(format!("{id}.yaml")))
+        .with_context(|| format!("remove proposal {id}"))?;
+    println!("granted. Restart the agent for it to take effect: mur agent restart {name}");
+    Ok(())
+}
+
+/// Refuse a proposed schedule. The agent is not told; it asked, and the answer
+/// is that it does not happen.
+pub fn cmd_schedule_decline(name: &str, id: &str) -> Result<()> {
+    let path = proposal_dir(name).join(format!("{id}.yaml"));
+    if !path.is_file() {
+        anyhow::bail!("no proposal {id:?} for agent '{name}'");
+    }
+    std::fs::remove_file(&path).with_context(|| format!("remove proposal {id}"))?;
+    println!("declined {id}");
+    Ok(())
+}
+
 /// Print all schedule entries for the named agent.
 pub fn cmd_schedule_list(name: &str) -> Result<()> {
     let entries = read_schedule(name)?;

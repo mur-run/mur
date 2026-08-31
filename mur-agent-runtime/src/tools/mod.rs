@@ -10,6 +10,7 @@ pub mod read_file;
 pub mod recall;
 pub mod registry;
 pub mod remember;
+pub mod remind;
 pub(crate) mod suggest;
 pub mod write_file;
 
