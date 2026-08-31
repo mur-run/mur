@@ -1026,6 +1026,35 @@ pub enum ExecutionMode {
     OnDemand,
 }
 
+/// Where an agent leaves a schedule it wants but cannot create.
+///
+/// An agent's schedules live in `lifecycle.schedule` inside its own
+/// `profile.yaml`, and an agent may not write that file — the sandbox denies it
+/// unconditionally so a running agent cannot widen its own entitlements and
+/// restart into them. So "remind me at 10 tomorrow" cannot become a schedule
+/// from the inside, however much the agent understands the request.
+///
+/// It becomes a proposal instead: a file in the agent's own home, which it may
+/// write, that `mur agent schedule accept` turns into the real entry.
+///
+/// Public and shared because both halves must name the same directory. Two
+/// spellings would not fail loudly — the agent would write proposals nobody
+/// lists, which is the shape of failure this whole area keeps producing.
+pub const SCHEDULE_PROPOSAL_DIR: &str = "schedule-proposals";
+
+/// A schedule an agent asked for and a person has not yet granted.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ScheduleProposal {
+    pub cron: String,
+    pub message: String,
+    /// What the user actually said, kept verbatim: a cron expression is not
+    /// reviewable on its own, and the reviewer is being asked whether this is
+    /// what they meant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked_for: Option<String>,
+    pub proposed_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ScheduleEntry {
     pub cron: String,
