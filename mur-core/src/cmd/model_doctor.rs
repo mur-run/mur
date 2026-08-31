@@ -143,11 +143,24 @@ pub fn audit(
                 .vendor_candidates()
                 .into_iter()
                 .find(|v| v.chars().all(|c| c.is_ascii_alphabetic() || c == '-'));
+            // The recommendation carries a precondition, so it names it. A
+            // keychain ref resolves through a session service — macOS Keychain,
+            // Windows Credential Manager, Linux Secret Service — and a headless
+            // box has none, which is why `file:` is the only backend there.
+            // Advice that cannot be followed where it is printed is how a
+            // warn-only check earns being ignored, and this one is warn-only
+            // precisely so it stays readable.
             let fix = match vendor {
                 Some(v) => format!(
-                    "`mur model connect {v}`, or set `secret: keychain:<service>/<account>`"
+                    "`mur model connect {v}`, or set `secret: keychain:<service>/<account>` \
+                     — keychain needs a session credential service (macOS Keychain, Windows \
+                     Credential Manager, Linux Secret Service), so on a headless box `file:` \
+                     with 0600 permissions is the available answer, not a worse one"
                 ),
-                None => "set `secret: keychain:<service>/<account>`".to_string(),
+                None => "set `secret: keychain:<service>/<account>` — keychain needs a session \
+                     credential service, so on a headless box `file:` with 0600 permissions is \
+                     the available answer, not a worse one"
+                    .to_string(),
             };
             out.push(Finding::warn(
                 key.clone(),
@@ -316,6 +329,34 @@ mod tests {
     /// A `file:` ref is plaintext on disk. Nothing said so before, which made
     /// six of them on a real machine look like a choice rather than a default
     /// nobody revisited.
+    /// The fix carries a precondition and must say so. `keychain:` resolves
+    /// through a session credential service, and a headless box has none — so
+    /// on the machines where `file:` is not a lazy default but the only option,
+    /// advice that says "move it to the keychain" cannot be followed. A
+    /// warn-only check that prints unfollowable advice is one people switch off.
+    #[test]
+    fn the_keychain_fix_names_what_it_needs_to_work() {
+        let mut reg = reg_with(&[("anth", "anthropic", "claude-sonnet-5", None)]);
+        reg.models.get_mut("anth").unwrap().secret = Some(mur_common::secret::SecretRef::File(
+            "/x/anthropic.key".into(),
+        ));
+        let f = audit(&reg, &[], None);
+        let hit = f.iter().find(|f| f.subject == "anth").unwrap();
+        assert!(
+            hit.detail.contains("session credential service"),
+            "the precondition must be named: {}",
+            hit.detail
+        );
+        assert!(
+            hit.detail.contains("headless"),
+            "the case where it cannot be followed must be named: {}",
+            hit.detail
+        );
+        // And `file:` must not be left reading as carelessness where it is the
+        // only thing that works.
+        assert!(hit.detail.contains("not a worse one"), "{}", hit.detail);
+    }
+
     #[test]
     fn a_plaintext_secret_is_named_with_the_path_and_the_fix() {
         let mut reg = reg_with(&[("anth", "anthropic", "claude-sonnet-5", None)]);
