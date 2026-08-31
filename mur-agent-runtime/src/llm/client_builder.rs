@@ -71,16 +71,23 @@ fn endpoint_context(entry: &ModelEntry) -> String {
         .base_url
         .as_deref()
         .unwrap_or("the provider's default endpoint");
+    // `label`, not `to_string`: a `cmd:` reference Displays its whole command
+    // line, and this string travels further than `mur agent doctor`'s stdout —
+    // it lands in the turn error, the TUI and whatever persists that.
     let secret = match &entry.secret {
-        Some(s) => s.to_string(),
+        Some(s) => s.label(),
         None => "the agent's own credentials (no secret ref)".to_string(),
     };
-    format!(
+    // A net under the structural fix above: a base URL can carry userinfo and a
+    // provider can echo a key back in a body we later concatenate. Catches only
+    // known key shapes, which is why it is the second line of defence.
+    let line = format!(
         "[auth] this request went to {endpoint} as {}/{}, carrying {secret}. \
          The endpoint rejected that credential — the model entry, the endpoint and the \
          credential are all named here so the wrong one can be found without guessing.",
         entry.provider, entry.model
-    )
+    );
+    mur_common::redact::redact_secrets(&line).into_owned()
 }
 
 /// Names the endpoint on an authentication failure.
@@ -309,6 +316,28 @@ mod endpoint_named_tests {
         // A resolved key would look nothing like a path; assert the shape we
         // print rather than trying to detect a secret after the fact.
         assert!(!c.contains("sk-"), "{c}");
+    }
+
+    /// This string travels further than `mur agent doctor`'s stdout — into the
+    /// turn error, the TUI, and whatever persists that — so a `cmd:` reference
+    /// must not bring its command line along.
+    #[test]
+    fn a_command_credential_does_not_carry_its_arguments_here() {
+        let mut e = entry();
+        e.secret = Some(SecretRef::Cmd("vault read --token=orgtok123".into()));
+        let c = endpoint_context(&e);
+        assert!(!c.contains("orgtok123"), "{c}");
+        assert!(c.contains("cmd:vault"), "{c}");
+    }
+
+    /// The pattern net under the structural fix: a key shape reaching this
+    /// string by any other route is still removed.
+    #[test]
+    fn a_key_shaped_string_anywhere_in_the_context_is_redacted() {
+        let mut e = entry();
+        e.base_url = Some("https://proxy/sk-ant-0123456789abcdefghijklmnop".into());
+        let c = endpoint_context(&e);
+        assert!(!c.contains("sk-ant-0123456789"), "{c}");
     }
 
     #[test]
