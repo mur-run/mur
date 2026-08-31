@@ -440,8 +440,15 @@ Agent** wizard offers the same catalog as a source.
   print the `mkdir -p` to run. `mur agent doctor <name>` reports the two ways a
   grant goes missing, which have different fixes: a path that doesn't exist and
   will be dropped when the sandbox seals, and a grant whose *scope* swallows a
-  protected path — Landlock cannot carve one out, so that grant is dropped
-  whole. Some paths can never be granted at all — another agent's signing key,
+  protected path. What happens then depends on the kernel: Landlock has no deny
+  rule, so Linux drops the whole grant; macOS installs it and re-closes the
+  protected paths inside it, which leaves the grant covering less than it reads
+  as. `doctor` says which of the two you are looking at rather than asserting
+  one everywhere.
+  `mur agent perm list-paths <name>` shows the other half of that picture —
+  every filesystem grant against what the sandbox actually installed, so a
+  grant the kernel discarded is visible as `✗ dropped` rather than as an
+  entry in a config file that quietly does nothing. Some paths can never be granted at all — another agent's signing key,
   the runtime binary, an autostart directory, and your credential store
   (`~/.mur/secrets`, `auth.json`, a `.env`) — because they decide what starts
   next or are the keys themselves; `allow-read` / `allow-write` refuse them,
@@ -537,6 +544,18 @@ Agent** wizard offers the same catalog as a source.
   itself when MUR upgrades, and interpreter-launched servers (`npx …`, `python
   -m …`) are reported as unprotected rather than enforced — hashing the
   interpreter breaks on unrelated runtime upgrades without covering what it runs.
+- **An outstanding-work list that ages and checks itself** — agents record what
+  they left undone, and that list used to only grow: it once carried items about
+  a release six versions old next to a breakfast reminder three weeks past. A
+  reported item now goes stale after two weeks — dropped from the default view,
+  counted in the summary line, still there under `mur open --all`. Stale
+  *demotes*; nothing deletes what a person recorded because a timer said so.
+  `mur open --check` goes further and runs the item's own `next` command, for
+  the subset that only looks (`ls`, `test -f`, `git log`); anything that would
+  act, or that needs a shell, is refused whole rather than trimmed to its safe
+  prefix. The result ranks the list and says how much of it could be answered —
+  `checked 1 of 4 reported items` — because a check that reports nothing about
+  its own reach is indistinguishable from one that found nothing wrong.
 
 ### 🔌 Power the tools you already pay for
 
@@ -600,7 +619,7 @@ mur
 ├── init / doctor / update / stats / verify
 ├── agent        create · start · stop · restart · remove · cli · send · card · dial · who ·
 │                export · install · install-service · addon · companion · voice · pair ·
-│                schedule · perm · secret · trash · rollback … (40+)
+│                schedule · perm (incl. list-paths) · secret · trash · rollback … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · status · run · set-loop · send · jobs   (squads of agents over a shared channel)
 ├── official     list · install   (official agents/fleets from the app.mur.run catalog)
@@ -610,7 +629,7 @@ mur
 ├── notes        create · search · list · show
 ├── workflow     run · suggest · list · schedule · show · search · new · publish · install
 ├── session      start · stop · record · status · list · review · show · export · push
-├── open         add · done   (what is still outstanding, by whether MUR saw it)
+├── open         add · done · --check   (what is still outstanding, by whether MUR saw it)
 ├── sync         (16+ AI tools) · status · fleet pull/push/both
 ├── hook         unified hook entry for AI tools (prompt / tool / stop / session-start)
 ├── chat         conversations archive + ask
