@@ -520,8 +520,10 @@ fn agent_endpoint_line(agent: &str) -> String {
                 .base_url
                 .as_deref()
                 .unwrap_or("the provider's default endpoint");
+            // `label`, not `to_string`: a `cmd:` reference Displays its whole
+            // command line, which is where an inline credential lives.
             let credential = match &entry.secret {
-                Some(s) => s.to_string(),
+                Some(s) => s.label(),
                 None => "the agent's own credentials".to_string(),
             };
             format!(
