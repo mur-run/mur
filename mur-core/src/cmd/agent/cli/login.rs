@@ -476,17 +476,62 @@ pub fn render_status_line(p: Provider, s: &OwnerStatus, stamped: bool) -> String
 
 /// The whole table. Blocking (shells out per provider via [`owner_status`]
 /// and, on macOS, [`store_stamp`]) — dispatch off the UI task.
-pub fn render_status_all() -> String {
-    let mut out = String::from("OAuth providers:\n");
+pub fn render_status_all(agent: &str) -> String {
+    let mut out = String::from("OAuth providers — the owner CLI's login:\n");
     for p in Provider::ALL {
         let s = owner_status(p);
         out.push_str(&render_status_line(p, &s, store_stamp(p).is_some()));
         out.push('\n');
     }
+    out.push_str(&agent_endpoint_line(agent));
     out.push_str(
         "\n(unrelated to `mur auth login`, which signs in to mur.run for the official catalog)",
     );
     out
+}
+
+/// What this agent's next turn will actually dial.
+///
+/// The table above is about the owner CLI's login. An agent reaches its model
+/// through the registry — provider, base URL, credential — and the two coincide
+/// only when the agent happens to use OAuth through that CLI. On any other
+/// setup a green tick above says nothing about whether the next turn works,
+/// which is how a healthy-looking `/login` came to sit next to a 401 (#1100).
+///
+/// The secret is NAMED, never resolved: a status line must not pop a keychain
+/// prompt. `mur agent doctor` resolves it deliberately, because it is
+/// interactive and a human asked it to check.
+fn agent_endpoint_line(agent: &str) -> String {
+    let path = crate::paths::mur_root(None)
+        .join("agents")
+        .join(agent)
+        .join("profile.yaml");
+    let Ok(yaml) = std::fs::read_to_string(&path) else {
+        return String::new();
+    };
+    let Ok(profile) = serde_yaml_ng::from_str::<mur_common::AgentProfile>(&yaml) else {
+        return String::new();
+    };
+    // The runtime's own resolution, so this cannot describe a different model
+    // than the one the turn will use.
+    match mur_agent_runtime::supervisor::resolve_model_entry(&profile) {
+        Ok(entry) => {
+            let endpoint = entry
+                .base_url
+                .as_deref()
+                .unwrap_or("the provider's default endpoint");
+            let credential = match &entry.secret {
+                Some(s) => s.to_string(),
+                None => "the agent's own credentials".to_string(),
+            };
+            format!(
+                "\n\nagent '{agent}' dials {endpoint} as {}/{}, carrying {credential}.\n\
+                 A ✓ above covers that only if this agent goes through the owner CLI.",
+                entry.provider, entry.model
+            )
+        }
+        Err(e) => format!("\n\nagent '{agent}' has no resolvable model: {e}"),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -752,3 +797,33 @@ fn request_login_handover(app: &mut crate::cmd::agent::cli::app::App, p: Provide
 #[cfg(test)]
 #[path = "login/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod endpoint_line_tests {
+    use super::*;
+
+    /// A status line must not resolve the credential: on macOS a `keychain:`
+    /// ref pops an authorization prompt, and typing `/login` to look at a table
+    /// is not asking for one. `mur agent doctor` resolves deliberately, because
+    /// a human asked it to check.
+    #[test]
+    fn the_endpoint_line_names_the_credential_without_resolving_it() {
+        let src = include_str!("login.rs");
+        let body = src
+            .split("fn agent_endpoint_line")
+            .nth(1)
+            .expect("function must exist");
+        let body = &body[..body.find("\n}\n").unwrap_or(body.len())];
+        assert!(
+            !body.contains("resolve_blocking"),
+            "a status line must not resolve a secret"
+        );
+    }
+
+    /// An unknown agent must produce nothing rather than an error banner: the
+    /// OAuth table above is still useful and this line is an addition to it.
+    #[test]
+    fn an_unknown_agent_adds_nothing() {
+        assert_eq!(agent_endpoint_line("no-such-agent-xyz"), "");
+    }
+}
