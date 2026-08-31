@@ -544,6 +544,16 @@ Agent** wizard offers the same catalog as a source.
   itself when MUR upgrades, and interpreter-launched servers (`npx …`, `python
   -m …`) are reported as unprotected rather than enforced — hashing the
   interpreter breaks on unrelated runtime upgrades without covering what it runs.
+- **A reminder that actually fires** — ask an agent to remind you at ten
+  tomorrow and it used to write a note in a list with no clock, which expired
+  quietly three weeks later. An agent cannot create its own schedule — its
+  entries live in a `profile.yaml` the sandbox denies it, deliberately, so a
+  running agent cannot widen its own permissions and restart into them. So it
+  asks: `mur agent schedule proposals <agent>` shows what it asked for, in its
+  own words alongside the cron and **when that cron would first fire in your
+  timezone**, because `0 10 1 9 *` tells a reviewer nothing about whether the
+  agent understood "tomorrow". `accept` turns it into a real entry on the real
+  scheduler.
 - **An outstanding-work list that ages and checks itself** — agents record what
   they left undone, and that list used to only grow: it once carried items about
   a release six versions old next to a breakfast reminder three weeks past. A
@@ -619,7 +629,8 @@ mur
 ├── init / doctor / update / stats / verify
 ├── agent        create · start · stop · restart · remove · cli · send · card · dial · who ·
 │                export · install · install-service · addon · companion · voice · pair ·
-│                schedule · perm (incl. list-paths) · secret · trash · rollback … (40+)
+│                schedule (add · proposals · accept) · perm (incl. list-paths) · secret ·
+│                trash · rollback … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · status · run · set-loop · send · jobs   (squads of agents over a shared channel)
 ├── official     list · install   (official agents/fleets from the app.mur.run catalog)
