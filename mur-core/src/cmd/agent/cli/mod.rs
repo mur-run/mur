@@ -2003,7 +2003,7 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
             }
         }
         SlashCmd::Login(arg) => match arg {
-            None => run_manage(app, move |_agent| Ok(login::render_status_all())).await,
+            None => run_manage(app, move |agent| Ok(login::render_status_all(&agent))).await,
             Some(word) => match login::Provider::parse(&word) {
                 None => app.push_error(format!(
                     "unknown provider {word:?} — try anthropic or chatgpt"
