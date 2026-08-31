@@ -362,6 +362,25 @@ pub async fn build_provider_runner(
             );
         }
     }
+    // Built-in remind: an agent cannot create its own schedule — its entries
+    // live in a `profile.yaml` the sandbox denies it — so this writes a
+    // proposal into the agent home instead. Available like `open_item` rather
+    // than gated: it writes a file nothing acts on until a person runs
+    // `mur agent schedule accept`, and the alternative is what #1075 recorded,
+    // a timed request landing in a list with no clock. An explicit Deny still
+    // wins.
+    {
+        use crate::tools::remind::{REMIND, RemindTool};
+        use mur_common::agent::{ToolPolicy, resolve_tool_policy};
+        if resolve_tool_policy(&tools_policy, REMIND) != ToolPolicy::Deny {
+            tool_map.insert(
+                REMIND.to_string(),
+                Arc::new(RemindTool {
+                    agent_home: agent_home.to_path_buf(),
+                }),
+            );
+        }
+    }
     // Built-in remember (memory federation P2a): proactive capture of durable
     // user preferences/facts as agent-local Draft notes. Gated on the global
     // `memory.capture` config; an explicit Deny in the profile still wins.
