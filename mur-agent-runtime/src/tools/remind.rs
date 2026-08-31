@@ -57,6 +57,10 @@ accept` to grant it, so say that you have asked rather than that it is set."
                     "asked_for": {
                         "type": "string",
                         "description": "The user's own words, verbatim. A cron expression is not reviewable on its own and the reviewer is being asked whether this is what they meant."
+                    },
+                    "once": {
+                        "type": "boolean",
+                        "description": "True when the request names ONE occasion — 'tomorrow at 10', 'on the 3rd', 'in an hour'. False for a recurrence — 'every weekday', 'each morning' — and also for a genuinely yearly one like a birthday. Cron has no year field, so a dated expression silently repeats every year; this is the only thing that stops it. Decide from the user's words, not from the cron: '0 9 15 3 *' is both 'remind me on March 15' and 'every year on my birthday', and the expression cannot tell you which."
                     }
                 }
             }),
@@ -96,10 +100,23 @@ accept` to grant it, so say that you have asked rather than that it is set."
         std::fs::create_dir_all(&dir)
             .map_err(|e| ToolError::Execution(format!("create proposal dir: {e}")))?;
 
+        // A one-shot is bounded by its own first firing. The scheduler admits
+        // the firing its bound names and retires the one after it, so this
+        // fires exactly once (#1119). An expression with no future firing
+        // yields no bound, which costs nothing: it never fires either.
+        let not_after = input
+            .get("once")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+            .then(|| crate::scheduler::next_n_fires(&cron, 1).ok())
+            .flatten()
+            .and_then(|v| v.first().map(|t| t.to_rfc3339()));
+
         let proposal = mur_common::agent::ScheduleProposal {
             cron: cron.clone(),
             message: message.clone(),
             asked_for: field("asked_for"),
+            not_after,
             proposed_at: chrono::Utc::now().to_rfc3339(),
         };
         // Derived from the content, so the same request restated in one
@@ -303,5 +320,49 @@ mod tests {
                 .exists(),
             "nothing may be written for a refused proposal"
         );
+    }
+
+    async fn only_proposal(d: &std::path::Path) -> mur_common::agent::ScheduleProposal {
+        let dir = d.join(mur_common::agent::SCHEDULE_PROPOSAL_DIR);
+        let files: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
+        assert_eq!(files.len(), 1, "{files:?}");
+        serde_yaml_ng::from_str(&std::fs::read_to_string(files[0].path()).unwrap()).unwrap()
+    }
+
+    /// The bug this whole field exists for: "remind me tomorrow at 10" has no
+    /// year to put in a cron, so `0 10 1 9 *` means every September 1st. The
+    /// bound is what turns that back into one morning (#1119).
+    #[tokio::test]
+    async fn a_one_off_is_bounded_by_its_own_first_firing() {
+        let d = tempfile::tempdir().unwrap();
+        tool(d.path())
+            .execute(serde_json::json!({
+                "cron": "0 10 1 9 *", "message": "breakfast",
+                "asked_for": "tomorrow at 10", "once": true
+            }))
+            .await
+            .unwrap();
+        let p = only_proposal(d.path()).await;
+        let first = crate::scheduler::next_n_fires("0 10 1 9 *", 1).unwrap()[0].to_rfc3339();
+        assert_eq!(
+            p.not_after.as_deref(),
+            Some(first.as_str()),
+            "the bound is the entry's own first firing — the scheduler admits \
+             the firing its bound names and retires the next one"
+        );
+    }
+
+    /// The control that keeps the bound from being applied to everything: a
+    /// recurrence must stay unbounded, or every standup reminder dies after one.
+    #[tokio::test]
+    async fn a_recurring_request_carries_no_bound() {
+        let d = tempfile::tempdir().unwrap();
+        tool(d.path())
+            .execute(serde_json::json!({
+                "cron": "0 9 * * 1-5", "message": "standup", "asked_for": "every weekday"
+            }))
+            .await
+            .unwrap();
+        assert!(only_proposal(d.path()).await.not_after.is_none());
     }
 }

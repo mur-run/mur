@@ -4,7 +4,8 @@
 //! MUR_HOME is a process-wide env var, so tests serialize via ENV_LOCK.
 
 use mur_core::cmd::agent_schedule::{
-    cmd_schedule_add, cmd_schedule_list, cmd_schedule_next, cmd_schedule_remove, read_schedule,
+    cmd_schedule_accept, cmd_schedule_add, cmd_schedule_list, cmd_schedule_next,
+    cmd_schedule_remove, read_schedule,
 };
 use std::fs;
 use std::sync::Mutex;
@@ -82,12 +83,13 @@ fn add_list_remove_roundtrip() {
     let _home_guard = MurHomeGuard;
 
     // Add two entries
-    cmd_schedule_add("sched_test", "0 9 * * 1-5", "morning brief", None).unwrap();
+    cmd_schedule_add("sched_test", "0 9 * * 1-5", "morning brief", None, None).unwrap();
     cmd_schedule_add(
         "sched_test",
         "0 18 * * 1-5",
         "end of day",
         Some("other_agent".to_string()),
+        None,
     )
     .unwrap();
 
@@ -134,7 +136,7 @@ fn schedule_next_does_not_error() {
         std::env::set_var("MUR_HOME", tmp.path());
     }
     let _home_guard = MurHomeGuard;
-    cmd_schedule_add("sched_next", "0 * * * *", "hourly ping", None).unwrap();
+    cmd_schedule_add("sched_next", "0 * * * *", "hourly ping", None, None).unwrap();
     // cmd_schedule_next prints to stdout — just verify it doesn't error.
     cmd_schedule_next("sched_next", 3).unwrap();
 }
@@ -147,7 +149,7 @@ fn add_invalid_cron_returns_err() {
         std::env::set_var("MUR_HOME", tmp.path());
     }
     let _home_guard = MurHomeGuard;
-    let result = cmd_schedule_add("sched_bad_cron", "not a cron", "msg", None);
+    let result = cmd_schedule_add("sched_bad_cron", "not a cron", "msg", None, None);
     assert!(result.is_err());
 }
 
@@ -159,6 +161,43 @@ fn schedule_list_does_not_error() {
         std::env::set_var("MUR_HOME", tmp.path());
     }
     let _home_guard = MurHomeGuard;
-    cmd_schedule_add("sched_list", "0 9 * * *", "daily check", None).unwrap();
+    cmd_schedule_add("sched_list", "0 9 * * *", "daily check", None, None).unwrap();
     cmd_schedule_list("sched_list").unwrap();
+}
+
+/// A proposal that says "once" must not be granted as a perpetual schedule.
+///
+/// The bound is part of what the reviewer approved, and `accept` is the one
+/// place it can be silently dropped — the same shape as #957, where a narrow
+/// DTO written back over a full record erased the fields it did not know about.
+#[test]
+fn accept_carries_the_one_shot_bound_onto_the_entry() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = setup("sched_once");
+    unsafe {
+        std::env::set_var("MUR_HOME", tmp.path());
+    }
+    let _home_guard = MurHomeGuard;
+
+    let dir = tmp
+        .path()
+        .join("agents")
+        .join("sched_once")
+        .join(mur_common::agent::SCHEDULE_PROPOSAL_DIR);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("deadbeef1234.yaml"),
+        "cron: \"0 10 1 9 *\"\nmessage: breakfast\nasked_for: tomorrow at 10\nnot_after: \"2026-09-01T10:00:00+08:00\"\nproposed_at: \"2026-08-31T00:00:00+00:00\"\n",
+    )
+    .unwrap();
+
+    cmd_schedule_accept("sched_once", "deadbeef1234").unwrap();
+
+    let entries = read_schedule("sched_once").unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].not_after.as_deref(),
+        Some("2026-09-01T10:00:00+08:00"),
+        "granting a proposal must grant what it said, bound included"
+    );
 }

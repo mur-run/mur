@@ -14,6 +14,7 @@ pub fn cmd_schedule_add(
     cron: &str,
     message: &str,
     sends_to: Option<String>,
+    not_after: Option<String>,
 ) -> Result<()> {
     validate_cron(cron)?;
     let (path, mut profile) = load_profile_for_edit(name)?;
@@ -21,6 +22,7 @@ pub fn cmd_schedule_add(
         cron: cron.to_string(),
         message: message.to_string(),
         sends_to,
+        not_after,
     });
     let idx = profile.lifecycle.schedule.len() - 1;
     save_profile(&path, &mut profile)?;
@@ -70,9 +72,17 @@ pub fn cmd_schedule_proposals(name: &str) -> Result<()> {
         if let Some(asked) = &p.asked_for {
             println!("      asked for: {asked}");
         }
+        // "would first fire" was true of both a one-off and an annual repeat,
+        // which is how a request for one morning was granted forever (#1119).
+        // The reviewer is told which one they are approving.
         match mur_agent_runtime::scheduler::next_n_fires(&p.cron, 1) {
-            Ok(f) if !f.is_empty() => println!("      would first fire: {}", f[0]),
-            _ => println!("      would first fire: never — this cron matches no time"),
+            Ok(f) if !f.is_empty() && p.not_after.is_some() => {
+                println!("      fires once, on {} — does not repeat", f[0])
+            }
+            Ok(f) if !f.is_empty() => {
+                println!("      first fires {}, and repeats on that cron", f[0])
+            }
+            _ => println!("      would never fire — this cron matches no time"),
         }
     }
     println!("\naccept one with: mur agent schedule accept {name} <id>");
@@ -93,7 +103,9 @@ pub fn cmd_schedule_accept(name: &str, id: &str) -> Result<()> {
                 "no proposal {id:?} for agent '{name}' — see `mur agent schedule proposals {name}`"
             )
         })?;
-    cmd_schedule_add(name, &p.cron, &p.message, None)?;
+    // The bound is part of what the reviewer approved: dropping it here would
+    // grant a perpetual schedule from a proposal that said "once".
+    cmd_schedule_add(name, &p.cron, &p.message, None, p.not_after.clone())?;
     std::fs::remove_file(proposal_dir(name).join(format!("{id}.yaml")))
         .with_context(|| format!("remove proposal {id}"))?;
     println!("granted. Restart the agent for it to take effect: mur agent restart {name}");
@@ -128,6 +140,14 @@ pub fn cmd_schedule_list(name: &str) -> Result<()> {
             e.message,
             e.sends_to.as_deref().unwrap_or("(self)")
         );
+        // A bare cron cannot show that an entry is spent or one-off, so a
+        // bounded entry gets the shared phrasing under its row.
+        if e.not_after.is_some() {
+            println!(
+                "     \u{21b3} {}",
+                crate::schedule_status::describe_bounded(&e.cron, e.not_after.as_deref())
+            );
+        }
     }
     Ok(())
 }
