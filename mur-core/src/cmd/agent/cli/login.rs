@@ -502,10 +502,14 @@ pub fn render_status_all(agent: &str) -> String {
 /// prompt. `mur agent doctor` resolves it deliberately, because it is
 /// interactive and a human asked it to check.
 fn agent_endpoint_line(agent: &str) -> String {
-    let path = crate::paths::mur_root(None)
-        .join("agents")
-        .join(agent)
-        .join("profile.yaml");
+    // Through the canonicaliser, not straight into a path: agent lookup is
+    // case-insensitive on the CLI (CLAUDE.md rule 8), and a typed name that
+    // differs only in case would otherwise silently render nothing here. It
+    // also removes the question of what a name containing `..` would do,
+    // rather than leaving it to be reasoned about (#1106).
+    let home = crate::paths::mur_root(None);
+    let agent = crate::a2a_dial::canonicalize_agent_name(&home, agent);
+    let path = home.join("agents").join(&agent).join("profile.yaml");
     let Ok(yaml) = std::fs::read_to_string(&path) else {
         return String::new();
     };

@@ -448,18 +448,12 @@ fn check_dropped_launch_chain_grants(
     // the user-visible consequence is identical: the grant silently vanishes.
     let (_kept_r, dropped_reads) = chain.partition_read_grants(&reads);
 
-    if dropped.is_empty() && dropped_reads.is_empty() {
-        return Check::new(
-            "grant_scope",
-            true,
-            format!(
-                "{} write + {} read grant(s), none overlap a protected path",
-                writes.len(),
-                reads.len()
-            ),
-        );
-    }
-    let (ok, detail) = grant_scope_verdict(&dropped, &dropped_reads, cfg!(target_os = "linux"));
+    let (ok, detail) = grant_scope_verdict(
+        &dropped,
+        &dropped_reads,
+        (writes.len(), reads.len()),
+        cfg!(target_os = "linux"),
+    );
     Check::new("grant_scope", ok, detail)
 }
 
@@ -472,8 +466,21 @@ fn check_dropped_launch_chain_grants(
 fn grant_scope_verdict(
     dropped: &[std::path::PathBuf],
     dropped_reads: &[std::path::PathBuf],
+    (writes, reads): (usize, usize),
     landlock: bool,
 ) -> (bool, String) {
+    // The all-clear used to live in the caller as an early return, which left
+    // this function returning `(false, "")` when handed two empty lists — a
+    // failed check with nothing written beside it. Unreachable through that
+    // caller, and exactly the blank #1095 removed from schedules: a verdict
+    // must always arrive with its reason. Owning the whole decision here means
+    // there is no invariant to enforce elsewhere and forget (#1105).
+    if dropped.is_empty() && dropped_reads.is_empty() {
+        return (
+            true,
+            format!("{writes} write + {reads} read grant(s), none overlap a protected path"),
+        );
+    }
     let mut parts: Vec<String> = Vec::new();
     if !dropped.is_empty() {
         let names: Vec<String> = dropped.iter().map(|p| p.display().to_string()).collect();
@@ -516,7 +523,10 @@ fn grant_scope_verdict(
     // A write-only overlap is not a failure where the grant is installed.
     // Reporting it as one is how a check earns its way into the part of the
     // screen people stop reading.
-    let ok = dropped_reads.is_empty() && !dropped.is_empty() && !landlock;
+    // Reached only with something dropped, so this says what it means: a read
+    // overlap fails everywhere, a write overlap fails only where Landlock
+    // discards it.
+    let ok = dropped_reads.is_empty() && !landlock;
     (ok, parts.join("; "))
 }
 
@@ -693,6 +703,21 @@ pub fn run_agent(name: &str, json: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// #1105: handed nothing dropped, this used to return a failed check with
+    /// an empty explanation — the blank that #1095 removed from schedules,
+    /// reintroduced two hours later in the fix for #1091. It was unreachable
+    /// only because the caller guarded it, and nothing in the signature said so.
+    #[test]
+    fn nothing_dropped_is_a_pass_with_its_reason_not_a_blank_failure() {
+        for landlock in [true, false] {
+            let (ok, detail) = grant_scope_verdict(&[], &[], (3, 2), landlock);
+            assert!(ok, "landlock={landlock}: {detail}");
+            assert!(!detail.is_empty(), "a verdict must arrive with its reason");
+            assert!(detail.contains("3 write"), "{detail}");
+            assert!(detail.contains("2 read"), "{detail}");
+        }
+    }
+
     fn pb(p: &str) -> std::path::PathBuf {
         std::path::PathBuf::from(p)
     }
@@ -701,7 +726,7 @@ mod tests {
     /// user must narrow it.
     #[test]
     fn under_landlock_an_overlapping_write_grant_is_reported_as_lost() {
-        let (ok, detail) = grant_scope_verdict(&[pb("/home/d/.mur")], &[], true);
+        let (ok, detail) = grant_scope_verdict(&[pb("/home/d/.mur")], &[], (1, 0), true);
         assert!(!ok, "{detail}");
         assert!(detail.contains("DROPPED WHOLE"), "{detail}");
         assert!(detail.contains("specific subdirectory"), "{detail}");
@@ -712,7 +737,7 @@ mod tests {
     /// Telling the user it was dropped sends them to narrow a working grant.
     #[test]
     fn without_landlock_the_same_grant_is_installed_and_not_called_lost() {
-        let (ok, detail) = grant_scope_verdict(&[pb("/Users/d/.mur")], &[], false);
+        let (ok, detail) = grant_scope_verdict(&[pb("/Users/d/.mur")], &[], (1, 0), false);
         assert!(ok, "an installed grant is not a failure: {detail}");
         assert!(
             !detail.contains("DROPPED WHOLE"),
@@ -726,7 +751,7 @@ mod tests {
     #[test]
     fn a_read_overlap_fails_on_either_platform() {
         for landlock in [true, false] {
-            let (ok, detail) = grant_scope_verdict(&[], &[pb("/x/.mur")], landlock);
+            let (ok, detail) = grant_scope_verdict(&[], &[pb("/x/.mur")], (0, 1), landlock);
             assert!(!ok, "landlock={landlock}: {detail}");
             assert!(detail.contains("DROPPED WHOLE"), "{detail}");
         }
