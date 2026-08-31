@@ -2059,7 +2059,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 cron,
                 message,
                 sends_to,
-            } => cmd::agent_schedule::cmd_schedule_add(&name, &cron, &message, sends_to)?,
+            } => cmd::agent_schedule::cmd_schedule_add(&name, &cron, &message, sends_to, None)?,
             AgentScheduleAction::Proposals { name } => {
                 cmd::agent_schedule::cmd_schedule_proposals(&name)?
             }
