@@ -94,6 +94,35 @@ fn preseal_lookup(r: &SecretRef) -> Option<SecretString> {
     c.iter().find(|(k, _)| k == r).map(|(_, v)| v.clone())
 }
 
+/// A form of this reference that is safe to put in front of a user, a log, or
+/// a model.
+///
+/// [`Display`](std::fmt::Display) prints the reference verbatim, which is right
+/// where the reader is the operator looking at their own config. It is wrong
+/// for `Cmd`: the whole command line is printed, and a command line is exactly
+/// where an inline credential lives (`cmd:vault read --token=…`).
+///
+/// Redaction by pattern does not cover this — `redact_secrets` matches known
+/// key shapes (`sk-`, `AKIA`, `ghp_`, JWT, PEM) and an arbitrary `--token=`
+/// argument is none of them. So the arguments are dropped structurally rather
+/// than filtered: the program name is what identifies the credential, and the
+/// arguments are only where the danger is.
+impl SecretRef {
+    pub fn label(&self) -> String {
+        match self {
+            SecretRef::Cmd(c) => {
+                let program = c.split_whitespace().next().unwrap_or("");
+                if c.split_whitespace().nth(1).is_some() {
+                    format!("cmd:{program} (arguments hidden)")
+                } else {
+                    format!("cmd:{program}")
+                }
+            }
+            other => other.to_string(),
+        }
+    }
+}
+
 impl std::fmt::Display for SecretRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -462,6 +491,41 @@ async fn decrypt_age(bytes: &[u8]) -> Result<String, SecretError> {
 
 #[cfg(test)]
 mod tests {
+    /// A command line is exactly where an inline credential lives, and pattern
+    /// redaction does not cover it: `redact_secrets` matches known key shapes
+    /// and `--token=anything` is none of them. The arguments go structurally.
+    #[test]
+    fn a_command_reference_hides_its_arguments() {
+        let r = SecretRef::Cmd("vault read -field=key secret/x --token=orgtok123".into());
+        let label = r.label();
+        assert!(label.starts_with("cmd:vault"), "{label}");
+        assert!(!label.contains("orgtok123"), "{label}");
+        assert!(label.contains("arguments hidden"), "{label}");
+    }
+
+    /// …but a bare command has nothing to hide, and saying "arguments hidden"
+    /// when there are none is its own small lie.
+    #[test]
+    fn a_bare_command_reference_is_shown_whole() {
+        assert_eq!(SecretRef::Cmd("get-key".into()).label(), "cmd:get-key");
+    }
+
+    /// The other forms name a location, not a payload, so they are unchanged —
+    /// `mur agent doctor` has printed them for a long time.
+    #[test]
+    fn the_other_forms_are_unchanged() {
+        for r in [
+            SecretRef::Env("ANTHROPIC_API_KEY".into()),
+            SecretRef::File("/home/d/.mur/secrets/k".into()),
+            SecretRef::Keychain {
+                service: "mur".into(),
+                account: "anthropic".into(),
+            },
+        ] {
+            assert_eq!(r.label(), r.to_string(), "{r}");
+        }
+    }
+
     use super::*;
     use serde_yaml_ng as yaml;
 
