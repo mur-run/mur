@@ -226,29 +226,48 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             // resolve to the bundled copy, so both should trigger the refresh.
             c == bundled || c.file_name() == bundled.file_name()
         });
+        let mut bundled_refreshed = None;
         if uses_bundled {
             match mur_common::exec::ensure_bundled_mcp_server() {
                 Ok(p) => {
                     info!(path = %p.display(), "ensured bundled mcp-server");
-                    // Re-pin: we just put this binary there ourselves, from the
-                    // `mur-mcp-server` shipped beside the running `mur`. Its
-                    // trust anchor is "same install as this runtime", not a
-                    // hash recorded weeks ago — an attacker who can swap it has
-                    // already swapped `mur` itself.
-                    //
-                    // Without this, every `mur` upgrade leaves the profile
-                    // pinned to the previous binary, so B0 rule 6 (now
-                    // enforcing, #791) would refuse to start the agent after a
-                    // routine upgrade. Third-party MCP entries are untouched.
-                    if let Err(e) = crate::mcp_repin::repin_bundled_mcp(&agent_home, &p) {
-                        warn!(error = %e, "could not re-pin bundled mcp-server");
-                    }
+                    bundled_refreshed = Some(p);
                 }
                 Err(e) => warn!(
                     error = %e,
                     "could not refresh bundled mcp-server; using existing copy if present"
                 ),
             }
+        }
+
+        // Re-pin the MCP servers MUR ships itself, whose trust anchor is "same
+        // install as this runtime" rather than a hash recorded weeks ago: an
+        // attacker who can swap one has already swapped the runtime. Without
+        // this, every `mur` upgrade leaves the profile pinned to the previous
+        // binary and B0 rule 6 (enforcing since #791) refuses to start the
+        // agent after a routine upgrade. Third-party entries are untouched.
+        //
+        // Runs whether or not the bundled server was refreshed: a profile can
+        // carry a first-party sibling (`mur-research-gateway`) and no
+        // `mur-mcp-server` at all — that is exactly the deep-research worker
+        // shape that crash-looped.
+        match std::env::current_exe().ok().and_then(|e| {
+            e.canonicalize()
+                .ok()
+                .and_then(|c| c.parent().map(Path::to_path_buf))
+        }) {
+            Some(runtime_dir) => {
+                if let Err(e) = crate::mcp_repin::repin_first_party(
+                    &agent_home,
+                    bundled_refreshed.as_deref(),
+                    &runtime_dir,
+                ) {
+                    warn!(error = %e, "could not re-pin first-party MCP binaries");
+                }
+            }
+            None => warn!(
+                "could not locate this runtime's own directory; skipped first-party MCP re-pin"
+            ),
         }
     }
 
