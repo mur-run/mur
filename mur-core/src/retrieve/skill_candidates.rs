@@ -234,6 +234,23 @@ impl Retrievable for LoadedSkill {
     }
 
     fn decay_half_life_days(&self) -> f64 {
+        // A note whose use was never recorded does not decay.
+        //
+        // The decay term reads `last_success_at` and falls back to creation
+        // when it is absent — which for a note is always. Nothing records a
+        // note as used: injection does not (it sorts by name and takes the
+        // first N, never consulting a score), and no retrieval path writes
+        // stats back. So the term was not measuring inactivity, it was
+        // measuring age and calling it inactivity, and a note the user wrote
+        // sank for a reason the system had no evidence of (#1062).
+        //
+        // Refusing to compute is the same answer this codebase now gives
+        // everywhere the input is missing rather than zero. When note usage is
+        // recorded, notes with a recorded use decay from it and this stops
+        // applying by itself — no second rule to remember to remove.
+        if self.is_note() && self.stats.last_success_at.is_none() {
+            return f64::INFINITY;
+        }
         // Per-kind curves (federation P1): rule notes decay fast, fact notes
         // linger. Uses the compile-time default factors — the config override
         // applies to the lifecycle sweep; retrieval uses the same defaults so
@@ -261,6 +278,63 @@ impl Retrievable for LoadedSkill {
 
 #[cfg(test)]
 mod tests {
+    /// Build one candidate from a written skill.yaml, so the fixture goes
+    /// through the same loader production does.
+    fn one_candidate(dir: &std::path::Path, yaml: &str) -> LoadedSkill {
+        let skills = dir.join("skills");
+        std::fs::create_dir_all(skills.join("subject")).unwrap();
+        std::fs::write(skills.join("subject").join("skill.yaml"), yaml).unwrap();
+        load_skill_candidates(&skills, dir).unwrap().pop().unwrap()
+    }
+
+    const A_NOTE: &str = "name: subject\nversion: 1.0.0\npublisher: agent:mur\n\
+         description: reply in zh-TW\ncategory: note\npriority: normal\n\
+         tags: [rule]\ncontent:\n  abstract: reply in zh-TW\n  context: x\n";
+
+    /// #1062: the decay term reads `last_success_at`, and nothing writes it for
+    /// a note — not injection (which sorts by name and never scores), not any
+    /// retrieval path. So it was measuring age and calling it inactivity, and a
+    /// note the user wrote sank for a reason the system had no evidence of.
+    #[test]
+    fn a_note_with_no_recorded_use_does_not_decay() {
+        let d = tempfile::tempdir().unwrap();
+        let c = one_candidate(d.path(), A_NOTE);
+        assert!(c.stats.last_success_at.is_none(), "fixture premise");
+        assert!(
+            c.decay_half_life_days().is_infinite(),
+            "a note with nothing recorded must not decay on it"
+        );
+    }
+
+    /// The exemption is not "notes never decay" — it lifts the moment there is
+    /// something real to measure, so it disappears on its own once note usage
+    /// is recorded rather than becoming a rule to remember to remove.
+    #[test]
+    fn a_note_with_a_recorded_use_decays_from_it() {
+        let d = tempfile::tempdir().unwrap();
+        let mut c = one_candidate(d.path(), A_NOTE);
+        c.stats.last_success_at = Some(chrono::Utc::now());
+        let h = c.decay_half_life_days();
+        assert!(h.is_finite(), "a measured note decays: {h}");
+        // `rule` halves the tier curve — the per-kind factor still applies.
+        assert!(h < c.tier().decay_half_life_days() as f64, "{h}");
+    }
+
+    /// Skills are untouched: they have a real activity signal, and widening the
+    /// exemption to them would stop recency ranking working at all.
+    #[test]
+    fn a_skill_with_no_recorded_use_still_decays() {
+        let d = tempfile::tempdir().unwrap();
+        let c = one_candidate(
+            d.path(),
+            "name: subject\nversion: 1.0.0\npublisher: human:test\n\
+             description: deploy\ncategory: context\npriority: normal\n\
+             tags: [x]\ncontent:\n  abstract: deploy\n  context: y\n",
+        );
+        assert!(c.stats.last_success_at.is_none(), "fixture premise");
+        assert!(c.decay_half_life_days().is_finite(), "skills still decay");
+    }
+
     use super::*;
     use crate::retrieve::scoring::ScoringHints;
     use chrono::Duration;
