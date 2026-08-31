@@ -77,6 +77,50 @@ export function scheduleScope(s: ScheduleItem): "agent" | "global" {
   return s.kind === "agent_cron" || s.kind === "agent_idle" ? "agent" : "global";
 }
 
+/// Whether the row runs on a clock, or only when something starts it.
+///
+/// `status` answers neither question: a manual fleet is "enabled" and still
+/// never fires on its own, which is how a table of five rows came to show four
+/// unscheduled ones as if they were scheduled. Four constants over `kind`, same
+/// reasoning as `scheduleScope` — a label, not a derivation.
+///
+/// A cron the backend could not parse still counts as timetabled: it has a
+/// timetable, and the reason it has no fire time is what `next_note` is for.
+/// Calling it "manual" would replace one wrong answer with another.
+export function scheduleTimetabled(s: ScheduleItem): boolean {
+  switch (s.kind) {
+    case "agent_cron":
+      return true;
+    case "agent_idle":
+      return false;
+    case "workflow":
+      return s.expr != null;
+    case "fleet":
+      return s.trigger !== "manual";
+  }
+}
+
+/// The rows the Panel shows, split the way it shows them.
+///
+/// The agent's own rows and machine-wide ones are always visible; other agents'
+/// appear only when asked for. `hidden` is what the toggle is suppressing right
+/// now — reported even when it is 0, because a checkbox whose effect is
+/// invisible is one a reader concludes is broken.
+export function panelSchedules(
+  rows: ScheduleItem[],
+  agent: string | null,
+  showAll: boolean,
+): { timed: ScheduleItem[]; manual: ScheduleItem[]; hidden: number } {
+  const visible = showAll
+    ? rows
+    : rows.filter((s) => scheduleScope(s) === "global" || s.owner === agent);
+  return {
+    timed: visible.filter(scheduleTimetabled),
+    manual: visible.filter((s) => !scheduleTimetabled(s)),
+    hidden: rows.length - visible.length,
+  };
+}
+
 export function scheduleNext(s: ScheduleItem): { text: string; title: string; muted: boolean } {
   const fires = "next_fires" in s ? s.next_fires : [];
   if (!fires.length) {
