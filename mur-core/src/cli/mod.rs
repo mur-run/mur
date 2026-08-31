@@ -295,6 +295,11 @@ see `mur skill <command> --help`.")]
         /// Include muted sources
         #[arg(long)]
         all: bool,
+        /// Run each item's own `next` command, when it only looks — `ls`,
+        /// `test -f`, `git log`. The result ranks the list; it never closes
+        /// anything, and a `next` that would act or needs a shell is skipped.
+        #[arg(long)]
+        check: bool,
     },
     /// Push pending signals from the outbox to the server
     Push {
