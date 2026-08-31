@@ -1022,7 +1022,12 @@ pub async fn run(cli: Cli) -> Result<()> {
             eprintln!("# mur out: use `mur session out`");
             cmd::session::cmd_out(action.as_deref(), force).await?
         }
-        Commands::Open { action, json, all } => {
+        Commands::Open {
+            action,
+            json,
+            all,
+            check,
+        } => {
             let home = crate::paths::mur_root(None);
             let cfg_path = home.join("config.yaml");
             match action {
@@ -1105,6 +1110,15 @@ pub async fn run(cli: Cli) -> Result<()> {
                             }))?
                         );
                     } else {
+                        let (visible, coverage) = if check {
+                            let (v, c) = crate::open_items::probe::annotate(
+                                visible,
+                                &std::env::current_dir()?,
+                            );
+                            (v, c.line())
+                        } else {
+                            (visible, None)
+                        };
                         let (fresh, stale) =
                             crate::open_items::split_stale(visible, chrono::Utc::now());
                         // `--all` suspends this policy too: stale items come
@@ -1117,6 +1131,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                             (fresh, n)
                         };
                         print!("{}", crate::open_items::render(&shown, &matched, hidden));
+                        if let Some(line) = coverage {
+                            println!("\n{line}");
+                        }
                     }
                 }
             }

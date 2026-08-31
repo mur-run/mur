@@ -24,6 +24,7 @@ use std::path::Path;
 pub use mur_open_items::{ItemSource, OpenItem};
 
 pub mod observed;
+pub mod probe;
 
 /// The agent-authored half lives in its own crate so the agent runtime can
 /// write to it without depending on this one.
