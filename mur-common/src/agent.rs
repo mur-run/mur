@@ -1052,6 +1052,11 @@ pub struct ScheduleProposal {
     /// what they meant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asked_for: Option<String>,
+    /// Proposed bound, carried verbatim onto the accepted [`ScheduleEntry`].
+    /// Present exactly when the agent judged the request to name one occasion
+    /// rather than a recurrence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_after: Option<String>,
     pub proposed_at: String,
 }
 
@@ -1061,6 +1066,19 @@ pub struct ScheduleEntry {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sends_to: Option<String>,
+    /// Retire the entry once its next firing would fall after this instant
+    /// (RFC3339 with offset). How a one-shot reminder is expressed: cron has no
+    /// year field, so "tomorrow at 10:00" can only be written as an annual
+    /// recurrence, and unbounded it turns a request for one morning into a
+    /// perpetual commitment (#1119).
+    ///
+    /// A bound rather than a fired-yet flag, because the scheduler runs inside
+    /// the agent's own sandbox where `profile.yaml` is denied
+    /// (`SELF_PROTECTED_AGENT_FILES`, #712) — it cannot record that an entry has
+    /// fired. Comparing the next firing against a stored instant needs no write
+    /// at all, so the bound works where a flag structurally could not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_after: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
