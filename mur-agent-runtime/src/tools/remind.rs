@@ -105,6 +105,19 @@ accept` to grant it, so say that you have asked rather than that it is set."
         // Derived from the content, so the same request restated in one
         // conversation folds onto one proposal instead of stacking.
         let id = proposal_id(&cron, &message);
+        // A correction supersedes what it corrects.
+        //
+        // The id is derived from the cron, so fixing a wrong date produces a
+        // second file rather than replacing the first — and a live test did
+        // exactly that: an agent guessed "tomorrow" wrong, checked `date`, and
+        // asked again, leaving two proposals for one request, the abandoned one
+        // due to fire six months later.
+        //
+        // Keyed on what the user said, not on what the agent computed: the
+        // words are the request, and the cron is one attempt at expressing it.
+        if let Some(asked) = proposal.asked_for.as_deref() {
+            supersede(&dir, asked, &id);
+        }
         let body = serde_yaml_ng::to_string(&proposal)
             .map_err(|e| ToolError::Execution(format!("serialise proposal: {e}")))?;
         std::fs::write(dir.join(format!("{id}.yaml")), body)
@@ -116,6 +129,36 @@ accept` to grant it, so say that you have asked rather than that it is set."
              accept <agent> {id}\nSay that you have asked, not that it is set."
         )
         .into())
+    }
+}
+
+/// Remove earlier proposals for the same request, keeping `keep_id`.
+///
+/// Best-effort: a proposal that cannot be read is left alone rather than
+/// deleted on a guess, and a failure here must not lose the new proposal — the
+/// worst case is the duplicate this exists to prevent, which is visible in
+/// `schedule proposals` and removable with `decline`.
+fn supersede(dir: &std::path::Path, asked_for: &str, keep_id: &str) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.extension().is_none_or(|x| x != "yaml") {
+            continue;
+        }
+        if path.file_stem().is_some_and(|s| s == keep_id) {
+            continue;
+        }
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(old) = serde_yaml_ng::from_str::<mur_common::agent::ScheduleProposal>(&body) else {
+            continue;
+        };
+        if old.asked_for.as_deref() == Some(asked_for) {
+            let _ = std::fs::remove_file(&path);
+        }
     }
 }
 
@@ -131,6 +174,72 @@ fn proposal_id(cron: &str, message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// The live test that produced this: an agent guessed "tomorrow" wrong,
+    /// checked `date`, and asked again — leaving two proposals for one request,
+    /// the abandoned one due to fire six months later. A reviewer should not
+    /// have to work out which of two identical-looking asks is the live one.
+    #[tokio::test]
+    async fn a_corrected_reminder_supersedes_the_one_it_corrects() {
+        let d = tempfile::tempdir().unwrap();
+        let asked = "明天早上 10:00 提醒我吃早餐";
+        // The wrong guess, then the correction, exactly as it happened.
+        tool(d.path())
+            .execute(
+                serde_json::json!({"cron": "0 10 24 2 *", "message": "吃早餐", "asked_for": asked}),
+            )
+            .await
+            .unwrap();
+        tool(d.path())
+            .execute(
+                serde_json::json!({"cron": "0 10 1 9 *", "message": "吃早餐", "asked_for": asked}),
+            )
+            .await
+            .unwrap();
+
+        let dir = d.path().join(mur_common::agent::SCHEDULE_PROPOSAL_DIR);
+        let files: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
+        assert_eq!(files.len(), 1, "one request, one live proposal: {files:?}");
+        let p: mur_common::agent::ScheduleProposal =
+            serde_yaml_ng::from_str(&std::fs::read_to_string(files[0].path()).unwrap()).unwrap();
+        assert_eq!(
+            p.cron, "0 10 1 9 *",
+            "the correction is the one that survives"
+        );
+    }
+
+    /// Two genuinely different requests are two proposals. Superseding on the
+    /// user's words must not collapse unrelated reminders into one.
+    #[tokio::test]
+    async fn different_requests_stay_separate() {
+        let d = tempfile::tempdir().unwrap();
+        tool(d.path())
+            .execute(serde_json::json!({"cron": "0 9 * * 1-5", "message": "standup", "asked_for": "weekday standup"}))
+            .await
+            .unwrap();
+        tool(d.path())
+            .execute(serde_json::json!({"cron": "0 18 * * 5", "message": "retro", "asked_for": "friday retro"}))
+            .await
+            .unwrap();
+        let dir = d.path().join(mur_common::agent::SCHEDULE_PROPOSAL_DIR);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+    }
+
+    /// Without the user's words there is nothing to key supersession on, and
+    /// guessing from the message would collapse two reminders that happen to
+    /// say the same thing at different times.
+    #[tokio::test]
+    async fn proposals_without_asked_for_are_left_alone() {
+        let d = tempfile::tempdir().unwrap();
+        for cron in ["0 10 1 9 *", "0 10 2 9 *"] {
+            tool(d.path())
+                .execute(serde_json::json!({"cron": cron, "message": "吃早餐"}))
+                .await
+                .unwrap();
+        }
+        let dir = d.path().join(mur_common::agent::SCHEDULE_PROPOSAL_DIR);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+    }
+
     use super::*;
 
     fn tool(dir: &std::path::Path) -> RemindTool {
