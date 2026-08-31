@@ -13,7 +13,7 @@
 use std::path::Path;
 
 use chrono::{Local, TimeZone};
-use mur_agent_runtime::scheduler::next_n_fires;
+use mur_agent_runtime::scheduler::{next_n_fires, parse_bound};
 
 use crate::cmd::fleet::loop_run::parse_duration;
 
@@ -238,9 +238,36 @@ fn local_fmt(unix: u64, fmt: &str) -> Option<String> {
 }
 
 fn fires(expr: &str) -> Vec<String> {
+    bounded_fires(expr, None)
+}
+
+/// Firings that will actually occur — anything past the entry's bound dropped.
+///
+/// A bare cron reading of a one-shot lists next year and the year after, times
+/// the scheduler retires the entry rather than reach (#1119). Showing them is
+/// the same failure the bound exists to fix, relocated into the UI.
+fn bounded_fires(expr: &str, not_after: Option<&str>) -> Vec<String> {
+    let bound = parse_bound(not_after);
     next_n_fires(expr, NEXT_FIRE_COUNT)
-        .map(|v| v.iter().map(|t| t.to_rfc3339()).collect())
+        .map(|v| {
+            v.iter()
+                .filter(|t| bound.is_none_or(|b| **t <= b))
+                .map(|t| t.to_rfc3339())
+                .collect()
+        })
         .unwrap_or_default()
+}
+
+/// Phrase what an entry will actually do, bound included.
+///
+/// One describer for every surface — `schedule list`, `schedule proposals`, the
+/// Panel and the Hub — so none of them can claim an entry repeats when it does
+/// not. Same discipline as #1095, applied to #1119's bound.
+pub fn describe_bounded(cron: &str, not_after: Option<&str>) -> String {
+    match parse_bound(not_after) {
+        Some(b) => format!("once, on {}", b.format("%Y-%m-%d %H:%M")),
+        None => describe_cron(cron),
+    }
 }
 
 fn collect_agents(
@@ -276,15 +303,22 @@ fn collect_agents(
         };
 
         for s in &profile.lifecycle.schedule {
-            let next_fires = fires(&s.cron);
+            let next_fires = bounded_fires(&s.cron, s.not_after.as_deref());
             out.push(ScheduleItem::AgentCron {
                 owner: name.clone(),
                 expr: s.cron.clone(),
                 message: s.message.clone(),
-                description: describe_cron(&s.cron),
-                next_note: next_fires
-                    .is_empty()
-                    .then(|| format!("could not read a schedule from `{}`", s.cron)),
+                description: describe_bounded(&s.cron, s.not_after.as_deref()),
+                // Two very different reasons produce no fire times, and a single
+                // note for both is exactly the lie this batch keeps finding: a
+                // spent one-off did its job, an unreadable cron never will.
+                next_note: next_fires.is_empty().then(|| {
+                    if parse_bound(s.not_after.as_deref()).is_some() {
+                        "already fired — this was a one-off and does not repeat".to_string()
+                    } else {
+                        format!("could not read a schedule from `{}`", s.cron)
+                    }
+                }),
                 next_fires,
                 status: "enabled".into(),
             });
@@ -542,6 +576,21 @@ mod tests {
 
     /// A cron string a reader can look up beats a sentence that is wrong, so
     /// anything unrecognised must come back verbatim rather than guessed at.
+    #[test]
+    fn a_bounded_entry_is_phrased_as_a_one_off_and_an_unreadable_bound_is_not() {
+        assert!(
+            describe_bounded("0 10 1 9 *", Some("2026-09-01T10:00:00+08:00")).starts_with("once,"),
+            "a bound is the difference between one morning and every September"
+        );
+        // Both sides read the bound through `scheduler::parse_bound`, so this
+        // cannot drift into showing a spent one-off while the entry keeps firing.
+        assert_eq!(
+            describe_bounded("0 9 * * *", Some("next tuesday")),
+            describe_cron("0 9 * * *"),
+            "an unreadable bound is no bound, on the surface as in the scheduler"
+        );
+    }
+
     #[test]
     fn an_unrecognised_cron_shape_is_returned_verbatim() {
         for expr in ["0 9 1 * *", "15 2 * 6 3", "not a cron", "0 9 * *"] {
