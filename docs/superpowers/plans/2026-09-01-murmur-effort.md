@@ -91,7 +91,7 @@ pub fn effort_shape(model: &str) -> EffortShape
 
 **Steps**
 
-- [ ] Add this test to the existing `mod tests` in `mur-common/src/llm.rs`:
+- [x] Add this test to the existing `mod tests` in `mur-common/src/llm.rs`:
 
 ```rust
 #[test]
@@ -142,10 +142,10 @@ fn effort_shape_negative_cases() {
 }
 ```
 
-- [ ] Run `cargo test -p mur-common --lib llm::tests::effort_shape` and watch
+- [x] Run `cargo test -p mur-common --lib llm::tests::effort_shape` and watch
       both tests fail to compile (`cannot find function effort_shape`).
 
-- [ ] Add to `mur-common/src/llm.rs`, immediately above `supported_effort`:
+- [x] Add to `mur-common/src/llm.rs`, immediately above `supported_effort`:
 
 ```rust
 /// What form of reasoning control a model accepts.
@@ -300,12 +300,12 @@ pub fn effort_shape(model: &str) -> EffortShape {
 }
 ```
 
-- [ ] Run `cargo test -p mur-common --lib llm::tests::effort_shape` and watch
+- [x] Run `cargo test -p mur-common --lib llm::tests::effort_shape` and watch
       both tests pass.
-- [ ] Run `cargo fmt -p mur-common` then
+- [x] Run `cargo fmt -p mur-common` then
       `cargo clippy -p mur-common --all-targets -- -D warnings`. Expect no
       output beyond `Finished`.
-- [ ] Commit: `feat(llm): effort_shape names what reasoning control a model takes`
+- [x] Commit: `feat(llm): effort_shape names what reasoning control a model takes`
 
 ---
 
@@ -320,9 +320,17 @@ Produces: no signature change. `supported_effort(model: &str, want: Effort) ->
 Option<Effort>` and `openai_reasoning_effort(model: &str, want: Effort) ->
 Option<&'static str>` keep their behavior and become table callers.
 
+**Correction found during execution.** The plan ordered the mutation check
+before the refactor. At that point the guard *cannot* fail: `supported_effort`
+does not yet read `LEVELS_NO_XHIGH`, so breaking that constant is invisible to
+it (Task 1's `l.len() == 4` is what catches it there). The mutation must run
+AFTER the delegation, which is where it was actually done — and where it
+produced `left: Some(High), right: Some(Max)`, the silent downgrade this guard
+exists to catch.
+
 **Steps**
 
-- [ ] Add this test, which pins delegation rather than duplication:
+- [x] Add this test, which pins delegation rather than duplication:
 
 ```rust
 /// Delegation must not change what the mappers return. This pins the exact
@@ -343,14 +351,14 @@ fn delegation_preserves_the_hole_in_the_pre_4_7_scale() {
 }
 ```
 
-- [ ] Run `cargo test -p mur-common --lib llm::tests::delegation_preserves` and
+- [x] Run `cargo test -p mur-common --lib llm::tests::delegation_preserves` and
       watch it PASS against the current implementation — it is written to
       describe today's behavior, which is exactly what a refactor guard must do.
       Then break it deliberately: change `LEVELS_NO_XHIGH` to drop `Effort::Max`,
       re-run, confirm it fails, and put `Max` back. A guard you have not seen
       fail is not a guard.
 
-- [ ] Replace the body of `supported_effort` with:
+- [x] Replace the body of `supported_effort` with:
 
 ```rust
 pub fn supported_effort(model: &str, want: Effort) -> Option<Effort> {
@@ -369,7 +377,7 @@ pub fn supported_effort(model: &str, want: Effort) -> Option<Effort> {
 }
 ```
 
-- [ ] Replace the body of `openai_reasoning_effort` with:
+- [x] Replace the body of `openai_reasoning_effort` with:
 
 ```rust
 pub fn openai_reasoning_effort(model: &str, want: Effort) -> Option<&'static str> {
@@ -390,13 +398,13 @@ pub fn openai_reasoning_effort(model: &str, want: Effort) -> Option<&'static str
 }
 ```
 
-- [ ] Run the whole module: `cargo test -p mur-common --lib llm`. **Every
+- [x] Run the whole module: `cargo test -p mur-common --lib llm`. **Every
       pre-existing test in this module must still pass** — they are the
       regression guard for this refactor. If any fails, the delegation changed
       behavior and must be fixed, not the test.
-- [ ] Run `cargo fmt -p mur-common` and
+- [x] Run `cargo fmt -p mur-common` and
       `cargo clippy -p mur-common --all-targets -- -D warnings`.
-- [ ] Commit: `refactor(llm): the vendor mappers read the shape table`
+- [x] Commit: `refactor(llm): the vendor mappers read the shape table`
 
 ---
 
@@ -418,7 +426,7 @@ pub fn effective_effort(
 
 **Steps**
 
-- [ ] Add this test:
+- [x] Add this test:
 
 ```rust
 #[test]
@@ -450,10 +458,10 @@ fn effective_effort_reports_value_and_where_it_came_from() {
 }
 ```
 
-- [ ] Run `cargo test -p mur-common --lib llm::tests::effective_effort` and
+- [x] Run `cargo test -p mur-common --lib llm::tests::effective_effort` and
       watch it fail to compile.
 
-- [ ] Add to `mur-common/src/llm.rs`:
+- [x] Add to `mur-common/src/llm.rs`:
 
 ```rust
 /// Where the effort in force came from, so a surface can say so instead of
@@ -503,10 +511,10 @@ pub fn effective_effort(
 }
 ```
 
-- [ ] Run `cargo test -p mur-common --lib llm` and watch everything pass.
-- [ ] Run `cargo fmt -p mur-common` and
+- [x] Run `cargo test -p mur-common --lib llm` and watch everything pass.
+- [x] Run `cargo fmt -p mur-common` and
       `cargo clippy -p mur-common --all-targets -- -D warnings`.
-- [ ] Commit: `feat(llm): effective_effort is the one derivation of what is in force`
+- [x] Commit: `feat(llm): effective_effort is the one derivation of what is in force`
 
 ---
 
@@ -525,7 +533,7 @@ Produces: no new public names.
 
 **Steps**
 
-- [ ] Add this test to `mod tests` in `mur-agent-runtime/src/llm/ollama.rs`:
+- [x] Add this test to `mod tests` in `mur-agent-runtime/src/llm/ollama.rs`:
 
 ```rust
 #[test]
@@ -544,10 +552,10 @@ fn think_is_sent_only_for_models_that_take_it() {
 }
 ```
 
-- [ ] Run `ORT_STRATEGY=download cargo test -p mur-agent-runtime --lib
+- [x] Run `ORT_STRATEGY=download cargo test -p mur-agent-runtime --lib
       llm::ollama::tests::think_is_sent` and watch it fail to compile.
 
-- [ ] Add above `impl OllamaClient` in `mur-agent-runtime/src/llm/ollama.rs`:
+- [x] Add above `impl OllamaClient` in `mur-agent-runtime/src/llm/ollama.rs`:
 
 ```rust
 /// The value for Ollama's top-level `think` field, or `None` to omit it.
@@ -579,7 +587,7 @@ fn ollama_think(model: &str, want: Option<mur_common::llm::Effort>) -> Option<&'
 }
 ```
 
-- [ ] In the non-streaming path, immediately after
+- [x] In the non-streaming path, immediately after
       `let mut body = json!({"model": self.model, "messages": messages, "stream": false});`
       (line ~71), add:
 
@@ -589,16 +597,16 @@ fn ollama_think(model: &str, want: Option<mur_common::llm::Effort>) -> Option<&'
         }
 ```
 
-- [ ] In the streaming path, immediately after
+- [x] In the streaming path, immediately after
       `let mut body = json!({"model": self.model, "messages": messages, "stream": true});`
       (line ~126), add the identical three lines. Both request builders must
       send it, or effort silently applies only to non-streaming turns.
 
-- [ ] Run `ORT_STRATEGY=download cargo test -p mur-agent-runtime --lib llm::ollama`
+- [x] Run `ORT_STRATEGY=download cargo test -p mur-agent-runtime --lib llm::ollama`
       and watch it pass.
-- [ ] Run `cargo fmt -p mur-agent-runtime` and
+- [x] Run `cargo fmt -p mur-agent-runtime` and
       `ORT_STRATEGY=download cargo clippy -p mur-agent-runtime --all-targets -- -D warnings`.
-- [ ] Commit: `fix(ollama): send the think parameter, not just read it back`
+- [x] Commit: `fix(ollama): send the think parameter, not just read it back`
 
 ---
 
