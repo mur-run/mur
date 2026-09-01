@@ -730,7 +730,15 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     //     Each loop selects on a shared CancellationToken so SIGTERM (which
     //     calls t.abort() on all transport_tasks) also stops in-flight entries.
     if !profile.inner.lifecycle.schedule.is_empty() {
-        let cs = CronScheduler::new(profile.inner.lifecycle.schedule.clone(), runner.clone());
+        // #1125: give the scheduler somewhere to leave each fired turn's
+        // reply. Without a sink the turn runs and its output is discarded.
+        let cs = CronScheduler::new(profile.inner.lifecycle.schedule.clone(), runner.clone())
+            .with_sink(crate::scheduler::ScheduleSink {
+                mur_home: mur_home.clone(),
+                agent: profile.inner.name.clone(),
+                identity: identity.clone(),
+                key_version: profile.inner.identity.key_version,
+            });
         transport_tasks.push(cs.spawn());
         info!(
             count = profile.inner.lifecycle.schedule.len(),

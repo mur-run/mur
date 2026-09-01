@@ -372,6 +372,15 @@ impl ChannelService {
         self.store.load_events(channel_id)
     }
 
+    /// Whether a channel exists, judged by its manifest.
+    ///
+    /// `load_events` is not an existence check: a missing event log reads as an
+    /// empty one, so it returns `Ok(vec![])` for a channel that was never
+    /// created. Callers holding a remembered channel id need this instead.
+    pub fn exists(&self, channel_id: &str) -> bool {
+        self.store.load_manifest(channel_id).is_ok()
+    }
+
     pub fn list(&self, limit: usize) -> Result<Vec<ChannelRow>> {
         self.index.list(limit)
     }
