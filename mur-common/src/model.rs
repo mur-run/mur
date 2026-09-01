@@ -849,7 +849,6 @@ mod switch_tests {
             cheap: Some("cheap".into()),
             frontier: Some("frontier".into()),
             threshold_input_tokens: Some(1000),
-            ..Default::default()
         };
         assert_eq!(choose_by_difficulty(1500, &r), Some("frontier".into()));
         assert_eq!(choose_by_difficulty(500, &r), Some("cheap".into()));
@@ -859,7 +858,6 @@ mod switch_tests {
             cheap: Some("c".into()),
             frontier: None,
             threshold_input_tokens: None,
-            ..Default::default()
         };
         assert_eq!(choose_by_difficulty(9999, &bad), None);
     }
