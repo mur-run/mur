@@ -370,7 +370,10 @@ mod tests {
         assert_eq!(first, second, "the second firing must reuse the channel");
         assert_eq!(
             std::fs::read_to_string(
-                tmp.path().join("agents").join("probe").join(SCHEDULE_CHANNEL_FILE)
+                tmp.path()
+                    .join("agents")
+                    .join("probe")
+                    .join(SCHEDULE_CHANNEL_FILE)
             )
             .unwrap()
             .trim(),
