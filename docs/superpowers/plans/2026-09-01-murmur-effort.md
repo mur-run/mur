@@ -1,9 +1,10 @@
 # Plan — reasoning effort: `effort_shape`, `/effort`, Hub control
 
-> **Execute with `mur-executing-plans`.** Tasks 1–3 are pure functions in
-> `mur-common` and have no runtime dependencies; 4–6 touch the runtime and the
-> murmur TUI; 7–8 touch the Hub. Tasks must be done in order — each Interfaces
-> block names what the previous task produced.
+> **Execute with `mur-executing-plans`. Phase 1 only — Tasks 1–4.** Tasks 1–3
+> are pure functions in `mur-common` with no runtime dependencies; Task 4 is one
+> client change that closes a live gap. Tasks 5–8 are marked *not yet
+> executable* and say why. Do them in order — each Interfaces block names what
+> the previous task produced.
 
 Design: `docs/superpowers/specs/2026-09-01-murmur-effort-design.md`.
 
@@ -59,12 +60,12 @@ Copied from the spec. Every task implicitly includes all of them.
 | `mur-common/src/llm.rs` | `supported_effort` / `openai_reasoning_effort` delegate | 2 |
 | `mur-common/src/llm.rs` | `EffortSource`, `effective_effort()` | 3 |
 | `mur-agent-runtime/src/llm/ollama.rs` | send `think` on both request paths | 4 |
-| `mur-agent-runtime/src/protocol/methods/effort_set.rs` | `effort/set` A2A handler (new file) | 5 |
-| `mur-agent-runtime/src/supervisor.rs` | register `effort/set` | 5 |
-| `mur-core/src/cmd/agent/cli/app.rs` | `SlashCmd::Effort` + parse | 6 |
-| `mur-hub-gui/src-tauri/src/detail.rs` | `effort`, `effort_levels`, re-narrow on model change | 7 |
-| `mur-hub-gui/ui/src/types.ts` | `AgentDetail.effort`, `effort_levels`, `DetailPatch.effort` | 7 |
-| `mur-hub-gui/ui/src/components/inspector/tabs/BehaviorTab.tsx` | effort radio cards | 8 |
+| `mur-agent-runtime/src/protocol/methods/effort_set.rs` | `effort/set` A2A handler (new file) | 5 — Phase 2 |
+| `mur-agent-runtime/src/supervisor.rs` | register `effort/set` | 5— Phase 2 |
+| `mur-core/src/cmd/agent/cli/app.rs` | `SlashCmd::Effort` + parse | 6— Phase 2 |
+| `mur-hub-gui/src-tauri/src/detail.rs` | `effort`, `effort_levels`, re-narrow on model change | 7 — Phase 2 |
+| `mur-hub-gui/ui/src/types.ts` | `AgentDetail.effort`, `effort_levels`, `DetailPatch.effort` | 7 — Phase 2 |
+| `mur-hub-gui/ui/src/components/inspector/tabs/BehaviorTab.tsx` | effort radio cards | 8 — Phase 2 |
 
 ---
 
@@ -97,13 +98,19 @@ pub fn effort_shape(model: &str) -> EffortShape
 fn effort_shape_covers_each_vendor_tier() {
     use EffortShape::*;
     assert!(matches!(effort_shape("claude-opus-5"), Graded(l) if l.len() == 5));
-    assert!(matches!(effort_shape("claude-opus-4-6"), Graded(l) if l.len() == 3));
+    // Four, not three: 4.6 keeps `max` and lacks only the `xhigh` step that
+    // 4.7 inserted between them. A level set is a subset, not a prefix.
+    assert!(matches!(effort_shape("claude-opus-4-6"), Graded(l) if l.len() == 4));
+    assert!(matches!(effort_shape("claude-opus-4-6"), Graded(l) if l.contains(&Effort::Max)));
+    assert!(matches!(effort_shape("claude-opus-4-6"), Graded(l) if !l.contains(&Effort::Xhigh)));
     assert!(matches!(effort_shape("gpt-5"), Graded(_)));
     assert!(matches!(effort_shape("grok-4.6"), Graded(l) if l.contains(&Effort::Xhigh)));
     assert!(matches!(effort_shape("grok-4.5"), Graded(l) if !l.contains(&Effort::Xhigh)));
     assert!(matches!(effort_shape("gemini-3-pro"), Graded(_)));
     assert!(matches!(effort_shape("gemini-2.5-pro"), Budget(_)));
     assert!(matches!(effort_shape("qwen3-32b"), Binary { .. }));
+    // A switch offers exactly two positions, never three that collapse to two.
+    assert_eq!(effort_shape("qwen3-32b").levels().len(), 2);
     assert!(matches!(effort_shape("glm-4.6"), Binary { .. }));
     assert!(matches!(effort_shape("magistral-medium-latest"), AlwaysOn));
     assert!(matches!(effort_shape("gpt-4o"), None));
@@ -172,17 +179,29 @@ pub enum EffortShape {
 
 /// Level sets, named so the table below reads as capability tiers rather than
 /// as anonymous literals. Cheapest first, matching [`Effort::ALL`].
-const LEVELS_FULL: &[Effort] = &[
+/// A level set is an arbitrary SUBSET of [`Effort::ALL`], not a prefix of it.
+/// Two tiers below have holes: Anthropic's pre-4.7 lines have `max` but no
+/// `xhigh` (the `xhigh` step was inserted between them in 4.7), and DeepSeek V4
+/// publishes low/high/max with no medium. Naming these by a ceiling —
+/// `LEVELS_TO_HIGH` and the like — is what produced a first draft that silently
+/// downgraded `max` to `high` on Opus 4.6 and broke an existing test. Name the
+/// membership, not a bound.
+const LEVELS_ALL: &[Effort] = &[
     Effort::Low,
     Effort::Medium,
     Effort::High,
     Effort::Xhigh,
     Effort::Max,
 ];
-const LEVELS_TO_XHIGH: &[Effort] = &[Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh];
-const LEVELS_TO_HIGH: &[Effort] = &[Effort::Low, Effort::Medium, Effort::High];
+/// Anthropic before 4.7: the whole scale except the `xhigh` step.
+const LEVELS_NO_XHIGH: &[Effort] = &[Effort::Low, Effort::Medium, Effort::High, Effort::Max];
+const LEVELS_LMHX: &[Effort] = &[Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh];
+const LEVELS_LMH: &[Effort] = &[Effort::Low, Effort::Medium, Effort::High];
 /// DeepSeek V4 publishes low / high / max — there is no medium step.
 const LEVELS_DEEPSEEK: &[Effort] = &[Effort::Low, Effort::High, Effort::Max];
+/// A switch has two positions and must offer two, not three that collapse to
+/// two. `Low` is off, `High` is on; the threshold lives in `Binary::on_at`.
+const LEVELS_BINARY: &[Effort] = &[Effort::Low, Effort::High];
 
 impl EffortShape {
     /// The levels a UI should offer. Empty for the two shapes that take no
@@ -190,7 +209,7 @@ impl EffortShape {
     pub fn levels(&self) -> &'static [Effort] {
         match self {
             EffortShape::Graded(l) | EffortShape::Budget(l) => l,
-            EffortShape::Binary { .. } => LEVELS_TO_HIGH,
+            EffortShape::Binary { .. } => LEVELS_BINARY,
             EffortShape::AlwaysOn | EffortShape::None => &[],
         }
     }
@@ -251,22 +270,26 @@ pub fn effort_shape(model: &str) -> EffortShape {
         return EffortShape::AlwaysOn;
     }
     if has(ANTHROPIC_FULL) {
-        return EffortShape::Graded(LEVELS_FULL);
+        return EffortShape::Graded(LEVELS_ALL);
     }
-    if has(ANTHROPIC_NO_XHIGH) || has(OPENAI_REASONING) || has(GROK_GRADED) {
-        return EffortShape::Graded(LEVELS_TO_HIGH);
+    // Anthropic pre-4.7 keeps `max`; it is only the `xhigh` step it lacks.
+    if has(ANTHROPIC_NO_XHIGH) {
+        return EffortShape::Graded(LEVELS_NO_XHIGH);
+    }
+    if has(OPENAI_REASONING) || has(GROK_GRADED) {
+        return EffortShape::Graded(LEVELS_LMH);
     }
     if has(GROK_XHIGH) {
-        return EffortShape::Graded(LEVELS_TO_XHIGH);
+        return EffortShape::Graded(LEVELS_LMHX);
     }
     if has(DEEPSEEK_GRADED) {
         return EffortShape::Graded(LEVELS_DEEPSEEK);
     }
     if has(GEMINI_LEVEL) || has(MISTRAL_GRADED) {
-        return EffortShape::Graded(LEVELS_TO_HIGH);
+        return EffortShape::Graded(LEVELS_LMH);
     }
     if has(GEMINI_BUDGET) {
-        return EffortShape::Budget(LEVELS_TO_HIGH);
+        return EffortShape::Budget(LEVELS_LMH);
     }
     if has(BINARY) {
         return EffortShape::Binary {
@@ -302,28 +325,30 @@ Option<&'static str>` keep their behavior and become table callers.
 - [ ] Add this test, which pins delegation rather than duplication:
 
 ```rust
-/// The two vendor mappers must agree with the table, or the table is not the
-/// single owner it claims to be.
+/// Delegation must not change what the mappers return. This pins the exact
+/// case a first draft of this plan got wrong: Anthropic's pre-4.7 lines keep
+/// `max` and lack only `xhigh`, so a level set expressed as a ceiling silently
+/// downgrades `max` to `high` here. Fails loudly if the table regresses.
 #[test]
-fn mappers_agree_with_the_shape_table() {
-    for model in ["claude-opus-5", "claude-opus-4-6", "gpt-5", "gpt-4o", "magistral-small-latest"] {
-        let shape = effort_shape(model);
-        for want in Effort::ALL.iter().copied() {
-            let anth = supported_effort(model, want);
-            let oai = openai_reasoning_effort(model, want);
-            if matches!(shape, EffortShape::None | EffortShape::AlwaysOn) {
-                assert!(anth.is_none(), "{model}/{want:?} anthropic");
-                assert!(oai.is_none(), "{model}/{want:?} openai");
-            }
-        }
-    }
+fn delegation_preserves_the_hole_in_the_pre_4_7_scale() {
+    // The hole: xhigh absent, max present.
+    assert_eq!(supported_effort("claude-opus-4-6", Effort::Xhigh), Some(Effort::High));
+    assert_eq!(supported_effort("claude-opus-4-6", Effort::Max), Some(Effort::Max));
+    // The full scale is unaffected.
+    assert_eq!(supported_effort("claude-opus-5", Effort::Xhigh), Some(Effort::Xhigh));
+    // A model the table calls AlwaysOn must get nothing from either mapper,
+    // because sending it anything is a 422.
+    assert_eq!(supported_effort("magistral-small-latest", Effort::High), None);
+    assert_eq!(openai_reasoning_effort("magistral-small-latest", Effort::High), None);
 }
 ```
 
-- [ ] Run `cargo test -p mur-common --lib llm::tests::mappers_agree` and watch
-      it fail on `magistral-small-latest` (today it is not in either mapper's
-      list, so both already return `None` — if it passes immediately, the guard
-      is still worth keeping and you may proceed).
+- [ ] Run `cargo test -p mur-common --lib llm::tests::delegation_preserves` and
+      watch it PASS against the current implementation — it is written to
+      describe today's behavior, which is exactly what a refactor guard must do.
+      Then break it deliberately: change `LEVELS_NO_XHIGH` to drop `Effort::Max`,
+      re-run, confirm it fails, and put `Max` back. A guard you have not seen
+      fail is not a guard.
 
 - [ ] Replace the body of `supported_effort` with:
 
@@ -576,6 +601,38 @@ fn ollama_think(model: &str, want: Option<mur_common::llm::Effort>) -> Option<&'
 - [ ] Commit: `fix(ollama): send the think parameter, not just read it back`
 
 ---
+
+---
+
+# Phase 2 — not yet executable
+
+**Stop after Task 4.** Everything below describes behavior rather than showing
+code, which `mur-writing-plans` names as a plan failure, and this section is
+marked rather than pretended to be ready.
+
+Three specific things are missing, and each one is a place where writing the
+step blind produces a wrong step:
+
+1. **Task 5 widens `TaskRunner`'s `effort` field to a shared cell.** The exact
+   edit depends on how the supervisor constructs the runner and on every other
+   caller of `with_effort` (there is at least one in `task_runner.rs`'s own
+   tests, around line 1962). That is a cross-file change in a 2800-line file;
+   it needs the real signatures in front of it.
+2. **Task 5 assumes `model_name` is in scope** at the `model/set` registration
+   in `supervisor.rs`. Never verified. The first draft of this plan invented a
+   filename the same way (`agent_detail.rs` for `detail.rs`), which is what
+   this note exists to prevent repeating.
+3. **Tasks 6 and 7** describe the murmur slash handling and the Hub Rust edits
+   in prose. Both need their insertion points read first.
+
+**Phase 1 stands alone and is worth shipping alone.** After Task 4,
+`mur agent effort` maps correctly for Grok, Gemini, DeepSeek and Mistral users
+instead of silently discarding the setting, and Ollama users get reasoning
+control for the first time. The surfaces in Phase 2 are UX on top of a
+foundation that will then exist — and their signatures will be real rather than
+predicted.
+
+Specify Phase 2 against the merged Phase 1, not against this draft.
 
 ## Task 5 — `effort/set` A2A method
 
