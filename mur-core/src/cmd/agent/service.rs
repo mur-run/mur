@@ -142,7 +142,7 @@ pub fn cmd_install_service(name: &str, dry_run: bool) -> Result<()> {
 
     #[cfg(target_os = "macos")]
     {
-        let plist = darwin_plist(name, &symlink, &derive_service_path());
+        let plist = darwin_plist(name, &symlink, &derive_service_path(&bin_dir));
         if dry_run {
             print!("{plist}");
             return Ok(());
@@ -171,7 +171,7 @@ pub fn cmd_install_service(name: &str, dry_run: bool) -> Result<()> {
     }
     #[cfg(target_os = "linux")]
     {
-        let unit = linux_unit(name, &symlink, &derive_service_path());
+        let unit = linux_unit(name, &symlink, &derive_service_path(&bin_dir));
         if dry_run {
             print!("{unit}");
             return Ok(());
@@ -216,11 +216,21 @@ const LAUNCHD_DEFAULT_PATH_DIRS: &[&str] = &["/usr/bin", "/bin", "/usr/sbin", "/
 /// binaries (npm/homebrew) resolve when launchd/systemd starts the agent
 /// with its minimal default PATH.
 ///
-/// Includes, in order: `<npm global prefix>/bin` (best-effort, skipped
-/// gracefully if npm is absent or fails), `/opt/homebrew/bin`,
-/// `/usr/local/bin`, then the launchd default dirs.
-fn derive_service_path() -> String {
-    let mut dirs: Vec<String> = Vec::new();
+/// Includes, in order: `bin_dir` (where MUR installed its own binaries),
+/// `<npm global prefix>/bin` (best-effort, skipped gracefully if npm is
+/// absent or fails), `/opt/homebrew/bin`, `/usr/local/bin`, then the launchd
+/// default dirs.
+///
+/// `bin_dir` leads for a reason. Since #935 an installed MUR lives in
+/// `~/.local/bin`, which is in the user's interactive PATH but in neither
+/// launchd's nor systemd's. Without it a sibling binary the agent pins --
+/// `mur-research-gateway` is the one that bit -- resolves to whatever OLD
+/// copy is left in `/opt/homebrew/bin` under the service and to the current
+/// one in an interactive shell. Two different binaries for the same agent
+/// depending on how it was launched, so the B0 rule 6 pin verifies
+/// interactively and fail-closes under launchd, crash-looping the agent.
+fn derive_service_path(bin_dir: &Path) -> String {
+    let mut dirs: Vec<String> = vec![bin_dir.to_string_lossy().into_owned()];
 
     if let Ok(output) = std::process::Command::new("npm")
         .args(["config", "get", "prefix"])
@@ -237,6 +247,9 @@ fn derive_service_path() -> String {
     dirs.push("/usr/local/bin".to_string());
     dirs.extend(LAUNCHD_DEFAULT_PATH_DIRS.iter().map(|d| d.to_string()));
 
+    // `bin_dir` is often one of the constants below it (a brew install).
+    let mut seen = std::collections::HashSet::new();
+    dirs.retain(|d| seen.insert(d.clone()));
     dirs.join(":")
 }
 
@@ -324,10 +337,41 @@ mod tests {
 
     #[test]
     fn derive_service_path_always_has_launchd_defaults() {
-        let path = derive_service_path();
+        let path = derive_service_path(Path::new("/Users/x/.local/bin"));
         for dir in LAUNCHD_DEFAULT_PATH_DIRS {
             assert!(path.contains(dir), "missing {dir} in {path}");
         }
+    }
+
+    /// The service must resolve sibling binaries out of the SAME directory the
+    /// runtime was installed into, ahead of any older copy left on the system
+    /// PATH. When it did not, a pinned `mur-research-gateway` resolved to the
+    /// stale `/opt/homebrew/bin` copy under launchd while an interactive start
+    /// got `~/.local/bin`, and the pin check fail-closed into a crash loop.
+    #[test]
+    fn install_dir_leads_the_service_path() {
+        let path = derive_service_path(Path::new("/Users/x/.local/bin"));
+        assert!(
+            path.starts_with("/Users/x/.local/bin:"),
+            "install dir must lead: {path}"
+        );
+        assert!(
+            path.find("/Users/x/.local/bin").unwrap() < path.find("/opt/homebrew/bin").unwrap(),
+            "install dir must outrank homebrew: {path}"
+        );
+    }
+
+    /// A brew install has `bin_dir == /opt/homebrew/bin`; it must appear once.
+    #[test]
+    fn a_bin_dir_that_repeats_a_constant_is_not_duplicated() {
+        let path = derive_service_path(Path::new("/opt/homebrew/bin"));
+        assert_eq!(
+            path.split(':')
+                .filter(|d| *d == "/opt/homebrew/bin")
+                .count(),
+            1,
+            "duplicated entry in {path}"
+        );
     }
 
     /// The label `stop_service` boots out is derived separately from the path

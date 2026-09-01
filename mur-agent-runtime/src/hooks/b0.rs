@@ -151,16 +151,28 @@ pub fn verify_mcp_supply_chain(
             );
             continue;
         }
-        // Resolve via PATH exactly as install does (mur_common::exec) so both
-        // passes hash the same binary `Command::new` will spawn. A bare
+        // Resolve against the SAME augmented PATH the spawn uses
+        // (`protocol/mcp_client.rs`, `supervisor_runner.rs`), so the file
+        // hashed here is provably the file `Command::new` will exec. A bare
         // `node`/`npx` opened verbatim is a CWD-relative path that doesn't
         // exist, which previously soft-failed and skipped the pin entirely.
+        //
+        // Resolving against the ambient PATH instead was not merely cosmetic.
+        // `augmented_path_var` appends `~/.local/bin` — where an installed MUR
+        // lives since #935 — and launchd/systemd hand the runtime a PATH
+        // without it. So a first-party binary found only there resolved for the
+        // spawn but not for this check: verification soft-failed with "command
+        // not resolvable, continuing" and the binary then ran entirely
+        // unpinned. The two passes must consult one PATH.
         let prog = entry
             .command
             .split_whitespace()
             .next()
             .unwrap_or(&entry.command);
-        let path = match mur_common::exec::resolve_command(prog) {
+        let path = match mur_common::exec::resolve_command_in(
+            &mur_common::exec::augmented_path_var(),
+            prog,
+        ) {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(

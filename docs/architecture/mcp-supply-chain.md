@@ -47,11 +47,24 @@ Both were written to `return Err(...)` from `B0SafetyHook::on_startup` with the 
 
 They now live in `verify_mcp_supply_chain` in `mur-agent-runtime/src/hooks/b0.rs`, which the supervisor calls with `?`. (#793)
 
-### MUR re-pins its own bundled MCP server
+### MUR re-pins the MCP servers it ships itself
 
 The supervisor refreshes `~/.mur/mcp-servers/mur-mcp-server` from the binary beside the running `mur` at every start, so **every upgrade drifts that pin by construction**. Enforcement without a re-pin would turn a routine `mur` upgrade into every agent refusing to start.
 
 This is not a weakening: that binary was written moments earlier by this runtime from its own installation. Its trust anchor is "same install as the runtime", not a hash recorded weeks ago, and anyone able to replace it has already replaced `mur`. Third-party entries are never re-pinned. (#793)
+
+The same reasoning covers MUR's **other** shipped servers, and originally did not reach them. `mur-research-gateway` — what `mur deep-research setup` installs — rides in the same release, lands in the same install directory, and is replaced by the same upgrade, but was pinned by a bare command name like any third-party entry. One `mur` upgrade left every deep-research worker crash-looping at boot on `B0 rule 6: MCP \`research-gateway\` changed since install`; launchd restarts it, it fail-closes again, and `mur agent status` reports only `stopped`.
+
+The exemption is a **property, not a list of names** — a list goes stale the day MUR ships another server. An entry is first-party when it resolves into the directory holding the running runtime's own executable **and** carries MUR's `mur-` name prefix. Both halves are load-bearing:
+
+- **Directory alone** would silently drop pin enforcement for an unrelated third-party MCP binary the user keeps in `~/.local/bin` — a crowded directory on a normal machine, unlike a Homebrew Cellar.
+- **Name alone** would trust any binary wearing MUR's name from anywhere on PATH.
+
+Resolution canonicalizes, so a symlinked install (Homebrew's `bin` into its Cellar) compares equal.
+
+### Rule 6 resolves against the PATH the spawn uses
+
+Rule 6 hashed the binary `mur_common::exec::resolve_command` found on the **ambient** PATH, while the spawn resolves against `augmented_path_var` (`protocol/mcp_client.rs`, `supervisor_runner.rs`). The two disagree exactly where it matters: `augmented_path_var` appends `~/.local/bin`, where an installed MUR lives since #935, and launchd/systemd hand the runtime a PATH without it. A first-party binary found only there resolved for the spawn but not for the check — verification soft-failed with "command not resolvable, continuing" and the binary then ran **entirely unpinned**. Both passes now consult one PATH.
 
 ### Interpreter-launched entries are reported, not enforced
 
@@ -114,7 +127,7 @@ The open follow-on is to connect the two: a server whose provenance cannot be ve
 |---|---|
 | Startup enforcement (rules 6 + 11) | `mur-agent-runtime/src/hooks/b0.rs` — `verify_mcp_supply_chain` |
 | Called by | `mur-agent-runtime/src/supervisor_runner.rs` (with `?`, before the hook chain) |
-| Re-pin of MUR's own bundle | `mur-agent-runtime/src/mcp_repin.rs` |
+| Re-pin of MUR's own servers (bundle + siblings) | `mur-agent-runtime/src/mcp_repin.rs` — `repin_first_party` |
 | Pin status classification | `mur-core/src/cmd/agent_mcp_pin.rs` — `binary_status` |
 | Vendoring + signature audit + provenance | `mur-core/src/cmd/agent_mcp_vendor.rs` |
 | Deep audit | `mur-core/src/cmd/agent_mcp_deep_audit.rs` |
