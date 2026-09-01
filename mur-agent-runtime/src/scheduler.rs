@@ -98,6 +98,11 @@ pub struct ScheduleSink {
     /// The agent's BCP-47 locale, written into the inbox entry's front matter.
     /// Carried rather than guessed: the entry claims a locale either way, and a
     /// guessed one is a small lie in a file the Hub renders.
+    ///
+    /// May be empty. `CompanionConfig.locale` has a serde default, but a
+    /// default only fires when the key is *absent* — a profile carrying
+    /// `locale: ""` yields an empty string, which is what real profiles on disk
+    /// do. Read it through [`resolved_locale`] rather than directly.
     pub locale: String,
 }
 
@@ -114,6 +119,21 @@ pub struct ScheduleSink {
 /// Skipping those gates is not a privilege. Quiet hours exist so the agent does
 /// not start conversations while you sleep; a 10:00 reminder you set is not
 /// that.
+/// The locale to stamp on an inbox entry.
+///
+/// An empty carried value is treated as absent. Writing `locale:` with nothing
+/// after it is worse than the default it was meant to avoid: a reader cannot
+/// tell a blank claim from a missing field, and the Hub renders the front
+/// matter as-is. Observed in production — every profile on this machine carries
+/// `companion.locale: ""`, so the serde default never fires.
+fn resolved_locale(carried: &str) -> String {
+    if carried.trim().is_empty() {
+        mur_common::agent::default_locale()
+    } else {
+        carried.to_string()
+    }
+}
+
 async fn notify_inbox(sink: &ScheduleSink, task_id: &str, body: &str, now: DateTime<Utc>) {
     use crate::companion::notifier::{CompanionMessage, Notifier, StdoutNotifier};
 
@@ -127,7 +147,7 @@ async fn notify_inbox(sink: &ScheduleSink, task_id: &str, body: &str, now: DateT
         situation: mur_common::companion::Situation::Scheduled,
         // No template was picked — the text is the schedule's own message.
         template_id: "scheduled".to_string(),
-        locale: sink.locale.clone(),
+        locale: resolved_locale(&sink.locale),
         body: body.to_string(),
         generated_at: now,
     };
@@ -424,6 +444,30 @@ mod tests {
             "cron has no year, so a dated request recurs annually — the bound is \
              the only thing that stops next September from firing too (#1119)"
         );
+    }
+
+    /// Found in production, not by a unit test — the test fixture said
+    /// "zh-TW" while every real profile on the machine carried `locale: ""`.
+    /// A serde default only fires when the key is absent, and these keys are
+    /// present and empty.
+    #[test]
+    fn an_empty_carried_locale_falls_back_rather_than_writing_a_blank_claim() {
+        assert!(
+            !resolved_locale("").is_empty(),
+            "an entry must claim some locale"
+        );
+        assert!(
+            !resolved_locale("   ").is_empty(),
+            "whitespace is not a locale"
+        );
+        assert_eq!(resolved_locale(""), mur_common::agent::default_locale());
+    }
+
+    /// The control: a real locale is carried through untouched, so the fallback
+    /// cannot quietly override what the profile actually says.
+    #[test]
+    fn a_real_carried_locale_is_used_as_is() {
+        assert_eq!(resolved_locale("zh-TW"), "zh-TW");
     }
 
     #[test]
