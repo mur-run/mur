@@ -34,7 +34,12 @@ fn seen_path(mur_home: &Path) -> PathBuf {
 
 fn load_seen(mur_home: &Path) -> HashSet<String> {
     std::fs::read_to_string(seen_path(mur_home))
-        .map(|s| s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+        .map(|s| {
+            s.lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -44,7 +49,10 @@ fn mark_seen(mur_home: &Path, id: &str) -> Result<()> {
         std::fs::create_dir_all(d)?;
     }
     use std::io::Write;
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&p)?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&p)?;
     writeln!(f, "{id}").context("record a notified inbox id")
 }
 
@@ -72,7 +80,11 @@ fn parse_entry(agent: &str, path: &Path) -> Option<InboxEntry> {
         id: field("id")?,
         agent: agent.to_string(),
         situation: field("situation").unwrap_or_default(),
-        body: body.trim().trim_end_matches(">>> response: <unset>").trim().to_string(),
+        body: body
+            .trim()
+            .trim_end_matches(">>> response: <unset>")
+            .trim()
+            .to_string(),
     })
 }
 
@@ -127,7 +139,9 @@ pub fn catch_up(app: &AppHandle, mur_home: &Path) -> usize {
     let seen = load_seen(mur_home);
     let mut n = 0;
     for (agent, dir) in inbox_dirs(mur_home) {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         let mut entries: Vec<_> = rd
             .flatten()
             .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
@@ -151,10 +165,7 @@ pub fn catch_up(app: &AppHandle, mur_home: &Path) -> usize {
 /// would take a descriptor per subdirectory. An agent created after the Hub
 /// started is picked up at the next Hub start — which is also when `catch_up`
 /// would report anything it missed, so nothing is lost, only delayed.
-pub fn watch_inboxes(
-    app: AppHandle,
-    mur_home: &Path,
-) -> Result<Vec<notify::RecommendedWatcher>> {
+pub fn watch_inboxes(app: AppHandle, mur_home: &Path) -> Result<Vec<notify::RecommendedWatcher>> {
     let mut watchers = Vec::new();
     for (agent, dir) in inbox_dirs(mur_home) {
         let app = app.clone();
@@ -163,7 +174,11 @@ pub fn watch_inboxes(
         let mut w = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             let Ok(ev) = res else { return };
             let seen = load_seen(&home);
-            for p in ev.paths.iter().filter(|p| p.extension().is_some_and(|x| x == "md")) {
+            for p in ev
+                .paths
+                .iter()
+                .filter(|p| p.extension().is_some_and(|x| x == "md"))
+            {
                 if let Some(e) = parse_entry(&who, p)
                     && !seen.contains(&e.id)
                 {

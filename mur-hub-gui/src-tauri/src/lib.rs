@@ -10,6 +10,7 @@ pub mod chat;
 pub mod chat_window;
 pub mod cli_tools;
 pub mod companion;
+pub mod companion_notify;
 pub mod dashboard;
 pub mod detail;
 pub mod export_muragent;
@@ -17,7 +18,6 @@ pub mod fleet;
 mod geometry;
 pub mod hitl;
 pub mod import_muragent;
-pub mod companion_notify;
 mod install_inbox;
 pub mod mcp_skills;
 pub mod memory;
@@ -603,7 +603,10 @@ pub fn run() {
                 // missed rather than absorbed into "unread" (#1125).
                 let missed = crate::companion_notify::catch_up(&app.handle().clone(), &home);
                 if missed > 0 {
-                    tracing::info!(missed, "companion inbox entries arrived while the Hub was closed");
+                    tracing::info!(
+                        missed,
+                        "companion inbox entries arrived while the Hub was closed"
+                    );
                 }
                 match crate::companion_notify::watch_inboxes(app.handle().clone(), &home) {
                     Ok(ws) => {
