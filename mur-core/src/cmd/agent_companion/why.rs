@@ -330,6 +330,11 @@ fn situation_to_slug(s: &mur_common::companion::Situation) -> &'static str {
         Situation::ShareQuote => "share_quote",
         Situation::ShareLink => "share_link",
         Situation::WorkflowNudge => "workflow_nudge",
+        // Unreachable from here in practice: a scheduled reminder skips the
+        // outbox, so it never writes the ledger events these functions read.
+        // The arm exists because the enum is exhaustive, not because the
+        // outbox handles schedules.
+        Situation::Scheduled => "scheduled",
     }
 }
 

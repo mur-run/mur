@@ -32,6 +32,12 @@ pub enum Situation {
     ShareQuote,
     ShareLink,
     WorkflowNudge,
+    /// A schedule the user set fired. Unlike every variant above, this one is
+    /// never chosen by `situations::pick_for_hour` — the picker samples a fixed
+    /// weight table and cannot reach it. It is supplied directly, because both
+    /// questions the picker exists to answer (say something? say what?) were
+    /// already answered by the person who wrote the schedule.
+    Scheduled,
 }
 
 #[cfg(test)]
