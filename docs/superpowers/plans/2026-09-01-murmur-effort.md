@@ -612,270 +612,99 @@ fn ollama_think(model: &str, want: Option<mur_common::llm::Effort>) -> Option<&'
 
 ---
 
-# Phase 2 — not yet executable
+# Phase 2a — specified 2026-09-01 against the merged Phase 1
 
-**Stop after Task 4.** Everything below describes behavior rather than showing
-code, which `mur-writing-plans` names as a plan failure, and this section is
-marked rather than pretended to be ready.
+The blocking note here said Tasks 5–8 described behavior instead of showing
+code and predicted signatures in files the plan had not read. Phase 1 is
+merged, the files are read, and Tasks 5–6 are rewritten below. **Tasks 7–8
+(the Hub) stay unspecified** and are Phase 2b.
 
-Three specific things are missing, and each one is a place where writing the
-step blind produces a wrong step:
+Reading the code made the design SMALLER, which is the whole reason the note
+existed.
 
-1. **Task 5 widens `TaskRunner`'s `effort` field to a shared cell.** The exact
-   edit depends on how the supervisor constructs the runner and on every other
-   caller of `with_effort` (there is at least one in `task_runner.rs`'s own
-   tests, around line 1962). That is a cross-file change in a 2800-line file;
-   it needs the real signatures in front of it.
-2. **Task 5 assumes `model_name` is in scope** at the `model/set` registration
-   in `supervisor.rs`. Never verified. The first draft of this plan invented a
-   filename the same way (`agent_detail.rs` for `detail.rs`), which is what
-   this note exists to prevent repeating.
-3. **Tasks 6 and 7** describe the murmur slash handling and the Hub Rust edits
-   in prose. Both need their insertion points read first.
+**What was predicted, and what is actually there:**
 
-**Phase 1 stands alone and is worth shipping alone.** After Task 4,
-`mur agent effort` maps correctly for Grok, Gemini, DeepSeek and Mistral users
-instead of silently discarding the setting, and Ollama users get reasoning
-control for the first time. The surfaces in Phase 2 are UX on top of a
-foundation that will then exist — and their signatures will be real rather than
-predicted.
+| Plan predicted | Tree |
+|---|---|
+| thread a `SessionEffort` cell from the supervisor | `build_dispatcher` already has `runner: &Arc<TaskRunner>`; every other handler takes `runner.clone()` |
+| `model_name` in scope at the `model/set` registration | not in scope — the model lives inside `backend: RunnerBackend` |
+| the handler narrows the level to what the model accepts | **the handler must not narrow at all** |
 
-Specify Phase 2 against the merged Phase 1, not against this draft.
+That last row is the real find. `supported_effort`'s own doc states the
+architecture: *"requests state the effort they want and this narrows it."*
+Narrowing already happens at the wire, in each client. A handler that narrowed
+too would be a second derivation of the same rule — the exact duplication this
+design exists to prevent.
 
-## Task 5 — `effort/set` A2A method
+So `effort/set` needs **no knowledge of the model at all**. It stores what was
+asked for. The murmur TUI, which already resolves the current model per turn,
+does its own display math with the `mur-common` functions Phase 1 shipped.
 
-**Interfaces**
+**Real signatures, verified in the tree:**
 
-Consumes: `Effort`, `effort_shape`, `EffortShape` (Task 1). Mirrors the
-existing `model/set` registration at `supervisor.rs:1065`.
+- `TaskRunner.effort: Option<Effort>` — field `task_runner.rs:225`, defaulted
+  `:339`, set by `with_effort` `:433`, read into `LlmRequest` at `:1164` and
+  `:1667`. Five sites, all in one file.
+- `TaskRunner` is used as `Arc<TaskRunner>`, so the cell is interior:
+  `RwLock<Option<Effort>>` on the struct, not an `Arc` threaded from outside.
+- `build_dispatcher(profile, runner, mur_home, notifier, pending_approvals,
+  identity, agent_name, key_version, model_switch, runtime_skills)` —
+  `supervisor.rs:994`.
+- `SlashCmd::Model` is handled at `cli/mod.rs:1951` using
+  `model_cmd::current_model_ref(&app.home, &app.agent)` and
+  `dial_method(&h, &ag, "model/set", json, DialMode::Auto)`.
+- `mur_core::cmd::agent::cmd_effort(name, Option<String>, bool)` already
+  persists to the profile — `--save` calls it rather than reimplementing it.
 
-Produces: A2A method `effort/set`, params `{"level": "<low|medium|high|xhigh|max>"}`,
-result `{"applied": "<level>", "narrowed": <bool>}`. Errors with
-`-32602` when the level does not parse and when the model takes no effort.
+## Tasks 5 and 6 — DONE, and not as drafted
 
-**Steps**
+Both are implemented. The drafted steps below were replaced, because reading
+the tree changed the design — see the Phase 2a section above for the three
+predictions that were wrong. Recording what was ACTUALLY built, since a plan
+that describes work nobody did is worse than no plan.
 
-- [ ] Create `mur-agent-runtime/src/protocol/methods/effort_set.rs` with:
+### Task 5 — `effort/set` (done)
 
-```rust
-//! `effort/set` — change the running agent's reasoning effort for this
-//! session, without a restart.
-//!
-//! Effort is a per-call parameter (`task_runner.rs`, `with_effort`), so unlike
-//! a model swap this needs no reconstruction: set the field and the next turn
-//! carries it. The value is deliberately NOT written to `profile.yaml` — the
-//! persistent form is `mur agent effort`, and murmur's `--save` calls that.
+- [x] `TaskRunner.effort` is now `RwLock<Option<Effort>>` — interior-mutable
+      because the runner is shared as `Arc<TaskRunner>` and `/effort` changes
+      it on a RUNNING agent. Five sites in one file: field, default,
+      `with_effort`, and the two `LlmRequest` reads, which became
+      `self.effort()`.
+- [x] `TaskRunner::effort()` / `set_effort()`. A poisoned lock reports `None`
+      rather than panicking: losing a session override costs a different
+      reasoning budget, panicking takes down a running agent mid-turn.
+- [x] `protocol/methods/effort_set.rs`. Holds `Arc<TaskRunner>` like every
+      other handler in `build_dispatcher` — no separate `SessionEffort` cell
+      threaded from the supervisor, which is what the draft predicted.
+- [x] **It does not narrow, and it does not know the model.** Narrowing
+      happens at the wire in each client; a second one here would be a second
+      derivation of one rule.
+- [x] It does not write `profile.yaml`. That is `mur agent effort`, which
+      `/effort --save` calls.
+- [x] Registered unconditionally, unlike `model/set`: there is no client to
+      rebuild and no agent shape that cannot accept a per-call parameter.
+- [x] 5 tests on `parse_level`, split out so argument handling is testable
+      without standing up a runner. `cargo test -p mur-agent-runtime --lib
+      effort_set` — 5 passed.
 
-use std::sync::Arc;
+### Task 6 — murmur `/effort` (done)
 
-use mur_common::llm::{Effort, EffortShape, effort_shape};
-
-/// Session effort, shared with the task runner.
-pub type SessionEffort = Arc<std::sync::RwLock<Option<Effort>>>;
-
-pub struct EffortSetHandler {
-    session: SessionEffort,
-    model: String,
-}
-
-impl EffortSetHandler {
-    pub fn new(session: SessionEffort, model: String) -> Self {
-        Self { session, model }
-    }
-
-    /// Split out from the handler so it is testable without a dispatcher.
-    pub fn apply(&self, raw: &str) -> Result<serde_json::Value, String> {
-        let want: Effort = raw.parse()?;
-        let levels = effort_shape(&self.model).levels();
-        if levels.is_empty() {
-            return Err(format!(
-                "model '{}' takes no reasoning effort parameter",
-                self.model
-            ));
-        }
-        let applied = if levels.contains(&want) {
-            want
-        } else {
-            levels
-                .iter()
-                .rev()
-                .find(|l| **l < want)
-                .copied()
-                .or_else(|| levels.first().copied())
-                .ok_or_else(|| "no usable level".to_string())?
-        };
-        *self.session.write().map_err(|e| e.to_string())? = Some(applied);
-        Ok(serde_json::json!({
-            "applied": applied.as_str(),
-            "narrowed": applied != want,
-        }))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn handler(model: &str) -> EffortSetHandler {
-        EffortSetHandler::new(Arc::new(std::sync::RwLock::new(None)), model.to_string())
-    }
-
-    #[test]
-    fn a_supported_level_applies_verbatim() {
-        let h = handler("claude-opus-5");
-        let out = h.apply("xhigh").unwrap();
-        assert_eq!(out["applied"], "xhigh");
-        assert_eq!(out["narrowed"], false);
-        assert_eq!(*h.session.read().unwrap(), Some(Effort::Xhigh));
-    }
-
-    #[test]
-    fn an_unsupported_level_narrows_and_says_so() {
-        // DeepSeek V4 has no medium step.
-        let out = handler("deepseek-v4-pro").apply("medium").unwrap();
-        assert_eq!(out["applied"], "low");
-        assert_eq!(out["narrowed"], true);
-    }
-
-    #[test]
-    fn a_model_without_effort_is_an_error_not_a_silent_success() {
-        let err = handler("gpt-4o").apply("high").unwrap_err();
-        assert!(err.contains("takes no reasoning effort"), "{err}");
-    }
-
-    #[test]
-    fn an_always_on_model_is_refused_rather_than_sent_a_value() {
-        assert!(matches!(effort_shape("magistral"), EffortShape::AlwaysOn));
-        assert!(handler("magistral").apply("high").is_err());
-    }
-
-    #[test]
-    fn a_typo_is_reported_with_the_valid_set() {
-        let err = handler("claude-opus-5").apply("hgih").unwrap_err();
-        assert!(err.contains("valid:"), "{err}");
-    }
-}
-```
-
-- [ ] Add `pub mod effort_set;` to `mur-agent-runtime/src/protocol/methods/mod.rs`,
-      in the existing alphabetical run of `pub mod` lines.
-- [ ] Run `ORT_STRATEGY=download cargo test -p mur-agent-runtime --lib
-      protocol::methods::effort_set` and watch all five tests pass.
-- [ ] Wire the handler into the dispatcher in `mur-agent-runtime/src/supervisor.rs`,
-      directly after the `model/set` registration block:
-
-```rust
-    // murmur /effort. Unlike model/set this needs no rebuild — effort is a
-    // per-call parameter, so the next turn picks it up.
-    d.register(
-        "effort/set",
-        Box::new(crate::protocol::methods::effort_set::EffortSetHandler::new(
-            session_effort.clone(),
-            model_name.clone(),
-        )),
-    );
-```
-
-- [ ] Thread `session_effort: SessionEffort` from the supervisor into
-      `TaskRunner::with_effort`'s call site so the runner reads the shared cell
-      instead of a fixed `Option<Effort>`: change `task_runner.rs`'s `effort`
-      field to `SessionEffort`, seeded from the profile value at construction.
-- [ ] Run `ORT_STRATEGY=download cargo test -p mur-agent-runtime --lib` — the
-      full crate suite, because this task changed a field type the runner uses.
-- [ ] Run `cargo fmt -p mur-agent-runtime` and
-      `ORT_STRATEGY=download cargo clippy -p mur-agent-runtime --all-targets -- -D warnings`.
-- [ ] Commit: `feat(a2a): effort/set changes reasoning effort without a restart`
-
----
-
-## Task 6 — murmur `/effort`
-
-**Interfaces**
-
-Consumes: the `effort/set` A2A method (Task 5), `effective_effort` and
-`EffortSource` (Task 3), `effort_shape` (Task 1).
-
-Produces: `SlashCmd::Effort { level: Option<String>, save: bool }`.
-
-**Steps**
-
-- [ ] Add this test beside the existing `parse_slash` tests in
-      `mur-core/src/cmd/agent/cli/app.rs` (the block containing
-      `assert_eq!(parse_slash("/model"), Some(SlashCmd::Model(None)));`):
-
-```rust
-#[test]
-fn effort_parses_bare_level_and_save() {
-    assert_eq!(
-        parse_slash("/effort"),
-        Some(SlashCmd::Effort { level: None, save: false })
-    );
-    assert_eq!(
-        parse_slash("/effort high"),
-        Some(SlashCmd::Effort { level: Some("high".into()), save: false })
-    );
-    assert_eq!(
-        parse_slash("/effort high --save"),
-        Some(SlashCmd::Effort { level: Some("high".into()), save: true })
-    );
-    // Order must not matter, and --save alone is a listing, not a write.
-    assert_eq!(
-        parse_slash("/effort --save xhigh"),
-        Some(SlashCmd::Effort { level: Some("xhigh".into()), save: true })
-    );
-    assert_eq!(
-        parse_slash("/effort --save"),
-        Some(SlashCmd::Effort { level: None, save: true })
-    );
-}
-```
-
-- [ ] Run `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist
-      cargo test -p mur-core --lib effort_parses_bare_level` and watch it fail
-      to compile (`no variant named Effort`).
-
-- [ ] Add to the `SlashCmd` enum in `app.rs`, directly after the `Model` variant:
-
-```rust
-    /// `/effort [level] [--save]` — list the levels this model accepts, or set
-    /// one. Session-scoped unless `--save` also writes the profile.
-    Effort {
-        level: Option<String>,
-        save: bool,
-    },
-```
-
-- [ ] Add to `parse_slash`'s match, directly after the `"model" =>` arm:
-
-```rust
-        "effort" => {
-            let args: Vec<&str> = words.collect();
-            SlashCmd::Effort {
-                level: args
-                    .iter()
-                    .find(|s| !s.starts_with("--"))
-                    .map(|s| (*s).to_string()),
-                save: args.iter().any(|s| *s == "--save"),
-            }
-        }
-```
-
-- [ ] Run the parse test and watch it pass.
-- [ ] Handle the variant where `SlashCmd::Model` is handled, using this
-      behavior: with `level: None`, print the levels from
-      `effort_shape(model).levels()`, the current value and source from
-      `effective_effort`, and — when the list is empty — the single line
-      `this model takes no reasoning effort parameter`. With `level: Some(l)`,
-      dial `effort/set`; on `narrowed: true`, print both the requested and the
-      applied level. With `save: true`, additionally call
-      `mur_core::cmd::agent::cmd_effort(name, Some(l), false)`.
-- [ ] Run `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist
-      cargo test -p mur-core --lib cmd::agent::cli` and watch the CLI suite pass.
-- [ ] Run `cargo fmt -p mur-core` and
-      `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist cargo clippy -p mur-core --all-targets -- -D warnings`.
-- [ ] Commit: `feat(murmur): /effort sets reasoning effort for this session`
-
----
+- [x] `SlashCmd::Effort { level: Option<String>, save: bool }` + parse arm +
+      completion-table entry.
+- [x] Parse test covers bare, level, `--save`, either order, and `--save`
+      alone (a listing, not a write). 1 passed.
+- [x] `App.session_effort` holds the session override apart from the profile
+      value, so `effective_effort` can report WHICH is in force — the user
+      needs to know whether their change outlives the session.
+- [x] `model_cmd::current_effort()` reads the profile value from the same file
+      `current_model_ref` reads.
+- [x] The offered levels are resolved from the agent's model
+      (`current_model_ref` → registry → `ModelEntry.model`, the raw id — never
+      `provider:`, which is the wire protocol). A model with no reasoning
+      control says so instead of listing a scale it ignores.
+- [x] A level the model lacks is reported, not swallowed: `/effort medium` on
+      `deepseek-v4-pro` says `(this model has no medium; using low)`. The
+      runtime still stores what was asked for.
 
 ## Task 7 — Hub backend: effort on `AgentDetail`, re-narrow on model change
 

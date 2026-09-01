@@ -2002,6 +2002,110 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
                 }
             }
         }
+        SlashCmd::Effort { level, save } => {
+            // The levels on offer are a property of the model this agent is
+            // configured with, so resolve it rather than listing the whole
+            // scale. `provider:` is the wire protocol, never the vendor — the
+            // raw id in `ModelEntry.model` is what the table keys on.
+            let model_id = model_cmd::current_model_ref(&app.home, &app.agent)
+                .and_then(|r| {
+                    mur_common::model::ModelRegistry::default_path()
+                        .and_then(|p| mur_common::model::ModelRegistry::load_from(&p))
+                        .ok()
+                        .and_then(|reg| reg.models.get(&r).map(|e| e.model.clone()))
+                })
+                .unwrap_or_default();
+            let levels = mur_common::llm::effort_shape(&model_id).levels();
+
+            if levels.is_empty() {
+                app.push_system(format!(
+                    "{model_id} takes no reasoning effort parameter — nothing to set"
+                ));
+                return;
+            }
+
+            let profile_effort = model_cmd::current_effort(&app.home, &app.agent);
+            let Some(raw) = level else {
+                let (eff, src) = mur_common::llm::effective_effort(
+                    app.session_effort,
+                    profile_effort,
+                    &model_id,
+                );
+                let offered: Vec<&str> = levels.iter().map(|e| e.as_str()).collect();
+                let now = match (eff, src) {
+                    (Some(e), mur_common::llm::EffortSource::SessionOverride) => {
+                        format!("{} (this session)", e.as_str())
+                    }
+                    (Some(e), _) => format!("{} (profile)", e.as_str()),
+                    (None, _) => "unset — the API default is high".to_string(),
+                };
+                app.push_system(format!(
+                    "{model_id} accepts: {}\ncurrent: {now}\n/effort <level> for this session, --save to persist",
+                    offered.join(" · ")
+                ));
+                return;
+            };
+
+            let want: mur_common::llm::Effort = match raw.parse() {
+                Ok(e) => e,
+                Err(e) => {
+                    app.push_system(e.to_string());
+                    return;
+                }
+            };
+            // Report what the model will ACTUALLY use. The runtime stores what
+            // was asked for and each client narrows at the wire, so a level
+            // this model lacks is not an error — but saying nothing about it
+            // would leave the user believing a setting that never applied.
+            let (applied, _) = mur_common::llm::effective_effort(Some(want), None, &model_id);
+
+            let (h, ag) = (app.home.clone(), app.agent.clone());
+            let lvl = want.as_str();
+            let res = tokio::task::spawn_blocking(move || {
+                dial_method(
+                    &h,
+                    &ag,
+                    "effort/set",
+                    serde_json::json!({ "level": lvl }),
+                    DialMode::Auto,
+                )
+            })
+            .await;
+
+            let narrowed = applied.filter(|a| *a != want);
+            let suffix = match narrowed {
+                Some(a) => format!(
+                    " (this model has no {}; using {})",
+                    want.as_str(),
+                    a.as_str()
+                ),
+                None => String::new(),
+            };
+            match res {
+                Ok(Ok(_)) => {
+                    app.session_effort = Some(want);
+                    app.push_system(format!(
+                        "effort → {}{suffix} (this session, effective next turn)",
+                        want.as_str()
+                    ));
+                }
+                Ok(Err(e)) => app.push_system(format!(
+                    "couldn't set effort on the running agent ({e:#}){suffix}"
+                )),
+                Err(e) => app.push_system(format!("effort task failed: {e}")),
+            }
+
+            if save {
+                match crate::cmd::agent::cmd_effort(
+                    &app.agent,
+                    Some(want.as_str().to_string()),
+                    false,
+                ) {
+                    Ok(()) => app.push_system(format!("saved {} to profile", want.as_str())),
+                    Err(e) => app.push_system(format!("profile write failed: {e:#}")),
+                }
+            }
+        }
         SlashCmd::Login(arg) => match arg {
             None => run_manage(app, move |agent| Ok(login::render_status_all(&agent))).await,
             Some(word) => match login::Provider::parse(&word) {
@@ -2889,6 +2993,7 @@ mod help_coverage_tests {
             SlashCmd::Panel(_) => Some("panel"),
             SlashCmd::Open => Some("open"),
             SlashCmd::Model(_) => Some("model"),
+            SlashCmd::Effort { .. } => Some("effort"),
             SlashCmd::Login(_) => Some("login"),
             SlashCmd::Quit => Some("exit"),
             SlashCmd::Unknown(_) => None,
