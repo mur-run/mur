@@ -1,15 +1,80 @@
-//! Brave Search: the first-class search backend.
+//! Brave Search: the first-class search backend, and the 429 handling that
+//! tells its two failure modes apart.
 //!
-//! Everything Brave-shaped, moved out of `fetcher.rs` verbatim. That file keeps
-//! the keyless DuckDuckGo tier, the SSRF screen, and `fetch`.
+//! Split out of `fetcher.rs` when the 429 classifier pushed that file past the
+//! repo's 800-line limit. Everything Brave-shaped lives here; `fetcher.rs`
+//! keeps the keyless DuckDuckGo tier, the SSRF screen, and `fetch`.
 
 use std::time::Duration;
 
 use super::{FetchError, MAX_BODY_BYTES, SearchHit, build_client, screen_url_blocking};
 
-/// Brave Search API web-search endpoint. First-class (real index, JSON, no
-/// scraping) — used when a subscription token is configured.
 const BRAVE_ENDPOINT: &str = "https://api.search.brave.com/res/v1/web/search";
+
+/// Brave's free/credit tier allows **1 query per second**, and most plans
+/// enforce that burst window AND a monthly quota at the same time. Both return
+/// HTTP 429, and the two need opposite handling: a per-second trip clears in
+/// about a second, a spent monthly quota clears next month. Treating them alike
+/// is why a run once retried a request that could never succeed and then
+/// reported "configure a Brave API key" to an operator who already had one.
+///
+/// `X-RateLimit-Reset` carries the seconds until each window frees up. We read
+/// the SOONEST of them: if relief is close it is the burst window and worth
+/// waiting for; if it is far away, no amount of backoff will help.
+const BRAVE_RETRYABLE_RESET_SECS: u64 = 10;
+
+/// Attempts against Brave when a 429 says the burst window will clear shortly.
+/// Deliberately small: with several workers sharing one key the honest fix is
+/// fewer concurrent searches, not a longer retry train.
+const BRAVE_MAX_ATTEMPTS: u32 = 3;
+
+/// What a Brave 429 actually meant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BraveThrottle {
+    /// Burst window; free again in `secs`.
+    Burst { secs: u64 },
+    /// Quota window; `secs` away, so retrying inside this run is pointless.
+    Exhausted { secs: u64 },
+    /// No usable `X-RateLimit-Reset`. Retried once as a burst, because a
+    /// missing header is more likely a proxy stripping it than a spent quota.
+    Unknown,
+}
+
+/// Classify a Brave 429 from its `X-RateLimit-Reset` header.
+///
+/// The header may carry one value per policy window (`"1, 1419704"`), so every
+/// number is parsed and the minimum wins — that is when search can next work.
+fn classify_brave_429(reset_header: Option<&str>) -> BraveThrottle {
+    let Some(soonest) = reset_header.and_then(|h| {
+        h.split(',')
+            .filter_map(|part| part.trim().parse::<u64>().ok())
+            .min()
+    }) else {
+        return BraveThrottle::Unknown;
+    };
+    if soonest <= BRAVE_RETRYABLE_RESET_SECS {
+        BraveThrottle::Burst { secs: soonest }
+    } else {
+        BraveThrottle::Exhausted { secs: soonest }
+    }
+}
+
+impl BraveThrottle {
+    /// How this 429 reads to a human, so the fallback message says what
+    /// actually happened instead of guessing.
+    fn describe(self) -> String {
+        match self {
+            BraveThrottle::Burst { secs } => format!(
+                "brave rate limit (1 query/sec on the free tier; window clears in {secs}s) —                  several workers are sharing one key"
+            ),
+            BraveThrottle::Exhausted { secs } => format!(
+                "brave quota exhausted (next window in {}h) — retrying will not help;                  raise the plan or reduce searches",
+                secs / 3600
+            ),
+            BraveThrottle::Unknown => "brave rate limit (429, no reset header)".to_string(),
+        }
+    }
+}
 
 /// Brave web search: GET the Brave API through the same proxy-honoring reqwest
 /// path, authenticated with `X-Subscription-Token`. Screens the endpoint host
@@ -31,13 +96,40 @@ pub(super) async fn search_brave(
         .map_err(FetchError::Guard)?;
 
     let client = build_client(timeout)?;
-    let resp = client
-        .get(screened.clone())
-        .header("X-Subscription-Token", key)
-        .header(reqwest::header::ACCEPT, "application/json")
-        .send()
-        .await
-        .map_err(|e| FetchError::Http(e.to_string()))?;
+    let mut resp = None;
+    for attempt in 0..BRAVE_MAX_ATTEMPTS {
+        let r = client
+            .get(screened.clone())
+            .header("X-Subscription-Token", key)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(|e| FetchError::Http(e.to_string()))?;
+        if r.status().as_u16() != 429 {
+            resp = Some(r);
+            break;
+        }
+        // A 429 is two different failures wearing one status code. Wait only
+        // for the one waiting can fix, and name the other instead of burning
+        // attempts on it.
+        let throttle = classify_brave_429(
+            r.headers()
+                .get("x-ratelimit-reset")
+                .and_then(|v| v.to_str().ok()),
+        );
+        let wait = match throttle {
+            BraveThrottle::Burst { secs } => secs.max(1),
+            BraveThrottle::Unknown => 1,
+            BraveThrottle::Exhausted { .. } => {
+                return Err(FetchError::Http(throttle.describe()));
+            }
+        };
+        if attempt + 1 == BRAVE_MAX_ATTEMPTS {
+            return Err(FetchError::Http(throttle.describe()));
+        }
+        tokio::time::sleep(Duration::from_secs(wait)).await;
+    }
+    let resp = resp.expect("loop returns on every non-retry path");
     let status = resp.status();
     if !status.is_success() {
         return Err(FetchError::Http(format!(
@@ -94,6 +186,31 @@ fn parse_brave_hits(json: &str, limit: usize) -> Result<Vec<SearchHit>, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 429 is two different failures wearing one status code. Waiting fixes
+    /// exactly one of them; conflating them once produced an hour of retrying
+    /// a request that could never succeed.
+    #[test]
+    fn a_burst_429_is_told_apart_from_a_spent_quota() {
+        // 1 query/sec window: relief is immediate, so retry.
+        assert_eq!(
+            classify_brave_429(Some("1")),
+            BraveThrottle::Burst { secs: 1 }
+        );
+        // Monthly window: no backoff inside this run can clear it.
+        assert!(matches!(
+            classify_brave_429(Some("1419704")),
+            BraveThrottle::Exhausted { .. }
+        ));
+        // Both windows reported together — the SOONEST is when search can work.
+        assert_eq!(
+            classify_brave_429(Some("1, 1419704")),
+            BraveThrottle::Burst { secs: 1 }
+        );
+        // A stripped header is likelier a proxy than a spent quota: retry once.
+        assert_eq!(classify_brave_429(None), BraveThrottle::Unknown);
+        assert_eq!(classify_brave_429(Some("garbage")), BraveThrottle::Unknown);
+    }
 
     #[test]
     fn parse_brave_hits_extracts_results_and_respects_limit() {

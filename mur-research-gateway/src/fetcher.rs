@@ -204,12 +204,12 @@ fn build_client(timeout: Duration) -> Result<reqwest::Client, FetchError> {
         .map_err(|e| FetchError::Http(e.to_string()))
 }
 
-mod brave;
-
 /// Pluggable web search: `brave_key.is_some()` → Brave's first-class API;
 /// `None` → scrape DuckDuckGo's HTML endpoint (keyless, zero-config). If Brave
 /// is configured but errors (bad key, quota, transport), degrade to DDG rather
 /// than fail the search — a misconfigured key must never black out research.
+mod brave;
+
 pub async fn search(
     query: &str,
     limit: usize,
@@ -222,15 +222,15 @@ pub async fn search(
         Some(key) => match brave::search_brave(query, limit, key, deny, timeout).await {
             Ok(hits) => Ok(hits),
             Err(e) => {
+                let why = fetch_err_brief(&e);
                 tracing::warn!(
                     target: "research_gateway",
-                    "brave search failed ({}), falling back to DuckDuckGo",
-                    fetch_err_brief(&e)
+                    "brave search failed ({why}), falling back to DuckDuckGo"
                 );
-                search_tier1(query, limit, deny, timeout, endpoint).await
+                search_tier1(query, limit, deny, timeout, endpoint, Some(&why)).await
             }
         },
-        None => search_tier1(query, limit, deny, timeout, endpoint).await,
+        None => search_tier1(query, limit, deny, timeout, endpoint, None).await,
     }
 }
 
@@ -253,6 +253,9 @@ pub async fn search_tier1(
     deny: &[String],
     timeout: Duration,
     endpoint: &str,
+    // Why Brave did not carry this search, when a key was configured. `None`
+    // when no key is set — only then is "configure a key" the right advice.
+    brave_failure: Option<&str>,
 ) -> Result<Vec<SearchHit>, FetchError> {
     // Operator-supplied (config/env), so a bad value must surface as an error
     // the worker can read — never a panic that takes the gateway down.
@@ -294,21 +297,33 @@ pub async fn search_tier1(
     // silently.
     match last_err {
         Some(e) => Err(e),
-        None => Err(search_blocked_error()),
+        None => Err(search_blocked_error(brave_failure)),
     }
 }
 
 /// The explicit error returned when DDG's anti-bot challenge never clears.
-/// Names both the worker-side workaround (direct `fetch`) and the operator
-/// fix (Brave key) so the message is actionable at both levels.
-fn search_blocked_error() -> FetchError {
+/// Names the worker-side workaround (direct `fetch`) and, when there is one,
+/// the operator fix.
+///
+/// `brave_failure` is why the configured Brave key did not carry the search.
+/// Telling an operator who already HAS a key to configure one sent a real
+/// investigation down the wrong path for an hour, so that advice is now
+/// printed only when no key is set.
+fn search_blocked_error(brave_failure: Option<&str>) -> FetchError {
+    let operator_fix = match brave_failure {
+        Some(why) => format!(
+            "Brave was tried first and did not carry it: {why}. Operator fix: address that, \
+             not the DuckDuckGo block."
+        ),
+        None => "Operator fix: configure a free Brave Search API key \
+             (research_gateway.brave_api_key — or brave_api_key_ref, e.g. keychain:mur/brave — \
+             in ~/.mur/config.yaml, or MUR_RESEARCH_BRAVE_KEY) to switch search off DuckDuckGo."
+            .to_string(),
+    };
     FetchError::Http(format!(
         "DuckDuckGo returned its anti-bot challenge (HTTP {DDG_CHALLENGE_STATUS}) on all \
          {SEARCH_MAX_ATTEMPTS} attempts — this host's IP appears persistently blocked, \
-         retrying will not help. Use direct `fetch` of known URLs instead. Operator fix: \
-         configure a free Brave Search API key (research_gateway.brave_api_key — or \
-         brave_api_key_ref, e.g. keychain:mur/brave — in \
-         ~/.mur/config.yaml, or MUR_RESEARCH_BRAVE_KEY) to switch search off DuckDuckGo."
+         retrying will not help. Use direct `fetch` of known URLs instead. {operator_fix}"
     ))
 }
 
@@ -454,7 +469,7 @@ mod tests {
         // `.expect("static URL is valid")`d it, which was only safe while the
         // endpoint was a hardcoded const. No network is touched: the URL fails
         // to parse before any request is built.
-        let err = search_tier1("q", 3, &[], Duration::from_secs(1), "not a url")
+        let err = search_tier1("q", 3, &[], Duration::from_secs(1), "not a url", None)
             .await
             .expect_err("a malformed endpoint must be an error, not a panic");
         let FetchError::Http(msg) = err else {
@@ -472,7 +487,7 @@ mod tests {
     fn search_blocked_error_names_workaround_and_operator_fix() {
         // Pin the actionable pointers so they can't silently rot: the worker
         // pivot (`fetch`) and both operator config paths for the Brave key.
-        let FetchError::Http(msg) = search_blocked_error() else {
+        let FetchError::Http(msg) = search_blocked_error(None) else {
             panic!("blocked error must be FetchError::Http");
         };
         assert!(msg.contains("fetch"));
@@ -596,5 +611,27 @@ mod tests {
         assert!(out.contains("[truncated 6 chars]"));
         // Never split a codepoint: the kept prefix is valid UTF-8 of 4 'é's.
         assert_eq!(out.chars().take_while(|&c| c == 'é').count(), 4);
+    }
+
+    /// The regression this whole change exists for: telling an operator who
+    /// already HAS a Brave key to configure one.
+    #[test]
+    fn the_blocked_message_only_advises_a_key_when_none_is_set() {
+        let no_key = format!("{:?}", search_blocked_error(None));
+        assert!(
+            no_key.contains("configure a free Brave Search API key"),
+            "{no_key}"
+        );
+
+        let with_key = format!(
+            "{:?}",
+            search_blocked_error(Some("brave quota exhausted (next window in 394h)"))
+        );
+        assert!(
+            !with_key.contains("configure a free Brave Search API key"),
+            "must not advise a fix already applied: {with_key}"
+        );
+        assert!(with_key.contains("Brave was tried first"), "{with_key}");
+        assert!(with_key.contains("quota exhausted"), "{with_key}");
     }
 }
