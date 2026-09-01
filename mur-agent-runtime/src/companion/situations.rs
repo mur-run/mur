@@ -45,3 +45,38 @@ pub fn pick_for_hour<R: RngCore>(
         _ => unreachable!(),
     })
 }
+
+#[cfg(test)]
+mod scheduled_is_unreachable_tests {
+    use super::*;
+    use chrono::TimeZone;
+    use rand::SeedableRng;
+
+    /// `Situation::Scheduled` is supplied directly by the scheduler and must
+    /// never be produced by the hourly picker — the picker answers "say
+    /// something? say what?", and a schedule already has both answers.
+    ///
+    /// This pins the claim in the enum's own doc comment. The guarantee is
+    /// structural (`weights_by_hour` returns a fixed 5-wide table and the
+    /// sample arms stop at index 4), but a sixth weight added later would
+    /// silently make it reachable, and nothing else would notice.
+    #[test]
+    fn the_hourly_picker_never_yields_scheduled() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0xB0A7);
+        let mut seen = 0usize;
+        for hour in 0..24 {
+            let now = Local.with_ymd_and_hms(2026, 9, 1, hour, 0, 0).unwrap();
+            for _ in 0..200 {
+                if let Some(s) = pick_for_hour(now, None, &mut rng) {
+                    seen += 1;
+                    assert_ne!(
+                        s,
+                        Situation::Scheduled,
+                        "the picker reached Scheduled at hour {hour}"
+                    );
+                }
+            }
+        }
+        assert!(seen > 0, "the loop must actually have picked something");
+    }
+}

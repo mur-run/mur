@@ -9,7 +9,7 @@
 use crate::llm::{BackgroundKind, RequestIntent};
 use crate::task_runner::{TaskOutcome, TaskRunner, TaskSpec};
 use anyhow::{Context, Result};
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, Utc};
 use cron::Schedule;
 use mur_channel::ChannelService;
 use mur_common::a2a::{Message, MessagePart};
@@ -90,6 +90,45 @@ pub struct ScheduleSink {
     pub agent: String,
     pub identity: Arc<AgentIdentity>,
     pub key_version: u32,
+    /// The agent's BCP-47 locale, written into the inbox entry's front matter.
+    /// Carried rather than guessed: the entry claims a locale either way, and a
+    /// guessed one is a small lie in a file the Hub renders.
+    pub locale: String,
+}
+
+/// Put the reply in the companion inbox, where the Hub already shows what an
+/// agent has said to you.
+///
+/// This reuses the companion's `Notifier` and deliberately skips its `Outbox`.
+/// The outbox exists to decide *whether* to speak (quiet hours, rhythm, earned
+/// permission) and *what* to say (situation weights, template cooldowns). A
+/// schedule has answers to both, supplied by the person who wrote it — running
+/// it through gates built to govern unprompted chatter would let a reminder be
+/// dropped for being the wrong topic at the wrong hour.
+///
+/// Skipping those gates is not a privilege. Quiet hours exist so the agent does
+/// not start conversations while you sleep; a 10:00 reminder you set is not
+/// that.
+async fn notify_inbox(sink: &ScheduleSink, task_id: &str, body: &str, now: DateTime<Utc>) {
+    use crate::companion::notifier::{CompanionMessage, Notifier, StdoutNotifier};
+
+    let inbox = sink
+        .mur_home
+        .join("agents")
+        .join(&sink.agent)
+        .join("companion/inbox");
+    let msg = CompanionMessage {
+        id: task_id.to_string(),
+        situation: mur_common::companion::Situation::Scheduled,
+        // No template was picked — the text is the schedule's own message.
+        template_id: "scheduled".to_string(),
+        locale: sink.locale.clone(),
+        body: body.to_string(),
+        generated_at: now,
+    };
+    if let Err(e) = StdoutNotifier::new(inbox).send(&msg).await {
+        warn!(error = %e, task_id = %task_id, "scheduled reply reached the channel but not the inbox");
+    }
 }
 
 /// The channel a fired entry writes to — created once, then remembered in the
@@ -126,7 +165,7 @@ fn schedule_channel(svc: &ChannelService, mur_home: &Path, agent: &str) -> Resul
 ///
 /// Best-effort, like the `channel/delegate` write it mirrors: a schedule that
 /// fired must not be reported as failed because the channel store was busy.
-fn record_reply(sink: &ScheduleSink, task: &mur_common::a2a::Task, cron: &str) {
+async fn record_reply(sink: &ScheduleSink, task: &mur_common::a2a::Task, cron: &str) {
     let text = crate::protocol::methods::channel_delegate::reply_text_of(task);
     if text.trim().is_empty() {
         return;
@@ -151,6 +190,10 @@ fn record_reply(sink: &ScheduleSink, task: &mur_common::a2a::Task, cron: &str) {
             "cron-triggered turn completed but its reply could not be recorded"
         );
     }
+
+    // The channel makes the reply findable; the inbox is where a person is
+    // already looking. Both, because neither replaces the other.
+    notify_inbox(sink, &task.id, &text, chrono::Utc::now()).await;
 }
 
 pub struct CronScheduler {
@@ -271,7 +314,7 @@ async fn run_entry(
             // fired on the second and reached nobody.
             TaskOutcome::Completed(t) => {
                 if let Some(sink) = sink.as_deref() {
-                    record_reply(sink, t, &entry.cron);
+                    record_reply(sink, t, &entry.cron).await;
                 }
             }
             TaskOutcome::Cancelled(_) => {}
