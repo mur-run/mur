@@ -128,6 +128,155 @@ impl std::str::FromStr for Effort {
     }
 }
 
+/// What form of reasoning control a model accepts.
+///
+/// Provider controls do not share a shape, and three of these cannot be
+/// expressed by a level-to-string table:
+///
+/// * [`EffortShape::AlwaysOn`] is not [`EffortShape::None`]. Mistral's
+///   Magistral models always reason and reject `reasoning_effort` with HTTP
+///   422 — a hard failure, not a degradation. `None` means "passing nothing is
+///   correct"; `AlwaysOn` means "passing anything breaks every call".
+/// * [`EffortShape::Binary`] is not a degenerate `Graded`. Qwen and GLM have a
+///   switch, not a dial, and spell it differently (`chat_template_kwargs`
+///   versus `thinking: {type}`). Two other agent products shipped that exact
+///   confusion.
+/// * [`EffortShape::Budget`] takes an integer on the wire but still carries a
+///   level list, because the user and both UIs deal in levels — only the
+///   client converts, at the last possible moment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffortShape {
+    /// Levels this model accepts, cheapest first.
+    Graded(&'static [Effort]),
+    /// Thinking is a switch; `on_at` is the lowest level that turns it on.
+    Binary { on_at: Effort },
+    /// Wants an integer token budget; these are the levels to offer.
+    Budget(&'static [Effort]),
+    /// Always reasons and rejects the parameter. Send nothing.
+    AlwaysOn,
+    /// No reasoning control.
+    None,
+}
+
+/// A level set is an arbitrary SUBSET of [`Effort::ALL`], not a prefix of it.
+/// Two tiers below have holes: Anthropic's pre-4.7 lines have `max` but no
+/// `xhigh` (that step was inserted between them in 4.7), and DeepSeek V4
+/// publishes low/high/max with no medium. Naming these by a ceiling —
+/// `LEVELS_TO_HIGH` and the like — is what produced a first draft that silently
+/// downgraded `max` to `high` on Opus 4.6. Name the membership, not a bound.
+const LEVELS_ALL: &[Effort] = &[
+    Effort::Low,
+    Effort::Medium,
+    Effort::High,
+    Effort::Xhigh,
+    Effort::Max,
+];
+/// Anthropic before 4.7: the whole scale except the `xhigh` step.
+const LEVELS_NO_XHIGH: &[Effort] = &[Effort::Low, Effort::Medium, Effort::High, Effort::Max];
+const LEVELS_LMHX: &[Effort] = &[Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh];
+const LEVELS_LMH: &[Effort] = &[Effort::Low, Effort::Medium, Effort::High];
+/// DeepSeek V4 publishes low / high / max — there is no medium step.
+const LEVELS_DEEPSEEK: &[Effort] = &[Effort::Low, Effort::High, Effort::Max];
+/// A switch has two positions and must offer two, not three that collapse to
+/// two. `Low` is off, `High` is on; the threshold lives in `Binary::on_at`.
+const LEVELS_BINARY: &[Effort] = &[Effort::Low, Effort::High];
+
+impl EffortShape {
+    /// The levels a UI should offer. Empty for the two shapes that take no
+    /// level from the user.
+    pub fn levels(&self) -> &'static [Effort] {
+        match self {
+            EffortShape::Graded(l) | EffortShape::Budget(l) => l,
+            EffortShape::Binary { .. } => LEVELS_BINARY,
+            EffortShape::AlwaysOn | EffortShape::None => &[],
+        }
+    }
+}
+
+/// Which reasoning control `model` accepts.
+///
+/// Keyed on the model id with any `vendor/` prefix stripped, never on the
+/// registry's `provider:` field — that records the wire protocol, so DeepSeek,
+/// Qwen and every other OpenAI-compatible third party all read `openai`.
+///
+/// Capability is version-scoped, not family-scoped: grok-4.3, 4.5 and 4.6 each
+/// accept a different set, exactly as the Claude 4-5 / 4-6 / 4-7 / 5 lines do.
+/// Named const lists per tier, so a new model is one edit in one place.
+///
+/// Vendor levels below `Low` (`none`, `minimal`) are deliberately dropped:
+/// MUR's scale starts at `Low`, and a level MUR cannot name is a level MUR
+/// does not offer. Nothing is mis-sent.
+pub fn effort_shape(model: &str) -> EffortShape {
+    /// Anthropic lines with the `xhigh` step (Opus 4.7 and later).
+    const ANTHROPIC_FULL: &[&str] = &[
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-sonnet-5",
+        "claude-fable-5",
+        "claude-mythos-5",
+    ];
+    /// Anthropic lines that take effort but have no `xhigh` step.
+    const ANTHROPIC_NO_XHIGH: &[&str] =
+        &["claude-opus-4-6", "claude-sonnet-4-6", "claude-opus-4-5"];
+    /// OpenAI reasoning families. `xhigh`/`max` clamp to `high` at the wire.
+    const OPENAI_REASONING: &[&str] = &["gpt-5", "o1", "o3", "o4"];
+    /// DeepSeek V4 thinking effort.
+    const DEEPSEEK_GRADED: &[&str] = &["deepseek-v4"];
+    /// Grok lines that added the `xhigh` step.
+    const GROK_XHIGH: &[&str] = &["grok-4.6", "grok-4.7"];
+    /// Grok lines with low/medium/high only.
+    const GROK_GRADED: &[&str] = &["grok-4.3", "grok-4.5"];
+    /// Gemini 3+ takes `thinkingConfig.thinkingLevel` — a level name.
+    const GEMINI_LEVEL: &[&str] = &["gemini-3"];
+    /// Gemini 2.5 takes `thinkingConfig.thinkingBudget` — an integer.
+    const GEMINI_BUDGET: &[&str] = &["gemini-2.5"];
+    /// Mistral hybrids where `reasoning_effort` enables reasoning.
+    const MISTRAL_GRADED: &[&str] = &["mistral-small-3", "mistral-small-4"];
+    /// Dedicated reasoning models that REJECT the parameter with HTTP 422.
+    const ALWAYS_ON: &[&str] = &["magistral"];
+    /// Models whose only control is an on/off switch.
+    const BINARY: &[&str] = &["qwen3", "glm-"];
+
+    let m = model.to_lowercase();
+    let bare = m.rsplit('/').next().unwrap_or(&m);
+    let has = |prefixes: &[&str]| prefixes.iter().any(|p| bare.starts_with(p));
+
+    // AlwaysOn is checked first: sending anything to these is a hard error, so
+    // no later arm may claim them.
+    if has(ALWAYS_ON) {
+        return EffortShape::AlwaysOn;
+    }
+    if has(ANTHROPIC_FULL) {
+        return EffortShape::Graded(LEVELS_ALL);
+    }
+    // Anthropic pre-4.7 keeps `max`; it is only the `xhigh` step it lacks.
+    if has(ANTHROPIC_NO_XHIGH) {
+        return EffortShape::Graded(LEVELS_NO_XHIGH);
+    }
+    if has(OPENAI_REASONING) || has(GROK_GRADED) {
+        return EffortShape::Graded(LEVELS_LMH);
+    }
+    if has(GROK_XHIGH) {
+        return EffortShape::Graded(LEVELS_LMHX);
+    }
+    if has(DEEPSEEK_GRADED) {
+        return EffortShape::Graded(LEVELS_DEEPSEEK);
+    }
+    if has(GEMINI_LEVEL) || has(MISTRAL_GRADED) {
+        return EffortShape::Graded(LEVELS_LMH);
+    }
+    if has(GEMINI_BUDGET) {
+        return EffortShape::Budget(LEVELS_LMH);
+    }
+    if has(BINARY) {
+        return EffortShape::Binary {
+            on_at: Effort::Medium,
+        };
+    }
+    EffortShape::None
+}
+
 /// The effort level to actually send for `model`, or `None` when the model
 /// takes no effort parameter at all.
 ///
@@ -212,6 +361,61 @@ pub fn openai_reasoning_effort(model: &str, want: Effort) -> Option<&'static str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effort_shape_covers_each_vendor_tier() {
+        use EffortShape::*;
+        assert!(matches!(effort_shape("claude-opus-5"), Graded(l) if l.len() == 5));
+        // Four, not three: 4.6 keeps `max` and lacks only the `xhigh` step that
+        // 4.7 inserted between them. A level set is a subset, not a prefix.
+        assert!(matches!(effort_shape("claude-opus-4-6"), Graded(l) if l.len() == 4));
+        assert!(matches!(effort_shape("claude-opus-4-6"), Graded(l) if l.contains(&Effort::Max)));
+        assert!(
+            matches!(effort_shape("claude-opus-4-6"), Graded(l) if !l.contains(&Effort::Xhigh))
+        );
+        assert!(matches!(effort_shape("gpt-5"), Graded(_)));
+        assert!(matches!(effort_shape("grok-4.6"), Graded(l) if l.contains(&Effort::Xhigh)));
+        assert!(matches!(effort_shape("grok-4.5"), Graded(l) if !l.contains(&Effort::Xhigh)));
+        assert!(matches!(effort_shape("gemini-3-pro"), Graded(_)));
+        assert!(matches!(effort_shape("gemini-2.5-pro"), Budget(_)));
+        assert!(matches!(effort_shape("qwen3-32b"), Binary { .. }));
+        // A switch offers exactly two positions, never three that collapse to two.
+        assert_eq!(effort_shape("qwen3-32b").levels().len(), 2);
+        assert!(matches!(effort_shape("glm-4.6"), Binary { .. }));
+        assert!(matches!(effort_shape("magistral-medium-latest"), AlwaysOn));
+        assert!(matches!(effort_shape("gpt-4o"), None));
+        assert!(matches!(effort_shape("llama3.2:3b"), None));
+    }
+
+    /// The three cases the design turns on. Each must fail if its guard is removed.
+    #[test]
+    fn effort_shape_negative_cases() {
+        use EffortShape::*;
+        // 1. DeepSeek V4 has low/high/max and NO medium. Offering medium is a 400.
+        let EffortShape::Graded(levels) = effort_shape("deepseek-v4-pro") else {
+            panic!("deepseek-v4-pro must be Graded");
+        };
+        assert!(
+            !levels.contains(&Effort::Medium),
+            "deepseek has no medium: {levels:?}"
+        );
+        assert_eq!(levels, &[Effort::Low, Effort::High, Effort::Max]);
+
+        // 2. A vendor prefix must be stripped before matching, and a Google model
+        //    must never match an OpenAI family prefix.
+        assert!(matches!(effort_shape("openai/gpt-5"), Graded(_)));
+        assert!(matches!(effort_shape("google/gemini-3.6-flash"), Graded(_)));
+        assert!(!matches!(
+            effort_shape("google/gemini-2.5-flash"),
+            Graded(_)
+        ));
+
+        // 3. Magistral REJECTS the parameter (HTTP 422). AlwaysOn is not None:
+        //    None means "send nothing and that is correct", AlwaysOn means
+        //    "send nothing or every call fails".
+        assert!(matches!(effort_shape("magistral-small-latest"), AlwaysOn));
+        assert!(effort_shape("magistral-small-latest").levels().is_empty());
+    }
 
     #[test]
     fn supported_effort_narrows_per_model_capability() {
