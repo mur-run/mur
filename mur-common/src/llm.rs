@@ -277,6 +277,52 @@ pub fn effort_shape(model: &str) -> EffortShape {
     EffortShape::None
 }
 
+/// Where the effort in force came from, so a surface can say so instead of
+/// showing a bare level the user cannot account for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffortSource {
+    /// Set for this conversation only (murmur `/effort`).
+    SessionOverride,
+    /// Stored on the agent profile.
+    Profile,
+    /// Nothing set — the provider's own default applies. Note that is not
+    /// "no effort": the API default is high.
+    Unset,
+}
+
+/// The effort actually in force for `model`, and where it came from.
+///
+/// The ONLY derivation of this. murmur and the Hub both call it; neither
+/// computes its own, because two surfaces answering one question differently
+/// is a failure this codebase has already shipped twice.
+///
+/// A stored level the model cannot accept is narrowed to the nearest level it
+/// can, and the source is preserved — the user did set it; they are simply
+/// getting the closest thing that will not 400.
+pub fn effective_effort(
+    session: Option<Effort>,
+    profile: Option<Effort>,
+    model: &str,
+) -> (Option<Effort>, EffortSource) {
+    let (want, source) = match (session, profile) {
+        (Some(e), _) => (e, EffortSource::SessionOverride),
+        (None, Some(e)) => (e, EffortSource::Profile),
+        (None, None) => return (None, EffortSource::Unset),
+    };
+    let levels = effort_shape(model).levels();
+    if levels.is_empty() {
+        return (None, EffortSource::Unset);
+    }
+    if levels.contains(&want) {
+        return (Some(want), source);
+    }
+    match levels.iter().rev().find(|l| **l < want).copied() {
+        Some(narrowed) => (Some(narrowed), source),
+        // `want` is below every level this model offers; take its cheapest.
+        None => (levels.first().copied(), source),
+    }
+}
+
 /// The effort level to actually send for `model`, or `None` when the model
 /// takes no effort parameter at all.
 ///
@@ -366,6 +412,35 @@ pub fn openai_reasoning_effort(model: &str, want: Effort) -> Option<&'static str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effective_effort_reports_value_and_where_it_came_from() {
+        use EffortSource::*;
+        // Session beats profile.
+        assert_eq!(
+            effective_effort(Some(Effort::Low), Some(Effort::Max), "claude-opus-5"),
+            (Some(Effort::Low), SessionOverride)
+        );
+        // Profile when there is no session override.
+        assert_eq!(
+            effective_effort(None, Some(Effort::Max), "claude-opus-5"),
+            (Some(Effort::Max), Profile)
+        );
+        // Neither set.
+        assert_eq!(effective_effort(None, None, "claude-opus-5"), (None, Unset));
+        // A value the model cannot take is narrowed, and the SOURCE is
+        // preserved: the user still set it, they just get the nearest level
+        // that works. DeepSeek V4 has no medium step.
+        assert_eq!(
+            effective_effort(None, Some(Effort::Medium), "deepseek-v4-pro"),
+            (Some(Effort::Low), Profile)
+        );
+        // A model with no control reports nothing regardless of what is stored.
+        assert_eq!(
+            effective_effort(Some(Effort::Max), Some(Effort::Max), "gpt-4o"),
+            (None, Unset)
+        );
+    }
 
     /// Delegation must not change what the mappers return. This pins the exact
     /// case a first draft of this plan got wrong: Anthropic's pre-4.7 lines keep
