@@ -88,6 +88,16 @@ pub(crate) fn current_model_ref(home: &Path, agent: &str) -> Option<String> {
         .model_ref
 }
 
+/// The effort stored on the agent's profile, if any.
+///
+/// Read from the same file `current_model_ref` reads, so `/effort` reports the
+/// value the runtime will actually load at its next start rather than a copy
+/// held somewhere else.
+pub(crate) fn current_effort(home: &Path, agent: &str) -> Option<mur_common::llm::Effort> {
+    let yaml = std::fs::read_to_string(profile_path(home, agent)).ok()?;
+    serde_yaml_ng::from_str::<AgentProfile>(&yaml).ok()?.effort
+}
+
 /// Fallback persistence when the dial can't reach a `model/set`-capable
 /// runtime: typed round-trip + temp/rename, mirroring the runtime handler.
 pub(crate) fn write_model_ref(home: &Path, agent: &str, model_ref: &str) -> Result<()> {
