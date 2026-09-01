@@ -154,6 +154,13 @@ pub fn cmd_install_service(name: &str, dry_run: bool) -> Result<()> {
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
+        // Unload any job already running under this label first. `launchctl
+        // load -w` is a no-op against a loaded job, so without this a re-install
+        // rewrote the plist on disk and launchd went right on using the
+        // environment it had read at first load — the new descriptor only took
+        // effect at the next login. Re-running install-service is exactly what
+        // an upgrade tells you to do, so the fix silently did not apply.
+        stop_service(name);
         write_atomic(&dest, plist.as_bytes())?;
         let load_output = std::process::Command::new("launchctl")
             .args(["load", "-w"])
@@ -183,6 +190,10 @@ pub fn cmd_install_service(name: &str, dry_run: bool) -> Result<()> {
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
+        // Same reason as the launchd leg above: `daemon-reload` makes systemd
+        // re-read the unit file, but a unit that is already running keeps the
+        // settings it started with until it is stopped.
+        stop_service(name);
         write_atomic(&dest, unit.as_bytes())?;
         let _ = std::process::Command::new("systemctl")
             .args(["--user", "daemon-reload"])
