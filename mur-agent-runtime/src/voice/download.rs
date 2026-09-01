@@ -137,6 +137,24 @@ mod tests {
         p
     }
 
+    /// A named temp file holding `content`, written through the handle
+    /// `tempfile` already owns.
+    ///
+    /// `fs::write(src.path(), …)` opens a SECOND write handle to a path the
+    /// `NamedTempFile` still holds open. POSIX allows that; Windows
+    /// intermittently refuses it with `Access is denied` (os error 5), which
+    /// reddened a CI run on a PR that touched none of this code and passed on
+    /// a bare re-run — the worst shape of flake, since it reads as "your change
+    /// broke Windows".
+    ///
+    /// The file lives only as long as the returned handle, so callers must bind
+    /// it for the duration of the test rather than drop it on the spot.
+    fn temp_file_with(content: &[u8]) -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(content).unwrap();
+        f
+    }
+
     #[test]
     fn already_present_matching_hash_skips_download() {
         let tmp = tempfile::tempdir().unwrap();
@@ -161,9 +179,8 @@ mod tests {
 
     #[test]
     fn file_url_copies_content() {
-        let src = tempfile::NamedTempFile::new().unwrap();
         let content = b"kokoro model data";
-        std::fs::write(src.path(), content).unwrap();
+        let src = temp_file_with(content);
         // Box::leak is required: ModelSpec.sha256 is &'static str, but the hash
         // is computed at runtime in this test — leak produces a 'static reference.
         let expected_sha: &'static str = Box::leak(sha256_hex(content).into_boxed_str());
@@ -185,8 +202,7 @@ mod tests {
 
     #[test]
     fn hash_mismatch_returns_error() {
-        let src = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(src.path(), b"real content").unwrap();
+        let src = temp_file_with(b"real content");
         let url: &'static str =
             Box::leak(format!("file://{}", src.path().display()).into_boxed_str());
 
