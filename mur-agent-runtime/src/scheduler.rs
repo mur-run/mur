@@ -290,6 +290,21 @@ pub fn next_n_fires(cron_expr: &str, count: usize) -> Result<Vec<chrono::DateTim
     Ok(schedule.upcoming(Local).take(count).collect())
 }
 
+/// The bound a one-off entry carries: its own first firing.
+///
+/// Shared by `mur agent schedule add --once` and the agent's `remind` tool, so
+/// the two cannot drift on what "once" means. Two derivations of the same idea
+/// would each pass their own tests while disagreeing with each other, and
+/// nothing would report it.
+///
+/// `None` for a recurring entry, and also when the expression has no future
+/// firing — an entry that never fires needs no bound.
+pub fn one_off_bound(cron_expr: &str, once: bool) -> Option<String> {
+    once.then(|| next_n_fires(cron_expr, 1).ok())
+        .flatten()
+        .and_then(|v| v.first().map(|t| t.to_rfc3339()))
+}
+
 /// Next fire time strictly after `after`, for a 5-field POSIX cron expression
 /// (seconds = 0, same grammar as [`next_n_fires`]). `None` when the expression
 /// is invalid or yields no future time. Used by the daemon's fleet auto-run to
@@ -356,6 +371,34 @@ mod tests {
             "cron has no year, so a dated request recurs annually — the bound is \
              the only thing that stops next September from firing too (#1119)"
         );
+    }
+
+    #[test]
+    fn a_recurring_entry_gets_no_bound() {
+        assert_eq!(one_off_bound("0 9 * * 1-5", false), None);
+    }
+
+    #[test]
+    fn a_one_off_bound_is_the_expression_own_first_firing() {
+        let cron = "0 10 1 9 *";
+        let bound = one_off_bound(cron, true).expect("a dated cron has a next firing");
+        assert_eq!(
+            bound,
+            next_n_fires(cron, 1).unwrap()[0].to_rfc3339(),
+            "the bound must be the firing the scheduler will admit, not a \
+             recomputation that could round differently"
+        );
+        // And the scheduler must agree that this firing still happens.
+        assert!(
+            !bound_exhausted(next_n_fires(cron, 1).unwrap()[0], Some(&bound)),
+            "the bound `--once` writes must let its own firing through"
+        );
+    }
+
+    #[test]
+    fn an_expression_with_no_future_firing_gets_no_bound() {
+        // 31 February. It never fires, so a bound would guard nothing.
+        assert_eq!(one_off_bound("0 10 31 2 *", true), None);
     }
 
     #[test]
