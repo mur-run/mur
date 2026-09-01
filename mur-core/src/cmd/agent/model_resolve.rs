@@ -147,6 +147,37 @@ pub fn cmd_agent_set_fallback(home: &Path, name: &str, refs: &[String]) -> Resul
     Ok(())
 }
 
+/// Set (or clear) this agent's Smart background-routing override.
+/// `follow` removes the override so the agent inherits `models.smart`.
+pub fn cmd_agent_set_smart(home: &Path, name: &str, state: &str) -> Result<()> {
+    let profile_path = home.join("agents").join(name).join("profile.yaml");
+    if !profile_path.exists() {
+        bail!("agent '{name}' not installed at {}", profile_path.display());
+    }
+    let mut profile: mur_common::AgentProfile =
+        serde_yaml_ng::from_str(&std::fs::read_to_string(&profile_path)?)
+            .with_context(|| format!("parse {}", profile_path.display()))?;
+    // Preserve any other overridden field (e.g. a pinned cheap model): this
+    // sets one field, it does not replace the block.
+    let existing = profile.smart.take().unwrap_or_default();
+    profile.smart = match state {
+        "follow" => None,
+        "on" => Some(mur_common::config::SmartOverride {
+            enabled: Some(true),
+            ..existing
+        }),
+        "off" => Some(mur_common::config::SmartOverride {
+            enabled: Some(false),
+            ..existing
+        }),
+        other => bail!("unknown state '{other}' (expected on, off, or follow)"),
+    };
+    std::fs::write(&profile_path, serde_yaml_ng::to_string(&profile)?)
+        .with_context(|| format!("write {}", profile_path.display()))?;
+    println!("agent '{name}' smart routing = {state}");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

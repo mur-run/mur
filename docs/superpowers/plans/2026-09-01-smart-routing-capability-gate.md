@@ -806,7 +806,7 @@ pub(crate) fn needs_routing_client(refs: usize, routing_on: bool, smart_on: bool
 
 **Steps**
 
-- [ ] Create `mur-core/src/cmd/model_smart.rs` with its test first:
+- [x] Create `mur-core/src/cmd/model_smart.rs` with its test first:
 
 ```rust
 //! `mur model smart <on|off>` — the global Smart background-routing toggle.
@@ -876,9 +876,9 @@ mod tests {
 }
 ```
 
-- [ ] Add `pub mod model_smart;` to `mur-core/src/cmd/mod.rs` after `pub mod model_doctor;` (line 53).
-- [ ] Change `fn ensure_ref_exists` in `mur-core/src/cmd/model.rs:704` to `pub(crate) fn ensure_ref_exists`.
-- [ ] Add the subcommand variant to `ModelCmd` in `mur-core/src/cmd/model.rs`, after `Fallback`:
+- [x] Add `pub mod model_smart;` to `mur-core/src/cmd/mod.rs` after `pub mod model_doctor;` (line 53).
+- [x] Change `fn ensure_ref_exists` in `mur-core/src/cmd/model.rs:704` to `pub(crate) fn ensure_ref_exists`.
+- [x] Add the subcommand variant to `ModelCmd` in `mur-core/src/cmd/model.rs`, after `Fallback`:
 
 ```rust
     /// Turn Smart background routing on or off globally (config.yaml
@@ -895,7 +895,7 @@ mod tests {
     },
 ```
 
-- [ ] Add the dispatch arm next to `ModelCmd::Fallback` (around line 394):
+- [x] Add the dispatch arm next to `ModelCmd::Fallback` (around line 394):
 
 ```rust
         ModelCmd::Smart { state, cheap } => crate::cmd::model_smart::cmd_model_smart(
@@ -905,7 +905,7 @@ mod tests {
         )?,
 ```
 
-- [ ] Add `cmd_agent_set_smart` to `mur-core/src/cmd/agent/model_resolve.rs`, directly after `cmd_agent_set_fallback`:
+- [x] Add `cmd_agent_set_smart` to `mur-core/src/cmd/agent/model_resolve.rs`, directly after `cmd_agent_set_fallback`:
 
 ```rust
 /// Set (or clear) this agent's Smart background-routing override.
@@ -940,7 +940,7 @@ pub fn cmd_agent_set_smart(home: &Path, name: &str, state: &str) -> Result<()> {
 }
 ```
 
-- [ ] Add the CLI variant to `AgentAction` in `mur-core/src/cli/agent.rs`, after `Fallback`:
+- [x] Add the CLI variant to `AgentAction` in `mur-core/src/cli/agent.rs`, after `Fallback`:
 
 ```rust
     /// Turn Smart background routing on or off for this agent, or `follow` to
@@ -954,7 +954,7 @@ pub fn cmd_agent_set_smart(home: &Path, name: &str, state: &str) -> Result<()> {
     },
 ```
 
-- [ ] Add the dispatch arm in `mur-core/src/dispatch.rs`, after the `AgentAction::Fallback` arm:
+- [x] Add the dispatch arm in `mur-core/src/dispatch.rs`, after the `AgentAction::Fallback` arm:
 
 ```rust
         AgentAction::Smart { name, state } => cmd::agent::model_resolve::cmd_agent_set_smart(
@@ -964,16 +964,16 @@ pub fn cmd_agent_set_smart(home: &Path, name: &str, state: &str) -> Result<()> {
         )?,
 ```
 
-- [ ] Run `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist cargo nextest run -p mur-core model_smart` → green. (`mur-core` needs both env vars to build; without `MUR_WEB_DIST` the dashboard embed fails.)
-- [ ] Verify the surface end to end:
+- [x] Run `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist cargo nextest run -p mur-core model_smart` → green. (`mur-core` needs both env vars to build; without `MUR_WEB_DIST` the dashboard embed fails.)
+- [x] Verify the surface end to end:
 
 ```bash
 export MUR_HOME=$(mktemp -d)
-cargo run -q -- model smart on --cheap nope   # expect: error, model_ref "nope" not in models.yaml
-cargo run -q -- model smart off               # expect: smart background routing = off (cheap = auto)
+cargo run -q --bin mur -- model smart on --cheap nope   # --bin is required: the workspace has 10 binaries   # expect: error, model_ref "nope" not in models.yaml
+cargo run -q --bin mur -- model smart off               # expect: smart background routing = off (cheap = auto)
 ```
 
-- [ ] `cargo fmt && git commit -am "feat(cli): mur model smart and mur agent smart"`
+- [x] `cargo fmt && git commit -am "feat(cli): mur model smart and mur agent smart"`
 
 ---
 

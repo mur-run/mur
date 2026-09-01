@@ -1577,6 +1577,11 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 &model_refs,
             )?
         }
+        AgentAction::Smart { name, state } => cmd::agent::model_resolve::cmd_agent_set_smart(
+            &cmd::agent::resolve_mur_home()?,
+            &name,
+            &state,
+        )?,
         AgentAction::Send {
             name,
             message,

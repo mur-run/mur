@@ -99,6 +99,15 @@ pub enum AgentAction {
         #[arg(num_args = 0..)]
         model_refs: Vec<String>,
     },
+    /// Turn Smart background routing on or off for this agent, or `follow` to
+    /// clear the override and inherit the global setting (`mur model smart`).
+    Smart {
+        /// Agent name
+        name: String,
+        /// `on`, `off`, or `follow`.
+        #[arg(value_parser = ["on", "off", "follow"])]
+        state: String,
+    },
     /// Dial an agent's Unix socket and issue A2A `message/send`
     Send {
         /// Agent name

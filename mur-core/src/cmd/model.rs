@@ -139,6 +139,18 @@ pub enum ModelCmd {
         #[arg(num_args = 0..)]
         model_refs: Vec<String>,
     },
+    /// Turn Smart background routing on or off globally (config.yaml
+    /// `models.smart`). Off by default: background turns then run on the
+    /// agent's own model. `--cheap` pins the model Smart downgrades to;
+    /// omit it to auto-pick the cheapest capable chat model.
+    Smart {
+        /// `on` or `off`.
+        #[arg(value_parser = ["on", "off"])]
+        state: String,
+        /// Registry key Smart downgrades to. Omit for auto-pick.
+        #[arg(long)]
+        cheap: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -394,6 +406,11 @@ pub async fn run(args: ModelArgs) -> anyhow::Result<()> {
         ModelCmd::Fallback { model_refs } => {
             cmd_model_fallback(&crate::cmd::agent::resolve_mur_home()?, &model_refs)?
         }
+        ModelCmd::Smart { state, cheap } => crate::cmd::model_smart::cmd_model_smart(
+            &crate::cmd::agent::resolve_mur_home()?,
+            state == "on",
+            cheap.as_deref(),
+        )?,
     }
     Ok(())
 }
@@ -701,7 +718,7 @@ fn parse_route_policy(raw: &str) -> anyhow::Result<RoutePolicy> {
 /// `<home>/models.yaml`. Used by both the global (`mur model default` /
 /// `fallback`) and per-agent (`mur agent fallback`) setters so a typo'd ref
 /// can never be silently persisted.
-fn ensure_ref_exists(home: &Path, r: &str) -> anyhow::Result<()> {
+pub(crate) fn ensure_ref_exists(home: &Path, r: &str) -> anyhow::Result<()> {
     let reg = ModelRegistry::load_from(&home.join("models.yaml"))?;
     anyhow::ensure!(
         reg.models.contains_key(r),
