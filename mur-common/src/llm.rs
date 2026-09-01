@@ -292,31 +292,31 @@ pub fn effort_shape(model: &str) -> EffortShape {
 /// list, one place to edit when a model ships, rather than a literal model ID
 /// buried in a conditional that goes stale on the next release.
 pub fn supported_effort(model: &str, want: Effort) -> Option<Effort> {
-    /// Accept every level including `xhigh` (Opus 4.7 and later lines).
-    const FULL_SCALE: &[&str] = &[
-        "claude-opus-5",
-        "claude-opus-4-8",
-        "claude-opus-4-7",
-        "claude-sonnet-5",
-        "claude-fable-5",
-        "claude-mythos-5",
-    ];
-    /// Accept effort but have no `xhigh` step.
-    const NO_XHIGH: &[&str] = &["claude-opus-4-6", "claude-sonnet-4-6", "claude-opus-4-5"];
+    /// This mapper is Anthropic's. [`effort_shape`] is vendor-neutral — it
+    /// answers "which levels", never "whose client is this" — so the vendor
+    /// gate stays here, symmetric with `openai_reasoning_effort`'s family
+    /// gate. Without it a delegated `supported_effort` starts claiming
+    /// `gpt-5`, which an existing test caught immediately.
+    const ANTHROPIC: &str = "claude-";
 
     let m = model.to_lowercase();
-    if FULL_SCALE.iter().any(|p| m.starts_with(p)) {
+    let bare = m.rsplit('/').next().unwrap_or(&m);
+    if !bare.starts_with(ANTHROPIC) {
+        return None;
+    }
+    let levels = match effort_shape(model) {
+        EffortShape::Graded(l) => l,
+        // Anthropic is Graded or nothing. Budget/Binary models never reach this
+        // client, and AlwaysOn must be sent nothing anywhere.
+        _ => return None,
+    };
+    if levels.contains(&want) {
         return Some(want);
     }
-    if NO_XHIGH.iter().any(|p| m.starts_with(p)) {
-        return Some(match want {
-            Effort::Xhigh => Effort::High,
-            other => other,
-        });
-    }
-    // Everything else — older Claude models, and any non-Anthropic model that
-    // reaches this path — takes no effort parameter.
-    None
+    // Degrade to the most expensive level this model DOES accept rather than
+    // send one it will 400 on. `levels` is a subset, not a prefix, so this
+    // steps over holes (pre-4.7 Anthropic has `max` but no `xhigh`).
+    levels.iter().rev().find(|l| **l < want).copied()
 }
 
 /// The `reasoning_effort` value to send for an OpenAI-compatible model, or
@@ -351,6 +351,11 @@ pub fn openai_reasoning_effort(model: &str, want: Effort) -> Option<&'static str
     if !REASONING_FAMILIES.iter().any(|f| bare.starts_with(f)) {
         return None;
     }
+    // Second gate: the table is the owner, so a family member the table has
+    // demoted (or that becomes AlwaysOn) stops being sent a value here too.
+    if !matches!(effort_shape(model), EffortShape::Graded(_)) {
+        return None;
+    }
     Some(match want {
         Effort::Low => "low",
         Effort::Medium => "medium",
@@ -361,6 +366,38 @@ pub fn openai_reasoning_effort(model: &str, want: Effort) -> Option<&'static str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Delegation must not change what the mappers return. This pins the exact
+    /// case a first draft of this plan got wrong: Anthropic's pre-4.7 lines keep
+    /// `max` and lack only `xhigh`, so a level set expressed as a ceiling
+    /// silently downgrades `max` to `high` here.
+    #[test]
+    fn delegation_preserves_the_hole_in_the_pre_4_7_scale() {
+        // The hole: xhigh absent, max present.
+        assert_eq!(
+            supported_effort("claude-opus-4-6", Effort::Xhigh),
+            Some(Effort::High)
+        );
+        assert_eq!(
+            supported_effort("claude-opus-4-6", Effort::Max),
+            Some(Effort::Max)
+        );
+        // The full scale is unaffected.
+        assert_eq!(
+            supported_effort("claude-opus-5", Effort::Xhigh),
+            Some(Effort::Xhigh)
+        );
+        // A model the table calls AlwaysOn must get nothing from either mapper,
+        // because sending it anything is a 422.
+        assert_eq!(
+            supported_effort("magistral-small-latest", Effort::High),
+            None
+        );
+        assert_eq!(
+            openai_reasoning_effort("magistral-small-latest", Effort::High),
+            None
+        );
+    }
 
     #[test]
     fn effort_shape_covers_each_vendor_tier() {
