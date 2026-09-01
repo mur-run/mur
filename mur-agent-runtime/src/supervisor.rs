@@ -738,6 +738,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                 agent: profile.inner.name.clone(),
                 identity: identity.clone(),
                 key_version: profile.inner.identity.key_version,
+                locale: profile.inner.companion.locale.clone(),
             });
         transport_tasks.push(cs.spawn());
         info!(
