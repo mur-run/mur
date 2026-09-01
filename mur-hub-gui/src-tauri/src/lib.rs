@@ -10,6 +10,7 @@ pub mod chat;
 pub mod chat_window;
 pub mod cli_tools;
 pub mod companion;
+pub mod companion_notify;
 pub mod dashboard;
 pub mod detail;
 pub mod export_muragent;
@@ -17,7 +18,7 @@ pub mod fleet;
 mod geometry;
 pub mod hitl;
 pub mod import_muragent;
-pub mod install_inbox;
+mod install_inbox;
 pub mod mcp_skills;
 pub mod memory;
 pub mod mlx_sidecar;
@@ -248,6 +249,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
@@ -594,6 +596,25 @@ pub fn run() {
                         app.manage(std::sync::Mutex::new(Some(InstallInboxWatcher(watcher))));
                     }
                     Err(e) => tracing::warn!("install-inbox watcher failed to start: {e:#}"),
+                }
+
+                // Companion inbox → system notification. Catch up first, so a
+                // reminder that fired while the Hub was closed is reported as
+                // missed rather than absorbed into "unread" (#1125).
+                let missed = crate::companion_notify::catch_up(&app.handle().clone(), &home);
+                if missed > 0 {
+                    tracing::info!(
+                        missed,
+                        "companion inbox entries arrived while the Hub was closed"
+                    );
+                }
+                match crate::companion_notify::watch_inboxes(app.handle().clone(), &home) {
+                    Ok(ws) => {
+                        #[allow(dead_code)] // held only to keep the watchers alive
+                        struct CompanionInboxWatchers(Vec<notify::RecommendedWatcher>);
+                        app.manage(std::sync::Mutex::new(Some(CompanionInboxWatchers(ws))));
+                    }
+                    Err(e) => tracing::warn!("companion inbox watchers failed to start: {e:#}"),
                 }
             }
 

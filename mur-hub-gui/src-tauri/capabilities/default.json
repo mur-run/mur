@@ -2,7 +2,9 @@
   "$schema": "https://schema.tauri.app/config/2",
   "identifier": "default",
   "description": "Default capability set for MUR Hub. M-h0 starts with shell/open only; later milestones add fs, dialog, autostart, etc.",
-  "windows": ["dashboard"],
+  "windows": [
+    "dashboard"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-set-size",
@@ -13,6 +15,7 @@
     "dialog:allow-save",
     "deep-link:default",
     "updater:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    "notification:default"
   ]
 }
