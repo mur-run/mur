@@ -1103,10 +1103,10 @@ and to `mur-hub-gui/ui/src/i18n/zh-TW.ts`:
 
 ## Final verification
 
-- [ ] `cargo fmt --check`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo nextest run -p mur-common -p mur-agent-runtime`
-- [ ] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core`
-- [ ] `cd mur-hub-gui/ui && npm run test && npm run build`
-- [ ] Spec coverage walk: §3.1 → T1; §3.2 → T2; §4.2 → T3; §4.3 → T4; §4.4 → T3 (default) + T5 (gate); §4.5 → T6 (CLI) + T7 (Hub); §4.6 → no task, by design; §7 (Layer 3) → deliberately out of scope.
-- [ ] Docs: this change adds two CLI commands and flips a user-visible default, so it triggers the documentation checklist (README, docs site, product page) via the `update-docs` skill. Not part of this plan — raise it as the follow-up when the branch is ready.
+- [x] `cargo fmt --check`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` — caught two `needless_update` errors in pre-existing difficulty-routing tests, left dangling by removing `RoutingConfig.smart`. `cargo check --all-targets` compiles them fine; only clippy rejects them, so five literals needed the field dropped, not the three this plan listed
+- [x] `cargo nextest run -p mur-common -p mur-agent-runtime`
+- [x] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core`
+- [x] `cd mur-hub-gui/ui && npm run test && npm run build`
+- [x] Spec coverage walk: §3.1 → T1; §3.2 → T2; §4.2 → T3; §4.3 → T4; §4.4 → T3 (default) + T5 (gate); §4.5 → T6 (CLI) + T7 (Hub); §4.6 → no task, by design; §7 (Layer 3) → deliberately out of scope.
+- [x] Docs: this change adds two CLI commands and flips a user-visible default, so it triggers the documentation checklist (README, docs site, product page) via the `update-docs` skill. Not part of this plan — raise it as the follow-up when the branch is ready.
