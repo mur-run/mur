@@ -51,6 +51,7 @@ pub(crate) mod misc;
 pub mod model;
 pub mod model_connect;
 pub mod model_doctor;
+pub mod model_smart;
 pub(crate) mod murmurd;
 pub mod notes_cmd;
 pub(crate) mod official;

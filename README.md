@@ -569,6 +569,23 @@ Agent** wizard offers the same catalog as a source.
   prefix. The result ranks the list and says how much of it could be answered —
   `checked 1 of 4 reported items` — because a check that reports nothing about
   its own reach is indistinguishable from one that found nothing wrong.
+- **A router that can't hand your work to a model that can't do it** — Smart
+  background routing runs low-stakes turns on a cheaper model. It also, until
+  now, handed image recognition to a text-tier model: the picker ranked
+  candidates by price and never asked whether they could see. Nothing catches
+  that afterwards — the cascade escalates on a *malformed* reply, and a
+  confidently wrong recognition is perfectly well-formed — and the decision
+  caption only renders in Hub chat, which background turns never reach. So a
+  router may now only substitute a model that can serve the request: price
+  orders the eligible set, it doesn't decide who's in it. Silence about vision
+  counts as absence of it, because that failure is silent; silence about tools
+  doesn't, because a tool-incapable model is refused loudly and the chain simply
+  advances. Explicit choices are never filtered — your `model_ref`, your pinned
+  re-run — they're yours to get wrong. Smart is now **off by default**
+  (`mur model smart on`), and per agent it's genuinely three-state:
+  `mur agent smart <name> follow|on|off`, where `follow` means follow. The
+  toggle used to lie in the other direction too — an agent with no fallback
+  chain never ran Smart at all, whatever the setting said.
 
 ### 🔌 Power the tools you already pay for
 
@@ -633,7 +650,7 @@ mur
 ├── agent        create · start · stop · restart · remove · cli · send · card · dial · who ·
 │                export · install · install-service · addon · companion · voice · pair ·
 │                schedule (add · proposals · accept) · perm (incl. list-paths) · secret ·
-│                trash · rollback … (40+)
+│                fallback · smart · trash · rollback … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · status · run · set-loop · send · jobs   (squads of agents over a shared channel)
 ├── official     list · install   (official agents/fleets from the app.mur.run catalog)
@@ -648,7 +665,7 @@ mur
 ├── hook         unified hook entry for AI tools (prompt / tool / stop / session-start)
 ├── chat         conversations archive + ask
 ├── model        connect · import · add · list · show · remove · doctor · prices · role · route ·
-│                default · fallback · migrate   (connect = one key, many models)
+│                default · fallback · smart · migrate   (connect = one key, many models)
 ├── source       external knowledge — Obsidian · Notion · Joplin
 ├── project      index · search   (semantic code search)
 ├── daemon       start · stop · restart · status · serve · sleep

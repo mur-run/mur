@@ -95,6 +95,12 @@ export const en = {
   "detail.fallbackChain": "Fallback chain (overrides global)",
   "detail.fallbackChainInherits": "Inherits global fallback chain.",
   "detail.fallbackChainError": "Couldn't save fallback chain: {error}",
+  "detail.smartRouting": "Smart routing",
+  "detail.smartFollow": "Follow global setting",
+  "detail.smartOn": "On for this agent",
+  "detail.smartOff": "Off for this agent",
+  "detail.smartHint":
+    "Background tasks may run on a cost-saving model. Never applies to requests this agent's cheaper models cannot serve.",
   "conv.ask": "Ask model",
   "conv.compact": "Compact model",
   "conv.rollup": "Rollup model",

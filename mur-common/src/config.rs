@@ -15,6 +15,11 @@ pub const DEFAULT_COOLDOWN_SECS: u64 = 60;
 pub const DEFAULT_ROUTING_THRESHOLD: u32 = 2000;
 pub const DEFAULT_SMART_MAX_ESCALATIONS: u32 = 1;
 
+/// Smart background routing is opt-in. Its failure mode is silent and
+/// irreversible for the turn it degrades, which is the kind of automation that
+/// has to be asked for. See the capability-gate spec §2.
+pub const DEFAULT_SMART_ENABLED: bool = false;
+
 /// The Ollama provider default endpoint. Single definition — `BackendConfig`
 /// resolution (`default_ollama_endpoint`), `config_migrate`, and the
 /// conversations `doctor`/`preflight` probes all read this constant instead of
@@ -33,14 +38,18 @@ fn default_cooldown_secs() -> u64 {
 fn default_smart_max_escalations() -> u32 {
     DEFAULT_SMART_MAX_ESCALATIONS
 }
+fn default_smart_enabled() -> bool {
+    DEFAULT_SMART_ENABLED
+}
 
 /// Smart background routing: auto-pick a cheap model for low-stakes/background
 /// requests instead of always dialing the agent's primary model_ref. Defaults
-/// ON with `cheap: None` (auto-pick the cheapest chat-capable registry entry
-/// via `mur_common::model::pick_cheap_model`).
+/// OFF — enable it globally (`mur model smart on`) or per agent. `cheap: None`
+/// auto-picks the cheapest registry entry that can serve the request
+/// (`mur_common::model::pick_cheap_model`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SmartConfig {
-    #[serde(default = "default_true")]
+    #[serde(default = "default_smart_enabled")]
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cheap: Option<String>,
@@ -51,7 +60,7 @@ pub struct SmartConfig {
 impl Default for SmartConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: DEFAULT_SMART_ENABLED,
             cheap: None,
             max_escalations: DEFAULT_SMART_MAX_ESCALATIONS,
         }
@@ -106,8 +115,65 @@ pub struct RoutingConfig {
     pub frontier: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub threshold_input_tokens: Option<u32>,
+}
+
+/// Partial view of [`SmartConfig`] for per-agent overrides: `None` on a field
+/// means "inherit the global value". A distinct type rather than reusing
+/// `SmartConfig`, because a full config standing in for a partial is exactly
+/// what made an omitted field silently mean `false` instead of "unset".
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct SmartOverride {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub smart: Option<SmartConfig>,
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cheap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_escalations: Option<u32>,
+}
+
+/// Partial view of [`RoutingConfig`]. Same inheritance rule as
+/// [`SmartOverride`].
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct RoutingOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cheap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frontier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold_input_tokens: Option<u32>,
+    /// Legacy nesting. Smart used to be overridden at `routing.smart`;
+    /// profiles written before the promotion to `AgentProfile.smart` — and
+    /// every exported `.muragent` bundle — still carry it, so it stays
+    /// readable forever. MUR never writes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smart: Option<SmartOverride>,
+}
+
+impl SmartConfig {
+    /// Global values with an agent's override layered on, field by field.
+    pub fn merged(&self, ov: Option<&SmartOverride>) -> SmartConfig {
+        let Some(o) = ov else { return self.clone() };
+        SmartConfig {
+            enabled: o.enabled.unwrap_or(self.enabled),
+            cheap: o.cheap.clone().or_else(|| self.cheap.clone()),
+            max_escalations: o.max_escalations.unwrap_or(self.max_escalations),
+        }
+    }
+}
+
+impl RoutingConfig {
+    /// Global values with an agent's override layered on, field by field.
+    pub fn merged(&self, ov: Option<&RoutingOverride>) -> RoutingConfig {
+        let Some(o) = ov else { return self.clone() };
+        RoutingConfig {
+            enabled: o.enabled.unwrap_or(self.enabled),
+            cheap: o.cheap.clone().or_else(|| self.cheap.clone()),
+            frontier: o.frontier.clone().or_else(|| self.frontier.clone()),
+            threshold_input_tokens: o.threshold_input_tokens.or(self.threshold_input_tokens),
+        }
+    }
 }
 
 /// Global MUR configuration (~/.mur/config.yaml)
@@ -2695,13 +2761,61 @@ mod model_switch_config_tests {
     }
 
     #[test]
-    fn smart_config_defaults_on_with_autopick() {
+    fn smart_config_defaults_off_with_autopick() {
         let cfg: Config = serde_yaml::from_str("{}").unwrap();
-        assert!(cfg.models.smart.enabled); // default ON
+        assert!(
+            !cfg.models.smart.enabled,
+            "Smart background routing is opt-in (capability-gate spec §2)"
+        );
         assert_eq!(cfg.models.smart.cheap, None); // auto-pick
         assert_eq!(
             cfg.models.smart.max_escalations,
             DEFAULT_SMART_MAX_ESCALATIONS
         );
+    }
+
+    #[test]
+    fn smart_override_inherits_field_by_field() {
+        let global = SmartConfig {
+            enabled: true,
+            cheap: Some("g".into()),
+            max_escalations: 3,
+        };
+        assert_eq!(global.merged(None), global);
+        assert_eq!(global.merged(Some(&SmartOverride::default())), global);
+        // Overriding one field must not reset the others — the whole point.
+        let only_cheap = SmartOverride {
+            cheap: Some("a".into()),
+            ..Default::default()
+        };
+        let m = global.merged(Some(&only_cheap));
+        assert!(m.enabled, "overriding cheap must not disable Smart");
+        assert_eq!(m.cheap.as_deref(), Some("a"));
+        assert_eq!(m.max_escalations, 3);
+        // An explicit false still beats a global true.
+        let off = SmartOverride {
+            enabled: Some(false),
+            ..Default::default()
+        };
+        assert!(!global.merged(Some(&off)).enabled);
+    }
+
+    #[test]
+    fn routing_override_inherits_field_by_field() {
+        let global = RoutingConfig {
+            enabled: true,
+            cheap: Some("c".into()),
+            frontier: Some("f".into()),
+            threshold_input_tokens: Some(9),
+        };
+        let only_cheap = RoutingOverride {
+            cheap: Some("a".into()),
+            ..Default::default()
+        };
+        let m = global.merged(Some(&only_cheap));
+        assert!(m.enabled, "overriding cheap must not disable routing");
+        assert_eq!(m.cheap.as_deref(), Some("a"));
+        assert_eq!(m.frontier.as_deref(), Some("f"));
+        assert_eq!(m.threshold_input_tokens, Some(9));
     }
 }

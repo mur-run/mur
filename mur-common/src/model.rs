@@ -290,15 +290,93 @@ pub fn choose_by_difficulty(est_input_tokens: u32, r: &RoutingConfig) -> Option<
     }
 }
 
-/// Pick the cheapest chat-capable model_ref for Smart background routing,
-/// excluding `exclude` (the agent's own primary). Chat-capable = capabilities
-/// contains "chat" OR is empty (legacy entries assumed chat). None when no
-/// qualifying entry exists → caller keeps normal candidates (fail-expensive).
-pub fn pick_cheap_model(reg: &ModelRegistry, exclude: Option<&str>) -> Option<String> {
+/// Registry capability strings. The baseline (`chat`) is legacy-permissive —
+/// an entry with no `capabilities` at all predates the field and is assumed
+/// chat-capable. Everything above the baseline is fail-closed.
+pub const CAP_CHAT: &str = "chat";
+pub const CAP_TOOLS: &str = "tools";
+pub const CAP_VISION: &str = "vision";
+
+/// A capability the request needs from whatever model serves it. Derived from
+/// the request itself (an image in the messages, a tool list) and never from
+/// config: a router may only substitute a model that can do the job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Requirement {
+    /// The request carries an image; the model has to be able to see it.
+    Vision,
+    /// The request declares tools; the model has to be able to call them.
+    Tools,
+}
+
+impl Requirement {
+    /// The registry capability an entry must declare to satisfy this.
+    pub fn capability(self) -> &'static str {
+        match self {
+            Requirement::Vision => CAP_VISION,
+            Requirement::Tools => CAP_TOOLS,
+        }
+    }
+
+    /// Does an entry that declares NO capabilities at all satisfy this?
+    ///
+    /// The two requirements differ in how they fail, and the answer follows
+    /// the failure mode rather than a blanket rule:
+    ///
+    /// - `Vision`: **no**. A model that cannot see answers an image request
+    ///   with confident nonsense — silent, and unrecoverable for that turn.
+    ///   That is the failure this gate exists to prevent, so silence about
+    ///   vision is treated as absence of it.
+    /// - `Tools`: **yes**. A model that cannot call tools fails loudly (the
+    ///   provider rejects the request) and the existing retry/advance path
+    ///   already handles it. Treating undeclared as incapable would drop every
+    ///   entry written before `capabilities` existed — in practice most of a
+    ///   real registry — out of the fallback chain of every tool-carrying turn,
+    ///   which is a large regression bought for very little.
+    ///
+    /// An entry that DOES declare capabilities is taken at its word either
+    /// way: if it enumerated what it can do and left `tools` out, that is a
+    /// statement, not silence.
+    fn permitted_when_undeclared(self) -> bool {
+        match self {
+            Requirement::Vision => false,
+            Requirement::Tools => true,
+        }
+    }
+}
+
+/// Can this entry serve a request needing `reqs`?
+///
+/// No registry write path emits `vision` today, so a `Vision` requirement
+/// disqualifies every current entry — auto-substitution goes inert for image
+/// requests rather than answering them blind. The same code makes a finer
+/// distinction the day entries start declaring it; there is no second version
+/// of this function to write later.
+pub fn satisfies(e: &ModelEntry, reqs: &[Requirement]) -> bool {
+    let chat_capable = e.capabilities.is_empty() || e.capabilities.iter().any(|c| c == CAP_CHAT);
+    if !chat_capable {
+        return false;
+    }
+    reqs.iter().all(|r| {
+        if e.capabilities.is_empty() {
+            r.permitted_when_undeclared()
+        } else {
+            e.capabilities.iter().any(|c| c == r.capability())
+        }
+    })
+}
+
+/// Pick the cheapest registry entry that can serve a request needing `reqs`,
+/// excluding `exclude` (the agent's own primary). None when no qualifying
+/// entry exists → caller keeps normal candidates (fail-expensive).
+pub fn pick_cheap_model(
+    reg: &ModelRegistry,
+    exclude: Option<&str>,
+    reqs: &[Requirement],
+) -> Option<String> {
     reg.models
         .iter()
         .filter(|(k, _)| exclude != Some(k.as_str()))
-        .filter(|(_, e)| e.capabilities.is_empty() || e.capabilities.iter().any(|c| c == "chat"))
+        .filter(|(_, e)| satisfies(e, reqs))
         .filter_map(|(k, e)| {
             // Not the deprecated field directly: `mur model add --output-cost`
             // deliberately leaves it unset, so reading it drops every entry
@@ -802,7 +880,6 @@ mod switch_tests {
             cheap: Some("cheap".into()),
             frontier: Some("frontier".into()),
             threshold_input_tokens: Some(1000),
-            ..Default::default()
         };
         assert_eq!(choose_by_difficulty(1500, &r), Some("frontier".into()));
         assert_eq!(choose_by_difficulty(500, &r), Some("cheap".into()));
@@ -812,7 +889,6 @@ mod switch_tests {
             cheap: Some("c".into()),
             frontier: None,
             threshold_input_tokens: None,
-            ..Default::default()
         };
         assert_eq!(choose_by_difficulty(9999, &bad), None);
     }
@@ -833,14 +909,96 @@ mod switch_tests {
             .insert("embed".into(), mk(0.00001, &["embedding"])); // not chat → skip
         // cheapest chat-capable, excluding the agent's own primary:
         assert_eq!(
-            pick_cheap_model(&reg, Some("cheap")),
+            pick_cheap_model(&reg, Some("cheap"), &[]),
             Some("frontier".into())
         ); // cheap excluded
-        assert_eq!(pick_cheap_model(&reg, None), Some("cheap".into()));
+        assert_eq!(pick_cheap_model(&reg, None, &[]), Some("cheap".into()));
         // no chat entries → None (Smart inert)
         let mut empty = ModelRegistry::default();
         empty.models.insert("e".into(), mk(0.0, &["embedding"]));
-        assert_eq!(pick_cheap_model(&empty, None), None);
+        assert_eq!(pick_cheap_model(&empty, None, &[]), None);
+    }
+
+    #[test]
+    fn satisfies_is_permissive_at_baseline_and_fail_closed_above_it() {
+        let mk = |caps: &[&str]| ModelEntry {
+            provider: "x".into(),
+            model: "m".into(),
+            capabilities: caps.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+        // Baseline: an entry written before the field existed is still chat.
+        assert!(satisfies(&mk(&[]), &[]));
+        assert!(satisfies(&mk(&["chat"]), &[]));
+        assert!(!satisfies(&mk(&["embedding"]), &[]));
+        // Above baseline: unstated is not permission.
+        assert!(!satisfies(&mk(&[]), &[Requirement::Vision]));
+        assert!(!satisfies(&mk(&["chat"]), &[Requirement::Vision]));
+        assert!(satisfies(&mk(&["chat", "vision"]), &[Requirement::Vision]));
+        assert!(!satisfies(&mk(&["chat", "vision"]), &[Requirement::Tools]));
+        assert!(satisfies(
+            &mk(&["chat", "vision", "tools"]),
+            &[Requirement::Vision, Requirement::Tools]
+        ));
+    }
+
+    /// Tools and Vision disagree about silence on purpose. A tool-incapable
+    /// model fails loudly and the chain advances; a blind one answers with
+    /// confident nonsense. So an entry that declares nothing keeps its place in
+    /// the chain for a tool turn — otherwise every pre-`capabilities` entry
+    /// (most of a real registry) would drop out of every tool-carrying request
+    /// — while the same silence disqualifies it for an image.
+    #[test]
+    fn undeclared_capabilities_pass_tools_but_never_vision() {
+        let mk = |caps: &[&str]| ModelEntry {
+            provider: "x".into(),
+            model: "m".into(),
+            capabilities: caps.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+        // Silence: permitted for tools, never for vision.
+        assert!(satisfies(&mk(&[]), &[Requirement::Tools]));
+        assert!(!satisfies(&mk(&[]), &[Requirement::Vision]));
+        assert!(!satisfies(
+            &mk(&[]),
+            &[Requirement::Vision, Requirement::Tools]
+        ));
+        // A declaration is taken at its word in both directions.
+        assert!(!satisfies(&mk(&["chat"]), &[Requirement::Tools]));
+        assert!(satisfies(&mk(&["chat", "tools"]), &[Requirement::Tools]));
+    }
+
+    /// The incident, as a regression test: an image request against a registry
+    /// where nothing declares vision must find no cheap candidate at all.
+    #[test]
+    fn pick_cheap_model_declines_when_no_entry_declares_the_requirement() {
+        let mk = |cost: f64, caps: &[&str]| ModelEntry {
+            provider: "x".into(),
+            model: "m".into(),
+            capabilities: caps.iter().map(|s| s.to_string()).collect(),
+            cost_per_1k_tokens: Some(cost),
+            ..Default::default()
+        };
+        let mut reg = ModelRegistry::default();
+        reg.models
+            .insert("cheap_text".into(), mk(0.0001, &["chat"]));
+        reg.models.insert("legacy".into(), mk(0.0002, &[]));
+        reg.models
+            .insert("frontier".into(), mk(0.01, &["chat", "vision"]));
+        // No requirement -> cheapest wins (today's behaviour, unchanged).
+        assert_eq!(pick_cheap_model(&reg, None, &[]), Some("cheap_text".into()));
+        // Vision required -> only the declaring entry qualifies, cost be damned.
+        assert_eq!(
+            pick_cheap_model(&reg, None, &[Requirement::Vision]),
+            Some("frontier".into())
+        );
+        // Nothing declares vision -> None, so Smart goes inert.
+        let mut blind = ModelRegistry::default();
+        blind
+            .models
+            .insert("cheap_text".into(), mk(0.0001, &["chat"]));
+        blind.models.insert("legacy".into(), mk(0.0002, &[]));
+        assert_eq!(pick_cheap_model(&blind, None, &[Requirement::Vision]), None);
     }
 
     /// A price with no date is a guess wearing the costume of a fact. But a
@@ -917,7 +1075,7 @@ models:
         };
         reg.models.insert("dear".into(), split(0.005, 0.025));
         reg.models.insert("cheap".into(), split(0.0001, 0.0004));
-        assert_eq!(pick_cheap_model(&reg, None), Some("cheap".into()));
+        assert_eq!(pick_cheap_model(&reg, None, &[]), Some("cheap".into()));
 
         // Input-only entries are priced too, rather than silently skipped.
         let mut input_only = ModelRegistry::default();
@@ -931,6 +1089,6 @@ models:
                 ..Default::default()
             },
         );
-        assert_eq!(pick_cheap_model(&input_only, None), Some("in".into()));
+        assert_eq!(pick_cheap_model(&input_only, None, &[]), Some("in".into()));
     }
 }

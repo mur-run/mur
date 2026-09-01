@@ -23,8 +23,8 @@ describe("modelSwitch helpers", () => {
     expect(ms.routing.threshold_input_tokens).toBeNull();
     expect(ms.routing.enabled).toBe(false);
     expect(ms.retry.cooldown_secs).toBe(60); // passthrough preserved
-    // smart defaults on and auto-picks when the Rust payload omits it entirely.
-    expect(ms.smart.enabled).toBe(true);
+    // smart is opt-in and auto-picks when the Rust payload omits it entirely.
+    expect(ms.smart.enabled).toBe(false);
     expect(ms.smart.cheap).toBeNull();
     expect(ms.smart.max_escalations).toBe(1);
   });
@@ -38,6 +38,11 @@ describe("modelSwitch helpers", () => {
     expect(ms.smart.enabled).toBe(false); // passthrough preserved
     expect(ms.smart.cheap).toBeNull();
     expect(ms.smart.max_escalations).toBe(3); // passthrough preserved
+  });
+
+  it("defaults smart to off when the config predates the field", () => {
+    const raw = { retry: {}, routing: {} } as unknown as ModelSwitchView;
+    expect(normalizeMs(raw).smart.enabled).toBe(false);
   });
 });
 

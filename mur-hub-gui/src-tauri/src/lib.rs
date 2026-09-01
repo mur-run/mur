@@ -667,6 +667,8 @@ pub fn run() {
             model_switch::model_switch_set,
             model_switch::agent_get_fallback,
             model_switch::agent_set_fallback,
+            model_switch::agent_get_smart,
+            model_switch::agent_set_smart,
             pet::pet_spawn_at,
             pet::pet_close,
             pet::pet_return_to_hub,
