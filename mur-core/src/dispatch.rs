@@ -2059,7 +2059,15 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 cron,
                 message,
                 sends_to,
-            } => cmd::agent_schedule::cmd_schedule_add(&name, &cron, &message, sends_to, None)?,
+                once,
+            } => {
+                // The bound is the entry's own first firing — the scheduler
+                // admits the firing its bound names and retires the one after
+                // it. Same derivation as the `remind` tool, so `--once` and an
+                // agent's own one-off proposal cannot disagree (#1119).
+                let not_after = mur_agent_runtime::scheduler::one_off_bound(&cron, once);
+                cmd::agent_schedule::cmd_schedule_add(&name, &cron, &message, sends_to, not_after)?
+            }
             AgentScheduleAction::Proposals { name } => {
                 cmd::agent_schedule::cmd_schedule_proposals(&name)?
             }

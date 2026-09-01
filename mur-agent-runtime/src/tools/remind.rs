@@ -104,13 +104,10 @@ accept` to grant it, so say that you have asked rather than that it is set."
         // the firing its bound names and retires the one after it, so this
         // fires exactly once (#1119). An expression with no future firing
         // yields no bound, which costs nothing: it never fires either.
-        let not_after = input
-            .get("once")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-            .then(|| crate::scheduler::next_n_fires(&cron, 1).ok())
-            .flatten()
-            .and_then(|v| v.first().map(|t| t.to_rfc3339()));
+        let not_after = crate::scheduler::one_off_bound(
+            &cron,
+            input.get("once").and_then(|v| v.as_bool()).unwrap_or(false),
+        );
 
         let proposal = mur_common::agent::ScheduleProposal {
             cron: cron.clone(),
