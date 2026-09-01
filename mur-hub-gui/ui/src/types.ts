@@ -117,6 +117,15 @@ export interface AgentDetail {
   model_ref: string | null;
   model_provider: string;
   model_name: string;
+  /** Current effort, already narrowed to what this agent's model accepts. */
+  effort: string | null;
+  /** What the profile actually holds. When it differs from `effort`, the
+   *  stored level has no step on this model — say so rather than showing the
+   *  narrowed card as if it were the setting. */
+  effort_stored: string | null;
+  /** Levels THIS model takes. Never hardcode a list — the set is a property
+   *  of the model (deepseek-v4 has no `medium`, pre-4.7 Claude no `xhigh`). */
+  effort_levels: string[];
   role: string | null;
   display_name: string;
   agent_name: string;
@@ -136,6 +145,8 @@ export interface DetailPatch {
   source_image_path?: string;
   behavior_preset?: string;
   model_ref?: string;
+  /** Level name, or "" to clear back to the provider default. */
+  effort?: string;
 }
 
 export type DetailTab =
