@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { scheduleNext, scheduleScope, type ScheduleItem } from "./schedule";
+import {
+  panelSchedules,
+  scheduleNext,
+  scheduleScope,
+  scheduleTimetabled,
+  type ScheduleItem,
+} from "./schedule";
 
 function fleet(over: Partial<Extract<ScheduleItem, { kind: "fleet" }>> = {}) {
   return {
@@ -87,5 +93,70 @@ describe("scheduleScope", () => {
         next_note: "no fixed time",
       }),
     ).toBe("agent");
+  });
+});
+
+const agentCron: ScheduleItem = {
+  kind: "agent_cron",
+  owner: "mur",
+  expr: "*/15 * * * *",
+  message: "hi",
+  next_fires: ["2026-08-31T20:00:00Z"],
+  status: "enabled",
+  description: "every 15 minutes",
+  next_note: null,
+};
+
+const manualWorkflow: ScheduleItem = {
+  kind: "workflow",
+  owner: "deploy",
+  expr: null,
+  next_fires: [],
+  status: "enabled",
+  description: "manual — runs only when started",
+  next_note: "no timetable — this runs only when something starts it",
+};
+
+describe("scheduleTimetabled", () => {
+  // The defect: four of five rows were manual, all badged "enabled", which
+  // reads as scheduled.
+  it("separates having a timetable from being able to run", () => {
+    expect(scheduleTimetabled(manualWorkflow)).toBe(false);
+    expect(scheduleTimetabled(fleet({ trigger: "manual" }))).toBe(false);
+    expect(scheduleTimetabled(agentCron)).toBe(true);
+    expect(scheduleTimetabled(fleet())).toBe(true); // interval:30m
+  });
+
+  it("keeps an unreadable cron timetabled — the note explains the blank", () => {
+    // Calling it manual would be a second wrong answer: it has a timetable,
+    // the backend just could not read it.
+    expect(scheduleTimetabled({ ...agentCron, expr: "garbage", next_fires: [] })).toBe(true);
+  });
+});
+
+describe("panelSchedules", () => {
+  const other: ScheduleItem = { ...agentCron, owner: "other-agent" };
+  const rows = [agentCron, other, fleet(), manualWorkflow];
+
+  it("hides other agents' rows and says how many", () => {
+    const out = panelSchedules(rows, "mur", false);
+    expect(out.hidden).toBe(1);
+    expect(out.timed.map((s) => s.owner)).not.toContain("other-agent");
+  });
+
+  it("reports zero hidden rather than leaving the toggle looking broken", () => {
+    const out = panelSchedules([agentCron, fleet()], "mur", false);
+    expect(out.hidden).toBe(0);
+  });
+
+  it("keeps machine-wide rows in both states", () => {
+    expect(panelSchedules(rows, "mur", false).timed).toContain(rows[2]);
+    expect(panelSchedules(rows, "mur", true).timed).toContain(rows[2]);
+  });
+
+  it("puts untimetabled rows in their own group", () => {
+    const out = panelSchedules(rows, "mur", true);
+    expect(out.manual).toEqual([manualWorkflow]);
+    expect(out.timed).toHaveLength(3);
   });
 });

@@ -103,6 +103,9 @@ export const en = {
   "settings.nav.models": "Models",
   "settings.nav.updates": "Updates & CLI",
   "settings.nav.data": "Import / Export",
+  "settings.data.openDashboard": "Open web Dashboard",
+  "settings.data.openDashboardHint": "Workflows, pipelines, sessions and search, in a browser. Starts the local server if it is not already running.",
+  "settings.data.openDashboardStarting": "Starting the local server…",
   "settings.nav.about": "About",
   "settings.theme": "Theme",
   "settings.theme.system": "System",
@@ -733,6 +736,7 @@ export const en = {
     "Finishes as soon as an iteration finds nothing queued. Free and deterministic — the right choice for a fleet you feed with jobs.",
   "fleet.settings.donePolicyHintMarker":
     "Converges when a member emits this text on a line of its own. Set in fleet.yaml, alongside whatever teaches the agent to emit it.",
+  "fleet.settings.nextRun": "Next auto-run",
   "fleet.settings.lastRun": "Last auto-run",
   "fleet.settings.lastRunNever": "never",
   "fleet.settings.stopHint": "Stopping this fleet (below) also blocks auto-run.",

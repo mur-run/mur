@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
+  panelSchedules,
   scheduleExpr,
   scheduleNext,
   scheduleScope,
+  type ScheduleItem,
   type ScheduleStatus,
 } from "../../schedule";
 import { invoke } from "@tauri-apps/api/core";
@@ -153,8 +155,8 @@ export function PanelWindow() {
     };
   }, [sess?.pid, sess?.terminal_program, pinned]);
 
-  // Fetch data for the active tab whenever the session, tab, showAll toggle
-  // change, or the window regains focus.
+  // Fetch data for the active tab whenever the session or tab change, or the
+  // window regains focus.
   const fetchTabData = useRef<() => void>(() => {});
   fetchTabData.current = () => {
     if (!sess) return;
@@ -176,15 +178,16 @@ export function PanelWindow() {
     } else if (tab === "notifications") {
       void invoke<ProposalSummary[]>("panel_proposals").then(setProposals);
     } else if (tab === "schedule") {
-      void invoke<ScheduleStatus>("panel_schedule_status", {
-        agent: showAll ? null : sess.agent,
-      }).then(setSchedule);
+      // Fetched unfiltered, filtered on screen: the toggle can then say how
+      // many rows it is hiding, instead of appearing inert when the answer is
+      // none.
+      void invoke<ScheduleStatus>("panel_schedule_status", { agent: null }).then(setSchedule);
     }
   };
 
   useEffect(() => {
     fetchTabData.current();
-  }, [sess?.pid, sess?.agent, sess?.cwd, tab, showAll]);
+  }, [sess?.pid, sess?.agent, sess?.cwd, tab]);
 
   useEffect(() => {
     const onFocus = () => fetchTabData.current();
@@ -204,6 +207,10 @@ export function PanelWindow() {
   const insert = (text: string, picked?: string) => {
     if (pid !== null) void invoke("panel_insert", { pid, text, picked: picked ?? null });
   };
+
+  // Split here, not in the fetch: the toggle hides rows that were fetched,
+  // so it can report how many — including none.
+  const sched = panelSchedules(schedule?.schedules ?? [], sess?.agent ?? null, showAll);
 
   return (
     <div className="panel-root">
@@ -248,6 +255,13 @@ export function PanelWindow() {
             />
             Show all agents
           </label>
+          <span className="panel-muted" style={{ marginLeft: 8, fontSize: 11 }}>
+            {showAll
+              ? "showing every agent"
+              : sched.hidden > 0
+                ? `${sched.hidden} other agents' schedules hidden`
+                : "no other agents have schedules"}
+          </span>
         </div>
       )}
       {tab === "preview" && sess && (
@@ -404,52 +418,25 @@ export function PanelWindow() {
                 </tr>
               </thead>
               <tbody>
-                {(schedule?.schedules ?? []).map((s, i) => {
-                  const next = scheduleNext(s);
-                  return (
-                    <tr key={i}>
-                      <td
-                        className={
-                          scheduleScope(s) === "global" ? "panel-muted" : undefined
-                        }
-                        title={
-                          scheduleScope(s) === "global"
-                            ? "machine-wide — not specific to this agent"
-                            : "this agent"
-                        }
-                      >
-                        {scheduleScope(s) === "global" ? "all agents" : "this agent"}
-                      </td>
-                      <td>{s.owner}</td>
-                      <td title={scheduleExpr(s)}>{s.description}</td>
-                      <td
-                        className={next.muted ? "panel-muted" : undefined}
-                        title={next.title}
-                      >
-                        {next.text}
-                      </td>
-                      <td>
-                        <span
-                          className={
-                            s.status === "stopped"
-                              ? "panel-badge panel-badge-warn"
-                              : "panel-badge panel-badge-ok"
-                          }
-                        >
-                          {s.status}
-                        </span>
-                        {s.kind === "fleet" && (
-                          <span className="panel-muted">
-                            {" "}
-                            budget ${s.budget_usd.toFixed(2)}
-                            {!s.autorun_env && " · autorun off"}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {sched.timed.map((s, i) => (
+                  <ScheduleRow key={`t-${i}`} item={s} />
+                ))}
               </tbody>
+              {sched.manual.length > 0 && (
+                <tbody>
+                  {/* A manual row is "enabled" and still never fires by itself.
+                      Listed together with timetabled rows it reads as scheduled,
+                      which is what made four of five rows misleading. */}
+                  <tr>
+                    <td colSpan={5} className="panel-muted" style={{ paddingTop: 10 }}>
+                      Not on a timetable — these run only when something starts them
+                    </td>
+                  </tr>
+                  {sched.manual.map((s, i) => (
+                    <ScheduleRow key={`m-${i}`} item={s} />
+                  ))}
+                </tbody>
+              )}
             </table>
             {(schedule?.warnings.length ?? 0) > 0 && (
               <footer className="panel-warnings">
@@ -477,5 +464,51 @@ export function PanelWindow() {
         )}
       </main>
     </div>
+  );
+}
+
+function ScheduleRow({ item }: { item: ScheduleItem }) {
+  const next = scheduleNext(item);
+  return (
+    <tr>
+      <td
+        className={
+          scheduleScope(item) === "global" ? "panel-muted" : undefined
+        }
+        title={
+          scheduleScope(item) === "global"
+            ? "machine-wide — not specific to this agent"
+            : "this agent"
+        }
+      >
+        {scheduleScope(item) === "global" ? "all agents" : "this agent"}
+      </td>
+      <td>{item.owner}</td>
+      <td title={scheduleExpr(item)}>{item.description}</td>
+      <td
+        className={next.muted ? "panel-muted" : undefined}
+        title={next.title}
+      >
+        {next.text}
+      </td>
+      <td>
+        <span
+          className={
+            item.status === "stopped"
+              ? "panel-badge panel-badge-warn"
+              : "panel-badge panel-badge-ok"
+          }
+        >
+          {item.status}
+        </span>
+        {item.kind === "fleet" && (
+          <span className="panel-muted">
+            {" "}
+            budget ${item.budget_usd.toFixed(2)}
+            {!item.autorun_env && " · autorun off"}
+          </span>
+        )}
+      </td>
+    </tr>
   );
 }

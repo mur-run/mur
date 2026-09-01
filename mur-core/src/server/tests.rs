@@ -839,3 +839,43 @@ async fn test_agents_router_mounted_returns_404_for_unknown_subpath() {
 
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+/// `GET /api/v1/schedules` is served, not swallowed by the SPA fallback.
+///
+/// The status code alone cannot show this: an unmatched path returns
+/// `200 text/html`, which is how a first pass over this server concluded that
+/// every endpoint existed. Content type is the signal.
+#[tokio::test]
+async fn test_schedules_serves_json() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = build_router(test_state(&tmp));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/schedules")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let ctype = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        ctype.starts_with("application/json"),
+        "schedules answered {ctype} — the SPA fallback, not the route"
+    );
+
+    // Empty MUR home → no schedules, but a well-formed envelope.
+    let json = body_json(resp).await;
+    assert!(
+        json["data"].is_array(),
+        "expected a {{data, meta}} envelope"
+    );
+}

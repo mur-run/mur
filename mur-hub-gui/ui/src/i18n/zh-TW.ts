@@ -105,6 +105,9 @@ export const zhTW: Table = {
   "settings.nav.models": "模型",
   "settings.nav.updates": "更新與工具",
   "settings.nav.data": "匯入 / 匯出",
+  "settings.data.openDashboard": "開啟網頁 Dashboard",
+  "settings.data.openDashboardHint": "在瀏覽器裡看 workflow、pipeline、session 與搜尋。本機伺服器沒在跑的話會先啟動。",
+  "settings.data.openDashboardStarting": "正在啟動本機伺服器…",
   "settings.nav.about": "關於",
   "settings.theme": "主題",
   "settings.theme.system": "跟隨系統",
@@ -735,6 +738,7 @@ export const zhTW: Table = {
     "某一輪發現沒有排隊的工作就結束。零成本且確定，適合用工作餵養的機群。",
   "fleet.settings.donePolicyHintMarker":
     "成員單獨一行輸出這段文字即收斂。請在 fleet.yaml 設定，並在同處寫明是誰教成員輸出它。",
+  "fleet.settings.nextRun": "下次自動執行",
   "fleet.settings.lastRun": "上次自動執行",
   "fleet.settings.lastRunNever": "從未執行",
   "fleet.settings.stopHint": "停止此機群（下方）也會阻止自動執行。",

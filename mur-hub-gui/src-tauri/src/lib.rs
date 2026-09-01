@@ -10,6 +10,7 @@ pub mod chat;
 pub mod chat_window;
 pub mod cli_tools;
 pub mod companion;
+pub mod dashboard;
 pub mod detail;
 pub mod export_muragent;
 pub mod fleet;
@@ -668,6 +669,7 @@ pub fn run() {
             companion::companion_quiet,
             cli_tools::install_cli_tools,
             cli_tools::cli_version_skew,
+            dashboard::dashboard_open,
             brain_badge::nudge_status,
             brain_badge::nudge_dismiss,
             official_catalog::official_list,
@@ -749,6 +751,12 @@ pub fn run() {
         .build(context)
         .expect("error while building tauri application")
         .run(|_app, _event| {
+            // A server the Hub started should not outlive the Hub: a listening
+            // socket the user never asked for has no business surviving the app
+            // that opened it. One that was already running is untouched.
+            if matches!(_event, tauri::RunEvent::Exit) {
+                dashboard::shutdown();
+            }
             #[cfg(target_os = "macos")]
             match _event {
                 tauri::RunEvent::Opened { urls } => {

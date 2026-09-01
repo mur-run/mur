@@ -95,6 +95,12 @@ fn shell_path_mur() -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
+/// The `mur` the user's shell would run, for callers that need to invoke it
+/// rather than just report on it.
+pub fn resolve_mur() -> Option<PathBuf> {
+    path_mur(&dirs::home_dir()?)
+}
+
 /// `mur --version` → "mur X.Y.Z" → "X.Y.Z".
 fn read_cli_version(mur: &Path) -> Option<String> {
     let out = Command::new(mur).arg("--version").output().ok()?;
