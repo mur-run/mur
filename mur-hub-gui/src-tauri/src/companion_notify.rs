@@ -59,9 +59,27 @@ fn mark_seen(mur_home: &Path, id: &str) -> Result<()> {
 /// One inbox entry, reduced to what a notification needs.
 pub struct InboxEntry {
     pub id: String,
+    /// The on-disk agent name — a path component, never shown to anyone.
     pub agent: String,
-    pub situation: String,
     pub body: String,
+}
+
+/// What to call the agent in a notification.
+///
+/// `agent` is the directory name and is lowercase by construction (the runtime
+/// spoof check matches it exactly against the on-disk name). The label a person
+/// should see is `display_name` — for the concierge that is the difference
+/// between a notification titled "mur" and one titled "MUR". Falls back to the
+/// directory name only when the profile cannot be read, which is better than no
+/// notification at all.
+fn display_name(mur_home: &Path, agent: &str) -> String {
+    let p = mur_home.join("agents").join(agent).join("profile.yaml");
+    std::fs::read_to_string(p)
+        .ok()
+        .and_then(|s| serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&s).ok())
+        .and_then(|v| v.get("display_name")?.as_str().map(str::to_string))
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| agent.to_string())
 }
 
 /// Parse the front matter `inbox::render` writes. Returns `None` for a file
@@ -79,7 +97,6 @@ fn parse_entry(agent: &str, path: &Path) -> Option<InboxEntry> {
     Some(InboxEntry {
         id: field("id")?,
         agent: agent.to_string(),
-        situation: field("situation").unwrap_or_default(),
         body: body
             .trim()
             .trim_end_matches(">>> response: <unset>")
@@ -109,10 +126,11 @@ fn inbox_dirs(mur_home: &Path) -> Vec<(String, PathBuf)> {
 /// and must not mark itself seen — otherwise a transient failure would silently
 /// consume the message.
 fn raise(app: &AppHandle, mur_home: &Path, e: &InboxEntry, missed: bool) {
+    let who = display_name(mur_home, &e.agent);
     let title = if missed {
-        format!("{} — while MUR Hub was closed", e.agent)
+        format!("{who} — while MUR Hub was closed")
     } else {
-        e.agent.clone()
+        who
     };
     match app
         .notification()
@@ -138,16 +156,18 @@ fn raise(app: &AppHandle, mur_home: &Path, e: &InboxEntry, missed: bool) {
 pub fn catch_up(app: &AppHandle, mur_home: &Path) -> usize {
     let seen = load_seen(mur_home);
     let mut n = 0;
+    let mut live: HashSet<String> = HashSet::new();
     for (agent, dir) in inbox_dirs(mur_home) {
         let Ok(rd) = std::fs::read_dir(&dir) else {
             continue;
         };
-        let mut entries: Vec<_> = rd
+        let all: Vec<_> = rd
             .flatten()
             .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
             .filter_map(|e| parse_entry(&agent, &e.path()))
-            .filter(|e| !seen.contains(&e.id))
             .collect();
+        live.extend(all.iter().map(|e| e.id.clone()));
+        let mut entries: Vec<_> = all.into_iter().filter(|e| !seen.contains(&e.id)).collect();
         // Oldest first, so a burst reads in the order it happened.
         entries.sort_by(|a, b| a.id.cmp(&b.id));
         for e in entries {
@@ -155,7 +175,25 @@ pub fn catch_up(app: &AppHandle, mur_home: &Path) -> usize {
             n += 1;
         }
     }
+    // An id whose entry no longer exists can never be offered again, so keeping
+    // it serves nothing while the marker grows for the life of the install.
+    // Pruning to what is on disk bounds it by the inbox rather than by time.
+    prune_seen(mur_home, &live);
     n
+}
+
+/// Drop recorded ids whose inbox entry is gone.
+fn prune_seen(mur_home: &Path, live: &HashSet<String>) {
+    let seen = load_seen(mur_home);
+    let kept: Vec<&String> = seen.iter().filter(|id| live.contains(*id)).collect();
+    if kept.len() == seen.len() {
+        return;
+    }
+    let body: String = kept.iter().map(|id| format!("{id}\n")).collect();
+    // Best-effort: a marker that fails to shrink is only ever too cautious.
+    if let Err(e) = std::fs::write(seen_path(mur_home), body) {
+        tracing::warn!("could not prune the notified-inbox marker: {e:#}");
+    }
 }
 
 /// Watch every agent's inbox and notify as entries appear.
@@ -173,12 +211,19 @@ pub fn watch_inboxes(app: AppHandle, mur_home: &Path) -> Result<Vec<notify::Reco
         let who = agent.clone();
         let mut w = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             let Ok(ev) = res else { return };
-            let seen = load_seen(&home);
-            for p in ev
+            // Filter first. This tree is written to constantly and the seen set
+            // is a whole-file read; paying it for every unrelated event is the
+            // difference between a cheap watcher and a hot one.
+            let mds: Vec<_> = ev
                 .paths
                 .iter()
                 .filter(|p| p.extension().is_some_and(|x| x == "md"))
-            {
+                .collect();
+            if mds.is_empty() {
+                return;
+            }
+            let seen = load_seen(&home);
+            for p in mds {
                 if let Some(e) = parse_entry(&who, p)
                     && !seen.contains(&e.id)
                 {
@@ -224,11 +269,43 @@ mod tests {
         let e = parse_entry("mur", &p).expect("the real writer's output must parse");
         assert_eq!(e.id, "task-abc");
         assert_eq!(e.agent, "mur");
-        assert_eq!(e.situation, "scheduled");
+        assert_eq!(
+            display_name(tmp.path(), "mur"),
+            "mur",
+            "with no profile to read, the directory name is the only honest fallback"
+        );
         assert_eq!(
             e.body, "該吃早餐了 🥐",
             "the response placeholder must not reach the notification body"
         );
+    }
+
+    /// The notification title must be the label a person should see, not the
+    /// directory name. For the concierge that is the difference between a
+    /// notification titled "mur" and one titled "MUR" (CLAUDE.md rule 7).
+    #[test]
+    fn the_title_uses_display_name_not_the_directory_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("agents").join("mur");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("profile.yaml"), "name: mur\ndisplay_name: MUR\n").unwrap();
+        assert_eq!(display_name(tmp.path(), "mur"), "MUR");
+    }
+
+    /// An empty or absent `display_name` falls back to the directory name —
+    /// a badly-named notification beats no notification.
+    #[test]
+    fn a_missing_display_name_falls_back_to_the_directory_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("agents").join("solo");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("profile.yaml"),
+            "name: solo\ndisplay_name: \"  \"\n",
+        )
+        .unwrap();
+        assert_eq!(display_name(tmp.path(), "solo"), "solo");
+        assert_eq!(display_name(tmp.path(), "no-such-agent"), "no-such-agent");
     }
 
     /// A file that is not ours yields `None` rather than a notification built

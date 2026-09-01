@@ -83,8 +83,13 @@ pub fn parse_bound(not_after: Option<&str>) -> Option<DateTime<Local>> {
 ///
 /// Before #1125 a completed scheduled turn was discarded: the scheduler warned
 /// on failure and did nothing at all with success, so a reminder fired on the
-/// second and reached nobody. The reply is now appended to a channel, which the
-/// Hub, the Panel and `mur channel` already read — one write, every surface.
+/// second and reached nobody.
+///
+/// The reply now goes two places. The channel is the record — signed, and read
+/// by the Hub, the Panel and `mur channel` alike. The companion inbox is where
+/// a person is already looking, and is what the Hub raises a system
+/// notification from. Neither replaces the other, and neither is conditional on
+/// the other succeeding.
 pub struct ScheduleSink {
     pub mur_home: PathBuf,
     pub agent: String,
@@ -127,7 +132,11 @@ async fn notify_inbox(sink: &ScheduleSink, task_id: &str, body: &str, now: DateT
         generated_at: now,
     };
     if let Err(e) = StdoutNotifier::new(inbox).send(&msg).await {
-        warn!(error = %e, task_id = %task_id, "scheduled reply reached the channel but not the inbox");
+        // Deliberately says only what this call knows. The earlier phrasing
+        // claimed the channel write had succeeded, which this function never
+        // checked — the same shape of unchecked assertion the whole batch is
+        // about, reintroduced inside its own fix.
+        warn!(error = %e, task_id = %task_id, "scheduled reply could not be written to the inbox");
     }
 }
 
@@ -192,7 +201,8 @@ async fn record_reply(sink: &ScheduleSink, task: &mur_common::a2a::Task, cron: &
     }
 
     // The channel makes the reply findable; the inbox is where a person is
-    // already looking. Both, because neither replaces the other.
+    // already looking. Both, because neither replaces the other — and the
+    // inbox attempt does not depend on the channel write having succeeded.
     notify_inbox(sink, &task.id, &text, chrono::Utc::now()).await;
 }
 
