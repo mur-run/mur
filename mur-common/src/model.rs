@@ -925,7 +925,8 @@ mod switch_tests {
             ..Default::default()
         };
         let mut reg = ModelRegistry::default();
-        reg.models.insert("cheap_text".into(), mk(0.0001, &["chat"]));
+        reg.models
+            .insert("cheap_text".into(), mk(0.0001, &["chat"]));
         reg.models.insert("legacy".into(), mk(0.0002, &[]));
         reg.models
             .insert("frontier".into(), mk(0.01, &["chat", "vision"]));
@@ -938,7 +939,9 @@ mod switch_tests {
         );
         // Nothing declares vision -> None, so Smart goes inert.
         let mut blind = ModelRegistry::default();
-        blind.models.insert("cheap_text".into(), mk(0.0001, &["chat"]));
+        blind
+            .models
+            .insert("cheap_text".into(), mk(0.0001, &["chat"]));
         blind.models.insert("legacy".into(), mk(0.0002, &[]));
         assert_eq!(pick_cheap_model(&blind, None, &[Requirement::Vision]), None);
     }

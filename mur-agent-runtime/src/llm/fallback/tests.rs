@@ -541,3 +541,70 @@ async fn routed_generate_emits_routing_event_on_escalation() {
         other => panic!("expected Event::Routing, got {other:?}"),
     }
 }
+
+/// The incident at the candidate-assembly layer: a background image turn must
+/// not be handed a cheap model that never declared it can see. Text work on the
+/// same config is untouched — this gate costs nothing when nothing is required.
+#[test]
+fn background_image_turn_drops_a_cheap_model_that_cannot_see() {
+    use mur_common::agent::AgentProfile;
+    use mur_common::config::{ModelSwitchConfig, SmartConfig};
+    use mur_common::model::{ModelEntry, ModelRegistry};
+
+    let mk = |cost: f64, caps: &[&str]| ModelEntry {
+        provider: "x".into(),
+        model: "m".into(),
+        capabilities: caps.iter().map(|s| s.to_string()).collect(),
+        cost_per_1k_tokens: Some(cost),
+        ..Default::default()
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let mut reg = ModelRegistry::default();
+    reg.models.insert("cheap".into(), mk(0.0001, &["chat"]));
+    reg.models.insert("primary".into(), mk(0.01, &["chat"]));
+    reg.save_to(&tmp.path().join("models.yaml")).unwrap();
+    // nextest runs one process per test, so this env write is not shared.
+    unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
+
+    let cfg = ModelSwitchConfig {
+        default: Some("primary".into()),
+        smart: SmartConfig {
+            enabled: true,
+            cheap: Some("cheap".into()),
+            max_escalations: 1,
+        },
+        ..Default::default()
+    };
+    let fb = FallbackLlmClient::new_routed(
+        AgentProfile::default_for_tests(),
+        cfg,
+        factory_for(Default::default()),
+        retry0(),
+    );
+
+    let text_turn = LlmRequest {
+        intent: RequestIntent::Background(BackgroundKind::Scheduled),
+        ..Default::default()
+    };
+    assert_eq!(
+        fb.candidates_for(&text_turn),
+        vec!["cheap".to_string(), "primary".into()],
+        "text background work still downgrades"
+    );
+
+    let image_turn = LlmRequest {
+        intent: RequestIntent::Background(BackgroundKind::Scheduled),
+        messages: vec![RichMessage::ImageText {
+            role: "user".into(),
+            media_type: "image/png".into(),
+            data: "aGk=".into(),
+            text: "what is in this photo".into(),
+        }],
+        ..Default::default()
+    };
+    assert_eq!(
+        fb.candidates_for(&image_turn),
+        vec!["primary".to_string()],
+        "nothing declares vision, so the explicit primary is all that is left"
+    );
+}

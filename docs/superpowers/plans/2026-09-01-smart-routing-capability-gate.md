@@ -75,7 +75,7 @@ Copied verbatim; every task implicitly includes all of them.
 
 **Steps**
 
-- [ ] Add both failing tests to the `mod tests` block in `mur-common/src/model.rs` (append after `pick_cheap_model_lowest_cost_chat_excluding_primary`):
+- [x] Add both failing tests to the `mod tests` block in `mur-common/src/model.rs` (append after `pick_cheap_model_lowest_cost_chat_excluding_primary`):
 
 ```rust
     #[test]
@@ -132,8 +132,8 @@ Copied verbatim; every task implicitly includes all of them.
     }
 ```
 
-- [ ] Run `cargo nextest run -p mur-common model::tests` → both new tests fail to compile (`cannot find value Requirement`, `this function takes 2 arguments but 3 were supplied`). This is the expected red.
-- [ ] In `mur-common/src/model.rs`, insert immediately **above** `pub fn pick_cheap_model`:
+- [x] Run `cargo nextest run -p mur-common model::tests` → both new tests fail to compile (`cannot find value Requirement`, `this function takes 2 arguments but 3 were supplied`). This is the expected red.
+- [x] In `mur-common/src/model.rs`, insert immediately **above** `pub fn pick_cheap_model`:
 
 ```rust
 /// Registry capability strings. The baseline (`chat`) is legacy-permissive —
@@ -181,7 +181,7 @@ pub fn satisfies(e: &ModelEntry, reqs: &[Requirement]) -> bool {
 }
 ```
 
-- [ ] Replace the body and signature of `pick_cheap_model` with:
+- [x] Replace the body and signature of `pick_cheap_model` with:
 
 ```rust
 /// Pick the cheapest registry entry that can serve a request needing `reqs`,
@@ -208,10 +208,10 @@ pub fn pick_cheap_model(
 }
 ```
 
-- [ ] Update the three call sites inside the existing test `pick_cheap_model_lowest_cost_chat_excluding_primary` to pass `&[]` as the third argument: `pick_cheap_model(&reg, Some("cheap"), &[])`, `pick_cheap_model(&reg, None, &[])`, `pick_cheap_model(&empty, None, &[])`.
-- [ ] Run `cargo nextest run -p mur-common model::tests` → all green, including the two new tests.
-- [ ] In `mur-agent-runtime/src/llm/fallback/mod.rs`, change the import line `use mur_common::model::{choose_by_difficulty, resolve_model_refs};` to `use mur_common::model::{Requirement, choose_by_difficulty, resolve_model_refs};`
-- [ ] Replace `fn autopick_cheap` (currently at line 427) with:
+- [x] Update the call sites to pass `&[]` as the third argument. **Plan said three; there are five** — two more live in the price/`effective_costs` tests (lines ~1020 and ~1034). Same mechanical fix: `pick_cheap_model(&reg, Some("cheap"), &[])`, `pick_cheap_model(&reg, None, &[])`, `pick_cheap_model(&empty, None, &[])`.
+- [x] Run `cargo nextest run -p mur-common model::tests` → all green, including the two new tests.
+- [x] In `mur-agent-runtime/src/llm/fallback/mod.rs`, change the import line `use mur_common::model::{choose_by_difficulty, resolve_model_refs};` to `use mur_common::model::{Requirement, choose_by_difficulty, resolve_model_refs};`
+- [x] Replace `fn autopick_cheap` (currently at line 427) with:
 
 ```rust
 /// The capabilities this request needs from whatever model serves it. Derived
@@ -239,9 +239,9 @@ fn autopick_cheap(primary: Option<&str>, reqs: &[Requirement]) -> Option<String>
 }
 ```
 
-- [ ] In `candidates_for`, inside the `CandidateSource::PerRequest` arm, add `let reqs = requirements_of(req);` as the first line of the arm, and change the auto-pick call from `.or_else(|| autopick_cheap(primary.as_deref()))` to `.or_else(|| autopick_cheap(primary.as_deref(), &reqs))`.
-- [ ] Run `cargo nextest run -p mur-agent-runtime llm::fallback` → green (existing tests unaffected; they pin `smart.cheap` and never reach auto-pick).
-- [ ] `cargo fmt && git commit -am "feat(model): capability requirements gate cheap-model auto-pick"`
+- [x] In `candidates_for`, inside the `CandidateSource::PerRequest` arm, add `let reqs = requirements_of(req);` as the first line of the arm, and change the auto-pick call from `.or_else(|| autopick_cheap(primary.as_deref()))` to `.or_else(|| autopick_cheap(primary.as_deref(), &reqs))`.
+- [x] Run `cargo nextest run -p mur-agent-runtime llm::fallback` → green (existing tests unaffected; they pin `smart.cheap` and never reach auto-pick).
+- [x] `cargo fmt && git commit -am "feat(model): capability requirements gate cheap-model auto-pick"`
 
 ---
 
@@ -258,7 +258,7 @@ fn autopick_cheap(primary: Option<&str>, reqs: &[Requirement]) -> Option<String>
 
 **Steps**
 
-- [ ] Add the failing test to `mur-agent-runtime/src/llm/fallback/tests.rs` (append at the end of the file):
+- [x] Add the failing test to `mur-agent-runtime/src/llm/fallback/tests.rs` (append at the end of the file):
 
 ```rust
 /// The incident at the candidate-assembly layer: a background image turn must
@@ -329,8 +329,8 @@ fn background_image_turn_drops_a_cheap_model_that_cannot_see() {
 }
 ```
 
-- [ ] Run `cargo nextest run -p mur-agent-runtime background_image_turn` → **fails**, asserting `["cheap", "primary"]` for the image turn. That failure is the bug, reproduced.
-- [ ] Add the three helpers to `mur-agent-runtime/src/llm/fallback/mod.rs`, immediately after `requirements_of`:
+- [x] Run `cargo nextest run -p mur-agent-runtime background_image_turn` → **fails**, asserting `["cheap", "primary"]` for the image turn. That failure is the bug, reproduced.
+- [x] Add the three helpers to `mur-agent-runtime/src/llm/fallback/mod.rs`, immediately after `requirements_of`:
 
 ```rust
 /// The registry, or `None` when it cannot be read. Eligibility treats `None`
@@ -373,7 +373,7 @@ fn filter_eligible(
 }
 ```
 
-- [ ] Replace the whole `CandidateSource::PerRequest { profile, cfg } => { … }` arm of `candidates_for` with:
+- [x] Replace the whole `CandidateSource::PerRequest { profile, cfg } => { … }` arm of `candidates_for` with:
 
 ```rust
             CandidateSource::PerRequest { profile, cfg } => {
@@ -428,9 +428,9 @@ fn filter_eligible(
             }
 ```
 
-- [ ] Run `cargo nextest run -p mur-agent-runtime llm::fallback` → all green, including the new test.
-- [ ] `cargo clippy -p mur-agent-runtime --all-targets -- -D warnings` → clean.
-- [ ] `cargo fmt && git commit -am "fix(routing): never substitute a model that cannot serve the request"`
+- [x] Run `cargo nextest run -p mur-agent-runtime llm::fallback` → all green, including the new test.
+- [x] `cargo clippy -p mur-agent-runtime --all-targets -- -D warnings` → clean.
+- [x] `cargo fmt && git commit -am "fix(routing): never substitute a model that cannot serve the request"`
 
 **Layer 1 is complete and shippable here.** Tasks 3-7 are the policy layer.
 
