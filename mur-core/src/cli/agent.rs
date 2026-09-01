@@ -613,6 +613,10 @@ pub enum AgentScheduleAction {
         /// Send the message to a different agent instead of self (optional)
         #[arg(long)]
         sends_to: Option<String>,
+        /// Fire once, then retire. Cron has no year field, so a dated
+        /// expression like `0 10 1 9 *` otherwise repeats every September.
+        #[arg(long)]
+        once: bool,
     },
     /// List all schedule entries for an agent
     List {
