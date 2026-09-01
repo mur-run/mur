@@ -87,6 +87,36 @@ pub fn agent_set_fallback(name: String, refs: Vec<String>) -> Result<Vec<String>
     agent_set_fallback_impl(&crate::mur_home_path(), &name, &refs)
 }
 
+/// Tri-state read: `None` = the agent follows the global setting.
+pub(crate) fn agent_get_smart_impl(home: &Path, name: &str) -> Result<Option<bool>, String> {
+    let path = home.join("agents").join(name).join("profile.yaml");
+    let profile: mur_common::AgentProfile = serde_yaml_ng::from_str(
+        &std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?,
+    )
+    .map_err(|e| format!("parse profile: {e}"))?;
+    Ok(profile.smart.and_then(|s| s.enabled))
+}
+
+pub(crate) fn agent_set_smart_impl(
+    home: &Path,
+    name: &str,
+    state: &str,
+) -> Result<Option<bool>, String> {
+    mur_core::cmd::agent::model_resolve::cmd_agent_set_smart(home, name, state)
+        .map_err(|e| format!("{e}"))?;
+    agent_get_smart_impl(home, name)
+}
+
+#[tauri::command]
+pub fn agent_get_smart(name: String) -> Result<Option<bool>, String> {
+    agent_get_smart_impl(&crate::mur_home_path(), &name)
+}
+
+#[tauri::command]
+pub fn agent_set_smart(name: String, state: String) -> Result<Option<bool>, String> {
+    agent_set_smart_impl(&crate::mur_home_path(), &name, &state)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

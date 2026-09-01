@@ -79,6 +79,8 @@ export function AgentInspector({ agentName, agents, runtime, onClose }: Props) {
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
   const [agentChain, setAgentChain] = useState<string[]>([]);
   const [chainErr, setChainErr] = useState<string | null>(null);
+  // Per-agent Smart override. null = follow the global setting.
+  const [agentSmart, setAgentSmart] = useState<boolean | null>(null);
 
   useEffect(() => {
     setError(null);
@@ -98,6 +100,12 @@ export function AgentInspector({ agentName, agents, runtime, onClose }: Props) {
   }, [agentName]);
 
   useEffect(() => {
+    invoke<boolean | null>("agent_get_smart", { name: agentName })
+      .then(setAgentSmart)
+      .catch(() => setAgentSmart(null));
+  }, [agentName]);
+
+  useEffect(() => {
     invoke<ModelOption[]>("list_models")
       .then(setModelOptions)
       .catch(() => setModelOptions([]));
@@ -110,6 +118,12 @@ export function AgentInspector({ agentName, agents, runtime, onClose }: Props) {
         setAgentChain(saved);
         setChainErr(null);
       })
+      .catch((e) => setChainErr(String(e)));
+  }
+
+  function saveAgentSmart(state: string) {
+    invoke<boolean | null>("agent_set_smart", { name: agentName, state })
+      .then(setAgentSmart)
       .catch((e) => setChainErr(String(e)));
   }
 
@@ -282,6 +296,19 @@ export function AgentInspector({ agentName, agents, runtime, onClose }: Props) {
                   {t("detail.fallbackChainError", { error: chainErr })}
                 </p>
               )}
+              <label className="field-label" htmlFor="agent-smart">
+                {t("detail.smartRouting")}
+              </label>
+              <select
+                id="agent-smart"
+                value={agentSmart === null ? "follow" : agentSmart ? "on" : "off"}
+                onChange={(e) => saveAgentSmart(e.target.value)}
+              >
+                <option value="follow">{t("detail.smartFollow")}</option>
+                <option value="on">{t("detail.smartOn")}</option>
+                <option value="off">{t("detail.smartOff")}</option>
+              </select>
+              <p className="settings-hint">{t("detail.smartHint")}</p>
             </div>
             <ModelLibrary open={libraryOpen} onClose={() => setLibraryOpen(false)} />
             <PersonaTab detail={detail} onSaved={handleSaved} />

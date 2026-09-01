@@ -989,7 +989,7 @@ cargo run -q --bin mur -- model smart off               # expect: smart backgrou
 
 **Steps**
 
-- [ ] Add the two command impls to `mur-hub-gui/src-tauri/src/model_switch.rs`, after `agent_set_fallback`:
+- [x] Add the two command impls to `mur-hub-gui/src-tauri/src/model_switch.rs`, after `agent_set_fallback`:
 
 ```rust
 /// Tri-state read: `None` = the agent follows the global setting.
@@ -1023,9 +1023,9 @@ pub fn agent_set_smart(name: String, state: String) -> Result<Option<bool>, Stri
 }
 ```
 
-- [ ] Register both in the `tauri::generate_handler![...]` list in `mur-hub-gui/src-tauri/src/lib.rs`, next to `agent_get_fallback` / `agent_set_fallback`.
-- [ ] Flip the TS default in `mur-hub-gui/ui/src/components/settings/modelSwitch.ts` — inside `normalizeMs`, change `enabled: raw.smart?.enabled ?? true` to `enabled: raw.smart?.enabled ?? false`, and update the doc comment sentence about `smart` to say the fallback mirrors the Rust default, which is now off.
-- [ ] Add the vitest case to `mur-hub-gui/ui/src/components/settings/modelSwitch.test.ts`:
+- [x] Register both in the `tauri::generate_handler![...]` list in `mur-hub-gui/src-tauri/src/lib.rs`, next to `agent_get_fallback` / `agent_set_fallback`.
+- [x] Flip the TS default in `mur-hub-gui/ui/src/components/settings/modelSwitch.ts` — inside `normalizeMs`, change `enabled: raw.smart?.enabled ?? true` to `enabled: raw.smart?.enabled ?? false`, and update the doc comment sentence about `smart` to say the fallback mirrors the Rust default, which is now off.
+- [x] Add the vitest case to `mur-hub-gui/ui/src/components/settings/modelSwitch.test.ts`:
 
 ```ts
   it("defaults smart to off when the config predates the field", () => {
@@ -1034,7 +1034,7 @@ pub fn agent_set_smart(name: String, state: String) -> Result<Option<bool>, Stri
   });
 ```
 
-- [ ] Add the five keys to `mur-hub-gui/ui/src/i18n/en.ts`:
+- [x] Add the five keys to `mur-hub-gui/ui/src/i18n/en.ts`:
 
 ```ts
   "detail.smartRouting": "Smart routing",
@@ -1056,7 +1056,7 @@ and to `mur-hub-gui/ui/src/i18n/zh-TW.ts`:
     "背景任務可能改用較省錢的模型。若該模型無法勝任這個請求，一律不會降級。",
 ```
 
-- [ ] Wire the control in `mur-hub-gui/ui/src/components/inspector/AgentInspector.tsx`. Add state and a loader next to the existing `agentChain` pair (around line 91):
+- [x] Wire the control in `mur-hub-gui/ui/src/components/inspector/AgentInspector.tsx`. Add state and a loader next to the existing `agentChain` pair (around line 91):
 
 ```tsx
   // Per-agent Smart override. null = follow the global setting.
@@ -1093,9 +1093,11 @@ and to `mur-hub-gui/ui/src/i18n/zh-TW.ts`:
               <p className="settings-hint">{t("detail.smartHint")}</p>
 ```
 
-- [ ] Run the UI gate: `cd mur-hub-gui/ui && npm run test && npm run build` → tests green, build succeeds (this also produces `ui/dist`, which the Rust side needs).
-- [ ] Run the Tauri gate: `cargo clippy --manifest-path mur-hub-gui/src-tauri/Cargo.toml --all-targets -- -D warnings` → clean. (Requires `ui/dist` from the previous step.)
-- [ ] `cargo fmt && git commit -am "feat(hub): three-state per-agent smart routing control"`
+- [x] `npm ci` first — a fresh worktree has no `node_modules`. Then the UI gate: `npm run test && npm run build`
+- [x] **Plan gap found during execution**: the existing case `normalizeMs fills fields the Rust config omits` asserted `smart.enabled === true`. Flipped to `false` alongside the default (same class as the Rust-side `smart_config_defaults_on_with_autopick`)
+- [x] ~~Run the UI gate~~ → tests green, build succeeds (this also produces `ui/dist`, which the Rust side needs).
+- [x] Run the Tauri gate: `cargo clippy --manifest-path mur-hub-gui/src-tauri/Cargo.toml --all-targets -- -D warnings` → clean. (Requires `ui/dist` from the previous step.) The log never prints `Checking mur-hub-gui` — a build-script package gets one `Compiling` line — so a negative control (a deliberate unused variable) was used to confirm the crate really is linted: exit 101, then 0 once removed.
+- [x] `cargo fmt && git commit -am "feat(hub): three-state per-agent smart routing control"`
 
 ---
 
