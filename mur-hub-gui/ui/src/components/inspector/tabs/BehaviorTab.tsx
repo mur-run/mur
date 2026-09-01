@@ -19,6 +19,7 @@ export function BehaviorTab({
 }) {
   const { t } = useT();
   const [selected, setSelected] = useState(detail.behavior_preset);
+  const [effort, setEffort] = useState(detail.effort);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -31,6 +32,31 @@ export function BehaviorTab({
         name: detail.agent_name,
         patch: { behavior_preset: b } as DetailPatch,
       });
+      onSaved(updated);
+    } catch (e) {
+      setSaveError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // NOTE: deliberately no EFFORT_OPTIONS constant beside BEHAVIOR_OPTIONS
+  // above. The behavior presets are a fixed set MUR owns; effort levels are a
+  // property of the agent's MODEL, and a hardcoded list would offer `medium`
+  // on deepseek-v4 (which has none) and `xhigh` on pre-4.7 Claude (a 400).
+  // The backend resolves them via `effort_shape` and sends `effort_levels`.
+  async function pickEffort(level: string) {
+    setEffort(level);
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const updated = await invoke<AgentDetail>("update_agent_detail", {
+        name: detail.agent_name,
+        patch: { effort: level } as DetailPatch,
+      });
+      // Take the value the backend reports rather than the one clicked: a
+      // level the model cannot use comes back narrowed.
+      setEffort(updated.effort);
       onSaved(updated);
     } catch (e) {
       setSaveError(String(e));
@@ -62,6 +88,37 @@ export function BehaviorTab({
           <div className="radio-card-desc">{t(opt.descKey)}</div>
         </label>
       ))}
+      {detail.effort_levels.length > 0 && (
+        <>
+          <div className="notif-section__title">{t("detail.effort")}</div>
+          <p className="field-muted" style={{ marginBottom: 12, fontSize: 12 }}>
+            {t("detail.effortHint")}
+          </p>
+          {detail.effort_stored && detail.effort_stored !== detail.effort && (
+            <p className="field-muted" style={{ marginBottom: 12, fontSize: 12 }}>
+              {t("detail.effortNarrowed")
+                .replace("{stored}", detail.effort_stored)
+                .replace("{using}", detail.effort ?? "")}
+            </p>
+          )}
+          {detail.effort_levels.map((level) => (
+            <label
+              key={level}
+              className={`radio-card${effort === level ? " radio-card--active" : ""}${saving ? " radio-card--disabled" : ""}`}
+            >
+              <input
+                type="radio"
+                name="effort"
+                value={level}
+                checked={effort === level}
+                disabled={saving}
+                onChange={() => pickEffort(level)}
+              />
+              <div className="radio-card-label">{level}</div>
+            </label>
+          ))}
+        </>
+      )}
       {saving && <p className="field-muted" style={{ fontSize: 12 }}>{t("detail.saving")}</p>}
       {saveError && <p className="save-error">{saveError}</p>}
       <NotificationsSection agentName={detail.agent_name} />
