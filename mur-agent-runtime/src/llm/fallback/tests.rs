@@ -332,7 +332,6 @@ async fn routed_generate_picks_frontier_for_large_request() {
             cheap: Some("cheap".into()),
             frontier: Some("frontier".into()),
             threshold_input_tokens: Some(5),
-            smart: None,
         },
         ..Default::default()
     };

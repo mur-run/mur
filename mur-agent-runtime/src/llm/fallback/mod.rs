@@ -119,11 +119,7 @@ impl FallbackLlmClient {
             return "explicit".to_string();
         }
         if let CandidateSource::PerRequest { profile, cfg } = &self.source {
-            let smart = profile
-                .routing
-                .as_ref()
-                .and_then(|r| r.smart.clone())
-                .unwrap_or_else(|| cfg.smart.clone());
+            let smart = profile.effective_smart(cfg);
             if matches!(req.intent, RequestIntent::Background(_)) && smart.enabled {
                 return "smart-background".to_string();
             }
@@ -152,10 +148,7 @@ impl FallbackLlmClient {
                 // model_ref/default primary. A routed pick is an automatic
                 // substitution, so it has to clear the capability bar too;
                 // when it cannot, resolution falls through to the primary.
-                let routing = profile
-                    .routing
-                    .clone()
-                    .unwrap_or_else(|| cfg.routing.clone());
+                let routing = profile.effective_routing(cfg);
                 let routed = if routing.enabled {
                     choose_by_difficulty(estimate_input_tokens(req), &routing)
                         .filter(|r| ref_ok(reg.as_ref(), r, &reqs))
@@ -167,11 +160,7 @@ impl FallbackLlmClient {
 
                 // Smart background: cheap model first, base (primary + chain)
                 // behind it (cascade). Per-agent Smart config overrides global.
-                let smart = profile
-                    .routing
-                    .as_ref()
-                    .and_then(|r| r.smart.clone())
-                    .unwrap_or_else(|| cfg.smart.clone());
+                let smart = profile.effective_smart(cfg);
                 if matches!(req.intent, RequestIntent::Background(_)) && smart.enabled {
                     let cheap = smart
                         .cheap
@@ -230,11 +219,7 @@ impl FallbackLlmClient {
             CandidateSource::PerRequest { profile, cfg }
                 if matches!(req.intent, RequestIntent::Background(_)) =>
             {
-                let smart = profile
-                    .routing
-                    .as_ref()
-                    .and_then(|r| r.smart.clone())
-                    .unwrap_or_else(|| cfg.smart.clone());
+                let smart = profile.effective_smart(cfg);
                 if smart.enabled {
                     smart.max_escalations
                 } else {

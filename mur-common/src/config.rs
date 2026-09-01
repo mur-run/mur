@@ -115,8 +115,6 @@ pub struct RoutingConfig {
     pub frontier: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub threshold_input_tokens: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub smart: Option<SmartConfig>,
 }
 
 /// Partial view of [`SmartConfig`] for per-agent overrides: `None` on a field
@@ -174,8 +172,6 @@ impl RoutingConfig {
             cheap: o.cheap.clone().or_else(|| self.cheap.clone()),
             frontier: o.frontier.clone().or_else(|| self.frontier.clone()),
             threshold_input_tokens: o.threshold_input_tokens.or(self.threshold_input_tokens),
-            // Carried through untouched; the field itself goes away in Task 4.
-            smart: self.smart.clone(),
         }
     }
 }
@@ -2811,7 +2807,6 @@ mod model_switch_config_tests {
             cheap: Some("c".into()),
             frontier: Some("f".into()),
             threshold_input_tokens: Some(9),
-            smart: None, // removed in Task 4
         };
         let only_cheap = RoutingOverride {
             cheap: Some("a".into()),

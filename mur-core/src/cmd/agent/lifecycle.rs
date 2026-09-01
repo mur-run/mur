@@ -132,6 +132,7 @@ pub fn cmd_create(
         model_ref: resolved_model_ref,
         fallback_chain: Vec::new(),
         routing: None,
+        smart: None,
         mcp_servers: vec![],
         skills: vec![],
         transport: TransportConfig {

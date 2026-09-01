@@ -616,7 +616,7 @@ impl RoutingConfig {
 
 **Steps**
 
-- [ ] Add the failing test to the `mod tests` block in `mur-common/src/agent.rs`:
+- [x] Add the failing test to the `mod tests` block in `mur-common/src/agent.rs`:
 
 ```rust
     #[test]
@@ -660,8 +660,8 @@ impl RoutingConfig {
     }
 ```
 
-- [ ] Run `cargo nextest run -p mur-common agent::tests` → red.
-- [ ] In `mur-common/src/agent.rs`, retype the `routing` field and add `smart` directly after it:
+- [x] Run `cargo nextest run -p mur-common agent::tests` → red.
+- [x] In `mur-common/src/agent.rs`, retype the `routing` field and add `smart` directly after it:
 
 ```rust
     /// Per-agent difficulty-routing override. Absent fields inherit the global
@@ -676,7 +676,7 @@ impl RoutingConfig {
     pub smart: Option<crate::config::SmartOverride>,
 ```
 
-- [ ] Add the two helpers inside `impl AgentProfile` (next to `default_for_tests`):
+- [x] Add the two helpers inside `impl AgentProfile` (next to `default_for_tests`):
 
 ```rust
     /// This agent's effective Smart config: the global values with the agent's
@@ -703,7 +703,7 @@ impl RoutingConfig {
     }
 ```
 
-- [ ] Fix the existing round-trip test at `mur-common/src/agent.rs:2055`: replace
+- [x] Fix the existing round-trip test at `mur-common/src/agent.rs:2055`: replace
 
 ```rust
         p.routing = Some(crate::config::RoutingConfig {
@@ -721,17 +721,18 @@ with
         });
 ```
 
-- [ ] Add `smart: None,` to the two `AgentProfile` struct literals — `mur-core/src/cmd/agent/lifecycle.rs:134` (next to `routing: None,`) and `mur-core/src/cmd/agent_companion/connector.rs:548`. `AgentProfile` has no `derive(Default)`, so a literal that omits the new field will not compile.
-- [ ] Replace the four inheritance read sites in `mur-agent-runtime/src/llm/fallback/mod.rs` with the helpers:
+- [x] Add `smart: None,` to the two `AgentProfile` struct literals — `mur-core/src/cmd/agent/lifecycle.rs:134` (next to `routing: None,`) and `mur-core/src/cmd/agent_companion/connector.rs:548`. `AgentProfile` has no `derive(Default)`, so a literal that omits the new field will not compile.
+- [x] Replace the four inheritance read sites in `mur-agent-runtime/src/llm/fallback/mod.rs` with the helpers:
   - in `selection_reason`: `let smart = profile.effective_smart(cfg);`
   - in `candidates_for`: `let routing = profile.effective_routing(cfg);` and `let smart = profile.effective_smart(cfg);`
   - in `generate_with_meta`'s `max_esc` match arm: `let smart = profile.effective_smart(cfg);`
 
   Each replaces the corresponding `profile.routing…unwrap_or_else(|| cfg.…clone())` expression; nothing else in those blocks changes.
-- [ ] Now that the legacy read goes through `RoutingOverride.smart`, delete the `smart: Option<SmartConfig>` field (and its two serde attribute lines) from `RoutingConfig` in `mur-common/src/config.rs`, drop the `smart: self.smart.clone(),` line from `RoutingConfig::merged`, and drop the now-dangling `smart:` line from three literals: the `routing_override_inherits_field_by_field` test (Task 3), `mur-agent-runtime/src/llm/fallback/tests.rs` in `routed_generate_picks_frontier_for_large_request`, and `mur-hub-gui/src-tauri/src/model_switch.rs` around line 155.
-- [ ] Run `cargo nextest run -p mur-common && cargo nextest run -p mur-agent-runtime llm::fallback` → green.
-- [ ] `cargo check --workspace --all-targets` → clean (catches any remaining `AgentProfile` literal in a test target).
-- [ ] `cargo fmt && git commit -am "feat(agent): three-state smart override on the profile"`
+- [x] Now that the legacy read goes through `RoutingOverride.smart`, delete the `smart: Option<SmartConfig>` field (and its two serde attribute lines) from `RoutingConfig` in `mur-common/src/config.rs`, drop the `smart: self.smart.clone(),` line from `RoutingConfig::merged`, and drop the now-dangling `smart:` line from three literals: the `routing_override_inherits_field_by_field` test (Task 3), `mur-agent-runtime/src/llm/fallback/tests.rs` in `routed_generate_picks_frontier_for_large_request`, and `mur-hub-gui/src-tauri/src/model_switch.rs` around line 155.
+- [x] Run `cargo nextest run -p mur-common && cargo nextest run -p mur-agent-runtime llm::fallback` → green.
+- [x] **Task-boundary gap found during execution**: retyping `profile.routing` breaks `supervisor_runner.rs` (`unwrap_or_else(|| switch_cfg.routing.clone())` type mismatch, `!routing.enabled` on an `Option<bool>`), so Task 4 cannot reach a clean workspace check on its own. Task 5's gate edit is the fix; the two tasks were executed and committed together.
+- [x] `cargo check --workspace --all-targets` → clean (catches any remaining `AgentProfile` literal in a test target).
+- [x] `cargo fmt && git commit -am "feat(agent): three-state smart override on the profile"`
 
 ---
 
@@ -745,7 +746,7 @@ with
 
 **Steps**
 
-- [ ] Add the failing test to the existing `#[cfg(test)] mod` at `mur-agent-runtime/src/supervisor_runner.rs:808`:
+- [x] Add the failing test to the existing `#[cfg(test)] mod` at `mur-agent-runtime/src/supervisor_runner.rs:808`:
 
 ```rust
     /// An agent with one model ref and no chain still needs the routing-aware
@@ -761,8 +762,8 @@ with
     }
 ```
 
-- [ ] Run `cargo nextest run -p mur-agent-runtime needs_routing_client` → red (function does not exist).
-- [ ] Add the predicate just above the function containing the gate (search for `if refs.len() <= 1 && !routing.enabled {`):
+- [x] Run `cargo nextest run -p mur-agent-runtime needs_routing_client` → red (function does not exist).
+- [x] Add the predicate just above the function containing the gate (search for `if refs.len() <= 1 && !routing.enabled {`):
 
 ```rust
 /// Does this agent need the routing-aware client, or is a single plain client
@@ -774,7 +775,7 @@ pub(crate) fn needs_routing_client(refs: usize, routing_on: bool, smart_on: bool
 }
 ```
 
-- [ ] Replace the gate block:
+- [x] Replace the gate block:
 
 ```rust
     let routing = profile.inner.effective_routing(&switch_cfg);
@@ -785,9 +786,9 @@ pub(crate) fn needs_routing_client(refs: usize, routing_on: bool, smart_on: bool
 ```
 
   (the old `let routing = profile.inner.routing.clone().unwrap_or_else(…);` goes away; the body of the `if` is unchanged.)
-- [ ] Update the comment block above it: the sentence "With no `models:` config and no per-agent chain/routing, `refs.len() <= 1 && !routing.enabled`" becomes "With no `models:` config, no per-agent chain/routing and Smart off (the default), `needs_routing_client` is false".
-- [ ] Run `cargo nextest run -p mur-agent-runtime` → green.
-- [ ] `cargo fmt && git commit -am "fix(runtime): boot gate consults the effective Smart setting"`
+- [x] Update the comment block above it: the sentence "With no `models:` config and no per-agent chain/routing, `refs.len() <= 1 && !routing.enabled`" becomes "With no `models:` config, no per-agent chain/routing and Smart off (the default), `needs_routing_client` is false".
+- [x] Run `cargo nextest run -p mur-agent-runtime` → green.
+- [x] `cargo fmt && git commit -am "fix(runtime): boot gate consults the effective Smart setting"`
 
 ---
 

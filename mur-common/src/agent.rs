@@ -82,10 +82,16 @@ pub struct AgentProfile {
     /// `models.fallback_chain` when non-empty. See the model-switch spec.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fallback_chain: Vec<String>,
-    /// Per-agent difficulty-routing override. Inherits the global
-    /// `models.routing` when `None`.
+    /// Per-agent difficulty-routing override. Absent fields inherit the global
+    /// `models.routing`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub routing: Option<crate::config::RoutingConfig>,
+    pub routing: Option<crate::config::RoutingOverride>,
+    /// Per-agent Smart background-routing override. Absent fields inherit the
+    /// global `models.smart`; `None` means "follow the global setting".
+    /// Promoted out of `routing` — nesting it there meant overriding Smart
+    /// silently rewrote this agent's difficulty routing as a side effect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smart: Option<crate::config::SmartOverride>,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerEntry>,
     #[serde(default)]
@@ -1754,6 +1760,29 @@ impl AgentProfile {
             .expect("minimal profile fixture")
     }
 
+    /// This agent's effective Smart config: the global values with the agent's
+    /// override layered on. Reads the promoted `smart` field first and falls
+    /// back to the legacy `routing.smart` nesting that older profiles and
+    /// exported `.muragent` bundles still carry.
+    pub fn effective_smart(
+        &self,
+        cfg: &crate::config::ModelSwitchConfig,
+    ) -> crate::config::SmartConfig {
+        let ov = self
+            .smart
+            .as_ref()
+            .or_else(|| self.routing.as_ref().and_then(|r| r.smart.as_ref()));
+        cfg.smart.merged(ov)
+    }
+
+    /// This agent's effective difficulty-routing config.
+    pub fn effective_routing(
+        &self,
+        cfg: &crate::config::ModelSwitchConfig,
+    ) -> crate::config::RoutingConfig {
+        cfg.routing.merged(self.routing.as_ref())
+    }
+
     /// Load an agent's profile from `<mur_home>/agents/<name>/profile.yaml`.
     ///
     /// Canonical read-path counterpart to the atomic-write path used by
@@ -2052,8 +2081,8 @@ mod model_ref_tests {
         // Round-trip with fallback_chain and routing.
         let mut p = p.clone();
         p.fallback_chain = vec!["claude_opus".into(), "claude_sonnet".into()];
-        p.routing = Some(crate::config::RoutingConfig {
-            enabled: true,
+        p.routing = Some(crate::config::RoutingOverride {
+            enabled: Some(true),
             ..Default::default()
         });
         let s = serde_yaml_ng::to_string(&p).unwrap();
@@ -2068,10 +2097,54 @@ mod model_ref_tests {
             vec!["claude_opus", "claude_sonnet"],
             "fallback_chain must round-trip"
         );
-        assert!(
+        assert_eq!(
             p2.routing.as_ref().unwrap().enabled,
+            Some(true),
             "routing.enabled must round-trip"
         );
+    }
+
+    #[test]
+    fn effective_smart_prefers_the_promoted_field_then_the_legacy_nesting() {
+        use crate::config::{ModelSwitchConfig, SmartConfig, SmartOverride};
+        let cfg = ModelSwitchConfig {
+            smart: SmartConfig {
+                enabled: false,
+                cheap: Some("g".into()),
+                max_escalations: 2,
+            },
+            ..Default::default()
+        };
+        // No override at all → the global values, untouched.
+        let p = AgentProfile::default_for_tests();
+        assert_eq!(p.effective_smart(&cfg), cfg.smart);
+
+        // Legacy profiles carry the override nested under `routing`.
+        let mut legacy = AgentProfile::default_for_tests();
+        legacy.routing = Some(crate::config::RoutingOverride {
+            smart: Some(SmartOverride {
+                enabled: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert!(
+            legacy.effective_smart(&cfg).enabled,
+            "legacy nesting is read"
+        );
+        assert_eq!(
+            legacy.effective_smart(&cfg).cheap.as_deref(),
+            Some("g"),
+            "unset fields still inherit"
+        );
+
+        // The promoted field wins when both are present.
+        let mut both = legacy.clone();
+        both.smart = Some(SmartOverride {
+            enabled: Some(false),
+            ..Default::default()
+        });
+        assert!(!both.effective_smart(&cfg).enabled);
     }
 }
 

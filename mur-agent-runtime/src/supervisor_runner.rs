@@ -192,6 +192,14 @@ pub fn build_runner(
     Arc::new(runner)
 }
 
+/// Does this agent need the routing-aware client, or is a single plain client
+/// enough? Extracted so the decision is testable without building providers:
+/// when this is wrong, Smart is silently inert for every agent with no
+/// fallback chain and the toggle reports a state it does not have.
+pub(crate) fn needs_routing_client(refs: usize, routing_on: bool, smart_on: bool) -> bool {
+    refs > 1 || routing_on || smart_on
+}
+
 /// Build the LLM-backed TaskRunner for a resolved model entry.
 /// Returns (runner, optional LLM client for companion sharing, optional McpPool for shutdown).
 #[allow(clippy::too_many_arguments)]
@@ -459,19 +467,17 @@ pub async fn build_provider_runner(
 
     // Model-switch: load the global config, resolve the ordered candidate refs
     // (per-agent overrides global) and decide single-client vs routing-aware
-    // fallback chain. With no `models:` config and no per-agent chain/routing,
-    // `refs.len() <= 1 && !routing.enabled` — the exact single-model path below
-    // runs unchanged (byte-for-byte with the pre-Task-7 behaviour).
+    // fallback chain. With no `models:` config, no per-agent chain/routing and
+    // Smart off (the default), `needs_routing_client` is false — the exact
+    // single-model path below runs unchanged (byte-for-byte with the
+    // pre-Task-7 behaviour).
     let switch_cfg =
         mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).models;
-    let routing = profile
-        .inner
-        .routing
-        .clone()
-        .unwrap_or_else(|| switch_cfg.routing.clone());
+    let routing = profile.inner.effective_routing(&switch_cfg);
+    let smart = profile.inner.effective_smart(&switch_cfg);
     let refs = mur_common::model::resolve_model_refs(&profile.inner, &switch_cfg, None);
 
-    if refs.len() <= 1 && !routing.enabled {
+    if !needs_routing_client(refs.len(), routing.enabled, smart.enabled) {
         // Nothing configured (no chain, no routing) → today's exact single-model
         // path on the SAME `entry` resolved above via `resolve_model_entry`, no
         // FallbackLlmClient wrapper.
@@ -808,6 +814,18 @@ pub(crate) async fn prepare_runtime(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An agent with one model ref and no chain still needs the routing-aware
+    /// client when Smart is on for it — the boot gate used to consult only the
+    /// chain length and difficulty routing, so Smart was dead for exactly the
+    /// agents that never configured anything else.
+    #[test]
+    fn single_ref_agent_with_smart_on_still_needs_the_routing_client() {
+        assert!(!needs_routing_client(1, false, false));
+        assert!(needs_routing_client(1, false, true));
+        assert!(needs_routing_client(1, true, false));
+        assert!(needs_routing_client(2, false, false));
+    }
 
     #[test]
     fn provider_host_extracts_external_host_only() {

@@ -157,7 +157,6 @@ mod tests {
                 cheap: Some("claude_sonnet".into()),
                 frontier: Some("nope".into()), // unknown → reject
                 threshold_input_tokens: Some(1000),
-                smart: None,
             },
             ..Default::default()
         };
