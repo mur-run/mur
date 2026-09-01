@@ -264,18 +264,28 @@ global models  ┘                          • cheap/chain -> satisfies(reqs)? 
 | `smart.cheap` pinned by the user to an ineligible ref | Filtered like any substitution; a pinned *cheap* is a policy, not a per-request choice. Hub/CLI validate the ref exists but cannot validate per-request eligibility. |
 | Legacy profile with nested `routing.smart` | Read at §4.3 step 2; unchanged behaviour. |
 
-## 7. Layer 3 — Visibility (deferred, with a condition attached)
+## 7. Layer 3 — Visibility (shipped as `mur agent routing`)
 
 Background routing decisions are recorded (`mur.routing` telemetry, Phase B)
-but have no read surface outside Hub chat captions, which background turns
-never reach. This spec does **not** implement one.
+but had no read surface outside Hub chat captions, which background turns never
+reach — so the least visible decisions were the ones nothing rendered.
 
-It records the dependency instead: **restoring `smart.enabled` to a default of
-`true` requires a background-visible routing surface first.** Without it, a
-Layer 1 or Layer 2 regression is again invisible to the person paying for it.
-Candidate surfaces (not chosen here): `mur agent routing-log <name>`, a Hub
-notification on substitution, or a provenance line on companion/scheduled
-output.
+`mur agent routing <name> [--limit N] [--downgrades-only]` is that surface. It
+reads `<agent_home>/telemetry/*.jsonl`, prints decisions newest first, and marks
+with `↓` the turns where `reason == smart-background` — the ones MUR chose for
+you rather than ones you configured. The summary line counts every decision on
+disk rather than the rows printed, because a "no downgrades" line speaking only
+for the last 20 turns would be the same half-truth the command exists to remove.
+
+The dependency this section originally recorded is therefore satisfied:
+**restoring `smart.enabled` to a default of `true` required a
+background-visible routing surface first.** That is not itself an argument for
+flipping it back — the default remains off on the reasoning in §2 — only a
+statement that the blocker is gone.
+
+Surfaces deliberately not built: a Hub notification on substitution, and a
+provenance line on companion/scheduled output. Both need UI work; the CLI reader
+answers the question with the telemetry that already exists.
 
 ## 8. Testing
 
@@ -330,7 +340,7 @@ Config/back-compat:
 |---|---|---|
 | L1 | `Requirement`/`satisfies`/`pick_cheap_model` + `requirements_of` + `candidates_for` filter + tests | Ships alone; fixes the incident without any config change |
 | L2 | Override types, profile promotion, default flip, boot gate, CLI, Hub three-state | Depends on L1 (turning the switch on must already be safe) |
-| L3 | Background-visible routing surface | Precondition for ever defaulting Smart back on (§7) |
+| L3 | `mur agent routing` — background-visible routing surface | **Shipped.** Was the precondition for ever defaulting Smart back on (§7) |
 
 L1 is deliberately shippable on its own: it makes the current default-on
 configuration safe for users who never read this spec.

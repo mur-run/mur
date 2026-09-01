@@ -650,7 +650,7 @@ mur
 ├── agent        create · start · stop · restart · remove · cli · send · card · dial · who ·
 │                export · install · install-service · addon · companion · voice · pair ·
 │                schedule (add · proposals · accept) · perm (incl. list-paths) · secret ·
-│                fallback · smart · trash · rollback … (40+)
+│                fallback · smart · routing · trash · rollback … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · status · run · set-loop · send · jobs   (squads of agents over a shared channel)
 ├── official     list · install   (official agents/fleets from the app.mur.run catalog)
