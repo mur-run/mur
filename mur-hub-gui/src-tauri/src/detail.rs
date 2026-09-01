@@ -31,6 +31,19 @@ pub struct AgentDetail {
     pub model_ref: Option<String>,
     pub model_provider: String,
     pub model_name: String,
+    // Reasoning effort. `effort_levels` is what THIS agent's model accepts —
+    // never a frontend constant, because the set is a property of the model
+    // (deepseek-v4 has no `medium`, pre-4.7 Claude no `xhigh`).
+    /// The level in force, already narrowed to what this model accepts.
+    pub effort: Option<String>,
+    /// What the profile actually holds. Differs from `effort` when the stored
+    /// level is one this model has no step for — the agent was set on another
+    /// model, or by the CLI. The UI must SAY so: the cards only ever offer
+    /// levels this model takes, so a user click can never produce this state,
+    /// and silently showing the narrowed card would hide that switching the
+    /// model back restores the stored value.
+    pub effort_stored: Option<String>,
+    pub effort_levels: Vec<String>,
     // Role (coarse grouping label; editable)
     pub role: Option<String>,
     // Read-only metadata
@@ -189,9 +202,37 @@ pub struct DetailPatch {
     pub behavior_preset: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_ref: Option<String>,
+    /// Reasoning effort level. Empty string clears it back to the provider
+    /// default; a level name sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     /// Empty string clears the role; non-empty sets it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+}
+
+/// The raw model id this agent actually dials, for keying
+/// [`mur_common::llm::effort_shape`].
+///
+/// `model_ref` wins over the inline `model:` block. That block is legacy data
+/// kept as a live read path for agents with no ref, and `AgentDetail.model_name`
+/// is filled from it — so keying the effort table on `model_name` would offer
+/// the levels of whatever model the profile used to point at. Resolution goes
+/// through the registry, exactly as the murmur TUI does.
+///
+/// Best-effort: an unreadable registry or a dangling ref falls back to the
+/// inline name rather than failing the whole detail fetch.
+fn resolved_model_id(profile: &mur_common::AgentProfile) -> String {
+    profile
+        .model_ref
+        .as_ref()
+        .and_then(|r| {
+            mur_common::model::ModelRegistry::default_path()
+                .and_then(|p| mur_common::model::ModelRegistry::load_from(&p))
+                .ok()
+                .and_then(|reg| reg.models.get(r).map(|e| e.model.clone()))
+        })
+        .unwrap_or_else(|| profile.model.name.clone())
 }
 
 /// Extract a profile into the Hub's `AgentDetail` view model.
@@ -204,6 +245,18 @@ pub fn build_agent_detail(
     profile: mur_common::AgentProfile,
     agent_home: Option<&std::path::Path>,
 ) -> AgentDetail {
+    // Resolved once: `resolved_model_id` reads `models.yaml`, and this runs on
+    // every detail fetch and at the end of every update.
+    let model_id = resolved_model_id(&profile);
+    let effective_effort_str = mur_common::llm::effective_effort(None, profile.effort, &model_id)
+        .0
+        .map(|e| e.as_str().to_string());
+    let effort_levels_str: Vec<String> = mur_common::llm::effort_shape(&model_id)
+        .levels()
+        .iter()
+        .map(|e| e.as_str().to_string())
+        .collect();
+
     AgentDetail {
         persona_category: format!("{:?}", profile.persona.category).to_lowercase(),
         persona_description: profile.persona.description.clone(),
@@ -277,6 +330,9 @@ pub fn build_agent_detail(
         model_ref: profile.model_ref.clone(),
         model_provider: profile.model.provider.clone(),
         model_name: profile.model.name.clone(),
+        effort: effective_effort_str,
+        effort_stored: profile.effort.map(|e| e.as_str().to_string()),
+        effort_levels: effort_levels_str,
         role: profile.role.clone(),
         display_name: profile.display_name.clone(),
         agent_name: profile.name.clone(),
@@ -361,6 +417,16 @@ pub fn update_agent_detail(name: String, patch: DetailPatch) -> Result<AgentDeta
         profile.model_ref = Some(r);
     }
 
+    // Apply effort. An empty string clears it; anything else must name a level
+    // MUR knows, or the write is refused rather than silently dropped.
+    if let Some(raw) = patch.effort {
+        profile.effort = if raw.is_empty() {
+            None
+        } else {
+            Some(raw.parse::<mur_common::llm::Effort>()?)
+        };
+    }
+
     // Apply behavior patch
     if let Some(b) = patch.behavior_preset {
         profile.appearance.behavior_preset = match b.as_str() {
@@ -390,7 +456,44 @@ pub fn update_agent_detail(name: String, patch: DetailPatch) -> Result<AgentDeta
 
 #[cfg(test)]
 mod tests {
-    use super::{SkillRefStatusView, skill_ref_view};
+    use super::{SkillRefStatusView, build_agent_detail, skill_ref_view};
+
+    /// The Hub must offer the levels THIS agent's model accepts, never a fixed
+    /// list. A frontend constant would show `medium` on deepseek-v4 (which has
+    /// low/high/max only) and `xhigh` on pre-4.7 Claude (a 400).
+    ///
+    /// Uses the inline `model:` fallback so the assertion does not depend on
+    /// whatever `~/.mur/models.yaml` happens to hold on this machine.
+    #[test]
+    fn effort_levels_come_from_the_agents_own_model() {
+        let mut p = mur_common::AgentProfile::default_for_tests();
+        p.model.name = "deepseek-v4-pro".into();
+        p.model_ref = None;
+        p.effort = Some(mur_common::llm::Effort::Xhigh);
+
+        let d = build_agent_detail(p, None);
+        assert_eq!(d.effort_levels, vec!["low", "high", "max"]);
+        // Xhigh is not on this model's scale, so the reported value is the
+        // nearest level below it — not the stale stored one.
+        assert_eq!(d.effort.as_deref(), Some("high"));
+        // …and the stored value stays visible, so the UI can say the two
+        // differ instead of silently showing the narrowed card.
+        assert_eq!(d.effort_stored.as_deref(), Some("xhigh"));
+    }
+
+    /// A model with no reasoning control offers nothing and reports nothing,
+    /// so the Hub can hide the group instead of showing a dead control.
+    #[test]
+    fn a_model_without_reasoning_control_offers_no_levels() {
+        let mut p = mur_common::AgentProfile::default_for_tests();
+        p.model.name = "gpt-4o".into();
+        p.model_ref = None;
+        p.effort = Some(mur_common::llm::Effort::Max);
+
+        let d = build_agent_detail(p, None);
+        assert!(d.effort_levels.is_empty());
+        assert_eq!(d.effort, None);
+    }
 
     // Regression: per-agent skill ids are directories (`skills/<name>`) holding
     // a `skill.yaml`. The loadable check must resolve into the dir, not try to
