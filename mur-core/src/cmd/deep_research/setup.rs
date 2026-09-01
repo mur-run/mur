@@ -19,7 +19,19 @@ use super::status::{DEFAULT_FLEET_NAME, collect_status};
 
 /// Default per-run budget ceiling (USD) persisted to the fleet's
 /// `loop.budget_usd`; the run loop's existing budget guard enforces it.
-pub const DEFAULT_RUN_BUDGET_USD: f64 = 10.0;
+/// Three measured three-worker runs on `claude-sonnet-5` cost $21.52, $32.12
+/// and $40.09. $10 was never a ceiling anyone could hit — it was a number the
+/// guard could not enforce, because the forward estimate underread an iteration
+/// by ~300x (see `EST_TOKENS_PER_MEMBER_ITERATION`). With that estimate
+/// corrected, a $10 ceiling refuses to start at all: honest, but useless.
+///
+/// $40 admits one real iteration and leaves the guard the headroom it needs to
+/// stop before a second — after a ~$32 iteration the projection for the next
+/// one exceeds the ceiling and the loop halts.
+///
+/// This is real money per run. It is deliberately not lower: a default that
+/// silently refuses every run is worse than one that states the true cost.
+pub const DEFAULT_RUN_BUDGET_USD: f64 = 40.0;
 
 pub struct WizardAnswers {
     pub model: String,
