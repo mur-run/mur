@@ -59,6 +59,39 @@ impl OllamaClient {
     }
 }
 
+/// The value for Ollama's top-level `think` field, or `None` to omit it.
+///
+/// Ollama accepts `low | medium | high | max` as well as a boolean, and detects
+/// reasoning support from the model's GGUF metadata — so a level sent to a
+/// model without it is ignored rather than rejected. We still gate on
+/// [`mur_common::llm::effort_shape`] so behavior matches every other client: a
+/// model MUR knows takes no reasoning control is not sent one, and an
+/// `AlwaysOn` model is never sent a value anywhere.
+///
+/// This client previously read `message.thinking` off responses while never
+/// sending `think` at all, so local models had no effort control on a runtime
+/// that supports one.
+fn ollama_think(model: &str, want: Option<mur_common::llm::Effort>) -> Option<&'static str> {
+    use mur_common::llm::Effort;
+    let want = want?;
+    let levels = mur_common::llm::effort_shape(model).levels();
+    if levels.is_empty() {
+        return None;
+    }
+    let level = if levels.contains(&want) {
+        want
+    } else {
+        levels.iter().rev().find(|l| **l < want).copied()?
+    };
+    Some(match level {
+        Effort::Low => "low",
+        Effort::Medium => "medium",
+        Effort::High => "high",
+        // Ollama's top scale ends at `max`; xhigh has no separate step.
+        Effort::Xhigh | Effort::Max => "max",
+    })
+}
+
 #[async_trait]
 impl LlmClient for OllamaClient {
     fn model_name(&self) -> &str {
@@ -69,6 +102,9 @@ impl LlmClient for OllamaClient {
         let url = format!("{}/api/chat", self.base_url);
         let messages = to_ollama_messages(&req.messages);
         let mut body = json!({"model": self.model, "messages": messages, "stream": false});
+        if let Some(think) = ollama_think(&self.model, req.effort) {
+            body["think"] = json!(think);
+        }
         if let Some(t) = req.temperature {
             body["options"]["temperature"] = json!(t);
         }
@@ -124,6 +160,9 @@ impl LlmClient for OllamaClient {
         let url = format!("{}/api/chat", self.base_url);
         let messages = to_ollama_messages(&req.messages);
         let mut body = json!({"model": self.model, "messages": messages, "stream": true});
+        if let Some(think) = ollama_think(&self.model, req.effort) {
+            body["think"] = json!(think);
+        }
         if let Some(t) = req.temperature {
             body["options"]["temperature"] = json!(t);
         }
@@ -218,6 +257,23 @@ impl LlmClient for OllamaClient {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn think_is_sent_only_for_models_that_take_it() {
+        use mur_common::llm::{Effort, EffortShape, effort_shape};
+        // A local model with a level set gets the level name Ollama documents.
+        assert_eq!(
+            super::ollama_think("qwen3-32b", Some(Effort::High)),
+            Some("high")
+        );
+        // A model MUR knows has no reasoning control is not sent one.
+        assert!(super::ollama_think("llama3.2:3b", Some(Effort::High)).is_none());
+        // No effort requested: send nothing.
+        assert_eq!(super::ollama_think("qwen3-32b", None), None);
+        // AlwaysOn must never be sent a value, on any transport.
+        assert!(matches!(effort_shape("magistral"), EffortShape::AlwaysOn));
+        assert!(super::ollama_think("magistral", Some(Effort::Max)).is_none());
+    }
+
     use super::*;
 
     #[test]
