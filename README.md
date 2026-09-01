@@ -585,7 +585,12 @@ Agent** wizard offers the same catalog as a source.
   (`mur model smart on`), and per agent it's genuinely three-state:
   `mur agent smart <name> follow|on|off`, where `follow` means follow. The
   toggle used to lie in the other direction too — an agent with no fallback
-  chain never ran Smart at all, whatever the setting said.
+  chain never ran Smart at all, whatever the setting said. And the decisions
+  are no longer write-only: `mur agent routing <name> --downgrades-only` reads
+  them back out of the telemetry that was always being written, marking with
+  `↓` the turns MUR chose the model for you. The gate stops the failure MUR can
+  recognise; no automated check can tell you the cheap model was simply *worse*
+  at something without paying to run the turn twice. That's what looking is for.
 
 ### 🔌 Power the tools you already pay for
 
