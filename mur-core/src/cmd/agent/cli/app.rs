@@ -188,6 +188,12 @@ pub enum SlashCmd {
     Open,
     /// `/model [N|name]` — list registry models, or hot-switch to one.
     Model(Option<String>),
+    /// `/effort [level] [--save]` — list the levels this model accepts, or set
+    /// one. Session-scoped unless `--save` also writes the profile.
+    Effort {
+        level: Option<String>,
+        save: bool,
+    },
     /// `/login [anthropic|chatgpt]` — show OAuth health, or repair one provider.
     /// Unrelated to `mur auth login`, which signs in to mur.run.
     Login(Option<String>),
@@ -214,6 +220,16 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
             }
         }
         "model" => SlashCmd::Model(words.next().map(str::to_string)),
+        "effort" => {
+            let args: Vec<&str> = words.collect();
+            SlashCmd::Effort {
+                level: args
+                    .iter()
+                    .find(|s| !s.starts_with("--"))
+                    .map(|s| (*s).to_string()),
+                save: args.contains(&"--save"),
+            }
+        }
         "login" => SlashCmd::Login(words.next().map(str::to_string)),
         "auto" => SlashCmd::Auto(match words.next() {
             Some("on") => Some(true),
@@ -483,6 +499,10 @@ pub struct App {
     pub turn_in: u64,
     pub turn_out: u64,
     /// Last-known context fill from the runtime's `Task.usage.context_tokens`.
+    /// Effort set with `/effort` this session, if any. Kept apart from the
+    /// profile value so `effective_effort` can report WHICH one is in force —
+    /// the user needs to know whether their change outlives the session.
+    pub session_effort: Option<mur_common::llm::Effort>,
     pub ctx_tokens: u64,
     /// Pricing for the model that answered the LAST turn — not necessarily the
     /// one this agent is configured with, because the runtime's fallback chain
@@ -628,6 +648,7 @@ impl App {
             session_out: 0,
             turn_in: 0,
             turn_out: 0,
+            session_effort: None,
             ctx_tokens: 0,
             pricing: super::footer::Pricing::default(),
             pricing_book: None,
@@ -1823,6 +1844,46 @@ mod tests {
         a.start_new_session(s);
         assert!(a.context_task_id.is_none());
         assert_eq!(a.messages.last().unwrap().role, Role::System);
+    }
+
+    #[test]
+    fn effort_parses_bare_level_and_save() {
+        assert_eq!(
+            parse_slash("/effort"),
+            Some(SlashCmd::Effort {
+                level: None,
+                save: false
+            })
+        );
+        assert_eq!(
+            parse_slash("/effort high"),
+            Some(SlashCmd::Effort {
+                level: Some("high".into()),
+                save: false
+            })
+        );
+        assert_eq!(
+            parse_slash("/effort high --save"),
+            Some(SlashCmd::Effort {
+                level: Some("high".into()),
+                save: true
+            })
+        );
+        // Order must not matter, and `--save` alone is a listing, not a write.
+        assert_eq!(
+            parse_slash("/effort --save xhigh"),
+            Some(SlashCmd::Effort {
+                level: Some("xhigh".into()),
+                save: true
+            })
+        );
+        assert_eq!(
+            parse_slash("/effort --save"),
+            Some(SlashCmd::Effort {
+                level: None,
+                save: true
+            })
+        );
     }
 
     #[test]

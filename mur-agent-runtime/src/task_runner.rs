@@ -222,7 +222,17 @@ pub struct TaskRunner {
     /// Per-agent effort for this agent's own turns. `None` = the API default.
     /// Mechanical internal calls override it downward regardless (see
     /// `graceful_exit`).
-    effort: Option<mur_common::llm::Effort>,
+    ///
+    /// Interior-mutable because murmur's `/effort` changes it on a RUNNING
+    /// agent through the `effort/set` A2A method, and the runner is shared as
+    /// `Arc<TaskRunner>`. Unlike a model swap this needs no reconstruction:
+    /// effort is a per-call parameter, so the next request picks it up.
+    ///
+    /// Deliberately stores what was ASKED FOR, not a narrowed value. Narrowing
+    /// to what a model accepts happens at the wire, in each client — see
+    /// `mur_common::llm::supported_effort`, whose doc records that split. A
+    /// second narrowing here would be a second derivation of one rule.
+    effort: std::sync::RwLock<Option<mur_common::llm::Effort>>,
     /// Multi-turn chat memory keyed by `context.task_id` (see `ConversationStore`).
     conversations: Mutex<ConversationStore>,
     /// Set by `begin_drain()` during graceful shutdown. When true, `run_sync_inner`
@@ -336,7 +346,7 @@ impl TaskRunner {
             max_token_budget: DEFAULT_MAX_TOKEN_BUDGET,
             tools: vec![],
             tools_policy: vec![],
-            effort: None,
+            effort: std::sync::RwLock::new(None),
             conversations: Mutex::new(ConversationStore::default()),
             draining: Arc::new(AtomicBool::new(false)),
         }
@@ -430,10 +440,27 @@ impl TaskRunner {
         self
     }
 
-    /// Set the agent's per-turn effort (from its profile).
+    /// Set the agent's per-turn effort (from its profile) at construction.
     pub fn with_effort(mut self, effort: Option<mur_common::llm::Effort>) -> Self {
-        self.effort = effort;
+        self.effort = std::sync::RwLock::new(effort);
         self
+    }
+
+    /// The effort this agent's own turns currently request.
+    ///
+    /// A poisoned lock reports `None` rather than panicking: losing the
+    /// session's effort override costs a slightly different reasoning budget,
+    /// while panicking here would take down a running agent mid-turn.
+    pub fn effort(&self) -> Option<mur_common::llm::Effort> {
+        self.effort.read().map(|g| *g).unwrap_or(None)
+    }
+
+    /// Change the effort on a running agent (murmur `/effort`, via the
+    /// `effort/set` A2A method). Takes effect on the next request.
+    pub fn set_effort(&self, effort: Option<mur_common::llm::Effort>) {
+        if let Ok(mut g) = self.effort.write() {
+            *g = effort;
+        }
     }
 
     pub fn with_telemetry(mut self, tx: mpsc::Sender<Event>) -> Self {
@@ -1161,7 +1188,7 @@ impl TaskRunner {
             temperature: None,
             max_tokens: None,
             tools: vec![],
-            effort: self.effort,
+            effort: self.effort(),
             intent,
             task_id: Some(task_id.to_string()),
             ..Default::default()
@@ -1664,7 +1691,7 @@ impl TaskRunner {
                 messages: history.clone(),
                 temperature: None,
                 max_tokens: None,
-                effort: self.effort,
+                effort: self.effort(),
                 tools: tool_defs.clone(),
                 intent,
                 task_id: Some(task_id.to_string()),

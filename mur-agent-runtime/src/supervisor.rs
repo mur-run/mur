@@ -1070,6 +1070,15 @@ fn build_dispatcher(
             )),
         );
     }
+    // murmur /effort. Unlike model/set this is registered unconditionally:
+    // effort is a per-call parameter, so there is no client to rebuild and no
+    // agent shape that cannot accept one.
+    d.register(
+        "effort/set",
+        Box::new(crate::protocol::methods::effort_set::EffortSetHandler::new(
+            runner.clone(),
+        )),
+    );
     // murmur `/remember` and `/forget` run in the CLI process; this is how they
     // tell the running agent its memory set changed.
     d.register(
