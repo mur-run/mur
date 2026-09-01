@@ -199,14 +199,25 @@ Resolution order for the effective Smart config:
 
 ### 4.6 Migration
 
-Changing "omitted field" from *serde default* to *inherit global* is a
-behaviour change for any profile that already carries a `routing:` block, and
-it must be deliberate rather than smuggled in as a bug fix. A one-shot
-migration in the existing `mur-common/src/config_migrate.rs` writes an explicit
-`enabled: false` into any legacy per-agent `routing` block that omitted it,
-preserving today's effective behaviour exactly. Users opt into the new
-inheritance by clearing the field themselves (or via `mur agent smart <name>
-follow`).
+None, deliberately.
+
+`RoutingOverride.enabled` is `Option<bool>`, so a legacy profile that wrote
+`enabled: false` explicitly still deserializes to `Some(false)` and keeps its
+behaviour exactly. Only a profile that *omitted* `enabled` changes meaning —
+from "disabled" (the serde default) to "inherit global".
+
+That difference is observable in exactly one configuration: global difficulty
+routing on **and** a hand-written per-agent `routing:` block that omits
+`enabled`. There, the old behaviour was itself the bug — omission was the only
+way to express a partial override, and it silently disabled the mechanism the
+user had just enabled globally. The new reading is what the author meant.
+
+A file-rewriting migration was considered and rejected. `config_migrate.rs`
+operates on the global `config.yaml` **text** and is wired into
+`Config::load_or_default` / `save_config_at`; it never sees
+`agents/*/profile.yaml`. Honouring the old reading would mean a new
+profile-rewriting pass over every agent on disk to defend a configuration that
+needs two uncommon conditions to coincide.
 
 Exported `.muragent` bundles carry old profiles, so the legacy nested read
 (§4.3 step 2) is permanent, not transitional.
@@ -268,7 +279,8 @@ Unit (`mur-agent-runtime`):
 Config/back-compat:
 - Legacy `models:` without `smart:` → `enabled: false` (new default).
 - Legacy profile with nested `routing.smart` still resolves.
-- Migration writes explicit `enabled: false` and changes nothing else.
+- Legacy profile with an explicit `routing.enabled: false` still resolves to
+  `Some(false)` — no silent re-enable (§4.6).
 
 ## 9. Rejected alternatives
 
@@ -298,7 +310,7 @@ Config/back-compat:
 | Phase | Content | Gate |
 |---|---|---|
 | L1 | `Requirement`/`satisfies`/`pick_cheap_model` + `requirements_of` + `candidates_for` filter + tests | Ships alone; fixes the incident without any config change |
-| L2 | Override types, profile promotion, default flip, boot gate, migration, CLI, Hub three-state | Depends on L1 (turning the switch on must already be safe) |
+| L2 | Override types, profile promotion, default flip, boot gate, CLI, Hub three-state | Depends on L1 (turning the switch on must already be safe) |
 | L3 | Background-visible routing surface | Precondition for ever defaulting Smart back on (§7) |
 
 L1 is deliberately shippable on its own: it makes the current default-on
