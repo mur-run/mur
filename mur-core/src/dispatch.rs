@@ -1594,6 +1594,11 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             params,
         } => cmd::agent::cmd_dial(&name, &method, params.as_deref())?,
         AgentAction::Effort { name, level, clear } => cmd::agent::cmd_effort(&name, level, clear)?,
+        AgentAction::Routing {
+            name,
+            limit,
+            downgrades_only,
+        } => cmd::agent::cmd_routing(&name, limit, downgrades_only)?,
         AgentAction::Who {
             can,
             skill,

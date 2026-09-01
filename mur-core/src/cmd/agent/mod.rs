@@ -53,6 +53,7 @@ mod prompt;
 mod reconnect;
 mod restart;
 mod restart_confirm;
+mod routing;
 mod secret;
 mod service;
 pub mod skill;
@@ -109,6 +110,7 @@ pub use prompt::{cmd_prompt_edit, cmd_prompt_set, cmd_prompt_show};
 pub use reconnect::cmd_agent_reconnect;
 #[allow(unused_imports)]
 pub use restart::{cmd_restart, restart_stale_excluding};
+pub use routing::cmd_routing;
 #[allow(unused_imports)]
 pub use secret::{cmd_secret_delete, cmd_secret_list, cmd_secret_set};
 #[allow(unused_imports)]

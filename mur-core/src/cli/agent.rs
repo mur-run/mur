@@ -152,6 +152,19 @@ pub enum AgentAction {
         #[arg(long)]
         clear: bool,
     },
+    /// What the router actually did, per turn — including the background turns
+    /// that never render a decision anywhere else. `↓` marks a model Smart
+    /// chose for you rather than one you configured.
+    Routing {
+        /// Agent name
+        name: String,
+        /// Rows to print (newest first). Default 20.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Only turns where Smart picked the model.
+        #[arg(long = "downgrades-only")]
+        downgrades_only: bool,
+    },
     /// Who can do what — the dispatch index, derived from what the sandbox
     /// actually enforces. With no filter, prints the whole roster.
     Who {
