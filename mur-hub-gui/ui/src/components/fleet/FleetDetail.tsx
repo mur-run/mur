@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+
+import { scheduleNext, type ScheduleItem, type ScheduleStatus } from "../../schedule";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { useT } from "../../i18n";
 import type { TranslationKey } from "../../i18n/types";
@@ -110,6 +112,25 @@ export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRef
     }, CRON_PREVIEW_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [trigKind, trigValue]);
+  // What the fleet is actually set up to do, as opposed to what the unsaved
+  // form says. Read from the same aggregator the Panel and the agent inspector
+  // use, so the three cannot answer "when does this next fire" differently.
+  const [saved, setSaved] = useState<ScheduleItem | null>(null);
+  useEffect(() => {
+    let live = true;
+    void invoke<ScheduleStatus>("panel_schedule_status", { agent: null })
+      .then((st) => {
+        if (!live) return;
+        setSaved(
+          st.schedules.find((r) => r.kind === "fleet" && r.owner === detail.name) ?? null,
+        );
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [detail.name, detail.loop_cfg?.trigger, detail.loop_cfg?.last_run]);
+
   const [maxIter, setMaxIter] = useState(
     detail.loop_cfg?.max_iterations ? String(detail.loop_cfg.max_iterations) : ""
   );
@@ -648,6 +669,15 @@ export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRef
         <div className="fleet-settings__hint">
           {t("fleet.settings.lastRun")}: {detail.loop_cfg?.last_run ?? t("fleet.settings.lastRunNever")}
           <br />
+          {/* Rendered only once the aggregator has answered: before that there
+              is nothing true to say, and a placeholder here would be read as
+              one. */}
+          {saved && (
+            <>
+              {t("fleet.settings.nextRun")}: {scheduleNext(saved).text}
+              <br />
+            </>
+          )}
           {t("fleet.settings.stopHint")}
         </div>
         <button

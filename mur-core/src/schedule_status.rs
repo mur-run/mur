@@ -12,7 +12,10 @@
 
 use std::path::Path;
 
+use chrono::{Local, TimeZone};
 use mur_agent_runtime::scheduler::{next_n_fires, parse_bound};
+
+use crate::cmd::fleet::loop_run::parse_duration;
 
 use crate::cmd::system_schedule::list_system_schedules_detailed;
 
@@ -146,26 +149,92 @@ fn describe_trigger(trigger: &str) -> String {
     trigger.to_string()
 }
 
-/// Why an item has no next fire.
-///
-/// The invariant this exists for: **an empty `next_fires` always carries a
-/// note.** A blank "Next" column is indistinguishable from "will not run
-/// again", and one of the things it currently hides is a fleet that runs every
-/// thirty minutes.
-fn trigger_note(trigger: &str) -> Option<String> {
-    if trigger == "manual" {
-        return Some("no timetable — this runs only when something starts it".into());
+/// When a fleet next fires, or why that cannot be said. Exactly one of the two
+/// is always present — a blank "Next" reads as "will not run again", and one of
+/// the things it used to hide was a fleet running every thirty minutes.
+fn fleet_next(dir: &Path, trigger: &str) -> (Vec<String>, Option<String>) {
+    if let Some(expr) = trigger.strip_prefix("cron:") {
+        let f = fires(expr);
+        if f.is_empty() {
+            return (f, Some(format!("could not read a schedule from `{expr}`")));
+        }
+        return (f, None);
     }
-    if trigger.starts_with("interval:") {
-        // `.last_run` is named by `schedule_status`'s own comment and by
-        // `cmd/fleet/export.rs` as the state this would need — and nothing in
-        // the tree writes it, so the gap is permanent until something does.
-        return Some(
-            "not tracked — an interval fires relative to its last run, which is not recorded"
-                .into(),
+    if let Some(every) = trigger.strip_prefix("interval:") {
+        return interval_next(dir, every);
+    }
+    if trigger == "manual" {
+        return (
+            Vec::new(),
+            Some("no timetable — this runs only when something starts it".into()),
         );
     }
-    Some(format!("could not read a schedule from `{trigger}`"))
+    (
+        Vec::new(),
+        Some(format!("could not read a schedule from `{trigger}`")),
+    )
+}
+
+/// An interval is measured from the previous run, which `mur-daemon`'s fleet
+/// tick stamps into `<fleet>/.last_run` — the same file the Hub already reads
+/// to show "Last run". An earlier version of this module recorded that nothing
+/// wrote that stamp and treated the gap as permanent; the daemon does write it,
+/// so the fire times are computable and are computed here.
+///
+/// Two things it still will not claim: a fleet that has never run has nothing
+/// to measure from, and a boundary that has already passed without the fleet
+/// running means the daemon is not picking it up — naming the boundary *after*
+/// that one would assert a wait the fleet is not doing.
+fn interval_next(dir: &Path, every: &str) -> (Vec<String>, Option<String>) {
+    let Some(step) = parse_duration(every)
+        .map(|d| d.as_secs())
+        .filter(|s| *s > 0)
+    else {
+        return (
+            Vec::new(),
+            Some(format!("could not read a duration from `{every}`")),
+        );
+    };
+    let Some(last) = read_last_run(dir) else {
+        return (
+            Vec::new(),
+            Some("not yet run — an interval is measured from the last run".into()),
+        );
+    };
+    let now = Local::now().timestamp().max(0) as u64;
+    let due = last + step;
+    if due <= now {
+        let when = local_fmt(due, "%Y-%m-%d %H:%M");
+        return (
+            Vec::new(),
+            Some(match when {
+                Some(t) => format!("due since {t} — waiting for the fleet daemon"),
+                None => "overdue — waiting for the fleet daemon".into(),
+            }),
+        );
+    }
+    let out: Vec<String> = (0..NEXT_FIRE_COUNT as u64)
+        .filter_map(|k| local_fmt(due + k * step, "%+"))
+        .collect();
+    if out.is_empty() {
+        return (out, Some("could not represent the next fire time".into()));
+    }
+    (out, None)
+}
+
+fn read_last_run(dir: &Path) -> Option<u64> {
+    std::fs::read_to_string(dir.join(".last_run"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+fn local_fmt(unix: u64, fmt: &str) -> Option<String> {
+    Local
+        .timestamp_opt(unix as i64, 0)
+        .single()
+        .map(|t| t.format(fmt).to_string())
 }
 
 fn fires(expr: &str) -> Vec<String> {
@@ -320,19 +389,8 @@ fn collect_fleets(home: &Path, out: &mut Vec<ScheduleItem>, warnings: &mut Vec<S
             continue;
         };
         let stopped = entry.path().join(".stopped").exists();
-        // Only cron-style triggers get next-fire previews; interval triggers
-        // need `.last_run` state to compute the next fire and are shown with
-        // an empty preview instead (fail-soft, not an error).
-        let next_fires = loop_cfg
-            .trigger
-            .strip_prefix("cron:")
-            .map(fires)
-            .unwrap_or_default();
+        let (next_fires, next_note) = fleet_next(&entry.path(), &loop_cfg.trigger);
         let description = describe_trigger(&loop_cfg.trigger);
-        let next_note = next_fires
-            .is_empty()
-            .then(|| trigger_note(&loop_cfg.trigger))
-            .flatten();
         out.push(ScheduleItem::Fleet {
             owner: fleet.name,
             trigger: loop_cfg.trigger,
@@ -402,6 +460,76 @@ mod tests {
                 "exactly one of a fire time and a note, got ({has_fire}, {note:?}) for {it:?}"
             );
         }
+    }
+
+    /// The stamp the daemon writes is enough to answer the question the old
+    /// note declined: a fleet on a 30-minute interval that ran ten minutes ago
+    /// fires twenty minutes from now.
+    #[test]
+    fn an_interval_fleet_with_a_last_run_gets_real_fire_times() {
+        let home = tempfile::tempdir().unwrap();
+        let d = home.path().join("fleets/paced");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(
+            d.join("fleet.yaml"),
+            "name: paced\nchannel_id: fleet-paced\nloop:\n  trigger: \"interval:30m\"\n",
+        )
+        .unwrap();
+        let ten_min_ago = chrono::Local::now().timestamp() - 600;
+        fs::write(d.join(".last_run"), ten_min_ago.to_string()).unwrap();
+
+        let st = schedule_status(home.path(), None);
+        let ScheduleItem::Fleet {
+            next_fires,
+            next_note,
+            ..
+        } = &st.schedules[0]
+        else {
+            panic!("{:?}", st.schedules)
+        };
+        assert!(next_note.is_none(), "{next_note:?}");
+        assert_eq!(next_fires.len(), 3, "{next_fires:?}");
+        let first = chrono::DateTime::parse_from_rfc3339(&next_fires[0]).unwrap();
+        let in_secs = first.timestamp() - chrono::Local::now().timestamp();
+        assert!(
+            (1150..=1250).contains(&in_secs),
+            "expected ~20 minutes out, got {in_secs}s"
+        );
+    }
+
+    /// A boundary that passed without the fleet running means nothing is
+    /// running it. Naming the boundary after that one would assert a wait the
+    /// fleet is not doing.
+    #[test]
+    fn an_overdue_interval_fleet_says_it_is_overdue() {
+        let home = tempfile::tempdir().unwrap();
+        let d = home.path().join("fleets/stalled");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(
+            d.join("fleet.yaml"),
+            "name: stalled\nchannel_id: fleet-stalled\nloop:\n  trigger: \"interval:5m\"\n",
+        )
+        .unwrap();
+        fs::write(
+            d.join(".last_run"),
+            (chrono::Local::now().timestamp() - 3600).to_string(),
+        )
+        .unwrap();
+
+        let st = schedule_status(home.path(), None);
+        let ScheduleItem::Fleet {
+            next_fires,
+            next_note,
+            ..
+        } = &st.schedules[0]
+        else {
+            panic!("{:?}", st.schedules)
+        };
+        assert!(next_fires.is_empty());
+        assert!(
+            next_note.as_deref().unwrap().contains("due since"),
+            "{next_note:?}"
+        );
     }
 
     /// The row from the report: a fleet running every half hour rendered as

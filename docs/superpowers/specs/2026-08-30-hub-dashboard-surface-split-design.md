@@ -1,7 +1,8 @@
 # Hub and Dashboard: which surface owns what
 
-Status: design (2026-08-30). Two repos: `mur` (Hub, local API, CLI) and
-`mur-web` (Dashboard).
+Status: implemented (2026-08-31). Two repos: `mur` (Hub, local API, CLI) and
+`mur-web` (Dashboard). Corrections where the design turned out to be wrong
+about the code are marked in place rather than silently edited out.
 
 ## Problem
 
@@ -163,9 +164,29 @@ Defect 1 is a scope error, not a rendering one: an agent-scoped panel must not
 show globally-scoped rows without labelling them as such, and the filter must
 visibly apply to what is on screen.
 
+**Landed:** 3 and 5 in #1095, 1 in #1096, 2 and 4 after. Defect 3's stated cause
+was only half of it. `next_n_fires` does parse cron only, but the reason an
+interval fleet was left with no answer was a second claim, written into
+`schedule_status` itself: that nothing records the `.last_run` an interval is
+measured from, "so the gap is permanent until something does". That claim was
+false — `mur-daemon`'s fleet tick writes the stamp on every auto-run, and the
+Hub already read the same file to show "Last auto-run". Interval fire times are
+computed from it now. Two answers are still declined, because they cannot be
+supported: a fleet that has never run has nothing to measure from, and a
+boundary that passed without the fleet running means nothing is running it.
+
 **D3c — Hub shows schedules read-only**, on agent and fleet detail: what fires
-next, whether it is enabled, what happened last. Editing stays in the CLI and
-the Dashboard, and the view says so.
+next, whether it is enabled, what happened last.
+
+The agent view is read-only and says where editing lives (`mur agent schedule`).
+**Fleet detail is not, and should not be:** the Hub already carries a
+loop-settings editor there — trigger, budget, deadline, iteration cap — and
+under the rule above that is exactly where fleets belong. This document's
+original "editing stays in the CLI and the Dashboard" was written without
+checking, and would have meant deleting a working surface to satisfy a
+sentence. What D3c adds to fleet detail is the half the editor never answered:
+when the fleet actually fires next, for every trigger kind rather than only
+while a cron expression is being typed.
 
 A link out to `localhost:3847` is acceptable **only if the Hub guarantees the
 target is reachable** — starting `mur serve` on demand, or not offering the link.
@@ -212,9 +233,10 @@ this needs a new client of existing machinery rather than new machinery.
 ### D4 — one describer, one next-fire calculator
 
 `mur-web/src/lib/schedule-parser.ts` is 288 lines carrying natural-language →
-cron, `describeCron`, and `getNextRun`. The Rust side has `next_n_fires` and no
-describer. That is two implementations of "when does this fire next", and a
-third would appear the moment the Hub grew a schedule view.
+cron, `describeCron`, and `getNextRun`. The Rust side has `next_n_fires`; the
+describer beside it (`describe_cron`, `describe_trigger`) landed in #1095 while
+this was being written. That is two implementations of "when does this fire
+next", and a third would appear the moment the Hub grew a schedule view.
 
 **`next_fires` and a human description become part of the schedule record's API
 shape.** Whoever serves the record fills them; the browser formats and does not
@@ -227,7 +249,8 @@ second implementation, but of a *different data set*, which is a tolerable
 shape. Two answers to one question is the failure; two sources each answering
 for their own data is not.
 
-The Rust describer is new work and belongs beside `next_n_fires`.
+The Rust describer belongs beside `next_n_fires` — which is where #1095 put
+it.
 
 ## Recorded, not acted on
 

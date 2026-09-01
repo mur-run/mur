@@ -35,6 +35,7 @@ mod governance;
 mod mobile;
 mod patterns;
 mod pipelines;
+mod schedules;
 mod search;
 mod sessions;
 mod signals;
@@ -230,6 +231,8 @@ pub fn build_router_with_auth(state: AppState, auth_token: Option<Arc<str>>) -> 
         .route("/api/v1/workflows/{id}", put(update_workflow))
         .route("/api/v1/workflows/{id}", delete(delete_workflow))
         // Stats & metadata
+        // Schedules (read-only; the CLI owns writing)
+        .route("/api/v1/schedules", get(schedules::list_schedules))
         .route("/api/v1/stats", get(get_stats))
         .route("/api/v1/tags", get(get_tags))
         .route("/api/v1/links/{id}", get(get_links))
