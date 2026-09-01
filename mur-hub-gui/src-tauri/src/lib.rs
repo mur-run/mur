@@ -598,16 +598,15 @@ pub fn run() {
                     Err(e) => tracing::warn!("install-inbox watcher failed to start: {e:#}"),
                 }
 
-                // Companion inbox → system notification. Catch up first, so a
-                // reminder that fired while the Hub was closed is reported as
-                // missed rather than absorbed into "unread" (#1125).
-                let missed = crate::companion_notify::catch_up(&app.handle().clone(), &home);
-                if missed > 0 {
-                    tracing::info!(
-                        missed,
-                        "companion inbox entries arrived while the Hub was closed"
-                    );
-                }
+                // Companion inbox → system notification (#1125).
+                //
+                // The watch is armed BEFORE the catch-up sweep. Sweeping first
+                // leaves a window: an entry written after the sweep read the
+                // directory but before the watch existed reached neither, and
+                // would surface only at the next Hub start. Arming first closes
+                // it — the seen marker already makes a double raise impossible,
+                // so the worst case is an entry labelled "new" that a stricter
+                // reading would have called "missed".
                 match crate::companion_notify::watch_inboxes(app.handle().clone(), &home) {
                     Ok(ws) => {
                         #[allow(dead_code)] // held only to keep the watchers alive
@@ -615,6 +614,13 @@ pub fn run() {
                         app.manage(std::sync::Mutex::new(Some(CompanionInboxWatchers(ws))));
                     }
                     Err(e) => tracing::warn!("companion inbox watchers failed to start: {e:#}"),
+                }
+                let missed = crate::companion_notify::catch_up(&app.handle().clone(), &home);
+                if missed > 0 {
+                    tracing::info!(
+                        missed,
+                        "companion inbox entries arrived while the Hub was closed"
+                    );
                 }
             }
 
