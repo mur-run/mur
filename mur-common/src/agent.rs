@@ -1042,6 +1042,11 @@ pub enum ExecutionMode {
 /// lists, which is the shape of failure this whole area keeps producing.
 pub const SCHEDULE_PROPOSAL_DIR: &str = "schedule-proposals";
 
+/// File in the agent's home holding the id of the channel a fired schedule
+/// leaves its reply in. One stable channel per agent, remembered rather than
+/// re-derived (#1125).
+pub const SCHEDULE_CHANNEL_FILE: &str = "schedule-channel";
+
 /// A schedule an agent asked for and a person has not yet granted.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ScheduleProposal {

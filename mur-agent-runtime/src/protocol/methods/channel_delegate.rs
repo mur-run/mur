@@ -82,7 +82,7 @@ pub fn append_self_reply(
 /// Extract the agent's reply text from a finished [`Task`](mur_common::a2a::Task):
 /// the last message's first text part. Returns an empty string if the task has
 /// no messages or the final message carries no text part.
-fn reply_text_of(task: &mur_common::a2a::Task) -> String {
+pub(crate) fn reply_text_of(task: &mur_common::a2a::Task) -> String {
     task.messages
         .last()
         .and_then(|m| {
