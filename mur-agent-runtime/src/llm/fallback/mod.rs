@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use mur_common::agent::AgentProfile;
 use mur_common::config::{ModelSwitchConfig, RetryConfig};
-use mur_common::model::{choose_by_difficulty, resolve_model_refs};
+use mur_common::model::{Requirement, choose_by_difficulty, resolve_model_refs};
 
 use super::{
     BackgroundKind, Disposition, LlmClient, LlmError, LlmRequest, LlmResponse, RequestIntent,
@@ -119,11 +119,7 @@ impl FallbackLlmClient {
             return "explicit".to_string();
         }
         if let CandidateSource::PerRequest { profile, cfg } = &self.source {
-            let smart = profile
-                .routing
-                .as_ref()
-                .and_then(|r| r.smart.clone())
-                .unwrap_or_else(|| cfg.smart.clone());
+            let smart = profile.effective_smart(cfg);
             if matches!(req.intent, RequestIntent::Background(_)) && smart.enabled {
                 return "smart-background".to_string();
             }
@@ -141,32 +137,36 @@ impl FallbackLlmClient {
         match &self.source {
             CandidateSource::Static(v) => v.clone(),
             CandidateSource::PerRequest { profile, cfg } => {
+                let reqs = requirements_of(req);
+                let reg = if reqs.is_empty() {
+                    None
+                } else {
+                    load_registry()
+                };
+
                 // Per-agent routing overrides global; disabled → None → normal
-                // model_ref/default primary.
-                let routing = profile
-                    .routing
-                    .clone()
-                    .unwrap_or_else(|| cfg.routing.clone());
+                // model_ref/default primary. A routed pick is an automatic
+                // substitution, so it has to clear the capability bar too;
+                // when it cannot, resolution falls through to the primary.
+                let routing = profile.effective_routing(cfg);
                 let routed = if routing.enabled {
                     choose_by_difficulty(estimate_input_tokens(req), &routing)
+                        .filter(|r| ref_ok(reg.as_ref(), r, &reqs))
                 } else {
                     None
                 };
                 let base = resolve_model_refs(profile, cfg, routed);
+                let keep = base.first().cloned();
 
                 // Smart background: cheap model first, base (primary + chain)
                 // behind it (cascade). Per-agent Smart config overrides global.
-                let smart = profile
-                    .routing
-                    .as_ref()
-                    .and_then(|r| r.smart.clone())
-                    .unwrap_or_else(|| cfg.smart.clone());
+                let smart = profile.effective_smart(cfg);
                 if matches!(req.intent, RequestIntent::Background(_)) && smart.enabled {
-                    let primary = base.first().cloned();
                     let cheap = smart
                         .cheap
                         .clone()
-                        .or_else(|| autopick_cheap(primary.as_deref()));
+                        .filter(|c| ref_ok(reg.as_ref(), c, &reqs))
+                        .or_else(|| autopick_cheap(keep.as_deref(), &reqs));
                     if let Some(c) = cheap {
                         let mut out = vec![c];
                         for r in base {
@@ -174,10 +174,10 @@ impl FallbackLlmClient {
                                 out.push(r);
                             }
                         }
-                        return out;
+                        return filter_eligible(out, keep.as_deref(), &reqs, reg.as_ref());
                     }
                 }
-                base
+                filter_eligible(base, keep.as_deref(), &reqs, reg.as_ref())
             }
         }
     }
@@ -219,11 +219,7 @@ impl FallbackLlmClient {
             CandidateSource::PerRequest { profile, cfg }
                 if matches!(req.intent, RequestIntent::Background(_)) =>
             {
-                let smart = profile
-                    .routing
-                    .as_ref()
-                    .and_then(|r| r.smart.clone())
-                    .unwrap_or_else(|| cfg.smart.clone());
+                let smart = profile.effective_smart(cfg);
                 if smart.enabled {
                     smart.max_escalations
                 } else {
@@ -420,14 +416,71 @@ fn truncate_chars(s: &str, max: usize) -> String {
     }
 }
 
-/// Auto-pick a cheap model from the on-disk registry, excluding `primary`.
-/// Any failure (no registry path, load error, empty registry) yields `None`
-/// so the caller falls through to Phase-1 `base` candidates (fail-expensive,
-/// never fail-hard).
-fn autopick_cheap(primary: Option<&str>) -> Option<String> {
+/// The capabilities this request needs from whatever model serves it. Derived
+/// from the request, never from config: an image in the messages means the
+/// model has to be able to see it, a tool list means it has to be able to call.
+fn requirements_of(req: &LlmRequest) -> Vec<Requirement> {
+    let mut out = Vec::new();
+    if req
+        .messages
+        .iter()
+        .any(|m| matches!(m, RichMessage::ImageText { .. }))
+    {
+        out.push(Requirement::Vision);
+    }
+    if !req.tools.is_empty() {
+        out.push(Requirement::Tools);
+    }
+    out
+}
+
+/// Auto-pick a cheap model from the on-disk registry that can serve `reqs`,
+/// excluding `primary`. Any failure (no registry path, load error, empty
+/// registry, nothing capable enough) yields `None` so the caller falls through
+/// to the `base` candidates (fail-expensive, never fail-hard).
+fn autopick_cheap(primary: Option<&str>, reqs: &[Requirement]) -> Option<String> {
     let path = mur_common::model::ModelRegistry::default_path().ok()?;
     let reg = mur_common::model::ModelRegistry::load_from(&path).ok()?;
-    mur_common::model::pick_cheap_model(&reg, primary)
+    mur_common::model::pick_cheap_model(&reg, primary, reqs)
+}
+
+/// The registry, or `None` when it cannot be read. Eligibility treats `None`
+/// as "no opinion" and keeps every candidate: a routing heuristic must not turn
+/// registry I/O into a hard dependency on the request path.
+fn load_registry() -> Option<mur_common::model::ModelRegistry> {
+    let path = mur_common::model::ModelRegistry::default_path().ok()?;
+    mur_common::model::ModelRegistry::load_from(&path).ok()
+}
+
+/// Can `model_ref` serve a request needing `reqs`? A ref the registry does not
+/// know is kept, so the existing per-candidate factory-error reporting (#947)
+/// still names it instead of it vanishing from the failure list.
+fn ref_ok(
+    reg: Option<&mur_common::model::ModelRegistry>,
+    model_ref: &str,
+    reqs: &[Requirement],
+) -> bool {
+    match reg.and_then(|r| r.models.get(model_ref)) {
+        Some(e) => mur_common::model::satisfies(e, reqs),
+        None => true,
+    }
+}
+
+/// Drop automatic candidates that cannot serve the request. `keep` — the user's
+/// explicit primary — always survives: it is their choice and must fail loudly
+/// rather than be second-guessed. Empty `reqs` is the common case and is free.
+fn filter_eligible(
+    refs: Vec<String>,
+    keep: Option<&str>,
+    reqs: &[Requirement],
+    reg: Option<&mur_common::model::ModelRegistry>,
+) -> Vec<String> {
+    if reqs.is_empty() {
+        return refs;
+    }
+    refs.into_iter()
+        .filter(|r| Some(r.as_str()) == keep || ref_ok(reg, r, reqs))
+        .collect()
 }
 
 /// In-memory per-model cooldown (circuit-breaker). Process-local; a restart

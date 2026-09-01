@@ -546,6 +546,7 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
         model_ref: None,
         fallback_chain: Vec::new(),
         routing: None,
+        smart: None,
         mcp_servers: vec![],
         skills: vec![],
         transport: TransportConfig {

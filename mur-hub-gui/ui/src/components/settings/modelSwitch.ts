@@ -49,7 +49,8 @@ export function isChainValid(chain: string[], known: Set<string>): boolean {
  * serialized, so they pass through untouched. `smart.cheap` is likewise
  * omitted when unset; `smart.enabled`/`smart.max_escalations` are always
  * serialized by the Rust side, but the whole `smart` object is guarded too
- * in case an older config predates the field entirely.
+ * in case an older config predates the field entirely. The `enabled` fallback
+ * mirrors the Rust default, which is off — Smart background routing is opt-in.
  */
 export function normalizeMs(raw: ModelSwitchView): ModelSwitchView {
   return {
@@ -64,7 +65,7 @@ export function normalizeMs(raw: ModelSwitchView): ModelSwitchView {
     },
     smart: {
       ...raw.smart,
-      enabled: raw.smart?.enabled ?? true,
+      enabled: raw.smart?.enabled ?? false,
       cheap: raw.smart?.cheap ?? null,
       max_escalations: raw.smart?.max_escalations ?? 1,
     },

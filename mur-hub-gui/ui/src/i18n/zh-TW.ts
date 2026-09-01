@@ -97,6 +97,12 @@ export const zhTW: Table = {
   "detail.fallbackChain": "備援鏈（覆寫全域設定）",
   "detail.fallbackChainInherits": "繼承全域備援鏈。",
   "detail.fallbackChainError": "無法儲存備援鏈：{error}",
+  "detail.smartRouting": "智慧路由",
+  "detail.smartFollow": "跟隨全域設定",
+  "detail.smartOn": "此 agent 開啟",
+  "detail.smartOff": "此 agent 關閉",
+  "detail.smartHint":
+    "背景任務可能改用較省錢的模型。若該模型無法勝任這個請求，一律不會降級。",
   "conv.ask": "對話 Ask 模型",
   "conv.compact": "Compact 摘要模型",
   "conv.rollup": "Rollup 彙整模型",
