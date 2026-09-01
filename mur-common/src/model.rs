@@ -316,6 +316,32 @@ impl Requirement {
             Requirement::Tools => CAP_TOOLS,
         }
     }
+
+    /// Does an entry that declares NO capabilities at all satisfy this?
+    ///
+    /// The two requirements differ in how they fail, and the answer follows
+    /// the failure mode rather than a blanket rule:
+    ///
+    /// - `Vision`: **no**. A model that cannot see answers an image request
+    ///   with confident nonsense — silent, and unrecoverable for that turn.
+    ///   That is the failure this gate exists to prevent, so silence about
+    ///   vision is treated as absence of it.
+    /// - `Tools`: **yes**. A model that cannot call tools fails loudly (the
+    ///   provider rejects the request) and the existing retry/advance path
+    ///   already handles it. Treating undeclared as incapable would drop every
+    ///   entry written before `capabilities` existed — in practice most of a
+    ///   real registry — out of the fallback chain of every tool-carrying turn,
+    ///   which is a large regression bought for very little.
+    ///
+    /// An entry that DOES declare capabilities is taken at its word either
+    /// way: if it enumerated what it can do and left `tools` out, that is a
+    /// statement, not silence.
+    fn permitted_when_undeclared(self) -> bool {
+        match self {
+            Requirement::Vision => false,
+            Requirement::Tools => true,
+        }
+    }
 }
 
 /// Can this entry serve a request needing `reqs`?
@@ -330,8 +356,13 @@ pub fn satisfies(e: &ModelEntry, reqs: &[Requirement]) -> bool {
     if !chat_capable {
         return false;
     }
-    reqs.iter()
-        .all(|r| e.capabilities.iter().any(|c| c == r.capability()))
+    reqs.iter().all(|r| {
+        if e.capabilities.is_empty() {
+            r.permitted_when_undeclared()
+        } else {
+            e.capabilities.iter().any(|c| c == r.capability())
+        }
+    })
 }
 
 /// Pick the cheapest registry entry that can serve a request needing `reqs`,
@@ -909,6 +940,32 @@ mod switch_tests {
             &mk(&["chat", "vision", "tools"]),
             &[Requirement::Vision, Requirement::Tools]
         ));
+    }
+
+    /// Tools and Vision disagree about silence on purpose. A tool-incapable
+    /// model fails loudly and the chain advances; a blind one answers with
+    /// confident nonsense. So an entry that declares nothing keeps its place in
+    /// the chain for a tool turn — otherwise every pre-`capabilities` entry
+    /// (most of a real registry) would drop out of every tool-carrying request
+    /// — while the same silence disqualifies it for an image.
+    #[test]
+    fn undeclared_capabilities_pass_tools_but_never_vision() {
+        let mk = |caps: &[&str]| ModelEntry {
+            provider: "x".into(),
+            model: "m".into(),
+            capabilities: caps.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+        // Silence: permitted for tools, never for vision.
+        assert!(satisfies(&mk(&[]), &[Requirement::Tools]));
+        assert!(!satisfies(&mk(&[]), &[Requirement::Vision]));
+        assert!(!satisfies(
+            &mk(&[]),
+            &[Requirement::Vision, Requirement::Tools]
+        ));
+        // A declaration is taken at its word in both directions.
+        assert!(!satisfies(&mk(&["chat"]), &[Requirement::Tools]));
+        assert!(satisfies(&mk(&["chat", "tools"]), &[Requirement::Tools]));
     }
 
     /// The incident, as a regression test: an image request against a registry

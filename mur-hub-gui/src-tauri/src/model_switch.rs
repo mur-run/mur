@@ -94,7 +94,7 @@ pub(crate) fn agent_get_smart_impl(home: &Path, name: &str) -> Result<Option<boo
         &std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?,
     )
     .map_err(|e| format!("parse profile: {e}"))?;
-    Ok(profile.smart.and_then(|s| s.enabled))
+    Ok(profile.smart_override().and_then(|s| s.enabled))
 }
 
 pub(crate) fn agent_set_smart_impl(

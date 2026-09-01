@@ -157,9 +157,18 @@ pub fn cmd_agent_set_smart(home: &Path, name: &str, state: &str) -> Result<()> {
     let mut profile: mur_common::AgentProfile =
         serde_yaml_ng::from_str(&std::fs::read_to_string(&profile_path)?)
             .with_context(|| format!("parse {}", profile_path.display()))?;
-    // Preserve any other overridden field (e.g. a pinned cheap model): this
-    // sets one field, it does not replace the block.
-    let existing = profile.smart.take().unwrap_or_default();
+    // Migrate any legacy `routing.smart` override forward and clear it, so the
+    // setting ends up living in exactly one place. Leaving both would mean
+    // `follow` did not actually follow: the legacy nesting still outranks the
+    // global config on the read path.
+    let existing = profile
+        .smart
+        .take()
+        .or_else(|| profile.routing.as_mut().and_then(|r| r.smart.take()))
+        .unwrap_or_default();
+    if let Some(r) = profile.routing.as_mut() {
+        r.smart = None;
+    }
     profile.smart = match state {
         "follow" => None,
         "on" => Some(mur_common::config::SmartOverride {

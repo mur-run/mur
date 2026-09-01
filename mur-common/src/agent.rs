@@ -1760,19 +1760,27 @@ impl AgentProfile {
             .expect("minimal profile fixture")
     }
 
+    /// This agent's Smart override, wherever it lives: the promoted `smart`
+    /// field, else the legacy `routing.smart` nesting that older profiles and
+    /// exported `.muragent` bundles still carry. `None` = follow the global
+    /// setting.
+    ///
+    /// Every reader goes through here. A surface that checked only the
+    /// promoted field would report "follows global" for an agent whose legacy
+    /// override is actually in force — one fact, two answers.
+    pub fn smart_override(&self) -> Option<&crate::config::SmartOverride> {
+        self.smart
+            .as_ref()
+            .or_else(|| self.routing.as_ref().and_then(|r| r.smart.as_ref()))
+    }
+
     /// This agent's effective Smart config: the global values with the agent's
-    /// override layered on. Reads the promoted `smart` field first and falls
-    /// back to the legacy `routing.smart` nesting that older profiles and
-    /// exported `.muragent` bundles still carry.
+    /// override layered on.
     pub fn effective_smart(
         &self,
         cfg: &crate::config::ModelSwitchConfig,
     ) -> crate::config::SmartConfig {
-        let ov = self
-            .smart
-            .as_ref()
-            .or_else(|| self.routing.as_ref().and_then(|r| r.smart.as_ref()));
-        cfg.smart.merged(ov)
+        cfg.smart.merged(self.smart_override())
     }
 
     /// This agent's effective difficulty-routing config.

@@ -45,10 +45,24 @@ is that one omission.
 
 Two consequences shape the whole design:
 
-- **Fail-closed above the baseline.** An entry with no declared capabilities is
-  assumed chat-capable (the existing legacy clause, which must stay or every
-  pre-capability entry drops out). It is **not** assumed vision- or
-  tool-capable. Unstated is not permission.
+- **Fail-closed above the baseline, per requirement.** An entry with no declared
+  capabilities is assumed chat-capable (the existing legacy clause, which must
+  stay or every pre-capability entry drops out). Above the baseline the rule
+  follows the *failure mode*, not a blanket policy:
+  - **Vision — silence disqualifies.** A model that cannot see answers with
+    confident nonsense: silent, and unrecoverable for that turn. Unstated is
+    not permission.
+  - **Tools — silence is permitted.** A tool-incapable model is rejected by the
+    provider, loudly, and the existing retry/advance path already handles it.
+    Treating silence as incapacity would drop every pre-`capabilities` entry —
+    most of a real registry — out of the fallback chain of every tool-carrying
+    turn, a large regression bought for very little. (Confirmed against a live
+    registry: the entries in an actual global chain carry no `capabilities` key
+    at all.)
+
+  An entry that *does* declare capabilities is taken at its word either way:
+  enumerating what you can do and leaving `tools` out is a statement, not
+  silence.
 - **Automation appetite tracks failure mode, not preference.** The Phase A+B
   spec turned Smart on by default because background failures were judged
   loud (structural) and correctable (one-click re-run). The incident shows the
@@ -79,6 +93,10 @@ fn requirements_of(req: &LlmRequest) -> Vec<Requirement> {
     // !req.tools.is_empty()                     -> Tools
 }
 ```
+
+`Requirement::permitted_when_undeclared` carries the per-requirement rule from
+§2, so `satisfies` enforces a declared capability list exactly and treats an
+absent one according to which failure the requirement guards against.
 
 The crate split follows the existing rule: the pure predicate lives in
 `mur-common` (below both `mur-core` and `mur-agent-runtime`); only the
@@ -240,7 +258,8 @@ global models  ┘                          • cheap/chain -> satisfies(reqs)? 
 |---|---|
 | Image request, no entry declares vision | Smart inert; primary used. Fail-expensive. |
 | Image request, primary itself cannot see | Primary is unfiltered → provider errors loudly. Not the router's call to silently fix. |
-| Tools requested, cheap entry declares no `tools` | Cheap skipped; next eligible candidate. |
+| Tools requested, cheap entry declares `capabilities` without `tools` | Cheap skipped; next eligible candidate. |
+| Tools requested, entry declares no `capabilities` at all | Kept. Silence is permitted for tools (§2); a genuinely tool-incapable model fails loudly and the chain advances. |
 | All candidates filtered out | Exhaustion path returns the last error (loud). |
 | `smart.cheap` pinned by the user to an ineligible ref | Filtered like any substitution; a pinned *cheap* is a policy, not a per-request choice. Hub/CLI validate the ref exists but cannot validate per-request eligibility. |
 | Legacy profile with nested `routing.smart` | Read at §4.3 step 2; unchanged behaviour. |

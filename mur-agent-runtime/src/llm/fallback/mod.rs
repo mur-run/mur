@@ -416,10 +416,6 @@ fn truncate_chars(s: &str, max: usize) -> String {
     }
 }
 
-/// Auto-pick a cheap model from the on-disk registry, excluding `primary`.
-/// Any failure (no registry path, load error, empty registry) yields `None`
-/// so the caller falls through to Phase-1 `base` candidates (fail-expensive,
-/// never fail-hard).
 /// The capabilities this request needs from whatever model serves it. Derived
 /// from the request, never from config: an image in the messages means the
 /// model has to be able to see it, a tool list means it has to be able to call.
@@ -438,6 +434,10 @@ fn requirements_of(req: &LlmRequest) -> Vec<Requirement> {
     out
 }
 
+/// Auto-pick a cheap model from the on-disk registry that can serve `reqs`,
+/// excluding `primary`. Any failure (no registry path, load error, empty
+/// registry, nothing capable enough) yields `None` so the caller falls through
+/// to the `base` candidates (fail-expensive, never fail-hard).
 fn autopick_cheap(primary: Option<&str>, reqs: &[Requirement]) -> Option<String> {
     let path = mur_common::model::ModelRegistry::default_path().ok()?;
     let reg = mur_common::model::ModelRegistry::load_from(&path).ok()?;
