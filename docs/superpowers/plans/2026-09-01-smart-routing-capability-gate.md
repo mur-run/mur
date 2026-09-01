@@ -452,7 +452,7 @@ fn filter_eligible(
 
 **Steps**
 
-- [ ] Add the failing tests to the `mod tests` block at the bottom of `mur-common/src/config.rs`:
+- [x] Add the failing tests to the `mod tests` block at the bottom of `mur-common/src/config.rs`:
 
 ```rust
     #[test]
@@ -502,8 +502,8 @@ fn filter_eligible(
     }
 ```
 
-- [ ] Run `cargo nextest run -p mur-common config::tests` → red (`SmartOverride` not found).
-- [ ] In `mur-common/src/config.rs`, add next to the other default constants (after `DEFAULT_SMART_MAX_ESCALATIONS`, line 16):
+- [x] Run `cargo nextest run -p mur-common config::tests` → red (`SmartOverride` not found).
+- [x] In `mur-common/src/config.rs`, add next to the other default constants (after `DEFAULT_SMART_MAX_ESCALATIONS`, line 16):
 
 ```rust
 /// Smart background routing is opt-in. Its failure mode is silent and
@@ -520,8 +520,8 @@ fn default_smart_enabled() -> bool {
 }
 ```
 
-- [ ] In `SmartConfig`, change `#[serde(default = "default_true")]` on `enabled` to `#[serde(default = "default_smart_enabled")]`, and in `impl Default for SmartConfig` change `enabled: true` to `enabled: DEFAULT_SMART_ENABLED`. Update the doc comment above `SmartConfig` — replace "Defaults ON with `cheap: None`" with "Defaults OFF; enable per-agent or globally (`mur model smart on`). `cheap: None` auto-picks".
-- [ ] Add both override types and both `merged` impls immediately after `RoutingConfig`:
+- [x] In `SmartConfig`, change `#[serde(default = "default_true")]` on `enabled` to `#[serde(default = "default_smart_enabled")]`, and in `impl Default for SmartConfig` change `enabled: true` to `enabled: DEFAULT_SMART_ENABLED`. Update the doc comment above `SmartConfig` — replace "Defaults ON with `cheap: None`" with "Defaults OFF; enable per-agent or globally (`mur model smart on`). `cheap: None` auto-picks".
+- [x] Add both override types and both `merged` impls immediately after `RoutingConfig`:
 
 ```rust
 /// Partial view of [`SmartConfig`] for per-agent overrides: `None` on a field
@@ -586,8 +586,8 @@ impl RoutingConfig {
 }
 ```
 
-- [ ] Confirm `SmartConfig` still derives `PartialEq` (it does today) — the new tests compare whole structs.
-- [ ] Fix the existing default-value test around `mur-common/src/config.rs:2700`: change `assert!(cfg.models.smart.enabled); // default ON` to:
+- [x] Confirm `SmartConfig` still derives `PartialEq` (it does today) — the new tests compare whole structs.
+- [x] Fix the existing default-value test around `mur-common/src/config.rs:2700`: change `assert!(cfg.models.smart.enabled); // default ON` to:
 
 ```rust
         assert!(
@@ -596,8 +596,8 @@ impl RoutingConfig {
         );
 ```
 
-- [ ] Run `cargo nextest run -p mur-common config` → green.
-- [ ] `cargo fmt && git commit -am "feat(config): partial override types for smart/routing, Smart defaults off"`
+- [x] Run `cargo nextest run -p mur-common config` → green.
+- [x] `cargo fmt && git commit -am "feat(config): partial override types for smart/routing, Smart defaults off"`
 
 ---
 
