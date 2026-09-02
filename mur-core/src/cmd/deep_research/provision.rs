@@ -252,35 +252,75 @@ pub fn grant_render_browser(mur_home: &Path, worker: &str) -> Result<()> {
     unsafe {
         std::env::set_var("MUR_HOME", mur_home);
     }
-    let Ok(abs) = which_agent_browser() else {
-        // Not installed is not a provisioning failure — the worker simply has
-        // no rendered fetch, and `browser.rs` says so when a page needs it.
-        eprintln!(
-            "  note: `agent-browser` is not on PATH, so {worker} gets no rendered fetch.              Install it and re-run setup to grant it."
-        );
-        return Ok(());
-    };
-    let (path, mut profile) = super::super::agent::load_profile_for_edit(worker)?;
-    let allowed = &mut profile.entitlements.processes.spawn.allowed;
-    if allowed.contains(&abs) {
+    let bins = render_binaries(mur_home);
+    if bins.is_empty() {
+        // Nothing installed is not a provisioning failure: the worker simply
+        // has no rendered fetch, and `browser.rs` says so when a page needs it.
+        eprintln!("  note: no render browser found, so {worker} gets no rendered fetch.");
         return Ok(());
     }
-    allowed.push(abs.clone());
+    let (path, mut profile) = super::super::agent::load_profile_for_edit(worker)?;
+    let allowed = &mut profile.entitlements.processes.spawn.allowed;
+    let mut added = Vec::new();
+    for abs in bins {
+        if !allowed.contains(&abs) {
+            allowed.push(abs.clone());
+            added.push(abs);
+        }
+    }
+    if added.is_empty() {
+        return Ok(());
+    }
     super::super::agent::save_profile(&path, &mut profile)?;
-    println!("Granted {worker} permission to spawn {abs}");
+    for abs in added {
+        println!("Granted {worker} permission to spawn {abs}");
+    }
     Ok(())
 }
 
-/// Absolute path of `agent-browser` on `PATH`, for the exec allowlist.
-fn which_agent_browser() -> Result<String> {
-    let path = std::env::var_os("PATH").ok_or_else(|| anyhow::anyhow!("PATH unset"))?;
-    for dir in std::env::split_paths(&path) {
-        let cand = dir.join("agent-browser");
-        if cand.is_file() {
-            return Ok(cand.canonicalize().unwrap_or(cand).to_string_lossy().into());
+/// Where the gateway keeps its bundled lightpanda, relative to `~/.mur`.
+/// Mirrors `mur-research-gateway`'s `DEFAULT_LIGHTPANDA_RELATIVE_PATH`; the two
+/// must agree or the grant names a binary the gateway never runs.
+const LIGHTPANDA_RELATIVE: &str = "aura/lightpanda";
+
+/// Every render binary the gateway might spawn, absolute, for the exec
+/// allowlist.
+///
+/// Granting only `agent-browser` was not enough, and an end-to-end check is
+/// what showed it: the gateway prefers `~/.mur/aura/lightpanda` whenever that
+/// file exists, so on a machine with it installed the grant named a binary that
+/// was never run and rendered fetch stayed refused. The consent is "may it
+/// execute a render browser", so it covers every candidate rather than guessing
+/// which one wins at run time.
+///
+/// A custom `research_gateway.lightpanda_path` is NOT covered: provisioning
+/// cannot see a run-time override. The denial message names the binary, so an
+/// operator can grant that one by hand.
+fn render_binaries(mur_home: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let lp = mur_home.join(LIGHTPANDA_RELATIVE);
+    if lp.is_file() {
+        out.push(canonical_string(&lp));
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let cand = dir.join("agent-browser");
+            if cand.is_file() {
+                out.push(canonical_string(&cand));
+                break;
+            }
         }
     }
-    anyhow::bail!("agent-browser not found on PATH")
+    out
+}
+
+/// Resolve symlinks so the granted path is the one the kernel checks: npm
+/// installs `agent-browser` as a symlink into `lib/node_modules/`.
+fn canonical_string(p: &Path) -> String {
+    p.canonicalize()
+        .unwrap_or_else(|_| p.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub fn grant_egress(mur_home: &Path, worker: &str, deny_hosts: &[String], yes: bool) -> Result<()> {
@@ -404,14 +444,29 @@ mod tests {
         let prev = std::env::var_os("PATH");
         // SAFETY: single-threaded test; PATH is restored below.
         unsafe { std::env::set_var("PATH", "") };
-        let r = super::which_agent_browser();
+        let r = super::render_binaries(home.path());
         if let Some(p) = prev {
             unsafe { std::env::set_var("PATH", p) };
         }
-        assert!(r.is_err(), "an empty PATH cannot resolve agent-browser");
+        assert!(r.is_empty(), "nothing installed resolves nothing: {r:?}");
         // …and the caller turns that into a note, never an Err — pinned by the
         // `let Ok(abs) = … else { return Ok(()) }` shape in grant_render_browser.
-        let _ = home;
+    }
+
+    /// The bug an end-to-end check found: the gateway prefers lightpanda when
+    /// it exists, so a grant naming only `agent-browser` covered the wrong
+    /// binary and rendered fetch stayed refused.
+    #[test]
+    fn a_bundled_lightpanda_is_granted_not_just_agent_browser() {
+        let home = tempfile::tempdir().unwrap();
+        let aura = home.path().join("aura");
+        std::fs::create_dir_all(&aura).unwrap();
+        std::fs::write(aura.join("lightpanda"), b"x").unwrap();
+        let bins = super::render_binaries(home.path());
+        assert!(
+            bins.iter().any(|b| b.ends_with("aura/lightpanda")),
+            "the bundled engine must be granted: {bins:?}"
+        );
     }
 
     use super::*;
