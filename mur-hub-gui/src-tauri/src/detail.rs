@@ -67,6 +67,42 @@ pub struct ModelOptionView {
     pub output_cost: Option<f64>,
     pub context_window: Option<u64>,
     pub capabilities: Vec<String>,
+    /// `subscription` / `usage_billed` / `local`; `None` = unknown, which the
+    /// UI renders as Unknown — never as free.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub billing: Option<String>,
+    /// `Some(false)` marks an id typed by hand when catalog discovery failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalog_verified: Option<bool>,
+}
+
+fn model_option_view(ref_name: String, entry: mur_common::model::ModelEntry) -> ModelOptionView {
+    let (input_cost, output_cost) = entry.effective_costs();
+    // Resolve before moving the fields out of `entry`.
+    let vendor = entry
+        .vendor_candidates()
+        .into_iter()
+        .next()
+        .filter(|v| *v != entry.provider);
+    ModelOptionView {
+        ref_name,
+        vendor,
+        provider: entry.provider,
+        model: entry.model,
+        tier: entry.tier.map(|t| format!("{t:?}").to_lowercase()),
+        input_cost,
+        output_cost,
+        context_window: entry.context_window,
+        capabilities: entry.capabilities,
+        billing: entry.billing.map(|b| {
+            // The serde name of the enum, so Rust and TS agree on the wire.
+            serde_json::to_value(b)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default()
+        }),
+        catalog_verified: entry.catalog_verified,
+    }
 }
 
 #[tauri::command]
@@ -76,26 +112,7 @@ pub fn list_models() -> Result<Vec<ModelOptionView>, String> {
     Ok(reg
         .models
         .into_iter()
-        .map(|(ref_name, entry)| {
-            let (input_cost, output_cost) = entry.effective_costs();
-            // Resolve before moving the fields out of `entry`.
-            let vendor = entry
-                .vendor_candidates()
-                .into_iter()
-                .next()
-                .filter(|v| *v != entry.provider);
-            ModelOptionView {
-                ref_name,
-                vendor,
-                provider: entry.provider,
-                model: entry.model,
-                tier: entry.tier.map(|t| format!("{t:?}").to_lowercase()),
-                input_cost,
-                output_cost,
-                context_window: entry.context_window,
-                capabilities: entry.capabilities,
-            }
-        })
+        .map(|(ref_name, entry)| model_option_view(ref_name, entry))
         .collect())
 }
 
@@ -539,6 +556,56 @@ mod tests {
             skill_ref_view(home.path(), "skills/broken"),
             SkillRefStatusView::Malformed
         );
+    }
+}
+
+#[cfg(test)]
+mod model_option_view_tests {
+    use super::*;
+    use mur_common::model::{BillingMode, ModelEntry};
+
+    #[test]
+    fn billing_metadata_is_carried_and_absent_when_unknown() {
+        let old = model_option_view(
+            "gpt".into(),
+            ModelEntry {
+                provider: "openai".into(),
+                model: "gpt-4o".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(old.billing, None);
+        assert_eq!(old.catalog_verified, None);
+        let json = serde_json::to_value(&old).unwrap();
+        assert!(json.get("billing").is_none(), "{json}");
+        assert!(json.get("catalog_verified").is_none(), "{json}");
+
+        let new = model_option_view(
+            "chatgpt_sol".into(),
+            ModelEntry {
+                provider: "codex".into(),
+                model: "gpt-5.6-sol".into(),
+                billing: Some(BillingMode::Subscription),
+                catalog_verified: Some(false),
+                ..Default::default()
+            },
+        );
+        let json = serde_json::to_value(&new).unwrap();
+        assert_eq!(json["billing"], "subscription");
+        assert_eq!(json["catalog_verified"], false);
+        for (mode, wire) in [
+            (BillingMode::UsageBilled, "usage_billed"),
+            (BillingMode::Local, "local"),
+        ] {
+            let v = model_option_view(
+                "x".into(),
+                ModelEntry {
+                    billing: Some(mode),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(v.billing.as_deref(), Some(wire));
+        }
     }
 }
 

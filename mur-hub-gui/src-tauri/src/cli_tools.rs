@@ -59,7 +59,7 @@ pub fn install_cli_tools() -> Result<String, String> {
 /// is about where to put a binary, not about which one is in front.
 fn path_mur(home: &Path) -> Option<PathBuf> {
     #[cfg(unix)]
-    if let Some(p) = shell_path_mur() {
+    if let Some(p) = shell_which("mur") {
         return Some(p);
     }
     [
@@ -70,7 +70,7 @@ fn path_mur(home: &Path) -> Option<PathBuf> {
     .find(|p| p.exists())
 }
 
-/// `$SHELL -ilc 'command -v mur'`, the resolution a terminal actually performs.
+/// `$SHELL -ilc 'command -v <name>'`, the resolution a terminal actually performs.
 ///
 /// Both flags are load-bearing and `-l` alone is not enough: on the machine
 /// this was reported from, PATH is exported at `.zshrc:74`, which only an
@@ -82,10 +82,10 @@ fn path_mur(home: &Path) -> Option<PathBuf> {
 /// nothing. Unix only: `$SHELL` and `-ilc` are POSIX conventions, and Windows
 /// has no equivalent question to ask — the probe list stands there.
 #[cfg(unix)]
-fn shell_path_mur() -> Option<PathBuf> {
+pub(crate) fn shell_which(name: &str) -> Option<PathBuf> {
     let shell = std::env::var("SHELL").ok()?;
     let out = Command::new(shell)
-        .args(["-ilc", "command -v mur"])
+        .args(["-ilc", &format!("command -v {name}")])
         .output()
         .ok()?;
     if !out.status.success() {

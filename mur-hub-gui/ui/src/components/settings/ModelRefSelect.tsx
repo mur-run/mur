@@ -1,5 +1,6 @@
 import type { ModelOption } from "../modelPicker";
 import { useT } from "../../i18n";
+import { billingKey } from "../chatgptSubscription";
 
 export interface ModelRefSelectProps {
   value: string | null;
@@ -30,7 +31,7 @@ export function ModelRefSelect({ value, options, onChange, allowEmpty, emptyLabe
       {allowEmpty && <option value="">{emptyLabel ?? t("settings.slots.pick")}</option>}
       {options.map((o) => (
         <option key={o.ref_name} value={o.ref_name}>
-          {`${o.ref_name} (${o.provider}/${o.model})`}
+          {`${o.ref_name} (${o.provider}/${o.model})${o.billing ? ` · ${t(billingKey(o.billing))}` : ""}`}
         </option>
       ))}
     </select>

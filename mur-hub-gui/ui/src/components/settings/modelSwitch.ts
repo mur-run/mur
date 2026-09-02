@@ -72,3 +72,25 @@ export function normalizeMs(raw: ModelSwitchView): ModelSwitchView {
   };
 }
 
+
+import { paidFallbackWarning } from "../chatgptSubscription";
+
+/**
+ * The ref "+ Add fallback" pre-selects: the first option not already in the
+ * chain, preferring one that does not move a subscription primary onto a
+ * paid bill. The row stays editable — this only decides the *default*, so
+ * MUR never inserts a paid fallback the user did not pick.
+ */
+export function pickNextFallback(
+  chain: string[],
+  options: Array<{ ref_name: string; billing?: string | null }>,
+  primaryRef?: string | null,
+): string | undefined {
+  const primary = options.find((o) => o.ref_name === primaryRef) ?? null;
+  const unused = options.filter((o) => !chain.includes(o.ref_name));
+  return (
+    unused.find((o) => paidFallbackWarning(primary, o) === null)?.ref_name ??
+    unused[0]?.ref_name ??
+    options[0]?.ref_name
+  );
+}

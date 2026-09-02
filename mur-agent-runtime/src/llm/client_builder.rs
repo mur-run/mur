@@ -10,7 +10,9 @@ use anyhow::Context;
 use tracing::warn;
 
 use crate::llm::{LlmClient, LlmError};
-use crate::llm::{anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient};
+use crate::llm::{
+    anthropic::AnthropicClient, codex::CodexClient, ollama::OllamaClient, openai::OpenAiClient,
+};
 use crate::profile::Profile;
 use crate::sandbox::reqwest_guard::HostGuard;
 use mur_common::agent::NetworkOutboundMode;
@@ -253,6 +255,10 @@ fn build_bare_client(
                 .map_err(anyhow::Error::from)
             }
         }
+        // ChatGPT subscription via the loopback gateway: no secret is
+        // resolved, no env var or keychain is consulted — `from_entry` refuses
+        // anything but a secret-free loopback `/codex/v1` URL.
+        "codex" => Ok(Arc::new(CodexClient::from_entry(entry, guarded_http)?)),
         "echo" => Err(anyhow::anyhow!("no model configured (echo placeholder)")),
         other => Err(anyhow::anyhow!("unsupported model provider {other:?}")),
     }
