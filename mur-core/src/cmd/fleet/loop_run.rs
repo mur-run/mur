@@ -25,12 +25,37 @@ use crate::executor::dag::{StepEvent, StepEventKind};
 const STUCK_LIMIT: u32 = 2;
 /// Default iteration cap when neither the CLI flag nor fleet.yaml sets one.
 const DEFAULT_MAX_ITERATIONS: u32 = 8;
-/// Conservative per-turn token estimate, used as the iteration-1 forward estimate
-/// and the fail-safe fallback when an iteration reports no usage. Real per-token
-/// cost now flows back via `PipelineOutput.tokens_used` (summed from each
-/// delegate's `Task.usage`), so cumulative spend is actual, not projected; this
-/// estimate only seeds the forward budget check before real data exists.
-const EST_TOKENS_PER_TURN: u64 = 8000;
+/// Tokens one member burns in one ITERATION, used as the iteration-1 forward
+/// estimate and as the fail-safe fallback when an iteration reports no usage.
+/// Real per-token cost flows back via `PipelineOutput.tokens_used` (summed from
+/// each delegate's `Task.usage`), so cumulative spend is actual, not projected;
+/// this only seeds the forward budget check before real data exists.
+///
+/// The old name and value (`EST_TOKENS_PER_TURN`, 8000) modelled a single TURN,
+/// but a member does not take one turn per iteration — it runs an agentic loop
+/// whose tool results are whole fetched web pages. The gap was about 300x, so
+/// the guard waved through an iteration it could not afford and only reported
+/// the overrun afterwards: a deep-research run with a $10 ceiling spent $21.52
+/// and still exited `Converged`.
+///
+/// Grounded in three measured deep-research runs, three workers each, on a
+/// $0.003/1k model:
+///
+/// | run | cost | tokens/member | notes |
+/// |---|---|---|---|
+/// | initial survey, search failing | $21.52 | 2.39M | fell back to whole-page fetches |
+/// | continuation of a prior channel | $40.09 | 4.45M | verify + synthesise, not a survey |
+/// | initial survey, search working | $32.12 | 3.57M | the clean measurement |
+///
+/// 3.5M is the middle of those, and projects $31.50 for three members against
+/// a measured $32.12 — close enough to gate honestly without refusing budgets
+/// a normal run fits inside.
+///
+/// Note what the clean pair shows: fixing search made a run MORE expensive
+/// ($21.52 → $32.12), not less. Search does not replace fetching; it finds
+/// more sources worth fetching. An estimate calibrated while search was broken
+/// would have under-read every healthy run.
+const EST_TOKENS_PER_MEMBER_ITERATION: u64 = 3_500_000;
 /// Fallback per-1k-token USD rate when models.yaml has no priced entry and no
 /// `MUR_FLEET_COST_PER_1K` override. Deliberately dear (frontier-ish output rate)
 /// so the projection errs high → stops early.
@@ -164,11 +189,12 @@ fn effective_deadline(flag: Option<&str>, fleet: &Fleet) -> Option<Duration> {
     })
 }
 
-/// Projected USD for one iteration: every member takes a ~`EST_TOKENS_PER_TURN`
-/// turn at `price_per_1k`. Used as the iteration-1 forward estimate (before any
-/// real data) and as the fail-safe fallback when an iteration reports no usage.
+/// Projected USD for one iteration: every member burns about
+/// `EST_TOKENS_PER_MEMBER_ITERATION` at `price_per_1k`. Used as the iteration-1
+/// forward estimate (before any real data) and as the fail-safe fallback when an
+/// iteration reports no usage.
 pub fn estimate_iteration_cost_usd(members: usize, price_per_1k: f64) -> f64 {
-    members as f64 * (EST_TOKENS_PER_TURN as f64 / 1000.0) * price_per_1k
+    members as f64 * (EST_TOKENS_PER_MEMBER_ITERATION as f64 / 1000.0) * price_per_1k
 }
 
 /// Real USD for an iteration from its actual token total (`PipelineOutput.tokens_used`,
@@ -901,10 +927,51 @@ mod tests {
         );
     }
 
+    /// The regression this constant exists for. A measured deep-research run —
+    /// three members on a $0.003/1k model — cost $21.52, and the old estimate
+    /// (8000 tokens per member) projected about $0.07, so a $10 ceiling waved
+    /// it through and reported the overrun only afterwards.
+    ///
+    /// The projection must now exceed a $10 ceiling for that shape, so the loop
+    /// refuses BEFORE spending rather than apologising after.
+    #[test]
+    fn a_three_member_iteration_no_longer_projects_as_pocket_change() {
+        let projected = estimate_iteration_cost_usd(3, 0.003);
+        assert!(
+            projected > 10.0,
+            "three members must not project under a $10 ceiling: ${projected}"
+        );
+        // …and not so dear that the shipped default refuses a normal run.
+        assert!(
+            projected < crate::cmd::deep_research::setup::DEFAULT_RUN_BUDGET_USD,
+            "the default budget must still admit one iteration: ${projected}"
+        );
+        assert!(budget_exceeded(0.0, projected, Some(10.0)));
+        assert!(!budget_exceeded(
+            0.0,
+            projected,
+            Some(crate::cmd::deep_research::setup::DEFAULT_RUN_BUDGET_USD)
+        ));
+    }
+
     #[test]
     fn estimate_and_budget_guard() {
-        // 2 members × 8000/1000 × 0.05 = 0.8 / iteration
-        assert!((estimate_iteration_cost_usd(2, 0.05) - 0.8).abs() < 1e-9);
+        // Expressed through the constant, not a literal: this pins the FORMULA
+        // (linear in members and in price), and the constant is documented as
+        // something to retune once there is more than one measured run.
+        let per_member_k = EST_TOKENS_PER_MEMBER_ITERATION as f64 / 1000.0;
+        assert!((estimate_iteration_cost_usd(2, 0.05) - 2.0 * per_member_k * 0.05).abs() < 1e-9);
+        // Linear in both arguments.
+        assert!(
+            (estimate_iteration_cost_usd(4, 0.05) - 2.0 * estimate_iteration_cost_usd(2, 0.05))
+                .abs()
+                < 1e-9
+        );
+        assert!(
+            (estimate_iteration_cost_usd(2, 0.10) - 2.0 * estimate_iteration_cost_usd(2, 0.05))
+                .abs()
+                < 1e-9
+        );
         // no budget / zero budget → never blocks
         assert!(!budget_exceeded(100.0, 5.0, None));
         assert!(!budget_exceeded(100.0, 5.0, Some(0.0)));
