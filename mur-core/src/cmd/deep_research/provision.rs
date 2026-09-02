@@ -463,8 +463,13 @@ mod tests {
         std::fs::create_dir_all(&aura).unwrap();
         std::fs::write(aura.join("lightpanda"), b"x").unwrap();
         let bins = super::render_binaries(home.path());
+        // `Path::ends_with` compares COMPONENTS, so it is separator-agnostic.
+        // `str::ends_with("aura/lightpanda")` passes on Unix and fails on
+        // Windows, where the canonical path uses backslashes — the product
+        // code is fine (it joins `PathBuf`s), only a test can get this wrong.
         assert!(
-            bins.iter().any(|b| b.ends_with("aura/lightpanda")),
+            bins.iter()
+                .any(|b| Path::new(b).ends_with("aura/lightpanda")),
             "the bundled engine must be granted: {bins:?}"
         );
     }
