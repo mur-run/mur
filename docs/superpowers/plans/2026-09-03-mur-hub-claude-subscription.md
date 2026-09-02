@@ -784,7 +784,7 @@ and become one-line callers with `"codex"` / `CHATGPT_GATEWAY_BASE`.
 
 **Steps**
 
-- [ ] In `process.rs` tests, extend `health_is_parsed_strictly`: replace the
+- [x] In `process.rs` tests, extend `health_is_parsed_strictly`: replace the
   `ok` assertion block with:
 
 ```rust
@@ -804,11 +804,11 @@ and become one-line callers with `"codex"` / `CHATGPT_GATEWAY_BASE`.
         assert_eq!(parse_health(&bad_claude), None, "an unknown claude kind is not a gateway we understand");
 ```
 
-- [ ] Run
+- [x] Run
   `cargo test --manifest-path mur-hub-gui/src-tauri/Cargo.toml health_is_parsed_strictly`
   and watch it fail to compile (`claude_credential` absent).
 
-- [ ] In `process.rs`:
+- [x] In `process.rs`:
   - change `async fn run_bounded(` to `pub(crate) async fn run_bounded(`;
   - add `claude_credential: Option<String>,` to `struct Health` (after
     `credential`) and `pub claude_credential_mode: Option<String>,` to
@@ -833,7 +833,7 @@ and become one-line callers with `"codex"` / `CHATGPT_GATEWAY_BASE`.
     and include `claude_credential,` in the returned `Health`;
   - in `status_at`, the `Some(h)` arm gains `claude_credential_mode: h.claude_credential,`.
 
-- [ ] In `mod.rs` add, after the `pub use` lines:
+- [x] In `mod.rs` add, after the `pub use` lines:
 
 ```rust
 /// The Claude provider reuses these views verbatim (its `plan_type` is
@@ -845,7 +845,7 @@ pub type SubscriptionModelView = ChatGptModelView;
 pub type SubscriptionModelPick = registry::ChatGptModelPick;
 ```
 
-- [ ] In `registry.rs`, replace `chatgpt_entry`, `add_chatgpt_models`, and
+- [x] In `registry.rs`, replace `chatgpt_entry`, `add_chatgpt_models`, and
   `disconnect_chatgpt` with the provider-parameterized forms plus thin
   ChatGPT wrappers:
 
@@ -938,12 +938,12 @@ pub fn disconnect_chatgpt(reg: &mut ModelRegistry) -> u32 {
     }
 ```
 
-- [ ] Run `cargo test --manifest-path mur-hub-gui/src-tauri/Cargo.toml chatgpt_subscription`
+- [x] Run `cargo test --manifest-path mur-hub-gui/src-tauri/Cargo.toml chatgpt_subscription`
   (expect the existing 12 plus the new test to pass) and
   `cargo clippy --manifest-path mur-hub-gui/src-tauri/Cargo.toml --all-targets -- -D warnings`;
   expect zero failures/warnings.
 
-- [ ] Commit: `git add mur-hub-gui/src-tauri/src/chatgpt_subscription`, then
+- [x] Commit: `git add mur-hub-gui/src-tauri/src/chatgpt_subscription`, then
   `git commit -m "refactor(hub): parameterize subscription plumbing by provider"`.
 
 ---
@@ -984,7 +984,7 @@ Gateway status/install are the existing `chatgpt_gateway_status` /
 
 **Steps**
 
-- [ ] Create `mur-hub-gui/src-tauri/src/claude_subscription/account.rs`:
+- [x] Create `mur-hub-gui/src-tauri/src/claude_subscription/account.rs`:
 
 ```rust
 //! `claude auth status / login / logout`, wrapped the way `codex` is.
@@ -1136,7 +1136,7 @@ mod tests {
 }
 ```
 
-- [ ] Create `mur-hub-gui/src-tauri/src/claude_subscription/catalog.rs`:
+- [x] Create `mur-hub-gui/src-tauri/src/claude_subscription/catalog.rs`:
 
 ```rust
 //! Models on a Claude plan come from the models.dev catalog — the same
@@ -1208,7 +1208,7 @@ mod tests {
 }
 ```
 
-- [ ] Create `mur-hub-gui/src-tauri/src/claude_subscription/mod.rs`:
+- [x] Create `mur-hub-gui/src-tauri/src/claude_subscription/mod.rs`:
 
 ```rust
 //! Claude Subscription provider — the Hub side. Sibling of
@@ -1379,7 +1379,7 @@ mod tests {
 }
 ```
 
-- [ ] In `mur-hub-gui/src-tauri/src/lib.rs`: add `pub mod claude_subscription;`
+- [x] In `mur-hub-gui/src-tauri/src/lib.rs`: add `pub mod claude_subscription;`
   after `pub mod chatgpt_subscription;`, and register the six commands
   directly after `chatgpt_subscription::registry::chatgpt_disconnect,`:
 
@@ -1392,7 +1392,7 @@ mod tests {
             claude_subscription::claude_disconnect,
 ```
 
-- [ ] Run
+- [x] Run
   `cargo test --manifest-path mur-hub-gui/src-tauri/Cargo.toml claude_subscription`
   (expect 4 tests: `parse_auth_status`, the two catalog tests, and the
   fake-`claude` flow), then the full
@@ -1403,7 +1403,7 @@ mod tests {
   without them; a `cfg(test)`-only item that is unused there fails
   `-D warnings`).
 
-- [ ] Commit: `git add mur-hub-gui/src-tauri/src/claude_subscription mur-hub-gui/src-tauri/src/lib.rs`,
+- [x] Commit: `git add mur-hub-gui/src-tauri/src/claude_subscription mur-hub-gui/src-tauri/src/lib.rs`,
   then `git commit -m "feat(hub): Claude subscription account, catalog, and registry commands"`.
 
 ---
@@ -1453,7 +1453,7 @@ and add-button copy stays shared under `lib.chatgpt.gateway.*` /
 
 **Steps**
 
-- [ ] In `chatgptSubscription.test.ts`, add after the existing
+- [x] In `chatgptSubscription.test.ts`, add after the existing
   `subscription readiness is strict` block:
 
 ```ts
@@ -1489,10 +1489,10 @@ describe("readiness is descriptor-driven", () => {
   Extend the import at the top of the file with `CHATGPT_READINESS,
   CLAUDE_READINESS, deriveSubscriptionState, gatewayProblem`.
 
-- [ ] Run `npm test -- chatgptSubscription.test.ts` in `mur-hub-gui/ui` and
+- [x] Run `npm test -- chatgptSubscription.test.ts` in `mur-hub-gui/ui` and
   watch it fail (exports absent).
 
-- [ ] In `chatgptSubscription.ts`: add `claude_credential_mode?: string | null;`
+- [x] In `chatgptSubscription.ts`: add `claude_credential_mode?: string | null;`
   to `GatewayStatus` (after `credential_mode`), and replace `gatewayProblem`
   and `deriveChatGPTState` with:
 
@@ -1551,10 +1551,10 @@ export function deriveChatGPTState(input: ChatGPTStateInput): ChatGPTPanelState 
   `/** The provider's CLI (codex / claude) is not on PATH. */` — the kind
   string itself stays `codex-missing` so the ChatGPT tests remain byte-for-byte.
 
-- [ ] Run `npm test -- chatgptSubscription.test.ts`; expect all tests (the
+- [x] Run `npm test -- chatgptSubscription.test.ts`; expect all tests (the
   17 existing + 3 new) to pass.
 
-- [ ] In `modelLibraryHelpers.ts`, replace the `CHATGPT_SUBSCRIPTION` block
+- [x] In `modelLibraryHelpers.ts`, replace the `CHATGPT_SUBSCRIPTION` block
   with:
 
 ```ts
@@ -1724,7 +1724,7 @@ describe("subscription descriptors", () => {
 
   (`zhTW` is the table's export name in `src/i18n/zh-TW.ts`; `en` in `en.ts`.)
 
-- [ ] `git mv src/components/ChatGPTSubscriptionPanel.tsx src/components/SubscriptionProviderPanel.tsx`
+- [x] `git mv src/components/ChatGPTSubscriptionPanel.tsx src/components/SubscriptionProviderPanel.tsx`
   and make these edits in the moved file (every other line stays):
   - Rename the component: `export function SubscriptionProviderPanel({ descriptor, registryModels, onModelsAdded }: { descriptor: SubscriptionDescriptor; registryModels: ModelOption[]; onModelsAdded: () => void })`.
   - Imports: replace `import { CHATGPT_SUBSCRIPTION, togglePick } from "./modelLibraryHelpers";`
@@ -1776,7 +1776,7 @@ describe("subscription descriptors", () => {
     Add `import type { SubscriptionCopy } from "./modelLibraryHelpers";`.
   - `ModelSection` receives `copy` as well for `modelsTitle` / `modelsHint`.
 
-- [ ] In `ModelLibrary.tsx`:
+- [x] In `ModelLibrary.tsx`:
   - imports: `import { CLOUD_PRESETS, SUBSCRIPTION_PROVIDERS, type SubscriptionDescriptor } from "./modelLibraryHelpers";`
     and `import { SubscriptionProviderPanel } from "./SubscriptionProviderPanel";`
     (remove the `ChatGPTSubscriptionPanel` and `CHATGPT_SUBSCRIPTION` imports).
@@ -1811,7 +1811,7 @@ describe("subscription descriptors", () => {
 
   - Routing: `panel.kind === "subscription" ? (<SubscriptionProviderPanel descriptor={SUBSCRIPTION_PROVIDERS.find((d) => d.key === panel.key)!} registryModels={registryModels} onModelsAdded={…same as today…} />)`.
 
-- [ ] Add copy. In `en.ts`, directly after `"lib.chatgpt.logoutConfirmOk": "Sign out",`:
+- [x] Add copy. In `en.ts`, directly after `"lib.chatgpt.logoutConfirmOk": "Sign out",`:
 
 ```ts
   "lib.chatgpt.loggedOutApiBilled": "Codex is signed in with an OpenAI API key. That is usage billing, not a ChatGPT subscription — sign in with ChatGPT to use this provider.",
@@ -1865,12 +1865,12 @@ describe("subscription descriptors", () => {
   "lib.claude.logoutConfirmOk": "登出",
 ```
 
-- [ ] Run in `mur-hub-gui/ui`: `npm test`, `npm run lint`, `npm run build`;
+- [x] Run in `mur-hub-gui/ui`: `npm test`, `npm run lint`, `npm run build`;
   expect zero failures. `tsc` is the parity check: a copy key missing in
   either language fails the `Table` type; the descriptor test above fails on
   an empty string.
 
-- [ ] Commit: `git add mur-hub-gui/ui/src/components/SubscriptionProviderPanel.tsx
+- [x] Commit: `git add mur-hub-gui/ui/src/components/SubscriptionProviderPanel.tsx
   mur-hub-gui/ui/src/components/ModelLibrary.tsx
   mur-hub-gui/ui/src/components/modelLibraryHelpers.ts
   mur-hub-gui/ui/src/components/modelLibraryHelpers.test.ts
@@ -1897,7 +1897,7 @@ registry keys:
 
 **Steps**
 
-- [ ] In `mur-core/src/cmd/model_doctor.rs` tests, add:
+- [x] In `mur-core/src/cmd/model_doctor.rs` tests, add:
 
 ```rust
     #[test]
@@ -1931,11 +1931,11 @@ registry keys:
   (`Level` already derives `PartialEq`; `is_local_endpoint` already treats
   `127.0.0.1`, `localhost`, and `::1` as local.)
 
-- [ ] Run `cargo test -p mur-core --lib model_doctor::tests::subscription_entries_are_checked_against_the_loopback_contract`
+- [x] Run `cargo test -p mur-core --lib model_doctor::tests::subscription_entries_are_checked_against_the_loopback_contract`
   (with `ORT_STRATEGY=download` and `MUR_WEB_DIST` set as this repo's build
   notes require) and watch it fail (no findings).
 
-- [ ] In `audit`, after the plaintext-secret loop (section 0) and before
+- [x] In `audit`, after the plaintext-secret loop (section 0) and before
   section 1, add:
 
 ```rust
@@ -1983,7 +1983,7 @@ registry keys:
     }
 ```
 
-- [ ] Run the focused test, then `cargo nextest run -p mur-core model_doctor`
+- [x] Run the focused test, then `cargo nextest run -p mur-core model_doctor`
   and `cargo clippy -p mur-core --all-targets -- -D warnings`; expect zero
   failures/warnings. Then run the installed-style check against the real
   registry: `cargo run -q -- model doctor` from the worktree and confirm the
@@ -1991,7 +1991,7 @@ registry keys:
   — this check exists because the last doctor rule was caught printing
   unusable advice only on real data.
 
-- [ ] `docs/model-gateway.md`: add a `## Claude Subscription` section directly
+- [x] `docs/model-gateway.md`: add a `## Claude Subscription` section directly
   after the `## ChatGPT Subscription` section, with the same sub-headings
   (Setup; The fixed route and no-key behaviour; Subscription vs usage
   billing; Disconnect vs sign out) adapted: CLI is Claude Code
@@ -2018,14 +2018,14 @@ models:
   that could become `provider: claude`, and the change is the two lines
   `provider:` and `base_url` (append `/v1`), nothing else.
 
-- [ ] `README.md`: directly after the **ChatGPT Subscription, no API key.**
+- [x] `README.md`: directly after the **ChatGPT Subscription, no API key.**
   paragraph add:
 
 ```markdown
 **Claude Subscription, the same way.** The Model Library's **Claude Subscription** provider signs in through Claude Code (`claude auth login`), lists the models from the catalog, and writes `provider: claude` entries that can only reach the loopback gateway's `/v1` route — no `secret`, and a `base_url` edit to `api.anthropic.com` is refused at startup instead of quietly switching the bill. Entries you already point at the gateway as `provider: anthropic` keep working; `mur model doctor` shows which ones could carry the explicit label.
 ```
 
-- [ ] Commit: `git add mur-core/src/cmd/model_doctor.rs docs/model-gateway.md README.md`,
+- [x] Commit: `git add mur-core/src/cmd/model_doctor.rs docs/model-gateway.md README.md`,
   then `git commit -m "feat(doctor): flag subscription entries off the loopback contract; docs"`.
 
 ---
