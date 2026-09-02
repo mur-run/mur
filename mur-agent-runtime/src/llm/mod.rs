@@ -5,6 +5,7 @@ use mur_common::{AgentProfile, LlmMode};
 
 pub mod anthropic;
 pub(crate) mod client_builder;
+pub mod codex;
 pub mod fallback;
 pub mod ollama;
 pub mod openai;
