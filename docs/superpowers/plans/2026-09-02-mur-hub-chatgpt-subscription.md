@@ -111,7 +111,7 @@ contains account IDs or token material.
 
 **Steps**
 
-- [ ] Create `tests/health.rs` with an Axum test server and these assertions:
+- [x] Create `tests/health.rs` with an Axum test server and these assertions:
 
 ```rust
 #[tokio::test]
@@ -136,10 +136,10 @@ async fn health_is_local_and_non_secret() {
 }
 ```
 
-- [ ] Run `cargo test --test health` and watch it fail because the route does
+- [x] Run `cargo test --test health` and watch it fail because the route does
   not exist.
 
-- [ ] Add both cfg arms in `src/codex.rs`:
+- [x] Add both cfg arms in `src/codex.rs`:
 
 ```rust
 #[cfg(has_codex_hook)]
@@ -149,7 +149,7 @@ pub const fn hook_compiled() -> bool { true }
 pub const fn hook_compiled() -> bool { false }
 ```
 
-- [ ] Add a private serializable response and handler in `src/lib.rs`. The
+- [x] Add a private serializable response and handler in `src/lib.rs`. The
   handler derives credential mode only when `token_source_codex` is
   `TokenSource::Codex`; every other source reports `missing`:
 
@@ -181,14 +181,14 @@ async fn health(State(state): State<AppState>) -> axum::Json<GatewayHealth> {
 }
 ```
 
-- [ ] Register `.route("/__mur/health", axum::routing::get(health))` before
+- [x] Register `.route("/__mur/health", axum::routing::get(health))` before
   the wildcard route in `build_router`.
 
-- [ ] Run `cargo test --test health` and expect one passing test. Run
+- [x] Run `cargo test --test health` and expect one passing test. Run
   `cargo test`, `cargo fmt --check`, and
   `cargo clippy --all-targets -- -D warnings`; expect zero failures/warnings.
 
-- [ ] Commit in the gateway repository:
+- [x] Commit in the gateway repository:
   `git add src/codex.rs src/lib.rs tests/health.rs`, then
   `git commit -m "feat(codex): expose non-secret readiness"`.
 
@@ -215,7 +215,7 @@ pub struct ModelEntry {
 
 **Steps**
 
-- [ ] Add a serde round-trip test in `mur-common/src/model.rs`:
+- [x] Add a serde round-trip test in `mur-common/src/model.rs`:
 
 ```rust
 #[test]
@@ -240,22 +240,22 @@ models:
 }
 ```
 
-- [ ] Run
+- [x] Run
   `cargo test -p mur-common --lib subscription_metadata_round_trips_without_a_secret`
   and watch it fail to compile.
 
-- [ ] Add `BillingMode` above `ModelEntry` and add both optional fields with
+- [x] Add `BillingMode` above `ModelEntry` and add both optional fields with
   `#[serde(default, skip_serializing_if = "Option::is_none")]`. Derive
   `Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq`.
 
-- [ ] Add a regression test that parses and reserializes an old entry without
+- [x] Add a regression test that parses and reserializes an old entry without
   either field and asserts both are `None`.
 
-- [ ] Run `cargo test -p mur-common --lib model::`, then
+- [x] Run `cargo test -p mur-common --lib model::`, then
   `cargo clippy -p mur-common --all-targets -- -D warnings`; expect zero
   failures/warnings.
 
-- [ ] Commit: `git add mur-common/src/model.rs`, then
+- [x] Commit: `git add mur-common/src/model.rs`, then
   `git commit -m "feat(models): classify model billing source"`.
 
 ---
@@ -285,18 +285,18 @@ All existing public constructors continue to create `OpenAiAuth::Bearer`.
 
 **Steps**
 
-- [ ] Add a mock-server test beside the existing OpenAI client tests that
+- [x] Add a mock-server test beside the existing OpenAI client tests that
   constructs `authless_with_http`, calls `generate`, and asserts the captured
   request has neither `authorization` nor `x-api-key`.
 
-- [ ] Run the focused test and watch it fail because the constructor is
+- [x] Run the focused test and watch it fail because the constructor is
   absent.
 
-- [ ] Replace `api_key: String` in `OpenAiClient` with `auth: OpenAiAuth`.
+- [x] Replace `api_key: String` in `OpenAiClient` with `auth: OpenAiAuth`.
   Route every existing constructor through `OpenAiAuth::Bearer`; add the
   authless constructor exactly as declared above.
 
-- [ ] Add one helper and use it on both streaming and non-streaming paths:
+- [x] Add one helper and use it on both streaming and non-streaming paths:
 
 ```rust
 fn apply_auth(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -310,14 +310,14 @@ fn apply_auth(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilde
   Replace both direct `.bearer_auth(&self.api_key)` calls with
   `self.apply_auth(self.http.post(url))` before `.json(&body)`.
 
-- [ ] Add a regression assertion that `OpenAiClient::new` still sends
+- [x] Add a regression assertion that `OpenAiClient::new` still sends
   `Authorization: Bearer test-key`.
 
-- [ ] Run all OpenAI client tests and
+- [x] Run all OpenAI client tests and
   `cargo clippy -p mur-agent-runtime --all-targets -- -D warnings`; expect
   zero failures/warnings.
 
-- [ ] Commit: `git add mur-agent-runtime/src/llm/openai.rs`, then
+- [x] Commit: `git add mur-agent-runtime/src/llm/openai.rs`, then
   `git commit -m "refactor(openai): make transport auth explicit"`.
 
 ---
@@ -348,7 +348,7 @@ impl CodexClient {
 
 **Steps**
 
-- [ ] Create `mur-agent-runtime/src/llm/codex.rs` with table-driven URL tests:
+- [x] Create `mur-agent-runtime/src/llm/codex.rs` with table-driven URL tests:
 
 ```rust
 #[test]
@@ -372,15 +372,15 @@ fn accepts_only_loopback_codex_base_urls() {
 }
 ```
 
-- [ ] Run the focused test and watch it fail because the module/function is
+- [x] Run the focused test and watch it fail because the module/function is
   absent.
 
-- [ ] Implement `validate_codex_base_url(&str) -> Result<reqwest::Url,
+- [x] Implement `validate_codex_base_url(&str) -> Result<reqwest::Url,
   LlmError>`: scheme must be `http`, username/password empty, host exactly
   `localhost` or an IP for which `is_loopback()` is true, explicit port is
   required, query/fragment absent, and normalized path exactly `/codex/v1`.
 
-- [ ] Implement `CodexClient::with_http_client`, then delegate both trait
+- [x] Implement `CodexClient::with_http_client`, then delegate both trait
   methods without changing request semantics:
 
 ```rust
@@ -399,19 +399,19 @@ impl LlmClient for CodexClient {
 }
 ```
 
-- [ ] Export the module/type from `llm/mod.rs`. Add a `"codex"` arm to
+- [x] Export the module/type from `llm/mod.rs`. Add a `"codex"` arm to
   `client_builder.rs`: reject `entry.secret.is_some()`, require `base_url`,
   and construct `CodexClient` with the guarded HTTP client. Do not inspect
   `OPENAI_API_KEY` or the agent keychain.
 
-- [ ] Add factory tests for: valid secret-free Codex entry succeeds; missing
+- [x] Add factory tests for: valid secret-free Codex entry succeeds; missing
   URL fails; secret present fails; remote URL fails; an OpenAI entry without a
   key still fails as before.
 
-- [ ] Run `cargo test -p mur-agent-runtime --lib llm::`, then formatting and
+- [x] Run `cargo test -p mur-agent-runtime --lib llm::`, then formatting and
   clippy for the crate; expect zero failures/warnings.
 
-- [ ] Commit: `git add mur-agent-runtime/src/llm/codex.rs
+- [x] Commit: `git add mur-agent-runtime/src/llm/codex.rs
   mur-agent-runtime/src/llm/mod.rs mur-agent-runtime/src/llm/client_builder.rs`,
   then
   `git commit -m "feat(runtime): add loopback ChatGPT subscription provider"`.
@@ -448,14 +448,14 @@ pub async fn list_models(codex: &Path) -> Result<Vec<ChatGptModelView>, ControlE
 
 **Steps**
 
-- [ ] Enable Tokio `process` and `io-util` features in the Hub Tauri crate.
+- [x] Enable Tokio `process` and `io-util` features in the Hub Tauri crate.
 
-- [ ] Create `chatgpt_subscription/app_server.rs`. Define a private
+- [x] Create `chatgpt_subscription/app_server.rs`. Define a private
   `JsonlSession` that spawns `codex app-server --listen stdio://` with null
   stdin inheritance, piped stdin/stdout, and piped-but-bounded stderr. Every
   request uses a monotonically increasing `u64` ID and a 15-second timeout.
 
-- [ ] Add fixture-driven tests using a temporary executable script that reads
+- [x] Add fixture-driven tests using a temporary executable script that reads
   JSONL and answers the exact request IDs. Assert the first two writes are:
 
 ```json
@@ -467,29 +467,29 @@ pub async fn list_models(codex: &Path) -> Result<Vec<ChatGptModelView>, ControlE
   waiting for a response, an `error` response becomes `ControlError::Rpc`, and
   EOF/timeout kills and reaps the child.
 
-- [ ] Implement initialization. Do not set `experimentalApi`; all required
+- [x] Implement initialization. Do not set `experimentalApi`; all required
   methods are stable.
 
-- [ ] Implement `account/read` with
+- [x] Implement `account/read` with
   `{"refreshToken":false}`. Treat only `account.type == "chatgpt"` as the
   subscription-connected state. `apiKey` must render as not connected to this
   provider, never as ChatGPT subscription.
 
-- [ ] Implement `model/list` with `limit: 100` and `includeHidden: false`.
+- [x] Implement `model/list` with `limit: 100` and `includeHidden: false`.
   Follow `nextCursor` until null, deduplicate by `model` (fall back to `id`),
   default absent `inputModalities` to `["text", "image"]`, and retain only
   display-safe fields listed in `ChatGptModelView`.
 
-- [ ] Register Tauri commands `chatgpt_account_read` and
+- [x] Register Tauri commands `chatgpt_account_read` and
   `chatgpt_models_list` in `src/lib.rs`. Resolve the `codex` executable once
   per call using the same PATH search discipline as existing CLI-tool code;
   return a typed `cli_present: false` view when it cannot be found.
 
-- [ ] Run
+- [x] Run
   `cargo test --manifest-path mur-hub-gui/src-tauri/Cargo.toml chatgpt_subscription`
   and clippy on that manifest; expect zero failures/warnings.
 
-- [ ] Commit: `git add mur-hub-gui/src-tauri/Cargo.toml
+- [x] Commit: `git add mur-hub-gui/src-tauri/Cargo.toml
   mur-hub-gui/src-tauri/src/chatgpt_subscription
   mur-hub-gui/src-tauri/src/lib.rs`, then
   `git commit -m "feat(hub): read ChatGPT account and model catalog"`.
@@ -522,27 +522,27 @@ pub struct GatewayStatusView {
 
 **Steps**
 
-- [ ] Create `chatgpt_subscription/process.rs` and tests around injected
+- [x] Create `chatgpt_subscription/process.rs` and tests around injected
   executable paths. `chatgpt_login` runs `codex login`, captures at most 32 KiB
   of combined output, enforces a five-minute timeout, reaps on cancellation,
   and then calls `account/read`; exit code zero alone is not success.
 
-- [ ] Serialize login attempts with a process-global async mutex so two Hub
+- [x] Serialize login attempts with a process-global async mutex so two Hub
   windows cannot launch two browser flows.
 
-- [ ] Make `chatgpt_logout(false)` return
+- [x] Make `chatgpt_logout(false)` return
   `confirmation required: signing out affects Codex CLI and IDE`. Only the
   confirmed arm runs `codex logout`; afterwards require `account/read` to
   report no ChatGPT account.
 
-- [ ] Implement gateway status in two layers: locate the binary/service, then
+- [x] Implement gateway status in two layers: locate the binary/service, then
   call `GET http://127.0.0.1:8088/__mur/health` with a two-second timeout.
   `running` means a valid health response, not merely a service file.
 
-- [ ] Parse health only into the Task 6 view. Reject a response whose
+- [x] Parse health only into the Task 6 view. Reject a response whose
   `codexCredential` is `apikey` as not ready for subscription use.
 
-- [ ] `chatgpt_gateway_install(false)` must fail before spawning anything.
+- [x] `chatgpt_gateway_install(false)` must fail before spawning anything.
   The consented arm runs:
 
 ```text
@@ -553,13 +553,13 @@ mur-model-gateway install --token-source-codex codex
   configuration: if the installed service already reports compression on,
   append `--compress`; otherwise do not change it.
 
-- [ ] Register all four commands. Tests must prove no install/logout process
+- [x] Register all four commands. Tests must prove no install/logout process
   starts without the boolean confirmation and that child output is bounded and
   control characters are stripped before returning diagnostics.
 
-- [ ] Run Hub Tauri tests and clippy; expect zero failures/warnings.
+- [x] Run Hub Tauri tests and clippy; expect zero failures/warnings.
 
-- [ ] Commit: `git add mur-hub-gui/src-tauri/src/chatgpt_subscription
+- [x] Commit: `git add mur-hub-gui/src-tauri/src/chatgpt_subscription
   mur-hub-gui/src-tauri/src/lib.rs`, then
   `git commit -m "feat(hub): manage ChatGPT login and gateway readiness"`.
 
@@ -589,7 +589,7 @@ pub fn chatgpt_disconnect() -> Result<u32, String>;
 
 **Steps**
 
-- [ ] Add tests in `models_admin.rs` using `MUR_HOME` isolation. Adding a pick
+- [x] Add tests in `models_admin.rs` using `MUR_HOME` isolation. Adding a pick
   must produce exactly:
 
 ```rust
@@ -605,22 +605,22 @@ ModelEntry {
 }
 ```
 
-- [ ] Add alias validation using the existing model-alias rules; reject empty,
+- [x] Add alias validation using the existing model-alias rules; reject empty,
   path-like, control-character, or duplicate aliases. Existing entries are
   never overwritten even if they are not Codex entries.
 
-- [ ] Implement `chatgpt_models_add`; do not reuse generic `add_models`, because
+- [x] Implement `chatgpt_models_add`; do not reuse generic `add_models`, because
   that function builds a SecretRef and maps UI vendor names onto wire
   protocols.
 
-- [ ] Implement `chatgpt_disconnect` as removal of entries for which both
+- [x] Implement `chatgpt_disconnect` as removal of entries for which both
   `provider == "codex"` and `billing == Some(Subscription)`. Return the count.
   Do not run `codex logout`, stop the gateway, or remove hand-authored Codex
   entries without subscription metadata.
 
-- [ ] Register both commands and run focused tests plus Hub Tauri clippy.
+- [x] Register both commands and run focused tests plus Hub Tauri clippy.
 
-- [ ] Commit: `git add mur-hub-gui/src-tauri/src/models_admin.rs
+- [x] Commit: `git add mur-hub-gui/src-tauri/src/models_admin.rs
   mur-hub-gui/src-tauri/src/chatgpt_subscription/mod.rs
   mur-hub-gui/src-tauri/src/lib.rs`, then
   `git commit -m "feat(hub): register ChatGPT subscription models"`.
@@ -652,24 +652,24 @@ export function billingLabel(mode?: BillingMode): "Subscription" | "Usage billed
 
 **Steps**
 
-- [ ] Create `chatgptSubscription.test.ts` with a table that proves the exact
+- [x] Create `chatgptSubscription.test.ts` with a table that proves the exact
   precedence: missing CLI → logged out → account error → gateway missing →
   gateway stopped → models loading → ready.
 
-- [ ] Add tests that API-key account mode never becomes subscription-ready;
+- [x] Add tests that API-key account mode never becomes subscription-ready;
   missing legacy billing metadata renders `Unknown`; and `subscription`,
   `usage_billed`, `local` map to distinct labels.
 
-- [ ] Run `npm test -- chatgptSubscription.test.ts` in `mur-hub-gui/ui` and
+- [x] Run `npm test -- chatgptSubscription.test.ts` in `mur-hub-gui/ui` and
   watch it fail because the module is absent.
 
-- [ ] Implement the DTOs, reducer, and billing label as pure functions with no
+- [x] Implement the DTOs, reducer, and billing label as pure functions with no
   Tauri imports or React state.
 
-- [ ] Run the focused test, full `npm test`, and `npm run lint`; expect zero
+- [x] Run the focused test, full `npm test`, and `npm run lint`; expect zero
   failures.
 
-- [ ] Commit: `git add mur-hub-gui/ui/src/components/chatgptSubscription.ts
+- [x] Commit: `git add mur-hub-gui/ui/src/components/chatgptSubscription.ts
   mur-hub-gui/ui/src/components/chatgptSubscription.test.ts`, then
   `git commit -m "feat(hub): model ChatGPT subscription connection states"`.
 
@@ -692,7 +692,7 @@ export function ChatGPTSubscriptionPanel(props: {
 
 **Steps**
 
-- [ ] Add a distinct provider descriptor to `modelLibraryHelpers.ts` rather
+- [x] Add a distinct provider descriptor to `modelLibraryHelpers.ts` rather
   than `CLOUD_PRESETS`:
 
 ```ts
@@ -704,37 +704,37 @@ export const CHATGPT_SUBSCRIPTION = {
 } as const;
 ```
 
-- [ ] Extend `PanelKind` in `ModelLibrary.tsx` with
+- [x] Extend `PanelKind` in `ModelLibrary.tsx` with
   `{ kind: "chatgpt-subscription" }`; render the provider in **Add Provider**
   separately from OpenAI and route it to `ChatGPTSubscriptionPanel`.
 
-- [ ] Implement panel loading with one cancellation flag per effect. Fetch
+- [x] Implement panel loading with one cancellation flag per effect. Fetch
   account and gateway status in parallel; fetch models only for a ChatGPT
   account. Never call generic `test_provider` or `/v1/models`.
 
-- [ ] Implement state-specific actions: login, retry account, consent modal
+- [x] Implement state-specific actions: login, retry account, consent modal
   then install gateway, start/repair gateway via install, retry models, add
   selected models, disconnect MUR, and separately confirmed global logout.
 
-- [ ] Model rows show display name, ID, default marker, input modalities, and
+- [x] Model rows show display name, ID, default marker, input modalities, and
   supported reasoning efforts. Default selection is only the `is_default`
   model. Alias edits reuse the existing checklist alias behavior.
 
-- [ ] When `model/list` fails, reveal an **Advanced: add unverified model ID**
+- [x] When `model/list` fails, reveal an **Advanced: add unverified model ID**
   field. Submitting it calls `chatgpt_models_add` with `verified: false` and a
   visible `Unverified` badge; no static model list is substituted.
 
-- [ ] Add all copy in `en.ts` and `zh-TW.ts`. Required phrases distinguish
+- [x] Add all copy in `en.ts` and `zh-TW.ts`. Required phrases distinguish
   ChatGPT subscription from OpenAI API usage billing and explain that global
   logout affects Codex CLI/IDE.
 
-- [ ] Add focused CSS using existing `ml-*` tokens; do not create a second
+- [x] Add focused CSS using existing `ml-*` tokens; do not create a second
   visual language. Preserve keyboard focus, field labels, `aria-live` error
   announcements, and disabled/loading states.
 
-- [ ] Run UI tests, lint, and `npm run build`; expect zero failures.
+- [x] Run UI tests, lint, and `npm run build`; expect zero failures.
 
-- [ ] Commit: `git add mur-hub-gui/ui/src/components/ChatGPTSubscriptionPanel.tsx
+- [x] Commit: `git add mur-hub-gui/ui/src/components/ChatGPTSubscriptionPanel.tsx
   mur-hub-gui/ui/src/components/ModelLibrary.tsx
   mur-hub-gui/ui/src/components/modelLibraryHelpers.ts
   mur-hub-gui/ui/src/i18n/en.ts mur-hub-gui/ui/src/i18n/zh-TW.ts
@@ -763,24 +763,24 @@ export function paidFallbackWarning(primary: ModelOption, fallback: ModelOption)
 
 **Steps**
 
-- [ ] Extend the Rust `ModelOption`/detail view returned by `list_models` with
+- [x] Extend the Rust `ModelOption`/detail view returned by `list_models` with
   both optional fields. Add a serialization test for old and new entries.
 
-- [ ] Extend the TypeScript type and render a billing badge in the model picker
+- [x] Extend the TypeScript type and render a billing badge in the model picker
   and fallback editor. Unknown remains `Unknown`, never `$0`.
 
-- [ ] Add `paidFallbackWarning` tests: subscription → usage-billed warns;
+- [x] Add `paidFallbackWarning` tests: subscription → usage-billed warns;
   subscription → local/subscription does not; unknown does not silently claim
   safety and produces a neutral “billing unknown” warning.
 
-- [ ] The editor may save a paid fallback only after the user's existing
+- [x] The editor may save a paid fallback only after the user's existing
   explicit selection. It must never insert one on 429 or while connecting the
   subscription provider.
 
-- [ ] Run Rust view tests, full UI tests/lint/build, and verify en/zh-TW key
+- [x] Run Rust view tests, full UI tests/lint/build, and verify en/zh-TW key
   parity with the existing i18n test.
 
-- [ ] Commit: `git add mur-hub-gui/src-tauri/src/detail.rs
+- [x] Commit: `git add mur-hub-gui/src-tauri/src/detail.rs
   mur-hub-gui/ui/src/components/modelPicker.ts
   mur-hub-gui/ui/src/components/settings/FallbackChainEditor.tsx
   mur-hub-gui/ui/src/components/settings/FallbackChainEditor.test.ts
@@ -797,12 +797,12 @@ Consumes all prior task outputs; produces no new runtime API.
 
 **Steps**
 
-- [ ] Add `docs/model-gateway.md` sections for ChatGPT Subscription setup,
+- [x] Add `docs/model-gateway.md` sections for ChatGPT Subscription setup,
   fixed `http://127.0.0.1:8088/codex/v1` route, no-key behavior, billing
   distinction, 429 behavior, disconnect, and global logout. Link to official
   OpenAI auth/app-server docs; do not document credential JSON fields.
 
-- [ ] Run the complete automated gates from the MUR repository:
+- [x] Run the complete automated gates from the MUR repository:
 
 ```text
 cargo test -p mur-common -p mur-agent-runtime
@@ -815,7 +815,7 @@ cd mur-hub-gui/ui && npm test && npm run lint && npm run build
 
   Expect zero failures and zero clippy warnings.
 
-- [ ] Run the complete gateway gates from the gateway repository:
+- [x] Run the complete gateway gates from the gateway repository:
 
 ```text
 cargo test
@@ -832,7 +832,7 @@ cargo clippy --all-targets -- -D warnings
   fallback; disconnect MUR and confirm `codex login status` remains logged in;
   finally confirm global logout and verify retained entries become unhealthy.
 
-- [ ] Search generated configuration and logs by key names, not token values:
+- [x] Search generated configuration and logs by key names, not token values:
 
 ```text
 rg -n "access_token|refresh_token|OPENAI_API_KEY" \
@@ -850,7 +850,7 @@ rg -n "access_token|refresh_token|OPENAI_API_KEY" \
   docs/superpowers/specs/2026-09-02-mur-hub-chatgpt-subscription-design.md`,
   then `git commit -m "docs(hub): document ChatGPT subscription setup"`.
 
-- [ ] Run `git status --short` in both repositories. Expected: empty. Record
+- [x] Run `git status --short` in both repositories. Expected: empty. Record
   the exact successful commands and commit IDs in the handoff.
 
 ## Spec coverage map
