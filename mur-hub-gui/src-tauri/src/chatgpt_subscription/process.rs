@@ -260,48 +260,57 @@ pub async fn gateway_status() -> GatewayStatusView {
 
 /// Load (or reload) the service the gateway's `install` wrote. `install`
 /// itself only writes the descriptor and prints the `launchctl` lines.
+/// Platform-split with `#[cfg]`, not `cfg!`: the macOS arm needs
+/// `std::os::unix`, which does not exist on a Windows build.
+#[cfg(target_os = "macos")]
 async fn activate_service() -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
     let file = service_file().ok_or("gateway service is not supported on this platform")?;
-    if cfg!(target_os = "macos") {
-        use std::os::unix::fs::MetadataExt;
-        let uid = std::fs::metadata(dirs::home_dir().ok_or("no home dir")?)
-            .map_err(|e| e.to_string())?
-            .uid();
-        let domain = format!("gui/{uid}");
-        let target = format!("{domain}/{GATEWAY_SERVICE_LABEL}");
-        // A previous load holds the old plist; unload first, ignore "not loaded".
-        let mut bootout = Command::new("launchctl");
-        bootout.args(["bootout", &target]);
-        let _ = run_bounded(bootout, SHORT_TIMEOUT).await;
-        let mut bootstrap = Command::new("launchctl");
-        bootstrap.args(["bootstrap", &domain, &file.to_string_lossy()]);
-        let (ok, out) = run_bounded(bootstrap, SHORT_TIMEOUT).await?;
-        if !ok {
-            return Err(format!("launchctl bootstrap failed: {}", out.trim()));
-        }
-        let mut enable = Command::new("launchctl");
-        enable.args(["enable", &target]);
-        let _ = run_bounded(enable, SHORT_TIMEOUT).await;
-        Ok(())
-    } else {
-        for args in [
-            vec!["--user", "daemon-reload"],
-            vec!["--user", "enable", "--now", "mur-model-gateway.service"],
-            vec!["--user", "restart", "mur-model-gateway.service"],
-        ] {
-            let mut c = Command::new("systemctl");
-            c.args(&args);
-            let (ok, out) = run_bounded(c, SHORT_TIMEOUT).await?;
-            if !ok {
-                return Err(format!(
-                    "systemctl {} failed: {}",
-                    args.join(" "),
-                    out.trim()
-                ));
-            }
-        }
-        Ok(())
+    let uid = std::fs::metadata(dirs::home_dir().ok_or("no home dir")?)
+        .map_err(|e| e.to_string())?
+        .uid();
+    let domain = format!("gui/{uid}");
+    let target = format!("{domain}/{GATEWAY_SERVICE_LABEL}");
+    // A previous load holds the old plist; unload first, ignore "not loaded".
+    let mut bootout = Command::new("launchctl");
+    bootout.args(["bootout", &target]);
+    let _ = run_bounded(bootout, SHORT_TIMEOUT).await;
+    let mut bootstrap = Command::new("launchctl");
+    bootstrap.args(["bootstrap", &domain, &file.to_string_lossy()]);
+    let (ok, out) = run_bounded(bootstrap, SHORT_TIMEOUT).await?;
+    if !ok {
+        return Err(format!("launchctl bootstrap failed: {}", out.trim()));
     }
+    let mut enable = Command::new("launchctl");
+    enable.args(["enable", &target]);
+    let _ = run_bounded(enable, SHORT_TIMEOUT).await;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+async fn activate_service() -> Result<(), String> {
+    for args in [
+        vec!["--user", "daemon-reload"],
+        vec!["--user", "enable", "--now", "mur-model-gateway.service"],
+        vec!["--user", "restart", "mur-model-gateway.service"],
+    ] {
+        let mut c = Command::new("systemctl");
+        c.args(&args);
+        let (ok, out) = run_bounded(c, SHORT_TIMEOUT).await?;
+        if !ok {
+            return Err(format!(
+                "systemctl {} failed: {}",
+                args.join(" "),
+                out.trim()
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+async fn activate_service() -> Result<(), String> {
+    Err("gateway service is not supported on this platform".into())
 }
 
 /// Install/repair the gateway service with the Codex credential source.
