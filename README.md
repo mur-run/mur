@@ -191,6 +191,8 @@ API keys are stored as `SecretRef`s (`env:`, `keychain:`, `file:`, `cmd:`) — n
 
 **Reuse the subscriptions you already pay for.** The companion [mur-model-gateway](https://github.com/mur-run/mur-model-gateway) runs a local endpoint (`127.0.0.1:8088`) that routes Anthropic / OpenAI / Gemini calls through one outlet and attaches credentials from your OS keychain — point a registry entry's `base_url` at it and your agents ride your existing Claude Code login instead of a separate metered API key.
 
+**ChatGPT Subscription, no API key.** MUR Hub's Model Library has a dedicated **ChatGPT Subscription** provider, separate from the usage-billed OpenAI entry: sign in through Codex CLI (the browser flow Codex already owns), let the Hub install the gateway with a Codex credential source, and pick the models your plan offers. Registry entries are `provider: codex` with no `secret` — the runtime sends authless requests only to the loopback `http://127.0.0.1:8088/codex/v1` and refuses anything else, so a typo cannot land on OpenAI Platform billing. Model pickers and fallback chains carry a billing label, and MUR never adds a usage-billed fallback behind a subscription model on its own. Disconnecting MUR leaves the shared Codex login untouched; signing out is a separate, confirmed step because it affects Codex CLI and IDE too. Details: [`docs/model-gateway.md`](docs/model-gateway.md).
+
 #### Cloud LLM backend (opt-in)
 
 Conversation stages inherit the top-level `llm:` block by default. Each stage
