@@ -86,5 +86,5 @@ pub async fn chatgpt_models_list() -> Result<Vec<ChatGptModelView>, String> {
 /// Linux a fork inherits another thread's still-open write fd, and exec of
 /// that file fails with ETXTBSY (`Text file busy`). Hold this for the whole
 /// test body, writer and spawner alike.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) static FAKE_BIN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
