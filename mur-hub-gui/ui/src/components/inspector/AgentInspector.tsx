@@ -288,6 +288,7 @@ export function AgentInspector({ agentName, agents, runtime, onClose }: Props) {
               <FallbackChainEditor
                 chain={agentChain}
                 options={modelOptions}
+                primaryRef={detail.model_ref}
                 onChange={saveAgentChain}
                 emptyHintKey="detail.fallbackChainInherits"
               />

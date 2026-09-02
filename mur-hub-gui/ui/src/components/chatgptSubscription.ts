@@ -121,3 +121,45 @@ export function defaultChatGPTAlias(modelId: string): string {
     .replace(/^_+|_+$/g, "");
   return `chatgpt_${slug}`;
 }
+
+export type PaidFallbackWarning =
+  | "settings.modelSwitch.paidFallback"
+  | "settings.modelSwitch.unknownFallback";
+
+/**
+ * Whether putting `fallback` behind a subscription `primary` changes who
+ * pays. A usage-billed fallback is a real warning; unknown billing is a
+ * neutral one — it does not claim safety. Both are advisory: the user may
+ * still save the chain explicitly. `null` when there is nothing to say.
+ */
+/** Anything with an optional billing field — a ModelOption or a test stub. */
+interface Billed {
+  ref_name?: string;
+  billing?: BillingMode | string | null;
+}
+
+export function paidFallbackWarning(
+  primary: Billed | null | undefined,
+  fallback: Billed | null | undefined,
+): PaidFallbackWarning | null {
+  if (primary?.billing !== "subscription" || !fallback) return null;
+  if (fallback.billing === "usage_billed") return "settings.modelSwitch.paidFallback";
+  if (fallback.billing === "subscription" || fallback.billing === "local") return null;
+  return "settings.modelSwitch.unknownFallback";
+}
+
+/** i18n key for a billing badge. */
+export function billingKey(
+  mode?: BillingMode | string | null,
+): "billing.subscription" | "billing.usageBilled" | "billing.local" | "billing.unknown" {
+  switch (billingLabel(mode)) {
+    case "Subscription":
+      return "billing.subscription";
+    case "Usage billed":
+      return "billing.usageBilled";
+    case "Local":
+      return "billing.local";
+    default:
+      return "billing.unknown";
+  }
+}
