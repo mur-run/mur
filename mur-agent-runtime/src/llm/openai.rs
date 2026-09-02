@@ -22,9 +22,19 @@ const LLM_CONNECT_TIMEOUT_SECS: u64 = 10;
 /// Service constant used by `mur agent secret set` (mirrors agent.rs).
 const MUR_AGENT_KEYCHAIN_SERVICE: &str = "mur-agent";
 
+/// How a request authenticates. Explicit so an authless route is a
+/// deliberate choice at construction, not an empty key that happens to be
+/// sent as `Bearer `. `None` exists for the loopback Codex gateway, which
+/// attaches the ChatGPT OAuth token itself.
+#[derive(Clone)]
+enum OpenAiAuth {
+    Bearer(String),
+    None,
+}
+
 pub struct OpenAiClient {
     base_url: String,
-    api_key: String,
+    auth: OpenAiAuth,
     model: String,
     http: reqwest::Client,
 }
@@ -38,7 +48,7 @@ impl OpenAiClient {
             .expect("failed to build reqwest client");
         Self {
             base_url,
-            api_key,
+            auth: OpenAiAuth::Bearer(api_key),
             model,
             http,
         }
@@ -53,9 +63,33 @@ impl OpenAiClient {
     ) -> Self {
         Self {
             base_url,
-            api_key,
+            auth: OpenAiAuth::Bearer(api_key),
             model,
             http,
+        }
+    }
+
+    /// Chat Completions transport that sends no credential at all. Only the
+    /// loopback Codex gateway route may use this (see `llm::codex`), which is
+    /// why it is crate-private: the gateway owns the OAuth token, and a key
+    /// here would either leak or silently switch the bill to OpenAI Platform.
+    pub(crate) fn authless_with_http(
+        base_url: String,
+        model: String,
+        http: reqwest::Client,
+    ) -> Self {
+        Self {
+            base_url,
+            auth: OpenAiAuth::None,
+            model,
+            http,
+        }
+    }
+
+    fn apply_auth(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.auth {
+            OpenAiAuth::Bearer(key) => request.bearer_auth(key),
+            OpenAiAuth::None => request,
         }
     }
 
@@ -331,9 +365,7 @@ impl LlmClient for OpenAiClient {
             return Err(LlmError::Http(e));
         }
         let resp = self
-            .http
-            .post(url)
-            .bearer_auth(&self.api_key)
+            .apply_auth(self.http.post(url))
             .json(&body)
             .send()
             .await
@@ -408,9 +440,7 @@ impl LlmClient for OpenAiClient {
             return Err(LlmError::Http(e));
         }
         let mut resp = self
-            .http
-            .post(url)
-            .bearer_auth(&self.api_key)
+            .apply_auth(self.http.post(url))
             .json(&body)
             .send()
             .await
@@ -691,5 +721,69 @@ mod tests {
         assert_eq!(tool_calls[0].call_id, "call_abc");
         assert_eq!(tool_calls[0].tool_name, "bash");
         assert_eq!(stop_reason, crate::llm::StopReason::ToolUse);
+    }
+
+    fn ok_completion() -> serde_json::Value {
+        json!({
+            "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+        })
+    }
+
+    fn hello() -> LlmRequest {
+        LlmRequest {
+            messages: vec![RichMessage::Text {
+                role: "user".into(),
+                content: "hi".into(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// The authless constructor sends neither `Authorization` nor `x-api-key`:
+    /// the loopback gateway attaches the subscription token itself.
+    #[tokio::test]
+    async fn authless_client_sends_no_credential_header() {
+        let server = httpmock::MockServer::start_async().await;
+        let m = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/chat/completions")
+                    .matches(|req| {
+                        !req.headers.as_ref().is_some_and(|h| {
+                            h.iter().any(|(k, _)| {
+                                k.eq_ignore_ascii_case("authorization")
+                                    || k.eq_ignore_ascii_case("x-api-key")
+                            })
+                        })
+                    });
+                then.status(200).json_body(ok_completion());
+            })
+            .await;
+        let client = OpenAiClient::authless_with_http(
+            server.base_url(),
+            "gpt-test".into(),
+            reqwest::Client::new(),
+        );
+        let resp = client.generate(hello()).await.unwrap();
+        assert_eq!(resp.text, "hi");
+        m.assert_async().await;
+    }
+
+    /// Existing constructors are unchanged: `new` still sends the bearer key.
+    #[tokio::test]
+    async fn keyed_client_still_sends_bearer() {
+        let server = httpmock::MockServer::start_async().await;
+        let m = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/chat/completions")
+                    .header("authorization", "Bearer test-key");
+                then.status(200).json_body(ok_completion());
+            })
+            .await;
+        let client = OpenAiClient::new(server.base_url(), "test-key".into(), "gpt-test".into());
+        client.generate(hello()).await.unwrap();
+        m.assert_async().await;
     }
 }

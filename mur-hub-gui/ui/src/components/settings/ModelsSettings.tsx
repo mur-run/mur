@@ -200,6 +200,7 @@ export function ModelsSettings() {
         <FallbackChainEditor
           chain={ms.fallback_chain}
           options={modelOptions}
+          primaryRef={ms.default}
           onChange={(next) => saveMs({ ...ms, fallback_chain: next })}
         />
 
