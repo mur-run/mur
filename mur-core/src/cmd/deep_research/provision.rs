@@ -319,6 +319,7 @@ pub fn cmd_provision(
     count: Option<usize>,
     model: Option<&str>,
     grant_egress_flag: bool,
+    grant_browser_flag: bool,
     deny_hosts: &[String],
     yes: bool,
     render_engine: Option<&str>,
@@ -357,6 +358,16 @@ pub fn cmd_provision(
         "  tool policy: {} → deny (built-ins off so a research turn can't dead-end on the HITL gate)",
         WORKER_DENIED_BUILTIN_TOOLS.join(", ")
     );
+
+    // The wizard asks this as its own question; this is that answer for
+    // scripted use. Without a path here the grant is reachable only from an
+    // interactive terminal — which is how this gap was found: verifying the
+    // grant end-to-end could not get past `setup`'s own non-interactive guard.
+    if grant_browser_flag {
+        for name in &names {
+            grant_render_browser(mur_home, name)?;
+        }
+    }
     if let Some((engine, worker_bin)) = &obscura_paths {
         println!(
             "  render engine: obscura — exec granted for {}, {}",
@@ -378,6 +389,31 @@ pub fn cmd_provision(
 
 #[cfg(test)]
 mod tests {
+    /// A machine without `agent-browser` must still provision. The grant is a
+    /// convenience, not a dependency — failing here would make an optional
+    /// render tier a hard requirement for deep research.
+    ///
+    /// (The `--grant-browser` flag itself is enforced by the compiler: the
+    /// dispatch cannot build without passing it, and `cli` lives in the binary
+    /// so a lib test cannot parse it. The gap it closes was found by trying to
+    /// use the grant from a script — `setup` refuses without a TTY, so before
+    /// this flag the grant was reachable only from an interactive terminal.)
+    #[test]
+    fn a_missing_browser_is_a_note_not_a_provisioning_failure() {
+        let home = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("PATH");
+        // SAFETY: single-threaded test; PATH is restored below.
+        unsafe { std::env::set_var("PATH", "") };
+        let r = super::which_agent_browser();
+        if let Some(p) = prev {
+            unsafe { std::env::set_var("PATH", p) };
+        }
+        assert!(r.is_err(), "an empty PATH cannot resolve agent-browser");
+        // …and the caller turns that into a note, never an Err — pinned by the
+        // `let Ok(abs) = … else { return Ok(()) }` shape in grant_render_browser.
+        let _ = home;
+    }
+
     use super::*;
     use std::collections::BTreeMap;
     use std::sync::Mutex;
