@@ -6,7 +6,8 @@ import type { ModelOption } from "../modelPicker";
 import { useT } from "../../i18n";
 import type { TranslationKey } from "../../i18n/types";
 import { ModelRefSelect } from "./ModelRefSelect";
-import { sanitizeChain } from "./modelSwitch";
+import { pickNextFallback, sanitizeChain } from "./modelSwitch";
+import { paidFallbackWarning } from "../chatgptSubscription";
 
 export interface FallbackChainEditorProps {
   chain: string[];
@@ -17,6 +18,8 @@ export interface FallbackChainEditorProps {
    *  (e.g. "inherits global chain") pass their own key. */
   emptyHintKey?: TranslationKey;
   disabled?: boolean;
+  /** The model this chain backs up; enables the paid-fallback warning. */
+  primaryRef?: string | null;
 }
 
 export function FallbackChainEditor({
@@ -25,11 +28,13 @@ export function FallbackChainEditor({
   onChange,
   emptyHintKey = "settings.modelSwitch.chainEmpty",
   disabled,
+  primaryRef,
 }: FallbackChainEditorProps) {
   const { t } = useT();
+  const primary = options.find((o) => o.ref_name === primaryRef) ?? null;
 
   const addRow = () => {
-    const pick = options.find((o) => !chain.includes(o.ref_name))?.ref_name ?? options[0]?.ref_name;
+    const pick = pickNextFallback(chain, options, primaryRef);
     if (!pick) return;
     onChange(sanitizeChain([...chain, pick]));
   };
@@ -62,8 +67,13 @@ export function FallbackChainEditor({
       {chain.length === 0 ? (
         <p className="settings-hint">{t(emptyHintKey)}</p>
       ) : (
-        chain.map((ref, i) => (
-          <div className="settings-row" key={`${ref}-${i}`}>
+        chain.map((ref, i) => {
+          const warn = paidFallbackWarning(
+            primary,
+            options.find((o) => o.ref_name === ref),
+          );
+          return (
+          <div className="settings-row settings-row--wrap" key={`${ref}-${i}`}>
             <span className="settings-row__label">{i + 1}.</span>
             <ModelRefSelect
               value={ref}
@@ -96,8 +106,14 @@ export function FallbackChainEditor({
             >
               ✕
             </button>
+            {warn && (
+              <p className="settings-hint slot-error" role="alert">
+                {t(warn)}
+              </p>
+            )}
           </div>
-        ))
+          );
+        })
       )}
     </>
   );

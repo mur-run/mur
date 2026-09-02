@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { billingKey } from "./chatgptSubscription";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useT } from "../i18n";
@@ -337,7 +338,7 @@ export function ModelPickerModal({ isOpen, onClose, dismissible = false }: Props
                       <option value="">{t("modelPicker.connect.pickPlaceholder")}</option>
                       {registryModels.map((m) => (
                         <option key={m.ref_name} value={m.ref_name}>
-                          {m.ref_name} ({m.provider})
+                          {m.ref_name} ({m.provider}){m.billing ? ` · ${t(billingKey(m.billing))}` : ""}
                         </option>
                       ))}
                     </select>
