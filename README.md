@@ -152,7 +152,7 @@ mur agent remove coach                        # unregisters it — add --purge t
 
 <p align="center"><img src="assets/demo.gif" alt="mur agent cli — streaming TUI chat with a local agent" width="92%" /></p>
 
-In the chat, `/model` lists your registered models and switches the agent to another one mid-conversation — no restart. `/login` shows OAuth health for every provider and re-authenticates one without leaving the TUI: it re-reads the credential, asks the owner CLI to refresh, and only falls back to a real browser login if neither worked. Type `/` to open a completion menu of slash commands (with their subcommands) and the agent's skills — `↑↓` to move, `Tab`/`Enter` to accept, `Esc` to dismiss. And when the agent offers you choices, they appear as `Tab`-to-fill suggestions right in the input: a single one as greyed ghost text, several as a picker.
+In the chat, `/model` lists your registered models and switches the agent to another one mid-conversation — no restart. `/effort` shows the reasoning levels *this agent's model* actually accepts and sets one for the conversation (`--save` to make it stick); a level the model has no step for is reported, not silently swallowed. `/login` shows OAuth health for every provider and re-authenticates one without leaving the TUI: it re-reads the credential, asks the owner CLI to refresh, and only falls back to a real browser login if neither worked. Type `/` to open a completion menu of slash commands (with their subcommands) and the agent's skills — `↑↓` to move, `Tab`/`Enter` to accept, `Esc` to dismiss. And when the agent offers you choices, they appear as `Tab`-to-fill suggestions right in the input: a single one as greyed ghost text, several as a picker.
 
 ### Models & providers
 
@@ -186,6 +186,8 @@ exactly which refs still need a key on the new machine.
 Providers rename and retire model ids constantly. The registry key is the stable name your agents point at, so a rename is **one edit to `models.yaml`** and every agent using that key follows — no per-agent migration. `mur model doctor` reports where that indirection has come apart; it is read-only and never rewrites a model id for you, because which model an agent runs is a cost and behaviour decision that shouldn't change silently.
 
 API keys are stored as `SecretRef`s (`env:`, `keychain:`, `file:`, `cmd:`) — never written to config in plaintext. The **MUR Hub** desktop app has a **Model Library** that connects cloud providers (key saved to the macOS Keychain), auto-detects local runtimes (Ollama / MLX / LM Studio), discovers their models via `/v1/models`, and adds them to the registry — no YAML editing required.
+
+**Dial reasoning up or down, per agent.** Every provider spells this differently — OpenAI takes a level name, Anthropic its own scale, DeepSeek V4 low/high/max with no middle step, Qwen and GLM only an on/off switch, and Mistral's Magistral models reject the parameter outright. MUR keeps one scale and one table that knows which levels each model really takes, so `mur agent effort <name> high` means the same thing everywhere and a level a model cannot use is degraded instead of erroring. Set it per agent from the CLI, for one conversation with `/effort`, or in the MUR Hub's **Behavior** tab.
 
 **Reuse the subscriptions you already pay for.** The companion [mur-model-gateway](https://github.com/mur-run/mur-model-gateway) runs a local endpoint (`127.0.0.1:8088`) that routes Anthropic / OpenAI / Gemini calls through one outlet and attaches credentials from your OS keychain — point a registry entry's `base_url` at it and your agents ride your existing Claude Code login instead of a separate metered API key.
 
@@ -655,7 +657,7 @@ mur
 ├── agent        create · start · stop · restart · remove · cli · send · card · dial · who ·
 │                export · install · install-service · addon · companion · voice · pair ·
 │                schedule (add · proposals · accept) · perm (incl. list-paths) · secret ·
-│                fallback · smart · routing · trash · rollback … (40+)
+│                fallback · smart · routing · effort · trash · rollback … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · status · run · set-loop · send · jobs   (squads of agents over a shared channel)
 ├── official     list · install   (official agents/fleets from the app.mur.run catalog)
