@@ -269,6 +269,25 @@ fn version_ge(v: &str, maj: u32, min: u32) -> bool {
     a > maj || (a == maj && b >= min)
 }
 
+/// Why a spawn failed, in terms the operator can act on.
+///
+/// `PermissionDenied` here is almost never file permissions — it is the agent's
+/// kernel sandbox refusing an exec that is not on its allowlist. The raw
+/// `Operation not permitted (os error 1)` reads like a broken install and sent
+/// a real investigation looking at the binary instead of at the policy, so the
+/// denial names itself and the grant that lifts it.
+fn spawn_error_message(bin: &str, e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::PermissionDenied {
+        return format!(
+            "spawn {bin}: refused by the agent's sandbox (exec allowlist). Rendered fetch \
+             needs that binary granted at provision time — re-run `mur deep-research setup` \
+             and answer 'yes' to the research browser, or add its ABSOLUTE path to the \
+             agent's entitlements.processes.spawn.allowed. Plain `fetch` still works."
+        );
+    }
+    format!("spawn {bin}: {e}")
+}
+
 /// Spawn agent-browser with `argv`, bounded by `timeout` (same source tier-1
 /// uses), and return its stdout. Enforces the tier-1 body cap on stdout so a
 /// runaway render can't buffer unbounded. Shared by `fetch_rendered`/`search`.
@@ -281,7 +300,7 @@ async fn run_agent_browser(
     let out = tokio::time::timeout(timeout, fut)
         .await
         .map_err(|_| FetchError::Http("agent-browser timed out".into()))?
-        .map_err(|e| FetchError::Http(format!("spawn agent-browser: {e}")))?;
+        .map_err(|e| FetchError::Http(spawn_error_message(bin, &e)))?;
     if !out.status.success() {
         return Err(FetchError::Http(
             String::from_utf8_lossy(&out.stderr).into(),
@@ -370,6 +389,30 @@ pub async fn fetch_rendered(
 
 #[cfg(test)]
 mod tests {
+
+    /// The message that cost an investigation an hour. `PermissionDenied` from
+    /// a spawn is the kernel sandbox refusing an exec, not a broken install —
+    /// the raw OS text reads like the latter.
+    #[test]
+    fn a_denied_spawn_names_the_sandbox_and_the_grant() {
+        let e = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let msg = super::spawn_error_message("agent-browser", &e);
+        assert!(msg.contains("sandbox"), "{msg}");
+        assert!(msg.contains("deep-research setup"), "{msg}");
+        // and it must not leave the reader thinking plain fetch is gone too
+        assert!(msg.contains("`fetch` still works"), "{msg}");
+    }
+
+    /// Any other spawn failure keeps the OS text — inventing a sandbox story
+    /// for a missing binary would be the same mistake pointing the other way.
+    #[test]
+    fn other_spawn_failures_keep_their_own_error() {
+        let e = std::io::Error::from(std::io::ErrorKind::NotFound);
+        let msg = super::spawn_error_message("agent-browser", &e);
+        assert!(!msg.contains("sandbox"), "{msg}");
+        assert!(msg.starts_with("spawn agent-browser:"), "{msg}");
+    }
+
     use super::*;
 
     // Process-global env — serialize with the same lock style config.rs tests use.
