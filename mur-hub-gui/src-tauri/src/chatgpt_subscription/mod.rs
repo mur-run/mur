@@ -81,3 +81,10 @@ pub async fn chatgpt_models_list() -> Result<Vec<ChatGptModelView>, String> {
         .ok_or_else(|| ControlError::CliMissing.to_string())?;
     list_models(&codex).await.map_err(|e| e.to_string())
 }
+
+/// Tests that write a fake executable and spawn it must not interleave: on
+/// Linux a fork inherits another thread's still-open write fd, and exec of
+/// that file fails with ETXTBSY (`Text file busy`). Hold this for the whole
+/// test body, writer and spawner alike.
+#[cfg(test)]
+pub(crate) static FAKE_BIN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());

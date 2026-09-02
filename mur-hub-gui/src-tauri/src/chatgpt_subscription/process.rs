@@ -403,6 +403,7 @@ mod tests {
 
     #[tokio::test]
     async fn nothing_runs_without_the_boolean() {
+        let _serial = super::super::FAKE_BIN_LOCK.lock().await;
         let dir = tempfile::tempdir().unwrap();
         let (bin, marker) = fake_bin(&dir, "exit 0");
         assert_eq!(
@@ -421,6 +422,7 @@ mod tests {
 
     #[tokio::test]
     async fn child_output_is_capped_and_stripped() {
+        let _serial = super::super::FAKE_BIN_LOCK.lock().await;
         let dir = tempfile::tempdir().unwrap();
         // 100 KiB of 'a' with an ANSI escape up front, on stdout and stderr.
         let (bin, _) = fake_bin(
@@ -440,6 +442,7 @@ mod tests {
     /// `codex login` exiting 0 is not success: the account must say chatgpt.
     #[tokio::test]
     async fn login_believes_the_account_not_the_exit_code() {
+        let _serial = super::super::FAKE_BIN_LOCK.lock().await;
         let dir = tempfile::tempdir().unwrap();
         let (bin, _) = fake_bin(
             &dir,
