@@ -118,16 +118,24 @@ login, logout }, i18nPrefix }`. `deriveChatGPTState` becomes
 `modelLibraryHelpers.ts`.
 
 #### `claude_subscription` (Hub Tauri)
-- `account.rs`: runs `claude auth status`, parses only `loggedIn`,
-  `authMethod`, `email` from its JSON; `logged_in` is true only for
-  `authMethod == "claude.ai"`. Any other field is dropped. The output is
-  bounded and sanitized by the shared `run_bounded`.
+- `account.rs`: runs `claude auth status --json` (`--json` is the default
+  today; pass it anyway so a future default change cannot break parsing),
+  keeps only `loggedIn`, `authMethod`, `email`, and drops every other field
+  before it can reach a view or log. `logged_in` is true only for
+  `authMethod == "claude.ai"`; any other value — `console`, an unknown
+  string, or the field missing — is "signed in, but not this provider". The
+  output is bounded and sanitized by the shared `run_bounded`; JSON is parsed
+  regardless of the exit code, and unparseable output is logged-out, not an
+  error.
 - Login: `claude auth login --claudeai`; five-minute timeout, process-global
   mutex, success decided by a following `auth status`, never by exit code.
 - Logout: `claude auth logout`, refused without `confirmed: true`.
-- Model list: `mur_core::model_prices` catalog cache filtered to the
-  `anthropic` vendor; `catalog_verified: true`. Catalog unavailable →
-  the panel's unverified-id field.
+- Model list: `mur_core::model_prices::load_cached` / `load_or_fetch`, then
+  `Catalog::provider_models("anthropic")` — the same source the Hub's
+  Anthropic discovery already uses instead of probing the endpoint;
+  `catalog_verified: true`. Catalog unavailable → the panel's unverified-id
+  field. Default pre-selection: none (the catalog has no "default" marker),
+  so the user picks explicitly.
 - Gateway status/install: reuse `chatgpt_subscription::process` as is; the
   install line already sets the Codex source and leaves the Anthropic source
   at its keychain default. Move `process.rs` and `run_bounded` to a shared
@@ -148,16 +156,28 @@ here, `/codex/v1` there). Factory arm `"claude"`: reject `secret`, require
 `/__mur/health` adds `claudeCredential: "oauth" | "missing"`, derived from
 `TokenSource::resolve_credential()` on the Anthropic source (keychain or
 credentials file); never the token, never the expiry. The Hub treats only
-`oauth` as ready.
+`oauth` as ready. This read goes through the gateway's existing 60 s
+memoised keychain access, so polling health does not add keychain traffic;
+on a gateway that has never been granted keychain access it is the same
+one-time "Always Allow" prompt a first request would cause.
 
 ## Hub State Model
 
-Identical to ChatGPT: loading → codex-missing (here: `claude` CLI missing) →
-logged-out (includes Console login, with a distinct message) → account error
-→ gateway missing → gateway unusable (`not-running` / `hook-missing` is not
-applicable — the Anthropic path needs no compiled hook — so the descriptor
-declares which health fields gate readiness: `claudeCredential == oauth`) →
-models loading → ready.
+The ChatGPT state machine, unchanged in shape and precedence:
+login-in-progress → CLI missing → logged out → account error → loading →
+gateway missing → gateway unusable → models loading → ready. Two things
+become descriptor-driven:
+
+- **Which CLI** is "missing": `claude` here, `codex` there.
+- **What "gateway usable" means.** The ChatGPT descriptor requires
+  `codexHook && codexCredential == "chatgpt"`; the Claude descriptor requires
+  `claudeCredential == "oauth"` and does not look at the hook (the Anthropic
+  path is plain header attachment, compiled into every build). The
+  `gatewayProblem` reasons stay the same set; `hook-missing` is simply never
+  produced for Claude.
+
+A Console login is rendered as logged-out with its own message ("signed in
+to Anthropic Console — that is API billing, not a subscription").
 
 ## Registry Contract
 
@@ -171,8 +191,12 @@ claude_opus_5:
   catalog_verified: true
 ```
 
-No `secret`. `mur model doctor` warns (never rewrites) when a
-`provider: anthropic` entry's `base_url` is a loopback gateway URL.
+No `secret`. `mur model doctor` adds two warn-only checks (it never
+rewrites): a `provider: anthropic` entry whose `base_url` is a loopback
+gateway URL ("this rides a subscription; `provider: claude` would make that
+explicit and refuse a remote host"), and a `provider: claude` entry whose
+`base_url` is not a loopback `/v1` URL or that carries a `secret` ("the
+runtime will refuse to start this").
 
 ## Runtime Contract
 
@@ -246,3 +270,9 @@ fallback warns exactly as a ChatGPT primary with an `openai` fallback does.
   logout`) — verified present in Claude Code 2.1.258.
 - **Health credential kinds:** `oauth | missing` only — the keychain blob has
   no auth-method field, so `console` is not derivable there.
+- **Sandbox port grant:** no change needed — `local_llm_port` grants the
+  loopback port of the resolved entry's `base_url` before it looks at the
+  provider string, so a `claude` entry reaches 8088 under `restricted`
+  networking exactly as `codex` does.
+- **Catalog source:** `Catalog::provider_models("anthropic")`, already what
+  Anthropic discovery uses; no `/v1/models` probe.
