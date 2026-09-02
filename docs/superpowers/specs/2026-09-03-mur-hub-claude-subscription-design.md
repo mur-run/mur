@@ -205,6 +205,14 @@ runtime will refuse to start this").
 normalized path equal to `required_path`. `codex.rs` calls it with
 `/codex/v1`, `claude.rs` with `/v1`.
 
+The authless `AnthropicClient` must **omit** the `x-api-key` header
+entirely, never send it empty. The gateway picks its mode by header
+presence (`contains_key`): no auth header → it attaches the keychain token
+(mode 2); an empty `x-api-key:` → passthrough untouched (mode 3) and a 401
+from Anthropic. `OpenAiAuth::None` already does this by skipping
+`.bearer_auth()`; `AnthropicAuth::None` skips `.header("x-api-key", …)` the
+same way, and a mock-server test asserts the header is absent.
+
 ## Logout and Disconnect Semantics
 
 Same as ChatGPT. *Disconnect MUR* removes registry entries only.
