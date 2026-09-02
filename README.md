@@ -193,6 +193,8 @@ API keys are stored as `SecretRef`s (`env:`, `keychain:`, `file:`, `cmd:`) — n
 
 **ChatGPT Subscription, no API key.** MUR Hub's Model Library has a dedicated **ChatGPT Subscription** provider, separate from the usage-billed OpenAI entry: sign in through Codex CLI (the browser flow Codex already owns), let the Hub install the gateway with a Codex credential source, and pick the models your plan offers. Registry entries are `provider: codex` with no `secret` — the runtime sends authless requests only to the loopback `http://127.0.0.1:8088/codex/v1` and refuses anything else, so a typo cannot land on OpenAI Platform billing. Model pickers and fallback chains carry a billing label, and MUR never adds a usage-billed fallback behind a subscription model on its own. Disconnecting MUR leaves the shared Codex login untouched; signing out is a separate, confirmed step because it affects Codex CLI and IDE too. Details: [`docs/model-gateway.md`](docs/model-gateway.md).
 
+**Claude Subscription, the same way.** The Model Library's **Claude Subscription** provider signs in through Claude Code (`claude auth login --claudeai`), lists models from the catalog, and writes `provider: claude` entries that can only reach the loopback gateway's `/v1` route — no `secret`, and a `base_url` edit to `api.anthropic.com` is refused at startup instead of quietly switching the bill. Entries you already point at the gateway as `provider: anthropic` keep working; `mur model doctor` shows which ones could carry the explicit label.
+
 #### Cloud LLM backend (opt-in)
 
 Conversation stages inherit the top-level `llm:` block by default. Each stage

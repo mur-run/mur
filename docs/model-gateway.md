@@ -105,8 +105,96 @@ and shows an **Unverified** badge. No static model list is substituted.
   extensions included. Registry entries that remain become unhealthy until
   you sign in again.
 
+## Claude Subscription
+
+Use a Claude Pro/Max plan for MUR agents through Claude Code, with no API
+key and no usage billing. Same shape as ChatGPT Subscription above; the CLI
+is Claude Code and the route is `/v1`.
+
+Who owns what:
+
+| Concern | Owner |
+|---|---|
+| Sign-in and the credential on disk | Claude Code (`claude auth login` / `logout`) |
+| Account status | MUR Hub, via `claude auth status --json` |
+| Attaching and refreshing the token | `mur-model-gateway` |
+| Registry entries and agent assignment | MUR |
+
+MUR never reads or copies the Claude Code credential (keychain blob or
+`~/.claude/.credentials.json`). The Hub keeps three fields from
+`claude auth status` — whether you are signed in, which login kind, and the
+email — and drops everything else.
+
+### Setup
+
+1. Install Claude Code (`npm install -g @anthropic-ai/claude-code`) and the
+   gateway (`brew install mur-run/tap/mur-model-gateway`).
+2. In MUR Hub, open **Models → Model Library → Add Provider → Claude
+   Subscription**. This is a separate entry from **Anthropic**, which is the
+   usage-billed API.
+3. **Sign in with Claude.** The Hub runs `claude auth login --claudeai` and
+   then asks `claude auth status` who is signed in; exit code alone is not
+   trusted. A **Console** login (`authMethod: console`) is the Anthropic API
+   and reads as "signed in, but not this provider".
+4. **Install gateway** if it is not running, behind the same consent card.
+5. Pick models. They come from the models.dev catalog, not from a live
+   endpoint probe.
+
+The registry entry:
+
+```yaml
+models:
+  claude_opus_5:
+    provider: claude
+    model: claude-opus-5
+    base_url: http://127.0.0.1:8088/v1
+    tier: frontier
+    billing: subscription
+    catalog_verified: true
+```
+
+### The fixed route and no-key behaviour
+
+`provider: claude` sends Anthropic Messages requests **with no `x-api-key`
+header at all** to `http://127.0.0.1:8088/v1`. Absent, not empty: the
+gateway decides what to do by whether an auth header is present. No header
+means "attach the Claude Code token"; an empty one would mean "pass this
+through untouched" and earn a 401.
+
+The runtime accepts only that shape — `http`, a loopback host, an explicit
+port, the path `/v1`, no user info, query, or fragment. A remote host, an
+`https` URL, or a `secret` on the entry is refused at startup rather than
+sent. `GET http://127.0.0.1:8088/__mur/health` reports `claudeCredential`
+(`oauth` or `missing` — a kind, never a token); the Hub treats only `oauth`
+as ready.
+
+### Already using `provider: anthropic` with the gateway?
+
+It keeps working, unchanged. The difference is what the entry guarantees:
+`provider: anthropic` is the same route with no protection, so one
+`base_url` edit to `api.anthropic.com` turns it into a metered API entry
+and nothing objects. Switching is two lines — `provider: claude` and
+`base_url` with `/v1` appended.
+
+`mur model doctor` points at the entries that could carry the label. It
+stays quiet about an `anthropic` gateway entry that has a `secret`, because
+what that entry does depends on the token in the secret (an `sk-ant-oat`
+subscription token rides the gateway; a normal API key is passed through and
+billed), and doctor does not read secrets to find out.
+
+### Disconnect vs sign out
+
+- **Disconnect MUR** removes the `provider: claude` subscription entries from
+  MUR's registry. `claude auth status` still reports you signed in, and every
+  other Claude Code session keeps working.
+- **Sign out of Claude** runs `claude auth logout` after a confirmation,
+  because it signs Claude Code out everywhere on this machine — terminal
+  sessions and IDE extensions included.
+
 ### References
 
 - OpenAI, *Codex authentication*: <https://developers.openai.com/codex/auth>
+- Anthropic, *Claude Code*: <https://docs.claude.com/en/docs/claude-code/overview>
 - OpenAI, *Codex app-server*: <https://developers.openai.com/codex/app-server>
-- Design: `docs/superpowers/specs/2026-09-02-mur-hub-chatgpt-subscription-design.md`
+- Designs: `docs/superpowers/specs/2026-09-02-mur-hub-chatgpt-subscription-design.md`,
+  `docs/superpowers/specs/2026-09-03-mur-hub-claude-subscription-design.md`
