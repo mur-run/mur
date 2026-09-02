@@ -258,6 +258,7 @@ mod tests {
 
     #[tokio::test]
     async fn handshake_then_account_read_skips_notifications() {
+        let _serial = super::super::FAKE_BIN_LOCK.lock().await;
         let dir = tempfile::tempdir().unwrap();
         let body = format!(
             "{INIT_OK}\n    *'\"account/read\"'*) printf '{{\"method\":\"thread/started\",\"params\":{{}}}}\\n'; printf '{{\"id\":99,\"result\":{{}}}}\\n'; printf '{{\"id\":%s,\"result\":{{\"account\":{{\"type\":\"chatgpt\",\"email\":\"u@example.com\",\"planType\":\"pro\"}}}}}}\\n' \"$id\";;"
@@ -311,6 +312,7 @@ mod tests {
 
     #[tokio::test]
     async fn rpc_error_and_eof_and_timeout_are_distinct() {
+        let _serial = super::super::FAKE_BIN_LOCK.lock().await;
         let dir = tempfile::tempdir().unwrap();
         let body = format!(
             "{INIT_OK}\n    *'\"account/read\"'*) printf '{{\"id\":%s,\"error\":{{\"code\":-32000,\"message\":\"boom\"}}}}\\n' \"$id\";;"
@@ -350,6 +352,7 @@ mod tests {
 
     #[tokio::test]
     async fn model_list_paginates_dedups_and_defaults_modalities() {
+        let _serial = super::super::FAKE_BIN_LOCK.lock().await;
         let dir = tempfile::tempdir().unwrap();
         let body = format!(
             concat!(
