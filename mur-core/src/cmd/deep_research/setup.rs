@@ -38,6 +38,10 @@ pub struct WizardAnswers {
     pub count: usize,
     pub budget_usd: f64,
     pub egress: bool,
+    /// Grant the workers' gateway permission to spawn the render browser.
+    /// Separate consent from egress: egress is "may it reach the web", this is
+    /// "may it start a browser to do so".
+    pub browser: bool,
 }
 
 fn read_line(input: &mut dyn BufRead) -> Result<String> {
@@ -129,11 +133,32 @@ pub fn run_wizard(
     output.flush()?;
     let egress = read_line(input)? == "yes";
 
+    // Q5: render-browser consent — literal "yes" only, like egress above.
+    // Asked separately because it grants something egress does not: the right
+    // to EXECUTE a browser inside the sandbox. Without it, pages that only
+    // render client-side (many government dataset portals) come back as an
+    // empty JS shell — a real quality ceiling, but not a reason to grant
+    // execution silently.
+    writeln!(
+        output,
+        "\nRender browser: some pages return only a JS shell to a plain fetch.\n\
+         Rendering them means the gateway EXECUTES `agent-browser` inside the\n\
+         worker's sandbox. Skipping this leaves plain fetch working; those pages\n\
+         are simply reported as unrenderable."
+    )?;
+    write!(
+        output,
+        "Type 'yes' to allow spawning the render browser (anything else = skip): "
+    )?;
+    output.flush()?;
+    let browser = read_line(input)? == "yes";
+
     Ok(WizardAnswers {
         model,
         count,
         budget_usd,
         egress,
+        browser,
     })
 }
 
@@ -244,6 +269,14 @@ pub fn cmd_setup(mur_home: &Path) -> Result<()> {
     fleet.loop_cfg = Some(loop_cfg);
     crate::cmd::fleet::store::save_fleet(mur_home, &fleet)?;
 
+    // Render browser: same consent discipline as egress — literal "yes" only,
+    // applied to every target worker, never revoked here.
+    if a.browser {
+        for name in &target_names {
+            super::provision::grant_render_browser(mur_home, name)?;
+        }
+    }
+
     // Egress: only when the wizard answer is the literal "yes", and only
     // for workers that don't already have it — never revoke.
     if a.egress {
@@ -291,23 +324,38 @@ mod tests {
 
     #[test]
     fn defaults_accepted_with_empty_lines_and_explicit_yes() {
-        // model=default, count=default, budget=default, egress consent "yes"
-        let a = answers("\n\n\nyes\n", &["claude_haiku", "claude_opus"]).unwrap();
+        // model=default, count=default, budget=default, egress "yes", browser "yes"
+        let a = answers("\n\n\nyes\nyes\n", &["claude_haiku", "claude_opus"]).unwrap();
         assert_eq!(a.model, "claude_haiku");
         assert_eq!(a.count, super::super::provision::DEFAULT_WORKER_COUNT);
         assert_eq!(a.budget_usd, DEFAULT_RUN_BUDGET_USD);
         assert!(a.egress);
+        assert!(a.browser);
     }
 
     #[test]
     fn egress_requires_literal_yes() {
-        let a = answers("\n\n\ny\n", &["claude_haiku"]).unwrap();
+        let a = answers("\n\n\ny\nno\n", &["claude_haiku"]).unwrap();
         assert!(!a.egress, "'y' must NOT count as egress consent");
+    }
+
+    /// The browser grant is EXEC permission inside the sandbox, so it obeys the
+    /// same literal-"yes" rule egress does — and is a separate answer, so one
+    /// consent can never buy both.
+    #[test]
+    fn browser_requires_its_own_literal_yes() {
+        let a = answers("\n\n\nyes\ny\n", &["claude_haiku"]).unwrap();
+        assert!(a.egress, "egress said yes");
+        assert!(!a.browser, "'y' must NOT count as browser consent");
+
+        let b = answers("\n\n\nno\nyes\n", &["claude_haiku"]).unwrap();
+        assert!(!b.egress, "egress declined");
+        assert!(b.browser, "browser consent is independent of egress");
     }
 
     #[test]
     fn model_picked_by_number() {
-        let a = answers("2\n\n\nno\n", &["claude_haiku", "claude_opus"]).unwrap();
+        let a = answers("2\n\n\nno\nno\n", &["claude_haiku", "claude_opus"]).unwrap();
         assert_eq!(a.model, "claude_opus");
     }
 

@@ -232,6 +232,57 @@ pub(crate) fn provision_one(
 /// Sets the process-global `MUR_HOME` env var for its duration, same
 /// caveat as [`provision`]'s `# Concurrency` note (`cmd_mcp_set_network`
 /// re-derives its home directory from that env var).
+/// Let `worker`'s gateway spawn the render browser.
+///
+/// The sandbox's exec allowlist searches a fixed set of directories that does
+/// NOT include a user's npm prefix, and `agent-browser` is a bare name resolved
+/// through `PATH` — so adding the NAME grants nothing. `from_entitlements`
+/// keeps an entry containing a path separator as-is when it resolves to an
+/// executable, which is why obscura grants absolute paths and why this must
+/// too. Resolving here, at provision time, also means an operator who has not
+/// installed the browser finds out now rather than mid-research.
+///
+/// Consent-gated by the caller: this is the right to EXECUTE a browser inside
+/// the worker's sandbox, which is a larger grant than egress and is asked for
+/// separately in the wizard.
+pub fn grant_render_browser(mur_home: &Path, worker: &str) -> Result<()> {
+    // Same reason `grant_egress` does this: the profile helpers below resolve
+    // their home from `MUR_HOME`, so a caller passing an explicit home must
+    // publish it or the edit lands in the wrong tree.
+    unsafe {
+        std::env::set_var("MUR_HOME", mur_home);
+    }
+    let Ok(abs) = which_agent_browser() else {
+        // Not installed is not a provisioning failure — the worker simply has
+        // no rendered fetch, and `browser.rs` says so when a page needs it.
+        eprintln!(
+            "  note: `agent-browser` is not on PATH, so {worker} gets no rendered fetch.              Install it and re-run setup to grant it."
+        );
+        return Ok(());
+    };
+    let (path, mut profile) = super::super::agent::load_profile_for_edit(worker)?;
+    let allowed = &mut profile.entitlements.processes.spawn.allowed;
+    if allowed.contains(&abs) {
+        return Ok(());
+    }
+    allowed.push(abs.clone());
+    super::super::agent::save_profile(&path, &mut profile)?;
+    println!("Granted {worker} permission to spawn {abs}");
+    Ok(())
+}
+
+/// Absolute path of `agent-browser` on `PATH`, for the exec allowlist.
+fn which_agent_browser() -> Result<String> {
+    let path = std::env::var_os("PATH").ok_or_else(|| anyhow::anyhow!("PATH unset"))?;
+    for dir in std::env::split_paths(&path) {
+        let cand = dir.join("agent-browser");
+        if cand.is_file() {
+            return Ok(cand.canonicalize().unwrap_or(cand).to_string_lossy().into());
+        }
+    }
+    anyhow::bail!("agent-browser not found on PATH")
+}
+
 pub fn grant_egress(mur_home: &Path, worker: &str, deny_hosts: &[String], yes: bool) -> Result<()> {
     unsafe {
         std::env::set_var("MUR_HOME", mur_home);
