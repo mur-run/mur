@@ -788,6 +788,17 @@ pub enum DeepResearchAction {
         /// `[y/N]` per worker unless `--yes`.
         #[arg(long)]
         grant_egress: bool,
+        /// After provisioning, also let each worker's gateway SPAWN the render
+        /// browser (`agent-browser`), resolved to an absolute path — the exec
+        /// allowlist searches directories that exclude a user's npm prefix, so
+        /// the bare name grants nothing.
+        ///
+        /// Separate consent from `--grant-egress`: that one is "may it reach
+        /// the web", this is "may it execute a browser inside the sandbox".
+        /// The wizard asks them as two questions; this is that second answer
+        /// for scripted use.
+        #[arg(long)]
+        grant_browser: bool,
         /// Denied host (repeatable) for the `--grant-egress` grant; ignored
         /// otherwise.
         #[arg(long = "deny-host")]
