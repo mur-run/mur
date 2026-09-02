@@ -419,13 +419,22 @@ fn truncate_chars(s: &str, max: usize) -> String {
 /// The capabilities this request needs from whatever model serves it. Derived
 /// from the request, never from config: an image in the messages means the
 /// model has to be able to see it, a tool list means it has to be able to call.
+///
+/// An image reaches a turn by two different doors, and only one of them is the
+/// obvious one. A user can attach a picture (`ImageText`), but an agent can
+/// also fetch one itself — `read_file` on a PNG, or an MCP tool that returns an
+/// image — and those arrive inside `ToolResults`, which the Anthropic adapter
+/// renders as real `image` blocks. Checking only the first door left automated
+/// work, the exact case this gate exists for, unprotected: nobody pastes a
+/// picture into a scheduled vehicle-recognition run.
 fn requirements_of(req: &LlmRequest) -> Vec<Requirement> {
     let mut out = Vec::new();
-    if req
-        .messages
-        .iter()
-        .any(|m| matches!(m, RichMessage::ImageText { .. }))
-    {
+    let carries_image = req.messages.iter().any(|m| match m {
+        RichMessage::ImageText { .. } => true,
+        RichMessage::ToolResults { results } => results.iter().any(|r| !r.images.is_empty()),
+        _ => false,
+    });
+    if carries_image {
         out.push(Requirement::Vision);
     }
     if !req.tools.is_empty() {
