@@ -744,6 +744,7 @@ mod tests {
     /// the loopback gateway attaches the subscription token itself.
     #[tokio::test]
     async fn authless_client_sends_no_credential_header() {
+        let _serial = crate::llm::MOCK_SERVER_LOCK.lock().await;
         let server = httpmock::MockServer::start_async().await;
         let m = server
             .mock_async(|when, then| {
@@ -773,6 +774,7 @@ mod tests {
     /// Existing constructors are unchanged: `new` still sends the bearer key.
     #[tokio::test]
     async fn keyed_client_still_sends_bearer() {
+        let _serial = crate::llm::MOCK_SERVER_LOCK.lock().await;
         let server = httpmock::MockServer::start_async().await;
         let m = server
             .mock_async(|when, then| {

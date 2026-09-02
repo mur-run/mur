@@ -114,7 +114,7 @@ error, `Disabled`, `Static`, `EnvVar`). Never the token, never the expiry.
 
 **Steps**
 
-- [ ] In `tests/health.rs`, change the `spawn` helper to take both token
+- [x] In `tests/health.rs`, change the `spawn` helper to take both token
   sources and add the Claude assertions. Replace the whole file with:
 
 ```rust
@@ -215,10 +215,10 @@ async fn health_reports_claude_credential_kind_without_the_credential() {
 }
 ```
 
-- [ ] Run `cargo test --test health` and watch the two Claude assertions fail
+- [x] Run `cargo test --test health` and watch the two Claude assertions fail
   (`claudeCredential` is null).
 
-- [ ] In `src/lib.rs`, replace the `health` handler body with:
+- [x] In `src/lib.rs`, replace the `health` handler body with:
 
 ```rust
 async fn health(State(state): State<AppState>) -> axum::Json<serde_json::Value> {
@@ -251,11 +251,11 @@ async fn health(State(state): State<AppState>) -> axum::Json<serde_json::Value> 
   /// \`claudeCredential\` exactly \`oauth\` / \`missing\` — kinds, never ids,
   /// tokens, or expiries.`
 
-- [ ] Run `cargo test --test health` and expect three passing tests. Run
+- [x] Run `cargo test --test health` and expect three passing tests. Run
   `cargo test`, `cargo fmt --check`, and
   `cargo clippy --all-targets -- -D warnings`; expect zero failures/warnings.
 
-- [ ] Commit in the gateway worktree: `git add src/lib.rs tests/health.rs`,
+- [x] Commit in the gateway worktree: `git add src/lib.rs tests/health.rs`,
   then `git commit -m "feat(health): report the Claude credential kind"`.
   Push and open a PR against `main`; merging it is a prerequisite for the
   acceptance run in Task 8, not for Tasks 2–7.
@@ -284,7 +284,7 @@ All existing public constructors continue to create `AnthropicAuth::ApiKey`.
 
 **Steps**
 
-- [ ] Append these tests to the end of `mod tests` in
+- [x] Append these tests to the end of `mod tests` in
   `mur-agent-runtime/src/llm/anthropic.rs` (before the module's closing
   brace):
 
@@ -320,7 +320,7 @@ All existing public constructors continue to create `AnthropicAuth::ApiKey`.
         let m = server
             .mock_async(|when, then| {
                 when.method(httpmock::Method::POST)
-                    .path("/messages")
+                    .path("/v1/messages")
                     .matches(|req| {
                         !req.headers.as_ref().is_some_and(|h| {
                             h.iter().any(|(k, _)| {
@@ -349,7 +349,7 @@ All existing public constructors continue to create `AnthropicAuth::ApiKey`.
         let m = server
             .mock_async(|when, then| {
                 when.method(httpmock::Method::POST)
-                    .path("/messages")
+                    .path("/v1/messages")
                     .header("x-api-key", "test-key");
                 then.status(200).json_body(ok_message());
             })
@@ -363,11 +363,11 @@ All existing public constructors continue to create `AnthropicAuth::ApiKey`.
   If `LlmRequest` is not already imported in the test module, add
   `use crate::llm::LlmRequest;` next to the existing `use crate::llm::{…}`.
 
-- [ ] Run
+- [x] Run
   `cargo test -p mur-agent-runtime --lib llm::anthropic::tests::authless_client_sends_no_credential_header`
   and watch it fail to compile (`authless_with_http` absent).
 
-- [ ] In `mur-agent-runtime/src/llm/anthropic.rs`, above `pub struct AnthropicClient`, add:
+- [x] In `mur-agent-runtime/src/llm/anthropic.rs`, above `pub struct AnthropicClient`, add:
 
 ```rust
 /// How a request authenticates. Explicit so an authless route is a
@@ -411,7 +411,7 @@ enum AnthropicAuth {
     }
 ```
 
-- [ ] Replace both request builders (in `generate` and `generate_stream`).
+- [x] Replace both request builders (in `generate` and `generate_stream`).
   The current shape is:
 
 ```rust
@@ -441,12 +441,12 @@ enum AnthropicAuth {
   `grep -n 'self.api_key' mur-agent-runtime/src/llm/anthropic.rs` that no
   reference remains.
 
-- [ ] Run `cargo test -p mur-agent-runtime --lib llm::anthropic`, then
+- [x] Run `cargo test -p mur-agent-runtime --lib llm::anthropic`, then
   `cargo fmt -p mur-agent-runtime` and
   `cargo clippy -p mur-agent-runtime --all-targets -- -D warnings`; expect
   zero failures/warnings.
 
-- [ ] Commit: `git add mur-agent-runtime/src/llm/anthropic.rs`, then
+- [x] Commit: `git add mur-agent-runtime/src/llm/anthropic.rs`, then
   `git commit -m "refactor(anthropic): make transport auth explicit"`.
 
 ---
@@ -482,7 +482,7 @@ impl ClaudeClient {
 
 **Steps**
 
-- [ ] Create `mur-agent-runtime/src/llm/loopback.rs`:
+- [x] Create `mur-agent-runtime/src/llm/loopback.rs`:
 
 ```rust
 //! The one URL shape a subscription provider may dial: this machine's
@@ -539,7 +539,7 @@ mod tests {
 }
 ```
 
-- [ ] In `mur-agent-runtime/src/llm/codex.rs`, replace the body of
+- [x] In `mur-agent-runtime/src/llm/codex.rs`, replace the body of
   `validate_codex_base_url` (keep its signature and doc comment) with:
 
 ```rust
@@ -552,7 +552,7 @@ pub fn validate_codex_base_url(raw: &str) -> Result<reqwest::Url, LlmError> {
   The existing table test `accepts_only_loopback_codex_base_urls` must still
   pass unchanged.
 
-- [ ] Create `mur-agent-runtime/src/llm/claude.rs`:
+- [x] Create `mur-agent-runtime/src/llm/claude.rs`:
 
 ```rust
 //! Claude-subscription provider (`provider: claude`).
@@ -693,12 +693,12 @@ mod tests {
 }
 ```
 
-- [ ] In `mur-agent-runtime/src/llm/mod.rs`, after `pub mod codex;` add
+- [x] In `mur-agent-runtime/src/llm/mod.rs`, after `pub mod codex;` add
   `pub mod claude;` and `pub mod loopback;` (keep the list alphabetical:
   `anthropic`, `client_builder`, `claude`, `codex`, `fallback`, `loopback`,
   `ollama`, `openai`, `stub`, `switchable`).
 
-- [ ] In `mur-agent-runtime/src/llm/client_builder.rs`, extend the import:
+- [x] In `mur-agent-runtime/src/llm/client_builder.rs`, extend the import:
 
 ```rust
 use crate::llm::{
@@ -716,16 +716,27 @@ use crate::llm::{
         "claude" => Ok(Arc::new(ClaudeClient::from_entry(entry, guarded_http)?)),
 ```
 
-- [ ] Run `cargo test -p mur-agent-runtime --lib llm::` (expect the
-  `loopback`, `claude`, and unchanged `codex` tests to pass), then
+- [x] Every test that starts an `httpmock::MockServer` must hold
+  `crate::llm::MOCK_SERVER_LOCK` (a `#[cfg(test)] pub(crate) static
+  tokio::sync::Mutex<()>` at the end of `llm/mod.rs`) for its whole body —
+  including the two added in Task 2. httpmock 0.7 recycles a small pool of
+  servers behind one shared runtime, and several `#[tokio::test]`s driving
+  their own server at once fail each other's connections (`Connect`,
+  refused — not a mock mismatch). Serial they all pass; the lock keeps that
+  without `--test-threads=1` for the crate.
+
+- [x] Run `cargo test -p mur-agent-runtime --lib llm::` three times (expect
+  the `loopback`, `claude`, and unchanged `codex`/`openai` tests to pass
+  every time — the failure above is parallelism-dependent), then
   `cargo fmt -p mur-agent-runtime` and
   `cargo clippy -p mur-agent-runtime --all-targets -- -D warnings`; expect
   zero failures/warnings.
 
-- [ ] Commit: `git add mur-agent-runtime/src/llm/loopback.rs
+- [x] Commit: `git add mur-agent-runtime/src/llm/loopback.rs
   mur-agent-runtime/src/llm/claude.rs mur-agent-runtime/src/llm/codex.rs
   mur-agent-runtime/src/llm/mod.rs mur-agent-runtime/src/llm/client_builder.rs`,
-  then `git commit -m "feat(runtime): add loopback Claude subscription provider"`.
+  `mur-agent-runtime/src/llm/openai.rs` (lock in its two mock tests), then
+  `git commit -m "feat(runtime): add loopback Claude subscription provider"`.
 
 ---
 

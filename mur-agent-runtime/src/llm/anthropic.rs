@@ -1241,6 +1241,7 @@ mod tests {
     /// "pass through untouched" — and a 401 from Anthropic.
     #[tokio::test]
     async fn authless_client_sends_no_credential_header() {
+        let _serial = crate::llm::MOCK_SERVER_LOCK.lock().await;
         let server = httpmock::MockServer::start_async().await;
         let m = server
             .mock_async(|when, then| {
@@ -1270,6 +1271,7 @@ mod tests {
     /// Existing constructors are unchanged: `new` still sends the key.
     #[tokio::test]
     async fn keyed_client_still_sends_x_api_key() {
+        let _serial = crate::llm::MOCK_SERVER_LOCK.lock().await;
         let server = httpmock::MockServer::start_async().await;
         let m = server
             .mock_async(|when, then| {
