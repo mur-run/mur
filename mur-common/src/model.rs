@@ -18,6 +18,23 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// Who pays when this model answers.
+///
+/// A ChatGPT-subscription model (`provider: codex`) and an OpenAI Platform
+/// model can share a model id and a wire format while landing on different
+/// bills, so the registry says which. `None` on entries written before this
+/// field existed — readers render that as unknown, never as free.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BillingMode {
+    /// Covered by a flat subscription (ChatGPT Plus/Pro via Codex).
+    Subscription,
+    /// Metered per token against an API key.
+    UsageBilled,
+    /// Runs on this machine; no bill.
+    Local,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ModelEntry {
     #[serde(default)]
@@ -72,6 +89,14 @@ pub struct ModelEntry {
     /// written ones — which is honest rather than defaulting to "fresh".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priced_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// See [`BillingMode`]. `None` = unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub billing: Option<BillingMode>,
+    /// Whether the model id came from the provider's live catalog
+    /// (`Some(true)`) or was typed by hand when discovery failed
+    /// (`Some(false)`). `None` on entries that predate the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_verified: Option<bool>,
 }
 
 /// Vendor label implied by an endpoint host: `https://api.deepseek.com/v1` →
@@ -1090,5 +1115,55 @@ models:
             },
         );
         assert_eq!(pick_cheap_model(&input_only, None, &[]), Some("in".into()));
+    }
+
+    #[test]
+    fn subscription_metadata_round_trips_without_a_secret() {
+        let yaml = r#"schema_version: 1
+models:
+  chatgpt_sol:
+    provider: codex
+    model: gpt-5.6-sol
+    base_url: http://127.0.0.1:8088/codex/v1
+    tier: frontier
+    billing: subscription
+    catalog_verified: true
+"#;
+        let reg: ModelRegistry = serde_yaml_ng::from_str(yaml).unwrap();
+        let entry = &reg.models["chatgpt_sol"];
+        assert_eq!(entry.billing, Some(BillingMode::Subscription));
+        assert_eq!(entry.catalog_verified, Some(true));
+        assert!(entry.secret.is_none());
+        let out = serde_yaml_ng::to_string(&reg).unwrap();
+        assert!(out.contains("billing: subscription"), "{out}");
+        assert!(out.contains("catalog_verified: true"), "{out}");
+    }
+
+    /// Entries written before billing metadata existed keep loading and
+    /// stay unknown — never inheriting a billing mode on reserialize.
+    #[test]
+    fn entry_without_billing_metadata_stays_unknown() {
+        let yaml = r#"schema_version: 1
+models:
+  gpt:
+    provider: openai
+    model: gpt-4o
+    secret: env:OPENAI_API_KEY
+"#;
+        let reg: ModelRegistry = serde_yaml_ng::from_str(yaml).unwrap();
+        let entry = &reg.models["gpt"];
+        assert_eq!(entry.billing, None);
+        assert_eq!(entry.catalog_verified, None);
+        let out = serde_yaml_ng::to_string(&reg).unwrap();
+        assert!(!out.contains("billing"), "{out}");
+        assert!(!out.contains("catalog_verified"), "{out}");
+        for (raw, mode) in [
+            ("subscription", BillingMode::Subscription),
+            ("usage_billed", BillingMode::UsageBilled),
+            ("local", BillingMode::Local),
+        ] {
+            let m: BillingMode = serde_yaml_ng::from_str(raw).unwrap();
+            assert_eq!(m, mode);
+        }
     }
 }
