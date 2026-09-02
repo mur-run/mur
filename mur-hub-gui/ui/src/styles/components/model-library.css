@@ -611,3 +611,47 @@
   font-size: 11px;
   color: var(--text-tertiary);
 }
+
+/* ── ChatGPT Subscription panel ─────────────────────────────────────────── */
+.ml-chatgpt__account {
+  font-size: 12px;
+  margin: 8px 0 12px;
+}
+.ml-chatgpt__logout {
+  margin-top: 18px;
+}
+.ml-badge--sub {
+  background: rgba(16, 163, 127, 0.14);
+  color: #0f8a6b;
+}
+.ml-badge--unverified {
+  background: rgba(251, 107, 83, 0.14);
+  color: var(--color-accent, #fb6b53);
+}
+.ml-mrow__pick {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  flex: 1;
+  cursor: pointer;
+}
+.ml-mbody__meta {
+  display: block;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.ml-input--alias {
+  width: 200px;
+}
+.ml-confirm {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong, rgba(0, 0, 0, 0.15));
+  border-radius: 10px;
+}
+.ml-confirm__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}

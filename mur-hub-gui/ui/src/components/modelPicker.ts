@@ -14,6 +14,10 @@ export interface ModelOption {
   output_cost?: number;
   context_window?: number;
   capabilities: string[];
+  /** Who pays: subscription / usage_billed / local. Absent = unknown, never free. */
+  billing?: "subscription" | "usage_billed" | "local" | null;
+  /** False when the id was typed by hand because catalog discovery failed. */
+  catalog_verified?: boolean | null;
 }
 
 /**

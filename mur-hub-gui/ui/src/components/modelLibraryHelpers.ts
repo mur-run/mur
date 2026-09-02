@@ -98,6 +98,20 @@ export const CLOUD_PRESETS: CloudPreset[] = [
   },
 ];
 
+/**
+ * ChatGPT Subscription is deliberately not a CLOUD_PRESET: it has no API key,
+ * no base URL to edit, and must never be tested against api.openai.com. It
+ * gets its own rail entry and panel (ChatGPTSubscriptionPanel).
+ */
+export const CHATGPT_SUBSCRIPTION = {
+  key: "chatgpt-subscription",
+  /** The wire provider its registry entries carry. */
+  provider: "codex",
+  name: "ChatGPT Subscription",
+  logo: "GPT",
+  color: "#10A37F",
+} as const;
+
 // Azure OpenAI is intentionally NOT a preset here: its `api-key` auth header
 // and deployment-scoped URLs are not the generic OpenAI-compatible shape
 // model_discovery speaks. Anthropic IS a preset — discover_models_for() sends
