@@ -89,10 +89,19 @@ pub fn pick_cheap_model(reg: &ModelRegistry, exclude: Option<&str>,
 ```rust
 // mur-agent-runtime — LlmRequest lives here
 fn requirements_of(req: &LlmRequest) -> Vec<Requirement> {
-    // messages contains RichMessage::ImageText  -> Vision
-    // !req.tools.is_empty()                     -> Tools
+    // messages contains RichMessage::ImageText              -> Vision
+    // ...or a ToolResults entry whose `images` is non-empty -> Vision
+    // !req.tools.is_empty()                                 -> Tools
 }
 ```
+
+**An image reaches a turn by two doors, and the obvious one is the rarer one
+in automated work.** A user can attach a picture (`ImageText`), but an agent can
+also fetch one itself — `read_file` on a PNG, an MCP tool returning an image —
+and those arrive inside `ToolResults`, which the Anthropic adapter renders as
+real `image` blocks. The first cut of this gate checked only `ImageText`, which
+left exactly the case it exists for unprotected: nobody pastes a picture into a
+scheduled vehicle-recognition run. Both doors are checked.
 
 `Requirement::permitted_when_undeclared` carries the per-requirement rule from
 §2, so `satisfies` enforces a declared capability list exactly and treats an

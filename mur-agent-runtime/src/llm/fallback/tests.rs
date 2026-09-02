@@ -606,4 +606,53 @@ fn background_image_turn_drops_a_cheap_model_that_cannot_see() {
         vec!["primary".to_string()],
         "nothing declares vision, so the explicit primary is all that is left"
     );
+
+    // The other door: the agent fetched the picture itself. Nobody pastes an
+    // image into a scheduled vehicle-recognition run — it arrives from
+    // `read_file` or an MCP tool, inside a tool result, and the Anthropic
+    // adapter renders those as real image blocks. Checking only the user turn
+    // left automated work — the exact case this gate exists for — unprotected.
+    let tool_image_turn = LlmRequest {
+        intent: RequestIntent::Background(BackgroundKind::Scheduled),
+        messages: vec![RichMessage::ToolResults {
+            results: vec![crate::llm::ToolResultEntry {
+                call_id: "c1".into(),
+                content: "[image /plates/frame-0412.png]".into(),
+                is_error: false,
+                status: Default::default(),
+                images: vec![crate::tools::ToolImage {
+                    media_type: "image/png".into(),
+                    data: "aGk=".into(),
+                }],
+            }],
+        }],
+        ..Default::default()
+    };
+    assert_eq!(
+        fb.candidates_for(&tool_image_turn),
+        vec!["primary".to_string()],
+        "an image the agent fetched itself must gate the same as one pasted in"
+    );
+
+    // Negative control: the same shape with no images is not a vision request,
+    // so Smart still downgrades. Otherwise the check above would pass for the
+    // wrong reason — every tool-using turn would look like vision.
+    let tool_text_turn = LlmRequest {
+        intent: RequestIntent::Background(BackgroundKind::Scheduled),
+        messages: vec![RichMessage::ToolResults {
+            results: vec![crate::llm::ToolResultEntry {
+                call_id: "c1".into(),
+                content: "plain text output".into(),
+                is_error: false,
+                status: Default::default(),
+                images: vec![],
+            }],
+        }],
+        ..Default::default()
+    };
+    assert_eq!(
+        fb.candidates_for(&tool_text_turn),
+        vec!["cheap".to_string(), "primary".into()],
+        "a tool result without images is ordinary background work"
+    );
 }
