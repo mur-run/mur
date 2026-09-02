@@ -77,9 +77,20 @@ fn warn_if_oauth_key_misconfigured(api_key: &str, base_url: &str) {
     );
 }
 
+/// How a request authenticates. Explicit so an authless route is a
+/// deliberate choice at construction, not an empty key that happens to be
+/// sent as `x-api-key: `. `None` exists for the loopback gateway route
+/// (`provider: claude`), where the gateway attaches the Claude Code OAuth
+/// token itself — and picks that mode by the header being *absent*.
+#[derive(Clone)]
+enum AnthropicAuth {
+    ApiKey(String),
+    None,
+}
+
 pub struct AnthropicClient {
     base_url: String,
-    api_key: String,
+    auth: AnthropicAuth,
     version: String,
     model: String,
     http: reqwest::Client,
@@ -94,7 +105,7 @@ impl AnthropicClient {
             .expect("failed to build reqwest client");
         Self {
             base_url,
-            api_key,
+            auth: AnthropicAuth::ApiKey(api_key),
             version: DEFAULT_VERSION.to_string(),
             model,
             http,
@@ -110,10 +121,36 @@ impl AnthropicClient {
     ) -> Self {
         Self {
             base_url,
-            api_key,
+            auth: AnthropicAuth::ApiKey(api_key),
             version: DEFAULT_VERSION.to_string(),
             model,
             http,
+        }
+    }
+
+    /// Messages transport that sends no credential at all. Only the loopback
+    /// gateway route may use this (see `llm::claude`), which is why it is
+    /// crate-private: the gateway owns the OAuth token, and a key here would
+    /// either leak or silently switch the bill to the Anthropic API.
+    pub(crate) fn authless_with_http(
+        base_url: String,
+        model: String,
+        http: reqwest::Client,
+    ) -> Self {
+        Self {
+            base_url,
+            auth: AnthropicAuth::None,
+            version: DEFAULT_VERSION.to_string(),
+            model,
+            http,
+        }
+    }
+
+    /// Absent, never empty: the gateway keys its mode on header presence.
+    fn apply_auth(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.auth {
+            AnthropicAuth::ApiKey(key) => request.header("x-api-key", key),
+            AnthropicAuth::None => request,
         }
     }
 
@@ -588,7 +625,9 @@ impl LlmClient for AnthropicClient {
             );
         }
 
-        warn_if_oauth_key_misconfigured(&self.api_key, &self.base_url);
+        if let AnthropicAuth::ApiKey(key) = &self.auth {
+            warn_if_oauth_key_misconfigured(key, &self.base_url);
+        }
 
         let url = format!("{}/v1/messages", self.base_url);
         if let Ok(parsed) = reqwest::Url::parse(&url)
@@ -597,11 +636,12 @@ impl LlmClient for AnthropicClient {
             return Err(LlmError::Http(e));
         }
         let resp = self
-            .http
-            .post(url)
-            .header("anthropic-version", &self.version)
-            .header("content-type", "application/json")
-            .header("x-api-key", &self.api_key)
+            .apply_auth(
+                self.http
+                    .post(url)
+                    .header("anthropic-version", &self.version)
+                    .header("content-type", "application/json"),
+            )
             .json(&body)
             .send()
             .await
@@ -664,7 +704,9 @@ impl LlmClient for AnthropicClient {
                     .collect::<Vec<_>>()
             );
         }
-        warn_if_oauth_key_misconfigured(&self.api_key, &self.base_url);
+        if let AnthropicAuth::ApiKey(key) = &self.auth {
+            warn_if_oauth_key_misconfigured(key, &self.base_url);
+        }
 
         let url = format!("{}/v1/messages", self.base_url);
         if let Ok(parsed) = reqwest::Url::parse(&url)
@@ -673,11 +715,12 @@ impl LlmClient for AnthropicClient {
             return Err(LlmError::Http(e));
         }
         let mut resp = self
-            .http
-            .post(url)
-            .header("anthropic-version", &self.version)
-            .header("content-type", "application/json")
-            .header("x-api-key", &self.api_key)
+            .apply_auth(
+                self.http
+                    .post(url)
+                    .header("anthropic-version", &self.version)
+                    .header("content-type", "application/json"),
+            )
             .json(&body)
             .send()
             .await
@@ -1169,5 +1212,76 @@ mod tests {
             ..StreamAccum::default()
         };
         assert!(finish_stream(acc, "claude-x".into()).is_err());
+    }
+
+    fn ok_message() -> serde_json::Value {
+        json!({
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1}
+        })
+    }
+
+    fn hello() -> LlmRequest {
+        LlmRequest {
+            messages: vec![RichMessage::Text {
+                role: "user".into(),
+                content: "hi".into(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// The authless constructor sends no `x-api-key` and no `Authorization`
+    /// at all. The gateway picks its mode by header *presence*: an absent
+    /// header means "attach the keychain token", an empty one means
+    /// "pass through untouched" — and a 401 from Anthropic.
+    #[tokio::test]
+    async fn authless_client_sends_no_credential_header() {
+        let server = httpmock::MockServer::start_async().await;
+        let m = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/messages")
+                    .matches(|req| {
+                        !req.headers.as_ref().is_some_and(|h| {
+                            h.iter().any(|(k, _)| {
+                                k.eq_ignore_ascii_case("x-api-key")
+                                    || k.eq_ignore_ascii_case("authorization")
+                            })
+                        })
+                    });
+                then.status(200).json_body(ok_message());
+            })
+            .await;
+        let client = AnthropicClient::authless_with_http(
+            server.base_url(),
+            "claude-opus-5".into(),
+            reqwest::Client::new(),
+        );
+        let resp = client.generate(hello()).await.unwrap();
+        assert_eq!(resp.text, "hi");
+        m.assert_async().await;
+    }
+
+    /// Existing constructors are unchanged: `new` still sends the key.
+    #[tokio::test]
+    async fn keyed_client_still_sends_x_api_key() {
+        let server = httpmock::MockServer::start_async().await;
+        let m = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/messages")
+                    .header("x-api-key", "test-key");
+                then.status(200).json_body(ok_message());
+            })
+            .await;
+        let client =
+            AnthropicClient::new(server.base_url(), "test-key".into(), "claude-opus-5".into());
+        client.generate(hello()).await.unwrap();
+        m.assert_async().await;
     }
 }
