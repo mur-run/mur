@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { CLOUD_PRESETS, togglePick } from "./modelLibraryHelpers";
+import { SUBSCRIPTION_PROVIDERS } from "./modelLibraryHelpers";
+import { en } from "../i18n/en";
+import { zhTW } from "../i18n/zh-TW";
 
 describe("CLOUD_PRESETS", () => {
   it("ships the required provider keys", () => {
@@ -67,5 +70,23 @@ describe("togglePick", () => {
   it("removing the last element returns an empty set", () => {
     const result = togglePick(new Set<string>(["only"]), "only");
     expect(result.size).toBe(0);
+  });
+});
+
+describe("subscription descriptors", () => {
+  it("every copy key resolves in both languages and providers are distinct", () => {
+    const keys = new Set<string>();
+    for (const d of SUBSCRIPTION_PROVIDERS) {
+      expect(keys.has(d.key)).toBe(false);
+      keys.add(d.key);
+      for (const k of Object.values(d.copy)) {
+        expect(en[k], `${d.key}: ${k} missing in en`).toBeTruthy();
+        expect(zhTW[k], `${d.key}: ${k} missing in zh-TW`).toBeTruthy();
+      }
+      expect(d.cliInstallCmd.length).toBeGreaterThan(0);
+    }
+    expect(new Set(SUBSCRIPTION_PROVIDERS.map((d) => d.provider)).size).toBe(
+      SUBSCRIPTION_PROVIDERS.length,
+    );
   });
 });

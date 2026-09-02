@@ -32,6 +32,8 @@ export interface GatewayStatus {
   codex_hook: boolean;
   /** `chatgpt` / `apikey` / `missing`; only `chatgpt` is usable here. */
   credential_mode?: string | null;
+  /** `oauth` / `missing`; absent on a gateway older than the field. */
+  claude_credential_mode?: string | null;
   compression: boolean;
 }
 
@@ -54,6 +56,7 @@ export type GatewayProblem =
 
 export type ChatGPTPanelState =
   | { kind: "loading" }
+  /** The provider's CLI (codex / claude) is not on PATH. */
   | { kind: "codex-missing" }
   | { kind: "logged-out" }
   | { kind: "login-in-progress" }
@@ -69,11 +72,25 @@ export type ChatGPTPanelState =
       modelsError: string | null;
     };
 
-export function gatewayProblem(g: GatewayStatus): GatewayProblem | null {
+/** What a gateway must report before this provider may route through it. */
+export interface GatewayReadiness {
+  /** ChatGPT needs the compiled Codex hook; the Anthropic path is plain header attachment. */
+  requiresHook: boolean;
+  credential: "codex" | "claude";
+}
+
+export const CHATGPT_READINESS: GatewayReadiness = { requiresHook: true, credential: "codex" };
+export const CLAUDE_READINESS: GatewayReadiness = { requiresHook: false, credential: "claude" };
+
+export function gatewayProblem(g: GatewayStatus, r: GatewayReadiness): GatewayProblem | null {
   if (!g.running) return "not-running";
-  if (!g.codex_hook) return "hook-missing";
-  if (g.credential_mode === "apikey") return "credential-apikey";
-  if (g.credential_mode !== "chatgpt") return "credential-missing";
+  if (r.requiresHook && !g.codex_hook) return "hook-missing";
+  if (r.credential === "codex") {
+    if (g.credential_mode === "apikey") return "credential-apikey";
+    if (g.credential_mode !== "chatgpt") return "credential-missing";
+    return null;
+  }
+  if (g.claude_credential_mode !== "oauth") return "credential-missing";
   return null;
 }
 
@@ -82,7 +99,10 @@ export function gatewayProblem(g: GatewayStatus): GatewayProblem | null {
  * login in progress → missing CLI → logged out → account error → loading →
  * gateway missing → gateway stopped/unusable → models loading → ready.
  */
-export function deriveChatGPTState(input: ChatGPTStateInput): ChatGPTPanelState {
+export function deriveSubscriptionState(
+  input: ChatGPTStateInput,
+  readiness: GatewayReadiness,
+): ChatGPTPanelState {
   const { account, accountError, loginInProgress, gateway, models, modelsError } = input;
   if (loginInProgress) return { kind: "login-in-progress" };
   if (account && !account.cli_present) return { kind: "codex-missing" };
@@ -91,10 +111,14 @@ export function deriveChatGPTState(input: ChatGPTStateInput): ChatGPTPanelState 
   if (!account) return { kind: "loading" };
   if (!gateway) return { kind: "loading" };
   if (!gateway.installed) return { kind: "gateway-missing", account };
-  const problem = gatewayProblem(gateway);
+  const problem = gatewayProblem(gateway, readiness);
   if (problem) return { kind: "gateway-stopped", account, problem };
   if (models === null && !modelsError) return { kind: "models-loading", account };
   return { kind: "ready", account, models: models ?? [], modelsError };
+}
+
+export function deriveChatGPTState(input: ChatGPTStateInput): ChatGPTPanelState {
+  return deriveSubscriptionState(input, CHATGPT_READINESS);
 }
 
 export type BillingLabel = "Subscription" | "Usage billed" | "Local" | "Unknown";

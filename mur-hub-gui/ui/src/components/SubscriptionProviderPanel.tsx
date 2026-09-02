@@ -1,11 +1,13 @@
 /**
- * ChatGPTSubscriptionPanel — connect a Codex-managed ChatGPT subscription.
+ * SubscriptionProviderPanel — connect a CLI-managed subscription (ChatGPT
+ * via Codex, Claude via Claude Code).
  *
- * Codex owns the login; the loopback gateway owns the token; this panel only
- * ever sees display-safe views. It never calls the generic `test_provider`
- * or `/v1/models` path — those expect an API key, and this provider has none.
- * What to render is decided by `deriveChatGPTState` (pure, tested); this
- * file is the wiring.
+ * That CLI owns the login; the loopback gateway owns the token; this panel
+ * only ever sees display-safe views. It never calls the generic
+ * `test_provider` or `/v1/models` path — those expect an API key, and these
+ * providers have none. What to render is decided by
+ * `deriveSubscriptionState` (pure, tested); everything provider-specific
+ * comes from the descriptor. This file is the wiring.
  */
 
 import { useEffect, useState } from "react";
@@ -13,10 +15,14 @@ import { invoke } from "@tauri-apps/api/core";
 import type { ModelOption } from "./modelPicker";
 import { useT } from "../i18n";
 import type { TranslationKey } from "../i18n/types";
-import { CHATGPT_SUBSCRIPTION, togglePick } from "./modelLibraryHelpers";
+import {
+  togglePick,
+  type SubscriptionCopy,
+  type SubscriptionDescriptor,
+} from "./modelLibraryHelpers";
 import {
   defaultChatGPTAlias,
-  deriveChatGPTState,
+  deriveSubscriptionState,
   gatewayProblem,
   type ChatGPTAccount,
   type ChatGPTModel,
@@ -47,10 +53,12 @@ const PROBLEM_KEY: Record<GatewayProblem, TranslationKey> = {
 
 type Confirm = "install" | "logout" | null;
 
-export function ChatGPTSubscriptionPanel({
+export function SubscriptionProviderPanel({
+  descriptor,
   registryModels,
   onModelsAdded,
 }: {
+  descriptor: SubscriptionDescriptor;
   registryModels: ModelOption[];
   onModelsAdded: () => void;
 }) {
@@ -75,7 +83,7 @@ export function ChatGPTSubscriptionPanel({
   useEffect(() => {
     let cancelled = false;
     setAccountError(null);
-    invoke<ChatGPTAccount>("chatgpt_account_read")
+    invoke<ChatGPTAccount>(descriptor.commands.accountRead)
       .then((a) => {
         if (!cancelled) setAccount(a);
       })
@@ -94,17 +102,17 @@ export function ChatGPTSubscriptionPanel({
     return () => {
       cancelled = true;
     };
-  }, [tick]);
+  }, [tick, descriptor]);
 
   // Models only for a ChatGPT login with a usable gateway.
   const loggedIn = account?.logged_in === true;
-  const gatewayUsable = gateway !== null && gatewayProblem(gateway) === null;
+  const gatewayUsable = gateway !== null && gatewayProblem(gateway, descriptor.readiness) === null;
   useEffect(() => {
     if (!loggedIn || !gatewayUsable) return;
     let cancelled = false;
     setModels(null);
     setModelsError(null);
-    invoke<ChatGPTModel[]>("chatgpt_models_list")
+    invoke<ChatGPTModel[]>(descriptor.commands.modelsList)
       .then((ms) => {
         if (cancelled) return;
         setModels(ms);
@@ -118,16 +126,19 @@ export function ChatGPTSubscriptionPanel({
     return () => {
       cancelled = true;
     };
-  }, [loggedIn, gatewayUsable, tick]);
+  }, [loggedIn, gatewayUsable, tick, descriptor]);
 
-  const state = deriveChatGPTState({
+  const state = deriveSubscriptionState(
+    {
     account,
     accountError,
     loginInProgress,
-    gateway,
-    models,
-    modelsError,
-  });
+      gateway,
+      models,
+      modelsError,
+    },
+    descriptor.readiness,
+  );
 
   async function run(action: () => Promise<void>) {
     setBusy(true);
@@ -146,12 +157,12 @@ export function ChatGPTSubscriptionPanel({
     setLoginInProgress(true);
     setActionError(null);
     try {
-      const r = await invoke<LoginResult>("chatgpt_login");
+      const r = await invoke<LoginResult>(descriptor.commands.login);
       if (!r.authenticated) {
-        setActionError(t("lib.chatgpt.loginFailed", { error: r.error ?? "" }));
+        setActionError(t(descriptor.copy.loginFailed, { error: r.error ?? "" }));
       }
     } catch (e) {
-      setActionError(t("lib.chatgpt.loginFailed", { error: String(e) }));
+      setActionError(t(descriptor.copy.loginFailed, { error: String(e) }));
     } finally {
       setLoginInProgress(false);
       refresh();
@@ -169,14 +180,14 @@ export function ChatGPTSubscriptionPanel({
   const logout = () =>
     run(async () => {
       setConfirm(null);
-      await invoke("chatgpt_logout", { confirmed: true });
+      await invoke(descriptor.commands.logout, { confirmed: true });
       setModels(null);
       refresh();
     });
 
   const addPicks = (list: Array<{ model: string; alias: string; verified: boolean }>) =>
     run(async () => {
-      await invoke("chatgpt_models_add", { picks: list });
+      await invoke(descriptor.commands.modelsAdd, { picks: list });
       setNotice(t("lib.addedOk", { count: String(list.length) }));
       setManualId("");
       onModelsAdded();
@@ -184,7 +195,7 @@ export function ChatGPTSubscriptionPanel({
 
   const disconnect = () =>
     run(async () => {
-      const n = await invoke<number>("chatgpt_disconnect");
+      const n = await invoke<number>(descriptor.commands.disconnect);
       setNotice(t("lib.chatgpt.disconnectedOk", { count: String(n) }));
       onModelsAdded();
     });
@@ -195,7 +206,7 @@ export function ChatGPTSubscriptionPanel({
       onModelsAdded();
     });
 
-  const inRegistry = registryModels.filter((m) => m.provider === "codex");
+  const inRegistry = registryModels.filter((m) => m.provider === descriptor.provider);
   const registrySet = new Set(inRegistry.map((m) => m.model));
 
   return (
@@ -203,23 +214,26 @@ export function ChatGPTSubscriptionPanel({
       <div className="ml-panel-h">
         <span
           className="ml-logo ml-logo--lg"
-          style={{ background: CHATGPT_SUBSCRIPTION.color }}
+          style={{ background: descriptor.color }}
           aria-hidden="true"
         >
-          {CHATGPT_SUBSCRIPTION.logo}
+          {descriptor.logo}
         </span>
         <div>
-          <h2 className="ml-panel-h__title">{t("lib.chatgpt.name")}</h2>
-          <div className="ml-panel-h__sub">{t("lib.chatgpt.subtitle")}</div>
+          <h2 className="ml-panel-h__title">{t(descriptor.copy.name)}</h2>
+          <div className="ml-panel-h__sub">{t(descriptor.copy.subtitle)}</div>
         </div>
       </div>
-      <p className="ml-hint">{t("lib.chatgpt.billingNote")}</p>
+      <p className="ml-hint">{t(descriptor.copy.billingNote)}</p>
 
       {"account" in state && <AccountLine account={state.account} />}
 
       <Body
         state={state}
         busy={busy}
+        copy={descriptor.copy}
+        cliInstallCmd={descriptor.cliInstallCmd}
+        apiBilled={account?.auth_mode != null && !account.logged_in}
         onLogin={login}
         onRetry={refresh}
         onInstall={() => setConfirm("install")}
@@ -228,6 +242,7 @@ export function ChatGPTSubscriptionPanel({
       {state.kind === "ready" && (
         <ModelSection
           state={state}
+          copy={descriptor.copy}
           busy={busy}
           picks={picks}
           aliases={aliases}
@@ -261,7 +276,7 @@ export function ChatGPTSubscriptionPanel({
       {inRegistry.length > 0 && (
         <section className="ml-reg-list">
           <div className="ml-disc-h">
-            <div className="ml-disc-h__title">{t("lib.chatgpt.registryTitle")}</div>
+            <div className="ml-disc-h__title">{t(descriptor.copy.registryTitle)}</div>
           </div>
           <ul className="ml-mlist" role="list">
             {inRegistry.map((m) => (
@@ -292,9 +307,9 @@ export function ChatGPTSubscriptionPanel({
               </li>
             ))}
           </ul>
-          <p className="ml-hint">{t("lib.chatgpt.disconnectHint")}</p>
+          <p className="ml-hint">{t(descriptor.copy.disconnectHint)}</p>
           <button className="ml-btn ml-btn--ghost" disabled={busy} onClick={disconnect}>
-            {t("lib.chatgpt.disconnectBtn")}
+            {t(descriptor.copy.disconnectBtn)}
           </button>
         </section>
       )}
@@ -306,7 +321,7 @@ export function ChatGPTSubscriptionPanel({
             disabled={busy}
             onClick={() => setConfirm("logout")}
           >
-            {t("lib.chatgpt.logoutBtn")}
+            {t(descriptor.copy.logoutBtn)}
           </button>
         </section>
       )}
@@ -324,9 +339,9 @@ export function ChatGPTSubscriptionPanel({
       )}
       {confirm === "logout" && (
         <ConfirmCard
-          title={t("lib.chatgpt.logoutConfirmTitle")}
-          body={t("lib.chatgpt.logoutConfirmBody")}
-          ok={t("lib.chatgpt.logoutConfirmOk")}
+          title={t(descriptor.copy.logoutConfirmTitle)}
+          body={t(descriptor.copy.logoutConfirmBody)}
+          ok={t(descriptor.copy.logoutConfirmOk)}
           cancel={t("lib.cancelBtn")}
           busy={busy}
           danger
@@ -357,12 +372,19 @@ function AccountLine({ account }: { account: ChatGPTAccount }) {
 function Body({
   state,
   busy,
+  copy,
+  cliInstallCmd,
+  apiBilled,
   onLogin,
   onRetry,
   onInstall,
 }: {
   state: ChatGPTPanelState;
   busy: boolean;
+  copy: SubscriptionCopy;
+  cliInstallCmd: string;
+  /** Signed in to the CLI, but with a credential this provider cannot use. */
+  apiBilled: boolean;
   onLogin: () => void;
   onRetry: () => void;
   onInstall: () => void;
@@ -375,10 +397,10 @@ function Body({
       return (
         <div>
           <p className="ml-error" role="alert">
-            {t("lib.chatgpt.codexMissing")}
+            {t(copy.cliMissing)}
           </p>
           <p className="ml-hint">
-            {t("lib.chatgpt.codexInstallHint")} <code className="ml-code">npm install -g @openai/codex</code>
+            {t(copy.cliInstallHint)} <code className="ml-code">{cliInstallCmd}</code>
           </p>
           <button className="ml-btn ml-btn--ghost" onClick={onRetry}>
             {t("lib.chatgpt.retryBtn")}
@@ -388,23 +410,23 @@ function Body({
     case "logged-out":
       return (
         <div>
-          <p className="ml-hint">{t("lib.chatgpt.loggedOut")}</p>
+          <p className="ml-hint">{t(apiBilled ? copy.loggedOutApiBilled : copy.loggedOut)}</p>
           <button className="ml-btn ml-btn--primary" disabled={busy} onClick={onLogin}>
-            {t("lib.chatgpt.loginBtn")}
+            {t(copy.loginBtn)}
           </button>
         </div>
       );
     case "login-in-progress":
       return (
         <p className="ml-hint" aria-live="polite">
-          {t("lib.chatgpt.loginInProgress")}
+          {t(copy.loginInProgress)}
         </p>
       );
     case "account-unavailable":
       return (
         <div>
           <p className="ml-error" role="alert">
-            {t("lib.chatgpt.accountUnavailable", { error: state.message })}
+            {t(copy.accountUnavailable, { error: state.message })}
           </p>
           <button className="ml-btn ml-btn--ghost" onClick={onRetry}>
             {t("lib.chatgpt.retryBtn")}
@@ -442,6 +464,7 @@ function Body({
 
 function ModelSection({
   state,
+  copy,
   busy,
   picks,
   aliases,
@@ -455,6 +478,7 @@ function ModelSection({
   onAddManual,
 }: {
   state: Extract<ChatGPTPanelState, { kind: "ready" }>;
+  copy: SubscriptionCopy;
   busy: boolean;
   picks: Set<string>;
   aliases: Record<string, string>;
@@ -504,14 +528,14 @@ function ModelSection({
     <div className="ml-discover">
       <div className="ml-disc-h">
         <div className="ml-disc-h__title">
-          {t("lib.chatgpt.modelsTitle")}
-          <span className="ml-disc-h__hint"> · {t("lib.chatgpt.modelsHint")}</span>
+          {t(copy.modelsTitle)}
+          <span className="ml-disc-h__hint"> · {t(copy.modelsHint)}</span>
         </div>
       </div>
       {state.models.length === 0 ? (
         <p className="ml-hint">{t("lib.noModelsHint")}</p>
       ) : (
-        <ul className="ml-mlist" role="group" aria-label={t("lib.chatgpt.modelsTitle")}>
+        <ul className="ml-mlist" role="group" aria-label={t(copy.modelsTitle)}>
           {state.models.map((m) => {
             const sel = picks.has(m.id);
             const alias = aliases[m.id] ?? defaultChatGPTAlias(m.id);

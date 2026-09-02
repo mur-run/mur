@@ -3,6 +3,10 @@
  * No React, no side effects, no I/O. Safe to import in tests directly.
  */
 
+import type { TranslationKey } from "../i18n/types";
+import type { GatewayReadiness } from "./chatgptSubscription";
+import { CHATGPT_READINESS, CLAUDE_READINESS } from "./chatgptSubscription";
+
 export interface CloudPreset {
   key: string;
   name: string;
@@ -98,19 +102,140 @@ export const CLOUD_PRESETS: CloudPreset[] = [
   },
 ];
 
+export type SubscriptionCopyKey =
+  | "name"
+  | "subtitle"
+  | "billingNote"
+  | "cliMissing"
+  | "cliInstallHint"
+  | "loggedOut"
+  | "loggedOutApiBilled"
+  | "loginBtn"
+  | "loginInProgress"
+  | "loginFailed"
+  | "accountUnavailable"
+  | "modelsTitle"
+  | "modelsHint"
+  | "registryTitle"
+  | "disconnectBtn"
+  | "disconnectHint"
+  | "logoutBtn"
+  | "logoutConfirmTitle"
+  | "logoutConfirmBody"
+  | "logoutConfirmOk";
+
+export type SubscriptionCopy = Record<SubscriptionCopyKey, TranslationKey>;
+
 /**
- * ChatGPT Subscription is deliberately not a CLOUD_PRESET: it has no API key,
- * no base URL to edit, and must never be tested against api.openai.com. It
- * gets its own rail entry and panel (ChatGPTSubscriptionPanel).
+ * A subscription provider is deliberately not a CLOUD_PRESET: it has no API
+ * key, no base URL to edit, and must never be tested against the vendor
+ * host. Each one gets its own rail entry and shares SubscriptionProviderPanel.
  */
-export const CHATGPT_SUBSCRIPTION = {
-  key: "chatgpt-subscription",
+export interface SubscriptionDescriptor {
+  key: string;
   /** The wire provider its registry entries carry. */
+  provider: string;
+  name: string;
+  logo: string;
+  color: string;
+  readiness: GatewayReadiness;
+  commands: {
+    accountRead: string;
+    modelsList: string;
+    login: string;
+    logout: string;
+    modelsAdd: string;
+    disconnect: string;
+  };
+  copy: SubscriptionCopy;
+  /** Shown verbatim beside `copy.cliInstallHint`. */
+  cliInstallCmd: string;
+}
+
+export const CHATGPT_SUBSCRIPTION: SubscriptionDescriptor = {
+  key: "chatgpt-subscription",
   provider: "codex",
   name: "ChatGPT Subscription",
   logo: "GPT",
   color: "#10A37F",
-} as const;
+  readiness: CHATGPT_READINESS,
+  commands: {
+    accountRead: "chatgpt_account_read",
+    modelsList: "chatgpt_models_list",
+    login: "chatgpt_login",
+    logout: "chatgpt_logout",
+    modelsAdd: "chatgpt_models_add",
+    disconnect: "chatgpt_disconnect",
+  },
+  copy: {
+    name: "lib.chatgpt.name",
+    subtitle: "lib.chatgpt.subtitle",
+    billingNote: "lib.chatgpt.billingNote",
+    cliMissing: "lib.chatgpt.codexMissing",
+    cliInstallHint: "lib.chatgpt.codexInstallHint",
+    loggedOut: "lib.chatgpt.loggedOut",
+    loggedOutApiBilled: "lib.chatgpt.loggedOutApiBilled",
+    loginBtn: "lib.chatgpt.loginBtn",
+    loginInProgress: "lib.chatgpt.loginInProgress",
+    loginFailed: "lib.chatgpt.loginFailed",
+    accountUnavailable: "lib.chatgpt.accountUnavailable",
+    modelsTitle: "lib.chatgpt.modelsTitle",
+    modelsHint: "lib.chatgpt.modelsHint",
+    registryTitle: "lib.chatgpt.registryTitle",
+    disconnectBtn: "lib.chatgpt.disconnectBtn",
+    disconnectHint: "lib.chatgpt.disconnectHint",
+    logoutBtn: "lib.chatgpt.logoutBtn",
+    logoutConfirmTitle: "lib.chatgpt.logoutConfirmTitle",
+    logoutConfirmBody: "lib.chatgpt.logoutConfirmBody",
+    logoutConfirmOk: "lib.chatgpt.logoutConfirmOk",
+  },
+  cliInstallCmd: "npm install -g @openai/codex",
+};
+
+export const CLAUDE_SUBSCRIPTION: SubscriptionDescriptor = {
+  key: "claude-subscription",
+  provider: "claude",
+  name: "Claude Subscription",
+  logo: "CL",
+  color: "#C5694A",
+  readiness: CLAUDE_READINESS,
+  commands: {
+    accountRead: "claude_account_read",
+    modelsList: "claude_models_list",
+    login: "claude_login",
+    logout: "claude_logout",
+    modelsAdd: "claude_models_add",
+    disconnect: "claude_disconnect",
+  },
+  copy: {
+    name: "lib.claude.name",
+    subtitle: "lib.claude.subtitle",
+    billingNote: "lib.claude.billingNote",
+    cliMissing: "lib.claude.cliMissing",
+    cliInstallHint: "lib.claude.cliInstallHint",
+    loggedOut: "lib.claude.loggedOut",
+    loggedOutApiBilled: "lib.claude.loggedOutApiBilled",
+    loginBtn: "lib.claude.loginBtn",
+    loginInProgress: "lib.claude.loginInProgress",
+    loginFailed: "lib.claude.loginFailed",
+    accountUnavailable: "lib.claude.accountUnavailable",
+    modelsTitle: "lib.claude.modelsTitle",
+    modelsHint: "lib.claude.modelsHint",
+    registryTitle: "lib.claude.registryTitle",
+    disconnectBtn: "lib.claude.disconnectBtn",
+    disconnectHint: "lib.claude.disconnectHint",
+    logoutBtn: "lib.claude.logoutBtn",
+    logoutConfirmTitle: "lib.claude.logoutConfirmTitle",
+    logoutConfirmBody: "lib.claude.logoutConfirmBody",
+    logoutConfirmOk: "lib.claude.logoutConfirmOk",
+  },
+  cliInstallCmd: "npm install -g @anthropic-ai/claude-code",
+};
+
+export const SUBSCRIPTION_PROVIDERS: readonly SubscriptionDescriptor[] = [
+  CHATGPT_SUBSCRIPTION,
+  CLAUDE_SUBSCRIPTION,
+];
 
 // Azure OpenAI is intentionally NOT a preset here: its `api-key` auth header
 // and deployment-scoped URLs are not the generic OpenAI-compatible shape
