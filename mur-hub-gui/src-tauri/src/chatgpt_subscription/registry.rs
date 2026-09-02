@@ -41,11 +41,11 @@ fn validate_alias(alias: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn chatgpt_entry(pick: &ChatGptModelPick) -> ModelEntry {
+pub fn subscription_entry(provider: &str, base_url: &str, pick: &ChatGptModelPick) -> ModelEntry {
     ModelEntry {
-        provider: "codex".into(),
+        provider: provider.into(),
         model: pick.model.clone(),
-        base_url: Some(CHATGPT_GATEWAY_BASE.into()),
+        base_url: Some(base_url.into()),
         secret: None,
         tier: Some(RouteTier::Frontier),
         billing: Some(BillingMode::Subscription),
@@ -54,10 +54,16 @@ pub fn chatgpt_entry(pick: &ChatGptModelPick) -> ModelEntry {
     }
 }
 
+pub fn chatgpt_entry(pick: &ChatGptModelPick) -> ModelEntry {
+    subscription_entry("codex", CHATGPT_GATEWAY_BASE, pick)
+}
+
 /// Validate every pick first, then insert; an existing alias always wins,
 /// whatever provider it belongs to. Returns how many were inserted.
-pub fn add_chatgpt_models(
+pub fn add_subscription_models(
     reg: &mut ModelRegistry,
+    provider: &str,
+    base_url: &str,
     picks: &[ChatGptModelPick],
 ) -> Result<u32, String> {
     let mut seen = std::collections::HashSet::new();
@@ -73,21 +79,35 @@ pub fn add_chatgpt_models(
     let mut added = 0;
     for pick in picks {
         if !reg.models.contains_key(&pick.alias) {
-            reg.models.insert(pick.alias.clone(), chatgpt_entry(pick));
+            reg.models.insert(
+                pick.alias.clone(),
+                subscription_entry(provider, base_url, pick),
+            );
             added += 1;
         }
     }
     Ok(added)
 }
 
-/// Remove only what this provider wrote: `provider == codex` *and*
-/// subscription billing. A hand-authored codex entry without the billing
+pub fn add_chatgpt_models(
+    reg: &mut ModelRegistry,
+    picks: &[ChatGptModelPick],
+) -> Result<u32, String> {
+    add_subscription_models(reg, "codex", CHATGPT_GATEWAY_BASE, picks)
+}
+
+/// Remove only what a subscription provider wrote: matching `provider`
+/// *and* subscription billing. A hand-authored entry without the billing
 /// marker is left alone. Returns how many were removed.
-pub fn disconnect_chatgpt(reg: &mut ModelRegistry) -> u32 {
+pub fn disconnect_subscription(reg: &mut ModelRegistry, provider: &str) -> u32 {
     let before = reg.models.len();
     reg.models
-        .retain(|_, e| !(e.provider == "codex" && e.billing == Some(BillingMode::Subscription)));
+        .retain(|_, e| !(e.provider == provider && e.billing == Some(BillingMode::Subscription)));
     (before - reg.models.len()) as u32
+}
+
+pub fn disconnect_chatgpt(reg: &mut ModelRegistry) -> u32 {
+    disconnect_subscription(reg, "codex")
 }
 
 #[tauri::command]
@@ -223,5 +243,31 @@ mod tests {
         let left: Vec<_> = reg.models.keys().cloned().collect();
         assert_eq!(left, ["hand_codex", "openai_paid"]);
         assert_eq!(disconnect_chatgpt(&mut reg), 0);
+    }
+
+    #[test]
+    fn disconnect_is_scoped_to_its_own_provider() {
+        let mut reg = ModelRegistry::default();
+        add_chatgpt_models(&mut reg, &[pick("gpt-5.6-sol", "gpt", true)]).unwrap();
+        add_subscription_models(
+            &mut reg,
+            "claude",
+            "http://127.0.0.1:8088/v1",
+            &[pick("claude-opus-5", "opus", true)],
+        )
+        .unwrap();
+        assert_eq!(reg.models["opus"].provider, "claude");
+        assert_eq!(
+            reg.models["opus"].base_url.as_deref(),
+            Some("http://127.0.0.1:8088/v1")
+        );
+        assert_eq!(reg.models["opus"].billing, Some(BillingMode::Subscription));
+        assert!(reg.models["opus"].secret.is_none());
+        assert_eq!(disconnect_subscription(&mut reg, "claude"), 1);
+        assert!(
+            reg.models.contains_key("gpt"),
+            "a ChatGPT entry survived a Claude disconnect"
+        );
+        assert_eq!(disconnect_chatgpt(&mut reg), 1);
     }
 }
