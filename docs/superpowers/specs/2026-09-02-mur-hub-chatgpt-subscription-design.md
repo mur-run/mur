@@ -1,7 +1,7 @@
 # MUR Hub ChatGPT Subscription — Design
 
 **Date:** 2026-09-02
-**Status:** Approved (brainstorm 2026-09-02)
+**Status:** Implemented (acceptance with a real ChatGPT account verified 2026-09-03; mur#1154, mur-model-gateway#11)
 **Scope:** `mur-hub-gui`, `mur-agent-runtime`, and the existing
 `mur-model-gateway` Codex contract
 

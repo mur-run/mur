@@ -12,6 +12,14 @@ pub mod registry;
 pub use app_server::{ControlError, list_models, read_account};
 pub use process::{CHATGPT_GATEWAY_BASE, GatewayStatusView, LoginResult};
 
+/// The Claude provider reuses these views verbatim (its `plan_type` is
+/// always `None`, its models carry no default marker). Type aliases rather
+/// than a rename so the UI DTOs and the shipped ChatGPT commands keep their
+/// field names.
+pub type SubscriptionAccountView = ChatGptAccountView;
+pub type SubscriptionModelView = ChatGptModelView;
+pub type SubscriptionModelPick = registry::ChatGptModelPick;
+
 use serde::Serialize;
 use std::path::PathBuf;
 

@@ -825,7 +825,7 @@ cargo clippy --all-targets -- -D warnings
 
   Expect zero failures and zero warnings.
 
-- [ ] With a test ChatGPT account, perform the approved acceptance sequence:
+- [x] With a test ChatGPT account, perform the approved acceptance sequence:
   login from Hub; verify account/plan and model list; install/start gateway;
   register one model; assign it to a disposable agent; send one turn; confirm
   the gateway log reports `provider=Codex`; simulate 429 and confirm no paid
@@ -844,7 +844,7 @@ rg -n "access_token|refresh_token|OPENAI_API_KEY" \
   logs. A literal field name in a diagnostic fixture is acceptable only inside
   the source test tree, never user state.
 
-- [ ] Update the design status to `Implemented` only after the real end-to-end
+- [x] Update the design status to `Implemented` only after the real end-to-end
   turn succeeds. Commit documentation and any test-only corrections:
   `git add docs/model-gateway.md
   docs/superpowers/specs/2026-09-02-mur-hub-chatgpt-subscription-design.md`,

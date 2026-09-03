@@ -4,9 +4,11 @@ use async_trait::async_trait;
 use mur_common::{AgentProfile, LlmMode};
 
 pub mod anthropic;
+pub mod claude;
 pub(crate) mod client_builder;
 pub mod codex;
 pub mod fallback;
+pub mod loopback;
 pub mod ollama;
 pub mod openai;
 pub mod stub;
@@ -605,3 +607,12 @@ mod proxy_isolation_tests {
         assert_eq!(resp.status(), 200);
     }
 }
+
+/// httpmock 0.7 recycles a small pool of servers behind one shared runtime.
+/// Several `#[tokio::test]`s driving their own mock server at once make each
+/// other's connections fail (`Connect`, refused — not a mock mismatch), so
+/// every test that starts a `MockServer` holds this for its whole body.
+/// Serial they all pass; this is the cheapest way to keep them that way
+/// without `--test-threads=1` for the whole crate.
+#[cfg(test)]
+pub(crate) static MOCK_SERVER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());

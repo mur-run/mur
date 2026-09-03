@@ -9,6 +9,7 @@ pub mod brain_badge;
 pub mod chat;
 pub mod chat_window;
 pub mod chatgpt_subscription;
+pub mod claude_subscription;
 pub mod cli_tools;
 pub mod companion;
 pub mod companion_notify;
@@ -707,6 +708,12 @@ pub fn run() {
             chatgpt_subscription::process::chatgpt_gateway_install,
             chatgpt_subscription::registry::chatgpt_models_add,
             chatgpt_subscription::registry::chatgpt_disconnect,
+            claude_subscription::claude_account_read,
+            claude_subscription::claude_login,
+            claude_subscription::claude_logout,
+            claude_subscription::claude_models_list,
+            claude_subscription::claude_models_add,
+            claude_subscription::claude_disconnect,
             dashboard::dashboard_open,
             brain_badge::nudge_status,
             brain_badge::nudge_dismiss,
