@@ -852,6 +852,41 @@ pub fn discover_all_indexes() -> Vec<DiscoveredIndex> {
     results
 }
 
+/// Marker line identifying the mur block inside `post-commit`.
+const HOOK_MARKER: &str = "# mur auto-index";
+/// Bump when the block changes. A block without this exact line is rewritten
+/// in place on the next index run, which is how already-installed hooks pick
+/// up the new form without anyone touching them by hand.
+const HOOK_VERSION_LINE: &str = "# hook-version: 2";
+
+fn hook_block() -> String {
+    // No path baked in: `--main-repo` makes mur resolve the primary repo from
+    // cwd (following linked worktrees), so renaming the directory cannot strand
+    // the hook and every repo carries an identical block. mur itself is resolved
+    // at hook-run time from PATH (brew, cargo, ...), falling back to the
+    // ~/.mur/bin installer location.
+    format!(
+        "\n{HOOK_MARKER}\n{HOOK_VERSION_LINE}\nMUR_BIN=\"$(command -v mur || true)\"\n[ -z \"$MUR_BIN\" ] && [ -x \"$HOME/.mur/bin/mur\" ] && MUR_BIN=\"$HOME/.mur/bin/mur\"\nif [ -n \"$MUR_BIN\" ]; then\n  \"$MUR_BIN\" project index --main-repo --quiet --background\nfi\n"
+    )
+}
+
+/// Byte span of an existing mur block: from the marker line through the end of
+/// the `fi` line that closes it. `None` when the hook has no mur block.
+fn hook_block_span(existing: &str) -> Option<(usize, usize)> {
+    let start = existing.find(HOOK_MARKER)?;
+    let mut from = start;
+    loop {
+        let i = existing[from..].find("\nfi")?;
+        let end = from + i + "\nfi".len();
+        // Accept only a bare `fi` line, not a longer word that starts with it.
+        match existing[end..].chars().next() {
+            None => return Some((start, end)),
+            Some('\n') => return Some((start, end + 1)),
+            Some(_) => from = end,
+        }
+    }
+}
+
 pub fn ensure_git_hook(project_path: &Path, quiet: bool) -> Result<bool> {
     let hooks_dir = project_path.join(".git").join("hooks");
     if !hooks_dir.exists() {
@@ -859,30 +894,31 @@ pub fn ensure_git_hook(project_path: &Path, quiet: bool) -> Result<bool> {
     }
     let hook_path = hooks_dir.join("post-commit");
     let existing = std::fs::read_to_string(&hook_path).unwrap_or_default();
-    let marker = "# mur auto-index";
-    if existing.contains(marker) {
-        return Ok(false);
-    }
-    // Resolve mur at hook-run time from PATH (covers brew, cargo, etc.),
-    // falling back to the ~/.mur/bin installer location.
-    let hook_content = format!(
-        "\n{marker}\nMUR_BIN=\"$(command -v mur || true)\"\n[ -z \"$MUR_BIN\" ] && [ -x \"$HOME/.mur/bin/mur\" ] && MUR_BIN=\"$HOME/.mur/bin/mur\"\nif [ -n \"$MUR_BIN\" ]; then\n  \"$MUR_BIN\" project index --path \"{path}\" --quiet --background\nfi\n",
-        path = project_path.display(),
-    );
-    if existing.is_empty() {
-        std::fs::write(&hook_path, format!("#!/bin/sh\n{}", hook_content))?;
-    } else {
-        let mut file = std::fs::OpenOptions::new().append(true).open(&hook_path)?;
-        use std::io::Write;
-        file.write_all(hook_content.as_bytes())?;
-    }
+
+    let (body, action) = match hook_block_span(&existing) {
+        Some(_) if existing.contains(HOOK_VERSION_LINE) => return Ok(false),
+        // Older block (pre-v2 baked in an absolute --path): swap it out in place,
+        // leaving whatever the user keeps before or after it untouched.
+        Some((start, end)) => {
+            let head = existing[..start]
+                .strip_suffix('\n')
+                .unwrap_or(&existing[..start]);
+            (
+                format!("{head}{}{}", hook_block(), &existing[end..]),
+                "upgraded",
+            )
+        }
+        None if existing.is_empty() => (format!("#!/bin/sh\n{}", hook_block()), "installed"),
+        None => (format!("{existing}{}", hook_block()), "installed"),
+    };
+    std::fs::write(&hook_path, body)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755))?;
     }
     if !quiet {
-        eprintln!("  Git hook installed for auto-reindex on commit");
+        eprintln!("  Git hook {action} for auto-reindex on commit");
     }
     Ok(true)
 }
@@ -972,6 +1008,59 @@ mod git_hook_tests {
             body.contains("# mur auto-index"),
             "must append marker block"
         );
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn hook_carries_no_path_and_resolves_main_repo() {
+        let repo = temp_repo();
+        ensure_git_hook(&repo, true).unwrap();
+        let body = fs::read_to_string(repo.join(".git/hooks/post-commit")).unwrap();
+        assert!(
+            body.contains("--main-repo"),
+            "must let mur resolve the repo"
+        );
+        assert!(
+            !body.contains(&repo.display().to_string()),
+            "must not bake the repo path into the hook"
+        );
+        assert!(
+            body.contains("# hook-version: 2"),
+            "must stamp the block version"
+        );
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn upgrades_legacy_hardcoded_block_in_place() {
+        let repo = temp_repo();
+        let hook = repo.join(".git/hooks/post-commit");
+        // What older mur wrote: the absolute path baked in, no version line.
+        let legacy = format!(
+            "#!/bin/sh\necho before\n\n# mur auto-index\nMUR_BIN=\"$(command -v mur || true)\"\nif [ -n \"$MUR_BIN\" ]; then\n  \"$MUR_BIN\" project index --path \"{}\" --quiet --background\nfi\necho after\n",
+            repo.display()
+        );
+        fs::write(&hook, &legacy).unwrap();
+
+        assert!(
+            ensure_git_hook(&repo, true).unwrap(),
+            "a legacy block must be reported as changed"
+        );
+        let body = fs::read_to_string(&hook).unwrap();
+        assert!(
+            body.contains("echo before") && body.contains("echo after"),
+            "user lines around the block must survive"
+        );
+        assert!(!body.contains("--path"), "hardcoded path must be gone");
+        assert!(body.contains("--main-repo"));
+        assert_eq!(
+            body.matches("# mur auto-index").count(),
+            1,
+            "exactly one block"
+        );
+        // Now current: a further call must be a no-op.
+        assert!(!ensure_git_hook(&repo, true).unwrap());
 
         fs::remove_dir_all(&repo).ok();
     }
