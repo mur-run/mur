@@ -10,8 +10,12 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ModelOption } from "./modelPicker";
-import { CHATGPT_SUBSCRIPTION, CLOUD_PRESETS } from "./modelLibraryHelpers";
-import { ChatGPTSubscriptionPanel } from "./ChatGPTSubscriptionPanel";
+import {
+  CLOUD_PRESETS,
+  SUBSCRIPTION_PROVIDERS,
+  type SubscriptionDescriptor,
+} from "./modelLibraryHelpers";
+import { SubscriptionProviderPanel } from "./SubscriptionProviderPanel";
 import { useT } from "../i18n";
 import {
   ConnectedPanel,
@@ -40,13 +44,14 @@ function deriveConnected(models: ModelOption[]): ConnectedProvider[] {
     const key = m.vendor || m.provider;
     map.set(key, (map.get(key) ?? 0) + 1);
   }
-  return Array.from(map.entries()).map(([key, count]) =>
-    key === CHATGPT_SUBSCRIPTION.provider
+  return Array.from(map.entries()).map(([key, count]) => {
+    const d = subscriptionFor(key);
+    return d
       ? {
           key,
-          name: CHATGPT_SUBSCRIPTION.name,
-          color: CHATGPT_SUBSCRIPTION.color,
-          initials: CHATGPT_SUBSCRIPTION.logo,
+          name: d.name,
+          color: d.color,
+          initials: d.logo,
           modelCount: count,
         }
       : {
@@ -55,8 +60,13 @@ function deriveConnected(models: ModelOption[]): ConnectedProvider[] {
           color: providerColor(key),
           initials: providerInitials(key),
           modelCount: count,
-        },
-  );
+        };
+  });
+}
+
+/** A connected entry whose provider is a subscription opens that panel. */
+function subscriptionFor(provider: string): SubscriptionDescriptor | undefined {
+  return SUBSCRIPTION_PROVIDERS.find((d) => d.provider === provider);
 }
 
 // ── Props ──────────────────────────────────────────────────────────────────
@@ -74,13 +84,12 @@ type PanelKind =
   | { kind: "connected"; providerKey: string }
   | { kind: "local"; detectedKey: string }
   | { kind: "new"; presetKey: string }
-  | { kind: "chatgpt-subscription" };
+  | { kind: "subscription"; key: string };
 
-/** Connected `codex` entries open the subscription panel, not ConnectedPanel. */
+/** Connected subscription entries open their own panel, not ConnectedPanel. */
 function panelForConnected(providerKey: string): PanelKind {
-  return providerKey === CHATGPT_SUBSCRIPTION.provider
-    ? { kind: "chatgpt-subscription" }
-    : { kind: "connected", providerKey };
+  const d = subscriptionFor(providerKey);
+  return d ? { kind: "subscription", key: d.key } : { kind: "connected", providerKey };
 }
 
 // ── Component ──────────────────────────────────────────────────────────────
@@ -159,8 +168,8 @@ export function ModelLibrary({ open, onClose, embedded = false }: Props) {
                 {connected.map((cp) => {
                   const target = panelForConnected(cp.key);
                   const active =
-                    target.kind === "chatgpt-subscription"
-                      ? panel?.kind === "chatgpt-subscription"
+                    target.kind === "subscription"
+                      ? panel?.kind === "subscription" && panel.key === target.key
                       : panel?.kind === "connected" && panel.providerKey === cp.key;
                   return (
                     <button
@@ -216,22 +225,21 @@ export function ModelLibrary({ open, onClose, embedded = false }: Props) {
             )}
 
             <div className="ml-rail__h">{t("lib.section.add")}</div>
-            {!connected.some((cp) => cp.key === CHATGPT_SUBSCRIPTION.provider) && (
+            {SUBSCRIPTION_PROVIDERS.filter(
+              (d) => !connected.some((cp) => cp.key === d.provider),
+            ).map((d) => (
               <button
-                className={`ml-prov ml-prov--add${panel?.kind === "chatgpt-subscription" ? " ml-prov--active" : ""}`}
-                onClick={() => setPanel({ kind: "chatgpt-subscription" })}
-                title={CHATGPT_SUBSCRIPTION.name}
+                key={d.key}
+                className={`ml-prov ml-prov--add${panel?.kind === "subscription" && panel.key === d.key ? " ml-prov--active" : ""}`}
+                onClick={() => setPanel({ kind: "subscription", key: d.key })}
+                title={d.name}
               >
-                <span
-                  className="ml-logo"
-                  style={{ background: CHATGPT_SUBSCRIPTION.color }}
-                  aria-hidden="true"
-                >
-                  {CHATGPT_SUBSCRIPTION.logo}
+                <span className="ml-logo" style={{ background: d.color }} aria-hidden="true">
+                  {d.logo}
                 </span>
-                <span className="ml-prov__name ml-prov__name--link">{CHATGPT_SUBSCRIPTION.name}</span>
+                <span className="ml-prov__name ml-prov__name--link">{d.name}</span>
               </button>
-            )}
+            ))}
             {CLOUD_PRESETS.map((preset) => {
               const active =
                 panel?.kind === "new" && panel.presetKey === preset.key;
@@ -270,8 +278,9 @@ export function ModelLibrary({ open, onClose, embedded = false }: Props) {
                     .catch(() => {})
                 }
               />
-            ) : panel.kind === "chatgpt-subscription" ? (
-              <ChatGPTSubscriptionPanel
+            ) : panel.kind === "subscription" ? (
+              <SubscriptionProviderPanel
+                descriptor={SUBSCRIPTION_PROVIDERS.find((d) => d.key === panel.key)!}
                 registryModels={registryModels}
                 onModelsAdded={() =>
                   invoke<ModelOption[]>("list_models")

@@ -48,8 +48,12 @@ pub struct GatewayStatusView {
     /// A valid health reply came back — not merely a service file.
     pub running: bool,
     pub codex_hook: bool,
-    /// `chatgpt` / `apikey` / `missing`; only `chatgpt` is ready for this provider.
+    /// `chatgpt` / `apikey` / `missing`; only `chatgpt` is ready for the
+    /// ChatGPT provider.
     pub credential_mode: Option<String>,
+    /// `oauth` / `missing`; only `oauth` is ready for the Claude provider.
+    /// `None` when the gateway predates the field.
+    pub claude_credential_mode: Option<String>,
     pub compression: bool,
 }
 
@@ -83,7 +87,10 @@ pub(crate) fn sanitize(bytes: &[u8]) -> String {
 
 /// Run to completion under `timeout`; `(exit_ok, combined_output)`. The
 /// child is killed and reaped on timeout or cancellation (`kill_on_drop`).
-async fn run_bounded(mut cmd: Command, timeout: Duration) -> Result<(bool, String), String> {
+pub(crate) async fn run_bounded(
+    mut cmd: Command,
+    timeout: Duration,
+) -> Result<(bool, String), String> {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -193,6 +200,8 @@ pub fn resolve_gateway() -> Option<PathBuf> {
 struct Health {
     codex_hook: bool,
     credential: String,
+    /// `claudeCredential`; `None` on a gateway older than the field.
+    claude_credential: Option<String>,
     compression: bool,
 }
 
@@ -207,9 +216,22 @@ fn parse_health(v: &serde_json::Value) -> Option<Health> {
     if !matches!(credential, "chatgpt" | "apikey" | "missing") {
         return None;
     }
+    // Absent on a gateway older than mur-model-gateway#12; present means it
+    // must be one of the two documented kinds.
+    let claude_credential = match v.get("claudeCredential") {
+        None => None,
+        Some(c) => {
+            let c = c.as_str()?;
+            if !matches!(c, "oauth" | "missing") {
+                return None;
+            }
+            Some(c.to_string())
+        }
+    };
     Some(Health {
         codex_hook: v["codexHook"].as_bool()?,
         credential: credential.to_string(),
+        claude_credential,
         compression: v["compression"].as_bool()?,
     })
 }
@@ -240,6 +262,7 @@ async fn status_at(url: &str, installed: bool) -> GatewayStatusView {
             running: true,
             codex_hook: h.codex_hook,
             credential_mode: Some(h.credential),
+            claude_credential_mode: h.claude_credential,
             compression: h.compression,
         },
         None => GatewayStatusView {
@@ -477,8 +500,23 @@ mod tests {
             Some(Health {
                 codex_hook: true,
                 credential: "apikey".into(),
+                claude_credential: None,
                 compression: false
             })
+        );
+        let with_claude = serde_json::json!({"status":"ok","codexHook":true,"codexCredential":"missing","claudeCredential":"oauth","compression":false});
+        assert_eq!(
+            parse_health(&with_claude)
+                .unwrap()
+                .claude_credential
+                .as_deref(),
+            Some("oauth")
+        );
+        let bad_claude = serde_json::json!({"status":"ok","codexHook":true,"codexCredential":"missing","claudeCredential":"sk-ant-oat01-x","compression":false});
+        assert_eq!(
+            parse_health(&bad_claude),
+            None,
+            "an unknown claude kind is not a gateway we understand"
         );
         for bad in [
             serde_json::json!({"status":"ok"}),

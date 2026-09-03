@@ -173,6 +173,49 @@ pub fn audit(
         }
     }
 
+    // 0b. Subscription entries and the loopback contract.
+    //
+    //    `provider: anthropic` pointed at the local gateway *works* — the
+    //    gateway attaches the Claude Code token to an authless request — but
+    //    nothing stops a later `base_url` edit from landing the same entry on
+    //    API billing. `provider: claude` is the same route with that edit
+    //    refused at startup. Warn-only: the entry is not broken, it is
+    //    unlabelled. The claude checks name what the runtime will refuse, so
+    //    the user learns it here rather than from a failed agent start.
+    for (key, e) in &reg.models {
+        let loopback = is_local_endpoint(e.base_url.as_deref());
+        match e.provider.as_str() {
+            "anthropic" if loopback && e.secret.is_none() => out.push(Finding::warn(
+                key.clone(),
+                "rides a Claude subscription through the local gateway. `provider: claude` says so \
+                 explicitly, labels it `billing: subscription`, and refuses a remote host or a \
+                 secret — see docs/model-gateway.md",
+            )),
+            "claude" => {
+                let path_ok = e
+                    .base_url
+                    .as_deref()
+                    .and_then(|b| reqwest::Url::parse(b).ok())
+                    .is_some_and(|u| u.path().trim_end_matches('/') == "/v1");
+                if !loopback || !path_ok {
+                    out.push(Finding::warn(
+                        key.clone(),
+                        "`provider: claude` must point at the loopback gateway \
+                         `http://127.0.0.1:<port>/v1`; the runtime refuses to start this entry",
+                    ));
+                }
+                if e.secret.is_some() {
+                    out.push(Finding::warn(
+                        key.clone(),
+                        "`provider: claude` takes no `secret` — the gateway holds the Claude Code \
+                         login; the runtime refuses to start this entry",
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
     // 1. Registry entries whose model id the catalog has never carried under
     //    any vendor we can name for them. See the module doc for what this does
     //    and does not prove.
@@ -521,5 +564,71 @@ mod tests {
         // A remote host that merely mentions localhost must not pass.
         assert!(!is_local_endpoint(Some("https://localhost.evil.com/v1")));
         assert!(!is_local_endpoint(None));
+    }
+
+    /// `provider: anthropic` at the gateway works but is unlabelled — one
+    /// `base_url` edit moves it to API billing. `provider: claude` is the
+    /// same route with that edit refused, so doctor points at the entries
+    /// that could carry the label, and at claude entries the runtime will
+    /// reject before an agent start does it for them.
+    #[test]
+    fn subscription_entries_are_checked_against_the_loopback_contract() {
+        let mut reg = reg_with(&[
+            (
+                "gw_anthropic",
+                "anthropic",
+                "claude-opus-5",
+                Some("http://127.0.0.1:8088"),
+            ),
+            ("api_anthropic", "anthropic", "claude-opus-5", None),
+            (
+                "good_claude",
+                "claude",
+                "claude-opus-5",
+                Some("http://127.0.0.1:8088/v1"),
+            ),
+            (
+                "remote_claude",
+                "claude",
+                "claude-opus-5",
+                Some("https://api.anthropic.com/v1"),
+            ),
+            (
+                "wrong_path_claude",
+                "claude",
+                "claude-opus-5",
+                Some("http://127.0.0.1:8088"),
+            ),
+            (
+                "secret_claude",
+                "claude",
+                "claude-opus-5",
+                Some("http://127.0.0.1:8088/v1"),
+            ),
+        ]);
+        reg.models.get_mut("secret_claude").unwrap().secret = Some(
+            mur_common::secret::SecretRef::Env("ANTHROPIC_API_KEY".into()),
+        );
+        let findings = audit(&reg, &[], None);
+        let subjects = |needle: &str| -> Vec<String> {
+            findings
+                .iter()
+                .filter(|f| f.level == Level::Warn && f.detail.contains(needle))
+                .map(|f| f.subject.clone())
+                .collect()
+        };
+        assert_eq!(subjects("provider: claude` says so"), vec!["gw_anthropic"]);
+        let mut refused = subjects("refuses to start");
+        refused.sort();
+        refused.dedup();
+        assert_eq!(
+            refused,
+            vec!["remote_claude", "secret_claude", "wrong_path_claude"]
+        );
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.subject == "good_claude" || f.subject == "api_anthropic")
+        );
     }
 }

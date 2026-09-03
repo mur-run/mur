@@ -21,33 +21,7 @@ pub const CODEX_ROUTE_PATH: &str = "/codex/v1";
 /// port, no userinfo, no query or fragment. Everything else is an error that
 /// names the offending part.
 pub fn validate_codex_base_url(raw: &str) -> Result<reqwest::Url, LlmError> {
-    let bad = |why: &str| LlmError::Http(format!("codex base_url {raw:?} rejected: {why}"));
-    let url = reqwest::Url::parse(raw).map_err(|e| bad(&e.to_string()))?;
-    if url.scheme() != "http" {
-        return Err(bad("scheme must be http (loopback only)"));
-    }
-    if !url.username().is_empty() || url.password().is_some() {
-        return Err(bad("credentials in the URL are not allowed"));
-    }
-    let loopback = match url.host() {
-        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-        None => false,
-    };
-    if !loopback {
-        return Err(bad("host must be localhost or a loopback IP"));
-    }
-    if url.port().is_none() {
-        return Err(bad("an explicit port is required"));
-    }
-    if url.query().is_some() || url.fragment().is_some() {
-        return Err(bad("query and fragment are not allowed"));
-    }
-    if url.path().trim_end_matches('/') != CODEX_ROUTE_PATH {
-        return Err(bad("path must be exactly /codex/v1"));
-    }
-    Ok(url)
+    super::loopback::validate_loopback_base_url(raw, CODEX_ROUTE_PATH)
 }
 
 pub struct CodexClient {

@@ -1,8 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
+  CHATGPT_READINESS,
+  CLAUDE_READINESS,
   billingLabel,
   defaultChatGPTAlias,
   deriveChatGPTState,
+  deriveSubscriptionState,
+  gatewayProblem,
   type ChatGPTAccount,
   type ChatGPTStateInput,
   type GatewayStatus,
@@ -109,5 +113,33 @@ describe("defaultChatGPTAlias", () => {
   it("slugs the model id under a chatgpt_ prefix", () => {
     expect(defaultChatGPTAlias("gpt-5.6-sol")).toBe("chatgpt_gpt_5_6_sol");
     expect(defaultChatGPTAlias("  GPT-5.6 Mini  ")).toBe("chatgpt_gpt_5_6_mini");
+  });
+});
+
+describe("readiness is descriptor-driven", () => {
+  const claudeReady: GatewayStatus = {
+    installed: true,
+    running: true,
+    codex_hook: false,
+    credential_mode: "missing",
+    claude_credential_mode: "oauth",
+    compression: false,
+  };
+  it("Claude ignores the codex hook and codex credential, requires claudeCredential oauth", () => {
+    expect(gatewayProblem(claudeReady, CLAUDE_READINESS)).toBeNull();
+    expect(gatewayProblem({ ...claudeReady, claude_credential_mode: "missing" }, CLAUDE_READINESS)).toBe("credential-missing");
+    expect(gatewayProblem({ ...claudeReady, claude_credential_mode: null }, CLAUDE_READINESS)).toBe("credential-missing");
+    expect(gatewayProblem({ ...claudeReady, running: false }, CLAUDE_READINESS)).toBe("not-running");
+  });
+  it("ChatGPT still requires the hook and a chatgpt credential", () => {
+    expect(gatewayProblem(claudeReady, CHATGPT_READINESS)).toBe("hook-missing");
+    expect(gatewayProblem({ ...claudeReady, codex_hook: true }, CHATGPT_READINESS)).toBe("credential-missing");
+    expect(gatewayProblem({ ...claudeReady, codex_hook: true, credential_mode: "chatgpt" }, CHATGPT_READINESS)).toBeNull();
+  });
+  it("deriveChatGPTState is deriveSubscriptionState with the ChatGPT rule", () => {
+    const input = { ...base, gateway: claudeReady };
+    expect(deriveChatGPTState(input)).toEqual(deriveSubscriptionState(input, CHATGPT_READINESS));
+    expect(deriveSubscriptionState(input, CLAUDE_READINESS).kind).toBe("ready");
+    expect(deriveChatGPTState(input).kind).toBe("gateway-stopped");
   });
 });
