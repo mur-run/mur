@@ -1243,6 +1243,11 @@ pub enum ProjectAction {
         /// Force foreground execution even for large projects
         #[arg(long, conflicts_with = "background")]
         foreground: bool,
+        /// Index the main repository containing the current directory, following
+        /// a linked worktree back to its primary repo. Used by the post-commit
+        /// hook so the hook carries no hardcoded path.
+        #[arg(long, conflicts_with = "path")]
+        main_repo: bool,
     },
     /// Internal: spawned by `project index --background`. Not shown in help.
     #[command(hide = true)]

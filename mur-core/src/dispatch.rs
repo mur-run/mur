@@ -1495,13 +1495,14 @@ pub async fn run(cli: Cli) -> Result<()> {
                 quiet,
                 background,
                 foreground,
+                main_repo,
             } => {
                 let mode = match (background, foreground) {
                     (true, _) => cmd::project::BackgroundMode::ForceBackground,
                     (_, true) => cmd::project::BackgroundMode::ForceForeground,
                     (false, false) => cmd::project::BackgroundMode::Auto,
                 };
-                cmd::project::cmd_project_index(path, rebuild, quiet, mode).await?
+                cmd::project::cmd_project_index(path, main_repo, rebuild, quiet, mode).await?
             }
             ProjectAction::IndexWorker {
                 project_name,

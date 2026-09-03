@@ -248,13 +248,28 @@ pub fn do_project_list() -> Result<Vec<ProjectStatusInfo>> {
 
 pub(crate) async fn cmd_project_index(
     path: Option<String>,
+    main_repo: bool,
     rebuild: bool,
     quiet: bool,
     bg_mode: BackgroundMode,
 ) -> Result<()> {
-    let project_path = match &path {
-        Some(p) => expand_tilde(p),
-        None => std::env::current_dir()?,
+    let project_path = match (&path, main_repo) {
+        (Some(p), _) => expand_tilde(p),
+        // The post-commit hook runs with cwd inside whichever worktree committed.
+        // Hooks are shared across linked worktrees, and what should refresh is the
+        // main repo's index, not a per-worktree one — so resolve through git here
+        // instead of baking a path into the hook, where a renamed directory would
+        // strand it.
+        (None, true) => {
+            let cwd = std::env::current_dir()?;
+            crate::codebase::scanner::main_repo_root(&cwd).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--main-repo: {} is not inside a git repository",
+                    cwd.display()
+                )
+            })?
+        }
+        (None, false) => std::env::current_dir()?,
     };
     let project_path = project_path.canonicalize().unwrap_or(project_path);
 
