@@ -1,8 +1,8 @@
 # MUR Hub Claude Subscription — Design
 
-**Status:** Implemented (mur#1155, mur-model-gateway#12). Backend verified
-end-to-end on a real Claude subscription 2026-09-03; the Hub panel itself was
-not driven live (see the plan's Task 8 note) and rests on its unit tests.
+**Status:** Implemented (mur#1155, mur-model-gateway#12). Verified end-to-end
+on a real Claude subscription 2026-09-03, backend and Hub panel alike — see
+the plan's Task 8 record.
 
 Sibling of `2026-09-02-mur-hub-chatgpt-subscription-design.md`. Where this
 document says "same as ChatGPT", that design and its shipped code

@@ -2078,13 +2078,26 @@ cargo clippy --all-targets -- -D warnings
   (binary-level negative control); `mur model doctor` on the real registry
   flagged nothing new and left the valid entry alone; the token-name scan of
   `~/.mur/models.yaml`, agent profiles and the gateway logs found nothing.
-  **Not driven live:** the Hub panel steps (sign-in card, model list, add,
-  Disconnect). The Hub had to be rebuilt to contain the panel, and
-  computer-use wedged on its known "通知中心" frontmost-detector desync
+  **Hub panel, driven by the user and verified from its effects:**
+  computer-use could not drive it — it wedged on the known "通知中心"
+  frontmost-detector desync
   (`gotcha_computeruse_frontmost_wedged_notification_center`), which only a
-  human click clears. The panel's logic is covered by the UI tests; its live
-  run is the one open item.
-  Original sequence, for a later manual pass:
+  human click clears — so the user clicked and the run was checked against
+  the filesystem instead. The models.dev cache was written at 10:22:44 (the
+  list came from the catalog, not a `/v1/models` probe — and the gateway log
+  shows no panel traffic, which is what the design predicts, since the
+  account read is a subprocess and the list is a local file). `models.yaml`
+  was written at 10:23:46 and its final content is byte-identical to the
+  pre-run backup: `claude_disconnect` only saves when it removed something,
+  and it removes only entries that are both `provider: claude` and
+  `billing: subscription`, so a write ending in zero such entries proves the
+  add wrote them and the disconnect took them back out. Nothing else in the
+  registry changed. Reaching the panel's `ready` state at all requires
+  `account.logged_in`, which only `authMethod == "claude.ai"` produces, so
+  the add succeeding is itself proof the account read classified the login
+  correctly. Afterwards `claude auth status` still reported
+  `loggedIn: true` — Disconnect left the shared Claude Code login alone.
+  The sequence the user performed:
   1. Hub → Model Library → Add Provider → **Claude Subscription**. With
      Claude Code signed out, the panel shows the sign-in card; **Sign in
      with Claude** completes in the browser and the panel shows the email.
