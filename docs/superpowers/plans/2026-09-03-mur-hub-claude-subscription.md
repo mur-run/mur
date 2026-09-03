@@ -2034,7 +2034,7 @@ models:
 
 **Steps**
 
-- [ ] Run the complete automated gates from the `mur` worktree:
+- [x] Run the complete automated gates from the `mur` worktree:
 
 ```text
 cargo nextest run -p mur-common -p mur-agent-runtime -p mur-core
@@ -2050,7 +2050,7 @@ cd mur-hub-gui/ui && npm test && npm run lint && npm run build
   in-process parallelism — a pre-existing flake documented in the ChatGPT
   plan's handoff.)
 
-- [ ] Run the complete gateway gates from the gateway worktree:
+- [x] Run the complete gateway gates from the gateway worktree:
 
 ```text
 cargo test
@@ -2058,14 +2058,46 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 ```
 
-- [ ] Merge the gateway PR from Task 1 and update the local gateway
+- [x] Merge the gateway PR from Task 1 and update the local gateway
   (`brew upgrade mur-model-gateway` or rebuild + `mur-model-gateway install`
   + relaunch). Confirm with
   `curl -s http://127.0.0.1:8088/__mur/health` that `claudeCredential` is
   present.
 
-- [ ] Acceptance, with a real Claude subscription (the user's own login;
-  each step is done by the user or with their explicit go-ahead):
+- [x] Acceptance, with a real Claude subscription, 2026-09-03. **Verified
+  live:** `claude auth status --json` returns exactly the parsed shape
+  (`loggedIn: true`, `authMethod: "claude.ai"`, `email`); the rebuilt gateway
+  reports `claudeCredential: "oauth"`; a disposable agent on a
+  `provider: claude` entry completed a turn, and the gateway logged
+  `path=/v1/messages provider=Anthropic disguise=true status=200` 3 ms before
+  the turn's `completedAt` (no `?beta=true`, which distinguishes it from the
+  machine's own Claude Code traffic); flipping that entry's `base_url` to
+  `https://api.anthropic.com/v1` produced `rejected: scheme must be http
+  (loopback only)` at build time, so the request never left the machine; the
+  old installed runtime lacks the `claude` arm and the new one has it
+  (binary-level negative control); `mur model doctor` on the real registry
+  flagged nothing new and left the valid entry alone; the token-name scan of
+  `~/.mur/models.yaml`, agent profiles and the gateway logs found nothing.
+  **Hub panel, driven by the user and verified from its effects:**
+  computer-use could not drive it — it wedged on the known "通知中心"
+  frontmost-detector desync
+  (`gotcha_computeruse_frontmost_wedged_notification_center`), which only a
+  human click clears — so the user clicked and the run was checked against
+  the filesystem instead. The models.dev cache was written at 10:22:44 (the
+  list came from the catalog, not a `/v1/models` probe — and the gateway log
+  shows no panel traffic, which is what the design predicts, since the
+  account read is a subprocess and the list is a local file). `models.yaml`
+  was written at 10:23:46 and its final content is byte-identical to the
+  pre-run backup: `claude_disconnect` only saves when it removed something,
+  and it removes only entries that are both `provider: claude` and
+  `billing: subscription`, so a write ending in zero such entries proves the
+  add wrote them and the disconnect took them back out. Nothing else in the
+  registry changed. Reaching the panel's `ready` state at all requires
+  `account.logged_in`, which only `authMethod == "claude.ai"` produces, so
+  the add succeeding is itself proof the account read classified the login
+  correctly. Afterwards `claude auth status` still reported
+  `loggedIn: true` — Disconnect left the shared Claude Code login alone.
+  The sequence the user performed:
   1. Hub → Model Library → Add Provider → **Claude Subscription**. With
      Claude Code signed out, the panel shows the sign-in card; **Sign in
      with Claude** completes in the browser and the panel shows the email.
@@ -2080,7 +2112,7 @@ cargo clippy --all-targets -- -D warnings
   6. **Sign out of Claude** (confirm); the remaining entries show unhealthy;
      sign back in.
 
-- [ ] Search generated configuration and logs by key names, not token values:
+- [x] Search generated configuration and logs by key names, not token values:
 
 ```text
 rg -n "sk-ant-oat|accessToken|refreshToken|ANTHROPIC_API_KEY" \
@@ -2090,19 +2122,19 @@ rg -n "sk-ant-oat|accessToken|refreshToken|ANTHROPIC_API_KEY" \
 
   Expected: no matches.
 
-- [ ] Update the design status to `Implemented` only after the real
+- [x] Update the design status to `Implemented` only after the real
   end-to-end turn succeeds. Commit:
   `git add docs/superpowers/specs/2026-09-03-mur-hub-claude-subscription-design.md`
   and the ticked plan, then
   `git commit -m "docs(hub): mark Claude subscription design implemented"`.
 
-- [ ] Open the `mur` PR against `main`; after merge, update the docs site
+- [x] Open the `mur` PR against `main`; after merge, update the docs site
   and product page in `mur-server` (a `## Claude Subscription` section on
   `docs-content/model-gateway.md` and one feature card) via the
   `update-docs` skill — a separate PR that publishes to app.mur.run and is
   never auto-merged.
 
-- [ ] Run `git status --short` in both worktrees. Expected: empty. Record
+- [x] Run `git status --short` in both worktrees. Expected: empty. Record
   the exact successful commands and commit IDs in the handoff.
 
 ## Spec coverage map
