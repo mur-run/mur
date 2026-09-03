@@ -34,7 +34,7 @@
 //! to vendor silently.
 
 use anyhow::{Context, Result, bail};
-use mur_common::agent::{McpPackagePin, McpServerEntry};
+use mur_common::agent::{AgentProfile, McpPackagePin, McpServerEntry};
 use std::path::{Path, PathBuf};
 
 /// Where MUR keeps vendored MCP packages for `agent`/`server`.
@@ -458,6 +458,36 @@ pub fn vendor_entry(
     Ok(dir)
 }
 
+/// Grant the profile what the *rewritten* entry needs in order to launch:
+/// the new interpreter in the spawn allowlist, and read on the install dir.
+///
+/// `mcp add` already syncs the spawn allowlist, because the sandbox launches
+/// only from it. Vendoring REPLACES that command (`npx <pkg>` becomes
+/// `node <script>`) and puts the script somewhere the agent has never been
+/// granted, so it has to sync both halves or the entry it just wrote can
+/// never start.
+///
+/// The install dir needs its own narrow grant: a read grant broad enough to
+/// cover `~/.mur` also reaches the credential store, and such a grant is
+/// dropped whole rather than carved (`sandbox::linux::partition_read_grants`
+/// — Landlock has no deny rule). So the wide grant a user is most likely to
+/// already have is exactly the one that does not help here.
+///
+/// Both failures surface only as `Operation not permitted` (blocked exec) or
+/// `exited before replying` (spawned, could not read its own script) — the
+/// runtime never gets to say "permission", which is why this must not be left
+/// to the operator.
+fn sync_launch_entitlements(profile: &mut AgentProfile, command: &str, install_dir: &Path) {
+    let ent = &mut profile.entitlements;
+    if !ent.processes.spawn.allowed.iter().any(|a| a == command) {
+        ent.processes.spawn.allowed.push(command.to_string());
+    }
+    let dir = install_dir.display().to_string();
+    if !ent.filesystem.read.iter().any(|p| p == &dir) {
+        ent.filesystem.read.push(dir);
+    }
+}
+
 /// `mur agent mcp vendor <agent> <server> [--version V] [--force]`
 pub fn cmd_mcp_vendor(
     agent: &str,
@@ -520,12 +550,18 @@ pub fn cmd_mcp_vendor(
 
     let dir = vendor_entry(entry, &mur_home, agent, &spec.name, &version)?;
     let pin = entry.package.clone().expect("set by vendor_entry");
+    let launch_command = entry.command.clone();
+    sync_launch_entitlements(&mut profile, &launch_command, &dir);
     crate::cmd::agent::save_profile(&path, &mut profile)?;
 
     println!("Vendored `{server_id}` for agent `{agent}`:");
     println!("  installed:   {}@{version}", pin.name);
     println!("  directory:   {}", dir.display());
     println!("  lockfile:    sha256:{}", pin.lockfile_sha256);
+    println!(
+        "  granted:     spawn `{launch_command}`, read {}",
+        dir.display()
+    );
     // These two lines describe npm-specific checks. Printing npm's wording for
     // a PyPI install would state things that never happened — "not audited
     // (npm too old, or offline)" when npm was never involved, and "none
@@ -557,6 +593,60 @@ pub fn cmd_mcp_vendor(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Vendoring rewrote the launch command and moved the script; a profile
+    /// that does not carry both grants produces an entry that cannot start.
+    #[test]
+    fn vendoring_grants_the_interpreter_and_the_install_dir() {
+        let mut p = AgentProfile::default_for_tests();
+        let dir = Path::new("/home/u/.mur/mcp-packages/a1/dc");
+        sync_launch_entitlements(&mut p, "node", dir);
+        assert!(
+            p.entitlements
+                .processes
+                .spawn
+                .allowed
+                .iter()
+                .any(|a| a == "node")
+        );
+        assert!(
+            p.entitlements
+                .filesystem
+                .read
+                .iter()
+                .any(|r| r == "/home/u/.mur/mcp-packages/a1/dc"),
+        );
+    }
+
+    /// Re-vendoring the same server must not grow the lists.
+    #[test]
+    fn syncing_twice_is_idempotent() {
+        let mut p = AgentProfile::default_for_tests();
+        let dir = Path::new("/home/u/.mur/mcp-packages/a1/dc");
+        sync_launch_entitlements(&mut p, "node", dir);
+        let spawn = p.entitlements.processes.spawn.allowed.len();
+        let read = p.entitlements.filesystem.read.len();
+        sync_launch_entitlements(&mut p, "node", dir);
+        assert_eq!(p.entitlements.processes.spawn.allowed.len(), spawn);
+        assert_eq!(p.entitlements.filesystem.read.len(), read);
+    }
+
+    /// An existing ANCESTOR grant is not a substitute: a read grant that
+    /// reaches the credential store is dropped whole by the sandbox, so the
+    /// narrow path must be added even when a wider one is already listed.
+    #[test]
+    fn an_ancestor_grant_does_not_stand_in_for_the_install_dir() {
+        let mut p = AgentProfile::default_for_tests();
+        p.entitlements.filesystem.read.push("/home/u/.mur".into());
+        sync_launch_entitlements(&mut p, "node", Path::new("/home/u/.mur/mcp-packages/a1/dc"));
+        assert!(
+            p.entitlements
+                .filesystem
+                .read
+                .iter()
+                .any(|r| r == "/home/u/.mur/mcp-packages/a1/dc"),
+        );
+    }
 
     fn write_pkg(dir: &Path, name: &str, bin: serde_json::Value) {
         let p = dir.join("node_modules").join(name);
