@@ -11,6 +11,31 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::Mutex;
 
+/// How much of a dead child's stderr to read back, and how many of its trailing
+/// lines to quote. A crashing server can have written megabytes; the failure
+/// reason is almost always in the last handful of lines.
+const STDERR_TAIL_BYTES: u64 = 8 * 1024;
+const STDERR_TAIL_LINES: usize = 5;
+
+/// Last non-empty lines of a child's stderr, joined for a single-line error.
+/// `None` when the child said nothing, so the caller can omit the clause
+/// entirely rather than print an empty one.
+fn tail_lines(raw: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(raw);
+    let mut lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .rev()
+        .take(STDERR_TAIL_LINES)
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    lines.reverse();
+    Some(lines.join(" | "))
+}
+
 /// Stdio (subprocess) MCP transport.
 pub struct StdioMcpClient {
     /// Raw std child — used for kill/wait in `shutdown`.
@@ -271,6 +296,27 @@ impl StdioMcpClient {
         self.stderr.lock().await.take()
     }
 
+    /// The last few lines the child wrote to stderr, consumed once.
+    ///
+    /// Only called after the child has exited: its write end is closed, so the
+    /// read hits EOF instead of blocking. This is the operator's ONLY chance to
+    /// see why it died during the handshake — the pool starts draining stderr
+    /// *after* `initialize` succeeds, so a server killed by a sandbox EPERM on
+    /// startup had its stderr discarded entirely, leaving an exit status that
+    /// looks identical to a genuine crash (#1161).
+    async fn stderr_tail(&self) -> Option<String> {
+        let mut pipe = self.stderr.lock().await.take()?;
+        let raw = tokio::task::spawn_blocking(move || {
+            use std::io::Read;
+            let mut buf = Vec::new();
+            let _ = pipe.by_ref().take(STDERR_TAIL_BYTES).read_to_end(&mut buf);
+            buf
+        })
+        .await
+        .ok()?;
+        tail_lines(&raw)
+    }
+
     /// Send a JSON-RPC *notification* (no `id`, no response expected).
     /// Used for the MCP lifecycle `notifications/initialized` handshake step.
     async fn notify(&self, method: &str, params: Value) -> Result<(), McpError> {
@@ -294,10 +340,16 @@ impl StdioMcpClient {
             child.try_wait()
         };
         match status {
-            Ok(Some(st)) => McpError::Server(format!(
-                "mcp server `{}` exited before replying ({st})",
-                self.server_name
-            )),
+            Ok(Some(st)) => {
+                let mut msg = format!(
+                    "mcp server `{}` exited before replying ({st})",
+                    self.server_name
+                );
+                if let Some(tail) = self.stderr_tail().await {
+                    msg.push_str(&format!("; stderr: {tail}"));
+                }
+                McpError::Server(msg)
+            }
             // Still alive, or we cannot tell — say so rather than implying an exit.
             Ok(None) => McpError::StreamClosed,
             Err(e) => McpError::Server(format!(
@@ -441,6 +493,27 @@ mod tests {
     use super::*;
     use mur_common::agent::{McpNetMode, McpServerNetwork};
     use std::collections::HashMap;
+
+    #[test]
+    fn stderr_tail_quotes_the_last_lines_and_nothing_when_silent() {
+        // The line that went missing in practice: a sandbox EPERM on the state
+        // dir the server writes at startup. It exits 1; without this the error
+        // is indistinguishable from a genuine crash (#1161).
+        let raw = b"boot\n\nEACCES: permission denied, mkdir '/Users/d/.claude-server-commander'\n";
+        let tail = tail_lines(raw).unwrap();
+        assert!(tail.contains("EACCES"));
+        assert!(!tail.contains("\n"), "must stay one line: {tail}");
+        assert!(!tail.contains(" |  |"), "blank lines dropped, not joined");
+
+        // Only the trailing window survives, in original order.
+        let many: Vec<String> = (1..=20).map(|i| format!("line{i}")).collect();
+        let tail = tail_lines(many.join("\n").as_bytes()).unwrap();
+        assert_eq!(tail, "line16 | line17 | line18 | line19 | line20");
+
+        // A silent child gets no clause at all.
+        assert!(tail_lines(b"").is_none());
+        assert!(tail_lines(b"\n  \n").is_none());
+    }
 
     #[test]
     fn proxy_env_only_for_restricted_servers() {
