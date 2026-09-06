@@ -1,19 +1,3 @@
-/* ── Fleet surface layout ───────────────────────────────────────────────── */
-
-.fleet-view {
-  display: grid;
-  grid-template-columns: 220px 1fr;
-  height: 100%;
-  overflow: hidden;
-}
-
-.fleet-view__main {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 20px 24px;
-}
 
 .fleet-view__empty {
   display: grid;
@@ -21,42 +5,6 @@
   height: 100%;
   color: var(--text-tertiary);
   font-size: 13px;
-}
-
-/* ── Fleet rail ─────────────────────────────────────────────────────────── */
-
-.fleet-rail {
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid var(--border-line);
-  overflow: hidden;
-}
-
-.fleet-rail__new {
-  margin: 10px 8px 6px;
-  flex: none;
-}
-
-.fleet-rail__list {
-  flex: 1;
-  overflow-y: auto;
-  list-style: none;
-  margin: 0;
-  padding: 0 8px 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-/* ── Label chips + groups ───────────────────────────────────────────────── */
-
-.fleet-rail__chips,
-.fleet-labels {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 4px 8px 8px;
-  flex: none;
 }
 
 .fleet-labels {
@@ -90,50 +38,9 @@
   font-weight: 600;
 }
 
-.fleet-chip__count,
-.fleet-rail__group-count {
-  font-size: 10px;
-  color: var(--text-tertiary);
-  font-variant-numeric: tabular-nums;
-}
-
 .fleet-chip__pin {
   font-size: 9px;
   line-height: 1;
-}
-
-.fleet-rail__group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.fleet-rail__group-title {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 10px 10px 4px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
-}
-
-.fleet-rail__group-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex: none;
-}
-
-.fleet-rail__group-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
 }
 
 .fleet-labels__empty,
@@ -152,122 +59,6 @@
 .fleet-labels__new input {
   flex: 1;
   min-width: 0;
-}
-
-.fleet-rail__empty {
-  padding: 16px 12px;
-  font-size: 12px;
-  color: var(--text-tertiary);
-  text-align: center;
-}
-
-.fleet-rail__item {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  width: 100%;
-  padding: 8px 10px;
-  border: none;
-  border-radius: var(--radius-md, 8px);
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.12s;
-}
-
-.fleet-rail__item:hover {
-  background: var(--surface-hover, rgba(255,255,255,0.05));
-}
-
-.fleet-rail__item.is-selected {
-  background: var(--color-brand-soft, rgba(99,102,241,0.14));
-}
-
-.fleet-rail__row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.fleet-rail__name {
-  flex: 1;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.fleet-rail__meta {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.fleet-rail__jobs-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--color-brand, #6366f1);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-  flex: none;
-}
-
-/* ── Status dot ─────────────────────────────────────────────────────────── */
-
-
-
-/* ── Fleet detail panel ─────────────────────────────────────────────────── */
-
-.fleet-detail__header {
-  margin-bottom: 16px;
-}
-
-.fleet-detail__title-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-
-.fleet-detail__title {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-
-
-.fleet-detail__goal {
-  font-size: 12px;
-  color: var(--text-secondary);
-  line-height: 1.5;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  margin-bottom: 6px;
-}
-
-.fleet-detail__router {
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-
-.fleet-detail__actions {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-bottom: 20px;
 }
 
 /* ── Sections ───────────────────────────────────────────────────────────── */
@@ -523,13 +314,6 @@
 
 .fleet-jobs__more:hover { text-decoration: underline; }
 
-/* ── Detail action layout ────────────────────────────────────────────────── */
-
-.fleet-detail__run { margin-bottom: 12px; }
-.fleet-detail__run .toolbar-btn { padding: 8px 16px; font-size: 13px; font-weight: 600; }
-
-.fleet-detail__mgmt { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
-
 /* ── Danger Zone ─────────────────────────────────────────────────────────── */
 
 .fleet-detail__danger {
@@ -658,21 +442,6 @@
   border-radius: 10px;
 }
 
-.fleet-detail__worktree-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-bottom: 8px;
-  cursor: pointer;
-}
-
-.fleet-detail__run-buttons {
-  display: flex;
-  gap: 6px;
-}
-
 .fleet-detail__loop-row {
   display: flex;
   gap: 6px;
@@ -684,3 +453,26 @@
   font-size: 12px;
   padding: 6px 8px;
 }
+
+/* ── Master–detail fleet page (spec §4.4) ────────────────────────────── */
+.fleet-view__empty { display: grid; place-items: center; height: 100%; color: var(--text-tertiary); font-size: 13px; }
+.fleet-avatar { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius-md); background: var(--surface-secondary); color: var(--text-secondary); }
+.fleet-avatar--lg { width: 48px; height: 48px; border-radius: var(--radius-lg); }
+.fleet-avatar--lg svg { width: 24px; height: 24px; }
+.fleet-goal { margin: 0; font-size: 13.5px; line-height: 1.55; max-width: 62ch; }
+.fleet-popover {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 20; min-width: 420px;
+  background: var(--surface-card); border: 1px solid var(--border-line); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-pop); padding: var(--space-5);
+}
+.fleet-popover .fleet-detail__loop-row, .fleet-popover .fleet-send { display: flex; gap: 8px; align-items: center; }
+.fleet-popover input { flex: 1; min-width: 0; }
+.fleet-overview__members { display: flex; flex-wrap: wrap; gap: 8px; }
+.fleet-overview__member {
+  display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px 5px 6px; border-radius: var(--radius-md);
+  background: var(--surface-secondary); font-size: var(--text-sm);
+}
+.fleet-overview__member i { font-style: normal; color: var(--text-tertiary); font-size: var(--text-xs); }
+.fleet-overview__initial { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; background: var(--status-idle); color: #fff; font-size: 11px; font-weight: 600; }
+.fleet-overview__add { padding: 5px 10px; border-radius: var(--radius-md); border: 1px dashed var(--border-line); background: transparent; color: var(--text-secondary); font: inherit; font-size: var(--text-sm); cursor: pointer; }
+.fleet-overview__job { grid-template-columns: 80px 1fr auto; }
