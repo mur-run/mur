@@ -140,3 +140,14 @@
   content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: var(--border-line);
 }
 .list-divider:hover::after, .list-divider:active::after { width: 2px; background: var(--color-brand); }
+
+/* ── Sidebar search → command palette (spec §3.3) ────────────────────── */
+.shell-sidebar__search {
+  display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px; margin: 0 2px;
+  border-radius: var(--radius-sm); border: 1px solid var(--border-line-subtle);
+  background: var(--surface-secondary); color: var(--text-tertiary); font: inherit; font-size: 12px; cursor: pointer;
+}
+.shell-sidebar__search:hover { color: var(--text-secondary); }
+.shell-sidebar__kbd { margin-left: auto; font: 11px var(--font-mono); }
+.shell-sidebar--collapsed .shell-sidebar__search { justify-content: center; padding: 0; width: 40px; margin: 0 auto; }
+.shell-sidebar--collapsed .shell-sidebar__kbd { display: none; }

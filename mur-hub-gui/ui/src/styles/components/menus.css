@@ -1,0 +1,19 @@
+/* SplitButton / OverflowMenu (spec §4.6). */
+.split { position: relative; display: inline-flex; }
+.split__main { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.split__more {
+  width: 26px; padding: 0; justify-content: center; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-left: 1px solid color-mix(in srgb, var(--text-on-brand) 28%, transparent);
+}
+.btn--icon { width: 28px; padding: 0; justify-content: center; }
+.menu {
+  position: absolute; top: calc(100% + 4px); right: 0; min-width: 180px; margin: 0; padding: 4px; list-style: none;
+  background: var(--surface-card); border: 1px solid var(--border-line); border-radius: var(--radius-md); box-shadow: var(--shadow-pop); z-index: 20;
+}
+.menu__item {
+  display: block; width: 100%; text-align: left; padding: 7px 10px; border: 0; background: none; border-radius: var(--radius-sm);
+  font: inherit; font-size: 13px; color: var(--text-primary); cursor: pointer;
+}
+.menu__item:hover:not(:disabled) { background: var(--surface-hover); }
+.menu__item:disabled { color: var(--text-tertiary); cursor: default; }
+.menu__item--danger { color: var(--status-failed); }
