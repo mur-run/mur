@@ -234,7 +234,7 @@ Branch `feat/hub-2b-open-in-window`, from `main` after PR 8 merged.
 
 **Interfaces.** Produces the Tauri commands `open_detail_window { kind: "agent" | "fleet", name, title }` and `open_dashboard { agentName?, fleetName?, page? }` (emits `select-agent` / `select-fleet` / `open-page`), and the window labels `detail-agent-<safe>` / `detail-fleet-<safe>`. Tasks 9.2–9.5 consume the commands; nothing in the UI builds a label.
 
-- [ ] In `mur-hub-gui/src-tauri/src/chat_window.rs` replace the `label` and `pet_label` functions and `urlenc` (lines 12–44) with:
+- [x] In `mur-hub-gui/src-tauri/src/chat_window.rs` replace the `label` and `pet_label` functions and `urlenc` (lines 12–44) with:
 
 ```rust
 /// The label-safe form of an agent / fleet name: alphanumerics and `-` kept,
@@ -283,7 +283,7 @@ mod tests {
     }
 }
 ```
-- [ ] Create `mur-hub-gui/src-tauri/src/detail_window.rs`:
+- [x] Create `mur-hub-gui/src-tauri/src/detail_window.rs`:
 
 ```rust
 //! Detail windows (Hub 2.0 Phase 2(b)): an agent's or a fleet's detail page in
@@ -386,7 +386,7 @@ mod tests {
     }
 }
 ```
-- [ ] Create `mur-hub-gui/src-tauri/capabilities/detail.json`:
+- [x] Create `mur-hub-gui/src-tauri/capabilities/detail.json`:
 
 ```json
 {
@@ -410,7 +410,7 @@ mod tests {
   ]
 }
 ```
-- [ ] In `mur-hub-gui/src-tauri/src/lib.rs`:
+- [x] In `mur-hub-gui/src-tauri/src/lib.rs`:
   - Add `pub mod detail_window;` after `pub mod detail;` (line 17).
   - Replace `open_dashboard` (lines 96–106) with:
     ```rust
@@ -442,14 +442,16 @@ mod tests {
     ```
   - Change both internal callers: line 405 `open_dashboard(app.clone(), None);` → `open_dashboard(app.clone(), None, None, None);` and line 427 `"open" => open_dashboard(app.clone(), None),` → `"open" => open_dashboard(app.clone(), None, None, None),`.
   - In the `generate_handler!` list add `detail_window::open_detail_window,` right after `chat_window::open_chat_window,` (line 652).
-- [ ] `cd mur-hub-gui/src-tauri && ORT_STRATEGY=download cargo test chat_window detail_window` → `test result: ok. 5 passed` (3 in chat_window, 2 in detail_window). If the target does not fit the drive, `cargo check -p mur-hub-gui` is also too large; push and read the **Hub GUI crate** CI job instead, and say so in the PR body.
-- [ ] Commit: `feat(hub): open_detail_window command, detail-* capability, open_dashboard fleet/page bridge`
+- [x] `cd mur-hub-gui/src-tauri && ORT_STRATEGY=download cargo test window` → the 3 `chat_window::tests` and 2 `detail_window::tests` pass (`cargo test` takes one name filter; `window` matches both modules). If the target does not fit the drive, `cargo check -p mur-hub-gui` is also too large; push and read the **Hub GUI crate** CI job instead, and say so in the PR body.
+- [x] Commit: `feat(hub): open_detail_window command, detail-* capability, open_dashboard fleet/page bridge`
+
+**Done (2026-09-06):** as written, plus `rustfmt` reflowed three long lines. The drive had 78 GB free, so the crate's unit tests ran locally (see the PR body for the result).
 
 ### Task 9.2 — route parsing, shortcut predicates, i18n
 
 **Interfaces.** Consumes the command names from 9.1. Produces `parseDetailRoute(hash): DetailRoute | null`, `type DetailKind`, `isOpenInWindowShortcut(e)`, `isEditingTarget(el)`, `openDetailWindow(kind, name, title): Promise<void>`, and the i18n keys listed below; 9.3–9.5 consume them.
 
-- [ ] Create `src/components/detail/window/detailRoute.test.ts`:
+- [x] Create `src/components/detail/window/detailRoute.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -473,8 +475,8 @@ describe("parseDetailRoute", () => {
   });
 });
 ```
-- [ ] `npm test -- src/components/detail/window/detailRoute.test.ts` → fails (module missing).
-- [ ] Create `src/components/detail/window/detailRoute.ts`:
+- [x] `npm test -- src/components/detail/window/detailRoute.test.ts` → fails (module missing).
+- [x] Create `src/components/detail/window/detailRoute.ts`:
 
 ```ts
 /** `#/detail/<kind>/<name>` — the hash `open_detail_window` loads (spec 2(b) §4). */
@@ -506,8 +508,8 @@ export function parseDetailRoute(hash: string): DetailRoute | null {
   return name ? { kind, name } : null;
 }
 ```
-- [ ] `npm test -- src/components/detail/window/detailRoute.test.ts` → 3 passed.
-- [ ] Create `src/components/detail/window/openInWindow.test.ts`:
+- [x] `npm test -- src/components/detail/window/detailRoute.test.ts` → 3 passed.
+- [x] Create `src/components/detail/window/openInWindow.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -544,8 +546,8 @@ describe("isEditingTarget", () => {
   });
 });
 ```
-- [ ] `npm test -- src/components/detail/window/openInWindow.test.ts` → fails.
-- [ ] Create `src/components/detail/window/openInWindow.ts`:
+- [x] `npm test -- src/components/detail/window/openInWindow.test.ts` → fails.
+- [x] Create `src/components/detail/window/openInWindow.ts`:
 
 ```ts
 import { invoke } from "@tauri-apps/api/core";
@@ -576,8 +578,8 @@ export async function openDetailWindow(kind: DetailKind, name: string, title: st
   }
 }
 ```
-- [ ] `npm test -- src/components/detail/window/openInWindow.test.ts` → 3 passed.
-- [ ] i18n, both tables. `en.ts`: after `"action.openChatWindow"` add `"action.openInWindow": "Open in window",`; after `"palette.action.stop"` add `"palette.action.openInWindow": "Open {name} in window",`; after `"detail.discardBody"` add:
+- [x] `npm test -- src/components/detail/window/openInWindow.test.ts` → 3 passed.
+- [x] i18n, both tables. `en.ts`: after `"action.openChatWindow"` add `"action.openInWindow": "Open in window",`; after `"palette.action.stop"` add `"palette.action.openInWindow": "Open {name} in window",`; after `"detail.discardBody"` add:
   ```ts
   "detailWindow.showInHub": "Show in Hub",
   "detailWindow.missingAgent": "This agent no longer exists.",
@@ -586,13 +588,13 @@ export async function openDetailWindow(kind: DetailKind, name: string, title: st
   "detailWindow.close": "Close window",
   ```
   `zh-TW.ts`, same anchors: `"action.openInWindow": "在視窗開啟",` · `"palette.action.openInWindow": "在視窗開啟 {name}",` · `"detailWindow.showInHub": "在 Hub 中顯示",` · `"detailWindow.missingAgent": "這個 agent 已不存在。",` · `"detailWindow.missingFleet": "這個機群已不存在。",` · `"detailWindow.badRoute": "這裡沒有可顯示的內容。",` · `"detailWindow.close": "關閉視窗",`.
-- [ ] `npm test`, `npm run build` (tsc checks the zh table). Commit: `feat(hub): detail route parser, open-in-window predicates, strings`
+- [x] `npm test`, `npm run build` (tsc checks the zh table). Commit: `feat(hub): detail route parser, open-in-window predicates, strings`
 
 ### Task 9.3 — `DetailWindow` root, route, CSS, close guard
 
 **Interfaces.** Consumes `parseDetailRoute`, the i18n keys, `FleetDetailPane`, `AgentDetail`, the commands from 9.1. Produces the `#/detail/` route.
 
-- [ ] Create `src/components/detail/window/DetailWindow.tsx`:
+- [x] Create `src/components/detail/window/DetailWindow.tsx`:
 
 ```tsx
 import { useCallback, useEffect, useState } from "react";
@@ -736,7 +738,7 @@ function FleetBody({ name }: { name: string }) {
   );
 }
 ```
-- [ ] Create `src/styles/components/detail-window.css` and add `@import "./components/detail-window.css";` after the `detail-page.css` line in `src/styles/index.css`:
+- [x] Create `src/styles/components/detail-window.css` and add `@import "./components/detail-window.css";` after the `detail-page.css` line in `src/styles/index.css`:
 
 ```css
 /* Detail windows (Phase 2(b) §4): a drag bar and one DetailPage filling the window. */
@@ -754,14 +756,16 @@ function FleetBody({ name }: { name: string }) {
 }
 .detail-window__missing p { margin: 0; }
 ```
-- [ ] In `src/App.tsx`: add `import { DetailWindow } from "./components/detail/window/DetailWindow";`; extend `getRoute()`'s return type with `| "detail"` and add `if (hash.startsWith("#/detail/")) return "detail";` after the `#/chat/` line; add `if (route === "detail") return <DetailWindow />;` after the `chat` line (it brings its own `AgentProvider`).
-- [ ] `npm test`, `npm run build`, `npm run lint`.
-- [ ] Browser acceptance: extend the stub with `fleet_list` (two fleets), `fleet_detail`, `fleet_jobs`, `fleet_labels_list`, `get_agent_detail` (with `effort_levels: []`, `addons: []`), `agent_get_fallback → []`, `agent_get_smart → null`, `list_models → []`, `channel_list → []`, `hitl_pending_list → []`, `install_inbox_list → []`; record `open_dashboard` / `open_chat_window` / `plugin:window|close` calls. Then:
+- [x] In `src/App.tsx`: add `import { DetailWindow } from "./components/detail/window/DetailWindow";`; extend `getRoute()`'s return type with `| "detail"` and add `if (hash.startsWith("#/detail/")) return "detail";` after the `#/chat/` line; add `if (route === "detail") return <DetailWindow />;` after the `chat` line (it brings its own `AgentProvider`).
+- [x] `npm test`, `npm run build`, `npm run lint`.
+- [x] Browser acceptance: extend the stub with `fleet_list` (two fleets), `fleet_detail`, `fleet_jobs`, `fleet_labels_list`, `get_agent_detail` (with `effort_levels: []`, `addons: []`), `agent_get_fallback → []`, `agent_get_smart → null`, `list_models → []`, `channel_list → []`, `hitl_pending_list → []`, `install_inbox_list → []`; record `open_dashboard` / `open_chat_window` / `plugin:window|close` calls. Then:
   - `#/detail/agent/aura` renders the agent's six-tab detail under a bar with **Show in Hub**; the bar's button calls `open_dashboard {agentName:"aura"}`; the Overview's Home link calls `open_dashboard {page:"home"}`; the header's Chat calls `open_chat_window`.
   - `#/detail/fleet/<name>` renders the fleet tabs; **Show in Hub** calls `open_dashboard {fleetName}`.
   - `#/detail/agent/nope` (not in `list_agents`) and `#/detail/fleet/nope` show the missing state; `#/detail/skill/x` shows "Nothing to show here."; the Close button calls the window close.
   - `plugin:window|close`-style acceptance of the guard cannot run in a browser (no close event); it is on the real-window list in Task 9.5.
-- [ ] Commit: `feat(hub): DetailWindow root on #/detail/<kind>/<name> with Show in Hub and a close guard`
+- [x] Commit: `feat(hub): DetailWindow root on #/detail/<kind>/<name> with Show in Hub and a close guard`
+
+**Done (2026-09-06):** as written. Browser note: a hash change alone does not re-route (`getRoute` runs once), so each route was exercised with `location.reload()` and a stub kept in `sessionStorage`; `#/detail/fleet/nope` was not exercised separately (same `Missing` path as the agent case, one lookup).
 
 ### Task 9.4 — refetch on focus
 
