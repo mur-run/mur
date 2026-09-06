@@ -24,6 +24,7 @@ Copied from the spec and `CLAUDE.md`. Every task includes all of them.
 4. No editing in this PR: no Tauri command writes a profile, the UI has no inputs.
 5. Brand name is uppercase **MUR** in every user-visible string.
 6. Single source file ≤ 800 lines. `perm.rs` is 859 today and must end ≤ 800; `detail-panel.css` (880) is not touched — new CSS goes in a new file.
+   **Executed deviation (Task 1):** extracting only the derivation left `perm.rs` at 843. The two text renderers and their 8 tests moved into `perm_view.rs` too — pure movement, no text change, tests unedited. Result: `perm.rs` 513, `perm_view.rs` 711. The plan's "both stay in `perm.rs`" no longer holds; `perm.rs` calls `super::perm_view::{outbound_picture, paths_picture}`.
 7. Every new user-visible string lands in both `src/i18n/en.ts` and `src/i18n/zh-TW.ts` in the same commit.
 8. Components reference only semantic tokens (`--status-attention`, `--status-running`, `--text-secondary`, …; note `--status-ok` is NOT a token — `wizard.css` uses it with a fallback, which is the anti-pattern); no raw hex in component CSS or TSX.
 9. Tests never touch the DOM: pure functions only.
@@ -93,7 +94,7 @@ pub fn permissions_view(profile: &AgentProfile, lock: Option<&LockFile>) -> Perm
 
 The spec's `bounded_by_allow_hosts: bool` is expressed as `scope: McpScope`: that boolean is false for *every* server (no MCP server is ever bounded by the agent's `allow_hosts`), so a column of it says nothing. `Unbounded` is the `inherit` case the UI must call out.
 
-- [ ] Create `mur-core/src/cmd/agent/perm_view.rs`:
+- [x] Create `mur-core/src/cmd/agent/perm_view.rs`:
   ```rust
   //! The one derivation of "what may this agent reach, and is that enforced".
   //!
@@ -473,9 +474,9 @@ The spec's `bounded_by_allow_hosts: bool` is expressed as `scope: McpScope`: tha
       }
   }
   ```
-- [ ] `mur-core/src/cmd/agent/mod.rs`: after line 51 (`mod perm;`) add `pub mod perm_view;`.
-- [ ] Run: `set -o pipefail; RUST_MIN_STACK=33554432 cargo nextest run -p mur-core --lib cmd::agent::perm_view 2>&1 | tail -n 20` → expect `5 tests run: 5 passed`.
-- [ ] `mur-core/src/cmd/agent/perm.rs`: replace the body of `outbound_picture` (lines 47–128) so it renders from the view. Delete the `use mur_common::agent::{McpNetMode, NetworkOutboundMode};` line inside it and write:
+- [x] `mur-core/src/cmd/agent/mod.rs`: after line 51 (`mod perm;`) add `pub mod perm_view;`.
+- [x] Run: `set -o pipefail; RUST_MIN_STACK=33554432 cargo nextest run -p mur-core --lib cmd::agent::perm_view 2>&1 | tail -n 20` → expect `5 tests run: 5 passed`.
+- [x] `mur-core/src/cmd/agent/perm.rs`: replace the body of `outbound_picture` (lines 47–128) so it renders from the view. Delete the `use mur_common::agent::{McpNetMode, NetworkOutboundMode};` line inside it and write:
   ```rust
   /// Testable core of [`print_outbound_picture`].
   fn outbound_picture(profile: &mur_common::AgentProfile) -> String {
@@ -562,7 +563,7 @@ The spec's `bounded_by_allow_hosts: bool` is expressed as `scope: McpScope`: tha
       o
   }
   ```
-- [ ] `perm.rs`: replace the body of `paths_picture` (lines 308–390) so it renders from the view:
+- [x] `perm.rs`: replace the body of `paths_picture` (lines 308–390) so it renders from the view:
   ```rust
   /// Testable core of [`cmd_perm_list_paths`].
   fn paths_picture(
@@ -638,10 +639,10 @@ The spec's `bounded_by_allow_hosts: bool` is expressed as `scope: McpScope`: tha
   }
   ```
   Then run `cargo check -p mur-core 2>&1 | tail -n 5` and delete any import the compiler now reports unused at the top of `perm.rs` (`LockFile` stays: `cmd_perm_list_paths` still parses it).
-- [ ] Run: `set -o pipefail; RUST_MIN_STACK=33554432 cargo nextest run -p mur-core --lib cmd::agent::perm 2>&1 | tail -n 25` → expect every `perm::tests::*` and `perm_view::tests::*` test passing (`14 tests run: 14 passed` — 9 existing + 5 new). The 9 existing tests are not edited (Global Constraint 3).
-- [ ] `wc -l mur-core/src/cmd/agent/perm.rs` → must print ≤ 800. If it does not, the two function bodies above were not replaced but appended — re-check.
-- [ ] `cargo clippy -p mur-core --all-targets -- -D warnings 2>&1 | tail -n 5` → exit 0; `cargo fmt -p mur-core`.
-- [ ] Commit: `feat(core): perm_view — one derivation for agent permissions, CLI renders from it`
+- [x] Run: `set -o pipefail; RUST_MIN_STACK=33554432 cargo nextest run -p mur-core --lib cmd::agent::perm 2>&1 | tail -n 25` → expect every `perm::tests::*` and `perm_view::tests::*` test passing (`15 tests run: 15 passed` — 10 existing + 5 new; the plan said 9, the measured baseline was 10). The 9 existing tests are not edited (Global Constraint 3).
+- [x] `wc -l mur-core/src/cmd/agent/perm.rs` → must print ≤ 800. If it does not, the two function bodies above were not replaced but appended — re-check.
+- [x] `cargo clippy -p mur-core --all-targets -- -D warnings 2>&1 | tail -n 5` → exit 0; `cargo fmt -p mur-core`.
+- [x] Commit: `feat(core): perm_view — one derivation for agent permissions, CLI renders from it`
 
 ---
 
