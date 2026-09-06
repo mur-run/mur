@@ -219,7 +219,7 @@ mod tests {
             &vec!["aura".to_string(), "scout".to_string()]
         );
         assert_eq!(map.get("mur-tdd").unwrap(), &vec!["scout".to_string()]);
-        assert!(map.get("nope").is_none());
+        assert!(!map.contains_key("nope"));
     }
 
     #[test]
