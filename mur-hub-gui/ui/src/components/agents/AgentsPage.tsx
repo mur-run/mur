@@ -87,7 +87,9 @@ function AgentsPageInner({
     if (last && agents.some((a) => a.name === last)) setSelected(last);
   }, [agents, selectedAgent, setSelected]);
   useEffect(() => {
-    writeKey(LAST_SELECTED_AGENT_KEY, selectedAgent);
+    // Only after the restore ran: the mount render's null must not erase the
+    // stored selection before the restore effect has read it.
+    if (restored.current) writeKey(LAST_SELECTED_AGENT_KEY, selectedAgent);
   }, [selectedAgent]);
 
   async function select(name: string | null) {
