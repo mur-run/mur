@@ -52,6 +52,10 @@ export const en = {
   "status.running": "running",
   "status.idle": "idle",
   "status.error": "error",
+  "status.restarting": "restarting",
+  "status.stopped": "stopped",
+  "status.failed": "failed",
+  "status.needsYou": "{count} waiting for you",
   "settings.language": "Language",
   // ── Settings panel ──
   "settings.title": "Settings",
