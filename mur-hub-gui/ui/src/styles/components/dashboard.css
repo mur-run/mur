@@ -23,9 +23,7 @@
 }
 
 .dashboard {
-  background:
-    radial-gradient(900px 300px at 80% -120px, rgba(74,144,217,.12), transparent 70%),
-    var(--surface-bg);
+  background: var(--surface-window);
   min-height: 100vh;
 }
 
@@ -246,10 +244,10 @@
   gap: 18px;
   margin: 4px 24px 8px;
   padding: 18px 22px;
-  background: linear-gradient(120deg, var(--surface-card), var(--surface-secondary));
+  background: var(--surface-card);
   border: 1px solid var(--border-line);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-1);
+  border-radius: var(--radius-lg);
+  box-shadow: none;
 }
 .dashboard__hero h3 {
   margin: 0;
@@ -348,7 +346,7 @@
   position: relative;
   background: var(--surface-card);
   border: 1px solid var(--border-line);
-  border-radius: var(--radius-2xl);
+  border-radius: var(--radius-lg);
   padding: 16px;
   cursor: pointer;
   overflow: hidden;

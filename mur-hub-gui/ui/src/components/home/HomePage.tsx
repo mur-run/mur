@@ -62,7 +62,7 @@ export function HomePage({
           <p className="home-empty__sub">{t("home.empty.subtitle")}</p>
           <div className="home-empty__actions">
             <button
-              className="btn btn--primary"
+              className="btn btn--accent"
               onClick={() => onNavigate("chats")}
             >
               {t("home.quick.newChat")}

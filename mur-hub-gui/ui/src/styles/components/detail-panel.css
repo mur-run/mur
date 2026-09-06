@@ -23,7 +23,7 @@
 .detail-panel__header {
   position: relative;
   padding: 20px 20px 16px;
-  background: linear-gradient(135deg, var(--color-brand-soft), var(--surface-card));
+  background: var(--surface-card);
   border-bottom: 1px solid var(--border-line);
 }
 .detail-panel__top {

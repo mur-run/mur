@@ -2,8 +2,11 @@
 .btn { font-size:var(--text-base); font-weight:var(--fw-bold); padding:9px 16px;
   border-radius:var(--radius-md); border:1px solid transparent; cursor:pointer;
   transition:transform var(--dur-fast) var(--ease-out), background var(--dur-fast), box-shadow var(--dur-fast); }
-.btn--primary { background:var(--color-accent); color:#fff; box-shadow:0 3px 10px rgba(251,107,83,.32); }
-.btn--primary:hover { background:var(--color-accent-strong); transform:translateY(-1px); }
+.btn--primary { background:var(--color-brand); color:var(--text-on-brand); }
+.btn--primary:hover { background:var(--color-brand-strong); }
+/* The coral CTA: used once per screen (spec §5.1). */
+.btn--accent { background:var(--color-accent); color:#fff; }
+.btn--accent:hover { background:var(--color-accent-strong); }
 .btn--blue { background:var(--color-brand); color:#fff; }
 .btn--blue:hover { background:var(--color-brand-strong); }
 .btn--secondary { background:var(--surface-card); color:var(--text-primary); border-color:var(--border-line); }

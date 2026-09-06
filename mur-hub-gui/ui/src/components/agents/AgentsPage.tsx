@@ -203,7 +203,7 @@ export function AgentsPage({
               <Mascot floating size={96} mood="excited" bubble={t("mascot.bubble.excited")} />
               <h3>{t("dashboard.empty.title")}</h3>
               <p>{t("dashboard.empty.body")}</p>
-              <button className="btn btn--primary" onClick={onNewAgent}>
+              <button className="btn btn--accent" onClick={onNewAgent}>
                 {t("dashboard.empty.cta")}
               </button>
             </div>

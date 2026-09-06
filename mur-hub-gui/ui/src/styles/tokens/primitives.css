@@ -1,30 +1,37 @@
 /* Raw scales. Never referenced directly by components — only by semantic.css. */
 :root {
   /* brand blue */
-  --blue-700:#2F6FB0; --blue-500:#4A90D9; --blue-300:#8FC1EC; --blue-soft:#EAF3FC; --blue-soft-dark:rgba(74,144,217,.22);
+  --blue-700:#2F6FB0; --blue-500:#4A90D9; --blue-400:#5B9CE0; --blue-300:#8FC1EC;
+  --blue-soft:rgba(74,144,217,.14); --blue-soft-dark:rgba(91,156,224,.18);
   /* accent coral */
   --coral-600:#F0563D; --coral-500:#FB6B53; --coral-300:#FFA290; --coral-soft:#FFF1EE; --coral-soft-dark:rgba(251,107,83,.20);
   /* category */
   --cat-research:#4A90D9; --cat-automation:#10B981; --cat-monitor:#F59E0B;
   --cat-notify:#EF4444; --cat-commerce:#8B5CF6; --cat-custom:#64748B;
   /* status */
-  --green-500:#22C55E; --green-600:#16A34A; --amber-500:#F59E0B;
-  --red-500:#EF4444; --red-600:#DC2626; --slate-400:#94A3B8;
-  /* neutral light */
-  --n-bg:#F6FAFE; --n-secondary:#EAF3FC; --n-card:#FFFFFF; --n-hover:#EAF1F9;
-  --n-line:#EAF0F7; --n-text:#16243B; --n-text2:#64758A; --n-text3:#9AA8B8;
+  --green-500:#22C55E; --green-600:#16A34A; --amber-500:#F59E0B; --amber-600:#D97706;
+  --red-500:#EF4444; --red-600:#DC2626; --slate-400:#94A3B8; --slate-500:#7C8798;
+  /* neutral light — cool-biased greys, no blue tint (spec §5.1) */
+  --n-bg:#F4F5F8; --n-sidebar:#EEF0F4; --n-list:#F9FAFC; --n-detail:#FFFFFF;
+  --n-secondary:#F4F5F8; --n-card:#FFFFFF; --n-hover:#ECEEF2;
+  --n-line:rgba(22,36,59,.10); --n-line-subtle:rgba(22,36,59,.06);
+  --n-text:#16243B; --n-text2:#5F6C80; --n-text3:#98A3B3;
   /* neutral dark */
-  --d-bg:#0F1117; --d-secondary:#161922; --d-card:#1A1E29; --d-hover:#232838;
-  --d-line:rgba(255,255,255,.08); --d-text:#F1F5F9; --d-text2:#94A3B8; --d-text3:#6B7688;
+  --d-bg:#0F1117; --d-sidebar:#0F1117; --d-list:#13161E; --d-detail:#161922;
+  --d-secondary:#20263A; --d-card:#1B2030; --d-hover:#232838;
+  --d-line:rgba(255,255,255,.08); --d-line-subtle:rgba(255,255,255,.05);
+  --d-text:#EEF2F7; --d-text2:#94A3B8; --d-text3:#6B7688;
   /* space (4px base) */
   --space-1:2px; --space-2:4px; --space-3:6px; --space-4:8px; --space-5:12px;
   --space-6:16px; --space-7:20px; --space-8:24px; --space-9:32px; --space-10:40px;
-  /* radius */
-  --radius-sm:6px; --radius-md:10px; --radius-lg:14px; --radius-xl:18px; --radius-2xl:20px; --radius-full:9999px;
+  /* radius — 6 controls, 8 rows, 12 cards/panes. lg/xl/2xl are aliases kept
+     until nothing references them (spec §5.2). */
+  --radius-sm:6px; --radius-md:8px; --radius-lg:12px; --radius-xl:12px; --radius-2xl:12px; --radius-full:9999px;
   /* type */
   --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang TC","Microsoft JhengHei",sans-serif;
+  --font-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
   --text-xs:11px; --text-sm:12.5px; --text-base:14px; --text-md:15px;
-  --text-lg:17px; --text-xl:19px; --text-2xl:22px;
+  --text-lg:17px; --text-xl:20px; --text-2xl:22px;
   --fw-regular:400; --fw-semi:600; --fw-bold:700; --fw-heavy:800;
   /* shadow */
   --shadow-sm:0 1px 2px rgba(16,40,80,.06);
@@ -35,11 +42,12 @@
   --dur-fast:130ms; --dur-base:180ms; --dur-slow:280ms;
   --ease-out:cubic-bezier(.2,.85,.25,1);
   --ease-spring:cubic-bezier(.34,1.56,.64,1);
-  /* shell layout (Phase 1 three-pane) */
-  --shell-sidebar-width:220px; --shell-inspector-width:320px;
-  --shell-blur:20px;
+  /* shell layout (spec §3.1) */
+  --shell-sidebar-width:220px; --shell-sidebar-collapsed-width:56px; --shell-inspector-width:320px;
+  --shell-list-width:300px; --shell-list-width-compact:280px; --shell-list-min:240px; --shell-list-max:400px;
+  --shell-titlebar-inset:28px; --shell-blur:20px;
   /* sidebar vibrancy: translucent bg over backdrop-filter blur, with a
      solid fallback if WKWebView renders artifacts (flip via --sidebar-bg). */
-  --n-sidebar-vibrancy:rgba(246,250,254,.72); --n-sidebar-solid:#F6FAFE;
+  --n-sidebar-vibrancy:rgba(238,240,244,.72); --n-sidebar-solid:#EEF0F4;
   --d-sidebar-vibrancy:rgba(15,17,23,.6); --d-sidebar-solid:#0F1117;
 }
