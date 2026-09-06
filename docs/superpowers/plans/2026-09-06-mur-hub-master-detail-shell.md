@@ -416,7 +416,7 @@ Branch `feat/hub-2-shell`.
 
 ### Task 2.1 — `persist.ts` and `breakpoints.ts`
 
-- [ ] Write `src/components/shell/breakpoints.test.ts`:
+- [x] Write `src/components/shell/breakpoints.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -472,8 +472,8 @@ describe("pref persistence", () => {
 });
 ```
 
-- [ ] Run it → `FAIL … Failed to resolve import "./breakpoints"`.
-- [ ] Create `src/components/shell/persist.ts`:
+- [x] Run it → `FAIL … Failed to resolve import "./breakpoints"`.
+- [x] Create `src/components/shell/persist.ts`:
 
 ```ts
 /** localStorage wrappers that never throw (private mode, quota, no window). */
@@ -496,7 +496,7 @@ export function writeKey(key: string, value: string | null): void {
 }
 ```
 
-- [ ] Create `src/components/shell/breakpoints.ts`:
+- [x] Create `src/components/shell/breakpoints.ts`:
 
 ```ts
 // Shell breakpoints (spec §3.1). These are the ONLY numbers that decide the
@@ -546,13 +546,13 @@ export function writeSidebarPref(storage: Pick<Storage, "setItem">, pref: Sideba
 }
 ```
 
-- [ ] Run the test → pass. Commit: `feat(hub): shell breakpoints and sidebar pref persistence`
+- [x] Run the test → pass. Commit: `feat(hub): shell breakpoints and sidebar pref persistence`
 
 **Interfaces — Produces:** `BP_WIDE`, `BP_COMPACT`, `SidebarPref`, `SidebarMode`, `ListMode`, `sidebarModeFor`, `listModeFor`, `togglePref`, `readSidebarPref`, `writeSidebarPref`, `readKey`, `writeKey`.
 
 ### Task 2.2 — Sidebar collapse and ⌘\
 
-- [ ] Append to `src/components/shell/shell.test.ts`:
+- [x] Append to `src/components/shell/shell.test.ts`:
 
 ```ts
 import { isSidebarToggle } from "./Shell";
@@ -569,7 +569,7 @@ describe("isSidebarToggle", () => {
 });
 ```
 
-- [ ] Create `src/components/shell/useWindowWidth.ts`:
+- [x] Create `src/components/shell/useWindowWidth.ts`:
 
 ```ts
 import { useEffect, useState } from "react";
@@ -587,7 +587,7 @@ export function useWindowWidth(): number {
 }
 ```
 
-- [ ] Create `src/components/shell/platform.ts`:
+- [x] Create `src/components/shell/platform.ts`:
 
 ```ts
 /** macOS gets the overlay title bar (traffic lights inside the sidebar);
@@ -597,7 +597,7 @@ export function isMac(): boolean {
 }
 ```
 
-- [ ] Replace `src/components/shell/Shell.tsx` with:
+- [x] Replace `src/components/shell/Shell.tsx` with:
 
 ```tsx
 import { useEffect, useState, type ReactNode } from "react";
@@ -690,7 +690,7 @@ export function Shell({ page, onNavigate, badge, inspector, banners, onSettings,
 }
 ```
 
-- [ ] `src/components/shell/Sidebar.tsx`: add `collapsed: boolean; onSettings: () => void;` to `SidebarProps`; add `title={t(labelKey)}` to the item `<button>`; add a gear glyph and a footer. Replace the `return (…)` block with:
+- [x] `src/components/shell/Sidebar.tsx`: add `collapsed: boolean; onSettings: () => void;` to `SidebarProps`; add `title={t(labelKey)}` to the item `<button>`; add a gear glyph and a footer. Replace the `return (…)` block with:
 
 ```tsx
   return (
@@ -714,8 +714,8 @@ export function Shell({ page, onNavigate, badge, inspector, banners, onSettings,
   );
 ```
   with, above the component, `const GEAR = (<><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1" /></>);` and, inside the component, the version read copied from `src/components/settings/AboutSettings.tsx` line 16: `const [version, setVersion] = useState<string | null>(null); useEffect(() => { getVersion().then(setVersion).catch(() => {}); }, []);` (`import { getVersion } from "@tauri-apps/api/app"`). Remove the two `as TranslationKey` casts — the keys exist (`en.ts` lines 848–849).
-- [ ] i18n: `"shell.version": "MUR Hub {version}"` in both tables.
-- [ ] `src/styles/components/shell.css`: replace the `.shell`, `.shell--with-inspector`, `.shell__content` rules with:
+- [x] i18n: `"shell.version": "MUR Hub {version}"` in both tables.
+- [x] `src/styles/components/shell.css`: replace the `.shell`, `.shell--with-inspector`, `.shell__content` rules with:
 
 ```css
 .shell {
@@ -754,15 +754,15 @@ export function Shell({ page, onNavigate, badge, inspector, banners, onSettings,
 }
 ```
   Also `.shell__sidebar { background: var(--surface-sidebar); … }` keeps the vibrancy line as is.
-- [ ] `src/components/DashboardApp.tsx`: pass `onSettings={() => setSettingsOpen(true)}` to `<Shell>`. Leave the gear in the global bar for now (removed in PR 4).
-- [ ] `npm test`, `npm run build` → green. Preview: at 1200+ the sidebar shows labels; drag the window under 1200 → icon rail; ⌘\ pins; relaunch keeps the pin.
-- [ ] Commit: `feat(hub): sidebar collapses by breakpoint, ⌘\ pins it, Settings moves to the sidebar footer`
+- [x] `src/components/DashboardApp.tsx`: pass `onSettings={() => setSettingsOpen(true)}` to `<Shell>`. Leave the gear in the global bar for now (removed in PR 4).
+- [x] `npm test`, `npm run build` → green. Preview: at 1200+ the sidebar shows labels; drag the window under 1200 → icon rail; ⌘\ pins; relaunch keeps the pin.
+- [x] Commit: `feat(hub): sidebar collapses by breakpoint, ⌘\ pins it, Settings moves to the sidebar footer`
 
 **Interfaces — Produces:** `Shell` props `banners?`, `onSettings`; `Sidebar` props `collapsed`, `onSettings`; classes `.shell--sidebar-collapsed`, `.shell--titlebar-inset`, `.shell__page`, `.shell-sidebar--collapsed`.
 
 ### Task 2.3 — Overlay title bar, window size, no auto-resize
 
-- [ ] `mur-hub-gui/src-tauri/tauri.conf.json`: the `dashboard` window becomes
+- [x] `mur-hub-gui/src-tauri/tauri.conf.json`: the `dashboard` window becomes
 
 ```json
       {
@@ -780,15 +780,15 @@ export function Shell({ page, onNavigate, badge, inspector, banners, onSettings,
         "hiddenTitle": true
       },
 ```
-- [ ] `mur-hub-gui/src-tauri/capabilities/default.json`: if `"core:window:allow-start-dragging"` is not in `permissions`, add it (the sidebar is a drag region). Do not remove `allow-set-size`: other windows share this capability.
-- [ ] `src/components/DashboardApp.tsx`: delete the auto-resize block — from the comment `// Auto-resize the window when the contextual inspector opens/closes` through the closing `}, [inspectorOpen]);` (lines 239–268), including the `const inspectorOpen = hasInspector(…)` it contains. Then `command grep -n 'getCurrentWindow\|currentMonitor\|LogicalSize' src/components/DashboardApp.tsx`; when only the import (line 4) remains, delete it.
-- [ ] `command grep -rn 'setSize\|setMinSize' src` → only files outside `DashboardApp.tsx` (Panel/Pet own windows), otherwise the task is not done.
-- [ ] `npm run build`. Preview in the Tauri dev window: traffic lights sit inside the sidebar's top inset; the sidebar drags the window; clicking an agent no longer resizes the window.
-- [ ] Commit: `feat(hub): overlay title bar, 1200×760 default window, no auto-resize on selection`
+- [x] `mur-hub-gui/src-tauri/capabilities/default.json`: if `"core:window:allow-start-dragging"` is not in `permissions`, add it (the sidebar is a drag region). Do not remove `allow-set-size`: other windows share this capability.
+- [x] `src/components/DashboardApp.tsx`: delete the auto-resize block — from the comment `// Auto-resize the window when the contextual inspector opens/closes` through the closing `}, [inspectorOpen]);` (lines 239–268), including the `const inspectorOpen = hasInspector(…)` it contains. Then `command grep -n 'getCurrentWindow\|currentMonitor\|LogicalSize' src/components/DashboardApp.tsx`; when only the import (line 4) remains, delete it.
+- [x] `command grep -rn 'setSize\|setMinSize' src` → only files outside `DashboardApp.tsx` (Panel/Pet own windows), otherwise the task is not done.
+- [x] `npm run build`. Preview in the Tauri dev window: traffic lights sit inside the sidebar's top inset; the sidebar drags the window; clicking an agent no longer resizes the window.
+- [x] Commit: `feat(hub): overlay title bar, 1200×760 default window, no auto-resize on selection`
 
 ### Task 2.4 — `useResizableColumn` and `ListDivider`
 
-- [ ] Write `src/components/shell/useResizableColumn.test.ts`:
+- [x] Write `src/components/shell/useResizableColumn.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -812,7 +812,7 @@ describe("parseStoredWidth", () => {
 });
 ```
 
-- [ ] Create `src/components/shell/useResizableColumn.ts`:
+- [x] Create `src/components/shell/useResizableColumn.ts`:
 
 ```ts
 import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
@@ -875,7 +875,7 @@ export function useResizableColumn(storageKey: string, fallback: number, min: nu
 }
 ```
 
-- [ ] Create `src/components/shell/ListDivider.tsx`:
+- [x] Create `src/components/shell/ListDivider.tsx`:
 
 ```tsx
 import type { ResizableColumn } from "./useResizableColumn";
@@ -895,7 +895,7 @@ export function ListDivider({ column, label }: { column: ResizableColumn; label:
 }
 ```
 
-- [ ] Append to `src/styles/components/shell.css`:
+- [x] Append to `src/styles/components/shell.css`:
 
 ```css
 /* Master–detail page layout (spec §3.1): list | divider | detail. The page
@@ -910,14 +910,14 @@ export function ListDivider({ column, label }: { column: ResizableColumn; label:
 }
 .list-divider:hover::after, .list-divider:active::after { width: 2px; background: var(--color-brand); }
 ```
-- [ ] i18n: `"shell.resizeList": "Drag to resize the list · double-click to reset"` (zh-TW: `"拖曳調整清單寬度 · 按兩下還原"`).
-- [ ] Test → pass. Commit: `feat(hub): draggable, persisted list divider (unused until the Agents page adopts it)`
+- [x] i18n: `"shell.resizeList": "Drag to resize the list · double-click to reset"` (zh-TW: `"拖曳調整清單寬度 · 按兩下還原"`).
+- [x] Test → pass. Commit: `feat(hub): draggable, persisted list divider (unused until the Agents page adopts it)`
 
 **Interfaces — Produces:** `useResizableColumn(storageKey, fallback, min, max): ResizableColumn`, `<ListDivider column label>`, class `.master-detail` reading `--md-list-width`.
 
 ### Task 2.5 — Banners into the content column
 
-- [ ] In `src/components/DashboardApp.tsx`, cut the four banner blocks (`{showAppsBanner && …}` through the `{cliSkew && …}` block, lines 362–455) out of the JSX and, above the `return (`, define:
+- [x] In `src/components/DashboardApp.tsx`, cut the four banner blocks (`{showAppsBanner && …}` through the `{cliSkew && …}` block, lines 362–455) out of the JSX and, above the `return (`, define:
 
 ```tsx
   const banners = (
@@ -927,8 +927,8 @@ export function ListDivider({ column, label }: { column: ResizableColumn; label:
   );
 ```
   Pass `banners={banners}` to `<Shell>`.
-- [ ] `npm run build`. Preview: trigger the CLI-skew banner (or temporarily force `cliSkew` in devtools) — it renders above the page content, the sidebar does not move.
-- [ ] Commit: `refactor(hub): banners render in the content column, not above the shell`
+- [x] `npm run build`. Preview: trigger the CLI-skew banner (or temporarily force `cliSkew` in devtools) — it renders above the page content, the sidebar does not move.
+- [x] Commit: `refactor(hub): banners render in the content column, not above the shell`
 
 **Manual acceptance PR 2:** 1200 and 960 widths × light/dark; ⌘\ pin survives relaunch; traffic lights inside the sidebar; window never resizes on selection; banners never push the sidebar down; Settings opens from the sidebar footer.
 
