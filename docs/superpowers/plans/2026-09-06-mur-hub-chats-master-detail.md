@@ -62,7 +62,7 @@ Copied from the design and `CLAUDE.md`. Every task includes all of them.
 
 **Interfaces.** Produces `DetailHeader({ avatar, title, status?, meta?, actions? })`; 10.3 consumes it. `DetailPage`'s props and markup are unchanged.
 
-- [ ] Create `src/components/shell/DetailHeader.test.tsx`:
+- [x] Create `src/components/shell/DetailHeader.test.tsx`:
 
 ```tsx
 import { describe, expect, it } from "vitest";
@@ -90,8 +90,8 @@ describe("DetailHeader markup", () => {
   });
 });
 ```
-- [ ] `npm test -- src/components/shell/DetailHeader.test.tsx` → fails (module missing).
-- [ ] Create `src/components/shell/DetailHeader.tsx`:
+- [x] `npm test -- src/components/shell/DetailHeader.test.tsx` → fails (module missing).
+- [x] Create `src/components/shell/DetailHeader.tsx`:
 
 ```tsx
 import type { ReactNode } from "react";
@@ -123,12 +123,12 @@ export function DetailHeader(p: DetailHeaderProps) {
   );
 }
 ```
-- [ ] In `src/components/shell/DetailPage.tsx`: change the import line `import { StatusPill, type StatusKind } from "./Status";` to `import type { StatusKind } from "./Status";` and add `import { DetailHeader } from "./DetailHeader";`. Replace the whole `<header className="detail-page__head">…</header>` block (the 10 lines from `<header` to `</header>`) with:
+- [x] In `src/components/shell/DetailPage.tsx`: change the import line `import { StatusPill, type StatusKind } from "./Status";` to `import type { StatusKind } from "./Status";` and add `import { DetailHeader } from "./DetailHeader";`. Replace the whole `<header className="detail-page__head">…</header>` block (the 10 lines from `<header` to `</header>`) with:
   ```tsx
       <DetailHeader avatar={p.avatar} title={p.title} status={p.status} meta={p.meta} actions={p.actions} />
   ```
-- [ ] `npm test` → 43 files, all pass (269 + 2). `npm run build`, `npm run lint`.
-- [ ] Commit: `refactor(hub): extract DetailHeader from DetailPage`
+- [x] `npm test` → 43 files, all pass (269 + 2). `npm run build`, `npm run lint`.
+- [x] Commit: `refactor(hub): extract DetailHeader from DetailPage`
 
 ### Task 10.2 — rows: channel join, `chatRows`, `chatFacets`, the unread dot, strings
 
@@ -138,7 +138,7 @@ export function DetailHeader(p: DetailHeaderProps) {
 - `SourceRowData.unread?: boolean`; `SourceListProps.createLabel?`, `SourceListProps.unreadLabel?`.
 - i18n keys `chats.selectHint`, `chats.noMatch`, `chats.openAgent`, `chats.popout`, `chats.unread`, `chats.facet.needsYou`, `chats.facet.unread`, `chats.noChannel`.
 
-- [ ] Replace the `buildChatList` describe in `src/components/chats/chatList.test.ts` with the following (keep the `sortConversations` and `groupByAgent` describes; add the imports and helper shown):
+- [x] Replace the `buildChatList` describe in `src/components/chats/chatList.test.ts` with the following (keep the `sortConversations` and `groupByAgent` describes; add the imports and helper shown):
 
 ```ts
 import type { ChannelSummary } from "../../work/types";
@@ -192,7 +192,7 @@ describe("chatRows", () => {
     expect(a.facets).toEqual([FACET_NEEDS_YOU]);
     expect(a.avatar).toBe("A");
     expect(b.subtitle).toBe("no channel");
-    expect(b.status).toBe("stopped");
+    expect(b.status).toBe("idle");
     expect(b.needsYou).toBe(0);
     expect(b.unread).toBe(true);
     expect(b.facets).toEqual([FACET_UNREAD]);
@@ -208,8 +208,8 @@ describe("chatFacets", () => {
   });
 });
 ```
-- [ ] `npm test -- src/components/chats/chatList.test.ts` → fails (signature / missing exports).
-- [ ] Edit `src/components/chats/chatList.ts`: add imports and replace `ChatListItem` and `buildChatList`, append the row builders:
+- [x] `npm test -- src/components/chats/chatList.test.ts` → fails (signature / missing exports).
+- [x] Edit `src/components/chats/chatList.ts`: add imports and replace `ChatListItem` and `buildChatList`, append the row builders:
 
 ```ts
 import type { ReactNode } from "react";
@@ -314,13 +314,13 @@ export function chatFacets(items: ChatListItem[], labels: { needsYou: string; un
   ];
 }
 ```
-  (`chatRows` yields `status: "stopped"` for an agent without runtime state — that is what `statusOf(undefined)` returns; the Agents page shows the same.)
-- [ ] `src/components/shell/sourceListModel.ts`: add to `SourceRowData` after `needsYou`:
+  (`chatRows` yields `status: "idle"` for an agent without runtime state — that is what `statusOf(undefined)` returns; the Agents page shows the same. The first draft of this plan said `"stopped"` without checking; the test expectation was corrected while executing.)
+- [x] `src/components/shell/sourceListModel.ts`: add to `SourceRowData` after `needsYou`:
   ```ts
   /** Brand-coloured dot before the name (Chats: activity while not focused). */
   unread?: boolean;
   ```
-- [ ] `src/components/shell/SourceList.tsx`: change `createLabel: string;` to `/** Title of the "+" button; only read when it renders. */\n  createLabel?: string;`; add after `onOpen?`:
+- [x] `src/components/shell/SourceList.tsx`: change `createLabel: string;` to `/** Title of the "+" button; only read when it renders. */\n  createLabel?: string;`; add after `onOpen?`:
   ```ts
   /** Accessible label for the unread dot; required when any row sets `unread`. */
   unreadLabel?: string;
@@ -329,11 +329,11 @@ export function chatFacets(items: ChatListItem[], labels: { needsYou: string; un
   ```tsx
                 {r.unread && <span className="source-row__unread" role="img" aria-label={p.unreadLabel} />}
   ```
-- [ ] `src/styles/components/source-list.css`: append
+- [x] `src/styles/components/source-list.css`: append
   ```css
   .source-row__unread { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--color-brand); }
   ```
-- [ ] `src/components/shell/SourceList.test.tsx`: add inside the `SourceList markup` describe:
+- [x] `src/components/shell/SourceList.test.tsx`: add inside the `SourceList markup` describe:
   ```tsx
   it("renders the unread dot only for unread rows", () => {
     const withUnread = [{ ...rows[0], unread: true }, rows[1]];
@@ -345,7 +345,7 @@ export function chatFacets(items: ChatListItem[], labels: { needsYou: string; un
   });
   ```
   (This test also exercises the now-optional `createLabel`: neither it nor `onCreate` is passed, and no "+" renders.)
-- [ ] i18n. `en.ts` after `"chats.filter"`:
+- [x] i18n. `en.ts` after `"chats.filter"`:
   ```ts
   "chats.selectHint": "Select an agent to start chatting.",
   "chats.noMatch": "No chats match.",
@@ -367,14 +367,14 @@ export function chatFacets(items: ChatListItem[], labels: { needsYou: string; un
   "chats.facet.unread": "未讀",
   "chats.noChannel": "尚無頻道。",
   ```
-- [ ] Keep the build green until 10.3 replaces the page: in the old `src/components/chats/ChatsPage.tsx` change `buildChatList(agents, attention, localQuery || query)` to `buildChatList(agents, attention, [], localQuery || query)` (no channels yet; rows keep today's name-only look for this one commit).
-- [ ] `npm test` → 43 files, all pass (272 + 5 new). `npm run build`, `npm run lint`. Commit: `feat(hub): chat rows join the primary channel; SourceList unread dot; strings`
+- [x] Keep the build green until 10.3 replaces the page: in the old `src/components/chats/ChatsPage.tsx` change `buildChatList(agents, attention, localQuery || query)` to `buildChatList(agents, attention, [], localQuery || query)` (no channels yet; rows keep today's name-only look for this one commit).
+- [x] `npm test` → 43 files, all pass (272 + 5 new). `npm run build`, `npm run lint`. Commit: `feat(hub): chat rows join the primary channel; SourceList unread dot; strings`
 
 ### Task 10.3 — `ChatPane`, the `ChatsPage` rewrite, `DashboardApp` wiring
 
 **Interfaces.** Consumes 10.1 `DetailHeader`, 10.2 builders / props / keys. Produces `ChatsPage` props `{ agents, runtimeMap, channels, initialAgent?, onInitialHandled?, onSelect?, onOpenAgent }`, `popOutChat(name)`, and `DashboardApp.selectedChat`.
 
-- [ ] Create `src/components/chats/ChatPane.tsx`:
+- [x] Create `src/components/chats/ChatPane.tsx`:
 
 ```tsx
 import { invoke } from "@tauri-apps/api/core";
@@ -449,7 +449,7 @@ export function ChatPane({ item, runtime, onOpenAgent }: ChatPaneProps) {
   );
 }
 ```
-- [ ] Rewrite `src/components/chats/ChatsPage.tsx`:
+- [x] Rewrite `src/components/chats/ChatsPage.tsx`:
 
 ```tsx
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -579,7 +579,7 @@ export function ChatsPage({ agents, runtimeMap, channels, initialAgent, onInitia
   );
 }
 ```
-- [ ] Create `src/styles/components/chats.css` and add `@import "./components/chats.css";` after the `detail-window.css` line in `src/styles/index.css`:
+- [x] Create `src/styles/components/chats.css` and add `@import "./components/chats.css";` after the `detail-window.css` line in `src/styles/index.css`:
 
 ```css
 /* Chats page (Phase 3(a) §5): header + conversation filling the detail column. */
@@ -589,7 +589,7 @@ export function ChatsPage({ agents, runtimeMap, channels, initialAgent, onInitia
 .chats-empty { display: grid; place-items: center; height: 100%; color: var(--text-tertiary); font-size: var(--text-sm); }
 .chats-empty p { margin: 0; }
 ```
-- [ ] `src/components/DashboardApp.tsx`:
+- [x] `src/components/DashboardApp.tsx`:
   - Add `import { popOutChat } from "./chats/ChatPane";`.
   - Delete the `onChatActive` callback (lines 80–83: the comment `// Stable callbacks …` and the `useCallback` that calls `setChatAgent`). Keep `chatAgent` / `setChatAgent` for now (10.4 removes them).
   - After `const openChatWith = useCallback(…)` add:
@@ -624,22 +624,27 @@ export function ChatsPage({ agents, runtimeMap, channels, initialAgent, onInitia
         }
     ```
     and add `selectedChat` to that effect's dependency array.
-- [ ] `npm test`, `npm run build`, `npm run lint` (0 errors).
-- [ ] Browser acceptance (stub: `list_agents` two agents, `list_runtime_statuses` with one running, `channel_list` with a primary channel for one agent — `id` = its name, `preview`, `updated_at`, `turns` — plus a `fleet-x` channel, `channel_load → []`, `agent_chat_send` not needed, `open_chat_window → null`, `panel_schedule_status → { schedules: [] }`): the list shows preview · relative time for the agent with a channel and "No channel yet." for the other; the running agent's dot; no chips until a stored `hitl-approval-needed` / `chat-delta` listener is fired, then "Needs you" / "Unread" chips appear with counts and the unread row shows the dot; selecting shows the header with model · channel · turns (or "No channel yet."); `localStorage['mur.chats.lastSelected']` is written and restores on remount (switch to Agents and back); from Agents, the detail's **Chat** lands here with that agent selected, and doing it twice for the same agent still works; **Pop out**, ⌘↩ (not while the compose box is focused), and a row double-click each call `open_chat_window`; **Open agent** lands on Agents with the agent selected; the task pill mounts above the compose box (`TaskPill` listens to `runtime-status-changed` — its listener id appears in the stub's event map); Esc in the list clears the selection to the hint.
-- [ ] Commit: `feat(hub): Chats page on the master–detail shell — SourceList rows, headed ChatPane with TaskPill`
+- [x] `npm test`, `npm run build`, `npm run lint` (0 errors).
+- [x] Browser acceptance (stub: `list_agents` two agents, `list_runtime_statuses` with one running, `channel_list` with a primary channel for one agent — `id` = its name, `preview`, `updated_at`, `turns` — plus a `fleet-x` channel, `channel_load → []`, `agent_chat_send` not needed, `open_chat_window → null`, `panel_schedule_status → { schedules: [] }`): the list shows preview · relative time for the agent with a channel and "No channel yet." for the other; the running agent's dot; no chips until a stored `hitl-approval-needed` / `chat-delta` listener is fired, then "Needs you" / "Unread" chips appear with counts and the unread row shows the dot; selecting shows the header with model · channel · turns (or "No channel yet."); `localStorage['mur.chats.lastSelected']` is written and restores on remount (switch to Agents and back); from Agents, the detail's **Chat** lands here with that agent selected, and doing it twice for the same agent still works; **Pop out**, ⌘↩ (not while the compose box is focused), and a row double-click each call `open_chat_window`; **Open agent** lands on Agents with the agent selected; the task pill mounts above the compose box (`TaskPill` listens to `runtime-status-changed` — its listener id appears in the stub's event map); Esc in the list clears the selection to the hint.
+- [x] Commit: `feat(hub): Chats page on the master–detail shell — SourceList rows, headed ChatPane with TaskPill`
 
 ### Task 10.4 — inspector retirement
 
 **Interfaces.** Consumes nothing new. Produces no API; removes `Shell.inspector`, `isInspectorToggle`, `Inspector`, `ChatInspector`.
 
-- [ ] Delete `src/components/inspector/ChatInspector.tsx` and `src/components/shell/Inspector.tsx`. `grep -rn 'ChatInspector\|shell/Inspector\|hasInspector\|InspectorSelection' src` → only `DashboardApp.tsx` (fixed below).
-- [ ] `src/components/shell/Shell.tsx`: delete the `isInspectorToggle` function and its comment (lines 10–14); delete `inspector?: ReactNode;` from `ShellProps`; remove `inspector` from the destructured props; delete `const [inspectorVisible, setInspectorVisible] = useState(true);`; delete the `if (isInspectorToggle(e)) { … return; }` block; delete `const showInspector = …;` and the `showInspector ? "shell--with-inspector" : "",` line; delete `{showInspector && <div className="shell__inspector">{inspector}</div>}`. `useState` stays imported (the sidebar pref uses it).
-- [ ] `src/components/shell/shell.test.ts`: change the import to `import { isSidebarToggle } from "./Shell";`, delete the `key()` helper (lines 4–13; only the inspector tests used it, and `noUnusedLocals` would flag it) and the whole `describe("isInspectorToggle", …)` block (lines 15–43). The `isSidebarToggle` describe builds its own `base` object and stays untouched.
-- [ ] `src/components/DashboardApp.tsx`: delete the `Inspector` import line; delete the `chatAgent` state and its three-line comment (lines 76–79); delete `setChatAgent(null);` from the Esc handler; delete the whole `inspectorSelection` / `inspectorNode` block (from `// Build the contextual inspector` to the `: undefined;` line); delete `inspector={inspectorNode}` from `<Shell …>`. `grep -n 'chatAgent\|inspector' src/components/DashboardApp.tsx` → none.
-- [ ] CSS: in `src/styles/components/shell.css` delete `.shell--with-inspector { … }`, the `.shell--sidebar-collapsed.shell--with-inspector { … }` rule, and `.shell__inspector { … }`. In `src/styles/tokens/primitives.css` remove ` --shell-inspector-width:320px;` from line 46. In `src/styles/components/work.css` delete the block from `/* ── Chats view — agent list + inline chat` through the end of `.chats-view__empty { … }`. In `src/styles/components/dashboard.css` delete `.conv-badge { … }`, `.conv-badge--unread { … }`, `.conv-badge--hitl { … }`. In `src/styles/components/detail-panel.css` delete `.detail-panel--inspector { … }`, `.detail-panel__close { … }`, `.detail-panel__close:hover { … }`. Then `grep -rn 'chats-view\|chats-item\|conv-badge\|detail-panel--inspector\|detail-panel__close\|shell__inspector\|shell-inspector-width' src` → none.
-- [ ] i18n: delete `chatInspector.subtitle`, `chatInspector.model`, `chatInspector.channel`, `chatInspector.noChannel` from both tables (`chats.noChannel` replaced the last in 10.2). Keep `chatInspector.turns` (the header uses it). `grep -rn 'chatInspector\.' src --include='*.tsx'` → only `ChatPane.tsx` (`turns`).
-- [ ] `npm test`, `npm run build`, `npm run lint`. Browser: no page shows a third column; ⌘⌥I does nothing; Agents / Fleets / Library / Chats all still render.
-- [ ] Commit: `refactor(hub): retire the inspector — Shell prop, ⌘⌥I, CSS track, ChatInspector`
+- [x] Delete `src/components/inspector/ChatInspector.tsx` and `src/components/shell/Inspector.tsx`. `grep -rn 'ChatInspector\|shell/Inspector\|hasInspector\|InspectorSelection' src` → only `DashboardApp.tsx` (fixed below).
+- [x] `src/components/shell/Shell.tsx`: delete the `isInspectorToggle` function and its comment (lines 10–14); delete `inspector?: ReactNode;` from `ShellProps`; remove `inspector` from the destructured props; delete `const [inspectorVisible, setInspectorVisible] = useState(true);`; delete the `if (isInspectorToggle(e)) { … return; }` block; delete `const showInspector = …;` and the `showInspector ? "shell--with-inspector" : "",` line; delete `{showInspector && <div className="shell__inspector">{inspector}</div>}`. `useState` stays imported (the sidebar pref uses it).
+- [x] `src/components/shell/shell.test.ts`: change the import to `import { isSidebarToggle } from "./Shell";`, delete the `key()` helper (lines 4–13; only the inspector tests used it, and `noUnusedLocals` would flag it) and the whole `describe("isInspectorToggle", …)` block (lines 15–43). The `isSidebarToggle` describe builds its own `base` object and stays untouched.
+- [x] `src/components/DashboardApp.tsx`: delete the `Inspector` import line; delete the `chatAgent` state and its three-line comment (lines 76–79); delete `setChatAgent(null);` from the Esc handler; delete the whole `inspectorSelection` / `inspectorNode` block (from `// Build the contextual inspector` to the `: undefined;` line); delete `inspector={inspectorNode}` from `<Shell …>`. `grep -n 'chatAgent\|inspector' src/components/DashboardApp.tsx` → none.
+- [x] CSS: in `src/styles/components/shell.css` delete `.shell--with-inspector { … }`, the `.shell--sidebar-collapsed.shell--with-inspector { … }` rule, and `.shell__inspector { … }`. In `src/styles/tokens/primitives.css` remove ` --shell-inspector-width:320px;` from line 46. In `src/styles/components/work.css` delete the block from `/* ── Chats view — agent list + inline chat` through the end of `.chats-view__empty { … }`. In `src/styles/components/dashboard.css` delete `.conv-badge { … }`, `.conv-badge--unread { … }`, `.conv-badge--hitl { … }`. In `src/styles/components/detail-panel.css` delete `.detail-panel--inspector { … }`, `.detail-panel__close { … }`, `.detail-panel__close:hover { … }`. Then `grep -rn 'chats-view\|chats-item\|conv-badge\|detail-panel--inspector\|detail-panel__close\|shell__inspector\|shell-inspector-width' src` → none.
+- [x] i18n: delete `chatInspector.subtitle`, `chatInspector.model`, `chatInspector.channel`, `chatInspector.noChannel` from both tables (`chats.noChannel` replaced the last in 10.2). Keep `chatInspector.turns` (the header uses it). `grep -rn 'chatInspector\.' src --include='*.tsx'` → only `ChatPane.tsx` (`turns`).
+- [x] `npm test`, `npm run build`, `npm run lint`. Browser: no page shows a third column; ⌘⌥I does nothing; Agents / Fleets / Library / Chats all still render.
+- [x] Commit: `refactor(hub): retire the inspector — Shell prop, ⌘⌥I, CSS track, ChatInspector`
+
+**Done (2026-09-06), deviations recorded:**
+- 10.2: `statusOf(undefined)` is `idle`, not `stopped` (test and note fixed above). The unread dot renders inside `.source-row__status` (right, before the needs-you badge), not before the avatar: `.source-row` is a fixed grid and a leading child shifted every cell.
+- 10.3 (approved mid-run): the attention reducer only counts `chat-delta` / `hitl-approval-needed` for open, non-active conversations and nothing had called `openConversation` since the tabbed conversations view was removed — the badges had never lit. Extra commit: `ChatsPage` opens every agent, focuses the selection, and blurs (new reducer action `blur`, with a test) when nothing is selected; the context callbacks became `useCallback`-stable because they are effect dependencies. Side effect: the background HITL notification (`notifyHitlBackground`) now fires as designed.
+- Test counts: 42 files, 276 tests after 10.3 and 269 after 10.4 (the seven `isInspectorToggle` tests removed).
 
 **Manual acceptance PR 10:** the Task 10.3 list plus: window at 960px shows the overlay list on Chats like Agents; the divider resizes and persists; light and dark themes; the chat still streams a reply from a real agent (dev build against a running Hub, or the first real-app check after install).
 

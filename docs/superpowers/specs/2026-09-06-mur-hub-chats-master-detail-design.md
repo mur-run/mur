@@ -1,6 +1,6 @@
 # MUR Hub 2.0 — Phase 3(a): the Chats page on the master–detail shell
 
-**Date:** 2026-09-06 · **Status:** Draft — awaiting review
+**Date:** 2026-09-06 · **Status:** Approved; implemented in PR 10
 **Follows:** `2026-09-06-mur-hub-master-detail-shell-design.md` (§10 Phase 3), `2026-09-06-mur-hub-library-master-detail-design.md` (Phase 2(a), #1171–#1173), `2026-09-06-mur-hub-open-in-window-design.md` (Phase 2(b), #1174–#1176).
 **Scope:** `mur-hub-gui/ui` only. No Rust change.
 
@@ -52,9 +52,11 @@ export interface ChatListItem {
 }
 ```
 
-`sortConversations` is unchanged and now sorts by real activity. `chatRows(items, runtimeMap, nowMs, labels): SourceRowData[]` (new, pure) maps to rows: `subtitle` = `preview` with `relativeTime(updated_at, nowMs)` (`work/format.ts`) appended after ` · `, or `chats.noChannel` when there is none; `status` = `statusOf(runtimeMap.get(name)?.state)`; `needsYou` = `hitl ? 1 : 0`; `unread` = `unread`; `facets` = `["needsYou"]` when `hitl`, `["unread"]` when `unread` (both when both); avatar = `PetFace` at 28px (the Agents row). `chatFacets(items, labels)` yields `{ id: "needsYou", label: chats.facet.needsYou, count }` and `{ id: "unread", … }`, each only when its count is > 0.
+`sortConversations` is unchanged and now sorts by real activity.
 
-**`SourceRowData.unread?: boolean`** is new. `SourceList` renders `<span className="source-row__unread" aria-label={unreadLabel} />` before the name when true; `SourceListProps.unreadLabel?: string` supplies the accessible label (`chats.unread`). CSS: an 8px `--color-brand` disc. Markup without `unread` is byte-identical (test).
+**Attention plumbing.** The reducer in `conversation/reducer.ts` counts `chat-delta` / `hitl-approval-needed` only for *open, non-active* conversations, and nothing has called `openConversation` since the tabbed conversations view was removed — so the old page's badges never lit. `ChatsPage` drives it: on mount and whenever the roster changes it opens every agent, focuses the selected one (which clears that agent's flags), and dispatches a new `blur` action when nothing is selected so every conversation counts again. The context's callbacks are `useCallback`-stable because they are effect dependencies. The background HITL desktop notification (`notifyHitlBackground`) starts working as a consequence. `chatRows(items, runtimeMap, nowMs, labels): SourceRowData[]` (new, pure) maps to rows: `subtitle` = `preview` with `relativeTime(updated_at, nowMs)` (`work/format.ts`) appended after ` · `, or `chats.noChannel` when there is none; `status` = `statusOf(runtimeMap.get(name)?.state)`; `needsYou` = `hitl ? 1 : 0`; `unread` = `unread`; `facets` = `["needsYou"]` when `hitl`, `["unread"]` when `unread` (both when both); avatar = `PetFace` at 28px (the Agents row). `chatFacets(items, labels)` yields `{ id: "needsYou", label: chats.facet.needsYou, count }` and `{ id: "unread", … }`, each only when its count is > 0.
+
+**`SourceRowData.unread?: boolean`** is new. `SourceList` renders `<span className="source-row__unread" aria-label={unreadLabel} />` inside the row's status cluster (right edge, before the needs-you badge — the row is a fixed grid, so a leading dot would shift every cell) when true; `SourceListProps.unreadLabel?: string` supplies the accessible label (`chats.unread`). CSS: an 8px `--color-brand` disc. Markup without `unread` is byte-identical (test).
 
 ## 5. Chat pane
 
