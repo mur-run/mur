@@ -1,6 +1,6 @@
 # MUR Hub 2.0 — Phase 3(c): `SourceList` multi-select with bulk Start / Stop
 
-**Date:** 2026-09-06 · **Status:** Draft — awaiting review
+**Date:** 2026-09-06 · **Status:** Approved; implemented in PR 12
 **Follows:** `2026-09-06-mur-hub-master-detail-shell-design.md` (§4.1 `SourceList`, §10 Phase 3), `2026-09-06-mur-hub-home-peek-design.md` (Phase 3(b), #1179–#1180).
 **Scope:** `mur-hub-gui/ui` only. Agents and Fleets pages. No Rust change.
 

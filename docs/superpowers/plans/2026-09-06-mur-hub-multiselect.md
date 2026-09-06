@@ -57,7 +57,7 @@ Copied from the design and `CLAUDE.md`. Every task includes all of them.
 
 **Interfaces.** Produces (all in `sourceListModel.ts`): `type SelectMode = "single" | "toggle" | "range"`, `interface Selection { anchor: string | null; ids: ReadonlySet<string> }`, `EMPTY_SELECTION`, `selectModeOf(e)`, `applySelection(visibleIds, current, clickedId, mode)`, `extendSelection(visibleIds, current, delta)`, `selectAll(visibleIds, current)`, `collapseSelection(current)`. 12.2, 12.4, 12.5 consume them.
 
-- [ ] Append to `src/components/shell/sourceListModel.test.ts`:
+- [x] Append to `src/components/shell/sourceListModel.test.ts`:
 
 ```ts
 import {
@@ -135,8 +135,8 @@ describe("selectAll / collapseSelection", () => {
   });
 });
 ```
-- [ ] `npm test -- src/components/shell/sourceListModel.test.ts` → fails (missing exports).
-- [ ] Append to `src/components/shell/sourceListModel.ts`:
+- [x] `npm test -- src/components/shell/sourceListModel.test.ts` → fails (missing exports).
+- [x] Append to `src/components/shell/sourceListModel.ts`:
 
 ```ts
 // ── Multi-select (spec 3(c) §3) ──────────────────────────────────────────
@@ -213,14 +213,14 @@ export function collapseSelection(current: Selection): Selection {
   return { anchor: current.anchor, ids: current.anchor === null ? new Set() : new Set([current.anchor]) };
 }
 ```
-- [ ] `npm test -- src/components/shell/sourceListModel.test.ts` → all pass (the existing `filterRows` / `moveSelection` tests plus the nine new ones). `npm run build`, `npm run lint`.
-- [ ] Commit: `feat(hub): SourceList selection helpers — mode, toggle, range, extend, all, collapse`
+- [x] `npm test -- src/components/shell/sourceListModel.test.ts` → all pass (the existing `filterRows` / `moveSelection` tests plus the nine new ones). `npm run build`, `npm run lint`.
+- [x] Commit: `feat(hub): SourceList selection helpers — mode, toggle, range, extend, all, collapse`
 
 ### Task 12.2 — `SourceList` multi-select props
 
 **Interfaces.** Consumes `SelectMode`, `selectModeOf`. Produces `SourceListProps.onSelect: (id: string | null, mode: SelectMode) => void`, `selectedIds?: ReadonlySet<string>`, `onExtend?: (delta: 1 | -1) => void`, `onSelectAll?: () => void`. Existing callers that pass `(id) => …` still type-check (fewer parameters are assignable).
 
-- [ ] `src/components/shell/SourceList.tsx`:
+- [x] `src/components/shell/SourceList.tsx`:
   - Import: change `import { filterRows, moveSelection, type SourceFacet, type SourceRowData } from "./sourceListModel";` to `import { filterRows, moveSelection, selectModeOf, type SelectMode, type SourceFacet, type SourceRowData } from "./sourceListModel";`.
   - Props: change `onSelect: (id: string | null) => void;` to
     ```ts
@@ -279,7 +279,7 @@ export function collapseSelection(current: Selection): Selection {
               })}
     ```
     (The three inner spans are today's markup verbatim; only the wrapper and the map's braces change.)
-- [ ] `src/components/shell/SourceList.test.tsx`: add
+- [x] `src/components/shell/SourceList.test.tsx`: add
   ```tsx
   it("renders every id in selectedIds as selected and marks the listbox multiselectable", () => {
     const props = { title: "Agents", count: 2, rows, facets: [], allLabel: "All", activeFacet: null, onFacet: noop,
@@ -292,14 +292,14 @@ export function collapseSelection(current: Selection): Selection {
     expect(single).not.toContain("aria-multiselectable");
   });
   ```
-- [ ] `npm test` (all pass), `npm run build`, `npm run lint`. Chats / Library still compile: their `onSelect={(id) => …}` ignore the second argument.
-- [ ] Commit: `feat(hub): SourceList — click modes, selectedIds, ⇧↑↓ extend, ⌘A`
+- [x] `npm test` (all pass), `npm run build`, `npm run lint`. Chats / Library still compile: their `onSelect={(id) => …}` ignore the second argument.
+- [x] Commit: `feat(hub): SourceList — click modes, selectedIds, ⇧↑↓ extend, ⌘A`
 
 ### Task 12.3 — `bulkModel`, `BulkPanel`, CSS, strings
 
 **Interfaces.** Consumes `StatusKind`, `StatusDot`, `showToast`. Produces `bulkModel.ts`: `BulkItem { id; name; status: StatusKind }`, `BulkResult { id; ok; error? }`, `bulkCounts(items)`, `startableIds(items)`, `stoppableIds(items)`, `runBulk(ids, call)`; `BulkPanel({ items, onStart, onStop, onClear })`; keys `bulk.selected`, `bulk.start`, `bulk.stop`, `bulk.clear`, `bulk.startedSummary`, `bulk.stoppedSummary`.
 
-- [ ] Create `src/components/shell/bulkModel.test.ts`:
+- [x] Create `src/components/shell/bulkModel.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -334,8 +334,8 @@ describe("runBulk", () => {
   });
 });
 ```
-- [ ] `npm test -- src/components/shell/bulkModel.test.ts` → fails (module missing).
-- [ ] Create `src/components/shell/bulkModel.ts`:
+- [x] `npm test -- src/components/shell/bulkModel.test.ts` → fails (module missing).
+- [x] Create `src/components/shell/bulkModel.ts`:
 
 ```ts
 import type { StatusKind } from "./Status";
@@ -375,8 +375,8 @@ export async function runBulk(ids: string[], call: (id: string) => Promise<unkno
   );
 }
 ```
-- [ ] `npm test -- src/components/shell/bulkModel.test.ts` → 2 passed.
-- [ ] i18n. `en.ts` after `"peek.viewConversation"`:
+- [x] `npm test -- src/components/shell/bulkModel.test.ts` → 2 passed.
+- [x] i18n. `en.ts` after `"peek.viewConversation"`:
   ```ts
   "bulk.selected": "{count} selected",
   "bulk.start": "Start {count}",
@@ -394,7 +394,7 @@ export async function runBulk(ids: string[], call: (id: string) => Promise<unkno
   "bulk.startedSummary": "已啟動 {ok}，失敗 {failed}",
   "bulk.stoppedSummary": "已停止 {ok}，失敗 {failed}",
   ```
-- [ ] Create `src/components/shell/BulkPanel.tsx`:
+- [x] Create `src/components/shell/BulkPanel.tsx`:
 
 ```tsx
 import { useState } from "react";
@@ -471,7 +471,7 @@ export function BulkPanel({ items, onStart, onStop, onClear }: BulkPanelProps) {
   );
 }
 ```
-- [ ] Create `src/styles/components/bulk.css` and add `@import "./components/bulk.css";` after the `peek.css` line in `src/styles/index.css`:
+- [x] Create `src/styles/components/bulk.css` and add `@import "./components/bulk.css";` after the `peek.css` line in `src/styles/index.css`:
 
 ```css
 /* Bulk panel (Phase 3(c) §6): the detail column while several rows are selected. */
@@ -486,14 +486,14 @@ export function BulkPanel({ items, onStart, onStop, onClear }: BulkPanelProps) {
 .bulk__error { color: var(--text-secondary); font-size: var(--text-xs); max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 ```
   (`--status-running` and `--status-failed` are the Phase 1 status tokens `StatusDot` uses; `grep -n 'status-running\|status-failed' src/styles/tokens/semantic.css` confirms.)
-- [ ] `npm test`, `npm run build`, `npm run lint`.
-- [ ] Commit: `feat(hub): BulkPanel — N selected, Start k / Stop m with per-row results`
+- [x] `npm test`, `npm run build`, `npm run lint`.
+- [x] Commit: `feat(hub): BulkPanel — N selected, Start k / Stop m with per-row results`
 
 ### Task 12.4 — Agents page
 
 **Interfaces.** Consumes 12.1–12.3. Produces the Agents page behaviour of spec §5 / §7.
 
-- [ ] `src/components/agents/AgentsPage.tsx`:
+- [x] `src/components/agents/AgentsPage.tsx`:
   - Imports: add `import { invoke } from "@tauri-apps/api/core";`, change the model import to `import { applySelection, collapseSelection, extendSelection, filterRows, selectAll, type SelectMode, type Selection, type SourceFacet, type SourceRowData } from "../shell/sourceListModel";`, add `import { BulkPanel } from "../shell/BulkPanel";` and `import { runBulk, type BulkItem } from "../shell/bulkModel";`.
   - State, after `const [facet, setFacet] = …`:
     ```tsx
@@ -560,15 +560,15 @@ export function BulkPanel({ items, onStart, onStop, onClear }: BulkPanelProps) {
         ) : selectedAgent && entry ? (
     ```
     (the rest of the ternary is unchanged.)
-- [ ] `npm test`, `npm run build`, `npm run lint` (0 errors).
-- [ ] Browser acceptance (stub: three agents `aura` running, `scout` idle, `muse` idle; `start_agent` resolves for `scout` and rejects for `muse` with `"runtime busy"`; `stop_agent` resolves; `list_runtime_statuses` accordingly): on Agents, click `aura`, ⌘-click `scout` → the panel says "2 selected", Start 1 / Stop 1; ⇧-click `muse` from anchor `aura` → 3 selected; ⇧↓ / ⇧↑ on the listbox grow / (no shrink) the block; Esc → back to `aura` alone (detail), Esc → none; ⌘A → 3 selected; type `sc` in the filter then ⌘A → only `scout` (a single, so the detail shows); clear the filter, ⌘-click all three, **Start 2** → `start_agent` called for `scout` and `muse`, `scout` ✓, `muse` ✗ "runtime busy", toast "Started 1, failed 1"; **Stop 1** → `stop_agent` for `aura`; a plain click on `scout` collapses to it; with `aura` selected and a Persona edit made dirty (type in the Identity tab's persona field), ⌘-click `scout` → the discard prompt (the stub's `plugin:dialog|message` answers Ok, so it proceeds; `window.__calls` shows the dialog call); Chats page: ⌘-click a row selects only it.
-- [ ] Commit: `feat(hub): Agents page multi-select with bulk Start / Stop`
+- [x] `npm test`, `npm run build`, `npm run lint` (0 errors).
+- [x] Browser acceptance (stub: three agents `aura` running, `scout` idle, `muse` idle; `start_agent` resolves for `scout` and rejects for `muse` with `"runtime busy"`; `stop_agent` resolves; `list_runtime_statuses` accordingly): on Agents, click `aura`, ⌘-click `scout` → the panel says "2 selected", Start 1 / Stop 1; ⇧-click `muse` from anchor `aura` → 3 selected; ⇧↓ / ⇧↑ on the listbox grow / (no shrink) the block; Esc → back to `aura` alone (detail), Esc → none; ⌘A → 3 selected; type `sc` in the filter then ⌘A → only `scout` (a single, so the detail shows); clear the filter, ⌘-click all three, **Start 2** → `start_agent` called for `scout` and `muse`, `scout` ✓, `muse` ✗ "runtime busy", toast "Started 1, failed 1"; **Stop 1** → `stop_agent` for `aura`; a plain click on `scout` collapses to it; with `aura` selected and a Persona edit made dirty (type in the Identity tab's persona field), ⌘-click `scout` → the discard prompt (the stub's `plugin:dialog|message` answers Ok, so it proceeds; `window.__calls` shows the dialog call); Chats page: ⌘-click a row selects only it.
+- [x] Commit: `feat(hub): Agents page multi-select with bulk Start / Stop`
 
 ### Task 12.5 — Fleets page
 
 **Interfaces.** Consumes 12.1–12.3. Produces the Fleets page behaviour of spec §5 / §7 with `fleet_start` / `fleet_stop`.
 
-- [ ] `src/components/fleet/FleetView.tsx`:
+- [x] `src/components/fleet/FleetView.tsx`:
   - Imports: extend the model import to `import { applySelection, collapseSelection, extendSelection, filterRows, selectAll, type SelectMode, type Selection, type SourceFacet, type SourceRowData } from "../shell/sourceListModel";`, add `import { BulkPanel } from "../shell/BulkPanel";` and `import { runBulk, type BulkItem } from "../shell/bulkModel";` (`invoke` is already imported).
   - State, after `const [filter, setFilter] = useState("");`: `const [multi, setMulti] = useState<ReadonlySet<string>>(new Set());`.
   - After the `facets` array add:
@@ -614,9 +614,15 @@ export function BulkPanel({ items, onStart, onStop, onClear }: BulkPanelProps) {
         ) : selectedName && summary ? (
     ```
     (`fleet_list` carries the `stopped` / `running` flags the rows' status comes from, so the list reload refreshes the counts.)
-- [ ] `npm test`, `npm run build`, `npm run lint` (0 errors).
-- [ ] Browser acceptance (stub: three fleets, one `stopped: true`; `fleet_start` / `fleet_stop` resolve and flip the stub's flags): ⌘-click two fleets → "2 selected" with the right counts; Start / Stop call `fleet_start` / `fleet_stop` with the right names and the counts update after the list reloads; ⇧-click, ⇧↓, ⌘A, Esc twice, plain click collapse — as on Agents; the palette's ⌘↩ still opens the anchor's window.
-- [ ] Commit: `feat(hub): Fleets page multi-select with bulk Start / Stop`
+- [x] `npm test`, `npm run build`, `npm run lint` (0 errors).
+- [x] Browser acceptance (stub: three fleets, one `stopped: true`; `fleet_start` / `fleet_stop` resolve and flip the stub's flags): ⌘-click two fleets → "2 selected" with the right counts; Start / Stop call `fleet_start` / `fleet_stop` with the right names and the counts update after the list reloads; ⇧-click, ⇧↓, ⌘A, Esc twice, plain click collapse — as on Agents; the palette's ⌘↩ still opens the anchor's window.
+- [x] Commit: `feat(hub): Fleets page multi-select with bulk Start / Stop`
+
+**Done (2026-09-06), notes:**
+- All five tasks as written. Browser acceptance ran on both pages with synthetic modifier events.
+- Known theoretical race, left as is: `AgentsPage.select` awaits the dirty guard, so two ⌘-clicks dispatched in the same tick compute from the same stale `selection` and the second wins — a hand cannot click within one render; a `selectionRef` would close it if it ever shows up.
+- Acceptance-script note: the listbox must be focused before dispatching Esc (as it is under a real keypress); with focus on `body`, `DashboardApp`'s global Esc handler also fires and clears the anchor.
+- The plan's Agents acceptance text assumed the anchor stays on `aura` after a ⌘-click; per spec §3 the toggle moves the anchor to the added row, so ⇧-click ranges from `scout`. The spec is right; the acceptance prose was loose.
 
 **Manual acceptance PR 12 (real build):** ⌘-click and ⇧-click with real modifier keys on macOS (the browser checks dispatch synthetic events); ⇧↑ / ⇧↓ from a focused list; ⌘A does not select the page text; a real bulk start of three idle agents shows three ✓ and the runtime dots turn green as `runtime-status-changed` events arrive.
 
