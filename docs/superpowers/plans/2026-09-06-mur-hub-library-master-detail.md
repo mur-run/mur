@@ -87,7 +87,7 @@ Branch `feat/hub-2-library-skills`.
         let map = agents_by_skill(&profiles);
         assert_eq!(map.get("mur-dev").unwrap(), &vec!["aura".to_string(), "scout".to_string()]);
         assert_eq!(map.get("mur-tdd").unwrap(), &vec!["scout".to_string()]);
-        assert!(map.get("nope").is_none());
+        assert!(!map.contains_key("nope"));
     }
 ```
   If `SkillCardEntry` does not derive `Default` (check `mur-common/src/agent.rs` line 15), build the entries with every field spelled out instead of `..Default::default()` — do not add a derive to `mur-common` for a test.
@@ -161,6 +161,11 @@ fn read_agent_skill_cards(agents_dir: &Path) -> Vec<(String, Vec<mur_common::age
   In `skills_installed()`, before `Ok(list_skills(...))`, add `let usage = agents_by_skill(&read_agent_skill_cards(&mur_home.join("agents")));` and pass `&usage` as a third argument. In `list_skills(skills_dir, status_by_name, usage: &std::collections::BTreeMap<String, Vec<String>>)` set `agents: usage.get(&manifest.name).cloned().unwrap_or_default()` and `path: dir.to_str().map(str::to_string)`. Update the two existing `list_skills` tests to pass `&std::collections::BTreeMap::new()` and assert `result[0].path.is_some()` in the manifest test.
 - [x] `ORT_STRATEGY=download cargo test skills_installed` → pass (or CI). `cargo clippy -- -D warnings` on the crate if it builds locally.
 - [x] Commit: `feat(hub): skills_installed reports which agents use each skill and its path`
+
+> **Deviation recorded during execution (PR 6):** the Rust change was not
+> compiled locally (drive full); CI's Hub GUI clippy caught one lint in the
+> test (`unnecessary_get_then_check`, fixed above). Everything else compiled
+> and the unit tests passed on all three platforms.
 
 **Interfaces — Produces:** `InstalledSkillView.agents: string[]`, `InstalledSkillView.path: string | null` (as seen by the UI).
 
