@@ -854,6 +854,7 @@ export const zhTW: Table = {
   "nav.groupWorkspace": "工作區",
   "nav.groupLibrary": "資源庫",
   "shell.version": "MUR Hub {version}",
+  "shell.resizeList": "拖曳調整清單寬度 · 按兩下還原",
   "nav.home": "首頁",
   "nav.chats": "對話",
   "nav.agents": "代理人",
