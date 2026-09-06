@@ -547,7 +547,7 @@ export function DashboardApp() {
           ) : page === "skills" ? (
             <SkillsPage />
           ) : page === "mcp" ? (
-            <McpPage onSelect={onLibrarySelect} />
+            <McpPage />
           ) : page === "workflows" ? (
             <WorkflowsPage onSelect={onLibrarySelect} />
           ) : page === "plugins" ? (
