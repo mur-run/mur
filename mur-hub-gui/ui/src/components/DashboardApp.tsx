@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { currentMonitor, getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAgents } from "../context/AgentContext";
 import type { AgentEntry, AgentRuntimeStatus, NudgeStatus } from "../types";
 import { WizardModal } from "./wizard/WizardModal";
@@ -236,37 +236,6 @@ export function DashboardApp() {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
-  // Auto-resize the window when the contextual inspector opens/closes, so the
-  // main pane keeps a usable width instead of being squeezed by the 320px
-  // inspector column. Keys on ANY inspector selection (agent/chat/fleet/
-  // library), matching the shell's --shell-inspector-width. Clamped to the
-  // monitor so the window never grows past the visible screen.
-  const inspectorOpen = hasInspector(page, {
-    agent: selectedAgent,
-    chatAgent: chatAgent?.name ?? null,
-    chatDisplayName: chatAgent?.displayName,
-    fleet: fleetName,
-    library: libItem,
-  });
-  useEffect(() => {
-    (async () => {
-      const win = getCurrentWindow();
-      const monitor = await currentMonitor().catch(() => null);
-      const scale = monitor?.scaleFactor ?? 1;
-      const availW = monitor ? monitor.size.width / scale - 16 : 1440;
-      const availH = monitor ? monitor.size.height / scale - 60 : 800;
-      const desiredW = 960 + (inspectorOpen ? 320 : 0);
-      const desiredH = inspectorOpen ? 720 : 620;
-      const width = Math.min(desiredW, availW);
-      const height = Math.min(desiredH, availH);
-      win.setSize(new LogicalSize(width, height)).catch(console.error);
-      const minW = Math.min(720 + (inspectorOpen ? 320 : 0), availW);
-      win
-        .setMinSize(new LogicalSize(minW, Math.min(480, availH)))
-        .catch(console.error);
-    })().catch(console.error);
-  }, [inspectorOpen]);
-
   // First-launch check: show banner if not running from /Applications
   useEffect(() => {
     invoke<{ is_first_launch: boolean; in_applications: boolean }>(
@@ -356,103 +325,109 @@ export function DashboardApp() {
     />
   ) : undefined;
 
+  // Banners render inside the content column (Shell `banners` slot), so
+  // they never push the sidebar down (spec §3.3).
+  const banners = (
+    <>
+    {showAppsBanner && (
+      <div className="onboarding-banner">
+        <span>
+          {t("dashboard.moveToAppsBody", {
+            folder: t("dashboard.applicationsFolder"),
+          })
+            .split(t("dashboard.applicationsFolder"))
+            .flatMap((part, i) =>
+              i === 0
+                ? [part]
+                : [
+                    <strong key={i}>{t("dashboard.applicationsFolder")}</strong>,
+                    part,
+                  ],
+            )}
+        </span>
+        <button
+          className="toolbar-btn"
+          onClick={() => setShowAppsBanner(false)}
+          title={t("dashboard.dismiss")}
+        >
+          ✕
+        </button>
+      </div>
+    )}
+    {showUpgradeNudge && !nudgeDismissed && (
+      <div className="upgrade-nudge-banner">
+        <span>{t("dashboard.nudgePrompt")}</span>
+        <div className="upgrade-nudge-actions">
+          <button
+            className="toolbar-btn"
+            onClick={() => {
+              invoke("nudge_dismiss").catch(() => {});
+              setNudgeDismissed(true);
+            }}
+          >
+            {t("dashboard.nudgeDecline")}
+          </button>
+          <button
+            className="toolbar-btn toolbar-btn--primary"
+            onClick={() => {
+              setShowUpgradeNudge(false);
+              setModelPickerOpen(true);
+            }}
+          >
+            {t("dashboard.nudgeAccept")}
+          </button>
+        </div>
+      </div>
+    )}
+    {appUpdate && (
+      <div className="upgrade-nudge-banner">
+        <span>
+          {updateError
+            ? t("dashboard.updateError", { error: updateError })
+            : updateProgress !== null
+              ? t("dashboard.updateDownloading", {
+                  version: appUpdate.version,
+                  pct: updateProgress,
+                })
+              : t("dashboard.updateAvailable", { version: appUpdate.version })}
+        </span>
+        {updateProgress === null && (
+          <div className="upgrade-nudge-actions">
+            <button className="toolbar-btn" onClick={() => setAppUpdate(null)}>
+              {t("dashboard.updateLater")}
+            </button>
+            <button
+              className="toolbar-btn toolbar-btn--primary"
+              onClick={installUpdate}
+            >
+              {updateError
+                ? t("dashboard.updateRetry")
+                : t("dashboard.updateInstall")}
+            </button>
+          </div>
+        )}
+      </div>
+    )}
+    {cliSkew && (
+      <div className="upgrade-nudge-banner">
+        <span>
+          {t("dashboard.cliSkew", { cli: cliSkew.cli, hub: cliSkew.hub, hint: cliSkew.upgrade_hint })}
+        </span>
+        <button
+          className="toolbar-btn"
+          onClick={() => setCliSkew(null)}
+          title={t("dashboard.dismiss")}
+        >
+          ✕
+        </button>
+      </div>
+    )}
+    </>
+  );
+
   return (
     <div className="dashboard-root">
       <div className="dashboard-main dashboard">
-        {showAppsBanner && (
-          <div className="onboarding-banner">
-            <span>
-              {t("dashboard.moveToAppsBody", {
-                folder: t("dashboard.applicationsFolder"),
-              })
-                .split(t("dashboard.applicationsFolder"))
-                .flatMap((part, i) =>
-                  i === 0
-                    ? [part]
-                    : [
-                        <strong key={i}>{t("dashboard.applicationsFolder")}</strong>,
-                        part,
-                      ],
-                )}
-            </span>
-            <button
-              className="toolbar-btn"
-              onClick={() => setShowAppsBanner(false)}
-              title={t("dashboard.dismiss")}
-            >
-              ✕
-            </button>
-          </div>
-        )}
-        {showUpgradeNudge && !nudgeDismissed && (
-          <div className="upgrade-nudge-banner">
-            <span>{t("dashboard.nudgePrompt")}</span>
-            <div className="upgrade-nudge-actions">
-              <button
-                className="toolbar-btn"
-                onClick={() => {
-                  invoke("nudge_dismiss").catch(() => {});
-                  setNudgeDismissed(true);
-                }}
-              >
-                {t("dashboard.nudgeDecline")}
-              </button>
-              <button
-                className="toolbar-btn toolbar-btn--primary"
-                onClick={() => {
-                  setShowUpgradeNudge(false);
-                  setModelPickerOpen(true);
-                }}
-              >
-                {t("dashboard.nudgeAccept")}
-              </button>
-            </div>
-          </div>
-        )}
-        {appUpdate && (
-          <div className="upgrade-nudge-banner">
-            <span>
-              {updateError
-                ? t("dashboard.updateError", { error: updateError })
-                : updateProgress !== null
-                  ? t("dashboard.updateDownloading", {
-                      version: appUpdate.version,
-                      pct: updateProgress,
-                    })
-                  : t("dashboard.updateAvailable", { version: appUpdate.version })}
-            </span>
-            {updateProgress === null && (
-              <div className="upgrade-nudge-actions">
-                <button className="toolbar-btn" onClick={() => setAppUpdate(null)}>
-                  {t("dashboard.updateLater")}
-                </button>
-                <button
-                  className="toolbar-btn toolbar-btn--primary"
-                  onClick={installUpdate}
-                >
-                  {updateError
-                    ? t("dashboard.updateRetry")
-                    : t("dashboard.updateInstall")}
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-        {cliSkew && (
-          <div className="upgrade-nudge-banner">
-            <span>
-              {t("dashboard.cliSkew", { cli: cliSkew.cli, hub: cliSkew.hub, hint: cliSkew.upgrade_hint })}
-            </span>
-            <button
-              className="toolbar-btn"
-              onClick={() => setCliSkew(null)}
-              title={t("dashboard.dismiss")}
-            >
-              ✕
-            </button>
-          </div>
-        )}
-
         <div className="dashboard__bar">
           <span className="dashboard__brand">MUR</span>
           <label className="field dashboard__bar-search">
@@ -517,6 +492,8 @@ export function DashboardApp() {
           onNavigate={(id) => setPage(id)}
           badge={badgeCount}
           inspector={inspectorNode}
+          banners={banners}
+          onSettings={() => setSettingsOpen(true)}
         >
           {page === "home" ? (
             <HomePage

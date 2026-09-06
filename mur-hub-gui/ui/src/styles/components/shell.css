@@ -3,18 +3,16 @@
 .shell {
   display: grid;
   grid-template-columns: var(--shell-sidebar-width) 1fr;
-  flex: 1;
-  min-height: 0;
-  width: 100%;
-  font-family: var(--font-sans);
-  font-size: var(--text-base);
-  color: var(--text-primary);
-  background: var(--surface-bg);
+  flex: 1; min-height: 0; width: 100%;
+  font-family: var(--font-sans); font-size: var(--text-base);
+  color: var(--text-primary); background: var(--surface-window);
 }
-
-.shell--with-inspector {
-  grid-template-columns: var(--shell-sidebar-width) 1fr var(--shell-inspector-width);
+.shell--sidebar-collapsed { grid-template-columns: var(--shell-sidebar-collapsed-width) 1fr; }
+.shell--with-inspector { grid-template-columns: var(--shell-sidebar-width) 1fr var(--shell-inspector-width); }
+.shell--sidebar-collapsed.shell--with-inspector {
+  grid-template-columns: var(--shell-sidebar-collapsed-width) 1fr var(--shell-inspector-width);
 }
+.shell--titlebar-inset .shell__sidebar { padding-top: var(--shell-titlebar-inset); }
 
 .shell__sidebar {
   /* Vibrancy treatment: translucent bg + blur. Fallback (flip to solid if
@@ -26,10 +24,9 @@
   overflow-y: auto;
 }
 
-.shell__content {
-  overflow: auto;
-  min-width: 0;
-}
+.shell__content { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.shell__page { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.shell__page > * { flex: 1; min-height: 0; }
 
 .shell__inspector {
   border-left: 1px solid var(--border-line);
@@ -44,6 +41,7 @@
   gap: 16px;
   padding: 12px 8px;
   width: 100%;
+  min-height: 100%;
   box-sizing: border-box;
 }
 
@@ -114,3 +112,31 @@
   background: var(--status-attention);
   color: var(--text-on-attention);
 }
+
+/* ── Collapsed icon rail + footer (spec §3.1) ─────────────────────────── */
+.shell-sidebar--collapsed .shell-sidebar__group-label,
+.shell-sidebar--collapsed .shell-sidebar-item__label,
+.shell-sidebar--collapsed .shell-sidebar__version { display: none; }
+.shell-sidebar--collapsed .shell-sidebar-item {
+  position: relative; justify-content: center; width: 40px; padding: 7px 0; margin: 0 auto;
+}
+.shell-sidebar--collapsed .shell-sidebar-item__badge {
+  position: absolute; top: 2px; right: 2px; min-width: 14px; height: 14px; padding: 0 4px; font-size: 9.5px;
+}
+.shell-sidebar__footer { margin-top: auto; display: flex; flex-direction: column; gap: 2px; }
+.shell-sidebar__version { font-size: var(--text-xs); color: var(--text-tertiary); padding: 4px 10px 0; }
+@media (prefers-reduced-motion: no-preference) {
+  .shell { transition: grid-template-columns var(--dur-base) var(--ease-out); }
+}
+
+/* Master–detail page layout (spec §3.1): list | divider | detail. The page
+   sets --md-list-width from useResizableColumn. */
+.master-detail {
+  display: grid; grid-template-columns: var(--md-list-width, var(--shell-list-width)) 6px 1fr;
+  height: 100%; min-height: 0; overflow: hidden;
+}
+.list-divider { position: relative; cursor: col-resize; background: transparent; }
+.list-divider::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: var(--border-line);
+}
+.list-divider:hover::after, .list-divider:active::after { width: 2px; background: var(--color-brand); }
