@@ -77,13 +77,11 @@ export function DashboardApp() {
   // agents-page selection lives in AgentContext (selectedAgent); these cover
   // the chats / fleets / library pages.
   const [chatAgent, setChatAgent] = useState<{ name: string; displayName?: string } | null>(null);
-  const [fleetName, setFleetName] = useState<string | null>(null);
   const [libItem, setLibItem] = useState<LibrarySelection | null>(null);
   // Stable callbacks so the pages' report-up effects don't loop.
   const onChatActive = useCallback((name: string | null, displayName?: string) => {
     setChatAgent(name ? { name, displayName } : null);
   }, []);
-  const onFleetSelect = useCallback((name: string | null) => setFleetName(name), []);
   const onLibrarySelect = useCallback((item: LibrarySelection | null) => setLibItem(item), []);
   // Unified inbox — owned here so the sidebar + Dock badges stay in sync with
   // what HomePage renders.
@@ -325,7 +323,6 @@ export function DashboardApp() {
       if (el && el.getAttribute("role") === "listbox") return; // SourceList owns its Esc
       setSelected(null);
       setChatAgent(null);
-      setFleetName(null);
       setLibItem(null);
     }
     window.addEventListener("keydown", onKey);
@@ -337,7 +334,6 @@ export function DashboardApp() {
     agent: selectedAgent,
     chatAgent: chatAgent?.name ?? null,
     chatDisplayName: chatAgent?.displayName,
-    fleet: fleetName,
     library: libItem,
   };
   const inspectorNode = hasInspector(page, inspectorSelection) ? (
@@ -347,8 +343,7 @@ export function DashboardApp() {
       onClose={() => {
         setSelected(null);
         setChatAgent(null);
-        setFleetName(null);
-        setLibItem(null);
+          setLibItem(null);
       }}
     />
   ) : undefined;
@@ -535,7 +530,7 @@ export function DashboardApp() {
           ) : page === "chats" ? (
             <ChatsPage agents={agents} initialAgent={chatInitial} onActiveChange={onChatActive} />
           ) : page === "fleets" ? (
-            <FleetView onSelect={onFleetSelect} requestedName={fleetRequest} onRequestHandled={clearFleetRequest} />
+            <FleetView requestedName={fleetRequest} onRequestHandled={clearFleetRequest} />
           ) : page === "agents" ? (
             <AgentsPage
               agents={agents}
