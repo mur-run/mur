@@ -1,6 +1,6 @@
 # MUR Hub 2.0 — Phase 3(b): side-peek from Home
 
-**Date:** 2026-09-06 · **Status:** Draft — awaiting review
+**Date:** 2026-09-06 · **Status:** Approved; implemented in PR 11
 **Follows:** `2026-09-06-mur-hub-master-detail-shell-design.md` (§10 Phase 3), `2026-09-06-mur-hub-chats-master-detail-design.md` (Phase 3(a), #1177–#1178: `ChatPane`, the attention reducer wiring), `2026-09-06-mur-hub-open-in-window-design.md` (Phase 2(b): `FleetDetailPane`, `DetailWindow`, `openDetailWindow`).
 **Scope:** `mur-hub-gui/ui` only. No Rust change.
 
@@ -62,11 +62,11 @@ export function peekTargetForChannel(channel: { id: string }, agentNames: Readon
 </aside>
 ```
 
-- **Props:** `{ target: PeekTarget; agents: AgentEntry[]; runtimeMap: Map<string, AgentRuntimeStatus>; channels: ChannelSummary[]; onClose: () => void; onGo: (t: PeekTarget) => void; onOpenInWindow: (t: PeekTarget) => void; onOpenAgent: (name: string) => void }`.
+- **Props:** `{ target: PeekTarget; agents: AgentEntry[]; runtimeMap: Map<string, AgentRuntimeStatus>; channels: ChannelSummary[]; onClose: () => void; onGo: (t: PeekTarget) => void; onOpenInWindow: (t: PeekTarget, title: string) => void; onOpenAgent: (name: string) => void }` — `title` is the display name the panel shows, so the window gets it too.
 - **Chat body:** `const entry = agents.find(a => a.name === target.agent)`; if absent → `<p className="peek__missing">{t("detailWindow.missingAgent")}</p>`; else `const item = buildChatList([entry], attention, channels)[0]` (`attention` from `useConversations()`) and `<ChatPane item={item} runtime={runtimeMap.get(name)} onOpenAgent={onOpenAgent} />`. `ChatPane`'s **Open agent** button keeps its meaning (the Agents page with that agent selected): `PeekPanel` takes `onOpenAgent: (name: string) => void`, `DashboardApp` passes its existing `openAgentFromChat` wrapped to close the peek first. Title = `entry.display_name`.
 - **Fleet body:** `FleetHost` (§6) with `initialTab="jobs"`, `onDeleted={onClose}`, missing text `detailWindow.missingFleet`. Title = the fleet's display name once `fleet_list` answers, the name before.
 - **Go:** chat → `openChatWith(agent)` (existing: Chats page with that agent); fleet → `setFleetRequest(name); setPage("fleets")` (the palette's path). Both then `closePeek()`.
-- **Open in window:** chat → `popOutChat(agent)`; fleet → `openDetailWindow("fleet", name, displayName)`. Both then `closePeek()`.
+- **Open in window:** chat → `popOutChat(agent)`; fleet → `openDetailWindow("fleet", name, title)` with the panel's title. Both then `closePeek()`.
 - **Keys:** a window `keydown` listener registered by `PeekPanel` (capture phase): `Escape` → `onClose` and `stopPropagation` (so `DashboardApp`'s global Esc, which clears selections, does not also fire); `isOpenInWindowShortcut(e)` → the Open-in-window action (not while `isEditingTarget(document.activeElement)` — the compose box). `DashboardApp`'s own ⌘↩ branch is unaffected because Home has no selection.
 - **Focus:** on mount, focus the close button; on unmount, restore focus to the element that was active before (captured in a ref on mount). No focus trap (Tab can leave the panel) — recorded as a known limitation; a trap is a later refinement.
 - **Attention:** on mount `openConversation(agent); focusConversation(agent)` for a chat target; on unmount `blurConversation()`.

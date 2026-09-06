@@ -62,13 +62,13 @@ Copied from the design and `CLAUDE.md`. Every task includes all of them.
 
 **Interfaces.** Produces `FleetHost({ name, initialTab?, onDeleted, missing, onOpenInWindow?, onTitle? })` and `FleetDetailPaneProps.initialTab?: FleetTabId`; 11.2 consumes `FleetHost`.
 
-- [ ] `src/components/detail/fleet/FleetDetailPane.tsx`: add to `FleetDetailPaneProps` after `onOpenInWindow?`:
+- [x] `src/components/detail/fleet/FleetDetailPane.tsx`: add to `FleetDetailPaneProps` after `onOpenInWindow?`:
   ```ts
   /** Tab to open on; the Home peek opens on Jobs. Default Overview. */
   initialTab?: FleetTabId;
   ```
   destructure `initialTab = "overview"` in the component signature, and change `useState<FleetTabId>("overview")` to `useState<FleetTabId>(initialTab)`.
-- [ ] Create `src/components/detail/fleet/FleetHost.tsx`:
+- [x] Create `src/components/detail/fleet/FleetHost.tsx`:
 
 ```tsx
 import { useCallback, useEffect, useState, type ReactNode } from "react";
@@ -132,7 +132,7 @@ export function FleetHost({ name, initialTab, onDeleted, missing, onOpenInWindow
   );
 }
 ```
-- [ ] `src/components/detail/window/DetailWindow.tsx`: delete the whole `function FleetBody(…) { … }` (lines 109–139) and the now-unused imports `useCallback`, `type AgentEntry`, `FleetSummary, LabelView`, `FleetDetailPane` (keep `useEffect`, `useState`, `invoke`, `getCurrentWindow`, `useAgents`, `AgentProvider`); add `import { FleetHost } from "../fleet/FleetHost";`. Replace `<FleetBody name={route.name} />` with:
+- [x] `src/components/detail/window/DetailWindow.tsx`: delete the whole `function FleetBody(…) { … }` (lines 109–139) and the now-unused imports `useCallback`, `type AgentEntry`, `FleetSummary, LabelView`, `FleetDetailPane` (keep `useEffect`, `useState`, `invoke`, `getCurrentWindow`, `useAgents`, `AgentProvider`); add `import { FleetHost } from "../fleet/FleetHost";`. Replace `<FleetBody name={route.name} />` with:
   ```tsx
         <FleetHost
           name={route.name}
@@ -141,14 +141,14 @@ export function FleetHost({ name, initialTab, onDeleted, missing, onOpenInWindow
         />
   ```
   (`t` is in scope in `DetailWindowInner`.) `grep -n 'FleetBody\|useCallback\|FleetSummary' src/components/detail/window/DetailWindow.tsx` → none.
-- [ ] `npm test`, `npm run build`, `npm run lint` (0 errors). Browser: `#/detail/fleet/<name>` renders as before (Overview tab first); `#/detail/fleet/nope` shows the missing state.
-- [ ] Commit: `refactor(hub): extract FleetHost from DetailWindow; FleetDetailPane.initialTab`
+- [x] `npm test`, `npm run build`, `npm run lint` (0 errors). Browser: `#/detail/fleet/<name>` renders as before (Overview tab first); `#/detail/fleet/nope` shows the missing state.
+- [x] Commit: `refactor(hub): extract FleetHost from DetailWindow; FleetDetailPane.initialTab`
 
 ### Task 11.2 — peek model, tokens, `PeekPanel`, `DashboardApp` state and keys
 
 **Interfaces.** Consumes `FleetHost` (11.1), `ChatPane` / `popOutChat` / `buildChatList` (3(a)), `openDetailWindow` / `isOpenInWindowShortcut` / `isEditingTarget` (2(b)). Produces `PeekTarget`, `peekTargetForChannel(channel, agentNames)`, `PeekPanel`, and `DashboardApp.openPeek(target)`; 11.3 consumes `openPeek`.
 
-- [ ] Create `src/components/peek/peekModel.test.ts`:
+- [x] Create `src/components/peek/peekModel.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -170,8 +170,8 @@ describe("peekTargetForChannel", () => {
   });
 });
 ```
-- [ ] `npm test -- src/components/peek/peekModel.test.ts` → fails (module missing).
-- [ ] Create `src/components/peek/peekModel.ts`:
+- [x] `npm test -- src/components/peek/peekModel.test.ts` → fails (module missing).
+- [x] Create `src/components/peek/peekModel.ts`:
 
 ```ts
 /** What the Home peek can show (spec 3(b) §3). */
@@ -191,9 +191,9 @@ export function peekTargetForChannel(channel: { id: string }, agentNames: Readon
   return null;
 }
 ```
-- [ ] `npm test -- src/components/peek/peekModel.test.ts` → 3 passed.
-- [ ] Tokens. `src/styles/tokens/primitives.css`: on the line holding `--shadow-pop` (line 39) append ` --z-peek:900;` (the modal overlay is `z-index: 1000` in `modal.css`; the peek stays below it) and `--scrim-light:rgba(16,24,40,.32); --scrim-dark:rgba(0,0,0,.5);`. `src/styles/tokens/semantic.css`: add `--scrim:var(--scrim-light);` to the `:root` block (after the `--surface-list… --surface-detail…` line) and to the `:root[data-theme="light"]` block; add `--scrim:var(--scrim-dark);` to the `@media (prefers-color-scheme: dark)` block's `:root:not([data-theme="light"])` and to the `:root[data-theme="dark"]` block (each after its `--surface-list… --surface-detail…` line).
-- [ ] Create `src/styles/components/peek.css` and add `@import "./components/peek.css";` after the `chats.css` line in `src/styles/index.css`:
+- [x] `npm test -- src/components/peek/peekModel.test.ts` → 3 passed.
+- [x] Tokens. `src/styles/tokens/primitives.css`: on the line holding `--shadow-pop` (line 39) append ` --z-peek:900;` (the modal overlay is `z-index: 1000` in `modal.css`; the peek stays below it) and `--scrim-light:rgba(16,24,40,.32); --scrim-dark:rgba(0,0,0,.5);`. `src/styles/tokens/semantic.css`: add `--scrim:var(--scrim-light);` to the `:root` block (after the `--surface-list… --surface-detail…` line) and to the `:root[data-theme="light"]` block; add `--scrim:var(--scrim-dark);` to the `@media (prefers-color-scheme: dark)` block's `:root:not([data-theme="light"])` and to the `:root[data-theme="dark"]` block (each after its `--surface-list… --surface-detail…` line).
+- [x] Create `src/styles/components/peek.css` and add `@import "./components/peek.css";` after the `chats.css` line in `src/styles/index.css`:
 
 ```css
 /* Home side-peek (Phase 3(b) §5): scrim + right-anchored slide-over hosting ChatPane / FleetDetailPane. */
@@ -221,7 +221,7 @@ export function peekTargetForChannel(channel: { id: string }, agentNames: Readon
 .peek__body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .peek__missing { margin: var(--space-8); color: var(--text-secondary); font-size: var(--text-sm); }
 ```
-- [ ] i18n. `en.ts` after `"home.nowRunning"`:
+- [x] i18n. `en.ts` after `"home.nowRunning"`:
   ```ts
   "peek.go": "Go",
   "peek.viewConversation": "View conversation",
@@ -231,7 +231,7 @@ export function peekTargetForChannel(channel: { id: string }, agentNames: Readon
   "peek.go": "前往",
   "peek.viewConversation": "查看對話",
   ```
-- [ ] Create `src/components/peek/PeekPanel.tsx`:
+- [x] Create `src/components/peek/PeekPanel.tsx`:
 
 ```tsx
 import { useEffect, useRef, useState } from "react";
@@ -352,7 +352,7 @@ function ChatBody({ agent, entry, runtimeMap, channels, onOpenAgent }: {
   return <ChatPane item={item} runtime={runtimeMap.get(agent)} onOpenAgent={onOpenAgent} />;
 }
 ```
-- [ ] `src/components/DashboardApp.tsx`:
+- [x] `src/components/DashboardApp.tsx`:
   - Imports: `import { PeekPanel } from "./peek/PeekPanel";` and `import type { PeekTarget } from "./peek/peekModel";`.
   - State, after `openAgentFromChat`:
     ```tsx
@@ -398,15 +398,15 @@ function ChatBody({ agent, entry, runtimeMap, channels, onOpenAgent }: {
             />
           )}
     ```
-- [ ] `npm test`, `npm run build`, `npm run lint` (0 errors). Nothing opens the panel yet; the browser check is in 11.3.
-- [ ] Commit: `feat(hub): PeekPanel — right-side slide-over for a chat or a fleet, with Esc / ⌘↩ / scrim`
+- [x] `npm test`, `npm run build`, `npm run lint` (0 errors). Nothing opens the panel yet; the browser check is in 11.3.
+- [x] Commit: `feat(hub): PeekPanel — right-side slide-over for a chat or a fleet, with Esc / ⌘↩ / scrim`
 
 ### Task 11.3 — Home entry points, the Quick Look note
 
 **Interfaces.** Consumes `peek` / `setPeek` and `PeekPanel` (11.2), `peekTargetForChannel`. Produces `DashboardApp.openPeek`, `HomePage.onPeek`, `NowRunning.onPeekAgent`, `NowRunning.onOpen(channel)`, `NeedsYou.onPeekAgent`.
 
-- [ ] `src/components/DashboardApp.tsx`: after `closePeek` add `const openPeek = useCallback((target: PeekTarget) => setPeek(target), []);` and pass `onPeek={openPeek}` to `<HomePage …/>`.
-- [ ] `src/components/home/HomePage.tsx`: add `import { peekTargetForChannel, type PeekTarget } from "../peek/peekModel";`; add the prop `onPeek: (target: PeekTarget) => void;` to `Props` (comment `/** Open the side-peek (spec 3(b)). */`); destructure it; replace `openChat` with:
+- [x] `src/components/DashboardApp.tsx`: after `closePeek` add `const openPeek = useCallback((target: PeekTarget) => setPeek(target), []);` and pass `onPeek={openPeek}` to `<HomePage …/>`.
+- [x] `src/components/home/HomePage.tsx`: add `import { peekTargetForChannel, type PeekTarget } from "../peek/peekModel";`; add the prop `onPeek: (target: PeekTarget) => void;` to `Props` (comment `/** Open the side-peek (spec 3(b)). */`); destructure it; replace `openChat` with:
   ```tsx
   const agentNames = new Set(agents.map((a) => a.name));
   // A channel row peeks its fleet or its agent's chat; other channels have no
@@ -419,7 +419,7 @@ function ChatBody({ agent, entry, runtimeMap, channels, onOpenAgent }: {
   const peekAgent = (name: string) => onPeek({ kind: "chat", agent: name });
   ```
   Pass `onPeekAgent={peekAgent}` to `<NeedsYou …/>` and `<NowRunning …/>`, and change `<NowRunning … onOpen={() => openChat()} />` to `onOpen={openChat}`.
-- [ ] `src/components/home/NowRunning.tsx`: change the prop to `onOpen: (channel: ChannelSummary) => void;` and add `onPeekAgent: (name: string) => void;`; destructure `onPeekAgent`; the chip becomes
+- [x] `src/components/home/NowRunning.tsx`: change the prop to `onOpen: (channel: ChannelSummary) => void;` and add `onPeekAgent: (name: string) => void;`; destructure `onPeekAgent`; the chip becomes
   ```tsx
               <button
                 key={s.name}
@@ -430,7 +430,7 @@ function ChatBody({ agent, entry, runtimeMap, channels, onOpenAgent }: {
               >
   ```
   (closing `</div>` → `</button>`); the row becomes `<button className="home-run-row" onClick={() => onOpen(ch)}>`.
-- [ ] `src/components/home/NeedsYou.tsx`: add `onPeekAgent: (name: string) => void;` to `Props` (comment `/** Peek the owning agent's conversation (spec 3(b) §4). */`), destructure it, pass `onPeekAgent={onPeekAgent}` to `HitlInboxCard` and `CompanionInboxCard`, add the prop to both components' prop types, and in each header render, after the title span:
+- [x] `src/components/home/NeedsYou.tsx`: add `onPeekAgent: (name: string) => void;` to `Props` (comment `/** Peek the owning agent's conversation (spec 3(b) §4). */`), destructure it, pass `onPeekAgent={onPeekAgent}` to `HitlInboxCard` and `CompanionInboxCard`, add the prop to both components' prop types, and in each header render, after the title span:
   ```tsx
         {agent && (
           <button type="button" className="home-card__peek" onClick={() => onPeekAgent(agent)}>
@@ -439,7 +439,7 @@ function ChatBody({ agent, entry, runtimeMap, channels, onOpenAgent }: {
         )}
   ```
   with `const agent = item.agent;` declared at the top of each card's body (no non-null assertion). `CompanionInboxCard` has no `useT` today: add `const { t } = useT();`. In the HITL header place it after the `home-card__tag` span; in the companion header after `inbox-situation`.
-- [ ] `src/styles/components/home.css`: on `.home-run-agent` add `font: inherit; color: inherit; cursor: pointer; text-align: left;` (it is a button now) and a hover `.home-run-agent:hover { background: var(--surface-hover); }`; append
+- [x] `src/styles/components/home.css`: on `.home-run-agent` add `font: inherit; color: inherit; cursor: pointer; text-align: left;` (it is a button now) and a hover `.home-run-agent:hover { background: var(--surface-hover); }`; append
   ```css
   .home-card__peek {
     margin-left: auto; background: none; border: 0; padding: 2px 6px; border-radius: var(--radius-sm);
@@ -447,10 +447,16 @@ function ChatBody({ agent, entry, runtimeMap, channels, onOpenAgent }: {
   }
   .home-card__peek:hover { background: var(--surface-hover); }
   ```
-- [ ] `docs/superpowers/specs/2026-09-06-mur-hub-master-detail-shell-design.md` line 26: change `Quick Look preview, side-peek from Home.` to `Quick Look preview (dropped in Phase 3(b): the detail pane already previews the selection), side-peek from Home (Phase 3(b)).`; line 228: change `Quick Look preview (space bar), side-peek from Home.` to `side-peek from Home (Phase 3(b)); Quick Look was dropped there.`
-- [ ] `npm test`, `npm run build`, `npm run lint` (0 errors).
-- [ ] Browser acceptance (stub: two agents, `list_runtime_statuses` with `aura` running, `channel_list` with `aura`'s primary channel, a `fleet-night-ops` channel with a non-empty `goal` and state `running`, and a `shared-x` channel with two agents and a goal; `hitl_pending_list` with one HITL for `aura`; `fleet_list` / `fleet_detail` / `fleet_jobs` / `fleet_labels_list` for `night-ops`; `channel_load → []`; `open_chat_window` / `open_detail_window → null`): on Home, the `AURA` chip opens the panel titled AURA with the `ChatPane` (model · channel · turns, compose box); the HITL card shows **View conversation** and opens the same; the `fleet-night-ops` row opens the fleet with the **Jobs** tab active and the fleet's display name as title; the `shared-x` row navigates to Chats (no panel); **Go** from a chat peek lands on Chats with AURA selected, from a fleet peek on Fleets with night-ops selected; **Open in window** calls `open_chat_window` / `open_detail_window {kind:"fleet"}` and closes; Esc and the scrim close; with the panel open, Esc does not clear `mur.agents.lastSelected`'s live selection on another page (open Agents, select, go Home, peek, Esc, back to Agents → still selected); a fired `chat-delta` for `aura` while its peek is open leaves the Chats row without the unread dot, and one fired after closing sets it; `peekTargetForChannel` for an unknown agent (edit the stub to drop `aura` from `list_agents` and reload) shows "This agent no longer exists." in the panel.
-- [ ] Commit: `feat(hub): Home side-peek — agent chips, HITL / companion cards, and fleet rows open the PeekPanel`
+- [x] `docs/superpowers/specs/2026-09-06-mur-hub-master-detail-shell-design.md` line 26: change `Quick Look preview, side-peek from Home.` to `Quick Look preview (dropped in Phase 3(b): the detail pane already previews the selection), side-peek from Home (Phase 3(b)).`; line 228: change `Quick Look preview (space bar), side-peek from Home.` to `side-peek from Home (Phase 3(b)); Quick Look was dropped there.`
+- [x] `npm test`, `npm run build`, `npm run lint` (0 errors).
+- [x] Browser acceptance (stub: two agents, `list_runtime_statuses` with `aura` running, `channel_list` with `aura`'s primary channel, a `fleet-night-ops` channel with a non-empty `goal` and state `running`, and a `shared-x` channel with two agents and a goal; `hitl_pending_list` with one HITL for `aura`; `fleet_list` / `fleet_detail` / `fleet_jobs` / `fleet_labels_list` for `night-ops`; `channel_load → []`; `open_chat_window` / `open_detail_window → null`): on Home, the `AURA` chip opens the panel titled AURA with the `ChatPane` (model · channel · turns, compose box); the HITL card shows **View conversation** and opens the same; the `fleet-night-ops` row opens the fleet with the **Jobs** tab active and the fleet's display name as title; the `shared-x` row navigates to Chats (no panel); **Go** from a chat peek lands on Chats with AURA selected, from a fleet peek on Fleets with night-ops selected; **Open in window** calls `open_chat_window` / `open_detail_window {kind:"fleet"}` and closes; Esc and the scrim close; with the panel open, Esc does not clear `mur.agents.lastSelected`'s live selection on another page (open Agents, select, go Home, peek, Esc, back to Agents → still selected); a fired `chat-delta` for `aura` while its peek is open leaves the Chats row without the unread dot, and one fired after closing sets it; `peekTargetForChannel` for an unknown agent (edit the stub to drop `aura` from `list_agents` and reload) shows "This agent no longer exists." in the panel.
+- [x] Commit: `feat(hub): Home side-peek — agent chips, HITL / companion cards, and fleet rows open the PeekPanel`
+
+**Done (2026-09-06), deviations recorded:**
+- 11.2: the peek state block had to sit after `paletteFleets` is declared (TS2454 otherwise); the plan placed it after `openAgentFromChat`.
+- 11.3 (small addition): `onOpenInWindow(target, title)` — the panel passes the display name it already knows, so a fleet's ⌘↩ / Open in window titles the window "Night Ops" instead of `night-ops`; `DashboardApp` no longer looks the fleet up in `paletteFleets` for this.
+- Browser note: the sidebar's Home button reads "首頁1" with a badge, so acceptance scripts match `startsWith`, not equality.
+- `#/detail/fleet/<name>` and `#/detail/fleet/nope` verified after the `FleetHost` extraction (11.1's browser check, run with 11.3's dev server).
 
 **Manual acceptance PR 11 (real build):** the slide-in motion and `prefers-reduced-motion`; the scrim colour in light and dark; a real streamed reply inside a chat peek; a fleet peek's Run ▾ menu (the popover must not be clipped by the panel).
 
