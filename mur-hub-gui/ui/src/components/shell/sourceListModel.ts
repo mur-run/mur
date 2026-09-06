@@ -5,7 +5,8 @@ export interface SourceRowData {
   id: string;
   name: string;
   subtitle?: string;
-  status: StatusKind;
+  /** Omitted for items that have no runtime (Library rows). */
+  status?: StatusKind;
   /** Amber "needs you" count; 0 or undefined hides the badge. */
   needsYou?: number;
   avatar: ReactNode;
