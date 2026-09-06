@@ -967,6 +967,8 @@ export const en = {
   "placeholder.open": "Open Model Library",
   "home.needsYou": "Needs you",
   "home.nowRunning": "Now running",
+  "peek.go": "Go",
+  "peek.viewConversation": "View conversation",
   "home.recentActivity": "Recent activity",
   "home.recentActivity.empty": "No recent activity yet.",
   "home.running.agents": "Running agents",

@@ -16,6 +16,8 @@ interface Props {
   onRefresh: () => void;
   /** Dismiss an item for this session; owned by the caller so the badge stays in sync. */
   onDismiss: (item: InboxItem) => void;
+  /** Peek the owning agent's conversation (spec 3(b) §4). */
+  onPeekAgent: (name: string) => void;
 }
 
 /**
@@ -24,7 +26,7 @@ interface Props {
  * the caller's dismissed-set so this list and the sidebar/Dock badge never
  * drift apart.
  */
-export function NeedsYou({ items, onRefresh, onDismiss }: Props) {
+export function NeedsYou({ items, onRefresh, onDismiss, onPeekAgent }: Props) {
   const { t } = useT();
 
   if (items.length === 0) return null;
@@ -42,6 +44,7 @@ export function NeedsYou({ items, onRefresh, onDismiss }: Props) {
                   item={it}
                   raw={it.payload as RawHitl}
                   onResolved={onRefresh}
+                  onPeekAgent={onPeekAgent}
                 />
               );
             case "install":
@@ -58,6 +61,7 @@ export function NeedsYou({ items, onRefresh, onDismiss }: Props) {
                   key={`companion:${it.id}`}
                   item={it}
                   raw={it.payload as RawCompanionEvent}
+                  onPeekAgent={onPeekAgent}
                 />
               );
             case "upgrade_blocked":
@@ -87,12 +91,15 @@ function HitlInboxCard({
   item,
   raw,
   onResolved,
+  onPeekAgent,
 }: {
   item: InboxItem;
   raw: RawHitl;
   onResolved: () => void;
+  onPeekAgent: (name: string) => void;
 }) {
   const { t } = useT();
+  const agent = item.agent;
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -121,6 +128,11 @@ function HitlInboxCard({
         <span className="hitl-card__icon">⏸</span>
         <span className="hitl-card__title">{item.title}</span>
         {raw.risk && <span className="home-card__tag">{raw.risk}</span>}
+        {agent && (
+          <button type="button" className="home-card__peek" onClick={() => onPeekAgent(agent)}>
+            {t("peek.viewConversation")}
+          </button>
+        )}
       </div>
       <div className="hitl-card__prompt">{item.subtitle}</div>
       <div className="hitl-card__actions">
@@ -169,14 +181,23 @@ function InstallInboxCard({ item, raw }: { item: InboxItem; raw: RawInstall }) {
 function CompanionInboxCard({
   item,
   raw,
+  onPeekAgent,
 }: {
   item: InboxItem;
   raw: RawCompanionEvent;
+  onPeekAgent: (name: string) => void;
 }) {
+  const { t } = useT();
+  const agent = item.agent;
   return (
     <div className="home-card inbox-msg inbox-msg--unread">
       <div className="inbox-msg-header">
         <span className="inbox-situation">{item.title}</span>
+        {agent && (
+          <button type="button" className="home-card__peek" onClick={() => onPeekAgent(agent)}>
+            {t("peek.viewConversation")}
+          </button>
+        )}
         <span className="inbox-time">
           {new Date(raw.generated_at).toLocaleTimeString([], {
             hour: "2-digit",

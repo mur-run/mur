@@ -114,7 +114,9 @@
   border: 1px solid var(--border-line);
   border-radius: var(--radius-xl);
   background: var(--surface-card);
+  font: inherit; color: inherit; cursor: pointer; text-align: left;
 }
+.home-run-agent:hover { background: var(--surface-hover); }
 
 .home-run-agent__name {
   font-size: 13px;
@@ -216,3 +218,9 @@
   flex-wrap: wrap;
   justify-content: center;
 }
+
+.home-card__peek {
+  margin-left: auto; background: none; border: 0; padding: 2px 6px; border-radius: var(--radius-sm);
+  color: var(--color-brand); font: inherit; font-size: var(--text-xs); cursor: pointer; white-space: nowrap;
+}
+.home-card__peek:hover { background: var(--surface-hover); }
