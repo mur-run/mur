@@ -53,7 +53,7 @@ Copied from the spec and `CLAUDE.md`. Every task includes all of them.
 | `mur-core/src/cmd/agent/mod.rs` (modify) | `pub mod perm_view;` |
 | `mur-hub-gui/src-tauri/src/detail.rs` (modify) | `AgentDetail.permissions`; `running.lock` read; one projection test |
 | `mur-hub-gui/ui/src/types.ts` (modify) | TS mirror of `PermissionsView` |
-| `mur-hub-gui/ui/src/components/inspector/tabs/permissionsModel.ts` (+ `.test.ts`) (new) | `enforcementTone`, `mcpScope`, `permCommands` |
+| `mur-hub-gui/ui/src/components/inspector/tabs/permissionsModel.ts` (+ `.test.ts`) (new) | `enforcementTone`, `permCommands` (no `mcpScope`: the scope arrives from the derivation) |
 | `mur-hub-gui/ui/src/components/inspector/tabs/PermissionsTab.tsx` (rewrite) | the section |
 | `mur-hub-gui/ui/src/styles/components/permissions.css` (new), `src/styles/index.css` (modify) | `.perm-*` rules |
 | `mur-hub-gui/ui/src/i18n/en.ts`, `zh-TW.ts` (modify) | `perm.*` keys; `detail.permissionsHint` removed |
@@ -702,7 +702,7 @@ The spec's `bounded_by_allow_hosts: bool` is expressed as `scope: McpScope`: tha
 
 **Interfaces.** Consumes the JSON shape of `PermissionsView` (Task 2). Produces nothing later tasks consume.
 
-- [ ] `mur-hub-gui/ui/src/types.ts`: before `export interface AgentDetail` (line 104) add:
+- [x] `mur-hub-gui/ui/src/types.ts`: before `export interface AgentDetail` (line 104) add:
   ```ts
   /** Mirror of mur-core `perm_view::PermissionsView` (spec 2026-09-07 §1.1). */
   export type Enforcement = "not_running" | "seal_unknown" | "advisory" | "enforcing";
@@ -754,7 +754,7 @@ The spec's `bounded_by_allow_hosts: bool` is expressed as `scope: McpScope`: tha
   ```
   and in `AgentDetail` after `capabilities: string[];` add `permissions: PermissionsView;`.
   (`NetworkOutboundMode` serialises `lowercase`, so `ProxyOnly` is `"proxyonly"`; `McpNetMode` is `snake_case`, so `"broad_audited"`.)
-- [ ] Create `src/components/inspector/tabs/permissionsModel.test.ts`:
+- [x] Create `src/components/inspector/tabs/permissionsModel.test.ts`:
   ```ts
   import { describe, expect, it } from "vitest";
   import { enforcementTone, permCommands } from "./permissionsModel";
@@ -780,7 +780,7 @@ The spec's `bounded_by_allow_hosts: bool` is expressed as `scope: McpScope`: tha
   });
   ```
   `npm test -- src/components/inspector/tabs/permissionsModel.test.ts` → fails (module missing).
-- [ ] Create `src/components/inspector/tabs/permissionsModel.ts`:
+- [x] Create `src/components/inspector/tabs/permissionsModel.ts`:
   ```ts
   import type { Enforcement } from "../../../types";
 
@@ -807,7 +807,7 @@ The spec's `bounded_by_allow_hosts: bool` is expressed as `scope: McpScope`: tha
   }
   ```
   `npm test -- src/components/inspector/tabs/permissionsModel.test.ts` → 2 passed.
-- [ ] `src/i18n/en.ts`: delete the `"detail.permissionsHint": …` line (289) and, after `"detail.noCaps": …` (177), add:
+- [x] `src/i18n/en.ts`: delete the `"detail.permissionsHint": …` line (289) and, after `"detail.noCaps": …` (177), add:
   ```ts
     // ── Permissions (spec 2026-09-07 §1.3) ──
     "perm.enforcement.not_running": "Not running — these are the grants it would ask for; nothing is enforced until it starts.",
@@ -848,7 +848,7 @@ The spec's `bounded_by_allow_hosts: bool` is expressed as `scope: McpScope`: tha
     "perm.failClosed.off": "Runs unconfined if the sandbox cannot be applied.",
     "perm.cmdHint": "Change from the CLI:",
   ```
-- [ ] `src/i18n/zh-TW.ts`: delete the `"detail.permissionsHint": …` line (291) and, after `"detail.noCaps": …` (179), add:
+- [x] `src/i18n/zh-TW.ts`: delete the `"detail.permissionsHint": …` line (291) and, after `"detail.noCaps": …` (179), add:
   ```ts
     // ── Permissions (spec 2026-09-07 §1.3) ──
     "perm.enforcement.not_running": "未執行中 — 以下是它啟動時會索取的授權；在它啟動前沒有任何一項被強制。",
@@ -889,7 +889,7 @@ The spec's `bounded_by_allow_hosts: bool` is expressed as `scope: McpScope`: tha
     "perm.failClosed.off": "沙盒無法套用時不受限制地執行。",
     "perm.cmdHint": "從 CLI 修改：",
   ```
-- [ ] Replace `src/components/inspector/tabs/PermissionsTab.tsx` entirely:
+- [x] Replace `src/components/inspector/tabs/PermissionsTab.tsx` entirely:
   ```tsx
   import type { AgentDetail, McpNetView, PathGrantView, PermissionsView } from "../../../types";
   import { useT } from "../../../i18n";
@@ -1077,7 +1077,7 @@ The spec's `bounded_by_allow_hosts: bool` is expressed as `scope: McpScope`: tha
   }
   ```
   `import type React from "react";` is needed at the top for `React.ReactNode` — add it as the first line.
-- [ ] Create `src/styles/components/permissions.css`:
+- [x] Create `src/styles/components/permissions.css`:
   ```css
   /* Permissions section (spec 2026-09-07 §1.3). Read-only. */
   .perm__banner { margin: 0 0 var(--space-5); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); font-size: var(--text-sm); border: 1px solid var(--border-line); }
@@ -1106,9 +1106,9 @@ The spec's `bounded_by_allow_hosts: bool` is expressed as `scope: McpScope`: tha
   .perm__cmd code { font-family: var(--font-mono); user-select: all; }
   ```
   If `--font-mono`, `--text-xs`, `--radius-md`, or `--space-N` is not defined in `src/styles/tokens/primitives.css` (check with `grep -c "<name>" …`), use the name the file does define for the same role — the CSS may not introduce a raw value.
-- [ ] `src/styles/index.css`: after line 8 (`@import "./components/detail-panel.css";`) add `@import "./components/permissions.css";`.
-- [ ] Run, from `mur-hub-gui/ui/`: `set -o pipefail; npm test 2>&1 | tail -n 8` → all files passing; `npm run build 2>&1 | tail -n 3` → `✓ built`; `npm run lint 2>&1 | tail -n 3` → 0 errors.
-- [ ] `grep -rn "permissionsHint" src/` → no matches (the removed key has no remaining user).
+- [x] `src/styles/index.css`: after line 8 (`@import "./components/detail-panel.css";`) add `@import "./components/permissions.css";`.
+- [x] Run, from `mur-hub-gui/ui/`: `set -o pipefail; npm test 2>&1 | tail -n 8` → all files passing; `npm run build 2>&1 | tail -n 3` → `✓ built`; `npm run lint 2>&1 | tail -n 3` → 0 errors.
+- [x] `grep -rn "permissionsHint" src/` → no matches (the removed key has no remaining user).
 - [ ] Manual acceptance (real Hub, `gotcha_hub_local_app_build_recipe`): open an agent that is **stopped** → Capabilities → Permissions shows the muted "Not running" banner first and `·` glyphs, no ✓. Start it → banner reads "Sandbox enforcing (macos-sbpl)", ✓ rows. Agent with an `inherit` MCP server → its row is marked and reads "NOT bounded by the allow-hosts above". Each block ends with a selectable `mur agent perm …` line.
 - [ ] Commit: `feat(hub): Permissions section shows the full entitlements view, read-only`
 
