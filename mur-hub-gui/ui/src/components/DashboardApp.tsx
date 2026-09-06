@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { currentMonitor, getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAgents } from "../context/AgentContext";
 import type { AgentEntry, AgentRuntimeStatus, NudgeStatus } from "../types";
 import { WizardModal } from "./wizard/WizardModal";
@@ -235,37 +235,6 @@ export function DashboardApp() {
     const unlisten = listen("need-model", () => setModelPickerOpen(true));
     return () => { unlisten.then((fn) => fn()); };
   }, []);
-
-  // Auto-resize the window when the contextual inspector opens/closes, so the
-  // main pane keeps a usable width instead of being squeezed by the 320px
-  // inspector column. Keys on ANY inspector selection (agent/chat/fleet/
-  // library), matching the shell's --shell-inspector-width. Clamped to the
-  // monitor so the window never grows past the visible screen.
-  const inspectorOpen = hasInspector(page, {
-    agent: selectedAgent,
-    chatAgent: chatAgent?.name ?? null,
-    chatDisplayName: chatAgent?.displayName,
-    fleet: fleetName,
-    library: libItem,
-  });
-  useEffect(() => {
-    (async () => {
-      const win = getCurrentWindow();
-      const monitor = await currentMonitor().catch(() => null);
-      const scale = monitor?.scaleFactor ?? 1;
-      const availW = monitor ? monitor.size.width / scale - 16 : 1440;
-      const availH = monitor ? monitor.size.height / scale - 60 : 800;
-      const desiredW = 960 + (inspectorOpen ? 320 : 0);
-      const desiredH = inspectorOpen ? 720 : 620;
-      const width = Math.min(desiredW, availW);
-      const height = Math.min(desiredH, availH);
-      win.setSize(new LogicalSize(width, height)).catch(console.error);
-      const minW = Math.min(720 + (inspectorOpen ? 320 : 0), availW);
-      win
-        .setMinSize(new LogicalSize(minW, Math.min(480, availH)))
-        .catch(console.error);
-    })().catch(console.error);
-  }, [inspectorOpen]);
 
   // First-launch check: show banner if not running from /Applications
   useEffect(() => {
