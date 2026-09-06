@@ -121,6 +121,7 @@ export function DashboardApp() {
   // its opener in 11.3.
   const [peek, setPeek] = useState<PeekTarget | null>(null);
   const closePeek = useCallback(() => setPeek(null), []);
+  const openPeek = useCallback((target: PeekTarget) => setPeek(target), []);
   const goFromPeek = useCallback((target: PeekTarget) => {
     setPeek(null);
     if (target.kind === "chat") openChatWith(target.agent);
@@ -129,14 +130,11 @@ export function DashboardApp() {
       setPage("fleets");
     }
   }, [openChatWith]);
-  const openWindowFromPeek = useCallback((target: PeekTarget) => {
+  const openWindowFromPeek = useCallback((target: PeekTarget, title: string) => {
     setPeek(null);
     if (target.kind === "chat") popOutChat(target.agent);
-    else {
-      const f = paletteFleets.find((x) => x.name === target.name);
-      void openDetailWindow("fleet", target.name, f?.display_name ?? target.name);
-    }
-  }, [paletteFleets]);
+    else void openDetailWindow("fleet", target.name, title);
+  }, []);
   const openAgentFromPeek = useCallback((name: string) => {
     setPeek(null);
     openAgentFromChat(name);
@@ -582,6 +580,7 @@ export function DashboardApp() {
               onDismiss={dismissInboxItem}
               onNavigate={(id) => setPage(id)}
               onCreateAgent={() => setWizardOpen(true)}
+              onPeek={openPeek}
             />
           ) : page === "chats" ? (
             <ChatsPage
