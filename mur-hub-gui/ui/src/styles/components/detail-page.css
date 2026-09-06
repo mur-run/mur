@@ -1,0 +1,46 @@
+/* DetailPage (spec §4.2). */
+.detail-page { display: flex; flex-direction: column; min-width: 0; height: 100%; overflow: auto; background: var(--surface-detail); }
+.detail-page__head { display: flex; align-items: flex-start; gap: var(--space-6); padding: var(--space-7) var(--space-8) 0; }
+.detail-page__avatar { display: flex; width: 48px; height: 48px; flex: none; }
+.detail-page__initials {
+  width: 48px; height: 48px; border-radius: var(--radius-lg); display: grid; place-items: center;
+  color: #fff; font-weight: var(--fw-bold); font-size: 18px;
+}
+.detail-page__ident { min-width: 0; flex: 1; }
+.detail-page__title { margin: 0; font-size: var(--text-xl); font-weight: var(--fw-semi); letter-spacing: -.015em; display: flex; align-items: center; gap: 10px; }
+.detail-page__meta { margin-top: 3px; font-size: var(--text-sm); color: var(--text-secondary); display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+.detail-page__meta .sep { color: var(--text-tertiary); }
+.detail-page__meta .mono { font-family: var(--font-mono); font-size: var(--text-sm); }
+.detail-page__actions { position: relative; margin-left: auto; display: flex; gap: var(--space-4); flex: none; }
+.detail-page__tabs { display: flex; gap: 2px; padding: var(--space-6) var(--space-8) 0; border-bottom: 1px solid var(--border-line); }
+.detail-page__tab {
+  padding: 6px 10px 9px; font: inherit; font-size: 13px; color: var(--text-secondary); background: none; border: 0;
+  border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; cursor: pointer;
+}
+.detail-page__tab--on { color: var(--text-primary); border-color: var(--color-brand); font-weight: 500; }
+.detail-page__body { padding: var(--space-7) var(--space-8) var(--space-9); display: flex; flex-direction: column; gap: var(--space-6); }
+@media (prefers-reduced-motion: no-preference) {
+  .detail-page__body { animation: detail-fade var(--dur-fast) var(--ease-out); }
+}
+@keyframes detail-fade { from { opacity: 0; } to { opacity: 1; } }
+/* Cards inside the body: hairline, no shadow (spec §5.2). */
+.detail-card { background: var(--surface-card); border: 1px solid var(--border-line); border-radius: var(--radius-lg); padding: 14px 16px; min-width: 0; }
+.detail-card__eyebrow { font-size: var(--text-xs); font-weight: var(--fw-semi); letter-spacing: .06em; text-transform: uppercase; color: var(--text-tertiary); margin-bottom: 8px; }
+.detail-section { scroll-margin-top: var(--space-6); }
+.detail-section + .detail-section { margin-top: var(--space-8); padding-top: var(--space-8); border-top: 1px solid var(--border-line-subtle); }
+.detail-section__title { margin: 0 0 var(--space-5); font-size: var(--text-md); font-weight: var(--fw-semi); }
+.detail-attn { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: var(--radius-md); background: color-mix(in srgb, var(--status-attention) 14%, transparent); }
+.detail-attn__text { flex: 1; min-width: 0; font-size: var(--text-sm); }
+.detail-kv { display: grid; grid-template-columns: 100px 1fr auto; gap: 10px; align-items: center; padding: 7px 0; border-top: 1px solid var(--border-line-subtle); font-size: var(--text-sm); }
+.detail-kv:first-of-type { border-top: 0; }
+.detail-kv > :first-child { color: var(--text-secondary); }
+.detail-kv button { font: inherit; font-size: var(--text-sm); color: var(--color-brand-strong); background: none; border: 0; cursor: pointer; }
+.detail-stats { display: grid; grid-template-columns: repeat(4, 1fr); padding: 0; overflow: hidden; font-variant-numeric: tabular-nums; }
+.detail-stats > div { padding: 12px 16px; border-left: 1px solid var(--border-line-subtle); }
+.detail-stats > div:first-child { border-left: 0; }
+.detail-stats b { display: block; font-size: var(--text-lg); font-weight: var(--fw-semi); }
+.detail-stats span { font-size: var(--text-xs); color: var(--text-secondary); }
+.detail-two { display: grid; grid-template-columns: 1.25fr 1fr; gap: var(--space-6); }
+.master-detail--compact .detail-two { grid-template-columns: 1fr; }
+.detail-error, .detail-loading { color: var(--text-secondary); font-size: var(--text-sm); }
+.detail-error { color: var(--status-failed); }
