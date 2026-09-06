@@ -26,7 +26,7 @@ Phase 3 per the shell spec is five independent pieces — Chats, Home side-peek 
 
 `ChatsPage` renders the same `master-detail` grid the Agents page does: `SourceList` · `ListDivider` (`useResizableColumn("mur.chats.listWidth", …)`) · the chat pane. Below 960px the list overlays (`listModeFor`, `master-detail--overlay`, the "Show list" button) exactly as on Agents.
 
-- **SourceList config.** Title `nav.chats`, count = agents, filter placeholder `chats.filter`, `allLabel` = `dashboard.all`, facets from §4, `onSelect` → select (no dirty guard: the chat has no forms), `onOpen` → pop-out, no "+" (`createLabel` still required by the prop; pass `chats.new` … no: `onCreate` and `createItems` both absent hides "+", per PR 6). Empty state: `chats.empty` when there are no agents, `chats.noMatch` when the filter hides all.
+- **SourceList config.** Title `nav.chats`, count = agents, filter placeholder `chats.filter`, `allLabel` = `dashboard.all`, facets from §4, `onSelect` → select (no dirty guard: the chat has no forms), `onOpen` → pop-out, no "+" — neither `onCreate` nor `createItems` is passed, which hides the button (PR 6), and `SourceListProps.createLabel` becomes optional because it is only read when the button renders. Empty state: `chats.empty` when there are no agents, `chats.noMatch` when the filter hides all.
 - **Selection.** `selected` state; on first non-empty agent list restore `readKey("mur.chats.lastSelected")` once (guarded by a ref, the AgentsPage pattern: never re-fills after Esc); write on change after the restore ran. `initialAgent` sets the selection whenever it changes (today's effect, kept) and clears itself in `DashboardApp` after being applied — `DashboardApp` gains `clearChatInitial` like `clearFleetRequest`, so opening the same agent's chat twice from Agents works.
 - **No selection.** `chats.selectHint` ("Select an agent to start chatting.") centred in the pane, the Fleets pattern.
 - **`onActiveChange`** and the `query` prop are removed from `ChatsPage` (the inspector was their only consumer; the palette's search never reached this page).
@@ -72,7 +72,7 @@ export interface ChatListItem {
 - `DashboardApp`: remove `chatAgent`, `setChatAgent`, `onChatActive`, `inspectorSelection`, `inspectorNode`, the `inspector={…}` prop, the `Inspector` import, and `setChatAgent(null)` from the Esc handler.
 - i18n: delete `chatInspector.subtitle`, `chatInspector.model`, `chatInspector.channel`; keep `chatInspector.turns` and rename `chatInspector.noChannel` → `chats.noChannel` (both used by §4–§5). New keys: `chats.selectHint`, `chats.noMatch`, `chats.openAgent`, `chats.unread`, `chats.facet.needsYou`, `chats.facet.unread`.
 - CSS: delete `.chats-view*`, `.chats-item*` from `work.css` and `.conv-badge*` from `dashboard.css` (ChatsPage was their only user — `grep` confirms before deleting).
-- `detail-panel.css` rules the inspector used (`.detail-panel--inspector`, `.detail-panel__close`) stay if the agent tabs still reference `.detail-panel*`; the plan greps and deletes only orphans.
+- `detail-panel.css`: `.detail-panel--inspector` and `.detail-panel__close` have no user besides `ChatInspector` (`grep -rl` on `src/**/*.tsx`); delete those two rules, keep the rest of `.detail-panel*` (the agent tabs still use it).
 
 ## 7. Keyboard and gestures
 
