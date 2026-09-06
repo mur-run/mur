@@ -24,6 +24,7 @@ describe("hitlToItem", () => {
     const item = hitlToItem(valid, "en");
     expect(item).not.toBeNull();
     expect(item?.kind).toBe("hitl");
+    expect(item?.agent).toBe(valid.agent);
     expect(item?.id).toBe("chan-1:hitl-1");
     expect(item?.ts).toBe(1720000000);
     expect(item?.title).toContain("quill");
@@ -83,19 +84,20 @@ describe("companionToItem", () => {
   };
 
   it("maps a valid record", () => {
-    const item = companionToItem(valid, "en");
+    const item = companionToItem(valid, "en", "aura");
     expect(item).not.toBeNull();
     expect(item?.kind).toBe("companion");
+    expect(item?.agent).toBe("aura");
     expect(item?.id).toBe("evt-1");
     expect(item?.ts).toBe(Math.floor(Date.parse(valid.generated_at) / 1000));
     expect(item?.title).toBe("Task finished");
   });
 
   it("returns null for a malformed record", () => {
-    expect(companionToItem({} as RawCompanionEvent, "en")).toBeNull();
-    expect(companionToItem(null as unknown as RawCompanionEvent, "en")).toBeNull();
+    expect(companionToItem({} as RawCompanionEvent, "en", "aura")).toBeNull();
+    expect(companionToItem(null as unknown as RawCompanionEvent, "en", "aura")).toBeNull();
     expect(
-      companionToItem({ ...valid, generated_at: "not-a-date" } as RawCompanionEvent, "en"),
+      companionToItem({ ...valid, generated_at: "not-a-date" } as RawCompanionEvent, "en", "aura"),
     ).toBeNull();
   });
 });
