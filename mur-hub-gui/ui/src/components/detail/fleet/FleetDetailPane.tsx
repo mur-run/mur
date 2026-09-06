@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useT } from "../../../i18n";
 import type { AgentEntry } from "../../../types";
 import type { FleetSummary, FleetDetail as Detail, JobRow, LabelView } from "../../fleet/types";
@@ -69,6 +70,15 @@ export function FleetDetailPane({ name, summary, labels, agentMap, onRefresh, on
     });
     return () => { void unlisten.then((fn) => fn()); };
   }, [name, load]);
+
+  // Refetch when this window is focused (spec 2(b) §6). Fleet forms never
+  // mark dirty, so no guard is needed here.
+  useEffect(() => {
+    const un = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (focused) void load();
+    });
+    return () => { void un.then((f) => f()); };
+  }, [load]);
 
   function refresh() {
     onRefresh();
