@@ -468,11 +468,10 @@ async fn run_tui(
     // below it. Bottom-anchoring also gives `insert_before` the headroom it
     // wants for the first screenful of transcript. Only ever move DOWN — moving
     // up would draw the viewport over visible shell output.
-    if let Ok((_, rows)) = crossterm::terminal::size() {
-        let top = rows.saturating_sub(initial_h);
-        if cursor::position().is_ok_and(|(_, r)| r < top) {
-            let _ = execute!(io::stdout(), cursor::MoveTo(0, top));
-        }
+    if let Ok((_, rows)) = crossterm::terminal::size()
+        && let Some(row) = anchor_row(rows, initial_h, cursor::position().ok().map(|(_, r)| r))
+    {
+        let _ = execute!(io::stdout(), cursor::MoveTo(0, row));
     }
     let mut terminal = Terminal::with_options(
         CrosstermBackend::new(io::stdout()),
@@ -591,6 +590,36 @@ fn leave_fullscreen(app: &mut App) {
 /// takes the whole window — mascot at the top, composer on the floor, instead
 /// of the whole UI huddled in the bottom fifth of a tall terminal. The height
 /// drops to the fixed one the moment the first message lands.
+/// Where to park the cursor before `Terminal::with_options` anchors the Inline
+/// viewport there. `None` = leave it where it is.
+///
+/// `with_options` anchors at the cursor and scrolls only as far as it must, so
+/// the cursor's row decides where the viewport lands:
+///
+/// - **Above the anchor row** — move down to it. Moving *up* would draw the
+///   viewport over shell output that is still on screen (and not scroll it, so
+///   it would not reach scrollback either), which is why this only ever
+///   descends.
+/// - **At or below it** — leave it: `with_options` scrolls what it needs and
+///   the viewport lands on the bottom rows by itself.
+/// - **Unknown** (the cursor-position query failed — it is a terminal
+///   round-trip and can) — park on the last row. Leaving it put anchors the
+///   viewport wherever the shell's cursor happened to be, and every row BELOW
+///   the viewport then keeps its pre-murmur contents: old shell output
+///   stranded under the composer, which nothing ever repaints because ratatui
+///   owns only the viewport rows. The last row instead makes `with_options`
+///   scroll the screen to make room, so displaced rows reach scrollback intact
+///   and the viewport is bottom-anchored — the invariant `purge_and_reanchor`
+///   maintains everywhere else.
+fn anchor_row(rows: u16, viewport_h: u16, cursor_row: Option<u16>) -> Option<u16> {
+    let top = rows.saturating_sub(viewport_h);
+    match cursor_row {
+        Some(r) if r < top => Some(top),
+        Some(_) => None,
+        None => Some(rows.saturating_sub(1)),
+    }
+}
+
 fn viewport_h_for(rows: u16, welcome: bool) -> u16 {
     let full = rows.saturating_sub(1).max(5);
     if welcome {
@@ -763,21 +792,42 @@ async fn event_loop(
         // same wipe + replay as /clear: the transcript is one message long at
         // that instant, so the replay is free and neither anchor artifact from
         // `viewport_h_for`'s doc comment can form.
-        if app.render_mode == RenderMode::Inline {
-            let want_h = viewport_h_for(last_size.height, app.messages.is_empty());
-            if want_h != viewport_h {
-                viewport_h = want_h;
-                app.flushed_upto = 0;
-                app.flushed_bytes = 0;
-                app.wants_screen_wipe = true;
-            }
+        if app.render_mode == RenderMode::Inline
+            && viewport_h_for(last_size.height, app.messages.is_empty()) != viewport_h
+        {
+            app.flushed_upto = 0;
+            app.flushed_bytes = 0;
+            app.wants_screen_wipe = true;
         }
         // /clear or channel switch: the on-screen transcript no longer
         // matches the conversation — wipe screen + scrollback and re-anchor
         // so the fresh state (welcome or replayed channel) renders clean.
+        //
+        // The height is derived HERE, from the state this wipe is about to
+        // render, and committed only once `purge_and_reanchor` has actually
+        // installed it. Both halves matter:
+        //
+        // - `purge_and_reanchor` can fail (the cursor-position query), and its
+        //   error is deliberately swallowed to keep the session alive. Setting
+        //   `viewport_h` before calling it therefore recorded a height the
+        //   terminal never took, and every later `flush_finished` / `render` /
+        //   `insert_before` measured the band against geometry that was not on
+        //   screen. Leaving it uncommitted also makes the next pass see the
+        //   mismatch again and retry, which is the right response to a
+        //   transient failure — and it cannot spin, because a terminal that
+        //   never answers the cursor query could not have started murmur
+        //   (`run`'s own `with_options` is a hard error).
+        // - `/clear` empties the transcript, so it changes the height AND
+        //   requests the wipe in one step. Deriving from the stale local ran
+        //   the purge at the outgoing height, and the block above then found
+        //   the mismatch and purged a second time — two full-screen clears and
+        //   two replays for one `/clear`.
         if app.render_mode == RenderMode::Inline && std::mem::take(&mut app.wants_screen_wipe) {
             drop(events);
-            let _ = purge_and_reanchor(terminal, viewport_h);
+            let want_h = viewport_h_for(last_size.height, app.messages.is_empty());
+            if purge_and_reanchor(terminal, want_h).is_ok() {
+                viewport_h = want_h;
+            }
             events = EventStream::new();
         }
         // A slash command (`/login`'s escalating repair) asked for the real
@@ -2422,7 +2472,7 @@ fn notify_unfocused(title: &str, message: &str) {
 #[cfg(test)]
 mod viewport_tests {
     use super::app::App;
-    use super::{INLINE_VIEWPORT_HEIGHT, prepare_handover, viewport_h_for};
+    use super::{INLINE_VIEWPORT_HEIGHT, anchor_row, prepare_handover, viewport_h_for};
 
     /// The welcome and the chat surface want opposite things, and only one of
     /// them is safe at full height: nothing is ever flushed to scrollback while
@@ -2446,6 +2496,38 @@ mod viewport_tests {
     /// "replay" anything — it hands `insert_before` the whole settled
     /// transcript a second time, on top of the copy already in scrollback,
     /// immediately before the child runs.
+    /// The viewport must end up bottom-anchored no matter what the cursor
+    /// query does. The third arm is the one that bit: an unknown cursor row
+    /// used to mean "leave it", which anchors the viewport high and strands
+    /// pre-murmur shell output on the rows below the composer — rows ratatui
+    /// never repaints, because it owns only the viewport.
+    #[test]
+    fn the_anchor_never_leaves_rows_stranded_below_the_viewport() {
+        // Cursor above the anchor row: descend to it, so the shell output
+        // still on screen above the viewport survives untouched.
+        assert_eq!(anchor_row(40, 20, Some(3)), Some(20));
+        // At or below it: `with_options` scrolls into place on its own.
+        assert_eq!(anchor_row(40, 20, Some(20)), None);
+        assert_eq!(anchor_row(40, 20, Some(39)), None);
+        // Unknown: park on the last row rather than wherever the cursor sits.
+        assert_eq!(anchor_row(40, 20, None), Some(39));
+        // Whatever it returns is a row the viewport can actually start on —
+        // never past the last row, and never so high that `h` rows overflow.
+        for rows in [5u16, 24, 40, 200] {
+            for h in [5u16, 20, rows.saturating_sub(1)] {
+                for c in [None, Some(0), Some(rows / 2), Some(rows - 1)] {
+                    if let Some(row) = anchor_row(rows, h, c) {
+                        assert!(row < rows, "rows={rows} h={h} c={c:?} -> {row}");
+                        assert!(
+                            row >= rows.saturating_sub(h),
+                            "anchored above the bottom band: rows={rows} h={h} c={c:?} -> {row}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_handover_does_not_rewind_the_flush_cursor() {
         let mut app = App::test_fixture();
