@@ -8,7 +8,12 @@ import { UNGROUPED } from "./fleetLabels";
 import { FleetCreateModal } from "./FleetCreateModal";
 import { Ico } from "../agents/GridCard";
 import { SourceList } from "../shell/SourceList";
-import type { SourceFacet, SourceRowData } from "../shell/sourceListModel";
+import {
+  applySelection, collapseSelection, extendSelection, filterRows, selectAll,
+  type SelectMode, type Selection, type SourceFacet, type SourceRowData,
+} from "../shell/sourceListModel";
+import { BulkPanel } from "../shell/BulkPanel";
+import { runBulk, type BulkItem } from "../shell/bulkModel";
 import { ListDivider } from "../shell/ListDivider";
 import {
   LIST_WIDTH_DEFAULT, LIST_WIDTH_MAX, LIST_WIDTH_MIN, useResizableColumn,
@@ -52,6 +57,8 @@ export function FleetView({ onSelect, requestedName, onRequestHandled }: {
   const [labels, setLabels] = useState<LabelView[]>([]);
   const [activeLabel, setActiveLabel] = useState<string | null>(loadLabelFilter);
   const [filter, setFilter] = useState("");
+  // Multi-select (spec 3(c) §5): empty, or two or more names including the anchor.
+  const [multi, setMulti] = useState<ReadonlySet<string>>(new Set());
   const [listShown, setListShown] = useState(false);
   const selectedRef = useRef<string | null>(null);
   // One-shot: the first fleet_list restores the last selection (or picks the
@@ -127,6 +134,13 @@ export function FleetView({ onSelect, requestedName, onRequestHandled }: {
     onRequestHandled?.();
   }, [requestedName, onRequestHandled]);
 
+  // A roster change drops vanished names; a multi that shrinks below two collapses.
+  useEffect(() => {
+    if (multi.size === 0) return;
+    const kept = new Set([...multi].filter((id) => fleets.some((f) => f.name === id)));
+    if (kept.size !== multi.size) setMulti(kept.size > 1 ? kept : new Set());
+  }, [fleets, multi]);
+
   // Refresh jobs when a fleet run completes
   useEffect(() => {
     const unlisten = listen<{ name: string; ok: boolean }>(
@@ -170,6 +184,24 @@ export function FleetView({ onSelect, requestedName, onRequestHandled }: {
     ...(ungrouped > 0 ? [{ id: UNGROUPED, label: t("fleet.labelUngrouped"), count: ungrouped }] : []),
   ];
   const summary = fleets.find((f) => f.name === selectedName);
+  const visibleIds = filterRows(rows, filter, activeLabel).map((r) => r.id);
+  const selection: Selection = {
+    anchor: selectedName,
+    ids: multi.size > 0 ? multi : new Set(selectedName ? [selectedName] : []),
+  };
+  function commit(next: Selection) {
+    setSelectedName(next.anchor);
+    setMulti(next.ids.size > 1 ? next.ids : new Set());
+    if (next.ids.size <= 1) setListShown(false);
+  }
+  function select(id: string | null, mode: SelectMode) {
+    if (id === null) {
+      if (multi.size > 1) setMulti(new Set());
+      else commit({ anchor: null, ids: new Set() });
+      return;
+    }
+    commit(applySelection(visibleIds, selection, id, mode));
+  }
   const cls = `master-detail master-detail--${listMode}${listShown ? " master-detail--list-shown" : ""}`;
 
   return (
@@ -186,10 +218,10 @@ export function FleetView({ onSelect, requestedName, onRequestHandled }: {
         onFilter={setFilter}
         filterPlaceholder={t("fleet.filter")}
         selectedId={selectedName}
-        onSelect={(id) => {
-          setSelectedName(id);
-          setListShown(false);
-        }}
+        onSelect={select}
+        selectedIds={multi.size > 1 ? multi : undefined}
+        onExtend={(delta) => commit(extendSelection(visibleIds, selection, delta))}
+        onSelectAll={() => commit(selectAll(visibleIds, selection))}
         onOpen={(id) => {
           const f = fleets.find((x) => x.name === id);
           if (f) void openDetailWindow("fleet", f.name, f.display_name);
@@ -209,7 +241,14 @@ export function FleetView({ onSelect, requestedName, onRequestHandled }: {
             {t("shell.showList")}
           </button>
         )}
-        {selectedName && summary ? (
+        {multi.size > 1 ? (
+          <BulkPanel
+            items={rows.filter((r) => multi.has(r.id)).map((r): BulkItem => ({ id: r.id, name: r.name, status: r.status ?? "idle" }))}
+            onStart={async (ids) => { const out = await runBulk(ids, (name) => invoke("fleet_start", { name })); void loadList(); return out; }}
+            onStop={async (ids) => { const out = await runBulk(ids, (name) => invoke("fleet_stop", { name })); void loadList(); return out; }}
+            onClear={() => commit(collapseSelection(selection))}
+          />
+        ) : selectedName && summary ? (
           <FleetDetailPane
             key={selectedName}
             name={selectedName}

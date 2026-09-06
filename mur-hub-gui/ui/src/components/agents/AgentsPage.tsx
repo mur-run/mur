@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { AgentEntry, AgentRuntimeStatus } from "../../types";
 import type { ChannelSummary } from "../../work/types";
 import { useAgents } from "../../context/AgentContext";
@@ -6,7 +7,12 @@ import { useT } from "../../i18n";
 import { avatarPreset, familyOf } from "../../utils";
 import { PetFace } from "../PetFace";
 import { SourceList } from "../shell/SourceList";
-import type { SourceFacet, SourceRowData } from "../shell/sourceListModel";
+import {
+  applySelection, collapseSelection, extendSelection, filterRows, selectAll,
+  type SelectMode, type Selection, type SourceFacet, type SourceRowData,
+} from "../shell/sourceListModel";
+import { BulkPanel } from "../shell/BulkPanel";
+import { runBulk, type BulkItem } from "../shell/bulkModel";
 import { ListDivider } from "../shell/ListDivider";
 import {
   LIST_WIDTH_DEFAULT, LIST_WIDTH_MAX, LIST_WIDTH_MIN, useResizableColumn,
@@ -71,6 +77,8 @@ function AgentsPageInner({
   const { confirmLeave } = useDirtyGuard();
   const [filter, setFilter] = useState("");
   const [facet, setFacet] = useState<string | null>(null);
+  // Multi-select (spec 3(c) §5): empty, or two or more ids including the anchor.
+  const [multi, setMulti] = useState<ReadonlySet<string>>(new Set());
   // Overlay list mode only (< 960 px): the list slides over the detail.
   const [listShown, setListShown] = useState(false);
   const column = useResizableColumn(AGENTS_LIST_WIDTH_KEY, LIST_WIDTH_DEFAULT, LIST_WIDTH_MIN, LIST_WIDTH_MAX);
@@ -93,14 +101,6 @@ function AgentsPageInner({
     if (restored.current) writeKey(LAST_SELECTED_AGENT_KEY, selectedAgent);
   }, [selectedAgent]);
 
-  async function select(name: string | null) {
-    if (name === selectedAgent) return;
-    if (await confirmLeave(t("detail.discardBody"), t("detail.discardTitle"))) {
-      setSelected(name);
-      setListShown(false);
-    }
-  }
-
   const rows: SourceRowData[] = useMemo(
     () =>
       agents.map((a) => {
@@ -117,6 +117,43 @@ function AgentsPageInner({
       }),
     [agents, runtimeMap, needsYou],
   );
+  const visibleIds = useMemo(() => filterRows(rows, filter, facet).map((r) => r.id), [rows, filter, facet]);
+  const selection: Selection = {
+    anchor: selectedAgent,
+    ids: multi.size > 0 ? multi : new Set(selectedAgent ? [selectedAgent] : []),
+  };
+
+  // A roster change drops vanished ids; a multi that shrinks below two collapses.
+  useEffect(() => {
+    if (multi.size === 0) return;
+    const kept = new Set([...multi].filter((id) => agents.some((a) => a.name === id)));
+    if (kept.size !== multi.size) setMulti(kept.size > 1 ? kept : new Set());
+  }, [agents, multi]);
+
+  function commit(next: Selection) {
+    setSelected(next.anchor);
+    setMulti(next.ids.size > 1 ? next.ids : new Set());
+    // Overlay list mode: keep the list open while multi-selecting.
+    if (next.ids.size <= 1) setListShown(false);
+  }
+
+  async function select(name: string | null, mode: SelectMode) {
+    if (name === null) {
+      // Esc: multi → the anchor alone; then the anchor → nothing.
+      if (multi.size > 1) {
+        setMulti(new Set());
+        return;
+      }
+      if (selectedAgent !== null) commit({ anchor: null, ids: new Set() });
+      return;
+    }
+    const next = applySelection(visibleIds, selection, name, mode);
+    if (next.anchor === selectedAgent && next.ids.size === selection.ids.size && [...next.ids].every((id) => selection.ids.has(id))) return;
+    // Leaving a single detail with unsaved edits asks first (the anchor changes or the detail is replaced by the panel).
+    if (multi.size <= 1 && (next.anchor !== selectedAgent || next.ids.size > 1)
+      && !(await confirmLeave(t("detail.discardBody"), t("detail.discardTitle")))) return;
+    commit(next);
+  }
 
   const entry = agents.find((a) => a.name === selectedAgent);
   const cls = `master-detail master-detail--${listMode}${listShown ? " master-detail--list-shown" : ""}`;
@@ -135,9 +172,12 @@ function AgentsPageInner({
         onFilter={setFilter}
         filterPlaceholder={t("agents.filter")}
         selectedId={selectedAgent}
-        onSelect={(id) => {
-          void select(id);
+        onSelect={(id, mode) => {
+          void select(id, mode);
         }}
+        selectedIds={multi.size > 1 ? multi : undefined}
+        onExtend={(delta) => commit(extendSelection(visibleIds, selection, delta))}
+        onSelectAll={() => commit(selectAll(visibleIds, selection))}
         onOpen={(id) => {
           const a = agents.find((x) => x.name === id);
           if (a) void openDetailWindow("agent", a.name, a.display_name);
@@ -157,7 +197,14 @@ function AgentsPageInner({
             {t("shell.showList")}
           </button>
         )}
-        {selectedAgent && entry ? (
+        {multi.size > 1 ? (
+          <BulkPanel
+            items={rows.filter((r) => multi.has(r.id)).map((r): BulkItem => ({ id: r.id, name: r.name, status: r.status ?? "idle" }))}
+            onStart={(ids) => runBulk(ids, (name) => invoke("start_agent", { name }))}
+            onStop={(ids) => runBulk(ids, (name) => invoke("stop_agent", { name }))}
+            onClear={() => commit(collapseSelection(selection))}
+          />
+        ) : selectedAgent && entry ? (
           // Keyed per agent: remounts the detail (and its dirty set) so the
           // cross-fade runs and stale form state never leaks across agents.
           <AgentDetail
