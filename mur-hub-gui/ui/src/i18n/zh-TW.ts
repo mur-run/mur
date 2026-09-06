@@ -969,6 +969,8 @@ export const zhTW: Table = {
   "placeholder.open": "開啟模型庫",
   "home.needsYou": "需要你處理",
   "home.nowRunning": "進行中",
+  "peek.go": "前往",
+  "peek.viewConversation": "查看對話",
   "home.recentActivity": "近期活動",
   "home.recentActivity.empty": "目前沒有近期活動。",
   "home.running.agents": "執行中的 agent",

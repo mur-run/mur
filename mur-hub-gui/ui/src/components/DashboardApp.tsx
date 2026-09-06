@@ -20,6 +20,8 @@ import { inboxBadge, visibleInboxItems } from "./home/inbox";
 import type { InboxItem } from "./home/inbox";
 import { ChatsPage } from "./chats/ChatsPage";
 import { popOutChat } from "./chats/ChatPane";
+import { PeekPanel } from "./peek/PeekPanel";
+import type { PeekTarget } from "./peek/peekModel";
 import { FleetView } from "./fleet/FleetView";
 import { useT } from "../i18n";
 import type { TranslationKey } from "../i18n/types";
@@ -115,6 +117,30 @@ export function DashboardApp() {
   const [paletteFleets, setPaletteFleets] = useState<FleetSummary[]>([]);
   // Handed to FleetView so a palette jump to the same fleet twice still fires.
   const clearFleetRequest = useCallback(() => setFleetRequest(null), []);
+  // Home's side-peek (spec 3(b) §3); rendered beside the Shell. Home gets
+  // its opener in 11.3.
+  const [peek, setPeek] = useState<PeekTarget | null>(null);
+  const closePeek = useCallback(() => setPeek(null), []);
+  const goFromPeek = useCallback((target: PeekTarget) => {
+    setPeek(null);
+    if (target.kind === "chat") openChatWith(target.agent);
+    else {
+      setFleetRequest(target.name);
+      setPage("fleets");
+    }
+  }, [openChatWith]);
+  const openWindowFromPeek = useCallback((target: PeekTarget) => {
+    setPeek(null);
+    if (target.kind === "chat") popOutChat(target.agent);
+    else {
+      const f = paletteFleets.find((x) => x.name === target.name);
+      void openDetailWindow("fleet", target.name, f?.display_name ?? target.name);
+    }
+  }, [paletteFleets]);
+  const openAgentFromPeek = useCallback((name: string) => {
+    setPeek(null);
+    openAgentFromChat(name);
+  }, [openAgentFromChat]);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [presetImportOpen, setPresetImportOpen] = useState(false);
   const [muragentImportOpen, setMuragentImportOpen] = useState(false);
@@ -348,6 +374,7 @@ export function DashboardApp() {
   // column). Ignored while a modal/input is focused so it doesn't fight them.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (peek) return; // PeekPanel owns Esc while open
       if (e.key !== "Escape") return;
       const el = document.activeElement;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) return;
@@ -356,7 +383,7 @@ export function DashboardApp() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setSelected]);
+  }, [setSelected, peek]);
 
   const selectedRuntime = selectedAgent ? runtimeMap.get(selectedAgent)?.state.state : undefined;
   const paletteItems: PaletteItem[] = [
@@ -594,6 +621,19 @@ export function DashboardApp() {
           )}
         </Shell>
       </div>
+
+      {peek && (
+        <PeekPanel
+          target={peek}
+          agents={agents}
+          runtimeMap={runtimeMap}
+          channels={channels}
+          onClose={closePeek}
+          onGo={goFromPeek}
+          onOpenInWindow={openWindowFromPeek}
+          onOpenAgent={openAgentFromPeek}
+        />
+      )}
 
       <WizardModal
         isOpen={wizardOpen}
