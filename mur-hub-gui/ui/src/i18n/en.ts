@@ -47,8 +47,6 @@ export const en = {
   "dashboard.col.category": "Category",
   "dashboard.col.model": "Model",
   "dashboard.col.status": "Status",
-  "view.grid": "Grid view",
-  "view.list": "List view",
   "status.running": "running",
   "status.idle": "idle",
   "status.error": "error",

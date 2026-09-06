@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAgents } from "../context/AgentContext";
-import type { AgentEntry, AgentRuntimeStatus, NudgeStatus } from "../types";
+import type { AgentRuntimeStatus, NudgeStatus } from "../types";
 import { WizardModal } from "./wizard/WizardModal";
 import { PresetImportModal } from "./PresetImportModal";
 import { MuragentImportModal } from "./MuragentImportModal";
@@ -15,6 +15,8 @@ import { InstallInboxModal } from "./InstallInboxModal";
 import { Inspector, hasInspector, type InspectorSelection } from "./shell/Inspector";
 import type { LibrarySelection } from "./inspector/LibraryInspector";
 import { HomePage } from "./home/HomePage";
+import { useChannels } from "./home/useChannels";
+import { needsYouCounts } from "./home/needsYouCounts";
 import { useInbox } from "./home/useInbox";
 import { inboxBadge, visibleInboxItems } from "./home/inbox";
 import type { InboxItem } from "./home/inbox";
@@ -69,7 +71,6 @@ type UpdaterEvent =
 export function DashboardApp() {
   const { t } = useT();
   const { agents, runtimeStatuses, selectedAgent, setSelected } = useAgents();
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   // Active shell page. Home is the default mission-control surface.
   const [page, setPage] = useState<PageId>("home");
   // Per-page selection that drives the contextual right-pane Inspector. The
@@ -92,6 +93,10 @@ export function DashboardApp() {
   // NeedsYou list are always computed from the same filtered array.
   const [dismissedInbox, setDismissedInbox] = useState<Set<string>>(new Set());
   const visibleInbox = visibleInboxItems(inboxItems, dismissedInbox);
+  // Per-agent "needs you" counts for the Agents list (spec §6.3), and the
+  // channel summaries the agent Overview reads (same source as Home).
+  const needsYou = needsYouCounts(visibleInbox);
+  const { channels } = useChannels();
   function dismissInboxItem(it: InboxItem) {
     setDismissedInbox((prev) => {
       const next = new Set(prev);
@@ -99,8 +104,13 @@ export function DashboardApp() {
       return next;
     });
   }
-  const [query, setQuery] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // Agents → Chat: which agent the Chats page should open on.
+  const [chatInitial, setChatInitial] = useState<string | null>(null);
+  const openChatWith = useCallback((name: string) => {
+    setChatInitial(name);
+    setPage("chats");
+  }, []);
   const [fleetRequest, setFleetRequest] = useState<string | null>(null);
   const [paletteFleets, setPaletteFleets] = useState<FleetSummary[]>([]);
   // Handed to FleetView so a palette jump to the same fleet twice still fires.
@@ -118,7 +128,6 @@ export function DashboardApp() {
   // Passive nudge when the PATH `mur` CLI lags this Hub. The Hub never
   // auto-upgrades it (that would clobber a brew binary) — just surface it.
   const [cliSkew, setCliSkew] = useState<{ cli: string; hub: string; upgrade_hint: string } | null>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
 
   // App auto-update. Detect on mount, but never download silently: a Hub update
   // is a large payload, so surface a banner and let the user choose to install
@@ -313,6 +322,7 @@ export function DashboardApp() {
       if (e.key !== "Escape") return;
       const el = document.activeElement;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) return;
+      if (el && el.getAttribute("role") === "listbox") return; // SourceList owns its Esc
       setSelected(null);
       setChatAgent(null);
       setFleetName(null);
@@ -334,8 +344,6 @@ export function DashboardApp() {
     <Inspector
       page={page}
       selection={inspectorSelection}
-      agents={agents}
-      runtimeMap={runtimeMap}
       onClose={() => {
         setSelected(null);
         setChatAgent(null);
@@ -505,65 +513,6 @@ export function DashboardApp() {
   return (
     <div className="dashboard-root">
       <div className="dashboard-main dashboard">
-        <div className="dashboard__bar">
-          <span className="dashboard__brand">MUR</span>
-          <label className="field dashboard__bar-search">
-            <input
-              ref={searchRef}
-              type="search"
-              placeholder={t("dashboard.search")}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </label>
-          <div className="dashboard__bar-tools">
-            <button
-              className="toolbar-btn toolbar-btn--primary"
-              onClick={() => setWizardOpen(true)}
-            >
-              + {t("app.newAgent")}
-            </button>
-            <div className="view-toggle">
-              <button
-                className={viewMode === "grid" ? "is-active" : ""}
-                onClick={() => setViewMode("grid")}
-                title={t("view.grid")}
-                aria-label={t("view.grid")}
-              >
-                ⊞
-              </button>
-              <button
-                className={viewMode === "list" ? "is-active" : ""}
-                onClick={() => setViewMode("list")}
-                title={t("view.list")}
-                aria-label={t("view.list")}
-              >
-                ☰
-              </button>
-            </div>
-            <button
-              className="toolbar-btn toolbar-btn--icon"
-              title={t("app.refresh")}
-              aria-label={t("app.refresh")}
-              onClick={() =>
-                invoke<AgentEntry[]>("list_agents")
-                  .then(() => {}) // state updated via event
-                  .catch(console.error)
-              }
-            >
-              ↺
-            </button>
-            <button
-              className="toolbar-btn toolbar-btn--icon"
-              title={t("app.settings")}
-              aria-label={t("app.settings")}
-              onClick={() => setSettingsOpen(true)}
-            >
-              ⚙
-            </button>
-          </div>
-        </div>
-
         <Shell
           page={page}
           onNavigate={(id) => setPage(id)}
@@ -584,17 +533,19 @@ export function DashboardApp() {
               onCreateAgent={() => setWizardOpen(true)}
             />
           ) : page === "chats" ? (
-            <ChatsPage agents={agents} query={query} onActiveChange={onChatActive} />
+            <ChatsPage agents={agents} initialAgent={chatInitial} onActiveChange={onChatActive} />
           ) : page === "fleets" ? (
-            <FleetView query={query} onSelect={onFleetSelect} requestedName={fleetRequest} onRequestHandled={clearFleetRequest} />
+            <FleetView onSelect={onFleetSelect} requestedName={fleetRequest} onRequestHandled={clearFleetRequest} />
           ) : page === "agents" ? (
             <AgentsPage
               agents={agents}
               runtimeMap={runtimeMap}
-              query={query}
-              viewMode={viewMode}
+              channels={channels}
+              needsYou={needsYou}
               selectedAgent={selectedAgent}
               onNewAgent={() => setWizardOpen(true)}
+              onOpenChat={openChatWith}
+              onOpenHome={() => setPage("home")}
             />
           ) : page === "models" ? (
             <ModelsPage />

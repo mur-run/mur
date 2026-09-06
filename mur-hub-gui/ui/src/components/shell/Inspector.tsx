@@ -5,10 +5,8 @@
 //! Shell auto-hides the column.
 
 import type { ReactNode } from "react";
-import type { AgentEntry, AgentRuntimeStatus } from "../../types";
 import type { PageId } from "./nav";
 import { isLibrary } from "./nav";
-import { AgentInspector } from "../inspector/AgentInspector";
 import { ChatInspector } from "../inspector/ChatInspector";
 import { FleetInspector } from "../inspector/FleetInspector";
 import { LibraryInspector, type LibrarySelection } from "../inspector/LibraryInspector";
@@ -27,7 +25,8 @@ export interface InspectorSelection {
 
 /** Whether the current page has an active selection that should show a column. */
 export function hasInspector(page: PageId, sel: InspectorSelection): boolean {
-  if (page === "agents") return sel.agent !== null;
+  // Agents render their detail in the page (spec §3.4); no inspector column.
+  if (page === "agents") return false;
   if (page === "chats") return sel.chatAgent !== null;
   if (page === "fleets") return sel.fleet !== null;
   if (isLibrary(page)) return sel.library !== null;
@@ -37,22 +36,10 @@ export function hasInspector(page: PageId, sel: InspectorSelection): boolean {
 export interface InspectorProps {
   page: PageId;
   selection: InspectorSelection;
-  agents: AgentEntry[];
-  runtimeMap: Map<string, AgentRuntimeStatus>;
   onClose: () => void;
 }
 
-export function Inspector({ page, selection, agents, runtimeMap, onClose }: InspectorProps): ReactNode {
-  if (page === "agents" && selection.agent) {
-    return (
-      <AgentInspector
-        agentName={selection.agent}
-        agents={agents}
-        runtime={runtimeMap.get(selection.agent)}
-        onClose={onClose}
-      />
-    );
-  }
+export function Inspector({ page, selection, onClose }: InspectorProps): ReactNode {
   if (page === "chats" && selection.chatAgent) {
     return (
       <ChatInspector
