@@ -13,6 +13,8 @@ interface Props {
   query?: string;
   /** Reports the active chat's agent up so the Shell inspector can show it. */
   onActiveChange?: (agentName: string | null, displayName?: string) => void;
+  /** Agent to open when the page is entered from elsewhere (Agents → Chat). */
+  initialAgent?: string | null;
 }
 
 /**
@@ -25,12 +27,17 @@ interface Props {
  * streaming, image paste, suggested replies, autocomplete, in-thread HITL
  * cards, and per-connection stream isolation all behave exactly as before.
  */
-export function ChatsPage({ agents, query, onActiveChange }: Props) {
+export function ChatsPage({ agents, query, onActiveChange, initialAgent }: Props) {
   const { t } = useT();
   const { attention } = useConversations();
   const [selected, setSelected] = useState<string | null>(null);
+  const [localQuery, setLocalQuery] = useState("");
 
-  const items = agents.length === 0 ? [] : buildChatList(agents, attention, query);
+  useEffect(() => {
+    if (initialAgent) setSelected(initialAgent);
+  }, [initialAgent]);
+
+  const items = agents.length === 0 ? [] : buildChatList(agents, attention, localQuery || query);
   const active = items.find((i) => i.name === selected) ?? items[0];
 
   // Report the active chat up so DashboardApp can show the ChatInspector.
@@ -50,6 +57,13 @@ export function ChatsPage({ agents, query, onActiveChange }: Props) {
   return (
     <div className="chats-view">
       <nav className="chats-view__list">
+        <input
+          className="source-list__filter"
+          type="search"
+          value={localQuery}
+          placeholder={t("chats.filter")}
+          onChange={(e) => setLocalQuery(e.target.value)}
+        />
         {items.map((item) => {
           const preset = avatarPreset(item.agent);
           const level = item.hitl ? "hitl" : item.unread ? "unread" : null;
