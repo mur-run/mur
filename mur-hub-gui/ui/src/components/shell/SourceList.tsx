@@ -2,7 +2,7 @@ import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { NeedsYouBadge, StatusDot } from "./Status";
 import { MenuList, type MenuItemDef } from "./SplitButton";
 import { useMenu } from "./useMenu";
-import { filterRows, moveSelection, type SourceFacet, type SourceRowData } from "./sourceListModel";
+import { filterRows, moveSelection, selectModeOf, type SelectMode, type SourceFacet, type SourceRowData } from "./sourceListModel";
 
 /** ⌘F focuses this list's filter field. One SourceList is mounted per page. */
 export function isFilterShortcut(e: globalThis.KeyboardEvent): boolean {
@@ -21,7 +21,14 @@ export interface SourceListProps {
   onFilter: (q: string) => void;
   filterPlaceholder: string;
   selectedId: string | null;
-  onSelect: (id: string | null) => void;
+  /** `mode` comes from the click's modifiers (spec 3(c) §4); keyboard ↑/↓ and Esc pass "single". */
+  onSelect: (id: string | null, mode: SelectMode) => void;
+  /** When given, every id in it renders selected (multi-select pages). */
+  selectedIds?: ReadonlySet<string>;
+  /** ⇧↑ / ⇧↓ in the listbox. */
+  onExtend?: (delta: 1 | -1) => void;
+  /** ⌘A / Ctrl+A in the listbox. */
+  onSelectAll?: () => void;
   /** Row double-click (spec 2(b) §7): open in a window. Absent on Library pages. */
   onOpen?: (id: string) => void;
   /** Accessible label for the unread dot; required when any row sets `unread`. */
@@ -58,9 +65,14 @@ export function SourceList(p: SourceListProps) {
   function onListKey(e: KeyboardEvent<HTMLDivElement>) {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      p.onSelect(moveSelection(visible, p.selectedId, e.key === "ArrowDown" ? 1 : -1));
+      const delta = e.key === "ArrowDown" ? 1 : -1;
+      if (e.shiftKey && p.onExtend) p.onExtend(delta);
+      else p.onSelect(moveSelection(visible, p.selectedId, delta), "single");
     } else if (e.key === "Escape") {
-      p.onSelect(null);
+      p.onSelect(null, "single");
+    } else if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "a" && p.onSelectAll) {
+      e.preventDefault();
+      p.onSelectAll();
     }
   }
 
@@ -120,34 +132,38 @@ export function SourceList(p: SourceListProps) {
       <div
         className="source-list__rows"
         role="listbox"
+        aria-multiselectable={p.selectedIds ? true : undefined}
         tabIndex={0}
         aria-activedescendant={p.selectedId ? `row-${p.selectedId}` : undefined}
         onKeyDown={onListKey}
       >
         {visible.length === 0
           ? p.emptyState
-          : visible.map((r) => (
-              <div
-                key={r.id}
-                id={`row-${r.id}`}
-                role="option"
-                aria-selected={r.id === p.selectedId}
-                className={`source-row${r.id === p.selectedId ? " source-row--on" : ""}`}
-                onClick={() => p.onSelect(r.id)}
-                onDoubleClick={p.onOpen ? () => p.onOpen?.(r.id) : undefined}
-              >
-                <span className="source-row__avatar">{r.avatar}</span>
-                <span className="source-row__text">
-                  <span className="source-row__name">{r.name}</span>
-                  {r.subtitle && <span className="source-row__sub">{r.subtitle}</span>}
-                </span>
-                <span className="source-row__status">
-                  {r.unread && <span className="source-row__unread" role="img" aria-label={p.unreadLabel} />}
-                  <NeedsYouBadge count={r.needsYou ?? 0} />
-                  {r.status && <StatusDot kind={r.status} />}
-                </span>
-              </div>
-            ))}
+          : visible.map((r) => {
+              const isOn = p.selectedIds ? p.selectedIds.has(r.id) : r.id === p.selectedId;
+              return (
+                <div
+                  key={r.id}
+                  id={`row-${r.id}`}
+                  role="option"
+                  aria-selected={isOn}
+                  className={`source-row${isOn ? " source-row--on" : ""}`}
+                  onClick={(e) => p.onSelect(r.id, selectModeOf(e))}
+                  onDoubleClick={p.onOpen ? () => p.onOpen?.(r.id) : undefined}
+                >
+                  <span className="source-row__avatar">{r.avatar}</span>
+                  <span className="source-row__text">
+                    <span className="source-row__name">{r.name}</span>
+                    {r.subtitle && <span className="source-row__sub">{r.subtitle}</span>}
+                  </span>
+                  <span className="source-row__status">
+                    {r.unread && <span className="source-row__unread" role="img" aria-label={p.unreadLabel} />}
+                    <NeedsYouBadge count={r.needsYou ?? 0} />
+                    {r.status && <StatusDot kind={r.status} />}
+                  </span>
+                </div>
+              );
+            })}
       </div>
     </section>
   );
