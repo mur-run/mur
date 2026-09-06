@@ -42,7 +42,7 @@ you already use, and can be handed to a friend as a single file.
 <p align="center">
   <img src="assets/mur-hub.png" alt="MUR Hub — fleet dashboard with conversation rail, companion status, and desktop-pet style presets" width="92%" />
   <br/>
-  <sub><b>MUR Hub</b> — your fleet's home: conversation rail, live agent status, desktop-pet style presets. UI in English · 繁體中文 · 简体中文.</sub>
+  <sub><b>MUR Hub</b> — your fleet's home: one master–detail shell for agents, fleets, chats, and the library, ⌘K palette, desktop-pet style presets. UI in English · 繁體中文 · 简体中文.</sub>
 </p>
 
 ## What is MUR?
@@ -384,9 +384,13 @@ anything is applied; the review lane labels each proposal `✓ signed`.
   milestone lines (delegations with their sub-goal, member-written completion
   summaries with elapsed time, run outcomes, approval gates) into the
   transcript as they land in the fleet's signed channel.
-- **MUR Hub** — multi-conversation rail across the fleet, streaming replies,
-  human-in-the-loop tool approvals, dashboards, and drag-out **desktop pets**
-  with expressions and speech bubbles.
+- **MUR Hub** — one master–detail shell for every page (agents, fleets,
+  chats, skills / workflows / MCP / plugins, settings): source list with filter
+  and facets, full-width detail, ⌘K palette, **⌘↩ to open any agent or fleet in
+  its own window**, a side-peek from Home, ⌘-click multi-select with bulk
+  Start / Stop, streaming replies, human-in-the-loop tool approvals, and
+  drag-out **desktop pets** with expressions and speech bubbles.
+  [Docs](https://app.mur.run/docs/core/mur-hub).
 - **Voice** — fully on-device TTS (Kokoro 82M) + STT (whisper.cpp); respects
   Do Not Disturb, Focus, and a busy microphone.
 - **iPhone** — the in-repo iOS companion (`mur-mobile-app`) pairs over LAN with
