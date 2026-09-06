@@ -883,7 +883,7 @@ Branch `feat/hub-2-library-rest`.
 
 ### Task 7.1 — MCP page
 
-- [ ] Rewrite `src/components/library/McpPage.tsx`:
+- [x] Rewrite `src/components/library/McpPage.tsx`:
 
 ```tsx
 import { useState } from "react";
@@ -940,12 +940,12 @@ export function McpPage() {
   );
 }
 ```
-- [ ] i18n (both): `mcplib.filter` "Filter MCP servers"/"篩選 MCP 伺服器", `mcplib.noMatch` "No MCP servers match."/"沒有符合的 MCP 伺服器。", `mcplib.add` "Add MCP server"/"新增 MCP 伺服器".
-- [ ] `DashboardApp`: `<McpPage />`. `npm test`, `npm run build`, `npm run lint`. Commit: `feat(hub): MCP page is master–detail`
+- [x] i18n (both): `mcplib.filter` "Filter MCP servers"/"篩選 MCP 伺服器", `mcplib.noMatch` "No MCP servers match."/"沒有符合的 MCP 伺服器。", `mcplib.add` "Add MCP server"/"新增 MCP 伺服器".
+- [x] `DashboardApp`: `<McpPage />`. `npm test`, `npm run build`, `npm run lint`. Commit: `feat(hub): MCP page is master–detail`
 
 ### Task 7.2 — Plugins page
 
-- [ ] Rewrite `src/components/library/PluginsPage.tsx`:
+- [x] Rewrite `src/components/library/PluginsPage.tsx`:
 
 ```tsx
 import { useState } from "react";
@@ -1013,12 +1013,12 @@ export function PluginsPage() {
   );
 }
 ```
-- [ ] i18n (both): `pluginslib.filter` "Filter plugins"/"篩選外掛", `pluginslib.noMatch` "No plugins match."/"沒有符合的外掛。".
-- [ ] `DashboardApp`: `<PluginsPage />`. Verify. Commit: `feat(hub): Plugins page is master–detail`
+- [x] i18n (both): `pluginslib.filter` "Filter plugins"/"篩選外掛", `pluginslib.noMatch` "No plugins match."/"沒有符合的外掛。".
+- [x] `DashboardApp`: `<PluginsPage />`. Verify. Commit: `feat(hub): Plugins page is master–detail`
 
 ### Task 7.3 — Workflows page
 
-- [ ] Rewrite `src/components/library/WorkflowsPage.tsx`:
+- [x] Rewrite `src/components/library/WorkflowsPage.tsx`:
 
 ```tsx
 import { useT } from "../../i18n";
@@ -1048,15 +1048,17 @@ export function WorkflowsPage() {
   );
 }
 ```
-- [ ] i18n (both): `workflowslib.filter` "Filter workflows"/"篩選工作流程", `workflowslib.noMatch` "No workflows match."/"沒有符合的工作流程。".
-- [ ] `DashboardApp`: `<WorkflowsPage />`. Verify. Commit: `feat(hub): Workflows page is master–detail`
+- [x] i18n (both): `workflowslib.filter` "Filter workflows"/"篩選工作流程", `workflowslib.noMatch` "No workflows match."/"沒有符合的工作流程。".
+- [x] `DashboardApp`: `<WorkflowsPage />`. Verify. Commit: `feat(hub): Workflows page is master–detail`
 
 ### Task 7.4 — Retire the Library inspector
 
-- [ ] Delete `src/components/inspector/LibraryInspector.tsx`. In `src/components/shell/Inspector.tsx` remove the `LibrarySelection` import and the `library` field of `InspectorSelection`, make the `isLibrary(page)` branch of `hasInspector` return `false` with the comment `// Library pages own their detail (Phase 2a); no inspector column.`, and delete the library render branch (and the now-unused `isLibrary` import if nothing else uses it). In `DashboardApp.tsx` remove `libItem`, `setLibItem`, `onLibrarySelect`, the `LibrarySelection` import and `library: libItem` from `inspectorSelection`. `grep -rn 'LibrarySelection\|libItem\|onLibrarySelect' src` → none.
-- [ ] CSS: `grep -rn 'item-card\|item-list\|tab-empty\|agent-picker' src --include='*.tsx'`; delete from `detail-panel.css` only the `.item-card*` / `.item-list` / `.tab-empty` rules with no remaining user (the agent Capabilities tabs still use `item-card`; keep whatever they reference). Keep `.agent-picker*`.
-- [ ] i18n: `grep -rn 'libraryInspector\.' src --include='*.tsx'`; remove `libraryInspector.version` and `libraryInspector.origin` from both tables if unused; keep `libraryInspector.kind.*` and `libraryInspector.readme` (LibraryDetail uses them).
-- [ ] `npm test`, `npm run build`, `npm run lint`. Commit: `refactor(hub): retire LibraryInspector — the Library pages own their detail`
+- [x] Delete `src/components/inspector/LibraryInspector.tsx`. In `src/components/shell/Inspector.tsx` remove the `LibrarySelection` import and the `library` field of `InspectorSelection`, make the `isLibrary(page)` branch of `hasInspector` return `false` with the comment `// Library pages own their detail (Phase 2a); no inspector column.`, and delete the library render branch (and the now-unused `isLibrary` import if nothing else uses it). In `DashboardApp.tsx` remove `libItem`, `setLibItem`, `onLibrarySelect`, the `LibrarySelection` import and `library: libItem` from `inspectorSelection`. `grep -rn 'LibrarySelection\|libItem\|onLibrarySelect' src` → none.
+- [x] CSS: `grep -rn 'item-card\|item-list\|tab-empty\|agent-picker' src --include='*.tsx'`; delete from `detail-panel.css` only the `.item-card*` / `.item-list` / `.tab-empty` rules with no remaining user (the agent Capabilities tabs still use `item-card`; keep whatever they reference). Keep `.agent-picker*`.
+- [x] i18n: `grep -rn 'libraryInspector\.' src --include='*.tsx'`; remove `libraryInspector.version` and `libraryInspector.origin` from both tables if unused; keep `libraryInspector.kind.*` and `libraryInspector.readme` (LibraryDetail uses them).
+- [x] `npm test`, `npm run build`, `npm run lint`. Commit: `refactor(hub): retire LibraryInspector — the Library pages own their detail`
+
+**Deviations (PR #1173):** Tasks 7.2–7.4 landed in one commit — 7.2/7.3 do not compile on their own once no page reports a selection (`noUnusedLocals` on `onLibrarySelect`), so the DashboardApp half of 7.4 travelled with them. Besides `libraryInspector.version`/`origin`, `mcplib.usedBy` and `pluginslib.usedBy` were also unused after the rewrite and were removed; `pluginslib.remove` and `workflowslib.openFolder` stay (LibraryDetail uses them). CSS: only `.item-card--selected` had no remaining user. Verified with `npm test` / `build` / `lint` and the browser acceptance below; not in a real Tauri window (Hub crate target does not fit the drive; no Rust changed in this PR).
 
 **Manual acceptance PR 7:** each of MCP / Plugins / Workflows selects, restores, filters (chips on MCP by transport), opens its install flow with the picked agent and reloads after it, toggles / removes from an agent and refreshes; Plugins shows the real enabled state per agent; Workflows shows Open folder and no Used-by card; no inspector column appears on any Library page; Chats still opens its inspector; Models is unchanged.
 
