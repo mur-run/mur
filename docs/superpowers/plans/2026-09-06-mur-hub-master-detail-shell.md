@@ -91,7 +91,7 @@ Copied from the approved design and `CLAUDE.md`. Every task includes all of them
 | 2 | `src/styles/components/shell.css` (modify) | collapsed rail, inset, page slot, divider, master-detail grid |
 | 2 | `mur-hub-gui/src-tauri/tauri.conf.json`, `mur-hub-gui/src-tauri/capabilities/default.json` (modify) | overlay title bar, 1200×760 / 900×560, start-dragging permission |
 | 2 | `src/components/DashboardApp.tsx` (modify) | delete window auto-resize; banners → Shell slot; Settings → sidebar |
-| 3 | `src/components/shell/sourceList.ts` (+ `.test.ts`), `SourceList.tsx` (+ `.test.tsx`) (new) | list pane: header, filter, facet chips, rows, keyboard |
+| 3 | `src/components/shell/sourceListModel.ts` (+ `.test.ts`), `SourceList.tsx` (+ `.test.tsx`) (new) | list pane: header, filter, facet chips, rows, keyboard |
 | 3 | `src/components/shell/DetailPage.tsx` (+ `.test.ts`) (new) | header + ARIA tabs + body |
 | 3 | `src/components/shell/dirty.tsx` (+ `.test.ts`) (new) | `DirtyProvider`, `useMarkDirty`, `useDirtyGuard` |
 | 3 | `src/components/shell/useMenu.ts`, `SplitButton.tsx`, `OverflowMenu.tsx` (+ `.test.tsx`) (new) | split primary action; ⋯ menu |
@@ -940,11 +940,18 @@ Branch `feat/hub-2-components`. Nothing adopts these yet except the command pale
 
 ### Task 3.1 — `SourceList`
 
-- [ ] Write `src/components/shell/sourceList.test.ts`:
+> **Deviation recorded during execution (PR 3):** the helper module was named
+> `sourceListModel.ts`, not `sourceList.ts`. macOS APFS is case-insensitive, so
+> `./sourceList` and `./SourceList` resolve to the same path and Vite picked the
+> `.ts` helper for the component import (`Element type is invalid … got:
+> undefined`). Never pair `Foo.tsx` with `foo.ts` in one directory — PR 4's
+> `agentsPage.test.ts` must be named `roleFacets.test.ts` for the same reason.
+
+- [x] Write `src/components/shell/sourceListModel.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { filterRows, moveSelection } from "./sourceList";
+import { filterRows, moveSelection } from "./sourceListModel";
 
 const rows = [
   { id: "aura", name: "AURA", subtitle: "Engineer · claude-sonnet", facets: ["Engineer"] },
@@ -974,7 +981,7 @@ describe("moveSelection", () => {
 });
 ```
 
-- [ ] Create `src/components/shell/sourceList.ts`:
+- [x] Create `src/components/shell/sourceListModel.ts`:
 
 ```ts
 import type { ReactNode } from "react";
@@ -1019,12 +1026,12 @@ export function moveSelection<T extends { id: string }>(rows: T[], selectedId: s
 }
 ```
 
-- [ ] Create `src/components/shell/SourceList.tsx`:
+- [x] Create `src/components/shell/SourceList.tsx`:
 
 ```tsx
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { NeedsYouBadge, StatusDot } from "./Status";
-import { filterRows, moveSelection, type SourceFacet, type SourceRowData } from "./sourceList";
+import { filterRows, moveSelection, type SourceFacet, type SourceRowData } from "./sourceListModel";
 
 /** ⌘F focuses this list's filter field. One SourceList is mounted per page. */
 export function isFilterShortcut(e: globalThis.KeyboardEvent): boolean {
@@ -1143,7 +1150,7 @@ export function SourceList(p: SourceListProps) {
 }
 ```
 
-- [ ] Write `src/components/shell/SourceList.test.tsx`:
+- [x] Write `src/components/shell/SourceList.test.tsx`:
 
 ```tsx
 import { describe, expect, it } from "vitest";
@@ -1179,7 +1186,7 @@ describe("SourceList markup", () => {
 });
 ```
 
-- [ ] Create `src/styles/components/source-list.css` and import it in `index.css` after `shell.css`:
+- [x] Create `src/styles/components/source-list.css` and import it in `index.css` after `shell.css`:
 
 ```css
 /* SourceList (spec §4.1). Rows are 13px; the selected row is a translucent brand tint. */
@@ -1220,13 +1227,13 @@ describe("SourceList markup", () => {
 .source-row__status { display: flex; align-items: center; gap: 8px; }
 ```
 
-- [ ] Run both tests → pass. Commit: `feat(hub): SourceList — the list pane the Agents, Fleets and Library pages share`
+- [x] Run both tests → pass. Commit: `feat(hub): SourceList — the list pane the Agents, Fleets and Library pages share`
 
 **Interfaces — Produces:** `SourceRowData`, `SourceFacet`, `filterRows`, `moveSelection`, `<SourceList …>` (props above), `isFilterShortcut`; CSS `.source-list*`, `.source-row*`, `.chip`, `.chip--on`.
 
 ### Task 3.2 — `DetailPage` and the dirty guard
 
-- [ ] Write `src/components/shell/DetailPage.test.ts`:
+- [x] Write `src/components/shell/DetailPage.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -1243,7 +1250,7 @@ describe("nextTab", () => {
 });
 ```
 
-- [ ] Write `src/components/shell/dirty.test.ts`:
+- [x] Write `src/components/shell/dirty.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -1257,7 +1264,7 @@ describe("shouldConfirmLeave", () => {
 });
 ```
 
-- [ ] Create `src/components/shell/DetailPage.tsx`:
+- [x] Create `src/components/shell/DetailPage.tsx`:
 
 ```tsx
 import type { KeyboardEvent, ReactNode } from "react";
@@ -1332,7 +1339,7 @@ export function DetailPage<T extends string>(p: DetailPageProps<T>) {
 }
 ```
 
-- [ ] Create `src/components/shell/dirty.tsx`:
+- [x] Create `src/components/shell/dirty.tsx`:
 
 ```tsx
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
@@ -1392,7 +1399,7 @@ export function useDirtyGuard(): {
 }
 ```
 
-- [ ] Create `src/styles/components/detail-page.css` and import it after `source-list.css`:
+- [x] Create `src/styles/components/detail-page.css` and import it after `source-list.css`:
 
 ```css
 /* DetailPage (spec §4.2). */
@@ -1437,13 +1444,13 @@ export function useDirtyGuard(): {
 .master-detail--compact .detail-two { grid-template-columns: 1fr; }
 ```
 
-- [ ] Tests pass; `npm run build`. Commit: `feat(hub): DetailPage with ARIA tabs, and a dirty guard for unsaved edits`
+- [x] Tests pass; `npm run build`. Commit: `feat(hub): DetailPage with ARIA tabs, and a dirty guard for unsaved edits`
 
 **Interfaces — Produces:** `DetailTabDef<T>`, `nextTab`, `<DetailPage avatar title status meta? actions? tabs activeTab onTab banners?>`, `DirtyProvider`, `useMarkDirty(id, isDirty)`, `useDirtyGuard(): { isDirty, confirmLeave(message, title) }`, `shouldConfirmLeave`; CSS `.detail-page*`, `.detail-card`, `.detail-card__eyebrow`, `.detail-section`, `.detail-attn`, `.detail-kv`, `.detail-stats`, `.detail-two`.
 
 ### Task 3.3 — `SplitButton` and `OverflowMenu`
 
-- [ ] Create `src/components/shell/useMenu.ts`:
+- [x] Create `src/components/shell/useMenu.ts`:
 
 ```ts
 import { useEffect, useRef, useState, type RefObject } from "react";
@@ -1471,7 +1478,7 @@ export function useMenu(): { open: boolean; setOpen: (v: boolean) => void; rootR
 }
 ```
 
-- [ ] Create `src/components/shell/SplitButton.tsx`:
+- [x] Create `src/components/shell/SplitButton.tsx`:
 
 ```tsx
 import type { ReactNode } from "react";
@@ -1541,7 +1548,7 @@ export function SplitButton({ label, onPrimary, items, disabled, menuLabel }: Sp
 }
 ```
 
-- [ ] Create `src/components/shell/OverflowMenu.tsx`:
+- [x] Create `src/components/shell/OverflowMenu.tsx`:
 
 ```tsx
 import { MenuList, type MenuItemDef } from "./SplitButton";
@@ -1560,7 +1567,7 @@ export function OverflowMenu({ items, label }: { items: MenuItemDef[]; label: st
 }
 ```
 
-- [ ] Write `src/components/shell/SplitButton.test.tsx`:
+- [x] Write `src/components/shell/SplitButton.test.tsx`:
 
 ```tsx
 import { describe, expect, it } from "vitest";
@@ -1582,7 +1589,7 @@ describe("menus at rest", () => {
 });
 ```
 
-- [ ] Create `src/styles/components/menus.css` (import after `detail-page.css`):
+- [x] Create `src/styles/components/menus.css` (import after `detail-page.css`):
 
 ```css
 .split { position: relative; display: inline-flex; }
@@ -1599,13 +1606,13 @@ describe("menus at rest", () => {
 .menu__item--danger { color: var(--status-failed); }
 ```
   Also set `.btn { height: 28px; padding: 0 12px; font-size: var(--text-sm); font-weight: 500; display: inline-flex; align-items: center; gap: 6px; border-radius: var(--radius-sm); }` in `styles/components/primitives.css` line 2 (replace the padding/size/weight declarations; keep the rest).
-- [ ] Test → pass. Commit: `feat(hub): SplitButton and OverflowMenu`
+- [x] Test → pass. Commit: `feat(hub): SplitButton and OverflowMenu`
 
 **Interfaces — Produces:** `MenuItemDef`, `<SplitButton label onPrimary items disabled? menuLabel>`, `<OverflowMenu items label>`, `useMenu`; CSS `.split*`, `.menu*`, `.btn--icon`.
 
 ### Task 3.4 — `detailTabs.ts`
 
-- [ ] Write `src/components/shell/detailTabs.test.ts`:
+- [x] Write `src/components/shell/detailTabs.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -1635,7 +1642,7 @@ describe("detailGroupOf", () => {
 });
 ```
 
-- [ ] Create `src/components/shell/detailTabs.ts`:
+- [x] Create `src/components/shell/detailTabs.ts`:
 
 ```ts
 import type { TranslationKey } from "../../i18n/types";
@@ -1688,14 +1695,14 @@ export const FLEET_TAB_LABEL_KEY: Record<FleetTabId, TranslationKey> = {
 };
 ```
 
-- [ ] i18n (both tables): `detail.tab.overview` "Overview"/"總覽", `detail.tab.identity` "Identity"/"身分", `detail.tab.capabilities` "Capabilities"/"能力", `detail.tab.memory` "Memory"/"記憶", `detail.tab.automation` "Automation"/"自動化", `detail.tab.channels` "Channels"/"頻道", `fleet.tab.overview` "Overview"/"總覽", `fleet.tab.members` "Members"/"成員", `fleet.tab.jobs` "Jobs"/"任務", `fleet.tab.settings` "Settings"/"設定".
-- [ ] Test → pass. Commit: `feat(hub): agent and fleet tab ids with the legacy 11→6 mapping`
+- [x] i18n (both tables): `detail.tab.overview` "Overview"/"總覽", `detail.tab.identity` "Identity"/"身分", `detail.tab.capabilities` "Capabilities"/"能力", `detail.tab.memory` "Memory"/"記憶", `detail.tab.automation` "Automation"/"自動化", `detail.tab.channels` "Channels"/"頻道", `fleet.tab.overview` "Overview"/"總覽", `fleet.tab.members` "Members"/"成員", `fleet.tab.jobs` "Jobs"/"任務", `fleet.tab.settings` "Settings"/"設定".
+- [x] Test → pass. Commit: `feat(hub): agent and fleet tab ids with the legacy 11→6 mapping`
 
 **Interfaces — Produces:** `AgentTabId`, `AGENT_TABS`, `AGENT_TAB_LABEL_KEY`, `detailGroupOf`, `FleetTabId`, `FLEET_TABS`, `FLEET_TAB_LABEL_KEY`.
 
 ### Task 3.5 — Command palette (⌘K)
 
-- [ ] Write `src/components/shell/palette.test.ts`:
+- [x] Write `src/components/shell/palette.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -1720,7 +1727,7 @@ describe("rankPalette", () => {
 });
 ```
 
-- [ ] Create `src/components/shell/palette.ts`:
+- [x] Create `src/components/shell/palette.ts`:
 
 ```ts
 export type PaletteKind = "page" | "action" | "agent" | "fleet";
@@ -1752,7 +1759,7 @@ export function rankPalette(items: PaletteItem[], query: string, limit = PALETTE
 }
 ```
 
-- [ ] Create `src/components/shell/CommandPalette.tsx`:
+- [x] Create `src/components/shell/CommandPalette.tsx`:
 
 ```tsx
 import { useEffect, useState, type KeyboardEvent } from "react";
@@ -1825,8 +1832,8 @@ export function CommandPalette({ open, items, onClose }: { open: boolean; items:
 ```
   (`t(\`palette.kind.${it.kind}\`)` needs a cast: `as TranslationKey` from `../../i18n/types` — add the import and the four keys.)
 
-- [ ] i18n (both): `palette.title` "Search or run a command"/"搜尋或執行指令", `palette.placeholder` "Jump to an agent, fleet or page… or run an action"/"跳到 agent、機群或頁面… 或執行動作", `palette.empty` "Nothing matches"/"沒有符合的項目", `palette.kind.page` "Page"/"頁面", `palette.kind.action` "Action"/"動作", `palette.kind.agent` "Agent"/"Agent", `palette.kind.fleet` "Fleet"/"機群", `palette.action.start` "Start {name}"/"啟動 {name}", `palette.action.stop` "Stop {name}"/"停止 {name}", `palette.action.newChat` "New chat"/"新對話", `palette.action.newAgent` "New agent"/"新增 Agent", `palette.action.settings` "Open Settings"/"開啟設定", `palette.action.refresh` "Refresh"/"重新整理", `shell.search` "Search or run a command"/"搜尋或執行指令".
-- [ ] Create `src/styles/components/palette.css` (import after `menus.css`):
+- [x] i18n (both): `palette.title` "Search or run a command"/"搜尋或執行指令", `palette.placeholder` "Jump to an agent, fleet or page… or run an action"/"跳到 agent、機群或頁面… 或執行動作", `palette.empty` "Nothing matches"/"沒有符合的項目", `palette.kind.page` "Page"/"頁面", `palette.kind.action` "Action"/"動作", `palette.kind.agent` "Agent"/"Agent", `palette.kind.fleet` "Fleet"/"機群", `palette.action.start` "Start {name}"/"啟動 {name}", `palette.action.stop` "Stop {name}"/"停止 {name}", `palette.action.newChat` "New chat"/"新對話", `palette.action.newAgent` "New agent"/"新增 Agent", `palette.action.settings` "Open Settings"/"開啟設定", `palette.action.refresh` "Refresh"/"重新整理", `shell.search` "Search or run a command"/"搜尋或執行指令".
+- [x] Create `src/styles/components/palette.css` (import after `menus.css`):
 
 ```css
 .palette-backdrop { position: fixed; inset: 0; background: color-mix(in srgb, var(--text-primary) 28%, transparent); display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; z-index: 40; }
@@ -1839,7 +1846,7 @@ export function CommandPalette({ open, items, onClose }: { open: boolean; items:
 .palette__empty { padding: 12px; }
 ```
 
-- [ ] `src/components/shell/Sidebar.tsx`: add `onSearch: () => void` to props and, as the first child of `<nav>`, a search button:
+- [x] `src/components/shell/Sidebar.tsx`: add `onSearch: () => void` to props and, as the first child of `<nav>`, a search button:
 
 ```tsx
       <button type="button" className="shell-sidebar__search" onClick={onSearch} title={t("shell.search")}>
@@ -1849,8 +1856,8 @@ export function CommandPalette({ open, items, onClose }: { open: boolean; items:
       </button>
 ```
   CSS in `shell.css`: `.shell-sidebar__search { display:flex; align-items:center; gap:8px; height:28px; padding:0 8px; border-radius:var(--radius-sm); border:1px solid var(--border-line-subtle); background:var(--surface-secondary); color:var(--text-tertiary); font:inherit; font-size:12px; cursor:pointer; } .shell-sidebar__kbd { margin-left:auto; font:11px var(--font-mono); } .shell-sidebar--collapsed .shell-sidebar__search { justify-content:center; padding:0; } .shell-sidebar--collapsed .shell-sidebar__kbd { display:none; }`.
-- [ ] `src/components/shell/Shell.tsx`: add `onSearch: () => void` to `ShellProps` and pass it to `<Sidebar onSearch={onSearch} …>`.
-- [ ] `src/components/fleet/FleetView.tsx`: add `requestedName?: string | null` to the props and, after the "Load detail whenever selection changes" effect:
+- [x] `src/components/shell/Shell.tsx`: add `onSearch: () => void` to `ShellProps` and pass it to `<Sidebar onSearch={onSearch} …>`.
+- [x] `src/components/fleet/FleetView.tsx`: add `requestedName?: string | null` to the props and, after the "Load detail whenever selection changes" effect:
 
 ```tsx
   // The command palette can ask for a fleet by name (spec §6.6).
@@ -1858,7 +1865,7 @@ export function CommandPalette({ open, items, onClose }: { open: boolean; items:
     if (requestedName) setSelectedName(requestedName);
   }, [requestedName]);
 ```
-- [ ] `src/components/DashboardApp.tsx`:
+- [x] `src/components/DashboardApp.tsx`:
   - state: `const [paletteOpen, setPaletteOpen] = useState(false); const [fleetRequest, setFleetRequest] = useState<string | null>(null); const [paletteFleets, setPaletteFleets] = useState<FleetSummary[]>([]);` (`import type { FleetSummary } from "./fleet/types"`).
   - replace the "⌘K focus search" effect (lines 308–317) with one that calls `setPaletteOpen(true)` when `isPaletteShortcut(e)`.
   - `useEffect(() => { if (!paletteOpen) return; invoke<FleetSummary[]>("fleet_list").then(setPaletteFleets).catch(() => setPaletteFleets([])); }, [paletteOpen]);`
@@ -1883,10 +1890,19 @@ export function CommandPalette({ open, items, onClose }: { open: boolean; items:
 ```
   - render `<CommandPalette open={paletteOpen} items={paletteItems} onClose={() => setPaletteOpen(false)} />` next to the modals; pass `onSearch={() => setPaletteOpen(true)}` to `<Shell>` and `requestedName={fleetRequest}` to `<FleetView>`.
   - the global bar's `<label className="field dashboard__bar-search">…` input stays for now (it still feeds `query` to Chats); ⌘R: add `if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "r") { e.preventDefault(); invoke("list_agents").catch(console.error); refreshInbox(); }` to the same keydown effect.
-- [ ] Tests, build, lint. Preview: ⌘K opens the palette; typing "au" ranks agents; Enter jumps; a fleet result opens the Fleets page on that fleet; Esc closes.
-- [ ] Commit: `feat(hub): ⌘K command palette — jump to pages, agents, fleets; start/stop, new chat, settings`
+- [x] Tests, build, lint. Preview: ⌘K opens the palette; typing "au" ranks agents; Enter jumps; a fleet result opens the Fleets page on that fleet; Esc closes.
+- [x] Commit: `feat(hub): ⌘K command palette — jump to pages, agents, fleets; start/stop, new chat, settings`
 
-**Interfaces — Produces:** `PaletteItem`, `rankPalette`, `<CommandPalette open items onClose>`, `isPaletteShortcut`; `Shell`/`Sidebar` prop `onSearch`; `FleetView` prop `requestedName`.
+**Interfaces — Produces:** `PaletteItem`, `rankPalette`, `<CommandPalette open items onClose>`, `isPaletteShortcut`; `Shell`/`Sidebar` prop `onSearch`; `FleetView` props `requestedName` and `onRequestHandled`.
+
+> **Deviation recorded during execution (PR 3):** the browser check found a
+> race — `FleetView`'s first-load "auto-select the first fleet" read
+> `selectedRef` before the `requestedName` effect's state had synced it, so a
+> palette jump on mount landed on the first fleet. Fixed by setting the ref
+> together with the state, and by adding `onRequestHandled` so DashboardApp
+> clears the request once applied (a second jump to the same fleet fires
+> again). `rankPalette` keeps caller order within a kind on an empty query so
+> pages list in sidebar order. PR 5's `FleetView` rewrite must keep both.
 
 **Manual acceptance PR 3:** palette works from every page; ⌘F does nothing yet (no SourceList mounted) and does not break the browser find; all existing pages unchanged.
 
