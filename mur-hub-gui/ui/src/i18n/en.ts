@@ -851,6 +851,8 @@ export const en = {
   "wizard.models.hint": "You can change this anytime in Settings → Models.",
   "nav.groupWorkspace": "Workspace",
   "nav.groupLibrary": "Library",
+  "shell.version": "MUR Hub {version}",
+  "shell.resizeList": "Drag to resize the list · double-click to reset",
   "nav.home": "Home",
   "nav.chats": "Chats",
   "nav.agents": "Agents",
