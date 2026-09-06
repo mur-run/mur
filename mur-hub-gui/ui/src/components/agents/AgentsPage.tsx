@@ -1,78 +1,43 @@
-import { useState } from "react";
-import { useAgents } from "../../context/AgentContext";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentEntry, AgentRuntimeStatus } from "../../types";
-import { Mascot } from "../Mascot";
-import type { MascotMood } from "../Mascot";
+import type { ChannelSummary } from "../../work/types";
+import { useAgents } from "../../context/AgentContext";
 import { useT } from "../../i18n";
-import { CATEGORY_COLORS, avatarInitials, timeGreetingKey } from "../../utils";
-import { StatusPill, statusOf } from "../shell/Status";
-import { GridCard, Ico } from "./GridCard";
+import { avatarPreset, familyOf } from "../../utils";
+import { PetFace } from "../PetFace";
+import { SourceList } from "../shell/SourceList";
+import type { SourceFacet, SourceRowData } from "../shell/sourceListModel";
+import { ListDivider } from "../shell/ListDivider";
+import {
+  LIST_WIDTH_DEFAULT, LIST_WIDTH_MAX, LIST_WIDTH_MIN, useResizableColumn,
+} from "../shell/useResizableColumn";
+import { statusOf } from "../shell/Status";
+import { DirtyProvider, useDirtyGuard } from "../shell/dirty";
+import { listModeFor } from "../shell/breakpoints";
+import { useWindowWidth } from "../shell/useWindowWidth";
+import { readKey, writeKey } from "../shell/persist";
+import { AgentDetail } from "../detail/agent/AgentDetail";
+import { AgentsOverview } from "./AgentsOverview";
 
-// ─── ListRow ───────────────────────────────────────────────────────────────
-
-interface ListRowProps {
-  agent: AgentEntry;
-  runtime: AgentRuntimeStatus | undefined;
-  isSelected: boolean;
-}
-
-export function ListRow({ agent, runtime, isSelected }: ListRowProps) {
-  const { t } = useT();
-  const { setSelected } = useAgents();
-  const color = CATEGORY_COLORS[agent.category] ?? "#6B7280";
-  const model =
-    agent.model_id.length > 24 ? agent.model_id.slice(0, 24) + "…" : agent.model_id;
-  return (
-    <div
-      className={`list-row${isSelected ? " list-row--selected" : ""}`}
-      style={{ ["--cat" as string]: color }}
-      data-agent={agent.name}
-      onClick={() => setSelected(isSelected ? null : agent.name)}
-    >
-      <div className="list-row__main">
-        <div className="list-avatar" style={{ background: color }}>
-          {avatarInitials(agent.display_name)}
-        </div>
-        <span className="list-name">{agent.display_name}</span>
-        {agent.role && <span className="role-chip">{agent.role}</span>}
-      </div>
-      <span className="list-category">{t(`category.${agent.category}` as Parameters<typeof t>[0])}</span>
-      <span className="list-model" title={agent.model_id}>
-        {model}
-      </span>
-      <StatusPill kind={statusOf(runtime?.state)} />
-      <button
-        className="list-row__settings"
-        onClick={(e) => { e.stopPropagation(); setSelected(isSelected ? null : agent.name); }}
-        title={t("dashboard.settings")}
-        aria-label={t("dashboard.settings")}
-      >
-        <Ico>
-          <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-          <circle cx="12" cy="12" r="3" />
-        </Ico>
-      </button>
-    </div>
-  );
-}
-
-// ─── Sidebar (role filter) ───────────────────────────────────────────────────
-
-/** Sentinel for the "no role assigned" sidebar bucket. */
+/** Sentinel for the "no role assigned" facet. */
 export const NO_ROLE = "__none__";
+export const LAST_SELECTED_AGENT_KEY = "mur.agents.lastSelected";
+export const AGENTS_LIST_WIDTH_KEY = "mur.agents.listWidth";
 
-interface SidebarProps {
-  activeRole: string | null;
+export interface AgentsPageProps {
   agents: AgentEntry[];
-  onSelect: (role: string | null) => void;
+  runtimeMap: Map<string, AgentRuntimeStatus>;
+  channels: ChannelSummary[];
+  needsYou: Record<string, number>;
+  selectedAgent: string | null;
+  onNewAgent: () => void;
+  onOpenChat: (name: string) => void;
+  onOpenHome: () => void;
 }
 
-/**
- * Left rail filters by ROLE (was persona category, which was useless — nearly
- * every agent is "custom"). Lists each distinct role + a "no role" bucket.
- */
-export function Sidebar({ activeRole, agents, onSelect }: SidebarProps) {
-  const { t } = useT();
+/** Facet chips by ROLE (persona category was useless — nearly every agent is
+ *  "custom"): each distinct role plus a "no role" bucket. */
+export function roleFacets(agents: AgentEntry[], noRoleLabel: string): SourceFacet[] {
   const counts: Record<string, number> = {};
   let noRole = 0;
   for (const a of agents) {
@@ -80,161 +45,127 @@ export function Sidebar({ activeRole, agents, onSelect }: SidebarProps) {
     if (r) counts[r] = (counts[r] ?? 0) + 1;
     else noRole++;
   }
-  const roles = Object.keys(counts).sort((x, y) => x.localeCompare(y));
+  const facets = Object.keys(counts)
+    .sort((x, y) => x.localeCompare(y))
+    .map((r) => ({ id: r, label: r, count: counts[r] }));
+  if (noRole > 0) facets.push({ id: NO_ROLE, label: noRoleLabel, count: noRole });
+  return facets;
+}
 
+/** Agents page (spec §3.1 / §4.5): source list | divider | detail. The
+ *  DirtyProvider scopes unsaved-edit guards to this page. */
+export function AgentsPage(props: AgentsPageProps) {
   return (
-    <nav className="sidebar">
-      <button
-        className={`sidebar-item${activeRole === null ? " sidebar-item--active" : ""}`}
-        onClick={() => onSelect(null)}
-      >
-        {t("dashboard.all")} <span className="badge">{agents.length}</span>
-      </button>
-      {roles.map((role) => (
-        <button
-          key={role}
-          className={`sidebar-item${activeRole === role ? " sidebar-item--active" : ""}`}
-          onClick={() => onSelect(role)}
-        >
-          <span className="sidebar-item__icon">🎭</span>
-          {role} <span className="badge">{counts[role]}</span>
-        </button>
-      ))}
-      {noRole > 0 && (
-        <button
-          className={`sidebar-item${activeRole === NO_ROLE ? " sidebar-item--active" : ""}`}
-          onClick={() => onSelect(NO_ROLE)}
-        >
-          <span className="sidebar-item__icon">∅</span>
-          {t("dashboard.noRole")} <span className="badge">{noRole}</span>
-        </button>
-      )}
-    </nav>
+    <DirtyProvider>
+      <AgentsPageInner {...props} />
+    </DirtyProvider>
   );
 }
 
-// ─── AgentsPage ──────────────────────────────────────────────────────────────
-
-interface AgentsPageProps {
-  agents: AgentEntry[];
-  runtimeMap: Map<string, AgentRuntimeStatus>;
-  query: string;
-  viewMode: "grid" | "list";
-  selectedAgent: string | null;
-  onNewAgent: () => void;
-}
-
-export function AgentsPage({
-  agents,
-  runtimeMap,
-  query,
-  viewMode,
-  selectedAgent,
-  onNewAgent,
+function AgentsPageInner({
+  agents, runtimeMap, channels, needsYou, selectedAgent, onNewAgent, onOpenChat, onOpenHome,
 }: AgentsPageProps) {
   const { t } = useT();
-  const [activeRole, setActiveRole] = useState<string | null>(null);
+  const { setSelected } = useAgents();
+  const { confirmLeave } = useDirtyGuard();
+  const [filter, setFilter] = useState("");
+  const [facet, setFacet] = useState<string | null>(null);
+  // Overlay list mode only (< 960 px): the list slides over the detail.
+  const [listShown, setListShown] = useState(false);
+  const column = useResizableColumn(AGENTS_LIST_WIDTH_KEY, LIST_WIDTH_DEFAULT, LIST_WIDTH_MIN, LIST_WIDTH_MAX);
+  const listMode = listModeFor(useWindowWidth());
 
-  // Flock stats for the hero: count agents whose runtime is actively running.
-  const runningCount = agents.filter(
-    (a) => runtimeMap.get(a.name)?.state.state === "running",
-  ).length;
-  const idleCount = agents.length - runningCount;
+  // Restore the last selection ONCE, when agents first arrive (spec §6.1).
+  // Guarded by a ref: re-running on every transition to null would re-select
+  // the row the user just cleared with Esc.
+  const restored = useRef(false);
+  useEffect(() => {
+    if (restored.current || agents.length === 0) return;
+    restored.current = true;
+    if (selectedAgent !== null) return;
+    const last = readKey(LAST_SELECTED_AGENT_KEY);
+    if (last && agents.some((a) => a.name === last)) setSelected(last);
+  }, [agents, selectedAgent, setSelected]);
+  useEffect(() => {
+    writeKey(LAST_SELECTED_AGENT_KEY, selectedAgent);
+  }, [selectedAgent]);
 
-  const mascotMood: MascotMood =
-    agents.length === 0
-      ? "excited"
-      : runningCount === agents.length
-        ? "happy"
-        : runningCount === 0
-          ? "worried"
-          : "idle";
+  async function select(name: string | null) {
+    if (name === selectedAgent) return;
+    if (await confirmLeave(t("detail.discardBody"), t("detail.discardTitle"))) {
+      setSelected(name);
+      setListShown(false);
+    }
+  }
 
-  const mascotBubble =
-    mascotMood === "excited"
-      ? t("mascot.bubble.excited")
-      : mascotMood === "happy"
-        ? t("mascot.bubble.happy")
-        : mascotMood === "worried"
-          ? t("mascot.bubble.worried")
-          : t("mascot.bubble.idle", { running: runningCount, idle: idleCount });
-
-  const q = query.toLowerCase();
-  const visible = agents.filter(
-    (a) =>
-      (activeRole === null ||
-        (activeRole === NO_ROLE ? !a.role?.trim() : a.role?.trim() === activeRole)) &&
-      (!q || a.name.toLowerCase().includes(q) || a.display_name.toLowerCase().includes(q)),
+  const rows: SourceRowData[] = useMemo(
+    () =>
+      agents.map((a) => {
+        const preset = avatarPreset(a);
+        return {
+          id: a.name,
+          name: a.display_name,
+          subtitle: [a.role?.trim(), a.model_id].filter(Boolean).join(" · "),
+          status: statusOf(runtimeMap.get(a.name)?.state),
+          needsYou: needsYou[a.name] ?? 0,
+          avatar: <PetFace presetId={preset} family={familyOf(preset)} expression="idle" size={28} />,
+          facets: [a.role?.trim() || NO_ROLE],
+        };
+      }),
+    [agents, runtimeMap, needsYou],
   );
 
-  return (
-    <div className="agents-view">
-      <Sidebar activeRole={activeRole} agents={agents} onSelect={setActiveRole} />
-      <div className="agents-view__content">
-        <div className="dashboard__hero">
-          <Mascot floating mood={mascotMood} bubble={mascotBubble} />
-          <div>
-            <h3>{t(timeGreetingKey())}</h3>
-            <p>
-              {t("dashboard.flockStatus", {
-                running: runningCount,
-                idle: idleCount,
-              })}
-            </p>
-          </div>
-          <div className="dashboard__stats">
-            <div className="stat">
-              <div className="stat__n stat__n--run">{runningCount}</div>
-              <div className="stat__l">{t("dashboard.stat.running")}</div>
-            </div>
-            <div className="stat">
-              <div className="stat__n">{idleCount}</div>
-              <div className="stat__l">{t("dashboard.stat.idle")}</div>
-            </div>
-          </div>
-        </div>
+  const entry = agents.find((a) => a.name === selectedAgent);
+  const cls = `master-detail master-detail--${listMode}${listShown ? " master-detail--list-shown" : ""}`;
 
-        <div className="dashboard-content">
-          {visible.length === 0 ? (
-            <div className="empty-state">
-              <Mascot floating size={96} mood="excited" bubble={t("mascot.bubble.excited")} />
-              <h3>{t("dashboard.empty.title")}</h3>
-              <p>{t("dashboard.empty.body")}</p>
-              <button className="btn btn--accent" onClick={onNewAgent}>
-                {t("dashboard.empty.cta")}
-              </button>
-            </div>
-          ) : viewMode === "grid" ? (
-            <div className="agent-grid">
-              {visible.map((a) => (
-                <GridCard
-                  key={a.name}
-                  agent={a}
-                  runtime={runtimeMap.get(a.name)}
-                  isSelected={selectedAgent === a.name}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="agent-list">
-              <div className="agent-list__head">
-                <span>{t("dashboard.col.agent")}</span>
-                <span>{t("dashboard.col.category")}</span>
-                <span>{t("dashboard.col.model")}</span>
-                <span>{t("dashboard.col.status")}</span>
-                <span />
-              </div>
-              {visible.map((a) => (
-                <ListRow
-                  key={a.name}
-                  agent={a}
-                  runtime={runtimeMap.get(a.name)}
-                  isSelected={selectedAgent === a.name}
-                />
-              ))}
-            </div>
-          )}
-        </div>
+  return (
+    <div className={cls} style={{ ["--md-list-width" as string]: `${column.width}px` }}>
+      <SourceList
+        title={t("nav.agents")}
+        count={agents.length}
+        rows={rows}
+        facets={roleFacets(agents, t("dashboard.noRole"))}
+        allLabel={t("dashboard.all")}
+        activeFacet={facet}
+        onFacet={setFacet}
+        filter={filter}
+        onFilter={setFilter}
+        filterPlaceholder={t("agents.filter")}
+        selectedId={selectedAgent}
+        onSelect={(id) => {
+          void select(id);
+        }}
+        onCreate={onNewAgent}
+        createLabel={t("app.newAgent")}
+        emptyState={<p className="source-list__empty">{t("agents.noMatch")}</p>}
+      />
+      <ListDivider column={column} label={t("shell.resizeList")} />
+      <div className="master-detail__detail">
+        {listMode === "overlay" && (
+          <button
+            type="button"
+            className="btn btn--secondary master-detail__show-list"
+            onClick={() => setListShown((v) => !v)}
+          >
+            {t("shell.showList")}
+          </button>
+        )}
+        {selectedAgent && entry ? (
+          // Keyed per agent: remounts the detail (and its dirty set) so the
+          // cross-fade runs and stale form state never leaks across agents.
+          <AgentDetail
+            key={selectedAgent}
+            agentName={selectedAgent}
+            entry={entry}
+            runtime={runtimeMap.get(selectedAgent)}
+            channels={channels}
+            needsYou={needsYou[selectedAgent] ?? 0}
+            onOpenChat={onOpenChat}
+            onOpenHome={onOpenHome}
+          />
+        ) : (
+          <AgentsOverview agents={agents} runtimeMap={runtimeMap} onNewAgent={onNewAgent} />
+        )}
       </div>
     </div>
   );

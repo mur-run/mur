@@ -7,6 +7,8 @@ export interface InboxItem {
   title: string;
   subtitle: string;
   payload: unknown; // kind-specific, cast card
+  /** Owning agent, set by the hitl and companion adapters; absent for global items. */
+  agent?: string;
 }
 
 /**

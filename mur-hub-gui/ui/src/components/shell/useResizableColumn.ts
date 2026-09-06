@@ -1,6 +1,11 @@
 import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { readKey, writeKey } from "./persist";
 
+/** List-pane widths (px). Mirror --shell-list-width / -min / -max in primitives.css. */
+export const LIST_WIDTH_DEFAULT = 300;
+export const LIST_WIDTH_MIN = 240;
+export const LIST_WIDTH_MAX = 400;
+
 export function clampWidth(w: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(w)));
 }
