@@ -6,6 +6,11 @@ export interface DetailTabDef<T extends string> {
   label: string;
 }
 
+/** A single tab needs no tab bar (Library items); two or more do. */
+export function hasTabBar<T extends string>(tabs: DetailTabDef<T>[]): boolean {
+  return tabs.length > 1;
+}
+
 export function nextTab<T extends string>(tabs: DetailTabDef<T>[], active: T, delta: 1 | -1): T {
   const i = Math.max(0, tabs.findIndex((t) => t.id === active));
   return tabs[(i + delta + tabs.length) % tabs.length].id;
@@ -14,7 +19,8 @@ export function nextTab<T extends string>(tabs: DetailTabDef<T>[], active: T, de
 export interface DetailPageProps<T extends string> {
   avatar: ReactNode;
   title: string;
-  status: StatusKind;
+  /** Omit for objects without a runtime state (Library items). */
+  status?: StatusKind;
   meta?: ReactNode;
   actions?: ReactNode;
   tabs: DetailTabDef<T>[];
@@ -38,12 +44,13 @@ export function DetailPage<T extends string>(p: DetailPageProps<T>) {
         <span className="detail-page__avatar">{p.avatar}</span>
         <div className="detail-page__ident">
           <h1 className="detail-page__title">
-            {p.title} <StatusPill kind={p.status} />
+            {p.title} {p.status && <StatusPill kind={p.status} />}
           </h1>
           {p.meta && <div className="detail-page__meta">{p.meta}</div>}
         </div>
         {p.actions && <div className="detail-page__actions">{p.actions}</div>}
       </header>
+      {hasTabBar(p.tabs) && (
       <div className="detail-page__tabs" role="tablist" onKeyDown={onTabsKey}>
         {p.tabs.map((t) => (
           <button
@@ -61,7 +68,8 @@ export function DetailPage<T extends string>(p: DetailPageProps<T>) {
           </button>
         ))}
       </div>
-      <div key={p.activeTab} className="detail-page__body" role="tabpanel" id={`panel-${p.activeTab}`} aria-labelledby={`tab-${p.activeTab}`}>
+      )}
+      <div key={p.activeTab} className={`detail-page__body${hasTabBar(p.tabs) ? "" : " detail-page__body--flush"}`} role="tabpanel" id={`panel-${p.activeTab}`} aria-labelledby={`tab-${p.activeTab}`}>
         {p.banners}
         {p.children}
       </div>

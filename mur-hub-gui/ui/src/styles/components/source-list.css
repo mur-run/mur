@@ -36,3 +36,6 @@
 .source-row__name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .source-row__sub { font-size: var(--text-xs); color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .source-row__status { display: flex; align-items: center; gap: 8px; }
+.source-list__toolbar { padding: 0 var(--space-5) var(--space-4); }
+.source-list__create-menu { margin-left: auto; }
+.source-list__create-menu .menu { right: 0; left: auto; }

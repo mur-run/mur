@@ -1,0 +1,11 @@
+/* Library pages (spec 2026-09-06 Phase 2a). */
+.library-glyph { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius-md); background: var(--surface-secondary); color: var(--text-secondary); }
+.library-glyph--lg { width: 48px; height: 48px; border-radius: var(--radius-lg); }
+.library-glyph--lg svg { width: 24px; height: 24px; }
+.library-detail__desc { margin: 0; font-size: 13.5px; line-height: 1.55; max-width: 62ch; }
+.library-detail__muted { margin: 0; color: var(--text-tertiary); font-size: var(--text-sm); }
+.library-use { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; border-top: 1px solid var(--border-line-subtle); font-size: 13px; }
+.library-use:first-of-type { border-top: 0; }
+.library-use__toggle { display: flex; align-items: center; gap: 8px; }
+.library-picker { display: flex; align-items: center; gap: 8px; font-size: var(--text-sm); color: var(--text-secondary); }
+.library-picker select { flex: 1; min-width: 0; }

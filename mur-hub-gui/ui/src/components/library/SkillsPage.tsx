@@ -1,169 +1,88 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAgents } from "../../context/AgentContext";
-import type { AgentDetail } from "../../types";
 import { useT } from "../../i18n";
 import { SkillRegistryModal } from "../SkillRegistryModal";
 import { SkillAddUrlModal } from "../SkillAddUrlModal";
 import { AgentPicker } from "./AgentPicker";
-import type { LibrarySelection } from "../inspector/LibraryInspector";
+import { LibraryGlyph } from "./LibraryGlyph";
+import { LibraryPage } from "../detail/library/LibraryPage";
+import { itemFor, skillFacets, skillRows, type InstalledSkillView } from "../detail/library/libraryModel";
+import { useInstallTarget } from "../detail/library/useInstallTarget";
 
-// ─── Backend shape ───────────────────────────────────────────────────────────
-
-interface InstalledSkillView {
-  name: string;
-  description: string;
-  category: string;
-  origin_version: string | null;
-  status: string;
-}
-
-// ─── Status → badge variant ──────────────────────────────────────────────────
-
-/** Pure mapping: backend status label -> badge CSS variant. Exported for
- * testing; backend already reduces `UpgradeStatus` labels. */
-export function statusBadgeClass(status: string): string {
-  switch (status) {
-    case "modified":
-      return "badge badge--warn";
-    case "update available":
-      return "badge badge--warn";
-    case "up to date":
-      return "badge badge--ok";
-    default:
-      return "badge";
-  }
-}
-
-// ─── Component ────────────────────────────────────────────────────────────────
-
-export function SkillsPage({ onSelect }: { onSelect?: (item: LibrarySelection | null) => void }) {
+/** Skills library (spec §3.1): installed skills | detail with usage.
+ *  `skills_installed` does not report per-agent enabled state, so the toggle
+ *  starts checked and only the unchecked direction reaches the backend;
+ *  re-enabling is done from the agent's Capabilities tab. */
+export function SkillsPage() {
   const { t } = useT();
   const { agents } = useAgents();
-  const [skills, setSkills] = useState<InstalledSkillView[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [target, setTarget] = useInstallTarget(agents);
   const [showRegistry, setShowRegistry] = useState(false);
   const [showAddUrl, setShowAddUrl] = useState(false);
-  const [targetAgent, setTargetAgent] = useState<string>(agents[0]?.name ?? "");
-  const [selected, setSelected] = useState<string | null>(null);
-
-  function pick(s: InstalledSkillView) {
-    setSelected(s.name);
-    onSelect?.({
-      kind: "skill",
-      name: s.name,
-      version: s.origin_version,
-      description: s.description,
-      meta: [
-        { label: t("detail.category"), value: s.category },
-        { label: "Status", value: s.status },
-      ],
-    });
-  }
-
-  useEffect(() => {
-    if (!targetAgent && agents[0]?.name) {
-      setTargetAgent(agents[0].name);
-    }
-  }, [agents, targetAgent]);
-
-  const refresh = useCallback(() => {
-    setLoading(true);
-    invoke<InstalledSkillView[]>("skills_installed")
-      .then((res) => {
-        setSkills(res);
-        setError(null);
-      })
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  const handleSaved = useCallback(
-    (_d: AgentDetail) => {
-      refresh();
-    },
-    [refresh],
-  );
+  const [reload, setReload] = useState(0);
+  const metaLabels = {
+    category: t("library.meta.category"),
+    version: t("library.meta.version"),
+    status: t("library.meta.status"),
+    path: t("library.meta.path"),
+  };
 
   return (
-    <div>
-      <div
-        className="tab-form"
-        style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 12 }}
-      >
-        <AgentPicker agents={agents} value={targetAgent} onChange={setTargetAgent} />
-        <button
-          className="btn btn--sm btn--secondary"
-          onClick={() => setShowAddUrl(true)}
-          disabled={!targetAgent}
-        >
-          {t("detail.installSkillUrl")}
-        </button>
-        <button
-          className="btn btn--sm btn--secondary"
-          onClick={() => setShowRegistry(true)}
-          disabled={!targetAgent}
-        >
-          {t("detail.browseRegistry")}
-        </button>
-      </div>
-
-      {error && <p className="save-error">{error}</p>}
-
-      {loading ? (
-        <p className="field-muted">{t("skillslib.loading")}</p>
-      ) : skills.length === 0 ? (
-        <div className="tab-empty">
-          <p>{t("detail.noSkills")}</p>
+    <LibraryPage<InstalledSkillView>
+      page="skills"
+      title={t("nav.skills")}
+      listCommand="skills_installed"
+      idOf={(s) => s.name}
+      rows={(skills) => skillRows(skills, t("library.versionPrefix"), () => <LibraryGlyph kind="skill" />)}
+      facets={skillFacets}
+      item={(s) => itemFor("skill", s, metaLabels)}
+      uses={(s) => s.agents.map((agent) => ({ agent, enabled: true }))}
+      toggle={async (s, agent, enabled) => {
+        await invoke("agent_skill_toggle", { name: agent, skillId: s.name, enabled });
+      }}
+      remove={async (s, agent) => {
+        await invoke("agent_skill_uninstall", { name: agent, skillId: s.name });
+      }}
+      folderOf={(s) => s.path}
+      createLabel={t("skillslib.add")}
+      createItems={[
+        { id: "url", label: t("detail.installSkillUrl"), onSelect: () => setShowAddUrl(true), disabled: !target },
+        { id: "registry", label: t("detail.browseRegistry"), onSelect: () => setShowRegistry(true), disabled: !target },
+      ]}
+      toolbar={
+        <div className="library-picker">
+          <AgentPicker agents={agents} value={target} onChange={setTarget} />
         </div>
-      ) : (
-        <ul className="item-list">
-          {skills.map((s) => (
-            <li
-              key={s.name}
-              className={`item-card${selected === s.name ? " item-card--selected" : ""}`}
-              onClick={() => pick(s)}
-              style={{ cursor: "pointer" }}
-            >
-              <div className="item-card-name" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <span style={{ fontWeight: 600 }}>{s.name}</span>
-                <span className="item-card__meta">{s.category}</span>
-                {s.origin_version && <span className="item-card__meta">v{s.origin_version}</span>}
-                <span className={statusBadgeClass(s.status)}>{s.status}</span>
-              </div>
-              <p style={{ margin: "4px 0 0", fontSize: 13, color: "var(--text-muted, #888)" }}>
-                {s.description}
-              </p>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {showAddUrl && targetAgent && (
+      }
+      copy={{
+        loading: t("skillslib.loading"),
+        empty: t("detail.noSkills"),
+        filter: t("skillslib.filter"),
+        noMatch: t("skillslib.noMatch"),
+      }}
+      reloadToken={reload}
+    >
+      {showAddUrl && target && (
         <SkillAddUrlModal
-          agentName={targetAgent}
+          agentName={target}
           onClose={() => setShowAddUrl(false)}
-          onSaved={(d) => {
-            handleSaved(d);
+          onSaved={() => {
+            setReload((n) => n + 1);
             setShowAddUrl(false);
           }}
         />
       )}
-      {showRegistry && targetAgent && (
+      {showRegistry && target && (
         <SkillRegistryModal
-          agentName={targetAgent}
+          agentName={target}
           onClose={() => setShowRegistry(false)}
-          onSaved={(d) => {
-            handleSaved(d);
+          onSaved={() => {
+            setReload((n) => n + 1);
             setShowRegistry(false);
           }}
         />
       )}
-    </div>
+    </LibraryPage>
   );
 }
