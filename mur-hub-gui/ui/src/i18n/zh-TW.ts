@@ -54,6 +54,10 @@ export const zhTW: Table = {
   "status.running": "執行中",
   "status.idle": "閒置",
   "status.error": "錯誤",
+  "status.restarting": "重啟中",
+  "status.stopped": "已停止",
+  "status.failed": "失敗",
+  "status.needsYou": "{count} 件等你處理",
   "settings.language": "語言",
   // ── Settings panel ──
   "settings.title": "設定",
