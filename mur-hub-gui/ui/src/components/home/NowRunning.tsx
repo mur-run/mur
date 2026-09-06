@@ -11,8 +11,10 @@ interface Props {
   runtimeStatuses: AgentRuntimeStatus[];
   channels: ChannelSummary[];
   nowMs: number;
-  /** Jump to the chats surface for a given channel/agent. */
-  onOpen: () => void;
+  /** A channel row: the Home page maps it to a peek or the Chats page. */
+  onOpen: (channel: ChannelSummary) => void;
+  /** An agent chip: peek that agent's conversation (spec 3(b) §4). */
+  onPeekAgent: (name: string) => void;
 }
 
 /**
@@ -27,6 +29,7 @@ export function NowRunning({
   channels,
   nowMs,
   onOpen,
+  onPeekAgent,
 }: Props) {
   const { t } = useT();
 
@@ -51,7 +54,13 @@ export function NowRunning({
             const entry = entryFor(s.name);
             const preset = entry ? avatarPreset(entry) : "starling";
             return (
-              <div key={s.name} className="home-run-agent">
+              <button
+                key={s.name}
+                type="button"
+                className="home-run-agent"
+                onClick={() => onPeekAgent(s.name)}
+                aria-label={entry?.display_name ?? s.name}
+              >
                 <span className="home-run-agent__avatar">
                   <PetFace
                     presetId={preset}
@@ -65,7 +74,7 @@ export function NowRunning({
                   {entry?.display_name ?? s.name}
                 </span>
                 <span className="home-run-agent__dot" aria-hidden="true" />
-              </div>
+              </button>
             );
           })}
         </div>
@@ -75,7 +84,7 @@ export function NowRunning({
         <ul className="home-run-list">
           {runningChannels.map((ch) => (
             <li key={ch.id}>
-              <button className="home-run-row" onClick={onOpen}>
+              <button className="home-run-row" onClick={() => onOpen(ch)}>
                 <span className="home-run-row__title">
                   {ch.title || ch.id.slice(0, 8)}
                 </span>

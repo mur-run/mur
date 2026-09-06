@@ -17,8 +17,9 @@ export interface PeekPanelProps {
   onClose: () => void;
   /** Leave Home for the page that owns the target, with it selected. */
   onGo: (t: PeekTarget) => void;
-  /** The chat window or the fleet detail window; the caller closes the peek. */
-  onOpenInWindow: (t: PeekTarget) => void;
+  /** The chat window or the fleet detail window; the caller closes the peek.
+   *  `title` is the display name when the panel knows it. */
+  onOpenInWindow: (t: PeekTarget, title: string) => void;
   /** ChatPane's "Open agent": the Agents page with that agent selected. */
   onOpenAgent: (name: string) => void;
 }
@@ -48,7 +49,7 @@ export function PeekPanel({ target, agents, runtimeMap, channels, onClose, onGo,
       } else if (isOpenInWindowShortcut(e) && !isEditingTarget(document.activeElement)) {
         e.stopPropagation();
         e.preventDefault();
-        onOpenInWindow(target);
+        onOpenInWindow(target, titleRef.current);
       }
     }
     window.addEventListener("keydown", onKey, true);
@@ -57,6 +58,9 @@ export function PeekPanel({ target, agents, runtimeMap, channels, onClose, onGo,
 
   const entry = target.kind === "chat" ? agents.find((a) => a.name === target.agent) : undefined;
   const title = target.kind === "chat" ? (entry?.display_name ?? target.agent) : (fleetTitle ?? target.name);
+  // The key handler reads the latest title without re-subscribing per render.
+  const titleRef = useRef(title);
+  titleRef.current = title;
 
   return (
     <>
@@ -68,7 +72,7 @@ export function PeekPanel({ target, agents, runtimeMap, channels, onClose, onGo,
             <button type="button" className="btn btn--secondary" onClick={() => onGo(target)}>
               {t("peek.go")}
             </button>
-            <button type="button" className="btn btn--secondary" onClick={() => onOpenInWindow(target)}>
+            <button type="button" className="btn btn--secondary" onClick={() => onOpenInWindow(target, title)}>
               {t("action.openInWindow")}
             </button>
             <button ref={closeRef} type="button" className="peek__close" onClick={onClose} aria-label={t("detail.close")}>
