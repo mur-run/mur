@@ -23,7 +23,7 @@ The visual language has the same accretion problem: pastel light-blue tint on ev
 | Detail navigation | **Master–detail**: fixed-width source list + full-width detail pane. Inspector column retired for Agents and Fleets. | Push navigation (full-page detail + back): loses list context, hides other agents' status while editing, back-stack state to manage, worse than today's fleet rail. Modal dialog: agent detail is a long-lived object with live state, not a task with an end; dims everything else; can't compare. Side drawer: option 3 with an overlay — the 11-tab width problem is unchanged. Resizable inspector (min 420): still squeezes the grid; wrong idiom for a primary editor. |
 | Pop-out | **"Open in window" (⌘↩) as an additive action in Phase 2**, reusing the Phase 1 detail component. Never the only path. | Separate window as the primary path: window management for 26 agents, and two windows fetching the same state — this codebase's most common failure. |
 | Scope of this spec | Sections 3–7 below are all Phase 1. They depend on each other: without breakpoints the tab IA doesn't fit; without the component family, Phase 2 rebuilds it. | Splitting tokens or components out into their own project. |
-| Deferred | Open-in-window, multi-select bulk start/stop, Quick Look preview, side-peek from Home. | — |
+| Deferred | Open-in-window, multi-select bulk start/stop, Quick Look preview (dropped in Phase 3(b): the detail pane already previews the selection), side-peek from Home (Phase 3(b)). | — |
 
 ## 3. Shell
 
@@ -225,4 +225,4 @@ Manual acceptance per PR 4 and PR 5, against the mockup: 960 and 1200 widths × 
 ## 10. Later phases
 
 - **Phase 2 — Library pages + open-in-window.** Skills / Workflows / MCP / Models / Plugins adopt `SourceList` + `DetailPage`; `LibraryInspector` retired; ⌘↩ opens the current detail in its own Tauri window reusing `DetailPage` (state read from the same Tauri commands, no second data path).
-- **Phase 3 — Home / Chats / Settings**, multi-select bulk actions in `SourceList`, Quick Look preview (space bar), side-peek from Home.
+- **Phase 3 — Home / Chats / Settings**, multi-select bulk actions in `SourceList`, side-peek from Home (Phase 3(b)); Quick Look was dropped there.

@@ -6,6 +6,7 @@
   /* surfaces (spec §5.1): window < sidebar < list < detail = card */
   --surface-bg:var(--n-bg); --surface-window:var(--n-bg); --surface-sidebar:var(--n-sidebar);
   --surface-list:var(--n-list); --surface-detail:var(--n-detail);
+  --scrim:var(--scrim-light);
   --surface-secondary:var(--n-secondary); --surface-card:var(--n-card); --surface-hover:var(--n-hover);
   --border-line:var(--n-line); --border-line-subtle:var(--n-line-subtle);
   --text-primary:var(--n-text); --text-secondary:var(--n-text2); --text-tertiary:var(--n-text3);
@@ -24,6 +25,7 @@
     --color-accent-strong:var(--coral-300);
     --surface-bg:var(--d-bg); --surface-window:var(--d-bg); --surface-sidebar:var(--d-sidebar);
     --surface-list:var(--d-list); --surface-detail:var(--d-detail);
+    --scrim:var(--scrim-dark);
     --surface-secondary:var(--d-secondary); --surface-card:var(--d-card); --surface-hover:var(--d-hover);
     --border-line:var(--d-line); --border-line-subtle:var(--d-line-subtle);
     --text-primary:var(--d-text); --text-secondary:var(--d-text2); --text-tertiary:var(--d-text3);
@@ -38,6 +40,7 @@
   --color-accent-strong:var(--coral-300);
   --surface-bg:var(--d-bg); --surface-window:var(--d-bg); --surface-sidebar:var(--d-sidebar);
   --surface-list:var(--d-list); --surface-detail:var(--d-detail);
+  --scrim:var(--scrim-dark);
   --surface-secondary:var(--d-secondary); --surface-card:var(--d-card); --surface-hover:var(--d-hover);
   --border-line:var(--d-line); --border-line-subtle:var(--d-line-subtle);
   --text-primary:var(--d-text); --text-secondary:var(--d-text2); --text-tertiary:var(--d-text3);
@@ -51,6 +54,7 @@
   --color-accent-strong:var(--coral-600);
   --surface-bg:var(--n-bg); --surface-window:var(--n-bg); --surface-sidebar:var(--n-sidebar);
   --surface-list:var(--n-list); --surface-detail:var(--n-detail);
+  --scrim:var(--scrim-light);
   --surface-secondary:var(--n-secondary); --surface-card:var(--n-card); --surface-hover:var(--n-hover);
   --border-line:var(--n-line); --border-line-subtle:var(--n-line-subtle);
   --text-primary:var(--n-text); --text-secondary:var(--n-text2); --text-tertiary:var(--n-text3);

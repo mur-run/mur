@@ -36,18 +36,20 @@ export interface FleetDetailPaneProps {
   onDeleted: () => void;
   /** Dashboard only: the ⋯ "Open in window" item. Undefined inside a window. */
   onOpenInWindow?: () => void;
+  /** Tab to open on; the Home peek opens on Jobs. Default Overview. */
+  initialTab?: FleetTabId;
 }
 
 /** One fleet's detail page (spec 2(b) §5): owns `fleet_detail` + `fleet_jobs`,
  *  reloads on `fleet:run_done` for this fleet, and renders the four tabs.
  *  Hosts key it by `name`, so a selection change remounts it. */
 export function FleetDetailPane({
-  name, summary, labels, agentMap, onRefresh, onDeleted, onOpenInWindow,
+  name, summary, labels, agentMap, onRefresh, onDeleted, onOpenInWindow, initialTab = "overview",
 }: FleetDetailPaneProps) {
   const { t } = useT();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [jobs, setJobs] = useState<JobRow[]>([]);
-  const [tab, setTab] = useState<FleetTabId>("overview");
+  const [tab, setTab] = useState<FleetTabId>(initialTab);
 
   const load = useCallback(async () => {
     try {

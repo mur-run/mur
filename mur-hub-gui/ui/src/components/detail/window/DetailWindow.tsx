@@ -1,10 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { AgentEntry } from "../../../types";
 import { AgentProvider, useAgents } from "../../../context/AgentContext";
 import { useT } from "../../../i18n";
-import type { FleetSummary, LabelView } from "../../fleet/types";
 import { visibleInboxItems } from "../../home/inbox";
 import { needsYouCounts } from "../../home/needsYouCounts";
 import { useChannels } from "../../home/useChannels";
@@ -12,7 +10,7 @@ import { useInbox } from "../../home/useInbox";
 import { DirtyProvider, useDirtyGuard } from "../../shell/dirty";
 import { isMac } from "../../shell/platform";
 import { AgentDetail } from "../agent/AgentDetail";
-import { FleetDetailPane } from "../fleet/FleetDetailPane";
+import { FleetHost } from "../fleet/FleetHost";
 import { parseDetailRoute, type DetailRoute } from "./detailRoute";
 
 /** Dismissals are session state in DashboardApp; a fresh window has none. */
@@ -61,7 +59,11 @@ function DetailWindowInner({ route }: { route: DetailRoute | null }) {
       ) : route.kind === "agent" ? (
         <AgentBody name={route.name} />
       ) : (
-        <FleetBody name={route.name} />
+        <FleetHost
+          name={route.name}
+          missing={<Missing text={t("detailWindow.missingFleet")} />}
+          onDeleted={() => void getCurrentWindow().close()}
+        />
       )}
     </div>
   );
@@ -102,39 +104,6 @@ function AgentBody({ name }: { name: string }) {
       onOpenHome={() => {
         invoke("open_dashboard", { page: "home" }).catch(console.error);
       }}
-    />
-  );
-}
-
-function FleetBody({ name }: { name: string }) {
-  const { t } = useT();
-  const { agents } = useAgents();
-  const [fleets, setFleets] = useState<FleetSummary[] | null>(null);
-  const [labels, setLabels] = useState<LabelView[]>([]);
-  const [agentMap, setAgentMap] = useState<Map<string, AgentEntry>>(new Map());
-
-  useEffect(() => {
-    setAgentMap(new Map(agents.map((a) => [a.name, a])));
-  }, [agents]);
-
-  // The pane's host data: the summary (status + labels) and the label registry.
-  const load = useCallback(() => {
-    invoke<FleetSummary[]>("fleet_list").then(setFleets).catch(() => setFleets([]));
-    invoke<LabelView[]>("fleet_labels_list").then(setLabels).catch(() => setLabels([]));
-  }, []);
-  useEffect(load, [load]);
-
-  if (fleets === null) return null;
-  const summary = fleets.find((f) => f.name === name);
-  if (!summary) return <Missing text={t("detailWindow.missingFleet")} />;
-  return (
-    <FleetDetailPane
-      name={name}
-      summary={summary}
-      labels={labels}
-      agentMap={agentMap}
-      onRefresh={load}
-      onDeleted={() => void getCurrentWindow().close()}
     />
   );
 }
