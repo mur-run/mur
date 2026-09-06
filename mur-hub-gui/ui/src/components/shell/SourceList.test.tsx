@@ -42,6 +42,16 @@ describe("SourceList markup", () => {
     expect(html.match(/source-row__unread/g)).toHaveLength(1);
     expect(renderToStaticMarkup(<SourceList {...props} rows={rows} />)).not.toContain("source-row__unread");
   });
+  it("renders every id in selectedIds as selected and marks the listbox multiselectable", () => {
+    const props = { title: "Agents", count: 2, rows, facets: [], allLabel: "All", activeFacet: null, onFacet: noop,
+      filter: "", onFilter: noop, filterPlaceholder: "Filter", selectedId: "aura", onSelect: noop, emptyState: <p>none</p> };
+    const html = renderToStaticMarkup(<SourceList {...props} selectedIds={new Set(["aura", "scout"])} />);
+    expect(html.match(/source-row--on/g)).toHaveLength(2);
+    expect(html).toContain('aria-multiselectable="true"');
+    const single = renderToStaticMarkup(<SourceList {...props} />);
+    expect(single.match(/source-row--on/g)).toHaveLength(1);
+    expect(single).not.toContain("aria-multiselectable");
+  });
 });
 
 import type { MenuItemDef } from "./SplitButton";
