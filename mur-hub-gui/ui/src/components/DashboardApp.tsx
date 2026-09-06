@@ -24,7 +24,8 @@ import { FleetView } from "./fleet/FleetView";
 import { useT } from "../i18n";
 import type { TranslationKey } from "../i18n/types";
 import { Shell } from "./shell/Shell";
-import { NAV_ITEMS, type PageId } from "./shell/nav";
+import { NAV_ITEMS, isPageId, type PageId } from "./shell/nav";
+import { isEditingTarget, isOpenInWindowShortcut, openDetailWindow } from "./detail/window/openInWindow";
 import type { FleetSummary } from "./fleet/types";
 import { CommandPalette, isPaletteShortcut } from "./shell/CommandPalette";
 import type { PaletteItem } from "./shell/palette";
@@ -107,6 +108,9 @@ export function DashboardApp() {
     setPage("chats");
   }, []);
   const [fleetRequest, setFleetRequest] = useState<string | null>(null);
+  // The Fleets page reports its selection up for ⌘↩ and the palette (spec 2(b) §7).
+  const [selectedFleet, setSelectedFleet] = useState<string | null>(null);
+  const onFleetSelect = useCallback((name: string | null) => setSelectedFleet(name), []);
   const [paletteFleets, setPaletteFleets] = useState<FleetSummary[]>([]);
   // Handed to FleetView so a palette jump to the same fleet twice still fires.
   const clearFleetRequest = useCallback(() => setFleetRequest(null), []);
@@ -210,6 +214,21 @@ export function DashboardApp() {
     };
   }, [setSelected]);
 
+  // "Show in Hub" from a fleet detail window, and page jumps from any window.
+  useEffect(() => {
+    const unFleet = listen<string>("select-fleet", (e) => {
+      setFleetRequest(e.payload);
+      setPage("fleets");
+    });
+    const unPage = listen<string>("open-page", (e) => {
+      if (isPageId(e.payload)) setPage(e.payload);
+    });
+    return () => {
+      void unFleet.then((fn) => fn());
+      void unPage.then((fn) => fn());
+    };
+  }, []);
+
   // Pet "Chat" / file-drop → open the dedicated chat window for that agent.
   useEffect(() => {
     const unsub = listen<{ agent: string; draft?: string | null }>("pet-open-chat", (e) => {
@@ -292,6 +311,17 @@ export function DashboardApp() {
       if (isPaletteShortcut(e)) {
         e.preventDefault();
         setPaletteOpen(true);
+      } else if (isOpenInWindowShortcut(e)) {
+        if (isEditingTarget(document.activeElement)) return;
+        if (page === "agents" && selectedAgent) {
+          e.preventDefault();
+          const a = agents.find((x) => x.name === selectedAgent);
+          void openDetailWindow("agent", selectedAgent, a?.display_name ?? selectedAgent);
+        } else if (page === "fleets" && selectedFleet) {
+          e.preventDefault();
+          const f = paletteFleets.find((x) => x.name === selectedFleet);
+          void openDetailWindow("fleet", selectedFleet, f?.display_name ?? selectedFleet);
+        }
       } else if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "r") {
         e.preventDefault();
         invoke("list_agents").catch(console.error);
@@ -300,7 +330,7 @@ export function DashboardApp() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [refreshInbox]);
+  }, [refreshInbox, page, selectedAgent, selectedFleet, agents, paletteFleets]);
 
   // Fleets are not held in app state; fetch them when the palette opens.
   useEffect(() => {
@@ -376,7 +406,27 @@ export function DashboardApp() {
                   invoke("start_agent", { name: selectedAgent }).catch(console.error);
                 },
               },
+          {
+            id: "action:openAgentInWindow",
+            kind: "action" as const,
+            label: t("palette.action.openInWindow", { name: selectedAgent }),
+            run: () => {
+              const a = agents.find((x) => x.name === selectedAgent);
+              void openDetailWindow("agent", selectedAgent, a?.display_name ?? selectedAgent);
+            },
+          },
         ]
+      : []),
+    ...(selectedFleet
+      ? [{
+          id: "action:openFleetInWindow",
+          kind: "action" as const,
+          label: t("palette.action.openInWindow", { name: selectedFleet }),
+          run: () => {
+            const f = paletteFleets.find((x) => x.name === selectedFleet);
+            void openDetailWindow("fleet", selectedFleet, f?.display_name ?? selectedFleet);
+          },
+        }]
       : []),
     ...agents.map((a) => ({
       id: `agent:${a.name}`,
@@ -524,7 +574,7 @@ export function DashboardApp() {
           ) : page === "chats" ? (
             <ChatsPage agents={agents} initialAgent={chatInitial} onActiveChange={onChatActive} />
           ) : page === "fleets" ? (
-            <FleetView requestedName={fleetRequest} onRequestHandled={clearFleetRequest} />
+            <FleetView onSelect={onFleetSelect} requestedName={fleetRequest} onRequestHandled={clearFleetRequest} />
           ) : page === "agents" ? (
             <AgentsPage
               agents={agents}

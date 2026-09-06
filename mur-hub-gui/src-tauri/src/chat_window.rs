@@ -9,9 +9,10 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 const PANEL_W: i32 = 380;
 const PANEL_H: i32 = 520;
 
-fn label(agent_name: &str) -> String {
-    let safe: String = agent_name
-        .chars()
+/// The label-safe form of an agent / fleet name: alphanumerics and `-` kept,
+/// everything else becomes `-`. Shared by the chat, pet, and detail windows.
+pub(crate) fn safe_label_part(name: &str) -> String {
+    name.chars()
         .map(|c| {
             if c.is_alphanumeric() || c == '-' {
                 c
@@ -19,26 +20,19 @@ fn label(agent_name: &str) -> String {
                 '-'
             }
         })
-        .collect();
-    format!("chat-{}", safe)
+        .collect()
+}
+
+fn label(agent_name: &str) -> String {
+    format!("chat-{}", safe_label_part(agent_name))
 }
 
 fn pet_label(agent_name: &str) -> String {
-    // Same safe-name transform as `label`, with the pet prefix.
-    let safe: String = agent_name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    format!("pet-{}", safe)
+    format!("pet-{}", safe_label_part(agent_name))
 }
 
-fn urlenc(s: &str) -> String {
+/// Spaces become `+` for the hash route; the UI reverses it (`agentNameFromHash`).
+pub(crate) fn urlenc(s: &str) -> String {
     s.chars().map(|c| if c == ' ' { '+' } else { c }).collect()
 }
 
@@ -100,4 +94,27 @@ pub fn open_chat_window(agent_name: String, app: AppHandle) -> Result<(), String
 
     win.show().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_label_part_keeps_alphanumerics_and_dashes() {
+        assert_eq!(safe_label_part("aura-2"), "aura-2");
+        assert_eq!(safe_label_part("My Agent.v2"), "My-Agent-v2");
+        assert_eq!(safe_label_part("研究員"), "研究員");
+    }
+
+    #[test]
+    fn label_prefixes_kind() {
+        assert_eq!(label("a b"), "chat-a-b");
+        assert_eq!(pet_label("a b"), "pet-a-b");
+    }
+
+    #[test]
+    fn urlenc_only_touches_spaces() {
+        assert_eq!(urlenc("a b-c"), "a+b-c");
+    }
 }

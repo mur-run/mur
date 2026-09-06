@@ -19,6 +19,7 @@ import { useWindowWidth } from "../shell/useWindowWidth";
 import { readKey, writeKey } from "../shell/persist";
 import { showToast } from "../detail/fleet/fleetActions";
 import { FleetDetailPane, FLEET_GLYPH } from "../detail/fleet/FleetDetailPane";
+import { openDetailWindow } from "../detail/window/openInWindow";
 
 const LABEL_FILTER_KEY = "mur.fleet.labelFilter";
 export const LAST_SELECTED_FLEET_KEY = "mur.fleets.lastSelected";
@@ -189,6 +190,10 @@ export function FleetView({ onSelect, requestedName, onRequestHandled }: {
           setSelectedName(id);
           setListShown(false);
         }}
+        onOpen={(id) => {
+          const f = fleets.find((x) => x.name === id);
+          if (f) void openDetailWindow("fleet", f.name, f.display_name);
+        }}
         onCreate={() => setShowCreate(true)}
         createLabel={t("fleet.new")}
         emptyState={<p className="source-list__empty">{fleets.length === 0 ? t("fleet.empty") : t("fleet.noMatch")}</p>}
@@ -213,6 +218,9 @@ export function FleetView({ onSelect, requestedName, onRequestHandled }: {
             agentMap={agentMap}
             onRefresh={handleRefresh}
             onDeleted={handleDelete}
+            onOpenInWindow={() => {
+              void openDetailWindow("fleet", summary.name, summary.display_name);
+            }}
           />
         ) : (
           <div className="fleet-view__empty">

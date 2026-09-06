@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { AgentEntry, AgentRuntimeStatus, AgentDetail as AgentDetailData } from "../../../types";
 import type { ChannelSummary } from "../../../work/types";
@@ -29,6 +30,8 @@ export interface AgentDetailProps {
   needsYou: number;
   onOpenChat: (name: string) => void;
   onOpenHome: () => void;
+  /** Dashboard only: the ⋯ "Open in window" item. Undefined inside a window. */
+  onOpenInWindow?: () => void;
 }
 
 // Lightweight toast — appends a bare `.toast` element to <body>, mirrors
@@ -43,10 +46,12 @@ function showToast(msg: string, durationMs = 2000) {
 
 /** The agent's full-width detail pane (spec §4.3): AgentInspector's data and
  *  handlers, rendered through DetailPage with the six grouped tabs. */
-export function AgentDetail({ agentName, entry, runtime, channels, needsYou, onOpenChat, onOpenHome }: AgentDetailProps) {
+export function AgentDetail({
+  agentName, entry, runtime, channels, needsYou, onOpenChat, onOpenHome, onOpenInWindow,
+}: AgentDetailProps) {
   const { t } = useT();
   const { desiredDetailTab, setDesiredDetailTab } = useAgents();
-  const { confirmLeave } = useDirtyGuard();
+  const { confirmLeave, isDirty } = useDirtyGuard();
   const [detail, setDetail] = useState<AgentDetailData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<AgentTabId>("overview");
@@ -64,6 +69,18 @@ export function AgentDetail({ agentName, entry, runtime, channels, needsYou, onO
       .then(setDetail)
       .catch((e) => setError(String(e)));
   }, [agentName]);
+
+  // Another window may have saved this agent: reload when ours is focused,
+  // unless a form here is mid-edit (spec 2(b) §6). Runs in the dashboard too.
+  useEffect(() => {
+    const un = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (!focused || isDirty) return;
+      invoke<AgentDetailData>("get_agent_detail", { name: agentName })
+        .then(setDetail)
+        .catch((e) => setError(String(e)));
+    });
+    return () => { void un.then((f) => f()); };
+  }, [agentName, isDirty]);
 
   // Per-agent fallback-chain override (empty = inherits the global chain set
   // in Settings → Models). Independent of `detail` — has its own Tauri pair.
@@ -178,6 +195,9 @@ export function AgentDetail({ agentName, entry, runtime, channels, needsYou, onO
               invoke("open_chat_window", { agentName }).catch(console.error);
             },
           },
+          ...(onOpenInWindow
+            ? [{ id: "openInWindow", label: t("action.openInWindow"), onSelect: onOpenInWindow }]
+            : []),
         ]}
       />
     </>

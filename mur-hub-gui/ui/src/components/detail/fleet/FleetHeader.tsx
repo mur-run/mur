@@ -34,12 +34,14 @@ export interface FleetHeaderProps {
   detail: Detail;
   onRefresh: () => void;
   onDelete: () => void;
+  /** Dashboard only: the ⋯ "Open in window" item. Undefined inside a window. */
+  onOpenInWindow?: () => void;
 }
 
 /** Header actions (spec §4.4): Run ▾ (loop / send job / worktree), Stop or
  *  Start, and ⋯ (Export, Import, Delete). Rendered into DetailPage's
  *  `actions` slot; the loop and send-job forms open as popovers below it. */
-export function FleetHeader({ detail, onRefresh, onDelete }: FleetHeaderProps) {
+export function FleetHeader({ detail, onRefresh, onDelete, onOpenInWindow }: FleetHeaderProps) {
   const { t } = useT();
   const { busy, setBusy, call } = useFleetCall(onRefresh);
   const [worktree, setWorktree] = useState(false);
@@ -183,6 +185,9 @@ export function FleetHeader({ detail, onRefresh, onDelete }: FleetHeaderProps) {
         items={[
           { id: "export", label: t("fleet.export"), onSelect: () => { void handleExport(); } },
           { id: "import", label: t("fleet.import"), onSelect: () => { void handleImport(); } },
+          ...(onOpenInWindow
+            ? [{ id: "openInWindow", label: t("action.openInWindow"), onSelect: onOpenInWindow }]
+            : []),
           { id: "delete", label: t("fleet.delete"), danger: true, onSelect: handleDelete },
         ]}
       />

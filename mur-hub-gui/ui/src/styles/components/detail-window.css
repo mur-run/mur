@@ -1,0 +1,14 @@
+/* Detail windows (Phase 2(b) §4): a drag bar and one DetailPage filling the window. */
+.detail-window { display: grid; grid-template-rows: auto 1fr; height: 100%; min-height: 0; background: var(--surface-detail); }
+.detail-window__bar {
+  display: flex; align-items: center; justify-content: flex-end;
+  height: calc(var(--shell-titlebar-inset) + 10px); padding: 0 var(--space-6);
+}
+/* macOS overlay title bar: keep the button clear of the traffic lights. */
+.detail-window--inset .detail-window__bar { padding-left: 80px; }
+.detail-window > .detail-page { min-height: 0; }
+.detail-window__missing {
+  display: grid; place-items: center; align-content: center; gap: var(--space-5);
+  height: 100%; color: var(--text-secondary); font-size: var(--text-sm);
+}
+.detail-window__missing p { margin: 0; }

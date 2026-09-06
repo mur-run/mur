@@ -35,3 +35,8 @@ export const NAV_ITEMS: NavItem[] = [
 export function isLibrary(id: PageId): boolean {
   return NAV_ITEMS.find((i) => i.id === id)?.group === "library";
 }
+
+/** Type guard for page ids arriving over events (`open-page`). */
+export function isPageId(id: string): id is PageId {
+  return NAV_ITEMS.some((n) => n.id === id);
+}
