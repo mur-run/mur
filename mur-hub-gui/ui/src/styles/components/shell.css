@@ -82,8 +82,8 @@
 }
 
 .shell-sidebar-item--active {
-  background: var(--color-brand);
-  color: var(--text-on-brand);
+  background: var(--color-brand-soft);
+  color: var(--color-brand-strong);
 }
 
 .shell-sidebar-item__icon {
@@ -103,12 +103,14 @@
 .shell-sidebar-item__badge {
   font-size: 11px;
   line-height: 1;
-  background: rgba(0, 0, 0, 0.15);
+  background: var(--status-attention);
+  color: var(--text-on-attention);
   padding: 2px 6px;
   border-radius: 10px;
   flex: none;
 }
 
 .shell-sidebar-item--active .shell-sidebar-item__badge {
-  background: rgba(255, 255, 255, 0.25);
+  background: var(--status-attention);
+  color: var(--text-on-attention);
 }

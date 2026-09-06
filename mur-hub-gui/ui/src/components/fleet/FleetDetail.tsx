@@ -8,6 +8,7 @@ import type { TranslationKey } from "../../i18n/types";
 import type { AgentEntry } from "../../types";
 import { CATEGORY_COLORS, avatarPreset, familyOf } from "../../utils";
 import { PetFace } from "../PetFace";
+import { StatusPill, fleetStatusOf } from "../shell/Status";
 import type { FleetDetail as Detail, JobRow, LabelView } from "./types";
 import { DURATION_RE } from "./fleetCreateForm";
 import { labelIdFrom, makePrimary, toggleAssignment } from "./fleetLabels";
@@ -34,6 +35,8 @@ import {
 interface Props {
   detail: Detail;
   jobs: JobRow[];
+  /** Live `running` from the fleet summary — FleetDetail carries only `stopped`. */
+  running: boolean;
   agentMap: Map<string, AgentEntry>;
   /** The whole registry, in registry order — the chips offered here. */
   labels: LabelView[];
@@ -51,21 +54,11 @@ function showToast(msg: string, durationMs = 2500) {
   setTimeout(() => el.remove(), durationMs);
 }
 
-function statusPillClass(d: Detail): string {
-  if (d.stopped) return "fleet-detail__status-pill fleet-detail__status-pill--stopped";
-  return "fleet-detail__status-pill fleet-detail__status-pill--idle";
-}
-
-function statusLabel(d: Detail): string {
-  if (d.stopped) return "⏸ stopped";
-  return "● idle";
-}
-
 function jobStatusClass(status: JobRow["status"]): string {
   return `fleet-job__status fleet-job__status--${status}`;
 }
 
-export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRefresh, onDelete }: Props) {
+export function FleetDetail({ detail, jobs, running, agentMap, labels, fleetLabels, onRefresh, onDelete }: Props) {
   const { t } = useT();
   const [busy, setBusy] = useState<string | null>(null);
   const [sendInput, setSendInput] = useState("");
@@ -369,7 +362,7 @@ export function FleetDetail({ detail, jobs, agentMap, labels, fleetLabels, onRef
       <div className="fleet-detail__header">
         <div className="fleet-detail__title-row">
           <h2 className="fleet-detail__title">{detail.display_name}</h2>
-          <span className={statusPillClass(detail)}>{statusLabel(detail)}</span>
+          <StatusPill kind={fleetStatusOf({ stopped: detail.stopped, running })} />
           {modeBadgeLabel(detail.parallel_summary, t) && (
             <span className="fleet-detail__mode-badge">{modeBadgeLabel(detail.parallel_summary, t)}</span>
           )}

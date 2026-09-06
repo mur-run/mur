@@ -23,7 +23,8 @@ import { MobileTab } from "../MobileTab";
 import { MemoryTab } from "../MemoryTab";
 import { useT } from "../../i18n";
 import type { TranslationKey } from "../../i18n/types";
-import { CATEGORY_COLORS, TAB_ICONS, avatarInitials, avatarPreset, familyOf, runtimePill } from "../../utils";
+import { CATEGORY_COLORS, TAB_ICONS, avatarInitials, avatarPreset, familyOf } from "../../utils";
+import { StatusPill, statusOf } from "../shell/Status";
 import { PetFace } from "../PetFace";
 import { PersonaTab } from "./tabs/PersonaTab";
 import { StyleTab } from "./tabs/StyleTab";
@@ -143,7 +144,6 @@ export function AgentInspector({ agentName, agents, runtime, onClose }: Props) {
   // pill and the card never disagree.
   const rtState = runtime?.state.state;
   const isRunning = rtState === "running" || rtState === "restarting";
-  const statusPill = runtimePill(runtime?.state);
 
   function handleSaved(updated: AgentDetail) {
     setDetail(updated);
@@ -196,10 +196,7 @@ export function AgentInspector({ agentName, agents, runtime, onClose }: Props) {
           )}
           <div className="detail-panel__ident">
             <div className="detail-panel__name">{name}</div>
-            <span className={statusPill.cls}>
-              <span className="pill__dot" />
-              {t(statusPill.key)}
-            </span>
+            <StatusPill kind={statusOf(runtime?.state)} />
           </div>
           <button
             className="detail-panel__close"
