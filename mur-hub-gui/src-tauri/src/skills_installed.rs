@@ -25,6 +25,11 @@ pub struct InstalledSkillView {
     pub category: String,
     pub origin_version: Option<String>,
     pub status: String,
+    /// Agents whose profile lists this skill, sorted by name.
+    pub agents: Vec<String>,
+    /// The global skill directory (for "Open folder"); `None` only if the
+    /// path is not valid UTF-8.
+    pub path: Option<String>,
 }
 
 /// Pure mapping: `UpgradeStatus` -> the short display label shown in the
@@ -38,6 +43,63 @@ pub fn status_label(status: &UpgradeStatus) -> String {
         UpgradeStatus::NotInRegistry => "—".to_string(),
         UpgradeStatus::Error(_) => "—".to_string(),
     }
+}
+
+/// Pure fold: (agent name, its `profile.installed_skills`) pairs → skill
+/// name → sorted agent names. Kept free of I/O so it is unit-testable.
+pub fn agents_by_skill(
+    profiles: &[(String, Vec<mur_common::agent::SkillCardEntry>)],
+) -> std::collections::BTreeMap<String, Vec<String>> {
+    let mut map: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for (agent, cards) in profiles {
+        for card in cards {
+            map.entry(card.name.clone())
+                .or_default()
+                .push(agent.clone());
+        }
+    }
+    for agents in map.values_mut() {
+        agents.sort();
+        agents.dedup();
+    }
+    map
+}
+
+/// Read every `agents/*/profile.yaml` the way `mcp_installed` does; an
+/// unreadable or unparsable profile is skipped with a warning.
+fn read_agent_skill_cards(
+    agents_dir: &Path,
+) -> Vec<(String, Vec<mur_common::agent::SkillCardEntry>)> {
+    let entries = match std::fs::read_dir(agents_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!(dir = %agents_dir.display(), error = %e, "skills_installed: cannot read agents dir");
+            return vec![];
+        }
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Some(agent_name) = dir.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        match std::fs::read(dir.join("profile.yaml")) {
+            Ok(bytes) => match serde_yaml_ng::from_slice::<mur_common::AgentProfile>(&bytes) {
+                Ok(profile) => out.push((agent_name.to_string(), profile.installed_skills.clone())),
+                Err(e) => {
+                    tracing::warn!(agent = %agent_name, error = %e, "skills_installed: skipping unparsable profile")
+                }
+            },
+            Err(e) => {
+                tracing::warn!(agent = %agent_name, error = %e, "skills_installed: skipping unreadable profile")
+            }
+        }
+    }
+    out
 }
 
 /// List every skill under `~/.mur/skills/*` with its upgrade status.
@@ -66,12 +128,14 @@ pub fn skills_installed() -> Result<Vec<InstalledSkillView>, String> {
         HashMap::new()
     };
 
-    Ok(list_skills(&skills_dir, &status_by_name))
+    let usage = agents_by_skill(&read_agent_skill_cards(&mur_home.join("agents")));
+    Ok(list_skills(&skills_dir, &status_by_name, &usage))
 }
 
 fn list_skills(
     skills_dir: &Path,
     status_by_name: &HashMap<String, UpgradeStatus>,
+    usage: &std::collections::BTreeMap<String, Vec<String>>,
 ) -> Vec<InstalledSkillView> {
     let entries = match std::fs::read_dir(skills_dir) {
         Ok(entries) => entries,
@@ -99,6 +163,8 @@ fn list_skills(
                     category: format!("{:?}", manifest.category).to_lowercase(),
                     origin_version: manifest.origin.as_ref().map(|_| manifest.version.clone()),
                     status,
+                    agents: usage.get(&manifest.name).cloned().unwrap_or_default(),
+                    path: dir.to_str().map(str::to_string),
                 });
             }
             Err(e) => {
@@ -136,12 +202,33 @@ mod tests {
     }
 
     #[test]
+    fn agents_by_skill_folds_agents_per_skill_sorted() {
+        use mur_common::agent::SkillCardEntry;
+        let card = |name: &str| SkillCardEntry {
+            name: name.to_string(),
+            ..Default::default()
+        };
+        let profiles = vec![
+            ("scout".to_string(), vec![card("mur-dev"), card("mur-tdd")]),
+            ("aura".to_string(), vec![card("mur-dev")]),
+            ("muse".to_string(), vec![]),
+        ];
+        let map = agents_by_skill(&profiles);
+        assert_eq!(
+            map.get("mur-dev").unwrap(),
+            &vec!["aura".to_string(), "scout".to_string()]
+        );
+        assert_eq!(map.get("mur-tdd").unwrap(), &vec!["scout".to_string()]);
+        assert!(map.get("nope").is_none());
+    }
+
+    #[test]
     fn list_skills_empty_dir_returns_empty() {
         let tmp =
             std::env::temp_dir().join(format!("mur-skills-installed-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
-        let result = list_skills(&tmp, &HashMap::new());
+        let result = list_skills(&tmp, &HashMap::new(), &std::collections::BTreeMap::new());
         assert!(result.is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -178,11 +265,16 @@ triggers: []
             },
         );
 
-        let result = list_skills(&tmp, &statuses);
+        let mut usage = std::collections::BTreeMap::new();
+        usage.insert("my-skill".to_string(), vec!["aura".to_string()]);
+
+        let result = list_skills(&tmp, &statuses, &usage);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "my-skill");
         assert_eq!(result[0].category, "workflow");
         assert_eq!(result[0].status, "update available");
+        assert_eq!(result[0].agents, vec!["aura".to_string()]);
+        assert!(result[0].path.is_some());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
