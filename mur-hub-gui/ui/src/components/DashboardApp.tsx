@@ -7,7 +7,8 @@ import type { AgentRuntimeStatus, NudgeStatus } from "../types";
 import { WizardModal } from "./wizard/WizardModal";
 import { PresetImportModal } from "./PresetImportModal";
 import { MuragentImportModal } from "./MuragentImportModal";
-import { SettingsModal } from "./SettingsModal";
+import { SettingsPage } from "./settings/SettingsPage";
+import type { SettingsSectionId } from "./settings/settingsSections";
 import { ModelSetupWizard } from "./ModelSetupWizard";
 import { ModelPickerModal } from "./ModelPickerModal";
 import { ModelsPage } from "./library/ModelsPage";
@@ -143,7 +144,13 @@ export function DashboardApp() {
   const [presetImportOpen, setPresetImportOpen] = useState(false);
   const [muragentImportOpen, setMuragentImportOpen] = useState(false);
   const [muragentImportPath, setMuragentImportPath] = useState<string | undefined>(undefined);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Settings is a page (spec 3(d)); the wizard can deep-link a section.
+  const [settingsRequest, setSettingsRequest] = useState<SettingsSectionId | null>(null);
+  const clearSettingsRequest = useCallback(() => setSettingsRequest(null), []);
+  const openSettings = useCallback((section: SettingsSectionId | null = null) => {
+    setSettingsRequest(section);
+    setPage("settings");
+  }, []);
   const [showModelWizard, setShowModelWizard] = useState(false);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [showAppsBanner, setShowAppsBanner] = useState(false);
@@ -282,9 +289,9 @@ export function DashboardApp() {
 
   // Listen for "open-settings" emitted by the app menu's Settings… item (Cmd+,).
   useEffect(() => {
-    const unlisten = listen("open-settings", () => setSettingsOpen(true));
+    const unlisten = listen("open-settings", () => openSettings());
     return () => { unlisten.then((fn) => fn()); };
-  }, []);
+  }, [openSettings]);
 
   // Listen for "need-model" emitted by backend on first run when no model is configured.
   useEffect(() => {
@@ -388,7 +395,7 @@ export function DashboardApp() {
     ...NAV_ITEMS.map((n) => ({ id: `page:${n.id}`, kind: "page" as const, label: t(n.labelKey), run: () => setPage(n.id) })),
     { id: "action:newChat", kind: "action", label: t("palette.action.newChat"), run: () => setPage("chats") },
     { id: "action:newAgent", kind: "action", label: t("palette.action.newAgent"), run: () => setWizardOpen(true) },
-    { id: "action:settings", kind: "action", label: t("palette.action.settings"), run: () => setSettingsOpen(true) },
+    { id: "action:settings", kind: "action", label: t("palette.action.settings"), run: () => openSettings() },
     {
       id: "action:refresh",
       kind: "action",
@@ -568,7 +575,7 @@ export function DashboardApp() {
           onNavigate={(id) => setPage(id)}
           badge={badgeCount}
           banners={banners}
-          onSettings={() => setSettingsOpen(true)}
+          onSettings={() => openSettings()}
           onSearch={() => setPaletteOpen(true)}
         >
           {page === "home" ? (
@@ -615,6 +622,13 @@ export function DashboardApp() {
             <WorkflowsPage />
           ) : page === "plugins" ? (
             <PluginsPage />
+          ) : page === "settings" ? (
+            <SettingsPage
+              requestedSection={settingsRequest}
+              onRequestHandled={clearSettingsRequest}
+              onImportAgent={() => setMuragentImportOpen(true)}
+              onImportPreset={() => setPresetImportOpen(true)}
+            />
           ) : (
             <PlaceholderPage id={page} />
           )}
@@ -660,14 +674,8 @@ export function DashboardApp() {
         onClose={() => setShowModelWizard(false)}
         onCustomize={() => {
           setShowModelWizard(false);
-          setSettingsOpen(true);
+          openSettings("models");
         }}
-      />
-      <SettingsModal
-        isOpen={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        onImportAgent={() => setMuragentImportOpen(true)}
-        onImportPreset={() => setPresetImportOpen(true)}
       />
       <ModelPickerModal
         isOpen={modelPickerOpen}
