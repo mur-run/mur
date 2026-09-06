@@ -58,8 +58,8 @@ Copied from the design and `CLAUDE.md`. Every task includes all of them.
 
 **Interfaces.** Produces `PageId` including `"settings"`, `isPageId("settings") === true`, `GLYPHS.settings`, and the footer's active state. 13.3 consumes `setPage("settings")`.
 
-- [ ] `src/components/shell/nav.test.ts`: in the `isPageId` describe add `expect(isPageId("settings")).toBe(true);` after the `home` line. `npm test -- src/components/shell/nav.test.ts` → fails.
-- [ ] `src/components/shell/nav.ts`: add `| "settings"` to the `PageId` union (after `"plugins"`), and replace `isPageId` with:
+- [x] `src/components/shell/nav.test.ts`: in the `isPageId` describe add `expect(isPageId("settings")).toBe(true);` after the `home` line. `npm test -- src/components/shell/nav.test.ts` → fails.
+- [x] `src/components/shell/nav.ts`: add `| "settings"` to the `PageId` union (after `"plugins"`), and replace `isPageId` with:
   ```ts
   /** Type guard for page ids arriving over events (`open-page`). Settings is a
    *  page without a nav item (spec 3(d) §3), so it is listed here explicitly. */
@@ -67,7 +67,7 @@ Copied from the design and `CLAUDE.md`. Every task includes all of them.
     return id === "settings" || NAV_ITEMS.some((n) => n.id === id);
   }
   ```
-- [ ] `src/components/shell/Sidebar.tsx`: `GLYPHS` is `Record<PageId, ReactNode>` and now needs a `settings` entry — move the `const GEAR = (…)` block above `GLYPHS` and add `settings: GEAR,` as its last entry. The footer button becomes:
+- [x] `src/components/shell/Sidebar.tsx`: `GLYPHS` is `Record<PageId, ReactNode>` and now needs a `settings` entry — move the `const GEAR = (…)` block above `GLYPHS` and add `settings: GEAR,` as its last entry. The footer button becomes:
   ```tsx
         <button
           type="button"
@@ -77,14 +77,14 @@ Copied from the design and `CLAUDE.md`. Every task includes all of them.
           title={t("app.settings")}
         >
   ```
-- [ ] `npm test` (all pass), `npm run build`, `npm run lint`. (`DashboardApp`'s `page === … ? … : <PlaceholderPage id={page} />` chain still compiles: `"settings"` falls through to the placeholder until 13.3.)
-- [ ] Commit: `feat(hub): settings is a PageId; the sidebar footer lights up on it`
+- [x] `npm test` (all pass), `npm run build`, `npm run lint`. (`DashboardApp`'s `page === … ? … : <PlaceholderPage id={page} />` chain still compiles: `"settings"` falls through to the placeholder until 13.3.)
+- [x] Commit: `feat(hub): settings is a PageId; the sidebar footer lights up on it`
 
 ### Task 13.2 — sections model, glyphs, `SettingsPage`, CSS, `DataSettings`
 
 **Interfaces.** Produces `SettingsSectionId`, `SETTINGS_SECTIONS`, `isSettingsSection`, `LAST_SECTION_KEY`, `SETTINGS_GLYPHS`, `SettingsPage({ requestedSection?, onRequestHandled?, onImportAgent, onImportPreset })`, and `DataSettings` without `onClose`. 13.3 consumes `SettingsPage`.
 
-- [ ] Create `src/components/settings/settingsSections.test.ts`:
+- [x] Create `src/components/settings/settingsSections.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -102,8 +102,8 @@ describe("SETTINGS_SECTIONS", () => {
   });
 });
 ```
-- [ ] `npm test -- src/components/settings/settingsSections.test.ts` → fails (module missing).
-- [ ] Create `src/components/settings/settingsSections.ts`:
+- [x] `npm test -- src/components/settings/settingsSections.test.ts` → fails (module missing).
+- [x] Create `src/components/settings/settingsSections.ts`:
 
 ```ts
 import type { TranslationKey } from "../../i18n/types";
@@ -125,8 +125,8 @@ export function isSettingsSection(id: string): id is SettingsSectionId {
 
 export const LAST_SECTION_KEY = "mur.settings.lastSection";
 ```
-- [ ] `npm test -- src/components/settings/settingsSections.test.ts` → 2 passed.
-- [ ] Create `src/components/settings/settingsGlyphs.tsx`:
+- [x] `npm test -- src/components/settings/settingsSections.test.ts` → 2 passed.
+- [x] Create `src/components/settings/settingsGlyphs.tsx`:
 
 ```tsx
 import type { ReactNode } from "react";
@@ -161,7 +161,7 @@ export const SETTINGS_GLYPHS: Record<SettingsSectionId, ReactNode> = {
   ),
 };
 ```
-- [ ] Create `src/components/settings/SettingsPage.tsx`:
+- [x] Create `src/components/settings/SettingsPage.tsx`:
 
 ```tsx
 import { useEffect, useRef, useState } from "react";
@@ -239,8 +239,8 @@ export function SettingsPage({ requestedSection, onRequestHandled, onImportAgent
   );
 }
 ```
-- [ ] `src/components/settings/DataSettings.tsx`: remove `onClose: () => void;` from `Props`, remove `onClose` from the destructuring, and change the two handlers `onClick={() => { onClose(); onImportAgent(); }}` / `onClick={() => { onClose(); onImportPreset(); }}` to `onClick={onImportAgent}` / `onClick={onImportPreset}`. In `src/components/SettingsModal.tsx` (still present until 13.3) drop the `onClose={onClose}` line from its `<DataSettings …/>` so the commit compiles.
-- [ ] Token and CSS. `src/styles/tokens/primitives.css` line 46: append ` --settings-nav-width:200px;` after `--shell-sidebar-collapsed-width:56px;`. Create `src/styles/components/settings-page.css` and add `@import "./components/settings-page.css";` after the `bulk.css` line in `src/styles/index.css`:
+- [x] `src/components/settings/DataSettings.tsx`: remove `onClose: () => void;` from `Props`, remove `onClose` from the destructuring, and change the two handlers `onClick={() => { onClose(); onImportAgent(); }}` / `onClick={() => { onClose(); onImportPreset(); }}` to `onClick={onImportAgent}` / `onClick={onImportPreset}`. In `src/components/SettingsModal.tsx` (still present until 13.3) drop the `onClose={onClose}` line from its `<DataSettings …/>` so the commit compiles.
+- [x] Token and CSS. `src/styles/tokens/primitives.css` line 46: append ` --settings-nav-width:200px;` after `--shell-sidebar-collapsed-width:56px;`. Create `src/styles/components/settings-page.css` and add `@import "./components/settings-page.css";` after the `bulk.css` line in `src/styles/index.css`:
 
 ```css
 /* Settings page (Phase 3(d) §5): section nav | section content. */
@@ -258,14 +258,14 @@ export function SettingsPage({ requestedSection, onRequestHandled, onImportAgent
 .settings-nav__icon { display: flex; width: 18px; height: 18px; }
 .settings-page__content { min-width: 0; overflow: auto; padding: var(--space-7) var(--space-8) var(--space-9); background: var(--surface-detail); }
 ```
-- [ ] `npm test` (all pass), `npm run build`, `npm run lint`.
-- [ ] Commit: `feat(hub): SettingsPage — section nav beside the existing section components`
+- [x] `npm test` (all pass), `npm run build`, `npm run lint`.
+- [x] Commit: `feat(hub): SettingsPage — section nav beside the existing section components`
 
 ### Task 13.3 — `DashboardApp` wiring, modal deletion, CSS cleanup
 
 **Interfaces.** Consumes 13.1 and 13.2. Produces the four openers on the page; `SettingsModal` gone.
 
-- [ ] `src/components/DashboardApp.tsx`:
+- [x] `src/components/DashboardApp.tsx`:
   - Replace `import { SettingsModal } from "./SettingsModal";` with `import { SettingsPage } from "./settings/SettingsPage";` and add `import type { SettingsSectionId } from "./settings/settingsSections";`.
   - Replace `const [settingsOpen, setSettingsOpen] = useState(false);` with:
     ```tsx
@@ -293,11 +293,17 @@ export function SettingsPage({ requestedSection, onRequestHandled, onImportAgent
     ```
   - Delete the `<SettingsModal … />` element (five lines).
   - `grep -n 'settingsOpen\|SettingsModal' src/components/DashboardApp.tsx` → none.
-- [ ] Delete `src/components/SettingsModal.tsx`. `grep -rn 'SettingsModal\|settings-modal\|className="sidebar\|sidebar-item' src --include='*.tsx'` → none.
-- [ ] `src/styles/components/dashboard.css`: delete the legacy sidebar block — the rules `.sidebar { … }`, `.sidebar-item { … }`, `.sidebar-item__icon { … }`, `.sidebar-item:hover { … }`, `.sidebar-item--active { … }`, and `.sidebar-item--active .badge { … }` (lines 16–50 and 60) — keeping `.badge { … }` only if `grep -rn 'className="badge\|"badge"' src --include='*.tsx'` finds a user (delete it too otherwise). Delete the modal-era settings block: the comment starting `/* ── Settings two-pane layout ── */` through `.settings-modal__content { … }` (lines 666–690). Keep `.settings-row--wrap*` (the chain editor uses it) and every `.settings-section*` / `.settings-row*` / `.settings-hint` / `.settings-actions` rule.
-- [ ] `npm test`, `npm run build`, `npm run lint` (0 errors).
-- [ ] Browser acceptance (stubbed bridge; the stub answers `get_fleet_autorun → false`, `nudge_status → null`, `model_slots_get` / `model_switch_get` / `list_models` / `probe_local_providers` with empty shapes, `cli_version_skew → null`): the sidebar footer button opens the page and gets the active style; ⌘K → 設定 opens it; a fired `open-settings` (stored listener) opens it; with the page open, the five nav items switch content and each shows its own `h3`; switch to Agents and back → the last section is restored; set `localStorage['mur.settings.lastSection']='nope'`, remount → General; the wizard path is exercised by calling the stub's stored `need-model` listener, clicking Customize → Settings on Models; Import agent opens the import modal and closing it leaves the Settings page; `document.querySelector('.settings-modal')` is null; ⌘1 still goes Home.
-- [ ] Commit: `refactor(hub): Settings opens as a page; SettingsModal and the legacy sidebar CSS retired`
+- [x] Delete `src/components/SettingsModal.tsx`. `grep -rn 'SettingsModal\|settings-modal\|className="sidebar\|sidebar-item' src --include='*.tsx'` → none.
+- [x] `src/styles/components/dashboard.css`: delete the legacy sidebar block — the rules `.sidebar { … }`, `.sidebar-item { … }`, `.sidebar-item__icon { … }`, `.sidebar-item:hover { … }`, `.sidebar-item--active { … }`, and `.sidebar-item--active .badge { … }` (lines 16–50 and 60) — keeping `.badge { … }` only if `grep -rn 'className="badge\|"badge"' src --include='*.tsx'` finds a user (delete it too otherwise). Delete the modal-era settings block: the comment starting `/* ── Settings two-pane layout ── */` through `.settings-modal__content { … }` (lines 666–690). Keep `.settings-row--wrap*` (the chain editor uses it) and every `.settings-section*` / `.settings-row*` / `.settings-hint` / `.settings-actions` rule.
+- [x] `npm test`, `npm run build`, `npm run lint` (0 errors).
+- [x] Browser acceptance (stubbed bridge; the stub answers `get_fleet_autorun → false`, `nudge_status → null`, `model_slots_get` / `model_switch_get` / `list_models` / `probe_local_providers` with empty shapes, `cli_version_skew → null`): the sidebar footer button opens the page and gets the active style; ⌘K → 設定 opens it; a fired `open-settings` (stored listener) opens it; with the page open, the five nav items switch content and each shows its own `h3`; switch to Agents and back → the last section is restored; set `localStorage['mur.settings.lastSection']='nope'`, remount → General; the wizard path is exercised by calling the stub's stored `need-model` listener, clicking Customize → Settings on Models; Import agent opens the import modal and closing it leaves the Settings page; `document.querySelector('.settings-modal')` is null.
+- [x] Commit: `refactor(hub): Settings opens as a page; SettingsModal and the legacy sidebar CSS retired`
+
+**Done (2026-09-06), notes:**
+- All three tasks as written.
+- The plan's acceptance list said "⌘1 still goes Home": ⌘1–9 were a deliberate Phase 1 gap (see that plan's "Deliberate gaps") and were never implemented — the line was wrong, not a regression, and is removed above. The spec's §6 is corrected the same way.
+- The wizard's Customize deep link was not browser-verified: the wizard's first step has no Customize button under the stub. The wiring is `openSettings("models")` in `DashboardApp`.
+- Stub note: `ModelsSettings` reads `model_slots_get` as `{ smart, search, ask, compact, rollup, summarize, reflector, curator }` with `SlotView` values and `model_switch_get` as `{ default, fallback_chain, retry, routing, smart }`; an under-shaped stub crashes the section (it did, once), which is the section's pre-existing behaviour, not this PR's.
 
 **Manual acceptance PR 13 (real build):** the app menu's Settings… (⌘,) lands on the page; the Models section's registry rows no longer wrap; light and dark; the 900px minimum window still shows nav + content.
 
