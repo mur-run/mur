@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useT } from "../../i18n";
 import type { AgentEntry } from "../../types";
-import type { FleetSummary, FleetDetail as Detail, JobRow, LabelView } from "./types";
+import type { FleetSummary, LabelView } from "./types";
 import { UNGROUPED } from "./fleetLabels";
 import { FleetCreateModal } from "./FleetCreateModal";
 import { Ico } from "../agents/GridCard";
@@ -13,18 +13,12 @@ import { ListDivider } from "../shell/ListDivider";
 import {
   LIST_WIDTH_DEFAULT, LIST_WIDTH_MAX, LIST_WIDTH_MIN, useResizableColumn,
 } from "../shell/useResizableColumn";
-import { DetailPage } from "../shell/DetailPage";
 import { fleetStatusOf } from "../shell/Status";
-import { FLEET_TABS, FLEET_TAB_LABEL_KEY, type FleetTabId } from "../shell/detailTabs";
 import { listModeFor } from "../shell/breakpoints";
 import { useWindowWidth } from "../shell/useWindowWidth";
 import { readKey, writeKey } from "../shell/persist";
-import { FleetHeader, fleetMeta } from "../detail/fleet/FleetHeader";
-import { FleetOverview } from "../detail/fleet/FleetOverview";
-import { FleetMembers } from "../detail/fleet/FleetMembers";
-import { FleetJobs } from "../detail/fleet/FleetJobs";
-import { FleetSettings } from "../detail/fleet/FleetSettings";
 import { showToast } from "../detail/fleet/fleetActions";
+import { FleetDetailPane, FLEET_GLYPH } from "../detail/fleet/FleetDetailPane";
 
 const LABEL_FILTER_KEY = "mur.fleet.labelFilter";
 export const LAST_SELECTED_FLEET_KEY = "mur.fleets.lastSelected";
@@ -42,13 +36,6 @@ function loadLabelFilter(): string | null {
   }
 }
 
-const FLEET_GLYPH = (
-  <>
-    <path d="M12 4l9 4.5-9 4.5-9-4.5z" />
-    <path d="M3 13l9 4.5 9-4.5" />
-  </>
-);
-
 export function FleetView({ onSelect, requestedName, onRequestHandled }: {
   onSelect?: (name: string | null) => void;
   /** The command palette can ask for a fleet by name (spec §6.6). */
@@ -59,14 +46,11 @@ export function FleetView({ onSelect, requestedName, onRequestHandled }: {
   const { t } = useT();
   const [fleets, setFleets] = useState<FleetSummary[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
-  const [detail, setDetail] = useState<Detail | null>(null);
-  const [jobs, setJobs] = useState<JobRow[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [agentMap, setAgentMap] = useState<Map<string, AgentEntry>>(new Map());
   const [labels, setLabels] = useState<LabelView[]>([]);
   const [activeLabel, setActiveLabel] = useState<string | null>(loadLabelFilter);
   const [filter, setFilter] = useState("");
-  const [tab, setTab] = useState<FleetTabId>("overview");
   const [listShown, setListShown] = useState(false);
   const selectedRef = useRef<string | null>(null);
   // One-shot: the first fleet_list restores the last selection (or picks the
@@ -87,10 +71,6 @@ export function FleetView({ onSelect, requestedName, onRequestHandled }: {
     // Only after the first restore: the mount render's null must not erase
     // the stored selection before fleet_list has had a chance to read it.
     if (restoredRef.current) writeKey(LAST_SELECTED_FLEET_KEY, selectedName);
-  }, [selectedName]);
-
-  useEffect(() => {
-    setTab("overview");
   }, [selectedName]);
 
   // Report the selected fleet up (DashboardApp keeps it for the palette).
@@ -126,20 +106,6 @@ export function FleetView({ onSelect, requestedName, onRequestHandled }: {
     }
   }
 
-  async function loadDetail(name: string) {
-    try {
-      const [d, j] = await Promise.all([
-        invoke<Detail>("fleet_detail", { name }),
-        invoke<JobRow[]>("fleet_jobs", { name, all: false }),
-      ]);
-      if (selectedRef.current !== name) return; // stale
-      setDetail(d);
-      setJobs(j);
-    } catch (err) {
-      showToast(String(err), 4000);
-    }
-  }
-
   // Initial list load + labels + agents map
   useEffect(() => {
     void loadList();
@@ -148,16 +114,6 @@ export function FleetView({ onSelect, requestedName, onRequestHandled }: {
       setAgentMap(new Map(agents.map((a) => [a.name, a])));
     }).catch(() => {});
   }, []);
-
-  // Load detail whenever selection changes
-  useEffect(() => {
-    if (selectedName) {
-      void loadDetail(selectedName);
-    } else {
-      setDetail(null);
-      setJobs([]);
-    }
-  }, [selectedName]);
 
   useEffect(() => {
     if (!requestedName) return;
@@ -175,10 +131,9 @@ export function FleetView({ onSelect, requestedName, onRequestHandled }: {
     const unlisten = listen<{ name: string; ok: boolean }>(
       "fleet:run_done",
       (event) => {
-        const { name, ok } = event.payload;
+        const { ok } = event.payload;
         showToast(ok ? t("fleet.runDone") : t("fleet.runFailed"), 3000);
         void loadList();
-        if (selectedRef.current === name) void loadDetail(name);
       },
     );
     return () => { void unlisten.then((fn) => fn()); };
@@ -187,13 +142,10 @@ export function FleetView({ onSelect, requestedName, onRequestHandled }: {
   function handleRefresh() {
     void loadList();
     void loadLabels();
-    if (selectedName) void loadDetail(selectedName);
   }
 
   function handleDelete() {
     setSelectedName(null);
-    setDetail(null);
-    setJobs([]);
     void loadList();
   }
 
@@ -216,7 +168,7 @@ export function FleetView({ onSelect, requestedName, onRequestHandled }: {
     ...labels.map((l) => ({ id: l.id, label: l.display || l.id, count: l.fleet_count })),
     ...(ungrouped > 0 ? [{ id: UNGROUPED, label: t("fleet.labelUngrouped"), count: ungrouped }] : []),
   ];
-  const summary = fleets.find((f) => f.name === detail?.name);
+  const summary = fleets.find((f) => f.name === selectedName);
   const cls = `master-detail master-detail--${listMode}${listShown ? " master-detail--list-shown" : ""}`;
 
   return (
@@ -252,25 +204,16 @@ export function FleetView({ onSelect, requestedName, onRequestHandled }: {
             {t("shell.showList")}
           </button>
         )}
-        {detail && summary ? (
-          <DetailPage
-            key={detail.name}
-            avatar={<span className="fleet-avatar fleet-avatar--lg" aria-hidden="true"><Ico>{FLEET_GLYPH}</Ico></span>}
-            title={detail.display_name}
-            status={fleetStatusOf(summary)}
-            meta={fleetMeta(detail, t)}
-            actions={<FleetHeader detail={detail} onRefresh={handleRefresh} onDelete={handleDelete} />}
-            tabs={FLEET_TABS.map((id) => ({ id, label: t(FLEET_TAB_LABEL_KEY[id]) }))}
-            activeTab={tab}
-            onTab={setTab}
-          >
-            {tab === "overview" && <FleetOverview detail={detail} jobs={jobs} agentMap={agentMap} onGoTo={setTab} />}
-            {tab === "members" && (
-              <FleetMembers detail={detail} agentMap={agentMap} labels={labels} fleetLabels={summary.labels} onRefresh={handleRefresh} />
-            )}
-            {tab === "jobs" && <FleetJobs detail={detail} jobs={jobs} onRefresh={handleRefresh} />}
-            {tab === "settings" && <FleetSettings detail={detail} onRefresh={handleRefresh} onDelete={handleDelete} />}
-          </DetailPage>
+        {selectedName && summary ? (
+          <FleetDetailPane
+            key={selectedName}
+            name={selectedName}
+            summary={summary}
+            labels={labels}
+            agentMap={agentMap}
+            onRefresh={handleRefresh}
+            onDeleted={handleDelete}
+          />
         ) : (
           <div className="fleet-view__empty">
             <p>{fleets.length === 0 ? t("fleet.empty") : t("fleet.selectHint")}</p>
