@@ -1,5 +1,7 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { NeedsYouBadge, StatusDot } from "./Status";
+import { MenuList, type MenuItemDef } from "./SplitButton";
+import { useMenu } from "./useMenu";
 import { filterRows, moveSelection, type SourceFacet, type SourceRowData } from "./sourceListModel";
 
 /** ⌘F focuses this list's filter field. One SourceList is mounted per page. */
@@ -20,8 +22,13 @@ export interface SourceListProps {
   filterPlaceholder: string;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
-  onCreate: () => void;
+  /** Plain "+" action. Ignored when `createItems` is given; "+" is hidden when neither is. */
+  onCreate?: () => void;
+  /** "+" opens this menu (a page with several install flows). */
+  createItems?: MenuItemDef[];
   createLabel: string;
+  /** Rendered between the header and the filter (e.g. the install-target picker). */
+  toolbar?: ReactNode;
   emptyState: ReactNode;
 }
 
@@ -30,6 +37,7 @@ export interface SourceListProps {
 export function SourceList(p: SourceListProps) {
   const visible = filterRows(p.rows, p.filter, p.activeFacet);
   const filterRef = useRef<HTMLInputElement>(null);
+  const menu = useMenu();
 
   useEffect(() => {
     function onKey(e: globalThis.KeyboardEvent) {
@@ -57,10 +65,28 @@ export function SourceList(p: SourceListProps) {
         <h2 className="source-list__title">
           {p.title} <span className="source-list__count">{p.count}</span>
         </h2>
-        <button type="button" className="source-list__create" onClick={p.onCreate} title={p.createLabel} aria-label={p.createLabel}>
-          +
-        </button>
+        {p.createItems && p.createItems.length > 0 ? (
+          <div className="split source-list__create-menu" ref={menu.rootRef}>
+            <button
+              type="button"
+              className="source-list__create"
+              aria-haspopup="menu"
+              aria-expanded={menu.open}
+              title={p.createLabel}
+              aria-label={p.createLabel}
+              onClick={() => menu.setOpen(!menu.open)}
+            >
+              +
+            </button>
+            {menu.open && <MenuList items={p.createItems} onPick={() => menu.setOpen(false)} />}
+          </div>
+        ) : p.onCreate ? (
+          <button type="button" className="source-list__create" onClick={p.onCreate} title={p.createLabel} aria-label={p.createLabel}>
+            +
+          </button>
+        ) : null}
       </header>
+      {p.toolbar && <div className="source-list__toolbar">{p.toolbar}</div>}
       <input
         ref={filterRef}
         className="source-list__filter"
@@ -111,7 +137,7 @@ export function SourceList(p: SourceListProps) {
                 </span>
                 <span className="source-row__status">
                   <NeedsYouBadge count={r.needsYou ?? 0} />
-                  <StatusDot kind={r.status} />
+                  {r.status && <StatusDot kind={r.status} />}
                 </span>
               </div>
             ))}

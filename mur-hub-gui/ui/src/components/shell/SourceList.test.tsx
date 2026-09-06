@@ -29,3 +29,26 @@ describe("SourceList markup", () => {
     expect(html).toContain("<p>none</p>");
   });
 });
+
+import type { MenuItemDef } from "./SplitButton";
+
+describe("SourceList library extensions", () => {
+  const base = {
+    title: "Skills", count: 1, facets: [], allLabel: "All", activeFacet: null, onFacet: noop,
+    filter: "", onFilter: noop, filterPlaceholder: "Filter", selectedId: null, onSelect: noop,
+    createLabel: "Add", emptyState: <p>none</p>,
+  };
+  const row = { id: "s1", name: "mur-dev", subtitle: "workflow", avatar: "S", facets: ["workflow"] };
+  it("renders the toolbar slot and no status dot for a row without status", () => {
+    const html = renderToStaticMarkup(<SourceList {...base} rows={[row]} toolbar={<span id="tb">picker</span>} />);
+    expect(html).toContain('id="tb"');
+    expect(html).not.toContain("status-dot");
+  });
+  it("renders a menu trigger instead of a plain + when createItems is given, and nothing when neither", () => {
+    const items: MenuItemDef[] = [{ id: "url", label: "From URL", onSelect: noop }];
+    const withMenu = renderToStaticMarkup(<SourceList {...base} rows={[row]} createItems={items} />);
+    expect(withMenu).toContain('aria-haspopup="menu"');
+    const plain = renderToStaticMarkup(<SourceList {...base} rows={[row]} />);
+    expect(plain).not.toContain("source-list__create");
+  });
+});

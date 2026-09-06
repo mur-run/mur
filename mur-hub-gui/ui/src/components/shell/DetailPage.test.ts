@@ -10,3 +10,12 @@ describe("nextTab", () => {
     expect(nextTab(tabs, "a", -1)).toBe("c");
   });
 });
+
+import { hasTabBar } from "./DetailPage";
+
+describe("hasTabBar", () => {
+  it("only with two or more tabs", () => {
+    expect(hasTabBar([{ id: "a", label: "A" }])).toBe(false);
+    expect(hasTabBar([{ id: "a", label: "A" }, { id: "b", label: "B" }])).toBe(true);
+  });
+});
