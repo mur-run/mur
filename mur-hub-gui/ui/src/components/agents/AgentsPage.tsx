@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentEntry, AgentRuntimeStatus } from "../../types";
 import type { ChannelSummary } from "../../work/types";
 import { useAgents } from "../../context/AgentContext";
@@ -75,9 +75,14 @@ function AgentsPageInner({
   const column = useResizableColumn(AGENTS_LIST_WIDTH_KEY, LIST_WIDTH_DEFAULT, LIST_WIDTH_MIN, LIST_WIDTH_MAX);
   const listMode = listModeFor(useWindowWidth());
 
-  // Restore the last selection once agents are known (spec §6.1).
+  // Restore the last selection ONCE, when agents first arrive (spec §6.1).
+  // Guarded by a ref: re-running on every transition to null would re-select
+  // the row the user just cleared with Esc.
+  const restored = useRef(false);
   useEffect(() => {
-    if (selectedAgent !== null || agents.length === 0) return;
+    if (restored.current || agents.length === 0) return;
+    restored.current = true;
+    if (selectedAgent !== null) return;
     const last = readKey(LAST_SELECTED_AGENT_KEY);
     if (last && agents.some((a) => a.name === last)) setSelected(last);
   }, [agents, selectedAgent, setSelected]);
