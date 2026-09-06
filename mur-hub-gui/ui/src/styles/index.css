@@ -18,4 +18,8 @@
 @import "./components/markdown.css";
 @import "./components/fleet.css";
 @import "./components/shell.css";
+@import "./components/source-list.css";
+@import "./components/detail-page.css";
+@import "./components/menus.css";
+@import "./components/palette.css";
 @import "./components/home.css";
