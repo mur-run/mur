@@ -4,7 +4,8 @@ import type { AgentEntry, AgentRuntimeStatus } from "../../types";
 import { Mascot } from "../Mascot";
 import type { MascotMood } from "../Mascot";
 import { useT } from "../../i18n";
-import { CATEGORY_COLORS, avatarInitials, runtimePill, timeGreetingKey } from "../../utils";
+import { CATEGORY_COLORS, avatarInitials, timeGreetingKey } from "../../utils";
+import { StatusPill, statusOf } from "../shell/Status";
 import { GridCard, Ico } from "./GridCard";
 
 // ─── ListRow ───────────────────────────────────────────────────────────────
@@ -19,7 +20,6 @@ export function ListRow({ agent, runtime, isSelected }: ListRowProps) {
   const { t } = useT();
   const { setSelected } = useAgents();
   const color = CATEGORY_COLORS[agent.category] ?? "#6B7280";
-  const pill = runtimePill(runtime?.state);
   const model =
     agent.model_id.length > 24 ? agent.model_id.slice(0, 24) + "…" : agent.model_id;
   return (
@@ -40,10 +40,7 @@ export function ListRow({ agent, runtime, isSelected }: ListRowProps) {
       <span className="list-model" title={agent.model_id}>
         {model}
       </span>
-      <span className={pill.cls}>
-        <span className="pill__dot" />
-        {t(pill.key)}
-      </span>
+      <StatusPill kind={statusOf(runtime?.state)} />
       <button
         className="list-row__settings"
         onClick={(e) => { e.stopPropagation(); setSelected(isSelected ? null : agent.name); }}

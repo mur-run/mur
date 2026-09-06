@@ -177,6 +177,7 @@ export function FleetView({ query, onSelect }: { query?: string; onSelect?: (nam
             jobs={jobs}
             agentMap={agentMap}
             labels={labels}
+            running={fleets.find((f) => f.name === detail.name)?.running ?? false}
             fleetLabels={fleets.find((f) => f.name === detail.name)?.labels ?? []}
             onRefresh={handleRefresh}
             onDelete={handleDelete}

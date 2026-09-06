@@ -7,7 +7,8 @@ import type { AgentEntry, AgentRuntimeStatus } from "../../types";
 import { useUnreadCount } from "../CompanionInbox";
 import { PetFace } from "../PetFace";
 import { useT } from "../../i18n";
-import { CATEGORY_COLORS, avatarInitials, avatarPreset, familyOf, runtimePill } from "../../utils";
+import { CATEGORY_COLORS, avatarInitials, avatarPreset, familyOf } from "../../utils";
+import { StatusPill, statusOf } from "../shell/Status";
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
 
@@ -53,7 +54,6 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
   const { setSelected } = useAgents();
   const unread = useUnreadCount(agent.name);
   const color = CATEGORY_COLORS[agent.category] ?? "#6B7280";
-  const pill = runtimePill(runtime?.state);
   const isRunning = runtime?.state.state === "running";
   const isBusy = runtime?.state.state === "restarting";
 
@@ -225,10 +225,7 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
 
         </div>
         <div className="grid-card__foot">
-          <span className={pill.cls}>
-            <span className="pill__dot" />
-            {t(pill.key)}
-          </span>
+          <StatusPill kind={statusOf(runtime?.state)} />
           <button
             className="grid-card__settings"
             onClick={(e) => { e.stopPropagation(); setSelected(agent.name); }}

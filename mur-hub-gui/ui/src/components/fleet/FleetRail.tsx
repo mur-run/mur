@@ -1,6 +1,7 @@
 import { useT } from "../../i18n";
 import type { FleetSummary, LabelView } from "./types";
 import { filterByLabels, groupFleets, UNGROUPED } from "./fleetLabels";
+import { StatusDot, fleetStatusOf } from "../shell/Status";
 
 interface Props {
   fleets: FleetSummary[];
@@ -11,12 +12,6 @@ interface Props {
   selectedName: string | null;
   onSelect: (name: string) => void;
   onNew: () => void;
-}
-
-function statusClass(f: FleetSummary): string {
-  if (f.stopped) return "fleet-rail__status--stopped";
-  if (f.running) return "fleet-rail__status--running";
-  return "fleet-rail__status--idle";
 }
 
 export function FleetRail({
@@ -83,7 +78,7 @@ export function FleetRail({
                     onClick={() => onSelect(f.name)}
                   >
                     <div className="fleet-rail__row">
-                      <span className={`fleet-rail__status ${statusClass(f)}`} />
+                      <StatusDot kind={fleetStatusOf(f)} />
                       <span className="fleet-rail__name">{f.display_name}</span>
                       {f.active_jobs > 0 && (
                         <span className="fleet-rail__jobs-badge">{f.active_jobs}</span>
