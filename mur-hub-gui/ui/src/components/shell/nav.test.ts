@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NAV_ITEMS, isLibrary } from "./nav";
+import { NAV_ITEMS, isLibrary, isPageId } from "./nav";
 
 describe("NAV_ITEMS", () => {
   it("is ordered exactly per spec §1", () => {
@@ -30,5 +30,13 @@ describe("isLibrary", () => {
   });
   it("returns false for workspace-group ids", () => {
     expect(isLibrary("home")).toBe(false);
+  });
+});
+
+describe("isPageId", () => {
+  it("accepts nav ids and rejects strangers", () => {
+    expect(isPageId("agents")).toBe(true);
+    expect(isPageId("home")).toBe(true);
+    expect(isPageId("nope")).toBe(false);
   });
 });

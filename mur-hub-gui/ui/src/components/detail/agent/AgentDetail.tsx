@@ -30,6 +30,8 @@ export interface AgentDetailProps {
   needsYou: number;
   onOpenChat: (name: string) => void;
   onOpenHome: () => void;
+  /** Dashboard only: the ⋯ "Open in window" item. Undefined inside a window. */
+  onOpenInWindow?: () => void;
 }
 
 // Lightweight toast — appends a bare `.toast` element to <body>, mirrors
@@ -44,7 +46,9 @@ function showToast(msg: string, durationMs = 2000) {
 
 /** The agent's full-width detail pane (spec §4.3): AgentInspector's data and
  *  handlers, rendered through DetailPage with the six grouped tabs. */
-export function AgentDetail({ agentName, entry, runtime, channels, needsYou, onOpenChat, onOpenHome }: AgentDetailProps) {
+export function AgentDetail({
+  agentName, entry, runtime, channels, needsYou, onOpenChat, onOpenHome, onOpenInWindow,
+}: AgentDetailProps) {
   const { t } = useT();
   const { desiredDetailTab, setDesiredDetailTab } = useAgents();
   const { confirmLeave, isDirty } = useDirtyGuard();
@@ -191,6 +195,9 @@ export function AgentDetail({ agentName, entry, runtime, channels, needsYou, onO
               invoke("open_chat_window", { agentName }).catch(console.error);
             },
           },
+          ...(onOpenInWindow
+            ? [{ id: "openInWindow", label: t("action.openInWindow"), onSelect: onOpenInWindow }]
+            : []),
         ]}
       />
     </>

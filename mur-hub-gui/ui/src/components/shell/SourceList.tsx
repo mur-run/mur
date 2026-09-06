@@ -22,6 +22,8 @@ export interface SourceListProps {
   filterPlaceholder: string;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
+  /** Row double-click (spec 2(b) §7): open in a window. Absent on Library pages. */
+  onOpen?: (id: string) => void;
   /** Plain "+" action. Ignored when `createItems` is given; "+" is hidden when neither is. */
   onCreate?: () => void;
   /** "+" opens this menu (a page with several install flows). */
@@ -129,6 +131,7 @@ export function SourceList(p: SourceListProps) {
                 aria-selected={r.id === p.selectedId}
                 className={`source-row${r.id === p.selectedId ? " source-row--on" : ""}`}
                 onClick={() => p.onSelect(r.id)}
+                onDoubleClick={p.onOpen ? () => p.onOpen?.(r.id) : undefined}
               >
                 <span className="source-row__avatar">{r.avatar}</span>
                 <span className="source-row__text">
