@@ -37,7 +37,7 @@ export function ChatsPage({ agents, query, onActiveChange, initialAgent }: Props
     if (initialAgent) setSelected(initialAgent);
   }, [initialAgent]);
 
-  const items = agents.length === 0 ? [] : buildChatList(agents, attention, localQuery || query);
+  const items = agents.length === 0 ? [] : buildChatList(agents, attention, [], localQuery || query);
   const active = items.find((i) => i.name === selected) ?? items[0];
 
   // Report the active chat up so DashboardApp can show the ChatInspector.
