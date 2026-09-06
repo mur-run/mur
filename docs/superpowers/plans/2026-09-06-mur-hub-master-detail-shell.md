@@ -2540,7 +2540,7 @@ Branch `feat/hub-2-fleets`. Line numbers refer to `src/components/fleet/FleetDet
 
 ### Task 5.1 — `fleetActions.ts`
 
-- [ ] Create `src/components/detail/fleet/fleetActions.ts`:
+- [x] Create `src/components/detail/fleet/fleetActions.ts`:
 
 ```ts
 import { useState } from "react";
@@ -2574,13 +2574,13 @@ export function useFleetCall(onRefresh: () => void): {
   return { busy, call };
 }
 ```
-- [ ] Commit: `refactor(hub): shared fleet call helper`
+- [x] Commit: `refactor(hub): shared fleet call helper`
 
 ### Task 5.2 — Split `FleetDetail.tsx` into tabs
 
 Every new component receives `detail: Detail` (`FleetDetail` type from `../../fleet/types`) and `onRefresh: () => void`, and takes its state, handlers and JSX from the cited line ranges **verbatim**, only re-pointing `call`/`busy` at `useFleetCall(onRefresh)` and `showToast` at `./fleetActions`.
 
-- [ ] `src/components/detail/fleet/FleetHeader.tsx` — props `{ detail; running: boolean; onRefresh; onDelete: () => void }`. State/handlers: lines 220–250 (worktree, loop panel, `handleRunLoop`, `handleRun`), 251–265 (`handleSend`, plus `const [sendInput, setSendInput] = useState("")` from line 71 and a new `const [sendOpen, setSendOpen] = useState(false)`), 282–329 (`handleExport`, `handleImport`, `handleDelete`). Renders (used by `FleetView` as the `DetailPage` `actions`):
+- [x] `src/components/detail/fleet/FleetHeader.tsx` — props `{ detail; running: boolean; onRefresh; onDelete: () => void }`. State/handlers: lines 220–250 (worktree, loop panel, `handleRunLoop`, `handleRun`), 251–265 (`handleSend`, plus `const [sendInput, setSendInput] = useState("")` from line 71 and a new `const [sendOpen, setSendOpen] = useState(false)`), 282–329 (`handleExport`, `handleImport`, `handleDelete`). Renders (used by `FleetView` as the `DetailPage` `actions`):
 
 ```tsx
   <>
@@ -2610,19 +2610,19 @@ Every new component receives `detail: Detail` (`FleetDetail` type from `../../fl
   </>
 ```
   `FleetHeader` also exports `fleetMeta(detail, t)`: the meta line `Router <router> · <n> members · <channel_id mono> · <mode badge>` (lines 372–378 content).
-- [ ] `src/components/detail/fleet/FleetOverview.tsx` — props `{ detail; jobs: JobRow[]; agentMap; onGoTo: (tab: FleetTabId) => void }`. Renders: goal card (`.detail-card` + `.goal`), `.detail-stats` row (`loop_cfg.last_run ?? t("fleetInspector.never")`, `loop_cfg.max_iterations`, `$loop_cfg.budget_usd`, `loop_cfg.done_when || "router"`; all `—` when `loop_cfg` is null), a `.detail-two` with members chips (router first, from `detail.members`, using `PetFace` via `agentMap`) and the first three `jobs` as `.detail-kv` rows with `StatusPill`-free text status (`t(\`fleet.status.${job.status}\`)`), and a loop card (`trigger`, `deadline`, `done_when`) whose buttons call `onGoTo("settings")`.
-- [ ] `src/components/detail/fleet/FleetMembers.tsx` — props `{ detail; agentMap; labels: LabelView[]; fleetLabels: string[]; onRefresh }`. Lines 173–207 (`saveLabels`, `createLabel`), 267–281 (`handleAddMember`), 449–568 (labels block + members block JSX).
-- [ ] `src/components/detail/fleet/FleetJobs.tsx` — props `{ detail; jobs: JobRow[]; onRefresh }`. Lines 74–75 (`showAll`, `allJobs`), 330–360 (`handleCancelJob`, `handleShowAll`), 692–740 minus the send-job input (moved to the header).
-- [ ] `src/components/detail/fleet/FleetSettings.tsx` — props `{ detail; onRefresh; onDelete }`. Lines 78–146 (trigger/cron/loop/done state + effects), 147–172 (`handleSaveSettings`), 361–366 (`applyCronShape`), 570–690 (form JSX), and the Danger zone (lines 741–750) last, wired to the same `handleDelete` as the header (import it from `FleetHeader` or duplicate the 12-line function — do not add a third variant).
-- [ ] i18n (both): `fleet.runOptions` "More run options"/"更多執行方式", `fleet.run.worktreeOn` "Worktree per track: on"/"每軌 worktree：開", `fleet.run.worktreeOff` "Worktree per track: off"/"每軌 worktree：關", `fleet.filter` "Filter fleets"/"篩選機群", `fleet.noMatch` "No fleets match."/"沒有符合的機群。", `fleet.cancel` "Cancel"/"取消". Reuse existing `fleet.*` keys everywhere else.
-- [ ] CSS `src/styles/components/fleet.css`: add `.fleet-popover { position:absolute; top:calc(100% + 6px); right:0; z-index:20; background:var(--surface-card); border:1px solid var(--border-line); border-radius:var(--radius-md); box-shadow:var(--shadow-pop); padding:var(--space-5); display:flex; gap:8px; }` and `.detail-page__actions { position: relative; }`; `.goal { margin:0; font-size:13.5px; line-height:1.55; max-width:62ch; }`.
-- [ ] `npm run build`; `wc -l src/components/detail/fleet/*.tsx` ≤ 800 each. Commit: `refactor(hub): FleetDetail split into Header, Overview, Members, Jobs, Settings`
+- [x] `src/components/detail/fleet/FleetOverview.tsx` — props `{ detail; jobs: JobRow[]; agentMap; onGoTo: (tab: FleetTabId) => void }`. Renders: goal card (`.detail-card` + `.goal`), `.detail-stats` row (`loop_cfg.last_run ?? t("fleetInspector.never")`, `loop_cfg.max_iterations`, `$loop_cfg.budget_usd`, `loop_cfg.done_when || "router"`; all `—` when `loop_cfg` is null), a `.detail-two` with members chips (router first, from `detail.members`, using `PetFace` via `agentMap`) and the first three `jobs` as `.detail-kv` rows with `StatusPill`-free text status (`t(\`fleet.status.${job.status}\`)`), and a loop card (`trigger`, `deadline`, `done_when`) whose buttons call `onGoTo("settings")`.
+- [x] `src/components/detail/fleet/FleetMembers.tsx` — props `{ detail; agentMap; labels: LabelView[]; fleetLabels: string[]; onRefresh }`. Lines 173–207 (`saveLabels`, `createLabel`), 267–281 (`handleAddMember`), 449–568 (labels block + members block JSX).
+- [x] `src/components/detail/fleet/FleetJobs.tsx` — props `{ detail; jobs: JobRow[]; onRefresh }`. Lines 74–75 (`showAll`, `allJobs`), 330–360 (`handleCancelJob`, `handleShowAll`), 692–740 minus the send-job input (moved to the header).
+- [x] `src/components/detail/fleet/FleetSettings.tsx` — props `{ detail; onRefresh; onDelete }`. Lines 78–146 (trigger/cron/loop/done state + effects), 147–172 (`handleSaveSettings`), 361–366 (`applyCronShape`), 570–690 (form JSX), and the Danger zone (lines 741–750) last, wired to the same `handleDelete` as the header (import it from `FleetHeader` or duplicate the 12-line function — do not add a third variant).
+- [x] i18n (both): `fleet.runOptions` "More run options"/"更多執行方式", `fleet.run.worktreeOn` "Worktree per track: on"/"每軌 worktree：開", `fleet.run.worktreeOff` "Worktree per track: off"/"每軌 worktree：關", `fleet.filter` "Filter fleets"/"篩選機群", `fleet.noMatch` "No fleets match."/"沒有符合的機群。", `fleet.cancel` "Cancel"/"取消". Reuse existing `fleet.*` keys everywhere else.
+- [x] CSS `src/styles/components/fleet.css`: add `.fleet-popover { position:absolute; top:calc(100% + 6px); right:0; z-index:20; background:var(--surface-card); border:1px solid var(--border-line); border-radius:var(--radius-md); box-shadow:var(--shadow-pop); padding:var(--space-5); display:flex; gap:8px; }` and `.detail-page__actions { position: relative; }`; `.goal { margin:0; font-size:13.5px; line-height:1.55; max-width:62ch; }`.
+- [x] `npm run build`; `wc -l src/components/detail/fleet/*.tsx` ≤ 800 each. Commit: `refactor(hub): FleetDetail split into Header, Overview, Members, Jobs, Settings`
 
 **Interfaces — Produces:** `<FleetHeader detail running onRefresh onDelete>`, `fleetMeta`, `<FleetOverview detail jobs agentMap onGoTo>`, `<FleetMembers detail agentMap labels fleetLabels onRefresh>`, `<FleetJobs detail jobs onRefresh>`, `<FleetSettings detail onRefresh onDelete>`.
 
 ### Task 5.3 — `FleetView` on `SourceList`
 
-- [ ] Rewrite the render of `src/components/fleet/FleetView.tsx` (keep every data function: `loadList`, `loadLabels`, `loadDetail`, the effects, `handleRefresh`, `handleDelete`, `handleCreated`, the `fleet:run_done` listener, the `LABEL_FILTER_KEY` persistence — now storing at most one id):
+- [x] Rewrite the render of `src/components/fleet/FleetView.tsx` (keep every data function: `loadList`, `loadLabels`, `loadDetail`, the effects, `handleRefresh`, `handleDelete`, `handleCreated`, the `fleet:run_done` listener, the `LABEL_FILTER_KEY` persistence — now storing at most one id):
 
 ```tsx
   const [tab, setTab] = useState<FleetTabId>("overview");
@@ -2688,11 +2688,19 @@ Every new component receives `detail: Detail` (`FleetDetail` type from `../../fl
   );
 ```
   Constants: `export const FLEETS_LIST_WIDTH_KEY = "mur.fleets.listWidth"; export const LAST_SELECTED_FLEET_KEY = "mur.fleets.lastSelected";` with `LIST_DEFAULT/MIN/MAX` as in `AgentsPage`. Last-selection: in `loadList`, replace the "Auto-select first" branch with `const last = readKey(LAST_SELECTED_FLEET_KEY); setSelectedName(last && rows.some((r) => r.name === last) ? last : rows[0]?.name ?? null);` and add `useEffect(() => { writeKey(LAST_SELECTED_FLEET_KEY, selectedName); }, [selectedName]);`. `Ico` is imported from `../agents/GridCard`. `filterByLabels` from `./fleetLabels` is no longer needed by the view (the facet does it); leave the helper and its tests in place.
-- [ ] i18n (both): `fleet.rowSubtitle` "{count} members"/"{count} 位成員".
-- [ ] CSS `fleet.css`: delete `.fleet-view`, `.fleet-view__main`, all `.fleet-rail*`, `.fleet-chip*`, `.fleet-detail__header`, `__title-row`, `__title`, `__goal`, `__router`, `__run*`, `__mgmt`, `__danger*` rules that no file references (`command grep -rn '<class>' src` per class before deleting); add `.fleet-avatar { display:grid; place-items:center; width:28px; height:28px; border-radius:var(--radius-md); background:var(--surface-secondary); color:var(--text-secondary); } .fleet-avatar--lg { width:48px; height:48px; border-radius:var(--radius-lg); }`.
-- [ ] Delete `src/components/fleet/FleetDetail.tsx`, `src/components/fleet/FleetRail.tsx`, `src/components/inspector/FleetInspector.tsx`; in `src/components/shell/Inspector.tsx` make `hasInspector` return `false` for `fleets` and remove the fleets branch + import; in `DashboardApp.tsx` drop the `fleetName` state and `onFleetSelect` if nothing else reads them (`grep -n fleetName`). Remove the `fleetInspector.*` keys from both i18n tables **except** `fleetInspector.never` (used by `FleetOverview`) — or move that string to `fleet.never`.
-- [ ] `npm test`, `npm run build`, `npm run lint`; `wc -l src/components/fleet/FleetView.tsx` ≤ 800.
-- [ ] Commit: `feat(hub): Fleets page is master–detail — label chips, four tabs, Run split button, no duplicate inspector`
+- [x] i18n (both): `fleet.rowSubtitle` "{count} members"/"{count} 位成員".
+- [x] CSS `fleet.css`: delete `.fleet-view`, `.fleet-view__main`, all `.fleet-rail*`, `.fleet-chip*`, `.fleet-detail__header`, `__title-row`, `__title`, `__goal`, `__router`, `__run*`, `__mgmt`, `__danger*` rules that no file references (`command grep -rn '<class>' src` per class before deleting); add `.fleet-avatar { display:grid; place-items:center; width:28px; height:28px; border-radius:var(--radius-md); background:var(--surface-secondary); color:var(--text-secondary); } .fleet-avatar--lg { width:48px; height:48px; border-radius:var(--radius-lg); }`.
+- [x] Delete `src/components/fleet/FleetDetail.tsx`, `src/components/fleet/FleetRail.tsx`, `src/components/inspector/FleetInspector.tsx`; in `src/components/shell/Inspector.tsx` make `hasInspector` return `false` for `fleets` and remove the fleets branch + import; in `DashboardApp.tsx` drop the `fleetName` state and `onFleetSelect` if nothing else reads them (`grep -n fleetName`). Remove the `fleetInspector.*` keys from both i18n tables **except** `fleetInspector.never` (used by `FleetOverview`) — or move that string to `fleet.never`.
+- [x] `npm test`, `npm run build`, `npm run lint`; `wc -l src/components/fleet/FleetView.tsx` ≤ 800.
+- [x] Commit: `feat(hub): Fleets page is master–detail — label chips, four tabs, Run split button, no duplicate inspector`
+
+> **Deviations recorded during execution (PR 5):** `FleetHeader` takes no
+> `running` prop (the status pill is DetailPage's; the header only needs
+> `detail.stopped`). The `fleetInspector.*` i18n keys stay — `FleetOverview`
+> reuses `router`, `loop` and `noLoop`; `fleet.never` was added for the stat
+> row. `FleetView` writes `mur.fleets.lastSelected` only after the one-shot
+> restore ran, because the mount render's `null` would otherwise erase the
+> stored value before `fleet_list` reads it (AgentsPage got the same guard).
 
 **Manual acceptance PR 5** (light + dark, 1200 and 960): only one copy of goal/members/loop on screen; Run ▾ offers Run as loop / Send job / worktree toggle; loop inputs validate as before; a `.stopped` fleet shows Stopped in red with Start as primary and Run disabled; label chips filter and the choice survives relaunch; Members add/remove and label edits still save; Jobs cancel and show-all work; Settings save + cron preview work; Delete asks to confirm; last fleet restored on relaunch; palette jump to a fleet lands on it.
 
