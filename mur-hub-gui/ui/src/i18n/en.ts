@@ -178,11 +178,7 @@ export const en = {
   "detail.save": "Save Changes",
   "detail.close": "Close",
   // ── Contextual inspectors ──
-  "chatInspector.subtitle": "Conversation",
-  "chatInspector.model": "Model",
-  "chatInspector.channel": "Channel",
   "chatInspector.turns": "{count} turns",
-  "chatInspector.noChannel": "No channel yet.",
   "fleetInspector.subtitle": "Fleet",
   "fleetInspector.goal": "Goal",
   "fleetInspector.channel": "Channel",

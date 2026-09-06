@@ -12,7 +12,6 @@ import { ModelSetupWizard } from "./ModelSetupWizard";
 import { ModelPickerModal } from "./ModelPickerModal";
 import { ModelsPage } from "./library/ModelsPage";
 import { InstallInboxModal } from "./InstallInboxModal";
-import { Inspector, hasInspector, type InspectorSelection } from "./shell/Inspector";
 import { HomePage } from "./home/HomePage";
 import { useChannels } from "./home/useChannels";
 import { needsYouCounts } from "./home/needsYouCounts";
@@ -74,10 +73,6 @@ export function DashboardApp() {
   const { agents, runtimeStatuses, selectedAgent, setSelected } = useAgents();
   // Active shell page. Home is the default mission-control surface.
   const [page, setPage] = useState<PageId>("home");
-  // Per-page selection that drives the contextual right-pane Inspector. The
-  // agents-page selection lives in AgentContext (selectedAgent); these cover
-  // the chats / fleets / library pages.
-  const [chatAgent, setChatAgent] = useState<{ name: string; displayName?: string } | null>(null);
   // Unified inbox — owned here so the sidebar + Dock badges stay in sync with
   // what HomePage renders.
   const { items: inboxItems, refresh: refreshInbox } = useInbox();
@@ -358,28 +353,10 @@ export function DashboardApp() {
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) return;
       if (el && el.getAttribute("role") === "listbox") return; // SourceList owns its Esc
       setSelected(null);
-      setChatAgent(null);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [setSelected]);
-
-  // Build the contextual inspector for the current page + selection.
-  const inspectorSelection: InspectorSelection = {
-    agent: selectedAgent,
-    chatAgent: chatAgent?.name ?? null,
-    chatDisplayName: chatAgent?.displayName,
-  };
-  const inspectorNode = hasInspector(page, inspectorSelection) ? (
-    <Inspector
-      page={page}
-      selection={inspectorSelection}
-      onClose={() => {
-        setSelected(null);
-        setChatAgent(null);
-      }}
-    />
-  ) : undefined;
 
   const selectedRuntime = selectedAgent ? runtimeMap.get(selectedAgent)?.state.state : undefined;
   const paletteItems: PaletteItem[] = [
@@ -565,7 +542,6 @@ export function DashboardApp() {
           page={page}
           onNavigate={(id) => setPage(id)}
           badge={badgeCount}
-          inspector={inspectorNode}
           banners={banners}
           onSettings={() => setSettingsOpen(true)}
           onSearch={() => setPaletteOpen(true)}

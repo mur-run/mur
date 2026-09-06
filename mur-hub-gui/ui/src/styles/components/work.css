@@ -7,63 +7,6 @@
   overflow: hidden;
 }
 
-/* ── Chats view — agent list + inline chat ─────────────────────────────── */
-.chats-view {
-  display: grid;
-  grid-template-columns: 220px 1fr;
-  height: 100%;
-  overflow: hidden;
-}
-.chats-view__list {
-  overflow-y: auto;
-  border-right: 1px solid var(--border-line);
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.chats-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 8px;
-  border-radius: var(--radius-md, 10px);
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-}
-.chats-item:hover { background: var(--surface-hover); }
-.chats-item.is-active { background: var(--color-brand-soft); }
-.chats-item__avatar { flex: none; width: 30px; height: 30px; display: inline-flex; }
-.chats-item__name { flex: 1 1 auto; min-width: 0; font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chats-item__popout {
-  flex: none;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary, #888);
-  cursor: pointer;
-  font-size: 13px;
-  line-height: 1;
-  padding: 2px 4px;
-  border-radius: var(--radius-sm, 6px);
-  opacity: 0;
-}
-.chats-item:hover .chats-item__popout,
-.chats-item.is-active .chats-item__popout { opacity: 1; }
-.chats-item__popout:hover { background: var(--surface-hover); color: var(--text-primary); }
-.chats-view__main {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-.chats-view__empty {
-  display: grid;
-  place-items: center;
-  height: 100%;
-  color: var(--text-tertiary);
-  font-size: 13px;
-}
 
 .work-view__rail {
   overflow-y: auto;
