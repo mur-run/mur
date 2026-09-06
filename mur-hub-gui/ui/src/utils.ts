@@ -28,7 +28,7 @@ export const TAB_ICONS: Record<string, string> = {
   plugins: "🧩",
 };
 
-import { BUILTIN_PRESETS, type AgentEntry, type RuntimeState } from "./types";
+import { BUILTIN_PRESETS, type AgentEntry } from "./types";
 
 // preset id → family, for theming the vector mascot avatar (cards + detail).
 const PRESET_FAMILY: Record<string, string> = Object.fromEntries(
@@ -57,21 +57,6 @@ export function avatarPreset(agent: AgentEntry): string {
  * list/cards AND the detail panel so they never disagree (was a bug: the
  * detail panel derived status from the lock-based AgentEntry.status instead).
  */
-export function runtimePill(rt: RuntimeState | undefined): {
-  cls: string;
-  key: "status.running" | "status.idle" | "status.error";
-} {
-  switch (rt?.state) {
-    case "running":
-    case "restarting":
-      return { cls: "pill pill--run", key: "status.running" };
-    case "failed":
-      return { cls: "pill pill--fail", key: "status.error" };
-    default:
-      return { cls: "pill pill--idle", key: "status.idle" };
-  }
-}
-
 export function avatarInitials(displayName: string): string {
   return displayName
     .split(" ")
