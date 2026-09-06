@@ -24,11 +24,14 @@ export interface SourceListProps {
   onSelect: (id: string | null) => void;
   /** Row double-click (spec 2(b) §7): open in a window. Absent on Library pages. */
   onOpen?: (id: string) => void;
+  /** Accessible label for the unread dot; required when any row sets `unread`. */
+  unreadLabel?: string;
   /** Plain "+" action. Ignored when `createItems` is given; "+" is hidden when neither is. */
   onCreate?: () => void;
   /** "+" opens this menu (a page with several install flows). */
   createItems?: MenuItemDef[];
-  createLabel: string;
+  /** Title of the "+" button; only read when it renders. */
+  createLabel?: string;
   /** Rendered between the header and the filter (e.g. the install-target picker). */
   toolbar?: ReactNode;
   emptyState: ReactNode;
@@ -133,6 +136,7 @@ export function SourceList(p: SourceListProps) {
                 onClick={() => p.onSelect(r.id)}
                 onDoubleClick={p.onOpen ? () => p.onOpen?.(r.id) : undefined}
               >
+                {r.unread && <span className="source-row__unread" role="img" aria-label={p.unreadLabel} />}
                 <span className="source-row__avatar">{r.avatar}</span>
                 <span className="source-row__text">
                   <span className="source-row__name">{r.name}</span>
