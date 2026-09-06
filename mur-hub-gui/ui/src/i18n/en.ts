@@ -852,6 +852,7 @@ export const en = {
   "nav.groupWorkspace": "Workspace",
   "nav.groupLibrary": "Library",
   "shell.version": "MUR Hub {version}",
+  "shell.resizeList": "Drag to resize the list · double-click to reset",
   "nav.home": "Home",
   "nav.chats": "Chats",
   "nav.agents": "Agents",
