@@ -49,8 +49,6 @@ export const zhTW: Table = {
   "dashboard.col.category": "分類",
   "dashboard.col.model": "模型",
   "dashboard.col.status": "狀態",
-  "view.grid": "卡片檢視",
-  "view.list": "列表檢視",
   "status.running": "執行中",
   "status.idle": "閒置",
   "status.error": "錯誤",

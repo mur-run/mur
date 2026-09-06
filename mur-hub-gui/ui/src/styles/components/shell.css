@@ -151,3 +151,15 @@
 .shell-sidebar__kbd { margin-left: auto; font: 11px var(--font-mono); }
 .shell-sidebar--collapsed .shell-sidebar__search { justify-content: center; padding: 0; width: 40px; margin: 0 auto; }
 .shell-sidebar--collapsed .shell-sidebar__kbd { display: none; }
+
+/* ── Master–detail: detail pane and the < 960 px overlay list (spec §3.1) ── */
+.master-detail { position: relative; }
+.master-detail__detail { position: relative; min-width: 0; min-height: 0; overflow: auto; background: var(--surface-detail); }
+.master-detail--overlay { grid-template-columns: 0 0 1fr; }
+.master-detail--overlay .source-list, .master-detail--overlay .list-divider { display: none; }
+.master-detail--overlay.master-detail--list-shown .source-list {
+  display: flex; position: absolute; top: 0; bottom: 0; left: 0; width: var(--shell-list-width-compact);
+  z-index: 10; box-shadow: var(--shadow-pop);
+}
+.master-detail__show-list { position: absolute; top: var(--space-6); left: var(--space-6); z-index: 5; }
+.agents-overview { display: flex; flex-direction: column; min-height: 100%; padding-top: var(--space-6); }
