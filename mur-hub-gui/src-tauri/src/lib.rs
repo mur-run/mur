@@ -15,6 +15,7 @@ pub mod companion;
 pub mod companion_notify;
 pub mod dashboard;
 pub mod detail;
+pub mod detail_window;
 pub mod export_muragent;
 pub mod fleet;
 mod geometry;
@@ -93,8 +94,16 @@ async fn stop_agent(name: String, supervisor: State<'_, SupervisorState>) -> Res
     Ok(())
 }
 
+/// Show + focus the dashboard, then tell it where to go: `select-agent`
+/// (existing), `select-fleet`, and `open-page` are each emitted only when
+/// given. Detail windows use this as their "Show in Hub" / "Home" bridge.
 #[tauri::command]
-fn open_dashboard(app: AppHandle, agent_name: Option<String>) {
+fn open_dashboard(
+    app: AppHandle,
+    agent_name: Option<String>,
+    fleet_name: Option<String>,
+    page: Option<String>,
+) {
     let Some(win) = app.get_webview_window("dashboard") else {
         return;
     };
@@ -102,6 +111,12 @@ fn open_dashboard(app: AppHandle, agent_name: Option<String>) {
     let _ = win.set_focus();
     if let Some(name) = agent_name {
         let _ = app.emit("select-agent", name);
+    }
+    if let Some(name) = fleet_name {
+        let _ = app.emit("select-fleet", name);
+    }
+    if let Some(id) = page {
+        let _ = app.emit("open-page", id);
     }
 }
 
@@ -402,7 +417,7 @@ pub fn run() {
             app.set_menu(app_menu)?;
             app.on_menu_event(|app, event| {
                 if event.id.as_ref() == "settings" {
-                    open_dashboard(app.clone(), None);
+                    open_dashboard(app.clone(), None, None, None);
                     let _ = app.emit("open-settings", ());
                 }
             });
@@ -424,7 +439,7 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "open" => open_dashboard(app.clone(), None),
+                    "open" => open_dashboard(app.clone(), None, None, None),
                     "install_cli" => match cli_tools::install_cli_tools() {
                         Ok(p) => {
                             let _ = app.emit("cli-tools-installed", p);
@@ -650,6 +665,7 @@ pub fn run() {
             chat::agent_chat_cancel,
             chat::channel_load,
             chat_window::open_chat_window,
+            detail_window::open_detail_window,
             work::channel_list,
             hitl::agent_hitl_respond,
             hitl::channel_hitl_respond,

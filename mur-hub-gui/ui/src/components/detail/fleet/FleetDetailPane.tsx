@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useT } from "../../../i18n";
 import type { AgentEntry } from "../../../types";
 import type { FleetSummary, FleetDetail as Detail, JobRow, LabelView } from "../../fleet/types";
@@ -33,12 +34,16 @@ export interface FleetDetailPaneProps {
   onRefresh: () => void;
   /** After a successful delete: the host clears its selection or closes the window. */
   onDeleted: () => void;
+  /** Dashboard only: the ⋯ "Open in window" item. Undefined inside a window. */
+  onOpenInWindow?: () => void;
 }
 
 /** One fleet's detail page (spec 2(b) §5): owns `fleet_detail` + `fleet_jobs`,
  *  reloads on `fleet:run_done` for this fleet, and renders the four tabs.
  *  Hosts key it by `name`, so a selection change remounts it. */
-export function FleetDetailPane({ name, summary, labels, agentMap, onRefresh, onDeleted }: FleetDetailPaneProps) {
+export function FleetDetailPane({
+  name, summary, labels, agentMap, onRefresh, onDeleted, onOpenInWindow,
+}: FleetDetailPaneProps) {
   const { t } = useT();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [jobs, setJobs] = useState<JobRow[]>([]);
@@ -70,6 +75,15 @@ export function FleetDetailPane({ name, summary, labels, agentMap, onRefresh, on
     return () => { void unlisten.then((fn) => fn()); };
   }, [name, load]);
 
+  // Refetch when this window is focused (spec 2(b) §6). Fleet forms never
+  // mark dirty, so no guard is needed here.
+  useEffect(() => {
+    const un = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (focused) void load();
+    });
+    return () => { void un.then((f) => f()); };
+  }, [load]);
+
   function refresh() {
     onRefresh();
     void load();
@@ -83,7 +97,7 @@ export function FleetDetailPane({ name, summary, labels, agentMap, onRefresh, on
       title={detail.display_name}
       status={fleetStatusOf(summary)}
       meta={fleetMeta(detail, t)}
-      actions={<FleetHeader detail={detail} onRefresh={refresh} onDelete={onDeleted} />}
+      actions={<FleetHeader detail={detail} onRefresh={refresh} onDelete={onDeleted} onOpenInWindow={onOpenInWindow} />}
       tabs={FLEET_TABS.map((id) => ({ id, label: t(FLEET_TAB_LABEL_KEY[id]) }))}
       activeTab={tab}
       onTab={setTab}

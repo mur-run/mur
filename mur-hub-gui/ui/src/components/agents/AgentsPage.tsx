@@ -17,6 +17,7 @@ import { listModeFor } from "../shell/breakpoints";
 import { useWindowWidth } from "../shell/useWindowWidth";
 import { readKey, writeKey } from "../shell/persist";
 import { AgentDetail } from "../detail/agent/AgentDetail";
+import { openDetailWindow } from "../detail/window/openInWindow";
 import { AgentsOverview } from "./AgentsOverview";
 
 /** Sentinel for the "no role assigned" facet. */
@@ -137,6 +138,10 @@ function AgentsPageInner({
         onSelect={(id) => {
           void select(id);
         }}
+        onOpen={(id) => {
+          const a = agents.find((x) => x.name === id);
+          if (a) void openDetailWindow("agent", a.name, a.display_name);
+        }}
         onCreate={onNewAgent}
         createLabel={t("app.newAgent")}
         emptyState={<p className="source-list__empty">{t("agents.noMatch")}</p>}
@@ -164,6 +169,9 @@ function AgentsPageInner({
             needsYou={needsYou[selectedAgent] ?? 0}
             onOpenChat={onOpenChat}
             onOpenHome={onOpenHome}
+            onOpenInWindow={() => {
+              void openDetailWindow("agent", entry.name, entry.display_name);
+            }}
           />
         ) : (
           <AgentsOverview agents={agents} runtimeMap={runtimeMap} onNewAgent={onNewAgent} />

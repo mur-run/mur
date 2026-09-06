@@ -28,6 +28,12 @@ describe("SourceList markup", () => {
     );
     expect(html).toContain("<p>none</p>");
   });
+  it("renders the same markup with or without onOpen (handlers are not markup)", () => {
+    const props = { title: "Agents", count: 2, rows, facets: [], allLabel: "All", activeFacet: null, onFacet: noop,
+      filter: "", onFilter: noop, filterPlaceholder: "Filter", selectedId: "aura", onSelect: noop, onCreate: noop,
+      createLabel: "New", emptyState: <p>none</p> };
+    expect(renderToStaticMarkup(<SourceList {...props} onOpen={noop} />)).toBe(renderToStaticMarkup(<SourceList {...props} />));
+  });
 });
 
 import type { MenuItemDef } from "./SplitButton";
