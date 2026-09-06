@@ -1,0 +1,21 @@
+/* Command palette (⌘K, spec §6.6). */
+.palette-backdrop {
+  position: fixed; inset: 0; background: color-mix(in srgb, var(--text-primary) 28%, transparent);
+  display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; z-index: 40;
+}
+.palette {
+  width: min(560px, 92vw); background: var(--surface-card); border: 1px solid var(--border-line);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); overflow: hidden;
+}
+.palette__input {
+  width: 100%; height: 44px; padding: 0 16px; border: 0; border-bottom: 1px solid var(--border-line);
+  background: transparent; color: var(--text-primary); font: inherit; font-size: var(--text-md); outline: none;
+}
+.palette__list { list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow: auto; }
+.palette__item {
+  display: grid; grid-template-columns: 60px 1fr auto; gap: 10px; align-items: center;
+  padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px;
+}
+.palette__item--on { background: var(--color-brand-soft); }
+.palette__kind, .palette__hint, .palette__empty { font-size: var(--text-xs); color: var(--text-tertiary); }
+.palette__empty { padding: 12px; }

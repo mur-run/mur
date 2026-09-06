@@ -29,7 +29,12 @@ function loadLabelFilter(): string[] {
   }
 }
 
-export function FleetView({ query, onSelect }: { query?: string; onSelect?: (name: string | null) => void }) {
+export function FleetView({ query, onSelect, requestedName }: {
+  query?: string;
+  onSelect?: (name: string | null) => void;
+  /** The command palette can ask for a fleet by name (spec §6.6). */
+  requestedName?: string | null;
+}) {
   const { t } = useT();
   const [fleets, setFleets] = useState<FleetSummary[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
@@ -111,6 +116,10 @@ export function FleetView({ query, onSelect }: { query?: string; onSelect?: (nam
       setJobs([]);
     }
   }, [selectedName]);
+
+  useEffect(() => {
+    if (requestedName) setSelectedName(requestedName);
+  }, [requestedName]);
 
   // Refresh jobs when a fleet run completes
   useEffect(() => {
