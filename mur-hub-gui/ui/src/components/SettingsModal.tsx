@@ -70,7 +70,6 @@ export function SettingsModal({
               <DataSettings
                 onImportAgent={onImportAgent}
                 onImportPreset={onImportPreset}
-                onClose={onClose}
               />
             )}
             {active === "about" && <AboutSettings />}
