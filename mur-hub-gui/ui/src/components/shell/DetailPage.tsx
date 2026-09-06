@@ -1,5 +1,6 @@
 import type { KeyboardEvent, ReactNode } from "react";
-import { StatusPill, type StatusKind } from "./Status";
+import type { StatusKind } from "./Status";
+import { DetailHeader } from "./DetailHeader";
 
 export interface DetailTabDef<T extends string> {
   id: T;
@@ -40,16 +41,7 @@ export function DetailPage<T extends string>(p: DetailPageProps<T>) {
   }
   return (
     <article className="detail-page">
-      <header className="detail-page__head">
-        <span className="detail-page__avatar">{p.avatar}</span>
-        <div className="detail-page__ident">
-          <h1 className="detail-page__title">
-            {p.title} {p.status && <StatusPill kind={p.status} />}
-          </h1>
-          {p.meta && <div className="detail-page__meta">{p.meta}</div>}
-        </div>
-        {p.actions && <div className="detail-page__actions">{p.actions}</div>}
-      </header>
+      <DetailHeader avatar={p.avatar} title={p.title} status={p.status} meta={p.meta} actions={p.actions} />
       {hasTabBar(p.tabs) && (
       <div className="detail-page__tabs" role="tablist" onKeyDown={onTabsKey}>
         {p.tabs.map((t) => (
