@@ -49,6 +49,7 @@ pub mod mcp_remote;
 pub mod model_resolve;
 mod peers;
 mod perm;
+pub mod perm_view;
 mod prompt;
 mod reconnect;
 mod restart;
