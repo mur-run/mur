@@ -325,103 +325,109 @@ export function DashboardApp() {
     />
   ) : undefined;
 
+  // Banners render inside the content column (Shell `banners` slot), so
+  // they never push the sidebar down (spec §3.3).
+  const banners = (
+    <>
+    {showAppsBanner && (
+      <div className="onboarding-banner">
+        <span>
+          {t("dashboard.moveToAppsBody", {
+            folder: t("dashboard.applicationsFolder"),
+          })
+            .split(t("dashboard.applicationsFolder"))
+            .flatMap((part, i) =>
+              i === 0
+                ? [part]
+                : [
+                    <strong key={i}>{t("dashboard.applicationsFolder")}</strong>,
+                    part,
+                  ],
+            )}
+        </span>
+        <button
+          className="toolbar-btn"
+          onClick={() => setShowAppsBanner(false)}
+          title={t("dashboard.dismiss")}
+        >
+          ✕
+        </button>
+      </div>
+    )}
+    {showUpgradeNudge && !nudgeDismissed && (
+      <div className="upgrade-nudge-banner">
+        <span>{t("dashboard.nudgePrompt")}</span>
+        <div className="upgrade-nudge-actions">
+          <button
+            className="toolbar-btn"
+            onClick={() => {
+              invoke("nudge_dismiss").catch(() => {});
+              setNudgeDismissed(true);
+            }}
+          >
+            {t("dashboard.nudgeDecline")}
+          </button>
+          <button
+            className="toolbar-btn toolbar-btn--primary"
+            onClick={() => {
+              setShowUpgradeNudge(false);
+              setModelPickerOpen(true);
+            }}
+          >
+            {t("dashboard.nudgeAccept")}
+          </button>
+        </div>
+      </div>
+    )}
+    {appUpdate && (
+      <div className="upgrade-nudge-banner">
+        <span>
+          {updateError
+            ? t("dashboard.updateError", { error: updateError })
+            : updateProgress !== null
+              ? t("dashboard.updateDownloading", {
+                  version: appUpdate.version,
+                  pct: updateProgress,
+                })
+              : t("dashboard.updateAvailable", { version: appUpdate.version })}
+        </span>
+        {updateProgress === null && (
+          <div className="upgrade-nudge-actions">
+            <button className="toolbar-btn" onClick={() => setAppUpdate(null)}>
+              {t("dashboard.updateLater")}
+            </button>
+            <button
+              className="toolbar-btn toolbar-btn--primary"
+              onClick={installUpdate}
+            >
+              {updateError
+                ? t("dashboard.updateRetry")
+                : t("dashboard.updateInstall")}
+            </button>
+          </div>
+        )}
+      </div>
+    )}
+    {cliSkew && (
+      <div className="upgrade-nudge-banner">
+        <span>
+          {t("dashboard.cliSkew", { cli: cliSkew.cli, hub: cliSkew.hub, hint: cliSkew.upgrade_hint })}
+        </span>
+        <button
+          className="toolbar-btn"
+          onClick={() => setCliSkew(null)}
+          title={t("dashboard.dismiss")}
+        >
+          ✕
+        </button>
+      </div>
+    )}
+    </>
+  );
+
   return (
     <div className="dashboard-root">
       <div className="dashboard-main dashboard">
-        {showAppsBanner && (
-          <div className="onboarding-banner">
-            <span>
-              {t("dashboard.moveToAppsBody", {
-                folder: t("dashboard.applicationsFolder"),
-              })
-                .split(t("dashboard.applicationsFolder"))
-                .flatMap((part, i) =>
-                  i === 0
-                    ? [part]
-                    : [
-                        <strong key={i}>{t("dashboard.applicationsFolder")}</strong>,
-                        part,
-                      ],
-                )}
-            </span>
-            <button
-              className="toolbar-btn"
-              onClick={() => setShowAppsBanner(false)}
-              title={t("dashboard.dismiss")}
-            >
-              ✕
-            </button>
-          </div>
-        )}
-        {showUpgradeNudge && !nudgeDismissed && (
-          <div className="upgrade-nudge-banner">
-            <span>{t("dashboard.nudgePrompt")}</span>
-            <div className="upgrade-nudge-actions">
-              <button
-                className="toolbar-btn"
-                onClick={() => {
-                  invoke("nudge_dismiss").catch(() => {});
-                  setNudgeDismissed(true);
-                }}
-              >
-                {t("dashboard.nudgeDecline")}
-              </button>
-              <button
-                className="toolbar-btn toolbar-btn--primary"
-                onClick={() => {
-                  setShowUpgradeNudge(false);
-                  setModelPickerOpen(true);
-                }}
-              >
-                {t("dashboard.nudgeAccept")}
-              </button>
-            </div>
-          </div>
-        )}
-        {appUpdate && (
-          <div className="upgrade-nudge-banner">
-            <span>
-              {updateError
-                ? t("dashboard.updateError", { error: updateError })
-                : updateProgress !== null
-                  ? t("dashboard.updateDownloading", {
-                      version: appUpdate.version,
-                      pct: updateProgress,
-                    })
-                  : t("dashboard.updateAvailable", { version: appUpdate.version })}
-            </span>
-            {updateProgress === null && (
-              <div className="upgrade-nudge-actions">
-                <button className="toolbar-btn" onClick={() => setAppUpdate(null)}>
-                  {t("dashboard.updateLater")}
-                </button>
-                <button
-                  className="toolbar-btn toolbar-btn--primary"
-                  onClick={installUpdate}
-                >
-                  {updateError
-                    ? t("dashboard.updateRetry")
-                    : t("dashboard.updateInstall")}
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-        {cliSkew && (
-          <div className="upgrade-nudge-banner">
-            <span>
-              {t("dashboard.cliSkew", { cli: cliSkew.cli, hub: cliSkew.hub, hint: cliSkew.upgrade_hint })}
-            </span>
-            <button
-              className="toolbar-btn"
-              onClick={() => setCliSkew(null)}
-              title={t("dashboard.dismiss")}
-            >
-              ✕
-            </button>
-          </div>
-        )}
-
         <div className="dashboard__bar">
           <span className="dashboard__brand">MUR</span>
           <label className="field dashboard__bar-search">
@@ -486,6 +492,7 @@ export function DashboardApp() {
           onNavigate={(id) => setPage(id)}
           badge={badgeCount}
           inspector={inspectorNode}
+          banners={banners}
           onSettings={() => setSettingsOpen(true)}
         >
           {page === "home" ? (
