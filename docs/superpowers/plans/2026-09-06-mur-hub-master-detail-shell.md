@@ -120,7 +120,7 @@ Branch `feat/hub-2-tokens`. Recolor only; no layout changes.
 
 ### Task 1.1 — `Status.tsx`
 
-- [ ] Write `src/components/shell/Status.test.tsx`:
+- [x] Write `src/components/shell/Status.test.tsx`:
 
 ```tsx
 import { describe, expect, it } from "vitest";
@@ -157,8 +157,8 @@ describe("markup", () => {
 });
 ```
 
-- [ ] Run `npm test -- src/components/shell/Status.test.tsx`. Expect `FAIL` with `Error: Failed to resolve import "./Status"`.
-- [ ] Create `src/components/shell/Status.tsx`:
+- [x] Run `npm test -- src/components/shell/Status.test.tsx`. Expect `FAIL` with `Error: Failed to resolve import "./Status"`.
+- [x] Create `src/components/shell/Status.tsx`:
 
 ```tsx
 import { useT } from "../../i18n";
@@ -231,7 +231,7 @@ export function NeedsYouBadge({ count, title }: { count: number; title?: string 
 }
 ```
 
-- [ ] Add to `src/i18n/en.ts` (next to the existing `status.*` keys, line 52) and the same keys to `src/i18n/zh-TW.ts`:
+- [x] Add to `src/i18n/en.ts` (next to the existing `status.*` keys, line 52) and the same keys to `src/i18n/zh-TW.ts`:
 
 ```ts
   "status.restarting": "restarting",   // zh-TW: "重啟中"
@@ -240,14 +240,14 @@ export function NeedsYouBadge({ count, title }: { count: number; title?: string 
   "status.needsYou": "{count} waiting for you",  // zh-TW: "{count} 件等你處理"
 ```
 
-- [ ] Add to the bare `:root` block of `src/styles/tokens/semantic.css` and to **each** of the two dark blocks and the light block:
+- [x] Add to the bare `:root` block of `src/styles/tokens/semantic.css` and to **each** of the two dark blocks and the light block:
 
 ```css
   --status-stopped:var(--red-600); --status-attention:var(--amber-500); --text-on-attention:#1A1200;
 ```
   (dark blocks use `--status-stopped:var(--red-500)`; the other two lines are identical in all four blocks.)
 
-- [ ] Create `src/styles/components/status.css`:
+- [x] Create `src/styles/components/status.css`:
 
 ```css
 /* One status vocabulary (spec §4.5). Colours come only from semantic tokens. */
@@ -276,15 +276,15 @@ export function NeedsYouBadge({ count, title }: { count: number; title?: string 
 }
 ```
 
-- [ ] In `src/styles/index.css` add `@import "./components/status.css";` directly after `@import "./components/primitives.css";`.
-- [ ] Run the test again → `Test Files  1 passed`. Run `npm run build` → `✓ built in`.
-- [ ] Commit: `feat(hub): one status vocabulary — StatusDot, StatusPill, NeedsYouBadge`
+- [x] In `src/styles/index.css` add `@import "./components/status.css";` directly after `@import "./components/primitives.css";`.
+- [x] Run the test again → `Test Files  1 passed`. Run `npm run build` → `✓ built in`.
+- [x] Commit: `feat(hub): one status vocabulary — StatusDot, StatusPill, NeedsYouBadge`
 
 **Interfaces — Produces:** `StatusKind`, `statusOf(rt: RuntimeState | undefined): StatusKind`, `fleetStatusOf({stopped, running}): StatusKind`, `<StatusDot kind title?>`, `<StatusPill kind>`, `<NeedsYouBadge count title?>`; CSS `.status-dot--<kind>`, `.status-pill--<kind>`, `.needs-you`; tokens `--status-stopped`, `--status-attention`, `--text-on-attention`.
 
 ### Task 1.2 — Neutral-first tokens
 
-- [ ] Replace the light and dark neutral lines, the radius line, the type line and the shell-layout lines in `src/styles/tokens/primitives.css` (lines 13–19, 24, 27–30, 42–48) with:
+- [x] Replace the light and dark neutral lines, the radius line, the type line and the shell-layout lines in `src/styles/tokens/primitives.css` (lines 13–19, 24, 27–30, 42–48) with:
 
 ```css
   /* neutral light — cool-biased greys, no blue tint (spec §5.1) */
@@ -318,7 +318,7 @@ export function NeedsYouBadge({ count, title }: { count: number; title?: string 
 ```
   Also add `--blue-400:#5B9CE0;` after `--blue-500`, change `--blue-soft` to `rgba(74,144,217,.14)` and `--blue-soft-dark` to `rgba(91,156,224,.18)`, and add `--slate-500:#7C8798;` after `--slate-400`.
 
-- [ ] Replace the whole of `src/styles/tokens/semantic.css` with:
+- [x] Replace the whole of `src/styles/tokens/semantic.css` with:
 
 ```css
 :root {
@@ -381,7 +381,7 @@ export function NeedsYouBadge({ count, title }: { count: number; title?: string 
 }
 ```
 
-- [ ] Recolor edits (exact old → new):
+- [x] Recolor edits (exact old → new):
   - `src/styles/components/dashboard.css` `.dashboard` (line 25): replace the `background:` radial-gradient declaration with `background: var(--surface-window);`.
   - `src/styles/components/dashboard.css` `.dashboard__hero` (line 243): `background: var(--surface-card); border-radius: var(--radius-lg); box-shadow: none;` (replace the gradient, `--radius-xl`, `--shadow-1` lines).
   - `src/styles/components/dashboard.css` `.grid-card` (line 346): `border-radius: var(--radius-lg);`.
@@ -389,22 +389,22 @@ export function NeedsYouBadge({ count, title }: { count: number; title?: string 
   - `src/styles/components/detail-panel.css` `.detail-panel__header` (line 23): `background: var(--surface-card);`.
   - `src/styles/components/primitives.css` line 5: `.btn--primary { background:var(--color-brand); color:var(--text-on-brand); }` (no glow). Add after it: `.btn--accent { background:var(--color-accent); color:#fff; }` — the coral CTA, used once per screen (spec §5.1).
   - `src/components/agents/AgentsPage.tsx` line 137 (empty-state CTA): `className="btn btn--primary"` → `className="btn btn--accent"`. Same for `src/components/home/HomePage.tsx` line 62 (`home.quick.newChat`).
-- [ ] `npm run build` → `✓ built in`. Preview light and dark: no light-blue page tint, sidebar active item is a translucent blue tint, primary buttons are blue, the two empty-state CTAs are coral.
-- [ ] Commit: `style(hub): neutral-first tokens, radius aliases, brand-blue primary`
+- [x] `npm run build` → `✓ built in`. Preview light and dark: no light-blue page tint, sidebar active item is a translucent blue tint, primary buttons are blue, the two empty-state CTAs are coral.
+- [x] Commit: `style(hub): neutral-first tokens, radius aliases, brand-blue primary`
 
 **Interfaces — Produces:** tokens `--surface-window`, `--surface-sidebar`, `--surface-list`, `--surface-detail`, `--border-line-subtle`, `--font-mono`, `--shell-sidebar-collapsed-width`, `--shell-list-width`, `--shell-list-width-compact`, `--shell-list-min`, `--shell-list-max`, `--shell-titlebar-inset`; class `.btn--accent`.
 
 ### Task 1.3 — Adopt the status vocabulary everywhere
 
-- [ ] `src/components/agents/AgentsPage.tsx` `ListRow` (lines 18–64): delete `const pill = runtimePill(runtime?.state);` and replace the `<span className={pill.cls}>…</span>` block (lines 42–45) with `<StatusPill kind={statusOf(runtime?.state)} />`. Import `{ StatusPill, statusOf } from "../shell/Status"`; drop `runtimePill` from the `../../utils` import.
-- [ ] `src/components/agents/GridCard.tsx`: line 56 `const pill = runtimePill(runtime?.state);` → delete; find the render that uses `pill.cls` (`grep -n 'pill\.' src/components/agents/GridCard.tsx`) and replace that `<span className={pill.cls}>…</span>` with `<StatusPill kind={statusOf(runtime?.state)} />`; fix imports as above.
-- [ ] `src/components/inspector/AgentInspector.tsx`: line 146 `const statusPill = runtimePill(runtime?.state);` → delete; lines 197–200 → `<StatusPill kind={statusOf(runtime?.state)} />`; fix imports.
-- [ ] `src/components/fleet/FleetDetail.tsx`: add `running: boolean;` to `Props` (after `jobs`); delete `statusPillClass` and `statusLabel` (lines 55–66); line 372 → `<StatusPill kind={fleetStatusOf({ stopped: detail.stopped, running })} />`; destructure `running` in the component signature. In `src/components/fleet/FleetView.tsx` pass `running={fleets.find((f) => f.name === detail.name)?.running ?? false}` next to `fleetLabels=`.
-- [ ] `src/components/fleet/FleetRail.tsx`: delete `statusClass` (lines 16–20); line 87 `<span className={\`fleet-rail__status ${statusClass(f)}\`} />` → `<StatusDot kind={fleetStatusOf(f)} />`. Delete the `.fleet-rail__status*` rules from `src/styles/components/fleet.css`.
-- [ ] `src/utils.ts`: delete `runtimePill` (lines 60–73). `src/styles/components/primitives.css`: delete `.pill`, `.pill__dot`, `.pill--run`, `.pill--idle`, `.pill--fail` (lines 20–27). Delete `.fleet-detail__status-pill*` rules from `fleet.css`.
-- [ ] `command grep -rn 'runtimePill\|pill--\|pill__dot\|fleet-rail__status' src` → no output.
-- [ ] `npm test` → all pass. `npm run build`, `npm run lint` → clean.
-- [ ] Commit: `refactor(hub): every surface renders status through StatusPill/StatusDot`
+- [x] `src/components/agents/AgentsPage.tsx` `ListRow` (lines 18–64): delete `const pill = runtimePill(runtime?.state);` and replace the `<span className={pill.cls}>…</span>` block (lines 42–45) with `<StatusPill kind={statusOf(runtime?.state)} />`. Import `{ StatusPill, statusOf } from "../shell/Status"`; drop `runtimePill` from the `../../utils` import.
+- [x] `src/components/agents/GridCard.tsx`: line 56 `const pill = runtimePill(runtime?.state);` → delete; find the render that uses `pill.cls` (`grep -n 'pill\.' src/components/agents/GridCard.tsx`) and replace that `<span className={pill.cls}>…</span>` with `<StatusPill kind={statusOf(runtime?.state)} />`; fix imports as above.
+- [x] `src/components/inspector/AgentInspector.tsx`: line 146 `const statusPill = runtimePill(runtime?.state);` → delete; lines 197–200 → `<StatusPill kind={statusOf(runtime?.state)} />`; fix imports.
+- [x] `src/components/fleet/FleetDetail.tsx`: add `running: boolean;` to `Props` (after `jobs`); delete `statusPillClass` and `statusLabel` (lines 55–66); line 372 → `<StatusPill kind={fleetStatusOf({ stopped: detail.stopped, running })} />`; destructure `running` in the component signature. In `src/components/fleet/FleetView.tsx` pass `running={fleets.find((f) => f.name === detail.name)?.running ?? false}` next to `fleetLabels=`.
+- [x] `src/components/fleet/FleetRail.tsx`: delete `statusClass` (lines 16–20); line 87 `<span className={\`fleet-rail__status ${statusClass(f)}\`} />` → `<StatusDot kind={fleetStatusOf(f)} />`. Delete the `.fleet-rail__status*` rules from `src/styles/components/fleet.css`.
+- [x] `src/utils.ts`: delete `runtimePill` (lines 60–73). `src/styles/components/primitives.css`: delete `.pill`, `.pill__dot`, `.pill--run`, `.pill--idle`, `.pill--fail` (lines 20–27). Delete `.fleet-detail__status-pill*` rules from `fleet.css`.
+- [x] `command grep -rn 'runtimePill\|pill--\|pill__dot\|fleet-rail__status' src` → no output.
+- [x] `npm test` → all pass. `npm run build`, `npm run lint` → clean.
+- [x] Commit: `refactor(hub): every surface renders status through StatusPill/StatusDot`
 
 **Manual acceptance PR 1** (light + dark): Agents grid/list, agent inspector header, Fleets rail dots, fleet detail header all show the same dot/pill family; a `.stopped` fleet is red "stopped"; a stopped agent is grey "idle".
 
