@@ -73,7 +73,7 @@ Branch `refactor/hub-2b-fleet-detail-pane`. No user-visible change, no i18n chan
 
 **Interfaces.** Produces `FleetDetailPane` and `FLEET_GLYPH` (below); PR 9 consumes both.
 
-- [ ] Create `src/components/detail/fleet/FleetDetailPane.tsx`:
+- [x] Create `src/components/detail/fleet/FleetDetailPane.tsx`:
 
 ```tsx
 import { useCallback, useEffect, useState } from "react";
@@ -177,7 +177,7 @@ export function FleetDetailPane({ name, summary, labels, agentMap, onRefresh, on
 }
 ```
 
-- [ ] Edit `src/components/fleet/FleetView.tsx` (288 lines). Apply exactly these changes:
+- [x] Edit `src/components/fleet/FleetView.tsx` (288 lines). Apply exactly these changes:
   - Imports: delete the lines importing `DetailPage`, `FLEET_TABS, FLEET_TAB_LABEL_KEY, type FleetTabId`, `FleetHeader, fleetMeta`, `FleetOverview`, `FleetMembers`, `FleetJobs`, `FleetSettings`. Delete `FleetDetail as Detail, JobRow` from the `./types` import (keep `FleetSummary`, `LabelView`). Add `import { FleetDetailPane, FLEET_GLYPH } from "../detail/fleet/FleetDetailPane";`.
   - Delete the local `const FLEET_GLYPH = (…);` block (lines 45–50).
   - Delete the state lines `const [detail, setDetail] = useState<Detail | null>(null);`, `const [jobs, setJobs] = useState<JobRow[]>([]);`, `const [tab, setTab] = useState<FleetTabId>("overview");`.
@@ -218,9 +218,11 @@ export function FleetDetailPane({ name, summary, labels, agentMap, onRefresh, on
           </div>
         )}
     ```
-- [ ] `set -o pipefail; npm test 2>&1 | grep -E 'Tests|FAIL'` → `Tests  261 passed (261)`; `npm run build` → `✓ built`; `npm run lint` → `0 errors`.
-- [ ] Browser acceptance (stub `fleet_list` with two fleets, `fleet_detail`, `fleet_jobs`, `fleet_labels_list`, `list_agents`): selecting a fleet loads its detail; switching fleets resets to Overview; a stubbed `fleet:run_done` event still toasts (dashboard) and the selected fleet's jobs reload; Delete clears the selection and reloads the list; a palette jump (`requestedName`) still selects that fleet. Identical to before.
-- [ ] Commit: `refactor(hub): extract FleetDetailPane from FleetView — pure movement`
+- [x] `set -o pipefail; npm test 2>&1 | grep -E 'Tests|FAIL'` → `Tests  261 passed (261)`; `npm run build` → `✓ built`; `npm run lint` → `0 errors`.
+- [x] Browser acceptance (stub `fleet_list` with two fleets, `fleet_detail`, `fleet_jobs`, `fleet_labels_list`, `list_agents`): selecting a fleet loads its detail; switching fleets resets to Overview; a stubbed `fleet:run_done` event still toasts (dashboard) and the selected fleet's jobs reload; Delete clears the selection and reloads the list; a palette jump (`requestedName`) still selects that fleet. Identical to before.
+- [x] Commit: `refactor(hub): extract FleetDetailPane from FleetView — pure movement`
+
+**Done (2026-09-06):** as written; the browser acceptance ran with an array-keeping event stub (both `fleet:run_done` listeners fire), which the Phase 1 stub did not need.
 
 ---
 
