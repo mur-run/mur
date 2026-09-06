@@ -12,7 +12,8 @@ export type PageId =
   | "workflows"
   | "mcp"
   | "models"
-  | "plugins";
+  | "plugins"
+  | "settings";
 
 export interface NavItem {
   id: PageId;
@@ -36,7 +37,8 @@ export function isLibrary(id: PageId): boolean {
   return NAV_ITEMS.find((i) => i.id === id)?.group === "library";
 }
 
-/** Type guard for page ids arriving over events (`open-page`). */
+/** Type guard for page ids arriving over events (`open-page`). Settings is a
+ *  page without a nav item (spec 3(d) §3), so it is listed here explicitly. */
 export function isPageId(id: string): id is PageId {
-  return NAV_ITEMS.some((n) => n.id === id);
+  return id === "settings" || NAV_ITEMS.some((n) => n.id === id);
 }

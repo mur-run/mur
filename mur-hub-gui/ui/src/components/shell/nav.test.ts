@@ -37,6 +37,7 @@ describe("isPageId", () => {
   it("accepts nav ids and rejects strangers", () => {
     expect(isPageId("agents")).toBe(true);
     expect(isPageId("home")).toBe(true);
+    expect(isPageId("settings")).toBe(true);
     expect(isPageId("nope")).toBe(false);
   });
 });
