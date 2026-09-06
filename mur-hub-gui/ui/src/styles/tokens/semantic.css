@@ -3,9 +3,11 @@
   --text-on-brand:#fff;
   --color-accent:var(--coral-500); --color-accent-strong:var(--coral-600);
   --color-accent-soft:var(--coral-soft); --color-brand-soft:var(--blue-soft);
-  --surface-bg:var(--n-bg); --surface-secondary:var(--n-secondary);
-  --surface-card:var(--n-card); --surface-hover:var(--n-hover);
-  --border-line:var(--n-line);
+  /* surfaces (spec §5.1): window < sidebar < list < detail = card */
+  --surface-bg:var(--n-bg); --surface-window:var(--n-bg); --surface-sidebar:var(--n-sidebar);
+  --surface-list:var(--n-list); --surface-detail:var(--n-detail);
+  --surface-secondary:var(--n-secondary); --surface-card:var(--n-card); --surface-hover:var(--n-hover);
+  --border-line:var(--n-line); --border-line-subtle:var(--n-line-subtle);
   --text-primary:var(--n-text); --text-secondary:var(--n-text2); --text-tertiary:var(--n-text3);
   --status-running:var(--green-600); --status-idle:var(--slate-400);
   --status-restarting:var(--amber-500); --status-failed:var(--red-600);
@@ -16,38 +18,43 @@
   --sidebar-bg:var(--n-sidebar-vibrancy); --sidebar-bg-solid:var(--n-sidebar-solid);
 }
 @media (prefers-color-scheme: dark) {
-  :root {
-    /* Soft tints must darken too: the light pastels (#EAF3FC / #FFF1EE)
-       under light text made selected rows unreadable in dark mode. The
-       paired -strong text colors lighten so they stay readable on the
-       dark tints. */
+  :root:not([data-theme="light"]) {
+    --color-brand:var(--blue-400); --color-brand-strong:var(--blue-300);
     --color-brand-soft:var(--blue-soft-dark); --color-accent-soft:var(--coral-soft-dark);
-    --color-brand-strong:var(--blue-300); --color-accent-strong:var(--coral-300);
-    --surface-bg:var(--d-bg); --surface-secondary:var(--d-secondary);
-    --surface-card:var(--d-card); --surface-hover:var(--d-hover);
-    --border-line:var(--d-line);
-  --status-stopped:var(--red-500); --status-attention:var(--amber-500); --text-on-attention:#1A1200;
-    --status-stopped:var(--red-500); --status-attention:var(--amber-500); --text-on-attention:#1A1200;
+    --color-accent-strong:var(--coral-300);
+    --surface-bg:var(--d-bg); --surface-window:var(--d-bg); --surface-sidebar:var(--d-sidebar);
+    --surface-list:var(--d-list); --surface-detail:var(--d-detail);
+    --surface-secondary:var(--d-secondary); --surface-card:var(--d-card); --surface-hover:var(--d-hover);
+    --border-line:var(--d-line); --border-line-subtle:var(--d-line-subtle);
     --text-primary:var(--d-text); --text-secondary:var(--d-text2); --text-tertiary:var(--d-text3);
+    --status-running:var(--green-500); --status-idle:var(--slate-500); --status-failed:var(--red-500);
+    --status-stopped:var(--red-500); --status-attention:var(--amber-500); --text-on-attention:#1A1200;
     --sidebar-bg:var(--d-sidebar-vibrancy); --sidebar-bg-solid:var(--d-sidebar-solid);
   }
 }
 :root[data-theme="dark"] {
+  --color-brand:var(--blue-400); --color-brand-strong:var(--blue-300);
   --color-brand-soft:var(--blue-soft-dark); --color-accent-soft:var(--coral-soft-dark);
-  --color-brand-strong:var(--blue-300); --color-accent-strong:var(--coral-300);
-  --surface-bg:var(--d-bg); --surface-secondary:var(--d-secondary);
-  --surface-card:var(--d-card); --surface-hover:var(--d-hover);
-  --border-line:var(--d-line);
+  --color-accent-strong:var(--coral-300);
+  --surface-bg:var(--d-bg); --surface-window:var(--d-bg); --surface-sidebar:var(--d-sidebar);
+  --surface-list:var(--d-list); --surface-detail:var(--d-detail);
+  --surface-secondary:var(--d-secondary); --surface-card:var(--d-card); --surface-hover:var(--d-hover);
+  --border-line:var(--d-line); --border-line-subtle:var(--d-line-subtle);
   --text-primary:var(--d-text); --text-secondary:var(--d-text2); --text-tertiary:var(--d-text3);
+  --status-running:var(--green-500); --status-idle:var(--slate-500); --status-failed:var(--red-500);
+  --status-stopped:var(--red-500); --status-attention:var(--amber-500); --text-on-attention:#1A1200;
   --sidebar-bg:var(--d-sidebar-vibrancy); --sidebar-bg-solid:var(--d-sidebar-solid);
 }
 :root[data-theme="light"] {
+  --color-brand:var(--blue-500); --color-brand-strong:var(--blue-700);
   --color-brand-soft:var(--blue-soft); --color-accent-soft:var(--coral-soft);
-  --color-brand-strong:var(--blue-700); --color-accent-strong:var(--coral-600);
-  --surface-bg:var(--n-bg); --surface-secondary:var(--n-secondary);
-  --surface-card:var(--n-card); --surface-hover:var(--n-hover);
-  --border-line:var(--n-line);
-  --status-stopped:var(--red-600); --status-attention:var(--amber-500); --text-on-attention:#1A1200;
+  --color-accent-strong:var(--coral-600);
+  --surface-bg:var(--n-bg); --surface-window:var(--n-bg); --surface-sidebar:var(--n-sidebar);
+  --surface-list:var(--n-list); --surface-detail:var(--n-detail);
+  --surface-secondary:var(--n-secondary); --surface-card:var(--n-card); --surface-hover:var(--n-hover);
+  --border-line:var(--n-line); --border-line-subtle:var(--n-line-subtle);
   --text-primary:var(--n-text); --text-secondary:var(--n-text2); --text-tertiary:var(--n-text3);
+  --status-running:var(--green-600); --status-idle:var(--slate-400); --status-failed:var(--red-600);
+  --status-stopped:var(--red-600); --status-attention:var(--amber-500); --text-on-attention:#1A1200;
   --sidebar-bg:var(--n-sidebar-vibrancy); --sidebar-bg-solid:var(--n-sidebar-solid);
 }
