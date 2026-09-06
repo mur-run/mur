@@ -517,6 +517,7 @@ export function DashboardApp() {
           onNavigate={(id) => setPage(id)}
           badge={badgeCount}
           inspector={inspectorNode}
+          onSettings={() => setSettingsOpen(true)}
         >
           {page === "home" ? (
             <HomePage

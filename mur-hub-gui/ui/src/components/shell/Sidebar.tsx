@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { useT } from "../../i18n";
 import type { TranslationKey } from "../../i18n/types";
 import { NAV_ITEMS, type PageId } from "./nav";
@@ -63,14 +64,29 @@ const GLYPHS: Record<PageId, ReactNode> = {
   ),
 };
 
+const GEAR = (
+  <>
+    <circle cx="12" cy="12" r="3" />
+    <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1" />
+  </>
+);
+
 export interface SidebarProps {
   active: PageId;
   badge: number;
   onSelect: (id: PageId) => void;
+  /** Icon rail (56 px): labels and group headers hide, items keep a title. */
+  collapsed: boolean;
+  onSettings: () => void;
 }
 
-export function Sidebar({ active, badge, onSelect }: SidebarProps) {
+export function Sidebar({ active, badge, onSelect, collapsed, onSettings }: SidebarProps) {
   const { t } = useT();
+  // Same read as AboutSettings: the bundle version, shown under Settings.
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    getVersion().then(setVersion).catch(() => {});
+  }, []);
   const workspace = NAV_ITEMS.filter((i) => i.group === "workspace");
   const library = NAV_ITEMS.filter((i) => i.group === "library");
 
@@ -81,6 +97,7 @@ export function Sidebar({ active, badge, onSelect }: SidebarProps) {
       className={`shell-sidebar-item${active === id ? " shell-sidebar-item--active" : ""}`}
       onClick={() => onSelect(id)}
       aria-current={active === id ? "page" : undefined}
+      title={t(labelKey)}
     >
       <span className="shell-sidebar-item__icon">
         <Ico>{GLYPHS[id]}</Ico>
@@ -93,14 +110,21 @@ export function Sidebar({ active, badge, onSelect }: SidebarProps) {
   );
 
   return (
-    <nav className="shell-sidebar" aria-label="Primary">
+    <nav className={`shell-sidebar${collapsed ? " shell-sidebar--collapsed" : ""}`} aria-label="Primary">
       <div className="shell-sidebar__group">
-        <div className="shell-sidebar__group-label">{t("nav.groupWorkspace" as TranslationKey)}</div>
+        <div className="shell-sidebar__group-label">{t("nav.groupWorkspace")}</div>
         {workspace.map((i) => renderItem(i.id, i.labelKey))}
       </div>
       <div className="shell-sidebar__group">
-        <div className="shell-sidebar__group-label">{t("nav.groupLibrary" as TranslationKey)}</div>
+        <div className="shell-sidebar__group-label">{t("nav.groupLibrary")}</div>
         {library.map((i) => renderItem(i.id, i.labelKey))}
+      </div>
+      <div className="shell-sidebar__footer">
+        <button type="button" className="shell-sidebar-item" onClick={onSettings} title={t("app.settings")}>
+          <span className="shell-sidebar-item__icon"><Ico>{GEAR}</Ico></span>
+          <span className="shell-sidebar-item__label">{t("app.settings")}</span>
+        </button>
+        {version && <div className="shell-sidebar__version">{t("shell.version", { version })}</div>}
       </div>
     </nav>
   );

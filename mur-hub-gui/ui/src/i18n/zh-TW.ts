@@ -853,6 +853,7 @@ export const zhTW: Table = {
   "wizard.models.hint": "之後隨時可到 設定 → Models 調整。",
   "nav.groupWorkspace": "工作區",
   "nav.groupLibrary": "資源庫",
+  "shell.version": "MUR Hub {version}",
   "nav.home": "首頁",
   "nav.chats": "對話",
   "nav.agents": "代理人",
