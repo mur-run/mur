@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useReducer, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   conversationReducer,
@@ -14,6 +14,8 @@ interface ConversationContextValue {
   openConversation: (agent: string) => void;
   closeConversation: (agent: string) => void;
   focusConversation: (agent: string) => void;
+  /** Nothing is being looked at (the Chats page cleared its selection). */
+  blurConversation: () => void;
   /** Pending chat-input text per agent (e.g. staged by file-drop on a pet). */
   drafts: Record<string, string>;
   setDraft: (agent: string, text: string) => void;
@@ -27,6 +29,7 @@ const Ctx = createContext<ConversationContextValue>({
   openConversation: () => {},
   closeConversation: () => {},
   focusConversation: () => {},
+  blurConversation: () => {},
   drafts: {},
   setDraft: () => {},
   clearDraft: () => {},
@@ -65,15 +68,22 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
     };
   }, []);
 
+  // Stable identities: the Chats page lists these as effect dependencies.
+  const openConversation = useCallback((agent: string) => dispatch({ type: "open", agent }), []);
+  const closeConversation = useCallback((agent: string) => dispatch({ type: "close", agent }), []);
+  const focusConversation = useCallback((agent: string) => dispatch({ type: "focus", agent }), []);
+  const blurConversation = useCallback(() => dispatch({ type: "blur" }), []);
+
   return (
     <Ctx.Provider
       value={{
         open: state.open,
         active: state.active,
         attention: state.attention,
-        openConversation: (agent) => dispatch({ type: "open", agent }),
-        closeConversation: (agent) => dispatch({ type: "close", agent }),
-        focusConversation: (agent) => dispatch({ type: "focus", agent }),
+        openConversation,
+        closeConversation,
+        focusConversation,
+        blurConversation,
         drafts,
         setDraft: (agent, text) => setDrafts((d) => ({ ...d, [agent]: text })),
         clearDraft: (agent) =>

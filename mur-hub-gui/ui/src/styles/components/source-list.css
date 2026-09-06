@@ -39,3 +39,4 @@
 .source-list__toolbar { padding: 0 var(--space-5) var(--space-4); }
 .source-list__create-menu { margin-left: auto; }
 .source-list__create-menu .menu { right: 0; left: auto; }
+.source-row__unread { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--color-brand); }

@@ -12,7 +12,6 @@ import { ModelSetupWizard } from "./ModelSetupWizard";
 import { ModelPickerModal } from "./ModelPickerModal";
 import { ModelsPage } from "./library/ModelsPage";
 import { InstallInboxModal } from "./InstallInboxModal";
-import { Inspector, hasInspector, type InspectorSelection } from "./shell/Inspector";
 import { HomePage } from "./home/HomePage";
 import { useChannels } from "./home/useChannels";
 import { needsYouCounts } from "./home/needsYouCounts";
@@ -20,6 +19,7 @@ import { useInbox } from "./home/useInbox";
 import { inboxBadge, visibleInboxItems } from "./home/inbox";
 import type { InboxItem } from "./home/inbox";
 import { ChatsPage } from "./chats/ChatsPage";
+import { popOutChat } from "./chats/ChatPane";
 import { FleetView } from "./fleet/FleetView";
 import { useT } from "../i18n";
 import type { TranslationKey } from "../i18n/types";
@@ -73,14 +73,6 @@ export function DashboardApp() {
   const { agents, runtimeStatuses, selectedAgent, setSelected } = useAgents();
   // Active shell page. Home is the default mission-control surface.
   const [page, setPage] = useState<PageId>("home");
-  // Per-page selection that drives the contextual right-pane Inspector. The
-  // agents-page selection lives in AgentContext (selectedAgent); these cover
-  // the chats / fleets / library pages.
-  const [chatAgent, setChatAgent] = useState<{ name: string; displayName?: string } | null>(null);
-  // Stable callbacks so the pages' report-up effects don't loop.
-  const onChatActive = useCallback((name: string | null, displayName?: string) => {
-    setChatAgent(name ? { name, displayName } : null);
-  }, []);
   // Unified inbox — owned here so the sidebar + Dock badges stay in sync with
   // what HomePage renders.
   const { items: inboxItems, refresh: refreshInbox } = useInbox();
@@ -107,6 +99,15 @@ export function DashboardApp() {
     setChatInitial(name);
     setPage("chats");
   }, []);
+  const clearChatInitial = useCallback(() => setChatInitial(null), []);
+  // The Chats page reports its selection up for ⌘↩ (spec 3(a) §7).
+  const [selectedChat, setSelectedChat] = useState<string | null>(null);
+  const onChatSelect = useCallback((name: string | null) => setSelectedChat(name), []);
+  // "Open agent" from a chat header: the Agents page with that agent selected.
+  const openAgentFromChat = useCallback((name: string) => {
+    setSelected(name);
+    setPage("agents");
+  }, [setSelected]);
   const [fleetRequest, setFleetRequest] = useState<string | null>(null);
   // The Fleets page reports its selection up for ⌘↩ and the palette (spec 2(b) §7).
   const [selectedFleet, setSelectedFleet] = useState<string | null>(null);
@@ -321,6 +322,9 @@ export function DashboardApp() {
           e.preventDefault();
           const f = paletteFleets.find((x) => x.name === selectedFleet);
           void openDetailWindow("fleet", selectedFleet, f?.display_name ?? selectedFleet);
+        } else if (page === "chats" && selectedChat) {
+          e.preventDefault();
+          popOutChat(selectedChat);
         }
       } else if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "r") {
         e.preventDefault();
@@ -330,7 +334,7 @@ export function DashboardApp() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [refreshInbox, page, selectedAgent, selectedFleet, agents, paletteFleets]);
+  }, [refreshInbox, page, selectedAgent, selectedFleet, selectedChat, agents, paletteFleets]);
 
   // Fleets are not held in app state; fetch them when the palette opens.
   useEffect(() => {
@@ -349,28 +353,10 @@ export function DashboardApp() {
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) return;
       if (el && el.getAttribute("role") === "listbox") return; // SourceList owns its Esc
       setSelected(null);
-      setChatAgent(null);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [setSelected]);
-
-  // Build the contextual inspector for the current page + selection.
-  const inspectorSelection: InspectorSelection = {
-    agent: selectedAgent,
-    chatAgent: chatAgent?.name ?? null,
-    chatDisplayName: chatAgent?.displayName,
-  };
-  const inspectorNode = hasInspector(page, inspectorSelection) ? (
-    <Inspector
-      page={page}
-      selection={inspectorSelection}
-      onClose={() => {
-        setSelected(null);
-        setChatAgent(null);
-      }}
-    />
-  ) : undefined;
 
   const selectedRuntime = selectedAgent ? runtimeMap.get(selectedAgent)?.state.state : undefined;
   const paletteItems: PaletteItem[] = [
@@ -556,7 +542,6 @@ export function DashboardApp() {
           page={page}
           onNavigate={(id) => setPage(id)}
           badge={badgeCount}
-          inspector={inspectorNode}
           banners={banners}
           onSettings={() => setSettingsOpen(true)}
           onSearch={() => setPaletteOpen(true)}
@@ -572,7 +557,15 @@ export function DashboardApp() {
               onCreateAgent={() => setWizardOpen(true)}
             />
           ) : page === "chats" ? (
-            <ChatsPage agents={agents} initialAgent={chatInitial} onActiveChange={onChatActive} />
+            <ChatsPage
+              agents={agents}
+              runtimeMap={runtimeMap}
+              channels={channels}
+              initialAgent={chatInitial}
+              onInitialHandled={clearChatInitial}
+              onSelect={onChatSelect}
+              onOpenAgent={openAgentFromChat}
+            />
           ) : page === "fleets" ? (
             <FleetView onSelect={onFleetSelect} requestedName={fleetRequest} onRequestHandled={clearFleetRequest} />
           ) : page === "agents" ? (
