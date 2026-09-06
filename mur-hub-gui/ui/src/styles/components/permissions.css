@@ -1,0 +1,25 @@
+/* Permissions section (spec 2026-09-07 §1.3). Read-only. */
+.perm__banner { margin: 0 0 var(--space-5); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); font-size: var(--text-sm); border: 1px solid var(--border-line); }
+.perm__banner--ok { color: var(--text-primary); }
+.perm__banner--muted { color: var(--text-secondary); }
+.perm__banner--attention { color: var(--text-on-attention); background: var(--status-attention); border-color: transparent; }
+.perm__block { margin-top: var(--space-5); }
+.perm__muted { font-size: var(--text-xs); margin: 2px 0; }
+.perm__mode { margin: 2px 0; font-size: var(--text-sm); font-family: var(--font-mono); }
+.perm__list { list-style: none; margin: 4px 0 0; padding: 0; }
+.perm__row { display: flex; align-items: baseline; gap: var(--space-2); padding: 2px 0; font-size: var(--text-sm); }
+.perm__row code { font-family: var(--font-mono); font-size: var(--text-xs); }
+.perm__row--attention .perm__detail { color: var(--status-attention); }
+.perm__row--dropped code { text-decoration: line-through; color: var(--text-secondary); }
+.perm__glyph { width: 1em; text-align: center; color: var(--text-secondary); }
+.perm__row--effective .perm__glyph { color: var(--status-running); }
+.perm__row--dropped .perm__glyph { color: var(--status-stopped); }
+.perm__detail { color: var(--text-secondary); font-size: var(--text-xs); }
+.perm__policy { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .04em; }
+.perm__policy--allow { color: var(--status-running); }
+.perm__policy--deny { color: var(--status-stopped); }
+.perm__policy--ask { color: var(--text-secondary); }
+.perm__note { margin: var(--space-3) 0 0; font-size: var(--text-xs); }
+.perm__note--attention { color: var(--status-attention); }
+.perm__cmd { margin: var(--space-2) 0 0; font-size: var(--text-xs); user-select: text; }
+.perm__cmd code { font-family: var(--font-mono); user-select: all; }
