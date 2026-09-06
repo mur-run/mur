@@ -1,201 +1,81 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useAgents } from "../../context/AgentContext";
-import type { AgentDetail } from "../../types";
 import { useT } from "../../i18n";
 import { AgentPicker } from "./AgentPicker";
-import type { LibrarySelection } from "../inspector/LibraryInspector";
+import { LibraryGlyph } from "./LibraryGlyph";
+import { LibraryPage } from "../detail/library/LibraryPage";
+import { itemFor, pluginRows, type InstalledAddonAgg } from "../detail/library/libraryModel";
+import { useInstallTarget } from "../detail/library/useInstallTarget";
 
-// ─── Backend shape (snake_case, from `addons_installed`) ─────────────────────
-
-interface AddonAgentState {
-  agent: string;
-  enabled: boolean;
-}
-
-interface InstalledAddonAgg {
-  id: string;
-  source: string;
-  skill_count: number;
-  mcp_count: number;
-  command_count: number;
-  agents: AddonAgentState[];
-}
-
-// ─── Component ────────────────────────────────────────────────────────────────
-
-export function PluginsPage({ onSelect }: { onSelect?: (item: LibrarySelection | null) => void }) {
+/** Plugins (add-ons) library (spec §3.1). `addons_installed` carries the real
+ *  per-agent enabled flag, so the toggle reflects it. */
+export function PluginsPage() {
   const { t } = useT();
   const { agents } = useAgents();
-  const [addons, setAddons] = useState<InstalledAddonAgg[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [targetAgent, setTargetAgent] = useState<string>(agents[0]?.name ?? "");
-  const [selected, setSelected] = useState<string | null>(null);
-
-  function pick(a: InstalledAddonAgg) {
-    setSelected(a.id);
-    onSelect?.({
-      kind: "plugin",
-      name: a.id,
-      origin: a.source,
-      meta: [
-        { label: "Skills", value: String(a.skill_count) },
-        { label: "MCP", value: String(a.mcp_count) },
-        { label: "Commands", value: String(a.command_count) },
-      ],
-    });
-  }
-
-  useEffect(() => {
-    if (!targetAgent && agents[0]?.name) {
-      setTargetAgent(agents[0].name);
-    }
-  }, [agents, targetAgent]);
-
-  const refresh = useCallback(() => {
-    setLoading(true);
-    invoke<InstalledAddonAgg[]>("addons_installed")
-      .then((res) => {
-        setAddons(res);
-        setError(null);
-      })
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
+  const [target, setTarget] = useInstallTarget(agents);
+  const [reload, setReload] = useState(0);
+  const [importError, setImportError] = useState<string | null>(null);
+  const metaLabels = {
+    source: t("library.meta.source"),
+    skills: t("library.meta.skills"),
+    mcp: t("library.meta.mcp"),
+    commands: t("library.meta.commands"),
+  };
 
   async function importPlugin() {
-    if (!targetAgent) return;
-    setError(null);
-    setBusy(true);
+    if (!target) return;
+    setImportError(null);
     try {
-      const dir = await open({ directory: true, title: "Select a Claude plugin folder" });
+      const dir = await open({ directory: true, title: t("pluginslib.import") });
       if (!dir || Array.isArray(dir)) return;
-      await invoke<AgentDetail>("agent_addon_import", {
-        name: targetAgent,
-        pluginDir: dir,
-        force: false,
-      });
-      refresh();
+      await invoke("agent_addon_import", { name: target, pluginDir: dir, force: false });
+      setReload((n) => n + 1);
     } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function toggleAddon(agentName: string, addonId: string, enabled: boolean) {
-    setError(null);
-    setBusy(true);
-    try {
-      await invoke<AgentDetail>("agent_addon_toggle", {
-        name: agentName,
-        addonId,
-        enabled,
-      });
-      refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function removeAddon(agentName: string, addonId: string) {
-    setError(null);
-    setBusy(true);
-    try {
-      await invoke<AgentDetail>("agent_addon_remove", {
-        name: agentName,
-        addonId,
-      });
-      refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
+      setImportError(String(e));
     }
   }
 
   return (
-    <div>
-      <div
-        className="tab-form"
-        style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 12 }}
-      >
-        <AgentPicker agents={agents} value={targetAgent} onChange={setTargetAgent} />
-        <button
-          className="btn btn--sm btn--secondary"
-          onClick={importPlugin}
-          disabled={!targetAgent || busy}
-        >
-          {t("pluginslib.import")}
-        </button>
-      </div>
-
-      {error && <p className="save-error">{error}</p>}
-
-      {loading ? (
-        <p className="field-muted">{t("pluginslib.loading")}</p>
-      ) : addons.length === 0 ? (
-        <div className="tab-empty">
-          <p>{t("pluginslib.empty")}</p>
+    <LibraryPage<InstalledAddonAgg>
+      page="plugins"
+      title={t("nav.plugins")}
+      listCommand="addons_installed"
+      idOf={(a) => a.id}
+      rows={(addons) =>
+        pluginRows(
+          addons,
+          { skills: t("pluginslib.skills"), mcp: t("pluginslib.mcp"), commands: t("pluginslib.commands") },
+          () => <LibraryGlyph kind="plugin" />,
+        )
+      }
+      item={(a) => itemFor("plugin", a, metaLabels)}
+      uses={(a) => a.agents.map(({ agent, enabled }) => ({ agent, enabled }))}
+      toggle={async (a, agent, enabled) => {
+        await invoke("agent_addon_toggle", { name: agent, addonId: a.id, enabled });
+      }}
+      remove={async (a, agent) => {
+        await invoke("agent_addon_remove", { name: agent, addonId: a.id });
+      }}
+      folderOf={(a) => a.source}
+      createLabel={t("pluginslib.import")}
+      createItems={[
+        { id: "import", label: t("pluginslib.import"), onSelect: () => { void importPlugin(); }, disabled: !target },
+      ]}
+      toolbar={
+        <div className="library-picker">
+          <AgentPicker agents={agents} value={target} onChange={setTarget} />
+          {importError && <p className="save-error">{importError}</p>}
         </div>
-      ) : (
-        <ul className="item-list">
-          {addons.map((a) => (
-            <li key={a.id} className={`item-card${selected === a.id ? " item-card--selected" : ""}`}>
-              <div
-                className="item-card-name"
-                style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}
-                onClick={() => pick(a)}
-              >
-                <span style={{ fontWeight: 600 }}>{a.id}</span>
-                <span className="item-card__meta">{a.source}</span>
-                <span className="item-card__meta">
-                  {a.skill_count} {t("pluginslib.skills")} / {a.mcp_count}{" "}
-                  {t("pluginslib.mcp")} / {a.command_count} {t("pluginslib.commands")}
-                </span>
-              </div>
-              <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
-                <span className="field-muted" style={{ fontSize: 12 }}>
-                  {t("pluginslib.usedBy")}
-                </span>
-                {a.agents.map((st) => (
-                  <div
-                    key={st.agent}
-                    style={{ display: "flex", gap: 8, alignItems: "center" }}
-                  >
-                    <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13 }}>
-                      <input
-                        type="checkbox"
-                        checked={st.enabled}
-                        disabled={busy}
-                        onChange={(e) => toggleAddon(st.agent, a.id, e.target.checked)}
-                      />
-                      <span>{st.agent}</span>
-                    </label>
-                    <button
-                      className="btn btn--xs btn--ghost"
-                      disabled={busy}
-                      onClick={() => removeAddon(st.agent, a.id)}
-                      title={t("pluginslib.remove")}
-                    >
-                      {t("pluginslib.remove")}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+      }
+      copy={{
+        loading: t("pluginslib.loading"),
+        empty: t("pluginslib.empty"),
+        filter: t("pluginslib.filter"),
+        noMatch: t("pluginslib.noMatch"),
+      }}
+      reloadToken={reload}
+    />
   );
 }
