@@ -78,9 +78,11 @@ export interface SidebarProps {
   /** Icon rail (56 px): labels and group headers hide, items keep a title. */
   collapsed: boolean;
   onSettings: () => void;
+  /** Opens the ⌘K command palette. */
+  onSearch: () => void;
 }
 
-export function Sidebar({ active, badge, onSelect, collapsed, onSettings }: SidebarProps) {
+export function Sidebar({ active, badge, onSelect, collapsed, onSettings, onSearch }: SidebarProps) {
   const { t } = useT();
   // Same read as AboutSettings: the bundle version, shown under Settings.
   const [version, setVersion] = useState<string | null>(null);
@@ -111,6 +113,14 @@ export function Sidebar({ active, badge, onSelect, collapsed, onSettings }: Side
 
   return (
     <nav className={`shell-sidebar${collapsed ? " shell-sidebar--collapsed" : ""}`} aria-label="Primary">
+      <button type="button" className="shell-sidebar__search" onClick={onSearch} title={t("shell.search")}>
+        <Ico>
+          <circle cx="11" cy="11" r="6" />
+          <path d="M20 20l-4.5-4.5" />
+        </Ico>
+        <span className="shell-sidebar-item__label">{t("shell.search")}</span>
+        <kbd className="shell-sidebar__kbd">⌘K</kbd>
+      </button>
       <div className="shell-sidebar__group">
         <div className="shell-sidebar__group-label">{t("nav.groupWorkspace")}</div>
         {workspace.map((i) => renderItem(i.id, i.labelKey))}

@@ -30,10 +30,11 @@ export interface ShellProps {
   /** Banners render at the top of the content column, never above the sidebar. */
   banners?: ReactNode;
   onSettings: () => void;
+  onSearch: () => void;
   children: ReactNode;
 }
 
-export function Shell({ page, onNavigate, badge, inspector, banners, onSettings, children }: ShellProps) {
+export function Shell({ page, onNavigate, badge, inspector, banners, onSettings, onSearch, children }: ShellProps) {
   const [inspectorVisible, setInspectorVisible] = useState(true);
   const [pref, setPref] = useState<SidebarPref>(initialPref);
   const width = useWindowWidth();
@@ -76,6 +77,7 @@ export function Shell({ page, onNavigate, badge, inspector, banners, onSettings,
           onSelect={onNavigate}
           collapsed={sidebarMode === "collapsed"}
           onSettings={onSettings}
+          onSearch={onSearch}
         />
       </div>
       <div className="shell__content">
