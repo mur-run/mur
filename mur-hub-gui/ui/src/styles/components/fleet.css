@@ -470,7 +470,7 @@
 .fleet-overview__members { display: flex; flex-wrap: wrap; gap: 8px; }
 .fleet-overview__member {
   display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px 5px 6px; border-radius: var(--radius-md);
-  background: var(--surface-secondary); font-size: var(--text-sm);
+  background: var(--surface-secondary); font-size: var(--text-sm); white-space: nowrap;
 }
 .fleet-overview__member i { font-style: normal; color: var(--text-tertiary); font-size: var(--text-xs); }
 .fleet-overview__initial { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; background: var(--status-idle); color: #fff; font-size: 11px; font-weight: 600; }
