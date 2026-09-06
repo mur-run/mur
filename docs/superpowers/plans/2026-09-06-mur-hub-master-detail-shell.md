@@ -99,7 +99,7 @@ Copied from the approved design and `CLAUDE.md`. Every task includes all of them
 | 3 | `src/components/shell/palette.ts` (+ `.test.ts`), `CommandPalette.tsx` (new) | ⌘K ranking + overlay |
 | 3 | `src/components/DashboardApp.tsx`, `Sidebar.tsx`, `fleet/FleetView.tsx` (modify) | palette wiring, sidebar search button, `requestedName` |
 | 3 | `src/styles/components/{source-list,detail-page,menus,palette}.css` (new) | styles for the above |
-| 4 | `src/components/home/inbox.ts`, `useInbox.ts`, `needsYou.ts` (+ tests) (modify/new) | `InboxItem.agent`, `needsYouCounts` |
+| 4 | `src/components/home/inbox.ts`, `useInbox.ts`, `needsYouCounts.ts` (+ tests) (modify/new) | `InboxItem.agent`, `needsYouCounts` |
 | 4 | `src/components/detail/agent/agentOverview.ts` (+ `.test.ts`) (new) | per-agent channel activity |
 | 4 | `src/components/detail/agent/{AgentDetail,OverviewTab,IdentityTab,CapabilitiesTab,ChannelsTab}.tsx` (new) | agent detail pane; `AgentInspector` content relocated |
 | 4 | `src/components/inspector/tabs/{PersonaTab,StyleTab}.tsx` (modify) | `useMarkDirty` |
@@ -1914,14 +1914,18 @@ Branch `feat/hub-2-agents`.
 
 ### Task 4.1 — `InboxItem.agent` and `needsYouCounts`
 
-- [ ] `src/components/home/inbox.ts`: add `agent?: string; // set by the hitl and companion adapters` after `payload`.
-- [ ] `src/components/home/useInbox.ts`: in `hitlToItem` add `agent,` to the returned object; change `companionToItem(raw: RawCompanionEvent, lang: string)` to `companionToItem(raw: RawCompanionEvent, lang: string, agent: string)` and add `agent,` to its return; in `refreshCompanion` capture `const names = agentNamesRef.current;` before `Promise.all(names.map(…))` and build items with `perAgent.flatMap((rows, i) => rows.map((r) => companionToItem(r, lang, names[i])))`.
-- [ ] Extend `src/components/home/useInboxAdapters.test.ts`: in the existing hitl test assert `expect(item?.agent).toBe(raw.agent)`; in the companion test pass a third argument `"aura"` and assert `expect(item?.agent).toBe("aura")`. Run → fails until the edits above are in; then passes.
-- [ ] Write `src/components/home/needsYou.test.ts`:
+> **Deviation recorded during execution (PR 4):** the helper is
+> `needsYouCounts.ts` — `home/NeedsYou.tsx` already exists and the case
+> collision fails `tsc` (TS1149). Same rule as PR 3's `sourceListModel.ts`.
+
+- [x] `src/components/home/inbox.ts`: add `agent?: string; // set by the hitl and companion adapters` after `payload`.
+- [x] `src/components/home/useInbox.ts`: in `hitlToItem` add `agent,` to the returned object; change `companionToItem(raw: RawCompanionEvent, lang: string)` to `companionToItem(raw: RawCompanionEvent, lang: string, agent: string)` and add `agent,` to its return; in `refreshCompanion` capture `const names = agentNamesRef.current;` before `Promise.all(names.map(…))` and build items with `perAgent.flatMap((rows, i) => rows.map((r) => companionToItem(r, lang, names[i])))`.
+- [x] Extend `src/components/home/useInboxAdapters.test.ts`: in the existing hitl test assert `expect(item?.agent).toBe(raw.agent)`; in the companion test pass a third argument `"aura"` and assert `expect(item?.agent).toBe("aura")`. Run → fails until the edits above are in; then passes.
+- [x] Write `src/components/home/needsYouCounts.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { needsYouCounts } from "./needsYou";
+import { needsYouCounts } from "./needsYouCounts";
 import type { InboxItem } from "./inbox";
 
 const item = (kind: InboxItem["kind"], id: string, agent?: string): InboxItem =>
@@ -1935,7 +1939,7 @@ describe("needsYouCounts", () => {
 });
 ```
 
-- [ ] Create `src/components/home/needsYou.ts`:
+- [x] Create `src/components/home/needsYouCounts.ts`:
 
 ```ts
 import type { InboxItem } from "./inbox";
@@ -1952,13 +1956,13 @@ export function needsYouCounts(items: InboxItem[]): Record<string, number> {
 }
 ```
 
-- [ ] Tests → pass. Commit: `feat(hub): inbox items carry their agent; per-agent needs-you counts`
+- [x] Tests → pass. Commit: `feat(hub): inbox items carry their agent; per-agent needs-you counts`
 
 **Interfaces — Produces:** `InboxItem.agent?`, `needsYouCounts(items): Record<string, number>`.
 
 ### Task 4.2 — `agentOverview.ts`
 
-- [ ] Write `src/components/detail/agent/agentOverview.test.ts`:
+- [x] Write `src/components/detail/agent/agentOverview.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -1984,7 +1988,7 @@ describe("activityFor", () => {
 });
 ```
 
-- [ ] Create `src/components/detail/agent/agentOverview.ts`:
+- [x] Create `src/components/detail/agent/agentOverview.ts`:
 
 ```ts
 import type { ChannelSummary } from "../../../work/types";
@@ -2006,7 +2010,7 @@ export function activityFor(channels: ChannelSummary[], agent: string, limit = R
 }
 ```
 
-- [ ] Test → pass. Commit: `feat(hub): per-agent activity from channel summaries`
+- [x] Test → pass. Commit: `feat(hub): per-agent activity from channel summaries`
 
 **Interfaces — Produces:** `activityFor(channels, agent, limit?): AgentActivity`.
 
@@ -2014,7 +2018,7 @@ export function activityFor(channels: ChannelSummary[], agent: string, limit = R
 
 Relocate `AgentInspector` into a `DetailPage`. Line numbers refer to `src/components/inspector/AgentInspector.tsx`.
 
-- [ ] Create `src/components/detail/agent/IdentityTab.tsx` — the model block (lines 280–314: `ModelCombobox`, fallback chain, smart routing, `ModelLibrary`) followed by `PersonaTab`, `StyleTab`, `BehaviorTab`, each wrapped:
+- [x] Create `src/components/detail/agent/IdentityTab.tsx` — the model block (lines 280–314: `ModelCombobox`, fallback chain, smart routing, `ModelLibrary`) followed by `PersonaTab`, `StyleTab`, `BehaviorTab`, each wrapped:
 
 ```tsx
 import type { AgentDetail } from "../../../types";
@@ -2068,9 +2072,9 @@ export function IdentityTab(p: IdentityTabProps) {
 }
 ```
 
-- [ ] Create `src/components/detail/agent/CapabilitiesTab.tsx` with the same shape: sections `agent-skills` (`SkillsTab`), `agent-mcp` (`McpTab`), `agent-plugins` (`PluginsTab`), `agent-permissions` (`PermissionsTab detail`), titles `detail.skills`, `detail.mcp`, `detail.plugins`, `detail.permissions`. Props `{ detail; onSaved }`.
-- [ ] Create `src/components/detail/agent/ChannelsTab.tsx`: sections `agent-inbox` (`CompanionInbox agentName`) and `agent-mobile` (`MobileTab agentName`), titles `detail.inbox`, `detail.mobile`. Props `{ agentName }`.
-- [ ] Create `src/components/detail/agent/OverviewTab.tsx`:
+- [x] Create `src/components/detail/agent/CapabilitiesTab.tsx` with the same shape: sections `agent-skills` (`SkillsTab`), `agent-mcp` (`McpTab`), `agent-plugins` (`PluginsTab`), `agent-permissions` (`PermissionsTab detail`), titles `detail.skills`, `detail.mcp`, `detail.plugins`, `detail.permissions`. Props `{ detail; onSaved }`.
+- [x] Create `src/components/detail/agent/ChannelsTab.tsx`: sections `agent-inbox` (`CompanionInbox agentName`) and `agent-mobile` (`MobileTab agentName`), titles `detail.inbox`, `detail.mobile`. Props `{ agentName }`.
+- [x] Create `src/components/detail/agent/OverviewTab.tsx`:
 
 ```tsx
 import type { AgentDetail } from "../../../types";
@@ -2144,8 +2148,8 @@ export function OverviewTab(p: OverviewTabProps) {
 }
 ```
   Before writing this file run `command grep -n 'model_ref\|skills\|mcp_servers' src/types.ts` inside `interface AgentDetail` and use the real field names (the three above are the expected ones; if a field is absent, render `DASH` for that row instead of inventing a field). Cost today, turns today, schedule and memory counts have no Hub source: they render `—` by design (spec §6.4).
-- [ ] i18n (both): `overview.now` "Now"/"現在", `overview.nothingRunning` "Nothing running right now."/"目前沒有進行中的工作。", `overview.openChat` "Open chat →"/"開啟對話 →", `overview.review` "Review"/"查看", `overview.costToday` "Cost today"/"今日花費", `overview.turnsToday` "Turns today"/"今日回合", `overview.recentTurns` "Turns in recent work"/"近期回合", `overview.lastActive` "Last active"/"上次活動", `overview.recent` "Recent work"/"近期工作", `overview.noRecent` "No recent work."/"沒有近期工作。", `overview.glance` "Setup at a glance"/"設定概覽", `overview.count` "{count}"/"{count}", `detail.section.model` "Model"/"模型" (`detail.mobile`, `detail.memory`, `detail.schedule`, `detail.plugins`, `detail.skills`, `detail.mcp`, `detail.permissions`, `detail.inbox` already exist — `AgentInspector`'s `TAB_LABEL_KEYS` uses them), `action.chat` "Chat"/"對話", `action.openChatWindow` "Open chat in a window"/"在新視窗開啟對話", `action.more` "More actions"/"更多動作".
-- [ ] Create `src/components/detail/agent/AgentDetail.tsx`:
+- [x] i18n (both): `overview.now` "Now"/"現在", `overview.nothingRunning` "Nothing running right now."/"目前沒有進行中的工作。", `overview.openChat` "Open chat →"/"開啟對話 →", `overview.review` "Review"/"查看", `overview.costToday` "Cost today"/"今日花費", `overview.turnsToday` "Turns today"/"今日回合", `overview.recentTurns` "Turns in recent work"/"近期回合", `overview.lastActive` "Last active"/"上次活動", `overview.recent` "Recent work"/"近期工作", `overview.noRecent` "No recent work."/"沒有近期工作。", `overview.glance` "Setup at a glance"/"設定概覽", `overview.count` "{count}"/"{count}", `detail.section.model` "Model"/"模型" (`detail.mobile`, `detail.memory`, `detail.schedule`, `detail.plugins`, `detail.skills`, `detail.mcp`, `detail.permissions`, `detail.inbox` already exist — `AgentInspector`'s `TAB_LABEL_KEYS` uses them), `action.chat` "Chat"/"對話", `action.openChatWindow` "Open chat in a window"/"在新視窗開啟對話", `action.more` "More actions"/"更多動作".
+- [x] Create `src/components/detail/agent/AgentDetail.tsx`:
 
 ```tsx
 import { useEffect, useState } from "react";
@@ -2295,13 +2299,18 @@ export function AgentDetail({ agentName, entry, runtime, channels, needsYou, onO
 }
 ```
   Where a comment says "verbatim", paste the cited lines from `AgentInspector.tsx` and adjust only the identifiers named. `detail.discardTitle` "Unsaved changes"/"尚未儲存", `detail.discardBody` "Discard the changes in this tab?"/"要放棄這個分頁的變更嗎？" go in both tables. CSS: `.detail-page__initials { width:48px; height:48px; border-radius:var(--radius-lg); display:grid; place-items:center; color:#fff; font-weight:var(--fw-bold); font-size:18px; }` in `detail-page.css`; `.overview-now__title { margin:0 0 3px; font-size:var(--text-base); font-weight:500; } .overview-now__sub { margin:0; color:var(--text-secondary); font-size:var(--text-sm); }`.
-- [ ] `npm run build` (each new file ≤ 800 lines; `wc -l src/components/detail/agent/*.tsx` to confirm). Commit: `feat(hub): AgentDetail — AgentInspector content in a DetailPage with six tabs`
+- [x] `npm run build` (each new file ≤ 800 lines; `wc -l src/components/detail/agent/*.tsx` to confirm). Commit: `feat(hub): AgentDetail — AgentInspector content in a DetailPage with six tabs`
 
 **Interfaces — Consumes:** `DetailPage`, `OverflowMenu`, `statusOf`, `detailGroupOf`, `AGENT_TABS`, `useDirtyGuard`, `activityFor`. **Produces:** `<AgentDetail agentName entry runtime channels needsYou onOpenChat onOpenHome>`.
 
 ### Task 4.4 — Dirty tracking in `PersonaTab` and `StyleTab`
 
-- [ ] `src/components/inspector/tabs/PersonaTab.tsx`: after the `useState` block (lines 44–52) add
+> **Deviation recorded during execution (PR 4):** `StyleTab` saves on pick
+> (`pickPreset` calls `update_agent_detail` immediately), so it never holds
+> unsaved state and gets no `useMarkDirty`. `PersonaTab` already computed a
+> `changed` boolean for its Save button; that is what registers.
+
+- [x] `src/components/inspector/tabs/PersonaTab.tsx`: after the `useState` block (lines 44–52) add
 
 ```tsx
   useMarkDirty(
@@ -2315,13 +2324,20 @@ export function AgentDetail({ agentName, entry, runtime, channels, needsYou, onO
   );
 ```
   with `import { useMarkDirty } from "../../shell/dirty";`. Next to the Save button render `{dirty && <span className="field-muted">{t("detail.unsaved")}</span>}` where `dirty` is the same expression hoisted into a `const dirty = …;` (pass `dirty` to `useMarkDirty`).
-- [ ] `src/components/inspector/tabs/StyleTab.tsx`: after line 15 add `const dirty = selected !== detail.style_preset; useMarkDirty("style", dirty);` and the same unsaved hint next to its Save button.
-- [ ] i18n: `detail.unsaved` "Unsaved changes"/"尚未儲存".
-- [ ] `npm run build`. Commit: `feat(hub): persona and style edits register with the dirty guard`
+- [x] `src/components/inspector/tabs/StyleTab.tsx`: after line 15 add `const dirty = selected !== detail.style_preset; useMarkDirty("style", dirty);` and the same unsaved hint next to its Save button.
+- [x] i18n: `detail.unsaved` "Unsaved changes"/"尚未儲存".
+- [x] `npm run build`. Commit: `feat(hub): persona and style edits register with the dirty guard`
 
 ### Task 4.5 — The Agents page on `SourceList` + `AgentDetail`
 
-- [ ] Create `src/components/agents/AgentsOverview.tsx`: move the hero (`dashboard__hero` block, lines 174–194 of `AgentsPage.tsx`), the empty state (lines 131–140) and the grid (lines 141–150) here, unchanged, as
+> **Deviation recorded during execution (PR 4):** the hero / stats / grid-card
+> rules stayed in `dashboard.css` (only the dead `.agents-view*`,
+> `.dashboard__bar*`, `.view-toggle*`, `.agent-list*`, `.list-row*` rules were
+> deleted); moving them to `agents.css` is cosmetic and was skipped to keep the
+> diff reviewable. `Inspector` lost its unused `agents` / `runtimeMap` props.
+> `AgentsOverview` takes `agents` + `runtimeMap` (no separate `visible`).
+
+- [x] Create `src/components/agents/AgentsOverview.tsx`: move the hero (`dashboard__hero` block, lines 174–194 of `AgentsPage.tsx`), the empty state (lines 131–140) and the grid (lines 141–150) here, unchanged, as
 
 ```tsx
 export interface AgentsOverviewProps {
@@ -2333,7 +2349,7 @@ export interface AgentsOverviewProps {
 export function AgentsOverview({ agents, visible, runtimeMap, onNewAgent }: AgentsOverviewProps) { /* hero + (empty | grid) */ }
 ```
   The mascot/greeting computations (lines 149–171) move with it. The list view (`agent-list` block, lines 151–168) and `ListRow` are deleted.
-- [ ] Rewrite `src/components/agents/AgentsPage.tsx`:
+- [x] Rewrite `src/components/agents/AgentsPage.tsx`:
 
 ```tsx
 import { useEffect, useMemo, useState } from "react";
@@ -2488,22 +2504,31 @@ function AgentsPageInner({ agents, runtimeMap, channels, needsYou, selectedAgent
 }
 ```
   Note: `key={selectedAgent}` remounts the detail (and the dirty set) per agent — that is the cross-fade trigger from spec §5.3.
-- [ ] Write `src/components/agents/agentsPage.test.ts` for `roleFacets` (two roles + no-role bucket; empty input → `[]`).
-- [ ] CSS (`shell.css`): `.master-detail__detail { position: relative; min-width: 0; overflow: auto; } .master-detail--overlay { grid-template-columns: 0 0 1fr; } .master-detail--overlay .source-list, .master-detail--overlay .list-divider { display: none; } .master-detail--overlay.master-detail--list-shown .source-list { display: flex; position: absolute; inset: 0 auto 0 0; width: var(--shell-list-width-compact); z-index: 10; box-shadow: var(--shadow-pop); } .master-detail__show-list { position: absolute; top: var(--space-6); left: var(--space-6); z-index: 5; } .source-list__empty { padding: var(--space-6); color: var(--text-tertiary); font-size: var(--text-sm); }`. The `.master-detail` root needs `position: relative`.
-- [ ] `src/components/chats/ChatsPage.tsx`: add `initialAgent?: string | null` to `Props`; after the `selected` state add `useEffect(() => { if (initialAgent) setSelected(initialAgent); }, [initialAgent]);`; add a local filter input at the top of `<nav className="chats-view__list">`: `<input className="source-list__filter" type="search" value={localQuery} onChange={(e) => setLocalQuery(e.target.value)} placeholder={t("chats.filter")} />` with `const [localQuery, setLocalQuery] = useState("")` and `buildChatList(agents, attention, localQuery || query)`.
-- [ ] `src/components/shell/Inspector.tsx`: in `hasInspector` change `if (page === "agents") return sel.agent !== null;` to `if (page === "agents") return false;` and delete the `page === "agents"` branch in `Inspector` plus the `AgentInspector` import.
-- [ ] `src/components/DashboardApp.tsx`:
+- [x] Write `src/components/agents/agentsPage.test.ts` for `roleFacets` (two roles + no-role bucket; empty input → `[]`).
+- [x] CSS (`shell.css`): `.master-detail__detail { position: relative; min-width: 0; overflow: auto; } .master-detail--overlay { grid-template-columns: 0 0 1fr; } .master-detail--overlay .source-list, .master-detail--overlay .list-divider { display: none; } .master-detail--overlay.master-detail--list-shown .source-list { display: flex; position: absolute; inset: 0 auto 0 0; width: var(--shell-list-width-compact); z-index: 10; box-shadow: var(--shadow-pop); } .master-detail__show-list { position: absolute; top: var(--space-6); left: var(--space-6); z-index: 5; } .source-list__empty { padding: var(--space-6); color: var(--text-tertiary); font-size: var(--text-sm); }`. The `.master-detail` root needs `position: relative`.
+- [x] `src/components/chats/ChatsPage.tsx`: add `initialAgent?: string | null` to `Props`; after the `selected` state add `useEffect(() => { if (initialAgent) setSelected(initialAgent); }, [initialAgent]);`; add a local filter input at the top of `<nav className="chats-view__list">`: `<input className="source-list__filter" type="search" value={localQuery} onChange={(e) => setLocalQuery(e.target.value)} placeholder={t("chats.filter")} />` with `const [localQuery, setLocalQuery] = useState("")` and `buildChatList(agents, attention, localQuery || query)`.
+- [x] `src/components/shell/Inspector.tsx`: in `hasInspector` change `if (page === "agents") return sel.agent !== null;` to `if (page === "agents") return false;` and delete the `page === "agents"` branch in `Inspector` plus the `AgentInspector` import.
+- [x] `src/components/DashboardApp.tsx`:
   - delete the whole `<div className="dashboard__bar">…</div>` block and the `viewMode`, `query`, `searchRef` state; delete the `PlaceholderPage` function if unused (`grep -n PlaceholderPage`).
   - add `const [chatInitial, setChatInitial] = useState<string | null>(null);` and `function openChatWith(name: string) { setChatInitial(name); setPage("chats"); }`.
   - `const { channels } = useChannels();` (import from `./home/useChannels`) and `const needsYou = needsYouCounts(visibleInbox);`.
   - `<AgentsPage agents={agents} runtimeMap={runtimeMap} channels={channels} needsYou={needsYou} selectedAgent={selectedAgent} onNewAgent={() => setWizardOpen(true)} onOpenChat={openChatWith} onOpenHome={() => setPage("home")} />`; `<ChatsPage agents={agents} initialAgent={chatInitial} onActiveChange={onChatActive} />`; `<FleetView onSelect={onFleetSelect} requestedName={fleetRequest} />` (drop `query=`).
   - the Esc handler (lines 320–333): keep, but skip when `document.activeElement?.getAttribute("role") === "listbox"` (SourceList handles its own Esc).
-- [ ] Delete `src/components/inspector/AgentInspector.tsx`. Delete from `dashboard.css`: `.agents-view*`, `.dashboard__bar*`, `.dashboard__brand`, `.view-toggle*`, `.agent-list*`, `.list-row*`, `.list-avatar`, `.list-name`, `.list-category`, `.list-model`; move `.dashboard__hero*`, `.dashboard__stats*`, `.stat*`, `.agent-grid`, `.grid-card*` into a new `src/styles/components/agents.css` (import after `detail-page.css`) so `dashboard.css` shrinks to the root/toolbar-btn rules still used elsewhere. Delete `.detail-panel--inspector`, `.detail-panel-tabs`, `.detail-tab*` from `detail-panel.css` only if `command grep -rn 'detail-panel-tabs\|detail-tab\b' src` shows no remaining user (the Chat/Library inspectors may still use `.detail-panel`). Keep `.sidebar*` rules: `SettingsModal` uses them.
-- [ ] i18n (both): `agents.filter` "Filter agents"/"篩選 agent", `agents.noMatch` "No agents match."/"沒有符合的 agent。", `chats.filter` "Filter chats"/"篩選對話", `shell.showList` "Show list"/"顯示清單". Delete `view.grid`/`view.list` from both tables (and any other key `tsc` now reports unused is fine to keep).
-- [ ] `npm test`, `npm run build`, `npm run lint`; `wc -l src/components/agents/*.tsx src/components/DashboardApp.tsx` all ≤ 800.
-- [ ] Commit: `feat(hub): Agents page is master–detail — source list, full-width AgentDetail, no inspector`
+- [x] Delete `src/components/inspector/AgentInspector.tsx`. Delete from `dashboard.css`: `.agents-view*`, `.dashboard__bar*`, `.dashboard__brand`, `.view-toggle*`, `.agent-list*`, `.list-row*`, `.list-avatar`, `.list-name`, `.list-category`, `.list-model`; move `.dashboard__hero*`, `.dashboard__stats*`, `.stat*`, `.agent-grid`, `.grid-card*` into a new `src/styles/components/agents.css` (import after `detail-page.css`) so `dashboard.css` shrinks to the root/toolbar-btn rules still used elsewhere. Delete `.detail-panel--inspector`, `.detail-panel-tabs`, `.detail-tab*` from `detail-panel.css` only if `command grep -rn 'detail-panel-tabs\|detail-tab\b' src` shows no remaining user (the Chat/Library inspectors may still use `.detail-panel`). Keep `.sidebar*` rules: `SettingsModal` uses them.
+- [x] i18n (both): `agents.filter` "Filter agents"/"篩選 agent", `agents.noMatch` "No agents match."/"沒有符合的 agent。", `chats.filter` "Filter chats"/"篩選對話", `shell.showList` "Show list"/"顯示清單". Delete `view.grid`/`view.list` from both tables (and any other key `tsc` now reports unused is fine to keep).
+- [x] `npm test`, `npm run build`, `npm run lint`; `wc -l src/components/agents/*.tsx src/components/DashboardApp.tsx` all ≤ 800.
+- [x] Commit: `feat(hub): Agents page is master–detail — source list, full-width AgentDetail, no inspector`
 
 **Interfaces — Consumes:** everything from PR 2/3, `needsYouCounts`, `AgentDetail`. **Produces:** `AgentsPage` props (above), `roleFacets`, `openChatWith`, `ChatsPage.initialAgent`, keys `mur.agents.lastSelected`, `mur.agents.listWidth`; classes `.master-detail--wide|compact|overlay`, `.master-detail__detail`.
+
+> **Deviation recorded during execution (PR 4):** the browser check found
+> that Esc could never clear the selection — the "restore last selection"
+> effect re-ran on every transition to null and re-selected the row. It is
+> now a one-shot guarded by a ref (first time agents arrive). PR 5's
+> `FleetView` restore must use the same one-shot shape. Also learned:
+> `@tauri-apps/plugin-dialog` 2.7 implements `confirm()` over
+> `plugin:dialog|message` and compares the result to the OK label, so a
+> browser stub must return the string `"Ok"`, not `true`.
 
 **Manual acceptance PR 4** (light + dark, 1200 and 960): list keeps its width when a row is selected; window does not resize; Overview lands first; all six tabs render their content; ↑↓ move selection; ⌘F focuses the filter; Esc clears selection; chips filter by role; a pending HITL shows an amber badge on that agent's row and the strip on its Overview; editing Persona then clicking another agent asks to discard; Chat opens the Chats page on that agent; ⋯ → Export saves a `.muragent`; nothing selected → the greeting + card grid; grid cards are their full size; at 900–959 px the list is an overlay behind "Show list"; relaunch restores the last agent.
 
