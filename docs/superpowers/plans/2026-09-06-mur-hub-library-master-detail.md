@@ -72,7 +72,7 @@ Branch `feat/hub-2-library-skills`.
 
 ### Task 6.1 — `skills_installed` gains `agents` and `path`
 
-- [ ] In `mur-hub-gui/src-tauri/src/skills_installed.rs`, add to the `tests` module:
+- [x] In `mur-hub-gui/src-tauri/src/skills_installed.rs`, add to the `tests` module:
 
 ```rust
     #[test]
@@ -91,8 +91,8 @@ Branch `feat/hub-2-library-skills`.
     }
 ```
   If `SkillCardEntry` does not derive `Default` (check `mur-common/src/agent.rs` line 15), build the entries with every field spelled out instead of `..Default::default()` — do not add a derive to `mur-common` for a test.
-- [ ] Run `ORT_STRATEGY=download cargo test skills_installed` from `mur-hub-gui/src-tauri/` → the new test fails to compile (`agents_by_skill` missing). If the crate cannot build locally (disk), skip to the code and let CI run it; note this in the PR.
-- [ ] Add the fields and the fold:
+- [x] Run `ORT_STRATEGY=download cargo test skills_installed` from `mur-hub-gui/src-tauri/` → the new test fails to compile (`agents_by_skill` missing). If the crate cannot build locally (disk), skip to the code and let CI run it; note this in the PR.
+- [x] Add the fields and the fold:
 
 ```rust
 /// One installed skill as shown in the Skills library list.
@@ -159,14 +159,14 @@ fn read_agent_skill_cards(agents_dir: &Path) -> Vec<(String, Vec<mur_common::age
 }
 ```
   In `skills_installed()`, before `Ok(list_skills(...))`, add `let usage = agents_by_skill(&read_agent_skill_cards(&mur_home.join("agents")));` and pass `&usage` as a third argument. In `list_skills(skills_dir, status_by_name, usage: &std::collections::BTreeMap<String, Vec<String>>)` set `agents: usage.get(&manifest.name).cloned().unwrap_or_default()` and `path: dir.to_str().map(str::to_string)`. Update the two existing `list_skills` tests to pass `&std::collections::BTreeMap::new()` and assert `result[0].path.is_some()` in the manifest test.
-- [ ] `ORT_STRATEGY=download cargo test skills_installed` → pass (or CI). `cargo clippy -- -D warnings` on the crate if it builds locally.
-- [ ] Commit: `feat(hub): skills_installed reports which agents use each skill and its path`
+- [x] `ORT_STRATEGY=download cargo test skills_installed` → pass (or CI). `cargo clippy -- -D warnings` on the crate if it builds locally.
+- [x] Commit: `feat(hub): skills_installed reports which agents use each skill and its path`
 
 **Interfaces — Produces:** `InstalledSkillView.agents: string[]`, `InstalledSkillView.path: string | null` (as seen by the UI).
 
 ### Task 6.2 — `SourceList`: toolbar, optional status, "+" menu
 
-- [ ] Append to `src/components/shell/SourceList.test.tsx`:
+- [x] Append to `src/components/shell/SourceList.test.tsx`:
 
 ```tsx
 import type { MenuItemDef } from "./SplitButton";
@@ -193,9 +193,9 @@ describe("SourceList library extensions", () => {
 });
 ```
   (`noop` and `renderToStaticMarkup` are already imported at the top of the file.)
-- [ ] Run `npm test -- src/components/shell/SourceList.test.tsx` → the new cases fail (`toolbar` / `createItems` unknown, dot rendered).
-- [ ] `src/components/shell/sourceListModel.ts`: `status?: StatusKind;` with the doc comment `/** Omitted for items that have no runtime (Library rows). */`.
-- [ ] `src/components/shell/SourceList.tsx`:
+- [x] Run `npm test -- src/components/shell/SourceList.test.tsx` → the new cases fail (`toolbar` / `createItems` unknown, dot rendered).
+- [x] `src/components/shell/sourceListModel.ts`: `status?: StatusKind;` with the doc comment `/** Omitted for items that have no runtime (Library rows). */`.
+- [x] `src/components/shell/SourceList.tsx`:
   - props: `onCreate?: () => void; createItems?: MenuItemDef[]; toolbar?: ReactNode;` (import `type MenuItemDef`, `MenuList` from `./SplitButton` and `useMenu` from `./useMenu`).
   - header: replace the "+" button with
 
@@ -216,14 +216,14 @@ describe("SourceList library extensions", () => {
     with `const menu = useMenu();` at the top of the component (hooks run unconditionally).
   - after the header: `{p.toolbar && <div className="source-list__toolbar">{p.toolbar}</div>}`.
   - row status: `{r.status && <StatusDot kind={r.status} />}`.
-- [ ] `src/styles/components/source-list.css`: `.source-list__toolbar { padding: 0 var(--space-5) var(--space-4); } .source-list__create-menu { margin-left: auto; } .source-list__create-menu .menu { right: 0; left: auto; }`.
-- [ ] Test → pass. `npm run build`. Commit: `feat(hub): SourceList toolbar slot, optional status dot, "+" as a menu`
+- [x] `src/styles/components/source-list.css`: `.source-list__toolbar { padding: 0 var(--space-5) var(--space-4); } .source-list__create-menu { margin-left: auto; } .source-list__create-menu .menu { right: 0; left: auto; }`.
+- [x] Test → pass. `npm run build`. Commit: `feat(hub): SourceList toolbar slot, optional status dot, "+" as a menu`
 
 **Interfaces — Produces:** `SourceListProps.toolbar?`, `createItems?`, `onCreate?`; `SourceRowData.status?`.
 
 ### Task 6.3 — `DetailPage` with a single tab and no status
 
-- [ ] Append to `src/components/shell/DetailPage.test.ts`:
+- [x] Append to `src/components/shell/DetailPage.test.ts`:
 
 ```ts
 import { hasTabBar } from "./DetailPage";
@@ -235,12 +235,12 @@ describe("hasTabBar", () => {
   });
 });
 ```
-- [ ] `src/components/shell/DetailPage.tsx`: `export function hasTabBar<T extends string>(tabs: DetailTabDef<T>[]): boolean { return tabs.length > 1; }`; wrap the tablist in `{hasTabBar(p.tabs) && (…)}`; make `status?: StatusKind` optional and render `{p.status && <StatusPill kind={p.status} />}`; give the body `className={\`detail-page__body${hasTabBar(p.tabs) ? "" : " detail-page__body--flush"}\`}`. Add `.detail-page__body--flush { padding-top: var(--space-6); border-top: 1px solid var(--border-line); margin-top: var(--space-6); }` to `detail-page.css`.
-- [ ] Test → pass. Commit: `feat(hub): DetailPage draws no tab bar for a single tab; status pill optional`
+- [x] `src/components/shell/DetailPage.tsx`: `export function hasTabBar<T extends string>(tabs: DetailTabDef<T>[]): boolean { return tabs.length > 1; }`; wrap the tablist in `{hasTabBar(p.tabs) && (…)}`; make `status?: StatusKind` optional and render `{p.status && <StatusPill kind={p.status} />}`; give the body `className={\`detail-page__body${hasTabBar(p.tabs) ? "" : " detail-page__body--flush"}\`}`. Add `.detail-page__body--flush { padding-top: var(--space-6); border-top: 1px solid var(--border-line); margin-top: var(--space-6); }` to `detail-page.css`.
+- [x] Test → pass. Commit: `feat(hub): DetailPage draws no tab bar for a single tab; status pill optional`
 
 ### Task 6.4 — `libraryModel.ts`, `LibraryGlyph`, `useInstallTarget`, `LibraryDetail`, `LibraryPage`
 
-- [ ] Write `src/components/detail/library/libraryModel.test.ts`:
+- [x] Write `src/components/detail/library/libraryModel.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -288,8 +288,8 @@ describe("itemFor", () => {
 });
 ```
 
-- [ ] Run it → fails (module missing).
-- [ ] Create `src/components/detail/library/libraryModel.ts`:
+- [x] Run it → fails (module missing).
+- [x] Create `src/components/detail/library/libraryModel.ts`:
 
 ```ts
 import type { ReactNode } from "react";
@@ -415,7 +415,7 @@ export function itemFor(kind: LibraryKind, r: InstalledSkillView | InstalledMcpV
 }
 ```
 
-- [ ] Create `src/components/library/LibraryGlyph.tsx` — the sidebar's four glyphs in a neutral tile:
+- [x] Create `src/components/library/LibraryGlyph.tsx` — the sidebar's four glyphs in a neutral tile:
 
 ```tsx
 import type { ReactNode } from "react";
@@ -454,7 +454,7 @@ export function LibraryGlyph({ kind, large }: { kind: LibraryKind; large?: boole
 ```
   Before committing, diff the four values against `Sidebar.tsx` `GLYPHS` (`skills`, `workflows`, `mcp`, `plugins`) — they must be byte-identical.
 
-- [ ] Write `src/components/detail/library/useInstallTarget.test.ts` and the hook:
+- [x] Write `src/components/detail/library/useInstallTarget.test.ts` and the hook:
 
 ```ts
 // test
@@ -495,7 +495,7 @@ export function useInstallTarget(agents: { name: string }[]): [string, (name: st
 }
 ```
 
-- [ ] Create `src/components/detail/library/LibraryDetail.tsx`:
+- [x] Create `src/components/detail/library/LibraryDetail.tsx`:
 
 ```tsx
 import { useT } from "../../../i18n";
@@ -586,7 +586,7 @@ export function LibraryDetail({ item, uses, busy, error, onToggle, onRemove, onO
 }
 ```
 
-- [ ] Create `src/components/detail/library/LibraryPage.tsx` — the generic page:
+- [x] Create `src/components/detail/library/LibraryPage.tsx` — the generic page:
 
 ```tsx
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -774,7 +774,7 @@ export function LibraryPage<T>(p: LibraryPageProps<T>) {
 }
 ```
 
-- [ ] Create `src/styles/components/library.css` (import in `index.css` after `detail-page.css`):
+- [x] Create `src/styles/components/library.css` (import in `index.css` after `detail-page.css`):
 
 ```css
 /* Library pages (spec 2026-09-06 Phase 2a). */
@@ -790,14 +790,14 @@ export function LibraryPage<T>(p: LibraryPageProps<T>) {
 .library-picker select { flex: 1; min-width: 0; }
 ```
 
-- [ ] i18n (both tables): `library.usedBy` "Used by"/"使用中的 agent", `library.notUsed` "No agent uses this yet."/"還沒有 agent 使用。", `library.selectHint` "Select an item, or add one with +."/"選一個項目，或用 + 新增。", `library.meta.category` "Category"/"類別", `library.meta.version` "Version"/"版本", `library.meta.status` "Status"/"狀態", `library.meta.path` "Path"/"路徑", `library.meta.transport` "Transport"/"傳輸", `library.meta.serverId` "Server id"/"伺服器 id", `library.meta.source` "Source"/"來源", `library.meta.skills` "Skills"/"技能", `library.meta.mcp` "MCP"/"MCP", `library.meta.commands` "Commands"/"指令", `library.usedByCount` "used by {count}"/"{count} 個 agent 使用", `library.versionPrefix` "v"/"v".
-- [ ] `npm test`, `npm run build`. Commit: `feat(hub): LibraryPage, LibraryDetail, libraryModel builders, install-target hook, kind glyphs`
+- [x] i18n (both tables): `library.usedBy` "Used by"/"使用中的 agent", `library.notUsed` "No agent uses this yet."/"還沒有 agent 使用。", `library.selectHint` "Select an item, or add one with +."/"選一個項目，或用 + 新增。", `library.meta.category` "Category"/"類別", `library.meta.version` "Version"/"版本", `library.meta.status` "Status"/"狀態", `library.meta.path` "Path"/"路徑", `library.meta.transport` "Transport"/"傳輸", `library.meta.serverId` "Server id"/"伺服器 id", `library.meta.source` "Source"/"來源", `library.meta.skills` "Skills"/"技能", `library.meta.mcp` "MCP"/"MCP", `library.meta.commands` "Commands"/"指令", `library.usedByCount` "used by {count}"/"{count} 個 agent 使用", `library.versionPrefix` "v"/"v".
+- [x] `npm test`, `npm run build`. Commit: `feat(hub): LibraryPage, LibraryDetail, libraryModel builders, install-target hook, kind glyphs`
 
 **Interfaces — Produces:** everything exported from `libraryModel.ts`; `<LibraryPage<T> …>` (props above) and `libraryKeys(page)`; `<LibraryDetail item uses? busy error onToggle? onRemove? onOpenFolder?>`; `useInstallTarget(agents): [target, set]`; `<LibraryGlyph kind large?>`; `DetailPageProps.status?`.
 
 ### Task 6.5 — Skills page
 
-- [ ] Rewrite `src/components/library/SkillsPage.tsx`:
+- [x] Rewrite `src/components/library/SkillsPage.tsx`:
 
 ```tsx
 import { useState } from "react";
@@ -863,10 +863,10 @@ export function SkillsPage() {
 }
 ```
   `statusBadgeClass` and its test: `grep -rn statusBadgeClass src` — if only the old page used it, delete both.
-- [ ] i18n (both): `skillslib.filter` "Filter skills"/"篩選技能", `skillslib.noMatch` "No skills match."/"沒有符合的技能。", `skillslib.add` "Add skill"/"新增技能".
-- [ ] `src/components/DashboardApp.tsx`: `<SkillsPage />` (drop `onSelect`). `Inspector.tsx` is untouched in PR 6: the page no longer reports a selection, so no inspector opens.
-- [ ] `npm test`, `npm run build`, `npm run lint`.
-- [ ] Commit: `feat(hub): Skills page is master–detail — usage per agent, enable/remove, install menu`
+- [x] i18n (both): `skillslib.filter` "Filter skills"/"篩選技能", `skillslib.noMatch` "No skills match."/"沒有符合的技能。", `skillslib.add` "Add skill"/"新增技能".
+- [x] `src/components/DashboardApp.tsx`: `<SkillsPage />` (drop `onSelect`). `Inspector.tsx` is untouched in PR 6: the page no longer reports a selection, so no inspector opens.
+- [x] `npm test`, `npm run build`, `npm run lint`.
+- [x] Commit: `feat(hub): Skills page is master–detail — usage per agent, enable/remove, install menu`
 
 **Manual acceptance PR 6:** Skills list with category chips and status in the subtitle; selecting shows description, meta, Used by with the agents from `skills_installed`; unchecking an agent calls `agent_skill_toggle` and the list refreshes; Remove calls `agent_skill_uninstall`; "+" opens the two modals with the picked agent and the list reloads after a save; Open folder reveals the skill dir; last selection restores; Esc clears to the hint; the Rust test passes in the Hub GUI CI job.
 
