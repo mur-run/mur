@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useMarkDirty } from "../../shell/dirty";
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentDetail, DetailPatch } from "../../../types";
 import { useT } from "../../../i18n";
@@ -84,6 +85,8 @@ export function PersonaTab({
     tone !== detail.persona_tone ||
     risk !== detail.persona_risk ||
     verbosity !== detail.persona_verbosity;
+  // Unsaved edits block selection / tab changes until saved or discarded (spec §6.5).
+  useMarkDirty("persona", changed);
 
   // Visual meter level for risk / verbosity (0-2 → 1-3 bars on).
   const riskLevel = Math.max(0, RISK_OPTIONS.indexOf(risk));
@@ -175,6 +178,7 @@ export function PersonaTab({
       >
         {saving ? t("detail.saving") : saved ? t("detail.saved") : t("detail.save")}
       </button>
+      {changed && !saving && <span className="field-muted">{t("detail.unsaved")}</span>}
       {saveError && <p className="save-error">{saveError}</p>}
     </div>
   );
