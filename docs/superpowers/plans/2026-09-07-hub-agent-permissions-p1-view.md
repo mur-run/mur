@@ -650,13 +650,13 @@ The spec's `bounded_by_allow_hosts: bool` is expressed as `scope: McpScope`: tha
 
 **Interfaces.** Consumes `mur_core::cmd::agent::perm_view::{PermissionsView, permissions_view, Enforcement, GrantStatus}` (Task 1). Produces `AgentDetail.permissions: PermissionsView` on the wire — the JSON shape Task 3's `types.ts` mirrors.
 
-- [ ] `mur-hub-gui/src-tauri/src/detail.rs`: in the `AgentDetail` struct, after `pub capabilities: Vec<String>,` (line 29) add:
+- [x] `mur-hub-gui/src-tauri/src/detail.rs`: in the `AgentDetail` struct, after `pub capabilities: Vec<String>,` (line 29) add:
   ```rust
       /// Spec 2026-09-07 §1.2: the same derivation `mur agent perm list-paths`
       /// prints. Read-only in P1.
       pub permissions: mur_core::cmd::agent::perm_view::PermissionsView,
   ```
-- [ ] In `build_agent_detail` (line 261), before `let model_id = …` add:
+- [x] In `build_agent_detail` (line 261), before `let model_id = …` add:
   ```rust
       // The seal lives in `running.lock`; without an agent home (tests) there
       // is none, which the view reports as NotRunning — nothing enforced.
@@ -667,7 +667,7 @@ The spec's `bounded_by_allow_hosts: bool` is expressed as `scope: McpScope`: tha
       let permissions = mur_core::cmd::agent::perm_view::permissions_view(&profile, lock.as_ref());
   ```
   and in the struct literal after `capabilities: profile.capabilities.clone(),` add `permissions,`.
-- [ ] In `mod tests` (after `a_model_without_reasoning_control_offers_no_levels`, line ~512) add:
+- [x] In `mod tests` (after `a_model_without_reasoning_control_offers_no_levels`, line ~512) add:
   ```rust
       /// Spec 2026-09-07 §1.4: entitlements reach the DTO through the shared
       /// derivation, and with no agent home the state is NotRunning.
@@ -692,9 +692,9 @@ The spec's `bounded_by_allow_hosts: bool` is expressed as `scope: McpScope`: tha
           assert_eq!(d.permissions.tools[0].pattern, "bash");
       }
   ```
-- [ ] `cd mur-hub-gui/ui && npm run build` (once), then: `set -o pipefail; cargo test --manifest-path mur-hub-gui/src-tauri/Cargo.toml --lib detail:: 2>&1 | tail -n 15` → expect `test result: ok` with the new test listed.
-- [ ] `cargo clippy --manifest-path mur-hub-gui/src-tauri/Cargo.toml --all-targets -- -D warnings 2>&1 | tail -n 5` → exit 0; `cargo fmt --manifest-path mur-hub-gui/src-tauri/Cargo.toml`.
-- [ ] Commit: `feat(hub): AgentDetail carries the permissions view`
+- [x] `cd mur-hub-gui/ui && npm run build` (once), then: `set -o pipefail; cargo test --manifest-path mur-hub-gui/src-tauri/Cargo.toml --lib detail:: 2>&1 | tail -n 15` → expect `test result: ok` with the new test listed.
+- [x] `cargo clippy --manifest-path mur-hub-gui/src-tauri/Cargo.toml --all-targets -- -D warnings 2>&1 | tail -n 5` → exit 0; `cargo fmt --manifest-path mur-hub-gui/src-tauri/Cargo.toml`.
+- [x] Commit: `feat(hub): AgentDetail carries the permissions view`
 
 ---
 
