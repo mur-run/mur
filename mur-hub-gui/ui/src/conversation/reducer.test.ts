@@ -86,3 +86,16 @@ describe("attentionLevel", () => {
     expect(attentionLevel({ unread: false, hitl: false })).toBe("none");
   });
 });
+
+describe("blur", () => {
+  it("clears the active conversation so its deltas count as unread again", () => {
+    let s = open(initialConversationState(), "a");
+    s = conversationReducer(s, { type: "delta", agent: "a" });
+    expect(s.attention.a.unread).toBe(false); // active: being looked at
+    s = conversationReducer(s, { type: "blur" });
+    expect(s.active).toBeNull();
+    s = conversationReducer(s, { type: "delta", agent: "a" });
+    expect(s.attention.a.unread).toBe(true);
+    expect(conversationReducer(s, { type: "blur" })).toBe(s); // already blurred: same state
+  });
+});

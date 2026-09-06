@@ -34,6 +34,14 @@ describe("SourceList markup", () => {
       createLabel: "New", emptyState: <p>none</p> };
     expect(renderToStaticMarkup(<SourceList {...props} onOpen={noop} />)).toBe(renderToStaticMarkup(<SourceList {...props} />));
   });
+  it("renders the unread dot only for unread rows", () => {
+    const withUnread = [{ ...rows[0], unread: true }, rows[1]];
+    const props = { title: "Chats", count: 2, facets: [], allLabel: "All", activeFacet: null, onFacet: noop,
+      filter: "", onFilter: noop, filterPlaceholder: "Filter", selectedId: null, onSelect: noop, emptyState: <p>none</p> };
+    const html = renderToStaticMarkup(<SourceList {...props} rows={withUnread} unreadLabel="Unread" />);
+    expect(html.match(/source-row__unread/g)).toHaveLength(1);
+    expect(renderToStaticMarkup(<SourceList {...props} rows={rows} />)).not.toContain("source-row__unread");
+  });
 });
 
 import type { MenuItemDef } from "./SplitButton";

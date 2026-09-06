@@ -16,7 +16,9 @@ export type ConversationAction =
   | { type: "close"; agent: string }
   | { type: "focus"; agent: string }
   | { type: "delta"; agent: string }
-  | { type: "hitl_open"; agent: string };
+  | { type: "hitl_open"; agent: string }
+  /** No conversation is being looked at: every open one counts attention again. */
+  | { type: "blur" };
 
 const CLEAR: ConversationAttention = { unread: false, hitl: false };
 
@@ -75,6 +77,9 @@ export function conversationReducer(
         ...state,
         attention: { ...state.attention, [action.agent]: { ...prev, unread: true } },
       };
+    }
+    case "blur": {
+      return state.active === null ? state : { ...state, active: null };
     }
     case "hitl_open": {
       if (!state.open.includes(action.agent) || state.active === action.agent)

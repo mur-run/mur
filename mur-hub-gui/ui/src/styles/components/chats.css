@@ -1,0 +1,6 @@
+/* Chats page (Phase 3(a) §5): header + conversation filling the detail column. */
+.chat-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--surface-detail); }
+.chat-pane__body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 var(--space-8) var(--space-6); }
+.chat-pane__body > .chat { flex: 1; }
+.chats-empty { display: grid; place-items: center; height: 100%; color: var(--text-tertiary); font-size: var(--text-sm); }
+.chats-empty p { margin: 0; }

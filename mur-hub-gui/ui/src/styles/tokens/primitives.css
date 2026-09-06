@@ -43,7 +43,7 @@
   --ease-out:cubic-bezier(.2,.85,.25,1);
   --ease-spring:cubic-bezier(.34,1.56,.64,1);
   /* shell layout (spec §3.1) */
-  --shell-sidebar-width:220px; --shell-sidebar-collapsed-width:56px; --shell-inspector-width:320px;
+  --shell-sidebar-width:220px; --shell-sidebar-collapsed-width:56px;
   --shell-list-width:300px; --shell-list-width-compact:280px; --shell-list-min:240px; --shell-list-max:400px;
   --shell-titlebar-inset:28px; --shell-blur:20px;
   /* sidebar vibrancy: translucent bg over backdrop-filter blur, with a

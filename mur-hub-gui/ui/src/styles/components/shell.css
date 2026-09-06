@@ -8,10 +8,6 @@
   color: var(--text-primary); background: var(--surface-window);
 }
 .shell--sidebar-collapsed { grid-template-columns: var(--shell-sidebar-collapsed-width) 1fr; }
-.shell--with-inspector { grid-template-columns: var(--shell-sidebar-width) 1fr var(--shell-inspector-width); }
-.shell--sidebar-collapsed.shell--with-inspector {
-  grid-template-columns: var(--shell-sidebar-collapsed-width) 1fr var(--shell-inspector-width);
-}
 .shell--titlebar-inset .shell__sidebar { padding-top: var(--shell-titlebar-inset); }
 
 .shell__sidebar {
@@ -28,12 +24,6 @@
 .shell__page { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
 .shell__page > * { flex: 1; min-height: 0; }
 
-.shell__inspector {
-  border-left: 1px solid var(--border-line);
-  background: var(--surface-card);
-  overflow-y: auto;
-  min-width: 0;
-}
 
 .shell-sidebar {
   display: flex;

@@ -571,21 +571,6 @@
   white-space: nowrap;
 }
 
-.conv-badge {
-  flex-shrink: 0;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.conv-badge--unread {
-  background: var(--color-brand);
-}
-
-.conv-badge--hitl {
-  background: var(--status-restarting);
-}
-
 .conv-close {
   flex-shrink: 0;
   display: none;

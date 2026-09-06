@@ -9,6 +9,8 @@ export interface SourceRowData {
   status?: StatusKind;
   /** Amber "needs you" count; 0 or undefined hides the badge. */
   needsYou?: number;
+  /** Brand-coloured dot before the name (Chats: activity while not focused). */
+  unread?: boolean;
   avatar: ReactNode;
   /** Facet ids this row belongs to (a role, label ids, …). */
   facets: string[];
