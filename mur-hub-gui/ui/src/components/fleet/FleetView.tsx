@@ -273,7 +273,7 @@ export function FleetView({ onSelect, requestedName, onRequestHandled }: {
           </DetailPage>
         ) : (
           <div className="fleet-view__empty">
-            <p>{t("fleet.empty")}</p>
+            <p>{fleets.length === 0 ? t("fleet.empty") : t("fleet.selectHint")}</p>
           </div>
         )}
       </div>

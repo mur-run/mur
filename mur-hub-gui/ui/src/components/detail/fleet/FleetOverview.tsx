@@ -16,6 +16,14 @@ export interface FleetOverviewProps {
 const DASH = "—";
 const JOB_PREVIEW = 3;
 
+/** `last_run` is an ISO timestamp from the loop record; show it in the
+ *  viewer's locale when it parses, else as given. */
+function lastRunLabel(raw: string | null | undefined, never: string): string {
+  if (!raw) return never;
+  const ms = Date.parse(raw);
+  return Number.isNaN(ms) ? raw : new Date(ms).toLocaleString();
+}
+
 /** Overview (spec §4.4): goal, the loop limits from `loop_cfg`, members, the
  *  first jobs, and the loop summary. Iterations used and budget spent have no
  *  Hub source yet and are not shown as numbers. */
@@ -31,7 +39,7 @@ export function FleetOverview({ detail, jobs, agentMap, onGoTo }: FleetOverviewP
       </div>
       <div className="detail-card detail-stats">
         <div>
-          <b>{loop?.last_run ?? t("fleet.never")}</b>
+          <b>{lastRunLabel(loop?.last_run, t("fleet.never"))}</b>
           <span>{t("fleet.settings.lastRun")}</span>
         </div>
         <div>

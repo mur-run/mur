@@ -869,6 +869,7 @@ export const en = {
   "fleet.cancel": "Cancel",
   "fleet.rowSubtitle": "{count} members",
   "fleet.never": "never",
+  "fleet.selectHint": "Select a fleet, or create one with +.",
   "palette.title": "Search or run a command",
   "palette.placeholder": "Jump to an agent, fleet or page… or run an action",
   "palette.empty": "Nothing matches",

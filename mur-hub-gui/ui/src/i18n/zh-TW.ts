@@ -871,6 +871,7 @@ export const zhTW: Table = {
   "fleet.cancel": "取消",
   "fleet.rowSubtitle": "{count} 位成員",
   "fleet.never": "從未",
+  "fleet.selectHint": "選一個機群，或用 + 建立一個。",
   "palette.title": "搜尋或執行指令",
   "palette.placeholder": "跳到 agent、機群或頁面… 或執行動作",
   "palette.empty": "沒有符合的項目",
