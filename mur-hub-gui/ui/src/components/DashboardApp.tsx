@@ -23,7 +23,10 @@ import { FleetView } from "./fleet/FleetView";
 import { useT } from "../i18n";
 import type { TranslationKey } from "../i18n/types";
 import { Shell } from "./shell/Shell";
-import type { PageId } from "./shell/nav";
+import { NAV_ITEMS, type PageId } from "./shell/nav";
+import type { FleetSummary } from "./fleet/types";
+import { CommandPalette, isPaletteShortcut } from "./shell/CommandPalette";
+import type { PaletteItem } from "./shell/palette";
 import { AgentsPage } from "./agents/AgentsPage";
 import { SkillsPage } from "./library/SkillsPage";
 import { McpPage } from "./library/McpPage";
@@ -97,6 +100,9 @@ export function DashboardApp() {
     });
   }
   const [query, setQuery] = useState("");
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [fleetRequest, setFleetRequest] = useState<string | null>(null);
+  const [paletteFleets, setPaletteFleets] = useState<FleetSummary[]>([]);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [presetImportOpen, setPresetImportOpen] = useState(false);
   const [muragentImportOpen, setMuragentImportOpen] = useState(false);
@@ -274,17 +280,29 @@ export function DashboardApp() {
 
 
 
-  // ⌘K focus search.
+  // ⌘K opens the command palette; ⌘R refreshes (spec §6.6).
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+      if (isPaletteShortcut(e)) {
         e.preventDefault();
-        searchRef.current?.focus();
+        setPaletteOpen(true);
+      } else if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "r") {
+        e.preventDefault();
+        invoke("list_agents").catch(console.error);
+        refreshInbox();
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [refreshInbox]);
+
+  // Fleets are not held in app state; fetch them when the palette opens.
+  useEffect(() => {
+    if (!paletteOpen) return;
+    invoke<FleetSummary[]>("fleet_list")
+      .then(setPaletteFleets)
+      .catch(() => setPaletteFleets([]));
+  }, [paletteOpen]);
 
   // Esc deselects the current page's inspector target (which auto-hides the
   // column). Ignored while a modal/input is focused so it doesn't fight them.
@@ -324,6 +342,63 @@ export function DashboardApp() {
       }}
     />
   ) : undefined;
+
+  const selectedRuntime = selectedAgent ? runtimeMap.get(selectedAgent)?.state.state : undefined;
+  const paletteItems: PaletteItem[] = [
+    ...NAV_ITEMS.map((n) => ({ id: `page:${n.id}`, kind: "page" as const, label: t(n.labelKey), run: () => setPage(n.id) })),
+    { id: "action:newChat", kind: "action", label: t("palette.action.newChat"), run: () => setPage("chats") },
+    { id: "action:newAgent", kind: "action", label: t("palette.action.newAgent"), run: () => setWizardOpen(true) },
+    { id: "action:settings", kind: "action", label: t("palette.action.settings"), run: () => setSettingsOpen(true) },
+    {
+      id: "action:refresh",
+      kind: "action",
+      label: t("palette.action.refresh"),
+      run: () => {
+        invoke("list_agents").catch(console.error);
+        refreshInbox();
+      },
+    },
+    ...(selectedAgent
+      ? [
+          selectedRuntime === "running"
+            ? {
+                id: "action:stop",
+                kind: "action" as const,
+                label: t("palette.action.stop", { name: selectedAgent }),
+                run: () => {
+                  invoke("stop_agent", { name: selectedAgent }).catch(console.error);
+                },
+              }
+            : {
+                id: "action:start",
+                kind: "action" as const,
+                label: t("palette.action.start", { name: selectedAgent }),
+                run: () => {
+                  invoke("start_agent", { name: selectedAgent }).catch(console.error);
+                },
+              },
+        ]
+      : []),
+    ...agents.map((a) => ({
+      id: `agent:${a.name}`,
+      kind: "agent" as const,
+      label: a.display_name,
+      hint: a.role ?? undefined,
+      run: () => {
+        setPage("agents");
+        setSelected(a.name);
+      },
+    })),
+    ...paletteFleets.map((f) => ({
+      id: `fleet:${f.name}`,
+      kind: "fleet" as const,
+      label: f.display_name,
+      run: () => {
+        setPage("fleets");
+        setFleetRequest(f.name);
+      },
+    })),
+  ];
 
   // Banners render inside the content column (Shell `banners` slot), so
   // they never push the sidebar down (spec §3.3).
@@ -494,6 +569,7 @@ export function DashboardApp() {
           inspector={inspectorNode}
           banners={banners}
           onSettings={() => setSettingsOpen(true)}
+          onSearch={() => setPaletteOpen(true)}
         >
           {page === "home" ? (
             <HomePage
@@ -508,7 +584,7 @@ export function DashboardApp() {
           ) : page === "chats" ? (
             <ChatsPage agents={agents} query={query} onActiveChange={onChatActive} />
           ) : page === "fleets" ? (
-            <FleetView query={query} onSelect={onFleetSelect} />
+            <FleetView query={query} onSelect={onFleetSelect} requestedName={fleetRequest} />
           ) : page === "agents" ? (
             <AgentsPage
               agents={agents}
@@ -575,6 +651,7 @@ export function DashboardApp() {
         dismissible
       />
       <InstallInboxModal />
+      <CommandPalette open={paletteOpen} items={paletteItems} onClose={() => setPaletteOpen(false)} />
     </div>
   );
 }
