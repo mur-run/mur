@@ -771,7 +771,7 @@ function FleetBody({ name }: { name: string }) {
 
 **Interfaces.** Consumes nothing new. Produces no API; `AgentDetail` and `FleetDetailPane` reload when their window is focused (spec §6).
 
-- [ ] In `src/components/detail/agent/AgentDetail.tsx`: add `import { getCurrentWindow } from "@tauri-apps/api/window";`; change `const { confirmLeave } = useDirtyGuard();` (line 50) to `const { confirmLeave, isDirty } = useDirtyGuard();`; after the first `useEffect` (the `get_agent_detail` load, lines 60–66) add:
+- [x] In `src/components/detail/agent/AgentDetail.tsx`: add `import { getCurrentWindow } from "@tauri-apps/api/window";`; change `const { confirmLeave } = useDirtyGuard();` (line 50) to `const { confirmLeave, isDirty } = useDirtyGuard();`; after the first `useEffect` (the `get_agent_detail` load, lines 60–66) add:
 
 ```tsx
   // Another window may have saved this agent: reload when ours is focused,
@@ -786,7 +786,7 @@ function FleetBody({ name }: { name: string }) {
     return () => { void un.then((f) => f()); };
   }, [agentName, isDirty]);
 ```
-- [ ] In `src/components/detail/fleet/FleetDetailPane.tsx`: add `import { getCurrentWindow } from "@tauri-apps/api/window";` and after the `fleet:run_done` effect add:
+- [x] In `src/components/detail/fleet/FleetDetailPane.tsx`: add `import { getCurrentWindow } from "@tauri-apps/api/window";` and after the `fleet:run_done` effect add:
 
 ```tsx
   // Refetch when this window is focused (spec 2(b) §6). Fleet forms never
@@ -798,20 +798,20 @@ function FleetBody({ name }: { name: string }) {
     return () => { void un.then((f) => f()); };
   }, [load]);
 ```
-- [ ] `npm test`, `npm run build`, `npm run lint`. Browser check: the stub's `plugin:event|listen` is called with `tauri://focus` / `tauri://blur` on both the dashboard's agent detail and a `#/detail/...` window (read `window.__calls`).
-- [ ] Commit: `feat(hub): agent and fleet detail refetch when their window regains focus`
+- [x] `npm test`, `npm run build`, `npm run lint`. Browser check: the stub's `plugin:event|listen` is called with `tauri://focus` / `tauri://blur` on both the dashboard's agent detail and a `#/detail/...` window (read `window.__calls`).
+- [x] Commit: `feat(hub): agent and fleet detail refetch when their window regains focus`
 
 ### Task 9.5 — triggers in the dashboard: ⌘↩, ⋯, double-click, ⌘K, and the two bridge listeners
 
 **Interfaces.** Consumes `isOpenInWindowShortcut`, `isEditingTarget`, `openDetailWindow`. Produces `SourceList.onOpen?`, `AgentDetail.onOpenInWindow?`, `FleetDetailPane.onOpenInWindow?` → `FleetHeader.onOpenInWindow?`, and `DashboardApp.selectedFleet`.
 
-- [ ] `src/components/shell/SourceList.tsx`: add to `SourceListProps` after `onSelect`:
+- [x] `src/components/shell/SourceList.tsx`: add to `SourceListProps` after `onSelect`:
   ```ts
   /** Row double-click (spec 2(b) §7): open in a window. Absent on Library pages. */
   onOpen?: (id: string) => void;
   ```
   and on the row `<div … onClick={() => p.onSelect(r.id)}>` (line 130) add `onDoubleClick={p.onOpen ? () => p.onOpen?.(r.id) : undefined}`.
-- [ ] `src/components/shell/SourceList.test.tsx`: add a third `it` in the `SourceList markup` describe:
+- [x] `src/components/shell/SourceList.test.tsx`: add a third `it` in the `SourceList markup` describe:
   ```tsx
   it("renders the same markup with or without onOpen (handlers are not markup)", () => {
     const props = { title: "Agents", count: 2, rows, facets: [], allLabel: "All", activeFacet: null, onFacet: noop,
@@ -821,22 +821,22 @@ function FleetBody({ name }: { name: string }) {
   });
   ```
   `npm test -- src/components/shell/SourceList.test.tsx` → 3 passed.
-- [ ] `src/components/detail/agent/AgentDetail.tsx`: add `onOpenInWindow?: () => void;` to `AgentDetailProps` (after `onOpenHome`) with the comment `/** Dashboard only: the ⋯ "Open in window" item. Undefined inside a window. */`; destructure it in the component signature; in the `OverflowMenu` `items` array (line 172) add after the `chatWindow` item:
+- [x] `src/components/detail/agent/AgentDetail.tsx`: add `onOpenInWindow?: () => void;` to `AgentDetailProps` (after `onOpenHome`) with the comment `/** Dashboard only: the ⋯ "Open in window" item. Undefined inside a window. */`; destructure it in the component signature; in the `OverflowMenu` `items` array (line 172) add after the `chatWindow` item:
   ```tsx
           ...(onOpenInWindow
             ? [{ id: "openInWindow", label: t("action.openInWindow"), onSelect: onOpenInWindow }]
             : []),
   ```
-- [ ] `src/components/detail/fleet/FleetHeader.tsx`: add `onOpenInWindow?: () => void;` to `FleetHeaderProps`; destructure; in its `OverflowMenu` `items` (line 183) insert after the `import` item:
+- [x] `src/components/detail/fleet/FleetHeader.tsx`: add `onOpenInWindow?: () => void;` to `FleetHeaderProps`; destructure; in its `OverflowMenu` `items` (line 183) insert after the `import` item:
   ```tsx
           ...(onOpenInWindow
             ? [{ id: "openInWindow", label: t("action.openInWindow"), onSelect: onOpenInWindow }]
             : []),
   ```
-- [ ] `src/components/detail/fleet/FleetDetailPane.tsx`: add `onOpenInWindow?: () => void;` to `FleetDetailPaneProps` (same comment as AgentDetail's), destructure, and pass `onOpenInWindow={onOpenInWindow}` to `<FleetHeader …/>`.
-- [ ] `src/components/agents/AgentsPage.tsx`: add `import { openDetailWindow } from "../detail/window/openInWindow";`. On `<SourceList …>` add `onOpen={(id) => { const a = agents.find((x) => x.name === id); if (a) void openDetailWindow("agent", a.name, a.display_name); }}`. On `<AgentDetail …>` add `onOpenInWindow={() => { void openDetailWindow("agent", entry.name, entry.display_name); }}` (`entry` is in scope and non-null on that branch).
-- [ ] `src/components/fleet/FleetView.tsx`: add `import { openDetailWindow } from "../detail/window/openInWindow";`. On `<SourceList …>` add `onOpen={(id) => { const f = fleets.find((x) => x.name === id); if (f) void openDetailWindow("fleet", f.name, f.display_name); }}`. On `<FleetDetailPane …>` add `onOpenInWindow={() => { void openDetailWindow("fleet", summary.name, summary.display_name); }}`. The `onSelect` prop and its report-up effect already exist (lines 52–53, 96–100); nothing to add here.
-- [ ] `src/components/DashboardApp.tsx`:
+- [x] `src/components/detail/fleet/FleetDetailPane.tsx`: add `onOpenInWindow?: () => void;` to `FleetDetailPaneProps` (same comment as AgentDetail's), destructure, and pass `onOpenInWindow={onOpenInWindow}` to `<FleetHeader …/>`.
+- [x] `src/components/agents/AgentsPage.tsx`: add `import { openDetailWindow } from "../detail/window/openInWindow";`. On `<SourceList …>` add `onOpen={(id) => { const a = agents.find((x) => x.name === id); if (a) void openDetailWindow("agent", a.name, a.display_name); }}`. On `<AgentDetail …>` add `onOpenInWindow={() => { void openDetailWindow("agent", entry.name, entry.display_name); }}` (`entry` is in scope and non-null on that branch).
+- [x] `src/components/fleet/FleetView.tsx`: add `import { openDetailWindow } from "../detail/window/openInWindow";`. On `<SourceList …>` add `onOpen={(id) => { const f = fleets.find((x) => x.name === id); if (f) void openDetailWindow("fleet", f.name, f.display_name); }}`. On `<FleetDetailPane …>` add `onOpenInWindow={() => { void openDetailWindow("fleet", summary.name, summary.display_name); }}`. The `onSelect` prop and its report-up effect already exist (lines 52–53, 96–100); nothing to add here.
+- [x] `src/components/DashboardApp.tsx`:
   - Imports: `import { isEditingTarget, isOpenInWindowShortcut, openDetailWindow } from "./detail/window/openInWindow";` and `import { isPageId } from "./shell/nav";` (added below).
   - State, next to `fleetRequest` (line 109): `const [selectedFleet, setSelectedFleet] = useState<string | null>(null);` and `const onFleetSelect = useCallback((name: string | null) => setSelectedFleet(name), []);`.
   - `<FleetView requestedName={fleetRequest} onRequestHandled={clearFleetRequest} />` → add `onSelect={onFleetSelect}`.
@@ -898,7 +898,7 @@ function FleetBody({ name }: { name: string }) {
         };
       }, []);
     ```
-- [ ] `src/components/shell/nav.ts`: add after `isLibrary`:
+- [x] `src/components/shell/nav.ts`: add after `isLibrary`:
   ```ts
   /** Type guard for page ids arriving over events (`open-page`). */
   export function isPageId(id: string): id is PageId {
@@ -914,9 +914,11 @@ function FleetBody({ name }: { name: string }) {
   });
   ```
   and change that file's import to `import { NAV_ITEMS, isLibrary, isPageId } from "./nav";`.
-- [ ] `npm test`, `npm run build`, `npm run lint` (0 errors).
-- [ ] Browser acceptance (dashboard stub, record `open_detail_window` calls): on Agents with a selection, ⌘↩ → `open_detail_window {kind:"agent", name, title:<display name>}`; ⌘↩ while the filter field is focused → no call; the ⋯ menu shows "Open in window" and calls it; double-click on a row calls it with that row; ⌘K lists "Open <name> in window"; the same four on Fleets with `kind:"fleet"`; Library pages: ⌘↩ and double-click do nothing. Emit stubbed `select-fleet` / `open-page` events (call the stored listener callbacks) → the page switches to Fleets with that fleet selected / to the named page.
-- [ ] Commit: `feat(hub): ⌘↩, ⋯, double-click, and ⌘K open the selected agent or fleet in a window`
+- [x] `npm test`, `npm run build`, `npm run lint` (0 errors).
+- [x] Browser acceptance (dashboard stub, record `open_detail_window` calls): on Agents with a selection, ⌘↩ → `open_detail_window {kind:"agent", name, title:<display name>}`; ⌘↩ while the filter field is focused → no call; the ⋯ menu shows "Open in window" and calls it; double-click on a row calls it with that row; ⌘K lists "Open <name> in window"; the same four on Fleets with `kind:"fleet"`; Library pages: ⌘↩ and double-click do nothing. Emit stubbed `select-fleet` / `open-page` events (call the stored listener callbacks) → the page switches to Fleets with that fleet selected / to the named page.
+- [x] Commit: `feat(hub): ⌘↩, ⋯, double-click, and ⌘K open the selected agent or fleet in a window`
+
+**Done (2026-09-06):** 9.4 and 9.5 as written. Browser acceptance drove the triggers with dispatched `keydown` / `dblclick` events and the stub's stored listener callbacks; the ⌘K label shows the agent's `name` (like the existing Start/Stop items), the window title gets the display name.
 
 **Manual acceptance PR 9 (real Hub build — needed once the drive allows it, otherwise the PR says it is unverified):** overlay title bar with traffic lights and the display name in Mission Control; second ⌘↩ focuses the existing window; the window cascades from the Hub and reopens where it was moved; Close with an unsaved Persona edit prompts, Cancel keeps the window; **Show in Hub** raises the dashboard on Agents (agent selected) / Fleets (fleet selected); editing the agent in the window then clicking the Hub shows the new value in the dashboard detail; deleting a fleet from its window closes the window and the Hub list drops it.
 
