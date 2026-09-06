@@ -120,7 +120,7 @@ The model / fallback-chain / smart-routing block that `AgentInspector` currently
 
 `DetailTab` (the 11 ids) is kept as the deep-link vocabulary: `desiredDetailTab` from Home still names the old id, and `detailGroupOf(tab)` (pure, tested) maps it to the new tab plus an in-tab anchor. Nothing that sets `desiredDetailTab` changes.
 
-Header actions: **Chat** (primary — navigates to the Chats page with this agent active; `ChatsPage` gains an `initialAgent` prop for this, it has none today), **Stop/Start**, **⋯** (Export, Duplicate, Open in window [Phase 2], Delete). Delete stays behind a confirm.
+Header actions: **Chat** (primary — navigates to the Chats page with this agent active; `ChatsPage` gains an `initialAgent` prop for this, it has none today), **Stop/Start**, **⋯** (Export, Open chat in a window via the existing `open_chat_window` command, Open in window [Phase 2]). Duplicate and Delete are not offered in Phase 1: no `delete_agent` / `duplicate_agent` Tauri command exists, and adding backend commands is out of this spec's scope.
 
 ### 4.4 Fleet tabs
 
@@ -140,8 +140,9 @@ Header actions: **Run ▾** split button (Run once / Run as loop / Send job…),
 | State | Colour token | Where |
 |---|---|---|
 | running | `--status-running` (green) | dot, pill |
-| idle | `--status-idle` (slate) | dot, pill |
-| stopped / failed | `--status-failed` (red) | dot, pill |
+| idle (includes an agent whose runtime is `stopped`) | `--status-idle` (slate) | dot, pill |
+| failed | `--status-failed` (red) | dot, pill |
+| stopped (fleet kill-switch `.stopped` only) | `--status-stopped` (red) | dot, pill |
 | restarting | `--status-restarting` (amber) | pill only |
 | **needs you** | `--status-attention` (amber badge with count) | list row, Home badge, Overview banner |
 
