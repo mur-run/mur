@@ -44,3 +44,6 @@
 .master-detail--compact .detail-two { grid-template-columns: 1fr; }
 .detail-error, .detail-loading { color: var(--text-secondary); font-size: var(--text-sm); }
 .detail-error { color: var(--status-failed); }
+/* Overview tab (spec §4.3). */
+.overview-now__title { margin: 0 0 3px; font-size: var(--text-base); font-weight: 500; }
+.overview-now__sub { margin: 0; color: var(--text-secondary); font-size: var(--text-sm); }
