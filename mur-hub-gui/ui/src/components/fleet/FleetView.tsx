@@ -29,11 +29,13 @@ function loadLabelFilter(): string[] {
   }
 }
 
-export function FleetView({ query, onSelect, requestedName }: {
+export function FleetView({ query, onSelect, requestedName, onRequestHandled }: {
   query?: string;
   onSelect?: (name: string | null) => void;
   /** The command palette can ask for a fleet by name (spec §6.6). */
   requestedName?: string | null;
+  /** Called once the request is applied, so the same fleet can be requested again. */
+  onRequestHandled?: () => void;
 }) {
   const { t } = useT();
   const [fleets, setFleets] = useState<FleetSummary[]>([]);
@@ -118,8 +120,14 @@ export function FleetView({ query, onSelect, requestedName }: {
   }, [selectedName]);
 
   useEffect(() => {
-    if (requestedName) setSelectedName(requestedName);
-  }, [requestedName]);
+    if (!requestedName) return;
+    // Sync the ref before the state so loadList's "auto-select the first
+    // fleet" branch (which reads the ref when fleet_list resolves) cannot
+    // race ahead of this selection on mount.
+    selectedRef.current = requestedName;
+    setSelectedName(requestedName);
+    onRequestHandled?.();
+  }, [requestedName, onRequestHandled]);
 
   // Refresh jobs when a fleet run completes
   useEffect(() => {

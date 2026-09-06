@@ -103,6 +103,8 @@ export function DashboardApp() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [fleetRequest, setFleetRequest] = useState<string | null>(null);
   const [paletteFleets, setPaletteFleets] = useState<FleetSummary[]>([]);
+  // Handed to FleetView so a palette jump to the same fleet twice still fires.
+  const clearFleetRequest = useCallback(() => setFleetRequest(null), []);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [presetImportOpen, setPresetImportOpen] = useState(false);
   const [muragentImportOpen, setMuragentImportOpen] = useState(false);
@@ -584,7 +586,7 @@ export function DashboardApp() {
           ) : page === "chats" ? (
             <ChatsPage agents={agents} query={query} onActiveChange={onChatActive} />
           ) : page === "fleets" ? (
-            <FleetView query={query} onSelect={onFleetSelect} requestedName={fleetRequest} />
+            <FleetView query={query} onSelect={onFleetSelect} requestedName={fleetRequest} onRequestHandled={clearFleetRequest} />
           ) : page === "agents" ? (
             <AgentsPage
               agents={agents}

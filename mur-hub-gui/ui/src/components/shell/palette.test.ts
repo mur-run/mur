@@ -14,7 +14,8 @@ describe("rankPalette", () => {
   it("prefix beats substring, then kind order, then label", () => {
     expect(rankPalette(items, "au").map((i) => i.id)).toEqual(["agent:auditor", "agent:aura", "action:stop"]);
   });
-  it("empty query lists everything in kind order, capped", () => {
+  it("empty query lists everything in kind order, capped, keeping input order within a kind", () => {
     expect(rankPalette(items, "", 3).map((i) => i.kind)).toEqual(["page", "action", "agent"]);
+    expect(rankPalette(items, "").filter((i) => i.kind === "agent").map((i) => i.id)).toEqual(["agent:aura", "agent:auditor"]);
   });
 });
