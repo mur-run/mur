@@ -1,152 +1,80 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAgents } from "../../context/AgentContext";
-import type { AgentDetail } from "../../types";
 import { useT } from "../../i18n";
 import { McpDiscoverModal } from "../McpDiscoverModal";
 import { McpAddRemoteModal } from "../McpAddRemoteModal";
 import { AgentPicker } from "./AgentPicker";
-import type { LibrarySelection } from "../inspector/LibraryInspector";
+import { LibraryGlyph } from "./LibraryGlyph";
+import { LibraryPage } from "../detail/library/LibraryPage";
+import { itemFor, mcpFacets, mcpRows, type InstalledMcpView } from "../detail/library/libraryModel";
+import { useInstallTarget } from "../detail/library/useInstallTarget";
 
-// ─── Backend shape ───────────────────────────────────────────────────────────
-
-interface InstalledMcpView {
-  id: string;
-  name: string;
-  description: string;
-  transport: string;
-  agents: string[];
-}
-
-// ─── Component ────────────────────────────────────────────────────────────────
-
-export function McpPage({ onSelect }: { onSelect?: (item: LibrarySelection | null) => void }) {
+/** MCP library (spec §3.1). `mcp_installed` reports which agents configure a
+ *  server but not the per-agent enabled flag, so the toggle starts checked. */
+export function McpPage() {
   const { t } = useT();
   const { agents } = useAgents();
-  const [servers, setServers] = useState<InstalledMcpView[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [target, setTarget] = useInstallTarget(agents);
   const [showDiscover, setShowDiscover] = useState(false);
   const [showAddRemote, setShowAddRemote] = useState(false);
-  const [targetAgent, setTargetAgent] = useState<string>(agents[0]?.name ?? "");
-  const [selected, setSelected] = useState<string | null>(null);
-
-  function pick(s: InstalledMcpView) {
-    setSelected(s.id);
-    onSelect?.({
-      kind: "mcp",
-      name: s.name,
-      description: s.description,
-      meta: [
-        { label: "Transport", value: s.transport },
-        { label: "Agents", value: String(s.agents.length) },
-      ],
-    });
-  }
-
-  useEffect(() => {
-    if (!targetAgent && agents[0]?.name) {
-      setTargetAgent(agents[0].name);
-    }
-  }, [agents, targetAgent]);
-
-  const refresh = useCallback(() => {
-    setLoading(true);
-    invoke<InstalledMcpView[]>("mcp_installed")
-      .then((res) => {
-        setServers(res);
-        setError(null);
-      })
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  const handleSaved = useCallback(
-    (_d: AgentDetail) => {
-      refresh();
-    },
-    [refresh],
-  );
+  const [reload, setReload] = useState(0);
+  const metaLabels = { transport: t("library.meta.transport"), serverId: t("library.meta.serverId") };
 
   return (
-    <div>
-      <div
-        className="tab-form"
-        style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 12 }}
-      >
-        <AgentPicker agents={agents} value={targetAgent} onChange={setTargetAgent} />
-        <button
-          className="btn btn--sm btn--secondary"
-          onClick={() => setShowDiscover(true)}
-          disabled={!targetAgent}
-        >
-          {t("detail.discoverMcp")}
-        </button>
-        <button
-          className="btn btn--sm btn--secondary"
-          onClick={() => setShowAddRemote(true)}
-          disabled={!targetAgent}
-        >
-          {t("detail.addRemoteMcp")}
-        </button>
-      </div>
-
-      {error && <p className="save-error">{error}</p>}
-
-      {loading ? (
-        <p className="field-muted">{t("mcplib.loading")}</p>
-      ) : servers.length === 0 ? (
-        <div className="tab-empty">
-          <p>{t("mcplib.empty")}</p>
+    <LibraryPage<InstalledMcpView>
+      page="mcp"
+      title={t("nav.mcp")}
+      listCommand="mcp_installed"
+      idOf={(s) => s.id}
+      rows={(servers) => mcpRows(servers, (n) => t("library.usedByCount", { count: n }), () => <LibraryGlyph kind="mcp" />)}
+      facets={mcpFacets}
+      item={(s) => itemFor("mcp", s, metaLabels)}
+      uses={(s) => s.agents.map((agent) => ({ agent, enabled: true }))}
+      toggle={async (s, agent, enabled) => {
+        await invoke("agent_mcp_toggle", { name: agent, serverId: s.id, enabled });
+      }}
+      remove={async (s, agent) => {
+        await invoke("agent_mcp_remove", { name: agent, serverId: s.id });
+      }}
+      createLabel={t("mcplib.add")}
+      createItems={[
+        { id: "discover", label: t("detail.discoverMcp"), onSelect: () => setShowDiscover(true), disabled: !target },
+        { id: "remote", label: t("detail.addRemoteMcp"), onSelect: () => setShowAddRemote(true), disabled: !target },
+      ]}
+      toolbar={
+        <div className="library-picker">
+          <AgentPicker agents={agents} value={target} onChange={setTarget} />
         </div>
-      ) : (
-        <ul className="item-list">
-          {servers.map((s) => (
-            <li
-              key={s.id}
-              className={`item-card${selected === s.id ? " item-card--selected" : ""}`}
-              onClick={() => pick(s)}
-              style={{ cursor: "pointer" }}
-            >
-              <div className="item-card-name" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <span style={{ fontWeight: 600 }}>{s.name}</span>
-                <span className="item-card__meta">{s.transport}</span>
-                <span className="item-card__meta">
-                  {t("mcplib.usedBy")} {s.agents.join(", ")}
-                </span>
-              </div>
-              <p style={{ margin: "4px 0 0", fontSize: 13, color: "var(--text-muted, #888)" }}>
-                {s.description}
-              </p>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {showDiscover && targetAgent && (
+      }
+      copy={{
+        loading: t("mcplib.loading"),
+        empty: t("mcplib.empty"),
+        filter: t("mcplib.filter"),
+        noMatch: t("mcplib.noMatch"),
+      }}
+      reloadToken={reload}
+    >
+      {showDiscover && target && (
         <McpDiscoverModal
-          agentName={targetAgent}
+          agentName={target}
           onClose={() => setShowDiscover(false)}
-          onImported={(d) => {
-            handleSaved(d);
+          onImported={() => {
+            setReload((n) => n + 1);
             setShowDiscover(false);
           }}
         />
       )}
-      {showAddRemote && targetAgent && (
+      {showAddRemote && target && (
         <McpAddRemoteModal
-          agentName={targetAgent}
+          agentName={target}
           onClose={() => setShowAddRemote(false)}
-          onSaved={(d) => {
-            handleSaved(d);
+          onSaved={() => {
+            setReload((n) => n + 1);
             setShowAddRemote(false);
           }}
         />
       )}
-    </div>
+    </LibraryPage>
   );
 }

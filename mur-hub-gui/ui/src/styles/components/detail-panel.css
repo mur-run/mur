@@ -338,10 +338,6 @@
   color: #fff;
 }
 /* Selected library row (drives the LibraryInspector). */
-.item-card--selected {
-  border-color: var(--color-brand);
-  box-shadow: 0 0 0 2px var(--color-brand-soft, rgba(74, 144, 217, 0.18));
-}
 /* ── Phase-1 enable/disable toggle ────────────────────────────────────── */
 .item-card-off {
   opacity: 0.55;

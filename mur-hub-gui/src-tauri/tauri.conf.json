@@ -56,8 +56,8 @@
     "fileAssociations": [
       {
         "ext": ["muragent"],
-        "name": "MuR Agent Package",
-        "description": "A portable MuR agent bundle",
+        "name": "MUR Agent Package",
+        "description": "A portable MUR agent bundle",
         "mimeType": "application/vnd.mur.agent",
         "role": "Viewer"
       }

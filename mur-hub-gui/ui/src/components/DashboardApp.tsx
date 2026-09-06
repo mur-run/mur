@@ -13,7 +13,6 @@ import { ModelPickerModal } from "./ModelPickerModal";
 import { ModelsPage } from "./library/ModelsPage";
 import { InstallInboxModal } from "./InstallInboxModal";
 import { Inspector, hasInspector, type InspectorSelection } from "./shell/Inspector";
-import type { LibrarySelection } from "./inspector/LibraryInspector";
 import { HomePage } from "./home/HomePage";
 import { useChannels } from "./home/useChannels";
 import { needsYouCounts } from "./home/needsYouCounts";
@@ -77,12 +76,10 @@ export function DashboardApp() {
   // agents-page selection lives in AgentContext (selectedAgent); these cover
   // the chats / fleets / library pages.
   const [chatAgent, setChatAgent] = useState<{ name: string; displayName?: string } | null>(null);
-  const [libItem, setLibItem] = useState<LibrarySelection | null>(null);
   // Stable callbacks so the pages' report-up effects don't loop.
   const onChatActive = useCallback((name: string | null, displayName?: string) => {
     setChatAgent(name ? { name, displayName } : null);
   }, []);
-  const onLibrarySelect = useCallback((item: LibrarySelection | null) => setLibItem(item), []);
   // Unified inbox — owned here so the sidebar + Dock badges stay in sync with
   // what HomePage renders.
   const { items: inboxItems, refresh: refreshInbox } = useInbox();
@@ -323,7 +320,6 @@ export function DashboardApp() {
       if (el && el.getAttribute("role") === "listbox") return; // SourceList owns its Esc
       setSelected(null);
       setChatAgent(null);
-      setLibItem(null);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -334,7 +330,6 @@ export function DashboardApp() {
     agent: selectedAgent,
     chatAgent: chatAgent?.name ?? null,
     chatDisplayName: chatAgent?.displayName,
-    library: libItem,
   };
   const inspectorNode = hasInspector(page, inspectorSelection) ? (
     <Inspector
@@ -343,7 +338,6 @@ export function DashboardApp() {
       onClose={() => {
         setSelected(null);
         setChatAgent(null);
-          setLibItem(null);
       }}
     />
   ) : undefined;
@@ -547,11 +541,11 @@ export function DashboardApp() {
           ) : page === "skills" ? (
             <SkillsPage />
           ) : page === "mcp" ? (
-            <McpPage onSelect={onLibrarySelect} />
+            <McpPage />
           ) : page === "workflows" ? (
-            <WorkflowsPage onSelect={onLibrarySelect} />
+            <WorkflowsPage />
           ) : page === "plugins" ? (
-            <PluginsPage onSelect={onLibrarySelect} />
+            <PluginsPage />
           ) : (
             <PlaceholderPage id={page} />
           )}
