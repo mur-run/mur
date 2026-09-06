@@ -180,11 +180,7 @@ export const zhTW: Table = {
   "detail.save": "儲存變更",
   "detail.close": "關閉",
   // ── 情境檢視器 ──
-  "chatInspector.subtitle": "對話",
-  "chatInspector.model": "模型",
-  "chatInspector.channel": "頻道",
   "chatInspector.turns": "{count} 輪對話",
-  "chatInspector.noChannel": "尚無頻道。",
   "fleetInspector.subtitle": "艦隊",
   "fleetInspector.goal": "目標",
   "fleetInspector.channel": "頻道",
