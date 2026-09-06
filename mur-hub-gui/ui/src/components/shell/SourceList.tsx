@@ -136,13 +136,13 @@ export function SourceList(p: SourceListProps) {
                 onClick={() => p.onSelect(r.id)}
                 onDoubleClick={p.onOpen ? () => p.onOpen?.(r.id) : undefined}
               >
-                {r.unread && <span className="source-row__unread" role="img" aria-label={p.unreadLabel} />}
                 <span className="source-row__avatar">{r.avatar}</span>
                 <span className="source-row__text">
                   <span className="source-row__name">{r.name}</span>
                   {r.subtitle && <span className="source-row__sub">{r.subtitle}</span>}
                 </span>
                 <span className="source-row__status">
+                  {r.unread && <span className="source-row__unread" role="img" aria-label={p.unreadLabel} />}
                   <NeedsYouBadge count={r.needsYou ?? 0} />
                   {r.status && <StatusDot kind={r.status} />}
                 </span>

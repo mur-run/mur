@@ -37,7 +37,7 @@ interface Props {
 /** Chats (spec 3(a)): SourceList of agents | divider | ChatPane. */
 export function ChatsPage({ agents, runtimeMap, channels, initialAgent, onInitialHandled, onSelect, onOpenAgent }: Props) {
   const { t } = useT();
-  const { attention } = useConversations();
+  const { attention, open, openConversation, focusConversation, blurConversation } = useConversations();
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [facet, setFacet] = useState<string | null>(null);
@@ -72,6 +72,17 @@ export function ChatsPage({ agents, runtimeMap, channels, initialAgent, onInitia
     onSelect?.(selected);
     return () => onSelect?.(null);
   }, [selected, onSelect]);
+
+  // The attention reducer counts deltas / HITL only for open, non-active
+  // conversations: open every agent so events register, focus the one being
+  // looked at (clearing its flags), and blur when nothing is selected.
+  useEffect(() => {
+    for (const a of agents) if (!open.includes(a.name)) openConversation(a.name);
+    if (selected) focusConversation(selected);
+    else blurConversation();
+    // `open` is read, not depended on: it changes because of this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agents, selected, openConversation, focusConversation, blurConversation]);
 
   const items = useMemo(() => buildChatList(agents, attention, channels), [agents, attention, channels]);
   const rows = chatRows(items, runtimeMap, Date.now(), { noChannel: t("chats.noChannel") }, (item) => {
