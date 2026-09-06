@@ -6,10 +6,9 @@ import { useT } from "../../i18n";
 interface Props {
   onImportAgent: () => void;
   onImportPreset: () => void;
-  onClose: () => void;
 }
 
-export function DataSettings({ onImportAgent, onImportPreset, onClose }: Props) {
+export function DataSettings({ onImportAgent, onImportPreset }: Props) {
   const { t } = useT();
   // Three states, because the backend has three answers: it opened, it is
   // starting one, or it refused because something that is not MUR holds the
@@ -35,20 +34,14 @@ export function DataSettings({ onImportAgent, onImportPreset, onClose }: Props) 
       <div className="settings-row">
         <button
           className="toolbar-btn"
-          onClick={() => {
-            onClose();
-            onImportAgent();
-          }}
+          onClick={onImportAgent}
           title={t("app.importAgentTooltip")}
         >
           {t("app.importAgent")}
         </button>
         <button
           className="toolbar-btn"
-          onClick={() => {
-            onClose();
-            onImportPreset();
-          }}
+          onClick={onImportPreset}
           title={t("app.importPresetTooltip")}
         >
           {t("app.importPreset")}
