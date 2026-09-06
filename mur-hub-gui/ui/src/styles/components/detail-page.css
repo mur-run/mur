@@ -47,3 +47,5 @@
 /* Overview tab (spec §4.3). */
 .overview-now__title { margin: 0 0 3px; font-size: var(--text-base); font-weight: 500; }
 .overview-now__sub { margin: 0; color: var(--text-secondary); font-size: var(--text-sm); }
+/* Single-tab pages: the tab bar's rule used to separate header and body. */
+.detail-page__body--flush { margin-top: var(--space-6); border-top: 1px solid var(--border-line); padding-top: var(--space-6); }
