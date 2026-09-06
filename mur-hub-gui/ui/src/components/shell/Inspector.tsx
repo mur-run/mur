@@ -8,7 +8,6 @@ import type { ReactNode } from "react";
 import type { PageId } from "./nav";
 import { isLibrary } from "./nav";
 import { ChatInspector } from "../inspector/ChatInspector";
-import { LibraryInspector, type LibrarySelection } from "../inspector/LibraryInspector";
 
 export interface InspectorSelection {
   /** Agents page — selected agent name (also drives the app-wide detail). */
@@ -16,8 +15,6 @@ export interface InspectorSelection {
   /** Chats page — active chat's agent name. */
   chatAgent: string | null;
   chatDisplayName?: string;
-  /** Library pages — selected manifest item. */
-  library: LibrarySelection | null;
 }
 
 /** Whether the current page has an active selection that should show a column. */
@@ -26,7 +23,8 @@ export function hasInspector(page: PageId, sel: InspectorSelection): boolean {
   if (page === "agents") return false;
   if (page === "chats") return sel.chatAgent !== null;
   if (page === "fleets") return false; // detail lives in the page (spec §3.4)
-  if (isLibrary(page)) return sel.library !== null;
+  // Library pages own their detail (Phase 2a); no inspector column.
+  if (isLibrary(page)) return false;
   return false;
 }
 
@@ -45,9 +43,6 @@ export function Inspector({ page, selection, onClose }: InspectorProps): ReactNo
         onClose={onClose}
       />
     );
-  }
-  if (isLibrary(page) && selection.library) {
-    return <LibraryInspector item={selection.library} onClose={onClose} />;
   }
   return null;
 }
