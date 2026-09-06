@@ -81,6 +81,7 @@ export function hitlToItem(raw: RawHitl, lang: string): InboxItem | null {
     title: translate(lang, "home.inbox.hitlTitle", { agent }),
     subtitle: summary || translate(lang, "home.inbox.hitlRisk", { risk }),
     payload: raw,
+    agent,
   };
 }
 
@@ -109,7 +110,7 @@ export function installToItem(raw: RawInstall, lang: string): InboxItem | null {
 }
 
 /** Pure adapter: `RawCompanionEvent` -> `InboxItem`. Returns null on malformed input (fail-open). */
-export function companionToItem(raw: RawCompanionEvent, lang: string): InboxItem | null {
+export function companionToItem(raw: RawCompanionEvent, lang: string, agent: string): InboxItem | null {
   if (!raw || typeof raw !== "object") return null;
   const { id, situation, body, generated_at } = raw;
   if (typeof id !== "string" || !id || typeof body !== "string") return null;
@@ -125,6 +126,7 @@ export function companionToItem(raw: RawCompanionEvent, lang: string): InboxItem
         : translate(lang, "home.inbox.companionTitle"),
     subtitle: body,
     payload: raw,
+    agent,
   };
 }
 
@@ -186,13 +188,17 @@ export function useInbox(): { items: InboxItem[]; refresh: () => void } {
   }, [lang]);
 
   const refreshCompanion = useCallback(() => {
+    // Capture the names once: the per-agent results are attributed by index.
+    const names = agentNamesRef.current;
     Promise.all(
-      agentNamesRef.current.map((agent) =>
+      names.map((agent) =>
         invoke<RawCompanionEvent[]>("companion_bridge_pending", { agent }).catch(() => []),
       ),
     )
       .then((perAgent) =>
-        setCompanionItems(filterNulls(perAgent.flat().map((r) => companionToItem(r, lang)))),
+        setCompanionItems(
+          filterNulls(perAgent.flatMap((rows, i) => rows.map((r) => companionToItem(r, lang, names[i])))),
+        ),
       )
       .catch(() => {});
   }, [lang]);
