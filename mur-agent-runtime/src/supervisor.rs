@@ -940,7 +940,11 @@ impl crate::protocol::a2a_server::MethodHandler for HitlRespondHandler {
                         .to_string(),
                 )
             })?;
-        let _ = tx.send(crate::hitl::HitlDecision { allow, reason });
+        let _ = tx.send(crate::hitl::HitlDecision {
+            allow,
+            reason,
+            surface: None,
+        });
         Ok(serde_json::json!({}))
     }
 }

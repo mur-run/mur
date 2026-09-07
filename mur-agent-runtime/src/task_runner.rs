@@ -1673,6 +1673,7 @@ impl TaskRunner {
                                 crate::hitl::HitlDecision {
                                     allow: false,
                                     reason: Some("timed out".into()),
+                                    surface: None,
                                 }
                             }
                         }
@@ -1681,6 +1682,7 @@ impl TaskRunner {
                         crate::hitl::HitlDecision {
                             allow: false,
                             reason: Some("no approval channel available".into()),
+                            surface: None,
                         }
                     };
                     if !decision.allow {
@@ -2412,6 +2414,7 @@ fn decide_without_asking(
             "`{tool_name}` needs approval and this caller cannot give one — run it from \
              `murmur`, or allow the tool with `mur agent perm tool-allow <agent> {tool_name}`"
         )),
+        surface: None,
     })
 }
 
@@ -3320,6 +3323,7 @@ mod tests {
                     let _ = tx.send(crate::hitl::HitlDecision {
                         allow: true,
                         reason: None,
+                        surface: None,
                     });
                     return;
                 }
