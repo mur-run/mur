@@ -414,8 +414,26 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                 service: crate::secrets::KEYCHAIN_SERVICE.to_string(),
                 account: format!("{}/{}", profile.inner.name, name),
             };
-            match mur_common::secret::cache_before_seal(&r) {
-                Ok(()) => {
+            // Bounded, on its own thread. A keychain item this binary has not
+            // been authorised for makes the OS raise a modal prompt, and the
+            // read blocks until somebody clicks it — which on a headless or
+            // login-time start is never. Unbounded, that hangs the agent
+            // BEFORE the sandbox seals: not a failure, not a degraded start,
+            // just a process that never becomes ready. Verified on a real
+            // machine, which is the only place it reproduces: the provider
+            // keys above never show it because they were authorised long ago.
+            //
+            // The orphaned thread is deliberate. It is parked in the OS call,
+            // owns nothing this process needs, and is the price of not
+            // hanging; the user answers the prompt (or does not) and the agent
+            // comes up either way, one secret short until the next `/secret`.
+            let (tx, rx) = std::sync::mpsc::channel();
+            let probe = r.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(mur_common::secret::cache_before_seal(&probe));
+            });
+            match rx.recv_timeout(USER_SECRET_RESOLVE_TIMEOUT) {
+                Ok(Ok(())) => {
                     if let Some(v) = r.resolve_preseal_cached() {
                         use secrecy::ExposeSecret;
                         match secrets.set(name, v.expose_secret()) {
@@ -424,11 +442,19 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                         }
                     }
                 }
-                Err(e) => warn!(
+                Ok(Err(e)) => warn!(
                     name,
                     error = %e,
                     "could not resolve a user secret before sealing; the agent \
                      will not have it until it is set again"
+                ),
+                Err(_) => warn!(
+                    name,
+                    timeout_secs = USER_SECRET_RESOLVE_TIMEOUT.as_secs(),
+                    "keychain did not answer for this secret in time — most likely \
+                     an authorisation prompt nobody is there to click. Starting \
+                     without it; approve the prompt (Always Allow) and restart, \
+                     or set it again from murmur with /secret"
                 ),
             }
         }
@@ -1138,6 +1164,12 @@ fn build_dispatcher(
     );
     d
 }
+
+/// How long to wait for one user secret to come back from the keychain before
+/// giving up on it and starting anyway. Short on purpose: the only thing that
+/// makes this slow is a modal prompt, and a prompt nobody answers must not
+/// cost the agent its startup.
+const USER_SECRET_RESOLVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 fn parent_pid() -> u32 {
     #[cfg(unix)]
