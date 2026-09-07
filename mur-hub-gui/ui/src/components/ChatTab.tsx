@@ -123,9 +123,11 @@ interface Props {
   displayName: string;
   /** Slot rendered between the message log and the composer (e.g. TaskPill). */
   aboveCompose?: React.ReactNode;
+  /** Channel picked in the chat window's rail; null/undefined = the agent's latest. */
+  channelId?: string | null;
 }
 
-export function ChatTab({ agentName, displayName, aboveCompose }: Props) {
+export function ChatTab({ agentName, displayName, aboveCompose, channelId }: Props) {
   const { t } = useT();
   const { drafts, clearDraft } = useConversations();
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -205,6 +207,7 @@ export function ChatTab({ agentName, displayName, aboveCompose }: Props) {
       try {
         const events = await invoke<ChannelEvent[]>("channel_load", {
           name: agentName,
+          channelId: channelId ?? null,
         });
         if (!alive) return;
         setMessages(channelEventsToMessages(events));
@@ -227,7 +230,10 @@ export function ChatTab({ agentName, displayName, aboveCompose }: Props) {
       alive = false;
       void unChannel.then((f) => f());
     };
-  }, [agentName]);
+    // ponytail: switching channel resets the agent context (taskIdRef) like an
+    // agent switch does; resuming the runtime conversation behind an older
+    // channel is the upgrade path.
+  }, [agentName, channelId]);
 
   // Subscribe to token deltas for this agent.
   useEffect(() => {
@@ -277,6 +283,7 @@ export function ChatTab({ agentName, displayName, aboveCompose }: Props) {
         text,
         taskId,
         contextTaskId: taskIdRef.current,
+        channelId: channelId ?? null,
       });
       taskIdRef.current = res.task_id || taskIdRef.current;
       // If Stop already committed the partial reply, don't append again.
