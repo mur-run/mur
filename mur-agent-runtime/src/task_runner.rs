@@ -3892,6 +3892,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let _ = runner.run_sync(loop_spec("loop")).await;
         let n = calls.load(Ordering::Relaxed);
