@@ -1109,10 +1109,28 @@ The spec's `bounded_by_allow_hosts: bool` is expressed as `scope: McpScope`: tha
 - [x] `src/styles/index.css`: after line 8 (`@import "./components/detail-panel.css";`) add `@import "./components/permissions.css";`.
 - [x] Run, from `mur-hub-gui/ui/`: `set -o pipefail; npm test 2>&1 | tail -n 8` → all files passing; `npm run build 2>&1 | tail -n 3` → `✓ built`; `npm run lint 2>&1 | tail -n 3` → 0 errors.
 - [x] `grep -rn "permissionsHint" src/` → no matches (the removed key has no remaining user).
-- [ ] Manual acceptance (real Hub, `gotcha_hub_local_app_build_recipe`): open an agent that is **stopped** → Capabilities → Permissions shows the muted "Not running" banner first and `·` glyphs, no ✓. Start it → banner reads "Sandbox enforcing (macos-sbpl)", ✓ rows. Agent with an `inherit` MCP server → its row is marked and reads "NOT bounded by the allow-hosts above". Each block ends with a selectable `mur agent perm …` line.
+- [x] Manual acceptance (real Hub, verified 2026-09-07 by driving the app): open an agent that is **stopped** → Capabilities → Permissions shows the muted "Not running" banner first and `·` glyphs, no ✓. Start it → banner reads "Sandbox enforcing (macos-sbpl)", ✓ rows. Agent with an `inherit` MCP server → its row is marked and reads "NOT bounded by the allow-hosts above". Each block ends with a selectable `mur agent perm …` line.
 - [ ] Commit: `feat(hub): Permissions section shows the full entitlements view, read-only`
 
 ---
+
+## Executed: one bug found and fixed beyond the plan
+
+Manual acceptance surfaced a **pre-existing shell layout bug** that this
+section is the first tab content tall enough to expose. `.master-detail` is a
+grid with no `grid-template-rows`, so the implicit `auto` row sized to content:
+the row grew to 1299px inside a 940px container, the excess was clipped by the
+container's `overflow: hidden`, and `.detail-page` ended up with a 1299px
+scroll viewport inside a 940px window — the bottom ~360px of any long tab was
+unreachable at max scroll (`scrollTop === scrollHeight - clientHeight` while
+content stayed off-screen).
+
+Measured live in the running app (`.master-detail` 940 / `.master-detail__detail`
+1299), fixed with `grid-template-rows: minmax(0, 1fr)` on `.master-detail`
+(item -> 948, the full 1913px of content scrollable), and folded into this PR
+because P1 is unusable without it. No test: a CSS layout rule cannot be
+asserted under the repo's DOM-free test convention, so the rule carries a
+comment naming exactly what breaks without it.
 
 ## Self-review
 
