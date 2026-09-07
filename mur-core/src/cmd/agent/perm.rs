@@ -78,15 +78,24 @@ pub fn cmd_perm_show(name: &str, section: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// The wire names plus the two spellings people type for the fourth mode.
+/// `ProxyOnly` was unreachable from the CLI until now.
+fn parse_outbound_mode(value: &str) -> Result<NetworkOutboundMode> {
+    Ok(match value {
+        "restricted" => NetworkOutboundMode::Restricted,
+        "unrestricted" => NetworkOutboundMode::Unrestricted,
+        "proxy_only" | "proxy-only" | "proxyonly" => NetworkOutboundMode::ProxyOnly,
+        "off" => NetworkOutboundMode::Off,
+        other => {
+            bail!("invalid outbound mode '{other}' (restricted, unrestricted, proxy_only, off)")
+        }
+    })
+}
+
 pub fn cmd_perm_set_mode(name: &str, key: &str, value: &str) -> Result<()> {
     match key {
         "network.outbound" => {
-            let mode = match value {
-                "restricted" => NetworkOutboundMode::Restricted,
-                "unrestricted" => NetworkOutboundMode::Unrestricted,
-                "off" => NetworkOutboundMode::Off,
-                other => bail!("invalid outbound mode '{other}'"),
-            };
+            let mode = parse_outbound_mode(value)?;
             let (path, mut profile) = load_profile_for_edit(name)?;
             profile.entitlements.network.outbound.mode = mode;
             save_profile(&path, &mut profile)?;
@@ -336,6 +345,34 @@ pub fn cmd_perm_deny_path(name: &str, path_arg: &str) -> Result<()> {
     Ok(())
 }
 
+/// Drop one path from one grant list. `deny_path` ADDS to the deny list; this
+/// is the only way to take a grant back short of editing profile.yaml.
+pub fn remove_path(
+    fs: &mut mur_common::agent::FilesystemEntitlement,
+    verb: &str,
+    path_arg: &str,
+) -> Result<bool> {
+    let list = match verb {
+        "read" => &mut fs.read,
+        "write" => &mut fs.write,
+        "deny" => &mut fs.deny,
+        other => bail!("remove-path: unknown list '{other}' (read, write, deny)"),
+    };
+    let before = list.len();
+    list.retain(|p| p != path_arg);
+    Ok(list.len() != before)
+}
+
+pub fn cmd_perm_remove_path(name: &str, verb: &str, path_arg: &str) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    if !remove_path(&mut profile.entitlements.filesystem, verb, path_arg)? {
+        bail!("'{path_arg}' is not in the {verb} list of '{name}'");
+    }
+    save_profile(&path, &mut profile)?;
+    warn_if_running(name);
+    Ok(())
+}
+
 pub fn cmd_perm_allow_spawn(name: &str, binary: &str) -> Result<()> {
     let (path, mut profile) = load_profile_for_edit(name)?;
     if !profile
@@ -472,7 +509,7 @@ pub fn cmd_perm_list_tools(name: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_host_pattern;
+    use super::{parse_outbound_mode, remove_path, validate_host_pattern};
 
     #[test]
     fn patterns_the_matcher_can_match_are_accepted() {
@@ -509,5 +546,31 @@ mod tests {
             .to_string();
         assert!(err.contains("NO effect"), "{err}");
         assert!(err.contains("set-mode data-ml unrestricted"), "{err}");
+    }
+
+    #[test]
+    fn remove_path_takes_one_grant_back_and_reports_whether_it_was_there() {
+        let mut fs = mur_common::agent::FilesystemEntitlement {
+            read: vec!["/a".into()],
+            write: vec!["/b".into(), "/c".into()],
+            deny: vec![],
+        };
+        assert!(remove_path(&mut fs, "write", "/b").unwrap());
+        assert_eq!(fs.write, vec!["/c"]);
+        assert!(
+            !remove_path(&mut fs, "write", "/b").unwrap(),
+            "already gone"
+        );
+        assert_eq!(fs.read, vec!["/a"], "other lists untouched");
+        assert!(remove_path(&mut fs, "exec", "/a").is_err());
+    }
+
+    #[test]
+    fn proxy_only_is_now_reachable_from_the_cli() {
+        use mur_common::agent::NetworkOutboundMode as M;
+        assert_eq!(parse_outbound_mode("proxy_only").unwrap(), M::ProxyOnly);
+        assert_eq!(parse_outbound_mode("proxy-only").unwrap(), M::ProxyOnly);
+        assert_eq!(parse_outbound_mode("off").unwrap(), M::Off);
+        assert!(parse_outbound_mode("open").is_err());
     }
 }
