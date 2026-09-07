@@ -2,6 +2,25 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod pin;
+
+/// Approvals and denials settle a gate for this long. Content staleness is
+/// already handled by the hash pin (any input change = a different hash); the
+/// TTL bounds TIME staleness, so a weeks-old approval cannot release a gate
+/// nobody remembers granting. Shared by gate A (`mur-core::hitl::gate`) and
+/// gate B (`mur-agent-runtime::hitl::store`) — one number, or the two gates
+/// remember for different lengths and the Hub cannot explain why.
+pub const APPROVAL_TTL_SECS: i64 = 7 * 24 * 60 * 60;
+
+/// Pure TTL predicate — split out so the boundary is testable without
+/// backdating channel events.
+pub fn within_approval_ttl(
+    event_ts: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    (now - event_ts).num_seconds() <= APPROVAL_TTL_SECS
+}
+
 /// How risky an action is. `Ord` is severity order: `Read` < … < `Privileged`.
 /// Tier is resolved most-restrictive-wins and is NEVER LLM-asserted.
 #[derive(
@@ -152,5 +171,14 @@ mod tests {
         assert!(!tier_may_be_granted(RiskTier::Spend));
         assert!(!tier_may_be_granted(RiskTier::Destructive));
         assert!(!tier_may_be_granted(RiskTier::Privileged));
+    }
+
+    #[test]
+    fn ttl_boundary_is_inclusive_at_seven_days() {
+        let now = chrono::Utc::now();
+        let exactly = now - chrono::Duration::seconds(APPROVAL_TTL_SECS);
+        let over = now - chrono::Duration::seconds(APPROVAL_TTL_SECS + 1);
+        assert!(within_approval_ttl(exactly, now));
+        assert!(!within_approval_ttl(over, now));
     }
 }

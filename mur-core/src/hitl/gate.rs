@@ -16,7 +16,9 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use mur_channel::ChannelService;
 use mur_common::channel::{ChannelActor, ChannelState, EventKind};
-use mur_common::hitl::{HitlMode, HitlRequest, HitlResponse, RiskTier, Unanswered, default_mode};
+use mur_common::hitl::{
+    HitlMode, HitlRequest, HitlResponse, RiskTier, Unanswered, default_mode, within_approval_ttl,
+};
 
 use crate::channel_writer::ROUTER_AGENT;
 use crate::hitl::pin::action_hash;
@@ -47,21 +49,6 @@ pub struct GateDecision {
 /// How often the wait loop re-reads the log, and the default wait budget.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
-
-/// Approvals and denials settle a gate for this long. Content staleness is
-/// already handled by the hash pin (any input change = a different hash); the
-/// TTL bounds TIME staleness, so a weeks-old approval cannot release a gate
-/// nobody remembers granting.
-pub(crate) const HITL_APPROVAL_TTL_SECS: i64 = 7 * 24 * 60 * 60;
-
-/// Pure TTL predicate — split out so the boundary is testable without
-/// backdating channel events.
-pub(crate) fn within_approval_ttl(
-    event_ts: chrono::DateTime<chrono::Utc>,
-    now: chrono::DateTime<chrono::Utc>,
-) -> bool {
-    (now - event_ts).num_seconds() <= HITL_APPROVAL_TTL_SECS
-}
 
 /// Everything the gate needs to know about the run's approval posture.
 ///
@@ -1122,11 +1109,11 @@ mod tests {
         let now = chrono::Utc::now();
         assert!(within_approval_ttl(now, now));
         assert!(within_approval_ttl(
-            now - chrono::Duration::seconds(HITL_APPROVAL_TTL_SECS - 1),
+            now - chrono::Duration::seconds(mur_common::hitl::APPROVAL_TTL_SECS - 1),
             now
         ));
         assert!(!within_approval_ttl(
-            now - chrono::Duration::seconds(HITL_APPROVAL_TTL_SECS + 1),
+            now - chrono::Duration::seconds(mur_common::hitl::APPROVAL_TTL_SECS + 1),
             now
         ));
     }

@@ -10,7 +10,7 @@ pub fn agent_hitl_respond(
     reason: Option<String>,
 ) -> Result<(), String> {
     let home = crate::mur_home_path();
-    let mut payload = json!({ "hitl_id": hitl_id, "allow": allow });
+    let mut payload = json!({ "hitl_id": hitl_id, "allow": allow, "surface": "hub" });
     if let Some(r) = reason {
         payload["reason"] = json!(r);
     }

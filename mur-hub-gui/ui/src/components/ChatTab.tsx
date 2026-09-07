@@ -10,7 +10,8 @@ import { useT } from "../i18n";
 import { useConversations } from "../conversation/ConversationContext";
 import { HitlCard } from "./HitlCard";
 import { Markdown } from "./Markdown";
-import type { HitlRequest } from "../types";
+import type { AgentDetail, HitlBatchPayload, HitlRequest, PermissionsView } from "../types";
+import { expandBatch, groupBatches } from "./hitlModel";
 
 interface ChatMsg {
   role: "user" | "agent" | "error";
@@ -129,6 +130,22 @@ export function ChatTab({ agentName, displayName, aboveCompose }: Props) {
   const { drafts, clearDraft } = useConversations();
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [hitlRequests, setHitlRequests] = useState<HitlRequest[]>([]);
+  // P1 permissions, for the approval card's grant hint. Loaded once per agent;
+  // null when the detail cannot be read (the card then offers no grant).
+  const [perms, setPerms] = useState<PermissionsView | null>(null);
+  useEffect(() => {
+    let live = true;
+    invoke<AgentDetail>("get_agent_detail", { name: agentName })
+      .then((d) => {
+        if (live) setPerms(d.permissions ?? null);
+      })
+      .catch(() => {
+        if (live) setPerms(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [agentName]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   // Live answer text accumulating from `chat-delta` events (null when idle).
@@ -226,9 +243,9 @@ export function ChatTab({ agentName, displayName, aboveCompose }: Props) {
         // starts — like DeepSeek's deepthink — rather than dropping it.
       }
     });
-    const unHitl = listen<HitlRequest>("hitl-approval-needed", (e) => {
+    const unHitl = listen<HitlBatchPayload>("hitl-approval-needed", (e) => {
       if (e.payload.agent !== agentName) return;
-      setHitlRequests((prev) => [...prev, e.payload]);
+      setHitlRequests((prev) => [...prev, ...expandBatch(e.payload)]);
     });
     return () => {
       void un.then((f) => f());
@@ -383,8 +400,17 @@ export function ChatTab({ agentName, displayName, aboveCompose }: Props) {
             <span className="chat__dot" />
           </div>
         )}
-        {hitlRequests.map((req) => (
-          <HitlCard key={req.hitl_id} request={req} />
+        {groupBatches(hitlRequests).map((group) => (
+          <div key={group[0].hitl_id} className="hitl-batch">
+            {group.length > 1 && (
+              <div className="hitl-batch__title">{t("hitl.batchTitle", { n: group.length })}</div>
+            )}
+            {group.map((req) => (
+              // A chat is only open against a running agent, so a profile write
+              // made from here always needs the restart to land.
+              <HitlCard key={req.hitl_id} request={req} perms={perms} isRunning={true} />
+            ))}
+          </div>
         ))}
         <div ref={endRef} />
       </div>

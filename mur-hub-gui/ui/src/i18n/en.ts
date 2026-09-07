@@ -523,6 +523,12 @@ export const en = {
   "hitl.denyReason": "Reason",
   "hitl.reasonPlaceholder": "Why are you denying this? (optional)",
   "hitl.confirmDeny": "Confirm Deny",
+  "hitl.allowOnce": "Allow this time",
+  "hitl.always": "Always allow",
+  "hitl.alwaysHint": "Writes an allow rule for exactly {tool} — takes effect when the agent restarts. Entitlements are not changed.",
+  "hitl.grantHint": "This path is outside the agent's grants; approving lets it run, not reach the file.",
+  "hitl.grant": "Grant {verb} on {path}",
+  "hitl.batchTitle": "{n} approvals for this response",
   // ── Specialist wizard — Role picker (T5) ──
   "wizard.role.title": "Choose a role template",
   "wizard.role.hint": "Select the role that best describes your agent's purpose. MUR will generate skills and a system prompt tailored to it.",
