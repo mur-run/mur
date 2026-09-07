@@ -108,6 +108,7 @@ export function AgentChatWindow() {
           <ChatTab
             agentName={agentName}
             displayName={displayName}
+            channelId={activeChannelId}
             aboveCompose={<TaskPill agentName={agentName} />}
           />
         </div>
