@@ -779,7 +779,7 @@ pub enum AgentPermAction {
         name: String,
         section: Option<String>,
     },
-    /// Set a mode (currently only `network.outbound <restricted|unrestricted|off>`)
+    /// Set a mode (currently only `network.outbound <restricted|unrestricted|proxy_only|off>`)
     SetMode {
         name: String,
         key: String,
