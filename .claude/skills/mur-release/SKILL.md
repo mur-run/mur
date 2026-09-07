@@ -42,7 +42,14 @@ and dispatches `release.yml` automatically. There is no manual tag step.
    ```
    `release.yml` handles the rest: cross-platform build, GitHub Release,
    Homebrew formula update, installer deployment, crates.io publish.
-4. Verify the artifact: `brew update && brew upgrade mur`
+4. Verify the artifact, once `release.yml` is green: `mur update --restart-agents`.
+   That is the whole post-release step — do not tell the user to run
+   `brew upgrade mur` first. On a Homebrew install `mur update` runs the brew
+   upgrade itself (`update/mod.rs`), and only its Homebrew branch runs
+   `resign::post_upgrade`, which refreshes `~/.local/bin/mur-agent-runtime`,
+   re-signs, and restarts stale agents. A bare `brew upgrade mur` swaps the
+   keg and leaves every agent whose symlink points at `~/.local/bin` on the
+   old build while `mur agent restart --stale` still reports ✓.
 
 ## Fallback: manual tag (automation down)
 
