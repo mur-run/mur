@@ -72,6 +72,11 @@ const COMMANDS: &[(&str, &str, &[&str])] = &[
         ],
     ),
     ("quit", "exit the chat", &[]),
+    (
+        "secret",
+        "hand the agent a credential (hidden input)",
+        &["--delete"],
+    ),
     ("sessions", "list past sessions", &[]),
     ("skill", "manage agent skills", &["list", "add", "remove"]),
     ("skin", "switch theme", &["dark", "light", "mur"]),
@@ -287,7 +292,14 @@ mod tests {
     #[test]
     fn top_level_includes_matching_skills() {
         let s = compute("/cre", &[skill("create-pr")]).unwrap();
-        assert_eq!(displays(&s), vec!["create-pr".to_string()]);
+        // Commands first, then skills (`build_top_level`). `/secret` is here
+        // because the match is a substring one and "se<cre>t" contains "cre" —
+        // matching how the menu really behaves, rather than asserting a list
+        // that any new command with those letters would break.
+        assert_eq!(
+            displays(&s),
+            vec!["/secret".to_string(), "create-pr".to_string()]
+        );
     }
 
     #[test]

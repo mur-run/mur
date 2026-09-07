@@ -211,6 +211,36 @@ pub fn run(
     Ok(status)
 }
 
+/// Read one line with echo off, with the terminal handed over exactly as
+/// [`run`] does for a child. Same contract: the caller has dropped the
+/// `EventStream` and recreates it afterwards. Returns the line without its
+/// newline; an empty line is the user backing out.
+///
+/// The value never reaches the TUI's composer, its history, or the channel —
+/// that is the entire point of routing it through here rather than through a
+/// widget.
+pub fn read_hidden(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    viewport_h: u16,
+    prompt: &str,
+) -> Result<String> {
+    let line = {
+        let _suspended = Suspended::begin(viewport_h)?;
+        let mut out = io::stdout();
+        write!(out, "{prompt}")?;
+        out.flush()?;
+        // rpassword opens and configures the tty itself, so this does not
+        // depend on the raw-mode state `Suspended` just released.
+        let line = rpassword::read_password().context("read hidden value")?;
+        // The prompt line stays on screen with no echo after it; a newline
+        // keeps the next message from continuing it.
+        let _ = writeln!(io::stdout());
+        line
+    };
+    reanchor(terminal, viewport_h)?;
+    Ok(line)
+}
+
 /// Anchor a fresh Inline viewport of height `h` at the bottom of the screen
 /// **without purging scrollback**.
 ///

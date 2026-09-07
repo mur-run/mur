@@ -197,6 +197,7 @@ pub fn cmd_create(
         installed_skills: vec![],
         disabled_skills: Vec::new(),
         disabled_mcp: Vec::new(),
+        secrets: Vec::new(),
         addons: Vec::new(),
         hitl: mur_common::HitlConfig::default(),
         created_at: now.clone(),

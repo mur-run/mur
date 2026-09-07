@@ -171,6 +171,8 @@ pub fn build_runner(
     context_window: Option<u64>,
     agent_name: String,
     decision_store: Option<Arc<dyn crate::hitl::store::DecisionStore>>,
+    // `None` for the stub runners, which have no tools to mask output from.
+    secrets: Option<Arc<crate::secrets::SecretVault>>,
 ) -> Arc<TaskRunner> {
     let mut runner = TaskRunner::with_llm(client)
         .with_agent_name(agent_name)
@@ -182,6 +184,9 @@ pub fn build_runner(
         .with_tools(tools)
         .with_tools_policy(tools_policy)
         .with_effort(effort);
+    if let Some(v) = secrets {
+        runner = runner.with_secrets(v);
+    }
     if let Some(n) = max_iterations {
         runner = runner.with_max_iterations(n);
     }
@@ -242,6 +247,10 @@ pub async fn build_provider_runner(
     // after the sandbox applies) — signs memory proposals dropped by the
     // built-in remember tool (P2c-2).
     identity: Arc<mur_common::identity::AgentIdentity>,
+    // Credentials the user handed this agent: exported into the bash tool's
+    // children and masked out of every tool result. Loaded pre-seal by the
+    // caller, because a keychain is unreachable once the sandbox closes.
+    secrets: Arc<crate::secrets::SecretVault>,
 ) -> anyhow::Result<(
     Arc<TaskRunner>,
     Option<Arc<dyn LlmClient>>,
@@ -306,7 +315,8 @@ pub async fn build_provider_runner(
                     .iter()
                     .map(|w| crate::sandbox::policy::expand_entitlement_path(w))
                     .collect(),
-            ),
+            )
+            .with_secrets(secrets.clone()),
     );
     let bash_def = bash_exec.def();
     // Issue #712: the file tools must never touch the agent's own
@@ -487,6 +497,7 @@ pub async fn build_provider_runner(
             entry.context_window,
             profile.inner.name.clone(),
             Some(decision_store.clone()),
+            Some(secrets.clone()),
         );
         (r, Some(client), Some(pool.clone()))
     };
