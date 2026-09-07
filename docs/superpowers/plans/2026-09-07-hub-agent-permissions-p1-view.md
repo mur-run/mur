@@ -1110,7 +1110,7 @@ The spec's `bounded_by_allow_hosts: bool` is expressed as `scope: McpScope`: tha
 - [x] Run, from `mur-hub-gui/ui/`: `set -o pipefail; npm test 2>&1 | tail -n 8` → all files passing; `npm run build 2>&1 | tail -n 3` → `✓ built`; `npm run lint 2>&1 | tail -n 3` → 0 errors.
 - [x] `grep -rn "permissionsHint" src/` → no matches (the removed key has no remaining user).
 - [x] Manual acceptance (real Hub, verified 2026-09-07 by driving the app): open an agent that is **stopped** → Capabilities → Permissions shows the muted "Not running" banner first and `·` glyphs, no ✓. Start it → banner reads "Sandbox enforcing (macos-sbpl)", ✓ rows. Agent with an `inherit` MCP server → its row is marked and reads "NOT bounded by the allow-hosts above". Each block ends with a selectable `mur agent perm …` line.
-- [ ] Commit: `feat(hub): Permissions section shows the full entitlements view, read-only`
+- [x] Commit: `feat(hub): Permissions section shows the full entitlements view, read-only`
 
 ---
 

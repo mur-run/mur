@@ -1,6 +1,6 @@
 # Hub: Agent Permissions — See, Grant, and Stop Being Interrupted
 
-**Status**: Designed, not started. Four phases, one user story.
+**Status**: P1 + P2 shipped in #1189 (v2.73.0, 2026-09-07). P3 chat gate and P4 run batch view not started. Four phases, one user story.
 **Scope**: sub-project A of two. B (browsing the agent's own on-disk files under
 `~/.mur/agents/<name>/`) is deliberately not designed here.
 
