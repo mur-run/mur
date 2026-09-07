@@ -1,6 +1,6 @@
 # murmur secret handoff — design
 
-**Status:** approved design, not yet implemented
+**Status:** implemented and verified on a real machine (PR #1203)
 **Date:** 2026-09-07
 **Branch:** `feat/murmur-secret-handoff`
 
@@ -92,6 +92,7 @@ new slot automatically because it is the same slot.
 | Both ✓ | `✓ GITEA_TOKEN available as $GITEA_TOKEN` |
 | Invalid KEY or value < 8 chars | Rejected in the TUI before any write. |
 | `--delete` | Keychain delete + `secret/delete` clears memory + system prompt refreshes. Same split reporting. |
+| A keychain item this binary is not yet authorised for | macOS raises a modal prompt and the read blocks until it is clicked. The pre-seal read is therefore bounded (3 s, own thread): on timeout the agent logs a warning naming the secret and starts **without** it, rather than hanging before the sandbox seals. Found only on a real machine — CI has no keychain, and the provider keys never showed it because they were authorised long ago. |
 | Value re-encoded (base64, split, hex-dumped) before being printed | Masking does not catch it. The spec states this ceiling explicitly: masking is defense in depth; the primary line is "plaintext never enters the context". |
 | Masking mangles legitimate output that happens to contain the value | Accepted; the ≥ 8 floor makes this negligible. |
 
@@ -122,3 +123,23 @@ new slot automatically because it is the same slot.
 Any token already pasted into a chat (as in the session that prompted this
 design) is compromised by the definitions above — it is in a signed
 append-only channel and at the provider. Revoke it at the issuer.
+
+## Real-machine verification (2026-09-08)
+
+Run against a throwaway agent (`secrettest`, `claude-haiku-4-5`), removed afterwards.
+
+| Check | Result |
+|---|---|
+| `secret/set` on a live agent | `{"name":"GITEA_TOKEN","names":["GITEA_TOKEN"],"effective":"next-turn"}` — no value in the response |
+| Runtime log line | `secret/set: vault updated name="GITEA_TOKEN"` — name only |
+| Short value | rejected: `-32602 invalid params: secret 'SHORT' is shorter than 8 characters` |
+| **The core guarantee** | one bash command returned `LEN=40 VAL=[SECRET:GITEA_TOKEN]` — the child process measured the real 40-character value while the model received the tag |
+| Leak scan | zero hits for the value across all 26 agents' `~/.mur/agents/` trees (channels, telemetry, conversations) |
+| Negative control | a planted canary file WAS found by the same grep, so the scan can detect what it claims to |
+| `secret/delete` | `removed: true`, and the next turn reported `LEN=0` |
+| Unreachable agent | dial fails with `agent 'secrettest' is not running (no running.lock)` — the string the `DurableOnly` reporting path renders |
+| Keychain prompt | before the fix: agent hung in `__psynch_cvwait` with `SecurityAgent` up, never reaching ready. After: `keychain did not answer for this secret in time … timeout_secs=3` then `agent ready` |
+
+Hits for the value in `~/.mur/queue/events.jsonl` and `~/.mur/session/recordings/` were attributed to the Claude Code session that typed it on its own command line (all 73 carry that session's id), not to any agent.
+
+Not verified on a real machine: the TUI `/secret` command itself (hidden input needs an interactive terminal). Its parsing, validation, and reporting are unit-tested; the durable and dial halves it calls were exercised directly here.

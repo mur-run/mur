@@ -4,7 +4,14 @@
 > delegation is set up for this branch.
 
 **Spec:** `docs/superpowers/specs/2026-09-07-murmur-secret-handoff-design.md`
-**Branch:** `feat/murmur-secret-handoff` (draft PR #1203)
+**Branch:** `feat/murmur-secret-handoff` (PR #1203)
+**Status:** all nine tasks done. Three corrections the plan did not anticipate are recorded below.
+
+## Corrections found during execution
+
+1. **`BashTool` is constructed in `build_provider_runner`, not `prepare_runtime`** (Task 6). Threading the vault through `prepare_runtime` does not compile.
+2. **`handle_tool_call` executes the tool at TWO sites** (Task 4) — the `Allow` arm and the `Ask` arm after approval. The plan's `masked()` unit test passes with BOTH sites unmasked. There is now one end-to-end test per arm, and mutating either site fails exactly one of them. `Ask` is the arm that matters most: a credential-touching tool is exactly what gets set to `Ask`.
+3. **The pre-seal keychain read can hang startup** (Task 6, not in the plan at all). A keychain item the binary is not yet authorised for raises a modal prompt; the read blocks until someone clicks it, which at login or on a headless box is never — and it blocks BEFORE the sandbox seals, so the agent never becomes ready. Now bounded at 3 s on its own thread. Only reproducible on a real machine.
 
 ## Goal
 
