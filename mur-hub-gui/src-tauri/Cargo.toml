@@ -33,6 +33,11 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-notification = "2"
+# Only pulled in by `macos-un-notifications`. tauri-plugin-notification does not
+# forward notify-rust's features, so the switch has to be made on the shared
+# dependency: Cargo unifies features across the graph, so enabling it here also
+# swaps the backend the plugin compiles against.
+notify-rust = { version = "4.18", optional = true, default-features = false }
 notify = "6"
 
 # Workspace siblings — reused from the root repo via relative path.
@@ -62,6 +67,15 @@ core-foundation = "0.10"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+# Post macOS notifications through UNUserNotificationCenter instead of the
+# deprecated NSUserNotification (issue #1135). OFF by default and deliberately
+# so: upstream still labels this backend a preview, its `mac-usernotifications`
+# dependency is 0.3.x, and UN adds a failure mode NS does not have — the user
+# can deny authorization, or revoke it later in System Settings. Flipping the
+# default is a product decision, not a dependency chore; this flag exists so
+# the decision can be tried against a real build first.
+macos-un-notifications = ["dep:notify-rust", "notify-rust/preview-macos-un"]
 
 [dev-dependencies]
 tempfile = "3"
