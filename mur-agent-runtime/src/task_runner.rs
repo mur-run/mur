@@ -416,6 +416,9 @@ pub struct TaskRunner {
     max_token_budget: u64,
     tools: Vec<Arc<dyn crate::tools::ToolExecutor>>,
     tools_policy: Vec<mur_common::agent::ToolRule>,
+    /// Credentials the user handed the agent. Names go into the system prompt;
+    /// values are masked out of every tool result. `None` = no vault (stubs).
+    secrets: Option<Arc<crate::secrets::SecretVault>>,
     /// Per-agent effort for this agent's own turns. `None` = the API default.
     /// Mechanical internal calls override it downward regardless (see
     /// `graceful_exit`).
@@ -549,6 +552,7 @@ impl TaskRunner {
             max_token_budget: DEFAULT_MAX_TOKEN_BUDGET,
             tools: vec![],
             tools_policy: vec![],
+            secrets: None,
             effort: std::sync::RwLock::new(None),
             conversations: Mutex::new(ConversationStore::default()),
             session_cwd: None,
@@ -642,6 +646,21 @@ impl TaskRunner {
     pub fn with_tools_policy(mut self, rules: Vec<mur_common::agent::ToolRule>) -> Self {
         self.tools_policy = rules;
         self
+    }
+
+    pub fn with_secrets(mut self, vault: Arc<crate::secrets::SecretVault>) -> Self {
+        self.secrets = Some(vault);
+        self
+    }
+
+    /// The one place tool output is scrubbed before it can reach the model.
+    /// BOTH tool-execution sites call this; a third site must too, or that
+    /// tool's output reaches the model unmasked.
+    fn masked(&self, output: String) -> String {
+        match &self.secrets {
+            Some(v) => v.mask(&output).into_owned(),
+            None => output,
+        }
     }
 
     /// Set the agent's per-turn effort (from its profile) at construction.
@@ -854,6 +873,9 @@ impl TaskRunner {
     ) -> (String, Vec<String>) {
         let mut base = self.system_prompt.clone().unwrap_or_default();
         base.push_str(OUTPUT_LOCATIONS_RULE);
+        if let Some(frag) = self.secrets.as_ref().and_then(|v| v.prompt_fragment()) {
+            base.push_str(&frag);
+        }
         if let Some((cwd, _)) = &self.session_cwd {
             base.push_str(&WORKING_DIR_RULE.replace("{path}", &cwd.current().to_string_lossy()));
         }
@@ -1740,7 +1762,7 @@ impl TaskRunner {
                     let t0 = std::time::Instant::now();
                     let (output, status, is_error, images) =
                         match tool.execute(call.input.clone()).await {
-                            Ok(out) => (out.text, out.status, false, out.images),
+                            Ok(out) => (self.masked(out.text), out.status, false, out.images),
                             Err(e) => (
                                 format!("tool error: {e}"),
                                 crate::tools::ToolStatus::Failed { exit_code: -1 },
@@ -1818,7 +1840,7 @@ impl TaskRunner {
         }
         let t0_ask = std::time::Instant::now();
         let (output, status, is_error, images) = match tool.execute(call.input.clone()).await {
-            Ok(out) => (out.text, out.status, false, out.images),
+            Ok(out) => (self.masked(out.text), out.status, false, out.images),
             Err(e) => (
                 format!("tool error: {e}"),
                 crate::tools::ToolStatus::Failed { exit_code: -1 },
@@ -4121,6 +4143,7 @@ mod tests {
             String::new(),
             None,
             None,
+            None,
         );
         let _ = runner.run_sync(loop_spec("loop")).await;
         let n = calls.load(Ordering::Relaxed);
@@ -4184,6 +4207,64 @@ mod tests {
             _input: serde_json::Value,
         ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
             Ok("identical build output".to_string().into())
+        }
+    }
+
+    /// A tool whose output contains a credential — the shape a real `curl -v`
+    /// or `git remote -v` produces once a secret is in the environment.
+    struct LeakyTool;
+
+    #[async_trait::async_trait]
+    impl crate::tools::ToolExecutor for LeakyTool {
+        fn name(&self) -> &str {
+            "build"
+        }
+        fn def(&self) -> crate::llm::ToolDef {
+            crate::llm::ToolDef {
+                name: "build".into(),
+                description: "test tool that echoes a credential".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+        ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
+            Ok(
+                "remote: https://x:d8b04a3cc632a5c8026cf5a810d36e292c603f99@git.local"
+                    .to_string()
+                    .into(),
+            )
+        }
+    }
+
+    /// Records every request it is handed, so a test can assert on what the
+    /// MODEL actually received — the only place the masking guarantee is
+    /// observable end to end. Asserting on `masked()` alone would pass even if
+    /// neither execute site called it.
+    struct RecordingLlm {
+        responses: Vec<crate::llm::LlmResponse>,
+        index: std::sync::atomic::AtomicUsize,
+        seen: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::llm::LlmClient for RecordingLlm {
+        async fn generate(
+            &self,
+            req: crate::llm::LlmRequest,
+        ) -> Result<crate::llm::LlmResponse, crate::llm::LlmError> {
+            self.seen
+                .lock()
+                .unwrap()
+                .push(format!("{:?}", req.messages));
+            let idx = self
+                .index
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(self.responses[idx % self.responses.len()].clone())
+        }
+        fn model_name(&self) -> &str {
+            "recording-stub"
         }
     }
 
@@ -4257,6 +4338,113 @@ mod tests {
     /// Fix #1b — genuine stuck IS a loop: the SAME tool call AND identical
     /// result each turn still aborts with stop_reason "loop_detected" within
     /// ~3 iterations, well below the iteration cap.
+    #[tokio::test]
+    async fn an_approved_ask_tool_result_is_masked_too() {
+        // The Allow arm and the Ask arm execute the tool at two separate call
+        // sites. A test that only drives Allow passes with the Ask site
+        // unmasked — which is the arm that matters most, since `Ask` is what a
+        // credential-touching tool is set to. Mutation-checked: reverting
+        // either site fails one of these two tests.
+        let vault = Arc::new(crate::secrets::SecretVault::new());
+        vault
+            .set("GITEA_TOKEN", "d8b04a3cc632a5c8026cf5a810d36e292c603f99")
+            .unwrap();
+        let llm = Arc::new(RecordingLlm {
+            responses: vec![build_tool_call_response("s-0"), end_turn_response("done")],
+            index: std::sync::atomic::AtomicUsize::new(0),
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        let approvals = empty_pending_approvals();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<serde_json::Value>(16);
+
+        // Stand in for the human: approve whatever is asked.
+        let approver = approvals.clone();
+        tokio::spawn(async move {
+            while let Some(msg) = rx.recv().await {
+                if msg["method"] == "tool/approval_needed"
+                    && let Some(id) = msg["params"]["hitl_id"].as_str()
+                    && let Some(sender) = approver.lock().await.remove(id)
+                {
+                    let _ = sender.send(crate::hitl::HitlDecision {
+                        allow: true,
+                        reason: None,
+                        // The test stands in for a surface that did not name
+                        // itself; recorded as unknown, never guessed.
+                        surface: None,
+                    });
+                }
+            }
+        });
+
+        let runner = Arc::new(
+            TaskRunner::with_llm(llm.clone())
+                .with_secrets(vault)
+                .with_tools(vec![Arc::new(LeakyTool)])
+                .with_tools_policy(vec![mur_common::agent::ToolRule {
+                    pattern: "build".into(),
+                    policy: mur_common::agent::ToolPolicy::Ask,
+                    risk: None,
+                }])
+                .with_pending_approvals(approvals)
+                .with_notifier(tx)
+                .with_hitl_timeout_secs(5)
+                .with_max_iterations(5),
+        );
+        let _ = runner.run_sync(loop_spec("push it")).await;
+
+        let seen = llm.seen.lock().unwrap().join("\n");
+        assert!(
+            seen.contains("[SECRET:GITEA_TOKEN]"),
+            "the approved tool's output reached the model unmasked; got:\n{seen}"
+        );
+        assert!(
+            !seen.contains("d8b04a3cc632a5c8026cf5a810d36e292c603f99"),
+            "the raw credential reached the model; got:\n{seen}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_model_never_receives_a_tool_result_containing_a_secret() {
+        // End to end through `run_sync`: a tool emits the credential, and what
+        // the MODEL is handed on the next call must carry the tag, not the
+        // value. This is the assertion the whole design rests on — a unit test
+        // of `masked()` would still pass if neither execute site called it.
+        let vault = Arc::new(crate::secrets::SecretVault::new());
+        vault
+            .set("GITEA_TOKEN", "d8b04a3cc632a5c8026cf5a810d36e292c603f99")
+            .unwrap();
+        let llm = Arc::new(RecordingLlm {
+            responses: vec![build_tool_call_response("s-0"), end_turn_response("done")],
+            index: std::sync::atomic::AtomicUsize::new(0),
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        let runner = Arc::new(
+            TaskRunner::with_llm(llm.clone())
+                .with_secrets(vault)
+                .with_tools(vec![Arc::new(LeakyTool)])
+                .with_tools_policy(vec![mur_common::agent::ToolRule {
+                    pattern: "build".into(),
+                    policy: mur_common::agent::ToolPolicy::Allow,
+                    risk: None,
+                }])
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                .with_max_iterations(5),
+        );
+        let _ = runner.run_sync(loop_spec("push it")).await;
+
+        let seen = llm.seen.lock().unwrap().join("\n");
+        assert!(
+            seen.contains("[SECRET:GITEA_TOKEN]"),
+            "the masked tag must be what the model saw; got:\n{seen}"
+        );
+        assert!(
+            !seen.contains("d8b04a3cc632a5c8026cf5a810d36e292c603f99"),
+            "the raw credential reached the model; got:\n{seen}"
+        );
+    }
+
     #[tokio::test]
     async fn identical_tool_results_still_trip_doom_loop() {
         use crate::llm::stub::SequenceLlm;
@@ -4728,6 +4916,36 @@ mod tests {
         let runner = TaskRunner::new_stub_echo().with_system_prompt(Some("BASE".into()));
         let (sys, _) = runner.assemble_system_prompt("hello", None, None);
         assert!(!sys.contains("## Working directory"));
+    }
+
+    #[test]
+    fn secret_names_reach_the_system_prompt_and_values_do_not() {
+        let vault = Arc::new(crate::secrets::SecretVault::new());
+        vault
+            .set("GITEA_TOKEN", "d8b04a3cc632a5c8026cf5a810d36e292c603f99")
+            .unwrap();
+        let runner = TaskRunner::new_stub_echo()
+            .with_system_prompt(Some("BASE PROMPT".into()))
+            .with_secrets(vault);
+        let (sys, _) = runner.assemble_system_prompt("hello", None, None);
+        assert!(sys.contains("$GITEA_TOKEN"), "{sys}");
+        assert!(!sys.contains("d8b04a3c"), "{sys}");
+    }
+
+    #[test]
+    fn tool_output_is_masked_before_it_becomes_a_result() {
+        let vault = Arc::new(crate::secrets::SecretVault::new());
+        vault
+            .set("GITEA_TOKEN", "d8b04a3cc632a5c8026cf5a810d36e292c603f99")
+            .unwrap();
+        let runner = TaskRunner::new_stub_echo().with_secrets(vault);
+        assert_eq!(
+            runner.masked("got d8b04a3cc632a5c8026cf5a810d36e292c603f99 back".into()),
+            "got [SECRET:GITEA_TOKEN] back"
+        );
+        // No vault: passthrough, no allocation surprise for the common case.
+        let bare = TaskRunner::new_stub_echo();
+        assert_eq!(bare.masked("x".into()), "x");
     }
 
     #[test]

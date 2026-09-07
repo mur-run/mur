@@ -113,6 +113,14 @@ pub struct AgentProfile {
     /// the profile. Empty = all configured servers enabled.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disabled_mcp: Vec<String>,
+
+    /// Names of per-agent secrets the user handed this agent (murmur
+    /// `/secret`, `mur agent secret set`). NAMES ONLY — the values live in the
+    /// keychain under `mur-agent/<name>/<NAME>`. The list exists because the
+    /// keychain cannot be enumerated: the supervisor reads it pre-seal to know
+    /// which accounts to load. Empty = nothing to load (back-compat).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<String>,
     /// Plugin-groups imported by this agent (add-on Phase 2). Each is
     /// self-contained (members installed per-agent). Absent/empty in
     /// legacy profiles (back-compat).
@@ -2698,7 +2706,7 @@ mod tool_policy_tests {
 
     #[test]
     fn addon_group_rule_truth_table() {
-        let mut p = AgentProfile::default_for_tests();
+        let mut p = crate::agent::AgentProfile::default_for_tests();
         p.addons.push(AddonRef {
             id: "grp".into(),
             source: "claude-local:grp@1.0.0".into(),
@@ -2838,5 +2846,25 @@ requires_programs:
         let without = "name: x\ncommand: y\n";
         let e2: crate::agent::McpServerEntry = serde_yaml::from_str(without).unwrap();
         assert!(e2.requires_programs.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod secrets_field_tests {
+    /// The list is NAMES only and must stay absent from the YAML when empty:
+    /// every existing profile on disk is rewritten by unrelated edits, and a
+    /// new always-present key would churn all of them.
+    #[test]
+    fn secrets_names_round_trip_and_are_absent_when_empty() {
+        let mut p = crate::agent::AgentProfile::default_for_tests();
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(
+            !yaml.contains("secrets:"),
+            "empty list must not be written: {yaml}"
+        );
+        p.secrets = vec!["GITEA_TOKEN".into()];
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        let back: crate::agent::AgentProfile = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(back.secrets, vec!["GITEA_TOKEN".to_string()]);
     }
 }

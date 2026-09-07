@@ -67,6 +67,9 @@ pub struct BashTool {
     /// `None` inside every real agent and silently costs the explanation this
     /// exists to give.
     pub write_grants: Vec<PathBuf>,
+    /// Credentials the user handed the agent, exported into every child's
+    /// environment. `None` (tests, embedded uses) exports nothing.
+    pub secrets: Option<std::sync::Arc<crate::secrets::SecretVault>>,
 }
 
 /// Resolve the effective timeout (in seconds) from the tool input's optional
@@ -88,6 +91,7 @@ impl BashTool {
             session_cwd,
             agent: None,
             write_grants: Vec::new(),
+            secrets: None,
         }
     }
 
@@ -119,6 +123,12 @@ impl BashTool {
     /// Attach the write grants used to explain a filesystem denial.
     pub fn with_write_grants(mut self, grants: Vec<PathBuf>) -> Self {
         self.write_grants = grants;
+        self
+    }
+
+    /// Attach the vault whose values become the child's environment.
+    pub fn with_secrets(mut self, vault: std::sync::Arc<crate::secrets::SecretVault>) -> Self {
+        self.secrets = Some(vault);
         self
     }
 }
@@ -195,24 +205,30 @@ Commands are killed after `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {
 
         let path = augmented_path(std::env::var("PATH").ok().as_deref());
 
-        let child = Command::new("bash")
-            .arg("-c")
+        let mut cmd = Command::new("bash");
+        cmd.arg("-c")
             .arg(&command)
             .current_dir(&working_dir)
             .env("PATH", path)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| {
-                let mut msg = format!("spawn failed: {e}");
-                if crate::tools::fs_policy::is_removable_volume_eperm(&working_dir, &e) {
-                    msg.push_str("\n\n");
-                    msg.push_str(crate::tools::fs_policy::REMOVABLE_VOLUME_EPERM_HINT);
-                }
-                ToolError::Execution(msg)
-            })?;
+            .kill_on_drop(true);
+        // Values leave the vault only here, straight into the child's
+        // environment. The parent never holds them as plain strings past this
+        // statement, and the model never sees them at all: what comes back is
+        // masked at the runner's tool-result chokepoint.
+        if let Some(vault) = &self.secrets {
+            cmd.envs(vault.env_pairs());
+        }
+        let child = cmd.spawn().map_err(|e| {
+            let mut msg = format!("spawn failed: {e}");
+            if crate::tools::fs_policy::is_removable_volume_eperm(&working_dir, &e) {
+                msg.push_str("\n\n");
+                msg.push_str(crate::tools::fs_policy::REMOVABLE_VOLUME_EPERM_HINT);
+            }
+            ToolError::Execution(msg)
+        })?;
 
         let output = match tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
@@ -374,6 +390,35 @@ mod tests {
             .await
             .unwrap();
         assert!(out.text.contains("hello"), "got: {}", out.text);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn vault_values_reach_the_child_environment() {
+        let vault = std::sync::Arc::new(crate::secrets::SecretVault::new());
+        vault
+            .set("GITEA_TOKEN", "d8b04a3cc632a5c8026cf5a810d36e292c603f99")
+            .unwrap();
+        let t = make_tool().with_secrets(vault);
+        let out = t
+            .execute(serde_json::json!({"command": "printf '%s' \"$GITEA_TOKEN\""}))
+            .await
+            .unwrap();
+        // The TOOL returns the raw value; masking is the runner's job at the
+        // chokepoint, not this tool's. This test pins that division — moving
+        // the mask in here would leave every other tool unprotected.
+        assert_eq!(out.text.trim(), "d8b04a3cc632a5c8026cf5a810d36e292c603f99");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_vault_means_no_extra_environment() {
+        let t = make_tool();
+        let out = t
+            .execute(serde_json::json!({"command": "printf '%s' \"${GITEA_TOKEN:-unset}\""}))
+            .await
+            .unwrap();
+        assert_eq!(out.text.trim(), "unset");
     }
 
     #[cfg(unix)]
