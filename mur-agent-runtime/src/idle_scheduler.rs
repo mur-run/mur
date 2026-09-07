@@ -136,6 +136,7 @@ async fn run_idle_loop(scheduler: IdleScheduler, cancel: CancellationToken) {
                 let _outcome = scheduler
                     .runner
                     .run_sync(TaskSpec {
+                        cwd: None,
                         input,
                         context_task_id: None,
                         task_id: None,

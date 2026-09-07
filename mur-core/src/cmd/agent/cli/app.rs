@@ -451,7 +451,6 @@ pub struct App {
     /// True after CWD has been injected into the first outgoing message this
     /// session. Reset on `/clear` or channel switch so each new session
     /// re-establishes context.
-    pub cwd_sent: bool,
     /// Active visual skin, resolved at startup. Updated live by `/skin`.
     pub theme: &'static Theme,
     pub last_esc_at: Option<std::time::Instant>,
@@ -648,7 +647,6 @@ impl App {
             panel: None,
             panel_stream: false,
             cwd: std::env::current_dir().ok(),
-            cwd_sent: false,
             theme,
             last_esc_at: None,
             esc_hint: false,
@@ -1271,7 +1269,6 @@ impl App {
         self.streaming = false;
         self.hitl = None;
         self.hitl_queue.clear();
-        self.cwd_sent = false;
         self.last_sent = None;
         self.last_esc_at = None;
         self.esc_hint = false;
@@ -1296,7 +1293,6 @@ impl App {
         self.streaming = false;
         self.hitl = None;
         self.hitl_queue.clear();
-        self.cwd_sent = false;
         self.wants_screen_wipe = true;
         self.load_history(turns);
         self.refresh_channel();
