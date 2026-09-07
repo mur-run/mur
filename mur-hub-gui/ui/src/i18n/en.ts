@@ -213,6 +213,8 @@ export const en = {
   "perm.failClosed.on": "Refuses to start if the sandbox cannot be applied.",
   "perm.failClosed.off": "Runs unconfined if the sandbox cannot be applied.",
   "perm.cmdHint": "Change from the CLI:",
+  "perm.copy": "Copy this command",
+  "perm.copied": "Copied:",
   "detail.save": "Save Changes",
   "detail.close": "Close",
   // ── Contextual inspectors ──

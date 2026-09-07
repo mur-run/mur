@@ -1,4 +1,5 @@
 import type React from "react";
+import { useEffect, useState } from "react";
 import type { AgentDetail, McpNetView, PathGrantView, PermissionsView } from "../../../types";
 import { useT } from "../../../i18n";
 import { enforcementTone, permCommands } from "./permissionsModel";
@@ -109,17 +110,43 @@ function EnforcementBanner({ v }: { v: PermissionsView }) {
 }
 
 function Block({ title, cmd, children }: { title: string; cmd?: string; children: React.ReactNode }) {
-  const { t } = useT();
   return (
     <section className="perm__block">
       <label className="field-label">{title}</label>
       {children}
-      {cmd && (
-        <p className="perm__cmd">
-          <span className="field-muted">{t("perm.cmdHint")}</span> <code>{cmd}</code>
-        </p>
-      )}
+      {cmd && <CopyCmd cmd={cmd} />}
     </section>
+  );
+}
+
+/** How long the "copied" acknowledgement stays up. */
+const COPIED_MS = 1200;
+
+/** Click the command to copy it. `navigator.clipboard` needs a user gesture,
+ *  which a real click has — verified in the Hub's WebView, so this needs no
+ *  Tauri clipboard plugin. The text stays selectable for a manual copy. */
+function CopyCmd({ cmd }: { cmd: string }) {
+  const { t } = useT();
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), COPIED_MS);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  return (
+    <p className="perm__cmd">
+      <button
+        type="button"
+        className="perm__cmd-btn"
+        title={t("perm.copy")}
+        onClick={() => {
+          navigator.clipboard.writeText(cmd).then(() => setCopied(true)).catch(console.error);
+        }}
+      >
+        <span className="field-muted">{copied ? t("perm.copied") : t("perm.cmdHint")}</span>{" "}
+        <code>{cmd}</code>
+      </button>
+    </p>
   );
 }
 

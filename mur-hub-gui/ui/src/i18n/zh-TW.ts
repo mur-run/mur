@@ -215,6 +215,8 @@ export const zhTW: Table = {
   "perm.failClosed.on": "沙盒無法套用時拒絕啟動。",
   "perm.failClosed.off": "沙盒無法套用時不受限制地執行。",
   "perm.cmdHint": "從 CLI 修改：",
+  "perm.copy": "複製這行指令",
+  "perm.copied": "已複製：",
   "detail.save": "儲存變更",
   "detail.close": "關閉",
   // ── 情境檢視器 ──
