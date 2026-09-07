@@ -54,7 +54,7 @@ Identical to the P1 plan (env exports, test commands, `npm` commands from `mur-h
 
 **Interfaces.** Produces `mur_core::cmd::agent::cmd_perm_remove_path(name: &str, verb: &str, path: &str) -> Result<()>` (verb ∈ `read|write|deny`) and `cmd_perm_set_mode(name, "network.outbound", "proxy_only")` accepted. Task 2 consumes both.
 
-- [ ] `perm.rs`: below `cmd_perm_deny_path` add:
+- [x] `perm.rs`: below `cmd_perm_deny_path` add:
   ```rust
   /// Drop one path from one grant list. `deny_path` ADDS to the deny list; this
   /// is the only way to take a grant back short of editing profile.yaml.
@@ -84,7 +84,7 @@ Identical to the P1 plan (env exports, test commands, `npm` commands from `mur-h
       Ok(())
   }
   ```
-- [ ] `perm.rs`: in `cmd_perm_set_mode`, replace the inline `"network.outbound"` match with a call to a new pure parser placed just above the function:
+- [x] `perm.rs`: in `cmd_perm_set_mode`, replace the inline `"network.outbound"` match with a call to a new pure parser placed just above the function:
   ```rust
   /// The wire names plus the two spellings people type for the fourth mode.
   /// `ProxyOnly` was unreachable from the CLI until now.
@@ -99,8 +99,8 @@ Identical to the P1 plan (env exports, test commands, `npm` commands from `mur-h
   }
   ```
   and in the match arm: `let mode = parse_outbound_mode(value)?;`.
-- [ ] `mod.rs` line 99 export list: add `cmd_perm_remove_path`.
-- [ ] `perm.rs` tests module, after `inert_patterns_are_refused_with_guidance`:
+- [x] `mod.rs` line 99 export list: add `cmd_perm_remove_path`.
+- [x] `perm.rs` tests module, after `inert_patterns_are_refused_with_guidance`:
   ```rust
       #[test]
       fn remove_path_takes_one_grant_back_and_reports_whether_it_was_there() {
@@ -126,8 +126,8 @@ Identical to the P1 plan (env exports, test commands, `npm` commands from `mur-h
       }
   ```
   Add `parse_outbound_mode, remove_path` to the test module's `use super::…` line.
-- [ ] `set -o pipefail; RUST_MIN_STACK=33554432 cargo nextest run -p mur-core --lib cmd::agent::perm 2>&1 | tail -n 6` → `17 tests run: 17 passed`. `cargo clippy -p mur-core --all-targets -- -D warnings` → 0. `cargo fmt -p mur-core`.
-- [ ] Commit: `feat(core): perm remove-path, and proxy_only reachable from set-mode`
+- [x] `set -o pipefail; RUST_MIN_STACK=33554432 cargo nextest run -p mur-core --lib cmd::agent::perm 2>&1 | tail -n 6` → `17 tests run: 17 passed`. `cargo clippy -p mur-core --all-targets -- -D warnings` → 0. `cargo fmt -p mur-core`.
+- [x] Commit: `feat(core): perm remove-path, and proxy_only reachable from set-mode`
 
 ---
 
@@ -135,7 +135,7 @@ Identical to the P1 plan (env exports, test commands, `npm` commands from `mur-h
 
 **Interfaces.** Consumes Task 1. Produces Tauri commands (all `(name, …) -> Result<AgentDetail, String>`): `agent_perm_set_outbound_mode(name, mode)`, `agent_perm_allow_host(name, host)`, `agent_perm_deny_host(name, host)`, `agent_perm_grant_path(name, verb, path)`, `agent_perm_remove_path(name, verb, path)`, `agent_perm_set_spawn_mode(name, mode)`, `agent_perm_allow_spawn(name, program)`, `agent_perm_deny_spawn(name, program)`, `agent_perm_allow_spawn_dir(name, dir)`, `agent_perm_deny_spawn_dir(name, dir)`, `agent_perm_set_tool(name, pattern, policy)`, `agent_perm_clear_tool(name, pattern)`. Task 3 invokes them by these names with camelCase args.
 
-- [ ] Create `mur-hub-gui/src-tauri/src/perm_admin.rs`:
+- [x] Create `mur-hub-gui/src-tauri/src/perm_admin.rs`:
   ```rust
   //! Permission writes from the Hub (spec 2026-09-07 §P2). Every command is one
   //! `cmd_perm_*` call and a re-read: the CLI function loads the whole profile,
@@ -263,9 +263,9 @@ Identical to the P1 plan (env exports, test commands, `npm` commands from `mur-h
       }
   }
   ```
-- [ ] `lib.rs`: add `mod perm_admin;` beside `mod mcp_skills;` (grep `^mod mcp_skills`), and in `invoke_handler` after `mcp_skills::agent_mcp_remove,` add the twelve `perm_admin::agent_perm_*` lines in the order above.
-- [ ] `set -o pipefail; cargo test --manifest-path mur-hub-gui/src-tauri/Cargo.toml --lib perm_admin:: 2>&1 | tail -n 5` → 1 passed. `cargo clippy --manifest-path mur-hub-gui/src-tauri/Cargo.toml --all-targets -- -D warnings` → 0. `cargo fmt --manifest-path mur-hub-gui/src-tauri/Cargo.toml`.
-- [ ] Commit: `feat(hub): permission write commands, each one CLI call and a re-read`
+- [x] `lib.rs`: add `mod perm_admin;` beside `mod mcp_skills;` (grep `^mod mcp_skills`), and in `invoke_handler` after `mcp_skills::agent_mcp_remove,` add the twelve `perm_admin::agent_perm_*` lines in the order above.
+- [x] `set -o pipefail; cargo test --manifest-path mur-hub-gui/src-tauri/Cargo.toml --lib perm_admin:: 2>&1 | tail -n 5` → 1 passed. `cargo clippy --manifest-path mur-hub-gui/src-tauri/Cargo.toml --all-targets -- -D warnings` → 0. `cargo fmt --manifest-path mur-hub-gui/src-tauri/Cargo.toml`.
+- [x] Commit: `feat(hub): permission write commands, each one CLI call and a re-read`
 
 ---
 
@@ -273,7 +273,7 @@ Identical to the P1 plan (env exports, test commands, `npm` commands from `mur-h
 
 **Interfaces.** Consumes Task 2's command names. Produces nothing later tasks consume.
 
-- [ ] `permissionsModel.test.ts`: append
+- [x] `permissionsModel.test.ts`: append
   ```ts
   import { OUTBOUND_MODES, SPAWN_MODES, TOOL_POLICIES, afterWriteHint } from "./permissionsModel";
 
@@ -290,7 +290,7 @@ Identical to the P1 plan (env exports, test commands, `npm` commands from `mur-h
   });
   ```
   `npm test -- src/components/inspector/tabs/permissionsModel.test.ts` → fails.
-- [ ] `permissionsModel.ts`: append
+- [x] `permissionsModel.ts`: append
   ```ts
   /** What the CLI's set-mode accepts, spelled as the view/serde names. The
    *  outbound value goes to `cmd_perm_set_mode` verbatim; `proxy_only` is the
@@ -310,7 +310,7 @@ Identical to the P1 plan (env exports, test commands, `npm` commands from `mur-h
   }
   ```
   Test passes.
-- [ ] i18n `en.ts` after `"perm.copied"`:
+- [x] i18n `en.ts` after `"perm.copied"`:
   ```ts
     "perm.saved": "Saved.",
     "perm.restartHint": "Saved — takes effect when the agent restarts (Stop, then Run, in the header).",
@@ -356,16 +356,16 @@ Identical to the P1 plan (env exports, test commands, `npm` commands from `mur-h
     "perm.spawnMode.none": "none",
     "perm.spawnMode.strict": "strict — 只有列出的程式，不含系統路徑",
   ```
-- [ ] Create `PermissionEditors.tsx` — `usePermWrite(detail, onSaved, isRunning)` returning `{ busy, error, hint, run(cmd, args) }` (mirrors `McpTab.addServer`: `setError(null); setBusy(true); try { onSaved(await invoke<AgentDetail>(cmd, { name: detail.agent_name, ...args })); setHint(afterWriteHint(isRunning)) } catch (e) { setError(String(e)) } finally { setBusy(false) }`), plus: `ModeSelect` (`<select className="perm__select">` over a given list, `onChange` → `run`), `RemoveBtn` (`<button className="perm__row-x" title={t("detail.remove")}>×</button>`), `AddHost` (input + `detail.add` button → `agent_perm_allow_host`), `AddFolder({verb})` (`open({ directory: true, title: t("perm.pickFolder", { verb: t(`perm.fs.${verb}`) }) })` → `agent_perm_grant_path`), `AddProgram` (`open({ multiple: false, title })` → `agent_perm_allow_spawn`), `AddDir` (`open({ directory: true, title })` → `agent_perm_allow_spawn_dir`), `AddRule` (pattern input + `PolicySelect` + `detail.add` → `agent_perm_set_tool`), `PolicySelect` (select over `TOOL_POLICIES`). Each editor takes the `write` object from the hook. `≤ 220` lines.
-- [ ] `PermissionsTab.tsx`: accept `isRunning: boolean`; create `const write = usePermWrite(detail, onSaved, isRunning)` once at the top; render `write.error` as `<p className="save-error">` and `write.hint` as `<p className="perm__hint field-muted">` directly under the enforcement banner (one place, not per block); then per block:
+- [x] Create `PermissionEditors.tsx` — `usePermWrite(detail, onSaved, isRunning)` returning `{ busy, error, hint, run(cmd, args) }` (mirrors `McpTab.addServer`: `setError(null); setBusy(true); try { onSaved(await invoke<AgentDetail>(cmd, { name: detail.agent_name, ...args })); setHint(afterWriteHint(isRunning)) } catch (e) { setError(String(e)) } finally { setBusy(false) }`), plus: `ModeSelect` (`<select className="perm__select">` over a given list, `onChange` → `run`), `RemoveBtn` (`<button className="perm__row-x" title={t("detail.remove")}>×</button>`), `AddHost` (input + `detail.add` button → `agent_perm_allow_host`), `AddFolder({verb})` (`open({ directory: true, title: t("perm.pickFolder", { verb: t(`perm.fs.${verb}`) }) })` → `agent_perm_grant_path`), `AddProgram` (`open({ multiple: false, title })` → `agent_perm_allow_spawn`), `AddDir` (`open({ directory: true, title })` → `agent_perm_allow_spawn_dir`), `AddRule` (pattern input + `PolicySelect` + `detail.add` → `agent_perm_set_tool`), `PolicySelect` (select over `TOOL_POLICIES`). Each editor takes the `write` object from the hook. `≤ 220` lines.
+- [x] `PermissionsTab.tsx`: accept `isRunning: boolean`; create `const write = usePermWrite(detail, onSaved, isRunning)` once at the top; render `write.error` as `<p className="save-error">` and `write.hint` as `<p className="perm__hint field-muted">` directly under the enforcement banner (one place, not per block); then per block:
   - runtime: `<ModeSelect value={outboundModeForCli(v.runtime_outbound.mode)} options={OUTBOUND_MODES} labelKey="perm.mode" cmd="agent_perm_set_outbound_mode" />` replaces the plain `perm__mode` line; each allow-host row gets `<RemoveBtn onClick={() => write.run("agent_perm_deny_host", { host })} />`; `<AddHost />` after the list. (Mode `off`/`unrestricted` still hide the host list, as P1 does.)
   - filesystem: each of Read / Write / Deny sub-lists gets `<AddFolder verb="read" />` etc. under it (shown even when the list is empty — replace the `perm.fs.none` early-return with the three `Grants` + three `AddFolder`s); each row gets `RemoveBtn` → `agent_perm_remove_path { verb, path: g.raw }`.
   - processes: `<ModeSelect value={v.processes.spawn_mode} options={SPAWN_MODES} labelKey="perm.spawnMode" cmd="agent_perm_set_spawn_mode" />`; program rows get `RemoveBtn` → `agent_perm_deny_spawn`; `<AddProgram />`; build-lane rows get `RemoveBtn` → `agent_perm_deny_spawn_dir`; `<AddDir />`.
   - tools: each rule's policy text becomes `<PolicySelect value={r.policy} onChange={(policy) => write.run("agent_perm_set_tool", { pattern: r.pattern, policy })} />`; `RemoveBtn` → `agent_perm_clear_tool`; `<AddRule />` after the list (also when empty).
   - limits block unchanged (Constraint 4).
   - The `CopyCmd` lines stay.
-- [ ] `CapabilitiesTab.tsx`: prop `isRunning: boolean` threaded to `<PermissionsTab detail={detail} onSaved={onSaved} isRunning={isRunning} />`. `AgentDetail.tsx` line 255: `<CapabilitiesTab detail={detail} onSaved={setDetail} isRunning={isRunning} />` (`isRunning` is already computed at line 142).
-- [ ] `permissions.css` append:
+- [x] `CapabilitiesTab.tsx`: prop `isRunning: boolean` threaded to `<PermissionsTab detail={detail} onSaved={onSaved} isRunning={isRunning} />`. `AgentDetail.tsx` line 255: `<CapabilitiesTab detail={detail} onSaved={setDetail} isRunning={isRunning} />` (`isRunning` is already computed at line 142).
+- [x] `permissions.css` append:
   ```css
   .perm__select { font: inherit; font-size: var(--text-sm); font-family: var(--font-mono); color: var(--text-primary); background: var(--surface-secondary); border: 1px solid var(--border-line); border-radius: var(--radius-sm); padding: 3px 6px; margin: 2px 0; }
   .perm__row-x { margin-left: auto; font: inherit; line-height: 1; color: var(--text-tertiary); background: none; border: 0; cursor: pointer; padding: 0 4px; }
@@ -374,9 +374,9 @@ Identical to the P1 plan (env exports, test commands, `npm` commands from `mur-h
   .perm__add .input { flex: 1; min-width: 0; max-width: 320px; }
   .perm__hint { font-size: var(--text-xs); margin: 0 0 var(--space-3); }
   ```
-- [ ] `set -o pipefail; npm test 2>&1 | tail -n 4; npm run build 2>&1 | tail -n 2; npm run lint 2>&1 | tail -n 2` → all green, 0 lint errors.
-- [ ] Manual acceptance in the real Hub, on a **running** agent: (1) Filesystem → Write → "Add folder…" → pick an existing folder → row appears with `·`/✓ and the hint says restart; (2) pick `~` (home) → the CLI's `reject_ungrantable` message appears verbatim in the error line, nothing added; (3) `×` on the new row → gone; (4) outbound select → `proxy_only` → view shows `proxyonly`; (5) tools → add `bash` `deny` → red DENY row; change its select to `allow` → green; `×` → gone; (6) `mur agent perm show <name>` in a terminal agrees with every change. Then stop the agent and confirm the hint reads "Saved." without the restart clause.
-- [ ] Commit: `feat(hub): edit permissions in place — folders via the native picker, hosts, spawn, tool rules`
+- [x] `set -o pipefail; npm test 2>&1 | tail -n 4; npm run build 2>&1 | tail -n 2; npm run lint 2>&1 | tail -n 2` → all green, 0 lint errors.
+- [x] Manual acceptance in the real Hub, on a **running** agent: (1) Filesystem → Write → "Add folder…" → pick an existing folder → row appears with `·`/✓ and the hint says restart; (2) pick `~` (home) → the CLI's `reject_ungrantable` message appears verbatim in the error line, nothing added; (3) `×` on the new row → gone; (4) outbound select → `proxy_only` → view shows `proxyonly`; (5) tools → add `bash` `deny` → red DENY row; change its select to `allow` → green; `×` → gone; (6) `mur agent perm show <name>` in a terminal agrees with every change. Then stop the agent and confirm the hint reads "Saved." without the restart clause.
+- [x] Commit: `feat(hub): edit permissions in place — folders via the native picker, hosts, spawn, tool rules`
 
 ## Self-review
 
