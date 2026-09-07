@@ -329,6 +329,22 @@ pub fn spawn_stream(
     });
 }
 
+/// Params for `tool/hitl_respond`.
+///
+/// `surface` is the audit attribution recorded on the signed `HitlResponse`
+/// (`mur_common::hitl::HitlResponse`): `"cli"` when a human answered the gate,
+/// `"auto"` when the session answered it for them (`--auto`, `--auto-reads`, a
+/// session-wide grant). Sending `"cli"` for a machine decision would claim a
+/// human was there, which is the class of lie spec §4.4 exists to prevent.
+///
+/// Omitting the field is not harmless either: the runtime defaults a missing
+/// surface to `"unknown"`, so the channel records that someone answered without
+/// recording who. Build the params here rather than inline so both CLI senders
+/// stay in step.
+pub(crate) fn hitl_respond_params(hitl_id: &str, allow: bool, surface: &str) -> serde_json::Value {
+    json!({ "hitl_id": hitl_id, "allow": allow, "surface": surface })
+}
+
 /// Answer a pending HITL request on a fresh connection. Does not block the
 /// streaming worker; the agent resumes once the runtime receives this.
 pub async fn respond_hitl(
@@ -336,13 +352,14 @@ pub async fn respond_hitl(
     agent: String,
     hitl_id: String,
     allow: bool,
+    surface: &'static str,
 ) -> Result<()> {
     tokio::task::spawn_blocking(move || {
         dial_method(
             &home,
             &agent,
             "tool/hitl_respond",
-            json!({ "hitl_id": hitl_id, "allow": allow }),
+            hitl_respond_params(&hitl_id, allow, surface),
             DialMode::RequireRunning,
         )
     })
@@ -440,6 +457,26 @@ fn extract_text(message: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hitl_respond_params_always_carry_a_surface() {
+        // The defect this guards: the CLI used to send only hitl_id and allow,
+        // so the runtime defaulted the surface to "unknown" and the signed
+        // channel could not say which surface answered.
+        for (allow, surface) in [(true, "cli"), (false, "cli"), (true, "auto")] {
+            let p = hitl_respond_params("h-1", allow, surface);
+            assert_eq!(p["hitl_id"], "h-1");
+            assert_eq!(p["allow"], allow);
+            assert_eq!(
+                p["surface"], surface,
+                "surface must be sent verbatim, never dropped"
+            );
+            assert!(
+                !p["surface"].is_null(),
+                "a missing surface is recorded as \"unknown\" by the runtime"
+            );
+        }
+    }
 
     #[test]
     fn build_params_threads_context() {
