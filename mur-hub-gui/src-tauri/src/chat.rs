@@ -85,6 +85,8 @@ pub async fn agent_chat_send(
     text: String,
     task_id: String,
     context_task_id: Option<String>,
+    // Channel picked in the chat window's rail; `None` = the agent's latest.
+    channel_id: Option<String>,
 ) -> Result<ChatReply, String> {
     let home = crate::mur_home_path();
     // Register the in-flight id synchronously so a Stop pressed mid-turn can
@@ -99,6 +101,7 @@ pub async fn agent_chat_send(
     // duplicate user turns on retry, and pins both halves to one channel.
     let persist_home = home.clone();
     let persist_name = name.clone();
+    let persist_channel = channel_id;
     let persist_user_text = text.clone();
     let user_task_id = task_id.clone();
 
@@ -194,6 +197,7 @@ pub async fn agent_chat_send(
     persist_exchange(
         &persist_home,
         &persist_name,
+        persist_channel.as_deref(),
         &persist_user_text,
         Some(&user_task_id),
         &reply,
@@ -267,15 +271,17 @@ fn extract_text(message: &Value) -> String {
 
 // ─── Channel persistence ───────────────────────────────────────────────────
 
-/// Persist one user→agent exchange into the agent's channel, resolving the
-/// channel ONCE so both halves land together (never split across channels if a
-/// newer channel appears mid-turn). Best-effort: failures are logged, never
+/// Persist one user→agent exchange into the agent's channel — the explicit
+/// `channel_id` when the chat window's rail picked one, else the agent's latest —
+/// resolving the channel ONCE so both halves land together (never split across
+/// channels if a newer channel appears mid-turn). Best-effort: failures are logged, never
 /// surfaced to the chat. The channel is created here on the first real exchange,
 /// so a failed/empty turn writes nothing (no orphaned user message).
 #[allow(clippy::too_many_arguments)]
 fn persist_exchange(
     home: &std::path::Path,
     agent: &str,
+    channel_id: Option<&str>,
     user_text: &str,
     user_task_id: Option<&str>,
     agent_text: &str,
@@ -284,9 +290,12 @@ fn persist_exchange(
 ) {
     let res = (|| -> anyhow::Result<()> {
         let svc = ChannelService::open(home)?;
-        let id = match svc.latest_for_agent(agent)? {
-            Some(id) => id,
-            None => svc.create_for_agent(agent)?.id,
+        let id = match channel_id {
+            Some(id) => id.to_string(),
+            None => match svc.latest_for_agent(agent)? {
+                Some(id) => id,
+                None => svc.create_for_agent(agent)?.id,
+            },
         };
         svc.append_message(
             &id,
@@ -322,15 +331,32 @@ fn persist_exchange(
     }
 }
 
-/// Tauri command: load the agent's latest channel events for hydration.
-#[tauri::command]
-pub async fn channel_load(name: String) -> Result<Vec<ChannelEvent>, String> {
-    let home = crate::mur_home_path();
-    let svc = ChannelService::open(&home).map_err(|e| e.to_string())?;
-    let Some(id) = svc.latest_for_agent(&name).map_err(|e| e.to_string())? else {
-        return Ok(vec![]);
+/// Events for hydration: the explicit `channel_id` when given, else the agent's
+/// latest channel (empty when the agent has none yet).
+fn load_channel_events(
+    home: &std::path::Path,
+    name: &str,
+    channel_id: Option<&str>,
+) -> anyhow::Result<Vec<ChannelEvent>> {
+    let svc = ChannelService::open(home)?;
+    let id = match channel_id {
+        Some(id) => id.to_string(),
+        None => match svc.latest_for_agent(name)? {
+            Some(id) => id,
+            None => return Ok(vec![]),
+        },
     };
-    svc.load_events(&id).map_err(|e| e.to_string())
+    svc.load_events(&id)
+}
+
+/// Tauri command: load channel events for hydration (see `load_channel_events`).
+#[tauri::command]
+pub async fn channel_load(
+    name: String,
+    channel_id: Option<String>,
+) -> Result<Vec<ChannelEvent>, String> {
+    let home = crate::mur_home_path();
+    load_channel_events(&home, &name, channel_id.as_deref()).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -366,6 +392,7 @@ mod channel_tests {
         persist_exchange(
             tmp.path(),
             "qa",
+            None,
             "the question",
             Some("u-1"),
             "the answer",
@@ -385,8 +412,47 @@ mod channel_tests {
         assert_eq!(evs[1].payload["usage"]["route_reason"], "smart-background");
         assert!(evs[0].payload.get("usage").is_none());
         // A second exchange appends to the SAME channel, not a new one.
-        persist_exchange(tmp.path(), "qa", "q2", None, "a2", None, None);
+        persist_exchange(tmp.path(), "qa", None, "q2", None, "a2", None, None);
         assert_eq!(svc.list(10).unwrap().len(), 1);
         assert_eq!(svc.load_events(&id).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn explicit_channel_id_wins_over_latest() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let old = svc.create_for_agent("qa").unwrap().id;
+        svc.append_message(
+            &old,
+            ChannelActor::local_human(),
+            EventKind::Message,
+            "old q",
+            None,
+        )
+        .unwrap();
+        let new = svc.create_for_agent("qa").unwrap().id;
+        svc.append_message(
+            &new,
+            ChannelActor::local_human(),
+            EventKind::Message,
+            "new q",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            svc.latest_for_agent("qa").unwrap().as_deref(),
+            Some(new.as_str())
+        );
+
+        // Hydration: no id → latest; explicit id → that channel, even if older.
+        let latest = load_channel_events(tmp.path(), "qa", None).unwrap();
+        assert_eq!(latest[0].payload["text"], "new q");
+        let picked = load_channel_events(tmp.path(), "qa", Some(&old)).unwrap();
+        assert_eq!(picked[0].payload["text"], "old q");
+
+        // Persistence follows the same choice: the turn lands in the picked channel.
+        persist_exchange(tmp.path(), "qa", Some(&old), "q2", None, "a2", None, None);
+        assert_eq!(svc.load_events(&old).unwrap().len(), 3);
+        assert_eq!(svc.load_events(&new).unwrap().len(), 1);
     }
 }

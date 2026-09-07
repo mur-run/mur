@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { ChannelSummary } from "../../work/types";
+import { relativeTime } from "../../work/format";
 
 interface Props {
   agentName: string;
@@ -17,6 +18,12 @@ function agentChannels(channels: ChannelSummary[], agentName: string): ChannelSu
       c.id.startsWith(`${agentName}-`) ||
       c.id.startsWith(`fleet-`),
   );
+}
+
+/** What the rail prints for a channel: its title (the first message), else the
+ *  preview line, else the short id — a uuid tail is the last resort, not the label. */
+export function channelLabel(c: ChannelSummary): string {
+  return c.title || c.preview || shortName(c.id);
 }
 
 function shortName(id: string): string {
@@ -42,9 +49,13 @@ export function ChatChannelRail({ agentName, activeId, onSelect }: Props) {
 
   const fleetChs = channels.filter((c) => c.id.startsWith("fleet-"));
   const agentChs = channels.filter((c) => !c.id.startsWith("fleet-"));
+  // No pick yet = the agent's latest channel, which is what ChatTab hydrates;
+  // the list is newest-first, so highlight the first row rather than nothing.
+  const highlighted = activeId ?? agentChs[0]?.id ?? null;
+  const now = Date.now();
 
   function renderChannel(c: ChannelSummary) {
-    const isActive = c.id === activeId;
+    const isActive = c.id === highlighted;
     return (
       <button
         key={c.id}
@@ -53,7 +64,8 @@ export function ChatChannelRail({ agentName, activeId, onSelect }: Props) {
         title={c.title || c.id}
       >
         <span className="cw-rail__ch-hash">#</span>
-        <span className="cw-rail__ch-name">{shortName(c.id)}</span>
+        <span className="cw-rail__ch-name">{channelLabel(c)}</span>
+        <span className="cw-rail__ch-time">{relativeTime(c.updated_at, now)}</span>
         {c.turns > 0 && !isActive && (
           <span className="cw-rail__ch-badge">{c.turns > 99 ? "99+" : c.turns}</span>
         )}
