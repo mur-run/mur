@@ -411,6 +411,10 @@ pub struct App {
     /// every new gate so a fresh request always opens at the top; the renderer
     /// clamps it to the content and hands back what it used.
     pub hitl_scroll: u16,
+    /// Body rows the approval modal last had room to show. The renderer reports
+    /// it so PgUp/PgDn can page by the real window instead of a fixed guess
+    /// that could step over unread rows; 0 until the modal has drawn once.
+    pub hitl_page: u16,
     pub session: Session,
     /// Cached live-channel id + state for status bar. Refreshed after each
     /// persisted turn on resume/switch. `None` until first append.
@@ -633,6 +637,7 @@ impl App {
             hitl_resolved_at: None,
             hitl_grant_confirm: None,
             hitl_scroll: 0,
+            hitl_page: 0,
             session,
             channel: None,
             scroll_back: 0,
