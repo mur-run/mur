@@ -6,6 +6,7 @@
 @import "./components/status.css";
 @import "./components/dashboard.css";
 @import "./components/detail-panel.css";
+@import "./components/permissions.css";
 @import "./components/chat.css";
 @import "./components/work.css";
 @import "./components/popover.css";

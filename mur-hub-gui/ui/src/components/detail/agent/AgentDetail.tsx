@@ -252,7 +252,7 @@ export function AgentDetail({
           setLibraryOpen={setLibraryOpen}
         />
       )}
-      {detail && tab === "capabilities" && <CapabilitiesTab detail={detail} onSaved={setDetail} />}
+      {detail && tab === "capabilities" && <CapabilitiesTab detail={detail} onSaved={setDetail} isRunning={isRunning} />}
       {tab === "memory" && <MemoryTab agentName={agentName} />}
       {tab === "automation" && <ScheduleTab agentName={agentName} />}
       {tab === "channels" && <ChannelsTab agentName={agentName} />}
