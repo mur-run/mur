@@ -388,8 +388,12 @@ anything is applied; the review lane labels each proposal `✓ signed`.
   chats, skills / workflows / MCP / plugins, settings): source list with filter
   and facets, full-width detail, ⌘K palette, **⌘↩ to open any agent or fleet in
   its own window**, a side-peek from Home, ⌘-click multi-select with bulk
-  Start / Stop, streaming replies, human-in-the-loop tool approvals, and
-  drag-out **desktop pets** with expressions and speech bubbles.
+  Start / Stop, streaming replies, human-in-the-loop tool approvals, a
+  **Permissions** section that shows every entitlement the sandbox will enforce
+  and edits it in place (folders through the native picker, hosts, spawn, tool
+  rules — each change is one CLI call and a re-read, so the Hub and
+  `mur agent perm show` never disagree), and drag-out **desktop pets** with
+  expressions and speech bubbles.
   [Docs](https://app.mur.run/docs/core/mur-hub).
 - **Voice** — fully on-device TTS (Kokoro 82M) + STT (whisper.cpp); respects
   Do Not Disturb, Focus, and a busy microphone.
@@ -664,7 +668,7 @@ mur
 ├── init / doctor / update / stats / verify
 ├── agent        create · start · stop · restart · remove · cli · send · card · dial · who ·
 │                export · install · install-service · addon · companion · voice · pair ·
-│                schedule (add · proposals · accept) · perm (incl. list-paths) · secret ·
+│                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only) · secret ·
 │                fallback · smart · routing · effort · trash · rollback … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · status · run · set-loop · send · jobs   (squads of agents over a shared channel)
