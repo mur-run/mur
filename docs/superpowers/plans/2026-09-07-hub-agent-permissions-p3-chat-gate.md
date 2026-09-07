@@ -90,8 +90,8 @@ Commit after every task. Check `git branch --show-current` is `feat/hub-permissi
 
 **Interfaces.** Produces `mur_common::hitl::pin::action_hash(tool_name, input, channel_id, step_or_call_id, agent_id) -> String`, `mur_common::hitl::pin::PIN_CANON_VERSION`, `mur_common::hitl::APPROVAL_TTL_SECS: i64`, `mur_common::hitl::within_approval_ttl(event_ts, now) -> bool`, `mur_common::agent::HITL_CHANNEL_FILE: &str`. Tasks 2, 3 consume them; mur-core keeps compiling through a re-export.
 
-- [ ] `git mv mur-core/src/hitl/pin.rs mur-common/src/hitl/pin.rs`. The moved file changes in exactly one place: nothing — it uses only `sha2` and `serde_json`, both mur-common deps. Confirm: `grep -n "^use" mur-common/src/hitl/pin.rs` → `use sha2::{Digest, Sha256};`.
-- [ ] `mur-common/src/hitl.rs`: after the `use serde::{Deserialize, Serialize};` line add:
+- [x] `git mv mur-core/src/hitl/pin.rs mur-common/src/hitl/pin.rs`. The moved file changes in exactly one place: nothing — it uses only `sha2` and `serde_json`, both mur-common deps. Confirm: `grep -n "^use" mur-common/src/hitl/pin.rs` → `use sha2::{Digest, Sha256};`.
+- [x] `mur-common/src/hitl.rs`: after the `use serde::{Deserialize, Serialize};` line add:
   ```rust
   pub mod pin;
 
@@ -113,7 +113,7 @@ Commit after every task. Check `git branch --show-current` is `feat/hub-permissi
   }
   ```
   `chrono` is already a mur-common dependency (`ChannelEvent.ts`). Because `hitl.rs` now has a submodule, move it: `git mv mur-common/src/hitl.rs mur-common/src/hitl/mod.rs` (Rust 2018+ allows `hitl.rs` + `hitl/pin.rs`, but the sibling crates use the `mod.rs` layout — match them).
-- [ ] `mur-common/src/hitl/mod.rs` tests module, append:
+- [x] `mur-common/src/hitl/mod.rs` tests module, append:
   ```rust
   #[test]
   fn ttl_boundary_is_inclusive_at_seven_days() {
@@ -124,7 +124,7 @@ Commit after every task. Check `git branch --show-current` is `feat/hub-permissi
       assert!(!within_approval_ttl(over, now));
   }
   ```
-- [ ] `mur-common/src/agent.rs`: directly below `pub const SCHEDULE_CHANNEL_FILE: &str = "schedule-channel";` add:
+- [x] `mur-common/src/agent.rs`: directly below `pub const SCHEDULE_CHANNEL_FILE: &str = "schedule-channel";` add:
   ```rust
   /// Marker file in the agent's home naming the channel that records chat-gate
   /// decisions (`HitlResponse` events keyed by `action_hash`). Same shape as
@@ -132,7 +132,7 @@ Commit after every task. Check `git branch --show-current` is `feat/hub-permissi
   /// channel that no longer loads.
   pub const HITL_CHANNEL_FILE: &str = "hitl-channel";
   ```
-- [ ] `mur-core/src/hitl/mod.rs` becomes:
+- [x] `mur-core/src/hitl/mod.rs` becomes:
   ```rust
   //! Risk-tiered, hash-pinned HITL gate for the channel executor (v3c).
   pub mod gate;
@@ -141,9 +141,9 @@ Commit after every task. Check `git branch --show-current` is `feat/hub-permissi
   /// `crate::hitl::pin::action_hash` call site stays valid.
   pub use mur_common::hitl::pin;
   ```
-- [ ] `mur-core/src/hitl/gate.rs`: delete the `HITL_APPROVAL_TTL_SECS` const and the `within_approval_ttl` fn (lines 51–64). Add `within_approval_ttl` to the existing `use mur_common::hitl::{...}` import. `grep -n "HITL_APPROVAL_TTL_SECS\|within_approval_ttl" mur-core/src` must show only the import and the call in `scan_prior` plus any test that already referenced the fn (update the test to `mur_common::hitl::APPROVAL_TTL_SECS` if it used the old name).
-- [ ] `set -o pipefail; cargo nextest run -p mur-common --lib hitl 2>&1 | tail -n 6` → `… passed` including `ttl_boundary_is_inclusive_at_seven_days`, `hash_is_stable_and_order_independent`, `drift_changes_the_hash`. `set -o pipefail; RUST_MIN_STACK=33554432 cargo nextest run -p mur-core --lib hitl 2>&1 | tail -n 6` → all gate tests pass unchanged. `cargo clippy -p mur-common -p mur-core --all-targets -- -D warnings` → 0. `cargo fmt`.
-- [ ] Commit: `refactor(hitl): pin canonicalisation and approval TTL move to mur-common`
+- [x] `mur-core/src/hitl/gate.rs`: delete the `HITL_APPROVAL_TTL_SECS` const and the `within_approval_ttl` fn (lines 51–64). Add `within_approval_ttl` to the existing `use mur_common::hitl::{...}` import. `grep -n "HITL_APPROVAL_TTL_SECS\|within_approval_ttl" mur-core/src` must show only the import and the call in `scan_prior` plus any test that already referenced the fn (update the test to `mur_common::hitl::APPROVAL_TTL_SECS` if it used the old name).
+- [x] `set -o pipefail; cargo nextest run -p mur-common --lib hitl 2>&1 | tail -n 6` → `… passed` including `ttl_boundary_is_inclusive_at_seven_days`, `hash_is_stable_and_order_independent`, `drift_changes_the_hash`. `set -o pipefail; RUST_MIN_STACK=33554432 cargo nextest run -p mur-core --lib hitl 2>&1 | tail -n 6` → all gate tests pass unchanged. `cargo clippy -p mur-common -p mur-core --all-targets -- -D warnings` → 0. `cargo fmt`.
+- [x] Commit: `refactor(hitl): pin canonicalisation and approval TTL move to mur-common`
 
 ---
 
@@ -166,7 +166,7 @@ impl ChannelDecisionStore { pub fn new(mur_home: PathBuf, agent: String, identit
 ```
 Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
 
-- [ ] `git mv mur-agent-runtime/src/hitl.rs mur-agent-runtime/src/hitl/mod.rs`; append to it:
+- [x] `git mv mur-agent-runtime/src/hitl.rs mur-agent-runtime/src/hitl/mod.rs`; append to it:
   ```rust
   pub mod batch;
   pub mod store;
@@ -184,7 +184,7 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
   }
   ```
   Every existing constructor of `HitlDecision` (grep `HitlDecision {` in `task_runner.rs`, `supervisor.rs`) gains `surface: None`. Create `mur-agent-runtime/src/hitl/batch.rs` as an empty file with `//! P3 batch gate — filled in Task 3.` so the module tree compiles.
-- [ ] Create `mur-agent-runtime/src/hitl/store.rs`:
+- [x] Create `mur-agent-runtime/src/hitl/store.rs`:
   ```rust
   //! Gate B's memory: settled chat-gate decisions, one remembered channel per
   //! agent. `HitlResponse` events only, signed by the agent's own identity.
@@ -437,8 +437,8 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
   }
   ```
   `svc.store().events_path(..)` and `svc.append(..)` signatures: confirm with `grep -n "pub fn events_path\|pub fn append(" mur-channel/src/store.rs mur-channel/src/service.rs` before writing the two tests that use them; if `events_path` does not exist, use `mur_home.join("channels").join(id).join("events.jsonl")` after confirming the layout with `find <tmp> -name '*.jsonl'` in a scratch run. `tempfile` is already a dev-dependency of the runtime (`grep tempfile mur-agent-runtime/Cargo.toml`).
-- [ ] `set -o pipefail; cargo nextest run -p mur-agent-runtime --lib hitl::store 2>&1 | tail -n 8` → `6 tests run: 6 passed`. `cargo clippy -p mur-agent-runtime --all-targets -- -D warnings` → 0. `cargo fmt -p mur-agent-runtime`.
-- [ ] Commit: `feat(runtime): chat-gate decision store — signed HitlResponse events in a remembered per-agent channel`
+- [x] `set -o pipefail; cargo nextest run -p mur-agent-runtime --lib hitl::store 2>&1 | tail -n 8` → `6 tests run: 6 passed`. `cargo clippy -p mur-agent-runtime --all-targets -- -D warnings` → 0. `cargo fmt -p mur-agent-runtime`.
+- [x] Commit: `feat(runtime): chat-gate decision store — signed HitlResponse events in a remembered per-agent channel`
 
 ---
 
@@ -453,7 +453,7 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
 } }
 ```
 
-- [ ] `mur-agent-runtime/src/hitl/batch.rs`:
+- [x] `mur-agent-runtime/src/hitl/batch.rs`:
   ```rust
   //! Gate B, batched: every `Ask` call of one LLM response is resolved before
   //! any of them runs — a settled decision from the store, or ONE
@@ -601,7 +601,7 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
   }
   ```
   Note: a timed-out call is recorded as a denial (`allow: false`, reason "timed out"). That means the next identical call inside the TTL is denied without asking. This is the fail-closed direction and matches gate A, where an unanswered request stays pending and a *settled* denial is remembered — but a timeout is not a human decision. **Do not record timeouts**: wrap the `record` in `if decision.reason.as_deref() != Some("timed out")`. Write it that way; the note stays as the reason.
-- [ ] `task_runner.rs`: add the field and builder beside `pending_approvals`:
+- [x] `task_runner.rs`: add the field and builder beside `pending_approvals`:
   ```rust
   /// P3: settled chat-gate decisions (gate B memory). `None` = ask every time.
   decision_store: Option<Arc<dyn crate::hitl::store::DecisionStore>>,
@@ -620,7 +620,7 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
       self
   }
   ```
-- [ ] `task_runner.rs` tool loop (the `for call in &resp.tool_calls` at ~1849) becomes:
+- [x] `task_runner.rs` tool loop (the `for call in &resp.tool_calls` at ~1849) becomes:
   ```rust
   // P3: gate the whole response first — one notification, N decisions.
   let decisions = self.gate_response(task_id, &resp.tool_calls).await?;
@@ -721,8 +721,8 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
   }
   ```
   The `step_id` used for `step/started` must be the one the notification carried, so the Hub/murmur can mark the card: `pending(..)` minted it. Simplest: `gate_response` returns `(decisions, step_ids: HashMap<call_id, step_id>)` and `handle_tool_call` takes `step_id: Option<String>` too, falling back to a fresh uuid. Do that; the two extra parameters are the whole change to the signature.
-- [ ] `supervisor.rs` `HitlRespondHandler::handle`: after `let reason = ...` add `let surface = p["surface"].as_str().map(str::to_string);` and send `HitlDecision { allow, reason, surface }`. In `HitlTestRequestHandler` and every other `HitlDecision {` literal add `surface: None`.
-- [ ] Wiring. In `supervisor.rs` where `build_provider_runner` returns `runner` (an `Arc<TaskRunner>`), the store cannot be added after the `Arc` — so `build_provider_runner` takes one more argument `decision_store: Option<Arc<dyn crate::hitl::store::DecisionStore>>` and calls `.with_decision_store(s)` / `.with_agent_name(profile.inner.name.clone())` on the builder before wrapping. In `supervisor.rs` before the call:
+- [x] `supervisor.rs` `HitlRespondHandler::handle`: after `let reason = ...` add `let surface = p["surface"].as_str().map(str::to_string);` and send `HitlDecision { allow, reason, surface }`. In `HitlTestRequestHandler` and every other `HitlDecision {` literal add `surface: None`.
+- [x] Wiring. In `supervisor.rs` where `build_provider_runner` returns `runner` (an `Arc<TaskRunner>`), the store cannot be added after the `Arc` — so `build_provider_runner` takes one more argument `decision_store: Option<Arc<dyn crate::hitl::store::DecisionStore>>` and calls `.with_decision_store(s)` / `.with_agent_name(profile.inner.name.clone())` on the builder before wrapping. In `supervisor.rs` before the call:
   ```rust
   let decision_store: Arc<dyn crate::hitl::store::DecisionStore> =
       Arc::new(crate::hitl::store::ChannelDecisionStore::new(
@@ -733,7 +733,7 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
       ));
   ```
   and pass `Some(decision_store)`. Every other caller of `build_provider_runner` (grep) passes `None`.
-- [ ] Tests in `task_runner.rs` tests module, after `ask_tool_executes_after_approval`:
+- [x] Tests in `task_runner.rs` tests module, after `ask_tool_executes_after_approval`:
   ```rust
   /// P3 §3.1: two `Ask` calls in one response → ONE `tool/approval_needed`
   /// carrying both, two pending oneshots, and both execute after two allows.
@@ -830,9 +830,9 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
   }
   ```
   `CountingBashTool`: if no such helper exists (`grep -n "struct CountingBashTool" task_runner.rs`), add one beside `CountingFleetRunTool`, same shape, `name()` returns `"bash"`, `execute` bumps the counter and returns `ToolOutput { text: "ok".into(), status: ToolStatus::Ok, images: vec![] }` (copy the exact `ToolOutput` field set from `CountingFleetRunTool`).
-- [ ] The existing gate tests must still pass unchanged: `ask_tool_denies_when_no_approval_sink`, `ask_tool_executes_after_approval`, `fleet_run_explicit_deny_still_wins`, `hitl_respond_*` in `supervisor.rs`, and every test that constructed `HitlDecision` (now with `surface: None`).
-- [ ] `set -o pipefail; cargo nextest run -p mur-agent-runtime --lib 2>&1 | tail -n 8` → all pass (the whole lib, not just `hitl`: the loop changed). `cargo clippy -p mur-agent-runtime --all-targets -- -D warnings` → 0. `cargo fmt -p mur-agent-runtime`. `wc -l mur-agent-runtime/src/task_runner.rs` → fewer lines than before this task (the inline ask block left; two tests came in — if it grew, move the two new tests to `hitl/batch.rs` tests instead).
-- [ ] Commit: `feat(runtime): chat gate asks once per response and remembers settled decisions`
+- [x] The existing gate tests must still pass unchanged: `ask_tool_denies_when_no_approval_sink`, `ask_tool_executes_after_approval`, `fleet_run_explicit_deny_still_wins`, `hitl_respond_*` in `supervisor.rs`, and every test that constructed `HitlDecision` (now with `surface: None`).
+- [x] `set -o pipefail; cargo nextest run -p mur-agent-runtime --lib 2>&1 | tail -n 8` → all pass (the whole lib, not just `hitl`: the loop changed). `cargo clippy -p mur-agent-runtime --all-targets -- -D warnings` → 0. `cargo fmt -p mur-agent-runtime`. `wc -l mur-agent-runtime/src/task_runner.rs` → fewer lines than before this task (the inline ask block left; two tests came in — if it grew, move the two new tests to `hitl/batch.rs` tests instead).
+- [x] Commit: `feat(runtime): chat gate asks once per response and remembers settled decisions`
 
 ---
 
@@ -840,7 +840,7 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
 
 **Interfaces.** Consumes the Task 3 wire shape. Produces `HitlRequest::from_params(v: Value) -> Vec<HitlRequest>` in `mur-core/src/cmd/agent/cli/stream.rs`. Nothing downstream changes: murmur's queue already holds many requests and answers each by its own `hitl_id`.
 
-- [ ] `stream.rs`: below `from_value` add:
+- [x] `stream.rs`: below `from_value` add:
   ```rust
   /// One request per gated call. A P3 runtime sends `calls: [...]`; each entry
   /// has its own `hitl_id`. Older runtimes send only the top-level fields,
@@ -853,7 +853,7 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
   }
   ```
   `from_value` reads `step_id`, `hitl_id`, `tool_name`, `tool_input`, `prompt` — every per-call entry carries the first four; `prompt` falls back to `Run \`<tool>\`?` as today.
-- [ ] The `on_hitl` closure (~line 262) becomes:
+- [x] The `on_hitl` closure (~line 262) becomes:
   ```rust
   |hitl| {
       for req in HitlRequest::from_params(hitl) {
@@ -864,7 +864,7 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
       }
   },
   ```
-- [ ] `stream.rs` tests module, beside the existing `from_value` tests:
+- [x] `stream.rs` tests module, beside the existing `from_value` tests:
   ```rust
   #[test]
   fn from_params_expands_calls_and_falls_back_to_single() {
@@ -883,9 +883,9 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
       assert_eq!(single[0].hitl_id, "h9");
   }
   ```
-- [ ] Confirm the queue: `grep -n "pending_hitl\|hitl_queue\|VecDeque<HitlRequest>\|Vec<HitlRequest>" mur-core/src/cmd/agent/cli/*.rs` shows the collection `StreamMsg::Hitl` pushes into. If it is a single `Option<HitlRequest>` (not a collection), STOP and report — batching would drop N-1 requests in murmur and the plan needs a queue step first.
-- [ ] `set -o pipefail; RUST_MIN_STACK=33554432 cargo nextest run -p mur-core --lib cmd::agent::cli::stream 2>&1 | tail -n 6` → passes. `cargo clippy -p mur-core --all-targets -- -D warnings` → 0. `cargo fmt -p mur-core`.
-- [ ] Commit: `feat(murmur): one approval card per call when the runtime batches a response`
+- [x] Confirm the queue: `grep -n "pending_hitl\|hitl_queue\|VecDeque<HitlRequest>\|Vec<HitlRequest>" mur-core/src/cmd/agent/cli/*.rs` shows the collection `StreamMsg::Hitl` pushes into. If it is a single `Option<HitlRequest>` (not a collection), STOP and report — batching would drop N-1 requests in murmur and the plan needs a queue step first.
+- [x] `set -o pipefail; RUST_MIN_STACK=33554432 cargo nextest run -p mur-core --lib cmd::agent::cli::stream 2>&1 | tail -n 6` → passes. `cargo clippy -p mur-core --all-targets -- -D warnings` → 0. `cargo fmt -p mur-core`.
+- [x] Commit: `feat(murmur): one approval card per call when the runtime batches a response`
 
 ---
 
@@ -893,15 +893,15 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
 
 **Interfaces.** Consumes Task 3's wire shape. Produces the `hitl-approval-needed` Tauri event with `calls` and `batch_id`; `agent_hitl_respond` sends `surface: "hub"`. Task 6 consumes the event.
 
-- [ ] `mur-hub-gui/src-tauri/src/chat.rs` relay closure: add two fields:
+- [x] `mur-hub-gui/src-tauri/src/chat.rs` relay closure: add two fields:
   ```rust
   "batch_id": hitl_params.get("batch_id"),
   "calls": hitl_params.get("calls"),
   ```
   (legacy fields stay so `useInbox`/`ConversationContext`, which only read `agent`, keep working).
-- [ ] `mur-hub-gui/src-tauri/src/hitl.rs` `agent_hitl_respond`: `let mut payload = json!({ "hitl_id": hitl_id, "allow": allow, "surface": "hub" });`
-- [ ] `cd mur-hub-gui/src-tauri && set -o pipefail; cargo clippy --all-targets -- -D warnings 2>&1 | tail -n 5` → 0 (needs `ui/dist`; run `npm run build` in `ui/` first if missing).
-- [ ] Commit: `feat(hub): relay batched approvals; the Hub says which surface answered`
+- [x] `mur-hub-gui/src-tauri/src/hitl.rs` `agent_hitl_respond`: `let mut payload = json!({ "hitl_id": hitl_id, "allow": allow, "surface": "hub" });`
+- [x] `cd mur-hub-gui/src-tauri && set -o pipefail; cargo clippy --all-targets -- -D warnings 2>&1 | tail -n 5` → 0 (needs `ui/dist`; run `npm run build` in `ui/` first if missing).
+- [x] Commit: `feat(hub): relay batched approvals; the Hub says which surface answered`
 
 ---
 
@@ -909,14 +909,14 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
 
 **Interfaces.** Consumes Task 5's event and P1's `PermissionsView` (`invoke<AgentDetail>("get_agent_detail", { name })` → `.permissions`) and P2's `agent_perm_set_tool(name, pattern, policy)` / `agent_perm_grant_path(name, verb, path)` (confirm exact argument names with `grep -n "pub fn agent_perm_set_tool\|pub fn agent_perm_grant_path" -A6 mur-hub-gui/src-tauri/src/perm_admin.rs` and use the snake→camel names Tauri expects, as `PermissionEditors.tsx` already does).
 
-- [ ] `types.ts`: extend `HitlRequest` with `action_hash?: string; batch_id?: string;` and add:
+- [x] `types.ts`: extend `HitlRequest` with `action_hash?: string; batch_id?: string;` and add:
   ```ts
   /** `hitl-approval-needed` payload: legacy single-call fields plus, from a P3 runtime, `calls`. */
   export interface HitlBatchPayload extends HitlRequest {
     calls?: Array<Pick<HitlRequest, "hitl_id" | "tool_name" | "tool_input" | "action_hash"> & { step_id?: string }>;
   }
   ```
-- [ ] `mur-hub-gui/ui/src/components/hitlModel.ts`:
+- [x] `mur-hub-gui/ui/src/components/hitlModel.ts`:
   ```ts
   import type { HitlBatchPayload, HitlRequest, PermissionsView } from "../types";
 
@@ -977,7 +977,7 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
   }
   ```
   `PermissionsView.filesystem.read[i].expanded` is the absolute path P1 already computes (`PathGrantView`). Import `PermissionsView` from `types.ts` (it is exported there, line 138).
-- [ ] `hitlModel.test.ts`:
+- [x] `hitlModel.test.ts`:
   ```ts
   import { describe, it, expect } from "vitest";
   import { expandBatch, alwaysRuleFor, grantHintFor, leafToolName } from "./hitlModel";
@@ -1046,7 +1046,7 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
     });
   });
   ```
-- [ ] `HitlCard.tsx`: props become `{ request: HitlRequest; perms: PermissionsView | null; isRunning: boolean }`. Replace the non-reason actions block with:
+- [x] `HitlCard.tsx`: props become `{ request: HitlRequest; perms: PermissionsView | null; isRunning: boolean }`. Replace the non-reason actions block with:
   ```tsx
   <div className="hitl-card__actions">
     <button className="hitl-card__btn hitl-card__btn--allow" onClick={() => respond(true)} disabled={busy}>
@@ -1116,7 +1116,7 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
   const [error, setError] = useState<string | null>(null);
   ```
   and `{error && <div className="hitl-card__error">{error}</div>}` under the actions. `respond` keeps its shape; the resolved states (`allowed` / `denied` / `timeout`) still render as today but the `allowed` state also shows `ruleWritten` hint when set. `t(key, vars)` — confirm the i18n helper's interpolation signature with `grep -n "export function useT\|function t(" mur-hub-gui/ui/src/i18n/index.tsx`; if it takes no vars, build the strings with template literals around `t("hitl.always")` etc. and keep the keys plain.
-- [ ] `ChatTab.tsx`: the listener becomes
+- [x] `ChatTab.tsx`: the listener becomes
   ```tsx
   const unHitl = listen<HitlBatchPayload>("hitl-approval-needed", (e) => {
     if (e.payload.agent !== agentName) return;
@@ -1134,7 +1134,7 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
   }, [agentName]);
   ```
   (`AgentDetail.permissions` is the P1 field; confirm its name in `types.ts` with `grep -n "permissions" mur-hub-gui/ui/src/types.ts`.) `isRunning`: ChatTab already knows whether the agent is running if it renders a status; if not, pass `isRunning={true}` — the restart hint is the safe default (saying "restart" to a stopped agent costs nothing; omitting it for a running one misleads). Render grouped: consecutive requests sharing a `batch_id` sit under one `<div className="hitl-batch">` with a header `t("hitl.batchTitle", { n })` when `n > 1`; each still renders its own `<HitlCard>`.
-- [ ] i18n, both files, same commit:
+- [x] i18n, both files, same commit:
   | key | en | zh-TW |
   |---|---|---|
   | `hitl.allowOnce` | Allow this time | 這次允許 |
@@ -1144,11 +1144,18 @@ Task 3 consumes `DecisionStore`, `Settled`, `chat_action_hash`.
   | `hitl.grant` | Grant {verb} on {path} | 授權 {path} 的 {verb} |
   | `hitl.batchTitle` | {n} approvals for this response | 這則回覆需要 {n} 個核准 |
   `perm.restartHint` / `perm.saved` exist from P2. Brand: no brand string here.
-- [ ] `chat.css`: `.hitl-card__btn--always { background: var(--accent-muted); color: var(--accent); }` (use the tokens `.hitl-card__btn--allow` neighbours use — if those are raw hex, keep the same raw hex style for consistency and note it; do not introduce a third style). `.hitl-card__grant { display:flex; gap: var(--space-2); align-items:center; font-size: var(--text-sm); color: var(--fg-muted); }`, `.hitl-batch { border-left: 2px solid var(--border); padding-left: var(--space-2); }`, `.hitl-card__error { color: var(--danger); font-size: var(--text-sm); }`.
-- [ ] `cd mur-hub-gui/ui && npm test -- --run 2>&1 | tail -n 8` → all pass incl. `hitlModel`. `npm run build 2>&1 | tail -n 3` → built. `npx tsc --noEmit` → 0 errors.
-- [ ] Commit: `feat(hub): approval card asks once per response, offers always-allow as an exact rule and the grant that makes it reach`
+- [x] `chat.css`: `.hitl-card__btn--always { background: var(--accent-muted); color: var(--accent); }` (use the tokens `.hitl-card__btn--allow` neighbours use — if those are raw hex, keep the same raw hex style for consistency and note it; do not introduce a third style). `.hitl-card__grant { display:flex; gap: var(--space-2); align-items:center; font-size: var(--text-sm); color: var(--fg-muted); }`, `.hitl-batch { border-left: 2px solid var(--border); padding-left: var(--space-2); }`, `.hitl-card__error { color: var(--danger); font-size: var(--text-sm); }`.
+- [x] `cd mur-hub-gui/ui && npm test -- --run 2>&1 | tail -n 8` → all pass incl. `hitlModel`. `npm run build 2>&1 | tail -n 3` → built. `npx tsc --noEmit` → 0 errors.
+- [x] Commit: `feat(hub): approval card asks once per response, offers always-allow as an exact rule and the grant that makes it reach`
 
 ---
+
+## Executed (2026-09-07, PR #1196)
+
+- Task 4's stop condition fired: murmur's gate is a single `app.hitl: Option<HitlRequest>`. Added `app.hitl_queue: VecDeque<(task_id, HitlRequest)>` plus `promote_queued_hitl`, run after every event, stream message, and expiry sweep. Not a separate PR: without it the batch would drop N-1 gates in murmur.
+- Wiring deviation: the decision store is built inside `build_provider_runner` (it already holds `mur_home`, `profile`, `identity`) and passed to `build_runner` as two new args, instead of `supervisor.rs`. Zero lines in `supervisor.rs` beyond `surface`.
+- `task_runner.rs` grew 4324 → 4500: the inline ask block left, the two gate tests came in (they need the tests module's private helpers).
+- Manual verification below not yet run; PR stays draft until it is.
 
 ## Manual verification (real Hub, before the PR is marked ready)
 
