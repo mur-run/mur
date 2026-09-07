@@ -923,6 +923,7 @@ impl crate::protocol::a2a_server::MethodHandler for HitlRespondHandler {
             crate::protocol::a2a_server::HandlerError::InvalidParams("missing allow".into())
         })?;
         let reason = p["reason"].as_str().map(str::to_string);
+        let surface = p["surface"].as_str().map(str::to_string);
         let tx = self
             .pending_approvals
             .lock()
@@ -943,7 +944,7 @@ impl crate::protocol::a2a_server::MethodHandler for HitlRespondHandler {
         let _ = tx.send(crate::hitl::HitlDecision {
             allow,
             reason,
-            surface: None,
+            surface,
         });
         Ok(serde_json::json!({}))
     }

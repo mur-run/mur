@@ -169,8 +169,11 @@ pub fn build_runner(
     // `None` dir keeps the store in memory, as the stub runners want.
     conversation_dir: Option<std::path::PathBuf>,
     context_window: Option<u64>,
+    agent_name: String,
+    decision_store: Option<Arc<dyn crate::hitl::store::DecisionStore>>,
 ) -> Arc<TaskRunner> {
     let mut runner = TaskRunner::with_llm(client)
+        .with_agent_name(agent_name)
         .with_system_prompt(base_system_prompt)
         .with_skills(skills)
         .with_skills_cfg(skills_cfg)
@@ -196,6 +199,9 @@ pub fn build_runner(
     }
     if let Some(dir) = conversation_dir {
         runner = runner.with_conversation_memory(dir, context_window);
+    }
+    if let Some(s) = decision_store {
+        runner = runner.with_decision_store(s);
     }
     Arc::new(runner)
 }
@@ -451,6 +457,14 @@ pub async fn build_provider_runner(
         }
     };
 
+    // P3: gate B's memory — settled chat-gate decisions, signed by this agent.
+    let decision_store: Arc<dyn crate::hitl::store::DecisionStore> =
+        Arc::new(crate::hitl::store::ChannelDecisionStore::new(
+            mur_home.clone(),
+            profile.inner.name.clone(),
+            identity.clone(),
+            profile.inner.identity.key_version,
+        ));
     let build = |client: Arc<dyn LlmClient>| {
         let r = crate::supervisor_runner::build_runner(
             client.clone(),
@@ -471,6 +485,8 @@ pub async fn build_provider_runner(
             profile.inner.effort,
             Some(agent_home.join("conversations")),
             entry.context_window,
+            profile.inner.name.clone(),
+            Some(decision_store.clone()),
         );
         (r, Some(client), Some(pool.clone()))
     };
