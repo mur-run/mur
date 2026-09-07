@@ -8,7 +8,7 @@
 //! issued on *separate* connections via `dial_method` (they must not wait on the
 //! streaming socket, which is busy reading) — mirroring the MUR Hub design.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -211,12 +211,16 @@ impl HitlRequest {
 /// task id as `context.task_id` so the agent keeps conversation history.
 /// `image`, when set, is `(mime, base64)` attached as a second A2A `data` part
 /// (an inline screenshot or pasted image file) that the runtime forwards to the
-/// model as a vision input.
+/// model as a vision input. `cwd` is the user's working directory, sent as
+/// `context.cwd` on EVERY turn: it used to be a line of text in the first
+/// message only, and history is trimmed oldest-first, so long conversations
+/// forgot which project they were in.
 pub fn build_params(
     text: &str,
     task_id: &str,
     context_task_id: Option<&str>,
     image: Option<(&str, &str)>,
+    cwd: Option<&Path>,
 ) -> Value {
     let mut parts = vec![json!({ "kind": "text", "text": text })];
     if let Some((mime, b64)) = image {
@@ -231,7 +235,10 @@ pub fn build_params(
         "task_id": task_id,
     });
     if let Some(tid) = context_task_id {
-        params["context"] = json!({ "task_id": tid });
+        params["context"]["task_id"] = json!(tid);
+    }
+    if let Some(dir) = cwd {
+        params["context"]["cwd"] = json!(dir.to_string_lossy());
     }
     params
 }
@@ -443,15 +450,33 @@ mod tests {
 
     #[test]
     fn build_params_threads_context() {
-        let p = build_params("hi", "t-2", Some("t-1"), None);
+        let p = build_params("hi", "t-2", Some("t-1"), None, None);
         assert_eq!(p["message"]["parts"][0]["text"], "hi");
         assert_eq!(p["task_id"], "t-2");
         assert_eq!(p["context"]["task_id"], "t-1");
     }
 
     #[test]
+    fn build_params_carries_cwd_as_context_on_every_turn() {
+        let dir = Path::new("/Users/x/Projects/ho-me");
+        let first = build_params("hi", "t-1", None, None, Some(dir));
+        assert_eq!(first["context"]["cwd"], "/Users/x/Projects/ho-me");
+        assert!(first["context"].get("task_id").is_none());
+        let later = build_params("hi", "t-2", Some("t-1"), None, Some(dir));
+        assert_eq!(later["context"]["cwd"], "/Users/x/Projects/ho-me");
+        assert_eq!(later["context"]["task_id"], "t-1");
+        assert!(
+            !first["message"]["parts"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("working directory"),
+            "the path is structured context, not prose in the message"
+        );
+    }
+
+    #[test]
     fn build_params_first_turn_has_no_context() {
-        let p = build_params("hi", "t-1", None, None);
+        let p = build_params("hi", "t-1", None, None, None);
         assert!(p.get("context").is_none());
     }
 
@@ -462,6 +487,7 @@ mod tests {
             "t-3",
             None,
             Some(("image/png", "QkFTRTY0")),
+            None,
         );
         let parts = p["message"]["parts"].as_array().unwrap();
         assert_eq!(parts.len(), 2, "text part + image data part");
@@ -470,10 +496,10 @@ mod tests {
         assert_eq!(parts[1]["mimeType"], "image/png");
         assert_eq!(parts[1]["data"]["base64"], "QkFTRTY0");
         // A non-PNG paste threads its own mime.
-        let jpg = build_params("x", "t-5", None, Some(("image/jpeg", "QQ==")));
+        let jpg = build_params("x", "t-5", None, Some(("image/jpeg", "QQ==")), None);
         assert_eq!(jpg["message"]["parts"][1]["mimeType"], "image/jpeg");
         // No image → no data part (back-compat).
-        let plain = build_params("hi", "t-4", None, None);
+        let plain = build_params("hi", "t-4", None, None, None);
         assert_eq!(plain["message"]["parts"].as_array().unwrap().len(), 1);
     }
 

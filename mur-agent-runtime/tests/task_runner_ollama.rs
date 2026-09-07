@@ -26,6 +26,7 @@ async fn runner_with_llm_generates_and_emits_telemetry() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
     let runner = TaskRunner::with_llm(client).with_telemetry(tx);
     let spec = TaskSpec {
+        cwd: None,
         input: Message {
             role: "user".into(),
             parts: vec![MessagePart::Text { text: "hi".into() }],

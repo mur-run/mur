@@ -6,6 +6,7 @@ use mur_common::a2a::{Message, MessagePart, TaskState};
 async fn sync_task_reaches_completed_state() {
     let runner = TaskRunner::new_stub_echo();
     let spec = TaskSpec {
+        cwd: None,
         input: Message {
             role: "user".into(),
             parts: vec![MessagePart::Text {
@@ -33,6 +34,7 @@ async fn sync_task_reaches_completed_state() {
 async fn cancellation_transitions_to_cancelled() {
     let runner = TaskRunner::new_stub_slow();
     let spec = TaskSpec {
+        cwd: None,
         input: Message {
             role: "user".into(),
             parts: vec![MessagePart::Text {

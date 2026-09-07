@@ -255,6 +255,7 @@ fn inject(runner: &Arc<TaskRunner>, text: &str) {
     tokio::spawn(async move {
         let _ = runner
             .run_sync(TaskSpec {
+                cwd: None,
                 input,
                 context_task_id: None,
                 task_id: None,

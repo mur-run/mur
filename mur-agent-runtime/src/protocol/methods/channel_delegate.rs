@@ -159,6 +159,7 @@ impl MethodHandler for ChannelDelegateHandler {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         let spec = TaskSpec {
+            cwd: None,
             input: message,
             context_task_id,
             task_id,

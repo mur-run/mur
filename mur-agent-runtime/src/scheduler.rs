@@ -27,6 +27,7 @@ use tracing::{info, warn};
 /// cron trigger, so this is an unambiguous background call site.
 fn scheduled_task_spec(message: &str) -> TaskSpec {
     TaskSpec {
+        cwd: None,
         input: Message {
             role: "user".into(),
             parts: vec![MessagePart::Text {
