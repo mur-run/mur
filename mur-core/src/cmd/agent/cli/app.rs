@@ -391,6 +391,11 @@ pub struct App {
     pub turn_produced_output: bool,
     pub streaming: bool,
     pub hitl: Option<HitlRequest>,
+    /// Gates that arrived while `hitl` was occupied. A P3 runtime asks once
+    /// per response with N calls; the runtime awaits their answers in order
+    /// against one deadline, so showing them one at a time is exact. Drained
+    /// by `mod::promote_queued_hitl` whenever the slot empties.
+    pub hitl_queue: std::collections::VecDeque<(String, HitlRequest)>,
     /// When the last HITL decision was resolved, for swallowing a stale
     /// decision key: if a gate auto-resolves (read lane / /auto) just as the
     /// operator presses `y`, that keystroke would otherwise land in the
@@ -625,6 +630,7 @@ impl App {
             turn_produced_output: false,
             streaming: false,
             hitl: None,
+            hitl_queue: std::collections::VecDeque::new(),
             hitl_resolved_at: None,
             hitl_grant_confirm: None,
             hitl_scroll: 0,
@@ -1264,6 +1270,7 @@ impl App {
         self.current_task_id = None;
         self.streaming = false;
         self.hitl = None;
+        self.hitl_queue.clear();
         self.cwd_sent = false;
         self.last_sent = None;
         self.last_esc_at = None;
@@ -1288,6 +1295,7 @@ impl App {
         self.current_task_id = None;
         self.streaming = false;
         self.hitl = None;
+        self.hitl_queue.clear();
         self.cwd_sent = false;
         self.wants_screen_wipe = true;
         self.load_history(turns);

@@ -140,6 +140,10 @@ pub async fn agent_chat_send(
                         "tool_input": hitl_params.get("tool_input"),
                         "prompt": hitl_params.get("prompt"),
                         "timeout_ms": hitl_params.get("timeout_ms"),
+                        // P3: the batch. Legacy fields above stay so listeners
+                        // that only read `agent` keep working.
+                        "batch_id": hitl_params.get("batch_id"),
+                        "calls": hitl_params.get("calls"),
                     }),
                 );
             },

@@ -368,6 +368,11 @@ pub struct TaskRunner {
     hook_ctx: Option<HookCtx>,
     hook_cancel: Option<CancellationToken>,
     pending_approvals: Option<HitlApprovals>,
+    /// P3: settled chat-gate decisions (gate B memory). `None` = ask every time.
+    decision_store: Option<Arc<dyn crate::hitl::store::DecisionStore>>,
+    /// The agent's own name, for `chat_action_hash`. Empty until the supervisor
+    /// sets it; an empty name still hashes, it just never matches another agent.
+    agent_name: String,
     notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
     /// Per-turn client notifiers keyed by task id, registered by `message/send`
     /// so a tool-approval prompt is routed to the connection that issued the
@@ -513,6 +518,8 @@ impl TaskRunner {
             hook_ctx: None,
             hook_cancel: None,
             pending_approvals: None,
+            decision_store: None,
+            agent_name: String::new(),
             notifier: None,
             client_notifiers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             steering: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -711,6 +718,18 @@ impl TaskRunner {
                 store.budget_tokens = (w / CONV_BUDGET_DIVISOR).max(1);
             }
         }
+        self
+    }
+
+    /// P3: where settled chat-gate decisions are looked up and recorded.
+    pub fn with_decision_store(mut self, s: Arc<dyn crate::hitl::store::DecisionStore>) -> Self {
+        self.decision_store = Some(s);
+        self
+    }
+
+    /// The agent's own name — part of every chat-gate hash.
+    pub fn with_agent_name(mut self, name: impl Into<String>) -> Self {
+        self.agent_name = name.into();
         self
     }
 
@@ -1530,10 +1549,82 @@ impl TaskRunner {
         Ok(system)
     }
 
+    /// Resolve every `Ask` call of one response before any executes. Calls whose
+    /// policy is not `Ask`, or whose tool is unknown, get no entry and take the
+    /// existing Allow/Deny/unknown-tool arms. Fail-closed exactly as before: no
+    /// sink → deny; a caller that declared `can_approve: false` → deny without
+    /// asking. Returns `call_id → decision` and `call_id → step_id` (the id the
+    /// notification carried, so the client can mark the card that ran it).
+    async fn gate_response(
+        &self,
+        task_id: &str,
+        calls: &[crate::llm::ToolCallResult],
+    ) -> (
+        HashMap<String, crate::hitl::HitlDecision>,
+        HashMap<String, String>,
+    ) {
+        use mur_common::agent::ToolPolicy;
+        let known: std::collections::HashSet<String> = self
+            .tools_for_loop()
+            .iter()
+            .map(|t| t.name().to_string())
+            .collect();
+        let mut pending = Vec::new();
+        let mut out = HashMap::new();
+        let mut step_ids = HashMap::new();
+        let entry = self.client_notifiers.lock().await.get(task_id).cloned();
+        for call in calls {
+            if !known.contains(&call.tool_name)
+                || effective_tool_policy(&self.tools_policy, &call.tool_name) != ToolPolicy::Ask
+            {
+                continue;
+            }
+            if let Some(d) =
+                decide_without_asking(entry.as_ref().map(|(_, ok)| *ok), &call.tool_name)
+            {
+                out.insert(call.call_id.clone(), d);
+                continue;
+            }
+            let step_id = uuid::Uuid::now_v7().to_string();
+            step_ids.insert(call.call_id.clone(), step_id.clone());
+            pending.push(crate::hitl::batch::pending(&self.agent_name, step_id, call));
+        }
+        if pending.is_empty() {
+            return (out, step_ids);
+        }
+        let routed = entry.map(|(tx, _)| tx);
+        let notifier = routed.as_ref().or(self.notifier.as_ref());
+        let (Some(pa), Some(notifier)) = (&self.pending_approvals, notifier) else {
+            // fail-closed: no approval sink => deny.
+            for c in pending {
+                out.insert(
+                    c.call_id,
+                    crate::hitl::HitlDecision {
+                        allow: false,
+                        reason: Some("no approval channel available".into()),
+                        surface: None,
+                    },
+                );
+            }
+            return (out, step_ids);
+        };
+        let gate = crate::hitl::batch::BatchGate {
+            task_id,
+            timeout: std::time::Duration::from_secs(self.hitl_timeout_secs as u64),
+            approvals: pa,
+            notifier,
+            store: self.decision_store.as_ref(),
+        };
+        out.extend(gate.resolve(pending).await);
+        (out, step_ids)
+    }
+
     async fn handle_tool_call(
         &self,
         task_id: &str,
         call: &crate::llm::ToolCallResult,
+        decision: Option<crate::hitl::HitlDecision>,
+        step_id: Option<String>,
     ) -> Result<crate::llm::ToolResultEntry, TaskError> {
         use crate::llm::ToolResultEntry;
 
@@ -1567,7 +1658,7 @@ impl TaskRunner {
                 .map(|(tx, _)| tx.clone());
             routed.or_else(|| self.notifier.clone())
         };
-        let step_id = uuid::Uuid::now_v7().to_string();
+        let step_id = step_id.unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
 
         // 1b. Policy gate: check before executing.
         {
@@ -1645,66 +1736,14 @@ impl TaskRunner {
                     });
                 }
                 ToolPolicy::Ask => {
-                    // issue #3: PRE-EXECUTION approval gate. The tool is NOT
-                    // executed until an Allow decision arrives. Route the
-                    // prompt to the connection that issued this turn; never
-                    // broadcast. fail-closed: with no approval sink wired
-                    // (pending_approvals or notifier missing) the decision is
-                    // DENY, so dispatch/spend tools cannot run unattended.
-                    let entry = self.client_notifiers.lock().await.get(task_id).cloned();
-                    // A connection that declared it cannot approve is not an
-                    // approval sink, however well it receives everything else.
-                    // Waiting on it burns `hitl.timeout_secs` and then returns
-                    // the same denial — and the silence in between reads as
-                    // "the agent had nothing to say", which is how this cost me
-                    // a misdiagnosis rather than five minutes.
-                    let shortcut =
-                        decide_without_asking(entry.as_ref().map(|(_, ok)| *ok), &call.tool_name);
-                    let routed = entry.map(|(tx, _)| tx);
-                    let effective_notifier = routed.as_ref().or(self.notifier.as_ref());
-                    let decision = if let Some(d) = shortcut {
-                        d
-                    } else if let (Some(pa), Some(notifier)) =
-                        (&self.pending_approvals, effective_notifier)
-                    {
-                        let hitl_id = uuid::Uuid::now_v7().to_string();
-                        let (tx, rx) = tokio::sync::oneshot::channel::<crate::hitl::HitlDecision>();
-                        pa.lock().await.insert(hitl_id.clone(), tx);
-                        let notification = serde_json::json!({
-                            "jsonrpc": "2.0",
-                            "method": "tool/approval_needed",
-                            "params": {
-                                "step_id": step_id,
-                                "hitl_id": hitl_id,
-                                "task_id": task_id,
-                                "tool_name": call.tool_name,
-                                "tool_input": call.input,
-                                "timeout_ms": (self.hitl_timeout_secs as u64) * 1000,
-                            }
-                        });
-                        let _ = notifier.send(notification).await;
-                        match tokio::time::timeout(
-                            std::time::Duration::from_secs(self.hitl_timeout_secs as u64),
-                            rx,
-                        )
-                        .await
-                        {
-                            Ok(Ok(d)) => d,
-                            _ => {
-                                pa.lock().await.remove(&hitl_id);
-                                crate::hitl::HitlDecision {
-                                    allow: false,
-                                    reason: Some("timed out".into()),
-                                }
-                            }
-                        }
-                    } else {
-                        // fail-closed: no approval sink => deny.
-                        crate::hitl::HitlDecision {
-                            allow: false,
-                            reason: Some("no approval channel available".into()),
-                        }
-                    };
+                    // P3: the decision was made in `gate_response`, before any
+                    // call of this response ran. Absent = the gate never saw
+                    // this call; deny, never execute.
+                    let decision = decision.unwrap_or(crate::hitl::HitlDecision {
+                        allow: false,
+                        reason: Some("no approval decision for this call".into()),
+                        surface: None,
+                    });
                     if !decision.allow {
                         return Err(task_error(
                             "hitl_denied",
@@ -2056,10 +2095,19 @@ impl TaskRunner {
                 return Ok((settle(resp.text, &ledger), None));
             }
 
-            // Execute tools and collect results.
+            // P3: gate the whole response first — one notification, N decisions.
+            let (mut decisions, mut step_ids) = self.gate_response(task_id, &resp.tool_calls).await;
             let mut results = Vec::new();
             for call in &resp.tool_calls {
-                match self.handle_tool_call(task_id, call).await {
+                match self
+                    .handle_tool_call(
+                        task_id,
+                        call,
+                        decisions.remove(&call.call_id),
+                        step_ids.remove(&call.call_id),
+                    )
+                    .await
+                {
                     Ok(entry) => results.push(entry),
                     Err(e) => return Err(e),
                 }
@@ -2434,6 +2482,7 @@ fn decide_without_asking(
             "`{tool_name}` needs approval and this caller cannot give one — run it from \
              `murmur`, or allow the tool with `mur agent perm tool-allow <agent> {tool_name}`"
         )),
+        surface: None,
     })
 }
 
@@ -3342,6 +3391,7 @@ mod tests {
                     let _ = tx.send(crate::hitl::HitlDecision {
                         allow: true,
                         reason: None,
+                        surface: None,
                     });
                     return;
                 }
@@ -3360,6 +3410,130 @@ mod tests {
         );
         let reply_text = task.messages.last().map(text_of).unwrap_or_default();
         assert!(reply_text.contains("REPORT DELIVERED"), "{reply_text}");
+    }
+
+    /// P3 §3.1: two `Ask` calls in one response → ONE `tool/approval_needed`
+    /// carrying both, two pending oneshots, and both execute after two allows.
+    #[tokio::test]
+    async fn two_ask_calls_in_one_response_emit_one_notification() {
+        use crate::llm::stub::SequenceLlm;
+        let mut two = tool_call_response("c-1", "echo one");
+        two.tool_calls.push(crate::llm::ToolCallResult {
+            call_id: "c-2".into(),
+            tool_name: "bash".into(),
+            input: serde_json::json!({"command": "echo two"}),
+        });
+        let responses = vec![two, end_turn_response("DONE")];
+        let calls = Arc::new(AtomicU64::new(0));
+        let pa = empty_pending_approvals();
+        let (ntx, mut nrx) = tokio::sync::mpsc::channel(16);
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_tools(vec![Arc::new(CountingBashTool {
+                    calls: calls.clone(),
+                })])
+                .with_tools_policy(vec![])
+                .with_pending_approvals(pa.clone())
+                .with_notifier(ntx)
+                .with_hitl_timeout_secs(5)
+                .with_max_iterations(5),
+        );
+        let pa2 = pa.clone();
+        let approver = tokio::spawn(async move {
+            for _ in 0..500 {
+                let senders: Vec<_> = {
+                    let mut g = pa2.lock().await;
+                    let keys: Vec<String> = g.keys().cloned().collect();
+                    keys.into_iter().filter_map(|k| g.remove(&k)).collect()
+                };
+                for tx in senders {
+                    let _ = tx.send(crate::hitl::HitlDecision {
+                        allow: true,
+                        reason: None,
+                        surface: None,
+                    });
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        });
+        let outcome = runner.run_sync(loop_spec("batch")).await;
+        approver.abort();
+        assert!(matches!(outcome, TaskOutcome::Completed(_)), "{outcome:?}");
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        let mut approvals = 0;
+        let mut batch_len = 0;
+        while let Ok(n) = nrx.try_recv() {
+            if n["method"] == "tool/approval_needed" {
+                approvals += 1;
+                batch_len = n["params"]["calls"]
+                    .as_array()
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                assert_eq!(
+                    n["params"]["hitl_id"], n["params"]["calls"][0]["hitl_id"],
+                    "legacy fields = calls[0]"
+                );
+                assert_eq!(
+                    n["params"]["calls"][0]["action_hash"]
+                        .as_str()
+                        .map(str::len),
+                    Some(64)
+                );
+            }
+        }
+        assert_eq!(approvals, 1, "one notification for the whole response");
+        assert_eq!(batch_len, 2);
+    }
+
+    /// P3 §3.2: a remembered allow executes without asking; a remembered deny
+    /// denies without asking; nothing is asked in either case.
+    #[tokio::test]
+    async fn remembered_decisions_are_not_asked_again() {
+        use crate::hitl::store::{DecisionStore, Settled};
+        struct Fixed(Settled);
+        #[async_trait::async_trait]
+        impl DecisionStore for Fixed {
+            async fn lookup(&self, _h: &str) -> Option<Settled> {
+                Some(self.0)
+            }
+            async fn record(&self, _r: mur_common::hitl::HitlResponse) {}
+        }
+        for (settled, expect_calls, expect_completed) in
+            [(Settled::Allow, 1u64, true), (Settled::Deny, 0u64, false)]
+        {
+            use crate::llm::stub::SequenceLlm;
+            let responses = vec![
+                tool_call_response("c-1", "echo hi"),
+                end_turn_response("OK"),
+            ];
+            let calls = Arc::new(AtomicU64::new(0));
+            let (ntx, mut nrx) = tokio::sync::mpsc::channel(16);
+            let runner = Arc::new(
+                TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                    .with_tools(vec![Arc::new(CountingBashTool {
+                        calls: calls.clone(),
+                    })])
+                    .with_tools_policy(vec![])
+                    .with_pending_approvals(empty_pending_approvals())
+                    .with_notifier(ntx)
+                    .with_decision_store(Arc::new(Fixed(settled)))
+                    .with_hitl_timeout_secs(1)
+                    .with_max_iterations(3),
+            );
+            let outcome = runner.run_sync(loop_spec("remembered")).await;
+            assert_eq!(
+                matches!(outcome, TaskOutcome::Completed(_)),
+                expect_completed,
+                "{settled:?}: {outcome:?}"
+            );
+            assert_eq!(calls.load(Ordering::Relaxed), expect_calls, "{settled:?}");
+            while let Ok(n) = nrx.try_recv() {
+                assert_ne!(
+                    n["method"], "tool/approval_needed",
+                    "{settled:?} must not ask"
+                );
+            }
+        }
     }
 
     /// An EXPLICIT Deny rule on fleet_run still wins over the built-in
@@ -3892,6 +4066,8 @@ mod tests {
             None,
             None,
             None,
+            String::new(),
+            None,
             None,
         );
         let _ = runner.run_sync(loop_spec("loop")).await;
@@ -4117,6 +4293,9 @@ mod tests {
                     let _ = sender.send(crate::hitl::HitlDecision {
                         allow: true,
                         reason: None,
+                        // The test stands in for a surface that did not name
+                        // itself; recorded as unknown, never guessed.
+                        surface: None,
                     });
                 }
             }

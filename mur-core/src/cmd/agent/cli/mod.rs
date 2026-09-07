@@ -928,7 +928,9 @@ async fn event_loop(
         // with nothing left to wake it — so the status line went on asking for
         // a decision on a request that had already been denied, which is the
         // very thing retiring it was meant to stop.
-        expire_stale_hitl(app);
+        if expire_stale_hitl(app) {
+            promote_queued_hitl(app, &tx);
+        }
         if app.needs_full_redraw {
             terminal.clear()?;
             app.needs_full_redraw = false;
@@ -989,10 +991,16 @@ async fn event_loop(
             .unwrap_or_else(|| TokioInstant::from_std(StdInstant::now()));
         tokio::select! {
             maybe = events.next() => match maybe {
-                Some(Ok(ev)) => handle_event(app, ev, &tx).await,
+                Some(Ok(ev)) => {
+                    handle_event(app, ev, &tx).await;
+                    promote_queued_hitl(app, &tx);
+                }
                 Some(Err(_)) | None => return Ok(()),
             },
-            Some(msg) = rx.recv() => handle_stream(app, msg, &tx),
+            Some(msg) = rx.recv() => {
+                handle_stream(app, msg, &tx);
+                promote_queued_hitl(app, &tx);
+            }
             // Never closes: PanelHandle in `app` holds a keepalive sender,
             // so this arm can't spin on a dead channel.
             Some(f) = panel_rx.recv() => match f {
@@ -1645,6 +1653,17 @@ fn expire_stale_hitl(app: &mut App) -> bool {
     );
     app.needs_full_redraw = true;
     true
+}
+
+/// The slot emptied (decision, timeout, or auto-approval): show the next
+/// queued gate, if any. Runs after every event or stream message, so a gate
+/// answered by keypress promotes its successor on the same tick.
+fn promote_queued_hitl(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
+    if app.hitl.is_none()
+        && let Some((task_id, req)) = app.hitl_queue.pop_front()
+    {
+        handle_stream(app, StreamMsg::Hitl { task_id, req }, tx);
+    }
 }
 
 fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: bool, auto: bool) {
@@ -2308,7 +2327,14 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
     }
     match msg {
         StreamMsg::Delta { text, thinking, .. } => app.append_delta(&text, thinking),
-        StreamMsg::Hitl { req, .. } => {
+        StreamMsg::Hitl { req, task_id } => {
+            // One slot on screen. A batched response delivers N gates at once;
+            // the rest wait their turn (`promote_queued_hitl`), each keeping its
+            // own `hitl_id` and its own countdown.
+            if app.hitl.is_some() {
+                app.hitl_queue.push_back((task_id, req));
+                return;
+            }
             // NB: `saw_hitl_this_turn` is set in `decide`, on approval — not
             // here. See its doc comment (#940).
             // Flag the card so it renders the inline approval row. Whether

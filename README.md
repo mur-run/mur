@@ -436,8 +436,15 @@ Agent** wizard offers the same catalog as a source.
   grant takes two presses — typing an ordinary sentence can't hand a tool
   blanket approval. An open gate always renders somewhere, `/auto off` revokes
   the per-tool grants it claims to revoke, and a gate that times out stops
-  asking. Reads never have to stop the run: `--auto-reads` covers `read_file`
-  and provably read-only shell commands, in the TUI and in `--plain` alike.
+  asking. Tool calls from one model response arrive as a single card rather
+  than one prompt each — every call is still decided on its own, and there is
+  no approve-all. A settled decision is remembered by action hash, so the same
+  call stops being asked twice, and an explicit no outranks any standing grant.
+  *Always* writes the narrowest exact tool rule; where a call reaches outside
+  its entitlements the card offers that grant as a separate control, never
+  folded into the rule. Reads never have to stop the run: `--auto-reads` covers
+  `read_file` and provably read-only shell commands, in the TUI and in
+  `--plain` alike.
 - **Build lane** — a toolchain that compiles its own executables can't be
   expressed as a list of binaries: `cargo` runs build scripts and test
   executables at paths that don't exist until the build creates them. Grant the

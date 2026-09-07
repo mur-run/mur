@@ -1061,6 +1061,12 @@ pub const SCHEDULE_PROPOSAL_DIR: &str = "schedule-proposals";
 /// re-derived (#1125).
 pub const SCHEDULE_CHANNEL_FILE: &str = "schedule-channel";
 
+/// Marker file in the agent's home naming the channel that records chat-gate
+/// decisions (`HitlResponse` events keyed by `action_hash`). Same shape as
+/// `SCHEDULE_CHANNEL_FILE`: created on first use, replaced if it names a
+/// channel that no longer loads.
+pub const HITL_CHANNEL_FILE: &str = "hitl-channel";
+
 /// A schedule an agent asked for and a person has not yet granted.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ScheduleProposal {

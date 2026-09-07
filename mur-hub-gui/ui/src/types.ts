@@ -277,6 +277,17 @@ export interface HitlRequest {
   tool_input: Record<string, unknown>;
   prompt: string;
   timeout_ms: number;
+  /** P3: canonical hash of (tool, input, agent); what a remembered decision is keyed on. */
+  action_hash?: string;
+  /** P3: shared by every call of one LLM response. */
+  batch_id?: string;
+}
+
+/** `hitl-approval-needed` payload: legacy single-call fields plus, from a P3 runtime, `calls`. */
+export interface HitlBatchPayload extends HitlRequest {
+  calls?: Array<
+    Pick<HitlRequest, "hitl_id" | "tool_name" | "tool_input" | "action_hash"> & { step_id?: string }
+  >;
 }
 
 /** `nudge_status` — state of the "connect a smarter brain" nudge. */
