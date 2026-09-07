@@ -350,6 +350,10 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         } else {
             None
         };
+    // The vault that carries user-handed credentials for this process's whole
+    // life: filled just below (pre-seal, because the keychain is unreachable
+    // once the sandbox closes), then mutated live by `secret/set`.
+    let secrets = Arc::new(crate::secrets::SecretVault::new());
     // Resolve provider secrets while the paths are still reachable.
     //
     // The client that needs them is built at `prepare_runtime` below — AFTER
@@ -396,6 +400,62 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             };
             if mur_common::secret::cache_before_seal(&r).is_ok() {
                 cached += 1;
+            }
+        }
+
+        // User-handed secrets (murmur `/secret`, `mur agent secret set`). The
+        // names come from the profile because a keychain cannot be enumerated;
+        // the values are resolved here, pre-seal, for the same reason as the
+        // provider keys above. A value the vault will not hold (too short) is
+        // skipped with a warning rather than failing startup — the CLI enforces
+        // the same floor, so this only fires for a hand-written keychain item.
+        for name in &profile.inner.secrets {
+            let r = mur_common::secret::SecretRef::Keychain {
+                service: crate::secrets::KEYCHAIN_SERVICE.to_string(),
+                account: format!("{}/{}", profile.inner.name, name),
+            };
+            // Bounded, on its own thread. A keychain item this binary has not
+            // been authorised for makes the OS raise a modal prompt, and the
+            // read blocks until somebody clicks it — which on a headless or
+            // login-time start is never. Unbounded, that hangs the agent
+            // BEFORE the sandbox seals: not a failure, not a degraded start,
+            // just a process that never becomes ready. Verified on a real
+            // machine, which is the only place it reproduces: the provider
+            // keys above never show it because they were authorised long ago.
+            //
+            // The orphaned thread is deliberate. It is parked in the OS call,
+            // owns nothing this process needs, and is the price of not
+            // hanging; the user answers the prompt (or does not) and the agent
+            // comes up either way, one secret short until the next `/secret`.
+            let (tx, rx) = std::sync::mpsc::channel();
+            let probe = r.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(mur_common::secret::cache_before_seal(&probe));
+            });
+            match rx.recv_timeout(USER_SECRET_RESOLVE_TIMEOUT) {
+                Ok(Ok(())) => {
+                    if let Some(v) = r.resolve_preseal_cached() {
+                        use secrecy::ExposeSecret;
+                        match secrets.set(name, v.expose_secret()) {
+                            Ok(()) => cached += 1,
+                            Err(e) => warn!(name, error = %e, "secret skipped"),
+                        }
+                    }
+                }
+                Ok(Err(e)) => warn!(
+                    name,
+                    error = %e,
+                    "could not resolve a user secret before sealing; the agent \
+                     will not have it until it is set again"
+                ),
+                Err(_) => warn!(
+                    name,
+                    timeout_secs = USER_SECRET_RESOLVE_TIMEOUT.as_secs(),
+                    "keychain did not answer for this secret in time — most likely \
+                     an authorisation prompt nobody is there to click. Starting \
+                     without it; approve the prompt (Always Allow) and restart, \
+                     or set it again from murmur with /secret"
+                ),
             }
         }
 
@@ -517,6 +577,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             max_tokens,
             Some(writer.sender()),
             identity.clone(),
+            secrets.clone(),
         )
         .await?;
     let dispatcher = Arc::new(build_dispatcher(
@@ -530,6 +591,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         profile.inner.identity.key_version,
         model_switch.map(|h| (h, agent_home.join("profile.yaml"))),
         runtime_skills.clone(),
+        secrets.clone(),
     ));
 
     // 7. Transports
@@ -1010,6 +1072,7 @@ fn build_dispatcher(
         std::path::PathBuf,
     )>,
     runtime_skills: Arc<crate::skills::RuntimeSkills>,
+    secrets: Arc<crate::secrets::SecretVault>,
 ) -> Dispatcher {
     let mut d = Dispatcher::new();
     d.register("agent/card", Box::new(CardHandler::new(profile.clone())));
@@ -1090,8 +1153,28 @@ fn build_dispatcher(
         "memory/reload",
         Box::new(crate::protocol::methods::memory_reload::MemoryReloadHandler::new(runtime_skills)),
     );
+    // murmur `/secret`. The CLI has already written the keychain and
+    // `profile.secrets`; this is how the sealed runtime learns without a
+    // restart. Registered unconditionally: every agent shape can carry an
+    // environment variable.
+    d.register(
+        "secret/set",
+        Box::new(crate::protocol::methods::secret_set::SecretSetHandler::new(
+            secrets.clone(),
+        )),
+    );
+    d.register(
+        "secret/delete",
+        Box::new(crate::protocol::methods::secret_set::SecretDeleteHandler::new(secrets)),
+    );
     d
 }
+
+/// How long to wait for one user secret to come back from the keychain before
+/// giving up on it and starting anyway. Short on purpose: the only thing that
+/// makes this slow is a modal prompt, and a prompt nobody answers must not
+/// cost the agent its startup.
+const USER_SECRET_RESOLVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 fn parent_pid() -> u32 {
     #[cfg(unix)]
