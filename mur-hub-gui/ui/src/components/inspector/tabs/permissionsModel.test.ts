@@ -20,3 +20,21 @@ describe("permCommands", () => {
     expect(c.mcp).toBe("mur agent mcp set-network aura <server> --allow-host <host>");
   });
 });
+
+import { OUTBOUND_MODES, SPAWN_MODES, TOOL_POLICIES, afterWriteHint, outboundModeForCli } from "./permissionsModel";
+
+describe("editing model", () => {
+  it("offers every mode the CLI accepts, in the CLI's spelling", () => {
+    expect(OUTBOUND_MODES).toEqual(["restricted", "unrestricted", "proxy_only", "off"]);
+    expect(SPAWN_MODES).toEqual(["allowlist", "any", "none", "strict"]);
+    expect(TOOL_POLICIES).toEqual(["allow", "ask", "deny"]);
+  });
+  it("bridges the DTO's proxyonly to the CLI's proxy_only", () => {
+    expect(outboundModeForCli("proxyonly")).toBe("proxy_only");
+    expect(outboundModeForCli("restricted")).toBe("restricted");
+  });
+  it("says restart only when the agent is running", () => {
+    expect(afterWriteHint(true)).toBe("perm.restartHint");
+    expect(afterWriteHint(false)).toBe("perm.saved");
+  });
+});

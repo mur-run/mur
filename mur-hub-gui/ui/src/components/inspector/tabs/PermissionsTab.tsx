@@ -2,17 +2,33 @@ import type React from "react";
 import { useEffect, useState } from "react";
 import type { AgentDetail, McpNetView, PathGrantView, PermissionsView } from "../../../types";
 import { useT } from "../../../i18n";
-import { enforcementTone, permCommands } from "./permissionsModel";
+import { enforcementTone, outboundModeForCli, permCommands } from "./permissionsModel";
+import {
+  AddDir, AddFolder, AddHost, AddProgram, AddRule, OutboundSelect, PolicySelect, RemoveBtn, SpawnSelect,
+  usePermWrite, type PermWrite,
+} from "./PermissionEditors";
 
-/** Spec 2026-09-07 §1.3: enforcement first, runtime traffic and MCP servers
- *  as two blocks, then filesystem / processes / tools / LLM / limits. Read-only. */
-export function PermissionsTab({ detail }: { detail: AgentDetail }) {
+/** Spec 2026-09-07 §1.3 + §P2: enforcement first, runtime traffic and MCP
+ *  servers as two blocks, then filesystem / processes / tools / LLM / limits.
+ *  Every editable row writes through one CLI call (PermissionEditors). */
+export function PermissionsTab({
+  detail,
+  onSaved,
+  isRunning,
+}: {
+  detail: AgentDetail;
+  onSaved: (d: AgentDetail) => void;
+  isRunning: boolean;
+}) {
   const { t } = useT();
   const v = detail.permissions;
   const cmd = permCommands(detail.agent_name);
+  const write = usePermWrite(detail, onSaved, isRunning);
   return (
     <div className="tab-form perm">
       <EnforcementBanner v={v} />
+      {write.error && <p className="save-error">{write.error}</p>}
+      {write.hint && <p className="perm__hint field-muted">{t(write.hint)}</p>}
 
       <label className="field-label">{t("detail.capabilities")}</label>
       {detail.capabilities.length === 0 ? (
@@ -27,8 +43,8 @@ export function PermissionsTab({ detail }: { detail: AgentDetail }) {
 
       <Block title={t("perm.runtime")} cmd={cmd.hosts}>
         <p className="field-muted perm__muted">{t("perm.runtime.note")}</p>
-        <p className="perm__mode">{v.runtime_outbound.mode}</p>
-        <Outbound v={v} />
+        <OutboundSelect value={outboundModeForCli(v.runtime_outbound.mode)} write={write} />
+        <Outbound v={v} write={write} />
       </Block>
 
       <Block title={t("perm.mcp")} cmd={v.mcp_servers.length ? cmd.mcp : undefined}>
@@ -42,27 +58,19 @@ export function PermissionsTab({ detail }: { detail: AgentDetail }) {
       </Block>
 
       <Block title={t("perm.filesystem")} cmd={cmd.paths}>
-        {v.filesystem.read.length + v.filesystem.write.length + v.filesystem.deny.length === 0 ? (
-          <p className="field-muted perm__muted">{t("perm.fs.none")}</p>
-        ) : (
-          <>
-            <Grants label={t("perm.fs.read")} list={v.filesystem.read} />
-            <Grants label={t("perm.fs.write")} list={v.filesystem.write} />
-            <Grants label={t("perm.fs.deny")} list={v.filesystem.deny} />
-            {v.grants_drifted && <p className="perm__note perm__note--attention">{t("perm.drifted")}</p>}
-          </>
-        )}
+        <Grants verb="read" list={v.filesystem.read} write={write} />
+        <Grants verb="write" list={v.filesystem.write} write={write} />
+        <Grants verb="deny" list={v.filesystem.deny} write={write} />
+        {v.grants_drifted && <p className="perm__note perm__note--attention">{t("perm.drifted")}</p>}
       </Block>
 
       <Block title={t("perm.processes")} cmd={cmd.spawn}>
-        <p className="perm__mode">{t("perm.spawn.mode", { mode: v.processes.spawn_mode })}</p>
-        {v.processes.allowed.length > 0 && <Paths list={v.processes.allowed} />}
-        {v.processes.allowed_dirs.length > 0 && (
-          <>
-            <p className="field-muted perm__muted">{t("perm.spawn.dirs")}</p>
-            <Paths list={v.processes.allowed_dirs} />
-          </>
-        )}
+        <SpawnSelect value={v.processes.spawn_mode} write={write} />
+        <Paths list={v.processes.allowed} onRemove={(program) => void write.run("agent_perm_deny_spawn", { program })} write={write} />
+        <AddProgram write={write} />
+        <p className="field-muted perm__muted">{t("perm.spawn.dirs")}</p>
+        <Paths list={v.processes.allowed_dirs} onRemove={(dir) => void write.run("agent_perm_deny_spawn_dir", { dir })} write={write} />
+        <AddDir write={write} />
       </Block>
 
       <Block title={t("perm.tools")} cmd={cmd.tools}>
@@ -73,12 +81,18 @@ export function PermissionsTab({ detail }: { detail: AgentDetail }) {
             {v.tools.map((r) => (
               <li key={r.pattern} className="perm__row">
                 <code>{r.pattern}</code>
-                <span className={`perm__policy perm__policy--${r.policy}`}>{r.policy}</span>
+                <PolicySelect
+                  value={r.policy}
+                  write={write}
+                  onChange={(policy) => void write.run("agent_perm_set_tool", { pattern: r.pattern, policy })}
+                />
                 {r.risk && <span className="badge-sm">{r.risk}</span>}
+                <RemoveBtn write={write} onClick={() => void write.run("agent_perm_clear_tool", { pattern: r.pattern })} />
               </li>
             ))}
           </ul>
         )}
+        <AddRule write={write} />
       </Block>
 
       <Block title={t("perm.limits")}>
@@ -150,16 +164,22 @@ function CopyCmd({ cmd }: { cmd: string }) {
   );
 }
 
-function Outbound({ v }: { v: PermissionsView }) {
+function Outbound({ v, write }: { v: PermissionsView; write: PermWrite }) {
   const { t } = useT();
   const o = v.runtime_outbound;
   if (o.mode === "off") return <p className="field-muted perm__muted">{t("perm.outbound.off")}</p>;
   if (o.mode === "unrestricted") return <p className="field-muted perm__muted">{t("perm.outbound.unrestricted")}</p>;
-  if (o.allow_hosts.length === 0) return <p className="field-muted perm__muted">{t("perm.outbound.onlyModel")}</p>;
   return (
     <>
-      <Paths list={o.allow_hosts} />
-      {o.model_host_always_allowed && <p className="field-muted perm__muted">{t("perm.outbound.plusModel")}</p>}
+      {o.allow_hosts.length === 0 ? (
+        <p className="field-muted perm__muted">{t("perm.outbound.onlyModel")}</p>
+      ) : (
+        <>
+          <Paths list={o.allow_hosts} onRemove={(host) => void write.run("agent_perm_deny_host", { host })} write={write} />
+          {o.model_host_always_allowed && <p className="field-muted perm__muted">{t("perm.outbound.plusModel")}</p>}
+        </>
+      )}
+      <AddHost write={write} />
     </>
   );
 }
@@ -180,33 +200,45 @@ function McpRow({ m }: { m: McpNetView }) {
   );
 }
 
-function Grants({ label, list }: { label: string; list: PathGrantView[] }) {
+/** One grant list with its verified glyphs, a remove on every row, and the
+ *  folder picker under it — shown even when the list is empty, or there is
+ *  no way to grant the first folder. */
+function Grants({ verb, list, write }: { verb: "read" | "write" | "deny"; list: PathGrantView[]; write: PermWrite }) {
   const { t } = useT();
-  if (list.length === 0) return null;
   return (
     <>
-      <p className="field-muted perm__muted">{label}</p>
-      <ul className="perm__list">
-        {list.map((g) => (
-          <li key={g.raw} className={`perm__row perm__row--${g.status.status}`} title={g.expanded}>
-            <span className="perm__glyph" aria-hidden>
-              {g.status.status === "effective" ? "✓" : g.status.status === "dropped" ? "✗" : "·"}
-            </span>
-            <code>{g.raw}</code>
-            {g.status.status === "dropped" && (
-              <span className="perm__detail">{t("perm.fs.dropped", { reason: g.status.reason })}</span>
-            )}
-          </li>
-        ))}
-      </ul>
+      <p className="field-muted perm__muted">{t(`perm.fs.${verb}`)}</p>
+      {list.length > 0 && (
+        <ul className="perm__list">
+          {list.map((g) => (
+            <li key={g.raw} className={`perm__row perm__row--${g.status.status}`} title={g.expanded}>
+              <span className="perm__glyph" aria-hidden>
+                {g.status.status === "effective" ? "✓" : g.status.status === "dropped" ? "✗" : "·"}
+              </span>
+              <code>{g.raw}</code>
+              {g.status.status === "dropped" && (
+                <span className="perm__detail">{t("perm.fs.dropped", { reason: g.status.reason })}</span>
+              )}
+              <RemoveBtn write={write} onClick={() => void write.run("agent_perm_remove_path", { verb, path: g.raw })} />
+            </li>
+          ))}
+        </ul>
+      )}
+      <AddFolder verb={verb} write={write} />
     </>
   );
 }
 
-function Paths({ list }: { list: string[] }) {
+function Paths({ list, onRemove, write }: { list: string[]; onRemove: (p: string) => void; write: PermWrite }) {
+  if (list.length === 0) return null;
   return (
     <ul className="perm__list">
-      {list.map((p) => <li key={p} className="perm__row"><code>{p}</code></li>)}
+      {list.map((p) => (
+        <li key={p} className="perm__row">
+          <code>{p}</code>
+          <RemoveBtn write={write} onClick={() => onRemove(p)} />
+        </li>
+      ))}
     </ul>
   );
 }

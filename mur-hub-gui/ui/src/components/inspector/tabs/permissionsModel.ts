@@ -21,3 +21,21 @@ export function permCommands(agent: string) {
     mcp: `mur agent mcp set-network ${agent} <server> --allow-host <host>`,
   };
 }
+
+/** What the CLI's set-mode accepts, spelled as the view/serde names. The
+ *  outbound value goes to `cmd_perm_set_mode` verbatim; `proxy_only` is the
+ *  CLI spelling (the DTO shows `proxyonly`, serde's lowercase of the variant). */
+export const OUTBOUND_MODES = ["restricted", "unrestricted", "proxy_only", "off"] as const;
+export const SPAWN_MODES = ["allowlist", "any", "none", "strict"] as const;
+export const TOOL_POLICIES = ["allow", "ask", "deny"] as const;
+export type OutboundMode = (typeof OUTBOUND_MODES)[number];
+
+/** Spec §P2: restart is said, not implied. Only a running agent needs it. */
+export function afterWriteHint(isRunning: boolean): "perm.restartHint" | "perm.saved" {
+  return isRunning ? "perm.restartHint" : "perm.saved";
+}
+
+/** The DTO's outbound spelling → the CLI's, for the select's current value. */
+export function outboundModeForCli(dto: string): OutboundMode {
+  return dto === "proxyonly" ? "proxy_only" : (dto as OutboundMode);
+}
