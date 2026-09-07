@@ -197,6 +197,14 @@ pub enum SlashCmd {
     /// `/login [anthropic|chatgpt]` — show OAuth health, or repair one provider.
     /// Unrelated to `mur auth login`, which signs in to mur.run.
     Login(Option<String>),
+    /// `/secret <KEY> [--delete]` — hand the agent a credential through a
+    /// hidden prompt, or revoke one. Only the KEY is ever on this line: a
+    /// value typed here would be in the composer, the history, and the
+    /// channel, which is the whole thing this command exists to avoid.
+    Secret {
+        key: Option<String>,
+        delete: bool,
+    },
     Quit,
     Unknown(String),
 }
@@ -231,6 +239,16 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
             }
         }
         "login" => SlashCmd::Login(words.next().map(str::to_string)),
+        "secret" => {
+            let args: Vec<&str> = words.collect();
+            SlashCmd::Secret {
+                key: args
+                    .iter()
+                    .find(|s| !s.starts_with("--"))
+                    .map(|s| (*s).to_string()),
+                delete: args.contains(&"--delete"),
+            }
+        }
         "auto" => SlashCmd::Auto(match words.next() {
             Some("on") => Some(true),
             Some("off") => Some(false),
@@ -586,6 +604,11 @@ pub struct App {
     /// main loop takes and clears this — `handle_slash` has no access to
     /// `terminal`/`events` to run the handover itself.
     pub pending_handover: Option<HandoverRequest>,
+    /// A `/secret KEY` waiting for the main loop to read its value with the
+    /// terminal handed over. Never holds the value itself.
+    pub pending_secret_prompt: Option<String>,
+    /// A `/secret KEY --delete` waiting to be carried out.
+    pub pending_secret_delete: Option<String>,
 }
 
 impl App {
@@ -675,6 +698,8 @@ impl App {
             fleet: None,
             auto_fleet_step: None,
             pending_handover: None,
+            pending_secret_prompt: None,
+            pending_secret_delete: None,
         }
     }
 
@@ -1915,6 +1940,36 @@ mod tests {
         assert_eq!(
             parse_slash("/login bogus"),
             Some(SlashCmd::Login(Some("bogus".into())))
+        );
+    }
+
+    #[test]
+    fn parse_slash_secret() {
+        let s = |key: Option<&str>, delete| {
+            Some(SlashCmd::Secret {
+                key: key.map(str::to_string),
+                delete,
+            })
+        };
+        assert_eq!(parse_slash("/secret"), s(None, false));
+        assert_eq!(
+            parse_slash("/secret GITEA_TOKEN"),
+            s(Some("GITEA_TOKEN"), false)
+        );
+        assert_eq!(
+            parse_slash("/secret GITEA_TOKEN --delete"),
+            s(Some("GITEA_TOKEN"), true)
+        );
+        assert_eq!(
+            parse_slash("/secret --delete GITEA_TOKEN"),
+            s(Some("GITEA_TOKEN"), true)
+        );
+        // Only the KEY is taken. A value typed on this line is ignored rather
+        // than accepted, so no path exists where a secret rides in the
+        // composer.
+        assert_eq!(
+            parse_slash("/secret GITEA_TOKEN somevalue"),
+            s(Some("GITEA_TOKEN"), false)
         );
     }
 

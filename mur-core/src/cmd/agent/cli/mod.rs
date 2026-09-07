@@ -27,6 +27,7 @@ mod paste;
 pub mod persist;
 mod recover;
 mod render_card;
+mod secret_cmd;
 mod settlement;
 mod step;
 mod stream;
@@ -192,7 +193,7 @@ async fn push_memory_reload(home: &std::path::Path, agent: &str) -> String {
     }
 }
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /open (outstanding items)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /model [N|name] (list/switch model)  /login [anthropic|chatgpt] (OAuth health / re-authenticate — unrelated to mur auth login, which signs in to mur.run for the official catalog)  /mcp  /skill  /remember <text> (save a memory)  /memories  /forget <name|last>  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
+const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /open (outstanding items)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /model [N|name] (list/switch model)  /login [anthropic|chatgpt] (OAuth health / re-authenticate — unrelated to mur auth login, which signs in to mur.run for the official catalog)  /secret <KEY> [--delete] (hand the agent a credential — hidden input, never enters the chat)  /mcp  /skill  /remember <text> (save a memory)  /memories  /forget <name|last>  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
 #[allow(clippy::too_many_arguments)]
@@ -880,6 +881,34 @@ async fn event_loop(
                 Err(e) => app.push_error(format!("{}: handover failed: {e:#}", req.label)),
             }
             app.needs_full_redraw = true;
+        }
+        // Same shape as the handover above, and for the same reason: the
+        // EventStream owns stdin and the child (here, rpassword's tty read)
+        // must have it to itself.
+        if app.render_mode == RenderMode::Inline
+            && let Some(key) = app.pending_secret_prompt.take()
+        {
+            let want_h = prepare_handover(app, &format!("/secret {key}"), last_size.height);
+            drop(events);
+            if want_h != viewport_h && handover::reanchor(terminal, want_h).is_ok() {
+                viewport_h = want_h;
+            }
+            ui::flush_finished(terminal, app, viewport_h)?;
+            terminal.draw(|f| ui::render(f, app))?;
+            let read = handover::read_hidden(
+                terminal,
+                viewport_h,
+                &format!("Enter value for {key} (input hidden, Enter alone cancels): "),
+            );
+            events = EventStream::new();
+            match read {
+                Ok(value) => secret_cmd::after_hidden_input(app, key, value).await,
+                Err(e) => app.push_error(format!("{key}: hidden read failed: {e:#}")),
+            }
+            app.needs_full_redraw = true;
+        }
+        if let Some(key) = app.pending_secret_delete.take() {
+            secret_cmd::after_delete(app, key).await;
         }
         arm_input_debounce(app, StdInstant::now());
         // Flush the live band's overflow into native scrollback BEFORE the
@@ -2165,6 +2194,7 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
                 Some(p) => login::dispatch_repair(app, p).await,
             },
         },
+        SlashCmd::Secret { key, delete } => secret_cmd::request(app, key, delete),
         SlashCmd::Mcp(args) => run_manage(app, move |agent| manage::run_mcp(&agent, &args)).await,
         SlashCmd::Skill(args) => {
             run_manage(app, move |agent| manage::run_skill(&agent, &args)).await
@@ -3077,6 +3107,7 @@ mod help_coverage_tests {
             SlashCmd::Model(_) => Some("model"),
             SlashCmd::Effort { .. } => Some("effort"),
             SlashCmd::Login(_) => Some("login"),
+            SlashCmd::Secret { .. } => Some("secret"),
             SlashCmd::Quit => Some("exit"),
             SlashCmd::Unknown(_) => None,
         }
@@ -3110,6 +3141,10 @@ mod help_coverage_tests {
             SlashCmd::Open,
             SlashCmd::Model(None),
             SlashCmd::Login(None),
+            SlashCmd::Secret {
+                key: None,
+                delete: false,
+            },
             SlashCmd::Quit,
             SlashCmd::Unknown("x".into()),
         ]

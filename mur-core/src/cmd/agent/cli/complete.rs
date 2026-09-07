@@ -72,6 +72,11 @@ const COMMANDS: &[(&str, &str, &[&str])] = &[
         ],
     ),
     ("quit", "exit the chat", &[]),
+    (
+        "secret",
+        "hand the agent a credential (hidden input)",
+        &["--delete"],
+    ),
     ("sessions", "list past sessions", &[]),
     ("skill", "manage agent skills", &["list", "add", "remove"]),
     ("skin", "switch theme", &["dark", "light", "mur"]),

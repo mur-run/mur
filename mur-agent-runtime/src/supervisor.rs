@@ -1134,9 +1134,7 @@ fn build_dispatcher(
     );
     d.register(
         "secret/delete",
-        Box::new(
-            crate::protocol::methods::secret_set::SecretDeleteHandler::new(secrets),
-        ),
+        Box::new(crate::protocol::methods::secret_set::SecretDeleteHandler::new(secrets)),
     );
     d
 }

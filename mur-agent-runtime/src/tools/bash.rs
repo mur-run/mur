@@ -221,16 +221,14 @@ Commands are killed after `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {
         if let Some(vault) = &self.secrets {
             cmd.envs(vault.env_pairs());
         }
-        let child = cmd
-            .spawn()
-            .map_err(|e| {
-                let mut msg = format!("spawn failed: {e}");
-                if crate::tools::fs_policy::is_removable_volume_eperm(&working_dir, &e) {
-                    msg.push_str("\n\n");
-                    msg.push_str(crate::tools::fs_policy::REMOVABLE_VOLUME_EPERM_HINT);
-                }
-                ToolError::Execution(msg)
-            })?;
+        let child = cmd.spawn().map_err(|e| {
+            let mut msg = format!("spawn failed: {e}");
+            if crate::tools::fs_policy::is_removable_volume_eperm(&working_dir, &e) {
+                msg.push_str("\n\n");
+                msg.push_str(crate::tools::fs_policy::REMOVABLE_VOLUME_EPERM_HINT);
+            }
+            ToolError::Execution(msg)
+        })?;
 
         let output = match tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),

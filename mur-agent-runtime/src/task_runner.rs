@@ -3979,9 +3979,11 @@ mod tests {
             &self,
             _input: serde_json::Value,
         ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
-            Ok("remote: https://x:d8b04a3cc632a5c8026cf5a810d36e292c603f99@git.local"
-                .to_string()
-                .into())
+            Ok(
+                "remote: https://x:d8b04a3cc632a5c8026cf5a810d36e292c603f99@git.local"
+                    .to_string()
+                    .into(),
+            )
         }
     }
 
@@ -4158,10 +4160,7 @@ mod tests {
             .set("GITEA_TOKEN", "d8b04a3cc632a5c8026cf5a810d36e292c603f99")
             .unwrap();
         let llm = Arc::new(RecordingLlm {
-            responses: vec![
-                build_tool_call_response("s-0"),
-                end_turn_response("done"),
-            ],
+            responses: vec![build_tool_call_response("s-0"), end_turn_response("done")],
             index: std::sync::atomic::AtomicUsize::new(0),
             seen: std::sync::Mutex::new(Vec::new()),
         });
