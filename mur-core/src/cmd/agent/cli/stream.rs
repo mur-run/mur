@@ -193,6 +193,18 @@ impl HitlRequest {
             created_at: std::time::Instant::now(),
         }
     }
+
+    /// One request per gated call. A P3 runtime sends `calls: [...]`; each
+    /// entry has its own `hitl_id`. Older runtimes send only the top-level
+    /// fields, which are exactly one call — so the fallback is one request.
+    pub fn from_params(v: Value) -> Vec<Self> {
+        match v.get("calls").and_then(Value::as_array) {
+            Some(calls) if !calls.is_empty() => {
+                calls.iter().cloned().map(Self::from_value).collect()
+            }
+            _ => vec![Self::from_value(v)],
+        }
+    }
 }
 
 /// Build the `message/send` params for one turn, threading the previous turn's
@@ -259,10 +271,12 @@ pub fn spawn_stream(
                 });
             },
             |hitl| {
-                let _ = tx.blocking_send(StreamMsg::Hitl {
-                    task_id: tid.clone(),
-                    req: HitlRequest::from_value(hitl),
-                });
+                for req in HitlRequest::from_params(hitl) {
+                    let _ = tx.blocking_send(StreamMsg::Hitl {
+                        task_id: tid.clone(),
+                        req,
+                    });
+                }
             },
             |step| {
                 let msg = match step {
@@ -567,5 +581,26 @@ mod hitl_step_tests {
         let v = serde_json::json!({ "hitl_id": "h-1", "tool_name": "bash" });
         let req = HitlRequest::from_value(v);
         assert!(req.step_id.is_none());
+    }
+
+    #[test]
+    fn from_params_expands_calls_and_falls_back_to_single() {
+        let batch = serde_json::json!({
+            "hitl_id": "h1", "tool_name": "bash", "tool_input": {"command": "a"},
+            "calls": [
+                {"hitl_id": "h1", "step_id": "s1", "tool_name": "bash", "tool_input": {"command": "a"}},
+                {"hitl_id": "h2", "step_id": "s2", "tool_name": "write_file", "tool_input": {"path": "x"}}
+            ]
+        });
+        let reqs = HitlRequest::from_params(batch);
+        assert_eq!(
+            reqs.iter().map(|r| r.hitl_id.as_str()).collect::<Vec<_>>(),
+            ["h1", "h2"]
+        );
+        assert_eq!(reqs[1].step_id.as_deref(), Some("s2"));
+        let single =
+            HitlRequest::from_params(serde_json::json!({"hitl_id": "h9", "tool_name": "bash"}));
+        assert_eq!(single.len(), 1);
+        assert_eq!(single[0].hitl_id, "h9");
     }
 }
