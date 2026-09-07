@@ -81,12 +81,57 @@ const MAX_REGISTRY_ENTRIES: usize = 1_024;
 /// Cap on chat threads retained for multi-turn memory (LRU-evicted) so a
 /// long-lived agent serving many conversations doesn't leak unboundedly.
 const MAX_CONVERSATIONS: usize = 256;
-/// Cap on stored messages per conversation (user+assistant turns; the system
-/// prompt is re-prepended fresh each turn, not stored). MUST stay even: stored
-/// history is always user/assistant pairs, and trimming an even count keeps the
-/// first message a `user` turn (Anthropic requires that). ponytail: crude count
-/// cap — switch to a token budget if turn sizes vary wildly.
-const MAX_CONV_MESSAGES: usize = 40;
+/// Hard ceiling on stored messages per conversation, kept only so a pathological
+/// stream of empty turns cannot grow the vector without bound. The real limit is
+/// [`CONV_BUDGET_DIVISOR`] below — a turn count says nothing about how much
+/// context the turns occupy (issue #1200). MUST stay even: stored history is
+/// always user/assistant pairs, and trimming an even count keeps the first
+/// message a `user` turn (Anthropic requires that).
+const MAX_CONV_MESSAGES: usize = 400;
+
+/// Characters per token, for sizing stored history against a token budget.
+/// Deliberately crude: the alternative is tokenizing every stored turn on every
+/// send, and the budget leaves enough headroom that a 25% error costs nothing.
+const CHARS_PER_TOKEN_ESTIMATE: usize = 4;
+
+/// Share of the model's context window that stored history may occupy: the
+/// window also has to hold the system prompt, injected skills, the tool
+/// inventory, this turn's tool traffic and the reply, so history gets a quarter.
+const CONV_BUDGET_DIVISOR: u64 = 4;
+
+/// History budget when the model's context window is unknown — an unregistered
+/// model, or a registry entry the catalog never carried a window for. Sized for
+/// the smallest window still in common use (32k) under the same quarter share.
+const DEFAULT_CONV_BUDGET_TOKENS: u64 = 8_000;
+
+/// Conversation keys come off the wire as `context.task_id`, so they reach the
+/// filename path. Only these characters are allowed through; anything else
+/// keeps the conversation in memory rather than naming a file.
+fn conversation_file_stem(key: &str) -> Option<&str> {
+    let ok = !key.is_empty()
+        && key.len() <= 128
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    ok.then_some(key)
+}
+
+/// Estimated token cost of a stored history. Only the text is counted: images
+/// are never stored (see [`TaskRunner::remember_turn`]) and tool scaffolding is
+/// dropped before a turn is remembered.
+fn estimated_tokens(history: &[crate::llm::RichMessage]) -> u64 {
+    use crate::llm::RichMessage as M;
+    let chars: usize = history
+        .iter()
+        .map(|m| match m {
+            M::Text { content, .. } => content.len(),
+            M::ImageText { text, .. } => text.len(),
+            M::ToolUse { text, .. } => text.as_ref().map_or(0, String::len),
+            M::ToolResults { results } => results.iter().map(|r| r.content.len()).sum(),
+        })
+        .sum();
+    (chars / CHARS_PER_TOKEN_ESTIMATE) as u64
+}
 
 /// Injected into every agent's system prompt so authored files land where MUR
 /// can read them instead of the working directory. Guidance, not enforcement.
@@ -106,39 +151,166 @@ Your complete final output for this turn must be written to `{path}` using write
 In your reply, state ONLY the file path and a one-line summary of what was written.\n\
 Do NOT include the file content in your reply — the caller will read the file directly.";
 
-/// In-memory multi-turn chat memory. The CLI and Hub thread `context.task_id` =
-/// the prior reply's id on every send, so we key stored history by the id of the
-/// turn that produced it; the next turn's `context.task_id` then recalls its
-/// predecessor. Stores text only — a pasted image was seen the turn it arrived
-/// and is not re-sent on later turns. ponytail: resets on runtime restart and is
-/// NOT a `--resume` persistence store; back it with disk if cross-restart model
-/// memory is ever needed.
-#[derive(Default)]
+/// Multi-turn chat memory. The CLI and Hub thread `context.task_id` = the prior
+/// reply's id on every send, so we key stored history by the id of the turn that
+/// produced it; the next turn's `context.task_id` then recalls its predecessor.
+/// Stores text only — a pasted image was seen the turn it arrived and is not
+/// re-sent on later turns.
+///
+/// Backed by disk when `dir` is set (issue #1199): a restart used to drop every
+/// conversation on the floor mid-session, which is not a rare event — editing an
+/// entitlement forces one, so the ordinary "hit a denial, grant the path,
+/// restart, carry on" loop destroyed the conversation that motivated the grant.
+/// The memory map stays the fast path; disk is read only when a key misses,
+/// which after a restart is once per conversation.
 struct ConversationStore {
     map: HashMap<String, Vec<crate::llm::RichMessage>>,
     /// Insertion order for LRU eviction past `MAX_CONVERSATIONS`.
     order: VecDeque<String>,
+    /// Directory holding one JSON file per conversation key. `None` keeps the
+    /// store purely in memory (stub runners, most tests).
+    dir: Option<std::path::PathBuf>,
+    /// Estimated-token ceiling for one conversation's stored history.
+    budget_tokens: u64,
+    /// Files left by earlier processes are swept once, on first write.
+    swept: bool,
+}
+
+impl Default for ConversationStore {
+    fn default() -> Self {
+        Self {
+            map: HashMap::new(),
+            order: VecDeque::new(),
+            dir: None,
+            budget_tokens: DEFAULT_CONV_BUDGET_TOKENS,
+            swept: false,
+        }
+    }
 }
 
 impl ConversationStore {
     /// Prior conversation for `key` (the caller's `context.task_id`), or empty.
+    ///
+    /// A miss falls through to disk: after a restart the caller still threads the
+    /// id of a reply this process never produced, and that is precisely the case
+    /// worth recovering.
     fn prior(&self, key: Option<&str>) -> Vec<crate::llm::RichMessage> {
-        key.and_then(|k| self.map.get(k))
-            .cloned()
-            .unwrap_or_default()
+        let Some(k) = key else {
+            return Vec::new();
+        };
+        if let Some(h) = self.map.get(k) {
+            return h.clone();
+        }
+        self.load(k)
+    }
+
+    /// Path holding `key`'s history, or `None` when persistence is off or the
+    /// key is not a name we are willing to put in a path.
+    fn path_for(&self, key: &str) -> Option<std::path::PathBuf> {
+        let dir = self.dir.as_ref()?;
+        let stem = conversation_file_stem(key)?;
+        Some(dir.join(format!("{stem}.json")))
+    }
+
+    fn load(&self, key: &str) -> Vec<crate::llm::RichMessage> {
+        let Some(path) = self.path_for(key) else {
+            return Vec::new();
+        };
+        let Ok(bytes) = std::fs::read(&path) else {
+            return Vec::new();
+        };
+        match serde_json::from_slice::<Vec<crate::llm::RichMessage>>(&bytes) {
+            Ok(h) => {
+                tracing::debug!(key, messages = h.len(), "conversation recovered from disk");
+                h
+            }
+            // A truncated or stale-format file is not worth failing a turn over;
+            // the conversation simply starts fresh, as it did before #1199.
+            Err(e) => {
+                tracing::warn!(key, error = %e, "unreadable conversation file; ignoring");
+                Vec::new()
+            }
+        }
+    }
+
+    /// Write `history` for `key`, atomically (temp + rename, as the YAML stores
+    /// do). Best-effort throughout: persistence must never fail a turn.
+    fn persist(&self, key: &str, history: &[crate::llm::RichMessage]) {
+        let Some(path) = self.path_for(key) else {
+            return;
+        };
+        let Some(dir) = path.parent() else {
+            return;
+        };
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            tracing::warn!(error = %e, "cannot create conversation dir; memory only");
+            return;
+        }
+        let Ok(json) = serde_json::to_vec(history) else {
+            return;
+        };
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, &json).is_ok() && std::fs::rename(&tmp, &path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+
+    fn forget_file(&self, key: &str) {
+        if let Some(path) = self.path_for(key) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    /// Drop conversation files left by earlier processes once this one starts
+    /// writing. Without it the directory grows by one file per turn forever,
+    /// since the in-memory LRU that bounds `map` starts empty on every boot.
+    fn sweep_stale_files(&mut self) {
+        if self.swept {
+            return;
+        }
+        self.swept = true;
+        let Some(dir) = self.dir.clone() else {
+            return;
+        };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return;
+        };
+        let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .filter_map(|e| {
+                let m = e.metadata().ok()?.modified().ok()?;
+                Some((m, e.path()))
+            })
+            .collect();
+        if files.len() <= MAX_CONVERSATIONS {
+            return;
+        }
+        files.sort_by_key(|(m, _)| *m);
+        let excess = files.len() - MAX_CONVERSATIONS;
+        for (_, path) in files.into_iter().take(excess) {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     /// Store `history` (user/assistant pairs) under `key`, trimming oldest turns
-    /// and evicting the oldest conversation if over the caps.
+    /// to the token budget and evicting the oldest conversation if over the cap.
     fn remember(&mut self, key: String, mut history: Vec<crate::llm::RichMessage>) {
+        // Oldest first, in pairs so the history keeps starting on a `user` turn.
+        while history.len() > 2 && estimated_tokens(&history) > self.budget_tokens {
+            history.drain(0..2);
+        }
         if history.len() > MAX_CONV_MESSAGES {
             history.drain(0..history.len() - MAX_CONV_MESSAGES);
         }
+        self.sweep_stale_files();
+        self.persist(&key, &history);
         if self.map.insert(key.clone(), history).is_none() {
             self.order.push_back(key);
             while self.order.len() > MAX_CONVERSATIONS {
                 if let Some(old) = self.order.pop_front() {
                     self.map.remove(&old);
+                    self.forget_file(&old);
                 }
             }
         }
@@ -502,6 +674,24 @@ impl TaskRunner {
 
     pub fn with_pending_approvals(mut self, pa: HitlApprovals) -> Self {
         self.pending_approvals = Some(pa);
+        self
+    }
+
+    /// Persist multi-turn memory under `dir` so conversations survive a restart
+    /// (issue #1199), and size stored history against `context_window` rather
+    /// than a turn count (issue #1200). `None` window keeps the default budget.
+    pub fn with_conversation_memory(
+        self,
+        dir: std::path::PathBuf,
+        context_window: Option<u64>,
+    ) -> Self {
+        {
+            let mut store = self.conversations.lock().unwrap_or_else(|e| e.into_inner());
+            store.dir = Some(dir);
+            if let Some(w) = context_window.filter(|w| *w > 0) {
+                store.budget_tokens = (w / CONV_BUDGET_DIVISOR).max(1);
+            }
+        }
         self
     }
 
@@ -2640,6 +2830,125 @@ mod tests {
         assert_eq!(runner.seed_history(None, "SYS".into(), &input).len(), 2);
     }
 
+    /// #1199: a restart used to drop the conversation. The store is rebuilt from
+    /// scratch here — a fresh `map`, as a new process has — and must still find
+    /// the turn the caller threads back to it.
+    #[test]
+    fn conversation_survives_a_restart() {
+        use crate::llm::RichMessage;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pair = |u: &str, a: &str| {
+            vec![
+                RichMessage::Text {
+                    role: "user".into(),
+                    content: u.into(),
+                },
+                RichMessage::Text {
+                    role: "agent".into(),
+                    content: a.into(),
+                },
+            ]
+        };
+
+        let mut before = ConversationStore {
+            dir: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        before.remember("turn-1".into(), pair("hello", "hi"));
+
+        // A new process: nothing in memory, same directory on disk.
+        let after = ConversationStore {
+            dir: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        assert!(after.map.is_empty(), "precondition: memory starts empty");
+        let recovered = after.prior(Some("turn-1"));
+        assert_eq!(recovered.len(), 2, "history was not recovered from disk");
+        assert!(
+            matches!(&recovered[0], RichMessage::Text { content, .. } if content == "hello"),
+            "recovered the wrong turn: {recovered:?}"
+        );
+
+        // Negative control: without a dir the same key recovers nothing, so the
+        // assertion above is testing persistence and not some other memory.
+        let no_disk = ConversationStore::default();
+        assert!(no_disk.prior(Some("turn-1")).is_empty());
+    }
+
+    /// #1200: the cap is a token budget, so twenty tiny turns are kept where two
+    /// huge ones are not — the count cap got both cases wrong.
+    #[test]
+    fn history_is_trimmed_by_tokens_not_turn_count() {
+        use crate::llm::RichMessage;
+        let msg = |role: &str, n: usize| RichMessage::Text {
+            role: role.into(),
+            content: "x".repeat(n),
+        };
+        const BUDGET: u64 = 500; // ≈ 2000 chars
+        let mut store = ConversationStore {
+            budget_tokens: BUDGET,
+            ..Default::default()
+        };
+
+        // 30 turns of 40 chars (10 tokens) each = 300 tokens: comfortably inside
+        // the budget, and 60 messages — well past the old 40-message cap.
+        let small: Vec<_> = (0..30)
+            .flat_map(|_| [msg("user", 20), msg("agent", 20)])
+            .collect();
+        assert!(
+            estimated_tokens(&small) <= BUDGET,
+            "test setup exceeds budget"
+        );
+        store.remember("small".into(), small);
+        let kept = store.prior(Some("small"));
+        assert_eq!(
+            kept.len(),
+            60,
+            "small turns were trimmed by count, not tokens"
+        );
+
+        // Two turns that blow the budget on their own get trimmed to one pair.
+        let big = vec![
+            msg("user", 4_000),
+            msg("agent", 4_000),
+            msg("user", 8),
+            msg("agent", 8),
+        ];
+        assert!(
+            estimated_tokens(&big) > BUDGET,
+            "test setup fits the budget"
+        );
+        store.remember("big".into(), big);
+        let kept = store.prior(Some("big"));
+        assert_eq!(kept.len(), 2, "oversized early turn was not dropped");
+        assert!(
+            matches!(&kept[0], RichMessage::Text { role, .. } if role == "user"),
+            "trimming must leave the history starting on a user turn"
+        );
+    }
+
+    /// The key arrives over the wire as `context.task_id`, so it must never
+    /// choose the file path.
+    #[test]
+    fn hostile_conversation_key_is_not_written_to_disk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = ConversationStore {
+            dir: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        for bad in ["../escape", "a/b", "", "with space", &"x".repeat(129)] {
+            assert!(
+                store.path_for(bad).is_none(),
+                "key {bad:?} was allowed to name a file"
+            );
+        }
+        assert!(
+            store
+                .path_for("019eb00c-d646-74a3-8cc8-b16dc1bbacf8")
+                .is_some()
+        );
+    }
+
     #[tokio::test]
     async fn run_sync_streaming_is_cancellable_by_id() {
         use std::sync::Arc;
@@ -3557,6 +3866,8 @@ mod tests {
             vec![],
             vec![],
             Some(3),
+            None,
+            None,
             None,
             None,
         );

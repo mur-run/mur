@@ -164,6 +164,11 @@ pub fn build_runner(
     max_iterations: Option<u32>,
     max_tokens: Option<u64>,
     effort: Option<mur_common::llm::Effort>,
+    // Where multi-turn memory is persisted so it survives a restart (#1199),
+    // and the model's context window, which sizes the history budget (#1200).
+    // `None` dir keeps the store in memory, as the stub runners want.
+    conversation_dir: Option<std::path::PathBuf>,
+    context_window: Option<u64>,
 ) -> Arc<TaskRunner> {
     let mut runner = TaskRunner::with_llm(client)
         .with_system_prompt(base_system_prompt)
@@ -188,6 +193,9 @@ pub fn build_runner(
     }
     if let Some(notif) = notifier {
         runner = runner.with_notifier(notif);
+    }
+    if let Some(dir) = conversation_dir {
+        runner = runner.with_conversation_memory(dir, context_window);
     }
     Arc::new(runner)
 }
@@ -461,6 +469,8 @@ pub async fn build_provider_runner(
             max_iterations,
             max_tokens,
             profile.inner.effort,
+            Some(agent_home.join("conversations")),
+            entry.context_window,
         );
         (r, Some(client), Some(pool.clone()))
     };
