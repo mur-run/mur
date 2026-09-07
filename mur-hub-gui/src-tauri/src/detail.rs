@@ -27,6 +27,9 @@ pub struct AgentDetail {
     pub mcp_servers: Vec<McpServerView>,
     // Permissions tab
     pub capabilities: Vec<String>,
+    /// Spec 2026-09-07 §1.2: the same derivation `mur agent perm list-paths`
+    /// prints. Read-only in P1.
+    pub permissions: mur_core::cmd::agent::perm_view::PermissionsView,
     // Model binding (registry ref takes precedence over the inline config)
     pub model_ref: Option<String>,
     pub model_provider: String,
@@ -262,6 +265,14 @@ pub fn build_agent_detail(
     profile: mur_common::AgentProfile,
     agent_home: Option<&std::path::Path>,
 ) -> AgentDetail {
+    // The seal lives in `running.lock`; with no agent home (tests) there is
+    // none, which the view reports as NotRunning — nothing enforced.
+    let lock: Option<mur_common::LockFile> = agent_home
+        .map(|h| h.join("running.lock"))
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok());
+    let permissions = mur_core::cmd::agent::perm_view::permissions_view(&profile, lock.as_ref());
+
     // Resolved once: `resolved_model_id` reads `models.yaml`, and this runs on
     // every detail fetch and at the end of every update.
     let model_id = resolved_model_id(&profile);
@@ -344,6 +355,7 @@ pub fn build_agent_detail(
             })
             .collect(),
         capabilities: profile.capabilities.clone(),
+        permissions,
         model_ref: profile.model_ref.clone(),
         model_provider: profile.model.provider.clone(),
         model_name: profile.model.name.clone(),
@@ -496,6 +508,35 @@ mod tests {
         // …and the stored value stays visible, so the UI can say the two
         // differ instead of silently showing the narrowed card.
         assert_eq!(d.effort_stored.as_deref(), Some("xhigh"));
+    }
+
+    /// Spec 2026-09-07 §1.4: entitlements reach the DTO through the shared
+    /// derivation, and with no agent home the state is NotRunning.
+    #[test]
+    fn entitlements_project_into_the_detail() {
+        use mur_core::cmd::agent::perm_view::{Enforcement, GrantStatus};
+        let mut p = mur_common::AgentProfile::default_for_tests();
+        p.entitlements.filesystem.write = vec!["/tmp/x".into()];
+        p.entitlements.network.outbound.allow_hosts = vec!["api.example.com".into()];
+        p.entitlements.tools.push(mur_common::agent::ToolRule {
+            pattern: "bash".into(),
+            policy: mur_common::agent::ToolPolicy::Allow,
+            risk: None,
+        });
+
+        let d = build_agent_detail(p, None);
+        assert_eq!(d.permissions.enforcement, Enforcement::NotRunning);
+        assert_eq!(d.permissions.filesystem.write[0].raw, "/tmp/x");
+        assert_eq!(
+            d.permissions.filesystem.write[0].status,
+            GrantStatus::Unverified
+        );
+        assert_eq!(
+            d.permissions.runtime_outbound.allow_hosts,
+            vec!["api.example.com"]
+        );
+        assert_eq!(d.permissions.tools.len(), 1);
+        assert_eq!(d.permissions.tools[0].pattern, "bash");
     }
 
     /// A model with no reasoning control offers nothing and reports nothing,

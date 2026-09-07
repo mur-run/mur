@@ -1945,6 +1945,9 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentPermAction::DenyPath { name, path } => {
                 cmd::agent::cmd_perm_deny_path(&name, &path)?
             }
+            AgentPermAction::RemovePath { name, list, path } => {
+                cmd::agent::cmd_perm_remove_path(&name, &list, &path)?
+            }
             AgentPermAction::AllowSpawn { name, binary } => {
                 cmd::agent::cmd_perm_allow_spawn(&name, &binary)?
             }

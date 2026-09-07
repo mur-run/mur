@@ -123,6 +123,13 @@
    sets --md-list-width from useResizableColumn. */
 .master-detail {
   display: grid; grid-template-columns: var(--md-list-width, var(--shell-list-width)) 6px 1fr;
+  /* The row must be capped at the container, not sized to content. Without
+     this the implicit `auto` row grows to the tallest pane, the excess is
+     clipped by `overflow: hidden`, and the detail pane's own scroller ends up
+     with a viewport taller than the window — so its last screenful is
+     unreachable at max scroll. `min-height: 0` on the item is necessary but
+     does not constrain the track. */
+  grid-template-rows: minmax(0, 1fr);
   height: 100%; min-height: 0; overflow: hidden;
 }
 .list-divider { position: relative; cursor: col-resize; background: transparent; }

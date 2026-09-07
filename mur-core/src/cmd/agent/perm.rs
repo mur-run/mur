@@ -40,98 +40,7 @@ pub(super) fn warn_if_running(name: &str) {
 /// runtime's own HTTP client (plus the B0 gate on the agent's `network.*`
 /// tools), and a spawned server runs neither.
 fn print_outbound_picture(profile: &mur_common::AgentProfile) {
-    print!("{}", outbound_picture(profile));
-}
-
-/// Testable core of [`print_outbound_picture`].
-fn outbound_picture(profile: &mur_common::AgentProfile) -> String {
-    use mur_common::agent::{McpNetMode, NetworkOutboundMode};
-    use std::fmt::Write as _;
-
-    let mut o = String::new();
-    let out = &profile.entitlements.network.outbound;
-
-    let _ = writeln!(o, "runtime's own traffic — {:?}", out.mode);
-    let _ = writeln!(
-        o,
-        "  (in-process DNS guard + the B0 gate on `network.*` tools)"
-    );
-    match out.mode {
-        NetworkOutboundMode::Off => {
-            let _ = writeln!(o, "  no outbound");
-        }
-        NetworkOutboundMode::Unrestricted => {
-            let _ = writeln!(o, "  any host, any port");
-        }
-        _ => {
-            if out.allow_hosts.is_empty() {
-                let _ = writeln!(
-                    o,
-                    "  allow_hosts: (none — only the configured model's host)"
-                );
-            } else {
-                let _ = writeln!(o, "  allow_hosts:");
-                for h in &out.allow_hosts {
-                    let _ = writeln!(o, "    {h}");
-                }
-                let _ = writeln!(o, "  plus the configured model's own host, always allowed");
-            }
-        }
-    }
-
-    if profile.mcp_servers.is_empty() {
-        return o;
-    }
-    let _ = writeln!(o);
-    let _ = writeln!(o, "MCP servers — {}", profile.mcp_servers.len());
-    let mut any_inherit = false;
-    for m in &profile.mcp_servers {
-        let mode = m.network.as_ref().map(|n| n.mode).unwrap_or_default();
-        let detail = match mode {
-            // The load-bearing line: `inherit` does NOT pick up allow_hosts.
-            McpNetMode::Inherit => {
-                any_inherit = true;
-                "NOT bounded by allow_hosts above — only by the OS sandbox, which \
-                 restricts ports, not hosts"
-                    .to_string()
-            }
-            McpNetMode::Restricted => {
-                let hosts = m
-                    .network
-                    .as_ref()
-                    .map(|n| n.allow_hosts.join(", "))
-                    .unwrap_or_default();
-                if hosts.is_empty() {
-                    "via the egress proxy; no hosts allowed (denies all)".to_string()
-                } else {
-                    format!("via the egress proxy; allows {hosts}")
-                }
-            }
-            McpNetMode::BroadAudited => {
-                let deny = m
-                    .network
-                    .as_ref()
-                    .map(|n| n.deny_hosts.join(", "))
-                    .unwrap_or_default();
-                if deny.is_empty() {
-                    "via the egress proxy; ALL hosts, audited".to_string()
-                } else {
-                    format!("via the egress proxy; all hosts except {deny}, audited")
-                }
-            }
-            McpNetMode::Off => "no outbound".to_string(),
-        };
-        let label = format!("{mode:?}").to_lowercase();
-        let _ = writeln!(o, "  {:<20} {:<11} {detail}", m.name, label);
-    }
-    if any_inherit {
-        let _ = writeln!(o);
-        let _ = writeln!(
-            o,
-            "  Bound a server by host: mur agent mcp set-network <agent> <server> --allow-host <host>"
-        );
-    }
-    o
+    print!("{}", super::perm_view::outbound_picture(profile));
 }
 
 pub fn cmd_perm_show(name: &str, section: Option<&str>) -> Result<()> {
@@ -169,15 +78,24 @@ pub fn cmd_perm_show(name: &str, section: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// The wire names plus the two spellings people type for the fourth mode.
+/// `ProxyOnly` was unreachable from the CLI until now.
+fn parse_outbound_mode(value: &str) -> Result<NetworkOutboundMode> {
+    Ok(match value {
+        "restricted" => NetworkOutboundMode::Restricted,
+        "unrestricted" => NetworkOutboundMode::Unrestricted,
+        "proxy_only" | "proxy-only" | "proxyonly" => NetworkOutboundMode::ProxyOnly,
+        "off" => NetworkOutboundMode::Off,
+        other => {
+            bail!("invalid outbound mode '{other}' (restricted, unrestricted, proxy_only, off)")
+        }
+    })
+}
+
 pub fn cmd_perm_set_mode(name: &str, key: &str, value: &str) -> Result<()> {
     match key {
         "network.outbound" => {
-            let mode = match value {
-                "restricted" => NetworkOutboundMode::Restricted,
-                "unrestricted" => NetworkOutboundMode::Unrestricted,
-                "off" => NetworkOutboundMode::Off,
-                other => bail!("invalid outbound mode '{other}'"),
-            };
+            let mode = parse_outbound_mode(value)?;
             let (path, mut profile) = load_profile_for_edit(name)?;
             profile.entitlements.network.outbound.mode = mode;
             save_profile(&path, &mut profile)?;
@@ -300,91 +218,11 @@ pub fn cmd_perm_list_paths(name: &str) -> Result<()> {
         .map(|d| d.join("running.lock"))
         .and_then(|p| std::fs::read(p).ok())
         .and_then(|b| serde_json::from_slice::<LockFile>(&b).ok());
-    print!("{}", paths_picture(name, &profile, lock.as_ref()));
+    print!(
+        "{}",
+        super::perm_view::paths_picture(name, &profile, lock.as_ref())
+    );
     Ok(())
-}
-
-/// Testable core of [`cmd_perm_list_paths`].
-fn paths_picture(
-    name: &str,
-    profile: &mur_common::AgentProfile,
-    lock: Option<&LockFile>,
-) -> String {
-    use std::fmt::Write as _;
-    let mut o = String::new();
-    let fs = &profile.entitlements.filesystem;
-    let sandbox = lock.and_then(|l| l.sandbox.as_ref());
-
-    // The header can subsume everything below it, so it goes first.
-    match (lock, sandbox) {
-        (None, _) => {
-            let _ = writeln!(
-                o,
-                "agent '{name}' is not running — these are the grants it would ask for; \
-                 nothing is enforced until it starts."
-            );
-        }
-        (Some(_), None) => {
-            let _ = writeln!(
-                o,
-                "agent '{name}' was started by a runtime that did not record its seal, \
-                 so what actually took effect is unknown. Restart it to find out."
-            );
-        }
-        (Some(_), Some(sb)) if !sb.enforcing => {
-            let _ = writeln!(
-                o,
-                "agent '{name}' is running WITHOUT a kernel sandbox ({}). Only advisory \
-                 hooks apply, so it can reach MORE than the grants below — restart it to \
-                 try sealing again.",
-                sb.mode
-            );
-        }
-        (Some(_), Some(sb)) => {
-            let _ = writeln!(o, "agent '{name}' — sandbox enforcing ({})", sb.mode);
-        }
-    }
-
-    // A grant added after the seal is inert until restart. Which specific rows
-    // moved is not recoverable — only that the set differs — so this is stated
-    // once, for the whole listing, rather than guessed at per row.
-    let drifted = sandbox
-        .is_some_and(|sb| sb.granted_digest != mur_common::agent::filesystem_grants_digest(fs));
-
-    for (label, list) in [("read", &fs.read), ("write", &fs.write), ("deny", &fs.deny)] {
-        if list.is_empty() {
-            continue;
-        }
-        let _ = writeln!(o, "\n{}", label.to_uppercase());
-        for raw in list {
-            let expanded = mur_agent_runtime::sandbox::policy::expand_entitlement_path(raw);
-            let dropped = sandbox.and_then(|sb| {
-                sb.dropped
-                    .iter()
-                    .find(|d| d.verb == label && d.path == expanded.display().to_string())
-            });
-            match dropped {
-                Some(d) => {
-                    let _ = writeln!(o, "  ✗ {raw}\n      dropped — {}", d.reason);
-                }
-                None if sandbox.is_none() => {
-                    let _ = writeln!(o, "  · {raw}");
-                }
-                None => {
-                    let _ = writeln!(o, "  ✓ {raw}");
-                }
-            }
-        }
-    }
-
-    if drifted {
-        let _ = writeln!(
-            o,
-            "\nGrants have changed since this agent sealed, so the ✓ rows describe the \
-             profile as it is now, not as it was enforced:\n    mur agent restart {name}"
-        );
-    }
-    o
 }
 
 /// Refuse a filesystem grant the sandbox would silently discard.
@@ -501,6 +339,34 @@ pub fn cmd_perm_deny_path(name: &str, path_arg: &str) -> Result<()> {
             .filesystem
             .deny
             .push(path_arg.to_string());
+    }
+    save_profile(&path, &mut profile)?;
+    warn_if_running(name);
+    Ok(())
+}
+
+/// Drop one path from one grant list. `deny_path` ADDS to the deny list; this
+/// is the only way to take a grant back short of editing profile.yaml.
+pub fn remove_path(
+    fs: &mut mur_common::agent::FilesystemEntitlement,
+    verb: &str,
+    path_arg: &str,
+) -> Result<bool> {
+    let list = match verb {
+        "read" => &mut fs.read,
+        "write" => &mut fs.write,
+        "deny" => &mut fs.deny,
+        other => bail!("remove-path: unknown list '{other}' (read, write, deny)"),
+    };
+    let before = list.len();
+    list.retain(|p| p != path_arg);
+    Ok(list.len() != before)
+}
+
+pub fn cmd_perm_remove_path(name: &str, verb: &str, path_arg: &str) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    if !remove_path(&mut profile.entitlements.filesystem, verb, path_arg)? {
+        bail!("'{path_arg}' is not in the {verb} list of '{name}'");
     }
     save_profile(&path, &mut profile)?;
     warn_if_running(name);
@@ -643,182 +509,7 @@ pub fn cmd_perm_list_tools(name: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{outbound_picture, paths_picture, validate_host_pattern};
-    use mur_common::LockFile;
-    use mur_common::agent::{DroppedGrant, SandboxRecord};
-
-    fn fs_profile(read: &[&str], write: &[&str]) -> mur_common::AgentProfile {
-        let mut p = mur_common::AgentProfile::default_for_tests();
-        p.entitlements.filesystem.read = read.iter().map(|s| s.to_string()).collect();
-        p.entitlements.filesystem.write = write.iter().map(|s| s.to_string()).collect();
-        p
-    }
-
-    fn lock_with(sandbox: Option<SandboxRecord>) -> LockFile {
-        LockFile {
-            schema: 1,
-            uuid: "u".into(),
-            name: "mur".into(),
-            pid: 1,
-            ppid: 0,
-            started_at: "t".into(),
-            binary_version: "v".into(),
-            transports: mur_common::agent::LockTransports {
-                stdio: true,
-                unix_socket: None,
-                tcp: None,
-                webhook: None,
-            },
-            card_digest: "d".into(),
-            capabilities: vec![],
-            build_sha: String::new(),
-            proto_version: 0,
-            sandbox,
-        }
-    }
-
-    fn sealed(profile: &mur_common::AgentProfile, dropped: Vec<DroppedGrant>) -> SandboxRecord {
-        SandboxRecord {
-            enforcing: true,
-            mode: "macos-sbpl".into(),
-            granted_digest: mur_common::agent::filesystem_grants_digest(
-                &profile.entitlements.filesystem,
-            ),
-            dropped,
-        }
-    }
-
-    /// Without a running agent nothing is enforced, and the listing must not
-    /// imply otherwise by ticking every row.
-    #[test]
-    fn a_stopped_agent_is_listed_without_claiming_anything_took_effect() {
-        let p = fs_profile(&[], &["/tmp/x"]);
-        let out = paths_picture("mur", &p, None);
-        assert!(out.contains("is not running"), "{out}");
-        assert!(out.contains("· /tmp/x"), "{out}");
-        assert!(
-            !out.contains('✓'),
-            "a stopped agent has nothing effective: {out}"
-        );
-    }
-
-    #[test]
-    fn a_dropped_grant_is_marked_with_its_reason() {
-        let p = fs_profile(&[], &["/tmp/gone", "/tmp/live"]);
-        let rec = sealed(
-            &p,
-            vec![DroppedGrant {
-                path: "/tmp/gone".into(),
-                verb: "write".into(),
-                reason: "path does not exist on disk".into(),
-            }],
-        );
-        let out = paths_picture("mur", &p, Some(&lock_with(Some(rec))));
-        assert!(out.contains("✗ /tmp/gone"), "{out}");
-        assert!(out.contains("does not exist on disk"), "{out}");
-        assert!(out.contains("✓ /tmp/live"), "{out}");
-        assert!(!out.contains("restart"), "nothing drifted: {out}");
-    }
-
-    /// The loudest case: no kernel sandbox at all means MORE access than the
-    /// grants below, so it cannot be a footnote.
-    #[test]
-    fn an_unenforced_sandbox_is_stated_before_anything_else() {
-        let p = fs_profile(&[], &["/tmp/x"]);
-        let mut rec = sealed(&p, vec![]);
-        rec.enforcing = false;
-        rec.mode = "advisory-only".into();
-        let out = paths_picture("mur", &p, Some(&lock_with(Some(rec))));
-        let first = out.lines().next().unwrap_or_default();
-        assert!(first.contains("WITHOUT a kernel sandbox"), "{out}");
-        assert!(first.contains("MORE"), "{out}");
-    }
-
-    /// Editing grants after the seal does not change what is enforced, and the
-    /// listing has to say so or its ticks are lies.
-    #[test]
-    fn grants_edited_after_the_seal_are_flagged_for_restart() {
-        let sealed_profile = fs_profile(&[], &["/tmp/x"]);
-        let rec = sealed(&sealed_profile, vec![]);
-        let now = fs_profile(&[], &["/tmp/x", "/tmp/added-later"]);
-        let out = paths_picture("mur", &now, Some(&lock_with(Some(rec))));
-        assert!(out.contains("changed since this agent sealed"), "{out}");
-        assert!(out.contains("mur agent restart mur"), "{out}");
-    }
-
-    /// An agent started by an older runtime has no record; saying nothing would
-    /// let its rows read as verified.
-    #[test]
-    fn a_lock_without_a_seal_record_says_the_effect_is_unknown() {
-        let p = fs_profile(&[], &["/tmp/x"]);
-        let out = paths_picture("mur", &p, Some(&lock_with(None)));
-        assert!(out.contains("did not record its seal"), "{out}");
-        assert!(!out.contains('✓'), "{out}");
-    }
-
-    fn profile_with(
-        servers: Vec<(&str, Option<mur_common::agent::McpNetMode>)>,
-    ) -> mur_common::AgentProfile {
-        use mur_common::agent::{McpServerEntry, McpServerNetwork};
-        let mut p = mur_common::AgentProfile::default_for_tests();
-        p.entitlements.network.outbound.allow_hosts = vec!["api.example.com".into()];
-        for (name, mode) in servers {
-            p.mcp_servers.push(McpServerEntry {
-                name: name.into(),
-                command: "npx".into(),
-                network: mode.map(|m| McpServerNetwork {
-                    mode: m,
-                    allow_hosts: vec!["db.internal".into()],
-                    deny_hosts: vec![],
-                    authorization: None,
-                }),
-                ..Default::default()
-            });
-        }
-        p
-    }
-
-    /// The whole point of the view: an `inherit` server must be shown as NOT
-    /// covered by the agent's allow_hosts. Believing otherwise is what sent
-    /// someone chasing a MySQL connection that the host list never governed.
-    #[test]
-    fn inherit_servers_are_shown_as_not_bounded_by_allow_hosts() {
-        let p = profile_with(vec![("media", None)]);
-        let out = outbound_picture(&p);
-        assert!(out.contains("api.example.com"), "{out}");
-        assert!(
-            out.contains("NOT bounded by allow_hosts"),
-            "an inherit server must be called out: {out}"
-        );
-        assert!(
-            out.contains("ports, not hosts"),
-            "must name what DOES bound it: {out}"
-        );
-        assert!(out.contains("set-network"), "must name the remedy: {out}");
-    }
-
-    /// A restricted server is genuinely host-bounded — it must NOT carry the
-    /// warning, or the warning becomes noise and stops being read.
-    #[test]
-    fn restricted_servers_show_their_own_hosts_without_the_warning() {
-        let p = profile_with(vec![(
-            "db",
-            Some(mur_common::agent::McpNetMode::Restricted),
-        )]);
-        let out = outbound_picture(&p);
-        assert!(out.contains("db.internal"), "{out}");
-        assert!(!out.contains("NOT bounded by allow_hosts"), "{out}");
-        assert!(!out.contains("set-network"), "no remedy needed: {out}");
-    }
-
-    /// With no MCP servers there is only one policy, and nothing to disambiguate.
-    #[test]
-    fn no_servers_means_no_server_section() {
-        let p = profile_with(vec![]);
-        let out = outbound_picture(&p);
-        assert!(out.contains("runtime's own traffic"), "{out}");
-        assert!(!out.contains("MCP servers"), "{out}");
-    }
+    use super::{parse_outbound_mode, remove_path, validate_host_pattern};
 
     #[test]
     fn patterns_the_matcher_can_match_are_accepted() {
@@ -855,5 +546,31 @@ mod tests {
             .to_string();
         assert!(err.contains("NO effect"), "{err}");
         assert!(err.contains("set-mode data-ml unrestricted"), "{err}");
+    }
+
+    #[test]
+    fn remove_path_takes_one_grant_back_and_reports_whether_it_was_there() {
+        let mut fs = mur_common::agent::FilesystemEntitlement {
+            read: vec!["/a".into()],
+            write: vec!["/b".into(), "/c".into()],
+            deny: vec![],
+        };
+        assert!(remove_path(&mut fs, "write", "/b").unwrap());
+        assert_eq!(fs.write, vec!["/c"]);
+        assert!(
+            !remove_path(&mut fs, "write", "/b").unwrap(),
+            "already gone"
+        );
+        assert_eq!(fs.read, vec!["/a"], "other lists untouched");
+        assert!(remove_path(&mut fs, "exec", "/a").is_err());
+    }
+
+    #[test]
+    fn proxy_only_is_now_reachable_from_the_cli() {
+        use mur_common::agent::NetworkOutboundMode as M;
+        assert_eq!(parse_outbound_mode("proxy_only").unwrap(), M::ProxyOnly);
+        assert_eq!(parse_outbound_mode("proxy-only").unwrap(), M::ProxyOnly);
+        assert_eq!(parse_outbound_mode("off").unwrap(), M::Off);
+        assert!(parse_outbound_mode("open").is_err());
     }
 }

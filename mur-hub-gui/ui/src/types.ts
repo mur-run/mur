@@ -101,6 +101,54 @@ export type RenderStatusView =
   | { status: "ready" }
   | { status: "failed"; reason: string };
 
+/** Mirror of mur-core `perm_view::PermissionsView` (spec 2026-09-07 §1.1). */
+export type Enforcement = "not_running" | "seal_unknown" | "advisory" | "enforcing";
+export type GrantStatus =
+  | { status: "unverified" }
+  | { status: "effective" }
+  | { status: "dropped"; reason: string };
+export type McpScope = "unbounded" | "own_hosts" | "all_audited" | "off";
+export type ToolPolicy = "allow" | "ask" | "deny";
+export interface PathGrantView { raw: string; expanded: string; status: GrantStatus }
+export interface PathsView { read: PathGrantView[]; write: PathGrantView[]; deny: PathGrantView[] }
+export interface OutboundView {
+  mode: "unrestricted" | "restricted" | "proxyonly" | "off";
+  allow_hosts: string[];
+  model_host_always_allowed: boolean;
+}
+export interface McpNetView {
+  name: string;
+  mode: "inherit" | "restricted" | "broad_audited" | "off";
+  scope: McpScope;
+  allow_hosts: string[];
+  deny_hosts: string[];
+}
+export interface ProcessesView {
+  spawn_mode: "allowlist" | "any" | "none" | "strict";
+  allowed: string[];
+  allowed_dirs: string[];
+}
+export interface ToolRuleView { pattern: string; policy: ToolPolicy; risk: string | null }
+export interface LimitsView {
+  cpu_seconds: number | null;
+  memory_mb: number;
+  file_descriptors: number;
+  processes: number;
+}
+export interface PermissionsView {
+  enforcement: Enforcement;
+  sandbox_mode: string | null;
+  grants_drifted: boolean;
+  runtime_outbound: OutboundView;
+  mcp_servers: McpNetView[];
+  filesystem: PathsView;
+  processes: ProcessesView;
+  tools: ToolRuleView[];
+  llm: "allowed" | "off";
+  limits: LimitsView;
+  fail_closed_on_sandbox_error: boolean;
+}
+
 export interface AgentDetail {
   persona_category: string;
   persona_description: string;
@@ -114,6 +162,7 @@ export interface AgentDetail {
   installed_skills: InstalledSkillView[];
   mcp_servers: McpServerView[];
   capabilities: string[];
+  permissions: PermissionsView;
   model_ref: string | null;
   model_provider: string;
   model_name: string;

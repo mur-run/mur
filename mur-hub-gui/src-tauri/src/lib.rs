@@ -34,6 +34,7 @@ pub mod notif;
 pub mod official_catalog;
 pub mod onboarding;
 pub mod panel;
+mod perm_admin;
 pub mod pet;
 pub mod preset;
 pub mod seed_mur;
@@ -752,6 +753,18 @@ pub fn run() {
             mcp_skills::agent_skill_convert,
             mcp_skills::agent_mcp_add,
             mcp_skills::agent_mcp_remove,
+            perm_admin::agent_perm_set_outbound_mode,
+            perm_admin::agent_perm_allow_host,
+            perm_admin::agent_perm_deny_host,
+            perm_admin::agent_perm_grant_path,
+            perm_admin::agent_perm_remove_path,
+            perm_admin::agent_perm_set_spawn_mode,
+            perm_admin::agent_perm_allow_spawn,
+            perm_admin::agent_perm_deny_spawn,
+            perm_admin::agent_perm_allow_spawn_dir,
+            perm_admin::agent_perm_deny_spawn_dir,
+            perm_admin::agent_perm_set_tool,
+            perm_admin::agent_perm_clear_tool,
             mcp_skills::agent_skill_toggle,
             mcp_skills::agent_mcp_toggle,
             mcp_skills::agent_addon_import,

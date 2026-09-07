@@ -6,7 +6,15 @@ import { PluginsTab } from "../../inspector/tabs/PluginsTab";
 import { PermissionsTab } from "../../inspector/tabs/PermissionsTab";
 
 /** Capabilities = skills + MCP + plugins + permissions (spec §4.3). */
-export function CapabilitiesTab({ detail, onSaved }: { detail: AgentDetail; onSaved: (d: AgentDetail) => void }) {
+export function CapabilitiesTab({
+  detail,
+  onSaved,
+  isRunning,
+}: {
+  detail: AgentDetail;
+  onSaved: (d: AgentDetail) => void;
+  isRunning: boolean;
+}) {
   const { t } = useT();
   return (
     <>
@@ -24,7 +32,7 @@ export function CapabilitiesTab({ detail, onSaved }: { detail: AgentDetail; onSa
       </section>
       <section className="detail-section" id="agent-permissions">
         <h3 className="detail-section__title">{t("detail.permissions")}</h3>
-        <PermissionsTab detail={detail} />
+        <PermissionsTab detail={detail} onSaved={onSaved} isRunning={isRunning} />
       </section>
     </>
   );

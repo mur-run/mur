@@ -799,6 +799,14 @@ pub enum AgentPermAction {
     AllowWrite { name: String, path: String },
     /// Deny filesystem access on a path
     DenyPath { name: String, path: String },
+    /// Take a grant back: drop a path from the read, write, or deny list
+    /// (deny-path ADDS to the deny list; this is the only way to undo one)
+    RemovePath {
+        name: String,
+        /// Which list: read, write, or deny
+        list: String,
+        path: String,
+    },
     /// Add a binary to the spawn allowlist
     AllowSpawn { name: String, binary: String },
     /// Remove a binary from the spawn allowlist
