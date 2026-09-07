@@ -152,7 +152,7 @@ mur agent remove coach                        # unregisters it — add --purge t
 
 <p align="center"><img src="assets/demo.gif" alt="mur agent cli — streaming TUI chat with a local agent" width="92%" /></p>
 
-In the chat, `/model` lists your registered models and switches the agent to another one mid-conversation — no restart. `/effort` shows the reasoning levels *this agent's model* actually accepts and sets one for the conversation (`--save` to make it stick); a level the model has no step for is reported, not silently swallowed. `/login` shows OAuth health for every provider and re-authenticates one without leaving the TUI: it re-reads the credential, asks the owner CLI to refresh, and only falls back to a real browser login if neither worked. Type `/` to open a completion menu of slash commands (with their subcommands) and the agent's skills — `↑↓` to move, `Tab`/`Enter` to accept, `Esc` to dismiss. And when the agent offers you choices, they appear as `Tab`-to-fill suggestions right in the input: a single one as greyed ghost text, several as a picker.
+In the chat, `/model` lists your registered models and switches the agent to another one mid-conversation — no restart. `/effort` shows the reasoning levels *this agent's model* actually accepts and sets one for the conversation (`--save` to make it stick); a level the model has no step for is reported, not silently swallowed. `/login` shows OAuth health for every provider and re-authenticates one without leaving the TUI: it re-reads the credential, asks the owner CLI to refresh, and only falls back to a real browser login if neither worked. `/secret <KEY>` hands the agent a credential — a gitea token, an API key — through a hidden prompt instead of the chat box, so the value never enters the conversation the model reads or the signed channel it is stored in; the agent gets it as `$KEY` in its shell, and every tool result comes back with the value masked. Type `/` to open a completion menu of slash commands (with their subcommands) and the agent's skills — `↑↓` to move, `Tab`/`Enter` to accept, `Esc` to dismiss. And when the agent offers you choices, they appear as `Tab`-to-fill suggestions right in the input: a single one as greyed ghost text, several as a picker.
 
 ### Models & providers
 
@@ -445,6 +445,14 @@ Agent** wizard offers the same catalog as a source.
   folded into the rule. Reads never have to stop the run: `--auto-reads` covers
   `read_file` and provably read-only shell commands, in the TUI and in
   `--plain` alike.
+- **Credentials the model never sees** — `/secret <KEY>` in `mur agent cli`
+  reads a token through a hidden prompt, stores it in the OS keychain, and
+  hands it to the running agent without a restart. The model is told the name
+  and nothing else: the value is injected into its shell's environment, and
+  every tool result is scrubbed of it on the way back. Pasting a token into the
+  chat put it in the model's context, in the agent's signed append-only
+  channel, and at your provider — pattern-matching redaction never caught the
+  ones without a recognisable prefix.
 - **Build lane** — a toolchain that compiles its own executables can't be
   expressed as a list of binaries: `cargo` runs build scripts and test
   executables at paths that don't exist until the build creates them. Grant the
