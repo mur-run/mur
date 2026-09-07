@@ -1804,26 +1804,14 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
 /// must not be dropped silently (#714).
 fn start_turn(app: &mut App, trimmed: String, tx: &mpsc::Sender<StreamMsg>) {
     let task_id = app.begin_user_turn(&trimmed);
-    // On the first send of each session, prepend the user's working directory
-    // so the agent knows which project they're in.
-    let cwd_prefix = if !app.cwd_sent {
-        app.cwd_sent = true;
-        app.cwd
-            .as_ref()
-            .map(|d| format!(
-                "[working directory: {path}] — pass `\"cwd\": \"{path}\"` in every bash tool call so commands run in this directory.\n\n",
-                path = d.display()
-            ))
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
     // Prefix any `!command` output the agent hasn't seen yet, so it has the
     // same context the user is looking at. The transcript shows only the
     // user's text; the shell blocks were already rendered when they ran.
+    // The working directory is NOT prose here — it rides as `context.cwd`
+    // in `build_params`, every turn.
     let outgoing = match app.take_pending_shell() {
-        Some(ctx) => format!("{cwd_prefix}{ctx}\n\n{trimmed}"),
-        None => format!("{cwd_prefix}{trimmed}"),
+        Some(ctx) => format!("{ctx}\n\n{trimmed}"),
+        None => trimmed,
     };
     let params = build_params(
         &outgoing,
@@ -1832,6 +1820,7 @@ fn start_turn(app: &mut App, trimmed: String, tx: &mpsc::Sender<StreamMsg>) {
         app.pending_image
             .as_ref()
             .map(|(m, b)| (m.as_str(), b.as_str())),
+        app.cwd.as_deref(),
     );
     app.pending_image = None;
     app.inflight_params = Some(params.clone());
@@ -2645,6 +2634,7 @@ fn run_plain(
     use std::io::Write as _;
     let out2 = RefCell::new(io::stdout());
     let mut context: Option<String> = None;
+    let cwd = std::env::current_dir().ok();
     let (pricing, _book) = load_pricing(home, agent);
     // Tools the operator granted with `[a]` this session. Plain mode had no
     // such set, so `[a]lways` approved exactly one call — the prompt said one
@@ -2667,7 +2657,7 @@ fn run_plain(
             continue;
         }
         let task_id = uuid::Uuid::now_v7().to_string();
-        let params = build_params(&text, &task_id, context.as_deref(), None);
+        let params = build_params(&text, &task_id, context.as_deref(), None, cwd.as_deref());
         let streamed = Cell::new(false);
         // Track step_id → name from Started events so Completed can print the name.
         let step_names: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());

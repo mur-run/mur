@@ -53,6 +53,12 @@ pub struct TaskSpec {
     /// byte-by-byte instead of re-typing content through another LLM
     /// (issue #715 Part B).
     pub output_artifact_path: Option<std::path::PathBuf>,
+    /// The caller's working directory for this turn (`context.cwd` on the
+    /// wire). The harness owns the working directory, not the model: when set
+    /// and entitled, it becomes the session cwd the tools resolve against and
+    /// is declared in the system prompt every turn. `None` leaves the session
+    /// cwd where it is.
+    pub cwd: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug)]
@@ -133,13 +139,27 @@ fn estimated_tokens(history: &[crate::llm::RichMessage]) -> u64 {
     (chars / CHARS_PER_TOKEN_ESTIMATE) as u64
 }
 
-/// Injected into every agent's system prompt so authored files land where MUR
-/// can read them instead of the working directory. Guidance, not enforcement.
+/// Injected into every agent's system prompt so authored files land where they
+/// belong. Guidance, not enforcement. The first bullet exists because the
+/// earlier wording ("never write into the working directory; the only
+/// exception is editing an existing file") sent an agent asked for a new
+/// `ci.yml` in the user's repo off to `~/.mur/artifacts` instead.
 const OUTPUT_LOCATIONS_RULE: &str = "\n\n## Output locations\n\
-When you produce files, put them where MUR can read them — never write them into the current working directory (often a source tree):\n\
-- Knowledge objects (workflows, skills, notes): register with the real command so they land in ~/.mur and show up in MUR and the Hub — `mur skill install <path>` for a skill, `mur workflow new` for a workflow. Never leave the definition in the working directory.\n\
-- Run artifacts (reports, quarantined files, scratch output): write to ~/.mur/artifacts/<your-agent-name>/<run>/, where <run> is a short timestamp or task label. Never the working directory.\n\
-- The only reason to write into the working directory is to edit an existing file in a repository you have been granted access to.";
+- Files that belong to the project in the working directory (source, config, CI definitions — new or existing) go in that project, where the user expects them.\n\
+- Knowledge objects (workflows, skills, notes): register with the real command so they land in ~/.mur and show up in MUR and the Hub — `mur skill install <path>` for a skill, `mur workflow new` for a workflow. Never leave the definition in a source tree.\n\
+- Run artifacts that are not part of any project (reports, quarantined files, scratch output): write to ~/.mur/artifacts/<your-agent-name>/<run>/, where <run> is a short timestamp or task label — never into a source tree.";
+
+/// Declares the session working directory in the system prompt every turn.
+/// It lives here and not in the first user message because history is
+/// trimmed oldest-first: a path stated once in message[0] was the first thing
+/// dropped, after which the only path the model still knew was `~/.mur`.
+/// The value is read from the runtime's own [`SessionCwd`], so it cannot go
+/// stale. `{path}` is substituted.
+///
+/// [`SessionCwd`]: crate::tools::fs_policy::SessionCwd
+const WORKING_DIR_RULE: &str = "\n\n## Working directory\n\
+`{path}`\n\
+This is where the user is working. Shell commands and relative paths in the file tools resolve here by default — you do not need to pass `cwd`.";
 
 /// Injected into the system prompt when `TaskSpec.output_artifact_path` is
 /// set. Tells the agent to write its full output to the designated file and
@@ -412,6 +432,10 @@ pub struct TaskRunner {
     effort: std::sync::RwLock<Option<mur_common::llm::Effort>>,
     /// Multi-turn chat memory keyed by `context.task_id` (see `ConversationStore`).
     conversations: Mutex<ConversationStore>,
+    /// The session cwd shared with bash and the file tools, plus the roots a
+    /// caller-supplied `TaskSpec.cwd` may move it to. `None` for runners built
+    /// without tools (stubs, most tests): no cwd line in the prompt.
+    session_cwd: Option<(crate::tools::fs_policy::SessionCwd, Vec<String>)>,
     /// Set by `begin_drain()` during graceful shutdown. When true, `run_sync_inner`
     /// rejects new turns immediately with a transient failure so in-flight work
     /// can finish before transports are torn down.
@@ -527,6 +551,7 @@ impl TaskRunner {
             tools_policy: vec![],
             effort: std::sync::RwLock::new(None),
             conversations: Mutex::new(ConversationStore::default()),
+            session_cwd: None,
             draining: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -702,6 +727,43 @@ impl TaskRunner {
         self
     }
 
+    /// Share the tools' session cwd so each turn can adopt the caller's
+    /// working directory and declare it in the prompt. `allowed_roots` are the
+    /// entitlement roots (read + write + agent home) a `TaskSpec.cwd` must fall
+    /// under to be adopted — a client cannot point the tools somewhere the
+    /// profile never granted.
+    pub fn with_session_cwd(
+        mut self,
+        cwd: crate::tools::fs_policy::SessionCwd,
+        allowed_roots: Vec<String>,
+    ) -> Self {
+        self.session_cwd = Some((cwd, allowed_roots));
+        self
+    }
+
+    /// Move the session cwd to the turn's `cwd` when one was supplied and it is
+    /// entitled; otherwise leave it where it is. Absent means "a client with
+    /// no notion of cwd" (Hub, `mur agent send`), and resetting on their behalf
+    /// would yank the directory out from under a concurrent murmur session.
+    ///
+    /// ponytail: the session cwd is per-agent, not per-conversation, so two
+    /// clients in different directories on one agent still race — store it in
+    /// `ConversationStore` keyed by `context_task_id` if that becomes real.
+    fn adopt_cwd(&self, requested: Option<&std::path::Path>) {
+        let (Some((session, roots)), Some(req)) = (&self.session_cwd, requested) else {
+            return;
+        };
+        let Ok(canonical) = std::fs::canonicalize(req) else {
+            tracing::warn!(cwd = %req.display(), "turn cwd does not exist; keeping session cwd");
+            return;
+        };
+        if crate::tools::fs_policy::under_any(roots, &canonical) {
+            session.set(canonical);
+        } else {
+            tracing::warn!(cwd = %req.display(), "turn cwd outside entitlements; keeping session cwd");
+        }
+    }
+
     /// P3: where settled chat-gate decisions are looked up and recorded.
     pub fn with_decision_store(mut self, s: Arc<dyn crate::hitl::store::DecisionStore>) -> Self {
         self.decision_store = Some(s);
@@ -792,6 +854,9 @@ impl TaskRunner {
     ) -> (String, Vec<String>) {
         let mut base = self.system_prompt.clone().unwrap_or_default();
         base.push_str(OUTPUT_LOCATIONS_RULE);
+        if let Some((cwd, _)) = &self.session_cwd {
+            base.push_str(&WORKING_DIR_RULE.replace("{path}", &cwd.current().to_string_lossy()));
+        }
         let Some(skills) = &self.skills else {
             return (base, vec![]);
         };
@@ -997,6 +1062,7 @@ impl TaskRunner {
         self.last_turn_truncated.store(false, Ordering::Relaxed);
 
         let output_artifact_path = spec.output_artifact_path.clone();
+        self.adopt_cwd(spec.cwd.as_deref());
         let generation = async {
             match &self.backend {
                 RunnerBackend::StubEcho => Ok((echo_response(&spec.input), None)),
@@ -2719,6 +2785,7 @@ mod tests {
 
     fn ping_spec() -> TaskSpec {
         TaskSpec {
+            cwd: None,
             input: mur_common::a2a::Message {
                 role: "user".into(),
                 parts: vec![MessagePart::Text {
@@ -2771,6 +2838,7 @@ mod tests {
     #[test]
     fn task_spec_accepts_optional_task_id() {
         let spec = TaskSpec {
+            cwd: None,
             input: mur_common::a2a::Message {
                 role: "user".into(),
                 parts: vec![MessagePart::Text { text: "hi".into() }],
@@ -2789,6 +2857,7 @@ mod tests {
     async fn run_sync_uses_supplied_task_id() {
         let runner = TaskRunner::new_stub_echo();
         let spec = TaskSpec {
+            cwd: None,
             input: mur_common::a2a::Message {
                 role: "user".into(),
                 parts: vec![MessagePart::Text { text: "hi".into() }],
@@ -2809,6 +2878,7 @@ mod tests {
 
     fn user_turn(text: &str, task_id: &str, ctx: Option<&str>) -> TaskSpec {
         TaskSpec {
+            cwd: None,
             input: mur_common::a2a::Message {
                 role: "user".into(),
                 parts: vec![MessagePart::Text { text: text.into() }],
@@ -3004,6 +3074,7 @@ mod tests {
         let runner = Arc::new(TaskRunner::new_stub_slow());
         let (tx, _rx) = tokio::sync::mpsc::channel(8); // streaming sink, unused here
         let spec = TaskSpec {
+            cwd: None,
             input: mur_common::a2a::Message {
                 role: "user".into(),
                 parts: vec![MessagePart::Text {
@@ -3801,6 +3872,7 @@ mod tests {
                 .with_notifier(notif_tx),
         );
         let spec = TaskSpec {
+            cwd: None,
             input: mur_common::a2a::Message {
                 role: "user".into(),
                 parts: vec![mur_common::a2a::MessagePart::Text {
@@ -3849,6 +3921,7 @@ mod tests {
                 .with_max_iterations(3),
         );
         let spec = TaskSpec {
+            cwd: None,
             input: mur_common::a2a::Message {
                 role: "user".into(),
                 parts: vec![mur_common::a2a::MessagePart::Text {
@@ -3994,6 +4067,7 @@ mod tests {
 
     fn loop_spec(text: &str) -> TaskSpec {
         TaskSpec {
+            cwd: None,
             input: mur_common::a2a::Message {
                 role: "user".into(),
                 parts: vec![mur_common::a2a::MessagePart::Text { text: text.into() }],
@@ -4045,6 +4119,7 @@ mod tests {
             None,
             None,
             String::new(),
+            None,
             None,
         );
         let _ = runner.run_sync(loop_spec("loop")).await;
@@ -4584,6 +4659,75 @@ mod tests {
             sys.starts_with("BASE PROMPT"),
             "the agent's own prompt still leads"
         );
+    }
+
+    /// The path lives in the system prompt, read from the runtime's own
+    /// session cwd — so it survives any amount of history trimming.
+    #[tokio::test]
+    async fn working_directory_reaches_the_system_prompt_every_turn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let cwd = crate::tools::fs_policy::SessionCwd::new(root.clone());
+        let runner = TaskRunner::new_stub_echo()
+            .with_system_prompt(Some("BASE".into()))
+            .with_session_cwd(cwd, vec![root.to_string_lossy().into_owned()]);
+        // Far more turns than any history cap, all in one conversation.
+        let mut ctx: Option<String> = None;
+        for i in 0..60 {
+            let id = format!("t{i}");
+            let mut spec = user_turn("hi", &id, ctx.as_deref());
+            spec.cwd = Some(root.clone());
+            let _ = runner.run_sync(spec).await;
+            ctx = Some(id);
+        }
+        let (sys, _) = runner.assemble_system_prompt("hello", None, None);
+        assert!(sys.contains("## Working directory"), "{sys}");
+        assert!(sys.contains(&root.to_string_lossy().into_owned()), "{sys}");
+        assert!(
+            !sys.contains("never write them into the current working directory"),
+            "the old wording that steered project files into ~/.mur is gone"
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_cwd_moves_the_session_cwd_only_within_entitlements() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let project = root.join("project");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let cwd = crate::tools::fs_policy::SessionCwd::new(root.clone());
+        let runner = TaskRunner::new_stub_echo()
+            .with_session_cwd(cwd.clone(), vec![project.to_string_lossy().into_owned()]);
+
+        let mut spec = user_turn("hi", "t1", None);
+        spec.cwd = Some(project.clone());
+        let _ = runner.run_sync(spec).await;
+        assert_eq!(cwd.current(), project, "entitled cwd is adopted");
+
+        let mut spec = user_turn("hi", "t2", None);
+        spec.cwd = Some(outside);
+        let _ = runner.run_sync(spec).await;
+        assert_eq!(
+            cwd.current(),
+            project,
+            "unentitled cwd is refused, session cwd kept"
+        );
+
+        let _ = runner.run_sync(user_turn("hi", "t3", None)).await;
+        assert_eq!(
+            cwd.current(),
+            project,
+            "absent cwd leaves the session cwd alone"
+        );
+    }
+
+    #[test]
+    fn no_session_cwd_means_no_working_directory_line() {
+        let runner = TaskRunner::new_stub_echo().with_system_prompt(Some("BASE".into()));
+        let (sys, _) = runner.assemble_system_prompt("hello", None, None);
+        assert!(!sys.contains("## Working directory"));
     }
 
     #[test]

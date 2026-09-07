@@ -171,6 +171,9 @@ pub fn build_runner(
     context_window: Option<u64>,
     agent_name: String,
     decision_store: Option<Arc<dyn crate::hitl::store::DecisionStore>>,
+    // The tools' shared session cwd and the roots a turn may move it to, so
+    // the prompt declares the working directory from the runtime's own state.
+    session_cwd: Option<(crate::tools::fs_policy::SessionCwd, Vec<String>)>,
 ) -> Arc<TaskRunner> {
     let mut runner = TaskRunner::with_llm(client)
         .with_agent_name(agent_name)
@@ -202,6 +205,9 @@ pub fn build_runner(
     }
     if let Some(s) = decision_store {
         runner = runner.with_decision_store(s);
+    }
+    if let Some((cwd, roots)) = session_cwd {
+        runner = runner.with_session_cwd(cwd, roots);
     }
     Arc::new(runner)
 }
@@ -334,8 +340,20 @@ pub async fn build_provider_runner(
         ));
     let write_file_def = write_file_exec.def();
     let edit_file_exec: Arc<dyn crate::tools::ToolExecutor> = Arc::new(
-        crate::tools::edit_file::EditFileTool::new(session_cwd, tool_fs, launch_chain),
+        crate::tools::edit_file::EditFileTool::new(session_cwd.clone(), tool_fs, launch_chain),
     );
+    // Where a turn's `context.cwd` may move the session cwd: anything the
+    // profile lets the agent read or write, plus its own home (the initial
+    // value). Same `~` expansion as the tool gate, via `under_any`.
+    let cwd_roots: Vec<String> = {
+        let fs = &profile.inner.entitlements.filesystem;
+        fs.read
+            .iter()
+            .chain(fs.write.iter())
+            .cloned()
+            .chain(std::iter::once(agent_home.to_string_lossy().into_owned()))
+            .collect()
+    };
     let edit_file_def = edit_file_exec.def();
     let tools_policy = profile.inner.entitlements.tools.clone();
     let (_defs, mut tool_map) = build_tools(
@@ -487,6 +505,7 @@ pub async fn build_provider_runner(
             entry.context_window,
             profile.inner.name.clone(),
             Some(decision_store.clone()),
+            Some((session_cwd.clone(), cwd_roots.clone())),
         );
         (r, Some(client), Some(pool.clone()))
     };

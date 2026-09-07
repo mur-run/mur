@@ -101,7 +101,15 @@ impl MethodHandler for MessageSendHandler {
             .get("output_artifact_path")
             .and_then(|v| v.as_str())
             .map(std::path::PathBuf::from);
+        // The caller's working directory, sent on every turn by murmur so the
+        // runtime — not the model's memory — owns where relative paths go.
+        let cwd = p
+            .get("context")
+            .and_then(|c| c.get("cwd"))
+            .and_then(|v| v.as_str())
+            .map(std::path::PathBuf::from);
         let spec = TaskSpec {
+            cwd,
             input: message,
             context_task_id,
             task_id,

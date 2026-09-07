@@ -156,7 +156,7 @@ Commands are killed after `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {
                     },
                     "cwd": {
                         "type": "string",
-                        "description": "Working directory for the command. Defaults to the shared session working directory (starts at the agent home). Passing cwd also moves that shared directory, so a later read_file/write_file/edit_file resolves relative paths against it. NOTE: a `cd` inside the command itself is NOT retained across calls — use this cwd argument instead."
+                        "description": "Working directory for the command. Defaults to the session working directory — the one declared under `## Working directory` in your instructions when the client supplied it, else the agent home — so you normally omit this. Passing cwd also moves that shared directory, so a later read_file/write_file/edit_file resolves relative paths against it. NOTE: a `cd` inside the command itself is NOT retained across calls — use this cwd argument instead."
                     },
                     "timeout_secs": {
                         "type": "integer",
