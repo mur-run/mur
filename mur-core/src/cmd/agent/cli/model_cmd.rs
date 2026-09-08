@@ -88,6 +88,29 @@ pub(crate) fn current_model_ref(home: &Path, agent: &str) -> Option<String> {
         .model_ref
 }
 
+/// The raw vendor model id behind an alias, e.g. `fast` → `deepseek-v4`.
+///
+/// Split from `current_model_id` so the registry lookup is testable without a
+/// registry file on disk.
+pub(crate) fn resolve_model_id(reg: &ModelRegistry, model_ref: Option<&str>) -> Option<String> {
+    reg.models.get(model_ref?).map(|e| e.model.clone())
+}
+
+/// The raw model id this agent is configured with.
+///
+/// Keyed on `ModelEntry.model`, never on `ModelEntry.provider` — that field
+/// records the wire protocol, so DeepSeek, Qwen and every other
+/// OpenAI-compatible third party all read `openai`. Anything asking "what can
+/// this model do" must go through the raw id. Best-effort: `None` when the
+/// profile, the registry, or the alias is missing.
+pub(crate) fn current_model_id(home: &Path, agent: &str) -> Option<String> {
+    let model_ref = current_model_ref(home, agent)?;
+    let reg = ModelRegistry::default_path()
+        .and_then(|p| ModelRegistry::load_from(&p))
+        .ok()?;
+    resolve_model_id(&reg, Some(&model_ref))
+}
+
 /// The effort stored on the agent's profile, if any.
 ///
 /// Read from the same file `current_model_ref` reads, so `/effort` reports the
@@ -196,5 +219,31 @@ mod tests {
         // Legacy `model:` block survives the rewrite (live read path).
         let text = std::fs::read_to_string(adir.join("profile.yaml")).unwrap();
         assert!(text.contains("provider: ollama"), "{text}");
+    }
+
+    /// The id the effort table keys on is `ModelEntry.model` — the raw vendor
+    /// id — never the alias and never `provider:`, which is the wire protocol.
+    #[test]
+    fn current_model_id_returns_the_raw_vendor_id() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join("agents").join("a");
+        std::fs::create_dir_all(&dir).unwrap();
+        // The same fixture the round-trip test uses: a hand-written profile
+        // does not deserialize into `AgentProfile`, and `current_model_ref`
+        // fails soft, so the test would read `None` and prove nothing.
+        const MINIMAL: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../mur-common/tests/fixtures/profile_p0a_minimal.yaml"
+        ));
+        std::fs::write(dir.join("profile.yaml"), MINIMAL).unwrap();
+        write_model_ref(home.path(), "a", "fast").unwrap();
+        // `reg` is the existing helper in this module: (alias, provider, model).
+        // The provider is `openai` on purpose — DeepSeek speaks that protocol,
+        // and a lookup keyed on it would resolve the wrong effort table.
+        let reg = reg(&[("fast", "openai", "deepseek-v4")]);
+        assert_eq!(
+            resolve_model_id(&reg, current_model_ref(home.path(), "a").as_deref()),
+            Some("deepseek-v4".to_string())
+        );
     }
 }
