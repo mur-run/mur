@@ -79,8 +79,8 @@ pub(super) fn render_chooser_band(f: &mut Frame, app: &App, area: Rect) {
         .map(|(i, c)| {
             if compact {
                 let mut spans = vec![
-                    Span::styled(format!("{} ", i + 1), Style::default().fg(theme.system)),
-                    Span::styled(c.display.clone(), Style::default().fg(theme.agent_text)),
+                    Span::styled(format!("{} ", i + 1), theme.muted),
+                    Span::styled(c.display.clone(), theme.text),
                 ];
                 if !c.desc.is_empty() {
                     spans.push(Span::styled(
@@ -91,8 +91,8 @@ pub(super) fn render_chooser_band(f: &mut Frame, app: &App, area: Rect) {
                 ListItem::new(Line::from(spans))
             } else {
                 let mut lines = vec![Line::from(vec![
-                    Span::styled(format!("{} ", i + 1), Style::default().fg(theme.system)),
-                    Span::styled(c.display.clone(), Style::default().fg(theme.agent_text)),
+                    Span::styled(format!("{} ", i + 1), theme.muted),
+                    Span::styled(c.display.clone(), theme.text),
                 ])];
                 if !c.desc.is_empty() {
                     lines.push(Line::from(Span::styled(
@@ -108,10 +108,10 @@ pub(super) fn render_chooser_band(f: &mut Frame, app: &App, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.border))
+        .border_style(theme.border)
         .padding(Padding::horizontal(1))
         .title(" 1-9 pick · ↑↓ move · Enter accept · Esc close · Ctrl+↑↓ resize ")
-        .title_style(Style::default().fg(theme.border_title));
+        .title_style(theme.muted);
 
     let mut list_state = ListState::default();
     list_state.select(Some(state.selected));
@@ -119,11 +119,7 @@ pub(super) fn render_chooser_band(f: &mut Frame, app: &App, area: Rect) {
     f.render_stateful_widget(
         List::new(rows)
             .block(block)
-            .highlight_style(
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            )
+            .highlight_style(theme.accent.add_modifier(Modifier::BOLD))
             .highlight_symbol("❯ "),
         area,
         &mut list_state,

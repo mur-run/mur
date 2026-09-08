@@ -2,7 +2,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Text};
 use ratatui::widgets::Paragraph;
 
@@ -48,39 +48,31 @@ pub(super) fn rail_lines(
         Some(n) => format!("{}  {n}", view.jobs_line),
         None => view.jobs_line.clone(),
     };
-    lines.push(Line::styled(
-        head,
-        Style::default()
-            .fg(theme.border_title)
-            .add_modifier(Modifier::BOLD),
-    ));
+    lines.push(Line::styled(head, theme.muted.add_modifier(Modifier::BOLD)));
 
     if rail_height_for(view) > 1 {
         for m in view.members.iter().take(MAX_EXPANDED_ROWS) {
-            let (body, color) = match &m.state {
+            let (body, style) = match &m.state {
                 MemberState::Blocked { summary, .. } => (format!("blocked: {summary}"), theme.warn),
                 MemberState::Working { tool, since } => (
                     match tool {
                         Some(t) => format!("working ({}) · {t}", elapsed(*since)),
                         None => format!("working ({})", elapsed(*since)),
                     },
-                    theme.agent,
+                    theme.accent,
                 ),
-                MemberState::Done => ("done".to_string(), theme.success),
+                MemberState::Done => ("done".to_string(), theme.ok),
                 MemberState::Failed => ("failed".to_string(), theme.error),
             };
             let glyph = m.state.glyph();
             lines.push(Line::styled(
                 format!("  {:<10} {glyph} {body}", m.agent),
-                Style::default().fg(color),
+                style,
             ));
         }
         let extra = view.members.len().saturating_sub(MAX_EXPANDED_ROWS);
         if extra > 0 {
-            lines.push(Line::styled(
-                format!("  … {extra} more"),
-                Style::default().fg(theme.system),
-            ));
+            lines.push(Line::styled(format!("  … {extra} more"), theme.muted));
         }
     }
 

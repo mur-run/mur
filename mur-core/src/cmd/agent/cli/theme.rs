@@ -1,136 +1,143 @@
-//! Skin/theme definitions for the agent CLI TUI.
+//! Skin/theme definitions for the agent CLI TUI: one semantic token
+//! vocabulary, three palettes. Tokens are `Style`, not `Color`, because
+//! `ansi` says "muted" with `DIM` where `light` says it with a grey, and a
+//! paint site must not know which. See
+//! `docs/superpowers/specs/2026-09-09-murmur-skin-redesign-design.md`.
 
+// `emphasis` has no paint site until the redesign PR (markdown table
+// headers take it); the token is part of the vocabulary from the start.
 #![allow(dead_code)]
 
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::BorderType;
 
 pub struct Theme {
-    // ── labels (bold, identifies speaker) ────────────────────────────────────
-    pub user: Color,   // "› you" label
-    pub agent: Color,  // "● agent" label
-    pub accent: Color, // mascot / brand accent (always color-capable)
-    pub shell: Color,  // "$ cmd" label for !command output
-    // ── body text ─────────────────────────────────────────────────────────────
-    pub user_text: Color,  // continuation lines of a user turn
-    pub agent_text: Color, // continuation lines of an agent reply
-    pub thinking: Color,   // streaming thinking tokens (italic+dim)
-    // ── chrome ────────────────────────────────────────────────────────────────
-    pub system: Color,       // system hints, errors, slash-cmd output
-    pub warn: Color,         // amber: warnings / degraded notices
-    pub error: Color,        // red: failures
-    pub success: Color,      // green: completed actions
-    pub border: Color,       // transcript + input box borders
-    pub border_title: Color, // text inside the border title
-    pub separator: Color,    // inter-message separator line
-    pub card_bg: Color,      // settlement card background (one step off the pane)
-    // ── status bar ────────────────────────────────────────────────────────────
-    pub status_bg: Color, // status bar background
-    pub badge_fg: Color,  // agent-name badge foreground
-    pub badge_bg: Color,  // agent-name badge background
-    // ── layout ────────────────────────────────────────────────────────────────
-    pub border_type: BorderType, // Plain | Rounded | Double
-    pub inner_padding: u8,       // horizontal padding inside panes (0–2)
-    pub show_separator: bool,    // true = ─── line; false = blank line
-    pub compact_input: bool,     // shorten input box hint text
+    // ── text ──────────────────────────────────────────────────────────────
+    /// Body text: agent replies; user turns take this plus DIM.
+    pub text: Style,
+    /// Metadata: notices, thinking, hints, rule titles, timestamps.
+    pub muted: Style,
+    /// Headings and focused items.
+    pub emphasis: Style,
+    // ── identity ──────────────────────────────────────────────────────────
+    /// "● agent" label, mascot, brand, focused-panel borders.
+    pub accent: Style,
+    /// "you ›" label, "$ cmd" shell label.
+    pub accent_alt: Style,
+    // ── status ────────────────────────────────────────────────────────────
+    pub ok: Style,
+    pub warn: Style,
+    pub error: Style,
+    // ── chrome ────────────────────────────────────────────────────────────
+    /// Unfocused rules: composer top rule, table grid, fleet rail.
+    pub border: Style,
+    /// Status bar and card background (bg only).
+    pub surface: Style,
+    /// Agent-name / AUTO badge on the status bar.
+    pub badge: Style,
+    // ── layout ────────────────────────────────────────────────────────────
+    pub border_type: BorderType,
+    pub inner_padding: u8,
+    pub compact_input: bool,
 }
 
-pub const DARK: Theme = Theme {
-    user: Color::Green,
-    agent: Color::Cyan,
-    accent: Color::Cyan,
-    shell: Color::Green,
-    user_text: Color::Rgb(0xb8, 0xb8, 0xb8),
-    agent_text: Color::Rgb(0xea, 0xea, 0xea),
-    thinking: Color::Rgb(0x8a, 0x8a, 0x8a),
-    system: Color::Rgb(0x8a, 0x8a, 0x8a),
-    warn: Color::Rgb(0xe5, 0xa5, 0x3a),
-    error: Color::Rgb(0xe0, 0x6c, 0x6c),
-    success: Color::Rgb(0x6c, 0xc0, 0x7a),
-    border: Color::Rgb(0x55, 0x55, 0x55),
-    border_title: Color::Rgb(0x70, 0x70, 0x70),
-    separator: Color::Rgb(0x45, 0x45, 0x45),
-    card_bg: Color::Rgb(0x1e, 0x1e, 0x1e),
-    status_bg: Color::Reset,
-    badge_fg: Color::Black,
-    badge_bg: Color::Cyan,
+const fn fg(c: Color) -> Style {
+    Style::new().fg(c)
+}
+
+const fn rgb(r: u8, g: u8, b: u8) -> Style {
+    Style::new().fg(Color::Rgb(r, g, b))
+}
+
+/// Follows the terminal: ANSI slots only, so the user's own theme decides
+/// every colour. Alias `dark`. (The greys are still today's RGB values in
+/// this PR; the redesign PR replaces them with `Reset` + modifiers.)
+pub const ANSI: Theme = Theme {
+    text: rgb(0xea, 0xea, 0xea),
+    muted: rgb(0x8a, 0x8a, 0x8a),
+    emphasis: rgb(0xea, 0xea, 0xea).add_modifier(Modifier::BOLD),
+    accent: fg(Color::Cyan),
+    accent_alt: fg(Color::Green),
+    ok: rgb(0x6c, 0xc0, 0x7a),
+    warn: rgb(0xe5, 0xa5, 0x3a),
+    error: rgb(0xe0, 0x6c, 0x6c),
+    border: rgb(0x55, 0x55, 0x55),
+    surface: Style::new().bg(Color::Rgb(0x1e, 0x1e, 0x1e)),
+    badge: Style::new().fg(Color::Black).bg(Color::Cyan),
     border_type: BorderType::Plain,
     inner_padding: 1,
-    show_separator: false,
     compact_input: false,
 };
 
 pub const LIGHT: Theme = Theme {
-    user: Color::Rgb(0x16, 0x65, 0x34),
-    agent: Color::Rgb(0x0e, 0x6b, 0x8c),
-    accent: Color::Rgb(0x0e, 0x6b, 0x8c),
-    shell: Color::Rgb(0x16, 0x65, 0x34),
-    user_text: Color::Rgb(0x22, 0x22, 0x33),
-    agent_text: Color::Rgb(0x22, 0x22, 0x33),
-    thinking: Color::Rgb(0x88, 0x88, 0x99),
-    system: Color::Rgb(0x77, 0x77, 0x88),
-    warn: Color::Rgb(0xb5, 0x74, 0x00),
-    error: Color::Rgb(0xc0, 0x30, 0x30),
-    success: Color::Rgb(0x1c, 0x7a, 0x3a),
-    border: Color::Rgb(0xd0, 0xd0, 0xe0),
-    border_title: Color::Rgb(0x99, 0x99, 0x99),
-    separator: Color::Rgb(0xd8, 0xd8, 0xe8),
-    card_bg: Color::Rgb(0xf1, 0xf1, 0xf7),
-    status_bg: Color::Rgb(0xef, 0xef, 0xf5),
-    badge_fg: Color::Rgb(0x0e, 0x6b, 0x8c),
-    badge_bg: Color::Rgb(0xe0, 0xf0, 0xf8),
+    text: rgb(0x22, 0x22, 0x33),
+    muted: rgb(0x77, 0x77, 0x88),
+    emphasis: rgb(0x22, 0x22, 0x33).add_modifier(Modifier::BOLD),
+    accent: rgb(0x0e, 0x6b, 0x8c),
+    accent_alt: rgb(0x16, 0x65, 0x34),
+    ok: rgb(0x1c, 0x7a, 0x3a),
+    warn: rgb(0xb5, 0x74, 0x00),
+    error: rgb(0xc0, 0x30, 0x30),
+    border: rgb(0xd0, 0xd0, 0xe0),
+    surface: Style::new().bg(Color::Rgb(0xf1, 0xf1, 0xf7)),
+    badge: Style::new()
+        .fg(Color::Rgb(0x0e, 0x6b, 0x8c))
+        .bg(Color::Rgb(0xe0, 0xf0, 0xf8)),
     border_type: BorderType::Rounded,
     inner_padding: 1,
-    show_separator: true,
     compact_input: false,
 };
 
 pub const MUR: Theme = Theme {
-    user: Color::Rgb(0xa7, 0x8b, 0xfa),
-    agent: Color::Rgb(0xfb, 0xbf, 0x24),
-    accent: Color::Rgb(0xfb, 0xbf, 0x24),
-    shell: Color::Rgb(0x88, 0x88, 0xcc),
-    user_text: Color::Rgb(0xc8, 0xc8, 0xe8),
-    agent_text: Color::Rgb(0xe0, 0xe0, 0xf0),
-    thinking: Color::Rgb(0x86, 0x86, 0xc0),
-    system: Color::Rgb(0x77, 0x77, 0xaa),
-    warn: Color::Rgb(0xf0, 0xc0, 0x60),
-    error: Color::Rgb(0xf0, 0x80, 0x90),
-    success: Color::Rgb(0x80, 0xd0, 0x90),
-    border: Color::Rgb(0x50, 0x50, 0x90),
-    border_title: Color::Rgb(0x55, 0x55, 0x99),
-    separator: Color::Rgb(0x3a, 0x3a, 0x70),
-    card_bg: Color::Rgb(0x14, 0x14, 0x2c),
-    status_bg: Color::Rgb(0x09, 0x09, 0x1a),
-    badge_fg: Color::Rgb(0xfb, 0xbf, 0x24),
-    badge_bg: Color::Rgb(0x22, 0x1a, 0x06),
+    text: rgb(0xe0, 0xe0, 0xf0),
+    muted: rgb(0x77, 0x77, 0xaa),
+    emphasis: rgb(0xe0, 0xe0, 0xf0).add_modifier(Modifier::BOLD),
+    accent: rgb(0xfb, 0xbf, 0x24),
+    accent_alt: rgb(0xa7, 0x8b, 0xfa),
+    ok: rgb(0x80, 0xd0, 0x90),
+    warn: rgb(0xf0, 0xc0, 0x60),
+    error: rgb(0xf0, 0x80, 0x90),
+    border: rgb(0x50, 0x50, 0x90),
+    surface: Style::new().bg(Color::Rgb(0x14, 0x14, 0x2c)),
+    badge: Style::new()
+        .fg(Color::Rgb(0xfb, 0xbf, 0x24))
+        .bg(Color::Rgb(0x22, 0x1a, 0x06)),
     border_type: BorderType::Rounded,
     inner_padding: 1,
-    show_separator: true,
     compact_input: true,
 };
 
-const KNOWN: [(&str, &Theme); 3] = [("dark", &DARK), ("light", &LIGHT), ("mur", &MUR)];
+/// The names `/skin` and `--skin` accept, in the order they are listed.
+/// `dark` is an alias of `ansi` and is not listed.
+pub const SKIN_NAMES: &str = "ansi, light, mur";
 
-/// Resolve a skin name to a theme. Falls back to `&DARK` for unknown names.
+const KNOWN: [(&str, &Theme); 4] = [
+    ("ansi", &ANSI),
+    ("dark", &ANSI),
+    ("light", &LIGHT),
+    ("mur", &MUR),
+];
+
+/// Resolve a skin name to a theme. `dark` is an alias of `ansi`; unknown
+/// names fall back to `&ANSI`, the default.
 pub fn resolve_skin(name: &str) -> &'static Theme {
     KNOWN
         .iter()
         .find(|(n, _)| *n == name)
         .map(|(_, t)| *t)
-        .unwrap_or(&DARK)
+        .unwrap_or(&ANSI)
 }
 
-/// Return the canonical name of a theme instance, or "dark" as fallback.
+/// Canonical name of a theme instance — `"ansi"` for the alias too.
 pub fn skin_name(theme: &'static Theme) -> &'static str {
     KNOWN
         .iter()
         .find(|(_, t)| std::ptr::eq(*t, theme))
         .map(|(n, _)| *n)
-        .unwrap_or("dark")
+        .unwrap_or("ansi")
 }
 
-/// True if `name` is a valid skin name.
+/// True if `name` is a valid skin name (the alias included).
 pub fn is_known_skin(name: &str) -> bool {
     KNOWN.iter().any(|(n, _)| *n == name)
 }
@@ -140,31 +147,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_known_skins() {
-        assert!(std::ptr::eq(resolve_skin("dark"), &DARK));
-        assert!(std::ptr::eq(resolve_skin("light"), &LIGHT));
-        assert!(std::ptr::eq(resolve_skin("mur"), &MUR));
+    fn dark_is_an_alias_of_ansi() {
+        assert!(std::ptr::eq(resolve_skin("dark"), &ANSI));
+        assert!(std::ptr::eq(resolve_skin("ansi"), &ANSI));
+        assert_eq!(skin_name(&ANSI), "ansi");
+        assert!(is_known_skin("dark"), "saved config still says dark");
     }
 
     #[test]
-    fn resolve_unknown_falls_back_to_dark() {
-        assert!(std::ptr::eq(resolve_skin("neon"), &DARK));
-        assert!(std::ptr::eq(resolve_skin(""), &DARK));
-    }
-
-    #[test]
-    fn skin_name_round_trips() {
-        assert_eq!(skin_name(&DARK), "dark");
-        assert_eq!(skin_name(&LIGHT), "light");
-        assert_eq!(skin_name(&MUR), "mur");
-    }
-
-    #[test]
-    fn is_known_skin_validates_names() {
-        assert!(is_known_skin("dark"));
-        assert!(is_known_skin("light"));
-        assert!(is_known_skin("mur"));
+    fn unknown_skins_fall_back_to_ansi() {
+        assert!(std::ptr::eq(resolve_skin("neon"), &ANSI));
+        assert!(std::ptr::eq(resolve_skin(""), &ANSI));
         assert!(!is_known_skin("neon"));
         assert!(!is_known_skin("DARK"));
+    }
+
+    #[test]
+    fn light_and_mur_resolve_to_themselves() {
+        assert!(std::ptr::eq(resolve_skin("light"), &LIGHT));
+        assert!(std::ptr::eq(resolve_skin("mur"), &MUR));
+        assert_eq!(skin_name(&LIGHT), "light");
+        assert_eq!(skin_name(&MUR), "mur");
     }
 }

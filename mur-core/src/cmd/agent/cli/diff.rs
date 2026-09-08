@@ -26,9 +26,9 @@ fn str_field<'a>(args: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> 
 
 /// Append one bounded diff line; no-op once `pushed` reaches `DIFF_MAX_LINES`.
 /// The counter always increments so it reflects the true total line count.
-fn push(out: &mut Vec<Line<'static>>, pushed: &mut usize, s: String, color: Color, dim: bool) {
+fn push(out: &mut Vec<Line<'static>>, pushed: &mut usize, s: String, style: Style, dim: bool) {
     if *pushed < DIFF_MAX_LINES {
-        let mut st = Style::default().fg(color);
+        let mut st = style;
         if dim {
             st = st.add_modifier(Modifier::DIM);
         }
@@ -57,9 +57,7 @@ pub fn edit_diff_lines(
     if !path.is_empty() {
         out.push(Line::styled(
             format!(" {path}"),
-            Style::default()
-                .fg(theme.system)
-                .add_modifier(Modifier::BOLD),
+            theme.muted.add_modifier(Modifier::BOLD),
         ));
     }
 
@@ -71,25 +69,25 @@ pub fn edit_diff_lines(
             for hunk in diff::lines(old_str, new) {
                 match hunk {
                     diff::Result::Left(l) => {
-                        push(&mut out, &mut pushed, format!("  - {l}"), Color::Red, false);
+                        push(
+                            &mut out,
+                            &mut pushed,
+                            format!("  - {l}"),
+                            Style::default().fg(Color::Red),
+                            false,
+                        );
                     }
                     diff::Result::Right(r) => {
                         push(
                             &mut out,
                             &mut pushed,
                             format!("  + {r}"),
-                            Color::Green,
+                            Style::default().fg(Color::Green),
                             false,
                         );
                     }
                     diff::Result::Both(l, _) => {
-                        push(
-                            &mut out,
-                            &mut pushed,
-                            format!("    {l}"),
-                            theme.system,
-                            true,
-                        );
+                        push(&mut out, &mut pushed, format!("    {l}"), theme.muted, true);
                     }
                 }
             }
@@ -101,7 +99,7 @@ pub fn edit_diff_lines(
                     &mut out,
                     &mut pushed,
                     format!("  + {line}"),
-                    Color::Green,
+                    Style::default().fg(Color::Green),
                     false,
                 );
             }
@@ -112,9 +110,7 @@ pub fn edit_diff_lines(
     if pushed > DIFF_MAX_LINES {
         out.push(Line::styled(
             format!("  … +{} more diff line(s)", pushed - DIFF_MAX_LINES),
-            Style::default()
-                .fg(theme.system)
-                .add_modifier(Modifier::DIM),
+            theme.muted.add_modifier(Modifier::DIM),
         ));
     }
 

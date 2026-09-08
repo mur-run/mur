@@ -143,7 +143,7 @@ pub fn resolve_mascot_mode(theme: &Theme, is_tty: bool) -> MascotMode {
     if !is_tty || no_color_env() || term_is_dumb() {
         return MascotMode::Off;
     }
-    MascotMode::Accent(theme.accent)
+    MascotMode::Accent(theme.accent.fg.unwrap_or(Color::Reset))
 }
 
 fn no_color_env() -> bool {
@@ -200,7 +200,7 @@ pub fn welcome_lines(
 ) -> Vec<Line<'static>> {
     let mascot_style = match mode {
         MascotMode::Accent(c) => Style::default().fg(c),
-        MascotMode::Off => Style::default().fg(theme.system),
+        MascotMode::Off => theme.muted,
     };
     // In Off mode the eye is always open (truly static — no animation); otherwise
     // the eye frame follows the wall-clock blink phase passed by the caller.
@@ -227,24 +227,20 @@ pub fn welcome_lines(
     // relative paths were handed over that could not resolve and the failure
     // looked like a missing file (#940).
     lines.push(Line::from(vec![
-        Span::styled(
-            agent.to_string(),
-            Style::default()
-                .fg(theme.agent)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("  ·  shell ", Style::default().fg(theme.separator)),
-        Span::styled(pretty_cwd(cwd), Style::default().fg(theme.system)),
+        Span::styled(agent.to_string(), theme.accent.add_modifier(Modifier::BOLD)),
+        Span::styled("  ·  shell ", theme.muted),
+        Span::styled(pretty_cwd(cwd), theme.muted),
     ]));
     lines.push(Line::default());
 
     // ONE example to seed the first message.
     lines.push(Line::from(vec![
-        Span::styled("Try  ", Style::default().fg(theme.system)),
+        Span::styled("Try  ", theme.muted),
         Span::styled(
             "\"explain this repo\"",
-            Style::default()
-                .fg(theme.user_text)
+            theme
+                .text
+                .add_modifier(Modifier::DIM)
                 .add_modifier(Modifier::ITALIC),
         ),
     ]));
@@ -252,17 +248,9 @@ pub fn welcome_lines(
     // Single discoverability hint — full reference lives behind /help. Surface
     // Ctrl+V image paste here too (it was previously undiscoverable).
     lines.push(Line::from(vec![
-        Span::styled("Type ", Style::default().fg(theme.system)),
-        Span::styled(
-            "/help",
-            Style::default()
-                .fg(theme.agent)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            " for commands · Ctrl+V pastes a screenshot",
-            Style::default().fg(theme.system),
-        ),
+        Span::styled("Type ", theme.muted),
+        Span::styled("/help", theme.accent.add_modifier(Modifier::BOLD)),
+        Span::styled(" for commands · Ctrl+V pastes a screenshot", theme.muted),
     ]));
 
     lines
@@ -347,7 +335,7 @@ mod tests {
 
     #[test]
     fn resolve_off_when_not_tty() {
-        let m = resolve_mascot_mode(&super::super::theme::DARK, false);
+        let m = resolve_mascot_mode(&super::super::theme::ANSI, false);
         assert_eq!(m, MascotMode::Off);
     }
 
@@ -371,7 +359,7 @@ mod tests {
     #[test]
     fn the_identity_line_labels_the_path_as_the_shell_cwd() {
         let lines = welcome_lines(
-            &super::super::theme::DARK,
+            &super::super::theme::ANSI,
             MascotMode::Off,
             "repomanager",
             Some(std::path::Path::new("/a/b/c")),
@@ -395,7 +383,7 @@ mod tests {
         // Off mode is truly static: even with eye_open=false, render the REST
         // (open-eye) frame — never the blink frame.
         let lines = welcome_lines(
-            &super::super::theme::DARK,
+            &super::super::theme::ANSI,
             MascotMode::Off,
             "a",
             None,

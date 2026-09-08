@@ -46,13 +46,13 @@ const MIN_INDENT_WIDTH: u16 = 24;
 
 /// Colour for a row, chosen by its lead glyph.
 fn row_style(glyph: char, theme: &'static super::theme::Theme) -> Style {
-    let fg = match glyph {
-        '✔' => theme.success,
+    let style = match glyph {
+        '✔' => theme.ok,
         '✘' => theme.error,
         '⚠' => theme.warn,
-        _ => theme.agent_text,
+        _ => theme.text,
     };
-    Style::default().fg(fg).bg(theme.card_bg)
+    style.patch(theme.surface)
 }
 
 /// Break `s` into chunks no wider than `width` display columns.
@@ -111,7 +111,7 @@ fn pad(s: &str, width: usize) -> String {
 
 /// Draw the settlement card for `body` at `width` columns.
 ///
-/// Every row is padded to the full width and carries `theme.card_bg`, so the
+/// Every row is padded to the full width and carries `theme.surface`, so the
 /// block reads as one surface rather than ragged text. Nothing is elided: the
 /// runtime already stopped guessing what fits, and this is the layer that
 /// actually knows.
@@ -128,9 +128,9 @@ pub fn card_lines(
     };
     let mut out = vec![Line::from(Span::styled(
         pad(" SETTLEMENT", w),
-        Style::default()
-            .fg(theme.border_title)
-            .bg(theme.card_bg)
+        theme
+            .muted
+            .patch(theme.surface)
             .add_modifier(Modifier::BOLD),
     ))];
     for raw in body.lines() {
@@ -188,7 +188,7 @@ mod tests {
         assert!(card.is_none());
     }
 
-    use super::super::theme::DARK;
+    use super::super::theme::ANSI;
     use super::card_lines;
     use unicode_width::UnicodeWidthStr;
 
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn every_row_is_padded_to_the_pane_width() {
-        let out = card_lines("  ✔ bash · cargo test", &DARK, 40);
+        let out = card_lines("  ✔ bash · cargo test", &ANSI, 40);
         assert!(!out.is_empty());
         for row in plain(&out) {
             assert_eq!(row.width(), 40, "ragged row: {row:?}");
@@ -211,8 +211,8 @@ mod tests {
     #[test]
     fn long_detail_wraps_instead_of_being_cut() {
         let body = format!("  ✘ parallel_jobs · {}", "e".repeat(200));
-        let narrow = card_lines(&body, &DARK, 40);
-        let wide = card_lines(&body, &DARK, 100);
+        let narrow = card_lines(&body, &ANSI, 40);
+        let wide = card_lines(&body, &ANSI, 100);
         assert!(
             narrow.len() > wide.len(),
             "narrow={} wide={} — text must reflow, not truncate",
@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn the_card_names_itself() {
-        let out = plain(&card_lines("  ✔ bash", &DARK, 40));
+        let out = plain(&card_lines("  ✔ bash", &ANSI, 40));
         assert!(out[0].contains("SETTLEMENT"), "{out:?}");
     }
 }

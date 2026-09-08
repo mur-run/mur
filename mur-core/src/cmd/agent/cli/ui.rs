@@ -174,8 +174,8 @@ fn render_completion(f: &mut Frame, app: &App, input_area: Rect) {
                 // Numbered option: "N  label" + a dimmed, aligned description +
                 // a spacer. The number is a quiet affordance for digit-select.
                 let mut lines = vec![Line::from(vec![
-                    Span::styled(format!("{}  ", i + 1), Style::default().fg(theme.system)),
-                    Span::styled(c.display.clone(), Style::default().fg(theme.agent_text)),
+                    Span::styled(format!("{}  ", i + 1), theme.muted),
+                    Span::styled(c.display.clone(), theme.text),
                 ])];
                 if !c.desc.is_empty() {
                     lines.push(Line::from(Span::styled(
@@ -186,10 +186,7 @@ fn render_completion(f: &mut Frame, app: &App, input_area: Rect) {
                 lines.push(Line::default()); // spacer between options
                 ListItem::new(lines)
             } else {
-                let mut spans = vec![Span::styled(
-                    c.display.clone(),
-                    Style::default().fg(theme.border_title),
-                )];
+                let mut spans = vec![Span::styled(c.display.clone(), theme.muted)];
                 if !c.desc.is_empty() {
                     spans.push(Span::raw(" "));
                     spans.push(Span::styled(
@@ -227,10 +224,10 @@ fn render_completion(f: &mut Frame, app: &App, input_area: Rect) {
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.border))
+        .border_style(theme.border)
         .padding(Padding::horizontal(state.spaced as u16))
         .title(title)
-        .title_style(Style::default().fg(theme.border_title));
+        .title_style(theme.muted);
 
     let mut list_state = ListState::default();
     list_state.select(Some(state.selected));
@@ -239,12 +236,7 @@ fn render_completion(f: &mut Frame, app: &App, input_area: Rect) {
     // description too. Mark the selection with a caret + accent-bold label
     // instead. The slash menu keeps its compact reverse highlight.
     let (highlight_style, highlight_symbol) = if state.spaced {
-        (
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-            "❯ ",
-        )
+        (theme.accent.add_modifier(Modifier::BOLD), "❯ ")
     } else {
         (Style::default().add_modifier(Modifier::REVERSED), "")
     };

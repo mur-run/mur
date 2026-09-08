@@ -125,7 +125,7 @@ pub enum Args {
 
 const ON_OFF: &[(&str, &str)] = &[("on", "enable"), ("off", "disable")];
 const SKINS: &[(&str, &str)] = &[
-    ("dark", "default"),
+    ("ansi", "default — follows your terminal"),
     ("light", "light terminals"),
     ("mur", "MUR brand"),
 ];

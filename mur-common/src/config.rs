@@ -578,7 +578,7 @@ impl Default for CcProxyConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CliConfig {
     /// Default visual skin for `mur agent cli`. Overridable with --skin.
-    /// Valid values: "dark" (default), "light", "mur".
+    /// Valid values: "ansi" (default; "dark" is an alias), "light", "mur".
     pub skin: Option<String>,
 }
 

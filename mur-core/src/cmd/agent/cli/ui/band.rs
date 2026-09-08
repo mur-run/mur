@@ -10,7 +10,7 @@ use super::rail::fleet_rail_height;
 use ratatui::Frame;
 use ratatui::backend::Backend;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Padding, Paragraph, Widget, Wrap};
 
@@ -388,9 +388,7 @@ pub fn flush_finished<B: Backend>(
             }
             lines.push(Line::from(Span::styled(
                 "● agent".to_string(),
-                Style::default()
-                    .fg(theme.agent)
-                    .add_modifier(Modifier::BOLD),
+                theme.accent.add_modifier(Modifier::BOLD),
             )));
         }
         lines.extend(agent_body_lines(
@@ -517,9 +515,6 @@ pub(super) fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(output.block(block).scroll((offset, 0)), area);
     if let Some(marker) = scroll_marker(max_scroll, app.scroll_back) {
         let row = Rect { height: 1, ..inner };
-        f.render_widget(
-            Line::styled(marker, Style::default().fg(theme.border_title)).right_aligned(),
-            row,
-        );
+        f.render_widget(Line::styled(marker, theme.muted).right_aligned(), row);
     }
 }
