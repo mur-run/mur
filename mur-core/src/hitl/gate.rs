@@ -832,8 +832,13 @@ mod tests {
         .unwrap();
 
         assert!(d.deferred && !d.allow, "parked, and never allowed");
+        // The bound separates "parked" from "sat out the 300 s timeout"; it is
+        // not a latency budget. 5 s tripped on a loaded Windows CI runner
+        // (8.04 s of keygen + file I/O under ~8k parallel tests) with the
+        // gate having parked correctly, so it is set well clear of that noise
+        // while still an order of magnitude under the timeout it guards.
         assert!(
-            t0.elapsed() < Duration::from_secs(5),
+            t0.elapsed() < Duration::from_secs(60),
             "must not wait out the gate timeout: {:?}",
             t0.elapsed()
         );
