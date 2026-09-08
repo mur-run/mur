@@ -22,7 +22,7 @@ pub(super) const AUTO_NAMES_MAX: usize = 24;
 
 pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
     let theme = app.theme;
-    let (msg, color) = if let Some(req) = &app.hitl {
+    let (msg, style) = if let Some(req) = &app.hitl {
         // Surface the auto-deny clock: the gate expires approvals after
         // DEFAULT_TIMEOUT (300s). Reuse `created_at` rather than tracking new
         // state; the status bar redraws on each blink deadline so it ticks.
@@ -34,7 +34,7 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
             .saturating_sub(req.created_at.elapsed().as_secs());
         (
             format!("⏳ approve {} · auto-deny in {remaining}s", req.tool_name),
-            Color::Yellow,
+            Style::default().fg(Color::Yellow),
         )
     } else if app.streaming {
         let spin = SPINNER[app.spinner % SPINNER.len()];
@@ -45,20 +45,17 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         } else {
             format!("{spin} generating…")
         };
-        (msg, theme.agent)
+        (msg, theme.accent)
     } else {
         let ctx = if app.context_task_id.is_some() {
             " · context kept"
         } else {
             ""
         };
-        (format!("ready{ctx}"), theme.system)
+        (format!("ready{ctx}"), theme.muted)
     };
     let mut spans = vec![
-        Span::styled(
-            format!(" {} ", app.agent),
-            Style::default().fg(theme.badge_fg).bg(theme.badge_bg),
-        ),
+        Span::styled(format!(" {} ", app.agent), theme.badge),
         Span::raw("  "),
     ];
     // Auto-approval visibility (#8 / proposal 2). All three auto-approval
@@ -116,13 +113,10 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         // `⏵ 019ff831:working   ready`. Two sources for one fact; the live one
         // wins and the stale one is gone (#940).
         let short: String = meta.id.chars().take(8).collect();
-        spans.push(Span::styled(
-            format!(" ⏵ {short} "),
-            Style::default().fg(theme.agent),
-        ));
+        spans.push(Span::styled(format!(" ⏵ {short} "), theme.accent));
         spans.push(Span::raw("  "));
     }
-    spans.push(Span::styled(msg, Style::default().fg(color)));
+    spans.push(Span::styled(msg, style));
 
     // Glass Box observability: tokens · cost · ctx · timer.
     //
@@ -153,19 +147,16 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
     );
     if !obs.is_empty() {
         spans.push(Span::raw(FOOTER_SEP));
-        spans.push(Span::styled(obs, Style::default().fg(theme.system)));
+        spans.push(Span::styled(obs, theme.muted));
     }
     if let Some(t) = timer {
-        spans.push(Span::styled(
-            format!("{FOOTER_SEP}{t}"),
-            Style::default().fg(theme.system),
-        ));
+        spans.push(Span::styled(format!("{FOOTER_SEP}{t}"), theme.muted));
     }
 
-    let right_hint: Option<(String, Color)> = if app.scroll_back > 0 {
+    let right_hint: Option<(String, Style)> = if app.scroll_back > 0 {
         Some((
             format!("↑ {} lines · ⬇ to bottom", app.scroll_back),
-            theme.system,
+            theme.muted,
         ))
     } else if app.esc_hint {
         let hint = if app.streaming {
@@ -173,14 +164,14 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         } else {
             "ESC again to clear"
         };
-        Some((hint.to_string(), theme.system))
+        Some((hint.to_string(), theme.muted))
     } else if app.ctrl_c_hint {
-        Some(("Ctrl+C again to quit".to_string(), theme.system))
+        Some(("Ctrl+C again to quit".to_string(), theme.muted))
     } else {
         None
     };
 
-    if let Some((hint_text, hint_color)) = right_hint {
+    if let Some((hint_text, hint_style)) = right_hint {
         let hint_display = format!(" {} ", hint_text);
         let hint_width = hint_display.chars().count() as u16;
         let left_width: u16 = spans.iter().map(|s| s.content.chars().count() as u16).sum();
@@ -191,7 +182,7 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
             spans.push(Span::raw(" ".repeat(pad as usize)));
             spans.push(Span::styled(
                 hint_display,
-                Style::default().fg(hint_color).add_modifier(Modifier::DIM),
+                hint_style.add_modifier(Modifier::DIM),
             ));
         }
     }

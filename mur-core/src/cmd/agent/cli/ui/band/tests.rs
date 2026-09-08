@@ -191,7 +191,12 @@ mod welcome_surface_tests {
     fn consecutive_notices_draw_no_rule_and_turns_still_do() {
         let mut app = App::test_fixture();
         app.theme = &MUR;
-        const { assert!(MUR.show_separator, "test needs a ruled skin") };
+        const {
+            assert!(
+                matches!(MUR.border_type, ratatui::widgets::BorderType::Rounded),
+                "test needs a ruled skin"
+            )
+        };
         app.push_system("skin changed to light");
         app.push_system("skin changed to mur");
         app.messages.push(ChatMsg::for_test(Role::User, "hi"));
@@ -339,5 +344,57 @@ mod band_growth_tests {
         app.flushed_upto = 1;
         let d = dump(&mut app);
         assert!(!d.contains(MASCOT_REST[1]), "mascot painted twice:\n{d}");
+    }
+}
+
+/// PR-1 of the skin redesign is structure only: for the cells whose colour
+/// maps 1:1 (agent label and body, notices) the cell under each skin carries
+/// the token the old field held. Deleted in the redesign PR once the
+/// palettes move on purpose.
+#[cfg(test)]
+mod token_pin_tests {
+    use super::super::super::super::app::{App, ChatMsg, Role};
+    use super::super::super::super::theme::{ANSI, LIGHT, MUR};
+    use super::super::render_transcript;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn agent_turn_and_notice_paint_their_tokens_under_each_skin() {
+        for (name, theme) in [("ansi", &ANSI), ("light", &LIGHT), ("mur", &MUR)] {
+            let mut app = App::test_fixture();
+            app.theme = theme;
+            app.welcome_dismissed = true;
+            app.messages
+                .push(ChatMsg::for_test(Role::Agent, "hello there"));
+            app.push_system("skin changed");
+            let mut term = Terminal::new(TestBackend::new(60, 8)).unwrap();
+            term.draw(|f| render_transcript(f, &mut app, Rect::new(0, 0, 60, 8)))
+                .unwrap();
+            let buf = term.backend().buffer().clone();
+            let find = |needle: &str| -> (u16, u16) {
+                for y in 0..buf.area.height {
+                    let row: String = (0..buf.area.width)
+                        .map(|x| buf.cell((x, y)).unwrap().symbol())
+                        .collect();
+                    if let Some(i) = row.find(needle) {
+                        let x = row[..i].chars().count() as u16;
+                        return (x, y);
+                    }
+                }
+                panic!("{name}: {needle:?} not painted:\n{buf:?}");
+            };
+            let label = buf.cell(find("● agent")).unwrap();
+            let body = buf.cell(find("hello")).unwrap();
+            let notice = buf.cell(find("skin changed")).unwrap();
+            assert_eq!(label.fg, theme.accent.fg.unwrap(), "{name}: agent label");
+            // A finished reply's body comes through the markdown renderer,
+            // which paints prose in the terminal's own foreground — the old
+            // `agent_text` never reached it. Pinned as-is; the redesign PR
+            // decides whether `text` should.
+            assert_eq!(body.fg, ratatui::style::Color::Reset, "{name}: agent body");
+            assert_eq!(notice.fg, theme.muted.fg.unwrap(), "{name}: notice");
+        }
     }
 }
