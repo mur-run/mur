@@ -629,9 +629,20 @@ fn wants_gap_before(m: &super::app::ChatMsg) -> bool {
     m.step.is_none()
 }
 
-/// The gap row itself — a rule when the skin asks for one, otherwise a blank.
-fn gap_row(theme: &'static super::theme::Theme) -> Line<'static> {
-    if theme.show_separator {
+/// The gap row itself — a rule when the skin asks for one AND the gap is a
+/// change of speaker between two spoken turns; otherwise a blank.
+///
+/// A System notice is the UI talking, not a speaker: three `/skin` switches
+/// used to draw three rules, and `/skills` output followed by its own notice
+/// read as four unrelated events. Notices group under a blank, and a rule is
+/// left meaning exactly one thing — the conversation moved to the other side.
+fn gap_row(
+    theme: &'static super::theme::Theme,
+    prev: Option<&super::app::ChatMsg>,
+    m: &super::app::ChatMsg,
+) -> Line<'static> {
+    let spoken = |r: Role| r != Role::System;
+    if theme.show_separator && prev.is_none_or(|p| spoken(p.role)) && spoken(m.role) {
         Line::styled(
             "─".repeat(SEPARATOR_WIDTH),
             Style::default().fg(theme.separator),
@@ -639,6 +650,28 @@ fn gap_row(theme: &'static super::theme::Theme) -> Line<'static> {
     } else {
         Line::default()
     }
+}
+
+/// The welcome, when it is the surface and still in the live band: painted
+/// above the first message by `render_transcript`, and committed to
+/// scrollback with it by `flush_finished`. `None` once the conversation has
+/// started or the head has already been flushed. Ends in a blank when there
+/// are notices under it, so the hint line and the first notice do not touch.
+fn welcome_header(app: &App, eye_open: bool) -> Option<Vec<Line<'static>>> {
+    if app.flushed_upto > 0 || !app.welcome_visible() {
+        return None;
+    }
+    let mut lines = welcome_lines(
+        app.theme,
+        app.mascot_mode,
+        &app.agent,
+        app.cwd.as_deref(),
+        eye_open,
+    );
+    if !app.messages.is_empty() {
+        lines.push(Line::default());
+    }
+    Some(lines)
 }
 
 /// Lines for one message, including the gap that precedes it.
@@ -666,7 +699,7 @@ fn message_block(
     // Never before a continuation: `skip > 0` resumes a message whose head is
     // already committed above.
     if idx > 0 && skip == 0 && wants_gap_before(m) {
-        lines.push(gap_row(app.theme));
+        lines.push(gap_row(app.theme, app.messages.get(idx - 1), m));
     }
     if measured {
         push_live_measured(&mut lines, app, m, skip);
@@ -811,7 +844,7 @@ pub fn flush_finished<B: Backend>(
     // once keeps this O(n) instead of re-measuring the whole tail per
     // candidate index (a resize resets `flushed_upto` to 0).
     let start = app.flushed_upto.min(app.messages.len());
-    let rows: Vec<u16> = app.messages[start..]
+    let mut rows: Vec<u16> = app.messages[start..]
         .iter()
         .enumerate()
         .map(|(n, m)| {
@@ -819,6 +852,15 @@ pub fn flush_finished<B: Backend>(
             band_rows(theme, lines, width)
         })
         .collect();
+    // The welcome is a header over the first notice, never a message of its
+    // own: it is measured with message 0 and leaves with it, so the band the
+    // flush decision was made from is the band that was painted.
+    let welcome = welcome_header(app, true);
+    if let Some(r) = rows.first_mut()
+        && let Some(w) = welcome.as_ref()
+    {
+        *r = r.saturating_add(band_rows(theme, w.clone(), width));
+    }
     let mut total: u32 = rows.iter().map(|r| u32::from(*r)).sum();
     let settled = settle_end(app);
     let mut end = start;
@@ -834,7 +876,7 @@ pub fn flush_finished<B: Backend>(
         end += 1;
     }
     if end > start {
-        let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut lines: Vec<Line<'static>> = welcome.unwrap_or_default();
         for i in start..end {
             let msg_skip = if i == start { skip } else { 0 };
             lines.extend(message_block(app, i, &app.messages[i], msg_skip, false));
@@ -870,7 +912,7 @@ pub fn flush_finished<B: Backend>(
                 // This path only ever emits an agent turn's own body, which
                 // always opens a turn — no `wants_gap_before` test needed, but
                 // the row itself comes from the one builder.
-                lines.push(gap_row(theme));
+                lines.push(gap_row(theme, app.messages.get(app.flushed_upto - 1), m));
             }
             lines.push(Line::from(Span::styled(
                 "● agent".to_string(),
@@ -978,18 +1020,14 @@ fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         ));
     }
 
-    if lines.is_empty() && start == 0 {
-        // Empty transcript → progressive-disclosure welcome (mascot + identity +
-        // one example + /help hint) instead of a bare prompt. The eye frame is a
-        // pure function of wall-clock time; the event loop schedules redraws on
-        // the blink deadline so an idle welcome animates without busy-looping.
-        lines = welcome_lines(
-            theme,
-            app.mascot_mode,
-            &app.agent,
-            app.cwd.as_deref(),
-            app.blink.eye_open(Instant::now()),
-        );
+    // No conversation yet → progressive-disclosure welcome (mascot + identity
+    // + one example + /help hint) above whatever notices slash commands have
+    // produced, instead of a bare prompt. The eye frame is a pure function of
+    // wall-clock time; the event loop schedules redraws on the blink deadline
+    // so an idle welcome animates without busy-looping.
+    if let Some(mut head) = welcome_header(app, app.blink.eye_open(Instant::now())) {
+        head.append(&mut lines);
+        lines = head;
     }
 
     // Same wrapped-row accounting as before (`line_count`, not `lines.len()`).
@@ -2283,7 +2321,11 @@ mod gap_tests {
     /// different-looking gaps.
     #[test]
     fn the_gap_row_follows_the_skin() {
-        let blank: String = gap_row(&DARK)
+        let (u, a) = (
+            ChatMsg::for_test(Role::User, "hi"),
+            ChatMsg::for_test(Role::Agent, "hello"),
+        );
+        let blank: String = gap_row(&DARK, Some(&u), &a)
             .spans
             .iter()
             .map(|s| s.content.as_ref())
@@ -2293,7 +2335,7 @@ mod gap_tests {
             "dark skin uses a blank row: {blank:?}"
         );
 
-        let ruled: String = gap_row(&MUR)
+        let ruled: String = gap_row(&MUR, Some(&u), &a)
             .spans
             .iter()
             .map(|s| s.content.as_ref())
@@ -2426,6 +2468,83 @@ mod transcript_chrome_tests {
             ruled,
             vec![0],
             "expected a top rule and nothing else: {ruled:?}\n{out}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod welcome_surface_tests {
+    use super::super::app::{App, ChatMsg, Role};
+    use super::super::theme::MUR;
+    use super::super::welcome::MASCOT_REST;
+    use super::{message_block, render_transcript};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::layout::Rect;
+
+    fn dump(app: &mut App) -> String {
+        let mut term = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        term.draw(|f| render_transcript(f, app, Rect::new(0, 0, 100, 40)))
+            .unwrap();
+        term.backend().to_string()
+    }
+
+    /// A slash command's notice is not a conversation. Before, the first
+    /// `/skills` ended the welcome: the mascot vanished, the viewport shrank
+    /// to the chat height, and a wiped screen showed five rows of notice over
+    /// a blank slab. The welcome stays until someone actually speaks.
+    #[test]
+    fn a_slash_notice_keeps_the_welcome_on_screen() {
+        let mut app = App::test_fixture();
+        app.push_system("skin changed to mur");
+        let d = dump(&mut app);
+        assert!(
+            d.contains(MASCOT_REST[1]),
+            "mascot gone after a notice:\n{d}"
+        );
+        assert!(d.contains("skin changed to mur"), "notice missing:\n{d}");
+
+        // Control: the first spoken turn ends it.
+        app.messages.push(ChatMsg::for_test(Role::User, "hi"));
+        assert!(app.messages.iter().any(|m| m.role == Role::User));
+        let d = dump(&mut app);
+        assert!(
+            !d.contains(MASCOT_REST[1]),
+            "welcome outlived the chat:\n{d}"
+        );
+    }
+
+    /// Three `/skin` switches drew three rules under the light skin. A rule
+    /// marks a change of speaker; a run of notices is one speaker (the UI).
+    #[test]
+    fn consecutive_notices_draw_no_rule_and_turns_still_do() {
+        let mut app = App::test_fixture();
+        app.theme = &MUR;
+        const { assert!(MUR.show_separator, "test needs a ruled skin") };
+        app.push_system("skin changed to light");
+        app.push_system("skin changed to mur");
+        app.messages.push(ChatMsg::for_test(Role::User, "hi"));
+        app.messages.push(ChatMsg::for_test(Role::Agent, "hello"));
+        let text = |i: usize| -> String {
+            message_block(&app, i, &app.messages[i], 0, false)
+                .iter()
+                .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+                .collect()
+        };
+        assert!(
+            !text(1).contains('─'),
+            "notice after notice ruled: {:?}",
+            text(1)
+        );
+        assert!(
+            !text(2).contains('─'),
+            "user after notice ruled: {:?}",
+            text(2)
+        );
+        assert!(
+            text(3).contains('─'),
+            "agent after user not ruled: {:?}",
+            text(3)
         );
     }
 }
