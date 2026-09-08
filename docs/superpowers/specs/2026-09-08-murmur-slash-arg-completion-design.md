@@ -88,9 +88,9 @@ descriptions where none is warranted; that is a follow-on, not a blocker.
 
 ```rust
 pub struct MenuContext {
-    /// Effort levels this agent's model accepts, each with a short hint.
-    pub effort: Vec<(String, String)>,
-    /// Registry aliases, described by the model id behind them.
+    /// Effort levels this agent's model accepts, in the model's own order.
+    pub effort: Vec<String>,
+    /// Registry aliases, each described by the model id behind it.
     pub models: Vec<(String, String)>,
     /// Secret KEYs the agent already holds.
     pub secrets: Vec<String>,
@@ -98,6 +98,10 @@ pub struct MenuContext {
     pub notes: Vec<String>,
 }
 ```
+
+Effort rows carry no description. Every wording would be invented, and the one
+genuinely useful label — "current" — would lie whenever a session override is
+in effect, because that override lives in `App`, not on disk.
 
 Built by `MenuContext::load(home, agent)`, stored on `App`, and rebuilt at
 startup and after `/model`, `/secret`, `/remember` and `/forget` — the four
@@ -148,6 +152,10 @@ exist.
 The existing test grows a third assertion: for every `SlashCmd` variant name,
 the parser accepts it, `HELP` mentions it, **and** the completion table offers
 it. `Effort` is added to `one_of_each()`, which is what let this slip.
+
+One rename falls out of it: `help_name(Quit)` reports `exit`, while the menu's
+word is `quit`. `HELP` gains `/quit` beside `/exit` and `help_name` reports
+`quit`, so all three lists agree on one spelling and both spellings still parse.
 
 **Rejected**: generating `HELP` from the command table, so two lists become
 one and drift is structurally impossible. `HELP` carries hand-written nuance a
