@@ -202,10 +202,14 @@ Two PRs, so the visual change can be judged on its own diff.
 **PR-1 — structure, zero visual change.** Collapse `Theme` to the token
 struct; move every use site in `ui/`, `markdown.rs`, `welcome.rs`,
 `fleet_rail.rs`, `render_card.rs`, `settlement.rs` onto tokens; fill the
-three palettes with today's values so a TestBackend render of a fixed
-transcript under each skin is byte-identical before and after (the test that
-proves it lands in this PR and is deleted in PR-2). `dark` alias and `ansi`
-name land here too, with `ansi` still holding today's `DARK` values.
+three palettes with today's values. Where two old fields merge into one token
+and held different values (`user_text`/`agent_text`, `thinking`/`system`/
+`border_title`) the surviving value is the more frequent role's — the plan
+lists each — so the render is identical for the agent turn, notices and the
+status bar, and moves by at most that delta for user body text, thinking and
+rule titles; a TestBackend test pins the identical cells and is deleted in
+PR-2. `dark` alias and `ansi` name land here too, with `ansi` still holding
+today's `DARK` values.
 
 **PR-2 — the redesign.** New palettes (§2), layout (§3), guards (§4),
 default `ansi` (§5), README skin paragraph and the docs-site skin section.
