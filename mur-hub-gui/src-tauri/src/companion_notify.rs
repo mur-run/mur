@@ -144,7 +144,19 @@ fn raise(app: &AppHandle, mur_home: &Path, e: &InboxEntry, missed: bool) {
                 tracing::warn!("notified {} but could not record it: {err:#}", e.id);
             }
         }
-        Err(err) => tracing::warn!("could not show notification for {}: {err:#}", e.id),
+        Err(err) => {
+            // A bare transport error is what issue #1135 called unhelpful: it
+            // says the call failed, never that the user revoked permission.
+            // Query the real authorization state and quote it when it explains
+            // the failure. Returns None on the old backend, which has no such
+            // API — the message then reads exactly as it did before.
+            match crate::macos_un::authorization_note() {
+                Some(note) => {
+                    tracing::warn!("could not show notification for {}: {err:#} — {note}", e.id)
+                }
+                None => tracing::warn!("could not show notification for {}: {err:#}", e.id),
+            }
+        }
     }
 }
 

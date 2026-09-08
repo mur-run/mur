@@ -22,6 +22,7 @@ mod geometry;
 pub mod hitl;
 pub mod import_muragent;
 mod install_inbox;
+pub mod macos_un;
 pub mod mcp_skills;
 pub mod memory;
 pub mod mlx_sidecar;
@@ -361,6 +362,12 @@ pub fn run() {
             // long-lived runtime. Mirrors the guard around `Supervisor::new` above.
             let rt_handle = tauri::async_runtime::handle();
             let _rt_guard = rt_handle.inner().enter();
+
+            // UN will not post until the user has been asked, and the answer can
+            // be no. Ask once per launch — macOS prompts the first time and
+            // replays the stored answer afterwards. No-op unless the UN backend
+            // is compiled in (issue #1135).
+            crate::macos_un::request_authorization_once();
 
             // Start agent discovery (filesystem scan).
             let (discovery, agent_rx) = AgentDiscovery::new(mur_home.clone());

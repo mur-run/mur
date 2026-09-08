@@ -33,6 +33,11 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-notification = "2"
+# Only pulled in by `macos-un-notifications`. tauri-plugin-notification does not
+# forward notify-rust's features, so the switch has to be made on the shared
+# dependency: Cargo unifies features across the graph, so enabling it here also
+# swaps the backend the plugin compiles against.
+notify-rust = { version = "4.18", optional = true, default-features = false }
 notify = "6"
 
 # Workspace siblings — reused from the root repo via relative path.
@@ -60,8 +65,22 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signa
 core-foundation = "0.10"
 
 [features]
-default = ["custom-protocol"]
+default = ["custom-protocol", "macos-un-notifications"]
 custom-protocol = ["tauri/custom-protocol"]
+
+# Post macOS notifications through UNUserNotificationCenter instead of the
+# deprecated NSUserNotification (issue #1135). ON by default.
+#
+# The cost this buys is real and is handled in `macos_un.rs`: UN will not post
+# until the user has been asked, and the answer can be no — at the prompt, or
+# later in System Settings. The Hub asks once per launch and names that state
+# when a post fails, which is also the detection point the issue wanted: on the
+# old backend nothing could tell us why a notification never arrived.
+#
+# Turn it OFF (`--no-default-features --features custom-protocol`) to fall back
+# to NSUserNotification. Upstream still labels the UN backend a preview and
+# `mac-usernotifications` is 0.3.x, so the way back should stay one flag away.
+macos-un-notifications = ["dep:notify-rust", "notify-rust/preview-macos-un"]
 
 [dev-dependencies]
 tempfile = "3"
