@@ -265,8 +265,9 @@ fn pane_argv(exe: &str, name: &str, resume: bool, auto: bool) -> Vec<String> {
     if resume {
         v.push("--resume".into());
     }
-    if auto {
-        v.push("--auto".into());
+    // Auto-approve is the pane's default too; only the opt-out has to travel.
+    if !auto {
+        v.push("--ask".into());
     }
     v
 }
@@ -575,20 +576,18 @@ mod tests {
 
     #[test]
     fn pane_argv_includes_flags() {
+        // Auto-approve is the default, so it travels as nothing; ask-first is
+        // the flag that has to reach the pane.
         let v = pane_argv("/opt/homebrew/bin/mur", "a1", true, true);
         assert_eq!(
             v,
-            vec![
-                "/opt/homebrew/bin/mur",
-                "agent",
-                "cli",
-                "a1",
-                "--resume",
-                "--auto"
-            ]
+            vec!["/opt/homebrew/bin/mur", "agent", "cli", "a1", "--resume"]
         );
         let v = pane_argv("/opt/homebrew/bin/mur", "a1", false, false);
-        assert_eq!(v, vec!["/opt/homebrew/bin/mur", "agent", "cli", "a1"]);
+        assert_eq!(
+            v,
+            vec!["/opt/homebrew/bin/mur", "agent", "cli", "a1", "--ask"]
+        );
     }
 
     #[test]
@@ -636,7 +635,7 @@ mod tests {
     #[test]
     fn tmux_new_session_plan_shape() {
         let names = vec!["a1".to_string(), "a2".to_string(), "a3".to_string()];
-        let cmds = tmux_new_session("mur-chat", "/bin/mur", &names, false, false);
+        let cmds = tmux_new_session("mur-chat", "/bin/mur", &names, false, true);
         assert_eq!(
             cmds[0],
             vec![
@@ -715,7 +714,7 @@ mod tests {
     #[test]
     fn tmux_inside_plan_shape() {
         let names = vec!["a1".to_string(), "a2".to_string()];
-        let open = tmux_inside_open("/bin/mur", &names, false, false);
+        let open = tmux_inside_open("/bin/mur", &names, false, true);
         assert_eq!(
             open,
             vec![
@@ -727,7 +726,7 @@ mod tests {
                 "/bin/mur agent cli a1"
             ]
         );
-        let rest = tmux_inside_rest("@7", "/bin/mur", &names, false, false);
+        let rest = tmux_inside_rest("@7", "/bin/mur", &names, false, true);
         assert_eq!(
             rest[0],
             vec!["tmux", "split-window", "-t", "@7", "/bin/mur agent cli a2"]
@@ -739,7 +738,7 @@ mod tests {
     #[test]
     fn zellij_inside_plan_shape() {
         let names = vec!["a1".to_string(), "a2".to_string()];
-        let cmds = zellij_inside("/bin/mur", &names, false, true);
+        let cmds = zellij_inside("/bin/mur", &names, false, false);
         assert_eq!(
             cmds[0],
             vec!["zellij", "action", "new-tab", "--name", "mur-chat"]
@@ -747,13 +746,13 @@ mod tests {
         assert_eq!(
             cmds[1],
             vec![
-                "zellij", "run", "--", "/bin/mur", "agent", "cli", "a1", "--auto"
+                "zellij", "run", "--", "/bin/mur", "agent", "cli", "a1", "--ask"
             ]
         );
         assert_eq!(
             cmds[2],
             vec![
-                "zellij", "run", "--", "/bin/mur", "agent", "cli", "a2", "--auto"
+                "zellij", "run", "--", "/bin/mur", "agent", "cli", "a2", "--ask"
             ]
         );
         assert_eq!(cmds.len(), 3);
@@ -762,7 +761,7 @@ mod tests {
     #[test]
     fn zellij_kdl_layout_quotes_and_lists_all_agents() {
         let names = vec!["a1".to_string(), "a2".to_string()];
-        let kdl = zellij_kdl_layout("/My Drive/mur", &names, true, false);
+        let kdl = zellij_kdl_layout("/My Drive/mur", &names, true, true);
         let expected = concat!(
             "layout {\n",
             "    pane split_direction=\"vertical\" {\n",
@@ -777,7 +776,7 @@ mod tests {
     #[test]
     fn wezterm_plan_alternates_direction() {
         let names = vec!["a1".to_string(), "a2".to_string(), "a3".to_string()];
-        let cmds = wezterm_splits("/bin/mur", &names, false, false);
+        let cmds = wezterm_splits("/bin/mur", &names, false, true);
         assert_eq!(
             cmds[0],
             vec![
@@ -825,7 +824,7 @@ mod tests {
     #[test]
     fn kitty_plan_alternates_location() {
         let names = vec!["a1".to_string(), "a2".to_string()];
-        let cmds = kitty_launches("/bin/mur", &names, false, false);
+        let cmds = kitty_launches("/bin/mur", &names, false, true);
         assert_eq!(
             cmds[0],
             vec![

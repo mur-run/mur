@@ -430,8 +430,9 @@ Agent** wizard offers the same catalog as a source.
 
 - **Kernel sandbox** per OS — Landlock + seccomp (Linux), SBPL (macOS), Job
   Object (Windows) — plus a DNS-resolver guard that filters network egress.
-- **Human-in-the-loop** — tool calls pause for your approval in Hub and in
-  `mur agent cli` (opt out per session with `--auto`). While a gate is open the
+- **Human-in-the-loop** — tool calls pause for your approval in Hub. In
+  `mur agent cli` a session starts with auto-approve ON (the status bar's
+  `AUTO` badge says so); `--ask` or `/auto off` makes it ask first. While a gate is open the
   decision keys only count when you aren't mid-message, and a session-wide
   grant takes two presses — typing an ordinary sentence can't hand a tool
   blanket approval. An open gate always renders somewhere, `/auto off` revokes
