@@ -5,13 +5,16 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-08-murmur-slash-arg-completion-design.md`
 **Branch:** `docs/murmur-slash-arg-completion-spec` (spec PR #1218); implement on a fresh branch off `main`.
-**Status:** Tasks 1–3 done. One correction the plan did not anticipate is recorded below.
+**Status:** Tasks 1–4 done. One correction the plan did not anticipate is recorded below.
 
 ## Corrections found during execution
 
 1. **A hand-written `profile.yaml` does not deserialize into `AgentProfile`** (Task 1). `current_model_ref` fails soft, so the test read `None` and asserted nothing about the resolution. It now uses `mur-common/tests/fixtures/profile_p0a_minimal.yaml` plus `write_model_ref`, the same fixture the neighbouring round-trip test uses.
 2. **`sort_by` with a reversed comparator trips `clippy::unnecessary_sort_by`** (Task 2). Written as `sort_by_key(|s| std::cmp::Reverse(s.manifest.updated_at))`; CI runs clippy with `--all-targets -D warnings`.
 3. **Clippy is red between Task 3 and Task 4 by construction** — `MenuContext` is dead code until `compute` takes it, and `-D warnings` implies `-D dead-code`. Task 3's steps do not lint for this reason; Task 4 is the first point where clippy can be clean.
+4. **`offers` is test-only** (Task 4). Nothing in production asks it, and the `mur` binary target compiles these modules too, so an unconditional `pub fn` is dead code under `-D warnings`. It carries `#[cfg(test)]`.
+5. **Task 5's two wiring lines moved into Task 4** — `MenuContext::load` stays dead code until it is called, so leaving it for Task 5 meant committing a clippy-red tree. Task 5 keeps its freshness test and the live verification.
+6. **Mutation check run before committing Task 4** (not in the plan). Replacing the `Args::Effort` rows with a hardcoded `low medium high xhigh max` fails both effort tests, so they are testing the wiring rather than restating the table.
 
 ## Goal
 
@@ -476,7 +479,7 @@ pub menu_ctx: complete::MenuContext   // on App
 
 ### Steps
 
-- [ ] Write the guard first, in `mur-core/src/cmd/agent/cli/mod.rs`. Replace the whole `help_lists_every_command_the_parser_accepts` test with:
+- [x] Write the guard first, in `mur-core/src/cmd/agent/cli/mod.rs`. Replace the whole `help_lists_every_command_the_parser_accepts` test with:
 
 ```rust
     /// Three lists describe the same set of commands — `parse_slash`, `HELP`,
@@ -506,7 +509,7 @@ pub menu_ctx: complete::MenuContext   // on App
     }
 ```
 
-- [ ] Add the missing variant to `one_of_each()`, immediately after the `SlashCmd::Model(None)` line, and replace its stale doc comment. The comment currently claims the list is structurally exhaustive; it is not, and that claim is why `Effort` was never noticed missing:
+- [x] Add the missing variant to `one_of_each()`, immediately after the `SlashCmd::Model(None)` line, and replace its stale doc comment. The comment currently claims the list is structurally exhaustive; it is not, and that claim is why `Effort` was never noticed missing:
 
 ```rust
     /// One concrete instance per `SlashCmd` variant, to drive the round-trip
@@ -527,26 +530,26 @@ pub menu_ctx: complete::MenuContext   // on App
             },
 ```
 
-- [ ] Rename the `Quit` spelling so all three lists agree. In `help_name`, change `SlashCmd::Quit => Some("exit")` to:
+- [x] Rename the `Quit` spelling so all three lists agree. In `help_name`, change `SlashCmd::Quit => Some("exit")` to:
 
 ```rust
             SlashCmd::Quit => Some("quit"),
 ```
 
-- [ ] In the `HELP` constant, replace `/panel [tab]  /exit ·` with:
+- [x] In the `HELP` constant, replace `/panel [tab]  /exit ·` with:
 
 ```
 /panel [tab]  /quit (or /exit)  /effort [level] (reasoning effort this model accepts) ·
 ```
 
-- [ ] Watch the guard fail, naming the six commands one at a time:
+- [x] Watch the guard fail, naming the six commands one at a time:
 
 ```bash
 cargo nextest run -p mur-core --lib every_command_is_parsed 2>&1 | grep panicked
 # panicked at ...: /effort works but the completion menu never offers it
 ```
 
-- [ ] In `complete.rs`, add the `Args` enum and the shared word lists above `COMMANDS`:
+- [x] In `complete.rs`, add the `Args` enum and the shared word lists above `COMMANDS`:
 
 ```rust
 /// Where a command's second-layer rows come from.
@@ -604,7 +607,7 @@ const LOGIN_PROVIDERS: &[(&str, &str)] = &[
 const CHANNELS_ARGS: &[(&str, &str)] = &[("--follow", "live-tail another channel")];
 ```
 
-- [ ] Replace the whole `COMMANDS` constant with:
+- [x] Replace the whole `COMMANDS` constant with:
 
 ```rust
 /// Built-in commands: (word without slash, description, argument source).
@@ -654,7 +657,7 @@ pub fn offers(word: &str) -> bool {
 }
 ```
 
-- [ ] Replace `subcommands_for`, `build_top_level` and `build_subcommands` with:
+- [x] Replace `subcommands_for`, `build_top_level` and `build_subcommands` with:
 
 ```rust
 /// The argument source for `cmd` (without leading slash), or `None` if `cmd`
@@ -721,7 +724,7 @@ fn build_top_level(skills: &[Candidate], ctx: &MenuContext) -> Vec<Candidate> {
 }
 ```
 
-- [ ] Rewrite `compute` to thread the context:
+- [x] Rewrite `compute` to thread the context:
 
 ```rust
 pub fn compute(input: &str, skills: &[Candidate], ctx: &MenuContext) -> Option<CompletionState> {
@@ -754,7 +757,7 @@ pub fn compute(input: &str, skills: &[Candidate], ctx: &MenuContext) -> Option<C
 }
 ```
 
-- [ ] Add the `menu_ctx` field to `App` in `app.rs`, directly under the `skills` field:
+- [x] Add the `menu_ctx` field to `App` in `app.rs`, directly under the `skills` field:
 
 ```rust
     /// Argument lists for the completion menu — effort levels, registry
@@ -773,7 +776,7 @@ Check the `use` line at the top of `app.rs`: if `complete::MenuContext` does
 not resolve, the file imports `CompletionState` directly — add
 `use super::complete;` rather than widening the existing import.
 
-- [ ] Update every `compute` call site. In `mod.rs`, `refresh_completion`:
+- [x] Update every `compute` call site. In `mod.rs`, `refresh_completion`:
 
 ```rust
     app.completion = complete::compute(&app.input_text(), &app.skills, &app.menu_ctx);
@@ -789,7 +792,7 @@ and in `completion_accept`:
     };
 ```
 
-- [ ] Update the existing `complete.rs` tests, which all call `compute(input, &skills)`. Add at the top of `mod tests`:
+- [x] Update the existing `complete.rs` tests, which all call `compute(input, &skills)`. Add at the top of `mod tests`:
 
 ```rust
     fn ctx() -> MenuContext {
@@ -806,7 +809,7 @@ and pass `&ctx()` as the third argument in every existing `compute(...)` call
 in that module. `panel_subcommands` and the `mcp` tests keep their assertions
 unchanged — `Args::Fixed` produces the same words.
 
-- [ ] Add the level tests. The vendor differences are the point of this change, so they are asserted through `compute`, not through `effort_shape`:
+- [x] Add the level tests. The vendor differences are the point of this change, so they are asserted through `compute`, not through `effort_shape`:
 
 ```rust
     fn effort_ctx(model: &str) -> MenuContext {
@@ -894,14 +897,14 @@ unchanged — `Args::Fixed` produces the same words.
     }
 ```
 
-- [ ] Run the whole module. Every test in it must pass, including the guard that was red at the start of this task:
+- [x] Run the whole module. Every test in it must pass, including the guard that was red at the start of this task:
 
 ```bash
 cargo nextest run -p mur-core --lib cmd::agent::cli 2>&1 | tail -2
 # 356 tests run: 356 passed
 ```
 
-- [ ] Lint, format, commit:
+- [x] Lint, format, commit:
 
 ```bash
 cargo clippy -p mur-core --all-targets -- -D warnings 2>&1 | grep -c '^error'

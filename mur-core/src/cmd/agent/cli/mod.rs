@@ -193,7 +193,7 @@ async fn push_memory_reload(home: &std::path::Path, agent: &str) -> String {
     }
 }
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /open (outstanding items)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /model [N|name] (list/switch model)  /login [anthropic|chatgpt] (OAuth health / re-authenticate — unrelated to mur auth login, which signs in to mur.run for the official catalog)  /secret <KEY> [--delete] (hand the agent a credential — hidden input, never enters the chat)  /mcp  /skill  /remember <text> (save a memory)  /memories  /forget <name|last>  /panel [tab]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
+const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /open (outstanding items)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /model [N|name] (list/switch model)  /login [anthropic|chatgpt] (OAuth health / re-authenticate — unrelated to mur auth login, which signs in to mur.run for the official catalog)  /secret <KEY> [--delete] (hand the agent a credential — hidden input, never enters the chat)  /mcp  /skill  /remember <text> (save a memory)  /memories  /forget <name|last>  /panel [tab]  /quit (or /exit)  /effort [level] (reasoning effort this model accepts) · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
 #[allow(clippy::too_many_arguments)]
@@ -432,6 +432,7 @@ async fn run_tui(
         app.fleet = Some(fleet_rail::FleetRail::start(f));
     }
     app.skills = complete::load_agent_skills(&agent);
+    app.menu_ctx = complete::MenuContext::load(&home, &agent);
     let (initial_pricing, book) = load_pricing(&home, &agent);
     app.pricing = initial_pricing;
     app.pricing_book = Some(book);
@@ -1534,7 +1535,7 @@ fn clipboard_png() -> Option<String> {
 /// Recompute the completion menu from the current input. Called after every
 /// edit and when Tab is pressed with the menu closed.
 fn refresh_completion(app: &mut App) {
-    app.completion = complete::compute(&app.input_text(), &app.skills);
+    app.completion = complete::compute(&app.input_text(), &app.skills, &app.menu_ctx);
 }
 
 /// Move the highlighted row by `delta`, wrapping.
@@ -1563,7 +1564,7 @@ fn completion_accept(app: &mut App) {
     let descend = cand.has_children;
     app.set_input(&insert);
     app.completion = if descend {
-        complete::compute(&app.input_text(), &app.skills)
+        complete::compute(&app.input_text(), &app.skills, &app.menu_ctx)
     } else {
         None
     };
@@ -1768,6 +1769,12 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         } else {
             app.clear_input();
             handle_slash(app, cmd, tx).await;
+            // One refresh site, not four. `/model`, `/secret`, `/remember` and
+            // `/forget` each change one of these lists, and `handle_slash` has
+            // early returns in most arms, so a per-arm refresh would rot the
+            // first time an arm gains a return. Slash commands are typed by a
+            // human; three small file reads per command is not a cost.
+            app.menu_ctx = complete::MenuContext::load(&app.home, &app.agent);
             return;
         }
     }
@@ -3139,17 +3146,20 @@ mod help_coverage_tests {
             SlashCmd::Effort { .. } => Some("effort"),
             SlashCmd::Login(_) => Some("login"),
             SlashCmd::Secret { .. } => Some("secret"),
-            SlashCmd::Quit => Some("exit"),
+            SlashCmd::Quit => Some("quit"),
             SlashCmd::Unknown(_) => None,
         }
     }
 
-    /// One concrete instance per `SlashCmd` variant, to drive the
-    /// round-trip check below. If a variant is missing from this list,
-    /// `help_name`'s match above still refuses to compile once that
-    /// variant is added to `SlashCmd` — this list only chooses which
-    /// instance exercises the parser/HELP check, it is not what makes the
-    /// coverage exhaustive.
+    /// One concrete instance per `SlashCmd` variant, to drive the round-trip
+    /// check below.
+    ///
+    /// **This list is hand-maintained and nothing forces it to be complete.**
+    /// `help_name`'s match is exhaustive over the enum, so a new variant must
+    /// be *named* — but a variant absent from this list is silently never
+    /// checked. `Effort` was missing here for its whole life, which is exactly
+    /// why it reached users absent from `/help` and from the menu. Add the new
+    /// variant here when you add one to `SlashCmd`.
     fn one_of_each() -> Vec<SlashCmd> {
         vec![
             SlashCmd::Help,
@@ -3171,6 +3181,10 @@ mod help_coverage_tests {
             SlashCmd::Panel(vec![]),
             SlashCmd::Open,
             SlashCmd::Model(None),
+            SlashCmd::Effort {
+                level: None,
+                save: false,
+            },
             SlashCmd::Login(None),
             SlashCmd::Secret {
                 key: None,
@@ -3181,8 +3195,12 @@ mod help_coverage_tests {
         ]
     }
 
+    /// Three lists describe the same set of commands — `parse_slash`, `HELP`,
+    /// and the completion table — and nothing but this test ties them
+    /// together. `/effort` shipped in the parser while missing from both of
+    /// the others; that is the drift this exists to catch.
     #[test]
-    fn help_lists_every_command_the_parser_accepts() {
+    fn every_command_is_parsed_documented_and_offered() {
         for cmd in one_of_each() {
             let Some(name) = help_name(&cmd) else {
                 continue;
@@ -3195,6 +3213,10 @@ mod help_coverage_tests {
             assert!(
                 HELP.contains(&format!("/{name}")),
                 "/{name} works but /help never mentions it"
+            );
+            assert!(
+                super::complete::offers(name),
+                "/{name} works but the completion menu never offers it"
             );
         }
     }
