@@ -386,51 +386,40 @@ impl Renderer {
 }
 
 /// Column widths for a table whose columns want `natural` widths inside
-/// `room` columns of text. Fits as-is when it can; otherwise columns that
-/// already fit under their proportional share keep their width, and the rest
-/// split what remains in proportion to what they asked for, never below
-/// `MIN_COL`. A pathologically narrow pane can still overflow `room` by the
-/// floors — the pane's own wrap catches that, and it is not worth a
-/// column-dropping strategy nobody has asked for.
+/// `room` columns of text. Fits as-is when it can. Otherwise the squeeze
+/// comes off the widest columns first: find the largest cap such that every
+/// column clipped to it fits, then hand any leftover columns back to the
+/// clipped ones. A short `crate` column next to a long `description` column
+/// keeps its width and only the description wraps — a proportional split
+/// squeezed every column and wrapped `mur-agent-runtime` in two for no
+/// gain. Never below `MIN_COL`; a pane too narrow even for that overflows
+/// into the pane's own wrap rather than dropping columns.
 fn fit_columns(natural: &[usize], room: usize) -> Vec<usize> {
-    let n = natural.len();
-    let mut widths = natural.to_vec();
-    if natural.iter().sum::<usize>() <= room {
-        return widths;
+    let clipped_sum = |cap: usize| natural.iter().map(|n| (*n).min(cap)).sum::<usize>();
+    if clipped_sum(usize::MAX) <= room {
+        return natural.to_vec();
     }
-    let mut fixed = vec![false; n];
-    let mut remaining = room;
-    let mut asked: usize = natural.iter().sum();
-    // Settle the columns that fit under their share; each one settled frees
-    // room for the others, so repeat until a pass changes nothing.
-    loop {
-        let mut changed = false;
-        for i in 0..n {
-            if fixed[i] {
-                continue;
-            }
-            let share = (remaining * natural[i] / asked.max(1)).max(MIN_COL);
-            if natural[i] <= share {
-                fixed[i] = true;
-                remaining = remaining.saturating_sub(natural[i]);
-                asked = asked.saturating_sub(natural[i]);
-                changed = true;
-            }
+    let (mut lo, mut hi) = (MIN_COL, natural.iter().copied().max().unwrap_or(MIN_COL));
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        if clipped_sum(mid) <= room {
+            lo = mid;
+        } else {
+            hi = mid - 1;
         }
-        if !changed {
+    }
+    // `lo` is never below `MIN_COL`, so clipping is the only floor needed;
+    // a column narrower than the floor keeps its own width.
+    let mut widths: Vec<usize> = natural.iter().map(|n| (*n).min(lo)).collect();
+    let mut left = room.saturating_sub(widths.iter().sum::<usize>());
+    for (i, n) in natural.iter().enumerate() {
+        if left == 0 {
             break;
         }
-    }
-    let open: Vec<usize> = (0..n).filter(|i| !fixed[*i]).collect();
-    let mut spent = 0usize;
-    for (k, &i) in open.iter().enumerate() {
-        let w = if k + 1 == open.len() {
-            remaining.saturating_sub(spent)
-        } else {
-            remaining * natural[i] / asked.max(1)
-        };
-        widths[i] = w.max(MIN_COL);
-        spent += widths[i];
+        if *n > widths[i] {
+            widths[i] += 1;
+            left -= 1;
+        }
     }
     widths
 }
@@ -610,6 +599,17 @@ mod tests {
             pos += at + word.len();
         }
         assert!(lines.last().unwrap().starts_with('└'));
+    }
+
+    /// The squeeze comes off the widest column: short columns keep their
+    /// natural width when clipping the long one alone makes the table fit.
+    #[test]
+    fn narrow_columns_survive_when_the_wide_one_can_absorb_the_squeeze() {
+        assert_eq!(fit_columns(&[17, 80, 18, 28], 93), vec![17, 30, 18, 28]);
+        // Two wide columns share the clip; leftover goes back one column at a time.
+        assert_eq!(fit_columns(&[5, 40, 40], 60), vec![5, 28, 27]);
+        // Fits: untouched.
+        assert_eq!(fit_columns(&[5, 10], 40), vec![5, 10]);
     }
 
     /// Wide (CJK) characters are two columns each; the grid must line up on
