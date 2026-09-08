@@ -4,8 +4,21 @@
 > delegation is set up for this branch.
 
 **Spec:** `docs/superpowers/specs/2026-09-08-murmur-slash-arg-completion-design.md`
-**Branch:** `docs/murmur-slash-arg-completion-spec` (spec PR #1218); implement on a fresh branch off `main`.
-**Status:** not started.
+**Branch:** `feat/murmur-slash-arg-completion` (PR #1219); spec and this ledger on `docs/murmur-slash-arg-completion-spec` (PR #1218).
+**Status:** all five tasks done. Six corrections the plan did not anticipate are recorded below, plus the live-verification result:
+
+- `/effort` on the `mur` agent (`claude_opus` → `claude-opus-5`, the five-level tier) offered exactly `low · medium · high · xhigh · max`.
+- `/forget` offered `last` then `reply-in-zh-tw`, the agent's one live note.
+- `/mo` offered `/memories` and `/model`, both of which the menu never had before. One correction the plan did not anticipate is recorded below.
+
+## Corrections found during execution
+
+1. **A hand-written `profile.yaml` does not deserialize into `AgentProfile`** (Task 1). `current_model_ref` fails soft, so the test read `None` and asserted nothing about the resolution. It now uses `mur-common/tests/fixtures/profile_p0a_minimal.yaml` plus `write_model_ref`, the same fixture the neighbouring round-trip test uses.
+2. **`sort_by` with a reversed comparator trips `clippy::unnecessary_sort_by`** (Task 2). Written as `sort_by_key(|s| std::cmp::Reverse(s.manifest.updated_at))`; CI runs clippy with `--all-targets -D warnings`.
+3. **Clippy is red between Task 3 and Task 4 by construction** — `MenuContext` is dead code until `compute` takes it, and `-D warnings` implies `-D dead-code`. Task 3's steps do not lint for this reason; Task 4 is the first point where clippy can be clean.
+4. **`offers` is test-only** (Task 4). Nothing in production asks it, and the `mur` binary target compiles these modules too, so an unconditional `pub fn` is dead code under `-D warnings`. It carries `#[cfg(test)]`.
+5. **Task 5's two wiring lines moved into Task 4** — `MenuContext::load` stays dead code until it is called, so leaving it for Task 5 meant committing a clippy-red tree. Task 5 keeps its freshness test and the live verification.
+6. **Mutation check run before committing Task 4** (not in the plan). Replacing the `Args::Effort` rows with a hardcoded `low medium high xhigh max` fails both effort tests, so they are testing the wiring rather than restating the table.
 
 ## Goal
 
@@ -83,7 +96,7 @@ pub(crate) fn current_model_id(home: &Path, agent: &str) -> Option<String>
 
 ### Steps
 
-- [ ] Append this test to the existing `mod tests` at the bottom of `mur-core/src/cmd/agent/cli/model_cmd.rs`:
+- [x] Append this test to the existing `mod tests` at the bottom of `mur-core/src/cmd/agent/cli/model_cmd.rs`:
 
 ```rust
     /// The id the effort table keys on is `ModelEntry.model` — the raw vendor
@@ -109,14 +122,14 @@ pub(crate) fn current_model_id(home: &Path, agent: &str) -> Option<String>
     }
 ```
 
-- [ ] Run it and watch it fail to compile (`resolve_model_id` does not exist):
+- [x] Run it and watch it fail to compile (`resolve_model_id` does not exist):
 
 ```bash
 cargo nextest run -p mur-core --lib model_cmd 2>&1 | tail -5
 # error[E0425]: cannot find function `resolve_model_id` in this scope
 ```
 
-- [ ] Add both functions to `model_cmd.rs`, directly below `current_model_ref`:
+- [x] Add both functions to `model_cmd.rs`, directly below `current_model_ref`:
 
 ```rust
 /// The raw vendor model id behind an alias, e.g. `fast` → `deepseek-v4`.
@@ -143,14 +156,14 @@ pub(crate) fn current_model_id(home: &Path, agent: &str) -> Option<String> {
 }
 ```
 
-- [ ] Watch it pass:
+- [x] Watch it pass:
 
 ```bash
 cargo nextest run -p mur-core --lib model_cmd 2>&1 | tail -3
 # Summary [   0.1s] N tests run: N passed
 ```
 
-- [ ] In `mur-core/src/cmd/agent/cli/mod.rs`, replace the inline resolution in the `SlashCmd::Effort` arm. Delete these lines:
+- [x] In `mur-core/src/cmd/agent/cli/mod.rs`, replace the inline resolution in the `SlashCmd::Effort` arm. Delete these lines:
 
 ```rust
             let model_id = model_cmd::current_model_ref(&app.home, &app.agent)
@@ -169,7 +182,7 @@ and put this in their place (keep the comment above them as it is):
             let model_id = model_cmd::current_model_id(&app.home, &app.agent).unwrap_or_default();
 ```
 
-- [ ] Full module check, then commit:
+- [x] Full module check, then commit:
 
 ```bash
 cargo nextest run -p mur-core --lib cmd::agent::cli 2>&1 | tail -2
@@ -197,7 +210,7 @@ Ordered most-recently-updated first, so `[0]` is what `/forget last` resolves to
 
 ### Steps
 
-- [ ] Add this test to `mod tests` in `mur-core/src/cmd/agent/cli/memory_cmds.rs`:
+- [x] Add this test to `mod tests` in `mur-core/src/cmd/agent/cli/memory_cmds.rs`:
 
 ```rust
     /// The menu and `/forget last` must see the same set, in the same order:
@@ -226,14 +239,14 @@ Ordered most-recently-updated first, so `[0]` is what `/forget last` resolves to
 The one-second sleep is load-bearing: note names are `note-%Y%m%d-%H%M%S`, and
 two notes minted in the same second collide (`remember` bails on the second).
 
-- [ ] Watch it fail:
+- [x] Watch it fail:
 
 ```bash
 cargo nextest run -p mur-core --lib memory_cmds 2>&1 | tail -5
 # error[E0425]: cannot find function `live_note_names` in this scope
 ```
 
-- [ ] Add the function to `memory_cmds.rs`, directly above `pub fn forget`:
+- [x] Add the function to `memory_cmds.rs`, directly above `pub fn forget`:
 
 ```rust
 /// Agent-local notes that are still injectable, newest first.
@@ -258,7 +271,7 @@ pub fn live_note_names(home: &Path, agent: &str) -> Vec<String> {
 }
 ```
 
-- [ ] Rewrite the `last` branch of `forget` to use it. Replace:
+- [x] Rewrite the `last` branch of `forget` to use it. Replace:
 
 ```rust
     let name = if target == "last" {
@@ -292,7 +305,7 @@ with:
     };
 ```
 
-- [ ] Watch both the new test and the existing `remember_memories_forget_cycle` pass, then commit:
+- [x] Watch both the new test and the existing `remember_memories_forget_cycle` pass, then commit:
 
 ```bash
 cargo nextest run -p mur-core --lib memory_cmds 2>&1 | tail -3
@@ -327,7 +340,7 @@ impl MenuContext { pub fn load(home: &Path, agent: &str) -> Self }
 
 ### Steps
 
-- [ ] Add the test first, in `mod tests` at the bottom of `complete.rs`:
+- [x] Add the test first, in `mod tests` at the bottom of `complete.rs`:
 
 ```rust
     /// A missing agent reads nothing and must not panic: the menu degrades to
@@ -347,14 +360,14 @@ impl MenuContext { pub fn load(home: &Path, agent: &str) -> Self }
 is safe to assert only because no agent is named `nope`; the secret read goes
 through the process-wide MUR home, not the tempdir.
 
-- [ ] Watch it fail:
+- [x] Watch it fail:
 
 ```bash
 cargo nextest run -p mur-core --lib complete 2>&1 | tail -5
 # error[E0433]: failed to resolve: use of undeclared type `MenuContext`
 ```
 
-- [ ] Update the module doc comment at the top of `complete.rs`:
+- [x] Update the module doc comment at the top of `complete.rs`:
 
 ```rust
 //! Pure autocomplete logic for the `mur agent cli` completion menu: build the
@@ -364,7 +377,7 @@ cargo nextest run -p mur-core --lib complete 2>&1 | tail -5
 //! never from `compute`.
 ```
 
-- [ ] Add `MenuContext` below the `CompletionState` struct:
+- [x] Add `MenuContext` below the `CompletionState` struct:
 
 ```rust
 /// The argument lists a menu row can come from, read from disk.
@@ -434,7 +447,7 @@ impl MenuContext {
 }
 ```
 
-- [ ] Watch it pass, then commit:
+- [x] Watch it pass, then commit:
 
 ```bash
 cargo nextest run -p mur-core --lib complete 2>&1 | tail -3
@@ -470,7 +483,7 @@ pub menu_ctx: complete::MenuContext   // on App
 
 ### Steps
 
-- [ ] Write the guard first, in `mur-core/src/cmd/agent/cli/mod.rs`. Replace the whole `help_lists_every_command_the_parser_accepts` test with:
+- [x] Write the guard first, in `mur-core/src/cmd/agent/cli/mod.rs`. Replace the whole `help_lists_every_command_the_parser_accepts` test with:
 
 ```rust
     /// Three lists describe the same set of commands — `parse_slash`, `HELP`,
@@ -500,7 +513,7 @@ pub menu_ctx: complete::MenuContext   // on App
     }
 ```
 
-- [ ] Add the missing variant to `one_of_each()`, immediately after the `SlashCmd::Model(None)` line, and replace its stale doc comment. The comment currently claims the list is structurally exhaustive; it is not, and that claim is why `Effort` was never noticed missing:
+- [x] Add the missing variant to `one_of_each()`, immediately after the `SlashCmd::Model(None)` line, and replace its stale doc comment. The comment currently claims the list is structurally exhaustive; it is not, and that claim is why `Effort` was never noticed missing:
 
 ```rust
     /// One concrete instance per `SlashCmd` variant, to drive the round-trip
@@ -521,26 +534,26 @@ pub menu_ctx: complete::MenuContext   // on App
             },
 ```
 
-- [ ] Rename the `Quit` spelling so all three lists agree. In `help_name`, change `SlashCmd::Quit => Some("exit")` to:
+- [x] Rename the `Quit` spelling so all three lists agree. In `help_name`, change `SlashCmd::Quit => Some("exit")` to:
 
 ```rust
             SlashCmd::Quit => Some("quit"),
 ```
 
-- [ ] In the `HELP` constant, replace `/panel [tab]  /exit ·` with:
+- [x] In the `HELP` constant, replace `/panel [tab]  /exit ·` with:
 
 ```
 /panel [tab]  /quit (or /exit)  /effort [level] (reasoning effort this model accepts) ·
 ```
 
-- [ ] Watch the guard fail, naming the six commands one at a time:
+- [x] Watch the guard fail, naming the six commands one at a time:
 
 ```bash
 cargo nextest run -p mur-core --lib every_command_is_parsed 2>&1 | grep panicked
 # panicked at ...: /effort works but the completion menu never offers it
 ```
 
-- [ ] In `complete.rs`, add the `Args` enum and the shared word lists above `COMMANDS`:
+- [x] In `complete.rs`, add the `Args` enum and the shared word lists above `COMMANDS`:
 
 ```rust
 /// Where a command's second-layer rows come from.
@@ -598,7 +611,7 @@ const LOGIN_PROVIDERS: &[(&str, &str)] = &[
 const CHANNELS_ARGS: &[(&str, &str)] = &[("--follow", "live-tail another channel")];
 ```
 
-- [ ] Replace the whole `COMMANDS` constant with:
+- [x] Replace the whole `COMMANDS` constant with:
 
 ```rust
 /// Built-in commands: (word without slash, description, argument source).
@@ -648,7 +661,7 @@ pub fn offers(word: &str) -> bool {
 }
 ```
 
-- [ ] Replace `subcommands_for`, `build_top_level` and `build_subcommands` with:
+- [x] Replace `subcommands_for`, `build_top_level` and `build_subcommands` with:
 
 ```rust
 /// The argument source for `cmd` (without leading slash), or `None` if `cmd`
@@ -715,7 +728,7 @@ fn build_top_level(skills: &[Candidate], ctx: &MenuContext) -> Vec<Candidate> {
 }
 ```
 
-- [ ] Rewrite `compute` to thread the context:
+- [x] Rewrite `compute` to thread the context:
 
 ```rust
 pub fn compute(input: &str, skills: &[Candidate], ctx: &MenuContext) -> Option<CompletionState> {
@@ -748,7 +761,7 @@ pub fn compute(input: &str, skills: &[Candidate], ctx: &MenuContext) -> Option<C
 }
 ```
 
-- [ ] Add the `menu_ctx` field to `App` in `app.rs`, directly under the `skills` field:
+- [x] Add the `menu_ctx` field to `App` in `app.rs`, directly under the `skills` field:
 
 ```rust
     /// Argument lists for the completion menu — effort levels, registry
@@ -767,7 +780,7 @@ Check the `use` line at the top of `app.rs`: if `complete::MenuContext` does
 not resolve, the file imports `CompletionState` directly — add
 `use super::complete;` rather than widening the existing import.
 
-- [ ] Update every `compute` call site. In `mod.rs`, `refresh_completion`:
+- [x] Update every `compute` call site. In `mod.rs`, `refresh_completion`:
 
 ```rust
     app.completion = complete::compute(&app.input_text(), &app.skills, &app.menu_ctx);
@@ -783,7 +796,7 @@ and in `completion_accept`:
     };
 ```
 
-- [ ] Update the existing `complete.rs` tests, which all call `compute(input, &skills)`. Add at the top of `mod tests`:
+- [x] Update the existing `complete.rs` tests, which all call `compute(input, &skills)`. Add at the top of `mod tests`:
 
 ```rust
     fn ctx() -> MenuContext {
@@ -800,7 +813,7 @@ and pass `&ctx()` as the third argument in every existing `compute(...)` call
 in that module. `panel_subcommands` and the `mcp` tests keep their assertions
 unchanged — `Args::Fixed` produces the same words.
 
-- [ ] Add the level tests. The vendor differences are the point of this change, so they are asserted through `compute`, not through `effort_shape`:
+- [x] Add the level tests. The vendor differences are the point of this change, so they are asserted through `compute`, not through `effort_shape`:
 
 ```rust
     fn effort_ctx(model: &str) -> MenuContext {
@@ -888,14 +901,14 @@ unchanged — `Args::Fixed` produces the same words.
     }
 ```
 
-- [ ] Run the whole module. Every test in it must pass, including the guard that was red at the start of this task:
+- [x] Run the whole module. Every test in it must pass, including the guard that was red at the start of this task:
 
 ```bash
 cargo nextest run -p mur-core --lib cmd::agent::cli 2>&1 | tail -2
 # 356 tests run: 356 passed
 ```
 
-- [ ] Lint, format, commit:
+- [x] Lint, format, commit:
 
 ```bash
 cargo clippy -p mur-core --all-targets -- -D warnings 2>&1 | grep -c '^error'
@@ -924,7 +937,7 @@ App::menu_ctx                                             // Task 4
 
 ### Steps
 
-- [ ] Add the freshness test to `mod tests` in `complete.rs`:
+- [x] Add the freshness test to `mod tests` in `complete.rs`:
 
 ```rust
     /// After a `/model` switch the menu must offer the NEW model's levels.
@@ -940,13 +953,13 @@ App::menu_ctx                                             // Task 4
     }
 ```
 
-- [ ] Load the context at startup. In `mod.rs`, beside the existing skills load (`app.skills = complete::load_agent_skills(&agent);`):
+- [x] Load the context at startup. In `mod.rs`, beside the existing skills load (`app.skills = complete::load_agent_skills(&agent);`):
 
 ```rust
     app.menu_ctx = complete::MenuContext::load(&home, &agent);
 ```
 
-- [ ] Refresh after every slash command. At the single `handle_slash` call site, replace:
+- [x] Refresh after every slash command. At the single `handle_slash` call site, replace:
 
 ```rust
             handle_slash(app, cmd, tx).await;
@@ -964,7 +977,7 @@ with:
             app.menu_ctx = complete::MenuContext::load(&app.home, &app.agent);
 ```
 
-- [ ] Verify the whole module, lint, format:
+- [x] Verify the whole module, lint, format:
 
 ```bash
 cargo nextest run -p mur-core --lib cmd::agent::cli 2>&1 | tail -2
@@ -974,7 +987,7 @@ cargo clippy -p mur-core --all-targets -- -D warnings 2>&1 | grep -c '^error'
 cargo fmt -p mur-core && cargo fmt --check -p mur-core && echo fmt-clean
 ```
 
-- [ ] Live-verify against a real agent, because a menu that only exists in tests has never been seen. Build the debug binary and drive it in tmux, polling for readiness before sending keys (sending early types into a terminal that is not listening yet):
+- [x] Live-verify against a real agent, because a menu that only exists in tests has never been seen. Build the debug binary and drive it in tmux, polling for readiness before sending keys (sending early types into a terminal that is not listening yet):
 
 ```bash
 cargo build -p mur-core --bin mur
@@ -995,7 +1008,7 @@ tmux send-keys -t murmenu C-d; sleep 2; tmux kill-session -t murmenu
 
 Expected: `last` first, then this agent's note names.
 
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git commit -am "feat(murmur): the menu's argument lists refresh after every slash command"
