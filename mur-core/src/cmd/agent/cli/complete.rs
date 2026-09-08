@@ -1,6 +1,8 @@
 //! Pure autocomplete logic for the `mur agent cli` completion menu: build the
-//! candidate set for the current input and filter it. No TUI, no I/O here
-//! (except `load_agent_skills`, which reads the agent profile at startup).
+//! candidate set for the current input and filter it. No TUI and no I/O on the
+//! per-keystroke path — the two functions that read disk (`load_agent_skills`
+//! and `MenuContext::load`) are called at startup and after a slash command,
+//! never from `compute`.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -32,6 +34,72 @@ pub struct CompletionState {
     /// the slash-command menu. The chooser renders each option with a blank
     /// spacer row so the choices don't crowd each other.
     pub spaced: bool,
+}
+
+/// The argument lists a menu row can come from, read from disk.
+///
+/// `compute` is pure, so everything it needs that lives in a file is gathered
+/// here first. Rebuilt after every slash command (see `mod.rs`), which is what
+/// keeps `/effort` honest after a `/model` hot-switch: the levels are a
+/// property of the model, and the model can change mid-session.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MenuContext {
+    /// Effort levels this agent's model accepts, in the model's own order.
+    /// Empty when the model takes no reasoning parameter at all.
+    pub effort: Vec<String>,
+    /// Registry aliases, each with the raw model id behind it.
+    pub models: Vec<(String, String)>,
+    /// Secret KEYs the agent already holds.
+    pub secrets: Vec<String>,
+    /// Agent-local note names, newest first, led by the literal `last`.
+    pub notes: Vec<String>,
+}
+
+impl MenuContext {
+    /// Read all four lists. Fail-soft throughout: any list that cannot be read
+    /// stays empty and its command simply opens no argument menu.
+    pub fn load(home: &Path, agent: &str) -> Self {
+        let effort = match super::model_cmd::current_model_id(home, agent) {
+            // The levels are NOT a fixed scale — Opus 4.6 has no `xhigh`,
+            // DeepSeek V4 has no `medium`, Qwen is a two-position switch. Ask
+            // the table keyed on the raw model id; never restate it here.
+            Some(id) => mur_common::llm::effort_shape(&id)
+                .levels()
+                .iter()
+                .map(|e| e.as_str().to_string())
+                .collect(),
+            None => Vec::new(),
+        };
+        let models = mur_common::model::ModelRegistry::default_path()
+            .and_then(|p| mur_common::model::ModelRegistry::load_from(&p))
+            .map(|reg| {
+                super::model_cmd::ordered_models(&reg)
+                    .into_iter()
+                    .map(|(alias, e)| (alias, e.model))
+                    .collect()
+            })
+            .unwrap_or_default();
+        // NOTE the asymmetry: `load_profile_for_edit` resolves the MUR home
+        // itself and ignores `home`, exactly as `load_agent_skills` does. Do
+        // not "fix" it by threading `home` through — that is a wider change
+        // than this menu, and both callers here are the same process reading
+        // its own agent.
+        let secrets = crate::cmd::agent::load_profile_for_edit(agent)
+            .map(|(_path, p)| p.secrets)
+            .unwrap_or_default();
+        let mut notes = super::memory_cmds::live_note_names(home, agent);
+        if !notes.is_empty() {
+            // `last` is what `/forget` resolves to, so it belongs in the menu
+            // beside the names — and first, because it is the common case.
+            notes.insert(0, "last".to_string());
+        }
+        Self {
+            effort,
+            models,
+            secrets,
+            notes,
+        }
+    }
 }
 
 /// Built-in commands: (word without slash, description, subcommands).
@@ -373,5 +441,15 @@ mod tests {
     #[test]
     fn multiline_input_has_no_menu() {
         assert!(compute("/mcp\nlist", &[]).is_none());
+    }
+    /// A missing agent reads nothing and must not panic: the menu degrades to
+    /// its command layer rather than taking the session down.
+    #[test]
+    fn menu_context_is_fail_soft_on_a_missing_agent() {
+        let home = tempfile::tempdir().unwrap();
+        let ctx = MenuContext::load(home.path(), "nope");
+        assert!(ctx.effort.is_empty());
+        assert!(ctx.secrets.is_empty());
+        assert!(ctx.notes.is_empty());
     }
 }

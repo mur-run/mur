@@ -5,12 +5,13 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-08-murmur-slash-arg-completion-design.md`
 **Branch:** `docs/murmur-slash-arg-completion-spec` (spec PR #1218); implement on a fresh branch off `main`.
-**Status:** Tasks 1–2 done. One correction the plan did not anticipate is recorded below.
+**Status:** Tasks 1–3 done. One correction the plan did not anticipate is recorded below.
 
 ## Corrections found during execution
 
 1. **A hand-written `profile.yaml` does not deserialize into `AgentProfile`** (Task 1). `current_model_ref` fails soft, so the test read `None` and asserted nothing about the resolution. It now uses `mur-common/tests/fixtures/profile_p0a_minimal.yaml` plus `write_model_ref`, the same fixture the neighbouring round-trip test uses.
 2. **`sort_by` with a reversed comparator trips `clippy::unnecessary_sort_by`** (Task 2). Written as `sort_by_key(|s| std::cmp::Reverse(s.manifest.updated_at))`; CI runs clippy with `--all-targets -D warnings`.
+3. **Clippy is red between Task 3 and Task 4 by construction** — `MenuContext` is dead code until `compute` takes it, and `-D warnings` implies `-D dead-code`. Task 3's steps do not lint for this reason; Task 4 is the first point where clippy can be clean.
 
 ## Goal
 
@@ -332,7 +333,7 @@ impl MenuContext { pub fn load(home: &Path, agent: &str) -> Self }
 
 ### Steps
 
-- [ ] Add the test first, in `mod tests` at the bottom of `complete.rs`:
+- [x] Add the test first, in `mod tests` at the bottom of `complete.rs`:
 
 ```rust
     /// A missing agent reads nothing and must not panic: the menu degrades to
@@ -352,14 +353,14 @@ impl MenuContext { pub fn load(home: &Path, agent: &str) -> Self }
 is safe to assert only because no agent is named `nope`; the secret read goes
 through the process-wide MUR home, not the tempdir.
 
-- [ ] Watch it fail:
+- [x] Watch it fail:
 
 ```bash
 cargo nextest run -p mur-core --lib complete 2>&1 | tail -5
 # error[E0433]: failed to resolve: use of undeclared type `MenuContext`
 ```
 
-- [ ] Update the module doc comment at the top of `complete.rs`:
+- [x] Update the module doc comment at the top of `complete.rs`:
 
 ```rust
 //! Pure autocomplete logic for the `mur agent cli` completion menu: build the
@@ -369,7 +370,7 @@ cargo nextest run -p mur-core --lib complete 2>&1 | tail -5
 //! never from `compute`.
 ```
 
-- [ ] Add `MenuContext` below the `CompletionState` struct:
+- [x] Add `MenuContext` below the `CompletionState` struct:
 
 ```rust
 /// The argument lists a menu row can come from, read from disk.
@@ -439,7 +440,7 @@ impl MenuContext {
 }
 ```
 
-- [ ] Watch it pass, then commit:
+- [x] Watch it pass, then commit:
 
 ```bash
 cargo nextest run -p mur-core --lib complete 2>&1 | tail -3
