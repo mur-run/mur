@@ -1680,8 +1680,12 @@ fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: boo
         // approval (#8) can offer a one-key re-run of the stranded request.
         let retry = app.last_sent.clone();
         let t = tx.clone();
+        // A keypress is the only branch a human actually answered; `auto` covers
+        // /auto, --auto-reads and session grants, which the audit trail must not
+        // report as a person sitting there.
+        let surface = if auto { "auto" } else { "cli" };
         tokio::spawn(async move {
-            if let Err(e) = respond_hitl(h, a, id, allow).await {
+            if let Err(e) = respond_hitl(h, a, id, allow, surface).await {
                 let msg = format!("{e:#}");
                 let out = match recover::classify_hitl_failure(&msg) {
                     // "approval expired" (new runtimes) / "task not found"
@@ -2713,19 +2717,22 @@ fn run_plain(
                     .get("tool_name")
                     .and_then(|v| v.as_str())
                     .unwrap_or("tool");
-                let allow = if auto {
+                // Second element is the audit attribution: only the interactive
+                // branch has a human at the keyboard, so every other branch says
+                // "auto" rather than claiming someone answered.
+                let (allow, surface) = if auto {
                     eprintln!("[non-interactive: auto-approving tool-approval request (--auto)]");
-                    true
+                    (true, "auto")
                 } else if auto_reads && bash_class::is_readonly_call(tool, hitl.get("tool_input")) {
                     // Same lane as the TUI, same classifier. This mode used to
                     // ignore `--auto-reads` outright, so the identical flag
                     // behaved differently depending on how the CLI was started
                     // — and plain mode is exactly where unattended runs live.
                     eprintln!("  [auto-approved read-only {tool} (--auto-reads)]");
-                    true
+                    (true, "auto")
                 } else if session_allow.borrow().contains(tool) {
                     eprintln!("  [auto-approved {tool} (session allow)]");
-                    true
+                    (true, "auto")
                 } else if interactive {
                     // Outer loop releases stdin lock between reads (Task 2), so
                     // we can safely acquire a fresh lock here to prompt the user.
@@ -2734,7 +2741,7 @@ fn run_plain(
                     let _ = o.flush();
                     let mut ans = String::new();
                     let _ = io::stdin().lock().read_line(&mut ans);
-                    match ans.trim().chars().next() {
+                    let allowed = match ans.trim().chars().next() {
                         // [a] now means what it says. It used to approve just
                         // this one call while the prompt promised "always".
                         Some('a' | 'A') => {
@@ -2743,18 +2750,19 @@ fn run_plain(
                         }
                         Some('y' | 'Y') => true,
                         _ => false,
-                    }
+                    };
+                    (allowed, "cli")
                 } else {
                     eprintln!(
                         "[non-interactive: auto-denying tool-approval request (use --auto to allow)]"
                     );
-                    false
+                    (false, "auto")
                 };
                 let _ = dial_method(
                     home,
                     agent,
                     "tool/hitl_respond",
-                    serde_json::json!({ "hitl_id": id, "allow": allow }),
+                    stream::hitl_respond_params(&id, allow, surface),
                     DialMode::RequireRunning,
                 );
             },
