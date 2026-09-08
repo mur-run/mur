@@ -1,11 +1,18 @@
 //! A2A method: `model/set` — hot-switch the running agent to another registry
-//! model and persist the choice to `profile.yaml`.
+//! model. The live process only: the runtime is sealed off from its own
+//! `profile.yaml` (the launch chain denies that write — the profile is the
+//! operator's file, see `sandbox::launch_chain`), so persisting the choice is
+//! the caller's job. murmur `/model` writes the profile first and then dials
+//! this, the same dual-write `/secret` uses; `mur agent dial` callers get the
+//! live switch and `"persisted": false` telling them the disk is theirs.
+//! Before this the handler persisted before swapping, and on a sandboxed
+//! runtime that write failed every time — no agent ever hot-switched.
 //!
-//! Registered only when boot produced a [`ModelSwitchHandle`] (single-model
-//! agents). Chain/routing and echo agents surface method-not-found, which the
-//! murmur TUI degrades to a profile write + restart hint.
+//! Registered when boot produced a [`ModelSwitchHandle`]: single-model agents
+//! swap the client, chain/routing agents swap the primary and keep the chain.
+//! Echo and misconfigured agents surface method-not-found, which murmur
+//! degrades to the profile write plus a restart hint.
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -16,15 +23,11 @@ use crate::protocol::a2a_server::{HandlerError, MethodHandler, RequestContext};
 
 pub struct ModelSetHandler {
     switch: Arc<ModelSwitchHandle>,
-    profile_path: PathBuf,
 }
 
 impl ModelSetHandler {
-    pub fn new(switch: Arc<ModelSwitchHandle>, profile_path: PathBuf) -> Self {
-        Self {
-            switch,
-            profile_path,
-        }
+    pub fn new(switch: Arc<ModelSwitchHandle>) -> Self {
+        Self { switch }
     }
 }
 
@@ -41,39 +44,21 @@ impl MethodHandler for ModelSetHandler {
             .and_then(|v| v.as_str())
             .ok_or_else(|| HandlerError::InvalidParams("missing 'model_ref' field".into()))?;
 
-        // Strict order: build → persist → swap. Any failure aborts with the
-        // old client AND the old profile intact — a switch can never leave
-        // "disk says new, process runs old" (or the reverse) behind.
+        // Build first, swap second: a ref the builder rejects leaves the old
+        // client running and nothing half-switched.
         let next = (self.switch.build_client)(model_ref)
             .map_err(|e| HandlerError::InvalidParams(format!("model_ref {model_ref:?}: {e:#}")))?;
-        persist_model_ref(&self.profile_path, model_ref)
-            .map_err(|e| HandlerError::Internal(format!("persist model_ref: {e:#}")))?;
         self.switch.switchable.swap(next);
         tracing::info!(model_ref, "model/set: live client switched");
-        Ok(json!({ "model_ref": model_ref, "effective": "next-turn" }))
+        Ok(json!({ "model_ref": model_ref, "effective": "next-turn", "persisted": false }))
     }
-}
-
-/// Rewrite `model_ref` in `profile.yaml` — typed round-trip + temp/rename,
-/// the same idiom as the rekey cleanup. The legacy `model:` block is a live
-/// read path and stays untouched; `model_ref` wins at resolution.
-fn persist_model_ref(path: &Path, model_ref: &str) -> anyhow::Result<()> {
-    let yaml = std::fs::read_to_string(path)?;
-    let mut p: mur_common::agent::AgentProfile = serde_yaml_ng::from_str(&yaml)?;
-    p.model_ref = Some(model_ref.to_string());
-    p.updated_at = chrono::Utc::now().to_rfc3339();
-    let out = serde_yaml_ng::to_string(&p)?;
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, out.as_bytes())?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::llm::switchable::SwitchableLlmClient;
-    use crate::llm::{LlmClient, LlmError, LlmRequest, LlmResponse, StopReason};
+    use crate::llm::{LlmClient, LlmError, LlmRequest, LlmResponse, RequestIntent, StopReason};
 
     struct FixedClient {
         name: &'static str,
@@ -97,41 +82,41 @@ mod tests {
         }
     }
 
-    const MINIMAL_PROFILE: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../mur-common/tests/fixtures/profile_p0a_minimal.yaml"
-    ));
-
-    fn seed_profile(dir: &Path) -> PathBuf {
-        let path = dir.join("profile.yaml");
-        let mut p: mur_common::agent::AgentProfile =
-            serde_yaml_ng::from_str(MINIMAL_PROFILE).unwrap();
-        p.model_ref = Some("old_ref".into());
-        std::fs::write(&path, serde_yaml_ng::to_string(&p).unwrap()).unwrap();
-        path
-    }
-
     fn handle_with(
         factory: crate::llm::fallback::ClientFactory,
-        profile_path: PathBuf,
-    ) -> ModelSetHandler {
-        ModelSetHandler::new(
-            Arc::new(ModelSwitchHandle {
-                switchable: SwitchableLlmClient::new(Arc::new(FixedClient { name: "boot" })),
-                build_client: factory,
-            }),
-            profile_path,
-        )
+    ) -> (ModelSetHandler, Arc<ModelSwitchHandle>) {
+        let handle = Arc::new(ModelSwitchHandle {
+            switchable: SwitchableLlmClient::new(Arc::new(FixedClient { name: "boot" })),
+            build_client: factory,
+        });
+        (ModelSetHandler::new(handle.clone()), handle)
     }
 
+    fn req() -> LlmRequest {
+        LlmRequest {
+            messages: vec![],
+            temperature: None,
+            max_tokens: None,
+            tools: vec![],
+            intent: RequestIntent::Interactive,
+            pin_model_ref: None,
+            task_id: None,
+            effort: None,
+        }
+    }
+
+    async fn answers(handle: &ModelSwitchHandle) -> String {
+        handle.switchable.generate(req()).await.unwrap().text
+    }
+
+    /// The live client switches and the reply says the disk is still the
+    /// caller's to write — the runtime cannot reach its own profile.
     #[tokio::test]
-    async fn switches_persists_and_replies() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let profile_path = seed_profile(tmp.path());
-        let h = handle_with(
-            Box::new(|_ref| Ok(Arc::new(FixedClient { name: "switched" }) as _)),
-            profile_path.clone(),
-        );
+    async fn switches_the_live_client_and_says_it_did_not_persist() {
+        let (h, handle) = handle_with(Box::new(|_ref| {
+            Ok(Arc::new(FixedClient { name: "switched" }) as _)
+        }));
+        assert_eq!(answers(&handle).await, "boot");
 
         let out = h
             .handle(
@@ -142,39 +127,31 @@ mod tests {
             .unwrap();
         assert_eq!(out["model_ref"], "new_ref");
         assert_eq!(out["effective"], "next-turn");
-
-        let p: mur_common::agent::AgentProfile =
-            serde_yaml_ng::from_str(&std::fs::read_to_string(&profile_path).unwrap()).unwrap();
-        assert_eq!(p.model_ref.as_deref(), Some("new_ref"));
+        assert_eq!(out["persisted"], false);
+        assert_eq!(answers(&handle).await, "switched");
     }
 
     #[tokio::test]
-    async fn builder_failure_aborts_without_persisting_or_swapping() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let profile_path = seed_profile(tmp.path());
-        let h = handle_with(
-            Box::new(|r| anyhow::bail!("model_ref {r:?} not in registry")),
-            profile_path.clone(),
-        );
+    async fn builder_failure_aborts_without_swapping() {
+        let (h, handle) = handle_with(Box::new(|r| {
+            anyhow::bail!("model_ref {r:?} not in registry")
+        }));
 
         let err = h
             .handle(Some(json!({"model_ref": "ghost"})), &RequestContext::none())
             .await
             .unwrap_err();
         assert!(matches!(err, HandlerError::InvalidParams(_)));
-
-        let p: mur_common::agent::AgentProfile =
-            serde_yaml_ng::from_str(&std::fs::read_to_string(&profile_path).unwrap()).unwrap();
-        assert_eq!(p.model_ref.as_deref(), Some("old_ref"), "profile untouched");
+        assert_eq!(
+            answers(&handle).await,
+            "boot",
+            "old client must keep running"
+        );
     }
 
     #[tokio::test]
     async fn missing_model_ref_param_is_invalid() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let h = handle_with(
-            Box::new(|_r| Ok(Arc::new(FixedClient { name: "x" }) as _)),
-            seed_profile(tmp.path()),
-        );
+        let (h, _) = handle_with(Box::new(|_r| Ok(Arc::new(FixedClient { name: "x" }) as _)));
         let err = h
             .handle(Some(json!({})), &RequestContext::none())
             .await
