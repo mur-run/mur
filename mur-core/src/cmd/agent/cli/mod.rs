@@ -2107,14 +2107,7 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
             // configured with, so resolve it rather than listing the whole
             // scale. `provider:` is the wire protocol, never the vendor — the
             // raw id in `ModelEntry.model` is what the table keys on.
-            let model_id = model_cmd::current_model_ref(&app.home, &app.agent)
-                .and_then(|r| {
-                    mur_common::model::ModelRegistry::default_path()
-                        .and_then(|p| mur_common::model::ModelRegistry::load_from(&p))
-                        .ok()
-                        .and_then(|reg| reg.models.get(&r).map(|e| e.model.clone()))
-                })
-                .unwrap_or_default();
+            let model_id = model_cmd::current_model_id(&app.home, &app.agent).unwrap_or_default();
             let levels = mur_common::llm::effort_shape(&model_id).levels();
 
             if levels.is_empty() {
