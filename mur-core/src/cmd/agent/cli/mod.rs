@@ -461,7 +461,7 @@ async fn run_tui(
     // to the first message). Built AFTER the app because "is this the welcome?"
     // is a question about the transcript.
     let initial_h = crossterm::terminal::size()
-        .map(|(_, rows)| viewport_h_for(rows, app.messages.is_empty()))
+        .map(|(_, rows)| viewport_h_for(rows, app.welcome_visible()))
         .unwrap_or(INLINE_VIEWPORT_HEIGHT);
     // Anchor the viewport at the BOTTOM of the screen, like `purge_and_reanchor`
     // does: `with_options` anchors wherever the cursor happens to be, which on a
@@ -661,7 +661,7 @@ fn rebuild_after_resize(
     // the whole screen, which sends `insert_before` through its degenerate
     // draw-over-the-top path (lost/garbled scrollback rows). A resize is the
     // only time the viewport height changes at all.
-    let h = viewport_h_for(size.1, app.messages.is_empty());
+    let h = viewport_h_for(size.1, app.welcome_visible());
     purge_and_reanchor(terminal, h)?;
     app.flushed_upto = 0;
     app.flushed_bytes = 0;
@@ -683,19 +683,21 @@ fn rebuild_after_resize(
 /// `insert_before` the whole settled transcript a second time, burying the
 /// login transcript under a duplicate of the conversation.
 ///
-/// The height is recomputed **after** the notice lands, not before: the notice
-/// is what makes the transcript non-empty, and `viewport_h_for` gives the
-/// full-window welcome height while it is empty. Computing first and handing
-/// that height to `handover::run` would scroll the child's own output almost
-/// entirely off-screen.
+/// The height is recomputed **after** the welcome is dismissed, not before:
+/// `viewport_h_for` gives the full-window welcome height while the welcome is
+/// the surface. Computing first and handing that height to `handover::run`
+/// would scroll the child's own output almost entirely off-screen.
 ///
 /// `wants_screen_wipe` is cleared for the same reason the reset is skipped: a
 /// wipe left pending would run `purge_and_reanchor` on the pass after the
 /// child exits and take the transcript with it.
 fn prepare_handover(app: &mut App, label: &str, term_rows: u16) -> u16 {
     app.push_system(format!("{label}: handing over the terminal…"));
+    // A notice alone no longer ends the welcome (`App::welcome_visible`), so
+    // the handover says so itself: the height below must be the chat one.
+    app.welcome_dismissed = true;
     app.wants_screen_wipe = false;
-    viewport_h_for(term_rows, app.messages.is_empty())
+    viewport_h_for(term_rows, app.welcome_visible())
 }
 
 /// Wipe the screen AND scrollback, then re-anchor a fresh Inline viewport
@@ -757,7 +759,7 @@ async fn event_loop(
     // Inline-viewport height: fixed for the terminal's current size (see
     // `viewport_h_for`). Tracks the height the live terminal actually has
     // (run() creates the terminal with this same value).
-    let mut viewport_h = viewport_h_for(last_size.height, app.messages.is_empty());
+    let mut viewport_h = viewport_h_for(last_size.height, app.welcome_visible());
 
     loop {
         // Terminal size changed (font zoom, window resize): ratatui's
@@ -794,7 +796,7 @@ async fn event_loop(
         // that instant, so the replay is free and neither anchor artifact from
         // `viewport_h_for`'s doc comment can form.
         if app.render_mode == RenderMode::Inline
-            && viewport_h_for(last_size.height, app.messages.is_empty()) != viewport_h
+            && viewport_h_for(last_size.height, app.welcome_visible()) != viewport_h
         {
             app.flushed_upto = 0;
             app.flushed_bytes = 0;
@@ -825,7 +827,7 @@ async fn event_loop(
         //   two replays for one `/clear`.
         if app.render_mode == RenderMode::Inline && std::mem::take(&mut app.wants_screen_wipe) {
             drop(events);
-            let want_h = viewport_h_for(last_size.height, app.messages.is_empty());
+            let want_h = viewport_h_for(last_size.height, app.welcome_visible());
             if purge_and_reanchor(terminal, want_h).is_ok() {
                 viewport_h = want_h;
             }
@@ -943,7 +945,10 @@ async fn event_loop(
         // boundary, but ONLY when the mascot animates, the transcript is empty
         // (so the welcome is actually on screen), and nothing is streaming.
         // Otherwise this arm is disabled and never wakes the loop.
-        let blink_live = app.mascot_mode.animated() && app.messages.is_empty() && !app.streaming;
+        let blink_live = app.mascot_mode.animated()
+            && app.welcome_visible()
+            && app.flushed_upto == 0
+            && !app.streaming;
         let blink_at = TokioInstant::from_std(app.blink.next_deadline(StdInstant::now()));
         let input_due = app
             .panel_input_deadline
@@ -2596,11 +2601,12 @@ mod viewport_tests {
         assert_eq!(app.flushed_bytes, 17, "same, for the partial-message tail");
     }
 
-    /// Order, not arithmetic: the notice is what makes the transcript
-    /// non-empty, so the height must be read after it lands. Computed first,
-    /// this returns the full-window welcome height and `handover::run` would
-    /// clear — and re-anchor — a viewport almost the size of the screen,
-    /// scrolling the child's own output off it.
+    /// Order, not arithmetic: the handover dismisses the welcome, so the
+    /// height must be read after that. Computed first, this returns the
+    /// full-window welcome height and `handover::run` would clear — and
+    /// re-anchor — a viewport almost the size of the screen, scrolling the
+    /// child's own output off it. A plain notice would NOT do it (that is
+    /// what keeps the mascot up through `/skills`), hence the explicit flag.
     #[test]
     fn a_handover_recomputes_the_height_after_its_notice_lands() {
         let mut app = App::test_fixture();
@@ -2611,6 +2617,10 @@ mod viewport_tests {
         assert_eq!(
             h, INLINE_VIEWPORT_HEIGHT,
             "the welcome height must not survive the handover notice"
+        );
+        assert!(
+            !app.welcome_visible(),
+            "the handover must dismiss the welcome"
         );
         assert_ne!(
             h,
