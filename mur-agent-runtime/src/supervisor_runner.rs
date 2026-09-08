@@ -634,7 +634,8 @@ pub async fn build_provider_runner(
         );
     }
 
-    // Chain and/or routing configured → routing-aware fallback client.
+    // Chain and/or routing configured → routing-aware fallback client, behind
+    // the same hot-switch seam as the single-model path (`chain_switch_handle`).
     // Reusable per-ref client builder: model_ref -> Arc<dyn LlmClient>.
     // Reuses a fresh registry lookup (resolve_model_entry keys off
     // profile.model_ref; here we resolve an explicit candidate ref) +
@@ -642,7 +643,7 @@ pub async fn build_provider_runner(
     // Profile and a cloned PathBuf.
     let profile_for_chain = profile.clone();
     let mur_home_for_chain = mur_home.clone();
-    let build_one = move |model_ref: &str| -> anyhow::Result<Arc<dyn LlmClient>> {
+    let build_one: RefClientBuilder = Arc::new(move |model_ref: &str| {
         let reg = mur_common::model::ModelRegistry::load_from(
             &mur_common::model::ModelRegistry::default_path()?,
         )?;
@@ -656,21 +657,72 @@ pub async fn build_provider_runner(
             &profile_for_chain,
             &mur_home_for_chain,
         )
-    };
-    let fallback_client: Arc<dyn LlmClient> = {
+    });
+    let (switchable, build_client) =
+        chain_switch_handle(profile.inner.clone(), switch_cfg, telemetry, build_one);
+    let handle = Arc::new(crate::llm::switchable::ModelSwitchHandle {
+        switchable: switchable.clone(),
+        build_client,
+    });
+    let (r, c, p) = build(switchable as Arc<dyn LlmClient>);
+    Ok((r, c, p, Some(handle)))
+}
+
+/// Turns a registry ref into a concrete client; shared by the chain's own
+/// fallback and by `/model`, so both resolve a ref the same way.
+pub(crate) type RefClientBuilder =
+    Arc<dyn Fn(&str) -> anyhow::Result<Arc<dyn LlmClient>> + Send + Sync>;
+
+/// The hot-switch seam for a chain/routing agent. `/model` on such an agent
+/// swaps the PRIMARY and keeps the chain: the chain is the safety net, the
+/// primary is the choice. Returns the live slot and a per-ref builder that
+/// produces a whole routed client whose profile names `model_ref` as primary,
+/// so `resolve_model_refs` keeps deriving `[primary, ...chain]` exactly as at
+/// boot, telemetry included.
+///
+/// Before this, chain agents got no handle at all — and because the global
+/// `models.fallback_chain` / `models.smart` settings make EVERY agent a chain
+/// agent, `/model` stopped hot-switching anything the moment either was set:
+/// each attempt reported `method not found: model/set`, wrote the profile and
+/// asked for a restart.
+pub(crate) fn chain_switch_handle(
+    profile: mur_common::agent::AgentProfile,
+    cfg: mur_common::config::ModelSwitchConfig,
+    telemetry: Option<tokio::sync::mpsc::Sender<crate::telemetry_writer::Event>>,
+    build_one: RefClientBuilder,
+) -> (
+    Arc<crate::llm::switchable::SwitchableLlmClient>,
+    crate::llm::fallback::ClientFactory,
+) {
+    let validate = build_one.clone();
+    let agent = profile.name.clone();
+    let make = Arc::new(move |primary: Option<&str>| -> Arc<dyn LlmClient> {
+        let mut p = profile.clone();
+        if let Some(r) = primary {
+            p.model_ref = Some(r.to_string());
+        }
+        let build_one = build_one.clone();
+        let factory: crate::llm::fallback::ClientFactory = Box::new(move |r: &str| build_one(r));
         let mut fb = crate::llm::fallback::FallbackLlmClient::new_routed(
-            profile.inner.clone(),
-            switch_cfg.clone(),
-            Box::new(build_one),
-            switch_cfg.retry.clone(),
+            p,
+            cfg.clone(),
+            factory,
+            cfg.retry.clone(),
         );
-        if let Some(tx) = telemetry {
-            fb = fb.with_telemetry(tx, profile.inner.name.clone());
+        if let Some(tx) = telemetry.clone() {
+            fb = fb.with_telemetry(tx, agent.clone());
         }
         Arc::new(fb)
-    };
-    let (r, c, p) = build(fallback_client);
-    Ok((r, c, p, None))
+    });
+    let switchable = crate::llm::switchable::SwitchableLlmClient::new(make(None));
+    let build_client: crate::llm::fallback::ClientFactory = Box::new(move |model_ref: &str| {
+        // A ref the registry does not know fails the switch here, where
+        // `model/set` keeps the old client, instead of on the next turn, where
+        // the chain would quietly answer for a primary that never existed.
+        validate(model_ref)?;
+        Ok(make(Some(model_ref)))
+    });
+    (switchable, build_client)
 }
 
 /// Telemetry writer + notification routing + hook chain + skills loaded once at boot.
@@ -870,6 +922,95 @@ pub(crate) async fn prepare_runtime(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::{LlmError, LlmRequest, LlmResponse, RequestIntent, StopReason};
+    use async_trait::async_trait;
+    use mur_common::config::{ModelSwitchConfig, RetryConfig};
+
+    /// Answers with its own name, or refuses to connect.
+    struct Fixed {
+        name: &'static str,
+        down: bool,
+    }
+
+    #[async_trait]
+    impl LlmClient for Fixed {
+        async fn generate(&self, _req: LlmRequest) -> Result<LlmResponse, LlmError> {
+            if self.down {
+                return Err(LlmError::Connect(format!("{} is down", self.name)));
+            }
+            Ok(LlmResponse {
+                text: self.name.to_string(),
+                input_tokens: 0,
+                output_tokens: 0,
+                model: self.name.to_string(),
+                tool_calls: vec![],
+                stop_reason: StopReason::EndTurn,
+            })
+        }
+
+        fn model_name(&self) -> &str {
+            self.name
+        }
+    }
+
+    fn req() -> LlmRequest {
+        LlmRequest {
+            messages: vec![],
+            temperature: None,
+            max_tokens: None,
+            tools: vec![],
+            intent: RequestIntent::Interactive,
+            pin_model_ref: None,
+            task_id: None,
+            effort: None,
+        }
+    }
+
+    /// `/model` on a chain agent: the primary changes, the chain stays, and a
+    /// ref the registry does not know is refused before anything is swapped.
+    /// Chain agents used to get no `model/set` at all — and the global
+    /// fallback chain makes every agent one.
+    #[tokio::test]
+    async fn chain_switch_swaps_the_primary_and_keeps_the_chain() {
+        let mut profile = inline_profile("ollama", "m");
+        profile.model_ref = Some("boot".into());
+        profile.fallback_chain = vec!["net".into()];
+        let cfg = ModelSwitchConfig {
+            retry: RetryConfig {
+                max_retries: 0,
+                backoff_base_ms: 0,
+                cooldown_secs: 0,
+            },
+            ..ModelSwitchConfig::default()
+        };
+        let build_one: RefClientBuilder = Arc::new(|r: &str| match r {
+            "boot" => Ok(Arc::new(Fixed {
+                name: "boot",
+                down: false,
+            }) as Arc<dyn LlmClient>),
+            "next" => Ok(Arc::new(Fixed {
+                name: "next",
+                down: true,
+            })),
+            "net" => Ok(Arc::new(Fixed {
+                name: "net",
+                down: false,
+            })),
+            other => anyhow::bail!("model_ref {other:?} not in registry"),
+        });
+        let (sw, build) = chain_switch_handle(profile, cfg, None, build_one);
+        assert_eq!(sw.generate(req()).await.unwrap().text, "boot");
+
+        assert!(
+            build("nope").is_err(),
+            "unknown ref must not become a primary"
+        );
+
+        sw.swap(build("next").unwrap());
+        // The new primary is down, so the reply comes from the chain: the
+        // switch changed the primary and nothing else.
+        assert_eq!(sw.generate(req()).await.unwrap().text, "net");
+    }
 
     /// An agent with one model ref and no chain still needs the routing-aware
     /// client when Smart is on for it — the boot gate used to consult only the
