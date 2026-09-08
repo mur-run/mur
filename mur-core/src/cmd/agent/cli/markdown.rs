@@ -9,6 +9,7 @@
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
+use unicode_width::UnicodeWidthChar;
 
 const HEADING: Color = Color::Cyan;
 const CODE: Color = Color::Yellow;
@@ -16,9 +17,34 @@ const QUOTE: Color = Color::DarkGray;
 const RULE: &str = "────────────────────────";
 const INDENT: &str = "  ";
 
-/// Render Markdown source into owned ratatui `Text`.
-pub fn render(src: &str) -> Text<'static> {
-    let mut r = Renderer::default();
+/// Body indent under a role header ("you ›" / "● agent") so a message's
+/// content reads as belonging to its speaker rather than sitting flush with
+/// the header. Owned here because it is part of the width a body may use.
+pub(crate) const BODY_INDENT: &str = "  ";
+
+/// Never lay a table out narrower than this, whatever the pane says: below it
+/// every cell is a ladder of single characters and nothing is readable.
+const MIN_BODY_COLS: usize = 20;
+
+/// Narrowest a table column is ever squeezed to.
+const MIN_COL: usize = 4;
+
+/// Columns a message body may use inside a pane `pane_width` wide: the pane
+/// minus its horizontal padding on both sides and the body indent.
+pub(crate) fn body_cols(pane_width: u16, inner_padding: u8) -> usize {
+    (pane_width as usize)
+        .saturating_sub(2 * inner_padding as usize + BODY_INDENT.len())
+        .max(MIN_BODY_COLS)
+}
+
+/// Render Markdown source into owned ratatui `Text`. `width` is the columns
+/// the text will be painted into; prose wraps at paint time, but a table has
+/// to know its width here to decide column widths and wrap its cells.
+pub fn render(src: &str, width: usize) -> Text<'static> {
+    let mut r = Renderer {
+        width: width.max(MIN_BODY_COLS),
+        ..Renderer::default()
+    };
     let parser = Parser::new_ext(src, Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES);
     for ev in parser {
         r.event(ev);
@@ -28,6 +54,8 @@ pub fn render(src: &str) -> Text<'static> {
 
 #[derive(Default)]
 struct Renderer {
+    /// Columns available to a table (see `render`).
+    width: usize,
     lines: Vec<Line<'static>>,
     cur: Vec<Span<'static>>,
     bold: bool,
@@ -39,7 +67,7 @@ struct Renderer {
     list_stack: Vec<Option<u64>>,
     /// Table collection: while inside a table, text/code/emphasis accumulate
     /// into `table_cur_cell` instead of `cur`, rows are collected in
-    /// `table_rows`, and `TagEnd::Table` renders them as aligned columns.
+    /// `table_rows`, and `TagEnd::Table` renders them as a boxed table.
     in_table: bool,
     table_rows: Vec<Vec<Vec<Span<'static>>>>,
     table_cur_cell: Vec<Span<'static>>,
@@ -252,10 +280,13 @@ impl Renderer {
         }
     }
 
-    /// Emit the collected rows as aligned, wrapped-free column lines: header
-    /// row bold with a dim separator under it. Cell text keeps its inline
-    /// styles (code, bold); widths are display-columns (CJK-safe), each
-    /// column capped so a pathological cell cannot balloon the line.
+    /// Emit the collected rows as a boxed table: `┌─┬─┐` borders, header row
+    /// bold with a `├─┼─┤` rule under it, one blank line after. Columns take
+    /// their natural width when the table fits; otherwise they share the
+    /// pane proportionally (never below `MIN_COL`) and cells wrap inside
+    /// their column, so a wide table stays inside the terminal instead of
+    /// spilling into the pane's own line-wrap and losing its grid. Widths are
+    /// display columns (CJK-safe); cell text keeps its inline styles.
     fn render_table(&mut self) {
         let rows = std::mem::take(&mut self.table_rows);
         self.in_table = false;
@@ -267,8 +298,7 @@ impl Renderer {
         if ncols == 0 {
             return;
         }
-        const CELL_MAX: usize = 24;
-        let rows: Vec<Vec<Line<'static>>> = rows
+        let rows: Vec<Vec<Vec<Span<'static>>>> = rows
             .into_iter()
             .map(|mut r| {
                 while r.len() < ncols {
@@ -276,59 +306,72 @@ impl Renderer {
                 }
                 r.into_iter()
                     .map(|spans| {
-                        Line::from(
-                            spans
-                                .into_iter()
-                                .map(|s| {
-                                    // Guard against stray newlines inside a cell.
-                                    Span::styled(s.content.replace('\n', " "), s.style)
-                                })
-                                .collect::<Vec<_>>(),
-                        )
+                        spans
+                            .into_iter()
+                            // Guard against stray newlines inside a cell.
+                            .map(|s| Span::styled(s.content.replace('\n', " "), s.style))
+                            .collect()
                     })
                     .collect()
             })
             .collect();
-        let mut widths = vec![0usize; ncols];
+        let mut natural = vec![0usize; ncols];
         for row in &rows {
             for (i, cell) in row.iter().enumerate() {
-                widths[i] = widths[i].max(cell.width());
+                natural[i] = natural[i].max(Line::from(cell.clone()).width());
             }
         }
-        for w in &mut widths {
-            *w = (*w).min(CELL_MAX);
-        }
+        // Every column costs its text plus one space each side and a border;
+        // the last border closes the row.
+        let room = self.width.saturating_sub(3 * ncols + 1);
+        let widths = fit_columns(&natural, room);
+
+        let rule = |l: &str, m: &str, r: &str| -> Line<'static> {
+            let bars = widths
+                .iter()
+                .map(|w| "─".repeat(w + 2))
+                .collect::<Vec<_>>()
+                .join(m);
+            Line::styled(format!("{l}{bars}{r}"), Style::default().fg(QUOTE))
+        };
+        let border = Style::default().fg(QUOTE);
+
+        self.lines.push(rule("┌", "┬", "┐"));
         for (ri, row) in rows.iter().enumerate() {
-            let mut line: Vec<Span<'static>> = Vec::new();
-            for (ci, cell) in row.iter().enumerate() {
-                if ci > 0 {
-                    line.push(Span::raw(" │ ".to_string()));
+            let cells: Vec<Vec<Line<'static>>> = row
+                .iter()
+                .zip(&widths)
+                .map(|(spans, w)| wrap_spans(spans, *w))
+                .collect();
+            let height = cells.iter().map(Vec::len).max().unwrap_or(1);
+            for k in 0..height {
+                let mut line: Vec<Span<'static>> = vec![Span::styled("│ ", border)];
+                for (ci, cell) in cells.iter().enumerate() {
+                    if ci > 0 {
+                        line.push(Span::styled(" │ ", border));
+                    }
+                    let (text, used) = match cell.get(k) {
+                        Some(l) => (l.spans.clone(), l.width()),
+                        None => (Vec::new(), 0),
+                    };
+                    if ri == 0 {
+                        // Header: bold, matching the heading style.
+                        line.extend(text.into_iter().map(|s| {
+                            Span::styled(s.content, s.style.add_modifier(Modifier::BOLD))
+                        }));
+                    } else {
+                        line.extend(text);
+                    }
+                    line.push(Span::raw(" ".repeat(widths[ci].saturating_sub(used))));
                 }
-                let pad = " ".repeat(widths[ci].saturating_sub(cell.width()));
-                line.push(Span::raw(pad));
-                if ri == 0 {
-                    // Header: bold, matching the heading style.
-                    line.extend(
-                        cell.spans
-                            .iter()
-                            .cloned()
-                            .map(|s| Span::styled(s.content, s.style.add_modifier(Modifier::BOLD))),
-                    );
-                } else {
-                    line.extend(cell.spans.iter().cloned());
-                }
+                line.push(Span::styled(" │", border));
+                self.lines.push(Line::from(line));
             }
-            self.lines.push(Line::from(line));
             if ri == 0 {
-                let sep = widths
-                    .iter()
-                    .map(|w| "─".repeat(*w))
-                    .collect::<Vec<_>>()
-                    .join("─┼─");
-                self.lines
-                    .push(Line::styled(sep, Style::default().fg(QUOTE)));
+                self.lines.push(rule("├", "┼", "┤"));
             }
         }
+        self.lines.push(rule("└", "┴", "┘"));
         self.blank_line();
     }
 
@@ -342,9 +385,132 @@ impl Renderer {
     }
 }
 
+/// Column widths for a table whose columns want `natural` widths inside
+/// `room` columns of text. Fits as-is when it can; otherwise columns that
+/// already fit under their proportional share keep their width, and the rest
+/// split what remains in proportion to what they asked for, never below
+/// `MIN_COL`. A pathologically narrow pane can still overflow `room` by the
+/// floors — the pane's own wrap catches that, and it is not worth a
+/// column-dropping strategy nobody has asked for.
+fn fit_columns(natural: &[usize], room: usize) -> Vec<usize> {
+    let n = natural.len();
+    let mut widths = natural.to_vec();
+    if natural.iter().sum::<usize>() <= room {
+        return widths;
+    }
+    let mut fixed = vec![false; n];
+    let mut remaining = room;
+    let mut asked: usize = natural.iter().sum();
+    // Settle the columns that fit under their share; each one settled frees
+    // room for the others, so repeat until a pass changes nothing.
+    loop {
+        let mut changed = false;
+        for i in 0..n {
+            if fixed[i] {
+                continue;
+            }
+            let share = (remaining * natural[i] / asked.max(1)).max(MIN_COL);
+            if natural[i] <= share {
+                fixed[i] = true;
+                remaining = remaining.saturating_sub(natural[i]);
+                asked = asked.saturating_sub(natural[i]);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let open: Vec<usize> = (0..n).filter(|i| !fixed[*i]).collect();
+    let mut spent = 0usize;
+    for (k, &i) in open.iter().enumerate() {
+        let w = if k + 1 == open.len() {
+            remaining.saturating_sub(spent)
+        } else {
+            remaining * natural[i] / asked.max(1)
+        };
+        widths[i] = w.max(MIN_COL);
+        spent += widths[i];
+    }
+    widths
+}
+
+/// Greedy wrap of styled text to `w` display columns. Breaks at the last
+/// space that falls inside the line when there is one, otherwise between
+/// characters (CJK text has no spaces to break at); a character wider than
+/// the column is emitted on its own line rather than dropped. Span styles
+/// survive the split. Always yields at least one line.
+fn wrap_spans(spans: &[Span<'static>], w: usize) -> Vec<Line<'static>> {
+    let w = w.max(1);
+    let chars: Vec<(char, Style)> = spans
+        .iter()
+        .flat_map(|s| s.content.chars().map(move |c| (c, s.style)))
+        .collect();
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < chars.len() {
+        if start > 0 {
+            while start < chars.len() && chars[start].0 == ' ' {
+                start += 1;
+            }
+            if start >= chars.len() {
+                break;
+            }
+        }
+        let mut end = start;
+        let mut used = 0;
+        let mut last_space = None;
+        while end < chars.len() {
+            let cw = chars[end].0.width().unwrap_or(0);
+            if used + cw > w {
+                break;
+            }
+            if chars[end].0 == ' ' {
+                last_space = Some(end);
+            }
+            used += cw;
+            end += 1;
+        }
+        if end < chars.len()
+            && let Some(sp) = last_space
+            && sp > start
+        {
+            end = sp;
+        }
+        if end == start {
+            end = start + 1;
+        }
+        out.push(line_from_chars(&chars[start..end]));
+        start = end;
+    }
+    if out.is_empty() {
+        out.push(Line::default());
+    }
+    out
+}
+
+/// Rebuild spans from a run of styled characters, merging neighbours that
+/// share a style.
+fn line_from_chars(chars: &[(char, Style)]) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (c, style) in chars {
+        match spans.last_mut() {
+            Some(s) if s.style == *style => s.content.to_mut().push(*c),
+            _ => spans.push(Span::styled(c.to_string(), *style)),
+        }
+    }
+    Line::from(spans)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unicode_width::UnicodeWidthStr;
+
+    /// Every test renders into a plain 80-column body unless it says otherwise.
+    fn render(src: &str) -> Text<'static> {
+        super::render(src, 80)
+    }
 
     fn plain(text: &Text) -> String {
         text.lines
@@ -395,22 +561,76 @@ mod tests {
                     .collect::<String>()
             })
             .collect::<Vec<_>>();
-        // Header and both body rows survive as their own lines with the column
-        // separator; the markdown pipes themselves are gone.
-        assert!(lines[0].contains("file:line"), "lines: {lines:?}");
-        assert!(lines[0].contains("│"));
-        assert!(lines[2].contains("CONFIRMED"));
-        assert!(lines[2].contains("│"));
-        assert!(lines[3].contains("REJECTED"));
+        // Boxed: top rule, header, rule, body rows, bottom rule. The markdown
+        // pipes themselves are gone.
+        assert!(
+            lines[0].starts_with('┌') && lines[0].ends_with('┐'),
+            "lines: {lines:?}"
+        );
+        assert!(lines[1].contains("file:line"));
+        assert!(lines[1].contains("│"));
+        assert!(lines[2].starts_with('├') && lines[2].contains('┼'));
+        assert!(lines[3].contains("CONFIRMED"));
+        assert!(lines[4].contains("REJECTED"));
+        assert!(lines[5].starts_with('└') && lines[5].ends_with('┘'));
         // Header row cell spans are styled bold (pad/separator spans aren't).
         assert!(
-            t.lines[0]
+            t.lines[1]
                 .spans
                 .iter()
                 .any(|s| s.style.add_modifier.contains(Modifier::BOLD))
         );
-        // A separator line sits under the header.
-        assert!(lines[1].contains('─'));
+        // Every row of the grid is the same display width.
+        let widths: Vec<usize> = lines.iter().map(|l| l.width()).collect();
+        assert!(
+            widths.iter().all(|w| *w == widths[0]),
+            "ragged grid: {widths:?}"
+        );
+    }
+
+    /// A table wider than the pane used to spill into the pane's own wrap,
+    /// which breaks rows mid-cell and loses the grid entirely. Now the
+    /// columns share the width and the cells wrap inside them.
+    #[test]
+    fn a_wide_table_wraps_its_cells_inside_the_width() {
+        let long = "one two three four five six seven eight nine ten eleven twelve";
+        let src = format!("| key | value |\n| --- | --- |\n| k | {long} |");
+        let t = super::render(&src, 40);
+        let lines = rows(&t);
+        assert!(lines.iter().all(|l| l.width() <= 40), "overflow: {lines:?}");
+        let body: Vec<&String> = lines.iter().filter(|l| l.starts_with('│')).collect();
+        assert!(body.len() > 2, "long cell did not wrap: {lines:?}");
+        // Nothing lost in the wrap: every word is still there, in order.
+        let joined: String = lines.join(" ");
+        let mut pos = 0;
+        for word in long.split(' ') {
+            let at = joined[pos..]
+                .find(word)
+                .unwrap_or_else(|| panic!("lost {word}"));
+            pos += at + word.len();
+        }
+        assert!(lines.last().unwrap().starts_with('└'));
+    }
+
+    /// Wide (CJK) characters are two columns each; the grid must line up on
+    /// display width, not character count.
+    #[test]
+    fn cjk_cells_keep_the_grid_aligned() {
+        let t = render("| 欄位 | 值 |\n| --- | --- |\n| 訊息通道 | ab |\n| x | 憑證 |");
+        let lines = rows(&t);
+        let widths: Vec<usize> = lines.iter().map(|l| l.width()).collect();
+        assert!(
+            widths.iter().all(|w| *w == widths[0]),
+            "ragged grid: {widths:?}"
+        );
+        // and a CJK cell wraps between characters when squeezed
+        let t = super::render(
+            "| a | b |\n| --- | --- |\n| 這是一段很長的中文內容用來測試換行 | y |",
+            24,
+        );
+        let lines = rows(&t);
+        assert!(lines.iter().all(|l| l.width() <= 24), "overflow: {lines:?}");
+        assert!(lines.iter().filter(|l| l.starts_with('│')).count() > 2);
     }
 
     #[test]
