@@ -441,9 +441,14 @@ async fn run_tui(
             "unknown skin '{skin_name}', using dark — valid: dark, light, mur"
         ));
     }
-    if auto {
-        app.auto_approve = true;
-        app.push_system("auto-approve is ON for this session (--auto) — every tool call will be allowed without asking");
+    // Auto-approve is the default and the status bar's AUTO badge says so;
+    // only the opt-out gets a notice, because a session that asks is the one
+    // whose operator has to know why it stopped.
+    app.auto_approve = auto;
+    if !auto {
+        app.push_system(
+            "ask-first is ON for this session (--ask) — every tool call waits for you; /auto to approve without asking",
+        );
     }
     app.budget_usd = budget_usd;
     if let Some(b) = budget_usd {
@@ -2741,7 +2746,9 @@ fn run_plain(
                 // branch has a human at the keyboard, so every other branch says
                 // "auto" rather than claiming someone answered.
                 let (allow, surface) = if auto {
-                    eprintln!("[non-interactive: auto-approving tool-approval request (--auto)]");
+                    eprintln!(
+                        "[non-interactive: auto-approving tool-approval request (default; --ask to deny)]"
+                    );
                     (true, "auto")
                 } else if auto_reads && bash_class::is_readonly_call(tool, hitl.get("tool_input")) {
                     // Same lane as the TUI, same classifier. This mode used to
@@ -2774,7 +2781,7 @@ fn run_plain(
                     (allowed, "cli")
                 } else {
                     eprintln!(
-                        "[non-interactive: auto-denying tool-approval request (use --auto to allow)]"
+                        "[non-interactive: auto-denying tool-approval request (--ask; drop it to allow)]"
                     );
                     (false, "auto")
                 };
@@ -2940,6 +2947,9 @@ mod hitl_key_tests {
     /// is where the flag used to be set. Calling `gate()` directly would skip
     /// the very line under test and pass either way.
     fn gate_via_stream(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
+        // An ask-first session: with the default auto-approve the request
+        // would be answered on arrival and no gate would open to test.
+        app.auto_approve = false;
         let task_id = "t1".to_string();
         app.current_task_id = Some(task_id.clone());
         let req = stream::HitlRequest {
@@ -2997,6 +3007,8 @@ mod hitl_key_tests {
     async fn typing_a_message_never_decides_the_gate() {
         let (tx, _rx) = mpsc::channel(16);
         let mut app = App::test_fixture();
+        // Ask-first session (`--ask`): the gate is the operator's to decide.
+        app.auto_approve = false;
         gate(&mut app);
 
         type_str(&mut app, "add the test", &tx).await;
