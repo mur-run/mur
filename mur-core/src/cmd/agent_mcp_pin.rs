@@ -141,6 +141,7 @@ pub enum ProbeError {
 pub async fn probe_mcp_descriptions(
     entry: &McpServerEntry,
     timeout: std::time::Duration,
+    policy: &mur_agent_runtime::sandbox::policy::SandboxPolicy,
 ) -> Result<
     (
         String,
@@ -149,13 +150,12 @@ pub async fn probe_mcp_descriptions(
     ProbeError,
 > {
     let probe = async {
-        // Diagnostic probe — no live agent profile available, so use a
-        // default (permissive) sandbox policy. The actual sandbox is
-        // applied by the supervisor at runtime; this call only needs
-        // the spawn to succeed for tool description hashing.
-        let policy = mur_agent_runtime::sandbox::policy::SandboxPolicy::default();
+        // The caller chooses the policy, and the choice is the whole point of
+        // the probe. `inspect` passes the agent's real one so a server that
+        // dies on a sandbox EPERM fails here too (#1161); the pin path passes a
+        // permissive one, where the job is only to hash tool descriptions.
         let mut client =
-            mur_agent_runtime::protocol::mcp_client::McpClient::connect(entry, &policy, None)
+            mur_agent_runtime::protocol::mcp_client::McpClient::connect(entry, policy, None)
                 .await?;
         let _info = client.initialize().await?;
         let tools = client.list_tools().await?;
@@ -220,6 +220,9 @@ pub fn build_pinned_entry(
 /// - `3` BothDrifted — *reserved* for M9.3.5.
 /// - `4` MissingPin — entry has no `binary_sha256` (pre-M9 entry).
 /// - `5` BinaryMissing — pinned binary not on disk anymore.
+/// - `6` InterpreterUnprotected — pin covers the interpreter, not the server.
+/// - `7` StartupWouldFail — the server did not answer `initialize` when spawned
+///   under the agent's own sandbox policy (`--probe` only).
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InspectStatus {
@@ -235,6 +238,11 @@ pub enum InspectStatus {
     /// the interpreter, not the server code, so it is reported rather than
     /// enforced. Not a failure — the agent starts — but not protection either.
     InterpreterUnprotected = 6,
+    /// The probe spawned the server under the agent's OWN sandbox policy and it
+    /// did not answer `initialize`. Distinct from every status above, which are
+    /// all statements about files on disk: this one says the agent will fail to
+    /// start the server (#1161). Additive code — 0-6 keep their meanings.
+    StartupWouldFail = 7,
 }
 
 /// Classify one MCP entry's binary against its pin, without printing.
@@ -430,6 +438,7 @@ pub async fn inspect_one_probed(
     agent: &str,
     entry: &mur_common::agent::McpServerEntry,
     timeout: std::time::Duration,
+    policy: &mur_agent_runtime::sandbox::policy::SandboxPolicy,
 ) -> InspectStatus {
     // Run the binary-side inspect synchronously first so its output
     // appears before the probe results in the user-facing report.
@@ -442,7 +451,7 @@ pub async fn inspect_one_probed(
     };
 
     println!();
-    println!("  Probing live MCP for description verification…");
+    println!("  Probing live MCP under this agent's sandbox…");
     let probe_entry = match resolve_command(&entry.command) {
         Ok(resolved) => mur_common::agent::McpServerEntry {
             command: resolved.display().to_string(),
@@ -453,7 +462,7 @@ pub async fn inspect_one_probed(
             return binary_status;
         }
     };
-    match probe_mcp_descriptions(&probe_entry, timeout).await {
+    match probe_mcp_descriptions(&probe_entry, timeout, policy).await {
         Ok((current, _)) => {
             let descr_drifted = !current.eq_ignore_ascii_case(expected_descr);
             if descr_drifted {
@@ -477,12 +486,25 @@ pub async fn inspect_one_probed(
             }
         }
         Err(e) => {
-            println!("  description status: <probe failed: {e}>");
+            // The probe ran under the agent's own policy, so this is not a
+            // diagnostic curiosity: the server will fail the same way when the
+            // agent starts. Say that plainly — the pins above still read CLEAN,
+            // and "CLEAN" is what sent the last operator hunting for hours.
+            println!("  startup status: WOULD FAIL UNDER THIS AGENT'S SANDBOX");
+            println!("  probe error:    {e}");
             println!(
-                "  hint:           pass --no-probe to inspect the binary alone, \
-                 or set MUR_MCP_PROBE_TIMEOUT_S to extend the budget",
+                "  hint:           the pins above only say the files are intact. If the error \
+                 names a path, grant it with `mur agent perm allow-read {agent} <path>` / \
+                 `allow-write`; many MCP servers write state under $HOME on first launch. \
+                 Pass --no-probe to inspect the binary alone, or set MUR_MCP_PROBE_TIMEOUT_S \
+                 to extend the budget."
             );
-            binary_status
+            // Worst-wins, the same rule `cmd_mcp_inspect` uses across servers.
+            if (binary_status as u8) > (InspectStatus::StartupWouldFail as u8) {
+                binary_status
+            } else {
+                InspectStatus::StartupWouldFail
+            }
         }
     }
 }
@@ -501,6 +523,16 @@ pub fn cmd_mcp_inspect(
         println!("Agent `{name}` has no MCP servers configured.");
         return Ok(0);
     }
+    // The probe is only worth running if it runs under the same policy the
+    // supervisor will apply; a permissive probe reports CLEAN for exactly the
+    // servers that die on startup (#1161).
+    let agent_home = crate::cmd::agent::resolve_mur_home()?
+        .join("agents")
+        .join(name);
+    let probe_policy = mur_agent_runtime::sandbox::policy::SandboxPolicy::from_entitlements(
+        &profile.entitlements,
+        &agent_home,
+    );
     let mut worst: u8 = 0;
     let mut printed = false;
     for entry in &profile.mcp_servers {
@@ -518,6 +550,7 @@ pub fn cmd_mcp_inspect(
                     name,
                     entry,
                     probe_timeout(),
+                    &probe_policy,
                 ))
             }) as u8
         } else {
@@ -630,8 +663,14 @@ pub fn cmd_mcp_pin(
             ..entry.clone()
         };
         match tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(probe_mcp_descriptions(&probe_entry, probe_timeout()))
+            tokio::runtime::Handle::current().block_on(probe_mcp_descriptions(
+                &probe_entry,
+                probe_timeout(),
+                // Permissive on purpose: this probe exists to hash tool
+                // descriptions, and a sandbox denial here would drop the
+                // hash for a server that is otherwise fine to pin.
+                &mur_agent_runtime::sandbox::policy::SandboxPolicy::default(),
+            ))
         }) {
             Ok((hash, tools)) => {
                 tracing::info!(
@@ -736,6 +775,49 @@ mod tests {
             binary_sha256: pin.map(str::to_string),
             ..Default::default()
         }
+    }
+
+    /// A command that starts and exits without answering `initialize` is a
+    /// working binary that will never serve tools. Before #1161 the probe ran
+    /// under a permissive policy and the report said CLEAN, which an operator
+    /// reads as "this server is fine" — it means "the files are there".
+    // Unix-only for the fixture, not the behaviour: the reporting under test is
+    // platform-independent, but it needs a known executable that is guaranteed
+    // present and guaranteed not to speak JSON-RPC. Windows has no /bin/echo.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_server_that_never_answers_initialize_is_not_reported_clean() {
+        // The pin must be the REAL hash: with a wrong one `inspect_one` already
+        // reports drift and the assertion below passes without the probe ever
+        // mattering. /bin/echo exists, hashes fine, and speaks no JSON-RPC, so
+        // every file-level check is CLEAN and only the handshake can fail.
+        let echo = resolve_command("/bin/echo").expect("/bin/echo on PATH");
+        let real = compute_binary_sha256(&echo).expect("hash /bin/echo");
+        let mut entry = entry_for(&echo.display().to_string(), Some(&real));
+        // The probe is skipped entirely without a pinned description hash.
+        entry.description_hash = Some("whatever".into());
+
+        // Guard the guard: if the binary side is not CLEAN this test proves
+        // nothing, because the assertion would hold for the wrong reason.
+        assert_eq!(
+            inspect_one("agent", &entry),
+            InspectStatus::Clean,
+            "fixture must be file-level CLEAN or the probe is not what is under test"
+        );
+
+        let status = inspect_one_probed(
+            "agent",
+            &entry,
+            std::time::Duration::from_secs(5),
+            &mur_agent_runtime::sandbox::policy::SandboxPolicy::default(),
+        )
+        .await;
+
+        assert_ne!(
+            status,
+            InspectStatus::Clean,
+            "a server that cannot complete the handshake must never report CLEAN"
+        );
     }
 
     /// `binary_status` is what both `inspect` and `mur doctor` classify with —
