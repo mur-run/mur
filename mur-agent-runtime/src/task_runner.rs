@@ -1896,10 +1896,15 @@ impl TaskRunner {
     /// image is not counted in that budget and swapping its bytes for a digest
     /// would leave the model looking at nothing. A hook that must suppress an
     /// image should deny the tool call, not blank the result.
+    /// `durations_ms` is per-call wall time, positionally matched to `calls`.
+    /// A short slice yields 0 for the tail rather than skipping those calls:
+    /// a hook that does not run can drop a compress offload or a PII
+    /// redaction, which is a worse failure than an unmeasured call.
     async fn apply_post_tool_use(
         &self,
         calls: &[crate::llm::ToolCallResult],
         results: &mut [crate::llm::ToolResultEntry],
+        durations_ms: &[u64],
     ) {
         let (Some(chain), Some(ctx), Some(cancel)) =
             (&self.hook_chain, &self.hook_ctx, &self.hook_cancel)
@@ -1908,7 +1913,7 @@ impl TaskRunner {
         };
         let mut turn_ctx = ctx.clone();
         turn_ctx.turn_id = self.turn_counter.load(Ordering::Relaxed);
-        for (call, entry) in calls.iter().zip(results.iter_mut()) {
+        for (i, (call, entry)) in calls.iter().zip(results.iter_mut()).enumerate() {
             let tc = ToolCall {
                 tool_name: call.tool_name.clone(),
                 mcp_server: None,
@@ -1919,7 +1924,7 @@ impl TaskRunner {
                 call_id: entry.call_id.clone(),
                 ok: !entry.is_error,
                 output: serde_json::Value::String(entry.content.clone()),
-                duration_ms: 0,
+                duration_ms: durations_ms.get(i).copied().unwrap_or(0),
             };
             if let Some(v) = chain
                 .post_tool_use(&turn_ctx, &tc, &tr, cancel)
@@ -2164,7 +2169,14 @@ impl TaskRunner {
             // P3: gate the whole response first — one notification, N decisions.
             let (mut decisions, mut step_ids) = self.gate_response(task_id, &resp.tool_calls).await;
             let mut results = Vec::new();
+            // Wall time per call, pushed in lockstep with `results` so the two
+            // cannot drift. This is the only place a tool's own latency is
+            // observable: `ToolResultEntry` does not carry it, and the dozen
+            // other places that build one are synthesised errors and refusals
+            // with no execution to measure (issue #1197).
+            let mut durations_ms: Vec<u64> = Vec::new();
             for call in &resp.tool_calls {
+                let t0 = std::time::Instant::now();
                 match self
                     .handle_tool_call(
                         task_id,
@@ -2174,7 +2186,10 @@ impl TaskRunner {
                     )
                     .await
                 {
-                    Ok(entry) => results.push(entry),
+                    Ok(entry) => {
+                        durations_ms.push(t0.elapsed().as_millis() as u64);
+                        results.push(entry);
+                    }
                     Err(e) => return Err(e),
                 }
             }
@@ -2184,7 +2199,7 @@ impl TaskRunner {
             // CompressHook offloads oversized output (size-gated) and B0 rule 8
             // redacts PII. Patches are content-deterministic, so the doom-loop
             // fingerprint below stays stable.
-            self.apply_post_tool_use(&resp.tool_calls, &mut results)
+            self.apply_post_tool_use(&resp.tool_calls, &mut results, &durations_ms)
                 .await;
 
             // Doom-loop detection (safety layer): fingerprint every tool call
@@ -2760,6 +2775,82 @@ mod tests {
         }
     }
 
+    /// Records the `duration_ms` every hook was handed, in call order.
+    struct RecordDurationHook(std::sync::Mutex<Vec<u64>>);
+    #[async_trait::async_trait]
+    impl crate::hooks::Hook for RecordDurationHook {
+        fn name(&self) -> &str {
+            "RecordDurationHook"
+        }
+        async fn post_tool_use(
+            &self,
+            _ctx: &HookCtx,
+            _call: &ToolCall,
+            result: &ToolResult,
+            _tok: &CancellationToken,
+        ) -> Result<crate::hooks::PostToolUsePatch, crate::hooks::HookError> {
+            self.0.lock().unwrap().push(result.duration_ms);
+            Ok(crate::hooks::PostToolUsePatch {
+                replace_output: None,
+            })
+        }
+    }
+
+    /// Every `execute_tool` telemetry record on this machine carried
+    /// `duration_ms: 0` — 8177 of them, no other value — because the
+    /// `ToolResult` handed to the hook chain was built with a literal zero
+    /// (issue #1197). Telemetry serialised the zero faithfully, so tool
+    /// latency read as measured-and-instant rather than never-measured.
+    #[tokio::test]
+    async fn post_tool_use_hooks_receive_the_measured_duration() {
+        use crate::llm::{ToolCallResult, ToolResultEntry};
+        let hook = Arc::new(RecordDurationHook(std::sync::Mutex::new(Vec::new())));
+        let chain = Arc::new(HookChain::new(vec![hook.clone()]));
+        let runner = TaskRunner::new_stub_echo().with_hook_chain(
+            chain,
+            HookCtx::for_test_with_home(std::path::PathBuf::from("."), 0),
+            CancellationToken::new(),
+        );
+        let calls = vec![
+            ToolCallResult {
+                call_id: "c1".into(),
+                tool_name: "slow".into(),
+                input: serde_json::json!({}),
+            },
+            ToolCallResult {
+                call_id: "c2".into(),
+                tool_name: "fast".into(),
+                input: serde_json::json!({}),
+            },
+        ];
+        let mut results = vec![
+            ToolResultEntry {
+                call_id: "c1".into(),
+                content: "a".into(),
+                is_error: false,
+                status: crate::tools::ToolStatus::Ok,
+                images: Vec::new(),
+            },
+            ToolResultEntry {
+                call_id: "c2".into(),
+                content: "b".into(),
+                is_error: false,
+                status: crate::tools::ToolStatus::Ok,
+                images: Vec::new(),
+            },
+        ];
+
+        runner
+            .apply_post_tool_use(&calls, &mut results, &[42, 7])
+            .await;
+
+        assert_eq!(
+            *hook.0.lock().unwrap(),
+            vec![42, 7],
+            "each call's own measured duration must reach its hook, in order"
+        );
+    }
+
     #[tokio::test]
     async fn apply_post_tool_use_rewrites_oversized_output() {
         use crate::llm::{ToolCallResult, ToolResultEntry};
@@ -2797,7 +2888,9 @@ mod tests {
                 images: Vec::new(),
             },
         ];
-        runner.apply_post_tool_use(&calls, &mut results).await;
+        runner
+            .apply_post_tool_use(&calls, &mut results, &[7, 9])
+            .await;
         assert_eq!(
             results[0].content, "OFFLOADED",
             "oversized output rewritten"
