@@ -2,7 +2,6 @@
 
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::BorderType;
 
 use super::super::app::{ChatMsg, Role, SPINNER, Severity};
 use super::super::markdown;
@@ -16,11 +15,6 @@ pub(super) fn indent_line(mut line: Line<'static>) -> Line<'static> {
     line.spans.insert(0, Span::raw(MSG_INDENT));
     line
 }
-
-/// Fixed separator width for flushed scrollback lines: the real frame width
-/// isn't known at flush time (content prints above the inline viewport and
-/// the terminal soft-wraps it), so a modest fixed rule stands in.
-pub(super) const SEPARATOR_WIDTH: usize = 60;
 
 /// Same, but rendered the way the message will look once it SETTLES — used for
 /// every flush decision.
@@ -44,27 +38,17 @@ pub(super) fn wants_gap_before(m: &crate::cmd::agent::cli::app::ChatMsg) -> bool
     m.step.is_none()
 }
 
-/// The gap row itself — a rule when the skin asks for one AND the gap is a
-/// change of speaker between two spoken turns; otherwise a blank.
-///
-/// A System notice is the UI talking, not a speaker: three `/skin` switches
-/// used to draw three rules, and `/skills` output followed by its own notice
-/// read as four unrelated events. Notices group under a blank, and a rule is
-/// left meaning exactly one thing — the conversation moved to the other side.
+/// The gap before a message: a blank line in every skin. The role label is
+/// the change-of-speaker signal; a rule under it repeated the information
+/// (spec decision 4). Kept as a function because `message_block` attributes
+/// the gap to the message it precedes, and that is what keeps the measured
+/// band and the painted band the same rows.
 pub(super) fn gap_row(
-    theme: &'static crate::cmd::agent::cli::theme::Theme,
-    prev: Option<&crate::cmd::agent::cli::app::ChatMsg>,
-    m: &crate::cmd::agent::cli::app::ChatMsg,
+    _theme: &'static crate::cmd::agent::cli::theme::Theme,
+    _prev: Option<&crate::cmd::agent::cli::app::ChatMsg>,
+    _m: &crate::cmd::agent::cli::app::ChatMsg,
 ) -> Line<'static> {
-    let spoken = |r: Role| r != Role::System;
-    if matches!(theme.border_type, BorderType::Rounded)
-        && prev.is_none_or(|p| spoken(p.role))
-        && spoken(m.role)
-    {
-        Line::styled("─".repeat(SEPARATOR_WIDTH), theme.border)
-    } else {
-        Line::default()
-    }
+    Line::default()
 }
 
 /// Header line of an agent turn plus its reasoning block: an animated bullet
@@ -301,28 +285,18 @@ mod gap_tests {
     /// One builder for the row, so the two emit paths cannot drift into
     /// different-looking gaps.
     #[test]
-    fn the_gap_row_follows_the_skin() {
+    fn the_gap_row_is_blank_under_every_skin() {
         let (u, a) = (
             ChatMsg::for_test(Role::User, "hi"),
             ChatMsg::for_test(Role::Agent, "hello"),
         );
-        let blank: String = gap_row(&ANSI, Some(&u), &a)
-            .spans
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect();
-        assert!(
-            blank.trim().is_empty(),
-            "dark skin uses a blank row: {blank:?}"
-        );
-
-        let ruled: String = gap_row(&MUR, Some(&u), &a)
-            .spans
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect();
-        if matches!(MUR.border_type, ratatui::widgets::BorderType::Rounded) {
-            assert!(ruled.contains('─'), "a ruled skin draws a rule: {ruled:?}");
+        for theme in [&ANSI, &MUR] {
+            let row: String = gap_row(theme, Some(&u), &a)
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect();
+            assert!(row.trim().is_empty(), "a rule between turns: {row:?}");
         }
     }
 }

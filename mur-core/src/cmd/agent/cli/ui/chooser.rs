@@ -108,7 +108,7 @@ pub(super) fn render_chooser_band(f: &mut Frame, app: &App, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(theme.border)
+        .border_style(theme.accent)
         .padding(Padding::horizontal(1))
         .title(" 1-9 pick · ↑↓ move · Enter accept · Esc close · Ctrl+↑↓ resize ")
         .title_style(theme.muted);

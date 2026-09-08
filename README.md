@@ -144,6 +144,8 @@ mur agent cli coach                           # streaming TUI chat with tool app
 mur agent cli dev qa ops                      # three agents, tiled panes (tmux/zellij/WezTerm/kitty)
                                               #   --resume continues the last conversation
 murmur coach                                  # quick form (murmur symlink), identical to mur agent cli coach
+murmur coach --skin mur                       # skins: ansi (default — follows your terminal's own
+                                              #   colours) | light | mur (brand); /skin switches and remembers
 
 mur agent stop coach                          # stops it for real: unloads the service first, so
                                               #   the supervisor cannot respawn it a second later

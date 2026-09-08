@@ -70,6 +70,7 @@ pub(super) fn wrap_row(s: &str, w: usize) -> Vec<String> {
 /// display, which is what the key handler pages by (see `hitl_scroll_step`).
 pub(super) fn render_hitl(
     f: &mut Frame,
+    theme: &'static crate::cmd::agent::cli::theme::Theme,
     hitl: &crate::cmd::agent::cli::stream::HitlRequest,
     grant_confirm: Option<char>,
     composer_empty: bool,
@@ -151,7 +152,7 @@ pub(super) fn render_hitl(
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
+        .border_style(theme.accent)
         .title(" approve tool call ");
     let inner = block.inner(area);
     f.render_widget(Clear, area);
@@ -275,7 +276,14 @@ mod hitl_modal_tests {
     fn the_key_row_survives_an_oversized_input() {
         let mut term = Terminal::new(TestBackend::new(88, 24)).unwrap();
         term.draw(|f| {
-            render_hitl(f, &fat_request(), None, true, 0);
+            render_hitl(
+                f,
+                &crate::cmd::agent::cli::theme::ANSI,
+                &fat_request(),
+                None,
+                true,
+                0,
+            );
         })
         .unwrap();
         let dump = term.backend().to_string();
@@ -299,7 +307,7 @@ mod hitl_modal_tests {
         };
         let mut term = Terminal::new(TestBackend::new(100, 40)).unwrap();
         term.draw(|f| {
-            render_hitl(f, &req, None, true, 0);
+            render_hitl(f, &crate::cmd::agent::cli::theme::ANSI, &req, None, true, 0);
         })
         .unwrap();
         let dump = term.backend().to_string().replace(['\n', ' '], "");
@@ -322,7 +330,7 @@ mod hitl_modal_tests {
         let hidden_at = |h: u16| -> usize {
             let mut term = Terminal::new(TestBackend::new(100, h)).unwrap();
             term.draw(|f| {
-                render_hitl(f, &req, None, true, 0);
+                render_hitl(f, &crate::cmd::agent::cli::theme::ANSI, &req, None, true, 0);
             })
             .unwrap();
             let dump = term.backend().to_string();
@@ -371,7 +379,14 @@ mod hitl_modal_tests {
         let draw = |scroll: u16| {
             let mut term = Terminal::new(TestBackend::new(100, 20)).unwrap();
             term.draw(|f| {
-                render_hitl(f, &req, None, true, scroll);
+                render_hitl(
+                    f,
+                    &crate::cmd::agent::cli::theme::ANSI,
+                    &req,
+                    None,
+                    true,
+                    scroll,
+                );
             })
             .unwrap();
             term.backend().to_string()
@@ -392,7 +407,14 @@ mod hitl_modal_tests {
     fn a_nonempty_composer_is_announced_on_the_key_row() {
         let mut term = Terminal::new(TestBackend::new(100, 24)).unwrap();
         term.draw(|f| {
-            render_hitl(f, &fat_request(), None, false, 0);
+            render_hitl(
+                f,
+                &crate::cmd::agent::cli::theme::ANSI,
+                &fat_request(),
+                None,
+                false,
+                0,
+            );
         })
         .unwrap();
         let dump = term.backend().to_string().replace('\n', " ");
