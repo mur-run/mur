@@ -1126,9 +1126,11 @@ fn build_dispatcher(
             notifier,
         }),
     );
-    // murmur /model hot-switch. Only single-model agents get a handle;
-    // chain/routing and echo agents surface method-not-found and the TUI
-    // degrades to a profile write + restart hint.
+    // murmur /model hot-switch. Single-model agents swap the client; chain
+    // and routing agents swap the primary and keep the chain
+    // (`chain_switch_handle`). Only echo/misconfigured agents get no handle —
+    // they surface method-not-found and the TUI degrades to a profile write +
+    // restart hint.
     if let Some((switch, profile_path)) = model_switch {
         d.register(
             "model/set",

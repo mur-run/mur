@@ -61,9 +61,10 @@ impl LlmClient for SwitchableLlmClient {
 }
 
 /// Everything `model/set` needs: the live slot to swap plus a builder that
-/// turns a registry ref into a concrete client (the boot single-model path).
-/// Only produced on that path — chain/routing and echo agents get `None`, so
-/// the method is simply not registered for them.
+/// turns a registry ref into a concrete client — a bare client on the
+/// single-model path, a whole routed chain with that ref as primary on the
+/// chain/routing path. Echo and misconfigured agents get `None`, so the
+/// method is simply not registered for them.
 pub struct ModelSwitchHandle {
     pub switchable: Arc<SwitchableLlmClient>,
     pub build_client: super::fallback::ClientFactory,
