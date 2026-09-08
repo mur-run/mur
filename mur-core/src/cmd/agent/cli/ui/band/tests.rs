@@ -188,15 +188,9 @@ mod welcome_surface_tests {
     /// Three `/skin` switches drew three rules under the light skin. A rule
     /// marks a change of speaker; a run of notices is one speaker (the UI).
     #[test]
-    fn consecutive_notices_draw_no_rule_and_turns_still_do() {
+    fn no_turn_draws_a_rule() {
         let mut app = App::test_fixture();
         app.theme = &MUR;
-        const {
-            assert!(
-                matches!(MUR.border_type, ratatui::widgets::BorderType::Rounded),
-                "test needs a ruled skin"
-            )
-        };
         app.push_system("skin changed to light");
         app.push_system("skin changed to mur");
         app.messages.push(ChatMsg::for_test(Role::User, "hi"));
@@ -218,8 +212,8 @@ mod welcome_surface_tests {
             text(2)
         );
         assert!(
-            text(3).contains('─'),
-            "agent after user not ruled: {:?}",
+            !text(3).contains('─'),
+            "agent after user ruled: {:?}",
             text(3)
         );
     }
@@ -344,5 +338,75 @@ mod band_growth_tests {
         app.flushed_upto = 1;
         let d = dump(&mut app);
         assert!(!d.contains(MASCOT_REST[1]), "mascot painted twice:\n{d}");
+    }
+}
+
+/// Spec decisions 4 and 5: no rule between turns, one rule above the
+/// composer.
+#[cfg(test)]
+mod layout_guard_tests {
+    use super::super::super::super::app::{App, ChatMsg, Role};
+    use super::super::super::super::theme::{ANSI, LIGHT, MUR};
+    use super::super::super::render;
+    use super::super::render_transcript;
+    use ratatui::backend::TestBackend;
+    use ratatui::layout::Rect;
+    use ratatui::{Terminal, TerminalOptions, Viewport};
+
+    /// The role label already says the speaker changed; a rule under it was
+    /// one more line on a screen full of them. No skin draws one.
+    #[test]
+    fn no_rule_between_turns_under_any_skin() {
+        for (name, theme) in [("ansi", &ANSI), ("light", &LIGHT), ("mur", &MUR)] {
+            let mut app = App::test_fixture();
+            app.theme = theme;
+            app.welcome_dismissed = true;
+            app.messages.push(ChatMsg::for_test(Role::User, "hi"));
+            app.messages.push(ChatMsg::for_test(Role::Agent, "hello"));
+            let mut term = Terminal::new(TestBackend::new(80, 30)).unwrap();
+            term.draw(|f| render_transcript(f, &mut app, Rect::new(0, 0, 80, 30)))
+                .unwrap();
+            let d = term.backend().to_string();
+            let ruled = d
+                .lines()
+                .filter(|l| l.chars().filter(|c| *c == '─').count() > 10)
+                .count();
+            assert_eq!(ruled, 0, "{name} drew a rule between turns:\n{d}");
+        }
+    }
+
+    /// One rule above the input row, and the status bar directly under it —
+    /// the composer's bottom border marked the same seam the status bar does.
+    #[test]
+    fn composer_has_one_rule_and_the_status_bar_sits_under_the_input() {
+        let mut app = App::test_fixture();
+        app.welcome_dismissed = true;
+        app.messages.push(ChatMsg::for_test(Role::User, "hi"));
+        let mut term = Terminal::with_options(
+            TestBackend::new(80, 20),
+            TerminalOptions {
+                viewport: Viewport::Inline(20),
+            },
+        )
+        .unwrap();
+        term.draw(|f| render(f, &mut app)).unwrap();
+        let d = term.backend().to_string();
+        let rows: Vec<&str> = d.lines().map(|l| l.trim_matches('"')).collect();
+        let status = rows[rows.len() - 1];
+        let input = rows[rows.len() - 2];
+        let rule = rows[rows.len() - 3];
+        assert!(status.contains("ready"), "status bar not last:\n{d}");
+        assert!(
+            input.contains("Type a message"),
+            "input row not above the status bar:\n{d}"
+        );
+        assert!(
+            rule.contains("message —"),
+            "composer rule not above the input row:\n{d}"
+        );
+        assert!(
+            !input.contains('─'),
+            "a rule between input and status bar:\n{d}"
+        );
     }
 }
