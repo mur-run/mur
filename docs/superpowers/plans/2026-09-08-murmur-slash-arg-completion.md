@@ -5,11 +5,12 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-08-murmur-slash-arg-completion-design.md`
 **Branch:** `docs/murmur-slash-arg-completion-spec` (spec PR #1218); implement on a fresh branch off `main`.
-**Status:** Task 1 done. One correction the plan did not anticipate is recorded below.
+**Status:** Tasks 1–2 done. One correction the plan did not anticipate is recorded below.
 
 ## Corrections found during execution
 
 1. **A hand-written `profile.yaml` does not deserialize into `AgentProfile`** (Task 1). `current_model_ref` fails soft, so the test read `None` and asserted nothing about the resolution. It now uses `mur-common/tests/fixtures/profile_p0a_minimal.yaml` plus `write_model_ref`, the same fixture the neighbouring round-trip test uses.
+2. **`sort_by` with a reversed comparator trips `clippy::unnecessary_sort_by`** (Task 2). Written as `sort_by_key(|s| std::cmp::Reverse(s.manifest.updated_at))`; CI runs clippy with `--all-targets -D warnings`.
 
 ## Goal
 
@@ -201,7 +202,7 @@ Ordered most-recently-updated first, so `[0]` is what `/forget last` resolves to
 
 ### Steps
 
-- [ ] Add this test to `mod tests` in `mur-core/src/cmd/agent/cli/memory_cmds.rs`:
+- [x] Add this test to `mod tests` in `mur-core/src/cmd/agent/cli/memory_cmds.rs`:
 
 ```rust
     /// The menu and `/forget last` must see the same set, in the same order:
@@ -230,14 +231,14 @@ Ordered most-recently-updated first, so `[0]` is what `/forget last` resolves to
 The one-second sleep is load-bearing: note names are `note-%Y%m%d-%H%M%S`, and
 two notes minted in the same second collide (`remember` bails on the second).
 
-- [ ] Watch it fail:
+- [x] Watch it fail:
 
 ```bash
 cargo nextest run -p mur-core --lib memory_cmds 2>&1 | tail -5
 # error[E0425]: cannot find function `live_note_names` in this scope
 ```
 
-- [ ] Add the function to `memory_cmds.rs`, directly above `pub fn forget`:
+- [x] Add the function to `memory_cmds.rs`, directly above `pub fn forget`:
 
 ```rust
 /// Agent-local notes that are still injectable, newest first.
@@ -262,7 +263,7 @@ pub fn live_note_names(home: &Path, agent: &str) -> Vec<String> {
 }
 ```
 
-- [ ] Rewrite the `last` branch of `forget` to use it. Replace:
+- [x] Rewrite the `last` branch of `forget` to use it. Replace:
 
 ```rust
     let name = if target == "last" {
@@ -296,7 +297,7 @@ with:
     };
 ```
 
-- [ ] Watch both the new test and the existing `remember_memories_forget_cycle` pass, then commit:
+- [x] Watch both the new test and the existing `remember_memories_forget_cycle` pass, then commit:
 
 ```bash
 cargo nextest run -p mur-core --lib memory_cmds 2>&1 | tail -3
