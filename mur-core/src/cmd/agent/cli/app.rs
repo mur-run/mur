@@ -430,8 +430,10 @@ pub struct App {
     pub chooser_grow: i16,
     pub spinner: usize,
     pub should_quit: bool,
-    /// Session-wide auto-approval of every tool call (`/auto` or `--auto`).
-    /// Never persisted: a new `mur agent cli` starts back at ask-first.
+    /// Session-wide auto-approval of every tool call. ON by default: a
+    /// session starts approving, `--ask` or `/auto off` makes it ask first.
+    /// Never persisted — the next `mur agent cli` starts from the default
+    /// again, not from where this one left off.
     pub auto_approve: bool,
     /// Tools the user marked "always allow" for THIS session via the HITL
     /// modal's `[a]` key. Same lifetime rules as `auto_approve`.
@@ -653,7 +655,7 @@ impl App {
             chooser_grow: 0,
             spinner: 0,
             should_quit: false,
-            auto_approve: false,
+            auto_approve: true,
             session_tool_allow: HashSet::new(),
             pending_shell: Vec::new(),
             persist_warned: false,

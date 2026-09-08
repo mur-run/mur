@@ -187,9 +187,14 @@ pub enum AgentAction {
         /// Resume the most recent saved conversation for this agent
         #[arg(long)]
         resume: bool,
-        /// Auto-approve every tool call for this session (no HITL prompts)
-        #[arg(long)]
+        /// Auto-approve every tool call for this session. This is the default;
+        /// the flag stays so existing scripts keep working.
+        #[arg(long, conflicts_with = "ask")]
         auto: bool,
+        /// Ask before every tool call this session instead (`/auto` toggles
+        /// it back). The old default.
+        #[arg(long)]
+        ask: bool,
         /// Visual skin: dark (default) | light | mur
         #[arg(long)]
         skin: Option<String>,
@@ -1213,6 +1218,7 @@ mod tests {
             names,
             resume,
             auto,
+            ask: _,
             skin: _,
             plain: _,
             budget_usd: _,

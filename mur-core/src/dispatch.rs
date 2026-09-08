@@ -1610,15 +1610,19 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         AgentAction::Cli {
             names,
             resume,
-            auto,
+            auto: _,
+            ask,
             skin,
             plain,
             budget_usd,
             auto_reads,
             fleet,
         } => {
+            // Auto-approve is the default; `--ask` is the only way to start
+            // ask-first. `--auto` is accepted for old scripts and means what
+            // the default already means.
             cmd::agent::cmd_cli(
-                &names, resume, auto, skin, plain, budget_usd, auto_reads, fleet,
+                &names, resume, !ask, skin, plain, budget_usd, auto_reads, fleet,
             )
             .await?
         }
