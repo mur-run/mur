@@ -578,6 +578,10 @@ pub struct App {
     pub completion: Option<CompletionState>,
     /// This agent's skills as menu candidates, loaded once at startup.
     pub skills: Vec<Candidate>,
+    /// Argument lists for the completion menu — effort levels, registry
+    /// models, secret KEYs, note names. Rebuilt after every slash command;
+    /// `compute` is pure, so this is where that I/O lives.
+    pub menu_ctx: super::complete::MenuContext,
     /// Replies captured from a `suggest_replies` tool call this turn, revealed
     /// after the turn finishes (see `reveal_suggestions`).
     pub pending_suggestions: Vec<super::suggest::Suggestion>,
@@ -698,6 +702,7 @@ impl App {
             width: DEFAULT_WIDTH,
             completion: None,
             skills: Vec::new(),
+            menu_ctx: super::complete::MenuContext::default(),
             pending_suggestions: Vec::new(),
             suggestion_ghost: None,
             wants_screen_wipe: false,

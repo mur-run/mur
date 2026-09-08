@@ -107,23 +107,36 @@ pub fn memories(home: &Path, agent: &str) -> String {
     )
 }
 
+/// Agent-local notes that are still injectable, newest first.
+///
+/// One definition for two callers: `/forget last` resolves to `[0]`, and the
+/// completion menu offers the whole list. A Destroyed note is excluded from
+/// both — offering a name that `forget` would then reject is worse than
+/// offering nothing.
+pub fn live_note_names(home: &Path, agent: &str) -> Vec<String> {
+    let mut live: Vec<_> = load_all(home, agent)
+        .into_iter()
+        .filter(|s| s.scope == SkillScope::Agent && note_kind(&s.manifest).is_some())
+        .filter(|s| {
+            SkillStats::load(&SkillStats::path_agent(home, agent, &s.name))
+                .ok()
+                .flatten()
+                .is_none_or(|st| st.lifecycle_state != LifecycleState::Destroyed)
+        })
+        .collect();
+    live.sort_by_key(|s| std::cmp::Reverse(s.manifest.updated_at));
+    live.into_iter().map(|s| s.name).collect()
+}
+
 /// `/forget <name|last>` — demote an AGENT-LOCAL note to `Destroyed`, which
 /// removes it from injection everywhere it is read. Shared notes are
 /// deliberately out of reach from a chat pane.
 pub fn forget(home: &Path, agent: &str, target: Option<&str>) -> Result<String> {
     let target = target.ok_or_else(|| anyhow::anyhow!("usage: /forget <name|last>"))?;
     let name = if target == "last" {
-        load_all(home, agent)
+        live_note_names(home, agent)
             .into_iter()
-            .filter(|s| s.scope == SkillScope::Agent && note_kind(&s.manifest).is_some())
-            .filter(|s| {
-                SkillStats::load(&SkillStats::path_agent(home, agent, &s.name))
-                    .ok()
-                    .flatten()
-                    .is_none_or(|st| st.lifecycle_state != LifecycleState::Destroyed)
-            })
-            .max_by_key(|s| s.manifest.updated_at)
-            .map(|s| s.name)
+            .next()
             .ok_or_else(|| anyhow::anyhow!("no agent-local memories to forget"))?
     } else {
         target.to_string()
@@ -217,6 +230,32 @@ mod tests {
                 &["--kind".into(), "opinion".into(), "x".into()]
             )
             .is_err()
+        );
+    }
+
+    /// The menu and `/forget last` must see the same set, in the same order:
+    /// a forgotten note stays out of both, and the newest is first.
+    #[test]
+    fn live_note_names_drops_forgotten_and_leads_with_the_newest() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        remember(h, "a", &["first".to_string()]).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        remember(h, "a", &["second".to_string()]).unwrap();
+
+        let names = live_note_names(h, "a");
+        assert_eq!(names.len(), 2, "{names:?}");
+
+        forget(h, "a", Some("last")).unwrap();
+        let after = live_note_names(h, "a");
+        assert_eq!(
+            after.len(),
+            1,
+            "a forgotten note is still listed: {after:?}"
+        );
+        assert_eq!(
+            after[0], names[1],
+            "`last` must forget the newest, leaving the older one"
         );
     }
 }
