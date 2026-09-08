@@ -63,6 +63,7 @@ pub fn cmd_mcp_add(
     server_id: &str,
     command: &str,
     args: &[String],
+    state_paths: &[String],
     pin: McpAddPin,
 ) -> Result<()> {
     let (path, mut profile) = load_profile_for_edit(name)?;
@@ -161,6 +162,7 @@ pub fn cmd_mcp_add(
         url: None,
         auth: None,
         requires_programs: Vec::new(),
+        state_paths: state_paths.to_vec(),
         package: None,
     });
     // Sync spawn allowlist so the supervisor is permitted to launch this MCP.
@@ -179,7 +181,46 @@ pub fn cmd_mcp_add(
             .allowed
             .push(command.to_string());
     }
+    grant_state_paths(name, &mut profile, state_paths)?;
     save_profile(&path, &mut profile)
+}
+
+/// Create each declared state path if missing, then grant read+write on it.
+///
+/// Creation is the point, not a convenience. `SandboxPolicy::from_entitlements`
+/// drops entitlement paths that do not exist when the profile is sealed, and
+/// the servers this exists for create their state on FIRST launch — which is
+/// the launch that gets denied. Granting a path that is not there yet would be
+/// accepted here and still return EPERM, which is the failure #1161 is about.
+///
+/// Grants go through the same guards as `mur agent perm allow-write`: the
+/// launch chain can never be granted, and neither can a home or volume root.
+/// A declared path is a claim by a server author, so it gets no more trust
+/// than a path the user typed.
+fn grant_state_paths(
+    agent: &str,
+    profile: &mut mur_common::AgentProfile,
+    state_paths: &[String],
+) -> Result<()> {
+    for raw in state_paths {
+        let expanded = mur_agent_runtime::sandbox::policy::expand_entitlement_path(raw);
+        crate::cmd::agent::perm::reject_ungrantable_path(agent, raw, true)?;
+        if !expanded.exists() {
+            std::fs::create_dir_all(&expanded)
+                .with_context(|| format!("create declared state path {}", expanded.display()))?;
+            println!("  created {}", expanded.display());
+        }
+        for list in [
+            &mut profile.entitlements.filesystem.read,
+            &mut profile.entitlements.filesystem.write,
+        ] {
+            if !list.iter().any(|p| p == raw) {
+                list.push(raw.clone());
+            }
+        }
+        println!("  granted read+write on {raw}");
+    }
+    Ok(())
 }
 
 pub fn cmd_mcp_remove(name: &str, server_id: &str) -> Result<()> {
@@ -445,6 +486,52 @@ pub fn cmd_mcp_add_remote(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A declared state path must be CREATED, not just listed. The sandbox
+    /// drops entitlement paths that are missing when the profile is sealed, so
+    /// a grant on a directory the server has not made yet is accepted here and
+    /// still returns EPERM — which is the failure #1161 is about, reintroduced
+    /// by the feature meant to fix it.
+    #[test]
+    fn a_declared_state_path_is_created_and_granted_read_and_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let want = tmp.path().join("dot-server-state");
+        assert!(!want.exists(), "fixture must start absent");
+        let raw = want.display().to_string();
+
+        let mut profile = mur_common::AgentProfile::default_for_tests();
+        grant_state_paths("agent", &mut profile, std::slice::from_ref(&raw)).unwrap();
+
+        assert!(
+            want.exists(),
+            "the path the sandbox will look for must exist"
+        );
+        assert!(
+            profile.entitlements.filesystem.read.contains(&raw),
+            "read grant missing"
+        );
+        assert!(
+            profile.entitlements.filesystem.write.contains(&raw),
+            "write grant missing"
+        );
+    }
+
+    /// A state path is a claim by a server author, so it gets no more trust
+    /// than a path the user typed: the same guard that stops
+    /// `perm allow-write ~` has to stop this too.
+    #[test]
+    fn a_declared_state_path_cannot_smuggle_in_an_overbroad_grant() {
+        let mut profile = mur_common::AgentProfile::default_for_tests();
+        let err = grant_state_paths("agent", &mut profile, &["~".to_string()]).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("too broad"),
+            "home directory must be refused, got: {err:#}"
+        );
+        assert!(
+            profile.entitlements.filesystem.write.is_empty(),
+            "a refused path must leave no grant behind"
+        );
+    }
     use std::sync::Mutex;
 
     /// Serialize tests that mutate the `MUR_HOME` env var to avoid races.
@@ -549,6 +636,7 @@ mod tests {
             "carol",
             "echo-srv",
             "true",
+            &[],
             &[],
             McpAddPin {
                 force: true,
@@ -672,6 +760,7 @@ mod tests {
             url: None,
             auth: None,
             requires_programs: Vec::new(),
+            state_paths: vec![],
             package: None,
         };
         let output = render_server_line(&server);
@@ -700,6 +789,7 @@ mod tests {
             url: None,
             auth: None,
             requires_programs: Vec::new(),
+            state_paths: vec![],
             package: None,
         };
         let output = render_server_line(&server);
@@ -728,6 +818,7 @@ mod tests {
             url: None,
             auth: None,
             requires_programs: Vec::new(),
+            state_paths: vec![],
             package: None,
         };
         let output = render_server_line(&server);
@@ -751,6 +842,7 @@ mod tests {
             url: None,
             auth: None,
             requires_programs: Vec::new(),
+            state_paths: vec![],
             package: None,
         };
         let output = render_server_line(&server);

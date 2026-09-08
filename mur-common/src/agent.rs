@@ -348,6 +348,23 @@ pub struct McpServerEntry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires_programs: Vec<ProgramDep>,
 
+    /// Paths this server writes state into at runtime, declared at install
+    /// time so the sandbox can be told about them (issue #1161).
+    ///
+    /// Distinct from everything above: `command`, `args` and `package`
+    /// describe how the server is *launched*, and #1158 already syncs what the
+    /// rewritten launch line needs. These are what the server touches once it
+    /// is running — a property of the server, not of the command MUR rewrote.
+    /// `@wonderwhy-er/desktop-commander` wants three of them under `$HOME` and
+    /// exits 1 before answering `initialize` without them.
+    ///
+    /// Granted read+write, and **created if missing** at install time. The
+    /// sandbox drops entitlement paths that do not exist when the profile is
+    /// sealed, so granting a directory the server has not created yet would be
+    /// accepted and still denied by the kernel — see `reject_dead_grant`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub state_paths: Vec<String>,
+
     /// Vendored package this entry launches, when MUR installed it itself.
     ///
     /// Present only for entries moved off a package runner by

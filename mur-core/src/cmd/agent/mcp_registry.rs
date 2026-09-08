@@ -166,6 +166,7 @@ pub async fn cmd_mcp_registry_add(agent: &str, server_name: &str, force: bool) -
             &id,
             &command,
             &args,
+            &[],
             McpAddPin {
                 force,
                 publisher_name: Some("mcp-registry".to_string()),
