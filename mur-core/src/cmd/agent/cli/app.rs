@@ -113,9 +113,9 @@ impl ChatMsg {
     }
 
     /// A finished agent message whose markdown is pre-rendered (resume path).
-    fn agent_rendered(text: String) -> Self {
+    fn agent_rendered(text: String, width: usize) -> Self {
         let (text, settlement) = super::settlement::split(&text);
-        let rendered = Some(markdown::render(&text).lines);
+        let rendered = Some(markdown::render(&text, width).lines);
         Self {
             role: Role::Agent,
             severity: Severity::Info,
@@ -918,6 +918,26 @@ impl App {
         !self.welcome_dismissed && self.flushed_upto == 0 && self.follow.is_none()
     }
 
+    /// Columns a message body may use at the current pane width — what a
+    /// finished reply's markdown is rendered at (tables need it up front).
+    pub fn body_cols(&self) -> usize {
+        markdown::body_cols(self.width, self.theme.inner_padding)
+    }
+
+    /// Re-render every cached reply at the current width. A table decided
+    /// its column widths when the reply finished; after a resize the pane is
+    /// a different width and the cache would either overflow or leave a
+    /// margin. Called from the resize rebuild, which replays the transcript
+    /// from index 0 anyway, so the fresh render is what gets painted.
+    pub fn rerender_markdown(&mut self) {
+        let width = self.body_cols();
+        for m in &mut self.messages {
+            if m.rendered.is_some() {
+                m.rendered = Some(markdown::render(&m.text, width).lines);
+            }
+        }
+    }
+
     pub fn push_system(&mut self, text: impl Into<String>) {
         self.messages.push(ChatMsg::new(Role::System, text));
         self.scroll_back = 0;
@@ -1014,6 +1034,7 @@ impl App {
     /// matched, so a late event that no longer has a live turn can't write a
     /// phantom line or thread a stale context id.
     pub fn finish_agent_turn(&mut self, reply: String, task_id: Option<String>) {
+        let width = self.body_cols();
         let mut body = None;
         if let Some(m) = self.streaming_agent_mut() {
             if !reply.is_empty() {
@@ -1023,7 +1044,7 @@ impl App {
             m.text = text;
             m.settlement = settlement;
             m.streaming = false;
-            m.rendered = Some(markdown::render(&m.text).lines);
+            m.rendered = Some(markdown::render(&m.text, width).lines);
             body = Some(m.text.clone());
         } else if self.streaming && !reply.is_empty() {
             // Tool-using turns run the agentic loop, which doesn't stream text
@@ -1032,7 +1053,8 @@ impl App {
             // own finished message instead of dropping it.
             // Guard: self.streaming is false after finish_partial() so stale
             // Done events from cancelled tasks are still silently ignored.
-            self.messages.push(ChatMsg::agent_rendered(reply.clone()));
+            self.messages
+                .push(ChatMsg::agent_rendered(reply.clone(), width));
             self.scroll_back = 0;
             body = Some(reply);
         }
@@ -1114,7 +1136,8 @@ impl App {
                 self.messages.remove(i);
             } else {
                 // Freeze the current text segment.
-                let rendered = Some(markdown::render(&self.messages[i].text).lines);
+                let rendered =
+                    Some(markdown::render(&self.messages[i].text, self.body_cols()).lines);
                 self.messages[i].streaming = false;
                 self.messages[i].rendered = rendered;
             }
@@ -1485,6 +1508,7 @@ impl App {
     }
 
     pub fn load_history(&mut self, turns: Vec<TurnRecord>) {
+        let width = self.body_cols();
         let mut last_task = None;
         for t in turns {
             let role = match t.role.as_str() {
@@ -1496,7 +1520,7 @@ impl App {
                 if let Some(id) = &t.task_id {
                     last_task = Some(id.clone());
                 }
-                self.messages.push(ChatMsg::agent_rendered(t.text));
+                self.messages.push(ChatMsg::agent_rendered(t.text, width));
             } else {
                 if role == Role::User {
                     self.history_record(&t.text);

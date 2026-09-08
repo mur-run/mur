@@ -217,6 +217,7 @@ pub(super) fn push_live_inner(
         app.spinner,
         app.theme,
         None,
+        app.width,
     ));
 }
 
@@ -392,7 +393,14 @@ pub fn flush_finished<B: Backend>(
                     .add_modifier(Modifier::BOLD),
             )));
         }
-        lines.extend(agent_body_lines(chunk, false, app.spinner, theme, None));
+        lines.extend(agent_body_lines(
+            chunk,
+            false,
+            app.spinner,
+            theme,
+            None,
+            width,
+        ));
         emit(terminal, lines, pad, width)?;
         skip += block_end;
         app.flushed_bytes = skip;

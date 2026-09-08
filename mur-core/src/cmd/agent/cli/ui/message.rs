@@ -8,7 +8,7 @@ use super::super::markdown;
 
 /// Body indent under a role header ("you ›" / "● agent") so a message's content
 /// reads as belonging to its speaker rather than sitting flush with the header.
-pub(super) const MSG_INDENT: &str = "  ";
+pub(super) const MSG_INDENT: &str = markdown::BODY_INDENT;
 
 /// Prepend the body indent to an already-styled line (e.g. cached markdown).
 pub(super) fn indent_line(mut line: Line<'static>) -> Line<'static> {
@@ -112,6 +112,7 @@ pub(super) fn agent_body_lines(
     spinner: usize,
     theme: &'static crate::cmd::agent::cli::theme::Theme,
     cached: Option<&Vec<Line<'static>>>,
+    width: u16,
 ) -> Vec<Line<'static>> {
     if streaming {
         let mut body: Vec<Line<'static>> = text
@@ -135,7 +136,7 @@ pub(super) fn agent_body_lines(
         // Finished reply: reuse the markdown rendered once at finish time.
         cached.iter().cloned().map(indent_line).collect()
     } else {
-        markdown::render(text)
+        markdown::render(text, markdown::body_cols(width, theme.inner_padding))
             .lines
             .into_iter()
             .map(indent_line)
@@ -225,6 +226,7 @@ pub(super) fn push_message(
                 spinner,
                 theme,
                 m.rendered.as_ref(),
+                width,
             ));
             // Drawn here, not baked into `rendered`: this is the only place
             // that knows the pane width, and it runs every frame, so the card

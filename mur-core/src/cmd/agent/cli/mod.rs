@@ -784,6 +784,11 @@ async fn event_loop(
                 }
                 events = EventStream::new();
                 last_size = terminal.backend().size()?;
+                // Cached replies were rendered for the old width; tables in
+                // them chose their columns from it. The rebuild replays the
+                // transcript from index 0, so re-render before that paint.
+                app.width = last_size.width.max(1);
+                app.rerender_markdown();
             }
         }
         // One ioctl per pass keeps every width-sensitive row (composer hint,
