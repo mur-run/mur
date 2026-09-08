@@ -589,7 +589,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         &identity,
         &profile.inner.name,
         profile.inner.identity.key_version,
-        model_switch.map(|h| (h, agent_home.join("profile.yaml"))),
+        model_switch,
         runtime_skills.clone(),
         secrets.clone(),
     ));
@@ -1067,10 +1067,7 @@ fn build_dispatcher(
     identity: &Arc<AgentIdentity>,
     agent_name: &str,
     key_version: u32,
-    model_switch: Option<(
-        Arc<crate::llm::switchable::ModelSwitchHandle>,
-        std::path::PathBuf,
-    )>,
+    model_switch: Option<Arc<crate::llm::switchable::ModelSwitchHandle>>,
     runtime_skills: Arc<crate::skills::RuntimeSkills>,
     secrets: Arc<crate::secrets::SecretVault>,
 ) -> Dispatcher {
@@ -1131,12 +1128,11 @@ fn build_dispatcher(
     // (`chain_switch_handle`). Only echo/misconfigured agents get no handle —
     // they surface method-not-found and the TUI degrades to a profile write +
     // restart hint.
-    if let Some((switch, profile_path)) = model_switch {
+    if let Some(switch) = model_switch {
         d.register(
             "model/set",
             Box::new(crate::protocol::methods::model_set::ModelSetHandler::new(
                 switch,
-                profile_path,
             )),
         );
     }

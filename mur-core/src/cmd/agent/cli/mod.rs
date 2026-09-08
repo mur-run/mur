@@ -2073,6 +2073,18 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
                         app.push_system(format!("no such model: {a} — /model to list"));
                         return;
                     };
+                    // Dual-write, profile first: this process owns the file,
+                    // the sealed runtime does not (its launch chain denies the
+                    // write — the profile is the operator's), so `model/set`
+                    // only swaps the live client. Disk first means the pick
+                    // survives a runtime that cannot switch (old build, echo
+                    // agent, not running): a restart applies it.
+                    if let Err(w) = model_cmd::write_model_ref(&app.home, &app.agent, &target) {
+                        app.push_system(format!(
+                            "model switch failed: profile write failed: {w:#}"
+                        ));
+                        return;
+                    }
                     let (h, ag, mref) = (app.home.clone(), app.agent.clone(), target.clone());
                     let res = tokio::task::spawn_blocking(move || {
                         dial_method(
@@ -2088,20 +2100,12 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
                         Ok(Ok(_)) => app.push_system(format!(
                             "model → {target} (effective next turn; saved to profile)"
                         )),
-                        // Runtime without model/set, or agent not running: save
-                        // the pick anyway so the operator's intent lands — a
-                        // restart applies it.
-                        Ok(Err(e)) => {
-                            match model_cmd::write_model_ref(&app.home, &app.agent, &target) {
-                                Ok(()) => app.push_system(format!(
-                                    "couldn't hot-switch ({e:#}); saved {target} to profile — restart the agent to apply"
-                                )),
-                                Err(w) => app.push_system(format!(
-                                    "model switch failed: {e:#}; profile write also failed: {w:#}"
-                                )),
-                            }
-                        }
-                        Err(e) => app.push_system(format!("model task failed: {e}")),
+                        Ok(Err(e)) => app.push_system(format!(
+                            "saved {target} to profile; couldn't hot-switch ({e:#}) — restart the agent to apply"
+                        )),
+                        Err(e) => app.push_system(format!(
+                            "saved {target} to profile; model task failed: {e} — restart the agent to apply"
+                        )),
                     }
                 }
             }
