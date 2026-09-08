@@ -7,7 +7,7 @@
 **Branches:** PR-1 on `refactor/murmur-theme-tokens`, PR-2 on
 `feat/murmur-skin-redesign` (branched from main after PR-1 merges); spec and
 this ledger on `docs/murmur-skin-redesign-spec` (PR #1229).
-**Status:** PR-1 done and live-checked; PR opened. PR-2 not started.
+**Status:** all seven tasks done. PR-1 #1230 merged; PR-2 #1231 open; docs site mur-server#81 open (human-reviewed, not auto-merged).
 
 ## Corrections found during execution
 
@@ -15,7 +15,10 @@ this ledger on `docs/murmur-skin-redesign-spec` (PR #1229).
 2. **The pin test finds cells by text, not by coordinate** (Task 4): the welcome header sits above message 0 in the band, so fixed coordinates would have pinned the mascot. `welcome_dismissed = true` and a `find("● agent")` helper locate the cells.
 3. **A finished reply's body never took `agent_text`** (Task 4). Markdown-rendered prose carries the terminal's own foreground; only chooser rows, cards and the settlement used the old field. The pin asserts `Color::Reset` for the body and PR-2 decides whether `text` should reach the renderer (spec §1 says body text is `text`).
 4. **Sending `/skin` + Enter in tmux accepts the completion menu's first row** (`ansi`) and switches the live skin — the live check must type `/skin ` with a trailing space or read the mascot colour with no keystrokes. This also persisted `cli.skin: ansi` into the reporting machine's config.
-5. **`/skin` completion rows and the startup fallback named `dark`** (Task 3, not in the plan): `complete.rs` `SKINS` now lists `ansi` first; `mod.rs` falls back to `"ansi"`. Both resolve to the same theme in PR-1.
+5. **`new_input()` also built a TOP|BOTTOM block** (Task 6, not in the plan). `sync_input_block` replaces it every frame in production, but a bare `render` in a test paints the initial block, so the composer guard failed until it too became `Borders::TOP`.
+6. **The status bar draws no rule of its own** (Task 6). Spec §3 says "the status bar's own rule stays and is the seam"; the rule under the input was always the composer's bottom border. With it gone the status bar sits directly under the input row, which is what decision 5 asked for; the spec sentence is wrong and harmless.
+7. **`README.md` had no skin sentence to edit** (Task 7); a line was added under the `murmur coach` quick-start entry instead.
+8. **`/skin` completion rows and the startup fallback named `dark`** (Task 3, not in the plan): `complete.rs` `SKINS` now lists `ansi` first; `mod.rs` falls back to `"ansi"`. Both resolve to the same theme in PR-1.
 
 ## Deviation from the spec, decided while planning
 
@@ -451,7 +454,7 @@ Branch `feat/murmur-skin-redesign` from `main` after PR-1 merges.
 
 **Interfaces — Consumes:** Task 1 struct. **Produces:** `theme::ASSUMED_BG_LIGHT`, `theme::ASSUMED_BG_MUR` (`Color::Rgb`), `theme::contrast_ratio(Color, Color) -> f64` (test-only, `#[cfg(test)]`).
 
-- [ ] Write the failing guards first. Replace `mod tests` in `theme.rs` with the three tests from Task 1 plus:
+- [x] Write the failing guards first. Replace `mod tests` in `theme.rs` with the three tests from Task 1 plus:
 
 ```rust
     /// WCAG 2 relative luminance of an sRGB colour.
@@ -515,10 +518,10 @@ Branch `feat/murmur-skin-redesign` from `main` after PR-1 merges.
     }
 ```
 
-- [ ] Run `cargo nextest run -p mur-core --lib cli::theme` — expected:
+- [x] Run `cargo nextest run -p mur-core --lib cli::theme` — expected:
   `light_and_mur_meet_wcag` fails on `mur: muted is 4.6:1` (or `light`
   first), `ansi_pins_no_colour` fails on `ansi.text`.
-- [ ] Replace the three palettes with the spec's §2 values:
+- [x] Replace the three palettes with the spec's §2 values:
 
 ```rust
 pub const ANSI: Theme = Theme {
@@ -583,15 +586,15 @@ pub const MUR: Theme = Theme {
 };
 ```
 
-- [ ] Delete `agent_turn_notice_and_status_bar_paint_the_same_cells_under_each_skin` from `ui/band/tests.rs` (its `theme.text.fg.unwrap()` panics on `ansi` now, and its job is done).
-- [ ] Run the theme tests — expected: all five pass. `cargo clippy` clean.
-- [ ] Commit: `feat(murmur): final skin palettes — ansi follows the terminal, light and mur meet WCAG`.
+- [x] Delete `agent_turn_notice_and_status_bar_paint_the_same_cells_under_each_skin` from `ui/band/tests.rs` (its `theme.text.fg.unwrap()` panics on `ansi` now, and its job is done).
+- [x] Run the theme tests — expected: all five pass. `cargo clippy` clean.
+- [x] Commit: `feat(murmur): final skin palettes — ansi follows the terminal, light and mur meet WCAG`.
 
 ## Task 6 — layout: no inter-turn rule, one rule above the composer, accent on focused panels
 
 **Interfaces — Consumes:** Task 5. **Produces:** `INPUT_H_MIN = 2`; `gap_row` returns `Line::default()` unconditionally; two tests in `ui/band/tests.rs`.
 
-- [ ] Write the failing tests in `ui/band/tests.rs`, `mod band_growth_tests`:
+- [x] Write the failing tests in `ui/band/tests.rs`, `mod band_growth_tests`:
 
 ```rust
     /// The role label already says the speaker changed; a rule under it was
@@ -644,8 +647,8 @@ pub const MUR: Theme = Theme {
 
   (`TestBackend::to_string` wraps rows in quotes; if `rows[...]` does not line
   up, strip the quotes with `.trim_matches('"')` before matching.)
-- [ ] Run them — expected: the first fails for `light` and `mur` (rule painted), the second fails on `!input.contains('─')` (bottom border present).
-- [ ] `ui/message.rs`: `gap_row` becomes
+- [x] Run them — expected: the first fails for `light` and `mur` (rule painted), the second fails on `!input.contains('─')` (bottom border present).
+- [x] `ui/message.rs`: `gap_row` becomes
 
 ```rust
 /// The gap before a message: a blank line in every skin. The role label is
@@ -668,33 +671,33 @@ pub(super) fn gap_row(
   `ui/band/tests.rs`, `consecutive_notices_draw_no_rule_and_turns_still_do`
   loses its last assertion (`text(3).contains('─')`) and its `const` guard,
   and is renamed `no_turn_draws_a_rule`.
-- [ ] `app.rs` `sync_input_block`: both blocks `Borders::TOP | Borders::BOTTOM` → `Borders::TOP`; the shell block's `Style::default().fg(Color::Red)` → `theme.error`. `ui.rs`: `INPUT_H_MIN` 3 → 2 with its doc `/// Composer height when the input is empty (one text row plus its top rule).`; line 55 `(input_lines + 2)` → `(input_lines + 1)`. `INPUT_H_MAX` stays 8.
-- [ ] Focused panels take `accent` on their border: `ui/chooser.rs` 111 `.border_style(theme.border)` → `.border_style(theme.accent)`; `ui.rs` 230 (completion popup) the same; `ui/hitl.rs` `.border_style(Style::default().fg(Color::Yellow))` → `.border_style(theme.accent)` — `render_hitl` does not take a theme today; add `theme: &'static Theme` as its first parameter and pass `app.theme` from `ui.rs` `render`, updating `hitl_modal_tests` to pass `&ANSI`.
-- [ ] Run the two new tests and the whole `cmd::agent::cli::` suite — expected green. `chooser_floor_tests::the_chooser_leaves_the_transcript_more_than_three_rows` and `ctrl_up_still_reaches_the_spaced_form` compute with `input_height = 3`; they pass a literal 3 and are unaffected, but re-read them: if either asserts a value derived from `INPUT_H_MIN`, update the expected number by one.
-- [ ] Live check in tmux under each skin: no rule between turns; exactly one rule above the input; status bar directly under; chooser and approval modal borders in the accent colour.
-- [ ] Commit: `feat(murmur): no rule between turns, one rule above the composer, accent on focused panels`.
+- [x] `app.rs` `sync_input_block`: both blocks `Borders::TOP | Borders::BOTTOM` → `Borders::TOP`; the shell block's `Style::default().fg(Color::Red)` → `theme.error`. `ui.rs`: `INPUT_H_MIN` 3 → 2 with its doc `/// Composer height when the input is empty (one text row plus its top rule).`; line 55 `(input_lines + 2)` → `(input_lines + 1)`. `INPUT_H_MAX` stays 8.
+- [x] Focused panels take `accent` on their border: `ui/chooser.rs` 111 `.border_style(theme.border)` → `.border_style(theme.accent)`; `ui.rs` 230 (completion popup) the same; `ui/hitl.rs` `.border_style(Style::default().fg(Color::Yellow))` → `.border_style(theme.accent)` — `render_hitl` does not take a theme today; add `theme: &'static Theme` as its first parameter and pass `app.theme` from `ui.rs` `render`, updating `hitl_modal_tests` to pass `&ANSI`.
+- [x] Run the two new tests and the whole `cmd::agent::cli::` suite — expected green. `chooser_floor_tests::the_chooser_leaves_the_transcript_more_than_three_rows` and `ctrl_up_still_reaches_the_spaced_form` compute with `input_height = 3`; they pass a literal 3 and are unaffected, but re-read them: if either asserts a value derived from `INPUT_H_MIN`, update the expected number by one.
+- [x] Live check in tmux under each skin: no rule between turns; exactly one rule above the input; status bar directly under; chooser and approval modal borders in the accent colour.
+- [x] Commit: `feat(murmur): no rule between turns, one rule above the composer, accent on focused panels`.
 
 ## Task 7 — default `ansi`, notices, docs
 
 **Interfaces — Consumes:** Tasks 5–6. **Produces:** nothing new.
 
-- [ ] Default: `resolve_skin` already falls back to `&ANSI`; find where the
+- [x] Default: `resolve_skin` already falls back to `&ANSI`; find where the
   configured skin is read at startup (`mod.rs` around line 430: the
   `skin_name` / `unknown_skin` block) and confirm the absent-config path
   resolves `"ansi"`. If a literal `"dark"` is the fallback there, change it to
   `"ansi"`.
-- [ ] `README.md`: find the sentence that lists the skins (grep `--skin`) and
+- [x] `README.md`: find the sentence that lists the skins (grep `--skin`) and
   make it read: ``Three skins: `ansi` (default — follows your terminal's own
   colours), `light`, and `mur` (the brand skin, purple on gold). `/skin
   <name>` switches and remembers; `dark` still works as an alias of `ansi`.``
-- [ ] Docs site: the `update-docs` skill names the mur-server paths; the skin
+- [x] Docs site: the `update-docs` skill names the mur-server paths; the skin
   section gets the same sentence. This is a separate repo and PR; note it in
   the PR body as a follow-up if it cannot land the same day.
-- [ ] Full suite, clippy, fmt. Live check: `murmur mur` with no `--skin` and
+- [x] Full suite, clippy, fmt. Live check: `murmur mur` with no `--skin` and
   no `agent_cli.skin` in config shows the terminal's own colours (agent label
   in the terminal's cyan); `/skin` lists `ansi, light, mur`; `--skin dark`
   behaves as `ansi`.
-- [ ] Commit: `feat(murmur): ansi is the default skin`. Open the PR with
+- [x] Commit: `feat(murmur): ansi is the default skin`. Open the PR with
   before/after screenshots of the three skins in the body.
 
 ---

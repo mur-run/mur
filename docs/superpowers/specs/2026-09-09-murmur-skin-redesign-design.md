@@ -151,8 +151,8 @@ truth.
   there is a gap.
 - **Composer**: `Borders::TOP` only, title unchanged. `INPUT_H_MIN` becomes
   2 (one text row plus the top rule); `render` and `chooser_band_height`
-  already read the constant. The status bar's own rule stays and is the
-  seam.
+  already read the constant. The status bar draws no rule of its own, so
+  it sits directly under the input row.
 - **Focused panels** keep full borders and take `accent` on the border: the
   approval modal, the suggested-reply chooser, the slash-command popup.
   Unfocused rules (composer top, table grid, fleet rail) take `border`.
