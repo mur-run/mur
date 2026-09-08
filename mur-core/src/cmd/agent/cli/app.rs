@@ -587,6 +587,10 @@ pub struct App {
     /// (/clear, /channels switch): the event loop wipes screen + scrollback
     /// and re-anchors a fresh viewport before the next draw.
     pub wants_screen_wipe: bool,
+    /// The welcome yielded to something that is not a conversation (a
+    /// terminal handover): see [`App::welcome_visible`]. Reset whenever the
+    /// transcript is cleared.
+    pub welcome_dismissed: bool,
     /// A channel being live-tailed (`/channels N --follow`) — someone else's
     /// conversation, not this pane's. `None` = not following.
     pub follow: Option<super::follow::Follow>,
@@ -697,6 +701,7 @@ impl App {
             pending_suggestions: Vec::new(),
             suggestion_ghost: None,
             wants_screen_wipe: false,
+            welcome_dismissed: false,
             follow: None,
             sent_history: Vec::new(),
             hist_idx: None,
@@ -879,6 +884,20 @@ impl App {
     pub fn set_input(&mut self, text: &str) {
         self.input = new_input();
         self.input.insert_str(text);
+    }
+
+    /// Is the welcome (mascot + identity + hint) the surface right now?
+    ///
+    /// Derived from the transcript, not from "is it empty": a slash command's
+    /// notice (`/skills`, `/skin`) is the UI talking, not a conversation, so
+    /// it renders *under* the welcome instead of ending it. Before, the first
+    /// `/skills` dropped the mascot, shrank the viewport to the chat height and
+    /// left five rows of notice over a blank slab. The welcome ends when
+    /// someone speaks (user, agent, or a `!shell` turn), on `/clear` it comes
+    /// back, and a terminal handover dismisses it explicitly because the
+    /// child's output must not be scrolled off by a full-window re-anchor.
+    pub fn welcome_visible(&self) -> bool {
+        !self.welcome_dismissed && self.messages.iter().all(|m| m.role == Role::System)
     }
 
     pub fn push_system(&mut self, text: impl Into<String>) {
@@ -1266,6 +1285,7 @@ impl App {
         self.session = session;
         self.channel = None;
         self.messages.clear();
+        self.welcome_dismissed = false;
         self.flushed_upto = 0;
         self.flushed_bytes = 0;
         self.needs_full_redraw = true;
@@ -1291,6 +1311,7 @@ impl App {
         self.session = session;
         self.channel = None;
         self.messages.clear();
+        self.welcome_dismissed = false;
         self.flushed_upto = 0;
         self.flushed_bytes = 0;
         self.context_task_id = None;
