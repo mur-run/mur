@@ -3,7 +3,7 @@ import {
   CHATGPT_READINESS,
   CLAUDE_READINESS,
   billingLabel,
-  defaultChatGPTAlias,
+  defaultSubscriptionAlias,
   deriveChatGPTState,
   deriveSubscriptionState,
   gatewayProblem,
@@ -11,6 +11,7 @@ import {
   type ChatGPTStateInput,
   type GatewayStatus,
 } from "./chatgptSubscription";
+import { CHATGPT_SUBSCRIPTION, CLAUDE_SUBSCRIPTION } from "./modelLibraryHelpers";
 
 const chatgpt: ChatGPTAccount = {
   cli_present: true,
@@ -109,10 +110,18 @@ describe("billingLabel", () => {
   });
 });
 
-describe("defaultChatGPTAlias", () => {
-  it("slugs the model id under a chatgpt_ prefix", () => {
-    expect(defaultChatGPTAlias("gpt-5.6-sol")).toBe("chatgpt_gpt_5_6_sol");
-    expect(defaultChatGPTAlias("  GPT-5.6 Mini  ")).toBe("chatgpt_gpt_5_6_mini");
+describe("defaultSubscriptionAlias", () => {
+  it("slugs the model id under the chatgpt_ prefix by default", () => {
+    expect(defaultSubscriptionAlias("gpt-5.6-sol")).toBe("chatgpt_gpt_5_6_sol");
+    expect(defaultSubscriptionAlias("  GPT-5.6 Mini  ")).toBe("chatgpt_gpt_5_6_mini");
+  });
+
+  it("uses the descriptor prefix, so Claude models are never chatgpt_", () => {
+    expect(defaultSubscriptionAlias("claude-opus-4-6", CLAUDE_SUBSCRIPTION.aliasPrefix)).toBe(
+      "anthropic_claude_opus_4_6",
+    );
+    expect(CHATGPT_SUBSCRIPTION.aliasPrefix).toBe("chatgpt");
+    expect(CLAUDE_SUBSCRIPTION.aliasPrefix).toBe("anthropic");
   });
 });
 
