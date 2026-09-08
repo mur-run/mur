@@ -1087,10 +1087,14 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                     // Paging the modal body, which now wraps and keeps the
                     // whole tool input rather than cutting it (#939).
                     KeyCode::PageUp => {
-                        app.hitl_scroll = app.hitl_scroll.saturating_sub(ui::HITL_SCROLL_PAGE)
+                        app.hitl_scroll = app
+                            .hitl_scroll
+                            .saturating_sub(ui::hitl_scroll_step(app.hitl_page))
                     }
                     KeyCode::PageDown => {
-                        app.hitl_scroll = app.hitl_scroll.saturating_add(ui::HITL_SCROLL_PAGE)
+                        app.hitl_scroll = app
+                            .hitl_scroll
+                            .saturating_add(ui::hitl_scroll_step(app.hitl_page))
                     }
                     KeyCode::Char('y') | KeyCode::Char('Y') if composer_empty => {
                         app.hitl_grant_confirm = None;
