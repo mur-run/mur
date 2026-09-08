@@ -7,7 +7,15 @@
 **Branches:** PR-1 on `refactor/murmur-theme-tokens`, PR-2 on
 `feat/murmur-skin-redesign` (branched from main after PR-1 merges); spec and
 this ledger on `docs/murmur-skin-redesign-spec` (PR #1229).
-**Status:** not started.
+**Status:** PR-1 done and live-checked; PR opened. PR-2 not started.
+
+## Corrections found during execution
+
+1. **`#![allow(dead_code)]` stays in `theme.rs` for PR-1** (Task 1). `emphasis` has no paint site until the redesign PR, and clippy runs with `-D warnings`.
+2. **The pin test finds cells by text, not by coordinate** (Task 4): the welcome header sits above message 0 in the band, so fixed coordinates would have pinned the mascot. `welcome_dismissed = true` and a `find("● agent")` helper locate the cells.
+3. **A finished reply's body never took `agent_text`** (Task 4). Markdown-rendered prose carries the terminal's own foreground; only chooser rows, cards and the settlement used the old field. The pin asserts `Color::Reset` for the body and PR-2 decides whether `text` should reach the renderer (spec §1 says body text is `text`).
+4. **Sending `/skin` + Enter in tmux accepts the completion menu's first row** (`ansi`) and switches the live skin — the live check must type `/skin ` with a trailing space or read the mascot colour with no keystrokes. This also persisted `cli.skin: ansi` into the reporting machine's config.
+5. **`/skin` completion rows and the startup fallback named `dark`** (Task 3, not in the plan): `complete.rs` `SKINS` now lists `ansi` first; `mod.rs` falls back to `"ansi"`. Both resolve to the same theme in PR-1.
 
 ## Deviation from the spec, decided while planning
 
@@ -122,7 +130,7 @@ and goes; `DARK.status_bg = Reset` becomes `surface` bg for the status bar,
 which is a visible change on `ansi` only if the status bar paints `surface` —
 Task 2 keeps the status bar on `Style::default()` in PR-1, so it does not.
 
-- [ ] Replace `theme.rs` lines 1–113 (everything above `const KNOWN`) with:
+- [x] Replace `theme.rs` lines 1–113 (everything above `const KNOWN`) with:
 
 ```rust
 //! Skin/theme definitions for the agent CLI TUI: one semantic token
@@ -245,7 +253,7 @@ const KNOWN: [(&str, &Theme); 4] = [
   Task 5 replaces them with `Reset` + modifiers; that is where the
   "no Rgb in ansi" guard lands.)
 
-- [ ] Replace `resolve_skin` and `skin_name` (old lines 116–131) with:
+- [x] Replace `resolve_skin` and `skin_name` (old lines 116–131) with:
 
 ```rust
 /// Resolve a skin name to a theme. `dark` is an alias of `ansi`; unknown
@@ -273,7 +281,7 @@ pub fn skin_name(theme: &'static Theme) -> &'static str {
   the end of Task 3; if clippy reports one unused, that is a missed site,
   not a reason to restore the allow.
 
-- [ ] Replace the existing `mod tests` in `theme.rs` with:
+- [x] Replace the existing `mod tests` in `theme.rs` with:
 
 ```rust
 #[cfg(test)]
@@ -304,7 +312,7 @@ mod tests {
 }
 ```
 
-- [ ] Run `cargo nextest run -p mur-core --lib cli::theme` — expected: the
+- [x] Run `cargo nextest run -p mur-core --lib cli::theme` — expected: the
   three tests pass; the crate does **not** compile yet elsewhere (`theme.agent`
   etc. no longer exist). That is Task 2's job; do not commit between Task 1
   and Task 3.
@@ -324,7 +332,7 @@ Rules for every replacement in this task and the next:
 - A `Color` that a type requires (`MascotMode::Accent(Color)`) →
   `theme.T.fg.unwrap_or(Color::Reset)`.
 
-- [ ] `ui/message.rs` — apply, line by line (line numbers from `main` at
+- [x] `ui/message.rs` — apply, line by line (line numbers from `main` at
   `5e7242d3`):
 
 | line | old | new |
@@ -340,21 +348,21 @@ Rules for every replacement in this task and the next:
 | 208 | `.fg(theme.shell)` | `theme.accent_alt` (same chain rule) |
 | 215 | `Style::default().fg(theme.system)` | `theme.muted` |
 
-- [ ] `ui/band.rs`: line 392 `.fg(theme.agent)` chain → `theme.accent.add_modifier(Modifier::BOLD)`; line 521 `Style::default().fg(theme.border_title)` → `theme.muted`.
-- [ ] `ui/chooser.rs`: 82/94 `Style::default().fg(theme.system)` → `theme.muted`; 83/95 `Style::default().fg(theme.agent_text)` → `theme.text`; 111 `.border_style(Style::default().fg(theme.border))` → `.border_style(theme.border)`; 114 `.title_style(Style::default().fg(theme.border_title))` → `.title_style(theme.muted)`; 124 `.fg(theme.accent)` chain → `theme.accent.add_modifier(Modifier::BOLD)`.
-- [ ] `ui/rail.rs`: 54 `.fg(theme.border_title)` chain → `theme.muted` (keep the chain's modifiers); 61 `theme.warn` stays (it is now a `Style`; change the tuple type and the later `Style::default().fg(...)` to use it directly); 67 `theme.agent` → `theme.accent`; 69 `theme.success` → `theme.ok`; 70 `theme.error` stays; 82 `Style::default().fg(theme.system)` → `theme.muted`.
-- [ ] `ui/status.rs`: 48 `(msg, theme.agent)` → `(msg, theme.accent)`; 55 `(format!("ready{ctx}"), theme.system)` → `(…, theme.muted)`; the consumer of that tuple (`Style::default().fg(color)`) uses the style directly; 60 `Style::default().fg(theme.badge_fg).bg(theme.badge_bg)` → `theme.badge`; 121 `Style::default().fg(theme.agent)` → `theme.accent`; 156/161/168/176/178 `theme.system` → `theme.muted` (same tuple rule where applicable).
-- [ ] `ui.rs`: 177 `theme.system` → `theme.muted`; 178 `theme.agent_text` → `theme.text`; 191 `.fg(theme.border_title)` chain → `theme.muted`; 230 `.border_style(Style::default().fg(theme.border))` → `.border_style(theme.border)`; 233 `.title_style(…theme.border_title)` → `.title_style(theme.muted)`; 244 `.fg(theme.accent)` chain → `theme.accent.add_modifier(Modifier::BOLD)`.
-- [ ] `ui/band/tests.rs`: the `MUR` import and `app.theme = &MUR` stay valid; the `const { assert!(MUR.show_separator, …) }` in `consecutive_notices_draw_no_rule_and_turns_still_do` becomes `const { assert!(matches!(MUR.border_type, BorderType::Rounded), "test needs a ruled skin") }` with the `BorderType` import.
-- [ ] `ui/message.rs` tests: `gap_row(&MUR, …)` expectations are unchanged in PR-1 (the rule still paints for `MUR`).
-- [ ] Run `cargo check -p mur-core --lib` — expected: errors only in `render_card.rs`, `settlement.rs`, `diff.rs`, `welcome.rs`, `app.rs`, `mod.rs` (Task 3 and 4 files). Any error in a `ui/` file means a missed site above.
+- [x] `ui/band.rs`: line 392 `.fg(theme.agent)` chain → `theme.accent.add_modifier(Modifier::BOLD)`; line 521 `Style::default().fg(theme.border_title)` → `theme.muted`.
+- [x] `ui/chooser.rs`: 82/94 `Style::default().fg(theme.system)` → `theme.muted`; 83/95 `Style::default().fg(theme.agent_text)` → `theme.text`; 111 `.border_style(Style::default().fg(theme.border))` → `.border_style(theme.border)`; 114 `.title_style(Style::default().fg(theme.border_title))` → `.title_style(theme.muted)`; 124 `.fg(theme.accent)` chain → `theme.accent.add_modifier(Modifier::BOLD)`.
+- [x] `ui/rail.rs`: 54 `.fg(theme.border_title)` chain → `theme.muted` (keep the chain's modifiers); 61 `theme.warn` stays (it is now a `Style`; change the tuple type and the later `Style::default().fg(...)` to use it directly); 67 `theme.agent` → `theme.accent`; 69 `theme.success` → `theme.ok`; 70 `theme.error` stays; 82 `Style::default().fg(theme.system)` → `theme.muted`.
+- [x] `ui/status.rs`: 48 `(msg, theme.agent)` → `(msg, theme.accent)`; 55 `(format!("ready{ctx}"), theme.system)` → `(…, theme.muted)`; the consumer of that tuple (`Style::default().fg(color)`) uses the style directly; 60 `Style::default().fg(theme.badge_fg).bg(theme.badge_bg)` → `theme.badge`; 121 `Style::default().fg(theme.agent)` → `theme.accent`; 156/161/168/176/178 `theme.system` → `theme.muted` (same tuple rule where applicable).
+- [x] `ui.rs`: 177 `theme.system` → `theme.muted`; 178 `theme.agent_text` → `theme.text`; 191 `.fg(theme.border_title)` chain → `theme.muted`; 230 `.border_style(Style::default().fg(theme.border))` → `.border_style(theme.border)`; 233 `.title_style(…theme.border_title)` → `.title_style(theme.muted)`; 244 `.fg(theme.accent)` chain → `theme.accent.add_modifier(Modifier::BOLD)`.
+- [x] `ui/band/tests.rs`: the `MUR` import and `app.theme = &MUR` stay valid; the `const { assert!(MUR.show_separator, …) }` in `consecutive_notices_draw_no_rule_and_turns_still_do` becomes `const { assert!(matches!(MUR.border_type, BorderType::Rounded), "test needs a ruled skin") }` with the `BorderType` import.
+- [x] `ui/message.rs` tests: `gap_row(&MUR, …)` expectations are unchanged in PR-1 (the rule still paints for `MUR`).
+- [x] Run `cargo check -p mur-core --lib` — expected: errors only in `render_card.rs`, `settlement.rs`, `diff.rs`, `welcome.rs`, `app.rs`, `mod.rs` (Task 3 and 4 files). Any error in a `ui/` file means a missed site above.
 
 ## Task 3 — paint sites outside `ui/`
 
 **Interfaces — Consumes:** Task 1 tokens. **Produces:** `welcome::resolve_mascot_mode` unchanged in signature.
 
-- [ ] `render_card.rs`: 36 `_ => theme.agent` → `_ => theme.accent` (this `match` yields a `Color` today; make it yield a `Style` and update the two arms above it the same way — they are `theme.success`/`theme.error` → `theme.ok`/`theme.error`); every `Style::default().fg(theme.system)` (59, 79, 83, 95, 101, 112, 119, 140, 147, 178, 212, 219, 226) → `theme.muted`, keeping any `.add_modifier` the chain had; 163 `theme.agent_text` → `theme.text`.
-- [ ] `settlement.rs`: 50–55 becomes
+- [x] `render_card.rs`: 36 `_ => theme.agent` → `_ => theme.accent` (this `match` yields a `Color` today; make it yield a `Style` and update the two arms above it the same way — they are `theme.success`/`theme.error` → `theme.ok`/`theme.error`); every `Style::default().fg(theme.system)` (59, 79, 83, 95, 101, 112, 119, 140, 147, 178, 212, 219, 226) → `theme.muted`, keeping any `.add_modifier` the chain had; 163 `theme.agent_text` → `theme.text`.
+- [x] `settlement.rs`: 50–55 becomes
 
 ```rust
     let style = match glyph {
@@ -367,20 +375,20 @@ Rules for every replacement in this task and the next:
 ```
 
   and 132–133 `.fg(theme.border_title).bg(theme.card_bg)` → `theme.muted.patch(theme.surface)`; the doc comment at 114 says `theme.surface`.
-- [ ] `diff.rs`: 61, 90, 116 `theme.system` → `theme.muted` (chain/tuple rules).
-- [ ] `welcome.rs`: 146 `MascotMode::Accent(theme.accent)` → `MascotMode::Accent(theme.accent.fg.unwrap_or(Color::Reset))`; 203 `Style::default().fg(theme.system)` → `theme.muted`; 233 `.fg(theme.agent)` chain → `theme.accent.add_modifier(Modifier::BOLD)`; 236 `Style::default().fg(theme.separator)` → `theme.muted`; 237/243/255/264 `theme.system` → `theme.muted`; 247 `.fg(theme.user_text)` chain → `theme.text.add_modifier(Modifier::ITALIC)` (the chain had ITALIC); 259 `.fg(theme.agent)` chain → `theme.accent.add_modifier(Modifier::BOLD)`.
-- [ ] `app.rs` `sync_input_block` (1588–1626): line 1617 `.border_style(Style::default().fg(theme.border))` → `.border_style(theme.border)`; 1620 `.title_style(Style::default().fg(theme.border_title))` → `.title_style(theme.muted)`. The shell-mode red border stays `Style::default().fg(Color::Red)` — it is a mode signal, not a skin token; PR-2 changes it to `theme.error`.
-- [ ] `mod.rs`: 2249 and 2253 replace the literal `dark, light, mur` with `{}` and `theme::SKIN_NAMES`; 441 (`unknown skin '{skin_name}', using dark — valid: dark, light, mur`) → `unknown skin '{skin_name}', using ansi — valid: {}` with `theme::SKIN_NAMES`.
-- [ ] `mur-core/src/cli/agent.rs` 193: `/// Visual skin: ansi (default; `dark` is an alias) | light | mur`.
-- [ ] `mur-common/src/config.rs` 580–581: `/// Valid values: "ansi" (default; "dark" is an alias), "light", "mur".`
-- [ ] Run `cargo clippy -p mur-core --all-targets -- -D warnings` — expected clean. If it reports `unused import: Color` in a file, remove the import; if it reports a dead token in `theme.rs`, find the site.
-- [ ] Run `cargo nextest run -p mur-core --lib cmd::agent::cli::` — expected: all pass except tests that assert an old value of a merged role. Fix those by asserting the token (`theme.muted`) rather than a hex; do not widen any assertion.
+- [x] `diff.rs`: 61, 90, 116 `theme.system` → `theme.muted` (chain/tuple rules).
+- [x] `welcome.rs`: 146 `MascotMode::Accent(theme.accent)` → `MascotMode::Accent(theme.accent.fg.unwrap_or(Color::Reset))`; 203 `Style::default().fg(theme.system)` → `theme.muted`; 233 `.fg(theme.agent)` chain → `theme.accent.add_modifier(Modifier::BOLD)`; 236 `Style::default().fg(theme.separator)` → `theme.muted`; 237/243/255/264 `theme.system` → `theme.muted`; 247 `.fg(theme.user_text)` chain → `theme.text.add_modifier(Modifier::ITALIC)` (the chain had ITALIC); 259 `.fg(theme.agent)` chain → `theme.accent.add_modifier(Modifier::BOLD)`.
+- [x] `app.rs` `sync_input_block` (1588–1626): line 1617 `.border_style(Style::default().fg(theme.border))` → `.border_style(theme.border)`; 1620 `.title_style(Style::default().fg(theme.border_title))` → `.title_style(theme.muted)`. The shell-mode red border stays `Style::default().fg(Color::Red)` — it is a mode signal, not a skin token; PR-2 changes it to `theme.error`.
+- [x] `mod.rs`: 2249 and 2253 replace the literal `dark, light, mur` with `{}` and `theme::SKIN_NAMES`; 441 (`unknown skin '{skin_name}', using dark — valid: dark, light, mur`) → `unknown skin '{skin_name}', using ansi — valid: {}` with `theme::SKIN_NAMES`.
+- [x] `mur-core/src/cli/agent.rs` 193: `/// Visual skin: ansi (default; `dark` is an alias) | light | mur`.
+- [x] `mur-common/src/config.rs` 580–581: `/// Valid values: "ansi" (default; "dark" is an alias), "light", "mur".`
+- [x] Run `cargo clippy -p mur-core --all-targets -- -D warnings` — expected clean. If it reports `unused import: Color` in a file, remove the import; if it reports a dead token in `theme.rs`, find the site.
+- [x] Run `cargo nextest run -p mur-core --lib cmd::agent::cli::` — expected: all pass except tests that assert an old value of a merged role. Fix those by asserting the token (`theme.muted`) rather than a hex; do not widen any assertion.
 
 ## Task 4 — pin what PR-1 must not move; commit; PR
 
 **Interfaces — Consumes:** everything above. **Produces:** `band_growth_tests::agent_turn_notice_and_status_bar_paint_the_same_cells_under_each_skin` (deleted in PR-2 Task 5).
 
-- [ ] Add to `ui/band/tests.rs`, inside `mod band_growth_tests`:
+- [x] Add to `ui/band/tests.rs`, inside `mod band_growth_tests`:
 
 ```rust
     /// PR-1 of the skin redesign is structure only: for the cells whose
@@ -414,10 +422,10 @@ Rules for every replacement in this task and the next:
   the three coordinates to the cells that actually hold `●`, `h` of `hello`,
   and `·` of the notice under the fixture's welcome header; then delete the
   `eprintln!`. Expected: passes under all three skins.
-- [ ] `cargo fmt -p mur-core`; `cargo clippy … -D warnings` clean; full
+- [x] `cargo fmt -p mur-core`; `cargo clippy … -D warnings` clean; full
   `cargo nextest run -p mur-core --lib` green.
-- [ ] Live check (the installed binary is not this branch): `MUR_WEB_DIST=… ./build.sh --install`, then in tmux `murmur mur --skin dark`, `--skin ansi`, `--skin light`, `--skin mur`: `/skin` with no argument prints `current skin: ansi — valid: ansi, light, mur` for the first two; each transcript looks as it did before this branch (agent gold/cyan label, notices grey, rule between turns on light/mur).
-- [ ] Commit on `refactor/murmur-theme-tokens`:
+- [x] Live check (the installed binary is not this branch): `MUR_WEB_DIST=… ./build.sh --install`, then in tmux `murmur mur --skin dark`, `--skin ansi`, `--skin light`, `--skin mur`: `/skin` with no argument prints `current skin: ansi — valid: ansi, light, mur` for the first two; each transcript looks as it did before this branch (agent gold/cyan label, notices grey, rule between turns on light/mur).
+- [x] Commit on `refactor/murmur-theme-tokens`:
 
 ```
 refactor(murmur): Theme is eleven semantic tokens; `ansi` names the terminal-following skin, `dark` is its alias
