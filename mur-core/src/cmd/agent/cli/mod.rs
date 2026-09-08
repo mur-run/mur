@@ -396,12 +396,12 @@ async fn run_tui(
     auto_reads: bool,
     fleet: Option<String>,
 ) -> Result<()> {
-    // Resolve skin: CLI flag > config > "dark"
+    // Resolve skin: CLI flag > config > "ansi"
     let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
     let skin_name = skin
         .as_deref()
         .or(cfg.cli.skin.as_deref())
-        .unwrap_or("dark");
+        .unwrap_or("ansi");
     let unknown_skin = !theme::is_known_skin(skin_name);
     let active_theme = theme::resolve_skin(skin_name);
 
@@ -438,7 +438,8 @@ async fn run_tui(
     app.pricing_book = Some(book);
     if unknown_skin {
         app.push_system(format!(
-            "unknown skin '{skin_name}', using dark — valid: dark, light, mur"
+            "unknown skin '{skin_name}', using ansi — valid: {}",
+            theme::SKIN_NAMES
         ));
     }
     // Auto-approve is the default and the status bar's AUTO badge says so;
@@ -2251,11 +2252,17 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
         SlashCmd::Skin(name_opt) => match name_opt {
             None => {
                 let current = theme::skin_name(app.theme);
-                app.push_system(format!("current skin: {current} — valid: dark, light, mur"));
+                app.push_system(format!(
+                    "current skin: {current} — valid: {}",
+                    theme::SKIN_NAMES
+                ));
             }
             Some(name) => {
                 if !theme::is_known_skin(&name) {
-                    app.push_system(format!("unknown skin '{name}' — valid: dark, light, mur"));
+                    app.push_system(format!(
+                        "unknown skin '{name}' — valid: {}",
+                        theme::SKIN_NAMES
+                    ));
                 } else {
                     app.theme = theme::resolve_skin(&name);
                     app.mascot_mode =

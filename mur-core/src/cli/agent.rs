@@ -195,7 +195,7 @@ pub enum AgentAction {
         /// it back). The old default.
         #[arg(long)]
         ask: bool,
-        /// Visual skin: dark (default) | light | mur
+        /// Visual skin: ansi (default; `dark` is an alias) | light | mur
         #[arg(long)]
         skin: Option<String>,
         /// Plain line-based output (no full-screen TUI) — for screen readers,

@@ -1616,10 +1616,10 @@ impl App {
             Block::default()
                 .borders(Borders::TOP | Borders::BOTTOM)
                 .border_type(theme.border_type)
-                .border_style(Style::default().fg(theme.border))
+                .border_style(theme.border)
                 .padding(Padding::horizontal(theme.inner_padding as u16))
                 .title(hint)
-                .title_style(Style::default().fg(theme.border_title))
+                .title_style(theme.muted)
         };
         self.input.set_block(block);
     }
@@ -1675,7 +1675,7 @@ impl App {
             home.path().to_path_buf(),
             "a".into(),
             session,
-            &super::theme::DARK,
+            &super::theme::ANSI,
         )
     }
 }
@@ -1692,7 +1692,7 @@ mod tests {
             home.path().to_path_buf(),
             "a".into(),
             session,
-            &super::super::theme::DARK,
+            &super::super::theme::ANSI,
         )
     }
 
@@ -1738,7 +1738,7 @@ mod tests {
             home.path().to_path_buf(),
             "a".into(),
             session,
-            &super::super::theme::DARK,
+            &super::super::theme::ANSI,
         )
     }
 
@@ -2756,7 +2756,7 @@ mod open_items_notice_tests {
             home.path().to_path_buf(),
             "a".into(),
             session,
-            &super::super::theme::DARK,
+            &super::super::theme::ANSI,
         )
     }
 

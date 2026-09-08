@@ -1,7 +1,8 @@
 //! One message's lines: role header, body, gap before it.
 
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
+use ratatui::widgets::BorderType;
 
 use super::super::app::{ChatMsg, Role, SPINNER, Severity};
 use super::super::markdown;
@@ -56,11 +57,11 @@ pub(super) fn gap_row(
     m: &crate::cmd::agent::cli::app::ChatMsg,
 ) -> Line<'static> {
     let spoken = |r: Role| r != Role::System;
-    if theme.show_separator && prev.is_none_or(|p| spoken(p.role)) && spoken(m.role) {
-        Line::styled(
-            "─".repeat(SEPARATOR_WIDTH),
-            Style::default().fg(theme.separator),
-        )
+    if matches!(theme.border_type, BorderType::Rounded)
+        && prev.is_none_or(|p| spoken(p.role))
+        && spoken(m.role)
+    {
+        Line::styled("─".repeat(SEPARATOR_WIDTH), theme.border)
     } else {
         Line::default()
     }
@@ -78,13 +79,11 @@ pub(super) fn push_agent_header(
 ) {
     let (bullet, header_style) = if m.streaming {
         let spin = SPINNER[spinner % SPINNER.len()];
-        (format!("{spin} agent"), Style::default().fg(theme.agent))
+        (format!("{spin} agent"), theme.accent)
     } else {
         (
             "● agent".to_string(),
-            Style::default()
-                .fg(theme.agent)
-                .add_modifier(Modifier::BOLD),
+            theme.accent.add_modifier(Modifier::BOLD),
         )
     };
     lines.push(Line::from(Span::styled(bullet, header_style)));
@@ -92,9 +91,7 @@ pub(super) fn push_agent_header(
         for l in m.thinking.lines() {
             lines.push(Line::styled(
                 format!("{MSG_INDENT}{l}"),
-                Style::default()
-                    .fg(theme.thinking)
-                    .add_modifier(Modifier::ITALIC | Modifier::DIM),
+                theme.muted.add_modifier(Modifier::ITALIC | Modifier::DIM),
             ));
         }
     }
@@ -122,14 +119,10 @@ pub(super) fn agent_body_lines(
         // Trailing spinner so the user sees liveness.
         let spin = SPINNER[spinner % SPINNER.len()];
         match body.last_mut() {
-            Some(last) => last.spans.push(Span::styled(
-                format!(" {spin}"),
-                Style::default().fg(theme.agent),
-            )),
-            None => body.push(Line::styled(
-                spin.to_string(),
-                Style::default().fg(theme.agent),
-            )),
+            Some(last) => last
+                .spans
+                .push(Span::styled(format!(" {spin}"), theme.accent)),
+            None => body.push(Line::styled(spin.to_string(), theme.accent)),
         }
         body
     } else if let Some(cached) = cached {
@@ -166,23 +159,23 @@ pub(super) fn push_message(
         Role::User => {
             lines.push(Line::from(Span::styled(
                 "you ›",
-                Style::default().fg(theme.user).add_modifier(Modifier::BOLD),
+                theme.accent_alt.add_modifier(Modifier::BOLD),
             )));
             for l in m.text.lines() {
                 lines.push(Line::styled(
                     format!("{MSG_INDENT}{l}"),
-                    Style::default().fg(theme.user_text),
+                    theme.text.add_modifier(Modifier::DIM),
                 ));
             }
         }
         Role::System => {
             // Severity paints the whole note and picks a lead glyph, so a
             // warning reads amber and a success reads green at a glance.
-            let (color, glyph) = match m.severity {
-                Severity::Info => (theme.system, "·"),
+            let (style, glyph) = match m.severity {
+                Severity::Info => (theme.muted, "·"),
                 Severity::Warn => (theme.warn, "▲"),
                 Severity::Error => (theme.error, "✖"),
-                Severity::Success => (theme.success, "✔"),
+                Severity::Success => (theme.ok, "✔"),
             };
             let bold = !matches!(m.severity, Severity::Info);
             for (i, l) in m.text.lines().enumerate() {
@@ -191,7 +184,7 @@ pub(super) fn push_message(
                 } else {
                     "  ".to_string()
                 };
-                let mut style = Style::default().fg(color);
+                let mut style = style;
                 if bold {
                     style = style.add_modifier(Modifier::BOLD);
                 }
@@ -204,16 +197,11 @@ pub(super) fn push_message(
             if let Some(first) = it.next() {
                 lines.push(Line::styled(
                     first.to_string(),
-                    Style::default()
-                        .fg(theme.shell)
-                        .add_modifier(Modifier::BOLD),
+                    theme.accent_alt.add_modifier(Modifier::BOLD),
                 ));
             }
             for l in it {
-                lines.push(Line::styled(
-                    l.to_string(),
-                    Style::default().fg(theme.system),
-                ));
+                lines.push(Line::styled(l.to_string(), theme.muted));
             }
         }
         Role::Agent => {
@@ -245,14 +233,14 @@ pub(super) fn push_message(
 mod settlement_paint_tests {
     use super::push_message;
     use crate::cmd::agent::cli::app::{ChatMsg, Role};
-    use crate::cmd::agent::cli::theme::DARK;
+    use crate::cmd::agent::cli::theme::ANSI;
 
     #[test]
     fn a_carried_settlement_is_painted_after_the_body() {
         let mut m = ChatMsg::for_test(Role::Agent, "did it");
         m.settlement = Some("  ✔ bash · cargo test".into());
         let mut lines = Vec::new();
-        push_message(&mut lines, &m, 0, &DARK, false, 60);
+        push_message(&mut lines, &m, 0, &ANSI, false, 60);
         let text: Vec<String> = lines
             .iter()
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -271,7 +259,7 @@ mod settlement_paint_tests {
     fn a_message_without_one_paints_nothing_extra() {
         let m = ChatMsg::for_test(Role::Agent, "did it");
         let mut lines = Vec::new();
-        push_message(&mut lines, &m, 0, &DARK, false, 60);
+        push_message(&mut lines, &m, 0, &ANSI, false, 60);
         let text: Vec<String> = lines
             .iter()
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -285,7 +273,7 @@ mod gap_tests {
     use super::{gap_row, wants_gap_before};
     use crate::cmd::agent::cli::app::{ChatMsg, Role};
     use crate::cmd::agent::cli::step::StepCard;
-    use crate::cmd::agent::cli::theme::{DARK, MUR};
+    use crate::cmd::agent::cli::theme::{ANSI, MUR};
 
     fn card_msg() -> ChatMsg {
         ChatMsg::tool_for_test(StepCard::new(
@@ -318,7 +306,7 @@ mod gap_tests {
             ChatMsg::for_test(Role::User, "hi"),
             ChatMsg::for_test(Role::Agent, "hello"),
         );
-        let blank: String = gap_row(&DARK, Some(&u), &a)
+        let blank: String = gap_row(&ANSI, Some(&u), &a)
             .spans
             .iter()
             .map(|s| s.content.as_ref())
@@ -333,7 +321,7 @@ mod gap_tests {
             .iter()
             .map(|s| s.content.as_ref())
             .collect();
-        if MUR.show_separator {
+        if matches!(MUR.border_type, ratatui::widgets::BorderType::Rounded) {
             assert!(ruled.contains('─'), "a ruled skin draws a rule: {ruled:?}");
         }
     }

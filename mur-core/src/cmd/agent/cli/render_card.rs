@@ -32,8 +32,8 @@ pub fn card_lines(
     let budget = hint_budget(width);
 
     let accent = match card.state {
-        StepState::Error => ratatui::style::Color::Red,
-        _ => theme.agent,
+        StepState::Error => Style::default().fg(ratatui::style::Color::Red),
+        _ => theme.accent,
     };
 
     // ── Header: glyph · name · arg-hint · duration ───────────────────────────
@@ -53,19 +53,11 @@ pub fn card_lines(
         None => format!("{} {} {}", card.glyph(), card.name, arg_hint(card, budget)),
     };
     let auto_tag = if card.auto_approved {
-        Span::styled(
-            " [auto]",
-            Style::default()
-                .fg(theme.system)
-                .add_modifier(Modifier::DIM),
-        )
+        Span::styled(" [auto]", theme.muted.add_modifier(Modifier::DIM))
     } else {
         Span::raw("")
     };
-    let mut header_spans = vec![Span::styled(
-        header,
-        Style::default().fg(accent).add_modifier(Modifier::BOLD),
-    )];
+    let mut header_spans = vec![Span::styled(header, accent.add_modifier(Modifier::BOLD))];
     // Without a subject the gist folds into the header, keeping the whole card
     // one scannable line. With one it belongs on the `⎿` row beside the command
     // it came from.
@@ -74,13 +66,10 @@ pub fn card_lines(
         && card.error.is_none()
         && let Some(gist) = result_gist(card, budget)
     {
-        header_spans.push(Span::styled(
-            format!("  → {gist}"),
-            Style::default().fg(theme.system),
-        ));
+        header_spans.push(Span::styled(format!("  → {gist}"), theme.muted));
     }
     if subject.is_none() {
-        header_spans.push(Span::styled(dur.clone(), Style::default().fg(theme.system)));
+        header_spans.push(Span::styled(dur.clone(), theme.muted));
     }
     header_spans.push(auto_tag);
     out.push(Line::from(header_spans));
@@ -89,17 +78,10 @@ pub fn card_lines(
     // land on, and this is the receipt underneath it.
     if subject.is_some() {
         let mut row = vec![
-            Span::styled(
-                "  ⎿ ",
-                Style::default()
-                    .fg(theme.system)
-                    .add_modifier(Modifier::DIM),
-            ),
+            Span::styled("  ⎿ ", theme.muted.add_modifier(Modifier::DIM)),
             Span::styled(
                 arg_hint(card, budget),
-                Style::default()
-                    .fg(theme.system)
-                    .add_modifier(Modifier::DIM),
+                theme.muted.add_modifier(Modifier::DIM),
             ),
         ];
         if !expanded
@@ -108,17 +90,10 @@ pub fn card_lines(
         {
             row.push(Span::styled(
                 format!("  → {gist}"),
-                Style::default()
-                    .fg(theme.system)
-                    .add_modifier(Modifier::DIM),
+                theme.muted.add_modifier(Modifier::DIM),
             ));
         }
-        row.push(Span::styled(
-            dur,
-            Style::default()
-                .fg(theme.system)
-                .add_modifier(Modifier::DIM),
-        ));
+        row.push(Span::styled(dur, theme.muted.add_modifier(Modifier::DIM)));
         out.push(Line::from(row));
     }
 
@@ -135,17 +110,12 @@ pub fn card_lines(
         let pretty = serde_json::to_string_pretty(&card.args).unwrap_or_default();
         let total_lines = pretty.lines().count();
         for l in pretty.lines().take(ARGS_MAX_LINES) {
-            out.push(Line::styled(
-                format!(" {l}"),
-                Style::default().fg(theme.system),
-            ));
+            out.push(Line::styled(format!(" {l}"), theme.muted));
         }
         if total_lines > ARGS_MAX_LINES {
             out.push(Line::styled(
                 format!(" … +{} more", total_lines - ARGS_MAX_LINES),
-                Style::default()
-                    .fg(theme.system)
-                    .add_modifier(Modifier::DIM),
+                theme.muted.add_modifier(Modifier::DIM),
             ));
         }
     }
@@ -158,10 +128,7 @@ pub fn card_lines(
     if !card.output.is_empty() {
         let output_line_count = card.output.lines().count();
         for l in card.output.lines().take(OUTPUT_MAX_LINES) {
-            out.push(Line::styled(
-                format!(" {l}"),
-                Style::default().fg(theme.agent_text),
-            ));
+            out.push(Line::styled(format!(" {l}"), theme.text));
         }
         let shown = output_line_count.min(OUTPUT_MAX_LINES);
         // Show "+N more" either when we clipped locally OR the runtime
@@ -174,9 +141,7 @@ pub fn card_lines(
         if card.truncated || output_line_count > OUTPUT_MAX_LINES {
             out.push(Line::styled(
                 format!(" … +{} more", total.saturating_sub(shown)),
-                Style::default()
-                    .fg(theme.system)
-                    .add_modifier(Modifier::DIM),
+                theme.muted.add_modifier(Modifier::DIM),
             ));
         }
     }
@@ -209,21 +174,21 @@ fn hitl_row(theme: &'static Theme) -> Line<'static> {
                 .fg(ratatui::style::Color::Green)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" approve  ", Style::default().fg(theme.system)),
+        Span::styled(" approve  ", theme.muted),
         Span::styled(
             "[a]",
             Style::default()
                 .fg(ratatui::style::Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" always  ", Style::default().fg(theme.system)),
+        Span::styled(" always  ", theme.muted),
         Span::styled(
             "[n]",
             Style::default()
                 .fg(ratatui::style::Color::Red)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" deny / Esc", Style::default().fg(theme.system)),
+        Span::styled(" deny / Esc", theme.muted),
     ])
 }
 
@@ -475,7 +440,7 @@ mod tests {
     }
 
     fn rows(card: &StepCard) -> Vec<String> {
-        super::card_lines(card, &theme::DARK, false, TEST_WIDTH)
+        super::card_lines(card, &theme::ANSI, false, TEST_WIDTH)
             .iter()
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
             .collect()
