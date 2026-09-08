@@ -167,7 +167,7 @@ pub(super) fn message_block(
     let mut lines: Vec<Line<'static>> = Vec::new();
     // Never before a continuation: `skip > 0` resumes a message whose head is
     // already committed above.
-    if idx > 0 && skip == 0 && wants_gap_before(m) {
+    if idx > 0 && skip == 0 && wants_gap_before(app.messages.get(idx - 1), m) {
         lines.push(gap_row(app.theme, app.messages.get(idx - 1), m));
     }
     if measured {

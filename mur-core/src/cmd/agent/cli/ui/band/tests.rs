@@ -393,20 +393,22 @@ mod layout_guard_tests {
         let d = term.backend().to_string();
         let rows: Vec<&str> = d.lines().map(|l| l.trim_matches('"')).collect();
         let status = rows[rows.len() - 1];
-        let input = rows[rows.len() - 2];
-        let rule = rows[rows.len() - 3];
+        let pad_below = rows[rows.len() - 2];
+        let input = rows[rows.len() - 3];
+        let pad_above = rows[rows.len() - 4];
+        let rule = rows[rows.len() - 5];
         assert!(status.contains("ready"), "status bar not last:\n{d}");
         assert!(
+            pad_below.trim().is_empty() && pad_above.trim().is_empty(),
+            "the input text must have a blank row above and below:\n{d}"
+        );
+        assert!(
             input.contains("Type a message"),
-            "input row not above the status bar:\n{d}"
+            "input row not two above the status bar:\n{d}"
         );
         assert!(
             rule.contains("message —"),
-            "composer rule not above the input row:\n{d}"
-        );
-        assert!(
-            !input.contains('─'),
-            "a rule between input and status bar:\n{d}"
+            "composer rule not above the padded input:\n{d}"
         );
     }
 }

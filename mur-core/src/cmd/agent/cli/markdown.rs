@@ -29,6 +29,10 @@ const MIN_BODY_COLS: usize = 20;
 /// Narrowest a table column is ever squeezed to.
 const MIN_COL: usize = 4;
 
+/// Spaces between a cell's text and its borders, each side. One read as
+/// cramped, especially around CJK text.
+const CELL_PAD: usize = 2;
+
 /// Columns a message body may use inside a pane `pane_width` wide: the pane
 /// minus its horizontal padding on both sides and the body indent.
 pub(crate) fn body_cols(pane_width: u16, inner_padding: u8) -> usize {
@@ -136,10 +140,18 @@ impl Renderer {
             Event::End(tag) => self.end(tag),
             Event::Text(t) => {
                 if self.in_code_block {
-                    // Code text may contain newlines; render each as its own line.
-                    for (i, part) in t.split('\n').enumerate() {
+                    // Code text may contain newlines; render each as its own
+                    // line. A fenced block's text ends in one, and that final
+                    // empty part is not a line: pushing it painted a blank
+                    // that `blank_line` then doubled.
+                    let parts: Vec<&str> = t.split('\n').collect();
+                    let last = parts.len() - 1;
+                    for (i, part) in parts.into_iter().enumerate() {
                         if i > 0 {
                             self.flush_line();
+                        }
+                        if i == last && part.is_empty() {
+                            break;
                         }
                         self.cur
                             .push(Span::styled(part.to_string(), Style::default().fg(CODE)));
@@ -156,7 +168,18 @@ impl Renderer {
                     self.cur.push(span);
                 }
             }
-            Event::SoftBreak => self.cur.push(Span::raw(" ".to_string())),
+            // A line break the author typed is a line break on screen —
+            // models lay out "label:\n• item" with a bare newline and no
+            // list marker, and joining it into one line loses the shape.
+            // Inside a table cell there is nowhere to break to.
+            Event::SoftBreak => {
+                if self.in_table {
+                    self.table_cur_cell.push(Span::raw(" ".to_string()));
+                } else {
+                    self.flush_line();
+                    self.indent();
+                }
+            }
             Event::HardBreak => self.flush_line(),
             Event::Rule => {
                 self.flush_line();
@@ -321,15 +344,16 @@ impl Renderer {
                 natural[i] = natural[i].max(Line::from(cell.clone()).width());
             }
         }
-        // Every column costs its text plus one space each side and a border;
-        // the last border closes the row.
-        let room = self.width.saturating_sub(3 * ncols + 1);
+        // Every column costs its text plus its padding each side and a
+        // border; the last border closes the row.
+        let room = self.width.saturating_sub((2 * CELL_PAD + 1) * ncols + 1);
+        let pad = " ".repeat(CELL_PAD);
         let widths = fit_columns(&natural, room);
 
         let rule = |l: &str, m: &str, r: &str| -> Line<'static> {
             let bars = widths
                 .iter()
-                .map(|w| "─".repeat(w + 2))
+                .map(|w| "─".repeat(w + 2 * CELL_PAD))
                 .collect::<Vec<_>>()
                 .join(m);
             Line::styled(format!("{l}{bars}{r}"), Style::default().fg(QUOTE))
@@ -345,10 +369,10 @@ impl Renderer {
                 .collect();
             let height = cells.iter().map(Vec::len).max().unwrap_or(1);
             for k in 0..height {
-                let mut line: Vec<Span<'static>> = vec![Span::styled("│ ", border)];
+                let mut line: Vec<Span<'static>> = vec![Span::styled(format!("│{pad}"), border)];
                 for (ci, cell) in cells.iter().enumerate() {
                     if ci > 0 {
-                        line.push(Span::styled(" │ ", border));
+                        line.push(Span::styled(format!("{pad}│{pad}"), border));
                     }
                     let (text, used) = match cell.get(k) {
                         Some(l) => (l.spans.clone(), l.width()),
@@ -364,7 +388,7 @@ impl Renderer {
                     }
                     line.push(Span::raw(" ".repeat(widths[ci].saturating_sub(used))));
                 }
-                line.push(Span::styled(" │", border));
+                line.push(Span::styled(format!("{pad}│"), border));
                 self.lines.push(Line::from(line));
             }
             if ri == 0 {
@@ -664,6 +688,31 @@ mod tests {
     fn renders_code_block_contents() {
         let t = render("```\nlet x = 1;\n```");
         assert!(plain(&t).contains("let x = 1;"));
+    }
+
+    /// The fence's trailing newline used to paint a blank that `blank_line`
+    /// then doubled: two empty rows under every code block.
+    #[test]
+    fn a_code_block_is_followed_by_exactly_one_blank_row() {
+        let r = rows(&render("before\n\n```\nlet x = 1;\n```\n\nafter"));
+        assert_eq!(r, vec!["before", "", "let x = 1;", "", "after"]);
+    }
+
+    /// A newline the author typed inside a paragraph stays a newline.
+    #[test]
+    fn a_soft_break_starts_a_new_line() {
+        assert_eq!(
+            rows(&render("憑據：\n• x\n• y")),
+            vec!["憑據：", "• x", "• y"]
+        );
+    }
+
+    /// Two spaces between a cell's text and its border, each side.
+    #[test]
+    fn table_cells_are_padded() {
+        let r = rows(&render("| a | b |\n| --- | --- |\n| 1 | 2 |"));
+        assert_eq!(r[1], "│  a  │  b  │", "header: {r:?}");
+        assert_eq!(r[3], "│  1  │  2  │", "body: {r:?}");
     }
 
     #[test]
