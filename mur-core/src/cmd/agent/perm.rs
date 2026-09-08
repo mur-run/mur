@@ -218,9 +218,11 @@ pub fn cmd_perm_list_paths(name: &str) -> Result<()> {
         .map(|d| d.join("running.lock"))
         .and_then(|p| std::fs::read(p).ok())
         .and_then(|b| serde_json::from_slice::<LockFile>(&b).ok());
+    let agent_home = super::resolve_mur_home()?.join("agents").join(name);
+    let chain = mur_agent_runtime::sandbox::launch_chain::LaunchChain::new(&agent_home);
     print!(
         "{}",
-        super::perm_view::paths_picture(name, &profile, lock.as_ref())
+        super::perm_view::paths_picture(name, &profile, lock.as_ref(), Some(&chain))
     );
     Ok(())
 }

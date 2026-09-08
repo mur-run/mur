@@ -337,10 +337,15 @@ pub(super) fn outbound_picture(profile: &mur_common::AgentProfile) -> String {
 }
 
 /// Testable core of [`cmd_perm_list_paths`].
+/// `chain` supplies the denies the SBPL emitter installs after the allows.
+/// Passed in rather than resolved here so this stays a pure function: the
+/// launch chain is derived from real paths on disk, and a renderer that reads
+/// the filesystem cannot be tested against a fixture.
 pub(super) fn paths_picture(
     name: &str,
     profile: &mur_common::AgentProfile,
     lock: Option<&LockFile>,
+    chain: Option<&mur_agent_runtime::sandbox::launch_chain::LaunchChain>,
 ) -> String {
     use std::fmt::Write as _;
 
@@ -379,7 +384,7 @@ pub(super) fn paths_picture(
 
     let fs = &v.filesystem;
     for (label, list) in [("read", &fs.read), ("write", &fs.write), ("deny", &fs.deny)] {
-        if list.is_empty() {
+        if list.is_empty() && !(label == "deny" && chain.is_some()) {
             continue;
         }
         let _ = writeln!(o, "\n{}", label.to_uppercase());
@@ -393,6 +398,28 @@ pub(super) fn paths_picture(
                 }
                 GrantStatus::Effective => {
                     let _ = writeln!(o, "  ✓ {}", g.raw);
+                }
+            }
+        }
+        // The denies that do most of the work are not in the profile at all.
+        // Without them a `✓` write grant on `~/.mur` reads as "every sibling's
+        // profile.yaml is writable", which is what this report was believed to
+        // be saying (#1198). It is not: the emitter closes the sibling tree
+        // again after the allows, and SBPL is last-match-wins.
+        if label == "deny"
+            && let Some(chain) = chain
+        {
+            let _ = writeln!(
+                o,
+                "  launch chain — installed after the grants above, so these win"
+            );
+            let self_home = chain.agent_self_home().display().to_string();
+            for d in chain.deny_paths() {
+                let _ = writeln!(o, "    ✓ {}", d.display());
+                // The one exception, and the reason the agent's own tree is
+                // writable while its siblings are not.
+                if d.ends_with("agents") {
+                    let _ = writeln!(o, "        except {self_home} — re-allowed next");
                 }
             }
         }
@@ -454,12 +481,49 @@ mod tests {
         }
     }
 
+    /// The report is the audit surface, so what it omits is what people
+    /// conclude is absent. Listing a `✓` write grant on `~/.mur` with a DENY
+    /// section that never mentions `agents/` reads as "this agent can write
+    /// every sibling's profile.yaml" — the reading that made #1198 look like a
+    /// privilege-escalation path. The emitter closes that tree again after the
+    /// allows, and the report has to say so.
+    #[test]
+    fn the_deny_section_shows_the_launch_chain_and_its_one_exception() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path().join(".mur");
+        let agent_home = mur_home.join("agents").join("mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let chain = mur_agent_runtime::sandbox::launch_chain::LaunchChain::for_test(
+            &agent_home,
+            &bin,
+            tmp.path(),
+        );
+
+        let p = fs_profile(&[], &[]);
+        let out = paths_picture("mur", &p, Some(&lock_with(None)), Some(&chain));
+
+        assert!(
+            out.contains("launch chain"),
+            "the denies that do most of the work must be named: {out}"
+        );
+        assert!(
+            out.contains(&mur_home.join("agents").display().to_string()),
+            "the sibling tree is the whole point of the report: {out}"
+        );
+        assert!(
+            out.contains("except") && out.contains(&agent_home.display().to_string()),
+            "the re-allow is why the agent's own tree is writable: {out}"
+        );
+    }
+
     /// Without a running agent nothing is enforced, and the listing must not
     /// imply otherwise by ticking every row.
     #[test]
     fn a_stopped_agent_is_listed_without_claiming_anything_took_effect() {
         let p = fs_profile(&[], &["/tmp/x"]);
-        let out = paths_picture("mur", &p, None);
+        let out = paths_picture("mur", &p, None, None);
         assert!(out.contains("is not running"), "{out}");
         assert!(out.contains("· /tmp/x"), "{out}");
         assert!(
@@ -479,7 +543,7 @@ mod tests {
                 reason: "path does not exist on disk".into(),
             }],
         );
-        let out = paths_picture("mur", &p, Some(&lock_with(Some(rec))));
+        let out = paths_picture("mur", &p, Some(&lock_with(Some(rec))), None);
         assert!(out.contains("✗ /tmp/gone"), "{out}");
         assert!(out.contains("does not exist on disk"), "{out}");
         assert!(out.contains("✓ /tmp/live"), "{out}");
@@ -494,7 +558,7 @@ mod tests {
         let mut rec = sealed(&p, vec![]);
         rec.enforcing = false;
         rec.mode = "advisory-only".into();
-        let out = paths_picture("mur", &p, Some(&lock_with(Some(rec))));
+        let out = paths_picture("mur", &p, Some(&lock_with(Some(rec))), None);
         let first = out.lines().next().unwrap_or_default();
         assert!(first.contains("WITHOUT a kernel sandbox"), "{out}");
         assert!(first.contains("MORE"), "{out}");
@@ -507,7 +571,7 @@ mod tests {
         let sealed_profile = fs_profile(&[], &["/tmp/x"]);
         let rec = sealed(&sealed_profile, vec![]);
         let now = fs_profile(&[], &["/tmp/x", "/tmp/added-later"]);
-        let out = paths_picture("mur", &now, Some(&lock_with(Some(rec))));
+        let out = paths_picture("mur", &now, Some(&lock_with(Some(rec))), None);
         assert!(out.contains("changed since this agent sealed"), "{out}");
         assert!(out.contains("mur agent restart mur"), "{out}");
     }
@@ -517,7 +581,7 @@ mod tests {
     #[test]
     fn a_lock_without_a_seal_record_says_the_effect_is_unknown() {
         let p = fs_profile(&[], &["/tmp/x"]);
-        let out = paths_picture("mur", &p, Some(&lock_with(None)));
+        let out = paths_picture("mur", &p, Some(&lock_with(None)), None);
         assert!(out.contains("did not record its seal"), "{out}");
         assert!(!out.contains('✓'), "{out}");
     }
