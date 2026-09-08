@@ -139,6 +139,8 @@ export interface SubscriptionDescriptor {
   logo: string;
   color: string;
   readiness: GatewayReadiness;
+  /** Prefix for default registry aliases — the vendor, not the CLI. */
+  aliasPrefix: string;
   commands: {
     accountRead: string;
     modelsList: string;
@@ -159,6 +161,7 @@ export const CHATGPT_SUBSCRIPTION: SubscriptionDescriptor = {
   logo: "GPT",
   color: "#10A37F",
   readiness: CHATGPT_READINESS,
+  aliasPrefix: "chatgpt",
   commands: {
     accountRead: "chatgpt_account_read",
     modelsList: "chatgpt_models_list",
@@ -199,6 +202,7 @@ export const CLAUDE_SUBSCRIPTION: SubscriptionDescriptor = {
   logo: "CL",
   color: "#C5694A",
   readiness: CLAUDE_READINESS,
+  aliasPrefix: "anthropic",
   commands: {
     accountRead: "claude_account_read",
     modelsList: "claude_models_list",

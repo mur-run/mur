@@ -21,7 +21,7 @@ import {
   type SubscriptionDescriptor,
 } from "./modelLibraryHelpers";
 import {
-  defaultChatGPTAlias,
+  defaultSubscriptionAlias,
   deriveSubscriptionState,
   gatewayProblem,
   type ChatGPTAccount,
@@ -246,6 +246,7 @@ export function SubscriptionProviderPanel({
           busy={busy}
           picks={picks}
           aliases={aliases}
+          aliasPrefix={descriptor.aliasPrefix}
           registrySet={registrySet}
           manualId={manualId}
           onToggle={(id) => setPicks(togglePick(picks, id))}
@@ -256,7 +257,7 @@ export function SubscriptionProviderPanel({
             addPicks(
               [...picks].map((id) => ({
                 model: id,
-                alias: aliases[id]?.trim() || defaultChatGPTAlias(id),
+                alias: aliases[id]?.trim() || defaultSubscriptionAlias(id, descriptor.aliasPrefix),
                 verified: true,
               })),
             )
@@ -265,7 +266,7 @@ export function SubscriptionProviderPanel({
             addPicks([
               {
                 model: manualId.trim(),
-                alias: defaultChatGPTAlias(manualId),
+                alias: defaultSubscriptionAlias(manualId, descriptor.aliasPrefix),
                 verified: false,
               },
             ])
@@ -468,6 +469,7 @@ function ModelSection({
   busy,
   picks,
   aliases,
+  aliasPrefix,
   registrySet,
   manualId,
   onToggle,
@@ -482,6 +484,7 @@ function ModelSection({
   busy: boolean;
   picks: Set<string>;
   aliases: Record<string, string>;
+  aliasPrefix: string;
   registrySet: Set<string>;
   manualId: string;
   onToggle: (id: string) => void;
@@ -538,7 +541,7 @@ function ModelSection({
         <ul className="ml-mlist" role="group" aria-label={t(copy.modelsTitle)}>
           {state.models.map((m) => {
             const sel = picks.has(m.id);
-            const alias = aliases[m.id] ?? defaultChatGPTAlias(m.id);
+            const alias = aliases[m.id] ?? defaultSubscriptionAlias(m.id, aliasPrefix);
             return (
               <li key={m.id} className={`ml-mrow${sel ? " ml-mrow--sel" : ""}`}>
                 <label className="ml-mrow__pick">

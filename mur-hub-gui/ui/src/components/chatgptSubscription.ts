@@ -137,13 +137,17 @@ export function billingLabel(mode?: BillingMode | string | null): BillingLabel {
   }
 }
 
-/** The registry alias a picked model gets by default: `chatgpt_<slug>`. */
-export function defaultChatGPTAlias(modelId: string): string {
+/**
+ * The registry alias a picked model gets by default: `<prefix>_<slug>`.
+ * The prefix names the vendor behind the subscription — `chatgpt` for Codex,
+ * `anthropic` for Claude Code — so it comes from the descriptor, never hard-coded.
+ */
+export function defaultSubscriptionAlias(modelId: string, prefix = "chatgpt"): string {
   const slug = modelId
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
-  return `chatgpt_${slug}`;
+  return `${prefix}_${slug}`;
 }
 
 export type PaidFallbackWarning =
