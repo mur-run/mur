@@ -144,6 +144,7 @@ pub(crate) fn provision_one(
         GATEWAY_MCP_NAME,
         GATEWAY_MCP_COMMAND,
         &[],
+        &[],
         McpAddPin {
             force: true,
             ..Default::default()

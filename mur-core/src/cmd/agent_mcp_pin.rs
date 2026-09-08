@@ -203,6 +203,7 @@ pub fn build_pinned_entry(
         url: None,
         auth: None,
         requires_programs: Vec::new(),
+        state_paths: Vec::new(),
         package: None,
     }
 }

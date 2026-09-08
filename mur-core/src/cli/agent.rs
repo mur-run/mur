@@ -951,6 +951,12 @@ pub enum AgentMcpAction {
         /// start with `-`/`--`, e.g. `--arg --engine` or `--arg=--engine`.
         #[arg(long = "arg", allow_hyphen_values = true)]
         args: Vec<String>,
+        /// A directory this server writes state into at runtime (repeatable).
+        /// Created if missing, then granted read+write. Many MCP servers put
+        /// config, logs or a device id under $HOME on first launch and exit
+        /// before answering `initialize` when the sandbox denies it.
+        #[arg(long = "state-path")]
+        state_paths: Vec<String>,
         /// Skip the y/N install confirmation prompt (B0 rule 6 / M9.2).
         /// Use for scripted / non-interactive installs.
         #[arg(long)]

@@ -76,6 +76,9 @@ pub fn agent_mcp_add(
         server_id,
         command,
         &args,
+        // No state paths: the Hub's add form has no field for them yet, and an
+        // empty list is exactly what every server that keeps no state wants.
+        &[],
         McpAddPin {
             force: true,
             ..Default::default()
