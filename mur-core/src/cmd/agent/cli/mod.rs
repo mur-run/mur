@@ -155,7 +155,7 @@ const RECENT_LIMIT: usize = 10;
 const MOUSE_SCROLL_STEP: u16 = 1;
 /// Fixed height of the Inline-mode viewport: 8 (max composer lines) + 2
 /// (composer border) + 1 (status line) + 9 (tail preview of the
-/// currently-streaming reply, plus its own top/bottom border). Generous
+/// currently-streaming reply; the band draws no border of its own). Generous
 /// enough that the common case (short composer, short-to-medium reply)
 /// never scrolls within its own area; a very long streaming reply just
 /// shows its latest lines until it finishes and flushes to scrollback.
@@ -943,13 +943,10 @@ async fn event_loop(
             return Ok(());
         }
         // The idle welcome blinks: schedule a redraw exactly at the next blink
-        // boundary, but ONLY when the mascot animates, the transcript is empty
-        // (so the welcome is actually on screen), and nothing is streaming.
+        // boundary, but ONLY when the mascot animates, it is still the head of
+        // the band (so it is actually on screen), and nothing is streaming.
         // Otherwise this arm is disabled and never wakes the loop.
-        let blink_live = app.mascot_mode.animated()
-            && app.welcome_visible()
-            && app.flushed_upto == 0
-            && !app.streaming;
+        let blink_live = app.mascot_mode.animated() && app.welcome_header_live() && !app.streaming;
         let blink_at = TokioInstant::from_std(app.blink.next_deadline(StdInstant::now()));
         let input_due = app
             .panel_input_deadline

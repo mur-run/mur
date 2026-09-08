@@ -905,6 +905,19 @@ impl App {
         !self.welcome_dismissed && self.messages.iter().all(|m| m.role == Role::System)
     }
 
+    /// Is the welcome (mascot + identity + hint) still the head of the live
+    /// band?
+    ///
+    /// Distinct from [`App::welcome_visible`], which sizes the viewport and
+    /// ends when someone speaks. The mascot itself is not a splash the first
+    /// turn replaces: it stays above the conversation until the band fills
+    /// and the flush carries it into scrollback — messages push it up, they
+    /// do not remove it. A followed channel is someone else's conversation
+    /// and gets no welcome.
+    pub fn welcome_header_live(&self) -> bool {
+        !self.welcome_dismissed && self.flushed_upto == 0 && self.follow.is_none()
+    }
+
     pub fn push_system(&mut self, text: impl Into<String>) {
         self.messages.push(ChatMsg::new(Role::System, text));
         self.scroll_back = 0;

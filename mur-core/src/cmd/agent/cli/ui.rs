@@ -513,23 +513,27 @@ fn elapsed(since: chrono::DateTime<chrono::Utc>) -> String {
 }
 
 /// Rows left for the live transcript band inside `viewport_h` once the
-/// composer, status line, chooser band, fleet rail and the band's own
-/// TOP/BOTTOM borders have taken theirs.
+/// composer, status line, chooser band and fleet rail have taken theirs. The
+/// band draws no border of its own (see `render_transcript`), so this is the
+/// exact row count it paints into.
 fn band_capacity(viewport_h: u16, input_h: u16, chooser_h: u16, rail_h: u16) -> u16 {
-    viewport_h.saturating_sub(input_h + 1 + chooser_h + rail_h + 2)
+    viewport_h.saturating_sub(input_h + 1 + chooser_h + rail_h)
 }
 
 /// Rows the live transcript band may KEEP inside a viewport of `viewport_h`.
 ///
-/// Deliberately the band's LARGEST height, not its height this frame: a
-/// grown composer and an open chooser band are both temporary, but a flush
-/// is not — rows pushed to scrollback never come back, so flushing to fit a
-/// transient squeeze leaves a blank hole above the composer the moment that
-/// squeeze ends. Over-keeping is free: the band tail-follows, so surplus
-/// rows simply wait off-screen until the space is theirs again. The rail is
-/// the exception — it stays for the session, so it really does take its rows.
+/// A grown composer is not counted: it is temporary, the operator is typing
+/// rather than reading, and rows flushed to fit it would leave a hole above
+/// the composer once it shrinks back. The chooser band IS counted, although
+/// it is temporary too: the operator must read the reply to choose, and a
+/// band that keeps rows it cannot show hides exactly that reply behind a
+/// "↑ 7 more" marker. Flushed rows land directly above the band, still on
+/// screen, so pushing the reply up costs a few blank rows after the pick
+/// and hiding it costs the reply. The rail stays for the session and takes
+/// its rows outright.
 fn band_inner_rows(app: &App, viewport_h: u16) -> u16 {
-    band_capacity(viewport_h, INPUT_H_MIN, 0, fleet_rail_height(app))
+    let chooser_h = chooser_band_height(app, viewport_h, INPUT_H_MIN);
+    band_capacity(viewport_h, INPUT_H_MIN, chooser_h, fleet_rail_height(app))
 }
 
 /// Index one past the last message that is settled AND therefore flushable:
@@ -652,13 +656,13 @@ fn gap_row(
     }
 }
 
-/// The welcome, when it is the surface and still in the live band: painted
-/// above the first message by `render_transcript`, and committed to
-/// scrollback with it by `flush_finished`. `None` once the conversation has
-/// started or the head has already been flushed. Ends in a blank when there
-/// are notices under it, so the hint line and the first notice do not touch.
+/// The welcome while it is still the head of the live band: painted above
+/// the first message by `render_transcript`, and committed to scrollback
+/// with it by `flush_finished`. `None` once that head has been flushed (see
+/// [`App::welcome_header_live`]). Ends in a blank when there are messages
+/// under it, so the hint line and the first message do not touch.
 fn welcome_header(app: &App, eye_open: bool) -> Option<Vec<Line<'static>>> {
-    if app.flushed_upto > 0 || !app.welcome_visible() {
+    if !app.welcome_header_live() {
         return None;
     }
     let mut lines = welcome_lines(
@@ -758,9 +762,7 @@ fn band_rows(
     if lines.is_empty() {
         return 0;
     }
-    let block = Block::default()
-        .borders(Borders::TOP | Borders::BOTTOM)
-        .padding(Padding::horizontal(theme.inner_padding as u16));
+    let block = Block::default().padding(Padding::horizontal(theme.inner_padding as u16));
     let inner_width = block.inner(Rect::new(0, 0, outer_width.max(1), 1)).width;
     Paragraph::new(Text::from(lines))
         .wrap(Wrap { trim: false })
@@ -864,14 +866,13 @@ pub fn flush_finished<B: Backend>(
     let mut total: u32 = rows.iter().map(|r| u32::from(*r)).sum();
     let settled = settle_end(app);
     let mut end = start;
-    // Stop BEFORE the message whose departure would leave the band short. A
-    // flush is one-way, and a message is flushed whole, so "flush while we
-    // overflow" hands a 30-row reply to scrollback and leaves the band empty —
-    // the transcript ends mid-screen with a blank slab down to the composer.
-    // Keeping it costs nothing: the band tail-follows, so the surplus rows sit
-    // off-screen (PageUp reaches them) until later messages push them out for
-    // real.
-    while end < settled && total > cap && total - u32::from(rows[end - start]) >= cap {
+    // Flush until what remains fits, even when that leaves the band short. The
+    // alternative — keep the message whose departure would leave a blank slab,
+    // and let the band hide its surplus rows above the fold — traded a few
+    // empty rows for a reply the reader could not see ("↑ 7 more · PgUp" over
+    // the one answer they were asked to act on). A flushed reply sits directly
+    // above the band, on screen; a hidden one is gone until they page for it.
+    while end < settled && total > cap {
         total -= u32::from(rows[end - start]);
         end += 1;
     }
@@ -985,23 +986,16 @@ fn scroll_marker(max_scroll: u16, scroll_back: u16) -> Option<String> {
 /// `scroll_back`-driven view of the complete `app.messages`).
 fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme;
-    // Top border only, and no title.
+    // No border at all.
     //
-    // The name was already in the status-bar badge, so ` chat · mur ` spent a
-    // full-width rule restating it. The bottom border marked the same seam as
-    // the composer's own titled top border directly beneath it — two rules for
-    // one boundary, and the composer's is the one carrying the key hints a
-    // reader acts on.
-    //
-    // The top rule stays: it is where the live band begins, which is the line a
-    // resize reflows from, and it still hosts the right-aligned scroll marker
-    // when rows are hidden above.
-    let block = Block::default()
-        .borders(Borders::TOP)
-        .border_type(theme.border_type)
-        .border_style(Style::default().fg(theme.border))
-        .padding(Padding::horizontal(theme.inner_padding as u16))
-        .title_style(Style::default().fg(theme.border_title));
+    // The name was already in the status-bar badge, so a titled frame spent a
+    // full-width rule restating it, and the bottom rule marked the same seam
+    // as the composer's own titled top border beneath it. The top rule went
+    // last: it only ever hosted the scroll marker, and on a screen already
+    // ruled between speakers and around the composer it read as one line too
+    // many. The marker now paints itself on the band's first row, right-
+    // aligned, when — and only when — rows are hidden above.
+    let block = Block::default().padding(Padding::horizontal(theme.inner_padding as u16));
     let inner = block.inner(area);
     let inner_width = inner.width;
 
@@ -1042,11 +1036,14 @@ fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     app.scroll_back = app.scroll_back.min(max_scroll);
     let offset = max_scroll - app.scroll_back;
 
-    let block = match scroll_marker(max_scroll, app.scroll_back) {
-        Some(marker) => block.title(Line::from(marker).right_aligned()),
-        None => block,
-    };
     f.render_widget(output.block(block).scroll((offset, 0)), area);
+    if let Some(marker) = scroll_marker(max_scroll, app.scroll_back) {
+        let row = Rect { height: 1, ..inner };
+        f.render_widget(
+            Line::styled(marker, Style::default().fg(theme.border_title)).right_aligned(),
+            row,
+        );
+    }
 }
 
 /// Header line of an agent turn plus its reasoning block: an animated bullet
@@ -2452,11 +2449,11 @@ mod transcript_chrome_tests {
         assert!(!out.contains("chat ·"), "title is back:\n{out}");
     }
 
-    /// One rule, not two. The composer's own titled top border marks the same
-    /// seam directly beneath this block, and it is the one carrying the key
-    /// hints a reader acts on.
+    /// No rule at all. The composer's own titled top border marks the seam
+    /// beneath this block, and the top rule only ever hosted the scroll
+    /// marker — one line too many on a screen already ruled between speakers.
     #[test]
-    fn only_the_top_edge_is_drawn() {
+    fn no_edge_is_drawn() {
         let out = painted();
         let ruled: Vec<usize> = out
             .lines()
@@ -2464,10 +2461,9 @@ mod transcript_chrome_tests {
             .filter(|(_, l)| l.chars().filter(|c| *c == '─').count() > 10)
             .map(|(i, _)| i)
             .collect();
-        assert_eq!(
-            ruled,
-            vec![0],
-            "expected a top rule and nothing else: {ruled:?}\n{out}"
+        assert!(
+            ruled.is_empty(),
+            "expected no rule, got rows {ruled:?}\n{out}"
         );
     }
 }
@@ -2504,13 +2500,14 @@ mod welcome_surface_tests {
         );
         assert!(d.contains("skin changed to mur"), "notice missing:\n{d}");
 
-        // Control: the first spoken turn ends it.
+        // Control: the welcome leaves with the head of the band, not with
+        // the first spoken turn (see `band_growth_tests`).
         app.messages.push(ChatMsg::for_test(Role::User, "hi"));
-        assert!(app.messages.iter().any(|m| m.role == Role::User));
+        app.flushed_upto = 1;
         let d = dump(&mut app);
         assert!(
             !d.contains(MASCOT_REST[1]),
-            "welcome outlived the chat:\n{d}"
+            "welcome outlived its flush:\n{d}"
         );
     }
 
@@ -2546,5 +2543,126 @@ mod welcome_surface_tests {
             "agent after user not ruled: {:?}",
             text(3)
         );
+    }
+}
+
+/// The live band grows upward: what no longer fits is pushed into scrollback
+/// (directly above the band, still on screen), never hidden behind a marker.
+#[cfg(test)]
+mod band_growth_tests {
+    use super::super::app::{App, ChatMsg, RenderMode, Role};
+    use super::super::complete::{Candidate, CompletionState};
+    use super::super::welcome::MASCOT_REST;
+    use super::{flush_finished, render, render_transcript};
+    use ratatui::backend::TestBackend;
+    use ratatui::layout::Rect;
+    use ratatui::{Terminal, TerminalOptions, Viewport};
+
+    fn option(display: &str) -> Candidate {
+        Candidate {
+            display: display.into(),
+            insert: display.into(),
+            desc: String::new(),
+            has_children: false,
+        }
+    }
+
+    /// A finished exchange with three suggested replies pending — the shape
+    /// from the report: the reply the operator must read to choose.
+    fn app_with_open_chooser() -> App {
+        let mut app = App::test_fixture();
+        app.render_mode = RenderMode::Inline;
+        let long = (1..=8)
+            .map(|i| format!("earlier line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.messages.push(ChatMsg::for_test(Role::Agent, &long));
+        app.messages
+            .push(ChatMsg::for_test(Role::User, "先建 Messaging API channel"));
+        app.messages.push(ChatMsg::for_test(
+            Role::Agent,
+            "Messaging API 建好以後跟我說",
+        ));
+        app.completion = Some(CompletionState {
+            items: vec![option("建好了"), option("卡住了"), option("接著建")],
+            selected: 0,
+            spaced: true,
+        });
+        app
+    }
+
+    /// The chooser takes rows from the band; before, the band answered by
+    /// hiding rows above ("↑ 7 more · PgUp") — the reply behind the chooser
+    /// read as lost. Now the overflow is flushed up into scrollback, where it
+    /// stays readable while the operator picks.
+    #[test]
+    fn an_open_chooser_pushes_the_reply_up_instead_of_hiding_it() {
+        let mut app = app_with_open_chooser();
+        let mut term = Terminal::with_options(
+            TestBackend::new(100, 60),
+            TerminalOptions {
+                viewport: Viewport::Inline(20),
+            },
+        )
+        .unwrap();
+        flush_finished(&mut term, &mut app, 20).unwrap();
+        term.draw(|f| render(f, &mut app)).unwrap();
+        let d = term.backend().to_string();
+        assert!(!d.contains("PgUp"), "rows hidden behind the chooser:\n{d}");
+        assert!(
+            d.contains("earlier line 1"),
+            "flushed reply not on screen:\n{d}"
+        );
+        assert!(
+            d.contains("建好以後跟我說"),
+            "latest reply not on screen:\n{d}"
+        );
+    }
+
+    /// The band's top rule was one more line on a screen full of them. It
+    /// only ever carried the scroll marker, which now paints on the first
+    /// row by itself when — and only when — rows are hidden.
+    #[test]
+    fn no_rule_above_the_band_and_the_marker_still_shows_when_needed() {
+        let mut app = App::test_fixture();
+        app.messages.push(ChatMsg::for_test(Role::User, "hi"));
+        app.messages.push(ChatMsg::for_test(Role::Agent, "hello"));
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        term.draw(|f| render_transcript(f, &mut app, Rect::new(0, 0, 100, 30)))
+            .unwrap();
+        let d = term.backend().to_string();
+        assert!(!d.contains('─'), "a rule above the band:\n{d}");
+        assert!(!d.contains("PgUp"), "marker with nothing hidden:\n{d}");
+
+        // Control: squeeze the same transcript so rows really are hidden.
+        app.flushed_upto = 0;
+        let mut term = Terminal::new(TestBackend::new(100, 3)).unwrap();
+        term.draw(|f| render_transcript(f, &mut app, Rect::new(0, 0, 100, 3)))
+            .unwrap();
+        let d = term.backend().to_string();
+        assert!(d.contains("more · PgUp"), "hidden rows unmarked:\n{d}");
+    }
+
+    /// The mascot is the head of the band, not a splash that the first turn
+    /// replaces: it stays until the band fills and the flush carries it up.
+    #[test]
+    fn the_mascot_stays_until_the_first_flush() {
+        let mut app = App::test_fixture();
+        app.messages.push(ChatMsg::for_test(Role::User, "hi"));
+        app.messages.push(ChatMsg::for_test(Role::Agent, "hello"));
+        let dump = |app: &mut App| {
+            let mut term = Terminal::new(TestBackend::new(100, 40)).unwrap();
+            term.draw(|f| render_transcript(f, app, Rect::new(0, 0, 100, 40)))
+                .unwrap();
+            term.backend().to_string()
+        };
+        let d = dump(&mut app);
+        assert!(d.contains(MASCOT_REST[1]), "mascot gone after a turn:\n{d}");
+        assert!(d.contains("hello"), "reply missing under the mascot:\n{d}");
+
+        // Control: once the head is in scrollback the band no longer paints it.
+        app.flushed_upto = 1;
+        let d = dump(&mut app);
+        assert!(!d.contains(MASCOT_REST[1]), "mascot painted twice:\n{d}");
     }
 }
