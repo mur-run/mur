@@ -35,10 +35,31 @@ const INPUT_H_MAX: u16 = 8;
 const HITL_PCT_X: u16 = 70;
 const HITL_PCT_Y: u16 = 50;
 
-/// Rows one PgUp/PgDn moves the approval modal's body. Fixed rather than
-/// "one screenful" because the key handler decides the step and only the
-/// renderer knows the box height; the renderer clamps whatever it is handed.
+/// Rows one PgUp/PgDn moves the approval modal's body, used only until the
+/// modal has been drawn once and can report its real height.
+///
+/// A fixed step is not safe on its own: when the box is short (a narrow pane
+/// wraps the input into more rows, leaving as few as two visible) a step of 5
+/// jumps clean over the rows in between, and the operator is never shown them.
+/// Skipping content in the one modal whose whole job is "read this before it
+/// runs" is the worst place to lose a line, so `hitl_scroll_step` clamps the
+/// step to what the renderer last had room for.
 pub(super) const HITL_SCROLL_PAGE: u16 = 5;
+
+/// Rows to page by, given how many body rows the modal last displayed.
+///
+/// Never larger than the visible window, so paging cannot step over a row that
+/// was never on screen. Keeps one row of overlap for reading continuity, and
+/// falls back to [`HITL_SCROLL_PAGE`] before the first draw reports a height.
+pub(super) const fn hitl_scroll_step(visible_rows: u16) -> u16 {
+    if visible_rows == 0 {
+        HITL_SCROLL_PAGE
+    } else if visible_rows > 1 {
+        visible_rows - 1
+    } else {
+        1
+    }
+}
 
 /// Prepend the body indent to an already-styled line (e.g. cached markdown).
 fn indent_line(mut line: Line<'static>) -> Line<'static> {
@@ -99,13 +120,17 @@ pub fn render(f: &mut Frame, app: &mut App) {
         .clone()
         .filter(|h| !app.hitl_inline_visible(h.step_id.as_deref()))
     {
-        app.hitl_scroll = render_hitl(
+        let (used, shown) = render_hitl(
             f,
             &hitl,
             app.hitl_grant_confirm,
             app.input_text().is_empty(),
             app.hitl_scroll,
         );
+        app.hitl_scroll = used;
+        // The renderer is the only place that knows the box height, so it hands
+        // the page size back rather than the key handler guessing one.
+        app.hitl_page = shown;
     }
 }
 
@@ -1375,16 +1400,17 @@ fn wrap_row(s: &str, w: usize) -> Vec<String> {
     rows
 }
 
-/// Draw the approval modal and return the scroll offset it actually used —
+/// Draw the approval modal. Returns the scroll offset it actually used —
 /// `scroll` clamped to the content, so the caller's stored offset cannot run
-/// away past the end of a short input.
+/// away past the end of a short input — and how many body rows it had room to
+/// display, which is what the key handler pages by (see `hitl_scroll_step`).
 fn render_hitl(
     f: &mut Frame,
     hitl: &super::stream::HitlRequest,
     grant_confirm: Option<char>,
     composer_empty: bool,
     scroll: u16,
-) -> u16 {
+) -> (u16, u16) {
     let area = centered_rect(HITL_PCT_X, HITL_PCT_Y, f.area());
     let input = serde_json::to_string_pretty(&hitl.tool_input).unwrap_or_default();
     // Header rows stay pinned: scrolling the body must never carry the tool
@@ -1514,8 +1540,10 @@ fn render_hitl(
     let body_h = chunks[0].height as usize;
     let room = body_h.saturating_sub(head.len());
     let mut lines = head;
+    let mut shown = room;
     let used_scroll = if body.len() > room && room > 1 {
         let visible = room - 1;
+        shown = visible;
         let above = (scroll as usize).min(body.len() - visible);
         let below = body.len() - visible - above;
         lines.extend(body.into_iter().skip(above).take(visible));
@@ -1535,7 +1563,7 @@ fn render_hitl(
         Paragraph::new(keys_text).wrap(Wrap { trim: false }),
         chunks[1],
     );
-    used_scroll
+    (used_scroll, shown as u16)
 }
 
 /// Format a token count with thousands separator (e.g. 1240 → "1,240").
@@ -2004,6 +2032,25 @@ mod hitl_modal_tests {
             "a bigger box hid {large} lines vs {small} in a smaller one — \
              the count is tracking box height, not residual content"
         );
+    }
+
+    /// A page must never step over a row the operator was not shown. With a
+    /// fixed step of 5 and a box short enough to show 2 body rows, one PgDn
+    /// moved from rows 1-2 to rows 6-7 and rows 3-5 were never displayed —
+    /// silently, in the modal whose entire purpose is reading before running.
+    #[test]
+    fn paging_never_steps_over_an_unread_row() {
+        for visible in 1u16..=40 {
+            let step = super::hitl_scroll_step(visible);
+            assert!(
+                step <= visible,
+                "visible={visible} step={step}: a step wider than the window \
+                 skips rows that were never on screen"
+            );
+            assert!(step >= 1, "visible={visible}: a zero step cannot scroll");
+        }
+        // Before the first draw there is no measured height to clamp to.
+        assert_eq!(super::hitl_scroll_step(0), super::HITL_SCROLL_PAGE);
     }
 
     /// #939 §1+§3: scrolling reaches content that is off-screen at rest, and an
