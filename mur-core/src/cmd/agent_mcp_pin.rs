@@ -781,6 +781,10 @@ mod tests {
     /// working binary that will never serve tools. Before #1161 the probe ran
     /// under a permissive policy and the report said CLEAN, which an operator
     /// reads as "this server is fine" — it means "the files are there".
+    // Unix-only for the fixture, not the behaviour: the reporting under test is
+    // platform-independent, but it needs a known executable that is guaranteed
+    // present and guaranteed not to speak JSON-RPC. Windows has no /bin/echo.
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_server_that_never_answers_initialize_is_not_reported_clean() {
         // The pin must be the REAL hash: with a wrong one `inspect_one` already
