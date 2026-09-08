@@ -1652,6 +1652,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 command,
                 args,
                 force,
+                state_paths,
                 publisher_name,
                 publisher_homepage,
                 publisher_registry_id,
@@ -1660,6 +1661,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 &server_id,
                 &command,
                 &args,
+                &state_paths,
                 cmd::agent::McpAddPin {
                     force,
                     publisher_name,

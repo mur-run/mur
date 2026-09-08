@@ -251,6 +251,10 @@ fn reject_dead_grant(path_arg: &str) -> Result<()> {
 ///
 /// Distinct from `reject_dead_grant`, which refuses a path that does not exist
 /// yet. This one refuses paths that must never be granted at all.
+pub(crate) fn reject_ungrantable_path(name: &str, path_arg: &str, write: bool) -> Result<()> {
+    reject_ungrantable(name, path_arg, write)
+}
+
 fn reject_ungrantable(name: &str, path_arg: &str, write: bool) -> Result<()> {
     use mur_agent_runtime::sandbox::launch_chain::{LaunchChain, is_overbroad_grant_root};
 

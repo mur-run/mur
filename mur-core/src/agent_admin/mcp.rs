@@ -16,6 +16,7 @@ pub fn add(name: &str, server_id: &str, command: &str, args: &[String]) -> Resul
         server_id,
         command,
         args,
+        &[],
         agent::McpAddPin {
             force: true,
             ..Default::default()
