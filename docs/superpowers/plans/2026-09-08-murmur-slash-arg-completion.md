@@ -5,7 +5,11 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-08-murmur-slash-arg-completion-design.md`
 **Branch:** `docs/murmur-slash-arg-completion-spec` (spec PR #1218); implement on a fresh branch off `main`.
-**Status:** Tasks 1–4 done. One correction the plan did not anticipate is recorded below.
+**Status:** all five tasks done. Six corrections the plan did not anticipate are recorded below, plus the live-verification result:
+
+- `/effort` on the `mur` agent (`claude_opus` → `claude-opus-5`, the five-level tier) offered exactly `low · medium · high · xhigh · max`.
+- `/forget` offered `last` then `reply-in-zh-tw`, the agent's one live note.
+- `/mo` offered `/memories` and `/model`, both of which the menu never had before. One correction the plan did not anticipate is recorded below.
 
 ## Corrections found during execution
 
@@ -933,7 +937,7 @@ App::menu_ctx                                             // Task 4
 
 ### Steps
 
-- [ ] Add the freshness test to `mod tests` in `complete.rs`:
+- [x] Add the freshness test to `mod tests` in `complete.rs`:
 
 ```rust
     /// After a `/model` switch the menu must offer the NEW model's levels.
@@ -949,13 +953,13 @@ App::menu_ctx                                             // Task 4
     }
 ```
 
-- [ ] Load the context at startup. In `mod.rs`, beside the existing skills load (`app.skills = complete::load_agent_skills(&agent);`):
+- [x] Load the context at startup. In `mod.rs`, beside the existing skills load (`app.skills = complete::load_agent_skills(&agent);`):
 
 ```rust
     app.menu_ctx = complete::MenuContext::load(&home, &agent);
 ```
 
-- [ ] Refresh after every slash command. At the single `handle_slash` call site, replace:
+- [x] Refresh after every slash command. At the single `handle_slash` call site, replace:
 
 ```rust
             handle_slash(app, cmd, tx).await;
@@ -973,7 +977,7 @@ with:
             app.menu_ctx = complete::MenuContext::load(&app.home, &app.agent);
 ```
 
-- [ ] Verify the whole module, lint, format:
+- [x] Verify the whole module, lint, format:
 
 ```bash
 cargo nextest run -p mur-core --lib cmd::agent::cli 2>&1 | tail -2
@@ -983,7 +987,7 @@ cargo clippy -p mur-core --all-targets -- -D warnings 2>&1 | grep -c '^error'
 cargo fmt -p mur-core && cargo fmt --check -p mur-core && echo fmt-clean
 ```
 
-- [ ] Live-verify against a real agent, because a menu that only exists in tests has never been seen. Build the debug binary and drive it in tmux, polling for readiness before sending keys (sending early types into a terminal that is not listening yet):
+- [x] Live-verify against a real agent, because a menu that only exists in tests has never been seen. Build the debug binary and drive it in tmux, polling for readiness before sending keys (sending early types into a terminal that is not listening yet):
 
 ```bash
 cargo build -p mur-core --bin mur
@@ -1004,7 +1008,7 @@ tmux send-keys -t murmenu C-d; sleep 2; tmux kill-session -t murmenu
 
 Expected: `last` first, then this agent's note names.
 
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git commit -am "feat(murmur): the menu's argument lists refresh after every slash command"

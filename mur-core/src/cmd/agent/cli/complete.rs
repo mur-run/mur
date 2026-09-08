@@ -639,4 +639,16 @@ mod tests {
         assert_eq!(s.items[0].display, "last");
         assert_eq!(s.items.len(), 2);
     }
+
+    /// After a `/model` switch the menu must offer the NEW model's levels.
+    /// Two shapes with different level counts, so a stale context cannot pass
+    /// by coincidence.
+    #[test]
+    fn switching_models_changes_the_levels_on_offer() {
+        let five = effort_ctx("claude-opus-5");
+        let three = effort_ctx("gpt-5");
+        assert_ne!(five.effort, three.effort);
+        assert_eq!(compute("/effort ", &[], &five).unwrap().items.len(), 5);
+        assert_eq!(compute("/effort ", &[], &three).unwrap().items.len(), 3);
+    }
 }
