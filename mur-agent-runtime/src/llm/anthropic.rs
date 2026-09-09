@@ -54,27 +54,92 @@ const LLM_CONNECT_TIMEOUT_SECS: u64 = 10;
 /// Must stay in sync with `mur-core/src/cmd/agent.rs::SECRET_SERVICE`.
 const MUR_AGENT_KEYCHAIN_SERVICE: &str = "mur-agent";
 
-/// Warn once per process if the resolved API key looks like a Claude
-/// subscription OAuth token (`sk-ant-oat*`) but the configured base URL
-/// still points at api.anthropic.com — Anthropic will reject the call.
+/// What is wrong with an `sk-ant-oat*` key at a given base URL, if anything.
+///
+/// Split out of `warn_if_oauth_key_misconfigured` so the rule is unit-testable
+/// without a tracing subscriber and without the process-global "warn once"
+/// latch, which makes the warning observable exactly once per test binary.
+#[derive(Debug, PartialEq, Eq)]
+enum OauthKeyMisuse {
+    /// Sent straight at Anthropic, which does not accept subscription tokens.
+    RejectedUpstream,
+    /// Sent at a loopback bridge. `mur-model-gateway` keys its mode on the
+    /// *shape* of the inbound credential: an `sk-ant-oat*` value in `x-api-key`
+    /// is read as "this client wants OAuth", and the bridge answers by
+    /// attaching its own, fresher Claude Code token and dropping the one that
+    /// arrived. The configured secret is therefore never sent anywhere, and a
+    /// model entry that looks like an independent credential path silently
+    /// shares whatever credential the bridge holds — so switching to it does
+    /// not escape an outage on that credential.
+    IgnoredByBridge,
+}
+
+/// `None` when the key is not a subscription token, or when the base URL is
+/// some other remote host whose credential policy we cannot know.
+///
+/// ponytail: loopback detection is a small host allowlist, not the whole of
+/// 127.0.0.0/8. Widen it if someone actually binds a bridge to 127.0.0.2.
+fn classify_oauth_key(api_key: &str, base_url: &str) -> Option<OauthKeyMisuse> {
+    if !api_key.contains("sk-ant-oat") {
+        return None;
+    }
+    if base_url.starts_with("https://api.anthropic.com") {
+        return Some(OauthKeyMisuse::RejectedUpstream);
+    }
+    let host = reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned));
+    match host.as_deref() {
+        Some("127.0.0.1" | "localhost" | "::1" | "[::1]") => Some(OauthKeyMisuse::IgnoredByBridge),
+        _ => None,
+    }
+}
+
+/// Warn once per process, per kind, if the resolved API key is a Claude
+/// subscription OAuth token in a place that cannot use it.
+///
+/// The loopback arm exists because the other arm's advice used to end the
+/// story: it told the reader to point the base URL at a local OAuth bridge,
+/// and doing exactly that produced no warning at all — while the bridge went
+/// on ignoring the key. A real config kept an `sk-ant-oat*` token in
+/// `~/.mur/secrets/anthropic.key` for months believing it was a second,
+/// independent credential; it was the same credential the whole time, which
+/// only surfaced when switching models during an outage changed nothing.
+///
+/// The two kinds latch separately. One shared flag would let whichever route
+/// ran first silence the other, and they are different diagnoses with
+/// different fixes.
 fn warn_if_oauth_key_misconfigured(api_key: &str, base_url: &str) {
     use std::sync::atomic::{AtomicBool, Ordering};
-    static WARNED: AtomicBool = AtomicBool::new(false);
-    if !api_key.contains("sk-ant-oat") {
-        return;
+    match classify_oauth_key(api_key, base_url) {
+        Some(OauthKeyMisuse::RejectedUpstream) => {
+            static WARNED: AtomicBool = AtomicBool::new(false);
+            if WARNED.swap(true, Ordering::Relaxed) {
+                return;
+            }
+            tracing::warn!(
+                base_url = %base_url,
+                "ANTHROPIC_API_KEY looks like an OAuth subscription token (sk-ant-oat*), \
+                 but base URL is api.anthropic.com — Anthropic will reject the request. \
+                 Point ANTHROPIC_BASE_URL at a local OAuth bridge, which supplies its \
+                 own credential and does not need this key."
+            );
+        }
+        Some(OauthKeyMisuse::IgnoredByBridge) => {
+            static WARNED: AtomicBool = AtomicBool::new(false);
+            if WARNED.swap(true, Ordering::Relaxed) {
+                return;
+            }
+            tracing::warn!(
+                base_url = %base_url,
+                "ANTHROPIC_API_KEY is an OAuth subscription token (sk-ant-oat*) pointed at \
+                 a loopback bridge. The bridge attaches its own Claude Code credential and \
+                 drops this one, so this key is never sent and this model entry is not an \
+                 independent credential path. Use an sk-ant-api03 key if it was meant to be."
+            );
+        }
+        None => {}
     }
-    if !base_url.starts_with("https://api.anthropic.com") {
-        return;
-    }
-    if WARNED.swap(true, Ordering::Relaxed) {
-        return;
-    }
-    tracing::warn!(
-        base_url = %base_url,
-        "ANTHROPIC_API_KEY looks like an OAuth subscription token (sk-ant-oat*), \
-         but base URL is api.anthropic.com — Anthropic will reject the request. \
-         Point ANTHROPIC_BASE_URL at a local OAuth bridge."
-    );
 }
 
 /// How a request authenticates. Explicit so an authless route is a
@@ -1285,5 +1350,51 @@ mod tests {
             AnthropicClient::new(server.base_url(), "test-key".into(), "claude-opus-5".into());
         client.generate(hello()).await.unwrap();
         m.assert_async().await;
+    }
+
+    /// The gap this closes: a subscription token pointed at the loopback
+    /// bridge used to be classified as fine, because the only check was
+    /// "is the base URL api.anthropic.com". The bridge drops the key and
+    /// attaches its own, so nothing about that config does what it looks
+    /// like it does.
+    #[test]
+    fn an_oauth_key_at_a_loopback_bridge_is_flagged_as_ignored() {
+        for base in [
+            "http://127.0.0.1:8088",
+            "http://localhost:8088/v1",
+            "http://[::1]:8088",
+        ] {
+            assert_eq!(
+                classify_oauth_key("sk-ant-oat01-abc", base),
+                Some(OauthKeyMisuse::IgnoredByBridge),
+                "{base}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_oauth_key_at_anthropic_is_still_flagged_as_rejected() {
+        assert_eq!(
+            classify_oauth_key("sk-ant-oat01-abc", "https://api.anthropic.com"),
+            Some(OauthKeyMisuse::RejectedUpstream)
+        );
+    }
+
+    /// A real API key is fine everywhere, and a remote bridge we know nothing
+    /// about must not be second-guessed — it may well forward the token.
+    #[test]
+    fn a_real_key_and_an_unknown_remote_are_left_alone() {
+        assert_eq!(
+            classify_oauth_key("sk-ant-api03-abc", "https://api.anthropic.com"),
+            None
+        );
+        assert_eq!(
+            classify_oauth_key("sk-ant-api03-abc", "http://127.0.0.1:8088"),
+            None
+        );
+        assert_eq!(
+            classify_oauth_key("sk-ant-oat01-abc", "https://bridge.example.com"),
+            None
+        );
     }
 }
