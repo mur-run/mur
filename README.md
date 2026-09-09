@@ -510,6 +510,20 @@ Agent** wizard offers the same catalog as a source.
   `--max-iterations 0` is not zero, and a cron expression that can never fire is
   not a schedule. Unattended auto-run still needs an explicit budget, and
   `mur fleet stop` still ends everything.
+- **Runs that report their own failures** — an agent handing a job to a fleet
+  used to hit a kernel refusal on a binary its profile plainly allowed: the
+  sandbox resolved the name by scanning the exec directories when the agent
+  started, while the spawn resolved it through `PATH` minutes later, and a
+  package upgrade in between was enough to make those two different files. The
+  grant and the spawn now read one derivation, so they cannot disagree. What
+  came back from a failed run was just as thin — six steps marked `failed` and
+  not one reason, leaving agent logs as the only route to a cause. Every
+  terminal step now records why, `mur job status` and `mur fleet status` print
+  it, and a step that fails with nothing to say says that. Delegation fan-out is
+  bounded on the ordinary path too, not only under the experimental worktree
+  flag: members share one local gateway and one upstream quota, so an uncapped
+  fan-out is a self-DoS (`MUR_FLEET_FANOUT` raises the bound; it clamps rather
+  than unbounds).
 - **Schedules that fire when they say they will** — `mur workflow schedule set`
   takes a flat workflow *or* a workflow skill, and resolves the name against
   both when you create the schedule, so a name it accepts is a name that will
