@@ -214,6 +214,40 @@ pub struct StepEvent {
     pub kind: StepEventKind,
     /// Per-step delegate token usage (0 for non-delegate or unknown).
     pub tokens_used: u64,
+    /// Why the step ended this way. Only meaningful on `Failed`.
+    pub error: Option<String>,
+}
+
+/// Cap on a recorded step failure reason: long enough for a dial error or a
+/// stderr tail, short enough that `run.json` stays a record and not a log.
+const STEP_ERROR_MAX_CHARS: usize = 500;
+
+/// Cap on the output excerpt mirrored into a channel `ToolResult`.
+const CHANNEL_EXCERPT_MAX_CHARS: usize = 2048;
+
+/// `String::truncate` panics off a char boundary and agent output is
+/// routinely multibyte, so every cap in this file goes through here.
+fn truncate_chars(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
+    }
+}
+
+/// The reason to record on a terminal step. `None` for a success.
+///
+/// An empty output still yields a reason: "failed with nothing to say" is
+/// itself the finding, and a bare exit code beats an empty field.
+fn step_failure_reason(result: &StepResult) -> Option<String> {
+    if result.success {
+        return None;
+    }
+    let text = result.output_text.trim();
+    Some(if text.is_empty() {
+        format!("no output; exit code {}", result.exit_code)
+    } else {
+        truncate_chars(text, STEP_ERROR_MAX_CHARS)
+    })
 }
 
 /// Apply one `StepEvent` to the record's `steps` — insert-or-update by step
@@ -233,6 +267,9 @@ fn apply_step_event(record: &mut crate::run_status::RunState, event: &StepEvent)
     };
     if let Some(step) = record.steps.iter_mut().find(|s| s.id == event.id) {
         step.state = state;
+        // Assign, never merge: a retry re-arms with `None` and must not leave
+        // the previous attempt's reason sitting next to a running state.
+        step.error = event.error.clone();
         if let Some(ts) = started_at {
             step.started_at = Some(ts);
         }
@@ -247,6 +284,7 @@ fn apply_step_event(record: &mut crate::run_status::RunState, event: &StepEvent)
         state,
         started_at,
         ended_at,
+        error: event.error.clone(),
     });
 }
 
@@ -628,17 +666,18 @@ async fn execute_step(
     let observer_agent = step.delegate_to.clone();
     // Display-only step lifecycle emit: MUST be cheap and MUST NOT panic
     // (plain Fn, never `?`'d — see `DagExecOptions.on_step` doc).
-    let emit = |kind: StepEventKind, tokens_used: u64| {
+    let emit = |kind: StepEventKind, tokens_used: u64, error: Option<String>| {
         if let Some(cb) = &opts.on_step {
             cb(StepEvent {
                 id: sid.clone(),
                 agent: observer_agent.clone(),
                 kind,
                 tokens_used,
+                error,
             });
         }
     };
-    emit(StepEventKind::Started, 0);
+    emit(StepEventKind::Started, 0, None);
     // Retries reuse (run_id, step_id); without an attempt discriminator a
     // succeeding retry's events collide with the failed attempt's idem keys and
     // are dropped by the dedup-aware writer. attempt 0 keeps the original keys
@@ -663,7 +702,7 @@ async fn execute_step(
             })
         {
             eprintln!("  Step {sid}: already completed (resume) — skipping");
-            emit(StepEventKind::Done, 0);
+            emit(StepEventKind::Done, 0, None);
             return StepResult {
                 exit_code: 0,
                 output_text: String::new(),
@@ -793,6 +832,7 @@ async fn execute_step(
                 StepEventKind::Failed
             },
             result.tokens_used,
+            step_failure_reason(&result),
         );
         return result;
     }
@@ -851,7 +891,7 @@ async fn execute_step(
                 "  Step {sid}: awaiting approval — {} (approve: mur channel approve {cid} <hitl_id>)",
                 decision.reason
             );
-            emit(StepEventKind::Blocked, 0);
+            emit(StepEventKind::Blocked, 0, None);
             return StepResult {
                 exit_code: 0,
                 output_text: decision.reason.clone(),
@@ -864,7 +904,11 @@ async fn execute_step(
         }
         if !decision.allow {
             eprintln!("  Step {sid}: gate denied ({})", decision.reason);
-            emit(StepEventKind::Failed, 0);
+            emit(
+                StepEventKind::Failed,
+                0,
+                Some(format!("hitl: {}", decision.reason)),
+            );
             return StepResult {
                 exit_code: 1,
                 output_text: format!("hitl: {}", decision.reason),
@@ -879,7 +923,7 @@ async fn execute_step(
         let now_hash = crate::hitl::pin::action_hash("sh", &input, cid, &sid, "mur");
         if !decision.action_hash.is_empty() && now_hash != decision.action_hash {
             eprintln!("  Step {sid}: hitl_drift at execute boundary — refusing");
-            emit(StepEventKind::Failed, 0);
+            emit(StepEventKind::Failed, 0, Some("hitl_drift".into()));
             return StepResult {
                 exit_code: 1,
                 output_text: "hitl_drift".into(),
@@ -926,6 +970,7 @@ async fn execute_step(
                     StepEventKind::Blocked
                 },
                 0,
+                refused.then(|| "needs_approval: declined".to_string()),
             );
             return StepResult {
                 exit_code: if refused { 1 } else { 0 },
@@ -959,8 +1004,7 @@ async fn execute_step(
     let result = execute_step_inner(step, opts, step_index).await;
 
     if let Some(cid) = opts.channel_id.as_deref() {
-        let mut excerpt = result.output_text.clone();
-        excerpt.truncate(2048);
+        let excerpt = truncate_chars(&result.output_text, CHANNEL_EXCERPT_MAX_CHARS);
         // Use the deterministic idem_key so the resume cursor can match this row.
         let result_key = idem_key(cid, &opts.run_id, &sid, &key("result"));
         let _ = ChannelService::open(mur_home).and_then(|svc| {
@@ -989,6 +1033,7 @@ async fn execute_step(
             StepEventKind::Failed
         },
         result.tokens_used,
+        step_failure_reason(&result),
     );
 
     result
@@ -1246,6 +1291,7 @@ pub async fn execute_dag(
                     agent: step.delegate_to.clone(),
                     kind: StepEventKind::Blocked,
                     tokens_used: 0,
+                    error: Some("depends on a step awaiting approval".into()),
                 });
             }
             blocked_ids.insert(sid);
@@ -1581,6 +1627,49 @@ async fn finalize_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn result(success: bool, exit_code: i32, out: &str) -> StepResult {
+        StepResult {
+            exit_code,
+            output_text: out.to_string(),
+            duration_ms: 0,
+            failed_step: None,
+            success,
+            blocked: false,
+            tokens_used: 0,
+        }
+    }
+
+    #[test]
+    fn a_failed_step_always_has_a_reason_and_a_done_step_never_does() {
+        assert_eq!(step_failure_reason(&result(true, 0, "fine")), None);
+        assert_eq!(
+            step_failure_reason(&result(false, 1, "  delegate failed: refused  ")).as_deref(),
+            Some("delegate failed: refused")
+        );
+        // Silence is itself the finding: six steps once failed with nothing
+        // recorded at all, and a bare exit code beats an empty field.
+        assert_eq!(
+            step_failure_reason(&result(false, 7, "   ")).as_deref(),
+            Some("no output; exit code 7")
+        );
+    }
+
+    #[test]
+    fn truncation_survives_multibyte_output() {
+        // `String::truncate` panics off a char boundary, and agent output is
+        // routinely CJK — the old byte cap was a live panic in the executor.
+        let cjk = "調度中".repeat(400);
+        let cut = truncate_chars(&cjk, STEP_ERROR_MAX_CHARS);
+        assert_eq!(
+            cut.chars().count(),
+            STEP_ERROR_MAX_CHARS + 1,
+            "cap + ellipsis"
+        );
+        assert!(cut.ends_with('…'));
+        assert_eq!(truncate_chars("short", STEP_ERROR_MAX_CHARS), "short");
+    }
+
     use mur_common::skill::manifest::ProcedureStep;
 
     fn step(id: &str, deps: &[&str], cmd: Option<&str>) -> ProcedureStep {
