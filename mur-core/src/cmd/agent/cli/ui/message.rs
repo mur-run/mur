@@ -12,6 +12,12 @@ pub(super) const MSG_INDENT: &str = markdown::BODY_INDENT;
 
 /// Prepend the body indent to an already-styled line (e.g. cached markdown).
 pub(super) fn indent_line(mut line: Line<'static>) -> Line<'static> {
+    // A blank stays a blank. Indenting it makes a whitespace-only line, and
+    // ratatui's `Wrap { trim: false }` paints one of those as TWO rows — every
+    // paragraph break in a reply showed up double-spaced.
+    if line.width() == 0 {
+        return line;
+    }
     line.spans.insert(0, Span::raw(MSG_INDENT));
     line
 }
@@ -33,9 +39,14 @@ pub(super) fn indent_line(mut line: Line<'static>) -> Line<'static> {
 /// read as ten unrelated events — twenty rows of scrollback for ten facts.
 /// Suppressing the gap there is what turns vertical rhythm into grouping
 /// instead of uniform repetition: every remaining gap now marks a real
-/// boundary.
-pub(super) fn wants_gap_before(m: &crate::cmd::agent::cli::app::ChatMsg) -> bool {
-    m.step.is_none()
+/// boundary — including the one where a run of cards begins: the first card
+/// after a spoken turn opens a gap, so the block of work is set off from the
+/// message that asked for it instead of hanging off its last line.
+pub(super) fn wants_gap_before(
+    prev: Option<&crate::cmd::agent::cli::app::ChatMsg>,
+    m: &crate::cmd::agent::cli::app::ChatMsg,
+) -> bool {
+    m.step.is_none() || prev.is_none_or(|p| p.step.is_none())
 }
 
 /// The gap before a message: a blank line in every skin. The role label is
@@ -98,7 +109,13 @@ pub(super) fn agent_body_lines(
     if streaming {
         let mut body: Vec<Line<'static>> = text
             .lines()
-            .map(|l| Line::raw(format!("{MSG_INDENT}{l}")))
+            .map(|l| {
+                if l.is_empty() {
+                    Line::default()
+                } else {
+                    Line::raw(format!("{MSG_INDENT}{l}"))
+                }
+            })
             .collect();
         // Trailing spinner so the user sees liveness.
         let spin = SPINNER[spinner % SPINNER.len()];
@@ -204,6 +221,10 @@ pub(super) fn push_message(
             // that knows the pane width, and it runs every frame, so the card
             // reflows on resize for free.
             if let Some(body) = &m.settlement {
+                // A blank row between the reply and its settlement card: the
+                // card is a surface of its own and read as part of the last
+                // paragraph when it sat flush against it.
+                lines.push(Line::default());
                 let inner = width.saturating_sub(u16::from(theme.inner_padding) * 2);
                 lines.extend(crate::cmd::agent::cli::settlement::card_lines(
                     body, theme, inner,
@@ -237,6 +258,11 @@ mod settlement_paint_tests {
             text.iter().any(|l| l.contains("cargo test")),
             "card body missing: {text:?}"
         );
+        let head = text.iter().position(|l| l.contains("SETTLEMENT")).unwrap();
+        assert!(
+            head > 0 && text[head - 1].trim().is_empty(),
+            "no blank row between the reply and its card: {text:?}"
+        );
     }
 
     #[test]
@@ -268,18 +294,34 @@ mod gap_tests {
     }
 
     /// The whole point: a run of tool calls is one block of work, not N
-    /// separate events. Ten calls used to cost ten gap rows.
+    /// separate events. Ten calls used to cost ten gap rows — but the run
+    /// itself is set off from the turn that asked for it.
     #[test]
-    fn a_tool_call_does_not_open_a_gap() {
-        assert!(!wants_gap_before(&card_msg()));
+    fn a_run_of_tool_calls_opens_one_gap() {
+        let user = ChatMsg::for_test(Role::User, "hi");
+        assert!(wants_gap_before(Some(&user), &card_msg()), "first card");
+        assert!(
+            !wants_gap_before(Some(&card_msg()), &card_msg()),
+            "card after card"
+        );
     }
 
     /// Control — if this ever flips, gaps stop marking anything at all.
     #[test]
     fn a_spoken_turn_still_opens_a_gap() {
-        assert!(wants_gap_before(&ChatMsg::for_test(Role::User, "hi")));
-        assert!(wants_gap_before(&ChatMsg::for_test(Role::Agent, "hello")));
-        assert!(wants_gap_before(&ChatMsg::for_test(Role::System, "note")));
+        let card = card_msg();
+        assert!(wants_gap_before(
+            Some(&card),
+            &ChatMsg::for_test(Role::User, "hi")
+        ));
+        assert!(wants_gap_before(
+            Some(&card),
+            &ChatMsg::for_test(Role::Agent, "hello")
+        ));
+        assert!(wants_gap_before(
+            None,
+            &ChatMsg::for_test(Role::System, "note")
+        ));
     }
 
     /// One builder for the row, so the two emit paths cannot drift into
@@ -341,12 +383,24 @@ mod block_tests {
         );
     }
 
-    /// A tool call is a step inside the turn before it.
+    /// A tool call is a step inside the turn before it: the first card of a
+    /// run is set off from the message that asked, the cards after it are not.
     #[test]
-    fn a_step_card_opens_no_gap() {
-        let app = App::test_fixture();
-        let lines = text(&message_block(&app, 3, &card(), 0, false));
-        assert!(!lines.first().is_some_and(|l| is_gap(l)), "{lines:?}");
+    fn a_run_of_step_cards_opens_one_gap() {
+        let mut app = App::test_fixture();
+        app.messages.push(ChatMsg::for_test(Role::User, "hi"));
+        app.messages.push(card());
+        app.messages.push(card());
+        let first = text(&message_block(&app, 1, &app.messages[1], 0, false));
+        assert!(
+            first.first().is_some_and(|l| is_gap(l)),
+            "first card: {first:?}"
+        );
+        let second = text(&message_block(&app, 2, &app.messages[2], 0, false));
+        assert!(
+            !second.first().is_some_and(|l| is_gap(l)),
+            "second card: {second:?}"
+        );
     }
 
     /// Control — if this flips, gaps stop marking anything.

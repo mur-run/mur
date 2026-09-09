@@ -1610,14 +1610,14 @@ impl App {
                 .borders(Borders::TOP)
                 .border_type(theme.border_type)
                 .border_style(theme.error)
-                .padding(Padding::horizontal(theme.inner_padding as u16))
+                .padding(composer_padding(theme))
                 .title(" ! shell command — output shared with agent ")
         } else {
             Block::default()
                 .borders(Borders::TOP)
                 .border_type(theme.border_type)
                 .border_style(theme.border)
-                .padding(Padding::horizontal(theme.inner_padding as u16))
+                .padding(composer_padding(theme))
                 .title(hint)
                 .title_style(theme.muted)
         };
@@ -1626,11 +1626,24 @@ impl App {
 }
 
 /// Build the styled multiline input widget.
+/// The composer's inner padding: the skin's horizontal padding, plus one
+/// blank row above and below the text so the input does not sit jammed
+/// between its rule and the status bar.
+fn composer_padding(theme: &Theme) -> Padding {
+    let h = u16::from(theme.inner_padding);
+    Padding::new(h, h, COMPOSER_PAD_ROWS, COMPOSER_PAD_ROWS)
+}
+
+/// Blank rows above and below the composer text. `ui::INPUT_H_MIN` counts
+/// them; change both together.
+pub(super) const COMPOSER_PAD_ROWS: u16 = 1;
+
 fn new_input() -> TextArea<'static> {
     let mut ta = TextArea::default();
     ta.set_block(
         Block::default()
             .borders(Borders::TOP)
+            .padding(Padding::new(0, 0, COMPOSER_PAD_ROWS, COMPOSER_PAD_ROWS))
             .title(ENTER_HINT_COMPACT),
     );
     ta.set_cursor_line_style(Style::default());

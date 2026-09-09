@@ -36,12 +36,16 @@ use super::complete;
 /// unhandled into the input box.
 const OVERLAY_HINT: &str = " press Enter or Esc to return · Ctrl+D quit ";
 
-/// Composer height when the input is empty (one text row plus its top rule;
-/// the status bar's own rule is the seam beneath). Typing grows it up to
-/// `INPUT_H_MAX`.
-pub(super) const INPUT_H_MIN: u16 = 2;
+/// Rows the composer spends on chrome: its top rule plus the blank row above
+/// and below the text (`app::COMPOSER_PAD_ROWS`).
+const INPUT_CHROME_ROWS: u16 = 1 + 2 * super::app::COMPOSER_PAD_ROWS;
 
-const INPUT_H_MAX: u16 = 8;
+/// Composer height when the input is empty (one text row plus the chrome;
+/// the status bar sits directly beneath). Typing grows it up to
+/// `INPUT_H_MAX`, which leaves seven text rows.
+pub(super) const INPUT_H_MIN: u16 = 1 + INPUT_CHROME_ROWS;
+
+const INPUT_H_MAX: u16 = 7 + INPUT_CHROME_ROWS;
 
 /// Draw the whole UI for one frame.
 pub fn render(f: &mut Frame, app: &mut App) {
@@ -53,7 +57,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         return;
     }
     let input_lines = app.input.lines().len() as u16;
-    let input_height = (input_lines + 1).clamp(INPUT_H_MIN, INPUT_H_MAX);
+    let input_height = (input_lines + INPUT_CHROME_ROWS).clamp(INPUT_H_MIN, INPUT_H_MAX);
     // The agent chooser (suggested replies) renders as its own layout band
     // between transcript and composer — never a Clear-overlay popup — so it
     // can't cover the reply the user must read to choose. The slash-command
