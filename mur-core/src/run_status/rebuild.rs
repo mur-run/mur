@@ -115,6 +115,9 @@ pub fn from_channel(mur_home: &Path, run_id: &str, sidecar: &Sidecar) -> Result<
                     state: State::Running,
                     started_at: Some(ev.ts),
                     ended_at: None,
+                    // A rebuild reconstructs from delegation events, which
+                    // carry no outcome — `None` is honest, never a guess.
+                    error: None,
                 });
             }
         }

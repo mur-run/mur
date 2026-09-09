@@ -139,6 +139,10 @@ fn main() -> Result<()> {
 
 async fn async_main() -> Result<()> {
     load_dotenv();
+    // Before anything else can touch stdin: a parent runtime may have handed
+    // us the signing capability there, because a process sealed inside an
+    // agent's sandbox cannot read the key from disk. No-op otherwise.
+    channel_writer::ingest_signing_handoff();
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()

@@ -108,6 +108,14 @@ pub struct StepState {
     pub started_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<DateTime<Utc>>,
+    /// Why a terminal step ended the way it did. Set on failure; a `Done`
+    /// step has nothing to explain, and a retry clears the prior attempt's.
+    ///
+    /// Without it the record answers "what" and never "why": six failed
+    /// steps once carried six bare `failed`s, and the only way to the reason
+    /// was grepping agent stderr in /tmp (fleet develop-rust, 2026-09-09).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Set while a run waits on a human decision. Plan B populates this; Plan A

@@ -35,6 +35,48 @@ fn read_key_version(agent_home: &Path) -> u32 {
     }
 }
 
+/// The signing capability our parent handed us on stdin, if any.
+///
+/// Set once, at process start, by `ingest_signing_handoff`. `None` for every
+/// ordinary invocation — a `mur` the user runs reads the key from disk like
+/// it always has.
+static HANDOFF: std::sync::OnceLock<Option<(String, u32, mur_common::identity::AgentIdentity)>> =
+    std::sync::OnceLock::new();
+
+/// Read a `SigningHandoff` from stdin when the parent said one is there.
+///
+/// Called once from `main`, before anything else can touch stdin, so the
+/// pipe is drained deterministically rather than by whoever reads first.
+///
+/// Silent on every failure. This is a capability, not a requirement: if it
+/// does not arrive, or arrives malformed, the caller falls through to the
+/// on-disk key and then to the existing unreadable-key branch, which is
+/// already loud and already fails closed under `MUR_CHANNEL_REQUIRE_SIG`.
+pub fn ingest_signing_handoff() {
+    if std::env::var_os(mur_common::identity::SIGNING_HANDOFF_ENV).is_none() {
+        return;
+    }
+    let mut line = String::new();
+    if std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut line).is_err() {
+        return;
+    }
+    let Ok(h) = serde_json::from_str::<mur_common::identity::SigningHandoff>(&line) else {
+        tracing::warn!("signing handoff was announced but could not be parsed; writing unsigned");
+        return;
+    };
+    let id = mur_common::identity::AgentIdentity::from_secret_bytes(&h.secret);
+    let _ = HANDOFF.set(Some((h.agent, h.key_version, id)));
+}
+
+/// The handed-over identity, but only for the writer it actually belongs to.
+///
+/// A child signs as the agent that spawned it and as nothing else — a run
+/// that writes on behalf of some other agent falls back to the disk path.
+fn handoff_for(router_agent: &str) -> Option<(&'static mur_common::identity::AgentIdentity, u32)> {
+    let (agent, kv, id) = HANDOFF.get()?.as_ref()?;
+    (agent == router_agent).then_some((id, *kv))
+}
+
 /// Append `actor`/`kind`/`payload` to `channel_id`, SIGNED by `router_agent`'s
 /// identity when it is available, else unsigned (migration-safe).
 ///
@@ -52,6 +94,14 @@ pub fn append_as_writer(
     payload: serde_json::Value,
     idem: Option<String>,
 ) -> anyhow::Result<ChannelEvent> {
+    // A process sealed inside an agent's sandbox cannot read `keys/` — that
+    // subtree is denied on purpose. Its parent loaded the key before sealing
+    // and handed it over stdin, so prefer that when it is for THIS writer.
+    // Checked before the disk read because the disk read is the thing that
+    // cannot work here, not a faster path we are skipping.
+    if let Some((id, kv)) = handoff_for(router_agent) {
+        return svc.append_signed(channel_id, id, kv, actor, kind, payload, idem);
+    }
     let agent_home = home.join("agents").join(router_agent);
     match mur_common::identity::AgentIdentity::load(&agent_home) {
         Ok(id) => {

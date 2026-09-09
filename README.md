@@ -499,10 +499,13 @@ Agent** wizard offers the same catalog as a source.
   the host left as `*`. It now refuses that form and names what would actually
   take effect. Same family, different surface: an agent whose secret or model
   reference failed to resolve used to start anyway and answer as an echo stub —
-  a "working" agent that parrots you back. `mur agent doctor <name>` now runs
-  the same resolution the runtime does and reports it, and `mur agent start`
-  waits for the runtime to claim it is up instead of reporting success the
-  instant the process forks.
+  a "working" agent that parrots you back. The agent now says so itself: a model
+  reference that does not resolve, or a provider client that will not build,
+  answers every message with the reason and the commands that fix it, and only a
+  deliberate `provider: echo` still echoes. `mur agent doctor <name>` runs the
+  same resolution the runtime does and reports it, and `mur agent start` waits
+  for the runtime to claim it is up instead of reporting success the instant the
+  process forks.
 - **Loop settings that can't quietly mean something else** — a fleet loop ends
   when its job queue drains, when a member emits an agreed marker on a line of
   its own, or when the router judges it done. `mur fleet set-loop` refuses a
@@ -510,6 +513,20 @@ Agent** wizard offers the same catalog as a source.
   `--max-iterations 0` is not zero, and a cron expression that can never fire is
   not a schedule. Unattended auto-run still needs an explicit budget, and
   `mur fleet stop` still ends everything.
+- **Runs that report their own failures** — an agent handing a job to a fleet
+  used to hit a kernel refusal on a binary its profile plainly allowed: the
+  sandbox resolved the name by scanning the exec directories when the agent
+  started, while the spawn resolved it through `PATH` minutes later, and a
+  package upgrade in between was enough to make those two different files. The
+  grant and the spawn now read one derivation, so they cannot disagree. What
+  came back from a failed run was just as thin — six steps marked `failed` and
+  not one reason, leaving agent logs as the only route to a cause. Every
+  terminal step now records why, `mur job status` and `mur fleet status` print
+  it, and a step that fails with nothing to say says that. Delegation fan-out is
+  bounded on the ordinary path too, not only under the experimental worktree
+  flag: members share one local gateway and one upstream quota, so an uncapped
+  fan-out is a self-DoS (`MUR_FLEET_FANOUT` raises the bound; it clamps rather
+  than unbounds).
 - **Schedules that fire when they say they will** — `mur workflow schedule set`
   takes a flat workflow *or* a workflow skill, and resolves the name against
   both when you create the schedule, so a name it accepts is a name that will
