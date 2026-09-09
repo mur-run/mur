@@ -422,6 +422,10 @@ pub async fn build_provider_runner(
                 Arc::new(FleetRunTool {
                     mur_home: mur_home.clone(),
                     agent_name: profile.inner.name.clone(),
+                    // Loaded before the sandbox sealed, which is the only
+                    // reason we still have it: the child cannot read `keys/`.
+                    signing: Some(identity.clone()),
+                    key_version: profile.inner.identity.key_version,
                 }),
             );
         }

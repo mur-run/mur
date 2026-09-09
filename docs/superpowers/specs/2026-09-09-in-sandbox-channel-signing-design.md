@@ -1,6 +1,7 @@
 # In-sandbox channel signing — handing the signing capability to a sealed child
 
-Status: **Design — not implemented.** Written 2026-09-09 from a live failure.
+Status: **Implemented for `fleet_run`** (mur#1239). Written 2026-09-09 from a
+live failure; the record of what was rejected is the point of keeping it.
 
 ## Problem
 
@@ -80,11 +81,17 @@ still have to ask the parent over the socket, which is option B with more steps;
 and it means reworking every `append_as_writer` call site in `mur-core` to know
 whether it is sandboxed. Large, and it lands in the same oracle.
 
-### D. Inherited file descriptor — CHOSEN
+### D. Inherited pipe — CHOSEN
 
-The runtime already holds the key from before the seal. At spawn it creates a
-pipe, writes the key bytes into it, and passes the read end to the child as a
-known descriptor; the child is told which one via `MUR_CHANNEL_SIGNING_FD`.
+The runtime already holds the key from before the seal. At spawn it writes the
+key into the child's **stdin** pipe and sets `MUR_CHANNEL_SIGNING_STDIN=1`.
+
+Stdin rather than a `dup2`'d fd 3: `fleet_run` already passed `Stdio::null()`
+there, nothing in a fleet run reads stdin (the HITL gate prompts only on a
+TTY, and a pipe is not one), and it needs no `pre_exec` — which runs between
+fork and exec, where the safe operations are few and the failure modes are
+quiet. The security properties are identical; the fd variant remains the
+answer if stdin ever gains a real use.
 
 - Requirement 2 holds: an fd number is not the key. `/dev/fd/3` in the bash
   tool's shell is *that shell's* fd 3, not the child's. Reading another
@@ -96,22 +103,23 @@ known descriptor; the child is told which one via `MUR_CHANNEL_SIGNING_FD`.
 
 **Runtime (`mur-agent-runtime`)**
 
-- `FleetRunTool` gains `identity: Arc<AgentIdentity>` — already in scope where
-  the tool is constructed (`supervisor_runner`).
-- On spawn: create a pipe, write the private key, `dup2` the read end onto a
-  fixed descriptor in `pre_exec`, and set `MUR_CHANNEL_SIGNING_FD` plus
-  `MUR_CHANNEL_SIGNING_KEY_VERSION`. The write end closes in the parent
-  immediately after the write, so the child sees EOF and never blocks.
-- `pre_exec` runs between fork and exec: `dup2` only. No allocation, no locks.
+- `FleetRunTool` carries `signing: Option<Arc<AgentIdentity>>` and the
+  profile's `key_version` — both already in scope where the tool is built.
+- On spawn: stdin is a pipe, `MUR_CHANNEL_SIGNING_STDIN=1` is set, and one
+  JSON line (`SigningHandoff`) is written and the handle dropped, so the child
+  sees EOF. The payload is ~200 bytes, far under a pipe buffer, so the write
+  never blocks even against a child that never reads it.
+- `None` — tests, and any runtime with no identity — spawns exactly as before.
 - The MCP pool spawns long-lived children that also host the DAG
-  (`parallel_jobs`). They get the same treatment or they stay unsigned — decide
-  explicitly rather than by omission; see Open questions.
+  (`parallel_jobs`). They are NOT covered; see Open questions.
 
 **Core (`mur-core`)**
 
-- `channel_writer` gains a process-lifetime `OnceLock<Option<AgentIdentity>>`
-  populated from the fd on first use, and prefers it over the disk read. The
-  descriptor is read exactly once and closed.
+- `channel_writer::ingest_signing_handoff()` runs from `main` before anything
+  else can touch stdin, so the pipe is drained deterministically rather than by
+  whichever code path reads first. It fills a process-lifetime `OnceLock`.
+- The cached identity is used only when the event names that same writer; a run
+  writing on behalf of another agent falls through to the disk path.
 - The disk path stays the default for every unsandboxed caller, unchanged.
 - Precedence is fd → disk → `NotFound` (unsigned, the legitimate bootstrap
   case) → unreadable (bail or warn, per `MUR_CHANNEL_REQUIRE_SIG`, as today).
@@ -129,8 +137,13 @@ known descriptor; the child is told which one via `MUR_CHANNEL_SIGNING_FD`.
    `events.jsonl` has **no** unsigned events — the mixed 13/27 file above is the
    before-picture and the acceptance criterion.
 
-Test 5 matters most. Tests 1–4 can all pass while the wiring never reaches the
-process that actually writes fleet events.
+Shipped: test 1's core (the payload survives `read_line` as one line and
+rebuilds a bit-identical key) as `a_signing_handoff_round_trips_to_the_same_key_on_one_line`,
+and test 2 by construction — `signing: None` leaves the old path untouched.
+
+**Test 5 has NOT been run.** It matters most: every other test can pass while
+the wiring never reaches the process that actually writes fleet events. Run it
+against a real `~/.mur` before believing this works.
 
 ## Open questions
 

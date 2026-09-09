@@ -168,7 +168,58 @@ pub fn migrate_private_key(agent_dir: &Path) -> Result<bool, IdentityError> {
     Ok(true)
 }
 
+/// Environment flag telling a spawned `mur` that its parent handed it a
+/// signing capability on stdin. Set only by `fleet_run`, only alongside the
+/// pipe that carries it.
+pub const SIGNING_HANDOFF_ENV: &str = "MUR_CHANNEL_SIGNING_STDIN";
+
+/// The signing capability a runtime hands to a child it sealed inside its own
+/// sandbox.
+///
+/// `<mur_home>/keys` is kernel-denied to every sandboxed process on purpose —
+/// a prompt-injected agent must not be able to exfiltrate its own signing key.
+/// The runtime escapes that only because it loads the key BEFORE the sandbox
+/// seals; a child spawned afterwards cannot, so every channel event such a
+/// child wrote was unsigned.
+///
+/// This travels on the child's **stdin pipe** — never argv, never the
+/// environment. `ps eww` shows another same-uid process's environment, so an
+/// env var here would hand the key straight back to the bash tool the sandbox
+/// exists to keep it away from. A pipe is readable only by the process holding
+/// the descriptor.
+///
+/// Design: `docs/superpowers/specs/2026-09-09-in-sandbox-channel-signing-design.md`.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct SigningHandoff {
+    /// The agent this key signs as. The receiver uses it only when the event
+    /// it is writing names this same writer.
+    pub agent: String,
+    pub key_version: u32,
+    /// Raw Ed25519 secret, as a JSON array of bytes — no encoding dependency
+    /// stands between the two ends of the pipe.
+    pub secret: [u8; SECRET_KEY_LENGTH],
+}
+
 impl AgentIdentity {
+    /// Rebuild an identity from raw secret bytes.
+    ///
+    /// The only legitimate caller is the receiving end of a `SigningHandoff`.
+    /// Anything that can reach the key file uses `load`.
+    pub fn from_secret_bytes(secret: &[u8; SECRET_KEY_LENGTH]) -> Self {
+        Self {
+            signing: SigningKey::from_bytes(secret),
+        }
+    }
+
+    /// The raw secret, for building a `SigningHandoff` and nothing else.
+    ///
+    /// Named for its one use so a second one has to argue for itself: putting
+    /// these bytes anywhere they can be read back — a file, argv, an
+    /// environment variable — undoes the reason `keys/` is denied at all.
+    pub fn secret_bytes_for_handoff(&self) -> [u8; SECRET_KEY_LENGTH] {
+        self.signing.to_bytes()
+    }
+
     /// Generate a fresh Ed25519 keypair using OS CSPRNG.
     pub fn generate() -> Self {
         Self {
@@ -755,6 +806,33 @@ fn write_canonical(out: &mut Vec<u8>, v: &serde_json::Value) {
 #[cfg(test)]
 mod identity_readability_tests {
     use super::*;
+
+    /// The handoff crosses a pipe as ONE line and must rebuild the same key.
+    ///
+    /// Both halves matter: the receiver does `read_line`, so a payload that
+    /// could carry a newline would arrive truncated and silently unsigned; and
+    /// a rebuilt identity that is not bit-identical signs events no verifier
+    /// accepts, which reads as tampering rather than as a bug.
+    #[test]
+    fn a_signing_handoff_round_trips_to_the_same_key_on_one_line() {
+        let id = AgentIdentity::generate();
+        let line = serde_json::to_string(&SigningHandoff {
+            agent: "mur".into(),
+            key_version: 3,
+            secret: id.secret_bytes_for_handoff(),
+        })
+        .expect("serialize handoff");
+        assert!(!line.contains('\n'), "must survive read_line: {line}");
+
+        let back: SigningHandoff = serde_json::from_str(&line).expect("parse handoff");
+        assert_eq!(back.agent, "mur");
+        assert_eq!(back.key_version, 3);
+        assert_eq!(
+            AgentIdentity::from_secret_bytes(&back.secret).verifying_key_bytes(),
+            id.verifying_key_bytes(),
+            "the child must sign as the same agent, not a lookalike"
+        );
+    }
 
     /// A key that exists but cannot be read must NOT report as absent.
     ///

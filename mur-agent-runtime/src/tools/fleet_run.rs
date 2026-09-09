@@ -42,6 +42,17 @@ pub struct FleetRunTool {
     pub mur_home: PathBuf,
     /// Canonical (on-disk) name of the agent this runtime hosts.
     pub agent_name: String,
+    /// This agent's signing identity, loaded before the sandbox sealed.
+    ///
+    /// Handed to the spawned child on its stdin pipe so the channel events it
+    /// writes are signed. Without it the child cannot read `keys/` — denied to
+    /// every sandboxed process on purpose — and every event of an
+    /// agent-triggered run went in unsigned. `None` in tests and wherever no
+    /// identity was loaded; the child then behaves exactly as it did before.
+    pub signing: Option<std::sync::Arc<mur_common::identity::AgentIdentity>>,
+    /// `identity.key_version` from the profile, carried with the signature so
+    /// a verifier can resolve the right key across a rotation.
+    pub key_version: u32,
 }
 
 /// Is `agent` allowed to run `fleet` per the global config? Deny-by-default:
@@ -177,21 +188,51 @@ Long-running: default timeout {DEFAULT_TIMEOUT_SECS}s (max {MAX_TIMEOUT_SECS}s).
         // a PATH lookup — see that function for why the two must be one.
         let mur_bin = crate::exec_dirs::mur_cli();
         let path_var = std::env::var("PATH").ok();
-        let child = Command::new(&mur_bin)
-            .args(&args)
+        // The signing capability travels on the child's stdin PIPE, never in
+        // argv or the environment: `ps eww` reads another same-uid process's
+        // environment, so an env var would hand the key back to the bash tool
+        // the sandbox exists to keep it away from. The payload is one line and
+        // far under a pipe buffer, so the write never blocks even if an older
+        // child never reads it — it just sees EOF.
+        let handoff = self
+            .signing
+            .as_ref()
+            .map(|id| mur_common::identity::SigningHandoff {
+                agent: self.agent_name.clone(),
+                key_version: self.key_version,
+                secret: id.secret_bytes_for_handoff(),
+            });
+        let mut cmd = Command::new(&mur_bin);
+        cmd.args(&args)
             .env("PATH", super::bash::augmented_path(path_var.as_deref()))
-            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| {
-                ToolError::Execution(format!(
-                    "failed to spawn `{}`: {e} — if the runtime sandbox denied the spawn, \
-                     restart the agent so the fleet_run carve-ins apply",
-                    mur_bin.display()
-                ))
-            })?;
+            .kill_on_drop(true);
+        if handoff.is_some() {
+            cmd.stdin(std::process::Stdio::piped())
+                .env(mur_common::identity::SIGNING_HANDOFF_ENV, "1");
+        } else {
+            cmd.stdin(std::process::Stdio::null());
+        }
+        let mut child = cmd.spawn().map_err(|e| {
+            ToolError::Execution(format!(
+                "failed to spawn `{}`: {e} — if the runtime sandbox denied the spawn, \
+                 restart the agent so the fleet_run carve-ins apply",
+                mur_bin.display()
+            ))
+        })?;
+        if let Some(h) = handoff
+            && let Some(mut stdin) = child.stdin.take()
+        {
+            use tokio::io::AsyncWriteExt;
+            let mut line = serde_json::to_string(&h).unwrap_or_default();
+            line.push('\n');
+            // Best-effort: an unwritten handoff leaves the child on the
+            // on-disk path, which is loud and fail-closed on its own.
+            let _ = stdin.write_all(line.as_bytes()).await;
+            let _ = stdin.shutdown().await;
+            // Dropped here — the child sees EOF and stops waiting.
+        }
 
         let out = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
@@ -268,6 +309,8 @@ mod tests {
         let tool = FleetRunTool {
             mur_home: tmp.path().to_path_buf(),
             agent_name: "mur".into(),
+            signing: None,
+            key_version: 0,
         };
         let err = tool
             .execute(serde_json::json!({"fleet": "deep-research"}))
@@ -293,6 +336,8 @@ mod tests {
         let tool = FleetRunTool {
             mur_home: tmp.path().to_path_buf(),
             agent_name: "mur".into(),
+            signing: None,
+            key_version: 0,
         };
         let err = tool
             .execute(serde_json::json!({"fleet": "selfy"}))
@@ -309,6 +354,8 @@ mod tests {
         let tool = FleetRunTool {
             mur_home: tmp.path().to_path_buf(),
             agent_name: "mur".into(),
+            signing: None,
+            key_version: 0,
         };
         let err = tool
             .execute(serde_json::json!({"fleet": "../etc"}))
@@ -328,6 +375,8 @@ mod tests {
         let tool = FleetRunTool {
             mur_home: tmp.path().to_path_buf(),
             agent_name: "mur".into(),
+            signing: None,
+            key_version: 0,
         };
         let err = tool
             .execute(serde_json::json!({"fleet": "deep-research"}))
@@ -354,6 +403,8 @@ mod tests {
         let tool = FleetRunTool {
             mur_home: PathBuf::from("/tmp"),
             agent_name: "mur".into(),
+            signing: None,
+            key_version: 0,
         };
         let def = tool.def();
         assert_eq!(def.name, FLEET_RUN);
