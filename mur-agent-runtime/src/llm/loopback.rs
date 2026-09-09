@@ -7,6 +7,28 @@
 
 use super::LlmError;
 
+/// True when `url`'s host is this machine. Split out of
+/// [`validate_loopback_base_url`] because two callers need the host test
+/// without the rest: that validator also pins scheme, port and an exact route
+/// path, which is right for a subscription gateway and wrong for an arbitrary
+/// local inference server.
+fn host_is_loopback(url: &reqwest::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    }
+}
+
+/// True when `raw` points at an OpenAI-compatible server on this machine.
+/// Unlike [`validate_loopback_base_url`] this asks only "is this host me?" —
+/// a local runtime picks its own port and route, so pinning either would just
+/// reject working endpoints.
+pub fn is_loopback_base_url(raw: &str) -> bool {
+    reqwest::Url::parse(raw).is_ok_and(|u| host_is_loopback(&u))
+}
+
 pub fn validate_loopback_base_url(
     raw: &str,
     required_path: &str,
@@ -19,13 +41,7 @@ pub fn validate_loopback_base_url(
     if !url.username().is_empty() || url.password().is_some() {
         return Err(bad("credentials in the URL are not allowed"));
     }
-    let loopback = match url.host() {
-        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-        None => false,
-    };
-    if !loopback {
+    if !host_is_loopback(&url) {
         return Err(bad("host must be localhost or a loopback IP"));
     }
     if url.port().is_none() {
@@ -43,6 +59,36 @@ pub fn validate_loopback_base_url(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A local inference server (oMLX, LM Studio, vLLM) is reached at
+    /// whatever port and path it chose, so only the host may be judged here.
+    #[test]
+    fn any_port_and_path_on_this_machine_counts_as_local() {
+        for ok in [
+            "http://127.0.0.1:8000/v1",
+            "http://localhost:1234/v1",
+            "http://127.0.0.1:11434/v1/",
+            "https://127.0.0.1:8000/v1",
+            "http://[::1]:8000/v1",
+        ] {
+            assert!(is_loopback_base_url(ok), "{ok}");
+        }
+    }
+
+    /// The whole point of the check: a remote host must not be treated as a
+    /// keyless local server. `localhost.evil.test` is the near-miss that a
+    /// `starts_with`/`contains` test would wave through.
+    #[test]
+    fn a_remote_host_is_never_local_however_it_is_spelled() {
+        for bad in [
+            "https://api.openai.com/v1",
+            "http://localhost.evil.test:8000/v1",
+            "http://192.168.1.10:8000/v1",
+            "not a url",
+        ] {
+            assert!(!is_loopback_base_url(bad), "{bad}");
+        }
+    }
 
     #[test]
     fn the_required_path_is_the_only_thing_that_differs_between_providers() {

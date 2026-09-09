@@ -246,6 +246,28 @@ fn build_bare_client(
                     entry.base_url.clone(),
                     guarded_http,
                 )))
+            } else if entry
+                .base_url
+                .as_deref()
+                .is_some_and(crate::llm::loopback::is_loopback_base_url)
+            {
+                // A local OpenAI-compatible runtime (oMLX, LM Studio, vLLM)
+                // does not authenticate, but `mur model connect` and the Hub
+                // both write `provider: openai` for it — that is the wire
+                // protocol, not the vendor. Without this arm the entry fell
+                // through to keychain/`OPENAI_API_KEY` and demanded a
+                // credential the server ignores and the user cannot obtain.
+                // Same placeholder the `local` provider sends, for the same
+                // reason.
+                let key = secrecy::SecretString::from(
+                    crate::supervisor_runner::LOCAL_LLM_PLACEHOLDER_KEY.to_string(),
+                );
+                Ok(Arc::new(OpenAiClient::from_secret_string_with_http(
+                    &key,
+                    entry.model.clone(),
+                    entry.base_url.clone(),
+                    guarded_http,
+                )))
             } else {
                 block_on(OpenAiClient::from_agent_credentials_with_http(
                     &profile.inner.name,
@@ -283,6 +305,45 @@ fn block_on<F: std::future::Future>(fut: F) -> F::Output {
             .build()
             .expect("failed to build scratch runtime")
             .block_on(fut),
+    }
+}
+
+#[cfg(test)]
+mod local_openai_endpoint_tests {
+    use super::*;
+    use mur_common::agent::AgentProfile;
+
+    fn profile() -> Profile {
+        Profile {
+            inner: AgentProfile::default_for_tests(),
+            agent_home: std::path::PathBuf::from("/tmp/does-not-need-to-exist"),
+            digest: String::new(),
+            raw_yaml: String::new(),
+            system_prompt: None,
+        }
+    }
+
+    /// A local inference server is reached over the OpenAI wire protocol, so
+    /// `mur model connect` and the Hub Model Library both write
+    /// `provider: openai` for it. Without this, that entry fell through to the
+    /// keychain/`OPENAI_API_KEY` chain and failed with "OPENAI_API_KEY not
+    /// set" — demanding a credential from a server that does not authenticate,
+    /// and one the user cannot obtain.
+    #[test]
+    fn a_keyless_local_server_builds_without_any_credential() {
+        let entry = ModelEntry {
+            provider: "openai".into(),
+            model: "Qwen3.5-4B-MLX-4bit".into(),
+            base_url: Some("http://127.0.0.1:8000/v1".into()),
+            secret: None,
+            ..Default::default()
+        };
+        let built = build_bare_client(&entry, &profile(), std::path::Path::new("/tmp"));
+        assert!(
+            built.is_ok(),
+            "keyless loopback entry must build: {:?}",
+            built.err()
+        );
     }
 }
 
