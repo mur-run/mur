@@ -140,6 +140,25 @@ Long-running: default timeout {DEFAULT_TIMEOUT_SECS}s (max {MAX_TIMEOUT_SECS}s).
         })?;
         let parsed: mur_common::fleet::Fleet = serde_yaml_ng::from_str(&doc)
             .map_err(|e| ToolError::Execution(format!("invalid fleet.yaml for '{fleet}': {e}")))?;
+
+        // A fleet that lists THIS agent hands the goal back to the process
+        // that triggered the run: the concierge calls `fleet_run`, the run
+        // dials `channel/delegate` on the concierge, and the concierge is
+        // already inside this tool call waiting for it. Seen live — fleet
+        // `develop-rust` listed `mur` among six members and the concierge was
+        // delegated its own goal (channel seq 106, 2026-09-09).
+        if parsed
+            .members
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case(&self.agent_name))
+        {
+            return Err(ToolError::Execution(format!(
+                "fleet '{fleet}' lists '{}' — the agent triggering this run — as a member, so the \
+                 run would delegate the same goal back to itself. Drop that member from \
+                 fleet.yaml, or run the fleet from the CLI instead.",
+                self.agent_name
+            )));
+        }
         if parsed.loop_cfg.map(|l| l.budget_usd).unwrap_or(0.0) <= 0.0 {
             return Err(ToolError::Execution(format!(
                 "fleet '{fleet}' has no budget (`loop.budget_usd`) — agent-triggered runs require \
@@ -154,7 +173,9 @@ Long-running: default timeout {DEFAULT_TIMEOUT_SECS}s (max {MAX_TIMEOUT_SECS}s).
             (_, None) => vec!["fleet".into(), "run".into(), fleet.clone(), "--loop".into()],
         };
 
-        let mur_bin = std::env::var("MUR_BIN").unwrap_or_else(|_| "mur".into());
+        // The same derivation the sandbox granted (`exec_dirs::mur_cli`), not
+        // a PATH lookup — see that function for why the two must be one.
+        let mur_bin = crate::exec_dirs::mur_cli();
         let path_var = std::env::var("PATH").ok();
         let child = Command::new(&mur_bin)
             .args(&args)
@@ -166,8 +187,9 @@ Long-running: default timeout {DEFAULT_TIMEOUT_SECS}s (max {MAX_TIMEOUT_SECS}s).
             .spawn()
             .map_err(|e| {
                 ToolError::Execution(format!(
-                    "failed to spawn `{mur_bin}`: {e} — if the runtime sandbox denied the spawn, \
-                     restart the agent so the fleet_run carve-ins apply"
+                    "failed to spawn `{}`: {e} — if the runtime sandbox denied the spawn, \
+                     restart the agent so the fleet_run carve-ins apply",
+                    mur_bin.display()
                 ))
             })?;
 
@@ -252,6 +274,32 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("not authorized"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn refuses_a_fleet_that_lists_the_triggering_agent() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_config(
+            tmp.path(),
+            "fleet_run:\n  agents: [mur]\n  fleets: [selfy]\n",
+        );
+        let dir = tmp.path().join("fleets").join("selfy");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("fleet.yaml"),
+            "name: selfy\ngoal: g\nchannel_id: fleet-selfy\nmembers: [qa, Mur]\nloop:\n  trigger: manual\n  budget_usd: 1.0\n",
+        )
+        .unwrap();
+        let tool = FleetRunTool {
+            mur_home: tmp.path().to_path_buf(),
+            agent_name: "mur".into(),
+        };
+        let err = tool
+            .execute(serde_json::json!({"fleet": "selfy"}))
+            .await
+            .unwrap_err();
+        // Matched case-insensitively, like every other agent-name lookup.
+        assert!(err.to_string().contains("as a member"), "{err}");
     }
 
     #[tokio::test]
