@@ -14,10 +14,7 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Padding, Paragraph, Widget, Wrap};
 
-use std::time::Instant;
-
 use super::super::app::{App, ChatMsg, Role};
-use super::super::welcome::welcome_lines;
 
 #[cfg(test)]
 mod tests;
@@ -119,28 +116,6 @@ pub(super) fn next_block_end(rest: &str) -> usize {
 /// the band's head message (its committed part is already in scrollback).
 pub(super) fn push_live(lines: &mut Vec<Line<'static>>, app: &App, m: &ChatMsg, skip: usize) {
     push_live_inner(lines, app, m, skip, false)
-}
-
-/// The welcome while it is still the head of the live band: painted above
-/// the first message by `render_transcript`, and committed to scrollback
-/// with it by `flush_finished`. `None` once that head has been flushed (see
-/// [`App::welcome_header_live`]). Ends in a blank when there are messages
-/// under it, so the hint line and the first message do not touch.
-pub(super) fn welcome_header(app: &App, eye_open: bool) -> Option<Vec<Line<'static>>> {
-    if !app.welcome_header_live() {
-        return None;
-    }
-    let mut lines = welcome_lines(
-        app.theme,
-        app.mascot_mode,
-        &app.agent,
-        app.cwd.as_deref(),
-        eye_open,
-    );
-    if !app.messages.is_empty() {
-        lines.push(Line::default());
-    }
-    Some(lines)
 }
 
 /// Lines for one message, including the gap that precedes it.
@@ -317,7 +292,7 @@ pub fn flush_finished<B: Backend>(
     // once keeps this O(n) instead of re-measuring the whole tail per
     // candidate index (a resize resets `flushed_upto` to 0).
     let start = app.flushed_upto.min(app.messages.len());
-    let mut rows: Vec<u16> = app.messages[start..]
+    let rows: Vec<u16> = app.messages[start..]
         .iter()
         .enumerate()
         .map(|(n, m)| {
@@ -325,15 +300,6 @@ pub fn flush_finished<B: Backend>(
             band_rows(theme, lines, width)
         })
         .collect();
-    // The welcome is a header over the first notice, never a message of its
-    // own: it is measured with message 0 and leaves with it, so the band the
-    // flush decision was made from is the band that was painted.
-    let welcome = welcome_header(app, true);
-    if let Some(r) = rows.first_mut()
-        && let Some(w) = welcome.as_ref()
-    {
-        *r = r.saturating_add(band_rows(theme, w.clone(), width));
-    }
     let mut total: u32 = rows.iter().map(|r| u32::from(*r)).sum();
     let settled = settle_end(app);
     let mut end = start;
@@ -348,7 +314,7 @@ pub fn flush_finished<B: Backend>(
         end += 1;
     }
     if end > start {
-        let mut lines: Vec<Line<'static>> = welcome.unwrap_or_default();
+        let mut lines: Vec<Line<'static>> = Vec::new();
         for i in start..end {
             let msg_skip = if i == start { skip } else { 0 };
             lines.extend(message_block(app, i, &app.messages[i], msg_skip, false));
@@ -492,16 +458,6 @@ pub(super) fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             if n == 0 { skip } else { 0 },
             false,
         ));
-    }
-
-    // No conversation yet → progressive-disclosure welcome (mascot + identity
-    // + one example + /help hint) above whatever notices slash commands have
-    // produced, instead of a bare prompt. The eye frame is a pure function of
-    // wall-clock time; the event loop schedules redraws on the blink deadline
-    // so an idle welcome animates without busy-looping.
-    if let Some(mut head) = welcome_header(app, app.blink.eye_open(Instant::now())) {
-        head.append(&mut lines);
-        lines = head;
     }
 
     // Same wrapped-row accounting as before (`line_count`, not `lines.len()`).
