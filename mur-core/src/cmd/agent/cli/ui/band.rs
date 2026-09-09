@@ -167,7 +167,7 @@ pub(super) fn message_block(
     let mut lines: Vec<Line<'static>> = Vec::new();
     // Never before a continuation: `skip > 0` resumes a message whose head is
     // already committed above.
-    if idx > 0 && skip == 0 && wants_gap_before(m) {
+    if idx > 0 && skip == 0 && wants_gap_before(app.messages.get(idx - 1), m) {
         lines.push(gap_row(app.theme, app.messages.get(idx - 1), m));
     }
     if measured {
@@ -399,6 +399,10 @@ pub fn flush_finished<B: Backend>(
             None,
             width,
         ));
+        // The block ended at a blank line and the renderer trims its own
+        // trailing blank; put the separator back, or every paragraph a
+        // streaming reply spilled sat flush against the next.
+        lines.push(Line::default());
         emit(terminal, lines, pad, width)?;
         skip += block_end;
         app.flushed_bytes = skip;
