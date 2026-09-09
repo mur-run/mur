@@ -399,6 +399,10 @@ pub fn flush_finished<B: Backend>(
             None,
             width,
         ));
+        // The block ended at a blank line and the renderer trims its own
+        // trailing blank; put the separator back, or every paragraph a
+        // streaming reply spilled sat flush against the next.
+        lines.push(Line::default());
         emit(terminal, lines, pad, width)?;
         skip += block_end;
         app.flushed_bytes = skip;

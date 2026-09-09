@@ -412,3 +412,93 @@ mod layout_guard_tests {
         );
     }
 }
+
+/// Paragraph spacing survives both paint paths: a blank line is one row in
+/// the band and one row in scrollback.
+#[cfg(test)]
+mod paragraph_spacing_tests {
+    use super::super::super::super::app::{App, ChatMsg, RenderMode, Role};
+    use super::super::super::render;
+    use super::super::{flush_finished, render_transcript};
+    use ratatui::backend::TestBackend;
+    use ratatui::layout::Rect;
+    use ratatui::{Terminal, TerminalOptions, Viewport};
+
+    fn rows(term: &Terminal<TestBackend>) -> Vec<String> {
+        let buf = term.backend().buffer();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf.cell((x, y)).unwrap().symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    fn blanks_between(rows: &[String], a: &str, b: &str) -> usize {
+        let ia = rows
+            .iter()
+            .position(|r| r.contains(a))
+            .unwrap_or_else(|| panic!("{a}: {rows:?}"));
+        let ib = rows
+            .iter()
+            .position(|r| r.contains(b))
+            .unwrap_or_else(|| panic!("{b}: {rows:?}"));
+        rows[ia + 1..ib].iter().filter(|r| r.is_empty()).count()
+    }
+
+    /// The band: a finished reply's blank line used to paint as two rows,
+    /// because the indent turned it into a whitespace-only line and
+    /// `Wrap { trim: false }` gives those two rows.
+    #[test]
+    fn a_blank_line_is_one_row_in_the_band() {
+        let mut app = App::test_fixture();
+        app.welcome_dismissed = true;
+        app.messages
+            .push(ChatMsg::for_test(Role::Agent, "first\n\nsecond"));
+        let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        term.draw(|f| render_transcript(f, &mut app, Rect::new(0, 0, 60, 12)))
+            .unwrap();
+        let r = rows(&term);
+        assert_eq!(blanks_between(&r, "first", "second"), 1, "{r:?}");
+    }
+
+    /// Scrollback: paragraphs a streaming reply spilled block by block kept
+    /// no blank between them (each chunk's trailing blank was trimmed), while
+    /// the live tail double-spaced them. One row, both places.
+    #[test]
+    fn spilled_paragraphs_keep_one_blank_between_them() {
+        let mut app = App::test_fixture();
+        app.render_mode = RenderMode::Inline;
+        app.welcome_dismissed = true;
+        app.width = 80;
+        app.messages.push(ChatMsg::for_test(Role::User, "hi"));
+        app.streaming = true;
+        let mut term = Terminal::with_options(
+            TestBackend::new(80, 40),
+            TerminalOptions {
+                viewport: Viewport::Inline(12),
+            },
+        )
+        .unwrap();
+        for p in [
+            "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel",
+        ] {
+            app.append_delta(&format!("{p}\n\n"), false);
+            flush_finished(&mut term, &mut app, 12).unwrap();
+            term.draw(|f| render(f, &mut app)).unwrap();
+        }
+        let r = rows(&term);
+        // Spilled into scrollback by the block-at-a-time path.
+        assert_eq!(blanks_between(&r, "alpha", "bravo"), 1, "scrollback: {r:?}");
+        assert_eq!(
+            blanks_between(&r, "bravo", "charlie"),
+            1,
+            "scrollback: {r:?}"
+        );
+        // Still in the live band.
+        assert_eq!(blanks_between(&r, "golf", "hotel"), 1, "band: {r:?}");
+    }
+}

@@ -12,6 +12,12 @@ pub(super) const MSG_INDENT: &str = markdown::BODY_INDENT;
 
 /// Prepend the body indent to an already-styled line (e.g. cached markdown).
 pub(super) fn indent_line(mut line: Line<'static>) -> Line<'static> {
+    // A blank stays a blank. Indenting it makes a whitespace-only line, and
+    // ratatui's `Wrap { trim: false }` paints one of those as TWO rows — every
+    // paragraph break in a reply showed up double-spaced.
+    if line.width() == 0 {
+        return line;
+    }
     line.spans.insert(0, Span::raw(MSG_INDENT));
     line
 }
@@ -103,7 +109,13 @@ pub(super) fn agent_body_lines(
     if streaming {
         let mut body: Vec<Line<'static>> = text
             .lines()
-            .map(|l| Line::raw(format!("{MSG_INDENT}{l}")))
+            .map(|l| {
+                if l.is_empty() {
+                    Line::default()
+                } else {
+                    Line::raw(format!("{MSG_INDENT}{l}"))
+                }
+            })
             .collect();
         // Trailing spinner so the user sees liveness.
         let spin = SPINNER[spinner % SPINNER.len()];
