@@ -142,83 +142,6 @@ mod transcript_chrome_tests {
     }
 }
 
-#[cfg(test)]
-mod welcome_surface_tests {
-    use super::super::{message_block, render_transcript};
-    use crate::cmd::agent::cli::app::{App, ChatMsg, Role};
-    use crate::cmd::agent::cli::theme::MUR;
-    use crate::cmd::agent::cli::welcome::MASCOT_REST;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-    use ratatui::layout::Rect;
-
-    fn dump(app: &mut App) -> String {
-        let mut term = Terminal::new(TestBackend::new(100, 40)).unwrap();
-        term.draw(|f| render_transcript(f, app, Rect::new(0, 0, 100, 40)))
-            .unwrap();
-        term.backend().to_string()
-    }
-
-    /// A slash command's notice is not a conversation. Before, the first
-    /// `/skills` ended the welcome: the mascot vanished, the viewport shrank
-    /// to the chat height, and a wiped screen showed five rows of notice over
-    /// a blank slab. The welcome stays until someone actually speaks.
-    #[test]
-    fn a_slash_notice_keeps_the_welcome_on_screen() {
-        let mut app = App::test_fixture();
-        app.push_system("skin changed to mur");
-        let d = dump(&mut app);
-        assert!(
-            d.contains(MASCOT_REST[1]),
-            "mascot gone after a notice:\n{d}"
-        );
-        assert!(d.contains("skin changed to mur"), "notice missing:\n{d}");
-
-        // Control: the welcome leaves with the head of the band, not with
-        // the first spoken turn (see `band_growth_tests`).
-        app.messages.push(ChatMsg::for_test(Role::User, "hi"));
-        app.flushed_upto = 1;
-        let d = dump(&mut app);
-        assert!(
-            !d.contains(MASCOT_REST[1]),
-            "welcome outlived its flush:\n{d}"
-        );
-    }
-
-    /// Three `/skin` switches drew three rules under the light skin. A rule
-    /// marks a change of speaker; a run of notices is one speaker (the UI).
-    #[test]
-    fn no_turn_draws_a_rule() {
-        let mut app = App::test_fixture();
-        app.theme = &MUR;
-        app.push_system("skin changed to light");
-        app.push_system("skin changed to mur");
-        app.messages.push(ChatMsg::for_test(Role::User, "hi"));
-        app.messages.push(ChatMsg::for_test(Role::Agent, "hello"));
-        let text = |i: usize| -> String {
-            message_block(&app, i, &app.messages[i], 0, false)
-                .iter()
-                .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
-                .collect()
-        };
-        assert!(
-            !text(1).contains('─'),
-            "notice after notice ruled: {:?}",
-            text(1)
-        );
-        assert!(
-            !text(2).contains('─'),
-            "user after notice ruled: {:?}",
-            text(2)
-        );
-        assert!(
-            !text(3).contains('─'),
-            "agent after user ruled: {:?}",
-            text(3)
-        );
-    }
-}
-
 /// The live band grows upward: what no longer fits is pushed into scrollback
 /// (directly above the band, still on screen), never hidden behind a marker.
 #[cfg(test)]
@@ -227,7 +150,6 @@ mod band_growth_tests {
     use super::super::{flush_finished, render_transcript};
     use crate::cmd::agent::cli::app::{App, ChatMsg, RenderMode, Role};
     use crate::cmd::agent::cli::complete::{Candidate, CompletionState};
-    use crate::cmd::agent::cli::welcome::MASCOT_REST;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
     use ratatui::{Terminal, TerminalOptions, Viewport};
@@ -316,29 +238,6 @@ mod band_growth_tests {
         let d = term.backend().to_string();
         assert!(d.contains("more · PgUp"), "hidden rows unmarked:\n{d}");
     }
-
-    /// The mascot is the head of the band, not a splash that the first turn
-    /// replaces: it stays until the band fills and the flush carries it up.
-    #[test]
-    fn the_mascot_stays_until_the_first_flush() {
-        let mut app = App::test_fixture();
-        app.messages.push(ChatMsg::for_test(Role::User, "hi"));
-        app.messages.push(ChatMsg::for_test(Role::Agent, "hello"));
-        let dump = |app: &mut App| {
-            let mut term = Terminal::new(TestBackend::new(100, 40)).unwrap();
-            term.draw(|f| render_transcript(f, app, Rect::new(0, 0, 100, 40)))
-                .unwrap();
-            term.backend().to_string()
-        };
-        let d = dump(&mut app);
-        assert!(d.contains(MASCOT_REST[1]), "mascot gone after a turn:\n{d}");
-        assert!(d.contains("hello"), "reply missing under the mascot:\n{d}");
-
-        // Control: once the head is in scrollback the band no longer paints it.
-        app.flushed_upto = 1;
-        let d = dump(&mut app);
-        assert!(!d.contains(MASCOT_REST[1]), "mascot painted twice:\n{d}");
-    }
 }
 
 /// Spec decisions 4 and 5: no rule between turns, one rule above the
@@ -360,7 +259,6 @@ mod layout_guard_tests {
         for (name, theme) in [("ansi", &ANSI), ("light", &LIGHT), ("mur", &MUR)] {
             let mut app = App::test_fixture();
             app.theme = theme;
-            app.welcome_dismissed = true;
             app.messages.push(ChatMsg::for_test(Role::User, "hi"));
             app.messages.push(ChatMsg::for_test(Role::Agent, "hello"));
             let mut term = Terminal::new(TestBackend::new(80, 30)).unwrap();
@@ -380,7 +278,6 @@ mod layout_guard_tests {
     #[test]
     fn composer_has_one_rule_and_the_status_bar_sits_under_the_input() {
         let mut app = App::test_fixture();
-        app.welcome_dismissed = true;
         app.messages.push(ChatMsg::for_test(Role::User, "hi"));
         let mut term = Terminal::with_options(
             TestBackend::new(80, 20),
@@ -395,12 +292,11 @@ mod layout_guard_tests {
         let status = rows[rows.len() - 1];
         let pad_below = rows[rows.len() - 2];
         let input = rows[rows.len() - 3];
-        let pad_above = rows[rows.len() - 4];
-        let rule = rows[rows.len() - 5];
+        let rule = rows[rows.len() - 4];
         assert!(status.contains("ready"), "status bar not last:\n{d}");
         assert!(
-            pad_below.trim().is_empty() && pad_above.trim().is_empty(),
-            "the input text must have a blank row above and below:\n{d}"
+            pad_below.trim().is_empty(),
+            "one blank row between the input text and the status bar:\n{d}"
         );
         assert!(
             input.contains("Type a message"),
@@ -408,7 +304,7 @@ mod layout_guard_tests {
         );
         assert!(
             rule.contains("message —"),
-            "composer rule not above the padded input:\n{d}"
+            "composer rule must sit directly above the input text:\n{d}"
         );
     }
 }
@@ -455,7 +351,6 @@ mod paragraph_spacing_tests {
     #[test]
     fn a_blank_line_is_one_row_in_the_band() {
         let mut app = App::test_fixture();
-        app.welcome_dismissed = true;
         app.messages
             .push(ChatMsg::for_test(Role::Agent, "first\n\nsecond"));
         let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();
@@ -472,7 +367,6 @@ mod paragraph_spacing_tests {
     fn spilled_paragraphs_keep_one_blank_between_them() {
         let mut app = App::test_fixture();
         app.render_mode = RenderMode::Inline;
-        app.welcome_dismissed = true;
         app.width = 80;
         app.messages.push(ChatMsg::for_test(Role::User, "hi"));
         app.streaming = true;

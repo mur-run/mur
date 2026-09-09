@@ -36,9 +36,9 @@ use super::complete;
 /// unhandled into the input box.
 const OVERLAY_HINT: &str = " press Enter or Esc to return · Ctrl+D quit ";
 
-/// Rows the composer spends on chrome: its top rule plus the blank row above
-/// and below the text (`app::COMPOSER_PAD_ROWS`).
-const INPUT_CHROME_ROWS: u16 = 1 + 2 * super::app::COMPOSER_PAD_ROWS;
+/// Rows the composer spends on chrome: its top rule plus the blank row under
+/// the text (`app::COMPOSER_PAD_BELOW`).
+const INPUT_CHROME_ROWS: u16 = 1 + super::app::COMPOSER_PAD_BELOW;
 
 /// Composer height when the input is empty (one text row plus the chrome;
 /// the status bar sits directly beneath). Typing grows it up to

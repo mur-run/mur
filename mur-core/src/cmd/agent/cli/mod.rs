@@ -470,6 +470,11 @@ async fn run_tui(
     let initial_h = crossterm::terminal::size()
         .map(|(_, rows)| viewport_h_for(rows))
         .unwrap_or(INLINE_VIEWPORT_HEIGHT);
+    // The welcome is terminal output, printed at the cursor like any banner:
+    // mascot at the top of what follows, and the viewport anchored below it.
+    if app.welcome_applies() {
+        let _ = welcome::print_banner(&mut io::stdout(), &app.welcome_banner());
+    }
     // Anchor the viewport at the BOTTOM of the screen, like `purge_and_reanchor`
     // does: `with_options` anchors wherever the cursor happens to be, which on a
     // tall window pins the composer a fifth of the way down with dead space
@@ -477,7 +482,7 @@ async fn run_tui(
     // wants for the first screenful of transcript. Only ever move DOWN — moving
     // up would draw the viewport over visible shell output.
     if let Ok((_, rows)) = crossterm::terminal::size()
-        && let Some(row) = anchor_row(rows, cursor::position().ok().map(|(_, r)| r))
+        && let Some(row) = anchor_row(rows, initial_h, cursor::position().ok().map(|(_, r)| r))
     {
         let _ = execute!(io::stdout(), cursor::MoveTo(0, row));
     }
@@ -596,23 +601,26 @@ fn leave_fullscreen(app: &mut App) {
 /// The welcome used to be the one exception — a full-window viewport so the
 /// mascot sat at the top and the composer on the floor. The first message
 /// then had to shrink it, and the only way to shrink an Inline viewport is a
-/// purge plus a re-anchor at the bottom: on a tall terminal the whole
-/// conversation, mascot included, dropped to the bottom fifth of the window
-/// with a void above it. One height for both surfaces means nothing ever
-/// re-anchors; the viewport starts where the shell's cursor was and
-/// `insert_before` walks it down to the floor as the transcript grows, the
-/// way any other CLI's output does.
+/// purge plus a re-anchor: on a tall terminal the whole conversation, mascot
+/// included, dropped to the bottom fifth of the window with a void above it.
+/// The welcome is now *printed* above the viewport (`welcome::print_banner`)
+/// instead of painted inside it, so one height serves both surfaces, the
+/// viewport is bottom-anchored from the first frame, and nothing ever
+/// re-anchors.
 /// Where to park the cursor before `Terminal::with_options` anchors the Inline
 /// viewport there. `None` = leave it where it is.
 ///
 /// `with_options` anchors at the cursor and scrolls only as far as it must, so
 /// the cursor's row decides where the viewport lands:
 ///
-/// - **Known** — leave it. The viewport starts on the prompt's row, the way
-///   any command's output does, and `insert_before` walks it down to the floor
-///   as the transcript grows; when the prompt is already low, `with_options`
-///   scrolls what it needs. (It used to descend to the bottom band first, so
-///   the UI opened huddled on the floor of a tall window.)
+/// - **Above the anchor row** — move down to it, so the composer sits on the
+///   floor of the window from the first frame. The welcome banner has already
+///   been printed above by then, so nothing is drawn over it. Moving *up*
+///   would draw the viewport over shell output that is still on screen (and
+///   not scroll it, so it would not reach scrollback either), which is why
+///   this only ever descends.
+/// - **At or below it** — leave it: `with_options` scrolls what it needs and
+///   the viewport lands on the bottom rows by itself.
 /// - **Unknown** (the cursor-position query failed — it is a terminal
 ///   round-trip and can) — park on the last row. Leaving it put anchors the
 ///   viewport wherever the shell's cursor happened to be, and every row BELOW
@@ -622,8 +630,10 @@ fn leave_fullscreen(app: &mut App) {
 ///   scroll the screen to make room, so displaced rows reach scrollback intact
 ///   and the viewport is bottom-anchored — the invariant `purge_and_reanchor`
 ///   maintains everywhere else.
-fn anchor_row(rows: u16, cursor_row: Option<u16>) -> Option<u16> {
+fn anchor_row(rows: u16, viewport_h: u16, cursor_row: Option<u16>) -> Option<u16> {
+    let top = rows.saturating_sub(viewport_h);
     match cursor_row {
+        Some(r) if r < top => Some(top),
         Some(_) => None,
         None => Some(rows.saturating_sub(1)),
     }
@@ -665,7 +675,8 @@ fn rebuild_after_resize(
     // draw-over-the-top path (lost/garbled scrollback rows). A resize is the
     // only time the viewport height changes at all.
     let h = viewport_h_for(size.1);
-    purge_and_reanchor(terminal, h)?;
+    let banner = app.welcome_applies().then(|| app.welcome_banner());
+    purge_and_reanchor(terminal, h, banner.as_deref())?;
     app.flushed_upto = 0;
     app.flushed_bytes = 0;
     Ok(h)
@@ -686,18 +697,11 @@ fn rebuild_after_resize(
 /// `insert_before` the whole settled transcript a second time, burying the
 /// login transcript under a duplicate of the conversation.
 ///
-/// The welcome is dismissed explicitly so the mascot does not come back over
-/// the child's transcript; the height itself no longer depends on it.
-///
 /// `wants_screen_wipe` is cleared for the same reason the reset is skipped: a
 /// wipe left pending would run `purge_and_reanchor` on the pass after the
 /// child exits and take the transcript with it.
 fn prepare_handover(app: &mut App, label: &str, term_rows: u16) -> u16 {
     app.push_system(format!("{label}: handing over the terminal…"));
-    // A notice alone does not end the welcome (`App::welcome_header_live`),
-    // so the handover says so itself: the mascot must not come back over the
-    // child's transcript.
-    app.welcome_dismissed = true;
     app.wants_screen_wipe = false;
     viewport_h_for(term_rows)
 }
@@ -715,18 +719,27 @@ fn prepare_handover(app: &mut App, label: &str, term_rows: u16) -> u16 {
 /// Anchoring at the bottom leaves the headroom `insert_before` needs to lay
 /// replayed rows down above the viewport, which is also the steady state the
 /// UI migrates to anyway.
-fn purge_and_reanchor(terminal: &mut Terminal<CrosstermBackend<Stdout>>, h: u16) -> Result<()> {
+fn purge_and_reanchor(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    h: u16,
+    banner: Option<&[ratatui::text::Line<'static>]>,
+) -> Result<()> {
     use crossterm::cursor::MoveTo;
     use crossterm::terminal::{Clear, ClearType};
+    let rows = crossterm::terminal::size()?.1;
     crossterm::execute!(
         io::stdout(),
-        // The screen is about to be empty, so the top is the natural anchor:
-        // the replayed transcript grows down from row 0 and `insert_before`
-        // walks the viewport to the floor once it is longer than the window.
         MoveTo(0, 0),
         Clear(ClearType::All),
         Clear(ClearType::Purge),
     )?;
+    // The welcome, when it still applies, goes back at the top as terminal
+    // output; the viewport then re-anchors on the floor (#725: anchoring it
+    // at the top leaves `insert_before` no headroom and drops replayed rows).
+    if let Some(lines) = banner {
+        welcome::print_banner(&mut io::stdout(), lines)?;
+    }
+    crossterm::execute!(io::stdout(), MoveTo(0, rows.saturating_sub(h)))?;
     // The cursor-position query inside `with_options` needs crossterm's
     // internal event reader; the just-dropped EventStream's background
     // thread can hold that lock for a beat longer. Retry briefly.
@@ -825,7 +838,8 @@ async fn event_loop(
         if app.render_mode == RenderMode::Inline && std::mem::take(&mut app.wants_screen_wipe) {
             drop(events);
             let want_h = viewport_h_for(last_size.height);
-            if purge_and_reanchor(terminal, want_h).is_ok() {
+            let banner = app.welcome_applies().then(|| app.welcome_banner());
+            if purge_and_reanchor(terminal, want_h, banner.as_deref()).is_ok() {
                 viewport_h = want_h;
             }
             events = EventStream::new();
@@ -938,12 +952,6 @@ async fn event_loop(
         if app.should_quit {
             return Ok(());
         }
-        // The idle welcome blinks: schedule a redraw exactly at the next blink
-        // boundary, but ONLY when the mascot animates, it is still the head of
-        // the band (so it is actually on screen), and nothing is streaming.
-        // Otherwise this arm is disabled and never wakes the loop.
-        let blink_live = app.mascot_mode.animated() && app.welcome_header_live() && !app.streaming;
-        let blink_at = TokioInstant::from_std(app.blink.next_deadline(StdInstant::now()));
         let input_due = app
             .panel_input_deadline
             .map(TokioInstant::from_std)
@@ -1006,9 +1014,6 @@ async fn event_loop(
                 mur_common::panel::HubFrame::Insert { text } => app.set_input(&text),
             },
             _ = spinner.tick(), if app.streaming => app.tick_spinner(),
-            // Wake at the blink deadline; the loop redraws at the top of the
-            // next iteration, advancing the eye frame. No state change needed.
-            _ = tokio::time::sleep_until(blink_at), if blink_live => {}
             _ = tokio::time::sleep_until(follow_at), if follow_armed => {
                 app.poll_follow(StdInstant::now());
             }
@@ -2554,19 +2559,33 @@ mod viewport_tests {
     /// "replay" anything — it hands `insert_before` the whole settled
     /// transcript a second time, on top of the copy already in scrollback,
     /// immediately before the child runs.
-    /// A known cursor row is where the viewport starts — the prompt's row,
-    /// like any command's output. Only an unknown row parks on the last row:
-    /// leaving it put would anchor wherever the shell happened to be and
-    /// strand pre-murmur output on the rows below the composer, which ratatui
-    /// never repaints because it owns only the viewport.
+    /// The viewport must end up bottom-anchored no matter what the cursor
+    /// query does: the composer lives on the floor, and an unknown cursor row
+    /// left put would strand pre-murmur shell output on the rows below the
+    /// composer — rows ratatui never repaints, because it owns only the
+    /// viewport.
     #[test]
-    fn the_viewport_starts_at_the_prompt_and_only_an_unknown_cursor_parks_low() {
-        assert_eq!(anchor_row(40, Some(3)), None);
-        assert_eq!(anchor_row(40, Some(20)), None);
-        assert_eq!(anchor_row(40, Some(39)), None);
-        assert_eq!(anchor_row(40, None), Some(39));
+    fn the_anchor_never_leaves_rows_stranded_below_the_viewport() {
+        // Cursor above the anchor row: descend to it (the banner printed
+        // above survives untouched).
+        assert_eq!(anchor_row(40, 20, Some(3)), Some(20));
+        // At or below it: `with_options` scrolls into place on its own.
+        assert_eq!(anchor_row(40, 20, Some(20)), None);
+        assert_eq!(anchor_row(40, 20, Some(39)), None);
+        // Unknown: park on the last row rather than wherever the cursor sits.
+        assert_eq!(anchor_row(40, 20, None), Some(39));
         for rows in [5u16, 24, 40, 200] {
-            assert!(anchor_row(rows, None).is_some_and(|row| row < rows));
+            for h in [5u16, 20, rows.saturating_sub(1)] {
+                for c in [None, Some(0), Some(rows / 2), Some(rows - 1)] {
+                    if let Some(row) = anchor_row(rows, h, c) {
+                        assert!(row < rows, "rows={rows} h={h} c={c:?} -> {row}");
+                        assert!(
+                            row >= rows.saturating_sub(h),
+                            "anchored above the bottom band: rows={rows} h={h} c={c:?} -> {row}"
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -2601,10 +2620,6 @@ mod viewport_tests {
         assert_eq!(
             h, INLINE_VIEWPORT_HEIGHT,
             "the welcome height must not survive the handover notice"
-        );
-        assert!(
-            !app.welcome_header_live(),
-            "the handover must dismiss the welcome"
         );
         assert!(
             app.messages
