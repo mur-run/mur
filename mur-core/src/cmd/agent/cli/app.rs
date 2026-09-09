@@ -594,8 +594,8 @@ pub struct App {
     /// and re-anchors a fresh viewport before the next draw.
     pub wants_screen_wipe: bool,
     /// The welcome yielded to something that is not a conversation (a
-    /// terminal handover): see [`App::welcome_visible`]. Reset whenever the
-    /// transcript is cleared.
+    /// terminal handover): see [`App::welcome_header_live`]. Reset whenever
+    /// the transcript is cleared.
     pub welcome_dismissed: bool,
     /// A channel being live-tailed (`/channels N --follow`) — someone else's
     /// conversation, not this pane's. `None` = not following.
@@ -893,29 +893,21 @@ impl App {
         self.input.insert_str(text);
     }
 
-    /// Is the welcome (mascot + identity + hint) the surface right now?
-    ///
-    /// Derived from the transcript, not from "is it empty": a slash command's
-    /// notice (`/skills`, `/skin`) is the UI talking, not a conversation, so
-    /// it renders *under* the welcome instead of ending it. Before, the first
-    /// `/skills` dropped the mascot, shrank the viewport to the chat height and
-    /// left five rows of notice over a blank slab. The welcome ends when
-    /// someone speaks (user, agent, or a `!shell` turn), on `/clear` it comes
-    /// back, and a terminal handover dismisses it explicitly because the
-    /// child's output must not be scrolled off by a full-window re-anchor.
-    pub fn welcome_visible(&self) -> bool {
-        !self.welcome_dismissed && self.messages.iter().all(|m| m.role == Role::System)
-    }
-
     /// Is the welcome (mascot + identity + hint) still the head of the live
     /// band?
     ///
-    /// Distinct from [`App::welcome_visible`], which sizes the viewport and
-    /// ends when someone speaks. The mascot itself is not a splash the first
-    /// turn replaces: it stays above the conversation until the band fills
-    /// and the flush carries it into scrollback — messages push it up, they
-    /// do not remove it. A followed channel is someone else's conversation
-    /// and gets no welcome.
+    /// The mascot is not a splash the first turn replaces: it stays above the
+    /// conversation until the band fills and the flush carries it into
+    /// scrollback — messages push it up, they do not remove it. A slash
+    /// command's notice is the UI talking, not a conversation, and renders
+    /// under it. A terminal handover dismisses it explicitly so it does not
+    /// come back over the child's transcript; `/clear` brings it back. A
+    /// followed channel is someone else's conversation and gets no welcome.
+    ///
+    /// (There used to be a second predicate, "has anyone spoken", that sized
+    /// the viewport full-window for the welcome and chat-height after; the
+    /// shrink it forced is what dropped the whole transcript to the floor of
+    /// a tall terminal on the first message. One viewport height now.)
     pub fn welcome_header_live(&self) -> bool {
         !self.welcome_dismissed && self.flushed_upto == 0 && self.follow.is_none()
     }
