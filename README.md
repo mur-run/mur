@@ -499,10 +499,13 @@ Agent** wizard offers the same catalog as a source.
   the host left as `*`. It now refuses that form and names what would actually
   take effect. Same family, different surface: an agent whose secret or model
   reference failed to resolve used to start anyway and answer as an echo stub —
-  a "working" agent that parrots you back. `mur agent doctor <name>` now runs
-  the same resolution the runtime does and reports it, and `mur agent start`
-  waits for the runtime to claim it is up instead of reporting success the
-  instant the process forks.
+  a "working" agent that parrots you back. The agent now says so itself: a model
+  reference that does not resolve, or a provider client that will not build,
+  answers every message with the reason and the commands that fix it, and only a
+  deliberate `provider: echo` still echoes. `mur agent doctor <name>` runs the
+  same resolution the runtime does and reports it, and `mur agent start` waits
+  for the runtime to claim it is up instead of reporting success the instant the
+  process forks.
 - **Loop settings that can't quietly mean something else** — a fleet loop ends
   when its job queue drains, when a member emits an agreed marker on a line of
   its own, or when the router judges it done. `mur fleet set-loop` refuses a
