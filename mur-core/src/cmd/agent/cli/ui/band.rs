@@ -3,9 +3,7 @@
 
 use super::INPUT_H_MIN;
 use super::chooser::chooser_band_height;
-use super::message::{
-    agent_body_lines, gap_row, push_agent_header, push_message, wants_gap_before,
-};
+use super::message::{agent_body_lines, gap_row, push_agent_header, push_message};
 use super::rail::fleet_rail_height;
 use ratatui::Frame;
 use ratatui::backend::Backend;
@@ -142,7 +140,7 @@ pub(super) fn message_block(
     let mut lines: Vec<Line<'static>> = Vec::new();
     // Never before a continuation: `skip > 0` resumes a message whose head is
     // already committed above.
-    if idx > 0 && skip == 0 && wants_gap_before(app.messages.get(idx - 1), m) {
+    if idx > 0 && skip == 0 {
         lines.push(gap_row(app.theme, app.messages.get(idx - 1), m));
     }
     if measured {
@@ -348,7 +346,7 @@ pub fn flush_finished<B: Backend>(
         if skip == 0 {
             if app.flushed_upto > 0 {
                 // This path only ever emits an agent turn's own body, which
-                // always opens a turn — no `wants_gap_before` test needed, but
+                // always opens a turn, but
                 // the row itself comes from the one builder.
                 lines.push(gap_row(theme, app.messages.get(app.flushed_upto - 1), m));
             }
