@@ -52,6 +52,7 @@ pub mod official;
 pub mod panel;
 pub mod parallel;
 pub mod parameterize;
+pub mod paths;
 pub mod pattern;
 pub mod permissions;
 pub mod pipeline;

@@ -355,7 +355,7 @@ impl SandboxPolicy {
         ) && crate::tools::fleet_run::agent_enabled(mur_home, agent_name)
         {
             fleet_run_enabled = true;
-            for dir in ["fleets", "commander", "conversations", "artifacts"] {
+            for dir in mur_common::paths::RUN_STATE_DIRS {
                 let d = mur_home.join(dir);
                 if !fs_write.contains(&d) {
                     let _ = std::fs::create_dir_all(&d);
@@ -480,11 +480,20 @@ impl SandboxPolicy {
         // (Issue 16 discipline: never emit an unresolvable grant).
         let spawn_mode = ent.processes.spawn.mode;
         let mut spawn_allowed_paths: Vec<PathBuf> = Vec::new();
-        // fleet_run: the child is the `mur` binary itself — chain it into the
-        // allowlist resolution below (same resolve/canonicalize/dedup path).
+        // fleet_run: the child is the `mur` binary itself. Grant the exact
+        // path `fleet_run` will exec (`exec_dirs::mur_cli`) — NOT the bare
+        // name. A bare name is resolved here by scanning the search dirs,
+        // while the exec resolves it through PATH later, and the two answered
+        // differently the moment a `brew` symlink landed after the seal
+        // (2026-09-09: allowlisted `~/.local/bin/mur`, exec'd the Cellar copy,
+        // EPERM). An absolute path takes the no-search branch below, so grant
+        // and spawn cannot drift apart again.
         let mut spawn_names: Vec<String> = ent.processes.spawn.allowed.clone();
-        if fleet_run_enabled && !spawn_names.iter().any(|n| n == "mur") {
-            spawn_names.push("mur".to_string());
+        if fleet_run_enabled {
+            let cli = crate::exec_dirs::mur_cli().to_string_lossy().into_owned();
+            if !spawn_names.contains(&cli) {
+                spawn_names.push(cli);
+            }
         }
         for name in &spawn_names {
             let mut matched_any = false;
@@ -543,6 +552,16 @@ impl SandboxPolicy {
                     binary = %name,
                     "spawn allowlist entry could not be resolved to an executable; dropping"
                 );
+                // Record it, don't just warn: a dropped filesystem grant lands
+                // in `running.lock`'s `dropped` while a dropped spawn grant
+                // used to exist only as a WARN in a multi-megabyte log — 264
+                // silent drops across the fleet before anyone looked (one
+                // agent lost its browser tooling on every start for weeks).
+                dropped.push(mur_common::agent::DroppedGrant {
+                    path: name.clone(),
+                    verb: "spawn".into(),
+                    reason: "no executable of that name in the search dirs".into(),
+                });
             }
         }
 
@@ -1156,14 +1175,14 @@ mod tests {
         let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
         assert!(!policy.fs_write.contains(&mur_home.join("fleets")));
 
-        // Allowlisted in config.yaml → the three dirs are carved in.
+        // Allowlisted in config.yaml → every run-state dir is carved in.
         std::fs::write(
             mur_home.join("config.yaml"),
             "fleet_run:\n  agents: [mur]\n  fleets: [deep-research]\n",
         )
         .unwrap();
         let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
-        for dir in ["fleets", "commander", "conversations"] {
+        for dir in mur_common::paths::RUN_STATE_DIRS {
             assert!(
                 policy.fs_write.contains(&mur_home.join(dir)),
                 "{dir} should be carved in for an allowlisted agent"

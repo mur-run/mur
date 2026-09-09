@@ -11,7 +11,8 @@ use super::{RunState, Sidecar};
 
 /// `<mur_home>/runs`.
 pub fn runs_dir(mur_home: &Path) -> PathBuf {
-    mur_home.join("runs")
+    // Shared with the sandbox carve-in — see `mur_common::paths`.
+    mur_home.join(mur_common::paths::RUNS)
 }
 
 /// `<mur_home>/runs/<run_id>/run.json`.
@@ -260,6 +261,7 @@ mod tests {
                     state: State::Running,
                     started_at: None,
                     ended_at: None,
+                    error: None,
                 })
                 .collect();
             run
@@ -409,6 +411,7 @@ mod tests {
                             state: State::Running,
                             started_at: None,
                             ended_at: None,
+                            error: None,
                         });
                     })
                     .unwrap();

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::companion::clock::SystemClock;
 use crate::hitl::HitlApprovals;
@@ -49,6 +49,31 @@ pub(crate) fn profile_needs_egress(entries: &[mur_common::agent::McpServerEntry]
                 | Some(mur_common::agent::McpNetMode::BroadAudited)
         )
     })
+}
+
+/// Provider marker for "this agent's model reference did not resolve".
+///
+/// Deliberately NOT `echo`. A failure that borrows a legitimate value's
+/// identity becomes indistinguishable from that value being chosen on
+/// purpose, and that is precisely how a broken agent came up as a parrot:
+/// resolution failed, the fallback wrote `provider: "echo"`, and nothing
+/// downstream could tell "the user asked for a stub" from "this agent has
+/// no model". `echo` is a useful stub; no model is a fault.
+const UNRESOLVED_PROVIDER: &str = "unresolved";
+
+/// What the user reads, in chat, from an agent that cannot answer.
+///
+/// The reply is the only surface they are looking at in the moment it
+/// matters — a WARN in a multi-megabyte log is not an answer to "why is my
+/// agent repeating me". Every command named here is one that exists.
+fn no_model_notice(agent: &str, reason: &str) -> String {
+    format!(
+        "⚠️ This agent has no working model, so it cannot answer.\n\
+         Reason: {reason}\n\
+         Diagnose: `mur agent doctor {agent}`\n\
+         Pick a model: `mur model list`, then `/model` in this chat\n\
+         Apply it: `mur agent restart {agent}`"
+    )
 }
 
 /// The external host the agent's configured model talks to, for auto-allowing
@@ -268,11 +293,17 @@ pub async fn build_provider_runner(
     }
 
     let resolved = crate::supervisor::resolve_model_entry(&profile.inner);
-    if let Err(ref e) = resolved {
-        warn!(error = %e, "model resolution failed; will fall back to echo");
+    // Keep the reason. A failure that borrows a legitimate provider's identity
+    // is indistinguishable from that provider being chosen on purpose — which
+    // is exactly how a broken agent came up as a parrot: resolution failed, the
+    // fallback wrote `provider: "echo"`, and the `"echo"` arm below could no
+    // longer tell "the user asked for a stub" from "this agent has no model".
+    let unresolved: Option<String> = resolved.as_ref().err().map(|e| format!("{e:#}"));
+    if let Some(ref e) = unresolved {
+        error!(error = %e, "model resolution failed — the agent will report it, not echo");
     }
     let entry = resolved.unwrap_or_else(|_| ModelEntry {
-        provider: "echo".into(),
+        provider: UNRESOLVED_PROVIDER.into(),
         model: String::new(),
         base_url: None,
         secret: None,
@@ -391,6 +422,10 @@ pub async fn build_provider_runner(
                 Arc::new(FleetRunTool {
                     mur_home: mur_home.clone(),
                     agent_name: profile.inner.name.clone(),
+                    // Loaded before the sandbox sealed, which is the only
+                    // reason we still have it: the child cannot read `keys/`.
+                    signing: Some(identity.clone()),
+                    key_version: profile.inner.identity.key_version,
                 }),
             );
         }
@@ -582,34 +617,43 @@ pub async fn build_provider_runner(
                         return Err(e);
                     }
                     match entry.provider.as_str() {
-                        "anthropic" => {
-                            warn!(error = %e, "anthropic client unavailable; falling back to echo");
+                        // A configured provider whose client would not build is
+                        // broken, not a stub: say so in every reply rather than
+                        // parroting the user back (same rule as `other` below).
+                        "anthropic" | "openai" => {
+                            error!(provider = %entry.provider, error = %e, "model client unavailable — replying with a misconfiguration notice instead of echo");
                             (
-                                Arc::new(TaskRunner::new_stub_echo()),
+                                Arc::new(TaskRunner::new_stub_misconfigured(no_model_notice(
+                                    &profile.inner.name,
+                                    &format!(
+                                        "the {} client could not be built: {e:#}",
+                                        entry.provider
+                                    ),
+                                ))),
                                 None,
                                 Some(pool.clone()),
                                 None,
                             )
                         }
-                        "openai" => {
-                            warn!(error = %e, "openai client unavailable; falling back to echo");
-                            (
-                                Arc::new(TaskRunner::new_stub_echo()),
-                                None,
-                                Some(pool.clone()),
-                                None,
-                            )
-                        }
-                        "echo" => {
-                            // Intentional fallback: model resolution failed or the agent has no
-                            // model configured. Degrade to echo (warned at resolution time).
-                            (
-                                Arc::new(TaskRunner::new_stub_echo()),
-                                None,
-                                Some(pool.clone()),
-                                None,
-                            )
-                        }
+                        // A DELIBERATE `provider: echo` — the test stub. This
+                        // arm means the user asked for a parrot, and only that.
+                        "echo" => (
+                            Arc::new(TaskRunner::new_stub_echo()),
+                            None,
+                            Some(pool.clone()),
+                            None,
+                        ),
+                        UNRESOLVED_PROVIDER => (
+                            Arc::new(TaskRunner::new_stub_misconfigured(no_model_notice(
+                                &profile.inner.name,
+                                unresolved
+                                    .as_deref()
+                                    .unwrap_or("model reference did not resolve"),
+                            ))),
+                            None,
+                            Some(pool.clone()),
+                            None,
+                        ),
                         other => {
                             // A real provider was configured but this runtime ships no client for
                             // it (e.g. `deepseek`). Do NOT silently echo — that looks alive but
@@ -921,6 +965,28 @@ pub(crate) async fn prepare_runtime(
 
 #[cfg(test)]
 mod tests {
+    use super::{UNRESOLVED_PROVIDER, no_model_notice};
+
+    /// The reply is the whole fix: it is the only surface the user is looking
+    /// at when an agent stops answering, so it must carry the cause and name the
+    /// commands — not point at a log.
+    #[test]
+    fn the_no_model_notice_carries_the_cause_and_a_way_out() {
+        let m = no_model_notice(
+            "pm",
+            r#"model_ref "chatgpt_gpt_5_4_min" not in the registry"#,
+        );
+        assert!(
+            m.contains("chatgpt_gpt_5_4_min"),
+            "the cause must survive: {m}"
+        );
+        assert!(m.contains("mur agent doctor pm"), "{m}");
+        assert!(m.contains("mur agent restart pm"), "{m}");
+        // The internal marker is our bookkeeping. A user should not have to
+        // learn a provider slug we invented to understand why nothing answers.
+        assert!(!m.contains(UNRESOLVED_PROVIDER), "{m}");
+    }
+
     use super::*;
     use crate::llm::{LlmError, LlmRequest, LlmResponse, RequestIntent, StopReason};
     use async_trait::async_trait;

@@ -212,6 +212,31 @@ fn discover_repo_root() -> Result<PathBuf> {
 /// Concurrency cap for the fan-out — closes the unbounded-spawn gap documented
 /// on `DagExecOptions::max_concurrency` (N worktree agents must not cascade past
 /// API rate limits). At most `cores-2`, never below 1, never above the step count.
+/// Default bound on simultaneous DELEGATE steps.
+///
+/// `fanout_cap` bounds CPU, which is the right resource for worktree tracks
+/// (each one compiles). A delegated step compiles nothing: it is another
+/// agent's turn against the same local model gateway and the same upstream
+/// quota, so a CPU-shaped cap does not bound what actually saturates. Left
+/// uncapped, a six-member fleet dialed at once and every step died — two on
+/// local connect refusals, four hung until the step gave up, upstream 429s
+/// throughout, and not one recorded reason (fleet develop-rust, 2026-09-09).
+const DEFAULT_DELEGATE_FANOUT: usize = 3;
+
+/// Env override for `DEFAULT_DELEGATE_FANOUT`. A bigger local gateway or a
+/// higher upstream tier can afford more; `0` and garbage fall back to the
+/// default rather than to "unbounded", because unbounded is the bug.
+const FANOUT_ENV: &str = "MUR_FLEET_FANOUT";
+
+fn delegate_fanout(n_steps: usize) -> usize {
+    let want = std::env::var(FANOUT_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_DELEGATE_FANOUT);
+    want.min(n_steps.max(1)).max(1)
+}
+
 fn fanout_cap(n_steps: usize) -> usize {
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -394,8 +419,12 @@ pub async fn cmd_fleet_run(
         run_id: run_id.clone(),
         run_kind: Some(crate::run_status::RunKind::Fleet),
         run_label: format!("fleet {}", fleet.name),
-        // Cap fan-out so N worktree agents don't cascade past API rate limits.
-        max_concurrency: exec_parallel.then(|| fanout_cap(proc.steps.len())),
+        // Cap fan-out so N agents don't cascade past API rate limits.
+        max_concurrency: Some(if exec_parallel {
+            fanout_cap(proc.steps.len())
+        } else {
+            delegate_fanout(proc.steps.len())
+        }),
         ..Default::default()
     };
     // skill_name here is a readable run-history label; channel routing still uses opts.channel_id.
@@ -553,6 +582,30 @@ mod tests {
             "an explicit force=true must enable isolation even with the env var unset"
         );
         assert!(!parallel_exec_enabled(false));
+    }
+
+    #[test]
+    fn delegate_fanout_is_bounded_even_without_the_parallel_flag() {
+        // The regression: the cap used to apply ONLY under the experimental
+        // worktree flag, so the ordinary path fanned out unbounded and six
+        // members dialed one gateway at once.
+        unsafe { std::env::remove_var(FANOUT_ENV) };
+        assert_eq!(delegate_fanout(6), DEFAULT_DELEGATE_FANOUT);
+        assert_eq!(delegate_fanout(1), 1, "never exceeds the step count");
+        assert!(delegate_fanout(0) >= 1, "never zero");
+    }
+
+    #[test]
+    fn delegate_fanout_env_override_never_unbounds() {
+        unsafe { std::env::set_var(FANOUT_ENV, "8") };
+        assert_eq!(delegate_fanout(20), 8);
+        // Zero and garbage fall back to the default, not to "unbounded" —
+        // unbounded is the bug this cap exists to prevent.
+        unsafe { std::env::set_var(FANOUT_ENV, "0") };
+        assert_eq!(delegate_fanout(20), DEFAULT_DELEGATE_FANOUT);
+        unsafe { std::env::set_var(FANOUT_ENV, "lots") };
+        assert_eq!(delegate_fanout(20), DEFAULT_DELEGATE_FANOUT);
+        unsafe { std::env::remove_var(FANOUT_ENV) };
     }
 
     #[test]

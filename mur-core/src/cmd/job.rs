@@ -120,6 +120,11 @@ pub fn print_status(w: &mut dyn std::io::Write, s: &RunStatus) {
             state_label(step.state),
             step.member.as_deref().unwrap_or("-")
         );
+        // The reason is the whole point of asking; print it on its own line
+        // rather than squeezing it into the fixed-width row.
+        if let Some(err) = &step.error {
+            let _ = writeln!(w, "       └─ {}", err.replace('\n', " "));
+        }
     }
 }
 
