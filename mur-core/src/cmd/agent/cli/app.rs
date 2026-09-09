@@ -16,7 +16,7 @@ use super::persist::{ChannelMeta, Session, TurnRecord};
 use super::step::StepState;
 use super::stream::HitlRequest;
 use super::theme::Theme;
-use super::welcome::{Blink, MascotMode, resolve_mascot_mode};
+use super::welcome::{MascotMode, resolve_mascot_mode};
 
 /// Spinner frames shown while the agent is generating.
 pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -505,9 +505,6 @@ pub struct App {
     /// clipboard screenshot (Ctrl+V) or an image file the terminal pasted as a
     /// path (Cmd+V / drag-drop). Sent as an inline image part, cleared on send.
     pub pending_image: Option<(String, String)>,
-    /// Mascot blink driver for the startup welcome screen. Render is a pure
-    /// function of elapsed time; the event loop wakes on its next deadline.
-    pub blink: Blink,
     /// Mascot color/animation mode, resolved once at startup from the theme
     /// and terminal capabilities (NO_COLOR / non-TTY / TERM=dumb → static).
     pub mascot_mode: MascotMode,
@@ -593,10 +590,6 @@ pub struct App {
     /// (/clear, /channels switch): the event loop wipes screen + scrollback
     /// and re-anchors a fresh viewport before the next draw.
     pub wants_screen_wipe: bool,
-    /// The welcome yielded to something that is not a conversation (a
-    /// terminal handover): see [`App::welcome_header_live`]. Reset whenever
-    /// the transcript is cleared.
-    pub welcome_dismissed: bool,
     /// A channel being live-tailed (`/channels N --follow`) — someone else's
     /// conversation, not this pane's. `None` = not following.
     pub follow: Option<super::follow::Follow>,
@@ -677,7 +670,6 @@ impl App {
             last_sent: None,
             expired_retry: None,
             pending_image: None,
-            blink: Blink::new(),
             // Resolve color/animation once: env + TTY don't change mid-session.
             mascot_mode: resolve_mascot_mode(theme, std::io::stdout().is_terminal()),
             // Assume focused at startup; crossterm corrects it on the first
@@ -708,7 +700,6 @@ impl App {
             pending_suggestions: Vec::new(),
             suggestion_ghost: None,
             wants_screen_wipe: false,
-            welcome_dismissed: false,
             follow: None,
             sent_history: Vec::new(),
             hist_idx: None,
@@ -893,25 +884,6 @@ impl App {
         self.input.insert_str(text);
     }
 
-    /// Is the welcome (mascot + identity + hint) still the head of the live
-    /// band?
-    ///
-    /// The mascot is not a splash the first turn replaces: it stays above the
-    /// conversation until the band fills and the flush carries it into
-    /// scrollback — messages push it up, they do not remove it. A slash
-    /// command's notice is the UI talking, not a conversation, and renders
-    /// under it. A terminal handover dismisses it explicitly so it does not
-    /// come back over the child's transcript; `/clear` brings it back. A
-    /// followed channel is someone else's conversation and gets no welcome.
-    ///
-    /// (There used to be a second predicate, "has anyone spoken", that sized
-    /// the viewport full-window for the welcome and chat-height after; the
-    /// shrink it forced is what dropped the whole transcript to the floor of
-    /// a tall terminal on the first message. One viewport height now.)
-    pub fn welcome_header_live(&self) -> bool {
-        !self.welcome_dismissed && self.flushed_upto == 0 && self.follow.is_none()
-    }
-
     /// Columns a message body may use at the current pane width — what a
     /// finished reply's markdown is rendered at (tables need it up front).
     pub fn body_cols(&self) -> usize {
@@ -930,6 +902,24 @@ impl App {
                 m.rendered = Some(markdown::render(&m.text, width).lines);
             }
         }
+    }
+
+    /// Does the welcome banner belong on screen? While no one has spoken — a
+    /// slash command's notice is the UI talking, not a conversation — and this
+    /// pane is not live-tailing someone else's channel. Consulted when the
+    /// screen is (re)built: startup, `/clear`, a resize.
+    pub fn welcome_applies(&self) -> bool {
+        self.messages.iter().all(|m| m.role == Role::System) && self.follow.is_none()
+    }
+
+    /// The welcome banner lines for this pane, in this skin.
+    pub fn welcome_banner(&self) -> Vec<ratatui::text::Line<'static>> {
+        super::welcome::welcome_lines(
+            self.theme,
+            self.mascot_mode,
+            &self.agent,
+            self.cwd.as_deref(),
+        )
     }
 
     pub fn push_system(&mut self, text: impl Into<String>) {
@@ -1320,7 +1310,6 @@ impl App {
         self.session = session;
         self.channel = None;
         self.messages.clear();
-        self.welcome_dismissed = false;
         self.flushed_upto = 0;
         self.flushed_bytes = 0;
         self.needs_full_redraw = true;
@@ -1346,7 +1335,6 @@ impl App {
         self.session = session;
         self.channel = None;
         self.messages.clear();
-        self.welcome_dismissed = false;
         self.flushed_upto = 0;
         self.flushed_bytes = 0;
         self.context_task_id = None;
@@ -1619,23 +1607,24 @@ impl App {
 
 /// Build the styled multiline input widget.
 /// The composer's inner padding: the skin's horizontal padding, plus one
-/// blank row above and below the text so the input does not sit jammed
-/// between its rule and the status bar.
+/// blank row under the text so the input does not sit jammed against the
+/// status bar. Nothing above it — the titled rule is its own separation, and
+/// a blank there too read as a hole (field report).
 fn composer_padding(theme: &Theme) -> Padding {
     let h = u16::from(theme.inner_padding);
-    Padding::new(h, h, COMPOSER_PAD_ROWS, COMPOSER_PAD_ROWS)
+    Padding::new(h, h, 0, COMPOSER_PAD_BELOW)
 }
 
-/// Blank rows above and below the composer text. `ui::INPUT_H_MIN` counts
-/// them; change both together.
-pub(super) const COMPOSER_PAD_ROWS: u16 = 1;
+/// Blank rows between the composer text and the status bar.
+/// `ui::INPUT_H_MIN` counts them; change both together.
+pub(super) const COMPOSER_PAD_BELOW: u16 = 1;
 
 fn new_input() -> TextArea<'static> {
     let mut ta = TextArea::default();
     ta.set_block(
         Block::default()
             .borders(Borders::TOP)
-            .padding(Padding::new(0, 0, COMPOSER_PAD_ROWS, COMPOSER_PAD_ROWS))
+            .padding(Padding::new(0, 0, 0, COMPOSER_PAD_BELOW))
             .title(ENTER_HINT_COMPACT),
     );
     ta.set_cursor_line_style(Style::default());

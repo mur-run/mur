@@ -32,23 +32,6 @@ pub(super) fn indent_line(mut line: Line<'static>) -> Line<'static> {
 /// short by exactly the lines markdown folded away, with no way to pull them
 /// back out of scrollback. Measuring settled means the band is exactly full
 /// after the turn; while streaming it simply tail-follows, as it always has.
-/// Whether a gap row goes before this message.
-///
-/// A gap means "the speaker changed". A step card is a step *inside* the turn
-/// that precedes it, so a run of ten tool calls used to cost ten gap rows and
-/// read as ten unrelated events — twenty rows of scrollback for ten facts.
-/// Suppressing the gap there is what turns vertical rhythm into grouping
-/// instead of uniform repetition: every remaining gap now marks a real
-/// boundary — including the one where a run of cards begins: the first card
-/// after a spoken turn opens a gap, so the block of work is set off from the
-/// message that asked for it instead of hanging off its last line.
-pub(super) fn wants_gap_before(
-    prev: Option<&crate::cmd::agent::cli::app::ChatMsg>,
-    m: &crate::cmd::agent::cli::app::ChatMsg,
-) -> bool {
-    m.step.is_none() || prev.is_none_or(|p| p.step.is_none())
-}
-
 /// The gap before a message: a blank line in every skin. The role label is
 /// the change-of-speaker signal; a rule under it repeated the information
 /// (spec decision 4). Kept as a function because `message_block` attributes
@@ -280,49 +263,9 @@ mod settlement_paint_tests {
 
 #[cfg(test)]
 mod gap_tests {
-    use super::{gap_row, wants_gap_before};
+    use super::gap_row;
     use crate::cmd::agent::cli::app::{ChatMsg, Role};
-    use crate::cmd::agent::cli::step::StepCard;
     use crate::cmd::agent::cli::theme::{ANSI, MUR};
-
-    fn card_msg() -> ChatMsg {
-        ChatMsg::tool_for_test(StepCard::new(
-            "s".into(),
-            "bash".into(),
-            serde_json::json!({"command": "ls"}),
-        ))
-    }
-
-    /// The whole point: a run of tool calls is one block of work, not N
-    /// separate events. Ten calls used to cost ten gap rows — but the run
-    /// itself is set off from the turn that asked for it.
-    #[test]
-    fn a_run_of_tool_calls_opens_one_gap() {
-        let user = ChatMsg::for_test(Role::User, "hi");
-        assert!(wants_gap_before(Some(&user), &card_msg()), "first card");
-        assert!(
-            !wants_gap_before(Some(&card_msg()), &card_msg()),
-            "card after card"
-        );
-    }
-
-    /// Control — if this ever flips, gaps stop marking anything at all.
-    #[test]
-    fn a_spoken_turn_still_opens_a_gap() {
-        let card = card_msg();
-        assert!(wants_gap_before(
-            Some(&card),
-            &ChatMsg::for_test(Role::User, "hi")
-        ));
-        assert!(wants_gap_before(
-            Some(&card),
-            &ChatMsg::for_test(Role::Agent, "hello")
-        ));
-        assert!(wants_gap_before(
-            None,
-            &ChatMsg::for_test(Role::System, "note")
-        ));
-    }
 
     /// One builder for the row, so the two emit paths cannot drift into
     /// different-looking gaps.
@@ -383,24 +326,22 @@ mod block_tests {
         );
     }
 
-    /// A tool call is a step inside the turn before it: the first card of a
-    /// run is set off from the message that asked, the cards after it are not.
+    /// Every item is set off from the one before it, tool cards included: a
+    /// run of cards used to group flush against each other and read as one
+    /// smear (field report). Each card is its own line of the story.
     #[test]
-    fn a_run_of_step_cards_opens_one_gap() {
+    fn every_step_card_opens_a_gap() {
         let mut app = App::test_fixture();
         app.messages.push(ChatMsg::for_test(Role::User, "hi"));
         app.messages.push(card());
         app.messages.push(card());
-        let first = text(&message_block(&app, 1, &app.messages[1], 0, false));
-        assert!(
-            first.first().is_some_and(|l| is_gap(l)),
-            "first card: {first:?}"
-        );
-        let second = text(&message_block(&app, 2, &app.messages[2], 0, false));
-        assert!(
-            !second.first().is_some_and(|l| is_gap(l)),
-            "second card: {second:?}"
-        );
+        for i in [1, 2] {
+            let lines = text(&message_block(&app, i, &app.messages[i], 0, false));
+            assert!(
+                lines.first().is_some_and(|l| is_gap(l)),
+                "card {i}: {lines:?}"
+            );
+        }
     }
 
     /// Control — if this flips, gaps stop marking anything.
