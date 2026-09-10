@@ -77,6 +77,83 @@ fn handoff_for(router_agent: &str) -> Option<(&'static mur_common::identity::Age
     (agent == router_agent).then_some((id, *kv))
 }
 
+/// How this process signs as `router_agent`, resolved once for every kind of
+/// write.
+///
+/// `Ok(Some(..))` — sign. `Ok(None)` — no key exists at all, which is the
+/// legitimate bootstrap case (a fresh home, a test, a workflow channel with
+/// no agent behind it); unsigned is correct there. `Err` — the key is present
+/// and unreadable while `MUR_CHANNEL_REQUIRE_SIG` is set.
+///
+/// One derivation on purpose: an append and a state transition on the same
+/// channel must not disagree about whether that channel is protected.
+fn writer_key(
+    home: &Path,
+    router_agent: &str,
+) -> anyhow::Result<Option<(mur_common::identity::AgentIdentity, u32)>> {
+    // A process sealed inside an agent's sandbox cannot read `keys/` — that
+    // subtree is denied on purpose. Its parent loaded the key before sealing
+    // and handed it over stdin, so prefer that when it is for THIS writer.
+    // Checked before the disk read because the disk read is the thing that
+    // cannot work here, not a faster path we are skipping.
+    if let Some((id, kv)) = handoff_for(router_agent) {
+        return Ok(Some((id.clone(), kv)));
+    }
+    let agent_home = home.join("agents").join(router_agent);
+    match mur_common::identity::AgentIdentity::load(&agent_home) {
+        Ok(id) => Ok(Some((id, read_key_version(&agent_home)))),
+        Err(mur_common::identity::IdentityError::NotFound) => Ok(None),
+        // The key is THERE and we may not read it — a sandbox deny (a spawned
+        // `mur` cannot read a sibling's signing key since #975). Falling back
+        // to unsigned here is a silent security downgrade: the event was meant
+        // to be signed, and with `require_sig` off the reader accepts it, so
+        // the whole v3d signing guarantee lapses with nothing to show for it.
+        // The mirror of the read-side fix in `channel_verify::verify_event`.
+        Err(e) => {
+            if crate::channel_verify::require_sig_from_env() {
+                // The reader would reject an unsigned event anyway; fail here,
+                // where the cause is still legible, instead of at verification.
+                anyhow::bail!(
+                    "refusing to write an unsigned event as '{router_agent}': the writer key \
+                     is unreadable ({e}), and MUR_CHANNEL_REQUIRE_SIG is set"
+                );
+            }
+            tracing::warn!(
+                router_agent,
+                error = %e,
+                "writer signing key is present but unreadable — writing UNSIGNED. \
+                 Signature verification is not protecting this channel while that holds."
+            );
+            Ok(None)
+        }
+    }
+}
+
+/// Move `channel_id` to `new_state`, SIGNED by `router_agent` when possible.
+///
+/// The signed counterpart of `ChannelService::transition`. A run's start and
+/// end are the two events every surface reads to decide whether work is in
+/// flight; leaving them unattributable while the messages between them are
+/// signed is the wrong way round.
+pub fn transition_as_writer(
+    svc: &ChannelService,
+    home: &Path,
+    channel_id: &str,
+    router_agent: &str,
+    new_state: mur_common::channel::ChannelState,
+    actor: ChannelActor,
+    run_id: Option<&str>,
+) -> anyhow::Result<ChannelEvent> {
+    let key = writer_key(home, router_agent)?;
+    svc.transition_signed(
+        channel_id,
+        new_state,
+        actor,
+        run_id,
+        key.as_ref().map(|(id, kv)| (id, *kv)),
+    )
+}
+
 /// Append `actor`/`kind`/`payload` to `channel_id`, SIGNED by `router_agent`'s
 /// identity when it is available, else unsigned (migration-safe).
 ///
@@ -94,51 +171,9 @@ pub fn append_as_writer(
     payload: serde_json::Value,
     idem: Option<String>,
 ) -> anyhow::Result<ChannelEvent> {
-    // A process sealed inside an agent's sandbox cannot read `keys/` — that
-    // subtree is denied on purpose. Its parent loaded the key before sealing
-    // and handed it over stdin, so prefer that when it is for THIS writer.
-    // Checked before the disk read because the disk read is the thing that
-    // cannot work here, not a faster path we are skipping.
-    if let Some((id, kv)) = handoff_for(router_agent) {
-        return svc.append_signed(channel_id, id, kv, actor, kind, payload, idem);
-    }
-    let agent_home = home.join("agents").join(router_agent);
-    match mur_common::identity::AgentIdentity::load(&agent_home) {
-        Ok(id) => {
-            let kv = read_key_version(&agent_home);
-            svc.append_signed(channel_id, &id, kv, actor, kind, payload, idem)
-        }
-        // No key at all: the legitimate bootstrap case (a fresh home, a test,
-        // a workflow channel with no agent behind it). Unsigned is correct.
-        Err(mur_common::identity::IdentityError::NotFound) => {
-            svc.append(channel_id, actor, kind, payload, idem)
-        }
-        // The key is THERE and we may not read it — a sandbox deny (a spawned
-        // `mur` cannot read a sibling's signing key since #975). Falling back
-        // to unsigned here is a silent security downgrade: the event was meant
-        // to be signed, and with `require_sig` off the reader accepts it, so
-        // the whole v3d signing guarantee lapses with nothing to show for it.
-        // The mirror of the read-side fix in `channel_verify::verify_event`.
-        Err(e) => {
-            if crate::channel_verify::require_sig_from_env() {
-                // The reader would reject an unsigned event anyway; fail here,
-                // where the cause is still legible, instead of at verification.
-                anyhow::bail!(
-                    "refusing to write an unsigned event to '{channel_id}': the \
-                     writer key for '{router_agent}' is unreadable ({e}), and \
-                     MUR_CHANNEL_REQUIRE_SIG is set"
-                );
-            }
-            tracing::warn!(
-                channel_id,
-                router_agent,
-                error = %e,
-                "writer signing key is present but unreadable — writing this \
-                 event UNSIGNED. Signature verification is not protecting this \
-                 channel while that holds."
-            );
-            svc.append(channel_id, actor, kind, payload, idem)
-        }
+    match writer_key(home, router_agent)? {
+        Some((id, kv)) => svc.append_signed(channel_id, &id, kv, actor, kind, payload, idem),
+        None => svc.append(channel_id, actor, kind, payload, idem),
     }
 }
 

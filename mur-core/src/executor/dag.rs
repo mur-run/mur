@@ -1070,8 +1070,13 @@ pub async fn execute_dag(
             Ok(events) => Some(events.last().map(|e| e.seq + 1).unwrap_or(0)),
             Err(_) => None,
         };
-        let _ = svc.transition(
+        // Signed like every other event this run writes — see
+        // `channel_writer::transition_as_writer`.
+        let _ = crate::channel_writer::transition_as_writer(
+            &svc,
+            mur_home,
             cid,
+            ROUTER_AGENT,
             ChannelState::Working,
             ChannelActor::System,
             opts.event_run_id(),
@@ -1231,8 +1236,17 @@ pub async fn execute_dag(
             RunOutcome::Done => ChannelState::Completed,
         };
         if let Some(cid) = opts.channel_id.as_deref() {
-            let _ = ChannelService::open(mur_home)
-                .and_then(|svc| svc.transition(cid, st, ChannelActor::System, opts.event_run_id()));
+            let _ = ChannelService::open(mur_home).and_then(|svc| {
+                crate::channel_writer::transition_as_writer(
+                    &svc,
+                    mur_home,
+                    cid,
+                    ROUTER_AGENT,
+                    st,
+                    ChannelActor::System,
+                    opts.event_run_id(),
+                )
+            });
         }
     };
 

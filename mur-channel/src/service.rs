@@ -329,12 +329,33 @@ impl ChannelService {
     /// Emit a `StateChange` event and persist the new state on the manifest.
     /// `run_id` stamps the run-status run boundary on the payload; pass `None`
     /// for transitions that are not part of a recorded run.
+    /// Unsigned state transition. Prefer `transition_signed` from anywhere a
+    /// writer identity is available — see that method for why.
     pub fn transition(
         &self,
         channel_id: &str,
         new_state: ChannelState,
         actor: ChannelActor,
         run_id: Option<&str>,
+    ) -> Result<ChannelEvent> {
+        self.transition_signed(channel_id, new_state, actor, run_id, None)
+    }
+
+    /// A state transition SIGNED by the channel's writer, when one is given.
+    ///
+    /// `transition` used to be the only entry point and never signed, so every
+    /// `StateChange` on every channel was unsigned regardless of who wrote it
+    /// — 33 of 33 on one live fleet channel, from sandboxed and unsandboxed
+    /// processes alike. `Message` and `Delegation` events went through the
+    /// signing path and these did not, which makes "the run started" and "the
+    /// run failed" the two events in a channel that nothing can attribute.
+    pub fn transition_signed(
+        &self,
+        channel_id: &str,
+        new_state: ChannelState,
+        actor: ChannelActor,
+        run_id: Option<&str>,
+        signer: Option<(&mur_common::identity::AgentIdentity, u32)>,
     ) -> Result<ChannelEvent> {
         let old_state = self
             .store
@@ -348,14 +369,30 @@ impl ChannelService {
         if let Some(run_id) = run_id {
             payload["run_id"] = serde_json::json!(run_id);
         }
+        // Same canonical sign-input as `append_signed`: no idempotency key
+        // participates here because a transition never carries one.
+        let (sig, kv) = match signer {
+            Some((id, kv)) => (
+                Some(crate::sign::sign_event(
+                    id,
+                    channel_id,
+                    &actor,
+                    EventKind::StateChange,
+                    &payload,
+                    None,
+                )),
+                Some(kv),
+            ),
+            None => (None, None),
+        };
         let ev = self.store.append_event(
             channel_id,
             actor,
             EventKind::StateChange,
             payload,
             None,
-            None,
-            None,
+            sig,
+            kv,
         )?;
         if let Ok(mut ch) = self.store.load_manifest(channel_id) {
             ch.state = new_state;
@@ -874,6 +911,49 @@ mod tests {
             trans.payload.get("run_id").is_none(),
             "non-run transitions must not fabricate a run_id"
         );
+    }
+
+    /// A state transition signs like every other event, and stays verifiable.
+    ///
+    /// The regression it pins: `transition` was the only write path that never
+    /// signed, so "the run started" and "the run failed" were the two events in
+    /// a channel nothing could attribute, while the messages between them were
+    /// signed. 33 of 33 StateChanges on one live fleet channel were unsigned.
+    #[test]
+    fn transition_signed_stores_verifiable_sig() {
+        let tmp = TempDir::new().unwrap();
+        let id = mur_common::identity::AgentIdentity::generate();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("signed-transition").unwrap();
+
+        let ev = svc
+            .transition_signed(
+                &ch.id,
+                ChannelState::Failed,
+                ChannelActor::System,
+                Some("run-7"),
+                Some((&id, 3)),
+            )
+            .unwrap();
+        assert_eq!(ev.key_version, Some(3));
+        let sig = ev.sig.as_ref().expect("a signed transition carries a sig");
+        assert!(crate::sign::verify_event_sig(
+            &ch.id,
+            &ev.actor,
+            ev.kind,
+            &ev.payload,
+            ev.idempotency_key.as_deref(),
+            sig,
+            &id.verifying_key_bytes()
+        ));
+
+        // No signer → unchanged behaviour, so the migration-safe path and every
+        // existing caller of `transition` keep working.
+        let plain = svc
+            .transition(&ch.id, ChannelState::Completed, ChannelActor::System, None)
+            .unwrap();
+        assert!(plain.sig.is_none());
+        assert!(plain.key_version.is_none());
     }
 
     #[test]
