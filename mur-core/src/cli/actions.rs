@@ -1,6 +1,7 @@
 //! Subcommand action enums (non-agent). Extracted from `main.rs` to keep the
 //! binary entry point lean. Pure clap derive types — no logic lives here.
 
+use crate::cmd::browser::BrowserEngine;
 use clap::Subcommand;
 
 #[derive(Subcommand)]
@@ -740,6 +741,52 @@ pub enum CapabilityAction {
         #[arg(long)]
         agent: String,
     },
+}
+
+#[derive(Subcommand)]
+pub enum BrowserAction {
+    /// Start an MCP proxy that records browser actions into a named run.
+    Record {
+        #[arg(long)]
+        run: String,
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long, default_value = "test")]
+        mode: String,
+        #[arg(long)]
+        trace: bool,
+        /// Extra arguments passed verbatim to @playwright/mcp.
+        #[arg(last = true, allow_hyphen_values = true)]
+        extra: Vec<String>,
+    },
+    /// Replay a recorded browser run (implemented in a later slice).
+    Replay { name: String },
+    /// Authenticate a named browser profile (handoff implementation follows).
+    Auth {
+        /// Profile name; used as a path component under browser/profiles.
+        site: String,
+        /// Login page to open in a headed Playwright session.
+        #[arg(long)]
+        url: String,
+        /// Replace an existing profile state after a fresh login.
+        #[arg(long)]
+        reauth: bool,
+        /// Browser engine to use (Chrome, Chromium, Firefox, or Edge).
+        /// Without this flag, MUR detects installed engines and asks when
+        /// more than one is available.
+        #[arg(long, value_enum)]
+        browser: Option<BrowserEngine>,
+    },
+    /// Run the secret broker (implemented in a later slice).
+    Broker,
+    /// List recorded runs (implemented in a later slice).
+    List,
+    /// Show one recorded run (implemented in a later slice).
+    Show { name: String },
+    /// Export a recorded run (implemented in a later slice).
+    Export { name: String },
+    /// Show browser subsystem status (implemented in a later slice).
+    Status,
 }
 
 #[derive(clap::Subcommand)]
