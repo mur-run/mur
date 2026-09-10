@@ -44,6 +44,40 @@ described it.
 
 The mechanism only recognises denials it produced itself.
 
+## Correction (same day, after the design was approved)
+
+The opening evidence is a misreading, and the design has to survive it.
+
+`cargo: Operation not permitted (os error 1)` was almost certainly **not** a
+spawn-allowlist denial. Later probing established that the agent has no access
+to the external volume at all — it cannot read a byte of the granted project
+tree, and `~/.cargo/bin` is on that volume too, so the binary could not be
+exec'd for a reason that has nothing to do with `spawn.allowed`. See
+`2026-09-10-unreachable-grants-design.md`.
+
+What survives unchanged:
+
+- The resolver asymmetry is real code behaviour. An allowlist entry containing
+  `/` still skips the rustup-toolchain scan (`policy.rs:500`), and a user
+  typing an absolute path into Hub's free-text field still gets a grant that
+  cannot cover a proxy's re-exec.
+- The attribution gap is real. `spawn_denied_path()` still recognises only the
+  denial shape bash produces itself.
+
+What this changes:
+
+- The **authoritative verdict** (component 3) moves from a nicety to the thing
+  that keeps this change from making the problem worse. Under the rejected
+  "widen the string match only" alternative, this exact string would have been
+  reported as "cargo is not in your allowlist" — a confident, wrong answer that
+  sends the user to edit a grant that was never the problem. That is precisely
+  what happened to the human and the model in the originating session.
+- The **third outcome** is now mandatory, not optional. When the trigger fires
+  and every spawn candidate resolves as granted, the hint must not fall silent:
+  that combination means the denial is a filesystem or volume denial, and the
+  hint should say so and point at the unreachable-grants record rather than
+  leaving the reader where they started.
+
 ## Non-goals
 
 Deliberately out of scope; each is its own change:
