@@ -1,0 +1,189 @@
+# Spawn-denial attribution — making a kernel EPERM say what to do about it
+
+Status: **Designed, not implemented.** Written 2026-09-10 from a live failure
+where a correctly-intentioned permission grant took a whole session to
+diagnose. The record of what was rejected is part of the point.
+
+## Problem
+
+An agent was granted `cargo` through the Hub permission UI. It still could not
+build. Every observable surface said the grant was fine, and the only signal
+the agent could produce was:
+
+```
+cargo: Operation not permitted (os error 1)
+```
+
+That string names no policy, no grant, and no fix. The agent reported it
+faithfully — "此 sandbox 禁止執行 Cargo" — and handed the work back to the
+user, which is the one outcome delegation exists to avoid. Three separate
+turns in that conversation ended that way.
+
+Two independent defects produced it.
+
+**1. The grant was the wrong shape, and nothing said so.** `~/.cargo/bin/cargo`
+is a rustup *proxy*: the binary the kernel actually checks at exec time is
+`<rustup_home>/toolchains/<tc>/bin/cargo`. `sandbox/policy.rs:452-468` knows
+this and scans every toolchain's `bin/` — but only for allowlist entries given
+as a **bare name**. An entry containing `/` takes the no-search branch
+(`policy.rs:500`), granting exactly one file and deriving one prefix
+(`.cargo`), so `.rustup/toolchains/**` is never granted. The Hub UI offers a
+free-text "Add program…" field, so an absolute path is the natural thing for a
+user to type, and it is the one shape that disables the only code path that
+understands rustup.
+
+**2. The attribution mechanism exists and did not fire.**
+`tools/denial.rs:144` `spawn_denied_path()` turns exactly this class of EPERM
+into a route — its own test fixture is `/Users/d/.cargo/bin/cargo`. It
+requires exit code `126` **and** a stderr line matching bash's own
+`<absolute path>: Operation not permitted`. The observed denial matched
+neither: rustup exits `1`, reports the argv0 as typed (`cargo`, no leading
+`/`), and appends `(os error 1)` because it is a Rust `io::Error` Display, not
+a bash message. The denial happened one exec level below bash, so bash never
+described it.
+
+The mechanism only recognises denials it produced itself.
+
+## Non-goals
+
+Deliberately out of scope; each is its own change:
+
+- Hub permission panels (restart-required banner, dropped grants, grant
+  preview).
+- A spawn-side counterpart to `perm list-paths` — the reconciliation of
+  declared grants against what the seal installed.
+- Toolchain presets replacing the free-text "Add program…" field.
+- Auto-granting on denial. Fail-open defeats the entire model.
+- Auto-restarting an agent when its permissions change.
+
+## Design
+
+Three components, all in `mur-agent-runtime`.
+
+### 1. `resolve_spawn_candidates(name) -> Vec<PathBuf>`
+
+Extracted from `sandbox/policy.rs:452-520` without behaviour change. Resolves
+one allowlist entry to **every** absolute path it may exec to, including each
+rustup toolchain's `bin/`. Two callers: policy construction (as today) and
+denial attribution (new).
+
+This is the shared floor the deferred spawn-reconciliation work also needs.
+Extracting it here means that change is a caller, not a re-implementation.
+
+### 2. `SEALED_SPAWN: OnceLock<SpawnGrants>`
+
+`sandbox/mod.rs::apply()` builds a `SandboxPolicy`, hands it to the kernel, and
+drops it — only `SandboxStatus` survives, in the existing `SANDBOX_STATUS`
+`OnceLock`. Store the spawn half alongside it: `spawn_allowed_paths`,
+`spawn_allowed_prefixes`, `spawn_mode`.
+
+This is the only non-lying source of truth for the question "was this binary
+granted?":
+
+- The profile on disk may have been edited after the seal. That is exactly
+  what happened here — the grant was written 11 minutes after the running
+  process sealed its sandbox — so a disk-based check would have answered
+  "granted" about a policy the kernel never received.
+- `SandboxRecord.granted_digest` (`mur-common/src/agent.rs:1294`) is a digest
+  of `entitlements.filesystem` **only**. Spawn grants are not in it. (This
+  also means editing spawn grants does not set `grants_drifted`, so the
+  restart-required signal is blind to this whole class of edit. Noted here;
+  fixing it belongs to the Hub-panel change.)
+
+### 3. Split `spawn_denied_path()` into trigger and verdict
+
+**Trigger (wide).** Any non-zero exit whose stderr contains
+`Operation not permitted`. Drop both the `126` requirement and the
+leading-`/` requirement.
+
+**Verdict (authoritative).** Resolve the extracted token through
+`resolve_spawn_candidates()` and compare every candidate against
+`SEALED_SPAWN`. Emit the hint only if at least one candidate is ungranted.
+
+Making the verdict authoritative is what lets the trigger be generous: a false
+trigger costs one lookup that answers "granted", and produces nothing.
+
+Checking every candidate — not just the first — is load-bearing. In the
+observed case `~/.cargo/bin/cargo` **is** granted; stopping there returns
+"allowed" and silently emits nothing, which is worse than the status quo
+because it looks like a considered answer.
+
+### Data flow
+
+```
+rustup proxy execs toolchain cargo  →  kernel EPERM
+  → "cargo: Operation not permitted (os error 1)"
+  → trigger: contains "Operation not permitted" ✓
+  → token "cargo" → resolve_spawn_candidates()
+       ~/.cargo/bin/cargo                        → in SEALED_SPAWN ✓
+       ~/.rustup/toolchains/stable-*/bin/cargo   → absent ✗
+       ~/.rustup/toolchains/1.98.0-*/bin/cargo   → absent ✗
+  → hint, naming the layer that was blocked rather than the layer that was granted
+```
+
+### Hint text
+
+```
+[blocked by sandbox]
+  cargo resolved to /Users/…/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo,
+  which is not in this agent's program allowlist.
+  (/Users/…/.cargo/bin/cargo IS granted, but it is a rustup proxy — the binary
+   it re-execs is the one the kernel checks.)
+  Fix (must be run by the user, not by this agent):
+    mur agent perm allow-spawn <agent> cargo
+    mur agent perm allow-spawn-dir <agent> <project>/target
+    mur agent restart <agent>
+```
+
+The existing `who_can_exec` delegation routes are kept and appended. They
+answer a different question ("who else could run this for me") and remain
+useful; they are simply not an answer for a Hub user with no fleets.
+
+Both grant lines appear together because a Rust build needs both: `cargo` and
+`rustc` as bare names, and the project's `target/` as a build lane, since build
+scripts, proc-macro shims and test binaries are exec'd from hash-suffixed paths
+that do not exist until the build creates them.
+
+## Self-widening guard
+
+Printing a runnable fix into tool output teaches the agent a command that
+widens its own permissions. The escalation path predates this change — an
+agent holding both `mur` in its spawn allowlist and write access to
+`~/.mur/agents` can already run `mur agent perm allow-spawn <self> …` and wait
+for a restart; the observed agent holds both — but making it discoverable
+changes its risk, so this change carries the guard rather than deferring it.
+
+`mur agent perm`'s mutating subcommands refuse when `MUR_AGENT_NAME` is set,
+printing "this must be run by the user" instead.
+
+**Honest limit:** this raises the bar, it does not close the hole. An agent
+can `env -u MUR_AGENT_NAME`. Closing it means not granting one agent both
+`mur` execution and `~/.mur/agents` write — a `mur agent doctor` check, out of
+scope here, and named as a follow-up rather than implied to be solved.
+
+## Rejected alternatives
+
+**Widen the string match only.** One function, no new state — but it makes the
+tool assert a sandbox denial from another program's error prose. A program
+hitting EPERM on a file write would be reported as an ungranted binary,
+sending the user to fix the wrong thing.
+
+**Ask the kernel (macOS unified log Sandbox events).** Authoritative, but the
+sandboxed process likely cannot read the log, it is macOS-only, and it races
+the tool's own return.
+
+**Pre-flight the command string.** Scanning for program names before exec
+cannot see rustup's second-level exec, which is the whole failure. Viable
+later as a complement, never as the mechanism.
+
+## Testing
+
+| Test | Guards against |
+|---|---|
+| `cargo: Operation not permitted (os error 1)` at exit 1 → hint naming the toolchain path | the regression itself |
+| `~/.cargo/bin/cargo` granted, toolchain path not → hint **still** emitted | the silent wrong answer from stopping at the first candidate |
+| every candidate present in `SEALED_SPAWN` → **no** hint | false positives from the widened trigger |
+| `bash: ./x: Permission denied` (genuinely non-executable) → no hint | the widened trigger breaking the existing negative case |
+| `MUR_AGENT_NAME` set → `perm allow-spawn` refuses and the profile is unchanged | a guard that prints but does not actually block the write |
+
+The first two are the ones that fail if the design is implemented shallowly.
