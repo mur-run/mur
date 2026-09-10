@@ -141,9 +141,21 @@ Shipped: test 1's core (the payload survives `read_line` as one line and
 rebuilds a bit-identical key) as `a_signing_handoff_round_trips_to_the_same_key_on_one_line`,
 and test 2 by construction — `signing: None` leaves the old path untouched.
 
-**Test 5 has NOT been run.** It matters most: every other test can pass while
-the wiring never reaches the process that actually writes fleet events. Run it
-against a real `~/.mur` before believing this works.
+**Test 5 was run on 2026-09-10, and it found what the others could not.**
+
+The handoff works: the sandboxed child's `delegation` event came back SIGNED,
+which is the thing this design exists to make true.
+
+It also showed the acceptance criterion above was **unachievable as written**.
+"Zero unsigned events" can never hold, because `StateChange` events never went
+through `append_as_writer` at all — `ChannelService::transition` appended them
+directly and signed nothing, from sandboxed and unsandboxed processes alike (33
+of 33 on the live channel). That is a separate, pre-existing hole, fixed
+separately; it was invisible until a real run put a signed and an unsigned event
+side by side in the same second.
+
+The criterion should read: **every `delegation` and `message` event written from
+inside the sandbox is signed** — and, once transitions sign too, every event.
 
 ## Open questions
 
