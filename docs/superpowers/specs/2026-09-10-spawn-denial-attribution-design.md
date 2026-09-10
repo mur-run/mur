@@ -78,6 +78,44 @@ What this changes:
   hint should say so and point at the unreachable-grants record rather than
   leaving the reader where they started.
 
+### The real spawn denial did surface — one layer later
+
+After the volume access was granted, `cargo test` in the same agent ran,
+compiled, and died at linking:
+
+```
+cc: error: can't exec '/Volumes/.../Xcode.app/Contents/Developer/Toolchains/\
+XcodeDefault.xctoolchain/usr/bin/clang' (errno=Operation not permitted)
+```
+
+That one *is* a spawn-allowlist denial: `/usr/bin/cc` is exempt as a system
+path, execs the active toolchain's `clang`, and that path was in no grant.
+Granting it (the shape `rustsmith` already carried) made the build pass —
+881 tests, exit 0. So the premise this spec was written on is sound; it was
+attached to the wrong observation.
+
+It also produces a **third error shape**, and it breaks the current detector
+in a way neither earlier shape does:
+
+| Source | Exit | Text |
+|---|---|---|
+| bash, exec denied | 126 | `bash: /path/to/bin: Operation not permitted` |
+| rustup proxy | 1 | `cargo: Operation not permitted (os error 1)` |
+| cc → clang | 101 | `cc: error: can't exec '/path/to/clang' (errno=Operation not permitted)` |
+
+The third one puts the path **in single quotes in the middle of the line**,
+not as a `<path>:` prefix. `spawn_denied_path()` extracts its path by
+stripping a `": Operation not permitted"` suffix and taking what precedes it,
+which yields nothing here.
+
+So token extraction cannot be a suffix strip against one known layout. The
+trigger collects **candidates** from the matching line — quoted runs, and
+whitespace-delimited words that look like a path or a bare program name — and
+the verdict tests each against the sealed grants. Guessing which shape the
+next tool will use is how the current detector ended up recognising only its
+own; enumerating candidates and asking the policy does not have that failure
+mode.
+
 ## Non-goals
 
 Deliberately out of scope; each is its own change:
@@ -218,6 +256,8 @@ later as a complement, never as the mechanism.
 | `~/.cargo/bin/cargo` granted, toolchain path not → hint **still** emitted | the silent wrong answer from stopping at the first candidate |
 | every candidate present in `SEALED_SPAWN` → **no** hint | false positives from the widened trigger |
 | `bash: ./x: Permission denied` (genuinely non-executable) → no hint | the widened trigger breaking the existing negative case |
+| `cc: error: can't exec '/x/clang' (errno=Operation not permitted)` at exit 101 → hint naming `/x/clang` | the third shape: quoted path mid-line, no 126, no `<path>:` prefix |
+| the same line with `/x/clang` granted → no hint | candidate extraction must not fire on a path the seal actually holds |
 | `MUR_AGENT_NAME` set → `perm allow-spawn` refuses and the profile is unchanged | a guard that prints but does not actually block the write |
 
 The first two are the ones that fail if the design is implemented shallowly.
