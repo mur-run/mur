@@ -453,6 +453,11 @@ see `mur skill <command> --help`.")]
         #[command(subcommand)]
         action: CommanderAction,
     },
+    /// Record and replay browser work through Playwright MCP.
+    Browser {
+        #[command(subcommand)]
+        action: BrowserAction,
+    },
     /// MUR-native deep research (wizard: `setup`; status: bare; run: pass a question)
     #[command(args_conflicts_with_subcommands = true)]
     DeepResearch {

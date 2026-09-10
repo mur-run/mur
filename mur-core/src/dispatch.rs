@@ -10,7 +10,7 @@ use crate::cli::{
     AgentAction, AgentAddonAction, AgentEvalAction, AgentHooksAction, AgentMcpAction,
     AgentPendingAction, AgentPermAction, AgentPromptAction, AgentQueueAction, AgentScheduleAction,
     AgentSecretAction, AgentSkillAction, AgentTrashAction, AgentWebhookAction, AuthAction,
-    CapabilityAction, ChannelAction, ChatAction, Cli, CommanderAction, Commands,
+    BrowserAction, CapabilityAction, ChannelAction, ChatAction, Cli, CommanderAction, Commands,
     ConversationsAction, DaemonAction, DeepResearchAction, DeployAction, DraftsAction, EvalAction,
     ExchangeAction, FleetAction, HookEvent, InternalsAction, MurmurdAction, OfficialAction,
     OpenAction, ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction,
@@ -513,6 +513,27 @@ pub async fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
+        Commands::Browser { action } => match action {
+            BrowserAction::Record {
+                run,
+                profile,
+                mode,
+                trace,
+                extra,
+            } => cmd::browser::record(&run, profile.as_deref(), &mode, trace, &extra).await?,
+            BrowserAction::Replay { .. } => cmd::browser::not_yet("replay")?,
+            BrowserAction::Auth {
+                site,
+                url,
+                reauth,
+                browser,
+            } => cmd::browser::auth(&site, &url, reauth, browser).await?,
+            BrowserAction::Broker => cmd::browser::broker().await?,
+            BrowserAction::List => cmd::browser::list()?,
+            BrowserAction::Show { name } => cmd::browser::show(&name)?,
+            BrowserAction::Export { .. } => cmd::browser::not_yet("export")?,
+            BrowserAction::Status => cmd::browser::status()?,
+        },
         Commands::DeepResearch { action, question } => {
             let mur_home = crate::paths::mur_root(None);
             match (action, question) {

@@ -14,6 +14,7 @@ members = [
     "mur-open-items",
     "mur-mobile-sdk",
     "mur-zfs-agent",
+    "mur-browser",
     # "mur-commander",  # separate crate — v0.2.0 released
 ]
 exclude = [

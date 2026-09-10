@@ -24,6 +24,7 @@ mur-compress = { path = "../mur-compress" }
 mur-agent-runtime = { path = "../mur-agent-runtime" }  # for cmd::agent::cmd_export
 mur-channel = { path = "../mur-channel" }
 mur-open-items = { path = "../mur-open-items" }
+mur-browser = { path = "../mur-browser" }
 tar = "0.4"           # cmd::agent_export_gui template-mode identity stripping
 flate2 = "1"          # gzip wrapper for the same
 multibase = "0.9"     # encode/decode signing data in fleet export
@@ -94,6 +95,7 @@ dotenvy = "0.15"
 getrandom = "0.2"
 shellexpand = "3"
 urlencoding = "2"
+url = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 sysinfo = "0.30"
 pulldown-cmark = "0.12"
