@@ -950,6 +950,19 @@ mod keychain_helpers_tests {
 
 #[cfg(test)]
 mod resolve_blocking_tests {
+    /// Serialises the tests that touch [`PRESEAL_CACHE`].
+    ///
+    /// That cache is a process-global. `cargo test` runs every test in this
+    /// module in ONE process on a thread pool, so two tests inserting
+    /// concurrently corrupt each other's view of the entry count — the delta
+    /// one test measures includes rows another test just added. `cargo
+    /// nextest` gives each test its own process, which hides the problem
+    /// rather than removing it, and nextest is this repo's canonical runner.
+    ///
+    /// Poison is deliberately ignored: a panic in one guarded test must fail
+    /// that test alone, not cascade into every other one.
+    static PRESEAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// A secret cached before the seal resolves afterwards even when the path
     /// has become unreachable — which is what a sandboxed agent faces for a
     /// `file:` ref inside the denied credential store (#866).
@@ -958,6 +971,7 @@ mod resolve_blocking_tests {
     /// as far as the process is concerned, exactly as a deny makes it.
     #[test]
     fn a_cached_secret_survives_its_path_becoming_unreachable() {
+        let _preseal_guard = PRESEAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("provider.key");
         std::fs::write(&path, "sk-test-value").unwrap();
@@ -1005,6 +1019,7 @@ mod resolve_blocking_tests {
     /// `secret:` of its own still broke on every upgrade.
     #[test]
     fn preseal_cached_lookup_does_not_touch_the_backend() {
+        let _preseal_guard = PRESEAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let r = SecretRef::Keychain {
             service: "mur-agent-test-nonexistent".into(),
             account: "no-such-agent/NO_SUCH_KEY".into(),
@@ -1033,6 +1048,7 @@ mod resolve_blocking_tests {
     /// Caching is idempotent and does not grow on repeat calls.
     #[test]
     fn caching_the_same_ref_twice_stores_one_entry() {
+        let _preseal_guard = PRESEAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("dup.key");
         std::fs::write(&path, "v").unwrap();
