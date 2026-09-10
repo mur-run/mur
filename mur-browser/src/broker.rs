@@ -9,13 +9,16 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+#[cfg(unix)]
+use std::path::Path;
 use std::{
     collections::HashMap,
-    path::Path,
     sync::{Arc, Mutex},
     time::Duration,
 };
+#[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -53,12 +56,14 @@ pub struct Transform {
 }
 
 /// Client for the one-request-per-connection Unix-socket wire protocol.
+#[cfg(unix)]
 #[derive(Debug, Clone)]
 pub struct SocketClient {
     socket: std::path::PathBuf,
     token: String,
 }
 
+#[cfg(unix)]
 impl SocketClient {
     pub fn new(socket: impl Into<std::path::PathBuf>, token: impl Into<String>) -> Self {
         Self {
@@ -102,6 +107,7 @@ impl SocketClient {
     }
 }
 
+#[cfg(unix)]
 impl BrokerClient for SocketClient {
     fn transform<'a>(
         &'a self,
@@ -344,6 +350,7 @@ impl Broker {
     /// occurs. Each connection carries exactly one request and one response.
     /// The owner creates/removes the socket: silently deleting an existing
     /// path here could tear down another active recording session.
+    #[cfg(unix)]
     pub async fn serve(self: Arc<Self>, socket: &Path) -> Result<()> {
         if socket.exists() {
             anyhow::bail!("broker socket already exists: {}", socket.display());
@@ -364,6 +371,7 @@ impl Broker {
         }
     }
 
+    #[cfg(unix)]
     async fn serve_connection(&self, stream: UnixStream) -> Result<()> {
         let (read, mut write) = stream.into_split();
         let mut lines = BufReader::new(read).lines();

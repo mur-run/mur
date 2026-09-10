@@ -1,13 +1,18 @@
 //! `mur browser` command handlers. Heavy implementation lives in `mur-browser`.
 
-use std::{fs, os::unix::fs::FileTypeExt, path::PathBuf, sync::Arc, time::Duration};
+use std::{fs, path::PathBuf};
+#[cfg(unix)]
+use std::{os::unix::fs::FileTypeExt, sync::Arc, time::Duration};
 
 use anyhow::{Result, bail};
 #[cfg(test)]
 use mur_browser::auth::write_meta;
+#[cfg(unix)]
+use mur_browser::broker::SocketClient;
+#[cfg(unix)]
+use mur_browser::broker::{Broker, KeychainStore};
 use mur_browser::{
     auth::{Handoff, ProfileMeta, save_profile},
-    broker::{Broker, KeychainStore, SocketClient},
     paths,
     proxy::{BrokerHook, capture_storage_state, playwright_command, run_stdio},
     recorder::{Mode, RecordHook, Run},
@@ -19,6 +24,7 @@ use mur_browser::{
 /// Slice 1 deliberately validates only CLI-level inputs then forwards every
 /// JSON-RPC line unchanged. Recorder, broker, and replay hooks replace the
 /// `ForwardHook` in later slices without changing this MCP launch contract.
+#[cfg(unix)]
 pub async fn record(
     run: &str,
     profile: Option<&str>,
@@ -76,6 +82,17 @@ pub async fn record(
     result
 }
 
+#[cfg(not(unix))]
+pub async fn record(
+    _run: &str,
+    _profile: Option<&str>,
+    _mode: &str,
+    _trace: bool,
+    _extra: &[String],
+) -> Result<()> {
+    bail!("browser recording requires Unix domain sockets and is unavailable on this platform")
+}
+
 fn mur_home() -> Result<std::path::PathBuf> {
     std::env::var_os("MUR_HOME")
         .map(std::path::PathBuf::from)
@@ -87,6 +104,7 @@ fn fresh_broker_token() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }
 
+#[cfg(unix)]
 fn remove_stale_broker_socket(socket: &std::path::Path) -> Result<()> {
     match std::fs::symlink_metadata(socket) {
         Ok(meta) if meta.file_type().is_socket() => {
@@ -101,6 +119,7 @@ fn remove_stale_broker_socket(socket: &std::path::Path) -> Result<()> {
     }
 }
 
+#[cfg(unix)]
 async fn wait_for_socket(socket: &std::path::Path) -> Result<()> {
     for _ in 0..30 {
         if socket.exists() {
@@ -113,6 +132,7 @@ async fn wait_for_socket(socket: &std::path::Path) -> Result<()> {
 
 /// Serve the private secret-broker socket. The token must arrive through the
 /// environment rather than argv, so shells and process listings never expose it.
+#[cfg(unix)]
 pub async fn broker() -> Result<()> {
     let token = std::env::var(mur_browser::broker::TOKEN_ENV)
         .map_err(|_| anyhow::anyhow!("{} is required", mur_browser::broker::TOKEN_ENV))?;
@@ -130,6 +150,11 @@ pub async fn broker() -> Result<()> {
         .await;
     let _ = std::fs::remove_file(socket);
     result
+}
+
+#[cfg(not(unix))]
+pub async fn broker() -> Result<()> {
+    bail!("browser secret broker requires Unix domain sockets and is unavailable on this platform")
 }
 
 /// List recorded runs under `~/.mur/browser/runs/`.
@@ -339,6 +364,7 @@ pub struct InstalledBrowser {
     executable: &'static str,
 }
 
+#[cfg(target_os = "macos")]
 const MACOS_BROWSERS: &[InstalledBrowser] = &[
     InstalledBrowser {
         engine: BrowserEngine::Chrome,
