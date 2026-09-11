@@ -192,7 +192,20 @@ fn render_completion(f: &mut Frame, app: &App, input_area: Rect) {
                 lines.push(Line::default()); // spacer between options
                 ListItem::new(lines)
             } else {
-                let mut spans = vec![Span::styled(c.display.clone(), theme.muted)];
+                // The row in force reads in `ok` with a ✔, the way a settings
+                // list says where you are before you move.
+                let is_current = state.current == Some(i);
+                let mut spans = vec![Span::styled(
+                    c.display.clone(),
+                    if is_current {
+                        theme.ok.add_modifier(Modifier::BOLD)
+                    } else {
+                        theme.muted
+                    },
+                )];
+                if is_current {
+                    spans.push(Span::styled(" ✔", theme.ok));
+                }
                 if !c.desc.is_empty() {
                     spans.push(Span::raw(" "));
                     spans.push(Span::styled(

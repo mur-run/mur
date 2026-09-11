@@ -34,6 +34,10 @@ pub struct CompletionState {
     /// the slash-command menu. The chooser renders each option with a blank
     /// spacer row so the choices don't crowd each other.
     pub spaced: bool,
+    /// The row whose word is in force right now — the model the agent runs,
+    /// the effort level that applies, the skin on screen — so a settings menu
+    /// shows where you are before you move. `None` for action menus.
+    pub current: Option<usize>,
 }
 
 /// The argument lists a menu row can come from, read from disk.
@@ -53,23 +57,53 @@ pub struct MenuContext {
     pub secrets: Vec<String>,
     /// Agent-local note names, newest first, led by the literal `last`.
     pub notes: Vec<String>,
+    /// The profile's `effort`, the raw model id and the registry alias behind
+    /// it: the on-disk half of "what is in force" (`current_word`).
+    pub profile_effort: Option<mur_common::llm::Effort>,
+    pub model_id: String,
+    pub model_ref: Option<String>,
+}
+
+/// The session half of "what is in force": a `/effort` override or a `/skin`
+/// switch never touches the profile, so `MenuContext::load` cannot see them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Current {
+    pub session_effort: Option<mur_common::llm::Effort>,
+    pub auto: bool,
+    pub verbose: bool,
+    pub skin: &'static str,
+}
+
+impl Default for Current {
+    fn default() -> Self {
+        Self {
+            session_effort: None,
+            auto: false,
+            verbose: false,
+            skin: "ansi",
+        }
+    }
 }
 
 impl MenuContext {
     /// Read all four lists. Fail-soft throughout: any list that cannot be read
     /// stays empty and its command simply opens no argument menu.
     pub fn load(home: &Path, agent: &str) -> Self {
-        let effort = match super::model_cmd::current_model_id(home, agent) {
-            // The levels are NOT a fixed scale — Opus 4.6 has no `xhigh`,
-            // DeepSeek V4 has no `medium`, Qwen is a two-position switch. Ask
-            // the table keyed on the raw model id; never restate it here.
-            Some(id) => mur_common::llm::effort_shape(&id)
+        let model_ref = super::model_cmd::current_model_ref(home, agent);
+        let model_id = super::model_cmd::current_model_id(home, agent).unwrap_or_default();
+        // The levels are NOT a fixed scale — Opus 4.6 has no `xhigh`,
+        // DeepSeek V4 has no `medium`, Qwen is a two-position switch. Ask
+        // the table keyed on the raw model id; never restate it here.
+        let effort = if model_id.is_empty() {
+            Vec::new()
+        } else {
+            mur_common::llm::effort_shape(&model_id)
                 .levels()
                 .iter()
                 .map(|e| e.as_str().to_string())
-                .collect(),
-            None => Vec::new(),
+                .collect()
         };
+        let profile_effort = super::model_cmd::current_effort(home, agent);
         let models = mur_common::model::ModelRegistry::default_path()
             .and_then(|p| mur_common::model::ModelRegistry::load_from(&p))
             .map(|reg| {
@@ -98,6 +132,9 @@ impl MenuContext {
             models,
             secrets,
             notes,
+            profile_effort,
+            model_id,
+            model_ref,
         }
     }
 }
@@ -228,9 +265,9 @@ fn build_args(cmd: &str, args: Args, ctx: &MenuContext) -> Vec<Candidate> {
             .iter()
             .map(|(w, d)| ((*w).to_string(), (*d).to_string()))
             .collect(),
-        // No description column: any wording would be invented, and the one
-        // useful label ("current") would lie under a session override, which
-        // lives in `App` and not on disk.
+        // No description column: any wording would be invented. Which level
+        // is in force is `CompletionState::current`, computed with the
+        // session override in hand, not a label written here from disk.
         Args::Effort => ctx
             .effort
             .iter()
@@ -297,17 +334,42 @@ fn filter(cands: Vec<Candidate>, query: &str) -> Vec<Candidate> {
         .collect()
 }
 
+/// The word in force for a settings command — the row `compute` marks.
+/// Action commands (`/mcp add`, `/login`, …) have no such word.
+fn current_word(cmd: &str, ctx: &MenuContext, cur: &Current) -> Option<String> {
+    let on_off = |b: bool| Some(if b { "on" } else { "off" }.to_string());
+    match cmd {
+        "auto" => on_off(cur.auto),
+        "verbose" => on_off(cur.verbose),
+        "skin" => Some(cur.skin.to_string()),
+        "model" => ctx.model_ref.clone(),
+        // Unset on both sides marks nothing: the API default is the model's
+        // business, and a ✔ on a guess would be a lie.
+        "effort" => {
+            mur_common::llm::effective_effort(cur.session_effort, ctx.profile_effort, &ctx.model_id)
+                .0
+                .map(|e| e.as_str().to_string())
+        }
+        _ => None,
+    }
+}
+
 /// Derive the completion menu from the current input. Returns `None` when the
 /// input is not in a slash context or nothing matches (menu closed).
-pub fn compute(input: &str, skills: &[Candidate], ctx: &MenuContext) -> Option<CompletionState> {
+pub fn compute(
+    input: &str,
+    skills: &[Candidate],
+    ctx: &MenuContext,
+    cur: &Current,
+) -> Option<CompletionState> {
     // ponytail: slash commands are single-line; a multiline composer has no menu.
     if input.contains('\n') {
         return None;
     }
     let after = input.trim_start().strip_prefix('/')?;
-    let items = match after.split_once(char::is_whitespace) {
+    let (items, current) = match after.split_once(char::is_whitespace) {
         // Still typing the command word.
-        None => filter(build_top_level(skills, ctx), after),
+        None => (filter(build_top_level(skills, ctx), after), None),
         // Command word complete → maybe an argument layer.
         Some((cmd, rest)) => {
             // A second whitespace means we're typing an arg past layer 2.
@@ -315,7 +377,11 @@ pub fn compute(input: &str, skills: &[Candidate], ctx: &MenuContext) -> Option<C
                 return None;
             }
             let args = args_for(cmd)?;
-            filter(build_args(cmd, args, ctx), rest.trim_start())
+            let items = filter(build_args(cmd, args, ctx), rest.trim_start());
+            // Looked up AFTER the filter so the index is into the rows shown.
+            let current =
+                current_word(cmd, ctx, cur).and_then(|w| items.iter().position(|c| c.display == w));
+            (items, current)
         }
     };
     if items.is_empty() {
@@ -325,6 +391,7 @@ pub fn compute(input: &str, skills: &[Candidate], ctx: &MenuContext) -> Option<C
         items,
         selected: 0,
         spaced: false,
+        current,
     })
 }
 
@@ -418,10 +485,71 @@ mod tests {
     fn ctx() -> MenuContext {
         MenuContext {
             effort: vec!["low".into(), "high".into(), "max".into()],
-            models: vec![("fast".into(), "deepseek-v4".into())],
+            models: vec![
+                ("fast".into(), "deepseek-v4".into()),
+                ("smart".into(), "claude-opus-5".into()),
+            ],
             secrets: vec!["GITHUB_TOKEN".into()],
             notes: vec!["last".into(), "note-20260908-101500".into()],
+            ..MenuContext::default()
         }
+    }
+
+    fn cur() -> Current {
+        Current::default()
+    }
+
+    /// Every settings menu marks the value in force — from the profile for
+    /// the model, from the session first for effort, from `App` for the rest —
+    /// and every action menu marks nothing.
+    #[test]
+    fn settings_menus_mark_the_value_in_force() {
+        use mur_common::llm::Effort;
+        let c = MenuContext {
+            model_ref: Some("smart".into()),
+            model_id: "claude-opus-5".into(),
+            profile_effort: Some(Effort::High),
+            ..ctx()
+        };
+        let cur = Current {
+            auto: true,
+            verbose: false,
+            skin: "mur",
+            ..cur()
+        };
+        let at = |input: &str, cur: &Current| {
+            let s = compute(input, &[], &c, cur).unwrap();
+            s.current.map(|i| s.items[i].display.clone())
+        };
+        assert_eq!(at("/model ", &cur).as_deref(), Some("smart"));
+        assert_eq!(at("/effort ", &cur).as_deref(), Some("high"), "profile");
+        let overridden = Current {
+            session_effort: Some(Effort::Low),
+            ..cur
+        };
+        assert_eq!(
+            at("/effort ", &overridden).as_deref(),
+            Some("low"),
+            "session wins"
+        );
+        assert_eq!(at("/skin ", &cur).as_deref(), Some("mur"));
+        assert_eq!(at("/auto ", &cur).as_deref(), Some("on"));
+        assert_eq!(at("/verbose ", &cur).as_deref(), Some("off"));
+        // The index is into the filtered rows, not the full list.
+        let s = compute("/skin m", &[], &c, &cur).unwrap();
+        assert_eq!(s.current, Some(0));
+        assert_eq!(s.items[0].display, "mur");
+        // Action menus and an unset effort mark nothing.
+        assert_eq!(compute("/mcp ", &[], &c, &cur).unwrap().current, None);
+        let unset = MenuContext {
+            profile_effort: None,
+            ..c.clone()
+        };
+        assert_eq!(
+            compute("/effort ", &[], &unset, &cur).unwrap().current,
+            None
+        );
+        assert_eq!(compute("/model ", &[], &MenuContext::default(), &cur), None);
     }
 
     fn effort_ctx(model: &str) -> MenuContext {
@@ -441,7 +569,7 @@ mod tests {
 
     #[test]
     fn no_menu_without_leading_slash() {
-        assert!(compute("hello", &[skill("create-pr")], &ctx()).is_none());
+        assert!(compute("hello", &[skill("create-pr")], &ctx(), &cur()).is_none());
     }
 
     #[test]
@@ -463,7 +591,7 @@ mod tests {
 
     #[test]
     fn top_level_filters_commands_by_prefix_substring() {
-        let s = compute("/sk", &[skill("create-pr")], &ctx()).unwrap();
+        let s = compute("/sk", &[skill("create-pr")], &ctx(), &cur()).unwrap();
         let d = displays(&s);
         assert!(d.contains(&"/skill".to_string()));
         assert!(d.contains(&"/skin".to_string()));
@@ -473,7 +601,7 @@ mod tests {
 
     #[test]
     fn top_level_includes_matching_skills() {
-        let s = compute("/cre", &[skill("create-pr")], &ctx()).unwrap();
+        let s = compute("/cre", &[skill("create-pr")], &ctx(), &cur()).unwrap();
         // Commands first, then skills (`build_top_level`). `/secret` is here
         // because the match is a substring one and "se<cre>t" contains "cre" —
         // matching how the menu really behaves, rather than asserting a list
@@ -486,7 +614,7 @@ mod tests {
 
     #[test]
     fn empty_slash_shows_commands_and_skills() {
-        let s = compute("/", &[skill("create-pr")], &ctx()).unwrap();
+        let s = compute("/", &[skill("create-pr")], &ctx(), &cur()).unwrap();
         let d = displays(&s);
         assert!(d.contains(&"/mcp".to_string()));
         assert!(d.contains(&"create-pr".to_string()));
@@ -494,14 +622,14 @@ mod tests {
 
     #[test]
     fn panel_subcommands() {
-        let s = compute("/panel ", &[], &ctx()).unwrap();
+        let s = compute("/panel ", &[], &ctx(), &cur()).unwrap();
         assert!(s.items.iter().any(|c| c.insert == "/panel preview "));
         assert_eq!(s.items.len(), 6);
     }
 
     #[test]
     fn descends_to_subcommands_after_space() {
-        let s = compute("/mcp ", &[], &ctx()).unwrap();
+        let s = compute("/mcp ", &[], &ctx(), &cur()).unwrap();
         let d = displays(&s);
         assert!(d.contains(&"list".to_string()));
         assert!(d.contains(&"add-remote".to_string()));
@@ -512,7 +640,7 @@ mod tests {
 
     #[test]
     fn subcommands_filter_by_query() {
-        let s = compute("/mcp add", &[], &ctx()).unwrap();
+        let s = compute("/mcp add", &[], &ctx(), &cur()).unwrap();
         let d = displays(&s);
         assert!(d.contains(&"add".to_string()));
         assert!(d.contains(&"add-remote".to_string()));
@@ -521,26 +649,26 @@ mod tests {
 
     #[test]
     fn no_menu_past_layer_two() {
-        assert!(compute("/mcp add foo", &[], &ctx()).is_none());
+        assert!(compute("/mcp add foo", &[], &ctx(), &cur()).is_none());
     }
 
     #[test]
     fn command_without_subcommands_has_no_layer_two() {
-        assert!(compute("/help ", &[], &ctx()).is_none());
+        assert!(compute("/help ", &[], &ctx(), &cur()).is_none());
     }
 
     #[test]
     fn unknown_command_no_match_closes_menu() {
-        assert!(compute("/zzz", &[], &ctx()).is_none());
+        assert!(compute("/zzz", &[], &ctx(), &cur()).is_none());
     }
 
     #[test]
     fn top_level_command_marks_children() {
-        let s = compute("/mc", &[], &ctx()).unwrap();
+        let s = compute("/mc", &[], &ctx(), &cur()).unwrap();
         let mcp = s.items.iter().find(|c| c.display == "/mcp").unwrap();
         assert!(mcp.has_children);
         assert_eq!(mcp.insert, "/mcp ");
-        let help = compute("/hel", &[], &ctx()).unwrap();
+        let help = compute("/hel", &[], &ctx(), &cur()).unwrap();
         let h = help.items.iter().find(|c| c.display == "/help").unwrap();
         assert!(!h.has_children);
     }
@@ -554,7 +682,7 @@ mod tests {
 
     #[test]
     fn multiline_input_has_no_menu() {
-        assert!(compute("/mcp\nlist", &[], &ctx()).is_none());
+        assert!(compute("/mcp\nlist", &[], &ctx(), &cur()).is_none());
     }
     /// A missing agent reads nothing and must not panic: the menu degrades to
     /// its command layer rather than taking the session down.
@@ -573,7 +701,7 @@ mod tests {
     #[test]
     fn effort_levels_follow_the_model_not_a_fixed_scale() {
         let levels = |model: &str| -> Vec<String> {
-            compute("/effort ", &[], &effort_ctx(model))
+            compute("/effort ", &[], &effort_ctx(model), &cur())
                 .map(|s| s.items.iter().map(|c| c.display.clone()).collect())
                 .unwrap_or_default()
         };
@@ -605,8 +733,8 @@ mod tests {
         for model in ["magistral-medium-latest", "gpt-4o"] {
             let c = effort_ctx(model);
             assert!(c.effort.is_empty(), "{model}");
-            assert!(compute("/effort ", &[], &c).is_none(), "{model}");
-            let top = compute("/effort", &[], &c).unwrap();
+            assert!(compute("/effort ", &[], &c, &cur()).is_none(), "{model}");
+            let top = compute("/effort", &[], &c, &cur()).unwrap();
             let row = top.items.iter().find(|i| i.display == "/effort").unwrap();
             assert!(!row.has_children, "{model} promised a layer it cannot open");
         }
@@ -616,17 +744,17 @@ mod tests {
     /// is typed freely and simply matches nothing, which closes the menu.
     #[test]
     fn secret_offers_held_keys_and_delete() {
-        let s = compute("/secret ", &[], &ctx()).unwrap();
+        let s = compute("/secret ", &[], &ctx(), &cur()).unwrap();
         let d: Vec<String> = s.items.iter().map(|c| c.display.clone()).collect();
         assert!(d.contains(&"GITHUB_TOKEN".to_string()), "{d:?}");
         assert!(d.contains(&"--delete".to_string()), "{d:?}");
-        assert!(compute("/secret NEW_KEY", &[], &ctx()).is_none());
+        assert!(compute("/secret NEW_KEY", &[], &ctx(), &cur()).is_none());
     }
 
     /// `/model` completes registry aliases, described by the id behind them.
     #[test]
     fn model_offers_registry_aliases() {
-        let s = compute("/model ", &[], &ctx()).unwrap();
+        let s = compute("/model ", &[], &ctx(), &cur()).unwrap();
         let row = s.items.iter().find(|c| c.display == "fast").unwrap();
         assert_eq!(row.insert, "/model fast ");
         assert_eq!(row.desc, "deepseek-v4");
@@ -635,7 +763,7 @@ mod tests {
     /// `/forget` completes note names, `last` first.
     #[test]
     fn forget_offers_last_then_note_names() {
-        let s = compute("/forget ", &[], &ctx()).unwrap();
+        let s = compute("/forget ", &[], &ctx(), &cur()).unwrap();
         assert_eq!(s.items[0].display, "last");
         assert_eq!(s.items.len(), 2);
     }
@@ -648,7 +776,16 @@ mod tests {
         let five = effort_ctx("claude-opus-5");
         let three = effort_ctx("gpt-5");
         assert_ne!(five.effort, three.effort);
-        assert_eq!(compute("/effort ", &[], &five).unwrap().items.len(), 5);
-        assert_eq!(compute("/effort ", &[], &three).unwrap().items.len(), 3);
+        assert_eq!(
+            compute("/effort ", &[], &five, &cur()).unwrap().items.len(),
+            5
+        );
+        assert_eq!(
+            compute("/effort ", &[], &three, &cur())
+                .unwrap()
+                .items
+                .len(),
+            3
+        );
     }
 }
