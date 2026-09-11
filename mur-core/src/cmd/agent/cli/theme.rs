@@ -33,7 +33,7 @@ pub struct Theme {
     pub border: Style,
     /// Status bar and card background (bg only).
     pub surface: Style,
-    /// Agent-name / AUTO badge on the status bar.
+    /// Agent-name / AUTO badge on the status bar; the SETTLEMENT title chip.
     pub badge: Style,
     // ── layout ────────────────────────────────────────────────────────────
     pub border_type: BorderType,

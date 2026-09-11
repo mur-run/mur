@@ -37,8 +37,16 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-/// Columns the glyph column occupies: two spaces, the glyph, one space.
+/// Columns the rail and glyph column occupy together: the rail, a space, the
+/// glyph, one space.
 const GLYPH_COL: usize = 4;
+
+/// The left rail every body row starts with. It is what makes the block read
+/// as one unit on `ansi`, whose `surface` paints no background at all.
+pub const RAIL: &str = "▎";
+
+/// The title chip. Padded on both sides so the badge renders as a block.
+const TITLE: &str = " SETTLEMENT ";
 
 /// Narrower than this and the hanging indent costs more than it buys, so the
 /// card falls back to flush-left rows.
@@ -109,6 +117,33 @@ fn pad(s: &str, width: usize) -> String {
     format!("{s}{}", " ".repeat(width - w))
 }
 
+/// The title row: the badge chip, then one count per outcome kind that
+/// occurred, then `surface` out to the edge.
+fn title_line(
+    theme: &'static super::theme::Theme,
+    w: usize,
+    counts: [(usize, char, Style); 3],
+) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        TITLE,
+        theme.badge.add_modifier(Modifier::BOLD),
+    )];
+    let mut used = TITLE.width();
+    for (n, glyph, style) in counts {
+        if n == 0 {
+            continue;
+        }
+        let s = format!("  {glyph} {n}");
+        used += s.width();
+        spans.push(Span::styled(s, style.patch(theme.surface)));
+    }
+    spans.push(Span::styled(
+        " ".repeat(w.saturating_sub(used)),
+        theme.surface,
+    ));
+    Line::from(spans)
+}
+
 /// Draw the settlement card for `body` at `width` columns.
 ///
 /// Every row is padded to the full width and carries `theme.surface`, so the
@@ -126,13 +161,27 @@ pub fn card_lines(
     } else {
         0
     };
-    let mut out = vec![Line::from(Span::styled(
-        pad(" SETTLEMENT", w),
-        theme
-            .muted
-            .patch(theme.surface)
-            .add_modifier(Modifier::BOLD),
-    ))];
+    let (mut ok, mut bad, mut warn) = (0usize, 0usize, 0usize);
+    for raw in body.lines() {
+        match raw.trim_start().chars().next() {
+            Some('✔') => ok += 1,
+            Some('✘') => bad += 1,
+            Some('⚠') => warn += 1,
+            _ => {}
+        }
+    }
+    let mut out = vec![title_line(
+        theme,
+        w,
+        [
+            (ok, '✔', theme.ok),
+            (bad, '✘', theme.error),
+            (warn, '⚠', theme.warn),
+        ],
+    )];
+    let rail = Span::styled(RAIL, theme.accent.patch(theme.surface));
+    let rail_w = RAIL.width();
+    let body_w = w.saturating_sub(rail_w).max(1);
     for raw in body.lines() {
         let trimmed = raw.trim_start();
         let glyph = trimmed.chars().next().unwrap_or(' ');
@@ -140,22 +189,25 @@ pub fn card_lines(
         let is_row = matches!(glyph, '✔' | '✘' | '⚠' | '~');
         let (head, text) = if is_row {
             let rest = trimmed.chars().skip(1).collect::<String>();
-            (format!("  {glyph} "), rest.trim_start().to_string())
+            (format!(" {glyph} "), rest.trim_start().to_string())
         } else {
-            (" ".repeat(indent.max(2)), trimmed.to_string())
+            (
+                " ".repeat(indent.saturating_sub(rail_w).max(1)),
+                trimmed.to_string(),
+            )
         };
         let head_w = head.width();
-        let avail = w.saturating_sub(head_w).max(1);
+        let avail = body_w.saturating_sub(head_w).max(1);
         for (i, chunk) in wrap(&text, avail).into_iter().enumerate() {
             let prefix = if i == 0 {
                 head.clone()
             } else {
                 " ".repeat(head_w)
             };
-            out.push(Line::from(Span::styled(
-                pad(&format!("{prefix}{chunk}"), w),
-                style,
-            )));
+            out.push(Line::from(vec![
+                rail.clone(),
+                Span::styled(pad(&format!("{prefix}{chunk}"), body_w), style),
+            ]));
         }
     }
     out
@@ -221,6 +273,51 @@ mod tests {
         );
         for row in plain(&narrow) {
             assert!(!row.contains('…'), "nothing may be elided: {row:?}");
+        }
+    }
+
+    use super::super::theme::{LIGHT, MUR};
+    use super::RAIL;
+    use ratatui::style::Modifier;
+
+    /// The title is a badge chip — the one token every skin already renders
+    /// as a filled, contrasting block — plus the verdict counts, so the card
+    /// is unmistakable and its outcome readable before a single row is.
+    #[test]
+    fn the_title_is_a_badge_chip_with_the_verdict_counts() {
+        for theme in [&ANSI, &LIGHT, &MUR] {
+            let out = card_lines(
+                "  ✔ bash · cargo test\n  ✘ edit · denied\n  ✔ read",
+                theme,
+                60,
+            );
+            let title = &out[0];
+            let chip = title
+                .spans
+                .iter()
+                .find(|s| s.content.contains("SETTLEMENT"))
+                .expect("title chip");
+            assert_eq!(chip.style, theme.badge.add_modifier(Modifier::BOLD));
+            let text: String = title.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(text.contains("✔ 2"), "{text:?}");
+            assert!(text.contains("✘ 1"), "{text:?}");
+            assert!(
+                !text.contains('⚠'),
+                "no warn count when there are none: {text:?}"
+            );
+        }
+    }
+
+    /// A left rail on every body row makes the block read as one unit even on
+    /// `ansi`, whose `surface` paints no background at all.
+    #[test]
+    fn every_body_row_carries_the_accent_rail() {
+        let out = card_lines("  ✔ bash\n  a note line", &ANSI, 40);
+        assert!(out.len() >= 3);
+        for line in &out[1..] {
+            let rail = &line.spans[0];
+            assert_eq!(rail.content.as_ref(), RAIL);
+            assert_eq!(rail.style, ANSI.accent.patch(ANSI.surface));
         }
     }
 
