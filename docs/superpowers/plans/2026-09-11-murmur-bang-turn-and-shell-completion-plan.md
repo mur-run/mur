@@ -323,7 +323,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **2.1 Create the module with its tests first** — new file `mur-core/src/cmd/agent/cli/shell_complete.rs`:
+- [x] **2.1 Create the module with its tests first** — new file `mur-core/src/cmd/agent/cli/shell_complete.rs`:
 
 ```rust
 //! Completion for `!` lines in the composer: command names for the first
@@ -610,11 +610,11 @@ mod tests {
 }
 ```
 
-- [ ] **2.2 Register the module** — in `mur-core/src/cmd/agent/cli/mod.rs`, next to the existing `mod complete;` line add `mod shell_complete;`.
+- [x] **2.2 Register the module** — in `mur-core/src/cmd/agent/cli/mod.rs`, next to the existing `mod complete;` line add `mod shell_complete;`.
 
-- [ ] **2.3 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(shell_complete)'`. Expected: 8 tests pass. (They are written together with the code; the red step for this task is the `mod shell_complete;` line failing to compile before the file exists — run 2.3 once with the file empty if you want to see it.) If `scan_path_bins_reads_the_env_path` is flaky under nextest's process-per-test model it cannot be — each test is its own process — but if it is ever run under plain `cargo test`, mark it `#[serial]` only if the crate already depends on `serial_test`; otherwise leave it.
+- [x] **2.3 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(shell_complete)'`. Expected: 8 tests pass. (They are written together with the code; the red step for this task is the `mod shell_complete;` line failing to compile before the file exists — run 2.3 once with the file empty if you want to see it.) If `scan_path_bins_reads_the_env_path` is flaky under nextest's process-per-test model it cannot be — each test is its own process — but if it is ever run under plain `cargo test`, mark it `#[serial]` only if the crate already depends on `serial_test`; otherwise leave it.
 
-- [ ] **2.4 fmt + clippy**, then **commit**:
+- [x] **2.4 fmt + clippy**, then **commit**:
 
 ```
 feat(murmur): shell_complete — candidates for ! lines

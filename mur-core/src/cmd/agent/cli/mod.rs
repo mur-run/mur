@@ -29,6 +29,7 @@ mod recover;
 mod render_card;
 mod secret_cmd;
 mod settlement;
+mod shell_complete;
 mod step;
 mod stream;
 mod suggest;
