@@ -193,7 +193,29 @@ async fn push_memory_reload(home: &std::path::Path, agent: &str) -> String {
     }
 }
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /channels N --follow (live-tail another channel; /channels --follow to stop)  /open (outstanding items)  /auto [on|off]  /verbose [on|off] (expand tool cards)  /skin [dark|light|mur]  /model [N|name] (list/switch model)  /login [anthropic|chatgpt] (OAuth health / re-authenticate — unrelated to mur auth login, which signs in to mur.run for the official catalog)  /secret <KEY> [--delete] (hand the agent a credential — hidden input, never enters the chat)  /mcp  /skill  /remember <text> (save a memory)  /memories  /forget <name|last>  /panel [tab]  /quit (or /exit)  /effort [level] (reasoning effort this model accepts) · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Shift+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
+/// The `/help` cheatsheet: one row per group, the settings row first among
+/// the things a session changes. Built rather than a literal so the skin
+/// list is the one `/skin` accepts — a hand-written copy said `dark` for a
+/// year after `ansi` became the name.
+fn help_text() -> String {
+    let skins = theme::SKIN_NAMES.replace(", ", "|");
+    let settings = format!(
+        "  settings  /model [N|name] · /effort [level] · /skin [{skins}] · /auto [on|off] · /verbose [on|off] (expand tool cards)"
+    );
+    [
+        "commands",
+        "  chat      /clear (new conversation) · /sessions · /channels [N] (list/switch) · /channels N --follow (live-tail; bare --follow stops)",
+        "  look      /card · /open (outstanding items) · /memories",
+        settings.as_str(),
+        "  agent     /mcp · /skill · /secret <KEY> [--delete] (hidden input, never enters the chat) · /login [anthropic|chatgpt] (OAuth health; not `mur auth login`)",
+        "  memory    /remember <text> · /forget <name|last>",
+        "  more      /panel [tab] (Hub companion window) · /help · /quit (or /exit)",
+        "  !cmd      run a local shell command (output shared with the agent)",
+        "keys        Enter send · Shift+Enter newline · Ctrl+V image · Ctrl+O transcript · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll",
+        "menus       ↑↓ move · Tab accept · Esc close",
+    ]
+    .join("\n")
+}
 
 /// Entry point dispatched from `AgentAction::Cli`.
 #[allow(clippy::too_many_arguments)]
@@ -1904,7 +1926,7 @@ fn start_turn(app: &mut App, trimmed: String, tx: &mpsc::Sender<StreamMsg>) {
 
 async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>) {
     match cmd {
-        SlashCmd::Help => app.push_system(HELP),
+        SlashCmd::Help => app.push_system(help_text()),
         SlashCmd::Quit => request_quit(app, tx),
         SlashCmd::Clear => {
             // Stop the in-flight turn first so its worker can't write into the
@@ -3161,8 +3183,8 @@ mod hitl_key_tests {
 /// remember" becomes "the build stops."
 #[cfg(test)]
 mod help_coverage_tests {
-    use super::HELP;
     use super::app::{SlashCmd, parse_slash};
+    use super::help_text;
 
     /// Canonical `/name` for a `SlashCmd` variant that must show up in
     /// `/help`, or `None` for a variant that legitimately has none.
@@ -3243,6 +3265,31 @@ mod help_coverage_tests {
     /// and the completion table — and nothing but this test ties them
     /// together. `/effort` shipped in the parser while missing from both of
     /// the others; that is the drift this exists to catch.
+    /// The composer hint and `/help` describe the same keys; the skin list in
+    /// `/help` is the one `/skin` accepts. Both drifted by hand once.
+    #[test]
+    fn help_matches_the_composer_hint_and_the_skin_list() {
+        let help = help_text();
+        for key in ["Enter", "Shift+Enter", "Ctrl+V", "Ctrl+O", "Ctrl+D"] {
+            assert!(
+                super::app::ENTER_HINT_FULL.contains(key) && help.contains(key),
+                "{key} must appear in both the composer hint and /help"
+            );
+        }
+        for skin in super::theme::SKIN_NAMES.split(", ") {
+            assert!(help.contains(skin), "/help does not list skin {skin}");
+        }
+        assert!(
+            !help.contains("dark|"),
+            "`dark` is an alias, not a listed skin"
+        );
+        // One group per row, indented under its heading — the wall of text
+        // this replaced had every command on one line.
+        assert!(help.contains("commands\n  chat      /clear"), "{help}");
+        assert!(help.contains("\n  settings  /model"), "{help}");
+        assert!(help.contains("\nkeys        Enter send"), "{help}");
+    }
+
     #[test]
     fn every_command_is_parsed_documented_and_offered() {
         for cmd in one_of_each() {
@@ -3255,7 +3302,7 @@ mod help_coverage_tests {
                 "/{name} is in the documented list but the parser rejects it: {parsed:?}"
             );
             assert!(
-                HELP.contains(&format!("/{name}")),
+                help_text().contains(&format!("/{name}")),
                 "/{name} works but /help never mentions it"
             );
             assert!(

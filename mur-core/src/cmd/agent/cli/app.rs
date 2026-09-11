@@ -29,9 +29,9 @@ const ENTER_HINT_COMPACT: &str = " message — Enter · Shift+Enter · /help ";
 /// Full composer-border hint. macOS calls the modifier "Option" even though
 /// it's still crossterm's `ALT` — every other OS calls it "Alt".
 #[cfg(target_os = "macos")]
-const ENTER_HINT_FULL: &str = " message — Enter to send · Shift+Enter newline (Option+Enter also works) · Ctrl+V image · Ctrl+O transcript · /help · Ctrl+D quit";
+pub(super) const ENTER_HINT_FULL: &str = " message — Enter to send · Shift+Enter newline (Option+Enter also works) · Ctrl+V image · Ctrl+O transcript · /help · Ctrl+D quit";
 #[cfg(not(target_os = "macos"))]
-const ENTER_HINT_FULL: &str = " message — Enter to send · Shift+Enter newline (Alt+Enter also works) · Ctrl+V image · Ctrl+O transcript · /help · Ctrl+D quit";
+pub(super) const ENTER_HINT_FULL: &str = " message — Enter to send · Shift+Enter newline (Alt+Enter also works) · Ctrl+V image · Ctrl+O transcript · /help · Ctrl+D quit";
 
 /// Assumed terminal width until the event loop reports the real one.
 const DEFAULT_WIDTH: u16 = 80;
