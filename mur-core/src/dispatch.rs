@@ -2054,7 +2054,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             Some(name) => cmd::doctor::run_agent(&name, json)?,
             None => cmd::doctor::run(&format, json)?,
         },
-        AgentAction::RuntimeDoctor { json } => cmd::agent::cmd_doctor(json)?,
+        AgentAction::RuntimeDoctor { json, fix } => cmd::agent::cmd_doctor(json, fix)?,
         AgentAction::InstallDeps { name, program, yes } => {
             let mur_home = cmd::agent::resolve_mur_home()?;
             let deps = cmd::deps::aggregate_agent(&mur_home, &name)?;
