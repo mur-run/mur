@@ -1533,7 +1533,12 @@ fn clipboard_png() -> Option<String> {
 /// Recompute the completion menu from the current input. Called after every
 /// edit and when Tab is pressed with the menu closed.
 fn refresh_completion(app: &mut App) {
-    app.completion = complete::compute(&app.input_text(), &app.skills, &app.menu_ctx);
+    app.completion = complete::compute(
+        &app.input_text(),
+        &app.skills,
+        &app.menu_ctx,
+        &app.current_values(),
+    );
 }
 
 /// Move the highlighted row by `delta`, wrapping.
@@ -1562,7 +1567,12 @@ fn completion_accept(app: &mut App) {
     let descend = cand.has_children;
     app.set_input(&insert);
     app.completion = if descend {
-        complete::compute(&app.input_text(), &app.skills, &app.menu_ctx)
+        complete::compute(
+            &app.input_text(),
+            &app.skills,
+            &app.menu_ctx,
+            &app.current_values(),
+        )
     } else {
         None
     };

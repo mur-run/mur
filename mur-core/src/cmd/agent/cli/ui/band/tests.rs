@@ -183,6 +183,7 @@ mod band_growth_tests {
             items: vec![option("建好了"), option("卡住了"), option("接著建")],
             selected: 0,
             spaced: true,
+            current: None,
         });
         app
     }

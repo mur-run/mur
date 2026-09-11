@@ -781,6 +781,16 @@ impl App {
     }
 
     /// Current input text (joined multiline).
+    /// The session half of what the settings menus mark as in force.
+    pub fn current_values(&self) -> super::complete::Current {
+        super::complete::Current {
+            session_effort: self.session_effort,
+            auto: self.auto_approve,
+            verbose: self.cards_expanded,
+            skin: super::theme::skin_name(self.theme),
+        }
+    }
+
     pub fn input_text(&self) -> String {
         self.input.lines().join("\n")
     }
@@ -866,6 +876,7 @@ impl App {
                     items: candidates,
                     selected: 0,
                     spaced: true,
+                    current: None,
                 });
             }
         }

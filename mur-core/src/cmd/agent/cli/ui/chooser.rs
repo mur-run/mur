@@ -153,6 +153,7 @@ mod chooser_floor_tests {
             ],
             selected: 0,
             spaced: true,
+            current: None,
         });
         a
     }
