@@ -226,6 +226,9 @@ mod tests {
     /// #1247: a launcher pinned into the keg is a path no installer refreshes,
     /// so the agent never upgrades and a TCC grant on the canonical path never
     /// applies. Report it, and repair only when asked.
+    /// Unix-only: the fixture needs real symlinks, which is also the only shape
+    /// this bug takes — on Windows the launcher is a copy, not a link.
+    #[cfg(unix)]
     #[test]
     fn link_drift_is_reported_only_when_there_is_somewhere_better_to_point() {
         let t = tempfile::tempdir().unwrap();
@@ -260,6 +263,8 @@ mod tests {
 
     /// The Homebrew path is itself a symlink into the versioned keg, so two
     /// names for one file must not read as drift.
+    /// Unix-only for the same reason: the fixture builds a symlink chain.
+    #[cfg(unix)]
     #[test]
     fn two_names_for_the_same_file_are_not_drift() {
         let t = tempfile::tempdir().unwrap();
