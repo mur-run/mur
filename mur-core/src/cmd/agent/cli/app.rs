@@ -578,6 +578,9 @@ pub struct App {
     /// models, secret KEYs, note names. Rebuilt after every slash command;
     /// `compute` is pure, so this is where that I/O lives.
     pub menu_ctx: super::complete::MenuContext,
+    /// Executable names on `$PATH` for `!` completion. `None` until the first
+    /// `!` completion asks; scanned once per session after that.
+    pub path_bins: Option<Vec<String>>,
     /// Replies captured from a `suggest_replies` tool call this turn, revealed
     /// after the turn finishes (see `reveal_suggestions`).
     pub pending_suggestions: Vec<super::suggest::Suggestion>,
@@ -693,6 +696,7 @@ impl App {
             completion: None,
             skills: Vec::new(),
             menu_ctx: super::complete::MenuContext::default(),
+            path_bins: None,
             pending_suggestions: Vec::new(),
             suggestion_ghost: None,
             wants_screen_wipe: false,
@@ -777,6 +781,13 @@ impl App {
     }
 
     /// Current input text (joined multiline).
+    /// The `$PATH` executable list, scanned on first use.
+    pub fn path_bins(&mut self) -> &[String] {
+        self.path_bins
+            .get_or_insert_with(super::shell_complete::scan_path_bins)
+            .as_slice()
+    }
+
     /// The session half of what the settings menus mark as in force.
     pub fn current_values(&self) -> super::complete::Current {
         super::complete::Current {

@@ -6,10 +6,6 @@
 //! ponytail: inserted paths are not quoted. A name with a space goes in as-is
 //! and the user quotes it; escaping is the upgrade if that ever bites.
 
-// Wired into the composer by the next commit; until then nothing in the
-// binary calls it. Removed there.
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 
 use super::complete::{Candidate, MAX_MENU_ROWS};
