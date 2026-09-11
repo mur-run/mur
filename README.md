@@ -145,8 +145,8 @@ mur agent cli dev qa ops                      # three agents, tiled panes (tmux/
                                               #   --resume continues the last conversation
 murmur coach                                  # quick form (murmur symlink), identical to mur agent cli coach
 murmur coach --skin mur                       # skins: ansi (default — follows your terminal's own
-                                              #   colours) | light | mur (brand) | claude (Claude Code's
-                                              #   palette); /skin switches and remembers
+                                              #   colours) | light | mur (brand) | clay (warm terracotta
+                                              #   on dark); /skin switches and remembers
 
 mur agent stop coach                          # stops it for real: unloads the service first, so
                                               #   the supervisor cannot respawn it a second later

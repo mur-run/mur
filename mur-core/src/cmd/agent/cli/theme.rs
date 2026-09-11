@@ -120,15 +120,15 @@ pub const MUR: Theme = Theme {
     compact_input: true,
 };
 
-/// Background `claude` is designed against (it does not paint one): a
-/// typical dark terminal, since Claude Code itself never paints one either.
-pub const ASSUMED_BG_CLAUDE: Color = Color::Rgb(0x1a, 0x1a, 0x1a);
+/// Background `clay` is designed against (it does not paint one): a
+/// typical dark terminal.
+pub const ASSUMED_BG_CLAY: Color = Color::Rgb(0x1a, 0x1a, 0x1a);
 
-/// Claude Code's dark palette: terracotta for the agent, periwinkle for the
-/// operator, its green / amber / rose for status, grey for metadata and
-/// rules. Every value is lifted from Claude Code's own dark theme table;
-/// only the assumed background and the surface tint are ours.
-pub const CLAUDE: Theme = Theme {
+/// Warm terracotta on dark: terracotta for the agent, periwinkle for the
+/// operator, green / amber / rose for status, grey for metadata and rules.
+/// The palette follows the familiar coding-assistant dark theme; the assumed
+/// background and the surface tint are ours.
+pub const CLAY: Theme = Theme {
     text: rgb(0xff, 0xff, 0xff),
     muted: rgb(0x99, 0x99, 0x99),
     emphasis: rgb(0xff, 0xff, 0xff).add_modifier(Modifier::BOLD),
@@ -149,14 +149,14 @@ pub const CLAUDE: Theme = Theme {
 
 /// The names `/skin` and `--skin` accept, in the order they are listed.
 /// `dark` is an alias of `ansi` and is not listed.
-pub const SKIN_NAMES: &str = "ansi, light, mur, claude";
+pub const SKIN_NAMES: &str = "ansi, light, mur, clay";
 
 const KNOWN: [(&str, &Theme); 5] = [
     ("ansi", &ANSI),
     ("dark", &ANSI),
     ("light", &LIGHT),
     ("mur", &MUR),
-    ("claude", &CLAUDE),
+    ("clay", &CLAY),
 ];
 
 /// Resolve a skin name to a theme. `dark` is an alias of `ansi`; unknown
@@ -242,7 +242,7 @@ mod tests {
         for (name, theme, bg) in [
             ("light", &LIGHT, ASSUMED_BG_LIGHT),
             ("mur", &MUR, ASSUMED_BG_MUR),
-            ("claude", &CLAUDE, ASSUMED_BG_CLAUDE),
+            ("clay", &CLAY, ASSUMED_BG_CLAY),
         ] {
             let fg = |s: Style| s.fg.expect("text token has a colour");
             let r = contrast_ratio(fg(theme.text), bg);

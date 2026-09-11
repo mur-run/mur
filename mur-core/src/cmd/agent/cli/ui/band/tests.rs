@@ -245,7 +245,7 @@ mod band_growth_tests {
 #[cfg(test)]
 mod layout_guard_tests {
     use super::super::super::super::app::{App, ChatMsg, Role};
-    use super::super::super::super::theme::{ANSI, CLAUDE, LIGHT, MUR};
+    use super::super::super::super::theme::{ANSI, CLAY, LIGHT, MUR};
     use super::super::super::render;
     use super::super::render_transcript;
     use ratatui::backend::TestBackend;
@@ -260,7 +260,7 @@ mod layout_guard_tests {
             ("ansi", &ANSI),
             ("light", &LIGHT),
             ("mur", &MUR),
-            ("claude", &CLAUDE),
+            ("clay", &CLAY),
         ] {
             let mut app = App::test_fixture();
             app.theme = theme;
