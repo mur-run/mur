@@ -211,7 +211,7 @@ fn help_text() -> String {
         "  agent     /mcp · /skill · /secret <KEY> [--delete] (hidden input, never enters the chat) · /login [anthropic|chatgpt] (OAuth health; not `mur auth login`)",
         "  memory    /remember <text> · /forget <name|last>",
         "  more      /panel [tab] (Hub companion window) · /help · /quit (or /exit)",
-        "  !cmd      run a local shell command (output shared with the agent)",
+        "  !cmd      run a local shell command; its output is sent to the agent as your message · Tab completes commands and paths",
         "keys        Enter send · Shift+Enter newline · Ctrl+V image · Ctrl+O transcript · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll",
         "menus       ↑↓ move · Tab accept · Esc close",
     ]
@@ -1554,14 +1554,44 @@ fn clipboard_png() -> Option<String> {
 }
 
 /// Recompute the completion menu from the current input. Called after every
-/// edit and when Tab is pressed with the menu closed.
+/// edit and when Tab is pressed with the menu closed. `/` lines get the
+/// command menu, `!` lines the shell menu, anything else none.
 fn refresh_completion(app: &mut App) {
-    app.completion = complete::compute(
-        &app.input_text(),
-        &app.skills,
-        &app.menu_ctx,
-        &app.current_values(),
+    let input = app.input_text();
+    app.completion = if input.trim_start().starts_with('!') {
+        shell_completion(app, input.trim_start())
+    } else {
+        complete::compute(&input, &app.skills, &app.menu_ctx, &app.current_values())
+    };
+}
+
+/// The shell menu for a `!` line: commands for the first word, paths after.
+/// Never marks a `current` row — a path has no value in force.
+fn shell_completion(app: &mut App, line: &str) -> Option<complete::CompletionState> {
+    let cwd = app
+        .cwd
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let home = dirs::home_dir();
+    let bins = app.path_bins().to_vec();
+    let items = shell_complete::candidates(
+        line,
+        &shell_complete::ShellCompleteCtx {
+            cwd: &cwd,
+            path_bins: &bins,
+            home: home.as_deref(),
+        },
     );
+    if items.is_empty() {
+        return None;
+    }
+    Some(complete::CompletionState {
+        items,
+        selected: 0,
+        spaced: false,
+        current: None,
+    })
 }
 
 /// Move the highlighted row by `delta`, wrapping.
@@ -1589,16 +1619,11 @@ fn completion_accept(app: &mut App) {
     let insert = cand.insert.clone();
     let descend = cand.has_children;
     app.set_input(&insert);
-    app.completion = if descend {
-        complete::compute(
-            &app.input_text(),
-            &app.skills,
-            &app.menu_ctx,
-            &app.current_values(),
-        )
+    if descend {
+        refresh_completion(app);
     } else {
-        None
-    };
+        app.completion = None;
+    }
 }
 
 /// Cancel the in-flight turn (if any) on a separate connection and mark the
@@ -3690,6 +3715,54 @@ mod shell_turn_tests {
                 .filter(|m| m.role == Role::Shell)
                 .count(),
             1
+        );
+    }
+
+    /// `!` lines open the shell menu through the same refresh path as `/`,
+    /// and accepting a directory keeps it open on that directory.
+    #[test]
+    fn bang_lines_get_the_shell_menu_and_directories_descend() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::create_dir(t.path().join("docs")).unwrap();
+        std::fs::write(t.path().join("docs/a.md"), "").unwrap();
+        let mut app = App::test_fixture();
+        app.cwd = Some(t.path().to_path_buf());
+        app.path_bins = Some(vec!["cargo".into(), "cat".into()]);
+
+        app.set_input("!ca");
+        refresh_completion(&mut app);
+        let items: Vec<String> = app
+            .completion
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .map(|c| c.display.clone())
+            .collect();
+        assert_eq!(items, ["cargo", "cat"]);
+        assert_eq!(app.completion.as_ref().unwrap().current, None);
+
+        app.set_input("!ls ");
+        refresh_completion(&mut app);
+        assert_eq!(app.completion.as_ref().unwrap().items[0].display, "docs/");
+        completion_accept(&mut app);
+        assert_eq!(app.input_text(), "!ls docs/");
+        let inside = app
+            .completion
+            .as_ref()
+            .expect("menu stays open on a directory");
+        assert_eq!(inside.items[0].display, "a.md");
+
+        app.set_input("/skin ");
+        refresh_completion(&mut app);
+        assert!(
+            app.completion
+                .as_ref()
+                .unwrap()
+                .items
+                .iter()
+                .any(|c| c.display == "mur"),
+            "slash menu untouched"
         );
     }
 }

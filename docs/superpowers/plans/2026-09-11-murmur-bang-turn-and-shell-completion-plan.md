@@ -636,7 +636,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **3.1 Write the failing wiring test** — append to `mod shell_turn_tests` in `mod.rs`:
+- [x] **3.1 Write the failing wiring test** — append to `mod shell_turn_tests` in `mod.rs`:
 
 ```rust
     /// `!` lines open the shell menu through the same refresh path as `/`,
@@ -670,9 +670,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
     }
 ```
 
-- [ ] **3.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(bang_lines_get_the_shell_menu)'`. Expected: compile error `no field path_bins on App`.
+- [x] **3.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(bang_lines_get_the_shell_menu)'`. Expected: compile error `no field path_bins on App`.
 
-- [ ] **3.3 Cache PATH on `App`** — in `app.rs`, next to `pub menu_ctx: super::complete::MenuContext,` add:
+- [x] **3.3 Cache PATH on `App`** — in `app.rs`, next to `pub menu_ctx: super::complete::MenuContext,` add:
 
 ```rust
     /// Executable names on `$PATH` for `!` completion. `None` until the first
@@ -691,7 +691,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
     }
 ```
 
-- [ ] **3.4 Dispatch in `refresh_completion`** — in `mod.rs` replace the fn with:
+- [x] **3.4 Dispatch in `refresh_completion`** — in `mod.rs` replace the fn with:
 
 ```rust
 /// Recompute the completion menu from the current input. Called after every
@@ -738,7 +738,7 @@ fn shell_completion(app: &mut App, line: &str) -> Option<complete::CompletionSta
 
   If `PathBuf` is not already imported at the top of `mod.rs`, add `use std::path::PathBuf;`.
 
-- [ ] **3.5 `completion_accept` reuses the dispatch** — replace its tail (from `app.set_input(&insert);` to the end of the fn) with:
+- [x] **3.5 `completion_accept` reuses the dispatch** — replace its tail (from `app.set_input(&insert);` to the end of the fn) with:
 
 ```rust
     app.set_input(&insert);
@@ -750,15 +750,15 @@ fn shell_completion(app: &mut App, line: &str) -> Option<complete::CompletionSta
 }
 ```
 
-- [ ] **3.6 `/help` wording** — in `help_text()` change the `!cmd` row to:
+- [x] **3.6 `/help` wording** — in `help_text()` change the `!cmd` row to:
 
 ```rust
         "  !cmd      run a local shell command; its output is sent to the agent as your message · Tab completes commands and paths",
 ```
 
-- [ ] **3.7 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(bang_lines_get_the_shell_menu) | test(help_matches) | test(every_command_is_parsed) | test(/complete::/)'`. Expected: all pass. Then fmt + clippy.
+- [x] **3.7 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(bang_lines_get_the_shell_menu) | test(help_matches) | test(every_command_is_parsed) | test(/complete::/)'`. Expected: all pass. Then fmt + clippy.
 
-- [ ] **3.8 Commit**:
+- [x] **3.8 Commit**:
 
 ```
 feat(murmur): live shell completion on ! lines
