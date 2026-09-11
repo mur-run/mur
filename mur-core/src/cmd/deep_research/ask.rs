@@ -49,12 +49,20 @@ pub fn plan_preflight(s: &DeepResearchStatus) -> Result<Vec<PreflightAction>> {
     }
     let mut plan = Vec::new();
     for w in &s.workers {
-        if !w.running {
-            plan.push(PreflightAction::StartWorker(w.name.clone()));
+        // A running worker has already proved its gateway pin against ITS
+        // OWN PATH. Re-pinning it from this process records whatever THIS
+        // process resolves, which on a dual-install box is a different copy
+        // (Hub-launched concierge: /opt/homebrew/bin first; launchd worker:
+        // ~/.local/bin first) — and the worker refuses to start next time
+        // (B0 rule 6). It would also need to write a sibling agent's profile,
+        // which the sandbox rightly denies. Only a stopped worker — the shape
+        // of a post-upgrade pin refusal — is healed: pin first, because the
+        // runtime reads its profile once, at start.
+        if w.running {
+            continue;
         }
-        // Unconditional idempotent re-pin: cheaper than drift detection and
-        // covers the known gateway-binary-swap failure mode.
         plan.push(PreflightAction::RepinGateway(w.name.clone()));
+        plan.push(PreflightAction::StartWorker(w.name.clone()));
     }
     Ok(plan)
 }
@@ -250,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn stopped_worker_planned_for_start_and_repin_always() {
+    fn only_stopped_workers_are_repinned_then_started() {
         let s = DeepResearchStatus {
             workers: vec![
                 worker("dr_worker_1", false, true),
@@ -260,21 +268,27 @@ mod tests {
             model: Some("m".into()),
         };
         let plan = plan_preflight(&s).unwrap();
+        // The running worker has proved its own pin; touching it from a
+        // process with a different PATH is how a worker gets bricked.
         assert!(
-            plan.iter()
-                .any(|a| matches!(a, PreflightAction::StartWorker(n) if n == "dr_worker_1"))
+            !plan.iter().any(
+                |a| matches!(a, PreflightAction::StartWorker(n) | PreflightAction::RepinGateway(n) if n == "dr_worker_2")
+            )
         );
+        // The stopped one is healed: pin first (the runtime reads the
+        // profile once, at start), then start.
+        let names: Vec<&str> = plan
+            .iter()
+            .map(|a| match a {
+                PreflightAction::RepinGateway(_) => "repin",
+                PreflightAction::StartWorker(_) => "start",
+            })
+            .collect();
+        assert_eq!(names, ["repin", "start"]);
         assert!(
-            !plan
-                .iter()
-                .any(|a| matches!(a, PreflightAction::StartWorker(n) if n == "dr_worker_2"))
-        );
-        // One re-pin per worker (idempotent, covers binary-swap drift):
-        assert_eq!(
-            plan.iter()
-                .filter(|a| matches!(a, PreflightAction::RepinGateway(_)))
-                .count(),
-            2
+            plan.iter().all(
+                |a| matches!(a, PreflightAction::StartWorker(n) | PreflightAction::RepinGateway(n) if n == "dr_worker_1")
+            )
         );
     }
 
