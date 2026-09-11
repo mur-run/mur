@@ -817,6 +817,30 @@ impl TaskRunner {
             .insert(task_id.to_string(), (tx, can_approve));
     }
 
+    /// Declare that nobody can answer an approval prompt for this turn.
+    ///
+    /// A delegated turn (`channel/delegate`) is synchronous — a fleet router is
+    /// waiting on the reply — but "synchronous" is not "attended": the caller
+    /// is a program. Registering nothing left the gate with no routed entry, so
+    /// it fell through to asking and waited out `hitl.timeout_secs` against the
+    /// agent-wide notifier that nobody was reading. The turn then returned with
+    /// no agent message and nothing naming approval as the cause.
+    ///
+    /// The sink here is never written to: with `can_approve: false` every
+    /// `Ask` call is decided by `decide_without_asking` before a prompt is
+    /// built, so `pending` is always empty and the gate never runs. It exists
+    /// only because the flag lives beside a sender in the same map.
+    pub async fn mark_unattended(&self, task_id: &str) {
+        // The receiver is dropped immediately: a send on this sink returns
+        // `Err`, which is the correct fail-closed answer if a future change
+        // ever routes a prompt here, and leaks nothing.
+        let (tx, _) = tokio::sync::mpsc::channel(1);
+        self.client_notifiers
+            .lock()
+            .await
+            .insert(task_id.to_string(), (tx, false));
+    }
+
     /// Drop the per-turn HITL sink once the turn completes.
     pub async fn unregister_client_notifier(&self, task_id: &str) {
         self.client_notifiers.lock().await.remove(task_id);
@@ -5058,6 +5082,57 @@ mod tests {
             sys.contains("mur skill install"),
             "names the register command"
         );
+    }
+
+    /// A delegated turn has no human on the other end: the fleet router that
+    /// dialled `channel/delegate` is a program waiting on a reply, not someone
+    /// who can answer an approval prompt. Before this it registered nothing, so
+    /// the gate fell through to asking and burned the whole `hitl.timeout_secs`
+    /// on an agent-wide notifier nobody was reading — the turn came back empty
+    /// with approval never named as the cause.
+    #[tokio::test]
+    async fn an_unattended_turn_is_refused_at_once_with_a_readable_reason() {
+        let calls = Arc::new(AtomicU64::new(0));
+        let runner = Arc::new(
+            TaskRunner::new_stub_echo()
+                .with_tools(vec![Arc::new(CountingBashTool {
+                    calls: calls.clone(),
+                })])
+                .with_tools_policy(vec![mur_common::agent::ToolRule {
+                    pattern: "bash".into(),
+                    policy: mur_common::agent::ToolPolicy::Ask,
+                    risk: None,
+                }]),
+        );
+        let call = crate::llm::ToolCallResult {
+            call_id: "c-1".into(),
+            tool_name: "bash".into(),
+            input: serde_json::json!({"command": "echo hi"}),
+        };
+
+        // Marked unattended → the readable refusal, before any prompt is sent.
+        runner.mark_unattended("t-delegated").await;
+        let (out, _) = runner
+            .gate_response("t-delegated", std::slice::from_ref(&call))
+            .await;
+        let d = out.get("c-1").expect("a decision for the gated call");
+        assert!(!d.allow);
+        let why = d.reason.clone().unwrap_or_default();
+        assert!(why.contains("bash"), "must name the tool: {why}");
+        assert!(why.contains("tool-allow"), "must name the way out: {why}");
+        assert_eq!(calls.load(Ordering::Relaxed), 0, "nothing may execute");
+
+        // Negative control: an unmarked turn takes the old no-sink path, whose
+        // refusal names neither the tool nor a remedy. If this ever matches the
+        // assertions above, the test has stopped distinguishing the two paths.
+        let (out, _) = runner
+            .gate_response("t-unmarked", std::slice::from_ref(&call))
+            .await;
+        let why = out
+            .get("c-1")
+            .and_then(|d| d.reason.clone())
+            .unwrap_or_default();
+        assert!(!why.contains("tool-allow"), "different path: {why}");
     }
 }
 
