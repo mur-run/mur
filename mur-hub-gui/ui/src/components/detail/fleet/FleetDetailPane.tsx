@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useT } from "../../../i18n";
 import type { AgentEntry } from "../../../types";
-import type { FleetSummary, FleetDetail as Detail, JobRow, LabelView } from "../../fleet/types";
+import { JOBS_POLL_MS, type FleetSummary, type FleetDetail as Detail, type JobRow, type LabelView } from "../../fleet/types";
 import { Ico } from "../../agents/GridCard";
 import { DetailPage } from "../../shell/DetailPage";
 import { fleetStatusOf } from "../../shell/Status";
@@ -84,6 +84,13 @@ export function FleetDetailPane({
       if (focused) void load();
     });
     return () => { void un.then((f) => f()); };
+  }, [load]);
+
+  // Same reason as the list's poll: a job queued from the CLI or by an agent
+  // has no event, and the Jobs tab said "No jobs yet" until remount.
+  useEffect(() => {
+    const id = setInterval(() => void load(), JOBS_POLL_MS);
+    return () => clearInterval(id);
   }, [load]);
 
   function refresh() {
