@@ -586,6 +586,8 @@ pub async fn run_guarded(
         budget_usd: budget,
         spend_usd: 0.0,
         steps: vec![],
+        artifact_path: None,
+        error: None,
     }));
     lock_progress(&progress).save(mur_home, name);
 

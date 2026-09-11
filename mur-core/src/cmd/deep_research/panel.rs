@@ -3,9 +3,9 @@
 use std::path::Path;
 
 use super::status::{DEFAULT_FLEET_NAME, DeepResearchStatus, collect_status};
-use crate::cmd::fleet::progress::{Phase, RunProgress, STALE_AFTER_SECS, StepState};
+use crate::cmd::fleet::progress::{Phase, ProgressView, STALE_AFTER_SECS, StepState};
 
-pub fn render_panel(s: &DeepResearchStatus, progress: Option<(RunProgress, u64)>) -> String {
+pub fn render_panel(s: &DeepResearchStatus, progress: Option<&ProgressView>) -> String {
     if s.workers.is_empty() {
         return "Deep research is not set up yet.\n  Run `mur deep-research setup` to configure workers, model, budget and egress.\n".to_string();
     }
@@ -34,16 +34,18 @@ pub fn render_panel(s: &DeepResearchStatus, progress: Option<(RunProgress, u64)>
             },
         ));
     }
-    if let Some((p, age)) = progress {
-        out.push_str(&render_progress(&p, age));
+    if let Some(view) = progress {
+        out.push_str(&render_progress(view));
     }
     out.push_str("\nRun research with: mur deep-research \"<your question>\"\n");
     out
 }
 
-/// Render the in-flight (or last) run block from the progress file. Pure over
-/// `(progress, file-mtime-age-secs)`; `age` only drives the staleness warning.
-pub fn render_progress(p: &RunProgress, mtime_age_secs: u64) -> String {
+/// Render the in-flight (or last) run block from the progress view. Pure
+/// over the view — `age_secs` only drives the staleness warning.
+pub fn render_progress(view: &ProgressView) -> String {
+    let p = &view.progress;
+    let mtime_age_secs = view.age_secs;
     // Finished run → one recap line.
     if let Some(ended) = &p.finished_at {
         return format!(
@@ -134,11 +136,13 @@ fn fmt_elapsed(secs: i64) -> String {
 }
 
 pub fn cmd_panel(mur_home: &Path) -> anyhow::Result<()> {
-    let progress = crate::cmd::fleet::progress::load(mur_home, DEFAULT_FLEET_NAME)
-        .map(|(p, mtime)| (p, mtime.elapsed().map(|d| d.as_secs()).unwrap_or(0)));
+    let progress = crate::cmd::fleet::progress::load_view(mur_home, DEFAULT_FLEET_NAME);
     print!(
         "{}",
-        render_panel(&collect_status(mur_home, DEFAULT_FLEET_NAME), progress)
+        render_panel(
+            &collect_status(mur_home, DEFAULT_FLEET_NAME),
+            progress.as_ref()
+        )
     );
     Ok(())
 }
@@ -147,7 +151,7 @@ pub fn cmd_panel(mur_home: &Path) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use crate::cmd::deep_research::status::{DeepResearchStatus, WorkerStatus};
-    use crate::cmd::fleet::progress::StepProgress;
+    use crate::cmd::fleet::progress::{RunProgress, StepProgress, view_from};
 
     #[test]
     fn panel_unconfigured_points_at_setup() {
@@ -223,13 +227,15 @@ mod tests {
                     ended_at: None,
                 },
             ],
+            artifact_path: None,
+            error: None,
         }
     }
 
     #[test]
     fn panel_shows_in_flight_run_block() {
-        let p = progress_fixture(None);
-        let out = render_progress(&p, 30);
+        let view = view_from(progress_fixture(None), 30);
+        let out = render_progress(&view);
         assert!(out.contains("Run in progress"));
         assert!(out.contains("iteration 2"));
         assert!(out.contains("$0.31"));
@@ -240,15 +246,18 @@ mod tests {
 
     #[test]
     fn panel_marks_stale_run() {
-        let p = progress_fixture(None);
-        let out = render_progress(&p, STALE_AFTER_SECS + 1);
+        let view = view_from(progress_fixture(None), STALE_AFTER_SECS + 1);
+        let out = render_progress(&view);
         assert!(out.contains("run may have crashed"));
     }
 
     #[test]
     fn panel_shows_last_run_line_when_finished() {
-        let p = progress_fixture(Some(("converged", "2026-07-14T01:00:00Z")));
-        let out = render_progress(&p, 10_000);
+        let view = view_from(
+            progress_fixture(Some(("converged", "2026-07-14T01:00:00Z"))),
+            10_000,
+        );
+        let out = render_progress(&view);
         assert!(out.contains("last run: converged"));
         assert!(out.contains("2 iterations"));
         assert!(out.contains("2026-07-14T01:00:00Z"));

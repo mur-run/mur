@@ -71,6 +71,15 @@ pub struct RunProgress {
     pub budget_usd: Option<f64>,
     pub spend_usd: f64,
     pub steps: Vec<StepProgress>,
+    /// Path to the saved report, filled in after `save_report` succeeds.
+    /// `None` while a terminal, done-set outcome is still writing its
+    /// report — see [`ProgressPhase::ReportSaving`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_path: Option<PathBuf>,
+    /// Set by the `cmd_ask` wrapper when preflight fails before the loop
+    /// ever runs (outcome `"failed"`); loop-internal failures use `stuck`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 pub struct Totals {
@@ -147,6 +156,99 @@ pub fn load(mur_home: &Path, fleet: &str) -> Option<(RunProgress, std::time::Sys
     let p: RunProgress = serde_json::from_slice(&body).ok()?;
     let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
     Some((p, mtime))
+}
+
+/// A progress record plus the file-mtime age and a computed liveness flag.
+/// The single place every reader (panel, `mur_job_status` fallback, murmur
+/// ticker) gets `age_secs`/`live` from, so they never disagree.
+#[derive(Debug, Clone)]
+pub struct ProgressView {
+    pub progress: RunProgress,
+    pub age_secs: u64,
+    /// `true` when the run has not finished and its file was updated
+    /// recently enough not to be considered stale/crashed.
+    ///
+    /// Not yet read outside tests — the `mur_job_status` fallback (Task 4)
+    /// and the murmur `/deep-research ask` ticker (Task 5) are its
+    /// production consumers.
+    #[allow(dead_code)]
+    pub live: bool,
+}
+
+/// Build a [`ProgressView`] from a loaded record and its file-mtime age.
+pub fn view_from(progress: RunProgress, age_secs: u64) -> ProgressView {
+    let live = progress.finished_at.is_none() && age_secs <= STALE_AFTER_SECS;
+    ProgressView {
+        progress,
+        age_secs,
+        live,
+    }
+}
+
+/// [`load`] plus [`view_from`] in one call — the common path for readers
+/// that only need the view, not the raw `SystemTime`.
+pub fn load_view(mur_home: &Path, fleet: &str) -> Option<ProgressView> {
+    let (p, mtime) = load(mur_home, fleet)?;
+    let age_secs = mtime.elapsed().map(|d| d.as_secs()).unwrap_or(0);
+    Some(view_from(p, age_secs))
+}
+
+/// Coarse render/poll state derived from an `outcome` string. Unknown
+/// strings (including a missing outcome that gets treated as failed by a
+/// caller) map to `"failed"` — see [`state_for_outcome`].
+///
+/// Not yet constructed outside tests — [`progress_phase`] is wired into
+/// the `mur_job_status` fallback in Task 4.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgressPhase {
+    Running,
+    ReportSaving,
+    Done,
+    Stopped,
+    Blocked,
+    Failed,
+}
+
+/// Single source of truth for outcome→state, shared by the panel, the
+/// `mur_job_status` fallback (Task 4), and the murmur ticker (Task 5).
+/// Mirrors `loop_run::outcome_label`'s nine terms plus the wrapper-only
+/// `"failed"` term; anything else is treated as failed.
+///
+/// Not yet called outside tests and [`progress_phase`] — Tasks 4/5 are its
+/// production callers.
+#[allow(dead_code)]
+pub fn state_for_outcome(outcome: &str) -> &'static str {
+    match outcome {
+        "converged" | "max-iterations" | "deadline" | "budget" | "queue-drained" => "done",
+        "stopped" | "commander-killed" => "stopped",
+        "awaiting-approval" => "blocked",
+        "stuck" | "failed" => "failed",
+        _ => "failed",
+    }
+}
+
+/// Full-phase verdict for a record, distinguishing a terminal, done-set
+/// outcome that hasn't had its report path back-filled yet
+/// ([`ProgressPhase::ReportSaving`]) from one that has ([`ProgressPhase::Done`]).
+///
+/// Not yet called outside tests — the `mur_job_status` fallback (Task 4)
+/// is its production caller.
+#[allow(dead_code)]
+pub fn progress_phase(p: &RunProgress) -> ProgressPhase {
+    let Some(outcome) = p.outcome.as_deref() else {
+        return ProgressPhase::Running;
+    };
+    if p.finished_at.is_none() {
+        return ProgressPhase::Running;
+    }
+    match state_for_outcome(outcome) {
+        "done" if p.artifact_path.is_none() => ProgressPhase::ReportSaving,
+        "done" => ProgressPhase::Done,
+        "stopped" => ProgressPhase::Stopped,
+        "blocked" => ProgressPhase::Blocked,
+        _ => ProgressPhase::Failed,
+    }
 }
 
 pub fn iteration_summary_line(p: &RunProgress) -> String {
@@ -234,6 +336,8 @@ mod tests {
                     ended_at: None,
                 },
             ],
+            artifact_path: None,
+            error: None,
         }
     }
 
@@ -262,5 +366,81 @@ mod tests {
         let (loaded, _mtime) = load(tmp.path(), "deep-research").unwrap();
         assert_eq!(loaded.iteration, 2);
         assert_eq!(loaded.steps.len(), 3);
+    }
+
+    #[test]
+    fn old_json_without_new_fields_loads() {
+        let mut value = serde_json::to_value(sample()).unwrap();
+        let obj = value.as_object_mut().unwrap();
+        obj.remove("artifact_path");
+        obj.remove("error");
+        let loaded: RunProgress = serde_json::from_value(value).unwrap();
+        assert_eq!(loaded.artifact_path, None);
+        assert_eq!(loaded.error, None);
+    }
+
+    #[test]
+    fn new_fields_round_trip() {
+        let mut p = sample();
+        p.artifact_path = Some(PathBuf::from("/tmp/report.md"));
+        p.error = Some("boom".into());
+        let json = serde_json::to_string(&p).unwrap();
+        let loaded: RunProgress = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.artifact_path, Some(PathBuf::from("/tmp/report.md")));
+        assert_eq!(loaded.error, Some("boom".into()));
+    }
+
+    #[test]
+    fn none_fields_are_omitted_on_save() {
+        let json = serde_json::to_string(&sample()).unwrap();
+        assert!(!json.contains("artifact_path"));
+        assert!(!json.contains("\"error\""));
+    }
+
+    #[test]
+    fn view_from_computes_age_and_liveness() {
+        let live = view_from(sample(), 30);
+        assert_eq!(live.age_secs, 30);
+        assert!(live.live);
+
+        let stale = view_from(sample(), STALE_AFTER_SECS + 1);
+        assert!(!stale.live);
+
+        let mut finished = sample();
+        finished.finished_at = Some("2026-07-14T01:00:00Z".into());
+        let done = view_from(finished, 5);
+        assert!(!done.live);
+    }
+
+    #[test]
+    fn state_for_outcome_covers_all_nine_plus_failed() {
+        let cases: &[(&str, &str)] = &[
+            ("converged", "done"),
+            ("max-iterations", "done"),
+            ("deadline", "done"),
+            ("budget", "done"),
+            ("queue-drained", "done"),
+            ("stopped", "stopped"),
+            ("commander-killed", "stopped"),
+            ("awaiting-approval", "blocked"),
+            ("stuck", "failed"),
+            ("failed", "failed"),
+        ];
+        for (outcome, want) in cases {
+            assert_eq!(state_for_outcome(outcome), *want, "outcome {outcome}");
+        }
+        assert_eq!(state_for_outcome("something-unknown"), "failed");
+    }
+
+    #[test]
+    fn report_saving_is_detected() {
+        let mut p = sample();
+        p.finished_at = Some("2026-07-14T01:00:00Z".into());
+        p.outcome = Some("converged".into());
+        p.artifact_path = None;
+        assert_eq!(progress_phase(&p), ProgressPhase::ReportSaving);
+
+        p.artifact_path = Some(PathBuf::from("/tmp/report.md"));
+        assert_eq!(progress_phase(&p), ProgressPhase::Done);
     }
 }
