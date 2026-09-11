@@ -148,13 +148,22 @@ export function CompanionInbox({ agentName }: Props) {
 
 // ─── Unread badge hook ───────────────────────────────────────────────────────
 
+/** How often a card's unread badge re-reads its count. A companion message
+ *  arrives with no event to this window (the inbox subscribes per open
+ *  agent only), so a badge read once at mount sat stale until remount. */
+const UNREAD_POLL_MS = 5_000;
+
 export function useUnreadCount(agentName: string): number {
   const [count, setCount] = useState(0);
 
   useEffect(() => {
-    invoke<number>("companion_unread_count", { agent: agentName })
-      .then(setCount)
-      .catch(() => {});
+    const load = () =>
+      invoke<number>("companion_unread_count", { agent: agentName })
+        .then(setCount)
+        .catch(() => {});
+    void load();
+    const id = setInterval(load, UNREAD_POLL_MS);
+    return () => clearInterval(id);
   }, [agentName]);
 
   return count;
