@@ -86,9 +86,18 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
     })?;
     let asset = release::select_asset(&release, asset_name)?;
 
+    // A total-request timeout is a throughput floor, and the release tarball
+    // is 150 MB and growing: 120 s total demanded 1.3 MB/s or the download
+    // died with "operation timed out" (seen twice on 2.78.0 while curl pulled
+    // the same asset fine at 2.6 MB/s). `reqwest::blocking` has no idle-read
+    // timeout, so the ceiling has to cover the whole body: 30 min is ~85 kB/s
+    // on today's asset — slow enough to be generous, bounded enough that a
+    // wedged connection cannot hang the CLI forever. `connect_timeout` keeps
+    // an unreachable host failing fast, which is the common case.
     let client = reqwest::blocking::Client::builder()
         .user_agent(concat!("mur-update/", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(120))
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(1800))
         .build()?;
 
     println!("Downloading {asset_name}…");
