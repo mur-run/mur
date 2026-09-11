@@ -29,6 +29,7 @@ mod recover;
 mod render_card;
 mod secret_cmd;
 mod settlement;
+mod shell_complete;
 mod step;
 mod stream;
 mod suggest;
@@ -210,7 +211,7 @@ fn help_text() -> String {
         "  agent     /mcp · /skill · /secret <KEY> [--delete] (hidden input, never enters the chat) · /login [anthropic|chatgpt] (OAuth health; not `mur auth login`)",
         "  memory    /remember <text> · /forget <name|last>",
         "  more      /panel [tab] (Hub companion window) · /help · /quit (or /exit)",
-        "  !cmd      run a local shell command (output shared with the agent)",
+        "  !cmd      run a local shell command; its output is sent to the agent as your message · Tab completes commands and paths",
         "keys        Enter send · Shift+Enter newline · Ctrl+V image · Ctrl+O transcript · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll",
         "menus       ↑↓ move · Tab accept · Esc close",
     ]
@@ -1553,14 +1554,44 @@ fn clipboard_png() -> Option<String> {
 }
 
 /// Recompute the completion menu from the current input. Called after every
-/// edit and when Tab is pressed with the menu closed.
+/// edit and when Tab is pressed with the menu closed. `/` lines get the
+/// command menu, `!` lines the shell menu, anything else none.
 fn refresh_completion(app: &mut App) {
-    app.completion = complete::compute(
-        &app.input_text(),
-        &app.skills,
-        &app.menu_ctx,
-        &app.current_values(),
+    let input = app.input_text();
+    app.completion = if input.trim_start().starts_with('!') {
+        shell_completion(app, input.trim_start())
+    } else {
+        complete::compute(&input, &app.skills, &app.menu_ctx, &app.current_values())
+    };
+}
+
+/// The shell menu for a `!` line: commands for the first word, paths after.
+/// Never marks a `current` row — a path has no value in force.
+fn shell_completion(app: &mut App, line: &str) -> Option<complete::CompletionState> {
+    let cwd = app
+        .cwd
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let home = dirs::home_dir();
+    let bins = app.path_bins().to_vec();
+    let items = shell_complete::candidates(
+        line,
+        &shell_complete::ShellCompleteCtx {
+            cwd: &cwd,
+            path_bins: &bins,
+            home: home.as_deref(),
+        },
     );
+    if items.is_empty() {
+        return None;
+    }
+    Some(complete::CompletionState {
+        items,
+        selected: 0,
+        spaced: false,
+        current: None,
+    })
 }
 
 /// Move the highlighted row by `delta`, wrapping.
@@ -1588,16 +1619,11 @@ fn completion_accept(app: &mut App) {
     let insert = cand.insert.clone();
     let descend = cand.has_children;
     app.set_input(&insert);
-    app.completion = if descend {
-        complete::compute(
-            &app.input_text(),
-            &app.skills,
-            &app.menu_ctx,
-            &app.current_values(),
-        )
+    if descend {
+        refresh_completion(app);
     } else {
-        None
-    };
+        app.completion = None;
+    }
 }
 
 /// Cancel the in-flight turn (if any) on a separate connection and mark the
@@ -1838,30 +1864,8 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
             return;
         }
         if let Some(task_id) = app.current_task_id.clone() {
-            let (h, a) = (app.home.clone(), app.agent.clone());
-            let (msg, t) = (trimmed.clone(), tx.clone());
-            app.push_system(format!("↗ steering: {trimmed}"));
             app.clear_input();
-            tokio::spawn(async move {
-                if let Err(e) = stream::steer_turn(h, a, task_id.clone(), msg.clone()).await {
-                    let err = format!("{e:#}");
-                    let out = match recover::classify_steer_failure(&err) {
-                        // The runtime restarted (tasks live in memory only):
-                        // the steered task is gone. Drop the dead binding and
-                        // replay the user's text as a fresh turn on the same
-                        // channel so it is not lost (#713).
-                        recover::SteerFailure::TaskGone => StreamMsg::TurnLost {
-                            task_id,
-                            note: "agent restarted — continuing in this conversation".to_string(),
-                            resend: Some(msg),
-                        },
-                        recover::SteerFailure::Other => {
-                            StreamMsg::Note(format!("steer failed: {err}"))
-                        }
-                    };
-                    let _ = t.send(out).await;
-                }
-            });
+            steer_now(app, task_id, trimmed.clone(), &trimmed, tx);
         } else {
             app.push_system("still generating — press Ctrl+C to cancel first");
         }
@@ -1895,17 +1899,10 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
 /// must not be dropped silently (#714).
 fn start_turn(app: &mut App, trimmed: String, tx: &mpsc::Sender<StreamMsg>) {
     let task_id = app.begin_user_turn(&trimmed);
-    // Prefix any `!command` output the agent hasn't seen yet, so it has the
-    // same context the user is looking at. The transcript shows only the
-    // user's text; the shell blocks were already rendered when they ran.
     // The working directory is NOT prose here — it rides as `context.cwd`
     // in `build_params`, every turn.
-    let outgoing = match app.take_pending_shell() {
-        Some(ctx) => format!("{ctx}\n\n{trimmed}"),
-        None => trimmed,
-    };
     let params = build_params(
-        &outgoing,
+        &trimmed,
         &task_id,
         app.context_task_id.as_deref(),
         app.pending_image
@@ -1922,6 +1919,100 @@ fn start_turn(app: &mut App, trimmed: String, tx: &mpsc::Sender<StreamMsg>) {
         task_id,
         tx.clone(),
     );
+}
+
+/// What the agent receives for a `!cmd` run. Singular, framed, nothing else:
+/// the agent may answer with one line, and the block does not ask for more.
+fn shell_block(cmd: &str, output: &str) -> String {
+    if output.is_empty() {
+        format!("[shell command the user ran locally]\n$ {cmd}\n[end of shell output]")
+    } else {
+        format!("[shell command the user ran locally]\n$ {cmd}\n{output}\n[end of shell output]")
+    }
+}
+
+/// Where a finished `!cmd` block goes.
+#[derive(Debug)]
+enum ShellRoute {
+    /// Idle: start a turn with the block as the user's message.
+    Start,
+    /// A turn is live: steer it with the block.
+    Steer(String),
+    /// Nowhere; the note says why. The Shell card still renders.
+    Skip(&'static str),
+}
+
+/// Pure so the three routes are testable without pricing or a live agent.
+/// The budget gates a NEW turn only, exactly as `submit` does for typed text:
+/// a steer rides the turn already being paid for.
+fn route_shell_output(streaming: bool, task_id: Option<&str>, over_budget: bool) -> ShellRoute {
+    if streaming {
+        return match task_id {
+            Some(t) => ShellRoute::Steer(t.to_string()),
+            None => {
+                ShellRoute::Skip("shell output not sent — a turn is generating without a task id")
+            }
+        };
+    }
+    if over_budget {
+        return ShellRoute::Skip("↯ shell output not sent — session budget reached");
+    }
+    ShellRoute::Start
+}
+
+/// Start a turn whose transcript entry is the Shell card already pushed by
+/// `push_shell`: no User bubble, no second channel event. A staged image is
+/// left staged — it belongs to the user's next typed message.
+fn start_shell_turn(app: &mut App, block: String, tx: &mpsc::Sender<StreamMsg>) {
+    let task_id = app.begin_turn();
+    let params = build_params(
+        &block,
+        &task_id,
+        app.context_task_id.as_deref(),
+        None,
+        app.cwd.as_deref(),
+    );
+    app.inflight_params = Some(params.clone());
+    spawn_stream(
+        app.home.clone(),
+        app.agent.clone(),
+        params,
+        task_id,
+        tx.clone(),
+    );
+}
+
+/// Inject `msg` into the live turn `task_id`. `label` is what the transcript
+/// shows after "↗ steering:" — the typed text for a message, a short tag for
+/// a shell block that would otherwise fill the screen twice.
+fn steer_now(
+    app: &mut App,
+    task_id: String,
+    msg: String,
+    label: &str,
+    tx: &mpsc::Sender<StreamMsg>,
+) {
+    let (h, a) = (app.home.clone(), app.agent.clone());
+    let t = tx.clone();
+    app.push_system(format!("↗ steering: {label}"));
+    tokio::spawn(async move {
+        if let Err(e) = stream::steer_turn(h, a, task_id.clone(), msg.clone()).await {
+            let err = format!("{e:#}");
+            let out = match recover::classify_steer_failure(&err) {
+                // The runtime restarted (tasks live in memory only):
+                // the steered task is gone. Drop the dead binding and
+                // replay the text as a fresh turn on the same channel so
+                // it is not lost (#713).
+                recover::SteerFailure::TaskGone => StreamMsg::TurnLost {
+                    task_id,
+                    note: "agent restarted — continuing in this conversation".to_string(),
+                    resend: Some(msg),
+                },
+                recover::SteerFailure::Other => StreamMsg::Note(format!("steer failed: {err}")),
+            };
+            let _ = t.send(out).await;
+        }
+    });
 }
 
 async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>) {
@@ -2490,7 +2581,22 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
                 start_turn(app, text, tx);
             }
         }
-        StreamMsg::ShellDone { cmd, output } => app.push_shell(&cmd, &output),
+        StreamMsg::ShellDone { cmd, output } => {
+            app.push_shell(&cmd, &output);
+            let block = shell_block(&cmd, &output);
+            match route_shell_output(
+                app.streaming,
+                app.current_task_id.as_deref(),
+                app.over_budget(),
+            ) {
+                ShellRoute::Start => start_shell_turn(app, block, tx),
+                ShellRoute::Steer(task_id) => {
+                    let label = format!("$ {cmd} output");
+                    steer_now(app, task_id, block, &label, tx);
+                }
+                ShellRoute::Skip(why) => app.push_system(why),
+            }
+        }
         StreamMsg::StepStarted {
             step_id,
             name,
@@ -3495,6 +3601,168 @@ mod fallback_visibility_tests {
         assert!(
             a.pricing.in_per_1k.is_none(),
             "stale rates must not survive an unpriceable answer"
+        );
+    }
+}
+
+#[cfg(test)]
+mod shell_turn_tests {
+    use super::*;
+
+    #[test]
+    fn shell_output_routes_by_turn_state() {
+        assert!(matches!(
+            route_shell_output(false, None, false),
+            ShellRoute::Start
+        ));
+        assert!(
+            matches!(route_shell_output(true, Some("t1"), false), ShellRoute::Steer(ref t) if t == "t1")
+        );
+        assert!(matches!(
+            route_shell_output(true, None, false),
+            ShellRoute::Skip(_)
+        ));
+        // Budget gates a NEW turn only; a steer rides the turn already paid for.
+        assert!(matches!(
+            route_shell_output(false, None, true),
+            ShellRoute::Skip(_)
+        ));
+        assert!(matches!(
+            route_shell_output(true, Some("t1"), true),
+            ShellRoute::Steer(_)
+        ));
+    }
+
+    #[test]
+    fn shell_block_frames_command_and_output() {
+        assert_eq!(
+            shell_block("ls", "a\nb"),
+            "[shell command the user ran locally]\n$ ls\na\nb\n[end of shell output]"
+        );
+        assert_eq!(
+            shell_block("true", ""),
+            "[shell command the user ran locally]\n$ true\n[end of shell output]"
+        );
+    }
+
+    /// Idle: the block becomes the outgoing user message, the transcript keeps
+    /// the one Shell card and gains no User bubble.
+    #[tokio::test]
+    async fn shell_done_while_idle_starts_a_turn_without_a_user_bubble() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut app = App::test_fixture();
+        handle_stream(
+            &mut app,
+            StreamMsg::ShellDone {
+                cmd: "ls".into(),
+                output: "a\nb".into(),
+            },
+            &tx,
+        );
+        assert_eq!(
+            app.messages
+                .iter()
+                .filter(|m| m.role == Role::Shell)
+                .count(),
+            1
+        );
+        assert_eq!(
+            app.messages.iter().filter(|m| m.role == Role::User).count(),
+            0
+        );
+        assert!(app.streaming, "a turn started");
+        let params = app.inflight_params.clone().expect("params kept for replay");
+        let text = params["message"]["parts"][0]["text"].as_str().unwrap();
+        assert!(text.contains("$ ls\na\nb"), "{text}");
+        assert!(
+            text.starts_with("[shell command the user ran locally]"),
+            "{text}"
+        );
+    }
+
+    /// Streaming: the block steers the live turn; no second turn starts.
+    #[tokio::test]
+    async fn shell_done_while_streaming_steers_the_live_turn() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut app = App::test_fixture();
+        let before = app.begin_user_turn("working");
+        handle_stream(
+            &mut app,
+            StreamMsg::ShellDone {
+                cmd: "ls".into(),
+                output: "a".into(),
+            },
+            &tx,
+        );
+        assert_eq!(
+            app.current_task_id.as_deref(),
+            Some(before.as_str()),
+            "same turn"
+        );
+        assert!(
+            app.messages
+                .iter()
+                .any(|m| m.text.contains("↗ steering: $ ls output")),
+            "{:?}",
+            app.messages
+                .iter()
+                .map(|m| m.text.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            app.messages
+                .iter()
+                .filter(|m| m.role == Role::Shell)
+                .count(),
+            1
+        );
+    }
+
+    /// `!` lines open the shell menu through the same refresh path as `/`,
+    /// and accepting a directory keeps it open on that directory.
+    #[test]
+    fn bang_lines_get_the_shell_menu_and_directories_descend() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::create_dir(t.path().join("docs")).unwrap();
+        std::fs::write(t.path().join("docs/a.md"), "").unwrap();
+        let mut app = App::test_fixture();
+        app.cwd = Some(t.path().to_path_buf());
+        app.path_bins = Some(vec!["cargo".into(), "cat".into()]);
+
+        app.set_input("!ca");
+        refresh_completion(&mut app);
+        let items: Vec<String> = app
+            .completion
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .map(|c| c.display.clone())
+            .collect();
+        assert_eq!(items, ["cargo", "cat"]);
+        assert_eq!(app.completion.as_ref().unwrap().current, None);
+
+        app.set_input("!ls ");
+        refresh_completion(&mut app);
+        assert_eq!(app.completion.as_ref().unwrap().items[0].display, "docs/");
+        completion_accept(&mut app);
+        assert_eq!(app.input_text(), "!ls docs/");
+        let inside = app
+            .completion
+            .as_ref()
+            .expect("menu stays open on a directory");
+        assert_eq!(inside.items[0].display, "a.md");
+
+        app.set_input("/skin ");
+        refresh_completion(&mut app);
+        assert!(
+            app.completion
+                .as_ref()
+                .unwrap()
+                .items
+                .iter()
+                .any(|c| c.display == "mur"),
+            "slash menu untouched"
         );
     }
 }
