@@ -47,7 +47,7 @@ character) and updates `/help`.
 
 ### Steps
 
-- [ ] **1.1 Write the failing routing test** — append to the `#[cfg(test)] mod hitl_key_tests` block in `mod.rs` (the module that already has `image_does_not_ride_a_steer_and_stays_staged`), a new module right after it:
+- [x] **1.1 Write the failing routing test** — append to the `#[cfg(test)] mod hitl_key_tests` block in `mod.rs` (the module that already has `image_does_not_ride_a_steer_and_stays_staged`), a new module right after it:
 
 ```rust
 #[cfg(test)]
@@ -106,9 +106,9 @@ mod shell_turn_tests {
 }
 ```
 
-- [ ] **1.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(shell_turn_tests)'` (with the env). Expected: compile error `cannot find function route_shell_output` (and `shell_block`, `ShellRoute`).
+- [x] **1.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(shell_turn_tests)'` (with the env). Expected: compile error `cannot find function route_shell_output` (and `shell_block`, `ShellRoute`).
 
-- [ ] **1.3 Split `begin_turn` out of `begin_user_turn`** in `app.rs` — replace the whole `begin_user_turn` body with:
+- [x] **1.3 Split `begin_turn` out of `begin_user_turn`** in `app.rs` — replace the whole `begin_user_turn` body with:
 
 ```rust
     pub fn begin_user_turn(&mut self, text: &str) -> String {
@@ -143,7 +143,7 @@ mod shell_turn_tests {
     }
 ```
 
-- [ ] **1.4 Delete the stash** in `app.rs`: remove the field `pub pending_shell: Vec<String>,` (with its doc comment), its initialiser `pending_shell: Vec::new(),`, the line `self.pending_shell.push(text);` inside `push_shell`, the whole `take_pending_shell` fn (and its doc comment), and the test `shell_blocks_queue_and_drain_into_prefix`. `push_shell` becomes:
+- [x] **1.4 Delete the stash** in `app.rs`: remove the field `pub pending_shell: Vec<String>,` (with its doc comment), its initialiser `pending_shell: Vec::new(),`, the line `self.pending_shell.push(text);` inside `push_shell`, the whole `take_pending_shell` fn (and its doc comment), and the test `shell_blocks_queue_and_drain_into_prefix`. `push_shell` becomes:
 
 ```rust
     /// Record a completed `!command` run: show it and persist it. The block is
@@ -160,7 +160,7 @@ mod shell_turn_tests {
     }
 ```
 
-- [ ] **1.5 `start_turn` no longer prefixes** — in `mod.rs` replace the body of `fn start_turn` with:
+- [x] **1.5 `start_turn` no longer prefixes** — in `mod.rs` replace the body of `fn start_turn` with:
 
 ```rust
 fn start_turn(app: &mut App, trimmed: String, tx: &mpsc::Sender<StreamMsg>) {
@@ -188,7 +188,7 @@ fn start_turn(app: &mut App, trimmed: String, tx: &mpsc::Sender<StreamMsg>) {
 }
 ```
 
-- [ ] **1.6 Add the shell-turn helpers** directly below `start_turn` in `mod.rs`:
+- [x] **1.6 Add the shell-turn helpers** directly below `start_turn` in `mod.rs`:
 
 ```rust
 /// What the agent receives for a `!cmd` run. Singular, framed, nothing else:
@@ -266,7 +266,7 @@ fn steer_now(app: &mut App, task_id: String, msg: String, label: &str, tx: &mpsc
 }
 ```
 
-- [ ] **1.7 Make `submit` use `steer_now`** — in `submit`'s `if app.streaming {` branch, replace everything from `if let Some(task_id) = app.current_task_id.clone() {` through the matching `} else { app.push_system("still generating — press Ctrl+C to cancel first"); }` with:
+- [x] **1.7 Make `submit` use `steer_now`** — in `submit`'s `if app.streaming {` branch, replace everything from `if let Some(task_id) = app.current_task_id.clone() {` through the matching `} else { app.push_system("still generating — press Ctrl+C to cancel first"); }` with:
 
 ```rust
         if let Some(task_id) = app.current_task_id.clone() {
@@ -279,7 +279,7 @@ fn steer_now(app: &mut App, task_id: String, msg: String, label: &str, tx: &mpsc
 
   (The `↗ steering:` line now comes from `steer_now`; the old inline `tokio::spawn` block is gone.)
 
-- [ ] **1.8 Route `ShellDone`** — in `handle_stream`, replace `StreamMsg::ShellDone { cmd, output } => app.push_shell(&cmd, &output),` with:
+- [x] **1.8 Route `ShellDone`** — in `handle_stream`, replace `StreamMsg::ShellDone { cmd, output } => app.push_shell(&cmd, &output),` with:
 
 ```rust
         StreamMsg::ShellDone { cmd, output } => {
@@ -298,9 +298,9 @@ fn steer_now(app: &mut App, task_id: String, msg: String, label: &str, tx: &mpsc
 
   `handle_stream`'s early return drops events whose task id is not current; `ShellDone` has no task id (`msg.task_id()` is `None` for it), so it always reaches this arm — verify by reading `StreamMsg::task_id` in `stream.rs`; if `ShellDone` is not in its `None` list, add it there.
 
-- [ ] **1.9 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(shell_turn_tests) | test(/cmd::agent::cli::/)'`. Expected: all pass, including the whole `cli` module (the deleted stash test is gone, nothing else referenced `take_pending_shell`). Then fmt + clippy per Global Constraints.
+- [x] **1.9 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(shell_turn_tests) | test(/cmd::agent::cli::/)'`. Expected: all pass, including the whole `cli` module (the deleted stash test is gone, nothing else referenced `take_pending_shell`). Then fmt + clippy per Global Constraints.
 
-- [ ] **1.10 Commit** — `git add mur-core/src/cmd/agent/cli && git commit` with message:
+- [x] **1.10 Commit** — `git add mur-core/src/cmd/agent/cli && git commit` with message:
 
 ```
 feat(murmur): a !cmd's output is the user's next turn
@@ -323,7 +323,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **2.1 Create the module with its tests first** — new file `mur-core/src/cmd/agent/cli/shell_complete.rs`:
+- [x] **2.1 Create the module with its tests first** — new file `mur-core/src/cmd/agent/cli/shell_complete.rs`:
 
 ```rust
 //! Completion for `!` lines in the composer: command names for the first
@@ -610,11 +610,11 @@ mod tests {
 }
 ```
 
-- [ ] **2.2 Register the module** — in `mur-core/src/cmd/agent/cli/mod.rs`, next to the existing `mod complete;` line add `mod shell_complete;`.
+- [x] **2.2 Register the module** — in `mur-core/src/cmd/agent/cli/mod.rs`, next to the existing `mod complete;` line add `mod shell_complete;`.
 
-- [ ] **2.3 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(shell_complete)'`. Expected: 8 tests pass. (They are written together with the code; the red step for this task is the `mod shell_complete;` line failing to compile before the file exists — run 2.3 once with the file empty if you want to see it.) If `scan_path_bins_reads_the_env_path` is flaky under nextest's process-per-test model it cannot be — each test is its own process — but if it is ever run under plain `cargo test`, mark it `#[serial]` only if the crate already depends on `serial_test`; otherwise leave it.
+- [x] **2.3 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(shell_complete)'`. Expected: 8 tests pass. (They are written together with the code; the red step for this task is the `mod shell_complete;` line failing to compile before the file exists — run 2.3 once with the file empty if you want to see it.) If `scan_path_bins_reads_the_env_path` is flaky under nextest's process-per-test model it cannot be — each test is its own process — but if it is ever run under plain `cargo test`, mark it `#[serial]` only if the crate already depends on `serial_test`; otherwise leave it.
 
-- [ ] **2.4 fmt + clippy**, then **commit**:
+- [x] **2.4 fmt + clippy**, then **commit**:
 
 ```
 feat(murmur): shell_complete — candidates for ! lines
@@ -636,7 +636,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **3.1 Write the failing wiring test** — append to `mod shell_turn_tests` in `mod.rs`:
+- [x] **3.1 Write the failing wiring test** — append to `mod shell_turn_tests` in `mod.rs`:
 
 ```rust
     /// `!` lines open the shell menu through the same refresh path as `/`,
@@ -670,9 +670,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
     }
 ```
 
-- [ ] **3.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(bang_lines_get_the_shell_menu)'`. Expected: compile error `no field path_bins on App`.
+- [x] **3.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(bang_lines_get_the_shell_menu)'`. Expected: compile error `no field path_bins on App`.
 
-- [ ] **3.3 Cache PATH on `App`** — in `app.rs`, next to `pub menu_ctx: super::complete::MenuContext,` add:
+- [x] **3.3 Cache PATH on `App`** — in `app.rs`, next to `pub menu_ctx: super::complete::MenuContext,` add:
 
 ```rust
     /// Executable names on `$PATH` for `!` completion. `None` until the first
@@ -691,7 +691,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
     }
 ```
 
-- [ ] **3.4 Dispatch in `refresh_completion`** — in `mod.rs` replace the fn with:
+- [x] **3.4 Dispatch in `refresh_completion`** — in `mod.rs` replace the fn with:
 
 ```rust
 /// Recompute the completion menu from the current input. Called after every
@@ -738,7 +738,7 @@ fn shell_completion(app: &mut App, line: &str) -> Option<complete::CompletionSta
 
   If `PathBuf` is not already imported at the top of `mod.rs`, add `use std::path::PathBuf;`.
 
-- [ ] **3.5 `completion_accept` reuses the dispatch** — replace its tail (from `app.set_input(&insert);` to the end of the fn) with:
+- [x] **3.5 `completion_accept` reuses the dispatch** — replace its tail (from `app.set_input(&insert);` to the end of the fn) with:
 
 ```rust
     app.set_input(&insert);
@@ -750,15 +750,15 @@ fn shell_completion(app: &mut App, line: &str) -> Option<complete::CompletionSta
 }
 ```
 
-- [ ] **3.6 `/help` wording** — in `help_text()` change the `!cmd` row to:
+- [x] **3.6 `/help` wording** — in `help_text()` change the `!cmd` row to:
 
 ```rust
         "  !cmd      run a local shell command; its output is sent to the agent as your message · Tab completes commands and paths",
 ```
 
-- [ ] **3.7 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(bang_lines_get_the_shell_menu) | test(help_matches) | test(every_command_is_parsed) | test(/complete::/)'`. Expected: all pass. Then fmt + clippy.
+- [x] **3.7 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(bang_lines_get_the_shell_menu) | test(help_matches) | test(every_command_is_parsed) | test(/complete::/)'`. Expected: all pass. Then fmt + clippy.
 
-- [ ] **3.8 Commit**:
+- [x] **3.8 Commit**:
 
 ```
 feat(murmur): live shell completion on ! lines
