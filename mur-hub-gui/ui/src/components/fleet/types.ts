@@ -1,3 +1,7 @@
+/** How often the fleet list and detail re-read job counts: other processes
+ *  (the CLI, an agent's `fleet_run`) queue jobs with no event to this window. */
+export const JOBS_POLL_MS = 5_000;
+
 export interface FleetSummary {
   name: string;
   display_name: string;

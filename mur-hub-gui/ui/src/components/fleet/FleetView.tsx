@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useT } from "../../i18n";
 import type { AgentEntry } from "../../types";
-import type { FleetSummary, LabelView } from "./types";
+import { JOBS_POLL_MS, type FleetSummary, type LabelView } from "./types";
 import { UNGROUPED } from "./fleetLabels";
 import { FleetCreateModal } from "./FleetCreateModal";
 import { Ico } from "../agents/GridCard";
@@ -152,6 +152,16 @@ export function FleetView({ onSelect, requestedName, onRequestHandled }: {
       },
     );
     return () => { void unlisten.then((fn) => fn()); };
+  }, []);
+
+  // Jobs are queued by other processes too — the CLI, an agent's `fleet_run`
+  // — and nothing tells this window when a file lands in a fleet's jobs dir,
+  // so the count sat stale until the pane was remounted.
+  // ponytail: poll; a notify watcher on ~/.mur/fleets emitting one event is
+  // the upgrade if the interval ever shows in a profile.
+  useEffect(() => {
+    const id = setInterval(() => void loadList(), JOBS_POLL_MS);
+    return () => clearInterval(id);
   }, []);
 
   function handleRefresh() {
