@@ -245,7 +245,7 @@ mod band_growth_tests {
 #[cfg(test)]
 mod layout_guard_tests {
     use super::super::super::super::app::{App, ChatMsg, Role};
-    use super::super::super::super::theme::{ANSI, LIGHT, MUR};
+    use super::super::super::super::theme::{ANSI, CLAUDE, LIGHT, MUR};
     use super::super::super::render;
     use super::super::render_transcript;
     use ratatui::backend::TestBackend;
@@ -256,7 +256,12 @@ mod layout_guard_tests {
     /// one more line on a screen full of them. No skin draws one.
     #[test]
     fn no_rule_between_turns_under_any_skin() {
-        for (name, theme) in [("ansi", &ANSI), ("light", &LIGHT), ("mur", &MUR)] {
+        for (name, theme) in [
+            ("ansi", &ANSI),
+            ("light", &LIGHT),
+            ("mur", &MUR),
+            ("claude", &CLAUDE),
+        ] {
             let mut app = App::test_fixture();
             app.theme = theme;
             app.messages.push(ChatMsg::for_test(Role::User, "hi"));
