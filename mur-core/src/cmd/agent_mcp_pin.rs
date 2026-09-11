@@ -622,6 +622,27 @@ fn pin_package_version(entry: &mut McpServerEntry) -> Option<String> {
     }
 }
 
+/// True when re-pinning would write back exactly what the profile already
+/// holds. `mur deep-research` re-pins on every run, sometimes from inside an
+/// agent sandbox that cannot (and must not) write a sibling agent's profile —
+/// so an unchanged pin has to be a no-op on disk, not a rewrite that only
+/// bumps `installed_at` and trips the sandbox.
+fn pin_unchanged(
+    entry: &McpServerEntry,
+    new_hash: &str,
+    new_description_hash: Option<&str>,
+    version_pinned: bool,
+    publisher: &Option<mur_common::agent::McpPublisherInfo>,
+) -> bool {
+    !version_pinned
+        && entry
+            .binary_sha256
+            .as_deref()
+            .is_some_and(|old| old.eq_ignore_ascii_case(new_hash))
+        && new_description_hash.is_none_or(|h| entry.description_hash.as_deref() == Some(h))
+        && entry.publisher == *publisher
+}
+
 pub fn cmd_mcp_pin(
     name: &str,
     server_id: &str,
@@ -710,6 +731,19 @@ pub fn cmd_mcp_pin(
             registry_id: r.or_else(|| entry.publisher.as_ref().and_then(|p| p.registry_id.clone())),
         }),
     };
+
+    if pin_unchanged(
+        entry,
+        &new_hash,
+        new_description_hash.as_deref(),
+        version_pinned.is_some(),
+        &publisher,
+    ) {
+        println!(
+            "MCP `{server_id}` on agent `{name}` already pinned to {new_hash} — nothing to write."
+        );
+        return Ok(());
+    }
 
     if !force {
         println!("Re-approving MCP `{server_id}` on agent `{name}`:");
@@ -976,6 +1010,32 @@ mod tests {
             compute_description_hash(&order_a),
             compute_description_hash(&order_b),
         );
+    }
+
+    #[test]
+    fn unchanged_pin_is_a_noop_and_any_difference_is_not() {
+        let same = "ab".repeat(32);
+        let mut e = entry_for("/bin/sh", Some(&same));
+        e.description_hash = Some("d1".into());
+        let pub_ = e.publisher.clone();
+        assert!(pin_unchanged(&e, &same.to_uppercase(), None, false, &pub_));
+        assert!(pin_unchanged(&e, &same, Some("d1"), false, &pub_));
+        assert!(!pin_unchanged(&e, &"cd".repeat(32), None, false, &pub_));
+        assert!(!pin_unchanged(&e, &same, Some("d2"), false, &pub_));
+        assert!(!pin_unchanged(&e, &same, None, true, &pub_));
+        let other = Some(mur_common::agent::McpPublisherInfo {
+            name: "x".into(),
+            ..Default::default()
+        });
+        assert!(!pin_unchanged(&e, &same, None, false, &other));
+        let unpinned = entry_for("/bin/sh", None);
+        assert!(!pin_unchanged(
+            &unpinned,
+            &same,
+            None,
+            false,
+            &unpinned.publisher
+        ));
     }
 
     #[test]
