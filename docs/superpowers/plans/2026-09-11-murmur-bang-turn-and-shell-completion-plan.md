@@ -47,7 +47,7 @@ character) and updates `/help`.
 
 ### Steps
 
-- [ ] **1.1 Write the failing routing test** — append to the `#[cfg(test)] mod hitl_key_tests` block in `mod.rs` (the module that already has `image_does_not_ride_a_steer_and_stays_staged`), a new module right after it:
+- [x] **1.1 Write the failing routing test** — append to the `#[cfg(test)] mod hitl_key_tests` block in `mod.rs` (the module that already has `image_does_not_ride_a_steer_and_stays_staged`), a new module right after it:
 
 ```rust
 #[cfg(test)]
@@ -106,9 +106,9 @@ mod shell_turn_tests {
 }
 ```
 
-- [ ] **1.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(shell_turn_tests)'` (with the env). Expected: compile error `cannot find function route_shell_output` (and `shell_block`, `ShellRoute`).
+- [x] **1.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(shell_turn_tests)'` (with the env). Expected: compile error `cannot find function route_shell_output` (and `shell_block`, `ShellRoute`).
 
-- [ ] **1.3 Split `begin_turn` out of `begin_user_turn`** in `app.rs` — replace the whole `begin_user_turn` body with:
+- [x] **1.3 Split `begin_turn` out of `begin_user_turn`** in `app.rs` — replace the whole `begin_user_turn` body with:
 
 ```rust
     pub fn begin_user_turn(&mut self, text: &str) -> String {
@@ -143,7 +143,7 @@ mod shell_turn_tests {
     }
 ```
 
-- [ ] **1.4 Delete the stash** in `app.rs`: remove the field `pub pending_shell: Vec<String>,` (with its doc comment), its initialiser `pending_shell: Vec::new(),`, the line `self.pending_shell.push(text);` inside `push_shell`, the whole `take_pending_shell` fn (and its doc comment), and the test `shell_blocks_queue_and_drain_into_prefix`. `push_shell` becomes:
+- [x] **1.4 Delete the stash** in `app.rs`: remove the field `pub pending_shell: Vec<String>,` (with its doc comment), its initialiser `pending_shell: Vec::new(),`, the line `self.pending_shell.push(text);` inside `push_shell`, the whole `take_pending_shell` fn (and its doc comment), and the test `shell_blocks_queue_and_drain_into_prefix`. `push_shell` becomes:
 
 ```rust
     /// Record a completed `!command` run: show it and persist it. The block is
@@ -160,7 +160,7 @@ mod shell_turn_tests {
     }
 ```
 
-- [ ] **1.5 `start_turn` no longer prefixes** — in `mod.rs` replace the body of `fn start_turn` with:
+- [x] **1.5 `start_turn` no longer prefixes** — in `mod.rs` replace the body of `fn start_turn` with:
 
 ```rust
 fn start_turn(app: &mut App, trimmed: String, tx: &mpsc::Sender<StreamMsg>) {
@@ -188,7 +188,7 @@ fn start_turn(app: &mut App, trimmed: String, tx: &mpsc::Sender<StreamMsg>) {
 }
 ```
 
-- [ ] **1.6 Add the shell-turn helpers** directly below `start_turn` in `mod.rs`:
+- [x] **1.6 Add the shell-turn helpers** directly below `start_turn` in `mod.rs`:
 
 ```rust
 /// What the agent receives for a `!cmd` run. Singular, framed, nothing else:
@@ -266,7 +266,7 @@ fn steer_now(app: &mut App, task_id: String, msg: String, label: &str, tx: &mpsc
 }
 ```
 
-- [ ] **1.7 Make `submit` use `steer_now`** — in `submit`'s `if app.streaming {` branch, replace everything from `if let Some(task_id) = app.current_task_id.clone() {` through the matching `} else { app.push_system("still generating — press Ctrl+C to cancel first"); }` with:
+- [x] **1.7 Make `submit` use `steer_now`** — in `submit`'s `if app.streaming {` branch, replace everything from `if let Some(task_id) = app.current_task_id.clone() {` through the matching `} else { app.push_system("still generating — press Ctrl+C to cancel first"); }` with:
 
 ```rust
         if let Some(task_id) = app.current_task_id.clone() {
@@ -279,7 +279,7 @@ fn steer_now(app: &mut App, task_id: String, msg: String, label: &str, tx: &mpsc
 
   (The `↗ steering:` line now comes from `steer_now`; the old inline `tokio::spawn` block is gone.)
 
-- [ ] **1.8 Route `ShellDone`** — in `handle_stream`, replace `StreamMsg::ShellDone { cmd, output } => app.push_shell(&cmd, &output),` with:
+- [x] **1.8 Route `ShellDone`** — in `handle_stream`, replace `StreamMsg::ShellDone { cmd, output } => app.push_shell(&cmd, &output),` with:
 
 ```rust
         StreamMsg::ShellDone { cmd, output } => {
@@ -298,9 +298,9 @@ fn steer_now(app: &mut App, task_id: String, msg: String, label: &str, tx: &mpsc
 
   `handle_stream`'s early return drops events whose task id is not current; `ShellDone` has no task id (`msg.task_id()` is `None` for it), so it always reaches this arm — verify by reading `StreamMsg::task_id` in `stream.rs`; if `ShellDone` is not in its `None` list, add it there.
 
-- [ ] **1.9 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(shell_turn_tests) | test(/cmd::agent::cli::/)'`. Expected: all pass, including the whole `cli` module (the deleted stash test is gone, nothing else referenced `take_pending_shell`). Then fmt + clippy per Global Constraints.
+- [x] **1.9 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(shell_turn_tests) | test(/cmd::agent::cli::/)'`. Expected: all pass, including the whole `cli` module (the deleted stash test is gone, nothing else referenced `take_pending_shell`). Then fmt + clippy per Global Constraints.
 
-- [ ] **1.10 Commit** — `git add mur-core/src/cmd/agent/cli && git commit` with message:
+- [x] **1.10 Commit** — `git add mur-core/src/cmd/agent/cli && git commit` with message:
 
 ```
 feat(murmur): a !cmd's output is the user's next turn

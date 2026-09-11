@@ -438,9 +438,6 @@ pub struct App {
     /// Tools the user marked "always allow" for THIS session via the HITL
     /// modal's `[a]` key. Same lifetime rules as `auto_approve`.
     pub session_tool_allow: HashSet<String>,
-    /// `!command` blocks (command + output) not yet shown to the agent; they
-    /// are prefixed onto the next user message so the agent has the context.
-    pub pending_shell: Vec<String>,
     /// Set once we've warned the user that session writes are failing, so the
     /// warning isn't repeated every turn.
     persist_warned: bool,
@@ -650,7 +647,6 @@ impl App {
             should_quit: false,
             auto_approve: true,
             session_tool_allow: HashSet::new(),
-            pending_shell: Vec::new(),
             persist_warned: false,
             panel: None,
             panel_stream: false,
@@ -962,6 +958,13 @@ impl App {
     pub fn begin_user_turn(&mut self, text: &str) -> String {
         self.messages.push(ChatMsg::new(Role::User, text));
         self.persist_turn("user", text, None, &[]);
+        self.begin_turn()
+    }
+
+    /// Start a turn the transcript already shows — a `!cmd` whose Shell card
+    /// is its entry. Everything `begin_user_turn` does except the User bubble
+    /// and the `"user"` channel event.
+    pub fn begin_turn(&mut self) -> String {
         // A fresh client-side task id per turn (used for cancellation).
         let task_id = uuid::Uuid::now_v7().to_string();
         self.current_task_id = Some(task_id.clone());
@@ -1473,8 +1476,8 @@ impl App {
         );
     }
 
-    /// Record a completed `!command` run: show it, persist it, and queue it
-    /// for the agent's next turn.
+    /// Record a completed `!command` run: show it and persist it. The block is
+    /// sent to the agent by `handle_stream`'s `ShellDone` arm, not stashed.
     pub fn push_shell(&mut self, cmd: &str, output: &str) {
         let text = if output.is_empty() {
             format!("$ {cmd}")
@@ -1483,21 +1486,7 @@ impl App {
         };
         self.messages.push(ChatMsg::new(Role::Shell, text.clone()));
         self.persist_turn("shell", &text, None, &[]);
-        self.pending_shell.push(text);
         self.scroll_back = 0;
-    }
-
-    /// Drain queued `!command` blocks into a context prefix for the next
-    /// message, or `None` if there is nothing pending.
-    pub fn take_pending_shell(&mut self) -> Option<String> {
-        if self.pending_shell.is_empty() {
-            return None;
-        }
-        let blocks = self.pending_shell.join("\n\n");
-        self.pending_shell.clear();
-        Some(format!(
-            "[shell commands the user just ran locally in this chat]\n{blocks}\n[end of shell context]"
-        ))
     }
 
     pub fn load_history(&mut self, turns: Vec<TurnRecord>) {
@@ -1876,21 +1865,6 @@ mod tests {
             Some("  ✔ bash · cargo test"),
             "card must be carried separately so it can be drawn at the pane width"
         );
-    }
-
-    #[test]
-    fn shell_blocks_queue_and_drain_into_prefix() {
-        let mut a = app();
-        a.push_shell("ls", "foo\nbar");
-        a.push_shell("true", "");
-        assert_eq!(
-            a.messages.iter().filter(|m| m.role == Role::Shell).count(),
-            2
-        );
-        let ctx = a.take_pending_shell().expect("pending blocks");
-        assert!(ctx.contains("$ ls\nfoo\nbar"));
-        assert!(ctx.contains("$ true"));
-        assert!(a.take_pending_shell().is_none(), "drained");
     }
 
     #[test]
