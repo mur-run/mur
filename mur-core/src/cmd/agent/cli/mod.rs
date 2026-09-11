@@ -1793,6 +1793,18 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
     // While a turn is generating: steer it if we have a live task id,
     // otherwise fall back to the old reject message.
     if app.streaming {
+        // `turn/steer` carries a string, so an image cannot ride a steer: the
+        // text would go, the image would stay staged, and the agent would
+        // truthfully answer "no image" — or, for an image-only send, the
+        // runtime would reject the empty steer. Hold the whole message
+        // instead. ponytail: queueing it for the next turn needs a hook at
+        // every turn-end site in app.rs; do that if "press Enter again" grates.
+        if app.pending_image.is_some() {
+            app.push_system(
+                "📎 an image can't steer a running turn — wait for it to finish (or Ctrl+C), then press Enter again",
+            );
+            return;
+        }
         if let Some(task_id) = app.current_task_id.clone() {
             let (h, a) = (app.home.clone(), app.agent.clone());
             let (msg, t) = (trimmed.clone(), tx.clone());
@@ -2945,6 +2957,27 @@ mod hitl_key_tests {
         };
         handle_stream(app, StreamMsg::Hitl { req, task_id }, tx);
         assert!(app.hitl.is_some(), "the gate opened");
+    }
+
+    /// An image staged while a turn is generating must not be split from its
+    /// caption: `turn/steer` is text-only, so the steer would go out without
+    /// the image and the composer would be cleared under it.
+    #[tokio::test]
+    async fn image_does_not_ride_a_steer_and_stays_staged() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let mut app = App::test_fixture();
+        app.begin_user_turn("working");
+        app.pending_image = Some(("image/png".into(), "AAAA".into()));
+        app.set_input("do you see it?");
+        submit(&mut app, &tx).await;
+        assert!(app.pending_image.is_some(), "image still staged");
+        assert_eq!(app.input_text(), "do you see it?", "caption kept");
+        assert!(
+            !app.messages.iter().any(|m| m.text.contains("steering")),
+            "no steer was announced"
+        );
+        assert!(app.messages.iter().any(|m| m.text.contains("image")));
+        assert!(rx.try_recv().is_err(), "nothing was dialled");
     }
 
     #[tokio::test]
