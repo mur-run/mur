@@ -40,6 +40,7 @@ pub fn post_upgrade(restart_agents: bool, fresh_runtime: Option<&std::path::Path
 
     let daemon_running = crate::cmd::murmurd::murmurd_running();
     print_checklist(restart_agents, daemon_running);
+    warn_pinned_launchers();
 
     let agents_result = if restart_agents {
         crate::cmd::agent::restart_stale_excluding(&restart_exclusions())
@@ -91,6 +92,38 @@ fn restart_exclusions() -> Vec<String> {
 /// to re-pin MCP servers after an upgrade is gone on purpose: the bundled
 /// server re-pins itself at agent start (`mur-agent-runtime/src/mcp_repin.rs`,
 /// #793) and third-party pins cover binaries an upgrade never touches.
+/// Name the agents whose launcher resolves to a runtime this upgrade did not
+/// touch — a Homebrew keg copy, typically — and say how to repair it.
+///
+/// Reports only. Re-pointing a launcher changes which binary the next start
+/// executes, and on macOS it moves which path a Full Disk Access grant has to
+/// name (#1247), so it waits for `runtime-doctor --fix` rather than happening
+/// inside an upgrade the user asked for something else.
+fn warn_pinned_launchers() {
+    let Ok(home) = crate::cmd::resolve_mur_home() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(home.join("agents")) else {
+        return;
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| crate::cmd::agent::stale::link_drift(n).is_some())
+        .collect();
+    if names.is_empty() {
+        return;
+    }
+    names.sort();
+    println!();
+    println!(
+        "note: {} agent(s) launch a runtime this upgrade did not touch: {}",
+        names.len(),
+        names.join(", ")
+    );
+    println!("      repair with: mur agent runtime-doctor --fix");
+}
+
 fn print_checklist(restart_agents: bool, daemon_running: bool) {
     if restart_agents {
         return;

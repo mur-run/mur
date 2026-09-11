@@ -366,6 +366,11 @@ pub enum AgentAction {
         /// Emit JSON array instead of human text
         #[arg(long)]
         json: bool,
+        /// Re-point launchers that resolve to a runtime no installer refreshes
+        /// (a Homebrew keg copy). Changes which binary the next start runs, so
+        /// it never happens without this flag.
+        #[arg(long)]
+        fix: bool,
     },
     /// Install missing curated program dependencies for this agent (consent-gated)
     #[command(name = "install-deps")]
