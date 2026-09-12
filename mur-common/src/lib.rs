@@ -35,6 +35,7 @@ pub mod jcs;
 pub mod knowledge;
 pub mod labels;
 pub mod ledger;
+pub mod limits;
 pub mod llm;
 pub mod local_llm;
 pub mod lock_file;
