@@ -556,6 +556,26 @@ pub enum FleetAction {
         #[arg(long)]
         done_when: Option<String>,
     },
+    /// Show or edit this fleet's limits: block (alias of `mur limits <name>`)
+    Limits {
+        /// Fleet name
+        name: String,
+        /// Emit JSON instead of the table
+        #[arg(long)]
+        json: bool,
+        /// Wall clock for the unit of work, e.g. 30m / 2h / 1h30m
+        #[arg(long)]
+        deadline: Option<String>,
+        /// Minutes of no progress before stopping (unattended) or warning (attended); `off` disables
+        #[arg(long)]
+        stuck: Option<String>,
+        /// Cost cap in USD — applies only to metered models
+        #[arg(long)]
+        cost_usd: Option<f64>,
+        /// Remove a key so the scope inherits it (repeatable)
+        #[arg(long = "unset")]
+        unset: Vec<String>,
+    },
     /// Queue a job for a fleet (async; drained by `run` or the daemon)
     Send {
         /// Fleet name

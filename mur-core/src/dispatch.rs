@@ -49,6 +49,44 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         Commands::Stats => cmd::misc::cmd_stats()?,
         Commands::Doctor => cmd::misc::cmd_doctor()?,
+        Commands::Limits {
+            name,
+            json,
+            global,
+            deadline,
+            stuck,
+            cost_usd,
+            unset,
+        } => {
+            let patch = cmd::limits_write::Patch {
+                deadline,
+                stuck,
+                cost_usd,
+                unset,
+            };
+            let editing = patch != cmd::limits_write::Patch::default();
+            let home = cmd::agent::resolve_mur_home()?;
+            match (global, name) {
+                (true, _) if editing => {
+                    cmd::limits_write::upsert_global_limits(&home.join("config.yaml"), &patch)?
+                }
+                (true, _) => {
+                    let cfg =
+                        mur_common::config::Config::load_or_default(&home.join("config.yaml"));
+                    print!("{}", cmd::limits_write::render_limits_block(&cfg.limits));
+                }
+                (false, Some(n)) if editing => match cmd::limits::detect_target(&home, &n)? {
+                    cmd::limits::Target::Fleet(f) => {
+                        cmd::limits_write::write_fleet_limits(&home, &f, &patch)?
+                    }
+                    cmd::limits::Target::Agent(a) => {
+                        cmd::limits_write::write_agent_limits(&a, &patch)?
+                    }
+                },
+                (false, Some(n)) => cmd::limits::cmd_limits(&n, json)?,
+                (false, None) => anyhow::bail!("give a fleet or agent name, or --global"),
+            }
+        }
 
         Commands::Sync {
             quiet,
@@ -326,6 +364,37 @@ pub async fn run(cli: Cli) -> Result<()> {
                         .await?
                     } else {
                         cmd::fleet::run::cmd_fleet_run(&mur_home, &name, job, worktree).await?
+                    }
+                }
+                FleetAction::Limits {
+                    name,
+                    json,
+                    deadline,
+                    stuck,
+                    cost_usd,
+                    unset,
+                } => {
+                    let patch = cmd::limits_write::Patch {
+                        deadline,
+                        stuck,
+                        cost_usd,
+                        unset,
+                    };
+                    if patch != cmd::limits_write::Patch::default() {
+                        cmd::limits_write::write_fleet_limits(&mur_home, &name, &patch)?
+                    } else {
+                        let r = cmd::limits::report(
+                            &mur_home,
+                            &cmd::limits::Target::Fleet(name.clone()),
+                        )?;
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&cmd::limits::render_json(&r))?
+                            );
+                        } else {
+                            print!("{}", cmd::limits::render_human(&r));
+                        }
                     }
                 }
                 FleetAction::SetLoop {
@@ -2050,6 +2119,35 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         AgentAction::Stats { name } => cmd::agent::cmd_stats(&name)?,
         AgentAction::Logs { name, tail } => cmd::agent::cmd_logs(&name, tail)?,
         AgentAction::Companion(args) => cmd::agent_companion::run(args).await?,
+        AgentAction::Limits {
+            name,
+            json,
+            deadline,
+            stuck,
+            cost_usd,
+            unset,
+        } => {
+            let patch = cmd::limits_write::Patch {
+                deadline,
+                stuck,
+                cost_usd,
+                unset,
+            };
+            if patch != cmd::limits_write::Patch::default() {
+                cmd::limits_write::write_agent_limits(&name, &patch)?
+            } else {
+                let mur_home = cmd::agent::resolve_mur_home()?;
+                let r = cmd::limits::report(&mur_home, &cmd::limits::Target::Agent(name.clone()))?;
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&cmd::limits::render_json(&r))?
+                    );
+                } else {
+                    print!("{}", cmd::limits::render_human(&r));
+                }
+            }
+        }
         AgentAction::Doctor { name, format, json } => match name {
             Some(name) => cmd::doctor::run_agent(&name, json)?,
             None => cmd::doctor::run(&format, json)?,

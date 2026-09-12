@@ -287,6 +287,12 @@ pub struct Config {
     /// Capture-queue rotation (`capture:`).
     #[serde(default)]
     pub capture: CaptureConfig,
+
+    /// Global execution limits (`limits:`), the outermost scope of spec
+    /// 2026-09-12 §3.1. Written textually by `mur limits --global`, never by
+    /// load-modify-save (that drops blocks other binaries own).
+    #[serde(default)]
+    pub limits: crate::limits::Limits,
 }
 
 /// Rotation for `~/.mur/queue/events.jsonl`, in the shape FreeBSD's

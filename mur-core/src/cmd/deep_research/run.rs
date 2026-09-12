@@ -98,6 +98,7 @@ mod tests {
             parallel: None,
             hitl: None,
             requires_programs: vec![],
+            limits: None,
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)

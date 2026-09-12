@@ -244,6 +244,7 @@ mod tests {
             parallel: None,
             hitl: None,
             requires_programs: vec![],
+            limits: None,
         }
     }
 

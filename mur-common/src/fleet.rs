@@ -40,6 +40,11 @@ pub struct Fleet {
     /// Absent → empty; resolved by `mur agent/fleet doctor` + `install-deps`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires_programs: Vec<ProgramDep>,
+    /// Execution limits for runs of this fleet (spec 2026-09-12 §3.1). Absent
+    /// → inherit from `config.yaml`; see `limits_or_legacy` for the read of
+    /// pre-`limits:` files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<crate::limits::Limits>,
 }
 
 /// Per-fleet approval policy. A floor, never a grant: every field here can only
@@ -112,6 +117,27 @@ fn default_trigger() -> String {
 }
 
 impl Fleet {
+    /// The fleet's `limits:` block, or one derived from the legacy
+    /// `loop.deadline` / `loop.budget_usd` when the block is absent (§6). An
+    /// explicit block — even an empty one — is authoritative; legacy zero /
+    /// empty values are absence, not a value.
+    pub fn limits_or_legacy(&self) -> Option<crate::limits::Limits> {
+        if let Some(l) = &self.limits {
+            return Some(l.clone());
+        }
+        let lc = self.loop_cfg.as_ref()?;
+        let deadline = (!lc.deadline.trim().is_empty()).then(|| lc.deadline.trim().to_string());
+        let cost_usd = (lc.budget_usd > 0.0).then_some(lc.budget_usd);
+        if deadline.is_none() && cost_usd.is_none() {
+            return None;
+        }
+        Some(crate::limits::Limits {
+            deadline,
+            stuck: None,
+            cost_usd,
+        })
+    }
+
     pub fn router_or_concierge(&self) -> &str {
         self.router.as_deref().unwrap_or(CONCIERGE_AGENT)
     }
@@ -340,6 +366,7 @@ mod tests {
             parallel: None,
             hitl: None,
             requires_programs: vec![],
+            limits: None,
         };
         assert_eq!(f.router_or_concierge(), CONCIERGE_AGENT);
         let yaml = serde_yaml::to_string(&f).unwrap();
@@ -423,5 +450,65 @@ mod tests {
         );
         let back: Job = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(back, j);
+    }
+}
+
+#[cfg(test)]
+mod limits_tests {
+    use super::*;
+
+    fn fleet(loop_cfg: Option<FleetLoop>, limits: Option<crate::limits::Limits>) -> Fleet {
+        Fleet {
+            name: "dev".into(),
+            display_name: String::new(),
+            goal: "g".into(),
+            router: None,
+            team_id: None,
+            members: vec![],
+            channel_id: "fleet-dev".into(),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg,
+            parallel: None,
+            hitl: None,
+            requires_programs: vec![],
+            limits,
+        }
+    }
+
+    /// §6: a fleet written before `limits:` existed keeps its bound — the old
+    /// loop.deadline / loop.budget_usd are read as limits until it is
+    /// rewritten. An explicit `limits:` block wins outright, even if empty.
+    #[test]
+    fn legacy_loop_fields_are_read_as_limits_only_when_the_block_is_absent() {
+        let lc = FleetLoop {
+            trigger: "manual".into(),
+            max_iterations: 8,
+            budget_usd: 5.0,
+            deadline: "2h".into(),
+            done_when: String::new(),
+        };
+        let legacy = fleet(Some(lc.clone()), None)
+            .limits_or_legacy()
+            .expect("derived");
+        assert_eq!(legacy.deadline.as_deref(), Some("2h"));
+        assert_eq!(legacy.cost_usd, Some(5.0));
+        assert_eq!(legacy.stuck, None, "the old loop had no stuck setting");
+
+        // Zero / empty legacy values are absence, not a value.
+        let zero = FleetLoop {
+            budget_usd: 0.0,
+            deadline: String::new(),
+            ..lc.clone()
+        };
+        assert_eq!(fleet(Some(zero), None).limits_or_legacy(), None);
+
+        // An explicit block, even empty, is authoritative.
+        let explicit = fleet(Some(lc), Some(crate::limits::Limits::default())).limits_or_legacy();
+        assert_eq!(explicit, Some(crate::limits::Limits::default()));
+
+        // Round trip: a fleet without limits serialises without the key.
+        let yaml = serde_yaml_ng::to_string(&fleet(None, None)).unwrap();
+        assert!(!yaml.contains("limits"), "{yaml}");
     }
 }
