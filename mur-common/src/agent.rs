@@ -150,6 +150,12 @@ pub struct AgentProfile {
     /// Human-in-the-loop configuration (Phase 2). Default = disabled.
     #[serde(default)]
     pub hitl: HitlConfig,
+    /// Execution limits for this agent's own tasks (spec 2026-09-12 §3.1).
+    /// Absent → inherit. Replaces `hitl.max_iterations` / `hitl.max_tokens`,
+    /// which stay readable for the migration warning until the runtime
+    /// switch (step 4) stops applying them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<crate::limits::Limits>,
     /// Voice I/O configuration (D1). Default = disabled.
     #[serde(default)]
     pub voice: VoiceConfig,

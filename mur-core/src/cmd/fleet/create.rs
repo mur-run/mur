@@ -56,6 +56,7 @@ pub fn cmd_fleet_create(
         // applies until someone writes `hitl.mode` into fleet.yaml.
         hitl: None,
         requires_programs: vec![],
+        limits: None,
     };
     store::save_fleet(mur_home, &fleet)?;
     println!("Created fleet '{name}' (channel {})", ch.id);

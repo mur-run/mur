@@ -89,24 +89,9 @@ pub enum LoopStop {
     AwaitingApproval,
 }
 
-/// Parse a humantime-ish duration: `30s`, `5m`, `2h`, `1d`, or a bare integer
-/// (= seconds). Returns None on anything else. (No `humantime` dependency.)
+/// One grammar for `--deadline`, `loop.deadline` and `limits.deadline`.
 pub fn parse_duration(s: &str) -> Option<Duration> {
-    let s = s.trim();
-    if s.is_empty() {
-        return None;
-    }
-    let split = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
-    let (num, unit) = s.split_at(split);
-    let n: u64 = num.parse().ok()?;
-    let secs = match unit {
-        "" | "s" => n,
-        "m" => n.checked_mul(60)?,
-        "h" => n.checked_mul(3600)?,
-        "d" => n.checked_mul(86_400)?,
-        _ => return None,
-    };
-    Some(Duration::from_secs(secs))
+    mur_common::limits::parse_duration(s)
 }
 
 /// Does the router's reply signal completion? True iff a standalone `done`
@@ -1241,6 +1226,7 @@ mod tests {
             parallel: None,
             hitl: None,
             requires_programs: vec![],
+            limits: None,
         };
         // default when nothing set
         assert_eq!(effective_max_iterations(None, &f), DEFAULT_MAX_ITERATIONS);
@@ -1314,6 +1300,7 @@ mod tests {
             parallel: None,
             hitl: None,
             requires_programs: vec![],
+            limits: None,
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
@@ -1425,6 +1412,7 @@ mod tests {
             parallel: None,
             hitl: None,
             requires_programs: vec![],
+            limits: None,
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         let svc = mur_channel::ChannelService::open(home).unwrap();
@@ -1531,6 +1519,7 @@ mod tests {
             parallel: None,
             hitl: None,
             requires_programs: vec![],
+            limits: None,
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
@@ -1580,6 +1569,7 @@ mod tests {
             parallel: None,
             hitl: None,
             requires_programs: vec![],
+            limits: None,
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
@@ -1662,6 +1652,7 @@ mod tests {
             parallel: None,
             hitl: None,
             requires_programs: vec![],
+            limits: None,
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
@@ -1698,6 +1689,7 @@ mod tests {
             parallel: None,
             hitl: None,
             requires_programs: vec![],
+            limits: None,
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
@@ -1737,6 +1729,7 @@ mod tests {
             parallel: None,
             hitl: None,
             requires_programs: vec![],
+            limits: None,
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
