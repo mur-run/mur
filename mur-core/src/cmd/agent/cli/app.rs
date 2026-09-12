@@ -1462,6 +1462,7 @@ impl App {
         let mut fleet = String::new();
         let mut summary = Vec::new();
         let mut retire = false;
+        let mut stop_word: Option<String> = None;
         if let Some(rail) = self.fleet.as_mut() {
             rail.set_run_in_flight(false);
             // A view up to POLL_INTERVAL stale would freeze the wrong states
@@ -1470,15 +1471,25 @@ impl App {
             fleet = rail.fleet().to_string();
             summary = rail.view().summary();
             retire = rail.is_auto();
+            stop_word = rail
+                .view()
+                .stop
+                .as_ref()
+                .filter(|s| s.reason != "converged")
+                .map(|s| s.reason.clone());
         }
         if retire {
             self.fleet = None;
         }
         let took = super::follow::fmt_elapsed(chrono::Duration::milliseconds(duration_ms as i64));
-        let head = format!(
-            "⛴ fleet {fleet} {} ({took})",
-            if ok { "finished" } else { "failed" }
-        );
+        // "finished" is reserved for a run that converged. A cap, a kill or an
+        // unanswered approval is a stop, and the first line says so.
+        let verdict = match (&stop_word, ok) {
+            (Some(reason), _) => format!("stopped: {reason}"),
+            (None, true) => "finished".to_string(),
+            (None, false) => "failed".to_string(),
+        };
+        let head = format!("⛴ fleet {fleet} {verdict} ({took})");
         self.push_system(
             std::iter::once(head)
                 .chain(summary)
@@ -2247,6 +2258,45 @@ mod step_app_tests {
         // The rail's own view, not just the headline: this is the part that
         // used to exist only on screen.
         assert!(last.lines().count() > 1, "rail view not committed: {last}");
+    }
+
+    /// A run that hit a cap is not "finished". The headline takes the rail's
+    /// stop word so the transcript's first line already says why.
+    #[test]
+    fn the_headline_says_stopped_when_the_rail_reports_a_stop() {
+        let mut a = app();
+        a.arm_auto_fleet("s1", "dev", std::time::Instant::now());
+        // Plant a stop event in the fleet's channel so the rail's final poll
+        // folds it. The fixture home has no channel yet; create it.
+        let svc = mur_channel::ChannelService::open(&a.home).unwrap();
+        svc.create_for_fleet("dev", "mur", &["qa".to_string()])
+            .unwrap();
+        svc.append(
+            "fleet-dev",
+            mur_common::channel::ChannelActor::System,
+            mur_common::channel::EventKind::StateChange,
+            serde_json::json!({"from": "working", "to": "failed",
+                               "stop_reason": "max-iterations",
+                               "remedy": "raise it: mur fleet settings dev --max-iterations <N>"}),
+            None,
+        )
+        .unwrap();
+
+        a.finish_auto_fleet("s1", true, 4000);
+
+        let last = a.messages.last().expect("outcome message").text.clone();
+        assert!(
+            last.starts_with("⛴ fleet dev stopped: max-iterations ("),
+            "got: {last}"
+        );
+        assert!(
+            !last.lines().next().unwrap().contains("finished"),
+            "got: {last}"
+        );
+        assert!(
+            last.contains("■ stopped: max-iterations — raise it"),
+            "rail line missing: {last}"
+        );
     }
 
     /// A `--fleet` rail is a band the user asked to keep; a delegated run
