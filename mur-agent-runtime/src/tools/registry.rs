@@ -122,6 +122,20 @@ pub async fn build_tools(
     (defs, map)
 }
 
+/// Register `bash_wait`/`bash_kill` iff `bash` itself was registered — the
+/// three share one gate (spec D6/D11). Call after `build_tools`.
+pub fn attach_bash_control(
+    map: &mut HashMap<String, Arc<dyn ToolExecutor>>,
+    controls: Vec<Arc<dyn ToolExecutor>>,
+) {
+    if !map.contains_key("bash") {
+        return;
+    }
+    for tool in controls {
+        map.insert(tool.name().to_string(), tool);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,6 +159,7 @@ mod tests {
             agent: None,
             write_grants: Vec::new(),
             secrets: None,
+            jobs: crate::tools::bash_jobs::JobTable::new(),
         });
         let bash_def = bash_exec.def();
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
@@ -180,6 +195,7 @@ mod tests {
             agent: None,
             write_grants: Vec::new(),
             secrets: None,
+            jobs: crate::tools::bash_jobs::JobTable::new(),
         });
         let bash_def = bash_exec.def();
         let rules = vec![ToolRule {
@@ -364,5 +380,34 @@ mod tests {
         assert_eq!(defs.len(), 1);
         assert!(!map.contains_key("edit_file"));
         assert!(map.contains_key("suggest_replies"));
+    }
+
+    /// Test 16: denying `bash` registers none of the three; allowing it
+    /// registers all three.
+    #[tokio::test]
+    async fn bash_control_tools_follow_bash_registration() {
+        use crate::tools::bash::BashTool;
+        let mk = || {
+            Arc::new(BashTool::new(
+                std::path::PathBuf::from("/tmp"),
+                crate::tools::fs_policy::SessionCwd::new(std::path::PathBuf::from("/tmp")),
+            ))
+        };
+        let deny = vec![ToolRule {
+            pattern: "bash".into(),
+            policy: ToolPolicy::Deny,
+            risk: None,
+        }];
+        for (rules, expect) in [(deny, false), (vec![], true)] {
+            let bash = mk();
+            let exec: Arc<dyn ToolExecutor> = bash.clone();
+            let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+            let (_defs, mut map) =
+                build_tools(Some((bash.def(), exec)), None, None, None, &[], &rules, pool).await;
+            attach_bash_control(&mut map, bash.control_tools());
+            assert_eq!(map.contains_key("bash"), expect);
+            assert_eq!(map.contains_key("bash_wait"), expect);
+            assert_eq!(map.contains_key("bash_kill"), expect);
+        }
     }
 }
