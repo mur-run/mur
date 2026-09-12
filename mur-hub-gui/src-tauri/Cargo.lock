@@ -6633,7 +6633,7 @@ dependencies = [
 
 [[package]]
 name = "mur-browser"
-version = "2.78.0"
+version = "2.79.0"
 dependencies = [
  "age",
  "anyhow",
@@ -6650,7 +6650,7 @@ dependencies = [
 
 [[package]]
 name = "mur-channel"
-version = "2.78.0"
+version = "2.79.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6669,7 +6669,7 @@ dependencies = [
 
 [[package]]
 name = "mur-common"
-version = "2.78.0"
+version = "2.79.0"
 dependencies = [
  "age",
  "anyhow",
@@ -6719,7 +6719,7 @@ dependencies = [
 
 [[package]]
 name = "mur-compress"
-version = "2.78.0"
+version = "2.79.0"
 dependencies = [
  "blake3",
  "chrono",
@@ -6745,7 +6745,7 @@ dependencies = [
 
 [[package]]
 name = "mur-core"
-version = "2.78.0"
+version = "2.79.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -6836,7 +6836,7 @@ dependencies = [
 
 [[package]]
 name = "mur-gui-core"
-version = "2.78.0"
+version = "2.79.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6897,7 +6897,7 @@ dependencies = [
 
 [[package]]
 name = "mur-open-items"
-version = "2.78.0"
+version = "2.79.0"
 dependencies = [
  "anyhow",
  "chrono",
