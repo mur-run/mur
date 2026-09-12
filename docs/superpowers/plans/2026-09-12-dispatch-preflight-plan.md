@@ -54,7 +54,7 @@ pub enum ToolError { Execution(String), Unknown(String), InvalidInput(String), N
 
 ### Steps
 
-- [ ] **1.1 Write the failing tests** — new file `mur-common/src/authz.rs`:
+- [x] **1.1 Write the failing tests** — new file `mur-common/src/authz.rs`:
 
 ```rust
 //! The one spelling of "you may not" that every authorization gate uses
@@ -97,9 +97,9 @@ mod tests {
 
   Register `pub mod authz;` in `mur-common/src/lib.rs` (alphabetical, after `agent_name`).
 
-- [ ] **1.2 Watch it pass** — `cargo nextest run -p mur-common --lib -E 'test(/authz::/)'`.
+- [x] **1.2 Watch it pass** — `cargo nextest run -p mur-common --lib -E 'test(/authz::/)'`.
 
-- [ ] **1.3 The variant and its three sources** —
+- [x] **1.3 The variant and its three sources** —
 
   `mur-agent-runtime/src/tools/mod.rs`:
 
@@ -129,9 +129,9 @@ mod tests {
 
   `mur-core/src/executor/jobs.rs` `check_authorization`: the `bail!` message becomes `mur_common::authz::not_authorized(&format!("target '{}' for parallel_jobs (deny-by-default) — add it under `parallel_jobs.targets` in {}, e.g.\n\nparallel_jobs:\n  targets:\n    - {}", …))` (the existing tests assert `contains("not authorized")` — still true).
 
-- [ ] **1.4 Watch it pass** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(/fleet_run::|mcp::/)'`, `cargo nextest run -p mur-core --lib -E 'test(/executor::jobs::/)'`, `-p mur-mcp-server`. Any `match` over `ToolError` the compiler names gets a `NotAuthorized(m) =>` arm that behaves like `Execution` for now (Task 2 changes the loop's).
+- [x] **1.4 Watch it pass** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(/fleet_run::|mcp::/)'`, `cargo nextest run -p mur-core --lib -E 'test(/executor::jobs::/)'`, `-p mur-mcp-server`. Any `match` over `ToolError` the compiler names gets a `NotAuthorized(m) =>` arm that behaves like `Execution` for now (Task 2 changes the loop's).
 
-- [ ] **1.5 fmt + clippy on `mur-common`, `mur-agent-runtime`, `mur-core`, `mur-mcp-server`**, then **commit**:
+- [x] **1.5 fmt + clippy on `mur-common`, `mur-agent-runtime`, `mur-core`, `mur-mcp-server`**, then **commit**:
 
 ```
 feat(authz): ToolError::NotAuthorized — one spelling for every gate's refusal
@@ -153,7 +153,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **2.1 Write the failing test** — `task_runner.rs` tests, next to `fleet_run_explicit_deny_still_wins`:
+- [x] **2.1 Write the failing test** — `task_runner.rs` tests, next to `fleet_run_explicit_deny_still_wins`:
 
 ```rust
     /// A stub LLM that records the tool names offered on every request.
@@ -199,9 +199,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
   Write `RecordingLlm` and `RefusingFleetRunTool` in full (the tool's `execute` returns `Err(ToolError::NotAuthorized(mur_common::authz::not_authorized("fleet_run: test refusal")))` after incrementing `calls`).
 
-- [ ] **2.2 Watch it fail** — today `calls == 3` (or the doom-loop guard trips at the third identical call — which is the spec's "not authorized ×3" complaint in miniature).
+- [x] **2.2 Watch it fail** — today `calls == 3` (or the doom-loop guard trips at the third identical call — which is the spec's "not authorized ×3" complaint in miniature).
 
-- [ ] **2.3 Implement** — in `run_agentic_loop`: move the `tool_defs` computation inside the `while` loop head and filter by `disabled`:
+- [x] **2.3 Implement** — in `run_agentic_loop`: move the `tool_defs` computation inside the `while` loop head and filter by `disabled`:
 
 ```rust
         let mut disabled: HashSet<String> = HashSet::new();
@@ -230,9 +230,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
   and the policy `Deny` arm's content gains the same suffix. Back in the loop, after the results are gathered, `for (call, entry) in … { if matches!(entry.status, ToolStatus::Denied { .. }) && !entry.content.starts_with("unknown tool") { disabled.insert(call.tool_name.clone()); } }` — `unknown tool` is not a refusal (the model invented a name), so it is not withdrawn (there is nothing to withdraw). Put the rule in one small `fn withdraws(entry: &ToolResultEntry) -> bool` with a two-line test so the string check has a name.
 
-- [ ] **2.4 Watch it pass**, then the whole crate — the existing `fleet_run_explicit_deny_still_wins` and the doom-loop tests still hold.
+- [x] **2.4 Watch it pass**, then the whole crate — the existing `fleet_run_explicit_deny_still_wins` and the doom-loop tests still hold.
 
-- [ ] **2.5 fmt + clippy**, then **commit**:
+- [x] **2.5 fmt + clippy**, then **commit**:
 
 ```
 feat(runtime): a refused tool is told once and withdrawn for the turn
@@ -266,7 +266,7 @@ pub fn missing_tools(&self, needs: &[String]) -> Vec<String>   // not registered
 
 ### Steps
 
-- [ ] **3.1 Write the failing tests** —
+- [x] **3.1 Write the failing tests** —
 
   `mur-common/src/fleet.rs` (in the `limits_tests` module): a fleet with `needs: [write_file]` round-trips; one without serialises no `needs` key.
 
@@ -317,9 +317,9 @@ pub fn missing_tools(&self, needs: &[String]) -> Vec<String>   // not registered
 
   written in full against the module's existing fixture.
 
-- [ ] **3.2 Watch them fail.**
+- [x] **3.2 Watch them fail.**
 
-- [ ] **3.3 Implement** —
+- [x] **3.3 Implement** —
 
   `mur-common/src/fleet.rs`: after `limits`:
 
@@ -370,9 +370,9 @@ pub fn missing_tools(&self, needs: &[String]) -> Vec<String>   // not registered
 
   with `failed_task_before_start` a small free function in `message_send.rs` that builds a `mur_common::a2a::Task` in state `Failed` carrying only the input message and `TaskError { code, message, recoverable: false, details: None }` (mirror how `run_sync` builds a Failed task; grep `TaskState::Failed` in `task_runner.rs` for the shape). `TaskRunner` needs `pub fn agent_name(&self) -> &str` if it has none. `channel_delegate` also appends its usual signed self-reply? No — nothing ran; the router's step fails with the message, which the rail shows.
 
-- [ ] **3.4 Watch it pass** — `cargo nextest run -p mur-common --lib -E 'test(/fleet::/)'`, `-p mur-core --lib -E 'test(/executor::dag::|fleet::/)'`, `-p mur-agent-runtime --lib`. Real-machine check (documented): add `needs: [write_file]` to a scratch fleet whose member denies `write_file`; `mur fleet run <f>` → the step fails in under a second with the `cannot start:` line in `mur fleet status`.
+- [x] **3.4 Watch it pass** — `cargo nextest run -p mur-common --lib -E 'test(/fleet::/)'`, `-p mur-core --lib -E 'test(/executor::dag::|fleet::/)'`, `-p mur-agent-runtime --lib`. Real-machine check (documented): add `needs: [write_file]` to a scratch fleet whose member denies `write_file`; `mur fleet run <f>` → the step fails in under a second with the `cannot start:` line in `mur fleet status`.
 
-- [ ] **3.5 fmt + clippy on the four crates; Hub check last**, then **commit**:
+- [x] **3.5 fmt + clippy on the four crates; Hub check last**, then **commit**:
 
 ```
 feat(fleet): declared needs are checked at dispatch, before the first model call
@@ -389,8 +389,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ## Task 4 — one line of doc
 
-- [ ] **4.1** `CLAUDE.md`, under the `mur fleet` bullet after the handles line: `- \`needs:\` in fleet.yaml names the tools the work requires; a member missing one fails at dispatch (\`cannot start: … — mur agent perm tool-allow …\`), and any authorization refusal (\`not authorized:\`) withdraws that tool for the rest of the turn instead of being retried.`
-- [ ] **4.2** `mur verify --file CLAUDE.md` shows no new ❌. Commit `docs: needs and non-retryable authorization, in words`.
+- [x] **4.1** `CLAUDE.md`, under the `mur fleet` bullet after the handles line: `- \`needs:\` in fleet.yaml names the tools the work requires; a member missing one fails at dispatch (\`cannot start: … — mur agent perm tool-allow …\`), and any authorization refusal (\`not authorized:\`) withdraws that tool for the rest of the turn instead of being retried.`
+- [x] **4.2** `mur verify --file CLAUDE.md` shows no new ❌. Commit `docs: needs and non-retryable authorization, in words`.
 
 ## After the last task
 
