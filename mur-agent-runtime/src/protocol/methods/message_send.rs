@@ -62,6 +62,15 @@ impl MessageSendHandler {
     }
 }
 
+/// `params.limits.deadline_secs`, when the caller sent one. Negative or
+/// non-integer values read as absent — the resolver then applies the scopes,
+/// which is the safe direction (a bound, not none).
+pub(crate) fn caller_deadline_secs(p: &Value) -> Option<u64> {
+    p.get("limits")
+        .and_then(|l| l.get("deadline_secs"))
+        .and_then(|v| v.as_u64())
+}
+
 #[async_trait]
 impl MethodHandler for MessageSendHandler {
     async fn handle(
@@ -121,6 +130,8 @@ impl MethodHandler for MessageSendHandler {
             // Interactive, never eligible for Smart cheap-model downgrade.
             intent: RequestIntent::Interactive,
             output_artifact_path,
+            attended: can_approve,
+            deadline_secs: caller_deadline_secs(&p),
         };
 
         self.emit_progress("pending", "llm_reasoning", None).await;
@@ -239,5 +250,21 @@ mod tests {
         let id = out.get("id").and_then(Value::as_str).unwrap_or_default();
         assert!(id.starts_with("task-"), "generated id, got {id:?}");
         assert_ne!(id, "task-from-client");
+    }
+}
+
+#[cfg(test)]
+mod limits_params {
+    /// The wire shape both handlers read: `limits.deadline_secs` is the
+    /// caller's remaining clock; absent means "resolve from the scopes".
+    #[test]
+    fn deadline_secs_is_read_from_limits_and_absent_is_none() {
+        let p = serde_json::json!({"limits": {"deadline_secs": 720}});
+        assert_eq!(super::caller_deadline_secs(&p), Some(720));
+        assert_eq!(super::caller_deadline_secs(&serde_json::json!({})), None);
+        assert_eq!(
+            super::caller_deadline_secs(&serde_json::json!({"limits": {"deadline_secs": -1}})),
+            None
+        );
     }
 }
