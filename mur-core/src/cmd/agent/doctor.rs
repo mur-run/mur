@@ -139,7 +139,7 @@ fn probe_volumes(path: &std::path::Path) -> std::io::Result<()> {
 /// Enumerates all agents that have a `running.lock`, compares each one's
 /// recorded `build_sha` against the on-disk runtime binary, and reports
 /// which ones are stale.  Exits non-zero when at least one agent is stale.
-pub fn cmd_doctor(json: bool) -> Result<()> {
+pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
     let mur_home = resolve_mur_home()?;
     let agents_dir = mur_home.join("agents");
 
@@ -269,6 +269,32 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
                 );
             } else {
                 println!("{}: running, current", r.name);
+            }
+            // A launcher into the keg is why an agent can be "current" and
+            // still never upgrade: the keg copy is a path no installer
+            // refreshes, and on macOS a Full Disk Access grant on the
+            // canonical path never applies because TCC keys on the binary
+            // actually executed (#1247).
+            if let Some(d) = stale::link_drift(&r.name) {
+                println!(
+                    "  launcher runs {} \u{2192} no installer refreshes that path",
+                    d.points_at.display()
+                );
+                if fix {
+                    match stale::repoint(&r.name) {
+                        Ok(now) => println!(
+                            "  re-pointed at {} \u{2192} run 'mur agent restart {}'",
+                            now.display(),
+                            r.name
+                        ),
+                        Err(e) => println!("  could not re-point: {e:#}"),
+                    }
+                } else {
+                    println!(
+                        "  fix with: mur agent runtime-doctor --fix && mur agent restart {}",
+                        r.name
+                    );
+                }
             }
             for (kind, p) in dead(&r.name) {
                 println!(

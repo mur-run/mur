@@ -154,15 +154,20 @@ impl MethodHandler for ChannelDelegateHandler {
             .and_then(|c| c.get("task_id"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        // Minted here when the caller did not supply one, because the turn has
+        // to be marked unattended BEFORE it runs and the mark is keyed by task
+        // id. `run_sync` honours a supplied id, so this is the same id the
+        // reply carries.
         let task_id = p
             .get("task_id")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
         let spec = TaskSpec {
             cwd: None,
             input: message,
             context_task_id,
-            task_id,
+            task_id: Some(task_id.clone()),
             // A fleet's shared channel is `fleet-<name>`; derive (and verify
             // membership of) the active fleet so the runtime injects only this
             // agent's own fleet's fleet-scoped skills. Untrusted/non-member/
@@ -180,9 +185,17 @@ impl MethodHandler for ChannelDelegateHandler {
             output_artifact_path: None,
         };
 
+        // Synchronous is not attended: the caller is a fleet router waiting on
+        // a reply, not a human who can answer an approval prompt. Say so before
+        // the turn runs, or a gated tool waits out `hitl.timeout_secs` against
+        // a notifier nobody reads and the turn returns empty with nothing
+        // naming approval as the cause.
+        self.runner.mark_unattended(&task_id).await;
+
         // Run the turn (non-streaming path; v3d-2 does not need per-delta
         // forwarding for delegated specialist replies).
         let outcome = self.runner.run_sync(spec).await;
+        self.runner.unregister_client_notifier(&task_id).await;
         // Only a Completed turn carries a genuine agent reply (`messages` =
         // [input, reply]); Failed/Cancelled tasks carry only the user input, so
         // appending their "last message" would sign the user's own text as the
@@ -228,6 +241,112 @@ impl MethodHandler for ChannelDelegateHandler {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    struct NeverRunsTool {
+        ran: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::tools::ToolExecutor for NeverRunsTool {
+        fn name(&self) -> &str {
+            "bash"
+        }
+        fn def(&self) -> crate::llm::ToolDef {
+            crate::llm::ToolDef {
+                name: "bash".into(),
+                description: "test tool".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+        ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
+            self.ran.store(true, std::sync::atomic::Ordering::Relaxed);
+            Ok(crate::tools::ToolOutput {
+                text: "ran".into(),
+                status: crate::tools::ToolStatus::Ok,
+                images: Vec::new(),
+            })
+        }
+    }
+
+    /// The wiring, not the flag: `channel/delegate` must MARK its turn
+    /// unattended, not merely be capable of it.
+    ///
+    /// The signal is time. The runner below has an agent-wide notifier and a
+    /// 600 s approval timeout, so an unmarked turn parks on that notifier for
+    /// ten minutes — which is the bug as users met it: a delegated step that
+    /// returns empty with nothing naming approval. Marked, the gate answers
+    /// before a prompt is ever built, so the whole call finishes inside the
+    /// two-second budget here.
+    #[tokio::test]
+    async fn a_delegated_turn_marks_itself_unattended() {
+        let tmp = TempDir::new().unwrap();
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let tool_call = crate::llm::LlmResponse {
+            text: String::new(),
+            input_tokens: 1,
+            output_tokens: 1,
+            model: "test".into(),
+            tool_calls: vec![crate::llm::ToolCallResult {
+                call_id: "c-1".into(),
+                tool_name: "bash".into(),
+                input: serde_json::json!({"command": "echo hi"}),
+            }],
+            stop_reason: crate::llm::StopReason::ToolUse,
+        };
+        let done = crate::llm::LlmResponse {
+            text: "DONE".into(),
+            input_tokens: 1,
+            output_tokens: 1,
+            model: "test".into(),
+            tool_calls: vec![],
+            stop_reason: crate::llm::StopReason::EndTurn,
+        };
+        // A notifier nobody reads: exactly the shape that turned the missing
+        // mark into a ten-minute wait instead of an immediate refusal.
+        let (ntx, _nrx) = tokio::sync::mpsc::channel(8);
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(crate::llm::stub::SequenceLlm::new(vec![
+                tool_call, done,
+            ])))
+            .with_tools(vec![Arc::new(NeverRunsTool { ran: ran.clone() })])
+            .with_tools_policy(vec![mur_common::agent::ToolRule {
+                pattern: "bash".into(),
+                policy: mur_common::agent::ToolPolicy::Ask,
+                risk: None,
+            }])
+            .with_pending_approvals(Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )))
+            .with_notifier(ntx)
+            .with_hitl_timeout_secs(600),
+        );
+        let handler = ChannelDelegateHandler::new(
+            runner,
+            Arc::new(AgentIdentity::generate()),
+            "specialist".into(),
+            1,
+            tmp.path().to_path_buf(),
+        );
+        let params = serde_json::json!({
+            "channel_id": "fleet-nope",
+            "message": {"role": "user", "parts": [{"kind": "text", "text": "go"}]},
+        });
+
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            handler.handle(Some(params), &RequestContext::none()),
+        )
+        .await
+        .expect("must not park on an approval nobody can answer");
+        assert!(out.is_ok(), "the turn still returns a Task: {out:?}");
+        assert!(
+            !ran.load(std::sync::atomic::Ordering::Relaxed),
+            "the gated tool must not execute"
+        );
+    }
 
     #[test]
     fn append_self_reply_is_signed_by_the_specialist() {
