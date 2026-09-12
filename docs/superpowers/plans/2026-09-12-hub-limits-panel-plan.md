@@ -81,7 +81,7 @@ pub fn remove_stale_key(mur_home: &Path, target: &Target, key: &str) -> anyhow::
 
 ### Steps
 
-- [ ] **1.1 Write the failing tests** — in `mur-core/src/cmd/limits.rs` tests:
+- [x] **1.1 Write the failing tests** — in `mur-core/src/cmd/limits.rs` tests:
 
 ```rust
     /// The fields a panel needs and the CLI never printed: is the row
@@ -179,9 +179,9 @@ pub fn remove_stale_key(mur_home: &Path, target: &Target, key: &str) -> anyhow::
 
   (`write_agent_limits`/`save_profile` resolve the home from `MUR_HOME` — the test sets it, as the step-3 CLI tests do; nextest runs each test in its own process.)
 
-- [ ] **1.2 Watch them fail** — `cargo nextest run -p mur-core --lib -E 'test(/cmd::limits/)'`.
+- [x] **1.2 Watch them fail** — `cargo nextest run -p mur-core --lib -E 'test(/cmd::limits/)'`.
 
-- [ ] **1.3 Implement** — `Row` gains `applies: bool, local: bool, raw: Option<String>`; `rows_from` takes the queried scope's `Source` (`Source::Fleet` / `Source::Agent` / `Source::Global`) and the scope's own `Limits` (to fill `raw`: `deadline.clone()`, `stuck.clone()`, `cost_usd.map(|c| format!("{c}"))`); `local = r.<knob>.source == scope_source`; `applies = cost_applies.is_none()`. `Stale` replaces `Vec<String>`: build each with `key`, `file` (`"fleet.yaml"` / `"profile.yaml"`), `value`, `message` (the current string). `render_human` prints `stale: {message}` unchanged. `LimitsReport.billable` = `billing.billable` (fleet) / `matches!(billing, Some(UsageBilled) | None)` (agent) / `true` (global); `needs_restart = matches!(target, Target::Agent(_))`. `Target::Global`: `resolve(Scope::FleetRun, &global, None, None, &none)` with `scope_source = Source::Global`, `cost_applies = None`, no stale, `attended_note` as the fleet's. `render_json`: `"target": {"kind": "global"|"fleet"|"agent", "name": name_or_null}`, rows with the three new fields, `"stale": [{key,file,value,message}]`, `"billable"`, `"needs_restart"`. `detect_target` is unchanged (a name is never global). `cmd_limits --global` (dispatch) keeps printing the block.
+- [x] **1.3 Implement** — `Row` gains `applies: bool, local: bool, raw: Option<String>`; `rows_from` takes the queried scope's `Source` (`Source::Fleet` / `Source::Agent` / `Source::Global`) and the scope's own `Limits` (to fill `raw`: `deadline.clone()`, `stuck.clone()`, `cost_usd.map(|c| format!("{c}"))`); `local = r.<knob>.source == scope_source`; `applies = cost_applies.is_none()`. `Stale` replaces `Vec<String>`: build each with `key`, `file` (`"fleet.yaml"` / `"profile.yaml"`), `value`, `message` (the current string). `render_human` prints `stale: {message}` unchanged. `LimitsReport.billable` = `billing.billable` (fleet) / `matches!(billing, Some(UsageBilled) | None)` (agent) / `true` (global); `needs_restart = matches!(target, Target::Agent(_))`. `Target::Global`: `resolve(Scope::FleetRun, &global, None, None, &none)` with `scope_source = Source::Global`, `cost_applies = None`, no stale, `attended_note` as the fleet's. `render_json`: `"target": {"kind": "global"|"fleet"|"agent", "name": name_or_null}`, rows with the three new fields, `"stale": [{key,file,value,message}]`, `"billable"`, `"needs_restart"`. `detect_target` is unchanged (a name is never global). `cmd_limits --global` (dispatch) keeps printing the block.
 
   `remove_stale_key` in `limits_write.rs`:
 
@@ -216,9 +216,9 @@ pub fn remove_stale_key(mur_home: &Path, target: &crate::cmd::limits::Target, ke
 }
 ```
 
-- [ ] **1.4 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/cmd::limits/)'`; `command grep -rn "cmd::limits::\|limits_write::" mur-hub-gui/src-tauri/src` must print nothing yet (the Hub does not call these before Task 2).
+- [x] **1.4 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/cmd::limits/)'`; `command grep -rn "cmd::limits::\|limits_write::" mur-hub-gui/src-tauri/src` must print nothing yet (the Hub does not call these before Task 2).
 
-- [ ] **1.5 fmt + clippy on `mur-core`**, then **commit**:
+- [x] **1.5 fmt + clippy on `mur-core`**, then **commit**:
 
 ```
 feat(limits): the report carries applies / local / raw, structured stale keys, a Global target
@@ -264,7 +264,7 @@ pub(crate) fn bounded_of(report: &LimitsReport) -> &'static str
 
 ### Steps
 
-- [ ] **2.1 Write the failing tests** — `mur-hub-gui/src-tauri/src/limits.rs` tests (the Tauri crate's tests use `tempfile`; mirror `fleet.rs`'s test module):
+- [x] **2.1 Write the failing tests** — `mur-hub-gui/src-tauri/src/limits.rs` tests (the Tauri crate's tests use `tempfile`; mirror `fleet.rs`'s test module):
 
 ```rust
 #[cfg(test)]
@@ -332,9 +332,9 @@ mod tests {
 
   (`set_in(home, scope, name, patch) -> Result<LimitsView, String>` is the testable core of `limits_set`; the agent scope's write goes through `MUR_HOME` — the Hub already runs with the same home, and the test for agent scope is the CLI's.)
 
-- [ ] **2.2 Watch them fail** — `cargo test --manifest-path mur-hub-gui/src-tauri/Cargo.toml --lib limits::` (symlink `ui/dist` first).
+- [x] **2.2 Watch them fail** — `cargo test --manifest-path mur-hub-gui/src-tauri/Cargo.toml --lib limits::` (symlink `ui/dist` first).
 
-- [ ] **2.3 Implement** — `limits.rs`:
+- [x] **2.3 Implement** — `limits.rs`:
 
 ```rust
 //! The Hub's limits surface (spec 2026-09-12 §10): three commands over the
@@ -408,9 +408,9 @@ pub(crate) fn set_in(home: &Path, scope: &str, name: Option<&str>, patch: Limits
 
   `fleet.rs`: `FleetLoopView` drops `max_iterations`, `budget_usd`; `FleetDetail` gains `pub limits: limits::LimitsView` (= `limits::resolve_in(&home, "fleet", Some(&name))`); `fleet_set_loop(name, trigger: Option<String>, done_when: Option<String>)` calls `cmd_fleet_set_loop(&home, &name, trigger, None, None, None, done_when)`; `fleet_run_loop(name, app)` passes `None, None, None, None`. Fix the tests in `fleet.rs` that build `FleetLoopView`.
 
-- [ ] **2.4 Watch it pass** — `cargo test --manifest-path mur-hub-gui/src-tauri/Cargo.toml --lib` (all), `cargo clippy --manifest-path mur-hub-gui/src-tauri/Cargo.toml --lib -- -D warnings`.
+- [x] **2.4 Watch it pass** — `cargo test --manifest-path mur-hub-gui/src-tauri/Cargo.toml --lib` (all), `cargo clippy --manifest-path mur-hub-gui/src-tauri/Cargo.toml --lib -- -D warnings`.
 
-- [ ] **2.5 Commit**:
+- [x] **2.5 Commit**:
 
 ```
 feat(hub): limits_resolve / limits_set / limits_remove_stale, and fleet_detail carries its limits
