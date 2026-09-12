@@ -449,7 +449,7 @@ export function LimitsPanel(props: { scope: LimitsView["scope"]; name?: string; 
 
 ### Steps
 
-- [ ] **3.1 Write the failing tests** — `mur-hub-gui/ui/src/components/limits/limitsPanel.test.ts`:
+- [x] **3.1 Write the failing tests** — `mur-hub-gui/ui/src/components/limits/limitsPanel.test.ts`:
 
 ```ts
 import { describe, it, expect } from "vitest";
@@ -495,11 +495,11 @@ describe("badge (§10.2)", () => {
 });
 ```
 
-- [ ] **3.2 Watch it fail** — `cd mur-hub-gui/ui && npx vitest run limitsPanel`.
+- [x] **3.2 Watch it fail** — `cd mur-hub-gui/ui && npx vitest run limitsPanel`.
 
-- [ ] **3.3 Implement the helper** — `limitsPanel.ts` exactly per the Interfaces; `chipLabel`: `source.includes("legacy")` → `limits.chip.legacy`; `"built-in default"` → `builtIn`; `"~/.mur/config.yaml"` → `config`; `"fleet.yaml"` → scope === "fleet" ? `thisFleet` : `fleet`; `"profile.yaml"` → scope === "agent" ? `thisAgent` : `agent`; `"command-line flag"` → `flag`.
+- [x] **3.3 Implement the helper** — `limitsPanel.ts` exactly per the Interfaces; `chipLabel`: `source.includes("legacy")` → `limits.chip.legacy`; `"built-in default"` → `builtIn`; `"~/.mur/config.yaml"` → `config`; `"fleet.yaml"` → scope === "fleet" ? `thisFleet` : `fleet`; `"profile.yaml"` → scope === "agent" ? `thisAgent` : `agent`; `"command-line flag"` → `flag`.
 
-- [ ] **3.4 The component** — `LimitsPanel.tsx`:
+- [x] **3.4 The component** — `LimitsPanel.tsx`:
 
 ```tsx
 import { useEffect, useState } from "react";
@@ -605,14 +605,14 @@ export function LimitsPanel({ scope, name, initial, focusKnob, onChanged }: Limi
 
   CSS (`styles/` — the file that holds `.fleet-settings__row`): `.limits-row { display:grid; grid-template-columns: 7rem 6rem auto 1fr; gap: .5rem; align-items:center; padding:.25rem 0 } .limits-row--inherited .limits-row__value, .limits-row--inherited .limits-chip { opacity:.55 } .limits-chip { font-size:.75rem; padding:.05rem .4rem; border-radius:999px; background: var(--surface-2, #eee) } .limits-stale { display:flex; gap:.5rem; color: var(--amber, #b7791f); padding:.25rem 0 } .fleet-detail__bounded--ok { color: var(--green, #2f855a) } .fleet-detail__bounded--amber { color: var(--amber, #b7791f) } .fleet-detail__bounded--off { color: var(--red, #c53030) }` — use the theme variables the stylesheet already defines (grep `--amber`/`--green`; if absent, use the closest existing status colours the `fleet-job__status--failed` rule uses).
 
-- [ ] **3.5 Mount at three scopes** —
+- [x] **3.5 Mount at three scopes** —
   - `GeneralSettings.tsx`: after the fleet-autorun row, a `settings-row` with `<h4>{t("limits.title")}</h4><LimitsPanel scope="global" />`.
   - `FleetSettings.tsx`: delete the `maxIter`, `deadline`, `budget` state and their three `fleet-settings__row` blocks + `budgetWarning`; `handleSaveSettings` sends `{ name, trigger, doneWhen }` only; `settingsAreValid(trigKind, trigValue)` (drop the `deadline` parameter in `fleetSettingsForm.ts` and its tests; `loopDeadlineIsValid` stays if `FleetHeader` still uses it for the legacy string, else delete it). Insert `<h4>{t("limits.title")}</h4><LimitsPanel scope="fleet" name={detail.name} initial={detail.limits} focusKnob={focusKnob} onChanged={onLimitsChanged} />` between the done-when block and Save; `FleetSettings` receives `focusKnob?: "deadline"|"stuck"|"cost_usd"` and `onLimitsChanged` from `FleetHost` (Task 5 sets the focus).
   - `OverviewTab.tsx` (agent): a new `detail-card` after the "glance" card: eyebrow `t("limits.title")`, `<LimitsPanel scope="agent" name={agentName} />`. No fifth tab.
 
-- [ ] **3.6 Watch it pass** — `npx vitest run` (all), `npx tsc --noEmit`. Fix every reference to the removed `FleetLoopView.max_iterations`/`budget_usd` the compiler names (`fleetSettingsForm.test.ts` fixtures, `FleetOverview.tsx` — Task 4 rewrites those cards; for now make it compile by removing the two cards, Task 4 puts the new ones in).
+- [x] **3.6 Watch it pass** — `npx vitest run` (all), `npx tsc --noEmit`. Fix every reference to the removed `FleetLoopView.max_iterations`/`budget_usd` the compiler names (`fleetSettingsForm.test.ts` fixtures, `FleetOverview.tsx` — Task 4 rewrites those cards; for now make it compile by removing the two cards, Task 4 puts the new ones in).
 
-- [ ] **3.7 Commit**:
+- [x] **3.7 Commit**:
 
 ```
 feat(hub): LimitsPanel at three scopes — the Hub renders what the CLI resolves
