@@ -273,7 +273,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **2.1 Write the failing tests** — append to `mur-core/src/cmd/agent/cli/fleet_rail/tests.rs`:
+- [x] **2.1 Write the failing tests** — append to `mur-core/src/cmd/agent/cli/fleet_rail/tests.rs`:
 
 ```rust
 #[test]
@@ -330,9 +330,9 @@ fn summary_names_the_stop_under_the_headline_except_when_converged() {
 
   `agent(..)` and `ev(..)` already exist in this file. If `StopNotice` / `fold_stop` are not brought in by the file's existing `use super::*;`, add `use super::{fold_stop, StopNotice};` at the top.
 
-- [ ] **2.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(/fold_stop_reads|summary_names_the_stop/)'`. Expected: compile error `cannot find function fold_stop` / `no field stop`.
+- [x] **2.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(/fold_stop_reads|summary_names_the_stop/)'`. Expected: compile error `cannot find function fold_stop` / `no field stop`.
 
-- [ ] **2.3 Add the type and the fold** — in `fleet_rail.rs`, directly below `pub fn fold_members`'s closing brace:
+- [x] **2.3 Add the type and the fold** — in `fleet_rail.rs`, directly below `pub fn fold_members`'s closing brace:
 
 ```rust
 /// Why the last run stopped and the way out, from the System `state-change`
@@ -361,7 +361,7 @@ pub fn fold_stop(events: &[ChannelEvent]) -> Option<StopNotice> {
 }
 ```
 
-- [ ] **2.4 Carry it in the view and render it** — add the field to `RailView`:
+- [x] **2.4 Carry it in the view and render it** — add the field to `RailView`:
 
 ```rust
     /// The last run's stop, rendered under the headline. `None` while a run is
@@ -388,9 +388,9 @@ pub fn fold_stop(events: &[ChannelEvent]) -> Option<StopNotice> {
 
   In `FleetRail::poll`, where `let view = RailView { jobs_line: …, members, notice: … }` is built, add `stop: fold_stop(&events),` after `members,`. `events` is the verified vector already in scope.
 
-- [ ] **2.5 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/fleet_rail/)'`. Expected: all pass. If a test elsewhere constructs `RailView { .. }` literally and now fails to compile, add `stop: None,` to that literal (search: `command grep -rn "RailView {" mur-core/src`).
+- [x] **2.5 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/fleet_rail/)'`. Expected: all pass. If a test elsewhere constructs `RailView { .. }` literally and now fails to compile, add `stop: None,` to that literal (search: `command grep -rn "RailView {" mur-core/src`).
 
-- [ ] **2.6 fmt + clippy**, then **commit**:
+- [x] **2.6 fmt + clippy**, then **commit**:
 
 ```
 feat(murmur): the fleet rail shows why the last run stopped
