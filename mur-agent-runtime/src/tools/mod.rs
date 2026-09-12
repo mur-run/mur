@@ -1,4 +1,5 @@
 pub mod bash;
+pub mod bash_jobs;
 mod denial;
 pub mod edit_file;
 pub mod fleet_run;
