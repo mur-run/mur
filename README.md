@@ -528,6 +528,18 @@ Agent** wizard offers the same catalog as a source.
   deadline. `mur limits <fleet|agent>` prints every bound in force and which
   scope set it; every stop reaches the settlement card with its reason and the
   one-line remedy.
+- **Long work returns a handle; liveness is a heartbeat** — `fleet_run` and
+  `parallel_jobs` answer `{run_id, status: dispatched}` within a second and
+  you poll `mur_job_status <run_id>` (or `mur fleet status`); the result lands
+  in the fleet's channel, and the MCP per-call timeout stays 120 s on purpose.
+  A running turn beats `turn/heartbeat` every 30 s, so the dial gives a
+  beating peer 90 s of silence before calling it `stopped responding` — and a
+  router that thinks for ten minutes is alive the whole time. `needs:` in
+  `fleet.yaml` names the tools the work requires; a member missing one fails
+  at dispatch (`cannot start: <agent> has no write_file — mur agent perm
+  tool-allow …`) instead of after its budget, and any `not authorized:`
+  refusal withdraws that tool for the rest of the turn instead of being
+  retried.
 - **Runs that report their own failures** — an agent handing a job to a fleet
   used to hit a kernel refusal on a binary its profile plainly allowed: the
   sandbox resolved the name by scanning the exec directories when the agent
@@ -721,7 +733,7 @@ mur
 │                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only) · secret ·
 │                fallback · smart · routing · effort · trash · rollback … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
-├── fleet        create · list · show · status · run · set-loop · limits · send · jobs   (squads of agents over a shared channel)
+├── fleet        create · list · show · status · run [--run-id] · set-loop · limits · send · jobs   (squads of agents over a shared channel)
 ├── limits       <fleet|agent> [--json] · --global · --deadline · --stuck · --cost-usd · --unset   (every execution bound in force, with its source)
 ├── official     list · install   (official agents/fleets from the app.mur.run catalog)
 ├── deep-research  setup · status · ask   (web research with wizard UX)
