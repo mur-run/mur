@@ -345,6 +345,52 @@ fn outcome_label(stop: LoopStop) -> &'static str {
     }
 }
 
+/// The one-line way out for each stop, in the words of the commands that exist
+/// today (`mur fleet settings`, `mur fleet start`, `mur channel approve`). The
+/// spec's step 3 rewrites these when `limits:` lands; until then a user who
+/// hits a cap must at least be told which knob it was. `None` for the two
+/// stops that mean the work is done.
+pub fn stop_remedy(stop: LoopStop, fleet: &str) -> Option<String> {
+    Some(match stop {
+        LoopStop::Converged | LoopStop::QueueDrained => return None,
+        LoopStop::MaxIterations => format!(
+            "raise it: mur fleet settings {fleet} --max-iterations <N>  (fleet.yaml loop.max_iterations)"
+        ),
+        LoopStop::Deadline => format!(
+            "raise it: mur fleet settings {fleet} --deadline <2h>  (fleet.yaml loop.deadline)"
+        ),
+        LoopStop::Stuck => format!(
+            "no member activity for {STUCK_LIMIT} iterations — see what they are waiting on: mur fleet status {fleet}"
+        ),
+        LoopStop::Budget => format!(
+            "raise it: mur fleet settings {fleet} --budget-usd <USD>  (fleet.yaml loop.budget_usd)"
+        ),
+        LoopStop::Stopped => format!("cleared by: mur fleet start {fleet}"),
+        LoopStop::CommanderKilled => {
+            format!("a commander directive halted {fleet} — inspect it: mur commander status")
+        }
+        LoopStop::AwaitingApproval => {
+            format!("a member is waiting on you: mur channel approve fleet-{fleet} <hitl_id>")
+        }
+    })
+}
+
+/// The channel terminal state a stop implies, in the kebab-case wire form
+/// `channel_terminal_status` and the rail already fold. Done is `completed`; a
+/// kill is `canceled`; waiting on a person is `input-required`; a guard trip
+/// is `failed`, because the goal was not reached — the run ending is not the
+/// same as the work being done.
+fn terminal_state_for(stop: LoopStop) -> &'static str {
+    match stop {
+        LoopStop::Converged | LoopStop::QueueDrained => "completed",
+        LoopStop::Stopped | LoopStop::CommanderKilled => "canceled",
+        LoopStop::AwaitingApproval => "input-required",
+        LoopStop::MaxIterations | LoopStop::Deadline | LoopStop::Stuck | LoopStop::Budget => {
+            "failed"
+        }
+    }
+}
+
 /// Inner guarded loop: runs iterations until a stop reason fires. Returns
 /// `(stop, iterations_completed, spent_usd)`. Extracted so tests can call it
 /// directly and inspect the `LoopStop` without going through the print layer.
@@ -718,15 +764,56 @@ pub async fn run_guarded(
 
     // Stamp the terminal state onto the progress file — kept as the last-run
     // record (overwritten by the next run). Best-effort.
-    {
+    let run_id = {
         let mut g = lock_progress(&progress);
         g.finished_at = Some(chrono::Utc::now().to_rfc3339());
         g.outcome = Some(outcome_label(stop).to_string());
         g.iteration = iteration;
         g.spend_usd = spent;
         g.save(mur_home, name);
-    }
+        g.run_id.clone()
+    };
+    // And onto the channel, where the rail, murmur and the Hub are looking.
+    // Until this existed the reason lived only in progress.json, and every
+    // surface said "finished" for a run that had hit a cap. Signed as the
+    // writer like every other event this run wrote; best-effort like the
+    // progress file — a stop must never fail because its announcement did.
+    emit_stop_event(&svc, mur_home, &fleet, stop, iteration, spent, &run_id);
     Ok((stop, iteration, spent))
+}
+
+/// One System `state-change` carrying why the loop stopped and the way out.
+/// `from` is always `working`: a loop that is ending was running.
+fn emit_stop_event(
+    svc: &mur_channel::ChannelService,
+    mur_home: &Path,
+    fleet: &Fleet,
+    stop: LoopStop,
+    iterations: u32,
+    spent_usd: f64,
+    run_id: &str,
+) {
+    let payload = serde_json::json!({
+        "from": "working",
+        "to": terminal_state_for(stop),
+        "stop_reason": outcome_label(stop),
+        "remedy": stop_remedy(stop, &fleet.name),
+        "iterations": iterations,
+        "spent_usd": spent_usd,
+        "run_id": run_id,
+    });
+    if let Err(e) = crate::channel_writer::append_as_writer(
+        svc,
+        mur_home,
+        &fleet.channel_id,
+        fleet.router_or_concierge(),
+        ChannelActor::System,
+        mur_common::channel::EventKind::StateChange,
+        payload,
+        None,
+    ) {
+        tracing::warn!(fleet = %fleet.name, error = %e, "could not write the stop reason to the channel");
+    }
 }
 
 /// `mur fleet run --loop`: run guarded iterations until the router converges or
@@ -1193,6 +1280,123 @@ mod tests {
         assert_eq!(p.question, "research question");
         assert!(p.finished_at.is_some());
         assert_eq!(p.outcome.as_deref(), Some("stopped"));
+    }
+
+    /// Every stop has a remedy except the two that mean "done". The remedy
+    /// names a command that exists today; the spec's later steps rewrite it.
+    #[test]
+    fn every_stop_short_of_done_names_a_remedy() {
+        for stop in [
+            LoopStop::MaxIterations,
+            LoopStop::Deadline,
+            LoopStop::Stuck,
+            LoopStop::Budget,
+            LoopStop::Stopped,
+            LoopStop::CommanderKilled,
+            LoopStop::AwaitingApproval,
+        ] {
+            let r = stop_remedy(stop, "dev").unwrap_or_else(|| panic!("{stop:?} has no remedy"));
+            assert!(
+                r.contains("dev"),
+                "{stop:?}: remedy must name the fleet: {r}"
+            );
+        }
+        assert_eq!(stop_remedy(LoopStop::Converged, "dev"), None);
+        assert_eq!(stop_remedy(LoopStop::QueueDrained, "dev"), None);
+        assert!(
+            stop_remedy(LoopStop::MaxIterations, "dev")
+                .unwrap()
+                .contains("--max-iterations")
+        );
+        assert!(
+            stop_remedy(LoopStop::Deadline, "dev")
+                .unwrap()
+                .contains("--deadline")
+        );
+        assert!(
+            stop_remedy(LoopStop::Budget, "dev")
+                .unwrap()
+                .contains("--budget-usd")
+        );
+        assert!(
+            stop_remedy(LoopStop::Stopped, "dev")
+                .unwrap()
+                .contains("mur fleet start dev")
+        );
+        assert!(
+            stop_remedy(LoopStop::AwaitingApproval, "dev")
+                .unwrap()
+                .contains("mur channel approve")
+        );
+    }
+
+    /// The map from "why we stopped" to the channel's terminal state. Done is
+    /// completed; a kill is canceled; waiting on a person is input-required;
+    /// a guard trip is failed — the goal was not reached.
+    #[test]
+    fn stop_maps_to_a_channel_terminal_state() {
+        assert_eq!(terminal_state_for(LoopStop::Converged), "completed");
+        assert_eq!(terminal_state_for(LoopStop::QueueDrained), "completed");
+        assert_eq!(terminal_state_for(LoopStop::Stopped), "canceled");
+        assert_eq!(terminal_state_for(LoopStop::CommanderKilled), "canceled");
+        assert_eq!(
+            terminal_state_for(LoopStop::AwaitingApproval),
+            "input-required"
+        );
+        for stop in [
+            LoopStop::MaxIterations,
+            LoopStop::Deadline,
+            LoopStop::Stuck,
+            LoopStop::Budget,
+        ] {
+            assert_eq!(terminal_state_for(stop), "failed", "{stop:?}");
+        }
+    }
+
+    /// The stop reaches the channel, not only progress.json: one System
+    /// state-change at the end of the run carrying reason and remedy.
+    #[tokio::test]
+    async fn a_guard_stop_is_written_to_the_channel_with_reason_and_remedy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let fleet = Fleet {
+            name: "dev".into(),
+            display_name: String::new(),
+            goal: "g".into(),
+            router: None,
+            members: vec!["pm".into()],
+            team_id: None,
+            channel_id: "fleet-dev".into(),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: None,
+            parallel: None,
+            hitl: None,
+            requires_programs: vec![],
+        };
+        crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
+        let svc = mur_channel::ChannelService::open(home).unwrap();
+        svc.create_for_fleet("dev", "mur", &["pm".into()]).unwrap();
+        // Kill-switch: the loop stops before any delegation, no live agent needed.
+        crate::cmd::fleet::control::cmd_fleet_stop(home, "dev").unwrap();
+
+        let stop = run_loop_for_test(home).await;
+        assert_eq!(stop, LoopStop::Stopped);
+
+        let events = svc.load_events("fleet-dev").unwrap();
+        let last = events
+            .last()
+            .expect("the stop event is the last thing written");
+        assert_eq!(last.kind, mur_common::channel::EventKind::StateChange);
+        assert_eq!(last.actor, ChannelActor::System);
+        assert_eq!(last.payload["to"], "canceled");
+        assert_eq!(last.payload["stop_reason"], "stopped");
+        assert_eq!(last.payload["remedy"], "cleared by: mur fleet start dev");
+        assert!(
+            last.payload["run_id"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty())
+        );
     }
 
     #[tokio::test]
