@@ -13,7 +13,11 @@ use crate::mcp::pool::McpPool;
 use crate::protocol::mcp_client::McpClient;
 
 /// Default per-tool-call timeout when an MCP server entry sets no
-/// `timeout_secs`. Override per server via `McpServerEntry.timeout_secs`.
+/// `timeout_secs`. Deliberately short (spec 2026-09-12 execution-limits
+/// §3.6): a tool that needs longer must return a handle and let the caller
+/// poll — `fleet_run` and `parallel_jobs` do. Raising this is the wrong fix
+/// for the next twenty-minute tool. Override per server via
+/// `McpServerEntry.timeout_secs` when a server genuinely answers slowly.
 pub const DEFAULT_MCP_TOOL_TIMEOUT_SECS: u64 = 120;
 pub const MCP_TOOL_TIMEOUT: Duration = Duration::from_secs(DEFAULT_MCP_TOOL_TIMEOUT_SECS);
 
