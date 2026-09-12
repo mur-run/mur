@@ -509,7 +509,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **4.1 Write the failing test** — in `mur-agent-runtime/src/turn_ledger.rs`'s test module, next to the existing test that asserts `"output may be incomplete"`:
+- [x] **4.1 Write the failing test** — in `mur-agent-runtime/src/turn_ledger.rs`'s test module, next to the existing test that asserts `"output may be incomplete"`:
 
 ```rust
     /// Every unclean stop says what to do about it, next to the fact. Naming
@@ -537,9 +537,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
   If `TurnLedger` has no `stop` field but a setter, use the setter the existing "output may be incomplete" test uses; mirror that test's construction exactly.
 
-- [ ] **4.2 Watch it fail** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(every_unclean_stop_names_its_remedy)'`. Expected: compile error `no method named remedy`.
+- [x] **4.2 Watch it fail** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(every_unclean_stop_names_its_remedy)'`. Expected: compile error `no method named remedy`.
 
-- [ ] **4.3 Add the remedy and render it** — in `impl StopKind`, after `as_str`:
+- [x] **4.3 Add the remedy and render it** — in `impl StopKind`, after `as_str`:
 
 ```rust
     /// What to do about it, in today's knobs. `hitl.max_iterations` and
@@ -573,9 +573,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
     }
 ```
 
-- [ ] **4.4 Watch it pass** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(/turn_ledger/)'`. Expected: all pass. The murmur card parser (`mur-core/src/cmd/agent/cli/settlement.rs`) treats the line as a `⚠` row and wraps it; no change there.
+- [x] **4.4 Watch it pass** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(/turn_ledger/)'`. Expected: all pass. The murmur card parser (`mur-core/src/cmd/agent/cli/settlement.rs`) treats the line as a `⚠` row and wraps it; no change there.
 
-- [ ] **4.5 fmt + clippy** (`cargo clippy -p mur-agent-runtime --all-targets -- -D warnings`), then **commit**:
+- [x] **4.5 fmt + clippy** (`cargo clippy -p mur-agent-runtime --all-targets -- -D warnings`), then **commit**:
 
 ```
 feat(runtime): the settlement card's stop row names the knob that bit
