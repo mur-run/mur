@@ -1659,7 +1659,15 @@ mod tests {
             parallel: None,
             hitl: None,
             requires_programs: vec![],
-            limits: None,
+            // The iteration errors (no live "pm") and produces no agent event,
+            // so a zero stuck window ends the loop right after it — the old
+            // `max_iterations: 1` no longer caps anything (spec §6), and
+            // without this the test would sit out the 10-minute default.
+            limits: Some(mur_common::limits::Limits {
+                deadline: None,
+                stuck: Some("0s".into()),
+                cost_usd: None,
+            }),
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
@@ -1668,9 +1676,9 @@ mod tests {
             .unwrap();
         // Same empty queue as the fires case, but router policy: the gate must
         // not mistake an empty queue for `done_when: queue-empty`. No live
-        // "pm" agent exists to dial, so the iteration errors out and
-        // `run_loop_for_test` folds that into MaxIterations — the only claim
-        // under test is that the gate did NOT mistake this for a drained queue.
+        // "pm" agent exists to dial, so the iteration errors out and the zero
+        // stuck window stops the loop — the only claim under test is that the
+        // gate did NOT mistake this for a drained queue.
         let stop = run_loop_for_test(home).await;
         assert_ne!(stop, LoopStop::QueueDrained);
     }
