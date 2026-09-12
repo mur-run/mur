@@ -181,7 +181,9 @@ The rule "unattended auto-run is OFF unless `MUR_FLEET_AUTORUN=1`, also requires
 | governance | fail-closed on Err | unchanged |
 | approvals | `yes:false` everywhere | unchanged |
 
-A local-model fleet is bounded by its deadline. A billable fleet with neither knob does not auto-run, same as today. **Approved by the user in conversation on 2026-09-12**; the `feedback_autonomous_loop_safety_audit` memory is updated to match.
+A local-model fleet is bounded by its deadline. A billable fleet with neither knob does not auto-run, same as today.
+
+A billable fleet bounded by a deadline **alone** is allowed — a deadline is a cost bound in a different unit (rate × time), and a dollar cap built on a stale price table is a falser comfort than a clock — but the choice must be made knowingly, never slid into. So (decided 2026-09-12): the loop prints one line at start, `⚠ billable, no cost cap — bound is the deadline (2h); spend is reported per iteration at $<rate>/1k — set --budget-usd to cap it`, and the Hub badge (§10.2) reads `bounded by deadline only · no cost cap` rather than a bare green check. No projection of total dollars is printed: iteration duration is unknown, and a made-up number would be worse than the honest rate. **Approved by the user in conversation on 2026-09-12**; the `feedback_autonomous_loop_safety_audit` memory is updated to match.
 
 ## 6. Migration
 
@@ -271,10 +273,12 @@ never          2h            10m           Router decides…
 Last auto-run  Deadline      Stuck         Done when
 ```
 
-with a fifth element on the header line next to the trigger: **`bounded ✓`**
-or **`unbounded — will not auto-run`**. That badge is §5 made visible: it
-is green when `deadline` is set or `cost_usd` applies and is set, and it
-links to the Settings tab otherwise. On a billable fleet the third card
+with a fifth element on the header line next to the trigger: **`bounded ✓`**,
+**`bounded by deadline only · no cost cap`** (a billable fleet with a deadline
+and no `cost_usd` — amber, not green, because the user is choosing to run
+without a dollar ceiling and should see that they are), or
+**`unbounded — will not auto-run`**. That badge is §5 made visible; the
+unbounded state links to the Settings tab. On a billable fleet the third card
 shows `$5.00 / Cost cap` instead of stuck when a cap is set; stuck moves to
 the panel.
 
