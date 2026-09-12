@@ -120,6 +120,28 @@ impl StopKind {
             StopKind::MaxTokens => "max_tokens",
         }
     }
+
+    /// What to do about it, in today's knobs. `hitl.max_iterations` and
+    /// `hitl.max_tokens` live in the agent's profile.yaml until the `limits:`
+    /// schema replaces them; the settlement card is where the user learns
+    /// which one bit, so it names it.
+    pub fn remedy(self) -> Option<&'static str> {
+        match self {
+            StopKind::EndTurn => None,
+            StopKind::MaxIterations => {
+                Some("raise hitl.max_iterations in the agent's profile.yaml and restart it")
+            }
+            StopKind::TokenBudget => {
+                Some("raise hitl.max_tokens in the agent's profile.yaml and restart it")
+            }
+            StopKind::LoopDetected => Some(
+                "the last tool call repeated with identical arguments — change the ask, or the tool's input",
+            ),
+            StopKind::MaxTokens => {
+                Some("the model's output limit — ask it to continue from where it stopped")
+            }
+        }
+    }
 }
 
 /// The turn's accounting.
@@ -364,10 +386,14 @@ pub fn render(ledger: &TurnLedger) -> String {
 
     if !ledger.stop.is_clean() {
         out.push_str(&format!(
-            "  ⚠ stopped at {} ({} iterations) — output may be incomplete\n",
+            "  ⚠ stopped at {} ({} iterations) — output may be incomplete",
             ledger.stop.as_str(),
             ledger.iterations
         ));
+        if let Some(r) = ledger.stop.remedy() {
+            out.push_str(&format!(" · {r}"));
+        }
+        out.push('\n');
     }
     out.push_str("```");
     out
@@ -680,5 +706,44 @@ mod tests {
         ));
         let card = render(&l);
         assert!(card.contains("/tmp/some/file.txt"), "target lost:\n{card}");
+    }
+
+    /// Every unclean stop says what to do about it, next to the fact. Naming
+    /// the knob is the difference between "the agent gave up" and "raise
+    /// hitl.max_tokens".
+    #[test]
+    fn every_unclean_stop_names_its_remedy() {
+        assert_eq!(StopKind::EndTurn.remedy(), None);
+        for k in [
+            StopKind::MaxIterations,
+            StopKind::TokenBudget,
+            StopKind::LoopDetected,
+            StopKind::MaxTokens,
+        ] {
+            assert!(k.remedy().is_some(), "{k:?}");
+        }
+        assert!(
+            StopKind::MaxIterations
+                .remedy()
+                .unwrap()
+                .contains("hitl.max_iterations")
+        );
+        assert!(
+            StopKind::TokenBudget
+                .remedy()
+                .unwrap()
+                .contains("hitl.max_tokens")
+        );
+
+        let ledger = TurnLedger {
+            stop: StopKind::TokenBudget,
+            iterations: 17,
+            ..Default::default()
+        };
+        let card = render(&ledger);
+        assert!(
+            card.contains("⚠ stopped at token budget (17 iterations) — output may be incomplete · raise hitl.max_tokens"),
+            "{card}"
+        );
     }
 }
