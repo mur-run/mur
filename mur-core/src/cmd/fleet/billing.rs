@@ -7,10 +7,6 @@
 //! it errs toward "this might cost something". A local-only fleet is bounded by
 //! a deadline; a billable one by a deadline or a `budget_usd`.
 
-// Wired into the loop and the daemon by the next two commits; until then
-// nothing calls it. Removed there.
-#![allow(dead_code)]
-
 use std::path::Path;
 
 use mur_common::fleet::{Fleet, FleetLoop};
@@ -73,6 +69,9 @@ pub fn fleet_billing(mur_home: &Path, fleet: &Fleet) -> FleetBilling {
 /// §5: unattended work must be bounded. A deadline bounds any fleet; a
 /// positive `budget_usd` bounds a billable one and means nothing for a fleet
 /// that cannot spend.
+// Consumed by `mur-daemon`; the `mur` binary target compiles this module too
+// and would otherwise report it unused (same as `complete::offers`).
+#[allow(dead_code)]
 pub fn is_bounded(lc: Option<&FleetLoop>, billing: &FleetBilling) -> bool {
     let Some(l) = lc else { return false };
     let has_deadline = !l.deadline.trim().is_empty();
@@ -82,6 +81,9 @@ pub fn is_bounded(lc: Option<&FleetLoop>, billing: &FleetBilling) -> bool {
 
 /// Why `is_bounded` said no, in the words of the fix. Only meaningful when it
 /// did say no.
+// Consumed by `mur-daemon`; the `mur` binary target compiles this module too
+// and would otherwise report it unused (same as `complete::offers`).
+#[allow(dead_code)]
 pub fn unbounded_reason(lc: Option<&FleetLoop>, billing: &FleetBilling, fleet: &str) -> String {
     let _ = lc;
     if billing.billable {
