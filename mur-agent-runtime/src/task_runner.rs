@@ -1795,7 +1795,10 @@ impl TaskRunner {
                 ToolPolicy::Deny => {
                     return Ok(ToolResultEntry {
                         call_id: call.call_id.clone(),
-                        content: format!("Tool `{}` is denied by policy.", call.tool_name),
+                        content: format!(
+                            "Tool `{}` is denied by policy — it is unavailable for the rest of this turn; do not call it again",
+                            call.tool_name
+                        ),
                         is_error: true,
                         status: crate::tools::ToolStatus::Denied {
                             detail: format!("Tool `{}` is denied by policy.", call.tool_name),
@@ -1821,16 +1824,30 @@ impl TaskRunner {
                             .await;
                     }
                     let t0 = std::time::Instant::now();
-                    let (output, status, is_error, images) =
-                        match tool.execute(call.input.clone()).await {
-                            Ok(out) => (self.masked(out.text), out.status, false, out.images),
-                            Err(e) => (
-                                format!("tool error: {e}"),
-                                crate::tools::ToolStatus::Failed { exit_code: -1 },
-                                true,
-                                Vec::new(),
+                    let (output, status, is_error, images) = match tool
+                        .execute(call.input.clone())
+                        .await
+                    {
+                        Ok(out) => (self.masked(out.text), out.status, false, out.images),
+                        // Same refusal handling as the Ask path below —
+                        // there are two execute sites, and a fix that
+                        // lands on one of them is not a fix.
+                        Err(crate::tools::ToolError::NotAuthorized(msg)) => (
+                            format!(
+                                "{msg} — `{}` is unavailable for the rest of this turn; do not call it again",
+                                call.tool_name
                             ),
-                        };
+                            crate::tools::ToolStatus::Denied { detail: msg },
+                            true,
+                            Vec::new(),
+                        ),
+                        Err(e) => (
+                            format!("tool error: {e}"),
+                            crate::tools::ToolStatus::Failed { exit_code: -1 },
+                            true,
+                            Vec::new(),
+                        ),
+                    };
                     if let Some(ref n) = step_notifier {
                         let (out, truncated, full_len) = cap_step_output(&output);
                         let _ = n
@@ -1902,6 +1919,17 @@ impl TaskRunner {
         let t0_ask = std::time::Instant::now();
         let (output, status, is_error, images) = match tool.execute(call.input.clone()).await {
             Ok(out) => (self.masked(out.text), out.status, false, out.images),
+            // A refusal is terminal for the tool this turn (spec §3.8): say
+            // so once; the loop withdraws it from the next request.
+            Err(crate::tools::ToolError::NotAuthorized(msg)) => (
+                format!(
+                    "{msg} — `{}` is unavailable for the rest of this turn; do not call it again",
+                    call.tool_name
+                ),
+                crate::tools::ToolStatus::Denied { detail: msg },
+                true,
+                Vec::new(),
+            ),
             Err(e) => (
                 format!("tool error: {e}"),
                 crate::tools::ToolStatus::Failed { exit_code: -1 },
@@ -2021,12 +2049,9 @@ impl TaskRunner {
         // `suggest_replies` is offered to the model only on streaming
         // (interactive) turns — non-interactive callers never see it.
         let streaming = sink.is_some();
-        let tool_defs: Vec<_> = self
-            .tools_for_loop()
-            .iter()
-            .map(|t| t.def())
-            .filter(|d| crate::tools::suggest::offer_for_streaming(&d.name, streaming))
-            .collect();
+        // Tools a gate refused this turn (spec §3.8): told once, then not
+        // offered again, so the model cannot spin on "not authorized" ×3.
+        let mut disabled: HashSet<String> = HashSet::new();
         // Seed with prior conversation threaded via `context.task_id` so the
         // model has multi-turn memory; this turn's tool scaffolding is appended
         // below and stays ephemeral (never persisted into chat memory).
@@ -2055,6 +2080,13 @@ impl TaskRunner {
 
         let mut iteration: u32 = 0;
         while iteration < self.iteration_ceiling {
+            let tool_defs: Vec<_> = self
+                .tools_for_loop()
+                .iter()
+                .map(|t| t.def())
+                .filter(|d| crate::tools::suggest::offer_for_streaming(&d.name, streaming))
+                .filter(|d| !disabled.contains(&d.name))
+                .collect();
             let now = std::time::Instant::now();
             if let Some(d) = bounds.deadline
                 && now >= d
@@ -2281,6 +2313,25 @@ impl TaskRunner {
             let mut durations_ms: Vec<u64> = Vec::new();
             for call in &resp.tool_calls {
                 let t0 = std::time::Instant::now();
+                // Withdrawn this turn (spec §3.8): the tool left the list
+                // after a refusal; a model that calls it anyway is told so
+                // again without the gate or the tool running.
+                if disabled.contains(&call.tool_name) {
+                    durations_ms.push(0);
+                    results.push(crate::llm::ToolResultEntry {
+                        call_id: call.call_id.clone(),
+                        content: format!(
+                            "`{}` was withdrawn for the rest of this turn after an authorization refusal; do not call it again",
+                            call.tool_name
+                        ),
+                        is_error: true,
+                        status: crate::tools::ToolStatus::Denied {
+                            detail: "withdrawn this turn".into(),
+                        },
+                        images: Vec::new(),
+                    });
+                    continue;
+                }
                 match self
                     .handle_tool_call(
                         task_id,
@@ -2314,6 +2365,9 @@ impl TaskRunner {
             // making progress (don't abort). Fingerprinting happens here,
             // AFTER execution, because the result is needed.
             for (call, entry) in resp.tool_calls.iter().zip(results.iter()) {
+                if withdraws(entry) {
+                    disabled.insert(call.tool_name.clone());
+                }
                 ledger.record(crate::turn_ledger::Action {
                     tool: call.tool_name.clone(),
                     target: crate::turn_ledger::describe_target(&call.tool_name, &call.input),
@@ -2702,6 +2756,14 @@ fn last_assistant_text(history: &[crate::llm::RichMessage]) -> Option<String> {
 /// Extracted because the same shape as an inline condition was untestable: a
 /// test of the map that carries the flag says nothing about whether the gate
 /// reads it.
+/// Does this result take its tool off the table for the rest of the turn?
+/// A gate's refusal does (policy Deny, `ToolError::NotAuthorized`); a name the
+/// model invented does not — there is nothing to withdraw.
+fn withdraws(entry: &crate::llm::ToolResultEntry) -> bool {
+    matches!(entry.status, crate::tools::ToolStatus::Denied { .. })
+        && !entry.content.starts_with("unknown tool")
+}
+
 fn decide_without_asking(
     can_approve: Option<bool>,
     tool_name: &str,
@@ -3879,6 +3941,140 @@ mod tests {
             0,
             "explicitly denied fleet_run must never execute"
         );
+    }
+
+    /// A stub LLM that records the tool names offered on every request and
+    /// otherwise answers from a fixed sequence.
+    struct OfferRecordingLlm {
+        inner: crate::llm::stub::SequenceLlm,
+        offered: Arc<std::sync::Mutex<Vec<Vec<String>>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::llm::LlmClient for OfferRecordingLlm {
+        async fn generate(
+            &self,
+            req: crate::llm::LlmRequest,
+        ) -> Result<crate::llm::LlmResponse, crate::llm::LlmError> {
+            self.offered
+                .lock()
+                .unwrap()
+                .push(req.tools.iter().map(|d| d.name.clone()).collect());
+            self.inner.generate(req).await
+        }
+        fn model_name(&self) -> &str {
+            "recording"
+        }
+    }
+
+    /// A fleet_run stand-in whose gate always says no.
+    struct RefusingFleetRunTool {
+        calls: Arc<AtomicU64>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::tools::ToolExecutor for RefusingFleetRunTool {
+        fn name(&self) -> &str {
+            crate::tools::fleet_run::FLEET_RUN
+        }
+        fn def(&self) -> crate::llm::ToolDef {
+            crate::llm::ToolDef {
+                name: crate::tools::fleet_run::FLEET_RUN.into(),
+                description: "refusing fleet_run".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+        ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Err(crate::tools::ToolError::NotAuthorized(
+                mur_common::authz::not_authorized("fleet_run: test refusal"),
+            ))
+        }
+    }
+
+    /// §3.8: a refusal is told once and the tool leaves the list. The stub
+    /// asks for fleet_run on three consecutive turns; the tool runs once, the
+    /// second and third requests do not offer it.
+    #[tokio::test]
+    async fn a_refused_tool_is_offered_once_and_then_withdrawn() {
+        use crate::llm::stub::SequenceLlm;
+        let offered = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let responses = vec![
+            fleet_run_call_response("fr-0"),
+            fleet_run_call_response("fr-1"),
+            fleet_run_call_response("fr-2"),
+            end_turn_response("gave up"),
+        ];
+        let calls = Arc::new(AtomicU64::new(0));
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(OfferRecordingLlm {
+                inner: SequenceLlm::new(responses),
+                offered: offered.clone(),
+            }))
+            .with_tools(vec![Arc::new(RefusingFleetRunTool {
+                calls: calls.clone(),
+            })])
+            .with_tools_policy(vec![mur_common::agent::ToolRule {
+                pattern: crate::tools::fleet_run::FLEET_RUN.into(),
+                policy: mur_common::agent::ToolPolicy::Allow,
+                risk: None,
+            }])
+            .with_pending_approvals(empty_pending_approvals())
+            .with_notifier(tokio::sync::mpsc::channel(16).0)
+            .with_hitl_timeout_secs(1)
+            .with_iteration_ceiling(6),
+        );
+        let _ = runner.run_sync(loop_spec("refused")).await;
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "the refused tool ran exactly once"
+        );
+        let offered = offered.lock().unwrap();
+        let fr = crate::tools::fleet_run::FLEET_RUN;
+        assert!(
+            offered[0].iter().any(|n| n == fr),
+            "offered on the first request: {offered:?}"
+        );
+        assert!(
+            offered.len() >= 2
+                && offered[1..]
+                    .iter()
+                    .all(|names| !names.iter().any(|n| n == fr)),
+            "withdrawn afterwards: {offered:?}"
+        );
+    }
+
+    #[test]
+    fn only_a_gates_refusal_withdraws_a_tool() {
+        use crate::llm::ToolResultEntry;
+        use crate::tools::ToolStatus;
+        let mk = |content: &str, status: ToolStatus| ToolResultEntry {
+            call_id: "c".into(),
+            content: content.into(),
+            is_error: true,
+            status,
+            images: Vec::new(),
+        };
+        assert!(withdraws(&mk(
+            "not authorized: x",
+            ToolStatus::Denied { detail: "x".into() }
+        )));
+        assert!(withdraws(&mk(
+            "Tool `bash` is denied by policy",
+            ToolStatus::Denied { detail: "d".into() }
+        )));
+        assert!(!withdraws(&mk(
+            "unknown tool: made_up",
+            ToolStatus::Denied { detail: "u".into() }
+        )));
+        assert!(!withdraws(&mk(
+            "tool error: boom",
+            ToolStatus::Failed { exit_code: -1 }
+        )));
     }
 
     /// Fix B — truncation is self-correcting, not a silent loop. When a turn
