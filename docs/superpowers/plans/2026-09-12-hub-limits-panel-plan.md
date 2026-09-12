@@ -672,7 +672,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **5.1 Write the failing tests** — Tauri `fleet.rs` tests:
+- [x] **5.1 Write the failing tests** — Tauri `fleet.rs` tests:
 
 ```rust
     #[test]
@@ -692,9 +692,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
   (`ChannelEvent` may have more fields — copy the literal from a test in `work.rs`.) UI `fleetJobs.test.ts`: `statusLabel(job, t)` → `"limits.stopped"` for `stop_reason: "deadline"`, `"limits.finished"` for `"converged"`, `"fleet.status.done"` when absent; `knobFor("budget") === "cost_usd"`.
 
-- [ ] **5.2 Implement** — `fleet.rs`: `stop_of` scans events newest-first for `kind == StateChange` with a `stop_reason`; `fleet_jobs` loads the fleet's channel events once and fills `stop_reason`/`remedy` for rows with a `run_id`; `fleet_detail` sets `last_stop` from the newest such event. UI: `fleetJobs.ts` pure helpers `statusLabel`, `knobFor`; `FleetJobs.tsx` uses `statusLabel`; `FleetOverview.tsx` renders `last_stop` with the remedy text and the `Adjust` button; `FleetHost.tsx` state `settingsFocus` → `FleetSettings focusKnob`.
+- [x] **5.2 Implement** — `fleet.rs`: `stop_of` scans events newest-first for `kind == StateChange` with a `stop_reason`; `fleet_jobs` loads the fleet's channel events once and fills `stop_reason`/`remedy` for rows with a `run_id`; `fleet_detail` sets `last_stop` from the newest such event. UI: `fleetJobs.ts` pure helpers `statusLabel`, `knobFor`; `FleetJobs.tsx` uses `statusLabel`; `FleetOverview.tsx` renders `last_stop` with the remedy text and the `Adjust` button; `FleetHost.tsx` state `settingsFocus` → `FleetSettings focusKnob`.
 
-- [ ] **5.3 Watch it pass** — Tauri `cargo test --lib`, `npx vitest run`, `npx tsc --noEmit`; Hub `cargo check` + clippy last. Commit:
+- [x] **5.3 Watch it pass** — Tauri `cargo test --lib`, `npx vitest run`, `npx tsc --noEmit`; Hub `cargo check` + clippy last. Commit:
 
 ```
 feat(hub): job rows and the fleet Overview show the channel's stop reason, with Adjust
