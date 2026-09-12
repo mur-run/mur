@@ -105,7 +105,7 @@ export function FleetDetailPane({
       avatar={<span className="fleet-avatar fleet-avatar--lg" aria-hidden="true"><Ico>{FLEET_GLYPH}</Ico></span>}
       title={detail.display_name}
       status={fleetStatusOf(summary)}
-      meta={fleetMeta(detail, t)}
+      meta={fleetMeta(detail, t, setTab)}
       actions={<FleetHeader detail={detail} onRefresh={refresh} onDelete={onDeleted} onOpenInWindow={onOpenInWindow} />}
       tabs={FLEET_TABS.map((id) => ({ id, label: t(FLEET_TAB_LABEL_KEY[id]) }))}
       activeTab={tab}

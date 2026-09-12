@@ -5,6 +5,7 @@ import { useT } from "../../../i18n";
 import type { TranslationKey } from "../../../i18n/types";
 import { avatarPreset, familyOf } from "../../../utils";
 import { PetFace } from "../../PetFace";
+import { statCards } from "./fleetOverviewCards";
 
 export interface FleetOverviewProps {
   detail: Detail;
@@ -16,13 +17,6 @@ export interface FleetOverviewProps {
 const DASH = "—";
 const JOB_PREVIEW = 3;
 
-/** `last_run` is an ISO timestamp from the loop record; show it in the
- *  viewer's locale when it parses, else as given. */
-function lastRunLabel(raw: string | null | undefined, never: string): string {
-  if (!raw) return never;
-  const ms = Date.parse(raw);
-  return Number.isNaN(ms) ? raw : new Date(ms).toLocaleString();
-}
 
 /** Overview (spec §4.4): goal, the loop limits from `loop_cfg`, members, the
  *  first jobs, and the loop summary. Iterations used and budget spent have no
@@ -38,14 +32,12 @@ export function FleetOverview({ detail, jobs, agentMap, onGoTo }: FleetOverviewP
         <p className="fleet-goal">{detail.goal}</p>
       </div>
       <div className="detail-card detail-stats">
-        <div>
-          <b>{lastRunLabel(loop?.last_run, t("fleet.never"))}</b>
-          <span>{t("fleet.settings.lastRun")}</span>
-        </div>
-        <div>
-          <b>{loop?.done_when || (loop ? t("fleet.settings.donePolicyRouter") : DASH)}</b>
-          <span>{t("fleet.settings.doneWhen")}</span>
-        </div>
+        {statCards(detail.limits, loop, t).map((card) => (
+          <div key={card.label}>
+            <b>{card.value}</b>
+            <span>{t(card.label)}</span>
+          </div>
+        ))}
       </div>
       <div className="detail-two">
         <div className="detail-card">

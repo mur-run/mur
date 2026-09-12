@@ -2,6 +2,8 @@ import { useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { FleetDetail as Detail } from "../../fleet/types";
+import type { FleetTabId } from "../../shell/detailTabs";
+import { badgeOf } from "../../limits/limitsPanelLogic";
 import { useT } from "../../../i18n";
 import { modeBadgeLabel } from "../../fleet/fleetSettingsForm";
 import { SplitButton } from "../../shell/SplitButton";
@@ -11,8 +13,9 @@ import { deleteFleet, showToast, useFleetCall } from "./fleetActions";
 type T = ReturnType<typeof useT>["t"];
 
 /** The meta line under the title: router · members · channel · mode. */
-export function fleetMeta(detail: Detail, t: T): ReactNode {
+export function fleetMeta(detail: Detail, t: T, onGoTo: (tab: FleetTabId) => void): ReactNode {
   const mode = modeBadgeLabel(detail.parallel_summary, t);
+  const badge = badgeOf(detail.limits, t);
   return (
     <>
       <span>{t("fleet.router")}: {detail.router}</span>
@@ -25,6 +28,14 @@ export function fleetMeta(detail: Detail, t: T): ReactNode {
           <span className="sep">·</span>
           <span className="fleet-detail__mode-badge">{mode}</span>
         </>
+      )}
+      <span className="sep">·</span>
+      {badge.tone === "off" ? (
+        <button type="button" className="fleet-detail__bounded-link" onClick={() => onGoTo("settings")}>
+          <span className={`fleet-detail__bounded fleet-detail__bounded--${badge.tone}`}>{badge.text}</span>
+        </button>
+      ) : (
+        <span className={`fleet-detail__bounded fleet-detail__bounded--${badge.tone}`}>{badge.text}</span>
       )}
     </>
   );
