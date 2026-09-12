@@ -24,6 +24,12 @@ pub enum ToolError {
     Unknown(String),
     #[error("invalid input: {0}")]
     InvalidInput(String),
+    /// An authorization gate said no — the fleet_run allowlist, a tool
+    /// policy `Deny`, an MCP server's refusal. Terminal for the tool for the
+    /// rest of the turn (spec §3.8): the model is told once, then the tool
+    /// leaves its list. Never retried.
+    #[error("{0}")]
+    NotAuthorized(String),
 }
 
 /// Structural status of a tool execution.
