@@ -279,6 +279,36 @@ fn effective_budget(flag: Option<f64>, fleet: &Fleet) -> Option<f64> {
         .filter(|&b| b > 0.0)
 }
 
+/// The budget the guard enforces: the configured one for a fleet that can
+/// spend, none for a fleet that cannot (spec D4). Enforcing a dollar ceiling
+/// on local models stopped real runs on a projection of money nobody was
+/// paying — the failure mode this exists to remove.
+fn budget_for(fleet_budget: Option<f64>, billing: &super::billing::FleetBilling) -> Option<f64> {
+    if billing.billable { fleet_budget } else { None }
+}
+
+/// The one line a billable fleet running on a deadline alone must see (spec
+/// §5, decided 2026-09-12): the choice to run without a dollar ceiling is
+/// allowed, never slid into. No total is projected — iteration duration is
+/// unknown and a made-up number is worse than the honest rate.
+fn no_cap_notice(
+    billing: &super::billing::FleetBilling,
+    budget: Option<f64>,
+    deadline: Option<Duration>,
+    rate_per_1k: f64,
+) -> Option<String> {
+    if !billing.billable || budget.is_some_and(|b| b > 0.0) {
+        return None;
+    }
+    let bound = match deadline {
+        Some(d) => format!("the deadline ({}s)", d.as_secs()),
+        None => "nothing but the iteration cap".to_string(),
+    };
+    Some(format!(
+        "⚠ billable, no cost cap — bound is {bound}; spend is reported per iteration at ${rate_per_1k}/1k — set --budget-usd to cap it"
+    ))
+}
+
 /// SHA-256 (hex) of the deciding directive's canonical sign-input, so the audit
 /// row binds to exactly the signed directive that was honored. Empty if the
 /// nonce has no matching event (defensive).
@@ -421,7 +451,26 @@ pub async fn run_guarded(
 
     let max_iter = effective_max_iterations(max_iterations, &fleet);
     let deadline = effective_deadline(deadline.as_deref(), &fleet);
-    let budget = effective_budget(budget_usd, &fleet);
+    let billing = super::billing::fleet_billing(mur_home, &fleet);
+    let configured_budget = effective_budget(budget_usd, &fleet);
+    let budget = budget_for(configured_budget, &billing);
+    if configured_budget.is_some_and(|b| b > 0.0) && budget.is_none() {
+        println!(
+            "  ℹ budget_usd ignored — fleet '{name}' runs on local/subscription models and cannot spend; \
+             its bound is the deadline"
+        );
+    }
+    if !billing.unknown.is_empty() {
+        let who: Vec<String> = billing
+            .unknown
+            .iter()
+            .map(|(a, m)| format!("{a} ({m})"))
+            .collect();
+        println!(
+            "  ⚠ billing unknown for {} — treated as metered. Mark a local model with `billing: local` in models.yaml",
+            who.join(", ")
+        );
+    }
     let price_per_1k = fleet_price_per_1k(mur_home);
     if let (rate, GuardRate::Default) = price_per_1k
         && budget.is_some()
@@ -435,6 +484,9 @@ pub async fn run_guarded(
         );
     }
     let price_per_1k = price_per_1k.0;
+    if let Some(line) = no_cap_notice(&billing, budget, deadline, price_per_1k) {
+        println!("  {line}");
+    }
     // Forward estimate before any real data (and the fail-safe fallback when an
     // iteration reports no token usage), so spend can never silently under-count.
     let projection = estimate_iteration_cost_usd(fleet.members.len(), price_per_1k);
@@ -1397,6 +1449,61 @@ mod tests {
                 .as_str()
                 .is_some_and(|s| !s.is_empty())
         );
+    }
+
+    /// A local or subscription fleet has no spend, so a `budget_usd` on it is
+    /// noise: the guard would stop a run on a projection of dollars nobody is
+    /// paying. Unknown billing keeps the budget — conservative, like the fold.
+    /// A billable fleet on a deadline alone is allowed, but told: the notice
+    /// names the bound and the rate, offers the cap, and stays silent for a
+    /// fleet that cannot spend or one that already has a cap.
+    #[test]
+    fn a_billable_fleet_without_a_cap_is_told_so() {
+        use super::super::billing::FleetBilling;
+        let local = FleetBilling {
+            billable: false,
+            unknown: vec![],
+        };
+        let billed = FleetBilling {
+            billable: true,
+            unknown: vec![],
+        };
+        let two_h = Some(Duration::from_secs(7200));
+        let n = no_cap_notice(&billed, None, two_h, 0.05).expect("billable, no cap → notice");
+        assert!(
+            n.contains("7200s") && n.contains("$0.05/1k") && n.contains("--budget-usd"),
+            "{n}"
+        );
+        assert!(
+            no_cap_notice(&billed, Some(5.0), two_h, 0.05).is_none(),
+            "capped → silent"
+        );
+        assert!(
+            no_cap_notice(&local, None, two_h, 0.05).is_none(),
+            "cannot spend → silent"
+        );
+        assert!(
+            no_cap_notice(&billed, None, None, 0.05)
+                .unwrap()
+                .contains("iteration cap")
+        );
+    }
+
+    #[test]
+    fn a_budget_applies_only_to_a_fleet_that_can_spend() {
+        use super::super::billing::FleetBilling;
+        let local = FleetBilling {
+            billable: false,
+            unknown: vec![],
+        };
+        let billed = FleetBilling {
+            billable: true,
+            unknown: vec![],
+        };
+        assert_eq!(budget_for(Some(5.0), &billed), Some(5.0));
+        assert_eq!(budget_for(Some(5.0), &local), None);
+        assert_eq!(budget_for(None, &billed), None);
+        assert_eq!(budget_for(None, &local), None);
     }
 
     #[tokio::test]
