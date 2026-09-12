@@ -47,7 +47,7 @@ from a worktree add `CARGO_TARGET_DIR=/Volumes/Firecuda4tb/Projects/mur/target`.
 
 ### Steps
 
-- [ ] **1.1 Write the failing test** — in `mur-common/src/model.rs`, in the test module that holds `entry_without_billing_metadata_stays_unknown`, add:
+- [x] **1.1 Write the failing test** — in `mur-common/src/model.rs`, in the test module that holds `entry_without_billing_metadata_stays_unknown`, add:
 
 ```rust
     /// Explicit `billing:` wins. Without it, the provider decides what can be
@@ -79,9 +79,9 @@ from a worktree add `CARGO_TARGET_DIR=/Volumes/Firecuda4tb/Projects/mur/target`.
 
   If `ModelEntry` does not implement `Default`, build it the way `entry_without_billing_metadata_stays_unknown` does (deserialise a minimal YAML string) and set `provider`/`billing` on the result.
 
-- [ ] **1.2 Watch it fail** — `cargo nextest run -p mur-common --lib -E 'test(billing_is_inferred)'`. Expected: `no method named billing_or_inferred`.
+- [x] **1.2 Watch it fail** — `cargo nextest run -p mur-common --lib -E 'test(billing_is_inferred)'`. Expected: `no method named billing_or_inferred`.
 
-- [ ] **1.3 Add the method** — in `mur-common/src/model.rs`, in `impl ModelEntry` (create the block next to the struct if none exists):
+- [x] **1.3 Add the method** — in `mur-common/src/model.rs`, in `impl ModelEntry` (create the block next to the struct if none exists):
 
 ```rust
     /// How this model is paid for, for the cost gates. An explicit `billing:`
@@ -106,11 +106,11 @@ from a worktree add `CARGO_TARGET_DIR=/Volumes/Firecuda4tb/Projects/mur/target`.
 
   `BillingMode` must be `Copy` for `if let Some(b) = self.billing`; if it is not, add `Copy` to its derive list (it is a fieldless enum).
 
-- [ ] **1.4 Watch it pass** — `cargo nextest run -p mur-common --lib -E 'test(/billing/)'`. Expected: all pass. Then `cargo clippy -p mur-common --all-targets -- -D warnings`, `cargo fmt -p mur-common`.
+- [x] **1.4 Watch it pass** — `cargo nextest run -p mur-common --lib -E 'test(/billing/)'`. Expected: all pass. Then `cargo clippy -p mur-common --all-targets -- -D warnings`, `cargo fmt -p mur-common`.
 
   **Hub check (mandatory — the Hub is workspace-excluded):** this task adds a method and possibly a derive; it changes no field, so no Hub struct literal breaks. Confirm with `command grep -rn "ModelEntry {" mur-hub-gui/src-tauri/src | wc -l` (informational) and `cargo check --manifest-path mur-hub-gui/src-tauri/Cargo.toml` if `ui/dist` exists; otherwise note it in the commit body.
 
-- [ ] **1.5 Commit**:
+- [x] **1.5 Commit**:
 
 ```
 feat(model): ModelEntry::billing_or_inferred — provider decides what it can
@@ -141,7 +141,7 @@ pub fn unbounded_reason(lc: Option<&FleetLoop>, billing: &FleetBilling, fleet: &
 
 ### Steps
 
-- [ ] **2.1 Create the module with its tests** — new file `mur-core/src/cmd/fleet/billing.rs`:
+- [x] **2.1 Create the module with its tests** — new file `mur-core/src/cmd/fleet/billing.rs`:
 
 ```rust
 //! Whether a fleet costs money, and what "bounded" means for it (spec
@@ -330,11 +330,11 @@ mod tests {
 }
 ```
 
-- [ ] **2.2 Register the module** — in `mur-core/src/cmd/fleet/mod.rs`, next to `pub mod loop_run;` add `pub mod billing;`.
+- [x] **2.2 Register the module** — in `mur-core/src/cmd/fleet/mod.rs`, next to `pub mod loop_run;` add `pub mod billing;`.
 
-- [ ] **2.3 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/fleet::billing::/)'`. Expected: 3 pass. (The red step for this task is the compile error before 2.2 registers the module; run 2.3 before 2.2 if you want to see it.) If `let ... && let` in `fleet_billing` fails to compile, the crate is on an older edition than 2024 — it is not; if `AgentProfile::load` needs a different path type, follow its signature (`&Path`, `&str`).
+- [x] **2.3 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/fleet::billing::/)'`. Expected: 3 pass. (The red step for this task is the compile error before 2.2 registers the module; run 2.3 before 2.2 if you want to see it.) If `let ... && let` in `fleet_billing` fails to compile, the crate is on an older edition than 2024 — it is not; if `AgentProfile::load` needs a different path type, follow its signature (`&Path`, `&str`).
 
-- [ ] **2.4 fmt + clippy** (`cargo clippy -p mur-core --all-targets -- -D warnings`), then **commit**:
+- [x] **2.4 fmt + clippy** (`cargo clippy -p mur-core --all-targets -- -D warnings`), then **commit**:
 
 ```
 feat(fleet): one billing verdict per fleet, and what "bounded" means
@@ -358,7 +358,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **3.1 Write the failing test** — in `loop_run.rs`'s `mod tests`:
+- [x] **3.1 Write the failing test** — in `loop_run.rs`'s `mod tests`:
 
 ```rust
     /// A local or subscription fleet has no spend, so a `budget_usd` on it is
@@ -376,9 +376,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
     }
 ```
 
-- [ ] **3.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(a_budget_applies_only)'`. Expected: `cannot find function budget_for`.
+- [x] **3.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(a_budget_applies_only)'`. Expected: `cannot find function budget_for`.
 
-- [ ] **3.3 Add the helper and use it** — below `fn effective_budget` in `loop_run.rs`:
+- [x] **3.3 Add the helper and use it** — below `fn effective_budget` in `loop_run.rs`:
 
 ```rust
 /// The budget the guard enforces: the configured one for a fleet that can
@@ -417,9 +417,9 @@ fn budget_for(fleet_budget: Option<f64>, billing: &super::billing::FleetBilling)
 
   `progress.budget_usd` is already set from `budget` a few lines down (`budget_usd: budget,`); leave it — a non-billable fleet now records `None`.
 
-- [ ] **3.4 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/loop_run::/)'`. Expected: all pass, including the step-1 tests (their fleets have no `models.yaml`, so billing is unknown → billable → behaviour unchanged).
+- [x] **3.4 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/loop_run::/)'`. Expected: all pass, including the step-1 tests (their fleets have no `models.yaml`, so billing is unknown → billable → behaviour unchanged).
 
-- [ ] **3.5 fmt + clippy**, then **commit**:
+- [x] **3.5 fmt + clippy**, then **commit**:
 
 ```
 fix(fleet): the loop does not enforce a budget a fleet cannot spend
@@ -442,7 +442,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **4.1 Write the failing tests** — in `fleet_tick.rs`'s test module, after `due_fleets_filters_by_trigger_and_last_run`:
+- [x] **4.1 Write the failing tests** — in `fleet_tick.rs`'s test module, after `due_fleets_filters_by_trigger_and_last_run`:
 
 ```rust
     /// §5 as tested at the daemon's seam: a deadline bounds any fleet; a
@@ -490,9 +490,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
   `loop_fleet` and `store` already exist in this test module. Note the fixture comment `// positive so auto-run eligibility holds in tests` on `budget_usd: 1.0` stays true (unknown billing → billable → budget bounds it).
 
-- [ ] **4.2 Watch it fail** — `cargo nextest run -p mur-daemon --lib -E 'test(/eligibility_is_bounded|kill_switch_beats/)'`. Expected: `cannot find function eligible`.
+- [x] **4.2 Watch it fail** — `cargo nextest run -p mur-daemon -E 'test(/eligibility_is_bounded|kill_switch_beats/)'`. Expected: `cannot find function eligible`.
 
-- [ ] **4.3 Replace the gate** — in `due_fleets`, replace from `// Auto-run requires a positive budget` through `let has_budget = …;` with:
+- [x] **4.3 Replace the gate** — in `due_fleets`, replace from `// Auto-run requires a positive budget` through `let has_budget = …;` with:
 
 ```rust
         // Auto-run requires a BOUND (spec §5): a deadline for any fleet, or a
@@ -531,9 +531,9 @@ fn eligible(
 
   If `FleetLoop` is not imported at the top of `fleet_tick.rs`, add `use mur_common::fleet::FleetLoop;`.
 
-- [ ] **4.4 Watch it pass** — `cargo nextest run -p mur-daemon --lib`. Expected: all pass. `due_fleets_filters_by_trigger_and_last_run` and `cron_fleet_not_due_immediately_after_baseline` still pass because their fixture's `budget_usd: 1.0` bounds an unknown-billing (→ billable) fleet.
+- [x] **4.4 Watch it pass** — `cargo nextest run -p mur-daemon`. Expected: all pass. `due_fleets_filters_by_trigger_and_last_run` and `cron_fleet_not_due_immediately_after_baseline` still pass because their fixture's `budget_usd: 1.0` bounds an unknown-billing (→ billable) fleet.
 
-- [ ] **4.5 fmt + clippy** (`cargo clippy -p mur-daemon --all-targets -- -D warnings`), then **commit**:
+- [x] **4.5 fmt + clippy** (`cargo clippy -p mur-daemon --all-targets -- -D warnings`), then **commit**:
 
 ```
 fix(daemon): unattended auto-run requires a bound, not a positive budget
