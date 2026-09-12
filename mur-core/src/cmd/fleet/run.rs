@@ -416,6 +416,7 @@ pub async fn cmd_fleet_run(
     let bounds = super::loop_run::fleet_bounds(mur_home, &fleet, None, None)?;
     let opts = crate::executor::dag::DagExecOptions {
         deadline_at: Some(std::time::Instant::now() + bounds.deadline),
+        needs: fleet.needs.clone(),
         // Fail-closed default: do NOT blanket-approve. Fleet delegation steps carry
         // no risk tier today (member runtimes gate their own tools), but a future
         // router-emitted DAG with risk steps must fail-closed, never auto-approve
