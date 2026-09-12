@@ -49,6 +49,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         Commands::Stats => cmd::misc::cmd_stats()?,
         Commands::Doctor => cmd::misc::cmd_doctor()?,
+        Commands::Limits { name, json } => cmd::limits::cmd_limits(&name, json)?,
 
         Commands::Sync {
             quiet,
