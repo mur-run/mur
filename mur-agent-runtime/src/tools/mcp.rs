@@ -139,8 +139,13 @@ impl ToolExecutor for McpToolExecutor {
         let text = render_mcp_result(&result);
         if is_error {
             // An error result carries no images: the error path is a String,
-            // and a failed call has nothing to show.
-            Err(ToolError::Execution(text))
+            // and a failed call has nothing to show. A refusal is not a
+            // failure to retry: the server said "may not".
+            Err(if mur_common::authz::is_not_authorized(&text) {
+                ToolError::NotAuthorized(text)
+            } else {
+                ToolError::Execution(text)
+            })
         } else {
             let mut out: ToolOutput = text.into();
             out.images = extract_mcp_images(&result);
