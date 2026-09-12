@@ -532,6 +532,10 @@ pub enum FleetAction {
         /// not supported with --loop). Equivalent to MUR_PARALLEL_EXEC=1 for this invocation.
         #[arg(long)]
         worktree: bool,
+        /// Record this run under a caller-chosen id (a tool that dispatched it
+        /// and will poll `mur_job_status`). Default: a fresh id.
+        #[arg(long, value_name = "RUN_ID")]
+        run_id: Option<String>,
     },
     /// Update a fleet's loop/auto-run config (trigger, budget, iteration cap,
     /// deadline, done-when policy). Only the flags you pass are changed —

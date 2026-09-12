@@ -210,6 +210,15 @@ pub fn stale_after(cfg: &mur_common::config::RunsConfig) -> chrono::Duration {
 /// config load, the clock read, and the derivation are assembled, so no caller
 /// can assemble them differently. `classify` stays pure so the table test can
 /// address every cell without a clock or a config file.
+/// A run id a caller may mint (`mur fleet run --run-id`): one path segment
+/// under `~/.mur/runs/`, so letters, digits, `-` and `_` only.
+pub fn valid_run_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 96
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Option<RunStatus>> {
     let loaded = store::load(mur_home, run_id);
     let record = match loaded {
@@ -844,5 +853,13 @@ mod tests {
             Liveness::Alive,
             "R is live and healthy; B's state must not leak into its liveness"
         );
+    }
+
+    #[test]
+    fn run_ids_are_one_safe_path_segment() {
+        assert!(valid_run_id("fleet-deep-research-0199"));
+        assert!(!valid_run_id(""));
+        assert!(!valid_run_id("../x"));
+        assert!(!valid_run_id("a b"));
     }
 }

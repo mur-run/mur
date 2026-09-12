@@ -490,6 +490,10 @@ see `mur skill <command> --help`.")]
         action: Option<DeepResearchAction>,
         /// Research question — runs the deep-research fleet directly
         question: Option<String>,
+        /// Record the run under a caller-chosen id (a tool that dispatched it
+        /// and will poll `mur_job_status`). Default: a fresh id.
+        #[arg(long, value_name = "RUN_ID")]
+        run_id: Option<String>,
     },
     /// Official MUR catalog: browse and install official agents/fleets
     Official {
