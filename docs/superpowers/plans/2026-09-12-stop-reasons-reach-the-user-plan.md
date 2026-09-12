@@ -412,7 +412,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **3.1 Write the failing test** — in `mur-core/src/cmd/agent/cli/app.rs`, right after `an_auto_armed_fleet_rail_lands_in_the_transcript_and_retires`:
+- [x] **3.1 Write the failing test** — in `mur-core/src/cmd/agent/cli/app.rs`, right after `an_auto_armed_fleet_rail_lands_in_the_transcript_and_retires`:
 
 ```rust
     /// A run that hit a cap is not "finished". The headline takes the rail's
@@ -447,9 +447,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
   If `App::test_fixture` / `app()` gives an `App` whose `home` is not a writable tempdir, read the fixture (`grep -n "fn test_fixture" -A20 app.rs`) and use the same tempdir it holds; do not create a second home.
 
-- [ ] **3.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(the_headline_says_stopped)'`. Expected: assertion failure `got: ⛴ fleet dev finished (4s)…`.
+- [x] **3.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(the_headline_says_stopped)'`. Expected: assertion failure `got: ⛴ fleet dev finished (4s)…`.
 
-- [ ] **3.3 Use the rail's stop in the headline** — in `finish_auto_fleet`, the block that builds `head` becomes:
+- [x] **3.3 Use the rail's stop in the headline** — in `finish_auto_fleet`, the block that builds `head` becomes:
 
 ```rust
         let mut fleet = String::new();
@@ -485,9 +485,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
         let head = format!("⛴ fleet {fleet} {verdict} ({took})");
 ```
 
-- [ ] **3.4 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/finish_auto_fleet|auto_armed_fleet|headline_says_stopped/)'`. Expected: the new test and `an_auto_armed_fleet_rail_lands_in_the_transcript_and_retires` both pass (that one has no stop event, so it still reads `finished`).
+- [x] **3.4 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/finish_auto_fleet|auto_armed_fleet|headline_says_stopped/)'`. Expected: the new test and `an_auto_armed_fleet_rail_lands_in_the_transcript_and_retires` both pass (that one has no stop event, so it still reads `finished`).
 
-- [ ] **3.5 fmt + clippy**, then **commit**:
+- [x] **3.5 fmt + clippy**, then **commit**:
 
 ```
 fix(murmur): a capped fleet run is "stopped: <reason>", not "finished"
