@@ -1432,15 +1432,12 @@ pub struct VoiceConfig {
 pub struct HitlConfig {
     #[serde(default = "default_hitl_timeout_secs")]
     pub timeout_secs: u32,
-    /// Hard cap on agentic-loop iterations (one LLM turn + its tool calls).
-    /// `None` falls back to the runner default (25). On exceeding the cap the
-    /// loop exits gracefully with a summary, not a hard error.
+    /// IGNORED since 2.79 (kept so old profiles load; warned at agent start).
+    /// Bounds live in `limits:` — see `mur limits <agent>`.
     #[serde(default)]
     pub max_iterations: Option<u32>,
-    /// Per-task ceiling on cumulative *input* tokens for the agentic loop. When
-    /// crossed before a turn, the loop stops gracefully with a summary.
-    /// `None` falls back to the runner default (750_000 ≈ a few dollars on
-    /// Sonnet); set a lower value per profile to bound spend tightly.
+    /// IGNORED since 2.79 (kept so old profiles load; warned at agent start).
+    /// Bounds live in `limits:` — see `mur limits <agent>`.
     #[serde(default)]
     pub max_tokens: Option<u64>,
 }

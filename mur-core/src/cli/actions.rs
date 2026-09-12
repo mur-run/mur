@@ -516,16 +516,16 @@ pub enum FleetAction {
         name: String,
         /// Optional job text — runs one-shot (jumps ahead of queue)
         job: Option<String>,
-        /// Loop until the router converges or a guard trips (cap/deadline/stuck)
+        /// Loop until the router converges or a bound trips (deadline / stuck / cost_usd)
         #[arg(long = "loop")]
         loop_flag: bool,
-        /// Max iterations in loop mode (overrides fleet.yaml `loop.max_iterations`)
+        /// Ignored since 2.79 (kept for old scripts); bounds are `mur fleet limits`
         #[arg(long)]
         max_iterations: Option<u32>,
-        /// Wall-clock deadline in loop mode, e.g. 30s/5m/2h (overrides fleet.yaml)
+        /// Wall-clock deadline in loop mode, e.g. 30s/5m/2h — prefer `mur fleet limits <name> --deadline`
         #[arg(long)]
         deadline: Option<String>,
-        /// Projected USD budget for the loop (overrides fleet.yaml `loop.budget_usd`)
+        /// Legacy spelling of `limits.cost_usd` — prefer `mur fleet limits <name> --cost-usd`
         #[arg(long)]
         budget_usd: Option<f64>,
         /// Force Tier-1 per-track git worktree isolation for this run (one-shot only,
@@ -542,13 +542,13 @@ pub enum FleetAction {
         /// manual | interval:<dur> | cron:<5-field POSIX expr>
         #[arg(long)]
         trigger: Option<String>,
-        /// Iteration cap for the guarded loop
+        /// Ignored since 2.79 (kept for old scripts); bounds are `mur fleet limits`
         #[arg(long)]
         max_iterations: Option<u32>,
-        /// Wall-clock deadline, e.g. 30s/5m/2h/1d (relative, NOT a calendar date)
+        /// Wall-clock deadline, e.g. 30s/5m/2h/1d (relative) — prefer `mur fleet limits <name> --deadline`
         #[arg(long)]
         deadline: Option<String>,
-        /// Projected USD budget ceiling for the loop; required > 0 for daemon auto-run
+        /// Legacy spelling of `limits.cost_usd` — prefer `mur fleet limits <name> --cost-usd`
         #[arg(long)]
         budget_usd: Option<f64>,
         /// Completion policy: marker:<TEXT> (own-line sentinel), queue-empty
@@ -884,20 +884,20 @@ pub enum DeepResearchAction {
     Setup,
     /// Run a deep-research fleet's guarded loop (thin wrapper over
     /// `mur fleet run --loop` — see `cmd/fleet/loop_run.rs`). This drives
-    /// only the loop's guard rails (iteration cap / deadline / budget /
+    /// only the loop's bounds (deadline / stuck / cost_usd /
     /// kill-switch / marker convergence); it does NOT reimplement or
     /// bypass anything the plain fleet loop already does.
     Run {
         /// Fleet name (as created by `mur fleet create`, typically after
         /// `mur deep-research provision`)
         name: String,
-        /// Max iterations (overrides fleet.yaml `loop.max_iterations`)
+        /// Ignored since 2.79 (kept for old scripts); bounds are `mur fleet limits`
         #[arg(long)]
         max_iterations: Option<u32>,
         /// Wall-clock deadline, e.g. 30s/5m/2h (overrides fleet.yaml)
         #[arg(long)]
         deadline: Option<String>,
-        /// Budget ceiling in USD (overrides fleet.yaml `loop.budget_usd`)
+        /// Legacy spelling of `limits.cost_usd` — prefer `mur fleet limits <name> --cost-usd`
         #[arg(long)]
         budget_usd: Option<f64>,
     },
