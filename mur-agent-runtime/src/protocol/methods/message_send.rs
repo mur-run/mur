@@ -23,6 +23,8 @@ pub struct MessageSendHandler {
     /// Socket notification channel. When present, LLM token deltas are streamed
     /// to connected clients as `message/delta` notifications as they generate.
     notifier: Option<mpsc::Sender<Value>>,
+    /// `turn/heartbeat` cadence; the constant in production, shortened by tests.
+    heartbeat_interval: std::time::Duration,
 }
 
 impl MessageSendHandler {
@@ -31,6 +33,7 @@ impl MessageSendHandler {
             runner,
             progress: None,
             notifier: None,
+            heartbeat_interval: crate::protocol::heartbeat::HEARTBEAT_INTERVAL,
         }
     }
 
@@ -39,6 +42,7 @@ impl MessageSendHandler {
             runner,
             progress: Some(progress),
             notifier: None,
+            heartbeat_interval: crate::protocol::heartbeat::HEARTBEAT_INTERVAL,
         }
     }
 
@@ -59,6 +63,12 @@ impl MessageSendHandler {
                 })
                 .await;
         }
+    }
+    /// Shorten the beat so a test can see one inside its budget.
+    #[cfg(test)]
+    pub(crate) fn with_heartbeat_interval(mut self, every: std::time::Duration) -> Self {
+        self.heartbeat_interval = every;
+        self
     }
 }
 
@@ -165,6 +175,15 @@ impl MethodHandler for MessageSendHandler {
                     mpsc::channel::<crate::llm::StreamDelta>(STREAM_DELTA_CAP);
                 let delta_task_id = turn_task_id.clone();
                 let delta_context_id = turn_context_id.clone();
+                // Proof of life for the dialing side while this turn runs —
+                // including through model inference, when no delta flows.
+                let _beat = turn_task_id.as_ref().map(|tid| {
+                    crate::protocol::heartbeat::spawn(
+                        notifier.clone(),
+                        tid.clone(),
+                        self.heartbeat_interval,
+                    )
+                });
                 let forward = tokio::spawn(async move {
                     while let Some(d) = delta_rx.recv().await {
                         let mut delta_params = json!({ "text": d.text, "thinking": d.thinking });
