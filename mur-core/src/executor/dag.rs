@@ -132,6 +132,10 @@ pub struct DagExecOptions<'a> {
     /// its clock is the fleet's, not a fresh one. `None` = the member resolves
     /// its own scopes (a workflow step, a run without a deadline).
     pub deadline_at: Option<std::time::Instant>,
+    /// Tools the fleet declared its work needs (`fleet.yaml needs:`). Handed
+    /// to every delegate as the A2A `needs` parameter so it can fail at
+    /// dispatch (spec §3.8) instead of after its budget. Empty = no preflight.
+    pub needs: Vec<String>,
     /// Optional display-only step-lifecycle observer (run-progress UI, Task 3).
     /// Fired `Started` before a step executes and `Done`/`Failed` where its
     /// `StepResult` is recorded. Runs synchronously on executor worker tasks
@@ -168,6 +172,7 @@ impl<'a> Default for DagExecOptions<'a> {
             run_label: String::new(),
             max_concurrency: None,
             deadline_at: None,
+            needs: Vec::new(),
             on_step: None,
         }
     }
@@ -312,6 +317,7 @@ fn build_channel_delegate_params(
     child_task_id: &str,
     idempotency_key: &str,
     deadline_secs: Option<u64>,
+    needs: &[String],
 ) -> serde_json::Value {
     let text = format!("{}{}", text, DELEGATE_REPLY_CONTRACT);
     let mut p = serde_json::json!({
@@ -322,6 +328,9 @@ fn build_channel_delegate_params(
     });
     if let Some(n) = deadline_secs {
         p["limits"] = serde_json::json!({ "deadline_secs": n });
+    }
+    if !needs.is_empty() {
+        p["needs"] = serde_json::json!(needs);
     }
     p
 }
@@ -791,6 +800,7 @@ async fn execute_step(
             &child_task_id,
             &reply_key,
             remaining_secs(opts.deadline_at, std::time::Instant::now()),
+            &opts.needs,
         );
         let dial = crate::a2a_dial::dial_method(
             mur_home,
@@ -1352,6 +1362,7 @@ pub async fn execute_dag(
         let opt_chan_id = opts.channel_id.clone();
         let opt_run_id = opts.run_id.clone();
         let opt_deadline_at = opts.deadline_at;
+        let opt_needs = opts.needs.clone();
         let opt_on_step = composed_on_step.clone();
         let mut handles = Vec::new();
         for &i in &indices {
@@ -1360,6 +1371,7 @@ pub async fn execute_dag(
             thread_dep_outputs(&mut graph.nodes[i].step, &completed_outputs);
             let step = graph.nodes[i].step.clone();
             let env_override = opt_env_override.clone();
+            let needs = opt_needs.clone();
             let dev_id = opt_dev_id.clone();
             let inp = opt_input.clone();
             let vars = opt_vars.clone();
@@ -1397,6 +1409,7 @@ pub async fn execute_dag(
                     max_concurrency: None,
                     // The launching clock travels into every step (§3.4).
                     deadline_at: opt_deadline_at,
+                    needs,
                     on_step,
                 };
                 execute_step(&step, &opts_clone, i, 0, &mh).await
@@ -1737,8 +1750,14 @@ mod tests {
         // v3d-2: the concierge delegates via `channel/delegate`, threading the
         // channel id + the deterministic reply_key (as idempotency_key) so the
         // specialist signs its OWN reply Message and re-dials fold.
-        let p =
-            build_channel_delegate_params("find the bug", "chan-1", "child-1", "rk-deadbeef", None);
+        let p = build_channel_delegate_params(
+            "find the bug",
+            "chan-1",
+            "child-1",
+            "rk-deadbeef",
+            None,
+            &[],
+        );
         assert_eq!(p["channel_id"], "chan-1");
         assert_eq!(p["task_id"], "child-1");
         assert_eq!(p["idempotency_key"], "rk-deadbeef");
@@ -2368,12 +2387,30 @@ mod tests {
     /// §3.4: the delegate carries the fleet's REMAINING clock, never a fresh one.
     #[test]
     fn delegate_params_carry_remaining_deadline() {
-        let p = build_channel_delegate_params("do x", "fleet-dev", "t1", "k1", Some(720));
+        let p = build_channel_delegate_params("do x", "fleet-dev", "t1", "k1", Some(720), &[]);
         assert_eq!(p["limits"]["deadline_secs"], 720);
-        let p = build_channel_delegate_params("do x", "fleet-dev", "t1", "k1", None);
+        let p = build_channel_delegate_params("do x", "fleet-dev", "t1", "k1", None, &[]);
         assert!(
             p.get("limits").is_none(),
             "no clock → the member resolves its own scopes"
+        );
+    }
+
+    #[test]
+    fn delegate_params_carry_the_fleets_needs() {
+        let p = build_channel_delegate_params(
+            "do x",
+            "fleet-dev",
+            "t1",
+            "k1",
+            None,
+            &["write_file".into(), "bash".into()],
+        );
+        assert_eq!(p["needs"], serde_json::json!(["write_file", "bash"]));
+        let p = build_channel_delegate_params("do x", "fleet-dev", "t1", "k1", None, &[]);
+        assert!(
+            p.get("needs").is_none(),
+            "no needs → no key → no preflight (old behaviour)"
         );
     }
 

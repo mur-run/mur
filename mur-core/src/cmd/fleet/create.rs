@@ -57,6 +57,7 @@ pub fn cmd_fleet_create(
         hitl: None,
         requires_programs: vec![],
         limits: None,
+        needs: vec![],
     };
     store::save_fleet(mur_home, &fleet)?;
     println!("Created fleet '{name}' (channel {})", ch.id);

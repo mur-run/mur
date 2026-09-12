@@ -202,6 +202,22 @@ impl MethodHandler for ChannelDelegateHandler {
         // the turn runs, or a gated tool waits out `hitl.timeout_secs` against
         // a notifier nobody reads and the turn returns empty with nothing
         // naming approval as the cause.
+        // Fail at dispatch, not after the budget (spec §3.8): a declared need
+        // this runtime cannot offer ends the task before any model call, and
+        // the router's step carries the grant command.
+        let missing = self
+            .runner
+            .missing_tools(&super::message_send::declared_needs(&p));
+        if let Some(msg) = super::message_send::preflight_missing(&self.agent, &missing) {
+            let task = super::message_send::failed_task_before_start(
+                Some(task_id.clone()),
+                spec.input,
+                "cannot_start",
+                &msg,
+            );
+            return serde_json::to_value(&task).map_err(|e| HandlerError::Internal(e.to_string()));
+        }
+
         // The fleet router dialing this delegate holds a 90 s idle timeout
         // (proto ≥ 2); beat so a long specialist turn is not mistaken for a
         // dead one.
@@ -465,6 +481,87 @@ mod tests {
         assert!(
             beats >= 1,
             "a 400 ms tool at a 50 ms beat must produce at least one frame"
+        );
+    }
+
+    struct NeverCalledLlm {
+        calls: Arc<std::sync::atomic::AtomicU64>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::llm::LlmClient for NeverCalledLlm {
+        async fn generate(
+            &self,
+            _req: crate::llm::LlmRequest,
+        ) -> Result<crate::llm::LlmResponse, crate::llm::LlmError> {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(crate::llm::LlmResponse {
+                text: "should not run".into(),
+                input_tokens: 1,
+                output_tokens: 1,
+                model: "never".into(),
+                tool_calls: vec![],
+                stop_reason: crate::llm::StopReason::EndTurn,
+            })
+        }
+        fn model_name(&self) -> &str {
+            "never"
+        }
+    }
+
+    /// §3.8 / §7: a coding brief on an agent whose policy denies write_file
+    /// fails before the first LLM call, naming the tool and the grant.
+    #[tokio::test]
+    async fn a_delegate_missing_a_declared_need_fails_before_the_model_is_called() {
+        let tmp = TempDir::new().unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(NeverCalledLlm {
+                calls: calls.clone(),
+            }))
+            .with_tools(vec![Arc::new(NeverRunsTool {
+                ran: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            })])
+            .with_tools_policy(vec![mur_common::agent::ToolRule {
+                pattern: "bash".into(),
+                policy: mur_common::agent::ToolPolicy::Deny,
+                risk: None,
+            }])
+            .with_pending_approvals(Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )))
+            .with_hitl_timeout_secs(1),
+        );
+        let handler = ChannelDelegateHandler::new(
+            runner,
+            Arc::new(AgentIdentity::generate()),
+            "specialist".into(),
+            1,
+            tmp.path().to_path_buf(),
+        );
+        // `bash` is registered but denied; `write_file` is not registered at all.
+        let params = serde_json::json!({
+            "channel_id": "fleet-nope",
+            "task_id": "t-pre",
+            "needs": ["write_file", "bash"],
+            "message": {"role": "user", "parts": [{"kind": "text", "text": "edit src/lib.rs"}]},
+        });
+        let out = handler
+            .handle(Some(params), &RequestContext::none())
+            .await
+            .expect("a Task, not an RPC error");
+        assert_eq!(out["state"], "failed", "{out}");
+        assert_eq!(out["error"]["code"], "cannot_start", "{out}");
+        assert_eq!(
+            out["error"]["message"],
+            "cannot start: specialist has no write_file — mur agent perm tool-allow specialist write_file",
+            "{out}"
+        );
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "no model call"
         );
     }
 
