@@ -51,6 +51,13 @@ pub enum ToolStatus {
     Denied {
         detail: String,
     },
+    /// The call yielded (spec 2026-09-12 bash-yield D1/D5): the command is
+    /// still running under `job_id` and this reply carried its output up to
+    /// byte `bytes_seen`. Not an error — the work is in flight, not lost.
+    Running {
+        job_id: String,
+        bytes_seen: u64,
+    },
 }
 
 /// Result of a tool execution: the model-facing text plus the real,

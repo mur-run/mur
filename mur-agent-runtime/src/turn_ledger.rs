@@ -33,6 +33,9 @@ pub enum Outcome {
     /// The kernel sandbox refused it. Distinguished from `Failed` because the
     /// remedy is different — a denial is routed or granted, not retried.
     Denied(String),
+    /// The call yielded and the command is still running (the detail is the
+    /// job id). Neither evidence nor a failure: the outcome does not exist yet.
+    Running(String),
 }
 
 /// One tool call, reduced to what a reader needs.
@@ -220,7 +223,15 @@ impl TurnLedger {
     pub fn blocked(&self) -> Vec<&Action> {
         self.actions
             .iter()
-            .filter(|a| a.outcome != Outcome::Ok)
+            .filter(|a| !matches!(a.outcome, Outcome::Ok | Outcome::Running(_)))
+            .collect()
+    }
+
+    /// Yielded and still running — work whose outcome the turn does not know.
+    pub fn running(&self) -> Vec<&Action> {
+        self.actions
+            .iter()
+            .filter(|a| matches!(a.outcome, Outcome::Running(_)))
             .collect()
     }
 
@@ -232,7 +243,10 @@ impl TurnLedger {
     /// its own terms — the cases where the user cannot tell from the reply
     /// alone what actually happened.
     pub fn warrants_settlement(&self) -> bool {
-        !self.changed().is_empty() || !self.blocked().is_empty() || !self.stop.is_clean()
+        !self.changed().is_empty()
+            || !self.blocked().is_empty()
+            || !self.running().is_empty()
+            || !self.stop.is_clean()
     }
 }
 
@@ -314,6 +328,12 @@ pub fn classify(content: &str, is_error: bool, status: &crate::tools::ToolStatus
     if let crate::tools::ToolStatus::Denied { detail } = status {
         return Outcome::Denied(truncate(detail, RUNAWAY_BACKSTOP));
     }
+    // Before the `is_error` check: a yield is never an error, and it must not
+    // be mistaken for `Ok` — "the tests are still running" is not "the tests
+    // passed" (spec §3.7).
+    if let crate::tools::ToolStatus::Running { job_id, .. } = status {
+        return Outcome::Running(job_id.clone());
+    }
     if is_error {
         return Outcome::Failed(truncate(content.trim(), RUNAWAY_BACKSTOP));
     }
@@ -362,6 +382,19 @@ pub fn render(ledger: &TurnLedger) -> String {
         }
     }
 
+    // Yielded calls get their own glyph: not ✔ (nothing is proven yet), not ✘
+    // (nothing failed). The remedy is on the line because it is always the same.
+    for a in ledger.running() {
+        let tool = short_tool(&a.tool);
+        let job = match &a.outcome {
+            Outcome::Running(j) => j.as_str(),
+            _ => "",
+        };
+        out.push_str(&format!(
+            "  ⏳ {tool} · still running ({job}) — bash_wait to continue\n"
+        ));
+    }
+
     let changed = ledger.changed();
     if !changed.is_empty() {
         // Deduped by target: the ledger holds one action per edit, so an agent
@@ -393,7 +426,7 @@ pub fn render(ledger: &TurnLedger) -> String {
             let why = match &a.outcome {
                 Outcome::Denied(d) => format!("sandbox: {d}"),
                 Outcome::Failed(f) => clean_reason(f),
-                Outcome::Ok => String::new(),
+                Outcome::Ok | Outcome::Running(_) => String::new(),
             };
             let tool = short_tool(&a.tool);
             out.push_str(&format!("  ✘ {tool} · {why}\n"));
@@ -553,6 +586,30 @@ mod tests {
             classify("all good", false, &crate::tools::ToolStatus::Ok),
             Outcome::Ok
         );
+    }
+
+    /// Spec §3.7: a yield is its own outcome — before `is_error`, and never
+    /// folded into `Ok`.
+    #[test]
+    fn classify_running_is_neither_ok_nor_failed() {
+        let running = classify(
+            "cargo test …\n[still running after 30s — job_id: j-1]",
+            false,
+            &crate::tools::ToolStatus::Running {
+                job_id: "j-1".into(),
+                bytes_seen: 512,
+            },
+        );
+        assert_eq!(running, Outcome::Running("j-1".into()));
+        let mut l = TurnLedger::default();
+        l.record(act("bash", "cargo test", running));
+        assert!(l.verified().is_empty(), "a yield is not evidence");
+        assert!(l.blocked().is_empty(), "a yield is not a failure");
+        assert_eq!(l.running().len(), 1);
+        assert!(l.warrants_settlement());
+        let card = render(&l);
+        assert!(card.contains("⏳ bash · still running (j-1)"), "{card}");
+        assert!(!card.contains("✘"), "{card}");
     }
 
     #[test]
