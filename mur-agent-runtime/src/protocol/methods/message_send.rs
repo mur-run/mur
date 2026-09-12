@@ -81,6 +81,54 @@ pub(crate) fn caller_deadline_secs(p: &Value) -> Option<u64> {
         .and_then(|v| v.as_u64())
 }
 
+/// `params.needs`: the tools the brief declares it requires (a fleet's
+/// `needs:`). Absent → empty → no preflight.
+pub(crate) fn declared_needs(p: &Value) -> Vec<String> {
+    p.get("needs")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A task that never started (spec §3.8): the input, a terminal Failed
+/// state, and the reason as a non-recoverable error — no model call, no
+/// tool, no settlement to draw.
+pub(crate) fn failed_task_before_start(
+    task_id: Option<String>,
+    input: Message,
+    code: &str,
+    message: &str,
+) -> mur_common::a2a::Task {
+    let now = chrono::Utc::now().to_rfc3339();
+    mur_common::a2a::Task {
+        id: task_id.unwrap_or_else(|| format!("task-{}", uuid::Uuid::now_v7())),
+        state: mur_common::a2a::TaskState::Failed,
+        messages: vec![input],
+        created_at: now.clone(),
+        completed_at: Some(now),
+        error: Some(mur_common::a2a::TaskError {
+            code: code.to_string(),
+            message: message.to_string(),
+            recoverable: false,
+            details: None,
+        }),
+        usage: None,
+        artifacts: None,
+    }
+}
+
+/// The dispatch preflight (spec §3.8): the first declared need this runtime
+/// cannot offer, phrased as the grant command.
+pub(crate) fn preflight_missing(agent: &str, missing: &[String]) -> Option<String> {
+    missing.first().map(|tool| {
+        format!("cannot start: {agent} has no {tool} — mur agent perm tool-allow {agent} {tool}")
+    })
+}
+
 #[async_trait]
 impl MethodHandler for MessageSendHandler {
     async fn handle(
@@ -143,6 +191,15 @@ impl MethodHandler for MessageSendHandler {
             attended: can_approve,
             deadline_secs: caller_deadline_secs(&p),
         };
+
+        // Fail at dispatch, not after the budget (spec §3.8): a declared need
+        // this runtime cannot offer ends the task before any model call.
+        let missing = self.runner.missing_tools(&declared_needs(&p));
+        if let Some(msg) = preflight_missing(self.runner.agent_name(), &missing) {
+            let task =
+                failed_task_before_start(spec.task_id.clone(), spec.input, "cannot_start", &msg);
+            return serde_json::to_value(&task).map_err(|e| HandlerError::Internal(e.to_string()));
+        }
 
         self.emit_progress("pending", "llm_reasoning", None).await;
         // Prefer the issuing connection's per-request sink (so deltas/HITL reach

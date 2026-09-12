@@ -318,6 +318,7 @@ mod tests {
             hitl: None,
             requires_programs: vec![],
             limits,
+            needs: vec![],
         }
     }
 

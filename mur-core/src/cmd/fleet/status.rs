@@ -124,6 +124,7 @@ mod tests {
             hitl: None,
             requires_programs: vec![],
             limits: None,
+            needs: vec![],
         }
     }
 

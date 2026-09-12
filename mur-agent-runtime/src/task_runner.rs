@@ -802,6 +802,27 @@ impl TaskRunner {
     }
 
     /// The agent's own name — part of every chat-gate hash.
+    /// The canonical agent name this runner hosts (empty on stub runners).
+    pub fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+
+    /// The tools a brief declares it needs that this runtime cannot offer:
+    /// not registered, or denied by policy — the same inventory and the same
+    /// rule list the gate consults, so preflight and gate cannot disagree
+    /// (spec §3.8).
+    pub fn missing_tools(&self, needs: &[String]) -> Vec<String> {
+        needs
+            .iter()
+            .filter(|n| {
+                !self.tools.iter().any(|t| t.name() == n.as_str())
+                    || effective_tool_policy(&self.tools_policy, n)
+                        == mur_common::agent::ToolPolicy::Deny
+            })
+            .cloned()
+            .collect()
+    }
+
     pub fn with_agent_name(mut self, name: impl Into<String>) -> Self {
         self.agent_name = name.into();
         self
@@ -4075,6 +4096,52 @@ mod tests {
             "tool error: boom",
             ToolStatus::Failed { exit_code: -1 }
         )));
+    }
+
+    struct NoopNamedTool(&'static str);
+
+    #[async_trait::async_trait]
+    impl crate::tools::ToolExecutor for NoopNamedTool {
+        fn name(&self) -> &str {
+            self.0
+        }
+        fn def(&self) -> crate::llm::ToolDef {
+            crate::llm::ToolDef {
+                name: self.0.into(),
+                description: "noop".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+        ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
+            Ok("ok".to_string().into())
+        }
+    }
+
+    /// The inventory the preflight consults is the loop's own: a tool is
+    /// missing when it is not registered or its policy is Deny.
+    #[test]
+    fn missing_tools_reads_the_same_inventory_the_gate_reads() {
+        let runner = TaskRunner::with_llm(Arc::new(crate::llm::stub::SequenceLlm::new(vec![])))
+            .with_tools(vec![
+                Arc::new(NoopNamedTool("write_file")),
+                Arc::new(NoopNamedTool("bash")),
+            ])
+            .with_tools_policy(vec![mur_common::agent::ToolRule {
+                pattern: "bash".into(),
+                policy: mur_common::agent::ToolPolicy::Deny,
+                risk: None,
+            }]);
+        assert_eq!(
+            runner.missing_tools(&["write_file".into()]),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            runner.missing_tools(&["bash".into(), "edit_file".into(), "write_file".into()]),
+            vec!["bash".to_string(), "edit_file".to_string()]
+        );
     }
 
     /// Fix B — truncation is self-correcting, not a silent loop. When a turn

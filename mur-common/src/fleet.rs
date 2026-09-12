@@ -45,6 +45,13 @@ pub struct Fleet {
     /// pre-`limits:` files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limits: Option<crate::limits::Limits>,
+    /// Tools every member needs for this fleet's work, e.g.
+    /// `[write_file, edit_file, bash]` for a coding fleet. Checked by each
+    /// delegate BEFORE its first model call (spec 2026-09-12 §3.8): a member
+    /// whose policy lacks one fails at dispatch with the grant command, not
+    /// after burning its budget. Empty = no preflight.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub needs: Vec<String>,
 }
 
 /// Per-fleet approval policy. A floor, never a grant: every field here can only
@@ -367,6 +374,7 @@ mod tests {
             hitl: None,
             requires_programs: vec![],
             limits: None,
+            needs: vec![],
         };
         assert_eq!(f.router_or_concierge(), CONCIERGE_AGENT);
         let yaml = serde_yaml::to_string(&f).unwrap();
@@ -473,6 +481,7 @@ mod limits_tests {
             hitl: None,
             requires_programs: vec![],
             limits,
+            needs: vec![],
         }
     }
 
@@ -510,5 +519,21 @@ mod limits_tests {
         // Round trip: a fleet without limits serialises without the key.
         let yaml = serde_yaml_ng::to_string(&fleet(None, None)).unwrap();
         assert!(!yaml.contains("limits"), "{yaml}");
+    }
+
+    /// `needs:` round-trips and is absent from the YAML when empty — a fleet
+    /// that declares nothing gets no preflight and no new key.
+    #[test]
+    fn needs_round_trip_and_stay_absent_when_empty() {
+        let mut f = fleet(None, None);
+        assert!(!serde_yaml_ng::to_string(&f).unwrap().contains("needs"));
+        f.needs = vec!["write_file".into(), "bash".into()];
+        let yaml = serde_yaml_ng::to_string(&f).unwrap();
+        assert!(yaml.contains("needs:"), "{yaml}");
+        let back: Fleet = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(
+            back.needs,
+            vec!["write_file".to_string(), "bash".to_string()]
+        );
     }
 }
