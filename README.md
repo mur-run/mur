@@ -312,6 +312,14 @@ an MCP server that returns image content reaches the model the same way. Before
 this the bytes were decoded as text and the model — with no way to say it never
 saw a picture — described one anyway.
 
+A slow `bash` command is never killed by its own timeout. `timeout_secs`
+(default 30s, cap 600s) now bounds only how long one call waits — past
+that, the command keeps running and the reply carries a `job_id`;
+`bash_wait` keeps waiting on it, `bash_kill` stops it (its whole process
+group, so `cargo`/test binaries/pipeline stages die with the shell).
+Before this, a build or test suite that ran past its timeout was killed
+mid-way and reported as a failure with no way to recover the work.
+
 ### 🧠 Learn — and forget — like a teammate
 
 ```mermaid
