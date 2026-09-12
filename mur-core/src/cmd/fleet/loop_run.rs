@@ -279,6 +279,14 @@ fn effective_budget(flag: Option<f64>, fleet: &Fleet) -> Option<f64> {
         .filter(|&b| b > 0.0)
 }
 
+/// The budget the guard enforces: the configured one for a fleet that can
+/// spend, none for a fleet that cannot (spec D4). Enforcing a dollar ceiling
+/// on local models stopped real runs on a projection of money nobody was
+/// paying — the failure mode this exists to remove.
+fn budget_for(fleet_budget: Option<f64>, billing: &super::billing::FleetBilling) -> Option<f64> {
+    if billing.billable { fleet_budget } else { None }
+}
+
 /// SHA-256 (hex) of the deciding directive's canonical sign-input, so the audit
 /// row binds to exactly the signed directive that was honored. Empty if the
 /// nonce has no matching event (defensive).
@@ -421,7 +429,26 @@ pub async fn run_guarded(
 
     let max_iter = effective_max_iterations(max_iterations, &fleet);
     let deadline = effective_deadline(deadline.as_deref(), &fleet);
-    let budget = effective_budget(budget_usd, &fleet);
+    let billing = super::billing::fleet_billing(mur_home, &fleet);
+    let configured_budget = effective_budget(budget_usd, &fleet);
+    let budget = budget_for(configured_budget, &billing);
+    if configured_budget.is_some_and(|b| b > 0.0) && budget.is_none() {
+        println!(
+            "  ℹ budget_usd ignored — fleet '{name}' runs on local/subscription models and cannot spend; \
+             its bound is the deadline"
+        );
+    }
+    if !billing.unknown.is_empty() {
+        let who: Vec<String> = billing
+            .unknown
+            .iter()
+            .map(|(a, m)| format!("{a} ({m})"))
+            .collect();
+        println!(
+            "  ⚠ billing unknown for {} — treated as metered. Mark a local model with `billing: local` in models.yaml",
+            who.join(", ")
+        );
+    }
     let price_per_1k = fleet_price_per_1k(mur_home);
     if let (rate, GuardRate::Default) = price_per_1k
         && budget.is_some()
@@ -1397,6 +1424,26 @@ mod tests {
                 .as_str()
                 .is_some_and(|s| !s.is_empty())
         );
+    }
+
+    /// A local or subscription fleet has no spend, so a `budget_usd` on it is
+    /// noise: the guard would stop a run on a projection of dollars nobody is
+    /// paying. Unknown billing keeps the budget — conservative, like the fold.
+    #[test]
+    fn a_budget_applies_only_to_a_fleet_that_can_spend() {
+        use super::super::billing::FleetBilling;
+        let local = FleetBilling {
+            billable: false,
+            unknown: vec![],
+        };
+        let billed = FleetBilling {
+            billable: true,
+            unknown: vec![],
+        };
+        assert_eq!(budget_for(Some(5.0), &billed), Some(5.0));
+        assert_eq!(budget_for(Some(5.0), &local), None);
+        assert_eq!(budget_for(None, &billed), None);
+        assert_eq!(budget_for(None, &local), None);
     }
 
     #[tokio::test]

@@ -358,7 +358,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **3.1 Write the failing test** — in `loop_run.rs`'s `mod tests`:
+- [x] **3.1 Write the failing test** — in `loop_run.rs`'s `mod tests`:
 
 ```rust
     /// A local or subscription fleet has no spend, so a `budget_usd` on it is
@@ -376,9 +376,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
     }
 ```
 
-- [ ] **3.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(a_budget_applies_only)'`. Expected: `cannot find function budget_for`.
+- [x] **3.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(a_budget_applies_only)'`. Expected: `cannot find function budget_for`.
 
-- [ ] **3.3 Add the helper and use it** — below `fn effective_budget` in `loop_run.rs`:
+- [x] **3.3 Add the helper and use it** — below `fn effective_budget` in `loop_run.rs`:
 
 ```rust
 /// The budget the guard enforces: the configured one for a fleet that can
@@ -417,9 +417,9 @@ fn budget_for(fleet_budget: Option<f64>, billing: &super::billing::FleetBilling)
 
   `progress.budget_usd` is already set from `budget` a few lines down (`budget_usd: budget,`); leave it — a non-billable fleet now records `None`.
 
-- [ ] **3.4 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/loop_run::/)'`. Expected: all pass, including the step-1 tests (their fleets have no `models.yaml`, so billing is unknown → billable → behaviour unchanged).
+- [x] **3.4 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/loop_run::/)'`. Expected: all pass, including the step-1 tests (their fleets have no `models.yaml`, so billing is unknown → billable → behaviour unchanged).
 
-- [ ] **3.5 fmt + clippy**, then **commit**:
+- [x] **3.5 fmt + clippy**, then **commit**:
 
 ```
 fix(fleet): the loop does not enforce a budget a fleet cannot spend
