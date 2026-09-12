@@ -141,7 +141,7 @@ pub fn unbounded_reason(lc: Option<&FleetLoop>, billing: &FleetBilling, fleet: &
 
 ### Steps
 
-- [ ] **2.1 Create the module with its tests** — new file `mur-core/src/cmd/fleet/billing.rs`:
+- [x] **2.1 Create the module with its tests** — new file `mur-core/src/cmd/fleet/billing.rs`:
 
 ```rust
 //! Whether a fleet costs money, and what "bounded" means for it (spec
@@ -330,11 +330,11 @@ mod tests {
 }
 ```
 
-- [ ] **2.2 Register the module** — in `mur-core/src/cmd/fleet/mod.rs`, next to `pub mod loop_run;` add `pub mod billing;`.
+- [x] **2.2 Register the module** — in `mur-core/src/cmd/fleet/mod.rs`, next to `pub mod loop_run;` add `pub mod billing;`.
 
-- [ ] **2.3 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/fleet::billing::/)'`. Expected: 3 pass. (The red step for this task is the compile error before 2.2 registers the module; run 2.3 before 2.2 if you want to see it.) If `let ... && let` in `fleet_billing` fails to compile, the crate is on an older edition than 2024 — it is not; if `AgentProfile::load` needs a different path type, follow its signature (`&Path`, `&str`).
+- [x] **2.3 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/fleet::billing::/)'`. Expected: 3 pass. (The red step for this task is the compile error before 2.2 registers the module; run 2.3 before 2.2 if you want to see it.) If `let ... && let` in `fleet_billing` fails to compile, the crate is on an older edition than 2024 — it is not; if `AgentProfile::load` needs a different path type, follow its signature (`&Path`, `&str`).
 
-- [ ] **2.4 fmt + clippy** (`cargo clippy -p mur-core --all-targets -- -D warnings`), then **commit**:
+- [x] **2.4 fmt + clippy** (`cargo clippy -p mur-core --all-targets -- -D warnings`), then **commit**:
 
 ```
 feat(fleet): one billing verdict per fleet, and what "bounded" means
