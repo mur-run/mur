@@ -28,16 +28,6 @@ pub const FLEET_RUN: &str = "fleet_run";
 /// naming it once keeps a rename of either from silently half-applying.
 const DEEP_RESEARCH: &str = "deep-research";
 
-/// Default / ceiling for how long a run may take before the child is killed.
-/// Fleet loops are long-lived (multi-iteration research runs take minutes);
-/// the ceiling keeps a wedged loop from pinning a tool slot forever.
-const DEFAULT_TIMEOUT_SECS: u64 = 1800;
-const MAX_TIMEOUT_SECS: u64 = 3600;
-
-/// Cap on returned combined output — the tail is what matters (converged
-/// report / guard verdict); the CompressHook handles anything still large.
-const MAX_OUTPUT_CHARS: usize = 16_000;
-
 pub struct FleetRunTool {
     pub mur_home: PathBuf,
     /// Canonical (on-disk) name of the agent this runtime hosts.
@@ -68,13 +58,6 @@ pub fn agent_enabled(mur_home: &std::path::Path, agent: &str) -> bool {
     cfg.agents.iter().any(|a| a == agent) && !cfg.fleets.is_empty()
 }
 
-fn resolve_timeout_secs(requested: Option<i64>) -> u64 {
-    match requested {
-        Some(secs) if secs >= 1 => (secs as u64).min(MAX_TIMEOUT_SECS),
-        _ => DEFAULT_TIMEOUT_SECS,
-    }
-}
-
 #[async_trait::async_trait]
 impl ToolExecutor for FleetRunTool {
     fn name(&self) -> &str {
@@ -84,13 +67,13 @@ impl ToolExecutor for FleetRunTool {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: FLEET_RUN.into(),
-            description: format!(
-                "Run a MUR fleet (agent squad) as a guarded, budgeted loop and return its output. \
-For the deep-research fleet pass the research question as `goal`. \
-Only fleets allowlisted in the user's config can be run; the run stops on \
-convergence, iteration cap, deadline, budget, or kill-switch. \
-Long-running: default timeout {DEFAULT_TIMEOUT_SECS}s (max {MAX_TIMEOUT_SECS}s)."
-            ),
+            description: "Dispatch a MUR fleet (agent squad) and return a handle at once: \
+{run_id, status: dispatched}. Poll mur_job_status <run_id> (or mur fleet status <fleet>) \
+for progress; the result lands in the fleet's channel, not in this reply. For the \
+deep-research fleet pass the research question as `goal`. Only fleets allowlisted in the \
+user's config can be run; the run is bounded by the fleet's limits (deadline / stuck / \
+cost_usd) and by `mur fleet stop`."
+                .into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -101,10 +84,6 @@ Long-running: default timeout {DEFAULT_TIMEOUT_SECS}s (max {MAX_TIMEOUT_SECS}s).
                     "goal": {
                         "type": "string",
                         "description": "Research question / job text. For deep-research this becomes the research goal; for other fleets it runs as a one-shot job."
-                    },
-                    "timeout_secs": {
-                        "type": "integer",
-                        "description": "Seconds before the run is killed"
                     }
                 },
                 "required": ["fleet"]
@@ -122,7 +101,10 @@ Long-running: default timeout {DEFAULT_TIMEOUT_SECS}s (max {MAX_TIMEOUT_SECS}s).
             .get("goal")
             .and_then(|v| v.as_str())
             .map(str::to_string);
-        let timeout_secs = resolve_timeout_secs(input.get("timeout_secs").and_then(|v| v.as_i64()));
+        // Accepted for one release so an older prompt does not break; the run
+        // is bounded by the fleet's limits now, not by how long this call may
+        // block (spec §3.6).
+        let stale_timeout = input.get("timeout_secs").is_some();
 
         if !mur_common::fleet::valid_fleet_name(&fleet) {
             return Err(ToolError::InvalidInput(format!(
@@ -143,8 +125,8 @@ Long-running: default timeout {DEFAULT_TIMEOUT_SECS}s (max {MAX_TIMEOUT_SECS}s).
             )));
         }
 
-        // Safety triad parity with unattended auto-run: an agent-triggered run
-        // must have an enforced budget. Refuse fleets without one.
+        // Read the fleet to refuse a self-delegating one below; the bounds
+        // themselves are the loop's business (`mur limits <fleet>`).
         let fleet_yaml = self.mur_home.join("fleets").join(&fleet).join("fleet.yaml");
         let doc = std::fs::read_to_string(&fleet_yaml).map_err(|e| {
             ToolError::Execution(format!("fleet '{fleet}' not found ({e}): {fleet_yaml:?}"))
@@ -170,19 +152,33 @@ Long-running: default timeout {DEFAULT_TIMEOUT_SECS}s (max {MAX_TIMEOUT_SECS}s).
                 self.agent_name
             )));
         }
-        if parsed.loop_cfg.map(|l| l.budget_usd).unwrap_or(0.0) <= 0.0 {
-            return Err(ToolError::Execution(format!(
-                "fleet '{fleet}' has no budget (`loop.budget_usd`) — agent-triggered runs require \
-                 a positive budget; set one with the fleet config or `mur deep-research setup`"
-            )));
-        }
+        // No budget gate here since 2.80: every fleet is bounded by its
+        // resolved limits (built-in deadline at least), and a cost cap means
+        // nothing on a local model — see `mur limits <fleet>`.
 
+        // The handle: minted here, handed to the child with --run-id, and
+        // what the caller polls. One path segment under ~/.mur/runs/.
+        let run_id = format!("fleet-{fleet}-{}", uuid::Uuid::now_v7());
         // Argv only — never a shell — so goal text cannot inject.
-        let args: Vec<String> = match (&fleet[..], &goal) {
+        let mut args: Vec<String> = match (&fleet[..], &goal) {
             (DEEP_RESEARCH, Some(g)) => vec![DEEP_RESEARCH.into(), g.clone()],
             (_, Some(g)) => vec!["fleet".into(), "run".into(), fleet.clone(), g.clone()],
             (_, None) => vec!["fleet".into(), "run".into(), fleet.clone(), "--loop".into()],
         };
+        args.push("--run-id".into());
+        args.push(run_id.clone());
+        // The child's stdio goes to a log beside its run record — `runs/` is
+        // already inside the fleet_run carve-in — because nobody is waiting
+        // on this pipe any more.
+        let log_dir = self.mur_home.join("runs").join(&run_id);
+        std::fs::create_dir_all(&log_dir)
+            .map_err(|e| ToolError::Execution(format!("create {}: {e}", log_dir.display())))?;
+        let log_path = log_dir.join("fleet_run.log");
+        let log = std::fs::File::create(&log_path)
+            .map_err(|e| ToolError::Execution(format!("create {}: {e}", log_path.display())))?;
+        let log_err = log
+            .try_clone()
+            .map_err(|e| ToolError::Execution(format!("clone log handle: {e}")))?;
 
         // The same derivation the sandbox granted (`exec_dirs::mur_cli`), not
         // a PATH lookup — see that function for why the two must be one.
@@ -205,9 +201,11 @@ Long-running: default timeout {DEFAULT_TIMEOUT_SECS}s (max {MAX_TIMEOUT_SECS}s).
         let mut cmd = Command::new(&mur_bin);
         cmd.args(&args)
             .env("PATH", super::bash::augmented_path(path_var.as_deref()))
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
+            .stdout(std::process::Stdio::from(log))
+            .stderr(std::process::Stdio::from(log_err))
+            // Detached on purpose: the run outlives this tool call and this
+            // turn. The fleet's limits and `mur fleet stop` bound it.
+            .kill_on_drop(false);
         if handoff.is_some() {
             cmd.stdin(std::process::Stdio::piped())
                 .env(mur_common::identity::SIGNING_HANDOFF_ENV, "1");
@@ -234,37 +232,25 @@ Long-running: default timeout {DEFAULT_TIMEOUT_SECS}s (max {MAX_TIMEOUT_SECS}s).
             // Dropped here — the child sees EOF and stops waiting.
         }
 
-        let out = tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
-            child.wait_with_output(),
-        )
-        .await
-        .map_err(|_| {
-            ToolError::Execution(format!(
-                "fleet run timed out after {timeout_secs}s and was killed; the fleet's own \
-                 guards (.last state, kill-switch) remain authoritative — check `mur fleet show {fleet}`"
-            ))
-        })?
-        .map_err(|e| ToolError::Execution(format!("fleet run failed: {e}")))?;
+        // Not awaited: the handle is the reply (spec §3.6). Dropping a tokio
+        // Child with kill_on_drop(false) leaves the process running.
+        drop(child);
 
-        let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        if !stderr.trim().is_empty() {
-            combined.push_str("\n--- stderr ---\n");
-            combined.push_str(&stderr);
+        let mut reply = serde_json::json!({
+            "run_id": run_id,
+            "fleet": fleet,
+            "status": "dispatched",
+            "log": log_path,
+            "follow": format!(
+                "mur_job_status {run_id} · mur fleet status {fleet} — the result lands in the fleet channel, not in this reply"
+            ),
+        });
+        if stale_timeout {
+            reply["note"] = serde_json::json!(
+                "timeout_secs is ignored since 2.80 — the run is bounded by the fleet's limits (mur limits <fleet>)"
+            );
         }
-        if !out.status.success() {
-            combined.push_str(&format!("\n[exit status: {}]", out.status));
-        }
-        // Keep the tail — convergence verdict / report location print last.
-        if combined.chars().count() > MAX_OUTPUT_CHARS {
-            let tail: String = combined
-                .chars()
-                .skip(combined.chars().count() - MAX_OUTPUT_CHARS)
-                .collect();
-            combined = format!("[output truncated to last {MAX_OUTPUT_CHARS} chars]\n…{tail}");
-        }
-        Ok(combined.into())
+        Ok(reply.to_string().into())
     }
 }
 
@@ -364,27 +350,6 @@ mod tests {
         assert!(err.to_string().contains("invalid fleet name"), "{err}");
     }
 
-    #[tokio::test]
-    async fn refuses_fleet_without_budget() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_config(
-            tmp.path(),
-            "fleet_run:\n  agents: [mur]\n  fleets: [deep-research]\n",
-        );
-        write_fleet(tmp.path(), "deep-research", 0.0);
-        let tool = FleetRunTool {
-            mur_home: tmp.path().to_path_buf(),
-            agent_name: "mur".into(),
-            signing: None,
-            key_version: 0,
-        };
-        let err = tool
-            .execute(serde_json::json!({"fleet": "deep-research"}))
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("budget"), "{err}");
-    }
-
     #[test]
     fn agent_enabled_gates_registration() {
         let tmp = tempfile::tempdir().unwrap();
@@ -409,5 +374,61 @@ mod tests {
         let def = tool.def();
         assert_eq!(def.name, FLEET_RUN);
         assert_eq!(def.input_schema["required"][0], "fleet");
+    }
+
+    /// §3.6: the tool returns a handle within a second while the fleet keeps
+    /// running, and the child got the id it will be polled under. nextest
+    /// runs each test in its own process, so MUR_BIN is private to this one.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fleet_run_returns_a_handle_and_leaves_the_child_running() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        write_config(
+            home,
+            "fleet_run:\n  agents: [mur]\n  fleets: [deep-research]\n",
+        );
+        write_fleet(home, "deep-research", 0.0);
+        let argv_log = home.join("argv.txt");
+        let fake = home.join("fake-mur");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\necho \"$@\" > {}\nsleep 5\n", argv_log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        unsafe { std::env::set_var("MUR_BIN", &fake) };
+        let tool = FleetRunTool {
+            mur_home: home.to_path_buf(),
+            agent_name: "mur".into(),
+            signing: None,
+            key_version: 0,
+        };
+        let t0 = std::time::Instant::now();
+        let out = tool
+            .execute(serde_json::json!({"fleet": "deep-research", "goal": "why is the sky blue"}))
+            .await
+            .unwrap();
+        unsafe { std::env::remove_var("MUR_BIN") };
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(2),
+            "returned in {:?}",
+            t0.elapsed()
+        );
+        let v: serde_json::Value = serde_json::from_str(&out.text).expect("json handle");
+        assert_eq!(v["status"], "dispatched");
+        let run_id = v["run_id"].as_str().unwrap().to_string();
+        assert!(run_id.starts_with("fleet-deep-research-"), "{run_id}");
+        assert!(v["follow"].as_str().unwrap().contains("mur_job_status"));
+        // the child is still alive and was told the id
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        let argv = std::fs::read_to_string(&argv_log).unwrap();
+        assert!(argv.contains(&format!("--run-id {run_id}")), "{argv}");
+        assert!(
+            argv.starts_with("deep-research why is the sky blue"),
+            "{argv}"
+        );
+        assert!(std::path::Path::new(v["log"].as_str().unwrap()).exists());
     }
 }
