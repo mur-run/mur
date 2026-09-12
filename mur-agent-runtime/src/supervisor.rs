@@ -556,8 +556,16 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     let pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<crate::hitl::HitlDecision>>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let hitl_timeout_secs = profile.inner.hitl.timeout_secs;
-    let max_iterations = profile.inner.hitl.max_iterations;
-    let max_tokens = profile.inner.hitl.max_tokens;
+    for line in stale_cap_warnings(&profile.inner.hitl) {
+        tracing::warn!(agent = %profile.inner.name, "{line}");
+        eprintln!("warning: {line}");
+    }
+    // The two scopes this process can see (spec §3.4). The fleet's clock, when
+    // there is one, arrives per turn in the A2A `limits` parameter.
+    let limits = (
+        mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).limits,
+        profile.inner.limits.clone(),
+    );
     let (runner, llm_for_companion, mcp_pool, model_switch) =
         crate::supervisor_runner::build_provider_runner(
             force_echo,
@@ -573,8 +581,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             Some(pending_approvals.clone()),
             Some(sock_notif_tx.clone()),
             hitl_timeout_secs,
-            max_iterations,
-            max_tokens,
+            limits,
             Some(writer.sender()),
             identity.clone(),
             secrets.clone(),
@@ -1464,6 +1471,23 @@ pub fn resolve_model_entry(
     }
 }
 
+/// §6: the old per-agent caps are loaded and ignored. One line per key at
+/// start, never an error — nobody's agent stops starting over a stale key.
+pub fn stale_cap_warnings(hitl: &mur_common::agent::HitlConfig) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(n) = hitl.max_iterations {
+        out.push(format!(
+            "profile.yaml hitl.max_iterations: {n} — IGNORED since 2.79; remove it (bounds are `mur limits <agent>`: deadline / stuck)"
+        ));
+    }
+    if let Some(n) = hitl.max_tokens {
+        out.push(format!(
+            "profile.yaml hitl.max_tokens: {n} — IGNORED since 2.79; remove it (bounds are `mur limits <agent>`: deadline / stuck / cost_usd)"
+        ));
+    }
+    out
+}
+
 #[cfg(test)]
 mod hitl_tests {
     use super::*;
@@ -1567,5 +1591,27 @@ mod hitl_tests {
 
         let decision = tokio::time::timeout(Duration::from_millis(100), rx).await;
         assert!(decision.is_err(), "should have timed out");
+    }
+
+    /// §6: a profile with the old caps starts, warns once per key, and the
+    /// value has no effect (the runner no longer has a setter to receive it).
+    #[test]
+    fn stale_caps_warn_once_and_name_the_replacement() {
+        let mut h = mur_common::agent::HitlConfig::default();
+        assert!(super::stale_cap_warnings(&h).is_empty());
+        h.max_iterations = Some(800);
+        h.max_tokens = Some(1_000_000);
+        let w = super::stale_cap_warnings(&h);
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(
+            w[0].contains("hitl.max_iterations: 800") && w[0].contains("IGNORED since 2.79"),
+            "{}",
+            w[0]
+        );
+        assert!(
+            w[1].contains("hitl.max_tokens") && w[1].contains("mur limits"),
+            "{}",
+            w[1]
+        );
     }
 }

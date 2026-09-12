@@ -45,10 +45,14 @@ pub fn detect_target(mur_home: &Path, name: &str) -> Result<Target> {
     ))
 }
 
-const STEP4_NOTE: &str = "still applied until the runtime switch (execution-limits step 4); ignored after — move it to limits:";
+const STEP4_NOTE: &str =
+    "IGNORED since 2.79 — remove it; the bounds are limits: deadline / stuck / cost_usd";
 
-fn fmt_dur(d: std::time::Duration) -> String {
+pub(crate) fn fmt_dur(d: std::time::Duration) -> String {
     let s = d.as_secs();
+    if s == 0 {
+        return "0s".to_string();
+    }
     if s.is_multiple_of(3600) {
         format!("{}h", s / 3600)
     } else if s.is_multiple_of(60) {
@@ -380,8 +384,8 @@ mod tests {
             r.stale
         );
         assert!(
-            r.stale[0].contains("still applied until"),
-            "honest about step 4: {}",
+            r.stale[0].contains("IGNORED since 2.79"),
+            "says it is ignored: {}",
             r.stale[0]
         );
     }

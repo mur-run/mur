@@ -186,8 +186,11 @@ pub fn build_runner(
     hitl_timeout_secs: u32,
     tools: Vec<std::sync::Arc<dyn crate::tools::ToolExecutor>>,
     tools_policy: Vec<mur_common::agent::ToolRule>,
-    max_iterations: Option<u32>,
-    max_tokens: Option<u64>,
+    // The two `limits:` scopes this process can see (spec §3.4).
+    limits: (
+        mur_common::limits::Limits,
+        Option<mur_common::limits::Limits>,
+    ),
     effort: Option<mur_common::llm::Effort>,
     // Where multi-turn memory is persisted so it survives a restart (#1199),
     // and the model's context window, which sizes the history budget (#1200).
@@ -215,12 +218,7 @@ pub fn build_runner(
     if let Some(v) = secrets {
         runner = runner.with_secrets(v);
     }
-    if let Some(n) = max_iterations {
-        runner = runner.with_max_iterations(n);
-    }
-    if let Some(n) = max_tokens {
-        runner = runner.with_max_token_budget(n);
-    }
+    runner = runner.with_limits(limits.0, limits.1);
     if let (Some(chain), Some(ctx), Some(cancel)) = (hook_chain, hook_ctx, hook_cancel) {
         runner = runner.with_hook_chain(chain, ctx, cancel);
     }
@@ -267,8 +265,11 @@ pub async fn build_provider_runner(
     pending_approvals: Option<HitlApprovals>,
     notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
     hitl_timeout_secs: u32,
-    max_iterations: Option<u32>,
-    max_tokens: Option<u64>,
+    // The two `limits:` scopes this process can see (spec §3.4).
+    limits: (
+        mur_common::limits::Limits,
+        Option<mur_common::limits::Limits>,
+    ),
     // Routing telemetry sink (Phase B, Task 5) — `Some(writer.sender())` from
     // the caller's already-constructed `TelemetryWriter`. Only the routed
     // (`FallbackLlmClient`) path below records `Event::Routing`; the
@@ -543,8 +544,7 @@ pub async fn build_provider_runner(
             hitl_timeout_secs,
             tools.clone(),
             tools_policy.clone(),
-            max_iterations,
-            max_tokens,
+            limits,
             profile.inner.effort,
             Some(agent_home.join("conversations")),
             entry.context_window,

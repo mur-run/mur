@@ -265,6 +265,8 @@ fn inject(runner: &Arc<TaskRunner>, text: &str) {
                 // no live user turn is waiting on it.
                 intent: RequestIntent::Background(BackgroundKind::Maintenance),
                 output_artifact_path: None,
+                attended: false,
+                deadline_secs: None,
             })
             .await;
     });

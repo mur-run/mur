@@ -127,6 +127,11 @@ pub struct DagExecOptions<'a> {
     /// concurrency, not just cost, or parallel delegations cascade past API
     /// rate limits.
     pub max_concurrency: Option<usize>,
+    /// The launching scope's deadline, as an instant (spec §3.4). A delegated
+    /// member is handed the REMAINING seconds in `limits.deadline_secs`, so
+    /// its clock is the fleet's, not a fresh one. `None` = the member resolves
+    /// its own scopes (a workflow step, a run without a deadline).
+    pub deadline_at: Option<std::time::Instant>,
     /// Optional display-only step-lifecycle observer (run-progress UI, Task 3).
     /// Fired `Started` before a step executes and `Done`/`Failed` where its
     /// `StepResult` is recorded. Runs synchronously on executor worker tasks
@@ -162,6 +167,7 @@ impl<'a> Default for DagExecOptions<'a> {
             run_kind: None,
             run_label: String::new(),
             max_concurrency: None,
+            deadline_at: None,
             on_step: None,
         }
     }
@@ -305,14 +311,25 @@ fn build_channel_delegate_params(
     channel_id: &str,
     child_task_id: &str,
     idempotency_key: &str,
+    deadline_secs: Option<u64>,
 ) -> serde_json::Value {
     let text = format!("{}{}", text, DELEGATE_REPLY_CONTRACT);
-    serde_json::json!({
+    let mut p = serde_json::json!({
         "message": { "role": "user", "parts": [{ "kind": "text", "text": text }] },
         "channel_id": channel_id,
         "task_id": child_task_id,
         "idempotency_key": idempotency_key,
-    })
+    });
+    if let Some(n) = deadline_secs {
+        p["limits"] = serde_json::json!({ "deadline_secs": n });
+    }
+    p
+}
+
+/// Seconds left on the launching clock, floored at one so a delegate that
+/// starts on the deadline is told to stop at once rather than told nothing.
+fn remaining_secs(deadline_at: Option<std::time::Instant>, now: std::time::Instant) -> Option<u64> {
+    deadline_at.map(|d| d.saturating_duration_since(now).as_secs().max(1))
 }
 
 /// Extract the specialist's reply: the last `role=="agent"` message's joined
@@ -768,7 +785,13 @@ async fn execute_step(
         // (the on_hitl mirror closure) is intentionally dropped here. If the
         // specialist gates, it appends its own HitlRequest mirror; a lost
         // *interactive* streaming relay is acceptable for v3d-2 (FLAGGED).
-        let params = build_channel_delegate_params(&goal_text, cid, &child_task_id, &reply_key);
+        let params = build_channel_delegate_params(
+            &goal_text,
+            cid,
+            &child_task_id,
+            &reply_key,
+            remaining_secs(opts.deadline_at, std::time::Instant::now()),
+        );
         let dial = crate::a2a_dial::dial_method(
             mur_home,
             &canonical,
@@ -1328,6 +1351,7 @@ pub async fn execute_dag(
         let opt_trigger = opts.trigger.to_string();
         let opt_chan_id = opts.channel_id.clone();
         let opt_run_id = opts.run_id.clone();
+        let opt_deadline_at = opts.deadline_at;
         let opt_on_step = composed_on_step.clone();
         let mut handles = Vec::new();
         for &i in &indices {
@@ -1371,6 +1395,8 @@ pub async fn execute_dag(
                     run_kind: None,
                     run_label: String::new(),
                     max_concurrency: None,
+                    // The launching clock travels into every step (§3.4).
+                    deadline_at: opt_deadline_at,
                     on_step,
                 };
                 execute_step(&step, &opts_clone, i, 0, &mh).await
@@ -1711,7 +1737,8 @@ mod tests {
         // v3d-2: the concierge delegates via `channel/delegate`, threading the
         // channel id + the deterministic reply_key (as idempotency_key) so the
         // specialist signs its OWN reply Message and re-dials fold.
-        let p = build_channel_delegate_params("find the bug", "chan-1", "child-1", "rk-deadbeef");
+        let p =
+            build_channel_delegate_params("find the bug", "chan-1", "child-1", "rk-deadbeef", None);
         assert_eq!(p["channel_id"], "chan-1");
         assert_eq!(p["task_id"], "child-1");
         assert_eq!(p["idempotency_key"], "rk-deadbeef");
@@ -2335,6 +2362,33 @@ mod tests {
         assert!(
             status.run.last_heartbeat_at.is_none(),
             "a re-derived record must report an unknown heartbeat, never invent one"
+        );
+    }
+
+    /// §3.4: the delegate carries the fleet's REMAINING clock, never a fresh one.
+    #[test]
+    fn delegate_params_carry_remaining_deadline() {
+        let p = build_channel_delegate_params("do x", "fleet-dev", "t1", "k1", Some(720));
+        assert_eq!(p["limits"]["deadline_secs"], 720);
+        let p = build_channel_delegate_params("do x", "fleet-dev", "t1", "k1", None);
+        assert!(
+            p.get("limits").is_none(),
+            "no clock → the member resolves its own scopes"
+        );
+    }
+
+    #[test]
+    fn remaining_secs_floors_at_one_and_is_none_without_a_deadline() {
+        let now = std::time::Instant::now();
+        assert_eq!(remaining_secs(None, now), None);
+        assert_eq!(
+            remaining_secs(Some(now + std::time::Duration::from_secs(90)), now),
+            Some(90)
+        );
+        assert_eq!(
+            remaining_secs(Some(now), now),
+            Some(1),
+            "a delegate that starts at the deadline gets one second, not zero"
         );
     }
 }

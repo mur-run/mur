@@ -59,6 +59,17 @@ pub struct TaskSpec {
     /// is declared in the system prompt every turn. `None` leaves the session
     /// cwd where it is.
     pub cwd: Option<std::path::PathBuf>,
+    /// Is a person watching this turn and able to stop it by hand? Attended
+    /// turns have no deadline and a stuck clock that only warns (spec §3.2).
+    /// Deliberately not defaulted: every construction site says which it is,
+    /// the way it already says `intent`. `message/send` passes its
+    /// `can_approve`; `channel/delegate` and every runtime scheduler pass
+    /// `false`.
+    pub attended: bool,
+    /// The launching scope's REMAINING clock, in seconds — a fleet delegating
+    /// with twelve minutes left passes 720 (spec §3.4). `None` = resolve the
+    /// deadline from `profile.yaml` → `config.yaml` → built-in.
+    pub deadline_secs: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -409,11 +420,13 @@ pub struct TaskRunner {
     /// loop picks it up at the next iteration boundary.
     steering: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::mpsc::Sender<String>>>>,
     hitl_timeout_secs: u32,
-    max_iterations: u32,
-    /// Per-task ceiling on cumulative input tokens for the agentic loop. The
-    /// loop snapshots the (per-runner) counter at entry and stops gracefully
-    /// once `current - start >= max_token_budget`.
-    max_token_budget: u64,
+    /// The two scopes this process can see — `config.yaml limits:` and the
+    /// agent's own `profile.yaml limits:` — resolved per turn in `bounds_for`.
+    limits: (
+        mur_common::limits::Limits,
+        Option<mur_common::limits::Limits>,
+    ),
+    iteration_ceiling: u32,
     tools: Vec<Arc<dyn crate::tools::ToolExecutor>>,
     tools_policy: Vec<mur_common::agent::ToolRule>,
     /// Credentials the user handed the agent. Names go into the system prompt;
@@ -445,14 +458,10 @@ pub struct TaskRunner {
     draining: Arc<AtomicBool>,
 }
 
-/// Default agentic-loop iteration cap when `HitlConfig.max_iterations` is unset.
-/// A layered set of budgets (token + loop-detection) is the real safety net, so
-/// this can be generous without risking runaway cost.
-const DEFAULT_MAX_ITERATIONS: u32 = 25;
-
-/// Default cumulative-input-token budget per task when `HitlConfig.max_tokens`
-/// is unset. ≈ a few dollars on Sonnet; override per profile to bound spend.
-const DEFAULT_MAX_TOKEN_BUDGET: u64 = 750_000;
+/// Diagnostic ceiling on agentic-loop iterations (spec §6). Not a setting:
+/// it exists so a runaway bug becomes a stop with a reason instead of a hang.
+/// Bounds that a user configures are `deadline` and `stuck` (`mur limits`).
+pub const ITERATION_CEILING: u32 = 10_000;
 
 /// Rolling-window size for doom-loop detection: the last N tool-call
 /// fingerprints are retained.
@@ -476,17 +485,20 @@ const RATE_LIMIT_BACKOFF_BASE: std::time::Duration = std::time::Duration::from_s
 /// a budget-truncated one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LoopStop {
-    MaxIterations,
-    TokenBudget,
+    /// `ITERATION_CEILING` — a runaway, not a budget.
+    IterationCeiling,
     LoopDetected,
+    Deadline,
+    Stuck,
 }
 
 impl LoopStop {
     fn as_str(self) -> &'static str {
         match self {
-            LoopStop::MaxIterations => "max_iterations",
-            LoopStop::TokenBudget => "token_budget",
+            LoopStop::IterationCeiling => "iteration_ceiling",
             LoopStop::LoopDetected => "loop_detected",
+            LoopStop::Deadline => "deadline",
+            LoopStop::Stuck => "stuck",
         }
     }
 }
@@ -548,8 +560,8 @@ impl TaskRunner {
             client_notifiers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             steering: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             hitl_timeout_secs: 300,
-            max_iterations: DEFAULT_MAX_ITERATIONS,
-            max_token_budget: DEFAULT_MAX_TOKEN_BUDGET,
+            limits: (Default::default(), None),
+            iteration_ceiling: ITERATION_CEILING,
             tools: vec![],
             tools_policy: vec![],
             secrets: None,
@@ -878,14 +890,35 @@ impl TaskRunner {
         self
     }
 
-    pub fn with_max_iterations(mut self, n: u32) -> Self {
-        self.max_iterations = n;
+    /// The two scopes the runtime can see: `config.yaml limits:` and the
+    /// agent's own `profile.yaml limits:`. Resolved per turn in `bounds_for`.
+    pub fn with_limits(
+        mut self,
+        global: mur_common::limits::Limits,
+        agent: Option<mur_common::limits::Limits>,
+    ) -> Self {
+        self.limits = (global, agent);
         self
     }
 
-    /// Set the per-task cumulative input-token budget for the agentic loop.
-    pub fn with_max_token_budget(mut self, n: u64) -> Self {
-        self.max_token_budget = n;
+    /// What bounds this turn. Errors only when a file carries an unparsable
+    /// value — surfaced as a failed task that names the key, per spec §4.
+    fn bounds_for(&self, spec: &TaskSpec) -> Result<crate::bounds::TurnBounds, TaskError> {
+        crate::bounds::resolve_bounds(
+            spec.attended,
+            &self.limits.0,
+            self.limits.1.as_ref(),
+            spec.deadline_secs,
+            std::time::Instant::now(),
+        )
+        .map_err(|e| task_error("limits", format!("limits: {e}"), false))
+    }
+
+    /// Lower the diagnostic ceiling so a scripted stub loop ends. Production
+    /// never calls this: the ceiling is not a setting (spec §6).
+    #[cfg(test)]
+    pub(crate) fn with_iteration_ceiling(mut self, n: u32) -> Self {
+        self.iteration_ceiling = n;
         self
     }
 
@@ -1135,6 +1168,9 @@ impl TaskRunner {
                             let rule = ARTIFACT_RULE.replace("{path}", &path.to_string_lossy());
                             system.push_str(&rule);
                         }
+                        // Resolved before the first LLM call so an unparsable
+                        // limits: value fails the task naming the key (§4).
+                        let bounds = self.bounds_for(&spec)?;
                         self.run_agentic_loop(
                             &id,
                             client.as_ref(),
@@ -1144,6 +1180,7 @@ impl TaskRunner {
                             sink,
                             steer_rx,
                             spec.intent,
+                            bounds,
                         )
                         .await
                     } else {
@@ -1977,6 +2014,7 @@ impl TaskRunner {
         sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
         mut steer_rx: Option<tokio::sync::mpsc::Receiver<String>>,
         intent: RequestIntent,
+        bounds: crate::bounds::TurnBounds,
     ) -> Result<(Message, Option<LoopExit>), TaskError> {
         use crate::llm::{LlmRequest, RichMessage, StopReason};
 
@@ -1995,11 +2033,6 @@ impl TaskRunner {
         let mut history: Vec<RichMessage> =
             self.seed_history(context_task_id, system_prompt, input);
 
-        // Snapshot the (per-runner, shared-across-tasks) token counter so the
-        // budget measures THIS task's spend, not the runner's lifetime total.
-        let start_tokens = self
-            .cumulative_input_tokens
-            .load(std::sync::atomic::Ordering::Relaxed);
         // Rolling window of recent tool-call fingerprints for doom-loop
         // detection: (tool_name, hash(canonical args), hash(result content)).
         // Keying on the RESULT too means a command repeated with identical
@@ -2010,29 +2043,76 @@ impl TaskRunner {
         let mut fingerprints: VecDeque<(String, u64, u64)> = VecDeque::with_capacity(LOOP_WINDOW);
         // Settlement accounting for this turn. Recorded from the loop's own
         // view of each call, so the card cannot disagree with what happened.
-        let mut ledger = crate::turn_ledger::TurnLedger::default();
+        let mut ledger = crate::turn_ledger::TurnLedger {
+            agent: self.agent_name.clone(),
+            ..Default::default()
+        };
+        // The stuck clock (§3.5). The last three calls travel in the stop
+        // reason; the ledger travels in the card. Attended turns are warned
+        // once — there is no second warning because the person is the stop.
+        let mut progress = crate::bounds::Progress::start(std::time::Instant::now());
+        let mut stuck_warned = false;
 
         let mut iteration: u32 = 0;
-        while iteration < self.max_iterations {
-            // Token budget (primary control): stop before spending more once
-            // this task's cumulative input tokens cross the ceiling.
-            let spent = self
-                .cumulative_input_tokens
-                .load(std::sync::atomic::Ordering::Relaxed)
-                .saturating_sub(start_tokens);
-            if spent >= self.max_token_budget {
+        while iteration < self.iteration_ceiling {
+            let now = std::time::Instant::now();
+            if let Some(d) = bounds.deadline
+                && now >= d
+            {
                 let msg = self
-                    .graceful_exit(client, &history, LoopStop::TokenBudget, &ledger, iteration)
+                    .graceful_exit(
+                        client,
+                        &history,
+                        LoopStop::Deadline,
+                        &ledger,
+                        iteration,
+                        &progress,
+                    )
                     .await;
                 return Ok((
                     msg,
                     Some(LoopExit {
-                        reason: LoopStop::TokenBudget,
+                        reason: LoopStop::Deadline,
                         iterations: iteration,
                     }),
                 ));
             }
-
+            if let mur_common::limits::Stuck::After(limit) = bounds.stuck
+                && iteration > 0
+                && progress.stuck_for(now) >= limit
+            {
+                if bounds.attended {
+                    if !stuck_warned {
+                        stuck_warned = true;
+                        self.emit_live_warning(
+                            task_id,
+                            &format!(
+                                "⚠ no progress for {} — Esc to stop",
+                                crate::bounds::fmt_dur(limit)
+                            ),
+                        )
+                        .await;
+                    }
+                } else {
+                    let msg = self
+                        .graceful_exit(
+                            client,
+                            &history,
+                            LoopStop::Stuck,
+                            &ledger,
+                            iteration,
+                            &progress,
+                        )
+                        .await;
+                    return Ok((
+                        msg,
+                        Some(LoopExit {
+                            reason: LoopStop::Stuck,
+                            iterations: iteration,
+                        }),
+                    ));
+                }
+            }
             let req = LlmRequest {
                 messages: history.clone(),
                 temperature: None,
@@ -2259,7 +2339,14 @@ impl TaskRunner {
                     // sanitizes, but keeping history consistent is cheap.
                     history.push(RichMessage::ToolResults { results });
                     let msg = self
-                        .graceful_exit(client, &history, LoopStop::LoopDetected, &ledger, iteration)
+                        .graceful_exit(
+                            client,
+                            &history,
+                            LoopStop::LoopDetected,
+                            &ledger,
+                            iteration,
+                            &progress,
+                        )
                         .await;
                     return Ok((
                         msg,
@@ -2291,6 +2378,14 @@ impl TaskRunner {
                     });
                 }
             }
+            progress.observe(
+                &resp
+                    .tool_calls
+                    .iter()
+                    .map(|c| (c.tool_name.clone(), fingerprint_args(&c.input)))
+                    .collect::<Vec<_>>(),
+                std::time::Instant::now(),
+            );
             iteration += 1;
         }
 
@@ -2298,18 +2393,36 @@ impl TaskRunner {
             .graceful_exit(
                 client,
                 &history,
-                LoopStop::MaxIterations,
+                LoopStop::IterationCeiling,
                 &ledger,
                 iteration,
+                &progress,
             )
             .await;
         Ok((
             msg,
             Some(LoopExit {
-                reason: LoopStop::MaxIterations,
+                reason: LoopStop::IterationCeiling,
                 iterations: iteration,
             }),
         ))
+    }
+
+    /// One line into the live transcript of the connection that holds this
+    /// turn, as a `message/delta` text frame — the frame murmur already
+    /// renders, so no new frame type and no client change. Attended turns
+    /// only; nobody is reading an unattended sink.
+    async fn emit_live_warning(&self, task_id: &str, text: &str) {
+        let entry = self.client_notifiers.lock().await.get(task_id).cloned();
+        if let Some((tx, _)) = entry {
+            let _ = tx
+                .send(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "message/delta",
+                    "params": { "task_id": task_id, "text": format!("\n{text}\n"), "thinking": false },
+                }))
+                .await;
+        }
     }
 
     /// One final, tools-DISABLED LLM turn asking the model to summarize what it
@@ -2323,14 +2436,26 @@ impl TaskRunner {
         reason: LoopStop,
         ledger: &crate::turn_ledger::TurnLedger,
         iterations: u32,
+        progress: &crate::bounds::Progress,
     ) -> Message {
         use crate::llm::{LlmRequest, RichMessage};
 
+        let why = match reason {
+            LoopStop::Deadline => "the deadline for this task has passed".to_string(),
+            LoopStop::Stuck => format!(
+                "no progress was made — the last tool calls were: {}",
+                progress.last_calls()
+            ),
+            LoopStop::LoopDetected => {
+                "the last tool call repeated with identical arguments and output".to_string()
+            }
+            LoopStop::IterationCeiling => {
+                format!("the {ITERATION_CEILING}-iteration safety ceiling was hit")
+            }
+        };
         let nudge = format!(
-            "You have hit the {} budget for this task. Stop calling tools. \
-             Summarize what you completed, the current build/test state, and the \
-             remaining steps so work can resume later.",
-            reason.as_str()
+            "Stop calling tools: {why}. Summarize what you completed, the current \
+             build/test state, and the remaining steps so work can resume later."
         );
         // When a budget aborts MID-iteration (e.g. the doom-loop guard fires
         // after the model emitted a tool_use but before its tool_result was
@@ -2368,7 +2493,7 @@ impl TaskRunner {
             Err(_) => {
                 // Never lose work: return the last assistant text from history.
                 last_assistant_text(history)
-                    .unwrap_or_else(|| format!("Stopped: {} budget reached.", reason.as_str()))
+                    .unwrap_or_else(|| format!("Stopped: {}.", reason.as_str()))
             }
         };
         // #595: mark output that ended early so partial execution is visible
@@ -2378,9 +2503,12 @@ impl TaskRunner {
         // settlement, next to what did and did not actually run.
         let ledger = crate::turn_ledger::TurnLedger {
             stop: match reason {
-                LoopStop::MaxIterations => crate::turn_ledger::StopKind::MaxIterations,
-                LoopStop::TokenBudget => crate::turn_ledger::StopKind::TokenBudget,
+                LoopStop::IterationCeiling => crate::turn_ledger::StopKind::MaxIterations,
                 LoopStop::LoopDetected => crate::turn_ledger::StopKind::LoopDetected,
+                LoopStop::Deadline => crate::turn_ledger::StopKind::Deadline,
+                LoopStop::Stuck => crate::turn_ledger::StopKind::Stuck {
+                    last_calls: progress.last_calls(),
+                },
             },
             // Use the live counter passed in, not `ledger.iterations`: on the
             // early-exit paths the caller's ledger was never updated with the
@@ -2937,6 +3065,8 @@ mod tests {
             output_artifact_path: None,
             active_fleet: None,
             active_team: None,
+            attended: true,
+            deadline_secs: None,
         }
     }
 
@@ -2988,6 +3118,8 @@ mod tests {
             output_artifact_path: None,
             active_fleet: None,
             active_team: None,
+            attended: true,
+            deadline_secs: None,
         };
         assert_eq!(spec.task_id.as_deref(), Some("task-fixed-1"));
     }
@@ -3007,6 +3139,8 @@ mod tests {
             output_artifact_path: None,
             active_fleet: None,
             active_team: None,
+            attended: true,
+            deadline_secs: None,
         };
         let outcome = runner.run_sync(spec).await;
         let TaskOutcome::Completed(task) = outcome else {
@@ -3028,6 +3162,8 @@ mod tests {
             output_artifact_path: None,
             active_fleet: None,
             active_team: None,
+            attended: true,
+            deadline_secs: None,
         }
     }
 
@@ -3226,6 +3362,8 @@ mod tests {
             output_artifact_path: None,
             active_fleet: None,
             active_team: None,
+            attended: true,
+            deadline_secs: None,
         };
         let r2 = runner.clone();
         let handle = tokio::spawn(async move { r2.run_sync_streaming(spec, tx, None).await });
@@ -3289,7 +3427,7 @@ mod tests {
             TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
                 .with_pending_approvals(empty_pending_approvals())
                 .with_notifier(tokio::sync::mpsc::channel(16).0)
-                .with_max_iterations(50),
+                .with_iteration_ceiling(50),
         );
         let outcome = runner.run_sync(loop_spec("fabricate")).await;
         match outcome {
@@ -3340,18 +3478,6 @@ mod tests {
             }],
             stop_reason: crate::llm::StopReason::ToolUse,
         }
-    }
-
-    /// Like `tool_call_response` but with a caller-specified input-token count,
-    /// for exercising the token budget.
-    fn tool_call_response_tokens(
-        call_id: &str,
-        command: &str,
-        input_tokens: u64,
-    ) -> crate::llm::LlmResponse {
-        let mut r = tool_call_response(call_id, command);
-        r.input_tokens = input_tokens;
-        r
     }
 
     fn end_turn_response(text: &str) -> crate::llm::LlmResponse {
@@ -3507,7 +3633,7 @@ mod tests {
                 .with_pending_approvals(empty_pending_approvals())
                 .with_notifier(tokio::sync::mpsc::channel(16).0)
                 .with_hitl_timeout_secs(1)
-                .with_max_iterations(5),
+                .with_iteration_ceiling(5),
         );
         let _ = runner.run_sync(loop_spec("fleet-run-default-ask")).await;
         assert_eq!(
@@ -3534,7 +3660,7 @@ mod tests {
                 .with_tools_policy(vec![]) // default Ask
                 // NB: no with_pending_approvals / no with_notifier => no sink
                 .with_hitl_timeout_secs(1)
-                .with_max_iterations(5),
+                .with_iteration_ceiling(5),
         );
         let _ = runner.run_sync(loop_spec("fleet-run-no-sink")).await;
         assert_eq!(
@@ -3565,7 +3691,7 @@ mod tests {
                 .with_pending_approvals(pa.clone())
                 .with_notifier(tokio::sync::mpsc::channel(16).0)
                 .with_hitl_timeout_secs(5)
-                .with_max_iterations(5),
+                .with_iteration_ceiling(5),
         );
         // Background approver: as soon as a pending approval appears, answer allow.
         let pa2 = pa.clone();
@@ -3624,7 +3750,7 @@ mod tests {
                 .with_pending_approvals(pa.clone())
                 .with_notifier(ntx)
                 .with_hitl_timeout_secs(5)
-                .with_max_iterations(5),
+                .with_iteration_ceiling(5),
         );
         let pa2 = pa.clone();
         let approver = tokio::spawn(async move {
@@ -3706,7 +3832,7 @@ mod tests {
                     .with_notifier(ntx)
                     .with_decision_store(Arc::new(Fixed(settled)))
                     .with_hitl_timeout_secs(1)
-                    .with_max_iterations(3),
+                    .with_iteration_ceiling(3),
             );
             let outcome = runner.run_sync(loop_spec("remembered")).await;
             assert_eq!(
@@ -3745,7 +3871,7 @@ mod tests {
                 .with_pending_approvals(empty_pending_approvals())
                 .with_notifier(tokio::sync::mpsc::channel(16).0)
                 .with_hitl_timeout_secs(1)
-                .with_max_iterations(5),
+                .with_iteration_ceiling(5),
         );
         let _ = runner.run_sync(loop_spec("fleet-run-deny")).await;
         assert_eq!(
@@ -3784,7 +3910,7 @@ mod tests {
                 .with_pending_approvals(empty_pending_approvals())
                 .with_notifier(tokio::sync::mpsc::channel(16).0)
                 .with_hitl_timeout_secs(1)
-                .with_max_iterations(50),
+                .with_iteration_ceiling(50),
         );
         let outcome = runner.run_sync(loop_spec("truncate")).await;
         let TaskOutcome::Completed(task) = outcome else {
@@ -3833,7 +3959,7 @@ mod tests {
                 .with_pending_approvals(empty_pending_approvals())
                 .with_notifier(tokio::sync::mpsc::channel(16).0)
                 .with_hitl_timeout_secs(1)
-                .with_max_iterations(50),
+                .with_iteration_ceiling(50),
         );
         let outcome = runner.run_sync(loop_spec("truncate-thinking")).await;
         let TaskOutcome::Completed(task) = outcome else {
@@ -3859,7 +3985,7 @@ mod tests {
                 .with_pending_approvals(empty_pending_approvals())
                 .with_notifier(tokio::sync::mpsc::channel(16).0)
                 .with_hitl_timeout_secs(1)
-                .with_max_iterations(5),
+                .with_iteration_ceiling(5),
         );
         let outcome = runner.run_sync(loop_spec("truncate-final-answer")).await;
         let TaskOutcome::Completed(task) = outcome else {
@@ -3895,7 +4021,7 @@ mod tests {
                 .with_pending_approvals(empty_pending_approvals())
                 .with_notifier(tokio::sync::mpsc::channel(16).0)
                 .with_hitl_timeout_secs(1)
-                .with_max_iterations(5),
+                .with_iteration_ceiling(5),
         );
         let outcome = runner.run_sync(loop_spec("clean-end-turn")).await;
         let TaskOutcome::Completed(task) = outcome else {
@@ -3982,7 +4108,7 @@ mod tests {
                 .with_pending_approvals(empty_pending_approvals())
                 .with_notifier(tokio::sync::mpsc::channel(16).0)
                 .with_hitl_timeout_secs(1)
-                .with_max_iterations(50),
+                .with_iteration_ceiling(50),
         );
         let outcome = runner.run_sync(loop_spec("empty-stream-retry")).await;
         let TaskOutcome::Completed(task) = outcome else {
@@ -4024,6 +4150,8 @@ mod tests {
             output_artifact_path: None,
             active_fleet: None,
             active_team: None,
+            attended: true,
+            deadline_secs: None,
         };
         let outcome = runner.run_sync(spec).await;
         assert!(matches!(outcome, TaskOutcome::Completed(_)));
@@ -4057,7 +4185,7 @@ mod tests {
                 .with_pending_approvals(pa)
                 .with_notifier(notif_tx)
                 .with_hitl_timeout_secs(1)
-                .with_max_iterations(3),
+                .with_iteration_ceiling(3),
         );
         let spec = TaskSpec {
             cwd: None,
@@ -4073,6 +4201,8 @@ mod tests {
             output_artifact_path: None,
             active_fleet: None,
             active_team: None,
+            attended: true,
+            deadline_secs: None,
         };
         let outcome = runner.run_sync(spec).await;
         let TaskOutcome::Completed(task) = outcome else {
@@ -4086,46 +4216,8 @@ mod tests {
         );
         // The stop reason is surfaced in usage for callers to inspect.
         let usage = task.usage.expect("graceful exit must populate usage");
-        assert_eq!(usage["stop_reason"], "max_iterations", "usage={usage}");
+        assert_eq!(usage["stop_reason"], "iteration_ceiling", "usage={usage}");
         assert_eq!(usage["iterations"], 3, "usage={usage}");
-    }
-
-    /// Step 3 (token budget): with a tiny `max_tokens` ceiling and an LLM that
-    /// reports input tokens, the loop stops early — before the iteration cap —
-    /// with stop_reason "token_budget", returning a Completed task carrying the
-    /// summary. The budget is checked at loop entry (current - start), so the
-    /// first turn always runs; the second turn trips the ceiling.
-    #[tokio::test]
-    async fn token_budget_exceeded_yields_completed_with_summary() {
-        use crate::llm::stub::SequenceLlm;
-        // idx0: one tool turn reporting 100 input tokens (>budget of 10).
-        // idx1: the graceful, tools-disabled summary turn.
-        let responses: Vec<crate::llm::LlmResponse> = vec![
-            tool_call_response_tokens("id-0", "echo work", 100),
-            end_turn_response("TOKEN SUMMARY: ran one step; build untouched; remaining: rest."),
-        ];
-        let runner = Arc::new(
-            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
-                .with_pending_approvals(empty_pending_approvals())
-                .with_notifier(tokio::sync::mpsc::channel(16).0)
-                .with_hitl_timeout_secs(1)
-                // High iteration cap so only the token budget can stop us.
-                .with_max_iterations(50)
-                .with_max_token_budget(10),
-        );
-        let outcome = runner.run_sync(loop_spec("budget")).await;
-        let TaskOutcome::Completed(task) = outcome else {
-            panic!("expected Completed (token-budget graceful exit), got {outcome:?}");
-        };
-        let reply_text = task.messages.last().map(text_of).unwrap_or_default();
-        assert!(
-            reply_text.contains("TOKEN SUMMARY"),
-            "expected summary in reply, got: {reply_text}"
-        );
-        let usage = task.usage.expect("token-budget exit must populate usage");
-        assert_eq!(usage["stop_reason"], "token_budget", "usage={usage}");
-        // Stopped after exactly one completed iteration, far below the cap of 50.
-        assert_eq!(usage["iterations"], 1, "usage={usage}");
     }
 
     /// Step 4 (doom-loop detection): an LLM that emits the SAME tool call every
@@ -4152,7 +4244,7 @@ mod tests {
                 .with_notifier(tokio::sync::mpsc::channel(16).0)
                 .with_hitl_timeout_secs(1)
                 // High cap so only doom-loop detection can stop us this fast.
-                .with_max_iterations(50),
+                .with_iteration_ceiling(50),
         );
         let outcome = runner.run_sync(loop_spec("doom")).await;
         let TaskOutcome::Completed(task) = outcome else {
@@ -4217,6 +4309,8 @@ mod tests {
             output_artifact_path: None,
             active_fleet: None,
             active_team: None,
+            attended: true,
+            deadline_secs: None,
         }
     }
 
@@ -4224,14 +4318,11 @@ mod tests {
         Arc::new(tokio::sync::Mutex::new(HashMap::new()))
     }
 
-    /// Step 1 (config wiring): the PRODUCTION wiring function `build_runner`
-    /// must honour a `max_iterations` of 3 — proving `HitlConfig.max_iterations`
-    /// is threaded through, not just the test-only builder. The counting LLM
-    /// emits tool_use every turn, so without the cap the loop would run forever
-    /// (well, until the default). We assert generate() is called at most 3+1
-    /// times (3 loop turns plus one graceful-summary turn).
+    /// The PRODUCTION wiring function `build_runner` applies the profile's
+    /// limits: an unattended turn with a zero deadline stops before its first
+    /// tool call — one generate() for the graceful summary, none for work.
     #[tokio::test]
-    async fn build_runner_caps_loop_at_configured_max_iterations() {
+    async fn build_runner_applies_profile_limits() {
         let calls = Arc::new(AtomicU64::new(0));
         let client: Arc<dyn crate::llm::LlmClient> = Arc::new(CountingToolLlm {
             calls: calls.clone(),
@@ -4252,8 +4343,14 @@ mod tests {
             1,
             vec![],
             vec![],
-            Some(3),
-            None,
+            (
+                mur_common::limits::Limits::default(),
+                Some(mur_common::limits::Limits {
+                    deadline: Some("0s".into()),
+                    stuck: None,
+                    cost_usd: None,
+                }),
+            ),
             None,
             None,
             None,
@@ -4262,15 +4359,220 @@ mod tests {
             None,
             None,
         );
-        let _ = runner.run_sync(loop_spec("loop")).await;
-        let n = calls.load(Ordering::Relaxed);
-        // 3 loop iterations; the graceful summary turn (step 4) adds at most one
-        // more. Before wiring, the default cap (25) lets it run far past this.
+        let mut spec = loop_spec("loop");
+        spec.attended = false;
+        let out = runner.run_sync(spec).await;
+        let usage = task_usage(&out);
+        assert_eq!(usage["stop_reason"], "deadline", "usage={usage}");
         assert!(
-            n <= 4,
-            "expected the loop capped near 3 iterations, got {n} generate() calls"
+            calls.load(Ordering::Relaxed) <= 1,
+            "no work turn may run past an expired deadline"
         );
-        assert!(n >= 3, "expected at least 3 iterations, got {n}");
+        // The same profile, attended: the deadline is ignored (§3.2) and the
+        // counting LLM runs until the test ceiling.
+        let (runner2, spec2) = runner_with_scripted_tool_calls(8, true, "off");
+        let usage = task_usage(&runner2.run_sync(spec2).await);
+        assert!(
+            usage.get("stop_reason").is_none(),
+            "attended must end naturally: {usage}"
+        );
+    }
+
+    /// A runner whose stub emits `n` distinct `bash` calls then ends the turn.
+    /// No `bash` tool is registered — every call resolves to the same
+    /// "unknown tool" result, which is fine: the progress rule keys on the
+    /// call, and distinct args are distinct calls.
+    fn runner_with_scripted_tool_calls(
+        n: usize,
+        attended: bool,
+        stuck: &str,
+    ) -> (Arc<TaskRunner>, TaskSpec) {
+        use crate::llm::stub::SequenceLlm;
+        let mut responses: Vec<crate::llm::LlmResponse> = (0..n)
+            .map(|i| tool_call_response(&format!("id-{i}"), &format!("echo step-{i}")))
+            .collect();
+        responses.push(end_turn_response("DONE"));
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                .with_iteration_ceiling(200)
+                .with_limits(
+                    mur_common::limits::Limits {
+                        deadline: None,
+                        stuck: Some(stuck.into()),
+                        cost_usd: None,
+                    },
+                    None,
+                ),
+        );
+        let mut spec = loop_spec("scripted");
+        spec.attended = attended;
+        (runner, spec)
+    }
+
+    /// A tool that takes a moment and answers differently every call, under
+    /// whatever name the test gives it. Varying output keeps the doom-loop
+    /// guard (which keys on the result too) out of the way, so what ends the
+    /// turn is the stuck clock — or nothing.
+    struct SlowVaryingTool {
+        name: String,
+        calls: Arc<AtomicU64>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::tools::ToolExecutor for SlowVaryingTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn def(&self) -> crate::llm::ToolDef {
+            crate::llm::ToolDef {
+                name: self.name.clone(),
+                description: "slow varying test tool".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+        ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
+            tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+            let n = self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(format!("output #{n}").into())
+        }
+    }
+
+    /// Like the above, but every turn is the SAME call to `tool` with the same
+    /// input — the "retrying the same thing" shape — against `SlowVaryingTool`,
+    /// so ~350 ms passes per iteration and a 1 s stuck window is reachable.
+    fn runner_with_scripted_tool_calls_repeating(
+        tool: &str,
+        n: usize,
+        attended: bool,
+        stuck: &str,
+    ) -> (Arc<TaskRunner>, TaskSpec) {
+        use crate::llm::stub::SequenceLlm;
+        let mut responses: Vec<crate::llm::LlmResponse> = (0..n)
+            .map(|i| crate::llm::LlmResponse {
+                text: String::new(),
+                input_tokens: 5,
+                output_tokens: 5,
+                model: "test".into(),
+                tool_calls: vec![crate::llm::ToolCallResult {
+                    call_id: format!("same-{i}"),
+                    tool_name: tool.into(),
+                    input: serde_json::json!({"path": "x"}),
+                }],
+                stop_reason: crate::llm::StopReason::ToolUse,
+            })
+            .collect();
+        responses.push(end_turn_response("DONE"));
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_tools(vec![Arc::new(SlowVaryingTool {
+                    name: tool.into(),
+                    calls: Arc::new(AtomicU64::new(0)),
+                })])
+                .with_tools_policy(vec![mur_common::agent::ToolRule {
+                    pattern: tool.into(),
+                    policy: mur_common::agent::ToolPolicy::Allow,
+                    risk: None,
+                }])
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                .with_iteration_ceiling(200)
+                .with_limits(
+                    mur_common::limits::Limits {
+                        deadline: None,
+                        stuck: Some(stuck.into()),
+                        cost_usd: None,
+                    },
+                    None,
+                ),
+        );
+        let mut spec = loop_spec("repeating");
+        spec.attended = attended;
+        (runner, spec)
+    }
+
+    fn task_usage(out: &TaskOutcome) -> serde_json::Value {
+        match out {
+            TaskOutcome::Completed(task) => task.usage.clone().unwrap_or_default(),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    fn last_agent_text(out: &TaskOutcome) -> String {
+        match out {
+            TaskOutcome::Completed(task) => task.messages.last().map(text_of).unwrap_or_default(),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// §7: an attended run passes the old 25-iteration mark without stopping.
+    #[tokio::test]
+    async fn attended_run_passes_the_old_iteration_cap() {
+        let (runner, spec) = runner_with_scripted_tool_calls(30, true, "off");
+        let out = runner.run_sync(spec).await;
+        let usage = task_usage(&out);
+        assert!(
+            usage.get("stop_reason").is_none(),
+            "must end naturally: {usage}"
+        );
+        assert!(last_agent_text(&out).contains("DONE"));
+    }
+
+    /// §7: unattended with a 1 s stuck window and ~350 ms per iteration, the
+    /// same `bash` call repeated stops with `stuck` (identical calls are not
+    /// progress) naming the last calls and the remedy; the same shape through
+    /// `write_file` never stops — a file write is always progress.
+    #[tokio::test]
+    async fn unattended_stuck_stops_on_no_progress_and_not_after_a_write() {
+        let (runner, spec) = runner_with_scripted_tool_calls_repeating("bash", 6, false, "1s");
+        let out = runner.run_sync(spec).await;
+        let usage = task_usage(&out);
+        assert_eq!(usage["stop_reason"], "stuck", "{usage}");
+        let card = last_agent_text(&out);
+        assert!(
+            card.contains("last calls: bash"),
+            "last calls named: {card}"
+        );
+        assert!(
+            card.contains("mur limits") && card.contains("--stuck"),
+            "remedy: {card}"
+        );
+
+        let (runner, spec) =
+            runner_with_scripted_tool_calls_repeating("write_file", 6, false, "1s");
+        let usage = task_usage(&runner.run_sync(spec).await);
+        assert!(
+            usage.get("stop_reason").is_none(),
+            "a write every turn is progress: {usage}"
+        );
+    }
+
+    /// §3.2 + §3.7: an unattended turn past its deadline stops with `deadline`
+    /// and the remedy names the limits command.
+    #[tokio::test]
+    async fn unattended_deadline_stops_with_reason_and_remedy() {
+        let (runner, mut spec) = runner_with_scripted_tool_calls(50, false, "off");
+        spec.deadline_secs = Some(0);
+        let out = runner.run_sync(spec).await;
+        let usage = task_usage(&out);
+        assert_eq!(usage["stop_reason"], "deadline", "{usage}");
+        assert!(
+            last_agent_text(&out).contains("mur limits"),
+            "{}",
+            last_agent_text(&out)
+        );
+    }
+
+    /// §6: the ceiling is a diagnostic, not a setting — absurd on purpose.
+    #[test]
+    fn iteration_ceiling_is_absurd_on_purpose() {
+        assert_eq!(ITERATION_CEILING, 10_000);
     }
 
     /// A tool whose output CHANGES on every call even when the args are
@@ -4435,7 +4737,7 @@ mod tests {
                 .with_hitl_timeout_secs(1)
                 // Small cap so the test terminates fast; doom-loop must NOT
                 // fire before the cap is reached.
-                .with_max_iterations(5),
+                .with_iteration_ceiling(5),
         );
         let outcome = runner.run_sync(loop_spec("progress")).await;
         let TaskOutcome::Completed(task) = outcome else {
@@ -4447,8 +4749,8 @@ mod tests {
             "changing results must NOT be a doom loop; usage={usage}"
         );
         assert_eq!(
-            usage["stop_reason"], "max_iterations",
-            "expected the iteration cap to be the terminus; usage={usage}"
+            usage["stop_reason"], "iteration_ceiling",
+            "expected the iteration ceiling to be the terminus; usage={usage}"
         );
     }
 
@@ -4505,7 +4807,7 @@ mod tests {
                 .with_pending_approvals(approvals)
                 .with_notifier(tx)
                 .with_hitl_timeout_secs(5)
-                .with_max_iterations(5),
+                .with_iteration_ceiling(5),
         );
         let _ = runner.run_sync(loop_spec("push it")).await;
 
@@ -4547,7 +4849,7 @@ mod tests {
                 .with_pending_approvals(empty_pending_approvals())
                 .with_notifier(tokio::sync::mpsc::channel(16).0)
                 .with_hitl_timeout_secs(1)
-                .with_max_iterations(5),
+                .with_iteration_ceiling(5),
         );
         let _ = runner.run_sync(loop_spec("push it")).await;
 
@@ -4582,7 +4884,7 @@ mod tests {
                 .with_pending_approvals(empty_pending_approvals())
                 .with_notifier(tokio::sync::mpsc::channel(16).0)
                 .with_hitl_timeout_secs(1)
-                .with_max_iterations(50),
+                .with_iteration_ceiling(50),
         );
         let outcome = runner.run_sync(loop_spec("stuck")).await;
         let TaskOutcome::Completed(task) = outcome else {
@@ -4656,6 +4958,7 @@ mod tests {
                 LoopStop::LoopDetected,
                 &crate::turn_ledger::TurnLedger::default(),
                 2,
+                &crate::bounds::Progress::start(std::time::Instant::now()),
             )
             .await;
         // Summary turn succeeded (not the fallback path).
@@ -4724,16 +5027,17 @@ mod tests {
             .graceful_exit(
                 client.as_ref(),
                 &history,
-                LoopStop::MaxIterations,
+                LoopStop::IterationCeiling,
                 &crate::turn_ledger::TurnLedger::default(),
                 3,
+                &crate::bounds::Progress::start(std::time::Instant::now()),
             )
             .await;
         let capped_text = text_of(&capped);
         assert!(
-            capped_text.contains("iteration cap")
+            capped_text.contains("iteration ceiling")
                 && capped_text.contains("output may be incomplete"),
-            "MaxIterations exit must name the cap: {capped_text}"
+            "IterationCeiling exit must name the ceiling: {capped_text}"
         );
 
         let other = runner
@@ -4743,6 +5047,7 @@ mod tests {
                 LoopStop::LoopDetected,
                 &crate::turn_ledger::TurnLedger::default(),
                 3,
+                &crate::bounds::Progress::start(std::time::Instant::now()),
             )
             .await;
         let other_text = text_of(&other);
