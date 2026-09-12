@@ -1,5 +1,6 @@
 //! `mur fleet` command module.
 
+pub mod billing;
 pub mod cherry_cmd;
 pub mod compare;
 pub mod concurrent_cmd;
