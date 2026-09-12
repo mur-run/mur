@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use mur_common::fleet::{Fleet, FleetLoop};
+use mur_common::fleet::Fleet;
 use mur_common::model::BillingMode;
 
 /// The fold of every agent's billing into one answer.
@@ -66,42 +66,10 @@ pub fn fleet_billing(mur_home: &Path, fleet: &Fleet) -> FleetBilling {
     out
 }
 
-/// §5: unattended work must be bounded. A deadline bounds any fleet; a
-/// positive `budget_usd` bounds a billable one and means nothing for a fleet
-/// that cannot spend.
-// Consumed by `mur-daemon`; the `mur` binary target compiles this module too
-// and would otherwise report it unused (same as `complete::offers`).
-#[allow(dead_code)]
-pub fn is_bounded(lc: Option<&FleetLoop>, billing: &FleetBilling) -> bool {
-    let Some(l) = lc else { return false };
-    let has_deadline = !l.deadline.trim().is_empty();
-    let has_budget = billing.billable && l.budget_usd > 0.0;
-    has_deadline || has_budget
-}
-
-/// Why `is_bounded` said no, in the words of the fix. Only meaningful when it
-/// did say no.
-// Consumed by `mur-daemon`; the `mur` binary target compiles this module too
-// and would otherwise report it unused (same as `complete::offers`).
-#[allow(dead_code)]
-pub fn unbounded_reason(lc: Option<&FleetLoop>, billing: &FleetBilling, fleet: &str) -> String {
-    let _ = lc;
-    if billing.billable {
-        format!(
-            "fleet '{fleet}' has no bound — set a deadline (mur fleet settings {fleet} --deadline 2h) \
-             or a budget (--budget-usd <USD>) before it may run unattended"
-        )
-    } else {
-        format!(
-            "fleet '{fleet}' has no bound — it runs on local/subscription models, so a budget does not \
-             apply; set a deadline: mur fleet settings {fleet} --deadline 2h"
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mur_common::fleet::FleetLoop;
 
     fn fleet(router: Option<&str>, members: &[&str], lc: Option<FleetLoop>) -> Fleet {
         Fleet {
@@ -119,16 +87,6 @@ mod tests {
             hitl: None,
             requires_programs: vec![],
             limits: None,
-        }
-    }
-
-    fn lc(budget_usd: f64, deadline: &str) -> FleetLoop {
-        FleetLoop {
-            trigger: "interval:1h".into(),
-            max_iterations: 0,
-            budget_usd,
-            deadline: deadline.into(),
-            done_when: String::new(),
         }
     }
 
@@ -165,62 +123,5 @@ mod tests {
         let unknown = fleet_billing_with(&f, |a| (a != "a").then_some(BillingMode::Local));
         assert!(unknown.billable);
         assert_eq!(unknown.unknown, vec![("a".to_string(), "?".to_string())]);
-    }
-
-    #[test]
-    fn bounded_means_a_deadline_or_a_budget_that_can_apply() {
-        let local = FleetBilling {
-            billable: false,
-            unknown: vec![],
-        };
-        let billed = FleetBilling {
-            billable: true,
-            unknown: vec![],
-        };
-
-        // No loop config at all: never bounded.
-        assert!(!is_bounded(None, &local));
-        assert!(!is_bounded(None, &billed));
-
-        // A deadline bounds anyone.
-        assert!(is_bounded(Some(&lc(0.0, "2h")), &local));
-        assert!(is_bounded(Some(&lc(0.0, "2h")), &billed));
-
-        // A budget bounds only a fleet that can spend.
-        assert!(is_bounded(Some(&lc(5.0, "")), &billed));
-        assert!(
-            !is_bounded(Some(&lc(5.0, "")), &local),
-            "a dollar figure means nothing here"
-        );
-
-        // Neither → unbounded, whatever the billing.
-        assert!(!is_bounded(Some(&lc(0.0, "")), &billed));
-        assert!(
-            !is_bounded(Some(&lc(0.0, "   ")), &local),
-            "whitespace is not a deadline"
-        );
-    }
-
-    #[test]
-    fn the_unbounded_reason_names_the_knob_that_applies() {
-        let local = FleetBilling {
-            billable: false,
-            unknown: vec![],
-        };
-        let billed = FleetBilling {
-            billable: true,
-            unknown: vec![],
-        };
-        let r = unbounded_reason(Some(&lc(0.0, "")), &local, "dev");
-        assert!(r.contains("--deadline"), "{r}");
-        assert!(
-            !r.contains("--budget-usd"),
-            "a local fleet is not offered a budget: {r}"
-        );
-        let r = unbounded_reason(Some(&lc(0.0, "")), &billed, "dev");
-        assert!(
-            r.contains("--deadline") && r.contains("--budget-usd"),
-            "{r}"
-        );
     }
 }
