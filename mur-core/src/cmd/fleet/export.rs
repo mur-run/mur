@@ -234,6 +234,7 @@ mod tests {
             parallel: None,
             hitl: None,
             requires_programs: vec![],
+            limits: None,
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         let out = home.join("dev.fleet");
@@ -268,6 +269,7 @@ mod tests {
             parallel: None,
             hitl: None,
             requires_programs: vec![],
+            limits: None,
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
 

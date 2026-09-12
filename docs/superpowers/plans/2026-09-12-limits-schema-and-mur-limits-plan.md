@@ -75,7 +75,7 @@ pub fn resolve(scope: Scope, global: &Limits, fleet: Option<&Limits>, agent: Opt
 
 ### Steps
 
-- [ ] **1.1 Create the module with its tests** — new file `mur-common/src/limits.rs`:
+- [x] **1.1 Create the module with its tests** — new file `mur-common/src/limits.rs`:
 
 ```rust
 //! Execution limits: the one `limits:` block every scope carries (spec
@@ -385,11 +385,11 @@ mod tests {
 
   If `mur-common` uses `serde_yaml` rather than `serde_yaml_ng` in its tests, use the same crate name the existing `model.rs` tests use.
 
-- [ ] **1.2 Register** — in `mur-common/src/lib.rs`, between `pub mod ledger;` and `pub mod llm;` add `pub mod limits;`.
+- [x] **1.2 Register** — in `mur-common/src/lib.rs`, between `pub mod ledger;` and `pub mod llm;` add `pub mod limits;`.
 
-- [ ] **1.3 Watch it pass** — `cargo nextest run -p mur-common --lib -E 'test(/limits::/)'`. Expected: 5 pass. (The red for this task is the missing module before 1.2.) Then `cargo clippy -p mur-common --all-targets -- -D warnings`, `cargo fmt -p mur-common`.
+- [x] **1.3 Watch it pass** — `cargo nextest run -p mur-common --lib -E 'test(/limits::/)'`. Expected: 5 pass. (The red for this task is the missing module before 1.2.) Then `cargo clippy -p mur-common --all-targets -- -D warnings`, `cargo fmt -p mur-common`.
 
-- [ ] **1.4 Commit**:
+- [x] **1.4 Commit**:
 
 ```
 feat(limits): the limits: schema, its grammar, defaults and resolver
@@ -412,7 +412,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **2.1 Write the failing test** — in `mur-common/src/fleet.rs`'s test module (create `#[cfg(test)] mod limits_tests` at the end of the file if there is none):
+- [x] **2.1 Write the failing test** — in `mur-common/src/fleet.rs`'s test module (create `#[cfg(test)] mod limits_tests` at the end of the file if there is none):
 
 ```rust
 #[cfg(test)]
@@ -470,9 +470,9 @@ mod limits_tests {
 }
 ```
 
-- [ ] **2.2 Watch it fail** — `cargo nextest run -p mur-common --lib -E 'test(legacy_loop_fields_are_read)'`. Expected: `struct Fleet has no field named limits`.
+- [x] **2.2 Watch it fail** — `cargo nextest run -p mur-common --lib -E 'test(legacy_loop_fields_are_read)'`. Expected: `struct Fleet has no field named limits`.
 
-- [ ] **2.3 Add the field to each scope** — 
+- [x] **2.3 Add the field to each scope** — 
 
   `mur-common/src/fleet.rs`, after `pub requires_programs: Vec<ProgramDep>,`:
 
@@ -530,9 +530,9 @@ mod limits_tests {
     pub limits: Option<crate::limits::Limits>,
 ```
 
-- [ ] **2.4 Fix every struct literal** — `command grep -rn "Fleet {\|AgentProfile {\|Config {" mur-common/src mur-core/src mur-daemon/src mur-agent-runtime/src mur-mcp-server/src mur-hub-gui/src-tauri/src mur-gui-core/src | command grep -v "FleetLoop\|FleetHitl\|FleetBilling\|FleetSummary\|FleetDetail\|EmbeddingConfig\|LlmConfig\|HitlConfig\|ConfigFile\|Config::"` and add `limits: None,` (Fleet, AgentProfile) or rely on `..Default::default()` where present. `Config` derives `Default`, so its literals with `..Default::default()` need nothing; literals without it get `limits: Default::default(),`. The Hub is workspace-excluded — its literals are found by this grep but only compiled by `cargo check --manifest-path mur-hub-gui/src-tauri/Cargo.toml`; run that **last** if `mur-hub-gui/ui/dist` exists, and record the result in the commit body either way.
+- [x] **2.4 Fix every struct literal** — `command grep -rn "Fleet {\|AgentProfile {\|Config {" mur-common/src mur-core/src mur-daemon/src mur-agent-runtime/src mur-mcp-server/src mur-hub-gui/src-tauri/src mur-gui-core/src | command grep -v "FleetLoop\|FleetHitl\|FleetBilling\|FleetSummary\|FleetDetail\|EmbeddingConfig\|LlmConfig\|HitlConfig\|ConfigFile\|Config::"` and add `limits: None,` (Fleet, AgentProfile) or rely on `..Default::default()` where present. `Config` derives `Default`, so its literals with `..Default::default()` need nothing; literals without it get `limits: Default::default(),`. The Hub is workspace-excluded — its literals are found by this grep but only compiled by `cargo check --manifest-path mur-hub-gui/src-tauri/Cargo.toml`; run that **last** if `mur-hub-gui/ui/dist` exists, and record the result in the commit body either way.
 
-- [ ] **2.5 Delegate the loop's duration grammar** — in `mur-core/src/cmd/fleet/loop_run.rs`, replace the body of `pub fn parse_duration(s: &str) -> Option<Duration>` with:
+- [x] **2.5 Delegate the loop's duration grammar** — in `mur-core/src/cmd/fleet/loop_run.rs`, replace the body of `pub fn parse_duration(s: &str) -> Option<Duration>` with:
 
 ```rust
 pub fn parse_duration(s: &str) -> Option<Duration> {
@@ -543,9 +543,9 @@ pub fn parse_duration(s: &str) -> Option<Duration> {
 
   and delete the private helpers it used if they are now unused (clippy will name them).
 
-- [ ] **2.6 Watch it pass** — `cargo nextest run -p mur-common --lib -E 'test(/limits/)'` then `cargo nextest run -p mur-core --lib -E 'test(/loop_run::|parse_duration/)'`. Expected: all pass, including the existing `parse_duration` tests in `loop_run.rs` (the grammar is a superset: `1h30m` now parses; if a test asserted it did **not**, update that assertion and say so in the commit).
+- [x] **2.6 Watch it pass** — `cargo nextest run -p mur-common --lib -E 'test(/limits/)'` then `cargo nextest run -p mur-core --lib -E 'test(/loop_run::|parse_duration/)'`. Expected: all pass, including the existing `parse_duration` tests in `loop_run.rs` (the grammar is a superset: `1h30m` now parses; if a test asserted it did **not**, update that assertion and say so in the commit).
 
-- [ ] **2.7 fmt + clippy on `mur-common`, `mur-core`, `mur-daemon`, `mur-agent-runtime`**, then **commit**:
+- [x] **2.7 fmt + clippy on `mur-common`, `mur-core`, `mur-daemon`, `mur-agent-runtime`**, then **commit**:
 
 ```
 feat(limits): the limits: block on config.yaml, fleet.yaml and profile.yaml
@@ -580,7 +580,7 @@ pub fn cmd_limits(name: &str, json: bool) -> anyhow::Result<()>
 
 ### Steps
 
-- [ ] **3.1 Write the failing tests** — new file `mur-core/src/cmd/limits.rs` starting with the tests (the module body comes in 3.3; put the tests at the bottom of the same file):
+- [x] **3.1 Write the failing tests** — new file `mur-core/src/cmd/limits.rs` starting with the tests (the module body comes in 3.3; put the tests at the bottom of the same file):
 
 ```rust
 #[cfg(test)]
@@ -684,9 +684,9 @@ mod tests {
 }
 ```
 
-- [ ] **3.2 Watch it fail** — add `pub mod limits;` to `mur-core/src/cmd/mod.rs` (alphabetical, next to the other `pub mod` lines), then `cargo nextest run -p mur-core --lib -E 'test(/cmd::limits::/)'`. Expected: compile errors `cannot find function report` etc.
+- [x] **3.2 Watch it fail** — add `pub mod limits;` to `mur-core/src/cmd/mod.rs` (alphabetical, next to the other `pub mod` lines), then `cargo nextest run -p mur-core --lib -E 'test(/cmd::limits::/)'`. Expected: compile errors `cannot find function report` etc.
 
-- [ ] **3.3 Write the module** — above the tests in `mur-core/src/cmd/limits.rs`:
+- [x] **3.3 Write the module** — above the tests in `mur-core/src/cmd/limits.rs`:
 
 ```rust
 //! `mur limits <name>` — every execution knob in force for a fleet or an
@@ -944,7 +944,7 @@ pub fn cmd_limits(name: &str, json: bool) -> Result<()> {
 
   Unused-import cleanup: `Resolved` may be unused — drop it from the `use` if clippy says so.
 
-- [ ] **3.4 Wire the command** — `mur-core/src/cli/mod.rs`, in `Commands`, next to `Doctor`:
+- [x] **3.4 Wire the command** — `mur-core/src/cli/mod.rs`, in `Commands`, next to `Doctor`:
 
 ```rust
     /// Every execution limit in force for a fleet or an agent, with the scope
@@ -964,9 +964,9 @@ pub fn cmd_limits(name: &str, json: bool) -> Result<()> {
         Commands::Limits { name, json } => cmd::limits::cmd_limits(&name, json)?,
 ```
 
-- [ ] **3.5 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/cmd::limits::/)'`. Expected: 4 pass. Then `cargo run -p mur-core --bin mur -- limits deep-research` against the real home prints three rows with sources (informational; do not assert values, they are this machine's).
+- [x] **3.5 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/cmd::limits::/)'`. Expected: 4 pass. Then `cargo run -p mur-core --bin mur -- limits deep-research` against the real home prints three rows with sources (informational; do not assert values, they are this machine's).
 
-- [ ] **3.6 fmt + clippy**, then **commit**:
+- [x] **3.6 fmt + clippy**, then **commit**:
 
 ```
 feat(cli): mur limits <name> — every knob in force, with its source
@@ -999,7 +999,7 @@ pub fn render_limits_block(l: &Limits) -> String
 
 ### Steps
 
-- [ ] **4.1 Write the failing tests** — new file `mur-core/src/cmd/limits_write.rs`, tests at the bottom:
+- [x] **4.1 Write the failing tests** — new file `mur-core/src/cmd/limits_write.rs`, tests at the bottom:
 
 ```rust
 #[cfg(test)]
@@ -1067,9 +1067,9 @@ mod tests {
 }
 ```
 
-- [ ] **4.2 Watch it fail** — add `pub mod limits_write;` to `mur-core/src/cmd/mod.rs`; `cargo nextest run -p mur-core --lib -E 'test(/limits_write::/)'`. Expected: compile errors for the missing items.
+- [x] **4.2 Watch it fail** — add `pub mod limits_write;` to `mur-core/src/cmd/mod.rs`; `cargo nextest run -p mur-core --lib -E 'test(/limits_write::/)'`. Expected: compile errors for the missing items.
 
-- [ ] **4.3 Write the module** — above the tests:
+- [x] **4.3 Write the module** — above the tests:
 
 ```rust
 //! Writers for the `limits:` block, one scope each (spec 2026-09-12 §3.9).
@@ -1199,7 +1199,7 @@ pub fn upsert_global_limits(config_path: &Path, patch: &Patch) -> Result<()> {
 }
 ```
 
-- [ ] **4.4 Wire three commands** —
+- [x] **4.4 Wire three commands** —
 
   `mur-core/src/cli/mod.rs`: extend `Commands::Limits`:
 
@@ -1252,9 +1252,9 @@ pub fn upsert_global_limits(config_path: &Path, patch: &Patch) -> Result<()> {
 
   and update Task 3's `Commands::Limits` shape accordingly (this replaces the 3.4 variant). `mur fleet limits <name> …` and `mur agent limits <name> …` are aliases: add to `FleetAction` and `AgentAction` a `Limits { name, deadline, stuck, cost_usd, unset, json }` variant with the same doc strings, dispatching to the same `write_*` / `cmd_limits` functions with the target fixed.
 
-- [ ] **4.5 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/limits/)'`. Expected: all Task 3 + Task 4 tests pass. Manual: `cargo run -p mur-core --bin mur -- limits --global --deadline 4h` against a **copy** of your config (`MUR_HOME=$(mktemp -d)` with a pasted config.yaml), then `diff` — only the `limits:` block may differ.
+- [x] **4.5 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/limits/)'`. Expected: all Task 3 + Task 4 tests pass. Manual: `cargo run -p mur-core --bin mur -- limits --global --deadline 4h` against a **copy** of your config (`MUR_HOME=$(mktemp -d)` with a pasted config.yaml), then `diff` — only the `limits:` block may differ.
 
-- [ ] **4.6 fmt + clippy across `mur-common`, `mur-core`, `mur-daemon`, `mur-agent-runtime`; Hub check last**, then **commit**:
+- [x] **4.6 fmt + clippy across `mur-common`, `mur-core`, `mur-daemon`, `mur-agent-runtime`; Hub check last**, then **commit**:
 
 ```
 feat(cli): mur limits writes one scope — fleet, agent, or config.yaml as text

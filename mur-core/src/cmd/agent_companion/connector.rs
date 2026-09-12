@@ -655,6 +655,7 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
         updated_at: now,
         requires_programs: Vec::new(),
         requires_capabilities: Vec::new(),
+        limits: None,
     };
     std::fs::write(
         dir.join("profile.yaml"),
