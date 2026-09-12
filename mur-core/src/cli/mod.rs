@@ -54,13 +54,29 @@ pub enum Commands {
     /// Check MUR setup and configuration health
     Doctor,
     /// Every execution limit in force for a fleet or an agent, with the scope
-    /// it came from, and the legacy keys that will stop applying.
+    /// it came from, and the legacy keys that will stop applying. Pass a
+    /// --deadline/--stuck/--cost-usd/--unset to edit that one scope instead.
     Limits {
-        /// Fleet or agent name
-        name: String,
+        /// Fleet or agent name (omit with --global)
+        name: Option<String>,
         /// Emit JSON instead of the table
         #[arg(long)]
         json: bool,
+        /// Edit ~/.mur/config.yaml's limits: block instead of a fleet or agent
+        #[arg(long)]
+        global: bool,
+        /// Wall clock for the unit of work, e.g. 30m / 2h / 1h30m
+        #[arg(long)]
+        deadline: Option<String>,
+        /// Minutes of no progress before stopping (unattended) or warning (attended); `off` disables
+        #[arg(long)]
+        stuck: Option<String>,
+        /// Cost cap in USD — applies only to metered models
+        #[arg(long)]
+        cost_usd: Option<f64>,
+        /// Remove a key so the scope inherits it (repeatable)
+        #[arg(long = "unset")]
+        unset: Vec<String>,
     },
     /// Sync patterns to AI tools (or run a sync subcommand)
     Sync {
