@@ -161,7 +161,7 @@ pub fn stop_remedy(stop: LoopStop, fleet: &str) -> Option<String> {
         ),
         LoopStop::Stopped => format!("cleared by: mur fleet start {fleet}"),
         LoopStop::CommanderKilled => format!(
-            "a commander directive halted {fleet} — inspect it: mur commander status {fleet}"
+            "a commander directive halted {fleet} — inspect it: mur commander status"
         ),
         LoopStop::AwaitingApproval => format!(
             "a member is waiting on you: mur channel approve fleet-{fleet} <hitl_id>"
