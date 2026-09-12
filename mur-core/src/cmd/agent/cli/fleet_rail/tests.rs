@@ -593,6 +593,7 @@ fn jobs_line_flags_an_in_flight_goal_run() {
 fn summary_spells_out_every_member_state_for_the_transcript() {
     let view = RailView {
         jobs_line: "fleet · dev   job 2/3".into(),
+        stop: None,
         members: vec![
             MemberRow {
                 agent: "coder".into(),
@@ -641,4 +642,79 @@ fn summary_spells_out_every_member_state_for_the_transcript() {
         "got: {}",
         lines[4]
     );
+}
+
+#[test]
+fn fold_stop_reads_the_last_system_stop_event() {
+    let evs = vec![
+        ev(
+            1,
+            agent("qa"),
+            EventKind::StateChange,
+            json!({"to": "working"}),
+        ),
+        ev(
+            2,
+            ChannelActor::System,
+            EventKind::StateChange,
+            json!({"from": "working", "to": "failed",
+                   "stop_reason": "max-iterations",
+                   "remedy": "raise it: mur fleet settings dev --max-iterations <N>"}),
+        ),
+    ];
+    let s = fold_stop(&evs).expect("a stop notice");
+    assert_eq!(s.reason, "max-iterations");
+    assert_eq!(
+        s.remedy.as_deref(),
+        Some("raise it: mur fleet settings dev --max-iterations <N>")
+    );
+
+    // A member's state-change is not a stop; a System one without the key is
+    // the DAG's ordinary transition, also not a stop.
+    let plain = vec![ev(
+        1,
+        ChannelActor::System,
+        EventKind::StateChange,
+        json!({"from": "working", "to": "completed"}),
+    )];
+    assert!(fold_stop(&plain).is_none());
+    assert!(fold_stop(&[]).is_none());
+}
+
+#[test]
+fn summary_names_the_stop_under_the_headline_except_when_converged() {
+    let mut view = RailView {
+        jobs_line: "fleet · dev   job 2/2".into(),
+        members: vec![],
+        notice: None,
+        stop: Some(StopNotice {
+            reason: "deadline".into(),
+            remedy: Some("raise it: mur fleet settings dev --deadline <2h>".into()),
+        }),
+    };
+    let lines = view.summary();
+    assert_eq!(lines[0], "fleet · dev   job 2/2");
+    assert_eq!(
+        lines[1],
+        "  ■ stopped: deadline — raise it: mur fleet settings dev --deadline <2h>"
+    );
+
+    view.stop = Some(StopNotice {
+        reason: "stuck".into(),
+        remedy: None,
+    });
+    assert_eq!(view.summary()[1], "  ■ stopped: stuck");
+
+    view.stop = Some(StopNotice {
+        reason: "converged".into(),
+        remedy: None,
+    });
+    assert_eq!(
+        view.summary().len(),
+        1,
+        "converged is not a stop to announce"
+    );
+
+    view.stop = None;
+    assert_eq!(view.summary().len(), 1);
 }
