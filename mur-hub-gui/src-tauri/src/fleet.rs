@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use mur_channel::ChannelService;
+use mur_common::channel::{ChannelEvent, EventKind};
 use mur_common::fleet::Job;
 use mur_common::parallel::ParallelConfig;
 use mur_core::cmd::fleet::{
@@ -67,6 +69,78 @@ pub struct FleetDetail {
     /// The Hub renders what the CLI resolves (spec §10): every execution
     /// bound in force for this fleet, with its source.
     pub limits: crate::limits::LimitsView,
+    /// The most recent guard stop on this fleet's channel, regardless of
+    /// which run wrote it — surfaced so a user who never opens Jobs still
+    /// sees why the loop is not running.
+    pub last_stop: Option<StopInfo>,
+}
+
+/// A guard stop, read back from the fleet channel's `state-change` event
+/// (`loop_run::emit_stop_event`). `run_id` is the event's own run id, which
+/// for an iteration is `{loop_run_id}-{n}` — `stop_of` matches a query run id
+/// against either form.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct StopInfo {
+    pub stop_reason: String,
+    pub remedy: Option<String>,
+    pub at: String,
+    pub run_id: String,
+}
+
+fn stop_info_from(ev: &ChannelEvent) -> Option<StopInfo> {
+    let reason = ev.payload.get("stop_reason")?.as_str()?.to_string();
+    Some(StopInfo {
+        stop_reason: reason,
+        remedy: ev
+            .payload
+            .get("remedy")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        at: ev.ts.to_rfc3339(),
+        run_id: ev
+            .payload
+            .get("run_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    })
+}
+
+/// The stop event for `run_id`, or for the loop run it was an iteration of
+/// (an iteration's run id is named `{loop_run_id}-{n}`, step 5 of the
+/// execution-limits spec). Newest-first so a re-run after a stop is not
+/// shadowed by the earlier one.
+pub(crate) fn stop_of(events: &[ChannelEvent], run_id: &str) -> Option<StopInfo> {
+    events
+        .iter()
+        .rev()
+        .filter(|e| e.kind == EventKind::StateChange)
+        .find_map(|e| {
+            let ev_run_id = e.payload.get("run_id")?.as_str()?;
+            if ev_run_id == run_id || run_id.starts_with(&format!("{ev_run_id}-")) {
+                stop_info_from(e)
+            } else {
+                None
+            }
+        })
+}
+
+/// The most recent guard stop on the channel, independent of which run wrote
+/// it — for `FleetDetail.last_stop`, which is about the fleet, not one job.
+fn newest_stop(events: &[ChannelEvent]) -> Option<StopInfo> {
+    events
+        .iter()
+        .rev()
+        .filter(|e| e.kind == EventKind::StateChange)
+        .find_map(stop_info_from)
+}
+
+/// Best-effort: a fleet's channel events, or empty if the channel cannot be
+/// opened/read (never fatal — stop reasons are supplementary, not load-bearing).
+fn channel_events(mur_home: &std::path::Path, channel_id: &str) -> Vec<ChannelEvent> {
+    ChannelService::open(mur_home)
+        .and_then(|svc| svc.load_events(channel_id))
+        .unwrap_or_default()
 }
 
 fn parallel_summary_view(cfg: &ParallelConfig) -> ParallelSummaryView {
@@ -103,6 +177,10 @@ pub struct JobRow {
     pub run_id: Option<String>,
     pub result: Option<String>,
     pub error: Option<String>,
+    /// From the channel's stop event for this row's `run_id`, when the loop
+    /// stopped on a guard rather than converging.
+    pub stop_reason: Option<String>,
+    pub remedy: Option<String>,
 }
 
 fn job_to_row(job: Job) -> JobRow {
@@ -117,6 +195,8 @@ fn job_to_row(job: Job) -> JobRow {
         run_id: job.run_id,
         result: job.result,
         error: job.error,
+        stop_reason: None,
+        remedy: None,
     }
 }
 
@@ -219,6 +299,7 @@ pub fn fleet_detail(name: String) -> Result<FleetDetail, String> {
     });
     let parallel_summary = fleet.parallel.as_ref().map(parallel_summary_view);
     let limits = crate::limits::resolve_in(&home, "fleet", Some(&name));
+    let last_stop = newest_stop(&channel_events(&home, &fleet.channel_id));
     Ok(FleetDetail {
         name: fleet.name.clone(),
         display_name: display(&fleet.name, &fleet.display_name),
@@ -230,6 +311,7 @@ pub fn fleet_detail(name: String) -> Result<FleetDetail, String> {
         loop_cfg,
         parallel_summary,
         limits,
+        last_stop,
     })
 }
 
@@ -380,7 +462,21 @@ pub fn fleet_jobs(name: String, all: bool) -> Result<Vec<JobRow>, String> {
             .filter(|j| !j.status.is_terminal())
             .collect()
     };
-    Ok(filtered.into_iter().map(job_to_row).collect())
+    let fleet = store::load_fleet(&home, &name).map_err(|e| e.to_string())?;
+    let events = channel_events(&home, &fleet.channel_id);
+    Ok(filtered
+        .into_iter()
+        .map(|job| {
+            let mut row = job_to_row(job);
+            if let Some(run_id) = row.run_id.as_deref()
+                && let Some(stop) = stop_of(&events, run_id)
+            {
+                row.stop_reason = Some(stop.stop_reason);
+                row.remedy = stop.remedy;
+            }
+            row
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -556,5 +652,49 @@ mod tests {
         // hardcoding a guessed calendar year, which would be a flaky assertion).
         let parsed = chrono::DateTime::parse_from_rfc3339(&got).unwrap();
         assert_eq!(parsed.timestamp(), 1751328000);
+    }
+
+    #[test]
+    fn stop_of_finds_the_runs_state_change_and_its_children() {
+        use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
+        let ev = |run_id: &str, reason: &str| ChannelEvent {
+            seq: 1,
+            ts: chrono::Utc::now(),
+            actor: ChannelActor::System,
+            kind: EventKind::StateChange,
+            payload: serde_json::json!({"from":"working","to":"failed","stop_reason": reason,"remedy":"raise it","run_id": run_id}),
+            idempotency_key: None,
+            sig: None,
+            key_version: None,
+        };
+        let events = vec![ev("fleet-dev-abc", "deadline")];
+        assert_eq!(
+            stop_of(&events, "fleet-dev-abc").unwrap().stop_reason,
+            "deadline"
+        );
+        assert_eq!(
+            stop_of(&events, "fleet-dev-abc-3").unwrap().stop_reason,
+            "deadline",
+            "an iteration run named under the loop"
+        );
+        assert!(stop_of(&events, "run-other").is_none());
+    }
+
+    #[test]
+    fn newest_stop_picks_the_latest_state_change_with_a_reason() {
+        use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
+        let ev = |run_id: &str, reason: &str| ChannelEvent {
+            seq: 1,
+            ts: chrono::Utc::now(),
+            actor: ChannelActor::System,
+            kind: EventKind::StateChange,
+            payload: serde_json::json!({"from":"working","to":"failed","stop_reason": reason,"remedy":null,"run_id": run_id}),
+            idempotency_key: None,
+            sig: None,
+            key_version: None,
+        };
+        let events = vec![ev("fleet-dev-1", "stuck"), ev("fleet-dev-2", "budget")];
+        assert_eq!(newest_stop(&events).unwrap().stop_reason, "budget");
+        assert_eq!(newest_stop(&[]), None);
     }
 }

@@ -34,6 +34,13 @@ export interface ParallelSummary {
   target_file: string | null;
 }
 
+export interface StopInfo {
+  stop_reason: string;
+  remedy: string | null;
+  at: string;
+  run_id: string;
+}
+
 export interface FleetDetail {
   name: string;
   display_name: string;
@@ -45,6 +52,7 @@ export interface FleetDetail {
   loop_cfg: FleetLoopView | null;
   parallel_summary: ParallelSummary | null;
   limits: LimitsView;
+  last_stop: StopInfo | null;
 }
 
 export interface JobRow {
@@ -58,6 +66,10 @@ export interface JobRow {
   source?: string;
   started_at?: string;
   run_id?: string;
+  /** From the channel's stop event for this row's run_id, when the loop
+   *  stopped on a guard rather than converging (execution-limits spec §10.2). */
+  stop_reason?: string;
+  remedy?: string;
 }
 
 export interface LimitsRowView {
