@@ -33,23 +33,74 @@ pub enum DialMode {
     ForceEphemeral,
 }
 
-/// Default idle read/write timeout for a dialed agent socket. Chosen to sit
-/// comfortably above the runtime's default HITL approval wait (300s, see
-/// `mur-agent-runtime::task_runner::HitlConfig::default`) plus headroom for
-/// slow generation, while still guaranteeing `mur agent send` cannot hang
-/// forever on a stalled or crashed peer (dogfood issue: one-shot send hung
-/// for 5+ minutes with no feedback). Overridable for tests and for callers
-/// who know their turns run long.
-const DEFAULT_DIAL_IO_TIMEOUT: Duration = Duration::from_secs(600);
+/// Idle read/write timeout for a peer that does NOT beat (proto < 2). Sits
+/// above the runtime's default HITL wait (300 s) plus generation headroom;
+/// never raise it — a beating peer is what makes a short timeout safe (spec
+/// 2026-09-12 execution-limits D7).
+const LEGACY_DIAL_IO_TIMEOUT: Duration = Duration::from_secs(600);
+/// Idle timeout for a peer that beats every 30 s (spec §3.6): three missed
+/// beats. Every heartbeat, delta and step frame resets it.
+const HEARTBEAT_DIAL_IO_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// Resolve the idle I/O timeout for a dialed socket, honoring
-/// `MUR_A2A_IO_TIMEOUT_SECS` (mainly for tests) with a sane default.
-fn dial_io_timeout() -> Duration {
-    std::env::var("MUR_A2A_IO_TIMEOUT_SECS")
+/// The idle timeout for THIS peer, from its running.lock: the env override
+/// (`MUR_A2A_IO_TIMEOUT_SECS`, tests) wins; else a runtime that advertises
+/// heartbeats gets the short one and anything older keeps the long one, so a
+/// fleet mid-upgrade never starts failing at 90 s on a router that is merely
+/// thinking.
+fn dial_io_timeout_for(proto: u32) -> Duration {
+    if let Some(d) = std::env::var("MUR_A2A_IO_TIMEOUT_SECS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .map(Duration::from_secs)
-        .unwrap_or(DEFAULT_DIAL_IO_TIMEOUT)
+    {
+        return d;
+    }
+    if proto >= mur_common::build::HEARTBEAT_MIN_PROTO {
+        HEARTBEAT_DIAL_IO_TIMEOUT
+    } else {
+        LEGACY_DIAL_IO_TIMEOUT
+    }
+}
+
+/// What a read timeout means, in words that fit the peer: a beating peer
+/// that went silent STOPPED RESPONDING (and we say when it last spoke); a
+/// legacy peer merely did not answer in time.
+fn timeout_error(
+    agent_name: &str,
+    proto: u32,
+    timeout: Duration,
+    last_frame: Option<&(String, String)>,
+    legacy_wording: &str,
+) -> anyhow::Error {
+    if proto >= mur_common::build::HEARTBEAT_MIN_PROTO {
+        anyhow!(
+            "agent '{agent_name}' stopped responding — no frame for {}s (last: {}); \
+             check `mur agent logs {agent_name}`",
+            timeout.as_secs(),
+            last_frame
+                .map(|(m, at)| format!("{at} · {m}"))
+                .unwrap_or_else(|| "none since the request".into())
+        )
+    } else {
+        anyhow!(
+            "agent '{agent_name}' {legacy_wording} {}s; check `mur agent logs {agent_name}`",
+            timeout.as_secs()
+        )
+    }
+}
+
+/// Remember the last non-response frame the peer sent — its method and its
+/// own timestamp when it carries one — for the timeout message.
+fn note_frame(last_frame: &mut Option<(String, String)>, v: &Value) {
+    if let Some(m) = v.get("method").and_then(Value::as_str) {
+        let at = v
+            .get("params")
+            .and_then(|p| p.get("at"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+        *last_frame = Some((m.to_string(), at));
+    }
 }
 
 /// True if `err` looks like a socket read/write timeout (`SO_RCVTIMEO`/
@@ -184,6 +235,7 @@ fn dial_socket(
 ) -> Result<Value> {
     let bytes = fs::read(lock_path).with_context(|| format!("read {}", lock_path.display()))?;
     let lock: LockFile = serde_json::from_slice(&bytes).context("parse running.lock")?;
+    let proto = lock.proto_version;
     let sock = lock.transports.unix_socket.ok_or_else(|| {
         anyhow!(
             "agent '{agent_name}' has no unix-socket transport (TCP-only transports are not yet supported by the install path)"
@@ -193,7 +245,7 @@ fn dial_socket(
     #[cfg(unix)]
     {
         use std::io::{BufRead, BufReader, Write};
-        let timeout = dial_io_timeout();
+        let timeout = dial_io_timeout_for(proto);
         let mut stream = std::os::unix::net::UnixStream::connect(&sock)
             .with_context(|| format!("connect {sock}"))?;
         // Bound both directions: without these, a stalled or crashed peer
@@ -219,13 +271,16 @@ fn dial_socket(
         })?;
         stream.flush().context("flush request")?;
         let reader = BufReader::new(stream.try_clone()?);
+        let mut last_frame: Option<(String, String)> = None;
         for line in reader.lines() {
             let line = line.map_err(|e| {
                 if is_io_timeout(&e) {
-                    anyhow!(
-                        "agent '{agent_name}' did not respond within {}s; \
-                         check `mur agent logs {agent_name}`",
-                        timeout.as_secs()
+                    timeout_error(
+                        agent_name,
+                        proto,
+                        timeout,
+                        last_frame.as_ref(),
+                        "did not respond within",
                     )
                 } else {
                     anyhow!(e).context("read response line")
@@ -235,6 +290,7 @@ fn dial_socket(
                 Ok(v) => v,
                 Err(_) => continue,
             };
+            note_frame(&mut last_frame, &v);
             if v.get("id") == Some(request_id) {
                 if let Some(err) = v.get("error") {
                     bail!("agent '{agent_name}' returned error: {err}");
@@ -346,6 +402,7 @@ pub fn dial_message_streaming(
     });
     let bytes = fs::read(&lock_path).with_context(|| format!("read {}", lock_path.display()))?;
     let lock: LockFile = serde_json::from_slice(&bytes).context("parse running.lock")?;
+    let proto = lock.proto_version;
     let sock = lock
         .transports
         .unix_socket
@@ -354,7 +411,7 @@ pub fn dial_message_streaming(
     #[cfg(unix)]
     {
         use std::io::{BufRead, BufReader, Write};
-        let timeout = dial_io_timeout();
+        let timeout = dial_io_timeout_for(proto);
         let mut stream = std::os::unix::net::UnixStream::connect(&sock)
             .with_context(|| format!("connect {sock}"))?;
         // Bound both directions — see `dial_socket` for why. This is an idle
@@ -381,13 +438,16 @@ pub fn dial_message_streaming(
         })?;
         stream.flush().context("flush request")?;
         let reader = BufReader::new(stream.try_clone()?);
+        let mut last_frame: Option<(String, String)> = None;
         for line in reader.lines() {
             let line = line.map_err(|e| {
                 if is_io_timeout(&e) {
-                    anyhow!(
-                        "agent '{agent_name}' went idle for {}s without a response; \
-                         check `mur agent logs {agent_name}`",
-                        timeout.as_secs()
+                    timeout_error(
+                        agent_name,
+                        proto,
+                        timeout,
+                        last_frame.as_ref(),
+                        "went idle for",
                     )
                 } else {
                     anyhow!(e).context("read response line")
@@ -397,6 +457,7 @@ pub fn dial_message_streaming(
                 Ok(v) => v,
                 Err(_) => continue,
             };
+            note_frame(&mut last_frame, &v);
             if v.get("method").and_then(Value::as_str) == Some("message/delta") {
                 let params = v.get("params");
                 if let Some(t) = params.and_then(|p| p.get("text")).and_then(Value::as_str) {
@@ -769,6 +830,151 @@ mod timeout_tests {
         );
 
         let _ = server.join();
+    }
+
+    fn lock_json(name: &str, sock: &std::path::Path, proto: u32) -> serde_json::Value {
+        serde_json::json!({
+            "schema": 1,
+            "uuid": "u",
+            "name": name,
+            "pid": 1,
+            "ppid": 1,
+            "started_at": "t",
+            "binary_version": "test",
+            "proto_version": proto,
+            "transports": { "stdio": true, "unix_socket": sock.to_str().unwrap() },
+            "card_digest": "d",
+            "capabilities": [],
+        })
+    }
+
+    fn write_lock(home: &std::path::Path, name: &str, sock: &std::path::Path, proto: u32) {
+        let dir = home.join("agents").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("running.lock"),
+            lock_json(name, sock, proto).to_string(),
+        )
+        .unwrap();
+    }
+
+    fn sockets_allowed(test: &str) -> bool {
+        if std::env::var("MUR_TEST_SOCKETS").as_deref() != Ok("1") {
+            eprintln!(
+                "skipping {test}: set MUR_TEST_SOCKETS=1 on a machine that permits AF_UNIX connects"
+            );
+            return false;
+        }
+        true
+    }
+
+    /// The timeout is chosen by the PEER's proto: a legacy lock keeps 600 s,
+    /// a beating one gets 90 s, and the env override beats both.
+    #[test]
+    fn idle_timeout_follows_the_peers_proto() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("MUR_A2A_IO_TIMEOUT_SECS") };
+        let p = std::path::Path::new("/nonexistent.sock");
+        let legacy: LockFile = serde_json::from_value(lock_json("a", p, 1)).unwrap();
+        let beating: LockFile = serde_json::from_value(lock_json("a", p, 2)).unwrap();
+        assert_eq!(
+            dial_io_timeout_for(legacy.proto_version),
+            LEGACY_DIAL_IO_TIMEOUT
+        );
+        assert_eq!(
+            dial_io_timeout_for(beating.proto_version),
+            HEARTBEAT_DIAL_IO_TIMEOUT
+        );
+        unsafe { std::env::set_var("MUR_A2A_IO_TIMEOUT_SECS", "7") };
+        assert_eq!(
+            dial_io_timeout_for(beating.proto_version),
+            Duration::from_secs(7)
+        );
+        unsafe { std::env::remove_var("MUR_A2A_IO_TIMEOUT_SECS") };
+    }
+
+    /// A proto-2 peer that beats every 300 ms while it "thinks" for 2 s is
+    /// alive: a 1 s idle timeout never fires, and the response arrives.
+    #[test]
+    fn heartbeats_reset_the_idle_timeout() {
+        use std::io::Write;
+        if !sockets_allowed("heartbeats_reset_the_idle_timeout") {
+            return;
+        }
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock_path = tmp.path().join("agent.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut conn, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = conn.read(&mut buf);
+                for _ in 0..7 {
+                    std::thread::sleep(Duration::from_millis(300));
+                    let _ = conn.write_all(
+                        b"{\"jsonrpc\":\"2.0\",\"method\":\"turn/heartbeat\",\"params\":{\"task_id\":\"t\",\"at\":\"2026-09-12T00:00:00Z\"}}\n",
+                    );
+                }
+                let _ =
+                    conn.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n");
+            }
+        });
+        write_lock(tmp.path(), "beating", &sock_path, 2);
+        unsafe { std::env::set_var("MUR_A2A_IO_TIMEOUT_SECS", "1") };
+        let result = dial_method(
+            tmp.path(),
+            "beating",
+            "message/send",
+            serde_json::json!({}),
+            DialMode::RequireRunning,
+        );
+        unsafe { std::env::remove_var("MUR_A2A_IO_TIMEOUT_SECS") };
+        let v = result.expect("heartbeats must keep the dial alive");
+        assert_eq!(v["ok"], true);
+        let _ = server.join();
+    }
+
+    /// A proto-2 peer that goes silent is reported as STOPPED RESPONDING,
+    /// naming the last frame — not as "did not respond", which is what a
+    /// legacy peer with no heartbeats gets.
+    #[test]
+    fn a_silent_beating_peer_stopped_responding() {
+        use std::io::Write;
+        if !sockets_allowed("a_silent_beating_peer_stopped_responding") {
+            return;
+        }
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock_path = tmp.path().join("agent.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        let _server = std::thread::spawn(move || {
+            if let Ok((mut conn, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = conn.read(&mut buf);
+                let _ = conn.write_all(
+                    b"{\"jsonrpc\":\"2.0\",\"method\":\"turn/heartbeat\",\"params\":{\"task_id\":\"t\",\"at\":\"2026-09-12T00:00:00Z\"}}\n",
+                );
+                std::thread::sleep(Duration::from_secs(4));
+            }
+        });
+        write_lock(tmp.path(), "silent", &sock_path, 2);
+        unsafe { std::env::set_var("MUR_A2A_IO_TIMEOUT_SECS", "1") };
+        let err = dial_method(
+            tmp.path(),
+            "silent",
+            "message/send",
+            serde_json::json!({}),
+            DialMode::RequireRunning,
+        )
+        .unwrap_err();
+        unsafe { std::env::remove_var("MUR_A2A_IO_TIMEOUT_SECS") };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("stopped responding")
+                && msg.contains("turn/heartbeat")
+                && msg.contains("2026-09-12T00:00:00Z"),
+            "{msg}"
+        );
     }
 }
 
