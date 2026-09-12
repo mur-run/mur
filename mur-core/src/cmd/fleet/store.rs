@@ -112,6 +112,7 @@ mod tests {
             parallel: None,
             hitl: None,
             requires_programs: vec![],
+            limits: None,
         };
         let err = save_fleet(home, &bad).unwrap_err();
         assert!(
@@ -143,6 +144,7 @@ mod tests {
             parallel: None,
             hitl: None,
             requires_programs: vec![],
+            limits: None,
         };
         save_fleet(home, &f).unwrap();
         assert!(fleet_path(home, "dev").exists());
