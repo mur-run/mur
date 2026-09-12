@@ -73,6 +73,33 @@ impl ChannelStore {
         Ok(())
     }
 
+    /// Give `id` a manifest if it has none, so a channel that holds events is
+    /// never invisible to the readers that ask for one. No-op when a manifest
+    /// exists — including an unparseable one, which is a corruption to be
+    /// reported, not silently replaced.
+    ///
+    /// The placeholder is honest about what it knows: the id, the schema
+    /// version, and that nobody claimed ownership. Title and participants fill
+    /// in through the normal paths (`add_participant`, a later `save_manifest`).
+    fn ensure_manifest(&self, id: &str) -> Result<()> {
+        if self.manifest_path(id).exists() {
+            return Ok(());
+        }
+        let now = chrono::Utc::now();
+        self.save_manifest(&Channel {
+            v: mur_common::channel::CHANNEL_SCHEMA_VERSION,
+            id: id.to_string(),
+            title: id.to_string(),
+            goal: mur_common::channel::Goal::default(),
+            state: mur_common::channel::ChannelState::Working,
+            purpose: None,
+            owner: ChannelActor::System,
+            participants: vec![],
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
     pub fn load_manifest(&self, id: &str) -> Result<Channel> {
         let path = self.manifest_path(id);
         let s = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
@@ -144,6 +171,15 @@ impl ChannelStore {
     ) -> Result<ChannelEvent> {
         let dir = self.channel_dir(id);
         fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+        // An append creates the directory, so it can resurrect a channel whose
+        // manifest is gone — archived away, or never written because the first
+        // thing that touched the id was an append. The events then accumulate
+        // in a channel every reader calls unreadable, because `load_manifest`
+        // is the existence check (the fleet rail's `⚠ channel unreadable` came
+        // from exactly this, permanently, on a live install). Write-if-absent:
+        // an existing manifest is authoritative and must never be clobbered by
+        // a write on the event path.
+        self.ensure_manifest(id)?;
         let path = self.events_path(id);
 
         // Serialize concurrent appends (CLI + Hub may write the same channel) via
@@ -257,6 +293,81 @@ mod tests {
             created_at: now,
             updated_at: now,
         }
+    }
+
+    /// A channel whose manifest is gone — archived away, or never written
+    /// because the directory was resurrected by an append — must not stay
+    /// half-existent. Events kept landing in it while every reader that asks
+    /// `load_manifest` (the fleet rail's existence check) said "channel
+    /// unreadable" forever.
+    #[test]
+    fn appending_to_a_channel_with_no_manifest_restores_one() {
+        let tmp = TempDir::new().unwrap();
+        let store = ChannelStore::new(tmp.path());
+        store.create(&sample_channel("fleet-x")).unwrap();
+        store
+            .append_event(
+                "fleet-x",
+                ChannelActor::Human { name: "me".into() },
+                EventKind::Message,
+                serde_json::json!({"text": "first"}),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        // What archiving did on a live machine: the manifest left, the events
+        // stayed, and the next append resurrected the directory without one.
+        std::fs::remove_file(store.manifest_path("fleet-x")).unwrap();
+        assert!(store.load_manifest("fleet-x").is_err(), "precondition");
+
+        store
+            .append_event(
+                "fleet-x",
+                ChannelActor::Human { name: "me".into() },
+                EventKind::Message,
+                serde_json::json!({"text": "second"}),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let ch = store
+            .load_manifest("fleet-x")
+            .expect("the append must leave the channel readable");
+        assert_eq!(ch.id, "fleet-x");
+        assert_eq!(ch.v, mur_common::channel::CHANNEL_SCHEMA_VERSION);
+        // Both events survive: healing the manifest must not touch the log.
+        assert_eq!(store.load_events("fleet-x").unwrap().len(), 2);
+    }
+
+    /// The heal is write-if-absent: an existing manifest is never rewritten,
+    /// or every append would clobber the title, owner and participants the
+    /// real channel carries.
+    #[test]
+    fn appending_never_overwrites_an_existing_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let store = ChannelStore::new(tmp.path());
+        let mut ch = sample_channel("c-keep");
+        ch.title = "the real title".into();
+        store.create(&ch).unwrap();
+        store
+            .append_event(
+                "c-keep",
+                ChannelActor::Human { name: "me".into() },
+                EventKind::Message,
+                serde_json::json!({"text": "hi"}),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            store.load_manifest("c-keep").unwrap().title,
+            "the real title"
+        );
     }
 
     #[test]
