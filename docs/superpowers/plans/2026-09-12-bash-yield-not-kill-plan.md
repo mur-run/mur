@@ -58,7 +58,7 @@ Types first so every later task compiles against them.
 
 **Interfaces.** Produces: `crate::tools::ToolStatus::Running { job_id: String, bytes_seen: u64 }`; `crate::turn_ledger::Outcome::Running(String)`; `TurnLedger::running(&self) -> Vec<&Action>`.
 
-- [ ] In `mur-agent-runtime/src/tools/mod.rs`, extend the enum:
+- [x] In `mur-agent-runtime/src/tools/mod.rs`, extend the enum:
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -81,7 +81,7 @@ pub enum ToolStatus {
 }
 ```
 
-- [ ] In `mur-agent-runtime/src/turn_ledger.rs`, add the variant and the accessor, and change `blocked`, `warrants_settlement`, `classify`, `render`:
+- [x] In `mur-agent-runtime/src/turn_ledger.rs`, add the variant and the accessor, and change `blocked`, `warrants_settlement`, `classify`, `render`:
 
 ```rust
 pub enum Outcome {
@@ -167,7 +167,7 @@ and make the `blocked` loop's match exhaustive:
             };
 ```
 
-- [ ] Add tests at the end of `turn_ledger::tests`:
+- [x] Add tests at the end of `turn_ledger::tests`:
 
 ```rust
     /// Spec §3.7: a yield is its own outcome — before `is_error`, and never
@@ -195,9 +195,9 @@ and make the `blocked` loop's match exhaustive:
     }
 ```
 
-- [ ] `cargo check -p mur-agent-runtime 2>&1 | tail -20` — expect exhaustiveness errors only where this plan already lists a match (none outside `turn_ledger.rs`; if the compiler names another, add an `Outcome::Running(_)`/`ToolStatus::Running { .. }` arm that behaves like `Ok` and note it in the commit body).
-- [ ] `cargo nextest run -p mur-agent-runtime turn_ledger` → all green, including `classify_running_is_neither_ok_nor_failed`.
-- [ ] Commit: `feat(runtime): ToolStatus::Running + ledger Outcome::Running (bash-yield T1)`.
+- [x] `cargo check -p mur-agent-runtime 2>&1 | tail -20` — expect exhaustiveness errors only where this plan already lists a match (none outside `turn_ledger.rs`; if the compiler names another, add an `Outcome::Running(_)`/`ToolStatus::Running { .. }` arm that behaves like `Ok` and note it in the commit body).
+- [x] `cargo nextest run -p mur-agent-runtime turn_ledger` → all green, including `classify_running_is_neither_ok_nor_failed`.
+- [x] Commit: `feat(runtime): ToolStatus::Running + ledger Outcome::Running (bash-yield T1)`.
 
 ---
 
@@ -205,7 +205,7 @@ and make the `blocked` loop's match exhaustive:
 
 **Interfaces.** Produces: `SecretVault::longest_value_len(&self) -> usize`; `SecretVault::masker(self: &Arc<Self>) -> StreamMasker`; `SecretVault::safe_split(&self, buf: &[u8], split: usize) -> usize`; `StreamMasker::{push(&mut self, &[u8]) -> Vec<u8>, finish(&mut self) -> Vec<u8>}`.
 
-- [ ] Write the failing tests first, appended to `secrets::tests`:
+- [x] Write the failing tests first, appended to `secrets::tests`:
 
 ```rust
     fn masked_through(v: &Arc<SecretVault>, a: &[u8], b: &[u8]) -> Vec<u8> {
@@ -270,8 +270,8 @@ and make the `blocked` loop's match exhaustive:
     }
 ```
 
-- [ ] `cargo nextest run -p mur-agent-runtime secrets::tests::stream_masker` → compile error (no `masker`). That is the failing state.
-- [ ] Implement, in `secrets.rs` after `impl SecretVault { ... }` (add `use std::sync::Arc;` at the top):
+- [x] `cargo nextest run -p mur-agent-runtime secrets::tests::stream_masker` → compile error (no `masker`). That is the failing state.
+- [x] Implement, in `secrets.rs` after `impl SecretVault { ... }` (add `use std::sync::Arc;` at the top):
 
 ```rust
 impl SecretVault {
@@ -370,9 +370,9 @@ fn mask_bytes(vault: &SecretVault, bytes: &[u8]) -> Vec<u8> {
 }
 ```
 
-- [ ] `cargo nextest run -p mur-agent-runtime secrets` → all green (the four new tests plus the existing nine).
-- [ ] `cargo clippy -p mur-agent-runtime --all-targets -- -D warnings; echo exit=$?` → `exit=0`.
-- [ ] Commit: `feat(runtime): boundary-safe StreamMasker over the secret vault (bash-yield T2)`.
+- [x] `cargo nextest run -p mur-agent-runtime secrets` → all green (the four new tests plus the existing nine).
+- [x] `cargo clippy -p mur-agent-runtime --all-targets -- -D warnings; echo exit=$?` → `exit=0`.
+- [x] Commit: `feat(runtime): boundary-safe StreamMasker over the secret vault (bash-yield T2)`.
 
 ---
 
@@ -405,7 +405,7 @@ impl JobTable {
 #[cfg(unix)] pub fn pid_alive(pid: u32) -> bool;
 ```
 
-- [ ] Create `mur-agent-runtime/src/tools/bash_jobs.rs`:
+- [x] Create `mur-agent-runtime/src/tools/bash_jobs.rs`:
 
 ```rust
 //! Background bash jobs: the table behind `bash`'s yield.
@@ -972,9 +972,9 @@ fn append(
 }
 ```
 
-- [ ] Register the module in `tools/mod.rs`: add `pub mod bash_jobs;` after `pub mod bash;`.
-- [ ] `cargo check -p mur-agent-runtime` → clean (if `Command::process_group` is reported missing, the tokio version is older than 1.28 — it is 1.52 in `Cargo.lock`; do not work around it).
-- [ ] Append the tests (unix-only where a process is the subject):
+- [x] Register the module in `tools/mod.rs`: add `pub mod bash_jobs;` after `pub mod bash;`.
+- [x] `cargo check -p mur-agent-runtime` → clean (if `Command::process_group` is reported missing, the tokio version is older than 1.28 — it is 1.52 in `Cargo.lock`; do not work around it).
+- [x] Append the tests (unix-only where a process is the subject):
 
 ```rust
 #[cfg(test)]
@@ -1204,9 +1204,9 @@ mod tests {
 }
 ```
 
-- [ ] `cargo nextest run -p mur-agent-runtime bash_jobs` → all green. If `kill_ends_the_whole_group_and_reaps_the_shell` fails on `grandchild outlived`, the group was not created: check that `process_group(0)` is on the `Command` before `spawn`, not after.
-- [ ] `cargo clippy -p mur-agent-runtime --all-targets -- -D warnings; echo exit=$?` → `exit=0`.
-- [ ] Commit: `feat(runtime): JobTable — process-group bash jobs with masked spool and owner task (bash-yield T3)`.
+- [x] `cargo nextest run -p mur-agent-runtime bash_jobs` → all green. If `kill_ends_the_whole_group_and_reaps_the_shell` fails on `grandchild outlived`, the group was not created: check that `process_group(0)` is on the `Command` before `spawn`, not after.
+- [x] `cargo clippy -p mur-agent-runtime --all-targets -- -D warnings; echo exit=$?` → `exit=0`.
+- [x] Commit: `feat(runtime): JobTable — process-group bash jobs with masked spool and owner task (bash-yield T3)`.
 
 ---
 
@@ -1214,7 +1214,7 @@ mod tests {
 
 **Interfaces.** Consumes: `JobTable`, `Poll`, `Exit`, `JobError` (T3); `ToolStatus::Running` (T1). Produces: `BashTool { …, pub jobs: Arc<JobTable> }`, `BashTool::with_jobs(self, Arc<JobTable>) -> Self`, `BashTool::control_tools(self: &Arc<Self>) -> Vec<Arc<dyn ToolExecutor>>`, `BashTool::finish_poll(&self, poll: Poll, working_dir: &Path, killed: bool) -> ToolOutput`; `crate::tools::bash_control::{BASH_WAIT, BASH_KILL, BashWaitTool, BashKillTool}`; `crate::tools::registry::attach_bash_control(map: &mut HashMap<String, Arc<dyn ToolExecutor>>, controls: Vec<Arc<dyn ToolExecutor>>)`.
 
-- [ ] In `bash.rs`, replace the two constants' docs and `resolve_timeout_secs` (0 is now legal — the background case):
+- [x] In `bash.rs`, replace the two constants' docs and `resolve_timeout_secs` (0 is now legal — the background case):
 
 ```rust
 /// Default wait (in seconds) before `bash` yields a handle when the caller
@@ -1239,7 +1239,7 @@ fn resolve_timeout_secs(requested: Option<i64>) -> u64 {
 
 and in the existing test `resolve_timeout_secs_defaults_clamps_and_passes_through` change the `Some(0)` line to `assert_eq!(resolve_timeout_secs(Some(0)), 0, "zero is the background case");`.
 
-- [ ] Add the field and builders to `BashTool`:
+- [x] Add the field and builders to `BashTool`:
 
 ```rust
     /// The runtime-wide job table (spec D3): shared with `bash_wait` and
@@ -1269,7 +1269,7 @@ In `BashTool::new` set `jobs: crate::tools::bash_jobs::JobTable::new(),` and add
 
 Update the two struct literals in `tools/registry.rs` tests (`bash_tool_included_when_allowed` and the one in `no_servers_empty_result`'s siblings — grep `BashTool {`) to add `jobs: crate::tools::bash_jobs::JobTable::new(),`.
 
-- [ ] Replace `def()`'s description and the `timeout_secs` property:
+- [x] Replace `def()`'s description and the `timeout_secs` property:
 
 ```rust
             description: format!(
@@ -1289,7 +1289,7 @@ The command is NOT killed when this elapses. 0 = return immediately with the han
                     }
 ```
 
-- [ ] Replace the body of `execute` from `let timeout_secs = ...` to the end with:
+- [x] Replace the body of `execute` from `let timeout_secs = ...` to the end with:
 
 ```rust
         let timeout_secs = resolve_timeout_secs(
@@ -1452,7 +1452,7 @@ impl BashTool {
 
 Delete the now-unused `use tokio::process::Command;` at the top of `bash.rs` if the compiler flags it (the zombie test below still needs `Command`; keep the import inside that test if so).
 
-- [ ] Replace the test `timeout_kill_path_leaves_no_zombie_children` (its subject, the kill-at-timeout branch, no longer exists) with:
+- [x] Replace the test `timeout_kill_path_leaves_no_zombie_children` (its subject, the kill-at-timeout branch, no longer exists) with:
 
 ```rust
     /// The yield path leaves no zombie either: the pump reaps the shell.
@@ -1482,7 +1482,7 @@ Delete the now-unused `use tokio::process::Command;` at the top of `bash.rs` if 
     }
 ```
 
-- [ ] Add tool-level tests to `bash::tests`:
+- [x] Add tool-level tests to `bash::tests`:
 
 ```rust
     /// D1 at the tool boundary: a yield is `Running`, not an error, and says
@@ -1539,7 +1539,7 @@ Delete the now-unused `use tokio::process::Command;` at the top of `bash.rs` if 
 
 Note the exact text of the last assertion: stdout `out\n`, then `\n[stderr]\n`, then `err\n`, then `\n[exit code: 3]`. If the existing test `vault_values_reach_the_child_environment` now fails because the value is masked in the tool's own reply, change its assertion to `assert_eq!(out.text.trim(), "[SECRET:GITEA_TOKEN]")` and its comment to: "Masking now happens in the pump (D10) because the spool is model-readable; the runner's chokepoint stays as the guard for every other tool."
 
-- [ ] Create `mur-agent-runtime/src/tools/bash_control.rs`:
+- [x] Create `mur-agent-runtime/src/tools/bash_control.rs`:
 
 ```rust
 //! `bash_wait` and `bash_kill`: the two control tools over `bash`'s job table
@@ -1739,7 +1739,7 @@ mod tests {
 
 Register it in `tools/mod.rs`: `pub mod bash_control;` after `pub mod bash;`.
 
-- [ ] In `tools/registry.rs` add, after `build_tools`:
+- [x] In `tools/registry.rs` add, after `build_tools`:
 
 ```rust
 /// Register `bash_wait`/`bash_kill` iff `bash` itself was registered — the
@@ -1790,9 +1790,9 @@ and the test (test 16), inside `registry::tests`:
     }
 ```
 
-- [ ] `cargo nextest run -p mur-agent-runtime tools::` → green. Then the full crate: `cargo nextest run -p mur-agent-runtime` → green (any test that asserted `command timed out` must now assert `still running`; list each in the commit body).
-- [ ] `cargo clippy -p mur-agent-runtime --all-targets -- -D warnings; echo exit=$?` → `exit=0`.
-- [ ] Commit: `feat(runtime): bash yields a job handle; bash_wait/bash_kill (bash-yield T4)`.
+- [x] `cargo nextest run -p mur-agent-runtime tools::` → green. Then the full crate: `cargo nextest run -p mur-agent-runtime` → green (any test that asserted `command timed out` must now assert `still running`; list each in the commit body).
+- [x] `cargo clippy -p mur-agent-runtime --all-targets -- -D warnings; echo exit=$?` → `exit=0`.
+- [x] Commit: `feat(runtime): bash yields a job handle; bash_wait/bash_kill (bash-yield T4)`.
 
 ---
 
@@ -1800,7 +1800,7 @@ and the test (test 16), inside `registry::tests`:
 
 **Interfaces.** Consumes: `CURRENT_TASK_ID`, `JobTable` (T3); `ToolStatus::Running` (T1). Produces: `TaskRunner::with_bash_jobs(self, Arc<JobTable>) -> Self`, `TaskRunner::kill_all_jobs(&self) -> usize` (async), `fn policy_name(tool: &str) -> &str` (private).
 
-- [ ] Add the field to `TaskRunner` (after `secrets`): `bash_jobs: Option<Arc<crate::tools::bash_jobs::JobTable>>,` and `bash_jobs: None,` in `with_backend`. Add after `with_secrets`:
+- [x] Add the field to `TaskRunner` (after `secrets`): `bash_jobs: Option<Arc<crate::tools::bash_jobs::JobTable>>,` and `bash_jobs: None,` in `with_backend`. Add after `with_secrets`:
 
 ```rust
     /// The bash job table (spec D3/D8), so the loop can end a task's jobs on
@@ -1841,13 +1841,13 @@ and the test (test 16), inside `registry::tests`:
     }
 ```
 
-- [ ] In `handle_tool_call`, at **both** execute sites (each is preceded by `let tool = tool.unwrap();`, so `tool: Arc<dyn ToolExecutor>`), replace `tool.execute(call.input.clone()).await` with `Self::execute_scoped(tool.as_ref(), task_id, call.input.clone()).await`, and in **both** `step/completed` JSON objects add, after the `"denied"` line:
+- [x] In `handle_tool_call`, at **both** execute sites (each is preceded by `let tool = tool.unwrap();`, so `tool: Arc<dyn ToolExecutor>`), replace `tool.execute(call.input.clone()).await` with `Self::execute_scoped(tool.as_ref(), task_id, call.input.clone()).await`, and in **both** `step/completed` JSON objects add, after the `"denied"` line:
 
 ```rust
                                     "running": matches!(status, crate::tools::ToolStatus::Running { .. }),
 ```
 
-- [ ] Replace `effective_tool_policy`:
+- [x] Replace `effective_tool_policy`:
 
 ```rust
 /// D11: the control tools resolve as themselves first, then as `bash`.
@@ -1876,7 +1876,7 @@ fn effective_tool_policy(
 }
 ```
 
-- [ ] Fingerprint fold (D4). In the zip loop `for (call, entry) in resp.tool_calls.iter().zip(results.iter())`, declare before the loop `let mut progress_calls: Vec<(String, u64)> = Vec::with_capacity(results.len());` and add as the loop's last statements:
+- [x] Fingerprint fold (D4). In the zip loop `for (call, entry) in resp.tool_calls.iter().zip(results.iter())`, declare before the loop `let mut progress_calls: Vec<(String, u64)> = Vec::with_capacity(results.len());` and add as the loop's last statements:
 
 ```rust
                 // D4: a yield that delivered new bytes is progress; one that
@@ -1890,7 +1890,7 @@ fn effective_tool_policy(
 
 and replace the `progress.observe(&resp.tool_calls.iter().map(...).collect::<Vec<_>>(), now)` call with `progress.observe(&progress_calls, std::time::Instant::now());`.
 
-- [ ] Cleanup on stop (D3). Immediately before each of the two `self.graceful_exit(client, &history, LoopStop::Deadline, …)` and `LoopStop::Stuck` calls in the loop (the unattended arm only — the attended arm warns and continues), insert `self.kill_jobs_of(task_id).await;`. In `cancel`, make the kill unconditional on cancellability:
+- [x] Cleanup on stop (D3). Immediately before each of the two `self.graceful_exit(client, &history, LoopStop::Deadline, …)` and `LoopStop::Stuck` calls in the loop (the unattended arm only — the attended arm warns and continues), insert `self.kill_jobs_of(task_id).await;`. In `cancel`, make the kill unconditional on cancellability:
 
 ```rust
     pub async fn cancel(&self, task_id: &str) -> Result<(), String> {
@@ -1912,7 +1912,7 @@ and replace the `progress.observe(&resp.tool_calls.iter().map(...).collect::<Vec
     }
 ```
 
-- [ ] Tests, in `task_runner::tests` (reuse the existing `loop_spec`, `end_turn_response`, `empty_pending_approvals`, `SequenceLlm`, `task_usage`):
+- [x] Tests, in `task_runner::tests` (reuse the existing `loop_spec`, `end_turn_response`, `empty_pending_approvals`, `SequenceLlm`, `task_usage`):
 
 ```rust
     /// Test 15 — D11 policy aliasing.
@@ -2061,10 +2061,10 @@ and replace the `progress.observe(&resp.tool_calls.iter().map(...).collect::<Vec
     }
 ```
 
-- [ ] Add a check that the scope reaches the tool from both sites: extend the existing `CountingBashTool` in `task_runner::tests` (line ≈3630) with a `seen_task: Arc<Mutex<Option<String>>>` field set from `crate::tools::bash_jobs::current_task_id()` inside `execute`, and in ONE existing test that uses it under `Allow` and ONE under `Ask` (grep `CountingBashTool {` — four uses; pick the first Allow-policy one and the first Ask-policy one) assert `seen_task.lock().unwrap().is_some()` after the run. Name the assertions "D8: the owner scope reaches the Allow site" / "… the Ask site".
-- [ ] `cargo nextest run -p mur-agent-runtime task_runner` → green (the deadline test is ≈4 s; `SLOW` is fine, a hang is not).
-- [ ] `cargo clippy -p mur-agent-runtime --all-targets -- -D warnings; echo exit=$?` → `exit=0`.
-- [ ] Commit: `feat(runtime): owner-scoped tool execution, running flag, bash policy alias, job cleanup on stop/cancel (bash-yield T5)`.
+- [x] Add a check that the scope reaches the tool from both sites: extend the existing `CountingBashTool` in `task_runner::tests` (line ≈3630) with a `seen_task: Arc<Mutex<Option<String>>>` field set from `crate::tools::bash_jobs::current_task_id()` inside `execute`, and in ONE existing test that uses it under `Allow` and ONE under `Ask` (grep `CountingBashTool {` — four uses; pick the first Allow-policy one and the first Ask-policy one) assert `seen_task.lock().unwrap().is_some()` after the run. Name the assertions "D8: the owner scope reaches the Allow site" / "… the Ask site".
+- [x] `cargo nextest run -p mur-agent-runtime task_runner` → green (the deadline test is ≈4 s; `SLOW` is fine, a hang is not).
+- [x] `cargo clippy -p mur-agent-runtime --all-targets -- -D warnings; echo exit=$?` → `exit=0`.
+- [x] Commit: `feat(runtime): owner-scoped tool execution, running flag, bash policy alias, job cleanup on stop/cancel (bash-yield T5)`.
 
 ---
 
@@ -2072,7 +2072,7 @@ and replace the `progress.observe(&resp.tool_calls.iter().map(...).collect::<Vec
 
 **Interfaces.** Consumes: `JobTable::new`, `BashTool::{with_jobs, control_tools}`, `attach_bash_control`, `TaskRunner::{with_bash_jobs, kill_all_jobs}`. Produces: `build_runner(.., bash_jobs: Option<Arc<JobTable>>)` (new last parameter).
 
-- [ ] `supervisor_runner.rs`, in `build_provider_runner`: build the table and the concrete tool:
+- [x] `supervisor_runner.rs`, in `build_provider_runner`: build the table and the concrete tool:
 
 ```rust
     let bash_jobs = crate::tools::bash_jobs::JobTable::new();
@@ -2095,7 +2095,7 @@ and replace the `progress.observe(&resp.tool_calls.iter().map(...).collect::<Vec
 
 Add `bash_jobs: Option<Arc<crate::tools::bash_jobs::JobTable>>,` as the last parameter of `build_runner`, apply it with `if let Some(j) = bash_jobs { runner = runner.with_bash_jobs(j); }` next to the `secrets` line, pass `Some(bash_jobs.clone())` from the `build` closure in `build_provider_runner`, and `None` in the test call `build_runner_applies_profile_limits` (`task_runner.rs` ≈4595).
 
-- [ ] `supervisor.rs`, in the graceful shutdown after the drain block and before `for t in transport_tasks`:
+- [x] `supervisor.rs`, in the graceful shutdown after the drain block and before `for t in transport_tasks`:
 
 ```rust
     // Every bash job is a process group this runtime started; nothing else
@@ -2106,9 +2106,9 @@ Add `bash_jobs: Option<Arc<crate::tools::bash_jobs::JobTable>>,` as the last par
     }
 ```
 
-- [ ] `cargo check -p mur-agent-runtime` → clean; `cargo nextest run -p mur-agent-runtime` → green.
-- [ ] `grep -rn "build_runner\|BashTool" mur-hub-gui/src-tauri/src mur-gui-core/src` → expect no matches (both are runtime-internal). If there is a match, fix the call and note it in the commit.
-- [ ] Commit: `feat(runtime): one job table per runtime, control tools attached, kill_all at shutdown (bash-yield T6)`.
+- [x] `cargo check -p mur-agent-runtime` → clean; `cargo nextest run -p mur-agent-runtime` → green.
+- [x] `grep -rn "build_runner\|BashTool" mur-hub-gui/src-tauri/src mur-gui-core/src` → expect no matches (both are runtime-internal). If there is a match, fix the call and note it in the commit.
+- [x] Commit: `feat(runtime): one job table per runtime, control tools attached, kill_all at shutdown (bash-yield T6)`.
 
 ---
 
