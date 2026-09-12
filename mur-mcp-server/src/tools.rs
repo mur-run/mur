@@ -338,7 +338,7 @@ pub fn all_tools() -> Vec<Tool> {
         },
         Tool {
             name: "parallel_jobs".into(),
-            description: "Fan out N distinct jobs to running MUR agents in parallel over an ephemeral channel — no workflow file. Each job is delegated as its own concurrent turn. Before coding fan-out, apply the parallel-code gate: disjoint files (no shared registry/lockfile), contracts frozen first, one writer per file. Targets the agents you name; runtimes must already be running.".into(),
+            description: "Fan out N distinct jobs to running MUR agents in parallel and return a handle at once: {run_id, channel_id, status: dispatched}. Poll mur_job_status <run_id> for progress; each job's reply lands in the channel. The run lives in this MCP server process — if the server exits, the run ends. Before coding fan-out, apply the parallel-code gate: disjoint files (no shared registry/lockfile), contracts frozen first, one writer per file. Targets the agents you name; runtimes must already be running.".into(),
             input_schema: ToolInputSchema {
                 schema_type: "object".into(),
                 properties: Some(BTreeMap::from([
@@ -368,7 +368,7 @@ pub fn all_tools() -> Vec<Tool> {
         },
         Tool {
             name: "mur_job_status".into(),
-            description: "Report the live status of a MUR run (a parallel_jobs dispatch, a fleet run, or a workflow run) by its run_id. Returns both a semantic state (running / blocked / done / failed / stopped) and a liveness verdict (alive / STALLED / DEAD / unknown). Use this after a tool call times out: a timeout means MUR stopped waiting, NOT that the work failed — ask here instead of re-dispatching.".into(),
+            description: "Report the live status of a MUR run (a parallel_jobs dispatch, a fleet_run, or a workflow run) by its run_id. Returns both a semantic state (running / blocked / done / failed / stopped) and a liveness verdict (alive / STALLED / DEAD / unknown). Use this after parallel_jobs or fleet_run hand you a run_id — poll here instead of re-dispatching.".into(),
             input_schema: ToolInputSchema {
                 schema_type: "object".into(),
                 properties: Some(BTreeMap::from([(
@@ -791,17 +791,25 @@ async fn dispatch_tool(name: &str, arguments: &Value) -> Result<Value, String> {
             let home = resolve_mur_home().map_err(|e| format!("parallel_jobs failed: {e}"))?;
             let jobs = mur_core::executor::jobs::resolve_jobs(&home, &jobs_in, default_agent)
                 .map_err(|e| format!("parallel_jobs: {e}"))?;
-            let (channel_id, out) = mur_core::executor::jobs::run_parallel_jobs(
+            // Dispatch, do not await (spec 2026-09-12 execution-limits §3.6):
+            // the handle is the reply and mur_job_status is the progress.
+            // Dropping the JoinHandle detaches the task; it runs on this
+            // server's runtime for as long as the server lives.
+            let d = mur_core::executor::jobs::dispatch_parallel_jobs(
                 &home,
                 &jobs,
                 Some(max_concurrency),
                 yes,
             )
-            .await
             .map_err(|e| format!("parallel_jobs failed: {e}"))?;
+            let (run_id, channel_id) = (d.run_id.clone(), d.channel_id.clone());
+            drop(d.handle);
             Ok(json!({
+                "run_id": run_id,
                 "channel_id": channel_id,
-                "output": out.output_text.unwrap_or_default(),
+                "status": "dispatched",
+                "jobs": jobs.len(),
+                "follow": format!("mur_job_status {run_id} — each job's reply lands in channel {channel_id}"),
             }))
         }
 
@@ -978,6 +986,20 @@ mod job_status_tests {
 
     /// Invoke a tool with `MUR_HOME` pointed at `mur_home` — the same
     /// resolution path the running server uses (`resolve_mur_home`).
+    /// Like `call_tool_in`, for tools whose result is a JSON object.
+    async fn call_tool_json_in(
+        mur_home: &std::path::Path,
+        name: &str,
+        arguments: Value,
+    ) -> Result<Value, String> {
+        let _guard = ENV_LOCK.lock().await;
+        // SAFETY: as in `call_tool_in` — the lock serialises env mutation.
+        unsafe { std::env::set_var("MUR_HOME", mur_home) };
+        let out = dispatch_tool(name, &arguments).await;
+        unsafe { std::env::remove_var("MUR_HOME") };
+        out
+    }
+
     async fn call_tool_in(
         mur_home: &std::path::Path,
         name: &str,
@@ -1032,6 +1054,38 @@ mod job_status_tests {
 
         assert!(out.contains("running"), "state missing from output: {out}");
         assert!(out.contains("alive"), "liveness missing from output: {out}");
+    }
+
+    /// The tool answers with a handle, not with output: one job to an
+    /// authorized agent that is not running dispatches at once and fails on
+    /// its own afterwards.
+    #[tokio::test]
+    async fn parallel_jobs_returns_a_dispatch_handle() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("config.yaml"),
+            "parallel_jobs:\n  targets: [ghost]\n",
+        )
+        .unwrap();
+        let t0 = std::time::Instant::now();
+        let v = call_tool_json_in(
+            tmp.path(),
+            "parallel_jobs",
+            serde_json::json!({"jobs": [{"description": "x", "agent": "ghost"}]}),
+        )
+        .await
+        .unwrap();
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            t0.elapsed()
+        );
+        assert_eq!(v["status"], "dispatched");
+        assert!(v["run_id"].as_str().unwrap().starts_with("run-"), "{v}");
+        assert!(
+            v["follow"].as_str().unwrap().contains("mur_job_status"),
+            "{v}"
+        );
     }
 
     #[tokio::test]

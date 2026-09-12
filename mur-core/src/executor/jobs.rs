@@ -120,32 +120,68 @@ fn authorize_targets(mur_home: &Path, jobs: &[Job]) -> Result<()> {
 /// returns `(channel_id, output)`. Per-job replies are persisted on the
 /// channel; the caller reads them back via `channel_id`. `yes` is passed
 /// straight through — `false` keeps risk-tiered steps fail-closed at the HITL gate.
+/// A fan-out that has been started and can be polled.
+pub struct Dispatched {
+    pub run_id: String,
+    pub channel_id: String,
+    pub handle: tokio::task::JoinHandle<Result<PipelineOutput>>,
+}
+
+/// Start the fan-out and return its handle at once (spec 2026-09-12
+/// execution-limits §3.6): the caller polls `mur_job_status`. The run
+/// executes on the CURRENT tokio runtime — inside `mur-mcp-server` that is
+/// the server's own lifetime, which the tool description says out loud.
+pub fn dispatch_parallel_jobs(
+    mur_home: &Path,
+    jobs: &[Job],
+    max_concurrency: Option<usize>,
+    yes: bool,
+) -> Result<Dispatched> {
+    authorize_targets(mur_home, jobs)?;
+    let proc = build_jobs_procedure(jobs);
+    let svc = ChannelService::open(mur_home)?;
+    let channel_id = svc.create_for_workflow("parallel-jobs")?.id;
+    let run_id = format!("run-{}", uuid::Uuid::now_v7());
+    let home = mur_home.to_path_buf();
+    let (rid, cid) = (run_id.clone(), channel_id.clone());
+    let label = format!("{} parallel job(s)", jobs.len());
+    let handle = tokio::spawn(async move {
+        let opts = DagExecOptions {
+            yes,
+            trigger: "agent",
+            channel_id: Some(cid.clone()),
+            run_id: rid,
+            run_kind: Some(crate::run_status::RunKind::Job),
+            run_label: label,
+            max_concurrency,
+            ..Default::default()
+        };
+        // `job:` keeps the run ledger out of the skill store — this fan-out is
+        // ephemeral and owns no skill.yaml. See `skill::event_log::event_log_path`.
+        execute_dag(&home, "job:parallel-jobs", &proc, &opts)
+            .await
+            .map_err(|e| anyhow::anyhow!("parallel_jobs run on channel {cid} failed: {e}"))
+    });
+    Ok(Dispatched {
+        run_id,
+        channel_id,
+        handle,
+    })
+}
+
+/// Dispatch and wait — for an in-process caller that wants the output.
 pub async fn run_parallel_jobs(
     mur_home: &Path,
     jobs: &[Job],
     max_concurrency: Option<usize>,
     yes: bool,
 ) -> Result<(String, PipelineOutput)> {
-    authorize_targets(mur_home, jobs)?;
-    let proc = build_jobs_procedure(jobs);
-    let svc = ChannelService::open(mur_home)?;
-    let channel_id = svc.create_for_workflow("parallel-jobs")?.id;
-    let opts = DagExecOptions {
-        yes,
-        trigger: "agent",
-        channel_id: Some(channel_id.clone()),
-        run_id: format!("run-{}", uuid::Uuid::now_v7()),
-        run_kind: Some(crate::run_status::RunKind::Job),
-        run_label: format!("{} parallel job(s)", jobs.len()),
-        max_concurrency,
-        ..Default::default()
-    };
-    // `job:` keeps the run ledger out of the skill store — this fan-out is
-    // ephemeral and owns no skill.yaml. See `skill::event_log::event_log_path`.
-    let out = execute_dag(mur_home, "job:parallel-jobs", &proc, &opts)
+    let d = dispatch_parallel_jobs(mur_home, jobs, max_concurrency, yes)?;
+    let out = d
+        .handle
         .await
-        .map_err(|e| anyhow::anyhow!("parallel_jobs run on channel {channel_id} failed: {e}"))?;
-    Ok((channel_id, out))
+        .map_err(|e| anyhow::anyhow!("parallel_jobs task panicked: {e}"))??;
+    Ok((d.channel_id, out))
 }
 
 #[cfg(test)]
@@ -331,5 +367,32 @@ mod tests {
         // The minted channel is persisted and loadable.
         let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
         assert!(svc.load_events(&channel_id).is_ok());
+    }
+
+    /// §7: dispatch returns at once with an id; the run is recorded under it
+    /// and finishes on its own. The target is not running, so the run fails
+    /// fast — what is under test is the shape, not the delegation.
+    #[tokio::test]
+    async fn dispatch_returns_before_the_run_finishes_and_records_it() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        std::fs::write(
+            home.join("config.yaml"),
+            "parallel_jobs:\n  targets:\n    - ghost\n",
+        )
+        .unwrap();
+        let jobs = vec![Job {
+            description: "do x".into(),
+            assignee: "ghost".into(),
+        }];
+        let t0 = std::time::Instant::now();
+        let d = dispatch_parallel_jobs(home, &jobs, Some(1), false).unwrap();
+        assert!(t0.elapsed() < std::time::Duration::from_secs(2));
+        assert!(d.run_id.starts_with("run-"));
+        let _ = d.handle.await;
+        let rec = crate::run_status::store::load(home, &d.run_id)
+            .unwrap()
+            .expect("recorded by execute_dag");
+        assert!(rec.state.is_terminal(), "{:?}", rec.state);
     }
 }
