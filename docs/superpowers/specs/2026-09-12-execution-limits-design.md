@@ -205,7 +205,6 @@ A local-model fleet is bounded by its deadline. A billable fleet with neither kn
 
 - Context-window management (compaction) for very long attended sessions — a separate design; this spec only stops the runtime from *killing* such a session.
 - Per-tool cost attribution.
-- Hub UI for `limits:` — follows once the CLI shape has settled.
 - Removing `hitl.timeout_secs` — it is a real HITL knob and stays.
 
 ## 9. Rollout
@@ -218,3 +217,98 @@ A local-model fleet is bounded by its deadline. A billable fleet with neither kn
 6. Dispatch preflight + non-retryable authorization (§3.8).
 
 Each step is its own plan and PR.
+
+## 10. Hub surface
+
+The Hub already has the three places these settings belong — the global
+Settings page, the fleet detail's Settings tab (today: trigger / max
+iterations / deadline / budget / done-when), and the agent detail's
+Overview. No new page. One rule above all: **the Hub renders what the CLI
+resolves.** A single Tauri command `limits_resolve(scope) -> LimitsView`
+wraps the same `mur_common::limits` resolver `mur limits` uses, and
+returns per knob `{ value, source, applies, note }`. The Hub never
+re-derives a default or an applicability rule in TypeScript — the two
+surfaces disagreeing about "what is in force" is the disease this whole
+spec treats.
+
+### 10.1 One `LimitsPanel`, rendered at three scopes
+
+| scope | where | what it edits |
+|---|---|---|
+| global | Settings → General → "Execution limits" | `~/.mur/config.yaml limits:` |
+| fleet | Fleet detail → Settings tab, **replacing** the loop-guards block (max iterations / budget go away; trigger, cron and done-when stay) | `fleet.yaml limits:` |
+| agent | Agent detail → Overview, a "Limits" card with Edit (no fifth tab) | `profile.yaml limits:` |
+
+Each row is `knob · effective value · source chip · action`:
+
+```
+deadline   2h      this fleet          [Reset to inherited]
+stuck      10m     built-in default    [Override here]
+cost_usd   —       Local model — no cost cap applies
+```
+
+- An **inherited** value renders dimmed with its source chip
+  (`built-in default` / `config.yaml` / `this fleet`); its action is
+  *Override here*. A **local** value renders solid; its action is *Reset to
+  inherited*, which deletes the key rather than writing the parent's value
+  (so a later change upstream still flows down).
+- `cost_usd` follows D4: shown as an editable row only when
+  `applies == true` (the scope's model is `UsageBilled`). Otherwise the row
+  is a single line of text naming why, never a disabled input — a disabled
+  field reads as "you are not allowed", and the truth is "this does not
+  exist for you".
+- Duration inputs accept `30m`, `2h`, `1h30m`; validation is the same
+  parser as the CLI, exposed through the resolve command's error, not
+  reimplemented.
+
+### 10.2 The fleet Overview stat cards
+
+The four cards today read `never / Last auto-run · 0 / Max iterations ·
+$2 / Budget · Router decides each iteration / Done when`. They become:
+
+```
+never          2h            10m           Router decides…
+Last auto-run  Deadline      Stuck         Done when
+```
+
+with a fifth element on the header line next to the trigger: **`bounded ✓`**
+or **`unbounded — will not auto-run`**. That badge is §5 made visible: it
+is green when `deadline` is set or `cost_usd` applies and is set, and it
+links to the Settings tab otherwise. On a billable fleet the third card
+shows `$5.00 / Cost cap` instead of stuck when a cap is set; stuck moves to
+the panel.
+
+### 10.3 Stop reasons where the Hub user is looking
+
+The Jobs tab and the Overview job rows show the `stop_reason` from the
+channel `state-change` event (§3.7) as the row's status —
+`■ stopped: deadline 1h` — with one inline action that opens `LimitsPanel`
+at the fleet scope with that knob focused. `finished` appears only for
+`Converged`, same word rule as the CLI.
+
+### 10.4 Migration warnings and attended state
+
+- A stale key (`hitl.max_iterations`, `loop.max_iterations`,
+  `loop.budget_usd` once migrated) shows as an amber row at the top of the
+  panel: `hitl.max_iterations: 800 in profile.yaml is ignored — Remove`.
+  Remove deletes the key through the same write path as an edit.
+- The agent-scope panel says whether a save needs a restart. Fleet and
+  global do not (read per run); an agent profile does, and the row uses
+  the existing "restart required" affordance rather than a new one.
+- The Hub's chat pane is an **attended** surface exactly like murmur:
+  while it holds a task, the live band shows elapsed / steps / tokens, the
+  `stuck` threshold shows a warning banner with a Stop button, and no hard
+  stop fires. Hub chat is in scope for D3.
+
+### 10.5 Wiring notes
+
+- `limits_resolve`, `limits_set(scope, patch)` and `limits_remove_stale
+  (scope, key)` are the only three commands; `fleet_set_loop` keeps
+  trigger / cron / done-when and drops the guard fields.
+- The Hub is workspace-excluded: `LimitsView` is a DTO owned by the Tauri
+  side, so a later change to `mur_common::limits` must grep the Hub
+  (`gotcha_workspace_excluded_addonref_literals`).
+- Hub work is rollout step 3b, after `mur limits` (§9 step 3) has settled
+  the shape, and before step 4 flips the runtime — so users can see the
+  new model before it starts governing their runs.
+
