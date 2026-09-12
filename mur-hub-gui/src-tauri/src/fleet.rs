@@ -38,8 +38,9 @@ pub struct LabelView {
 #[derive(Serialize, Clone)]
 pub struct FleetLoopView {
     pub trigger: String,
-    pub max_iterations: u32,
-    pub budget_usd: f64,
+    /// Legacy loop.deadline string, kept only so the panel's stale row (if
+    /// this fleet has not migrated to `limits:`) can show it. The bounds a
+    /// user edits now live in `FleetDetail.limits`.
     pub deadline: String,
     pub done_when: String,
     pub last_run: Option<String>,
@@ -63,6 +64,9 @@ pub struct FleetDetail {
     pub stopped: bool,
     pub loop_cfg: Option<FleetLoopView>,
     pub parallel_summary: Option<ParallelSummaryView>,
+    /// The Hub renders what the CLI resolves (spec §10): every execution
+    /// bound in force for this fleet, with its source.
+    pub limits: crate::limits::LimitsView,
 }
 
 fn parallel_summary_view(cfg: &ParallelConfig) -> ParallelSummaryView {
@@ -209,13 +213,12 @@ pub fn fleet_detail(name: String) -> Result<FleetDetail, String> {
     let stopped = control::is_stopped(&home, &name);
     let loop_cfg = fleet.loop_cfg.as_ref().map(|l| FleetLoopView {
         trigger: l.trigger.clone(),
-        max_iterations: l.max_iterations,
-        budget_usd: l.budget_usd,
         deadline: l.deadline.clone(),
         done_when: l.done_when.clone(),
         last_run: read_last_run_rfc3339(&home, &name),
     });
     let parallel_summary = fleet.parallel.as_ref().map(parallel_summary_view);
+    let limits = crate::limits::resolve_in(&home, "fleet", Some(&name));
     Ok(FleetDetail {
         name: fleet.name.clone(),
         display_name: display(&fleet.name, &fleet.display_name),
@@ -226,6 +229,7 @@ pub fn fleet_detail(name: String) -> Result<FleetDetail, String> {
         stopped,
         loop_cfg,
         parallel_summary,
+        limits,
     })
 }
 
@@ -281,13 +285,7 @@ pub async fn fleet_run(name: String, worktree: bool, app: tauri::AppHandle) -> R
 }
 
 #[tauri::command]
-pub async fn fleet_run_loop(
-    name: String,
-    max_iterations: Option<u32>,
-    deadline: Option<String>,
-    budget_usd: Option<f64>,
-    app: tauri::AppHandle,
-) -> Result<(), String> {
+pub async fn fleet_run_loop(name: String, app: tauri::AppHandle) -> Result<(), String> {
     let home = mur_home_path();
     let fleet_name = name.clone();
     tokio::task::spawn_blocking(move || {
@@ -296,9 +294,9 @@ pub async fn fleet_run_loop(
             .block_on(loop_run::cmd_fleet_run_loop(
                 &home,
                 &fleet_name,
-                max_iterations,
-                deadline,
-                budget_usd,
+                None,
+                None,
+                None,
                 None,
             ))
             .is_ok();
@@ -314,22 +312,11 @@ pub async fn fleet_run_loop(
 pub fn fleet_set_loop(
     name: String,
     trigger: Option<String>,
-    max_iterations: Option<u32>,
-    deadline: Option<String>,
-    budget_usd: Option<f64>,
     done_when: Option<String>,
 ) -> Result<(), String> {
     let home = mur_home_path();
-    settings::cmd_fleet_set_loop(
-        &home,
-        &name,
-        trigger,
-        max_iterations,
-        deadline,
-        budget_usd,
-        done_when,
-    )
-    .map_err(|e| e.to_string())
+    settings::cmd_fleet_set_loop(&home, &name, trigger, None, None, None, done_when)
+        .map_err(|e| e.to_string())
 }
 
 /// The next `count` fire times for a 5-field cron expression, formatted in the

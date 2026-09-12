@@ -22,6 +22,7 @@ mod geometry;
 pub mod hitl;
 pub mod import_muragent;
 mod install_inbox;
+pub mod limits;
 pub mod macos_un;
 pub mod mcp_skills;
 pub mod memory;
@@ -814,6 +815,9 @@ pub fn run() {
             fleet::fleet_set_loop,
             fleet::cron_preview,
             fleet::get_fleet_autorun,
+            limits::limits_resolve,
+            limits::limits_set,
+            limits::limits_remove_stale,
             fleet::set_fleet_autorun,
             fleet::fleet_send,
             fleet::fleet_cancel_job,
