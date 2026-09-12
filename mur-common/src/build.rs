@@ -9,7 +9,11 @@ pub const SHORT_SHA: &str = env!("MUR_GIT_SHA");
 /// method (added method, changed params/result contract). Carried in
 /// `running.lock` AgentCard; dial refuses a method whose
 /// `method_min_proto` exceeds the peer's advertised proto.
-pub const A2A_PROTO_VERSION: u32 = 1;
+pub const A2A_PROTO_VERSION: u32 = 2;
+
+/// The first proto whose runtimes emit `turn/heartbeat` (spec 2026-09-12
+/// execution-limits §3.6). The dial gives such a peer a 90 s idle timeout.
+pub const HEARTBEAT_MIN_PROTO: u32 = 2;
 
 /// Minimum proto a peer must advertise to accept the dialed `method`. `0` means
 /// always available (never gated). Add an entry per method introduced/changed.

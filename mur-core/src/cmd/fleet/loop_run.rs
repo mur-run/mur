@@ -417,6 +417,20 @@ pub fn stop_remedy(stop: LoopStop, fleet: &str) -> Option<String> {
 /// kill is `canceled`; waiting on a person is `input-required`; a guard trip
 /// is `failed`, because the goal was not reached — the run ending is not the
 /// same as the work being done.
+/// The run state a stop implies — the same map `terminal_state_for` gives
+/// the channel, in the run ledger's vocabulary.
+pub fn loop_terminal_state(stop: LoopStop) -> crate::run_status::State {
+    use crate::run_status::State;
+    match stop {
+        LoopStop::Converged | LoopStop::QueueDrained => State::Done,
+        LoopStop::AwaitingApproval => State::Blocked,
+        LoopStop::Stopped | LoopStop::CommanderKilled => State::Stopped,
+        LoopStop::MaxIterations | LoopStop::Deadline | LoopStop::Stuck | LoopStop::Budget => {
+            State::Failed
+        }
+    }
+}
+
 fn terminal_state_for(stop: LoopStop) -> &'static str {
     match stop {
         LoopStop::Converged | LoopStop::QueueDrained => "completed",
@@ -437,6 +451,7 @@ pub async fn run_guarded(
     max_iterations: Option<u32>,
     deadline: Option<String>,
     budget_usd: Option<f64>,
+    run_id: Option<String>,
 ) -> Result<(LoopStop, u32, f64)> {
     let fleet = store::load_fleet(mur_home, name)?;
     if fleet.members.is_empty() {
@@ -543,9 +558,21 @@ pub async fn run_guarded(
     // ── Run progress (deep-research UX): one best-effort JSON the run output +
     // `mur deep-research` panel render from. Every write is best-effort — a
     // failure must never fail, slow, or change the loop (see RunProgress::save).
+    // The loop's handle: minted by the caller that will poll it, else fresh.
+    let run_id = match run_id {
+        Some(id) => {
+            if !crate::run_status::valid_run_id(&id) {
+                anyhow::bail!(
+                    "invalid --run-id `{id}`: letters, digits, `-` and `_` only, at most 96 chars"
+                );
+            }
+            id
+        }
+        None => format!("fleet-{name}-{}", uuid::Uuid::now_v7()),
+    };
     let progress = Arc::new(Mutex::new(RunProgress {
         schema_version: 1,
-        run_id: uuid::Uuid::now_v7().to_string(),
+        run_id: run_id.clone(),
         question: fleet.goal.clone(),
         started_at: chrono::Utc::now().to_rfc3339(),
         finished_at: None,
@@ -561,6 +588,41 @@ pub async fn run_guarded(
         steps: vec![],
     }));
     lock_progress(&progress).save(mur_home, name);
+
+    // The loop is one run with a handle (spec §3.6): recorded now so
+    // `mur_job_status <run_id>` answers while it runs, beaten every interval,
+    // and closed with the state the stop implies. Best-effort like
+    // progress.json — a ledger failure never stops the loop. No sidecar: the
+    // parent has no single first channel seq; `mur fleet status` keeps
+    // finding the per-iteration runs through theirs.
+    let runs_cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).runs;
+    let now = chrono::Utc::now();
+    let record = crate::run_status::RunState {
+        schema: crate::run_status::RUN_SCHEMA,
+        run_id: run_id.clone(),
+        channel_id: Some(fleet.channel_id.clone()),
+        kind: crate::run_status::RunKind::Fleet,
+        label: format!("fleet {name} loop"),
+        pid: std::process::id(),
+        started_at: now,
+        last_heartbeat_at: Some(now),
+        state: crate::run_status::State::Running,
+        steps: vec![],
+        blocked_on: None,
+        binary_version: env!("CARGO_PKG_VERSION").to_string(),
+        build_sha: mur_common::build::SHORT_SHA.to_string(),
+    };
+    let loop_beat = match crate::run_status::store::save(mur_home, &record) {
+        Ok(()) => Some(crate::run_status::heartbeat::Heartbeat::spawn(
+            mur_home.to_path_buf(),
+            run_id.clone(),
+            std::time::Duration::from_secs(runs_cfg.heartbeat_interval_secs),
+        )),
+        Err(error) => {
+            tracing::warn!(run_id = %run_id, %error, "fleet loop: run record not written; mur_job_status will not see this loop");
+            None
+        }
+    };
 
     let stop = loop {
         // Commander governance (highest priority). Fail-closed: a channel read
@@ -762,7 +824,7 @@ pub async fn run_guarded(
             channel_id: Some(fleet.channel_id.clone()),
             // uuid nonce so concurrent `--loop` runs don't collide on the
             // channel's idempotency-key dedup (the iteration stays for readability).
-            run_id: format!("loop-{}-{}-{}", name, uuid::Uuid::now_v7(), iteration),
+            run_id: format!("{run_id}-{iteration}"),
             run_kind: Some(crate::run_status::RunKind::Fleet),
             run_label: format!("fleet {name} iter {iteration}"),
             on_step: Some(on_step),
@@ -867,6 +929,16 @@ pub async fn run_guarded(
     // writer like every other event this run wrote; best-effort like the
     // progress file — a stop must never fail because its announcement did.
     emit_stop_event(&svc, mur_home, &fleet, stop, iteration, spent, &run_id);
+    // Stop the beat BEFORE the terminal write so a late tick cannot
+    // resurrect `running` (see Heartbeat::stop).
+    if let Some(b) = loop_beat {
+        b.stop().await;
+    }
+    let terminal = loop_terminal_state(stop);
+    if let Err(error) = crate::run_status::store::update(mur_home, &run_id, |r| r.state = terminal)
+    {
+        tracing::warn!(run_id = %run_id, %error, "fleet loop: terminal state not recorded");
+    }
     Ok((stop, iteration, spent))
 }
 
@@ -912,9 +984,10 @@ pub async fn cmd_fleet_run_loop(
     max_iterations: Option<u32>,
     deadline: Option<String>,
     budget_usd: Option<f64>,
+    run_id: Option<String>,
 ) -> Result<()> {
     let (stop, iteration, spent) =
-        run_guarded(mur_home, name, max_iterations, deadline, budget_usd).await?;
+        run_guarded(mur_home, name, max_iterations, deadline, budget_usd, run_id).await?;
     println!(
         "fleet '{}' loop stopped after {iteration} iteration(s) (~${spent:.2} spent): {stop:?}",
         name
@@ -1246,7 +1319,7 @@ mod tests {
 
     /// Test seam: run one guarded iteration and return the stop reason.
     async fn run_loop_for_test(home: &Path) -> LoopStop {
-        run_guarded(home, "dev", Some(1), None, None)
+        run_guarded(home, "dev", Some(1), None, None, None)
             .await
             .map(|(stop, _, _)| stop)
             .unwrap_or(LoopStop::MaxIterations)
@@ -1861,5 +1934,70 @@ mod tests {
                 .unwrap()
                 .contains("ceiling")
         );
+    }
+
+    /// The whole loop is one run: a record exists while it runs and ends in
+    /// the state its stop implies, so `mur_job_status <run_id>` answers for a
+    /// handle the caller minted before the loop started.
+    #[tokio::test]
+    async fn the_loop_records_itself_under_the_callers_run_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let mut f = bounds_fixture("dev");
+        f.loop_cfg = Some(mur_common::fleet::FleetLoop {
+            trigger: "manual".into(),
+            max_iterations: 0,
+            budget_usd: 0.0,
+            deadline: String::new(),
+            done_when: "queue-empty".into(),
+        });
+        crate::cmd::fleet::store::save_fleet(home, &f).unwrap();
+        mur_channel::ChannelService::open(home)
+            .unwrap()
+            .create_for_fleet("dev", "mur", &["pm".into()])
+            .unwrap();
+        let (stop, _, _) = run_guarded(home, "dev", None, None, None, Some("fleet-dev-abc".into()))
+            .await
+            .unwrap();
+        assert_eq!(stop, LoopStop::QueueDrained);
+        let rec = crate::run_status::store::load(home, "fleet-dev-abc")
+            .unwrap()
+            .expect("recorded");
+        assert_eq!(rec.kind, crate::run_status::RunKind::Fleet);
+        assert_eq!(rec.state, crate::run_status::State::Done);
+        assert!(rec.last_heartbeat_at.is_some());
+        let status = crate::run_status::status_of(home, "fleet-dev-abc")
+            .unwrap()
+            .unwrap();
+        assert_eq!(status.state, crate::run_status::State::Done);
+        let e = run_guarded(home, "dev", None, None, None, Some("bad id!".into()))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("invalid --run-id"), "{e}");
+    }
+
+    #[test]
+    fn stops_map_to_run_states() {
+        use crate::run_status::State;
+        assert_eq!(loop_terminal_state(LoopStop::Converged), State::Done);
+        assert_eq!(loop_terminal_state(LoopStop::QueueDrained), State::Done);
+        assert_eq!(
+            loop_terminal_state(LoopStop::AwaitingApproval),
+            State::Blocked
+        );
+        assert_eq!(loop_terminal_state(LoopStop::Stopped), State::Stopped);
+        assert_eq!(
+            loop_terminal_state(LoopStop::CommanderKilled),
+            State::Stopped
+        );
+        for s in [
+            LoopStop::Deadline,
+            LoopStop::Stuck,
+            LoopStop::Budget,
+            LoopStop::MaxIterations,
+        ] {
+            assert_eq!(loop_terminal_state(s), State::Failed, "{s:?}");
+        }
     }
 }

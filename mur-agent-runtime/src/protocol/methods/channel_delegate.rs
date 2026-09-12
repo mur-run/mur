@@ -105,6 +105,8 @@ pub struct ChannelDelegateHandler {
     agent: String,
     key_version: u32,
     mur_home: PathBuf,
+    /// `turn/heartbeat` cadence; the constant in production, shortened by tests.
+    heartbeat_interval: std::time::Duration,
 }
 
 impl ChannelDelegateHandler {
@@ -121,7 +123,15 @@ impl ChannelDelegateHandler {
             agent,
             key_version,
             mur_home,
+            heartbeat_interval: crate::protocol::heartbeat::HEARTBEAT_INTERVAL,
         }
+    }
+
+    /// Shorten the beat so a test can see one inside its budget.
+    #[cfg(test)]
+    pub(crate) fn with_heartbeat_interval(mut self, every: std::time::Duration) -> Self {
+        self.heartbeat_interval = every;
+        self
     }
 }
 
@@ -130,7 +140,7 @@ impl MethodHandler for ChannelDelegateHandler {
     async fn handle(
         &self,
         params: Option<Value>,
-        _ctx: &RequestContext,
+        ctx: &RequestContext,
     ) -> Result<Value, HandlerError> {
         let p = params.ok_or_else(|| HandlerError::InvalidParams("missing params".into()))?;
         // NEW vs message/send: a channel_id is required so we know where to
@@ -192,6 +202,12 @@ impl MethodHandler for ChannelDelegateHandler {
         // the turn runs, or a gated tool waits out `hitl.timeout_secs` against
         // a notifier nobody reads and the turn returns empty with nothing
         // naming approval as the cause.
+        // The fleet router dialing this delegate holds a 90 s idle timeout
+        // (proto ≥ 2); beat so a long specialist turn is not mistaken for a
+        // dead one.
+        let _beat = ctx.notifier.as_ref().map(|n| {
+            crate::protocol::heartbeat::spawn(n.clone(), task_id.clone(), self.heartbeat_interval)
+        });
         self.runner.mark_unattended(&task_id).await;
 
         // Run the turn (non-streaming path; v3d-2 does not need per-delta
@@ -347,6 +363,108 @@ mod tests {
         assert!(
             !ran.load(std::sync::atomic::Ordering::Relaxed),
             "the gated tool must not execute"
+        );
+    }
+
+    struct SlowOkTool;
+
+    #[async_trait::async_trait]
+    impl crate::tools::ToolExecutor for SlowOkTool {
+        fn name(&self) -> &str {
+            "bash"
+        }
+        fn def(&self) -> crate::llm::ToolDef {
+            crate::llm::ToolDef {
+                name: "bash".into(),
+                description: "slow test tool".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+        ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            Ok(crate::tools::ToolOutput {
+                text: "ran".into(),
+                status: crate::tools::ToolStatus::Ok,
+                images: Vec::new(),
+            })
+        }
+    }
+
+    /// The delegate beats on the connection that dialed it: a router waiting
+    /// on a slow specialist sees a `turn/heartbeat` frame carrying the task id
+    /// before the reply — the frame the 90 s idle timeout is counting on.
+    #[tokio::test]
+    async fn a_delegated_turn_beats_on_the_callers_connection() {
+        let tmp = TempDir::new().unwrap();
+        let tool_call = crate::llm::LlmResponse {
+            text: String::new(),
+            input_tokens: 1,
+            output_tokens: 1,
+            model: "test".into(),
+            tool_calls: vec![crate::llm::ToolCallResult {
+                call_id: "c-1".into(),
+                tool_name: "bash".into(),
+                input: serde_json::json!({"command": "sleep"}),
+            }],
+            stop_reason: crate::llm::StopReason::ToolUse,
+        };
+        let done = crate::llm::LlmResponse {
+            text: "DONE".into(),
+            input_tokens: 1,
+            output_tokens: 1,
+            model: "test".into(),
+            tool_calls: vec![],
+            stop_reason: crate::llm::StopReason::EndTurn,
+        };
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(crate::llm::stub::SequenceLlm::new(vec![
+                tool_call, done,
+            ])))
+            .with_tools(vec![Arc::new(SlowOkTool)])
+            .with_tools_policy(vec![mur_common::agent::ToolRule {
+                pattern: "bash".into(),
+                policy: mur_common::agent::ToolPolicy::Allow,
+                risk: None,
+            }])
+            .with_pending_approvals(Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )))
+            .with_hitl_timeout_secs(1),
+        );
+        let handler = ChannelDelegateHandler::new(
+            runner,
+            Arc::new(AgentIdentity::generate()),
+            "specialist".into(),
+            1,
+            tmp.path().to_path_buf(),
+        )
+        .with_heartbeat_interval(std::time::Duration::from_millis(50));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let params = serde_json::json!({
+            "channel_id": "fleet-nope",
+            "task_id": "t-beat",
+            "message": {"role": "user", "parts": [{"kind": "text", "text": "go"}]},
+        });
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            handler.handle(Some(params), &RequestContext::with_notifier(tx)),
+        )
+        .await
+        .expect("turn finishes");
+        assert!(out.is_ok(), "{out:?}");
+        let mut beats = 0;
+        while let Ok(f) = rx.try_recv() {
+            if f["method"] == crate::protocol::heartbeat::HEARTBEAT_METHOD {
+                assert_eq!(f["params"]["task_id"], "t-beat");
+                beats += 1;
+            }
+        }
+        assert!(
+            beats >= 1,
+            "a 400 ms tool at a 50 ms beat must produce at least one frame"
         );
     }
 

@@ -343,6 +343,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     deadline,
                     budget_usd,
                     worktree,
+                    run_id,
                 } => {
                     if loop_flag {
                         if worktree {
@@ -360,10 +361,12 @@ pub async fn run(cli: Cli) -> Result<()> {
                             max_iterations,
                             deadline,
                             budget_usd,
+                            run_id,
                         )
                         .await?
                     } else {
-                        cmd::fleet::run::cmd_fleet_run(&mur_home, &name, job, worktree).await?
+                        cmd::fleet::run::cmd_fleet_run(&mur_home, &name, job, worktree, run_id)
+                            .await?
                     }
                 }
                 FleetAction::Limits {
@@ -603,7 +606,11 @@ pub async fn run(cli: Cli) -> Result<()> {
             BrowserAction::Export { .. } => cmd::browser::not_yet("export")?,
             BrowserAction::Status => cmd::browser::status()?,
         },
-        Commands::DeepResearch { action, question } => {
+        Commands::DeepResearch {
+            action,
+            question,
+            run_id,
+        } => {
             let mur_home = crate::paths::mur_root(None);
             match (action, question) {
                 (
@@ -647,10 +654,11 @@ pub async fn run(cli: Cli) -> Result<()> {
                         max_iterations,
                         deadline,
                         budget_usd,
+                        None,
                     )
                     .await?
                 }
-                (None, Some(q)) => cmd::deep_research::ask::cmd_ask(&mur_home, &q).await?,
+                (None, Some(q)) => cmd::deep_research::ask::cmd_ask(&mur_home, &q, run_id).await?,
                 (None, None) => cmd::deep_research::panel::cmd_panel(&mur_home)?,
             }
         }

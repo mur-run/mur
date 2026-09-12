@@ -66,7 +66,7 @@ pub fn spawn(notifier: tokio::sync::mpsc::Sender<serde_json::Value>, task_id: St
 
 ### Steps
 
-- [ ] **1.1 Write the failing test** — new file `mur-agent-runtime/src/protocol/heartbeat.rs`, tests first:
+- [x] **1.1 Write the failing test** — new file `mur-agent-runtime/src/protocol/heartbeat.rs`, tests first:
 
 ```rust
 #[cfg(test)]
@@ -110,9 +110,9 @@ mod tests {
 }
 ```
 
-- [ ] **1.2 Watch it fail** — add `pub mod heartbeat;` to `mur-agent-runtime/src/protocol/mod.rs`; `cargo nextest run -p mur-agent-runtime --lib -E 'test(/heartbeat::/)'`. Expected: `cannot find function spawn`.
+- [x] **1.2 Watch it fail** — add `pub mod heartbeat;` to `mur-agent-runtime/src/protocol/mod.rs`; `cargo nextest run -p mur-agent-runtime --lib -E 'test(/heartbeat::/)'`. Expected: `cannot find function spawn`.
 
-- [ ] **1.3 Implement** — above the tests:
+- [x] **1.3 Implement** — above the tests:
 
 ```rust
 //! `turn/heartbeat` — proof of life while a turn runs (spec 2026-09-12
@@ -172,7 +172,7 @@ pub fn spawn(
 
   `mur-common/src/build.rs`: `pub const A2A_PROTO_VERSION: u32 = 2;` and add `pub const HEARTBEAT_MIN_PROTO: u32 = 2;` with the doc line above; the existing `const { assert!(A2A_PROTO_VERSION >= 1) }` stays true. Do **not** add `turn/heartbeat` to `method_min_proto` — it is never dialed.
 
-- [ ] **1.4 Hold the guard for the turn** —
+- [x] **1.4 Hold the guard for the turn** —
 
   `message_send.rs`, inside the `Some(notifier) =>` arm, before `let outcome = self.runner.run_sync_streaming(...)`:
 
@@ -227,9 +227,9 @@ pub fn spawn(
 
   Write that test out in full against the module's existing fixture (read the module's tests first — they already construct a `ChannelDelegateHandler` and a channel). If the override static is uglier than the fixture allows, an equivalent is to make the interval a field on both handlers with a `Default` of `HEARTBEAT_INTERVAL` and a `#[cfg(test)]` setter; choose one and use it in both handlers.
 
-- [ ] **1.5 Watch it pass** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(/heartbeat|a_delegated_turn_beats/)'`. Then the whole crate.
+- [x] **1.5 Watch it pass** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(/heartbeat|a_delegated_turn_beats/)'`. Then the whole crate.
 
-- [ ] **1.6 fmt + clippy on `mur-agent-runtime`, `mur-common`**, then **commit**:
+- [x] **1.6 fmt + clippy on `mur-agent-runtime`, `mur-common`**, then **commit**:
 
 ```
 feat(runtime): turn/heartbeat — proof of life every 30 s while a turn runs
@@ -260,7 +260,7 @@ fn dial_io_timeout_for(lock: &LockFile) -> Duration   // env override > proto �
 
 ### Steps
 
-- [ ] **2.1 Write the failing tests** — in the existing `timeout_tests` module of `a2a_dial.rs` (it owns `ENV_LOCK` and the fake-listener shape; copy the `stalled` fixture):
+- [x] **2.1 Write the failing tests** — in the existing `timeout_tests` module of `a2a_dial.rs` (it owns `ENV_LOCK` and the fake-listener shape; copy the `stalled` fixture):
 
 ```rust
     /// A proto-2 peer that beats every 300 ms while it "thinks" for 2 s is
@@ -339,9 +339,9 @@ fn dial_io_timeout_for(lock: &LockFile) -> Duration   // env override > proto �
 
   Add two helpers to the module: `fn write_lock(home: &Path, name: &str, sock: &Path, proto: u32)` (the JSON the `stalled` test writes, plus `"proto_version": proto`) and `fn lock_fixture() -> LockFile` (`serde_json::from_value` of the same JSON with a dummy socket). Rewrite the existing `stalled` test to use `write_lock(.., 1)` and keep its `did not respond` assertion — that is the legacy path.
 
-- [ ] **2.2 Watch them fail** — `cargo nextest run -p mur-core --lib -E 'test(/timeout_tests::/)'`. Expected: compile errors for the new names.
+- [x] **2.2 Watch them fail** — `cargo nextest run -p mur-core --lib -E 'test(/timeout_tests::/)'`. Expected: compile errors for the new names.
 
-- [ ] **2.3 Implement** — replace `DEFAULT_DIAL_IO_TIMEOUT` and `dial_io_timeout()`:
+- [x] **2.3 Implement** — replace `DEFAULT_DIAL_IO_TIMEOUT` and `dial_io_timeout()`:
 
 ```rust
 /// Idle read/write timeout for a peer that does NOT beat (proto < 2). Sits
@@ -394,9 +394,9 @@ fn dial_io_timeout_for(lock: &LockFile) -> Duration {
 
   (the streaming loop's wording is "went idle for Ns without a response" — keep that for legacy). Any other caller of `dial_io_timeout()` (grep) gets `dial_io_timeout_for(&lock)` if it has a lock, else `LEGACY_DIAL_IO_TIMEOUT` with a one-line comment.
 
-- [ ] **2.4 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/a2a_dial::/)'`; then `command grep -rn "dial_io_timeout\b\|DEFAULT_DIAL_IO_TIMEOUT" mur-core mur-daemon mur-gui-core mur-hub-gui/src-tauri` must show only the new names.
+- [x] **2.4 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/a2a_dial::/)'`; then `command grep -rn "dial_io_timeout\b\|DEFAULT_DIAL_IO_TIMEOUT" mur-core mur-daemon mur-gui-core mur-hub-gui/src-tauri` must show only the new names.
 
-- [ ] **2.5 fmt + clippy on `mur-core`**, then **commit**:
+- [x] **2.5 fmt + clippy on `mur-core`**, then **commit**:
 
 ```
 feat(dial): 90 s idle timeout for a peer that beats, 600 s for one that does not
@@ -419,7 +419,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **3.1 Write the failing tests** — `loop_run.rs` tests:
+- [x] **3.1 Write the failing tests** — `loop_run.rs` tests:
 
 ```rust
     /// The whole loop is one run: a record exists while it runs and ends in
@@ -459,9 +459,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
   and update `run_loop_for_test` to pass `None` as the new last argument.
 
-- [ ] **3.2 Watch them fail** — `cargo nextest run -p mur-core --lib -E 'test(/the_loop_records_itself|stops_map_to_run_states/)'`.
+- [x] **3.2 Watch them fail** — `cargo nextest run -p mur-core --lib -E 'test(/the_loop_records_itself|stops_map_to_run_states/)'`.
 
-- [ ] **3.3 Implement** — in `loop_run.rs`:
+- [x] **3.3 Implement** — in `loop_run.rs`:
 
 ```rust
 /// The run state a stop implies — the same map `terminal_state_for` gives
@@ -536,9 +536,9 @@ pub fn loop_terminal_state(stop: LoopStop) -> crate::run_status::State {
 
   and thread it in `dispatch.rs` to both calls. Every other caller (`fleet_tick.rs`, `deep_research/run.rs`, any test) passes `None` — let the compiler list them. Validate the id: same charset as a fleet name plus `-` and digits (`mur_common::fleet::valid_fleet_name` is too strict for a uuid; write `fn valid_run_id(s: &str) -> bool { !s.is_empty() && s.len() <= 96 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') }` in `run_status/mod.rs` with a two-line test, and `bail!` in `cmd_fleet_run*` on a bad one).
 
-- [ ] **3.4 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/loop_run::|run_status::/)'`, `cargo nextest run -p mur-daemon`.
+- [x] **3.4 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/loop_run::|run_status::/)'`, `cargo nextest run -p mur-daemon`.
 
-- [ ] **3.5 fmt + clippy on `mur-core`, `mur-daemon`**, then **commit**:
+- [x] **3.5 fmt + clippy on `mur-core`, `mur-daemon`**, then **commit**:
 
 ```
 feat(fleet): the loop is one run with a handle — --run-id, run.json, heartbeat, terminal state
@@ -561,7 +561,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **4.1 Write the failing test** — in `fleet_run.rs` tests. Read the module's existing tests first: they build a `FleetRunTool` and point `exec_dirs::mur_cli()` at a fake binary — reuse exactly that mechanism (grep `fn mur_cli` in `exec_dirs.rs` for the test override; if there is none, the existing tests do not exercise `execute`, and this test must set one up the same way `bash.rs` tests fake a binary: a shell script written to a temp dir, made executable, and the override env/var the module offers). The fake `mur` records its argv to a file and sleeps 5 s:
+- [x] **4.1 Write the failing test** — in `fleet_run.rs` tests. Read the module's existing tests first: they build a `FleetRunTool` and point `exec_dirs::mur_cli()` at a fake binary — reuse exactly that mechanism (grep `fn mur_cli` in `exec_dirs.rs` for the test override; if there is none, the existing tests do not exercise `execute`, and this test must set one up the same way `bash.rs` tests fake a binary: a shell script written to a temp dir, made executable, and the override env/var the module offers). The fake `mur` records its argv to a file and sleeps 5 s:
 
 ```rust
     /// §3.6: the tool returns a handle within a second while the fleet keeps
@@ -591,9 +591,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
     }
 ```
 
-- [ ] **4.2 Watch it fail** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(fleet_run_returns_a_handle)'`.
+- [x] **4.2 Watch it fail** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(fleet_run_returns_a_handle)'`.
 
-- [ ] **4.3 Implement** — in `execute`:
+- [x] **4.3 Implement** — in `execute`:
   - `let run_id = format!("fleet-{fleet}-{}", uuid::Uuid::now_v7());`
   - args: append `"--run-id".into(), run_id.clone()` to every arm (the `deep-research <q>` arm too — confirm `mur deep-research` accepts `--run-id` after Task 3's `cmd_fleet_run_loop` change; if `deep_research/run.rs` has its own clap surface, add the same flag there and forward it).
   - log: `let log_dir = self.mur_home.join("runs").join(&run_id); std::fs::create_dir_all(&log_dir)?; let log = std::fs::File::create(log_dir.join("fleet_run.log"))?;` — `runs/` is inside the fleet_run carve-in already (the child writes `run.json` there today); `.stdout(log.try_clone()?)`, `.stderr(log)`, `.kill_on_drop(false)`.
@@ -613,9 +613,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
   - `timeout_secs`: remove from `input_schema`; if a caller still sends it, add `"note": "timeout_secs is ignored since 2.80 — the run is bounded by the fleet's limits (mur limits <fleet>)"` to the output. Delete `DEFAULT_TIMEOUT_SECS`, `MAX_TIMEOUT_SECS`, `resolve_timeout_secs` and their test.
   - description: `"Dispatch a MUR fleet (agent squad) and return a handle at once: {run_id, status: dispatched}. Poll mur_job_status <run_id> (or mur fleet status <fleet>) for progress; the result lands in the fleet's channel. For the deep-research fleet pass the research question as goal. Only fleets allowlisted in the user's config can be run; the run is bounded by the fleet's limits (deadline / stuck / cost_usd) and mur fleet stop."`
 
-- [ ] **4.4 Watch it pass**, then the whole crate. Real-machine check (documented, not automated): from murmur ask the concierge to run deep-research; it must answer with the run id within seconds and `mur fleet status deep-research` must show the run.
+- [x] **4.4 Watch it pass**, then the whole crate. Real-machine check (documented, not automated): from murmur ask the concierge to run deep-research; it must answer with the run id within seconds and `mur fleet status deep-research` must show the run.
 
-- [ ] **4.5 fmt + clippy**, then **commit**:
+- [x] **4.5 fmt + clippy**, then **commit**:
 
 ```
 feat(tools): fleet_run returns a handle — {run_id, status: dispatched} within a second
@@ -645,7 +645,7 @@ pub fn dispatch_parallel_jobs(mur_home: &Path, jobs: &[Job], max_concurrency: Op
 
 ### Steps
 
-- [ ] **5.1 Write the failing tests** — `jobs.rs`:
+- [x] **5.1 Write the failing tests** — `jobs.rs`:
 
 ```rust
     /// §7: dispatch returns at once with an id; the run is recorded under it
@@ -683,9 +683,9 @@ pub fn dispatch_parallel_jobs(mur_home: &Path, jobs: &[Job], max_concurrency: Op
     }
 ```
 
-- [ ] **5.2 Watch them fail.**
+- [x] **5.2 Watch them fail.**
 
-- [ ] **5.3 Implement** — `jobs.rs`:
+- [x] **5.3 Implement** — `jobs.rs`:
 
 ```rust
 /// Start the fan-out and return its handle at once (spec §3.6): the caller
@@ -746,9 +746,9 @@ pub async fn run_parallel_jobs(mur_home: &Path, jobs: &[Job], max_concurrency: O
 
   Description: `"Fan out N distinct jobs to running MUR agents in parallel and return a handle at once: {run_id, channel_id, status: dispatched}. Poll mur_job_status <run_id> for progress; each job's reply lands in the channel. The run lives in this MCP server process — if the server exits, the run ends. Before coding fan-out, apply the parallel-code gate: disjoint files (no shared registry/lockfile), contracts frozen first, one writer per file. Targets the agents you name; runtimes must already be running."` Update the `mur_job_status` description's first sentence to drop "Use this after a tool call times out" in favour of "Use this after parallel_jobs / fleet_run hand you a run_id".
 
-- [ ] **5.4 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/executor::jobs::/)'`, `cargo nextest run -p mur-mcp-server`.
+- [x] **5.4 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/executor::jobs::/)'`, `cargo nextest run -p mur-mcp-server`.
 
-- [ ] **5.5 fmt + clippy on `mur-core`, `mur-mcp-server`**, then **commit**:
+- [x] **5.5 fmt + clippy on `mur-core`, `mur-mcp-server`**, then **commit**:
 
 ```
 feat(mcp): parallel_jobs returns a handle — the run is dispatched, not awaited
@@ -765,7 +765,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ## Task 6 — the 120 s rule, in words
 
-- [ ] **6.1** `mur-agent-runtime/src/tools/mcp.rs`, the doc on `DEFAULT_MCP_TOOL_TIMEOUT_SECS`:
+- [x] **6.1** `mur-agent-runtime/src/tools/mcp.rs`, the doc on `DEFAULT_MCP_TOOL_TIMEOUT_SECS`:
 
 ```rust
 /// Default per-tool-call timeout when an MCP server entry sets no
@@ -776,8 +776,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 /// `McpServerEntry.timeout_secs` when a server genuinely answers slowly.
 ```
 
-- [ ] **6.2** `CLAUDE.md`, the `mur fleet` bullet: after the `mur limits` line add `- Long work returns a handle: \`fleet_run\` / \`parallel_jobs\` answer \`{run_id, status: dispatched}\` within a second and the caller polls \`mur_job_status\`; the MCP per-call timeout stays 120 s on purpose. The runtime beats \`turn/heartbeat\` every 30 s during a turn and the dial gives a beating peer (proto ≥ 2) 90 s idle, a legacy one 600 s.`
-- [ ] **6.3** `mur verify --file CLAUDE.md` shows no new ❌ (the three pre-existing paths remain). Commit:
+- [x] **6.2** `CLAUDE.md`, the `mur fleet` bullet: after the `mur limits` line add `- Long work returns a handle: \`fleet_run\` / \`parallel_jobs\` answer \`{run_id, status: dispatched}\` within a second and the caller polls \`mur_job_status\`; the MCP per-call timeout stays 120 s on purpose. The runtime beats \`turn/heartbeat\` every 30 s during a turn and the dial gives a beating peer (proto ≥ 2) 90 s idle, a legacy one 600 s.`
+- [x] **6.3** `mur verify --file CLAUDE.md` shows no new ❌ (the three pre-existing paths remain). Commit:
 
 ```
 docs: the 120 s MCP rule and heartbeats, in words
