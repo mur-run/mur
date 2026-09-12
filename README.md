@@ -512,9 +512,22 @@ Agent** wizard offers the same catalog as a source.
   when its job queue drains, when a member emits an agreed marker on a line of
   its own, or when the router judges it done. `mur fleet set-loop` refuses a
   value that would be silently reinterpreted: a calendar date is not a deadline,
-  `--max-iterations 0` is not zero, and a cron expression that can never fire is
-  not a schedule. Unattended auto-run still needs an explicit budget, and
-  `mur fleet stop` still ends everything.
+  a cron expression that can never fire is not a schedule. `mur fleet stop`
+  still ends everything.
+- **Bounded, not budgeted** — three knobs, one schema at every scope:
+  `deadline`, `stuck`, `cost_usd` in `config.yaml` → `fleet.yaml` → `profile.yaml`,
+  inner scope replacing the outer. Nothing else stops a run: iteration caps and
+  token budgets are gone, and a stale `hitl.max_iterations` is loaded, ignored,
+  and named once at start. A turn you are watching in `murmur` has no hard stop
+  — the stuck clock warns, you press Esc. Unattended work (`mur agent send`,
+  schedules, fleet loops, daemon auto-run) stops on its deadline — built-in 30m
+  for a task, 1h for a fleet run — or after 10m with no real progress (a file
+  write, a channel event, a tool call that differs from the last one), and a
+  delegated member inherits the fleet's *remaining* clock, not a fresh one. A
+  cost cap applies only to a metered model; a local fleet is bounded by its
+  deadline. `mur limits <fleet|agent>` prints every bound in force and which
+  scope set it; every stop reaches the settlement card with its reason and the
+  one-line remedy.
 - **Runs that report their own failures** — an agent handing a job to a fleet
   used to hit a kernel refusal on a binary its profile plainly allowed: the
   sandbox resolved the name by scanning the exec directories when the agent
@@ -698,17 +711,18 @@ mur dashboard        # terminal TUI dashboard
 ```
 
 <details>
-<summary><b>Full command tree</b> (28 top-level commands)</summary>
+<summary><b>Full command tree</b> (29 top-level commands)</summary>
 
 ```
 mur
 ├── init / doctor / update / stats / verify
-├── agent        create · start · stop · restart · remove · cli · send · card · dial · who ·
+├── agent        create · start · stop · restart · remove · cli · send · card · dial · who · limits ·
 │                export · install · install-service · addon · companion · voice · pair ·
 │                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only) · secret ·
 │                fallback · smart · routing · effort · trash · rollback … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
-├── fleet        create · list · show · status · run · set-loop · send · jobs   (squads of agents over a shared channel)
+├── fleet        create · list · show · status · run · set-loop · limits · send · jobs   (squads of agents over a shared channel)
+├── limits       <fleet|agent> [--json] · --global · --deadline · --stuck · --cost-usd · --unset   (every execution bound in force, with its source)
 ├── official     list · install   (official agents/fleets from the app.mur.run catalog)
 ├── deep-research  setup · status · ask   (web research with wizard UX)
 ├── skill        install · search · show · doctor · generate · suggest · evolve · recombine ·
