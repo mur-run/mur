@@ -556,8 +556,12 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     let pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<crate::hitl::HitlDecision>>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let hitl_timeout_secs = profile.inner.hitl.timeout_secs;
-    let max_iterations = profile.inner.hitl.max_iterations;
-    let max_tokens = profile.inner.hitl.max_tokens;
+    // The two scopes this process can see (spec §3.4). The fleet's clock, when
+    // there is one, arrives per turn in the A2A `limits` parameter.
+    let limits = (
+        mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).limits,
+        profile.inner.limits.clone(),
+    );
     let (runner, llm_for_companion, mcp_pool, model_switch) =
         crate::supervisor_runner::build_provider_runner(
             force_echo,
@@ -573,8 +577,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             Some(pending_approvals.clone()),
             Some(sock_notif_tx.clone()),
             hitl_timeout_secs,
-            max_iterations,
-            max_tokens,
+            limits,
             Some(writer.sender()),
             identity.clone(),
             secrets.clone(),
