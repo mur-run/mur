@@ -67,7 +67,7 @@ pub fn plan_preflight(s: &DeepResearchStatus) -> Result<Vec<PreflightAction>> {
     Ok(plan)
 }
 
-pub async fn cmd_ask(mur_home: &Path, question: &str) -> Result<()> {
+pub async fn cmd_ask(mur_home: &Path, question: &str, run_id: Option<String>) -> Result<()> {
     // `cmd_start`/`cmd_mcp_pin` resolve their home via the `MUR_HOME` env
     // var (same caveat as `provision.rs`'s `grant_egress`). Process-lifetime
     // set_var is intentional here: `mur deep-research "<question>"` is a
@@ -139,7 +139,8 @@ pub async fn cmd_ask(mur_home: &Path, question: &str) -> Result<()> {
 
     // Budget comes from fleet.yaml loop.budget_usd (set by setup); pass None
     // overrides so the existing precedence applies unchanged.
-    super::run::cmd_deep_research_run(mur_home, DEFAULT_FLEET_NAME, None, None, None).await?;
+    super::run::cmd_deep_research_run(mur_home, DEFAULT_FLEET_NAME, None, None, None, run_id)
+        .await?;
 
     // Persist the synthesized report so the answer outlives the console
     // scrollback — and so a sandboxed caller (fleet_run tool) gets a file

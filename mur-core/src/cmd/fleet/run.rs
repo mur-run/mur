@@ -301,6 +301,7 @@ pub async fn cmd_fleet_run(
     name: &str,
     job_arg: Option<String>,
     force_worktree: bool,
+    run_id: Option<String>,
 ) -> Result<()> {
     let fleet = store::load_fleet(mur_home, name)?;
     if fleet.members.is_empty() {
@@ -399,7 +400,17 @@ pub async fn cmd_fleet_run(
             });
         (p, None)
     };
-    let run_id = format!("run-{}", uuid::Uuid::now_v7());
+    let run_id = match run_id {
+        Some(id) => {
+            if !crate::run_status::valid_run_id(&id) {
+                bail!(
+                    "invalid --run-id `{id}`: letters, digits, `-` and `_` only, at most 96 chars"
+                );
+            }
+            id
+        }
+        None => format!("run-{}", uuid::Uuid::now_v7()),
+    };
     // A one-shot run is unattended too: its members inherit the fleet's
     // resolved deadline (spec §3.4).
     let bounds = super::loop_run::fleet_bounds(mur_home, &fleet, None, None)?;

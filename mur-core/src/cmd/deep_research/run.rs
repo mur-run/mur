@@ -42,6 +42,7 @@ pub async fn cmd_deep_research_run(
     max_iterations: Option<u32>,
     deadline: Option<String>,
     budget_usd: Option<f64>,
+    run_id: Option<String>,
 ) -> Result<()> {
     crate::cmd::fleet::loop_run::cmd_fleet_run_loop(
         mur_home,
@@ -49,6 +50,7 @@ pub async fn cmd_deep_research_run(
         max_iterations,
         deadline,
         budget_usd,
+        run_id,
     )
     .await
 }
@@ -117,7 +119,7 @@ mod tests {
         // `mur deep-research run dr-test` must stop before any delegation —
         // if it reached execute_dag it would try to dial nonexistent live
         // agent sockets and this test would hang or error, not return Ok.
-        cmd_deep_research_run(home, "dr-test", Some(1), None, None)
+        cmd_deep_research_run(home, "dr-test", Some(1), None, None, None)
             .await
             .expect("guarded loop stop is a clean Ok(()), not an Err");
 
