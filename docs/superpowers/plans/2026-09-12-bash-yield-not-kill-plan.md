@@ -2116,7 +2116,7 @@ Add `bash_jobs: Option<Arc<crate::tools::bash_jobs::JobTable>>,` as the last par
 
 **Interfaces.** Consumes: the `running` key on `step/completed` (T5). Produces: `StepEvent::Completed { .., running: bool }`, `StreamMsg::StepCompleted { .., running: bool }`, `App::update_step_completed(.., denied: bool, running: bool)`, `CallOutcome::Running`, `StepState::Yielded`, glyph `⏳`.
 
-- [ ] `mur-core/src/a2a_dial.rs`: add to `StepEvent::Completed`
+- [x] `mur-core/src/a2a_dial.rs`: add to `StepEvent::Completed`
 
 ```rust
         /// The call yielded and the command is still running (a runtime ≥ the
@@ -2144,8 +2144,8 @@ and in `parse_step`: `running: p.get("running").and_then(Value::as_bool).unwrap_
     }
 ```
 
-- [ ] `mur-core/src/cmd/agent/cli/stream.rs`: add `running: bool,` to `StreamMsg::StepCompleted` (after `denied`) and thread it through the `StepEvent::Completed { .. } => StreamMsg::StepCompleted { .. }` conversion (both the destructuring and the constructor).
-- [ ] `mur-core/src/cmd/agent/cli/step.rs`:
+- [x] `mur-core/src/cmd/agent/cli/stream.rs`: add `running: bool,` to `StreamMsg::StepCompleted` (after `denied`) and thread it through the `StepEvent::Completed { .. } => StreamMsg::StepCompleted { .. }` conversion (both the destructuring and the constructor).
+- [x] `mur-core/src/cmd/agent/cli/step.rs`:
 
 ```rust
 pub enum StepState {
@@ -2184,7 +2184,7 @@ in `complete`: `CallOutcome::Running => StepState::Yielded,`; in `glyph`: `StepS
     }
 ```
 
-- [ ] `mur-core/src/cmd/agent/cli/app.rs`: add `running: bool` as the last parameter of `update_step_completed` and make the outcome
+- [x] `mur-core/src/cmd/agent/cli/app.rs`: add `running: bool` as the last parameter of `update_step_completed` and make the outcome
 
 ```rust
             let outcome = match (ok, denied, running) {
@@ -2236,29 +2236,29 @@ Append `, false` to the four existing test calls (lines ≈2324, 2344, 2529, 254
 
 (`app()` and `begin_user_turn` are the same helpers the neighbouring test `update_step_completed_marks_card_done` uses; `App` is the type in this file.)
 
-- [ ] `mur-core/src/cmd/agent/cli/mod.rs`: destructure `running` in the `StreamMsg::StepCompleted { .. }` arm and pass it as the last argument. `render_card.rs` needs no change (`_ => theme.accent` covers `Yielded`); confirm with `grep -n "StepState::" mur-core/src/cmd/agent/cli/render_card.rs` that no exhaustive match exists.
-- [ ] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core cli::step cli::app a2a_dial` → green.
-- [ ] `cargo clippy -p mur-core --all-targets -- -D warnings; echo exit=$?` → `exit=0`.
-- [ ] Commit: `feat(murmur): ⏳ yielded step state from the runtime's running flag (bash-yield T7)`.
+- [x] `mur-core/src/cmd/agent/cli/mod.rs`: destructure `running` in the `StreamMsg::StepCompleted { .. }` arm and pass it as the last argument. `render_card.rs` needs no change (`_ => theme.accent` covers `Yielded`); confirm with `grep -n "StepState::" mur-core/src/cmd/agent/cli/render_card.rs` that no exhaustive match exists.
+- [x] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core cli::step cli::app a2a_dial` → green.
+- [x] `cargo clippy -p mur-core --all-targets -- -D warnings; echo exit=$?` → `exit=0`.
+- [x] Commit: `feat(murmur): ⏳ yielded step state from the runtime's running flag (bash-yield T7)`.
 
 ---
 
 ## Task 8 — Docs
 
 - [ ] Spec `docs/superpowers/specs/2026-09-12-bash-yield-not-kill-design.md`: in §3.6 change the spool row's "Why" to "log lands on disk; past the cap the spool stops growing, the tail stays live, and the reply says so"; in §3.4 replace the Windows paragraph with "Windows: `taskkill /F /T /PID <pid>` — a tree kill, so grandchildren die there too (`ponytail:` note in code names Job Objects as the upgrade if an orphan is ever reported)"; in §3.7 note that the settlement line carries the job id (elapsed is in the tool text). Set **Status** to "Implemented in #<PR>".
-- [ ] `README.md`: in the agent tools list, the `bash` entry becomes "`bash` — runs a command; waits up to `timeout_secs` then yields a `job_id` and the command keeps running; `bash_wait` / `bash_kill` continue or stop it."
+- [x] `README.md`: in the agent tools list, the `bash` entry becomes "`bash` — runs a command; waits up to `timeout_secs` then yields a `job_id` and the command keeps running; `bash_wait` / `bash_kill` continue or stop it."
 - [ ] Invoke the **`update-docs`** skill for the docs site (`https://app.mur.run/docs/core`) and product page; the change is user-facing (three surfaces per CLAUDE.md).
 - [ ] Release-note line for the next bump PR (put it in this PR's description so the release author copies it): "`bash` no longer kills a command at `timeout_secs`; it returns a job handle and the command keeps running. New tools `bash_wait`, `bash_kill`. Agents pick this up on restart."
-- [ ] Commit: `docs: bash yield — spec status, README tool list (bash-yield T8)`.
+- [x] Commit: `docs: bash yield — spec status, README tool list (bash-yield T8)`.
 
 ---
 
 ## Task 9 — Whole-workspace verification and live check
 
-- [ ] `cargo fmt --all -- --check; echo exit=$?` → `exit=0`.
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings; echo exit=$?` → `exit=0`.
-- [ ] `cargo nextest run -p mur-agent-runtime; echo exit=$?` → `exit=0`.
-- [ ] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core; echo exit=$?` → `exit=0`.
+- [x] `cargo fmt --all -- --check; echo exit=$?` → `exit=0`.
+- [x] `cargo clippy --workspace --all-targets -- -D warnings; echo exit=$?` → `exit=0`.
+- [x] `cargo nextest run -p mur-agent-runtime; echo exit=$?` → `exit=0`.
+- [x] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core; echo exit=$?` → `exit=0`.
 - [ ] Hub, **last**: `cd mur-hub-gui/src-tauri && cargo check; echo exit=$?` → `exit=0` (symlink `mur-hub-gui/ui/dist` from the main checkout if the worktree lacks it; remove the symlink before committing).
 - [ ] Live (spec §5): `./build.sh --install`, `mur agent restart <agent> --stale`, then from murmur ask the agent to run `cargo build --release` in a repo it can reach. Expect the step card `⏳ bash` and the settlement line `⏳ bash · still running (j-…)`; a `bash_wait` lands the exit code; a `bash_kill` of a second `cargo build` followed by `pgrep -f rustc` on the host shows nothing from that build. Record the three observations (card, settlement, pgrep) in the PR description — these are the D9 and seatbelt checks that no unit test can stand in for.
 - [ ] Open the PR: title `feat: bash timeout is a yield, not a kill — job handles, bash_wait/bash_kill (#1285 spec)`, body = the spec's D1–D12 in one line each, the release-note line from T8, the live observations.
