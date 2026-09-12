@@ -2245,10 +2245,10 @@ Append `, false` to the four existing test calls (lines ≈2324, 2344, 2529, 254
 
 ## Task 8 — Docs
 
-- [ ] Spec `docs/superpowers/specs/2026-09-12-bash-yield-not-kill-design.md`: in §3.6 change the spool row's "Why" to "log lands on disk; past the cap the spool stops growing, the tail stays live, and the reply says so"; in §3.4 replace the Windows paragraph with "Windows: `taskkill /F /T /PID <pid>` — a tree kill, so grandchildren die there too (`ponytail:` note in code names Job Objects as the upgrade if an orphan is ever reported)"; in §3.7 note that the settlement line carries the job id (elapsed is in the tool text). Set **Status** to "Implemented in #<PR>".
+- [x] Spec `docs/superpowers/specs/2026-09-12-bash-yield-not-kill-design.md`: in §3.6 change the spool row's "Why" to "log lands on disk; past the cap the spool stops growing, the tail stays live, and the reply says so"; in §3.4 replace the Windows paragraph with "Windows: `taskkill /F /T /PID <pid>` — a tree kill, so grandchildren die there too (`ponytail:` note in code names Job Objects as the upgrade if an orphan is ever reported)"; in §3.7 note that the settlement line carries the job id (elapsed is in the tool text). Set **Status** to "Implemented in #<PR>".
 - [x] `README.md`: in the agent tools list, the `bash` entry becomes "`bash` — runs a command; waits up to `timeout_secs` then yields a `job_id` and the command keeps running; `bash_wait` / `bash_kill` continue or stop it."
 - [ ] Invoke the **`update-docs`** skill for the docs site (`https://app.mur.run/docs/core`) and product page; the change is user-facing (three surfaces per CLAUDE.md).
-- [ ] Release-note line for the next bump PR (put it in this PR's description so the release author copies it): "`bash` no longer kills a command at `timeout_secs`; it returns a job handle and the command keeps running. New tools `bash_wait`, `bash_kill`. Agents pick this up on restart."
+- [x] Release-note line for the next bump PR (put it in this PR's description so the release author copies it): "`bash` no longer kills a command at `timeout_secs`; it returns a job handle and the command keeps running. New tools `bash_wait`, `bash_kill`. Agents pick this up on restart."
 - [x] Commit: `docs: bash yield — spec status, README tool list (bash-yield T8)`.
 
 ---
@@ -2259,9 +2259,9 @@ Append `, false` to the four existing test calls (lines ≈2324, 2344, 2529, 254
 - [x] `cargo clippy --workspace --all-targets -- -D warnings; echo exit=$?` → `exit=0`.
 - [x] `cargo nextest run -p mur-agent-runtime; echo exit=$?` → `exit=0`.
 - [x] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core; echo exit=$?` → `exit=0`.
-- [ ] Hub, **last**: `cd mur-hub-gui/src-tauri && cargo check; echo exit=$?` → `exit=0` (symlink `mur-hub-gui/ui/dist` from the main checkout if the worktree lacks it; remove the symlink before committing).
+- [x] Hub, **last**: `cd mur-hub-gui/src-tauri && cargo check; echo exit=$?` → `exit=0` (symlink `mur-hub-gui/ui/dist` from the main checkout if the worktree lacks it; remove the symlink before committing).
 - [ ] Live (spec §5): `./build.sh --install`, `mur agent restart <agent> --stale`, then from murmur ask the agent to run `cargo build --release` in a repo it can reach. Expect the step card `⏳ bash` and the settlement line `⏳ bash · still running (j-…)`; a `bash_wait` lands the exit code; a `bash_kill` of a second `cargo build` followed by `pgrep -f rustc` on the host shows nothing from that build. Record the three observations (card, settlement, pgrep) in the PR description — these are the D9 and seatbelt checks that no unit test can stand in for.
-- [ ] Open the PR: title `feat: bash timeout is a yield, not a kill — job handles, bash_wait/bash_kill (#1285 spec)`, body = the spec's D1–D12 in one line each, the release-note line from T8, the live observations.
+- [x] Open the PR: title `feat: bash timeout is a yield, not a kill — job handles, bash_wait/bash_kill (#1285 spec)`, body = the spec's D1–D12 in one line each, the release-note line from T8, the live observations.
 
 ## Self-review
 

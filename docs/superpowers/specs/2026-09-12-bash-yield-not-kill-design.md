@@ -1,6 +1,6 @@
 # bash: a timeout is a yield, not a kill
 
-**Status:** Approved in conversation 2026-09-12; revised the same day after review (six findings, all verified against main — see §8). Awaiting plan.
+**Status:** Implemented in #1288. Live verification (spec §5) still pending — see that PR's description.
 **Scope:** `mur-agent-runtime` (`tools/bash.rs`, new `tools/bash_jobs.rs`, `tools/registry.rs`, `secrets.rs` streaming masker, `task_runner.rs` policy alias + task-local owner + deadline/cancel cleanup + fingerprint, `turn_ledger.rs` running outcome) and `mur-core` (murmur `CallOutcome::Running` rendering only). No protocol change on the wire beyond one additive boolean on the existing `ToolResult` event. No new config keys.
 **Parent:** `docs/superpowers/specs/2026-09-12-execution-limits-design.md` — this applies its D6 ("long-running tools return a handle, never block") to the last built-in tool that still blocks and kills.
 
