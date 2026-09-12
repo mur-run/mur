@@ -88,11 +88,14 @@ fn check_authorization(allow: &HashSet<String>, jobs: &[Job], config_path: &Path
     for j in jobs {
         if !allow.contains(&j.assignee) {
             bail!(
-                "target '{}' not authorized for parallel_jobs (deny-by-default) — add it under \
-                 `parallel_jobs.targets` in {}, e.g.\n\nparallel_jobs:\n  targets:\n    - {}",
-                j.assignee,
-                config_path.display(),
-                j.assignee
+                "{}",
+                mur_common::authz::not_authorized(&format!(
+                    "target '{}' for parallel_jobs (deny-by-default) — add it under \
+                     `parallel_jobs.targets` in {}, e.g.\n\nparallel_jobs:\n  targets:\n    - {}",
+                    j.assignee,
+                    config_path.display(),
+                    j.assignee
+                ))
             );
         }
     }

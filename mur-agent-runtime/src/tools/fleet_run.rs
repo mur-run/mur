@@ -117,11 +117,13 @@ cost_usd) and by `mur fleet stop`."
         let cfg = mur_common::config::Config::load_or_default(&self.mur_home.join("config.yaml"))
             .fleet_run;
         if !allowed(&cfg, &self.agent_name, &fleet) {
-            return Err(ToolError::Execution(format!(
-                "fleet_run denied: agent '{}' / fleet '{fleet}' not authorized — the user must \
-                 add them to `fleet_run.agents` / `fleet_run.fleets` in ~/.mur/config.yaml \
-                 (deny-by-default)",
-                self.agent_name
+            return Err(ToolError::NotAuthorized(mur_common::authz::not_authorized(
+                &format!(
+                    "fleet_run: agent '{}' / fleet '{fleet}' — the user must add them to \
+                     `fleet_run.agents` / `fleet_run.fleets` in ~/.mur/config.yaml \
+                     (deny-by-default)",
+                    self.agent_name
+                ),
             )));
         }
 
@@ -302,6 +304,10 @@ mod tests {
             .execute(serde_json::json!({"fleet": "deep-research"}))
             .await
             .unwrap_err();
+        assert!(
+            matches!(err, ToolError::NotAuthorized(_)),
+            "a refusal is NotAuthorized, not Execution: {err}"
+        );
         assert!(err.to_string().contains("not authorized"), "{err}");
     }
 

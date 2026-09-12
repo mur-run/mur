@@ -22,6 +22,9 @@ pub fn cmd_fleet_show(mur_home: &Path, name: &str) -> Result<()> {
     if !f.skills.is_empty() {
         println!("Skills: {}", f.skills.join(", "));
     }
+    if !f.needs.is_empty() {
+        println!("Needs: {}", f.needs.join(", "));
+    }
 
     // Surface the job queue (parity with `mur fleet list`'s JOBS column). Active =
     // not yet terminal (queued/running); terminal jobs stay in `mur fleet jobs --all`.

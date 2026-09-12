@@ -829,6 +829,7 @@ pub async fn run_guarded(
             run_label: format!("fleet {name} iter {iteration}"),
             on_step: Some(on_step),
             deadline_at: Some(start + bounds.deadline),
+            needs: fleet.needs.clone(),
             ..Default::default()
         };
         let out =
@@ -1344,6 +1345,7 @@ mod tests {
             hitl: None,
             requires_programs: vec![],
             limits: None,
+            needs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
@@ -1456,6 +1458,7 @@ mod tests {
             hitl: None,
             requires_programs: vec![],
             limits: None,
+            needs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         let svc = mur_channel::ChannelService::open(home).unwrap();
@@ -1563,6 +1566,7 @@ mod tests {
             hitl: None,
             requires_programs: vec![],
             limits: None,
+            needs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
@@ -1613,6 +1617,7 @@ mod tests {
             hitl: None,
             requires_programs: vec![],
             limits: None,
+            needs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
@@ -1696,6 +1701,7 @@ mod tests {
             hitl: None,
             requires_programs: vec![],
             limits: None,
+            needs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
@@ -1741,6 +1747,7 @@ mod tests {
                 stuck: Some("0s".into()),
                 cost_usd: None,
             }),
+            needs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
@@ -1781,6 +1788,7 @@ mod tests {
             hitl: None,
             requires_programs: vec![],
             limits: None,
+            needs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
@@ -1814,6 +1822,7 @@ mod tests {
             hitl: None,
             requires_programs: vec![],
             limits: None,
+            needs: vec![],
         }
     }
 

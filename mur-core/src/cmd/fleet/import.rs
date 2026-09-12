@@ -543,6 +543,7 @@ mod tests {
             hitl: None,
             requires_programs: vec![],
             limits: None,
+            needs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         let out = home.join("dev.fleet");
@@ -780,6 +781,7 @@ mod tests {
             hitl: None,
             requires_programs: vec![],
             limits: None,
+            needs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(s, &fleet).unwrap();
         let bundle = s.join("dev.fleet");
@@ -854,6 +856,7 @@ mod tests {
             hitl: None,
             requires_programs: vec![],
             limits: None,
+            needs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(s, &fleet).unwrap();
         let bundle = s.join("dev.fleet");
@@ -1483,6 +1486,7 @@ mod tests {
             hitl: None,
             requires_programs: vec![],
             limits: None,
+            needs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(s, &fleet).unwrap();
         let bundle = s.join("dev.fleet");
@@ -1572,6 +1576,7 @@ mod tests {
             hitl: None,
             requires_programs: vec![],
             limits: None,
+            needs: vec![],
         };
         crate::cmd::fleet::store::save_fleet(s, &fleet).unwrap();
         let bundle = s.join("dev.fleet");
