@@ -142,6 +142,47 @@ pub fn upsert_global_limits(config_path: &Path, patch: &Patch) -> Result<()> {
     Ok(())
 }
 
+/// Delete one legacy key through the same store the edits use (spec §10.4):
+/// the fleet's loop.* through save_fleet, the agent's hitl.* through
+/// save_profile. Anything else is refused by name so a typo cannot clear a
+/// live setting.
+pub fn remove_stale_key(
+    mur_home: &Path,
+    target: &crate::cmd::limits::Target,
+    key: &str,
+) -> Result<()> {
+    use crate::cmd::limits::Target;
+    match (target, key) {
+        (Target::Fleet(name), "loop.max_iterations" | "loop.budget_usd" | "loop.deadline") => {
+            let mut fleet = crate::cmd::fleet::store::load_fleet(mur_home, name)?;
+            if let Some(lc) = fleet.loop_cfg.as_mut() {
+                match key {
+                    "loop.max_iterations" => lc.max_iterations = 0,
+                    "loop.budget_usd" => lc.budget_usd = 0.0,
+                    _ => lc.deadline.clear(),
+                }
+            }
+            crate::cmd::fleet::store::save_fleet(mur_home, &fleet)
+        }
+        (Target::Agent(name), "hitl.max_iterations" | "hitl.max_tokens") => {
+            let (path, mut profile) = crate::cmd::agent::load_profile_for_edit(name)?;
+            if key == "hitl.max_iterations" {
+                profile.hitl.max_iterations = None;
+            } else {
+                profile.hitl.max_tokens = None;
+            }
+            crate::cmd::agent::save_profile(&path, &mut profile)
+        }
+        (Target::Global, _) => anyhow::bail!("config.yaml has no stale limits keys"),
+        (Target::Fleet(_), other) => anyhow::bail!(
+            "`{other}` is not a stale fleet key (loop.max_iterations, loop.budget_usd, loop.deadline)"
+        ),
+        (Target::Agent(_), other) => anyhow::bail!(
+            "`{other}` is not a stale agent key (hitl.max_iterations, hitl.max_tokens)"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,6 +302,109 @@ mod tests {
         let text = std::fs::read_to_string(&p).unwrap();
         assert!(!text.contains("limits:"), "{text}");
         assert!(text.contains("research_gateway:"), "{text}");
+    }
+
+    fn fleet_for_test(
+        name: &str,
+        loop_cfg: Option<mur_common::fleet::FleetLoop>,
+    ) -> mur_common::fleet::Fleet {
+        mur_common::fleet::Fleet {
+            name: name.into(),
+            display_name: String::new(),
+            goal: "g".into(),
+            router: None,
+            team_id: None,
+            members: vec!["pm".into()],
+            channel_id: format!("fleet-{name}"),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg,
+            parallel: None,
+            hitl: None,
+            requires_programs: vec![],
+            limits: None,
+            needs: vec![],
+        }
+    }
+
+    #[test]
+    fn remove_stale_key_clears_exactly_that_key() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path();
+        let f = fleet_for_test(
+            "dev",
+            Some(mur_common::fleet::FleetLoop {
+                trigger: "manual".into(),
+                max_iterations: 8,
+                budget_usd: 5.0,
+                deadline: "2h".into(),
+                done_when: String::new(),
+            }),
+        );
+        crate::cmd::fleet::store::save_fleet(home, &f).unwrap();
+        remove_stale_key(
+            home,
+            &crate::cmd::limits::Target::Fleet("dev".into()),
+            "loop.max_iterations",
+        )
+        .unwrap();
+        let back = crate::cmd::fleet::store::load_fleet(home, "dev").unwrap();
+        assert_eq!(back.loop_cfg.as_ref().unwrap().max_iterations, 0);
+        assert_eq!(
+            back.loop_cfg.as_ref().unwrap().budget_usd,
+            5.0,
+            "the other keys survive"
+        );
+
+        let mut yaml = std::fs::read_to_string(
+            env!("CARGO_MANIFEST_DIR").to_string()
+                + "/../mur-hub-gui/src-tauri/resources/mur-agent-template/profile.yaml",
+        )
+        .unwrap()
+        .replacen(
+            "name: mur
+",
+            "name: pm
+model_ref: local
+",
+            1,
+        );
+        yaml.push_str(
+            "hitl:
+  max_iterations: 800
+  max_tokens: 9
+",
+        );
+        std::fs::create_dir_all(home.join("agents/pm")).unwrap();
+        std::fs::write(home.join("agents/pm/profile.yaml"), yaml).unwrap();
+        unsafe { std::env::set_var("MUR_HOME", home) };
+        remove_stale_key(
+            home,
+            &crate::cmd::limits::Target::Agent("pm".into()),
+            "hitl.max_tokens",
+        )
+        .unwrap();
+        unsafe { std::env::remove_var("MUR_HOME") };
+        let p = mur_common::agent::AgentProfile::load(home, "pm").unwrap();
+        assert_eq!(p.hitl.max_tokens, None);
+        assert_eq!(p.hitl.max_iterations, Some(800));
+
+        let e = remove_stale_key(
+            home,
+            &crate::cmd::limits::Target::Fleet("dev".into()),
+            "loop.trigger",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            e.contains("loop.max_iterations"),
+            "names the allowed keys: {e}"
+        );
+
+        let e = remove_stale_key(home, &crate::cmd::limits::Target::Global, "anything")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("no stale"), "{e}");
     }
 
     #[test]
