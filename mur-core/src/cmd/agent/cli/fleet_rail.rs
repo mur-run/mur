@@ -196,6 +196,31 @@ pub fn fold_members(events: &[ChannelEvent]) -> Vec<MemberRow> {
     rows
 }
 
+/// Why the last run stopped and the way out, from the System `state-change`
+/// the fleet loop writes at its end (`loop_run::emit_stop_event`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StopNotice {
+    /// The `outcome_label` word: `max-iterations`, `deadline`, `stuck`, …
+    pub reason: String,
+    pub remedy: Option<String>,
+}
+
+/// The most recent stop event, if any. Only System-authored state-changes
+/// that carry `stop_reason` count: a member's own state-change is progress,
+/// and the DAG's plain `completed` transition is a step ending, not the run.
+pub fn fold_stop(events: &[ChannelEvent]) -> Option<StopNotice> {
+    events.iter().rev().find_map(|ev| {
+        if ev.kind != EventKind::StateChange || ev.actor != ChannelActor::System {
+            return None;
+        }
+        let reason = field(ev, &["stop_reason"])?.to_string();
+        Some(StopNotice {
+            reason,
+            remedy: field(ev, &["remedy"]).map(str::to_string),
+        })
+    })
+}
+
 /// The always-present collapsed line: how far the fleet's work has got.
 ///
 /// `2/5` is jobs in a terminal state over the total — the question a user asks
@@ -243,6 +268,9 @@ pub struct RailView {
     /// Degraded-state text (unreadable channel, unreadable jobs). Rendered in
     /// place of detail; never an error the caller has to handle.
     pub notice: Option<String>,
+    /// The last run's stop, rendered under the headline. `None` while a run is
+    /// in flight or before the first run.
+    pub stop: Option<StopNotice>,
 }
 
 impl RailView {
@@ -259,6 +287,17 @@ impl RailView {
             None => self.jobs_line.clone(),
         };
         let mut out = vec![head];
+        // "finished" is reserved for a converged run; every other stop is
+        // announced with its reason and remedy, because the headline alone
+        // reads as "done" for a run that hit a cap.
+        if let Some(s) = &self.stop
+            && s.reason != "converged"
+        {
+            out.push(match &s.remedy {
+                Some(r) => format!("  ■ stopped: {} — {r}", s.reason),
+                None => format!("  ■ stopped: {}", s.reason),
+            });
+        }
         out.extend(self.members.iter().map(|m| {
             let state = match &m.state {
                 MemberState::Blocked { summary, .. } => format!("blocked: {summary}"),
@@ -420,6 +459,7 @@ impl FleetRail {
         let view = RailView {
             jobs_line: jobs_line_text,
             members,
+            stop: fold_stop(&events),
             notice: if notices.is_empty() {
                 None
             } else {

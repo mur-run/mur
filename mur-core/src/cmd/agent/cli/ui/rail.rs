@@ -110,6 +110,7 @@ mod fleet_rail_layout_tests {
     fn view(blocked: usize) -> RailView {
         RailView {
             jobs_line: "fleet · dev   job 0/1".into(),
+            stop: None,
             members: (0..blocked)
                 .map(|i| MemberRow {
                     agent: format!("m{i}"),
