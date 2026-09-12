@@ -187,7 +187,7 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
                         "type": "integer",
                         "description": format!(
                             "Seconds to wait for the command before yielding a job handle (default {DEFAULT_TIMEOUT_SECS}, clamped to 0-{MAX_TIMEOUT_SECS}). \
-The command is NOT killed when this elapses. 0 = return immediately with the handle. `wait_secs` is accepted as an alias."
+            The command is NOT killed when this elapses. 0 = return immediately with the handle. `wait_secs` is accepted as an alias."
                         )
                     }
                 },
@@ -352,7 +352,9 @@ impl BashTool {
             if let Some(bin) = spawn_denied_path(exit.code, &poll.new_stderr)
                 && let Some((mur_home, agent)) = &self.agent
             {
-                let cwd = working_dir.canonicalize().unwrap_or(working_dir.to_path_buf());
+                let cwd = working_dir
+                    .canonicalize()
+                    .unwrap_or(working_dir.to_path_buf());
                 let routes = who_can_exec(mur_home, agent, &bin, Some(&cwd));
                 let hint = spawn_denied_hint(&bin, agent, &routes);
                 combined.push_str(&hint);
@@ -648,8 +650,7 @@ mod tests {
             .unwrap();
         assert_eq!(out.status, ToolStatus::Failed { exit_code: 3 });
         assert_eq!(
-            out.text,
-            "out\n\n[stderr]\nerr\n\n[exit code: 3]",
+            out.text, "out\n\n[stderr]\nerr\n\n[exit code: 3]",
             "{}",
             out.text
         );

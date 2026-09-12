@@ -219,7 +219,6 @@ fn mask_bytes(vault: &SecretVault, bytes: &[u8]) -> Vec<u8> {
     vault.mask(&text).into_owned().into_bytes()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

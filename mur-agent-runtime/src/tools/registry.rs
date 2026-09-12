@@ -402,8 +402,16 @@ mod tests {
             let bash = mk();
             let exec: Arc<dyn ToolExecutor> = bash.clone();
             let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
-            let (_defs, mut map) =
-                build_tools(Some((bash.def(), exec)), None, None, None, &[], &rules, pool).await;
+            let (_defs, mut map) = build_tools(
+                Some((bash.def(), exec)),
+                None,
+                None,
+                None,
+                &[],
+                &rules,
+                pool,
+            )
+            .await;
             attach_bash_control(&mut map, bash.control_tools());
             assert_eq!(map.contains_key("bash"), expect);
             assert_eq!(map.contains_key("bash_wait"), expect);

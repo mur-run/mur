@@ -1986,8 +1986,13 @@ impl TaskRunner {
                 .await;
         }
         let t0_ask = std::time::Instant::now();
-        let (output, status, is_error, images) =
-            match Self::execute_scoped(tool.as_ref(), task_id, call.input.clone()).await {
+        let (output, status, is_error, images) = match Self::execute_scoped(
+            tool.as_ref(),
+            task_id,
+            call.input.clone(),
+        )
+        .await
+        {
             Ok(out) => (self.masked(out.text), out.status, false, out.images),
             // A refusal is terminal for the tool this turn (spec §3.8): say
             // so once; the loop withdraws it from the next request.
@@ -4930,14 +4935,29 @@ mod tests {
             risk: None,
         };
         let allow = vec![rule("bash", ToolPolicy::Allow)];
-        assert_eq!(effective_tool_policy(&allow, "bash_wait"), ToolPolicy::Allow);
-        assert_eq!(effective_tool_policy(&allow, "bash_kill"), ToolPolicy::Allow);
+        assert_eq!(
+            effective_tool_policy(&allow, "bash_wait"),
+            ToolPolicy::Allow
+        );
+        assert_eq!(
+            effective_tool_policy(&allow, "bash_kill"),
+            ToolPolicy::Allow
+        );
         let ask = vec![rule("bash", ToolPolicy::Ask)];
         assert_eq!(effective_tool_policy(&ask, "bash_wait"), ToolPolicy::Ask);
-        let mixed = vec![rule("bash", ToolPolicy::Allow), rule("bash_kill", ToolPolicy::Deny)];
-        assert_eq!(effective_tool_policy(&mixed, "bash_wait"), ToolPolicy::Allow);
+        let mixed = vec![
+            rule("bash", ToolPolicy::Allow),
+            rule("bash_kill", ToolPolicy::Deny),
+        ];
+        assert_eq!(
+            effective_tool_policy(&mixed, "bash_wait"),
+            ToolPolicy::Allow
+        );
         assert_eq!(effective_tool_policy(&mixed, "bash_kill"), ToolPolicy::Deny);
-        assert_eq!(effective_tool_policy(&[], "bash_wait"), ToolPolicy::default());
+        assert_eq!(
+            effective_tool_policy(&[], "bash_wait"),
+            ToolPolicy::default()
+        );
     }
 
     fn bash_call(id: &str, command: &str, timeout_secs: u64) -> crate::llm::LlmResponse {
@@ -5069,7 +5089,11 @@ mod tests {
         };
         assert_ne!(fp(10), fp(20));
         assert_eq!(fp(20), fp(20));
-        assert_ne!(fp(10), fingerprint_args(&input), "a yield is not the bare call");
+        assert_ne!(
+            fp(10),
+            fingerprint_args(&input),
+            "a yield is not the bare call"
+        );
     }
 
     /// §6: the ceiling is a diagnostic, not a setting — absurd on purpose.

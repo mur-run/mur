@@ -194,7 +194,9 @@ mod tests {
             .execute(serde_json::json!({"job_id": "j-nope"}))
             .await;
         assert!(matches!(r, Err(ToolError::InvalidInput(_))), "{r:?}");
-        let r = BashKillTool { bash: b }.execute(serde_json::json!({})).await;
+        let r = BashKillTool { bash: b }
+            .execute(serde_json::json!({}))
+            .await;
         assert!(matches!(r, Err(ToolError::InvalidInput(_))), "{r:?}");
     }
 }

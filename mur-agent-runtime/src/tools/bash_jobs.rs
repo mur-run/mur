@@ -605,10 +605,7 @@ mod tests {
             t0.elapsed() < Duration::from_millis(2500),
             "waited the whole sleep"
         );
-        assert!(
-            pid_alive(t.pid(&id).unwrap()),
-            "the clock killed the child"
-        );
+        assert!(pid_alive(t.pid(&id).unwrap()), "the clock killed the child");
         assert_eq!(t.running_ids(), vec![id.clone()]);
         // Test 2 — a later wait collects the exit and the job is gone.
         let p = t.poll(&id, Duration::from_secs(5)).await.unwrap();
