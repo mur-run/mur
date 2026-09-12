@@ -117,6 +117,24 @@ fn vendor_label_of_url(base_url: Option<&str>) -> Option<String> {
 }
 
 impl ModelEntry {
+    /// How this model is paid for, for the cost gates. An explicit `billing:`
+    /// is the answer; without one the provider decides what it can:
+    /// `ollama` runs on this machine, `codex` and `claude` ride a flat
+    /// subscription. Everything else — including a loopback `base_url`, which
+    /// is just as often the model gateway fronting a metered API — is treated
+    /// as metered. Guessing "free" is the one mistake a cost gate must not
+    /// make; a wrong "metered" costs the user one line in `models.yaml`
+    /// (`billing: local`), and the gate says so when it applies.
+    pub fn billing_or_inferred(&self) -> BillingMode {
+        if let Some(b) = self.billing {
+            return b;
+        }
+        match self.provider.as_str() {
+            "ollama" => BillingMode::Local,
+            "codex" | "claude" => BillingMode::Subscription,
+            _ => BillingMode::UsageBilled,
+        }
+    }
     /// Resolve effective per-1k rates as `(input, output)`.
     ///
     /// The deprecated `cost_per_1k_tokens` is treated as the output rate and
@@ -1141,6 +1159,36 @@ models:
 
     /// Entries written before billing metadata existed keep loading and
     /// stay unknown — never inheriting a billing mode on reserialize.
+    /// Explicit `billing:` wins. Without it, the provider decides what can be
+    /// decided — ollama runs here, codex/claude ride a subscription — and
+    /// everything else is treated as metered, because guessing "free" is the
+    /// one mistake a cost gate must not make.
+    #[test]
+    fn billing_is_inferred_from_the_provider_when_not_declared() {
+        let mut e = ModelEntry {
+            provider: "ollama".into(),
+            model: "llama3.2:3b".into(),
+            ..Default::default()
+        };
+        assert_eq!(e.billing_or_inferred(), BillingMode::Local);
+        e.provider = "codex".into();
+        assert_eq!(e.billing_or_inferred(), BillingMode::Subscription);
+        e.provider = "claude".into();
+        assert_eq!(e.billing_or_inferred(), BillingMode::Subscription);
+        e.provider = "openai".into();
+        assert_eq!(
+            e.billing_or_inferred(),
+            BillingMode::UsageBilled,
+            "unknown is metered"
+        );
+        e.provider = "anthropic".into();
+        assert_eq!(e.billing_or_inferred(), BillingMode::UsageBilled);
+        // A declaration overrides every inference — an LM Studio entry is
+        // `provider: openai` and the user marks it local.
+        e.billing = Some(BillingMode::Local);
+        assert_eq!(e.billing_or_inferred(), BillingMode::Local);
+    }
+
     #[test]
     fn entry_without_billing_metadata_stays_unknown() {
         let yaml = r#"schema_version: 1
