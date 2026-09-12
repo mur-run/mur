@@ -37,6 +37,8 @@ async fn runner_with_llm_generates_and_emits_telemetry() {
         active_team: None,
         intent: RequestIntent::Interactive,
         output_artifact_path: None,
+        attended: true,
+        deadline_secs: None,
     };
     let outcome = runner.run_sync(spec).await;
     let task = match outcome {

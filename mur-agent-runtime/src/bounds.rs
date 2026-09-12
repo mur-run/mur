@@ -106,6 +106,9 @@ impl Progress {
 /// `10m`, `2h`, `45s` — the same spelling `mur limits` prints.
 pub fn fmt_dur(d: Duration) -> String {
     let s = d.as_secs();
+    if s == 0 {
+        return "0s".to_string();
+    }
     if s.is_multiple_of(3600) {
         format!("{}h", s / 3600)
     } else if s.is_multiple_of(60) {
