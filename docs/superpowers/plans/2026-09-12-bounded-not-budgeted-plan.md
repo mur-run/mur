@@ -442,7 +442,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **4.1 Write the failing tests** — in `fleet_tick.rs`'s test module, after `due_fleets_filters_by_trigger_and_last_run`:
+- [x] **4.1 Write the failing tests** — in `fleet_tick.rs`'s test module, after `due_fleets_filters_by_trigger_and_last_run`:
 
 ```rust
     /// §5 as tested at the daemon's seam: a deadline bounds any fleet; a
@@ -490,9 +490,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
   `loop_fleet` and `store` already exist in this test module. Note the fixture comment `// positive so auto-run eligibility holds in tests` on `budget_usd: 1.0` stays true (unknown billing → billable → budget bounds it).
 
-- [ ] **4.2 Watch it fail** — `cargo nextest run -p mur-daemon --lib -E 'test(/eligibility_is_bounded|kill_switch_beats/)'`. Expected: `cannot find function eligible`.
+- [x] **4.2 Watch it fail** — `cargo nextest run -p mur-daemon -E 'test(/eligibility_is_bounded|kill_switch_beats/)'`. Expected: `cannot find function eligible`.
 
-- [ ] **4.3 Replace the gate** — in `due_fleets`, replace from `// Auto-run requires a positive budget` through `let has_budget = …;` with:
+- [x] **4.3 Replace the gate** — in `due_fleets`, replace from `// Auto-run requires a positive budget` through `let has_budget = …;` with:
 
 ```rust
         // Auto-run requires a BOUND (spec §5): a deadline for any fleet, or a
@@ -531,9 +531,9 @@ fn eligible(
 
   If `FleetLoop` is not imported at the top of `fleet_tick.rs`, add `use mur_common::fleet::FleetLoop;`.
 
-- [ ] **4.4 Watch it pass** — `cargo nextest run -p mur-daemon --lib`. Expected: all pass. `due_fleets_filters_by_trigger_and_last_run` and `cron_fleet_not_due_immediately_after_baseline` still pass because their fixture's `budget_usd: 1.0` bounds an unknown-billing (→ billable) fleet.
+- [x] **4.4 Watch it pass** — `cargo nextest run -p mur-daemon`. Expected: all pass. `due_fleets_filters_by_trigger_and_last_run` and `cron_fleet_not_due_immediately_after_baseline` still pass because their fixture's `budget_usd: 1.0` bounds an unknown-billing (→ billable) fleet.
 
-- [ ] **4.5 fmt + clippy** (`cargo clippy -p mur-daemon --all-targets -- -D warnings`), then **commit**:
+- [x] **4.5 fmt + clippy** (`cargo clippy -p mur-daemon --all-targets -- -D warnings`), then **commit**:
 
 ```
 fix(daemon): unattended auto-run requires a bound, not a positive budget

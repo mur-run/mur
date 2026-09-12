@@ -111,9 +111,12 @@ pub fn due_fleets(mur_home: &Path, now_unix: u64) -> Result<Vec<String>> {
         let fleet = store::load_fleet(mur_home, &name)?;
         let lc = fleet.loop_cfg.as_ref();
         let trigger = lc.map(|l| l.trigger.as_str()).unwrap_or("manual");
-        // Auto-run requires a positive budget (no unattended run without a $ ceiling)
-        // and is skipped when the kill-switch is engaged.
-        let has_budget = lc.map(|l| l.budget_usd > 0.0).unwrap_or(false);
+        // Auto-run requires a BOUND (spec §5): a deadline for any fleet, or a
+        // budget for one that can spend. "Positive budget" was the old rule;
+        // it demanded a dollar figure from local-model fleets, which protected
+        // nothing and blocked real users.
+        let billing = mur_core::cmd::fleet::billing::fleet_billing(mur_home, &fleet);
+        let bounded = eligible(lc, &billing);
         // Fail-closed: if governance_state errors (e.g. I/O, bad signature),
         // treat the fleet as halted and skip it. A zero budget ceiling is a hard
         // halt too (the loop breaks LoopStop::Budget on it), so skip those as
@@ -123,7 +126,14 @@ pub fn due_fleets(mur_home: &Path, now_unix: u64) -> Result<Vec<String>> {
             Ok(g) => g.killed || matches!(g.budget_ceiling, Some(c) if c == 0.0),
             Err(_) => true, // fail-closed
         };
-        if has_budget
+        if !bounded && is_due(trigger, read_last_run(mur_home, &name), now_unix) {
+            tracing::warn!(
+                fleet = %name,
+                "{}",
+                mur_core::cmd::fleet::billing::unbounded_reason(lc, &billing, &name)
+            );
+        }
+        if bounded
             && is_due(trigger, read_last_run(mur_home, &name), now_unix)
             && !mur_core::cmd::fleet::control::is_stopped(mur_home, &name)
             && !commander_halted
@@ -137,6 +147,16 @@ pub fn due_fleets(mur_home: &Path, now_unix: u64) -> Result<Vec<String>> {
 /// One daemon cycle: find due fleets and detach each one's guarded loop onto its
 /// own thread. Non-blocking. Stamps `.last_run` BEFORE launching so the next
 /// tick won't re-trigger a fleet whose loop is still running.
+/// The daemon's eligibility rule, by its spec name. Thin on purpose: the
+/// definition lives in `mur_core::cmd::fleet::billing::is_bounded` so the loop
+/// and the daemon cannot drift.
+fn eligible(
+    lc: Option<&mur_common::fleet::FleetLoop>,
+    billing: &mur_core::cmd::fleet::billing::FleetBilling,
+) -> bool {
+    mur_core::cmd::fleet::billing::is_bounded(lc, billing)
+}
+
 /// Is unattended fleet auto-run enabled? OFF unless `MUR_FLEET_AUTORUN` is set
 /// truthy, so the shipped daemon never runs fleets on its own without an
 /// operator explicitly opting in. (Per-fleet autonomy + an enforced budget +
@@ -357,6 +377,57 @@ mod tests {
         assert!(due_fleets(home, 5030).unwrap().is_empty());
 
         assert_eq!(due_fleets(home, 5070).unwrap(), vec!["auto".to_string()]);
+    }
+
+    /// §5 as tested at the daemon's seam: a deadline bounds any fleet; a
+    /// budget bounds only a billable one; neither means no unattended run.
+    /// These three replace "positive budget required".
+    #[test]
+    fn eligibility_is_bounded_not_budgeted() {
+        use mur_core::cmd::fleet::billing::FleetBilling;
+        let local = FleetBilling {
+            billable: false,
+            unknown: vec![],
+        };
+        let billed = FleetBilling {
+            billable: true,
+            unknown: vec![],
+        };
+        let lc = |budget: f64, deadline: &str| FleetLoop {
+            trigger: "interval:1m".into(),
+            max_iterations: 0,
+            budget_usd: budget,
+            deadline: deadline.into(),
+            done_when: String::new(),
+        };
+        // local fleet + deadline → runs; local fleet + budget only → does not
+        assert!(eligible(Some(&lc(0.0, "2h")), &local));
+        assert!(!eligible(Some(&lc(9.0, "")), &local));
+        // billable fleet: either knob
+        assert!(eligible(Some(&lc(9.0, "")), &billed));
+        assert!(eligible(Some(&lc(0.0, "2h")), &billed));
+        // neither knob, or no loop block: never
+        assert!(!eligible(Some(&lc(0.0, "")), &billed));
+        assert!(!eligible(None, &local));
+    }
+
+    /// The kill-switch still wins over a bounded, due fleet.
+    #[test]
+    fn kill_switch_beats_a_bounded_due_fleet() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let mut f = loop_fleet("auto", "interval:1m");
+        f.loop_cfg.as_mut().unwrap().deadline = "2h".into();
+        f.loop_cfg.as_mut().unwrap().budget_usd = 0.0;
+        store::save_fleet(home, &f).unwrap();
+        // No models.yaml in this home → billing unknown → billable; the
+        // deadline is what makes it bounded here.
+        assert_eq!(due_fleets(home, 5000).unwrap(), vec!["auto".to_string()]);
+        mur_core::cmd::fleet::control::cmd_fleet_stop(home, "auto").unwrap();
+        assert!(
+            due_fleets(home, 5000).unwrap().is_empty(),
+            "kill-switch must win"
+        );
     }
 
     #[test]
