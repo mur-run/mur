@@ -432,6 +432,9 @@ pub struct TaskRunner {
     /// Credentials the user handed the agent. Names go into the system prompt;
     /// values are masked out of every tool result. `None` = no vault (stubs).
     secrets: Option<Arc<crate::secrets::SecretVault>>,
+    /// The bash job table (spec D3/D8), so the loop can end a task's jobs on
+    /// an unattended stop or a cancel, and the supervisor every job at exit.
+    bash_jobs: Option<Arc<crate::tools::bash_jobs::JobTable>>,
     /// Per-agent effort for this agent's own turns. `None` = the API default.
     /// Mechanical internal calls override it downward regardless (see
     /// `graceful_exit`).
@@ -565,6 +568,7 @@ impl TaskRunner {
             tools: vec![],
             tools_policy: vec![],
             secrets: None,
+            bash_jobs: None,
             effort: std::sync::RwLock::new(None),
             conversations: Mutex::new(ConversationStore::default()),
             session_cwd: None,
@@ -663,6 +667,43 @@ impl TaskRunner {
     pub fn with_secrets(mut self, vault: Arc<crate::secrets::SecretVault>) -> Self {
         self.secrets = Some(vault);
         self
+    }
+
+    /// The bash job table (spec D3/D8), so the loop can end a task's jobs on
+    /// an unattended stop or a cancel, and the supervisor every job at exit.
+    pub fn with_bash_jobs(mut self, jobs: Arc<crate::tools::bash_jobs::JobTable>) -> Self {
+        self.bash_jobs = Some(jobs);
+        self
+    }
+
+    /// Runtime shutdown: every running bash job, whoever started it.
+    pub async fn kill_all_jobs(&self) -> usize {
+        match &self.bash_jobs {
+            Some(t) => t.kill_all().await,
+            None => 0,
+        }
+    }
+
+    async fn kill_jobs_of(&self, task_id: &str) {
+        if let Some(t) = &self.bash_jobs {
+            let n = t.kill_owned_by(task_id).await;
+            if n > 0 {
+                tracing::info!(task_id, jobs = n, "ended the task's running bash jobs");
+            }
+        }
+    }
+
+    /// D8: every tool executes inside the owner task's scope, from BOTH
+    /// execute sites, so `bash` can stamp its job. One helper — a third site
+    /// must call it too or its jobs belong to nobody.
+    async fn execute_scoped(
+        tool: &dyn crate::tools::ToolExecutor,
+        task_id: &str,
+        input: serde_json::Value,
+    ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
+        crate::tools::bash_jobs::CURRENT_TASK_ID
+            .scope(task_id.to_string(), tool.execute(input))
+            .await
     }
 
     /// The one place tool output is scrubbed before it can reach the model.
@@ -1464,6 +1505,9 @@ impl TaskRunner {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(task_id);
+        // Whether or not the generation is still cancellable, the task's
+        // jobs are (D3): a cancel means "stop everything this task started".
+        self.kill_jobs_of(task_id).await;
         match tx {
             Some(tx) => {
                 let _ = tx.send(());
@@ -1845,9 +1889,12 @@ impl TaskRunner {
                             .await;
                     }
                     let t0 = std::time::Instant::now();
-                    let (output, status, is_error, images) = match tool
-                        .execute(call.input.clone())
-                        .await
+                    let (output, status, is_error, images) = match Self::execute_scoped(
+                        tool.as_ref(),
+                        task_id,
+                        call.input.clone(),
+                    )
+                    .await
                     {
                         Ok(out) => (self.masked(out.text), out.status, false, out.images),
                         // Same refusal handling as the Ask path below —
@@ -1887,6 +1934,7 @@ impl TaskRunner {
                                         serde_json::Value::Null
                                     },
                                     "denied": matches!(status, crate::tools::ToolStatus::Denied { .. }),
+                                    "running": matches!(status, crate::tools::ToolStatus::Running { .. }),
                                     "duration_ms": t0.elapsed().as_millis() as u64,
                                 }),
                             ))
@@ -1938,7 +1986,8 @@ impl TaskRunner {
                 .await;
         }
         let t0_ask = std::time::Instant::now();
-        let (output, status, is_error, images) = match tool.execute(call.input.clone()).await {
+        let (output, status, is_error, images) =
+            match Self::execute_scoped(tool.as_ref(), task_id, call.input.clone()).await {
             Ok(out) => (self.masked(out.text), out.status, false, out.images),
             // A refusal is terminal for the tool this turn (spec §3.8): say
             // so once; the loop withdraws it from the next request.
@@ -1976,6 +2025,7 @@ impl TaskRunner {
                             serde_json::Value::Null
                         },
                         "denied": matches!(status, crate::tools::ToolStatus::Denied { .. }),
+                        "running": matches!(status, crate::tools::ToolStatus::Running { .. }),
                         "duration_ms": t0_ask.elapsed().as_millis() as u64,
                     }),
                 ))
@@ -2112,6 +2162,7 @@ impl TaskRunner {
             if let Some(d) = bounds.deadline
                 && now >= d
             {
+                self.kill_jobs_of(task_id).await;
                 let msg = self
                     .graceful_exit(
                         client,
@@ -2147,6 +2198,7 @@ impl TaskRunner {
                         .await;
                     }
                 } else {
+                    self.kill_jobs_of(task_id).await;
                     let msg = self
                         .graceful_exit(
                             client,
@@ -2385,6 +2437,7 @@ impl TaskRunner {
             // repeated" = stuck (abort); "same command, changing output" =
             // making progress (don't abort). Fingerprinting happens here,
             // AFTER execution, because the result is needed.
+            let mut progress_calls: Vec<(String, u64)> = Vec::with_capacity(results.len());
             for (call, entry) in resp.tool_calls.iter().zip(results.iter()) {
                 if withdraws(entry) {
                     disabled.insert(call.tool_name.clone());
@@ -2408,6 +2461,13 @@ impl TaskRunner {
                     fingerprints.pop_front();
                 }
                 let repeats = fingerprints.iter().filter(|f| **f == fp).count();
+                // D4: a yield that delivered new bytes is progress; one that
+                // delivered nothing repeats the previous fingerprint exactly.
+                let mut args_fp = fingerprint_args(&call.input);
+                if let crate::tools::ToolStatus::Running { bytes_seen, .. } = &entry.status {
+                    args_fp ^= fingerprint_str(&format!("bytes_seen:{bytes_seen}"));
+                }
+                progress_calls.push((call.tool_name.clone(), args_fp));
                 if repeats >= LOOP_REPEAT_THRESHOLD {
                     // Append the results gathered this turn before exiting so
                     // the dangling tool_use is closed; graceful_exit also
@@ -2453,14 +2513,7 @@ impl TaskRunner {
                     });
                 }
             }
-            progress.observe(
-                &resp
-                    .tool_calls
-                    .iter()
-                    .map(|c| (c.tool_name.clone(), fingerprint_args(&c.input)))
-                    .collect::<Vec<_>>(),
-                std::time::Instant::now(),
-            );
+            progress.observe(&progress_calls, std::time::Instant::now());
             iteration += 1;
         }
 
@@ -2880,10 +2933,20 @@ fn effective_tool_policy(
     if crate::tools::suggest::suggest_replies_allowed(tool_name) {
         return ToolPolicy::Allow;
     }
-    match resolve_tool_policy_opt(rules, tool_name) {
+    match resolve_tool_policy_opt(rules, tool_name)
+        .or_else(|| resolve_tool_policy_opt(rules, policy_name(tool_name)))
+    {
         Some(explicit) => explicit,
         None if crate::tools::recall::recall_needs_no_approval(tool_name) => ToolPolicy::Allow,
         None => ToolPolicy::default(),
+    }
+}
+
+/// D11: the control tools resolve as themselves first, then as `bash`.
+fn policy_name(tool: &str) -> &str {
+    match tool {
+        crate::tools::bash_control::BASH_WAIT | crate::tools::bash_control::BASH_KILL => "bash",
+        other => other,
     }
 }
 
@@ -3627,8 +3690,14 @@ mod tests {
 
     /// Counting `bash` tool: records how many times it executes so a test can
     /// assert a (truncated) tool call was NOT run.
+    #[derive(Default)]
     struct CountingBashTool {
         calls: Arc<AtomicU64>,
+        /// D8 regression cover: the task id `execute` observed via the
+        /// task-local, if the scope reached it. `None` on a stub that never
+        /// sets this field — struct-update syntax at every call site keeps
+        /// this optional.
+        seen_task: Arc<Mutex<Option<String>>>,
     }
 
     #[async_trait::async_trait]
@@ -3648,6 +3717,8 @@ mod tests {
             _input: serde_json::Value,
         ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
             self.calls.fetch_add(1, Ordering::Relaxed);
+            *self.seen_task.lock().unwrap_or_else(|e| e.into_inner()) =
+                crate::tools::bash_jobs::current_task_id();
             Ok("ran".to_string().into())
         }
     }
@@ -3828,6 +3899,7 @@ mod tests {
             TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
                 .with_tools(vec![Arc::new(CountingBashTool {
                     calls: calls.clone(),
+                    ..Default::default()
                 })])
                 .with_tools_policy(vec![])
                 .with_pending_approvals(pa.clone())
@@ -3904,11 +3976,13 @@ mod tests {
                 end_turn_response("OK"),
             ];
             let calls = Arc::new(AtomicU64::new(0));
+            let seen_task: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
             let (ntx, mut nrx) = tokio::sync::mpsc::channel(16);
             let runner = Arc::new(
                 TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
                     .with_tools(vec![Arc::new(CountingBashTool {
                         calls: calls.clone(),
+                        seen_task: seen_task.clone(),
                     })])
                     .with_tools_policy(vec![])
                     .with_pending_approvals(empty_pending_approvals())
@@ -3924,6 +3998,18 @@ mod tests {
                 "{settled:?}: {outcome:?}"
             );
             assert_eq!(calls.load(Ordering::Relaxed), expect_calls, "{settled:?}");
+            if matches!(settled, Settled::Allow) {
+                // D8: the owner scope reaches the Ask site (this policy is
+                // the default, `Ask`, resolved by a remembered decision) —
+                // the tool observed a task id, not `None`.
+                assert!(
+                    seen_task
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .is_some(),
+                    "the Ask execute site never scoped CURRENT_TASK_ID"
+                );
+            }
             while let Ok(n) = nrx.try_recv() {
                 assert_ne!(
                     n["method"], "tool/approval_needed",
@@ -4164,6 +4250,7 @@ mod tests {
             TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
                 .with_tools(vec![Arc::new(CountingBashTool {
                     calls: calls.clone(),
+                    ..Default::default()
                 })])
                 .with_tools_policy(vec![mur_common::agent::ToolRule {
                     pattern: "bash".into(),
@@ -4621,6 +4708,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let mut spec = loop_spec("loop");
         spec.attended = false;
@@ -4830,6 +4918,158 @@ mod tests {
             "{}",
             last_agent_text(&out)
         );
+    }
+
+    /// Test 15 — D11 policy aliasing.
+    #[test]
+    fn bash_control_tools_inherit_bashs_rule_unless_named() {
+        use mur_common::agent::{ToolPolicy, ToolRule};
+        let rule = |p: &str, policy| ToolRule {
+            pattern: p.into(),
+            policy,
+            risk: None,
+        };
+        let allow = vec![rule("bash", ToolPolicy::Allow)];
+        assert_eq!(effective_tool_policy(&allow, "bash_wait"), ToolPolicy::Allow);
+        assert_eq!(effective_tool_policy(&allow, "bash_kill"), ToolPolicy::Allow);
+        let ask = vec![rule("bash", ToolPolicy::Ask)];
+        assert_eq!(effective_tool_policy(&ask, "bash_wait"), ToolPolicy::Ask);
+        let mixed = vec![rule("bash", ToolPolicy::Allow), rule("bash_kill", ToolPolicy::Deny)];
+        assert_eq!(effective_tool_policy(&mixed, "bash_wait"), ToolPolicy::Allow);
+        assert_eq!(effective_tool_policy(&mixed, "bash_kill"), ToolPolicy::Deny);
+        assert_eq!(effective_tool_policy(&[], "bash_wait"), ToolPolicy::default());
+    }
+
+    fn bash_call(id: &str, command: &str, timeout_secs: u64) -> crate::llm::LlmResponse {
+        crate::llm::LlmResponse {
+            text: String::new(),
+            input_tokens: 5,
+            output_tokens: 5,
+            model: "test".into(),
+            tool_calls: vec![crate::llm::ToolCallResult {
+                call_id: id.into(),
+                tool_name: "bash".into(),
+                input: serde_json::json!({"command": command, "timeout_secs": timeout_secs}),
+            }],
+            stop_reason: crate::llm::StopReason::ToolUse,
+        }
+    }
+
+    fn runner_with_real_bash(
+        responses: Vec<crate::llm::LlmResponse>,
+        deadline: Option<&str>,
+    ) -> (Arc<TaskRunner>, Arc<crate::tools::bash_jobs::JobTable>) {
+        use crate::llm::stub::SequenceLlm;
+        let base = std::env::temp_dir();
+        let jobs = crate::tools::bash_jobs::JobTable::new();
+        let bash: Arc<dyn crate::tools::ToolExecutor> = Arc::new(
+            crate::tools::bash::BashTool::new(
+                base.clone(),
+                crate::tools::fs_policy::SessionCwd::new(base),
+            )
+            .with_jobs(jobs.clone()),
+        );
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_tools(vec![bash])
+                .with_tools_policy(vec![mur_common::agent::ToolRule {
+                    pattern: "bash".into(),
+                    policy: mur_common::agent::ToolPolicy::Allow,
+                    risk: None,
+                }])
+                .with_bash_jobs(jobs.clone())
+                .with_iteration_ceiling(50)
+                .with_limits(
+                    mur_common::limits::Limits {
+                        deadline: deadline.map(str::to_string),
+                        stuck: Some("off".into()),
+                        cost_usd: None,
+                    },
+                    None,
+                ),
+        );
+        (runner, jobs)
+    }
+
+    /// Test 12 — an unattended deadline stop ends the task's jobs; an
+    /// attended turn that ends normally leaves them running.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unattended_deadline_kills_the_tasks_jobs_and_attended_does_not() {
+        // Unattended: job spawned at once, a 2 s call carries the loop past
+        // the 1 s deadline, the next iteration stops and kills the job.
+        let (runner, jobs) = runner_with_real_bash(
+            vec![
+                bash_call("c0", "sleep 30", 0),
+                bash_call("c1", "sleep 2", 5),
+                end_turn_response("DONE"),
+            ],
+            Some("1s"),
+        );
+        let mut spec = loop_spec("deadline");
+        spec.attended = false;
+        spec.deadline_secs = Some(1);
+        let out = runner.run_sync(spec).await;
+        assert_eq!(task_usage(&out)["stop_reason"], "deadline");
+        assert!(jobs.running_ids().is_empty(), "{:?}", jobs.running_ids());
+
+        // Attended: same script, no deadline applies, the job outlives the turn.
+        let (runner, jobs) = runner_with_real_bash(
+            vec![bash_call("c0", "sleep 30", 0), end_turn_response("DONE")],
+            Some("1s"),
+        );
+        let mut spec = loop_spec("attended");
+        spec.attended = true;
+        runner.run_sync(spec).await;
+        assert_eq!(
+            jobs.running_ids().len(),
+            1,
+            "an attended turn must not kill its jobs"
+        );
+        jobs.kill_all().await;
+    }
+
+    /// Test 13 — `tasks/cancel` ends the task's jobs even when the
+    /// generation is no longer cancellable.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancel_kills_the_tasks_jobs() {
+        let (runner, jobs) = runner_with_real_bash(vec![], None);
+        let base = std::env::temp_dir();
+        let id = crate::tools::bash_jobs::CURRENT_TASK_ID
+            .scope("task-c".to_string(), async {
+                jobs.spawn(crate::tools::bash_jobs::SpawnSpec {
+                    command: "sleep 30",
+                    cwd: &base,
+                    env: vec![("PATH".into(), std::env::var("PATH").unwrap_or_default())],
+                    spool_dir: &base,
+                    vault: None,
+                })
+            })
+            .await
+            .unwrap();
+        let pid = jobs.pid(&id).unwrap();
+        let r = runner.cancel("task-c").await;
+        assert!(r.is_err(), "nothing registered a cancel signal: {r:?}");
+        assert!(
+            !crate::tools::bash_jobs::pid_alive(pid),
+            "cancel left the job running"
+        );
+    }
+
+    /// Test 14 — D4: the stuck fingerprint differs when bytes arrived and
+    /// repeats when nothing did.
+    #[test]
+    fn running_fingerprint_folds_bytes_seen() {
+        let input = serde_json::json!({"job_id": "j-1"});
+        let fp = |bytes_seen: u64| {
+            fingerprint_args(&input) ^ fingerprint_str(&format!("bytes_seen:{bytes_seen}"))
+        };
+        assert_ne!(fp(10), fp(20));
+        assert_eq!(fp(20), fp(20));
+        assert_ne!(fp(10), fingerprint_args(&input), "a yield is not the bare call");
     }
 
     /// §6: the ceiling is a diagnostic, not a setting — absurd on purpose.
@@ -5665,6 +5905,7 @@ mod tests {
             TaskRunner::new_stub_echo()
                 .with_tools(vec![Arc::new(CountingBashTool {
                     calls: calls.clone(),
+                    ..Default::default()
                 })])
                 .with_tools_policy(vec![mur_common::agent::ToolRule {
                     pattern: "bash".into(),
