@@ -50,7 +50,7 @@ worktree to avoid a cold build.
 
 ### Steps
 
-- [ ] **1.1 Write the failing tests** — in `mur-core/src/cmd/fleet/loop_run.rs`, inside the existing `#[cfg(test)] mod tests`, right after `progress_file_written_with_outcome_on_guard_stop`:
+- [x] **1.1 Write the failing tests** — in `mur-core/src/cmd/fleet/loop_run.rs`, inside the existing `#[cfg(test)] mod tests`, right after `progress_file_written_with_outcome_on_guard_stop`:
 
 ```rust
     /// Every stop has a remedy except the two that mean "done". The remedy
@@ -134,9 +134,9 @@ worktree to avoid a cold build.
     }
 ```
 
-- [ ] **1.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(/every_stop_short_of_done|stop_maps_to_a_channel|a_guard_stop_is_written/)'`. Expected: compile error `cannot find function stop_remedy` (and `terminal_state_for`).
+- [x] **1.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(/every_stop_short_of_done|stop_maps_to_a_channel|a_guard_stop_is_written/)'`. Expected: compile error `cannot find function stop_remedy` (and `terminal_state_for`).
 
-- [ ] **1.3 Add the two pure functions** — in `loop_run.rs` directly below `fn outcome_label`:
+- [x] **1.3 Add the two pure functions** — in `loop_run.rs` directly below `fn outcome_label`:
 
 ```rust
 /// The one-line way out for each stop, in the words of the commands that exist
@@ -186,7 +186,7 @@ fn terminal_state_for(stop: LoopStop) -> &'static str {
 }
 ```
 
-- [ ] **1.4 Write the event at the end of `run_guarded`** — replace the block that begins `// Stamp the terminal state onto the progress file` and ends `Ok((stop, iteration, spent))` with:
+- [x] **1.4 Write the event at the end of `run_guarded`** — replace the block that begins `// Stamp the terminal state onto the progress file` and ends `Ok((stop, iteration, spent))` with:
 
 ```rust
     // Stamp the terminal state onto the progress file — kept as the last-run
@@ -246,9 +246,9 @@ fn emit_stop_event(
 
   `svc` and `fleet` are already in scope in `run_guarded` (`let svc = mur_channel::ChannelService::open(mur_home)?;` and the loaded `fleet`). If `fleet` is a `Fleet` value rather than a reference at that point, pass `&fleet`.
 
-- [ ] **1.5 Watch it pass** — same filter as 1.2, plus the neighbours: `cargo nextest run -p mur-core --lib -E 'test(/loop_run::/)'`. Expected: all pass, including `progress_file_written_with_outcome_on_guard_stop` (the progress write is unchanged).
+- [x] **1.5 Watch it pass** — same filter as 1.2, plus the neighbours: `cargo nextest run -p mur-core --lib -E 'test(/loop_run::/)'`. Expected: all pass, including `progress_file_written_with_outcome_on_guard_stop` (the progress write is unchanged).
 
-- [ ] **1.6 fmt + clippy** (`cargo clippy -p mur-core --all-targets -- -D warnings`), then **commit**:
+- [x] **1.6 fmt + clippy** (`cargo clippy -p mur-core --all-targets -- -D warnings`), then **commit**:
 
 ```
 feat(fleet): the loop writes its stop reason and remedy to the channel
@@ -273,7 +273,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **2.1 Write the failing tests** — append to `mur-core/src/cmd/agent/cli/fleet_rail/tests.rs`:
+- [x] **2.1 Write the failing tests** — append to `mur-core/src/cmd/agent/cli/fleet_rail/tests.rs`:
 
 ```rust
 #[test]
@@ -330,9 +330,9 @@ fn summary_names_the_stop_under_the_headline_except_when_converged() {
 
   `agent(..)` and `ev(..)` already exist in this file. If `StopNotice` / `fold_stop` are not brought in by the file's existing `use super::*;`, add `use super::{fold_stop, StopNotice};` at the top.
 
-- [ ] **2.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(/fold_stop_reads|summary_names_the_stop/)'`. Expected: compile error `cannot find function fold_stop` / `no field stop`.
+- [x] **2.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(/fold_stop_reads|summary_names_the_stop/)'`. Expected: compile error `cannot find function fold_stop` / `no field stop`.
 
-- [ ] **2.3 Add the type and the fold** — in `fleet_rail.rs`, directly below `pub fn fold_members`'s closing brace:
+- [x] **2.3 Add the type and the fold** — in `fleet_rail.rs`, directly below `pub fn fold_members`'s closing brace:
 
 ```rust
 /// Why the last run stopped and the way out, from the System `state-change`
@@ -361,7 +361,7 @@ pub fn fold_stop(events: &[ChannelEvent]) -> Option<StopNotice> {
 }
 ```
 
-- [ ] **2.4 Carry it in the view and render it** — add the field to `RailView`:
+- [x] **2.4 Carry it in the view and render it** — add the field to `RailView`:
 
 ```rust
     /// The last run's stop, rendered under the headline. `None` while a run is
@@ -388,9 +388,9 @@ pub fn fold_stop(events: &[ChannelEvent]) -> Option<StopNotice> {
 
   In `FleetRail::poll`, where `let view = RailView { jobs_line: …, members, notice: … }` is built, add `stop: fold_stop(&events),` after `members,`. `events` is the verified vector already in scope.
 
-- [ ] **2.5 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/fleet_rail/)'`. Expected: all pass. If a test elsewhere constructs `RailView { .. }` literally and now fails to compile, add `stop: None,` to that literal (search: `command grep -rn "RailView {" mur-core/src`).
+- [x] **2.5 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/fleet_rail/)'`. Expected: all pass. If a test elsewhere constructs `RailView { .. }` literally and now fails to compile, add `stop: None,` to that literal (search: `command grep -rn "RailView {" mur-core/src`).
 
-- [ ] **2.6 fmt + clippy**, then **commit**:
+- [x] **2.6 fmt + clippy**, then **commit**:
 
 ```
 feat(murmur): the fleet rail shows why the last run stopped
@@ -412,7 +412,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **3.1 Write the failing test** — in `mur-core/src/cmd/agent/cli/app.rs`, right after `an_auto_armed_fleet_rail_lands_in_the_transcript_and_retires`:
+- [x] **3.1 Write the failing test** — in `mur-core/src/cmd/agent/cli/app.rs`, right after `an_auto_armed_fleet_rail_lands_in_the_transcript_and_retires`:
 
 ```rust
     /// A run that hit a cap is not "finished". The headline takes the rail's
@@ -447,9 +447,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
   If `App::test_fixture` / `app()` gives an `App` whose `home` is not a writable tempdir, read the fixture (`grep -n "fn test_fixture" -A20 app.rs`) and use the same tempdir it holds; do not create a second home.
 
-- [ ] **3.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(the_headline_says_stopped)'`. Expected: assertion failure `got: ⛴ fleet dev finished (4s)…`.
+- [x] **3.2 Watch it fail** — `cargo nextest run -p mur-core --lib -E 'test(the_headline_says_stopped)'`. Expected: assertion failure `got: ⛴ fleet dev finished (4s)…`.
 
-- [ ] **3.3 Use the rail's stop in the headline** — in `finish_auto_fleet`, the block that builds `head` becomes:
+- [x] **3.3 Use the rail's stop in the headline** — in `finish_auto_fleet`, the block that builds `head` becomes:
 
 ```rust
         let mut fleet = String::new();
@@ -485,9 +485,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
         let head = format!("⛴ fleet {fleet} {verdict} ({took})");
 ```
 
-- [ ] **3.4 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/finish_auto_fleet|auto_armed_fleet|headline_says_stopped/)'`. Expected: the new test and `an_auto_armed_fleet_rail_lands_in_the_transcript_and_retires` both pass (that one has no stop event, so it still reads `finished`).
+- [x] **3.4 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/finish_auto_fleet|auto_armed_fleet|headline_says_stopped/)'`. Expected: the new test and `an_auto_armed_fleet_rail_lands_in_the_transcript_and_retires` both pass (that one has no stop event, so it still reads `finished`).
 
-- [ ] **3.5 fmt + clippy**, then **commit**:
+- [x] **3.5 fmt + clippy**, then **commit**:
 
 ```
 fix(murmur): a capped fleet run is "stopped: <reason>", not "finished"
@@ -509,7 +509,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **4.1 Write the failing test** — in `mur-agent-runtime/src/turn_ledger.rs`'s test module, next to the existing test that asserts `"output may be incomplete"`:
+- [x] **4.1 Write the failing test** — in `mur-agent-runtime/src/turn_ledger.rs`'s test module, next to the existing test that asserts `"output may be incomplete"`:
 
 ```rust
     /// Every unclean stop says what to do about it, next to the fact. Naming
@@ -537,9 +537,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
   If `TurnLedger` has no `stop` field but a setter, use the setter the existing "output may be incomplete" test uses; mirror that test's construction exactly.
 
-- [ ] **4.2 Watch it fail** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(every_unclean_stop_names_its_remedy)'`. Expected: compile error `no method named remedy`.
+- [x] **4.2 Watch it fail** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(every_unclean_stop_names_its_remedy)'`. Expected: compile error `no method named remedy`.
 
-- [ ] **4.3 Add the remedy and render it** — in `impl StopKind`, after `as_str`:
+- [x] **4.3 Add the remedy and render it** — in `impl StopKind`, after `as_str`:
 
 ```rust
     /// What to do about it, in today's knobs. `hitl.max_iterations` and
@@ -573,9 +573,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
     }
 ```
 
-- [ ] **4.4 Watch it pass** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(/turn_ledger/)'`. Expected: all pass. The murmur card parser (`mur-core/src/cmd/agent/cli/settlement.rs`) treats the line as a `⚠` row and wraps it; no change there.
+- [x] **4.4 Watch it pass** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(/turn_ledger/)'`. Expected: all pass. The murmur card parser (`mur-core/src/cmd/agent/cli/settlement.rs`) treats the line as a `⚠` row and wraps it; no change there.
 
-- [ ] **4.5 fmt + clippy** (`cargo clippy -p mur-agent-runtime --all-targets -- -D warnings`), then **commit**:
+- [x] **4.5 fmt + clippy** (`cargo clippy -p mur-agent-runtime --all-targets -- -D warnings`), then **commit**:
 
 ```
 feat(runtime): the settlement card's stop row names the knob that bit
