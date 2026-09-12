@@ -21,10 +21,9 @@ use super::run::build_fleet_procedure;
 use super::store;
 use crate::executor::dag::{StepEvent, StepEventKind};
 
-/// Iterations with no new agent activity before the loop gives up.
-const STUCK_LIMIT: u32 = 2;
-/// Default iteration cap when neither the CLI flag nor fleet.yaml sets one.
-const DEFAULT_MAX_ITERATIONS: u32 = 8;
+/// Diagnostic ceiling on loop iterations (spec §6). Not a setting — the bounds
+/// a user sets are `deadline`, `stuck` and `cost_usd` (`mur fleet limits`).
+pub const LOOP_ITERATION_CEILING: u32 = 10_000;
 /// Tokens one member burns in one ITERATION, used as the iteration-1 forward
 /// estimate and as the fail-safe fallback when an iteration reports no usage.
 /// Real per-token cost flows back via `PipelineOutput.tokens_used` (summed from
@@ -67,11 +66,11 @@ pub enum LoopStop {
     /// Goal complete: a structured `done_when: marker:<TEXT>` was emitted by a
     /// member, or (free-text/empty criterion) the router judged it done.
     Converged,
-    /// Hit the iteration cap.
+    /// Hit the `LOOP_ITERATION_CEILING` diagnostic ceiling — a runaway.
     MaxIterations,
     /// Hit the wall-clock deadline.
     Deadline,
-    /// `STUCK_LIMIT` consecutive iterations produced no new agent activity.
+    /// No agent-authored channel event for the stuck window (spec §3.5).
     Stuck,
     /// Projected cumulative cost would exceed the fleet's budget.
     Budget,
@@ -92,6 +91,77 @@ pub enum LoopStop {
 /// One grammar for `--deadline`, `loop.deadline` and `limits.deadline`.
 pub fn parse_duration(s: &str) -> Option<Duration> {
     mur_common::limits::parse_duration(s)
+}
+
+/// What bounds this fleet run, resolved across `--flags` → `fleet.yaml
+/// limits:` (or its legacy `loop.*`) → `config.yaml limits:` → built-in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FleetBounds {
+    pub deadline: Duration,
+    pub deadline_source: mur_common::limits::Source,
+    pub stuck: mur_common::limits::Stuck,
+    /// The configured cost cap, before `budget_for` decides whether the
+    /// fleet can spend at all.
+    pub cost_usd: Option<f64>,
+}
+
+pub fn fleet_bounds(
+    mur_home: &Path,
+    fleet: &Fleet,
+    flag_deadline: Option<&str>,
+    flag_budget: Option<f64>,
+) -> Result<FleetBounds> {
+    let global = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).limits;
+    let fleet_limits = fleet.limits_or_legacy();
+    let flags = mur_common::limits::Limits {
+        deadline: flag_deadline.map(|d| d.trim().to_string()),
+        stuck: None,
+        cost_usd: flag_budget,
+    };
+    let r = mur_common::limits::resolve(
+        mur_common::limits::Scope::FleetRun,
+        &global,
+        fleet_limits.as_ref(),
+        None,
+        &flags,
+    )
+    .map_err(|e| anyhow::anyhow!("fleet '{}': {e}", fleet.name))?;
+    Ok(FleetBounds {
+        // FleetRun always resolves a deadline (built-in when nothing is set);
+        // the Option exists for the SingleTask/attended case.
+        deadline: r
+            .deadline
+            .value
+            .unwrap_or(mur_common::limits::DEFAULT_DEADLINE_FLEET),
+        deadline_source: r.deadline.source,
+        stuck: r.stuck.value,
+        cost_usd: r.cost_usd.value,
+    })
+}
+
+/// Pure pre-iteration guard check. `stuck_for` = time since the last
+/// agent-authored channel event. Deadline first: when both are due, the
+/// clock the user set explicitly is the one to name.
+pub fn check_guards(
+    iteration: u32,
+    elapsed: Duration,
+    deadline: Duration,
+    stuck_for: Duration,
+    stuck: mur_common::limits::Stuck,
+) -> Option<LoopStop> {
+    if elapsed >= deadline {
+        return Some(LoopStop::Deadline);
+    }
+    if let mur_common::limits::Stuck::After(limit) = stuck
+        && stuck_for >= limit
+        && iteration > 0
+    {
+        return Some(LoopStop::Stuck);
+    }
+    if iteration >= LOOP_ITERATION_CEILING {
+        return Some(LoopStop::MaxIterations);
+    }
+    None
 }
 
 /// Does the router's reply signal completion? True iff a standalone `done`
@@ -129,48 +199,6 @@ pub fn channel_has_marker(events: &[ChannelEvent], marker: &str, after_seq: u64)
                 .get("text")
                 .and_then(|t| t.as_str())
                 .is_some_and(|t| t.lines().any(|line| line.trim() == marker))
-    })
-}
-
-/// Pure pre-iteration guard check. `iteration` = number of iterations already
-/// completed. Returns Some(stop) to halt before running another.
-pub fn check_guards(
-    iteration: u32,
-    max_iterations: u32,
-    elapsed: Duration,
-    deadline: Option<Duration>,
-    stuck_count: u32,
-) -> Option<LoopStop> {
-    if iteration >= max_iterations {
-        return Some(LoopStop::MaxIterations);
-    }
-    if let Some(d) = deadline
-        && elapsed >= d
-    {
-        return Some(LoopStop::Deadline);
-    }
-    if stuck_count >= STUCK_LIMIT {
-        return Some(LoopStop::Stuck);
-    }
-    None
-}
-
-/// Resolve the effective iteration cap: CLI flag > fleet.yaml loop.max_iterations > default.
-fn effective_max_iterations(flag: Option<u32>, fleet: &Fleet) -> u32 {
-    flag.or_else(|| fleet.loop_cfg.as_ref().map(|l| l.max_iterations))
-        .filter(|&n| n > 0)
-        .unwrap_or(DEFAULT_MAX_ITERATIONS)
-}
-
-/// Resolve the effective deadline: CLI flag > fleet.yaml loop.deadline > none.
-fn effective_deadline(flag: Option<&str>, fleet: &Fleet) -> Option<Duration> {
-    flag.and_then(parse_duration).or_else(|| {
-        fleet
-            .loop_cfg
-            .as_ref()
-            .map(|l| l.deadline.as_str())
-            .filter(|s| !s.is_empty())
-            .and_then(parse_duration)
     })
 }
 
@@ -256,12 +284,6 @@ fn iteration_goal(
     } else {
         Ok((standing_goal.to_string(), None))
     }
-}
-
-/// Resolve the effective budget USD: CLI flag > fleet.yaml `loop.budget_usd` > none.
-fn effective_budget(flag: Option<f64>, fleet: &Fleet) -> Option<f64> {
-    flag.or_else(|| fleet.loop_cfg.as_ref().map(|l| l.budget_usd))
-        .filter(|&b| b > 0.0)
 }
 
 /// The budget the guard enforces: the configured one for a fleet that can
@@ -369,16 +391,16 @@ pub fn stop_remedy(stop: LoopStop, fleet: &str) -> Option<String> {
     Some(match stop {
         LoopStop::Converged | LoopStop::QueueDrained => return None,
         LoopStop::MaxIterations => format!(
-            "raise it: mur fleet settings {fleet} --max-iterations <N>  (fleet.yaml loop.max_iterations)"
+            "the {LOOP_ITERATION_CEILING}-iteration safety ceiling — a runaway, not a setting; report it with the run id (mur fleet status {fleet})"
         ),
         LoopStop::Deadline => format!(
-            "raise it: mur fleet settings {fleet} --deadline <2h>  (fleet.yaml loop.deadline)"
+            "raise it: mur fleet limits {fleet} --deadline <2h>  (fleet.yaml limits.deadline)"
         ),
         LoopStop::Stuck => format!(
-            "no member activity for {STUCK_LIMIT} iterations — see what they are waiting on: mur fleet status {fleet}"
+            "no member activity for the stuck window — see what they are waiting on: mur fleet status {fleet}; widen it: mur fleet limits {fleet} --stuck <20m|off>"
         ),
         LoopStop::Budget => format!(
-            "raise it: mur fleet settings {fleet} --budget-usd <USD>  (fleet.yaml loop.budget_usd)"
+            "raise it: mur fleet limits {fleet} --cost-usd <USD>  (fleet.yaml limits.cost_usd)"
         ),
         LoopStop::Stopped => format!("cleared by: mur fleet start {fleet}"),
         LoopStop::CommanderKilled => {
@@ -434,10 +456,33 @@ pub async fn run_guarded(
         Ok(())
     })();
 
-    let max_iter = effective_max_iterations(max_iterations, &fleet);
-    let deadline = effective_deadline(deadline.as_deref(), &fleet);
+    if max_iterations.is_some() {
+        println!(
+            "  ℹ --max-iterations is ignored since 2.79 — the bounds are deadline / stuck / cost_usd (mur fleet limits {name})"
+        );
+    }
+    if fleet
+        .loop_cfg
+        .as_ref()
+        .is_some_and(|l| l.max_iterations != 0)
+    {
+        println!(
+            "  ℹ fleet.yaml loop.max_iterations is IGNORED since 2.79 — remove it (mur fleet limits {name})"
+        );
+    }
+    let bounds = fleet_bounds(mur_home, &fleet, deadline.as_deref(), budget_usd)?;
+    let deadline = Some(bounds.deadline);
+    println!(
+        "  bounds: deadline {} ← {}; stuck {}",
+        crate::cmd::limits::fmt_dur(bounds.deadline),
+        bounds.deadline_source.label(),
+        match bounds.stuck {
+            mur_common::limits::Stuck::Off => "off".to_string(),
+            mur_common::limits::Stuck::After(d) => crate::cmd::limits::fmt_dur(d),
+        }
+    );
     let billing = super::billing::fleet_billing(mur_home, &fleet);
-    let configured_budget = effective_budget(budget_usd, &fleet);
+    let configured_budget = bounds.cost_usd.filter(|&b| b > 0.0);
     let budget = budget_for(configured_budget, &billing);
     if configured_budget.is_some_and(|b| b > 0.0) && budget.is_none() {
         println!(
@@ -489,7 +534,7 @@ pub async fn run_guarded(
     // channel by a previous run can't make the loop converge instantly.
     let start_seq = last_seq;
     let mut iteration = 0u32;
-    let mut stuck = 0u32;
+    let mut last_progress = Instant::now();
 
     // Load commander keys once; empty = governance inert.
     let commander_keys = crate::cmd::commander::accepted_pubkeys(mur_home);
@@ -565,7 +610,13 @@ pub async fn run_guarded(
         if super::control::is_stopped(mur_home, name) {
             break LoopStop::Stopped;
         }
-        if let Some(stop) = check_guards(iteration, max_iter, start.elapsed(), deadline, stuck) {
+        if let Some(stop) = check_guards(
+            iteration,
+            start.elapsed(),
+            bounds.deadline,
+            last_progress.elapsed(),
+            bounds.stuck,
+        ) {
             break stop;
         }
         // Budget guard: stop before an iteration we can't afford. `spent` is the
@@ -715,6 +766,7 @@ pub async fn run_guarded(
             run_kind: Some(crate::run_status::RunKind::Fleet),
             run_label: format!("fleet {name} iter {iteration}"),
             on_step: Some(on_step),
+            deadline_at: Some(start + bounds.deadline),
             ..Default::default()
         };
         let out =
@@ -761,16 +813,15 @@ pub async fn run_guarded(
             println!("{}", iteration_summary_line(&g));
         }
 
-        // Stuck-detection: did this iteration add any new agent-authored event?
+        // Stuck-detection (§3.5, fleet half): an agent-authored channel event
+        // is progress and resets the clock; a router-only iteration is not.
         let events = svc.load_events(&fleet.channel_id)?;
         let progressed = events
             .iter()
             .any(|e| e.seq > last_seq && matches!(e.actor, ChannelActor::Agent { .. }));
         last_seq = events.last().map(|e| e.seq).unwrap_or(last_seq);
         if progressed {
-            stuck = 0;
-        } else {
-            stuck += 1;
+            last_progress = Instant::now();
         }
 
         // Convergence: three policies, dispatched from the same `done_when`
@@ -1008,49 +1059,6 @@ mod tests {
         assert!(!is_converged(""));
     }
 
-    #[test]
-    fn check_guards_precedence_and_trips() {
-        // under all limits → keep going
-        assert_eq!(check_guards(0, 8, Duration::from_secs(0), None, 0), None);
-        // iteration cap
-        assert_eq!(
-            check_guards(8, 8, Duration::from_secs(0), None, 0),
-            Some(LoopStop::MaxIterations)
-        );
-        // deadline
-        assert_eq!(
-            check_guards(
-                1,
-                8,
-                Duration::from_secs(10),
-                Some(Duration::from_secs(5)),
-                0
-            ),
-            Some(LoopStop::Deadline)
-        );
-        // not yet past deadline
-        assert_eq!(
-            check_guards(
-                1,
-                8,
-                Duration::from_secs(3),
-                Some(Duration::from_secs(5)),
-                0
-            ),
-            None
-        );
-        // stuck
-        assert_eq!(
-            check_guards(1, 8, Duration::from_secs(0), None, STUCK_LIMIT),
-            Some(LoopStop::Stuck)
-        );
-        // cap takes precedence over stuck
-        assert_eq!(
-            check_guards(8, 8, Duration::from_secs(0), None, STUCK_LIMIT),
-            Some(LoopStop::MaxIterations)
-        );
-    }
-
     /// The regression this constant exists for. A measured deep-research run —
     /// three members on a $0.003/1k model — cost $21.52, and the old estimate
     /// (8000 tokens per member) projected about $0.07, so a $10 ceiling waved
@@ -1211,44 +1219,6 @@ mod tests {
     }
 
     #[test]
-    fn effective_max_iterations_precedence() {
-        let mut f = Fleet {
-            name: "x".into(),
-            display_name: String::new(),
-            goal: String::new(),
-            router: None,
-            members: vec![],
-            channel_id: "fleet-x".into(),
-            team_id: None,
-            rules: vec![],
-            skills: vec![],
-            loop_cfg: None,
-            parallel: None,
-            hitl: None,
-            requires_programs: vec![],
-            limits: None,
-        };
-        // default when nothing set
-        assert_eq!(effective_max_iterations(None, &f), DEFAULT_MAX_ITERATIONS);
-        // fleet.yaml value
-        f.loop_cfg = Some(mur_common::fleet::FleetLoop {
-            trigger: "manual".into(),
-            max_iterations: 3,
-            budget_usd: 0.0,
-            deadline: String::new(),
-            done_when: String::new(),
-        });
-        assert_eq!(effective_max_iterations(None, &f), 3);
-        // CLI flag wins
-        assert_eq!(effective_max_iterations(Some(5), &f), 5);
-        // a 0 in fleet.yaml is ignored → default
-        if let Some(l) = f.loop_cfg.as_mut() {
-            l.max_iterations = 0;
-        }
-        assert_eq!(effective_max_iterations(None, &f), DEFAULT_MAX_ITERATIONS);
-    }
-
-    #[test]
     fn iteration_goal_drains_queue_then_falls_back_to_standing() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
@@ -1345,7 +1315,7 @@ mod tests {
         assert!(
             stop_remedy(LoopStop::MaxIterations, "dev")
                 .unwrap()
-                .contains("--max-iterations")
+                .contains("ceiling")
         );
         assert!(
             stop_remedy(LoopStop::Deadline, "dev")
@@ -1355,7 +1325,7 @@ mod tests {
         assert!(
             stop_remedy(LoopStop::Budget, "dev")
                 .unwrap()
-                .contains("--budget-usd")
+                .contains("--cost-usd")
         );
         assert!(
             stop_remedy(LoopStop::Stopped, "dev")
@@ -1689,7 +1659,15 @@ mod tests {
             parallel: None,
             hitl: None,
             requires_programs: vec![],
-            limits: None,
+            // The iteration errors (no live "pm") and produces no agent event,
+            // so a zero stuck window ends the loop right after it — the old
+            // `max_iterations: 1` no longer caps anything (spec §6), and
+            // without this the test would sit out the 10-minute default.
+            limits: Some(mur_common::limits::Limits {
+                deadline: None,
+                stuck: Some("0s".into()),
+                cost_usd: None,
+            }),
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         mur_channel::ChannelService::open(home)
@@ -1698,9 +1676,9 @@ mod tests {
             .unwrap();
         // Same empty queue as the fires case, but router policy: the gate must
         // not mistake an empty queue for `done_when: queue-empty`. No live
-        // "pm" agent exists to dial, so the iteration errors out and
-        // `run_loop_for_test` folds that into MaxIterations — the only claim
-        // under test is that the gate did NOT mistake this for a drained queue.
+        // "pm" agent exists to dial, so the iteration errors out and the zero
+        // stuck window stops the loop — the only claim under test is that the
+        // gate did NOT mistake this for a drained queue.
         let stop = run_loop_for_test(home).await;
         assert_ne!(stop, LoopStop::QueueDrained);
     }
@@ -1745,5 +1723,143 @@ mod tests {
         super::super::jobs::enqueue_job(home, "dev", "job-1", "cli").unwrap();
         let stop = run_loop_for_test(home).await;
         assert_ne!(stop, LoopStop::Converged);
+    }
+
+    fn bounds_fixture(name: &str) -> Fleet {
+        Fleet {
+            name: name.into(),
+            display_name: String::new(),
+            goal: "g".into(),
+            router: None,
+            team_id: None,
+            members: vec!["pm".into()],
+            channel_id: format!("fleet-{name}"),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: None,
+            parallel: None,
+            hitl: None,
+            requires_programs: vec![],
+            limits: None,
+        }
+    }
+
+    /// Guards, narrowest reason first: deadline, then stuck, then the
+    /// diagnostic ceiling. Stuck is a CLOCK now — how long since progress —
+    /// not a count of iterations.
+    #[test]
+    fn guards_are_deadline_then_stuck_then_ceiling() {
+        use mur_common::limits::Stuck;
+        let m = Duration::from_secs(60);
+        assert_eq!(
+            check_guards(
+                0,
+                Duration::ZERO,
+                60 * m,
+                Duration::ZERO,
+                Stuck::After(10 * m)
+            ),
+            None
+        );
+        assert_eq!(
+            check_guards(3, 61 * m, 60 * m, Duration::ZERO, Stuck::After(10 * m)),
+            Some(LoopStop::Deadline)
+        );
+        assert_eq!(
+            check_guards(3, 5 * m, 60 * m, 10 * m, Stuck::After(10 * m)),
+            Some(LoopStop::Stuck)
+        );
+        assert_eq!(
+            check_guards(3, 5 * m, 60 * m, 99 * m, Stuck::Off),
+            None,
+            "off never trips"
+        );
+        assert_eq!(
+            check_guards(
+                LOOP_ITERATION_CEILING,
+                5 * m,
+                60 * m,
+                Duration::ZERO,
+                Stuck::Off
+            ),
+            Some(LoopStop::MaxIterations)
+        );
+        assert_eq!(
+            check_guards(3, 61 * m, 60 * m, 10 * m, Stuck::After(10 * m)),
+            Some(LoopStop::Deadline),
+            "deadline beats stuck when both are due"
+        );
+    }
+
+    /// §3.3 + §3.4: a fleet with no limits: block gets the 1h built-in;
+    /// flags beat fleet.yaml beats config.yaml; a legacy loop.budget_usd is
+    /// the cost cap (applicability is decided later by `budget_for`).
+    #[test]
+    fn fleet_bounds_resolve_across_scopes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        std::fs::write(
+            home.join("config.yaml"),
+            "limits:\n  deadline: 4h\n  stuck: 20m\n",
+        )
+        .unwrap();
+        let mut f = bounds_fixture("dev");
+        f.loop_cfg = Some(mur_common::fleet::FleetLoop {
+            trigger: "manual".into(),
+            max_iterations: 8,
+            budget_usd: 5.0,
+            deadline: "2h".into(),
+            done_when: String::new(),
+        });
+        let b = fleet_bounds(home, &f, None, None).unwrap();
+        assert_eq!(b.deadline, Duration::from_secs(2 * 3600));
+        assert_eq!(b.deadline_source, mur_common::limits::Source::Fleet);
+        assert_eq!(
+            b.stuck,
+            mur_common::limits::Stuck::After(Duration::from_secs(20 * 60))
+        );
+        assert_eq!(b.cost_usd, Some(5.0));
+        let b = fleet_bounds(home, &f, Some("15m"), Some(1.0)).unwrap();
+        assert_eq!(b.deadline, Duration::from_secs(15 * 60));
+        assert_eq!(b.deadline_source, mur_common::limits::Source::Flag);
+        assert_eq!(b.cost_usd, Some(1.0));
+        f.loop_cfg = None;
+        std::fs::remove_file(home.join("config.yaml")).unwrap();
+        let b = fleet_bounds(home, &f, None, None).unwrap();
+        assert_eq!(b.deadline, mur_common::limits::DEFAULT_DEADLINE_FLEET);
+        assert_eq!(b.deadline_source, mur_common::limits::Source::BuiltIn);
+        // an unparsable value is an error that names the key, not a default
+        f.limits = Some(mur_common::limits::Limits {
+            deadline: Some("soon".into()),
+            stuck: None,
+            cost_usd: None,
+        });
+        let e = fleet_bounds(home, &f, None, None).unwrap_err().to_string();
+        assert!(e.contains("limits.deadline") && e.contains("soon"), "{e}");
+    }
+
+    /// The remedies name the commands that exist now.
+    #[test]
+    fn remedies_name_mur_fleet_limits() {
+        assert!(
+            stop_remedy(LoopStop::Deadline, "dev")
+                .unwrap()
+                .contains("mur fleet limits dev --deadline")
+        );
+        assert!(
+            stop_remedy(LoopStop::Stuck, "dev")
+                .unwrap()
+                .contains("--stuck")
+        );
+        assert!(
+            stop_remedy(LoopStop::Budget, "dev")
+                .unwrap()
+                .contains("--cost-usd")
+        );
+        assert!(
+            stop_remedy(LoopStop::MaxIterations, "dev")
+                .unwrap()
+                .contains("ceiling")
+        );
     }
 }

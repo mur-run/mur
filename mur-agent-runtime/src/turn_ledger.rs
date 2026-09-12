@@ -90,57 +90,78 @@ impl Action {
 }
 
 /// Why the turn ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StopKind {
     /// The model finished on its own.
     EndTurn,
+    /// The 10 000-iteration diagnostic ceiling (spec §6) — a runaway.
     MaxIterations,
+    /// Retained so ledgers written before 2.79 still deserialise. Never
+    /// produced: the token budget is gone.
     TokenBudget,
     LoopDetected,
     /// Output hit `max_tokens` mid-thought.
     MaxTokens,
+    /// The unattended deadline passed (spec §3.2).
+    Deadline,
+    /// No progress for the stuck window; the last three tool calls (§3.5).
+    Stuck {
+        last_calls: String,
+    },
 }
+
+/// Repeated from `task_runner::ITERATION_CEILING` in prose; a test pins the
+/// two equal so the card never names a number the loop does not use.
+const ITERATION_CEILING_NOTE: &str = "the 10000-iteration safety ceiling was hit";
 
 impl StopKind {
     /// Did the turn end on its own terms? Anything else means the output may
     /// be incomplete, which a settlement must say out loud — today the runtime
     /// appends that notice as a trailing string, disconnected from whatever
     /// the model claimed a line earlier.
-    pub fn is_clean(self) -> bool {
-        self == StopKind::EndTurn
+    pub fn is_clean(&self) -> bool {
+        *self == StopKind::EndTurn
     }
 
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             StopKind::EndTurn => "end_turn",
-            StopKind::MaxIterations => "iteration cap",
+            StopKind::MaxIterations => "iteration ceiling",
             StopKind::TokenBudget => "token budget",
             StopKind::LoopDetected => "loop detected",
             StopKind::MaxTokens => "max_tokens",
+            StopKind::Deadline => "deadline",
+            StopKind::Stuck { .. } => "stuck",
         }
     }
 
-    /// What to do about it, in today's knobs. `hitl.max_iterations` and
-    /// `hitl.max_tokens` live in the agent's profile.yaml until the `limits:`
-    /// schema replaces them; the settlement card is where the user learns
-    /// which one bit, so it names it.
-    pub fn remedy(self) -> Option<&'static str> {
-        match self {
-            StopKind::EndTurn => None,
-            StopKind::MaxIterations => {
-                Some("raise hitl.max_iterations in the agent's profile.yaml and restart it")
-            }
-            StopKind::TokenBudget => {
-                Some("raise hitl.max_tokens in the agent's profile.yaml and restart it")
-            }
-            StopKind::LoopDetected => Some(
-                "the last tool call repeated with identical arguments — change the ask, or the tool's input",
+    /// What to do about it. The remedy names the command that exists NOW —
+    /// `mur limits <agent>` — because the settlement card is where the user
+    /// learns which bound bit.
+    pub fn remedy(&self, agent: &str) -> Option<String> {
+        Some(match self {
+            StopKind::EndTurn => return None,
+            StopKind::MaxIterations => format!(
+                "{ITERATION_CEILING_NOTE} — this is a runaway, not a setting; report it with the transcript"
             ),
-            StopKind::MaxTokens => {
-                Some("the model's output limit — ask it to continue from where it stopped")
+            StopKind::TokenBudget => {
+                "an old token budget stopped this turn; upgrade the agent runtime".to_string()
             }
-        }
+            StopKind::LoopDetected => {
+                "the last tool call repeated with identical arguments — change the ask, or the tool's input"
+                    .to_string()
+            }
+            StopKind::MaxTokens => {
+                "the model's output limit — ask it to continue from where it stopped".to_string()
+            }
+            StopKind::Deadline => format!(
+                "raise it: mur limits {agent} --deadline <1h>  (or --deadline on the fleet that launched it)"
+            ),
+            StopKind::Stuck { last_calls } => format!(
+                "no progress; last calls: {last_calls} — change the ask, or widen it: mur limits {agent} --stuck <20m|off>"
+            ),
+        })
     }
 }
 
@@ -152,6 +173,10 @@ pub struct TurnLedger {
     pub iterations: u32,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Whose turn this was — the remedy names `mur limits <agent>`. Empty on
+    /// ledgers written before 2.79 and on stub runners.
+    #[serde(default)]
+    pub agent: String,
 }
 
 impl Default for TurnLedger {
@@ -162,6 +187,7 @@ impl Default for TurnLedger {
             iterations: 0,
             input_tokens: 0,
             output_tokens: 0,
+            agent: String::new(),
         }
     }
 }
@@ -390,7 +416,7 @@ pub fn render(ledger: &TurnLedger) -> String {
             ledger.stop.as_str(),
             ledger.iterations
         ));
-        if let Some(r) = ledger.stop.remedy() {
+        if let Some(r) = ledger.stop.remedy(&ledger.agent) {
             out.push_str(&format!(" · {r}"));
         }
         out.push('\n');
@@ -581,7 +607,7 @@ mod tests {
         assert!(card.contains("sandbox:"), "{card}");
         // The truncation notice belongs IN the settlement, not appended after
         // the model's own claim where the two can contradict each other.
-        assert!(card.contains("iteration cap"), "{card}");
+        assert!(card.contains("iteration ceiling"), "{card}");
         assert!(card.contains("output may be incomplete"), "{card}");
     }
 
@@ -708,41 +734,52 @@ mod tests {
         assert!(card.contains("/tmp/some/file.txt"), "target lost:\n{card}");
     }
 
-    /// Every unclean stop says what to do about it, next to the fact. Naming
-    /// the knob is the difference between "the agent gave up" and "raise
-    /// hitl.max_tokens".
+    /// Every unclean stop says what to do about it, next to the fact, and
+    /// names the command that exists now.
     #[test]
     fn every_unclean_stop_names_its_remedy() {
-        assert_eq!(StopKind::EndTurn.remedy(), None);
+        assert_eq!(StopKind::EndTurn.remedy("dev"), None);
         for k in [
             StopKind::MaxIterations,
             StopKind::TokenBudget,
             StopKind::LoopDetected,
             StopKind::MaxTokens,
+            StopKind::Deadline,
+            StopKind::Stuck {
+                last_calls: "bash".into(),
+            },
         ] {
-            assert!(k.remedy().is_some(), "{k:?}");
+            assert!(k.remedy("dev").is_some(), "{k:?}");
         }
         assert!(
-            StopKind::MaxIterations
-                .remedy()
-                .unwrap()
-                .contains("hitl.max_iterations")
+            ITERATION_CEILING_NOTE.contains(&crate::task_runner::ITERATION_CEILING.to_string()),
+            "the card must name the ceiling the loop uses"
         );
         assert!(
-            StopKind::TokenBudget
-                .remedy()
+            StopKind::Deadline
+                .remedy("dev")
                 .unwrap()
-                .contains("hitl.max_tokens")
+                .contains("mur limits dev --deadline")
+        );
+        let s = StopKind::Stuck {
+            last_calls: "bash, bash, bash".into(),
+        }
+        .remedy("dev")
+        .unwrap();
+        assert!(
+            s.contains("bash, bash, bash") && s.contains("--stuck"),
+            "{s}"
         );
 
         let ledger = TurnLedger {
-            stop: StopKind::TokenBudget,
+            stop: StopKind::Deadline,
             iterations: 17,
+            agent: "dev".into(),
             ..Default::default()
         };
         let card = render(&ledger);
         assert!(
-            card.contains("⚠ stopped at token budget (17 iterations) — output may be incomplete · raise hitl.max_tokens"),
+            card.contains("⚠ stopped at deadline (17 iterations) — output may be incomplete · raise it: mur limits dev --deadline"),
             "{card}"
         );
     }

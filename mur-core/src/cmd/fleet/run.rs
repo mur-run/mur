@@ -400,7 +400,11 @@ pub async fn cmd_fleet_run(
         (p, None)
     };
     let run_id = format!("run-{}", uuid::Uuid::now_v7());
+    // A one-shot run is unattended too: its members inherit the fleet's
+    // resolved deadline (spec §3.4).
+    let bounds = super::loop_run::fleet_bounds(mur_home, &fleet, None, None)?;
     let opts = crate::executor::dag::DagExecOptions {
+        deadline_at: Some(std::time::Instant::now() + bounds.deadline),
         // Fail-closed default: do NOT blanket-approve. Fleet delegation steps carry
         // no risk tier today (member runtimes gate their own tools), but a future
         // router-emitted DAG with risk steps must fail-closed, never auto-approve

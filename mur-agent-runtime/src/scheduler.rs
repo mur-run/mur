@@ -40,6 +40,8 @@ fn scheduled_task_spec(message: &str) -> TaskSpec {
         active_team: None,
         intent: RequestIntent::Background(BackgroundKind::Scheduled),
         output_artifact_path: None,
+        attended: false,
+        deadline_secs: None,
     }
 }
 

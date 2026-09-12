@@ -65,7 +65,7 @@ pub fn with_limits(self, global: Limits, agent: Option<Limits>) -> Self
 
 ### Steps
 
-- [ ] **1.1 Write the failing tests** — new file `mur-agent-runtime/src/bounds.rs`:
+- [x] **1.1 Write the failing tests** — new file `mur-agent-runtime/src/bounds.rs`:
 
 ```rust
 //! What bounds one turn (spec 2026-09-12 execution-limits §3.2–§3.5).
@@ -231,9 +231,9 @@ mod tests {
 }
 ```
 
-- [ ] **1.2 Register and run** — add `pub mod bounds;` to `mur-agent-runtime/src/lib.rs` (alphabetical). `cargo nextest run -p mur-agent-runtime --lib -E 'test(/bounds::/)'`. Expected: 2 pass.
+- [x] **1.2 Register and run** — add `pub mod bounds;` to `mur-agent-runtime/src/lib.rs` (alphabetical). `cargo nextest run -p mur-agent-runtime --lib -E 'test(/bounds::/)'`. Expected: 2 pass.
 
-- [ ] **1.3 Write the failing `TaskSpec` test** — in `mur-agent-runtime/src/protocol/methods/message_send.rs` tests (create `#[cfg(test)] mod limits_params` at the bottom if the file has no test module):
+- [x] **1.3 Write the failing `TaskSpec` test** — in `mur-agent-runtime/src/protocol/methods/message_send.rs` tests (create `#[cfg(test)] mod limits_params` at the bottom if the file has no test module):
 
 ```rust
 #[cfg(test)]
@@ -250,9 +250,9 @@ mod limits_params {
 }
 ```
 
-- [ ] **1.4 Watch it fail** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(deadline_secs_is_read)'`. Expected: `cannot find function caller_deadline_secs`.
+- [x] **1.4 Watch it fail** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(deadline_secs_is_read)'`. Expected: `cannot find function caller_deadline_secs`.
 
-- [ ] **1.5 Add the fields and the parser** —
+- [x] **1.5 Add the fields and the parser** —
 
   `mur-agent-runtime/src/task_runner.rs`, in `pub struct TaskSpec`, after `pub output_artifact_path: ...` (last field):
 
@@ -315,9 +315,9 @@ pub(crate) fn caller_deadline_secs(p: &Value) -> Option<u64> {
 
   If `TaskError` has no `Internal` variant, use the variant the file already uses for configuration failures (grep `enum TaskError` first; do not add a variant).
 
-- [ ] **1.6 Watch it pass** — `cargo check -p mur-agent-runtime --all-targets` until zero `E0063`; then `cargo nextest run -p mur-agent-runtime --lib -E 'test(/bounds::|deadline_secs_is_read/)'`. Expected: 3 pass. `bounds_for` is unused until Task 2 — put `#[allow(dead_code)]` on it with the comment `// consumed by Task 2 of the loop-switch plan` and remove the attribute there.
+- [x] **1.6 Watch it pass** — `cargo check -p mur-agent-runtime --all-targets` until zero `E0063`; then `cargo nextest run -p mur-agent-runtime --lib -E 'test(/bounds::|deadline_secs_is_read/)'`. Expected: 3 pass. `bounds_for` is unused until Task 2 — put `#[allow(dead_code)]` on it with the comment `// consumed by Task 2 of the loop-switch plan` and remove the attribute there.
 
-- [ ] **1.7 fmt + clippy on `mur-agent-runtime`**, then **commit**:
+- [x] **1.7 fmt + clippy on `mur-agent-runtime`**, then **commit**:
 
 ```
 feat(runtime): TurnBounds — attended split and the caller's remaining clock
@@ -343,7 +343,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **2.1 Write the failing tests** — in `mur-agent-runtime/src/task_runner.rs` tests, next to `max_iterations_exceeded_yields_completed_with_summary`. Use the same stub client + tool helpers that test uses (read it first and copy its construction verbatim; the helpers below name what they must do):
+- [x] **2.1 Write the failing tests** — in `mur-agent-runtime/src/task_runner.rs` tests, next to `max_iterations_exceeded_yields_completed_with_summary`. Use the same stub client + tool helpers that test uses (read it first and copy its construction verbatim; the helpers below name what they must do):
 
 ```rust
     /// §7: an attended run passes the old 25-iteration mark without stopping.
@@ -398,9 +398,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
   Add the three helpers in the test module. `runner_with_scripted_tool_calls(n, attended, stuck)` builds a `TaskRunner` with a stub LLM that emits, for iteration `i < n`, one `bash` tool call with input `{"cmd": format!("step {i}")}`, and `end_turn` at `n`; registers a no-op `bash` tool that returns `"ok"`; calls `.with_limits(Limits { stuck: Some(stuck.into()), ..Default::default() }, None)`; returns a `TaskSpec { attended, deadline_secs: None, intent: RequestIntent::Interactive, .. }`. `runner_with_scripted_tool_calls_repeating(tool, n, attended, stuck)` is the same but every iteration emits the same `tool` with the same input `{"path": "x"}` (`write_file` stub returns `"ok"` too). `task_usage(&out)` returns `out.task.usage.clone().unwrap_or_default()` (adapt to the `TaskOutcome` shape the existing test reads `usage` from). `last_agent_text(&out)` joins the last agent message's text parts. Put them next to the existing stub-client helpers so they share the stub types; do not invent a second stub.
 
-- [ ] **2.2 Watch them fail** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(/attended_run_passes|unattended_stuck|unattended_deadline|iteration_ceiling/)'`. Expected: compile errors (`ITERATION_CEILING`, `with_limits` OK from Task 1; helpers missing until you add them; then the loop stops at 25 for the attended test).
+- [x] **2.2 Watch them fail** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(/attended_run_passes|unattended_stuck|unattended_deadline|iteration_ceiling/)'`. Expected: compile errors (`ITERATION_CEILING`, `with_limits` OK from Task 1; helpers missing until you add them; then the loop stops at 25 for the attended test).
 
-- [ ] **2.3 Switch the loop** — in `mur-agent-runtime/src/task_runner.rs`:
+- [x] **2.3 Switch the loop** — in `mur-agent-runtime/src/task_runner.rs`:
 
   Constants (replace `DEFAULT_MAX_ITERATIONS` / `DEFAULT_MAX_TOKEN_BUDGET` and their docs):
 
@@ -523,7 +523,7 @@ impl LoopStop {
 
   `sanitize_dangling_tool_uses(history, reason)` takes a `LoopStop` — update its match arms for the new variants (it only uses the reason for a string; keep that).
 
-- [ ] **2.4 `StopKind` grows and its remedy names the agent** — `mur-agent-runtime/src/turn_ledger.rs`:
+- [x] **2.4 `StopKind` grows and its remedy names the agent** — `mur-agent-runtime/src/turn_ledger.rs`:
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -580,11 +580,11 @@ pub enum StopKind {
         assert!(s.contains("bash, bash, bash") && s.contains("--stuck"), "{s}");
 ```
 
-- [ ] **2.5 Usage JSON** — `usage_obj["stop_reason"] = exit.reason.as_str().into();` already picks up the new strings. Remove the `"token_budget"` expectation from any test that asserted it (grep `token_budget` in tests; the test `..._with_max_token_budget(10)` at ~4113 tests a removed feature — delete it and say so in the commit).
+- [x] **2.5 Usage JSON** — `usage_obj["stop_reason"] = exit.reason.as_str().into();` already picks up the new strings. Remove the `"token_budget"` expectation from any test that asserted it (grep `token_budget` in tests; the test `..._with_max_token_budget(10)` at ~4113 tests a removed feature — delete it and say so in the commit).
 
-- [ ] **2.6 Watch it pass** — `cargo nextest run -p mur-agent-runtime --lib`. Expected: all pass, including the four new tests. If `attended_run_passes_the_old_iteration_cap` is slow (30 stub turns), it should still be < 2 s; if not, the stub is doing I/O — fix the stub, not the assertion.
+- [x] **2.6 Watch it pass** — `cargo nextest run -p mur-agent-runtime --lib`. Expected: all pass, including the four new tests. If `attended_run_passes_the_old_iteration_cap` is slow (30 stub turns), it should still be < 2 s; if not, the stub is doing I/O — fix the stub, not the assertion.
 
-- [ ] **2.7 fmt + clippy on `mur-agent-runtime`**, then **commit**:
+- [x] **2.7 fmt + clippy on `mur-agent-runtime`**, then **commit**:
 
 ```
 feat(runtime): deadline and stuck govern the loop; iterations and tokens do not
@@ -610,7 +610,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **3.1 Write the failing test** — `mur-agent-runtime/src/supervisor.rs` tests:
+- [x] **3.1 Write the failing test** — `mur-agent-runtime/src/supervisor.rs` tests:
 
 ```rust
     /// §6: a profile with the old caps starts, warns once per key, and the
@@ -628,9 +628,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
     }
 ```
 
-- [ ] **3.2 Watch it fail** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(stale_caps_warn_once)'`. Expected: `cannot find function stale_cap_warnings`.
+- [x] **3.2 Watch it fail** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(stale_caps_warn_once)'`. Expected: `cannot find function stale_cap_warnings`.
 
-- [ ] **3.3 Implement** — `supervisor.rs`, near the call site (~line 559):
+- [x] **3.3 Implement** — `supervisor.rs`, near the call site (~line 559):
 
 ```rust
 /// §6: the old per-agent caps are loaded and ignored. One line per key at
@@ -687,9 +687,9 @@ pub fn stale_cap_warnings(hitl: &mur_common::agent::HitlConfig) -> Vec<String> {
 
   written out in full against the same stub the deleted test used.
 
-- [ ] **3.4 Watch it pass** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(/stale_caps|build_runner_applies/)'` then the whole crate. `command grep -rn "build_provider_runner\|max_token_budget\|with_max_iterations" mur-gui-core/src mur-hub-gui/src-tauri/src` must print nothing.
+- [x] **3.4 Watch it pass** — `cargo nextest run -p mur-agent-runtime --lib -E 'test(/stale_caps|build_runner_applies/)'` then the whole crate. `command grep -rn "build_provider_runner\|max_token_budget\|with_max_iterations" mur-gui-core/src mur-hub-gui/src-tauri/src` must print nothing.
 
-- [ ] **3.5 fmt + clippy**, then **commit**:
+- [x] **3.5 fmt + clippy**, then **commit**:
 
 ```
 feat(runtime): the supervisor passes limits, ignores the old caps, and says so once
@@ -711,7 +711,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **4.1 Write the failing tests** — `mur-core/src/cmd/fleet/loop_run.rs` tests. Replace `check_guards_precedence_and_trips` and `effective_max_iterations_precedence` (both test removed behaviour) with:
+- [x] **4.1 Write the failing tests** — `mur-core/src/cmd/fleet/loop_run.rs` tests. Replace `check_guards_precedence_and_trips` and `effective_max_iterations_precedence` (both test removed behaviour) with:
 
 ```rust
     /// Guards, narrowest reason first: deadline, then stuck, then the
@@ -816,9 +816,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
   (`loop_fleet` is the existing fixture; make its `budget_usd` 0.0 and `deadline` empty if it is not already, and add `limits: None`.)
 
-- [ ] **4.2 Watch them fail** — `cargo nextest run -p mur-core --lib -E 'test(/guards_are_deadline|fleet_bounds_resolve|remedies_name|delegate_params_carry|remaining_secs_floors/)'` and `cargo nextest run -p mur-daemon -E 'test(eligibility_is_a_resolvable)'`. Expected: compile errors for the new names.
+- [x] **4.2 Watch them fail** — `cargo nextest run -p mur-core --lib -E 'test(/guards_are_deadline|fleet_bounds_resolve|remedies_name|delegate_params_carry|remaining_secs_floors/)'` and `cargo nextest run -p mur-daemon -E 'test(eligibility_is_a_resolvable)'`. Expected: compile errors for the new names.
 
-- [ ] **4.3 `loop_run.rs`** —
+- [x] **4.3 `loop_run.rs`** —
 
   Replace `DEFAULT_MAX_ITERATIONS`, `STUCK_LIMIT`, `effective_max_iterations`, `effective_deadline`, `effective_budget` with:
 
@@ -957,7 +957,7 @@ pub fn check_guards(
 
   and update `every_stop_short_of_done_names_a_remedy`'s three `contains` assertions (`--deadline`, `--cost-usd`, and drop the `--max-iterations` one for `contains("ceiling")`).
 
-- [ ] **4.4 `dag.rs`** — `DagExecOptions` gains
+- [x] **4.4 `dag.rs`** — `DagExecOptions` gains
 
 ```rust
     /// The launching scope's deadline, as an instant (spec §3.4). A delegated
@@ -980,9 +980,9 @@ fn remaining_secs(deadline_at: Option<std::time::Instant>, now: std::time::Insta
 
   `build_channel_delegate_params` gains `deadline_secs: Option<u64>` and inserts `"limits": {"deadline_secs": n}` when `Some`. The call in `execute_step` passes `remaining_secs(opts.deadline_at, std::time::Instant::now())`.
 
-- [ ] **4.5 `run.rs`** — the one-shot `mur fleet run` is unattended too: before building `opts`, `let bounds = super::loop_run::fleet_bounds(mur_home, &fleet, None, None)?;` and set `deadline_at: Some(std::time::Instant::now() + bounds.deadline),`. (`fleet_bounds` is `pub`; `run.rs` already imports from `loop_run`? It is the other way round — `loop_run` imports `run::build_fleet_procedure`; a `super::loop_run::` path from `run.rs` is fine, both are siblings under `cmd/fleet`.)
+- [x] **4.5 `run.rs`** — the one-shot `mur fleet run` is unattended too: before building `opts`, `let bounds = super::loop_run::fleet_bounds(mur_home, &fleet, None, None)?;` and set `deadline_at: Some(std::time::Instant::now() + bounds.deadline),`. (`fleet_bounds` is `pub`; `run.rs` already imports from `loop_run`? It is the other way round — `loop_run` imports `run::build_fleet_procedure`; a `super::loop_run::` path from `run.rs` is fine, both are siblings under `cmd/fleet`.)
 
-- [ ] **4.6 `fleet_tick.rs`** — replace `eligible(lc, &billing)` and the `unbounded_reason` warning with
+- [x] **4.6 `fleet_tick.rs`** — replace `eligible(lc, &billing)` and the `unbounded_reason` warning with
 
 ```rust
         // §5 after the loop switch: bounded = the fleet's limits resolve. The
@@ -1002,7 +1002,7 @@ fn remaining_secs(deadline_at: Option<std::time::Instant>, now: std::time::Insta
 
   delete the local `fn eligible`, and delete `is_bounded` / `unbounded_reason` (and their tests) from `mur-core/src/cmd/fleet/billing.rs` — `command grep -rn "is_bounded\|unbounded_reason" mur-core mur-daemon` must print nothing afterwards. Keep `kill_switch_beats_a_bounded_due_fleet` (rename the doc line: "bounded by the built-in deadline").
 
-- [ ] **4.7 `mur limits` stale note** — `mur-core/src/cmd/limits.rs`:
+- [x] **4.7 `mur limits` stale note** — `mur-core/src/cmd/limits.rs`:
 
 ```rust
 const STEP4_NOTE: &str = "IGNORED since 2.79 — remove it; the bounds are limits: deadline / stuck / cost_usd";
@@ -1010,9 +1010,9 @@ const STEP4_NOTE: &str = "IGNORED since 2.79 — remove it; the bounds are limit
 
   and update `a_legacy_fleet_is_read_and_its_stale_keys_named`'s assertion from `"still applied until"` to `"IGNORED since 2.79"`.
 
-- [ ] **4.8 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/fleet::|executor::dag::|cmd::limits/)'`, `cargo nextest run -p mur-daemon`. Then the deep-research path that passes `max_iterations: 4`: `command grep -rn "max_iterations" mur-core/src/cmd/deep_research/` — leave the field (it is `FleetLoop`'s), the loop now prints the ignored notice; confirm `cargo run -q -p mur-core --bin mur -- fleet run deep-research --loop --deadline 1s` (real home, harmless: it stops on the deadline before the first iteration) prints `bounds: deadline 1s ← command-line flag` and the two ℹ lines, then a `stopped: deadline` settlement.
+- [x] **4.8 Watch it pass** — `cargo nextest run -p mur-core --lib -E 'test(/fleet::|executor::dag::|cmd::limits/)'`, `cargo nextest run -p mur-daemon`. Then the deep-research path that passes `max_iterations: 4`: `command grep -rn "max_iterations" mur-core/src/cmd/deep_research/` — leave the field (it is `FleetLoop`'s), the loop now prints the ignored notice; confirm `cargo run -q -p mur-core --bin mur -- fleet run deep-research --loop --deadline 1s` (real home, harmless: it stops on the deadline before the first iteration) prints `bounds: deadline 1s ← command-line flag` and the two ℹ lines, then a `stopped: deadline` settlement.
 
-- [ ] **4.9 fmt + clippy on `mur-core`, `mur-daemon`; Hub check last**, then **commit**:
+- [x] **4.9 fmt + clippy on `mur-core`, `mur-daemon`; Hub check last**, then **commit**:
 
 ```
 feat(fleet): the loop resolves limits:, stuck is a clock, delegates inherit the remaining deadline
@@ -1037,10 +1037,10 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **5.1 `CLAUDE.md`** — in the `mur fleet` bullet, replace the safety-triad sentence `auto-run also requires a positive \`loop.budget_usd\`` with `auto-run requires the fleet's \`limits:\` to resolve (every fleet is bounded by its deadline — built-in 1h — or a \`cost_usd\` on a billable model; see the 2026-09-12 execution-limits spec §5)`, and replace `run --loop adds guards (iteration cap, deadline, stuck-detection, --budget-usd from real per-token spend)` with `run --loop is bounded by \`deadline\` / \`stuck\` / \`cost_usd\` resolved across flags → fleet.yaml \`limits:\` → config.yaml → built-in (\`mur limits <fleet>\` shows what is in force and from where); iteration caps and token budgets are gone`. Add one line under the bullet: `- \`mur limits <name>\` / \`mur fleet limits\` / \`mur agent limits\` — show or edit the three knobs per scope; attended (murmur) turns have no hard stop, unattended ones stop on deadline or no progress.`
-- [ ] **5.2 `HitlConfig` docs** (`mur-common/src/agent.rs`) — the two field docs become `/// IGNORED since 2.79 (kept so old profiles load; warned at agent start). Bounds live in \`limits:\` — see \`mur limits <agent>\`.`
-- [ ] **5.3 `set-loop` help** (`mur-core/src/cli/actions.rs`) — `--max-iterations`: `Ignored since 2.79 (kept for old scripts); bounds are \`mur fleet limits\``; `--budget-usd`: `Legacy spelling of \`limits.cost_usd\` — prefer \`mur fleet limits <name> --cost-usd\``; `--deadline`: append `— prefer \`mur fleet limits <name> --deadline\``.
-- [ ] **5.4 `mur verify --file CLAUDE.md`** must pass (it scans for stale command claims). Commit:
+- [x] **5.1 `CLAUDE.md`** — in the `mur fleet` bullet, replace the safety-triad sentence `auto-run also requires a positive \`loop.budget_usd\`` with `auto-run requires the fleet's \`limits:\` to resolve (every fleet is bounded by its deadline — built-in 1h — or a \`cost_usd\` on a billable model; see the 2026-09-12 execution-limits spec §5)`, and replace `run --loop adds guards (iteration cap, deadline, stuck-detection, --budget-usd from real per-token spend)` with `run --loop is bounded by \`deadline\` / \`stuck\` / \`cost_usd\` resolved across flags → fleet.yaml \`limits:\` → config.yaml → built-in (\`mur limits <fleet>\` shows what is in force and from where); iteration caps and token budgets are gone`. Add one line under the bullet: `- \`mur limits <name>\` / \`mur fleet limits\` / \`mur agent limits\` — show or edit the three knobs per scope; attended (murmur) turns have no hard stop, unattended ones stop on deadline or no progress.`
+- [x] **5.2 `HitlConfig` docs** (`mur-common/src/agent.rs`) — the two field docs become `/// IGNORED since 2.79 (kept so old profiles load; warned at agent start). Bounds live in \`limits:\` — see \`mur limits <agent>\`.`
+- [x] **5.3 `set-loop` help** (`mur-core/src/cli/actions.rs`) — `--max-iterations`: `Ignored since 2.79 (kept for old scripts); bounds are \`mur fleet limits\``; `--budget-usd`: `Legacy spelling of \`limits.cost_usd\` — prefer \`mur fleet limits <name> --cost-usd\``; `--deadline`: append `— prefer \`mur fleet limits <name> --deadline\``.
+- [x] **5.4 `mur verify --file CLAUDE.md`** must pass (it scans for stale command claims). Commit:
 
 ```
 docs: the bounds are deadline / stuck / cost_usd — CLAUDE.md, HitlConfig, set-loop help
