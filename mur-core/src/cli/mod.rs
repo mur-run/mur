@@ -53,6 +53,15 @@ pub enum Commands {
     Stats,
     /// Check MUR setup and configuration health
     Doctor,
+    /// Every execution limit in force for a fleet or an agent, with the scope
+    /// it came from, and the legacy keys that will stop applying.
+    Limits {
+        /// Fleet or agent name
+        name: String,
+        /// Emit JSON instead of the table
+        #[arg(long)]
+        json: bool,
+    },
     /// Sync patterns to AI tools (or run a sync subcommand)
     Sync {
         /// Suppress output

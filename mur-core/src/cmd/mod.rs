@@ -46,6 +46,7 @@ pub(crate) mod inject_cmd;
 pub(crate) mod internals;
 pub mod job;
 pub(crate) mod learn;
+pub mod limits;
 pub mod media;
 pub(crate) mod migrate_patterns;
 pub(crate) mod misc;
