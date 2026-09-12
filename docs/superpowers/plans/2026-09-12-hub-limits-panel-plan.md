@@ -637,7 +637,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 
 ### Steps
 
-- [ ] **4.1 Write the failing test** — `fleetSettingsForm.test.ts` (or a new `fleetOverview.test.ts` beside `FleetOverview.tsx` if the pure helper lives there):
+- [x] **4.1 Write the failing test** — `fleetSettingsForm.test.ts` (or a new `fleetOverview.test.ts` beside `FleetOverview.tsx` if the pure helper lives there):
 
 ```ts
 import { statCards } from "../detail/fleet/fleetOverviewCards";
@@ -652,9 +652,9 @@ it("cards are deadline / stuck / done-when, and cost cap replaces stuck on a cap
 });
 ```
 
-- [ ] **4.2 Implement** — `components/detail/fleet/fleetOverviewCards.ts`: `statCards(limits: LimitsView, loop: FleetLoopView | null, t): {value, label}[]` — first card `lastRunLabel(loop?.last_run)`, second the deadline row's value, third `cost_usd` row's value + `limits.card.costCap` when `limits.billable && costRow.local`, else the stuck row's value + `limits.card.stuck`, fourth done-when as today. `FleetOverview.tsx` renders `statCards(detail.limits, loop, t)`. `FleetHeader.tsx` `fleetMeta` appends the badge from `badgeOf(detail.limits, t)`.
+- [x] **4.2 Implement** — `components/detail/fleet/fleetOverviewCards.ts`: `statCards(limits: LimitsView, loop: FleetLoopView | null, t): {value, label}[]` — first card `lastRunLabel(loop?.last_run)`, second the deadline row's value, third `cost_usd` row's value + `limits.card.costCap` when `limits.billable && costRow.local`, else the stuck row's value + `limits.card.stuck`, fourth done-when as today. `FleetOverview.tsx` renders `statCards(detail.limits, loop, t)`. `FleetHeader.tsx` `fleetMeta` appends the badge from `badgeOf(detail.limits, t)`.
 
-- [ ] **4.3 Watch it pass** — `npx vitest run`, `npx tsc --noEmit`. Commit:
+- [x] **4.3 Watch it pass** — `npx vitest run`, `npx tsc --noEmit`. Commit:
 
 ```
 feat(hub): fleet Overview cards read the resolved limits; header shows the §5 badge
