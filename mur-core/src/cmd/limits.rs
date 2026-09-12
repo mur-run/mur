@@ -9,6 +9,11 @@ use mur_common::limits::{Limits, ResolvedLimits, Scope, Source, Stuck, resolve};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
+    // The CLI's `--global` flag bypasses `Target` entirely (`dispatch.rs`
+    // calls `upsert_global_limits`/`render_limits_block` directly); this
+    // variant is constructed only by mur-hub-gui's global-scope LimitsPanel
+    // (Hub 3b, spec §10) and by this module's own tests.
+    #[allow(dead_code)]
     Global,
     Fleet(String),
     Agent(String),

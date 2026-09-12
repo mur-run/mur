@@ -146,6 +146,10 @@ pub fn upsert_global_limits(config_path: &Path, patch: &Patch) -> Result<()> {
 /// the fleet's loop.* through save_fleet, the agent's hitl.* through
 /// save_profile. Anything else is refused by name so a typo cannot clear a
 /// live setting.
+///
+/// Called by mur-hub-gui's `limits_remove_stale` Tauri command (Hub 3b) — the
+/// CLI has no equivalent subcommand yet, so the bin target never reaches it.
+#[allow(dead_code)]
 pub fn remove_stale_key(
     mur_home: &Path,
     target: &crate::cmd::limits::Target,
