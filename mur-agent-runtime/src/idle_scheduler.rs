@@ -146,6 +146,8 @@ async fn run_idle_loop(scheduler: IdleScheduler, cancel: CancellationToken) {
                         // no live user is watching this turn.
                         intent: RequestIntent::Background(BackgroundKind::Maintenance),
                         output_artifact_path: None,
+                        attended: false,
+                        deadline_secs: None,
                     })
                     .await;
 

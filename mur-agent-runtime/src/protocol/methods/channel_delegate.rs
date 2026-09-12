@@ -183,6 +183,8 @@ impl MethodHandler for ChannelDelegateHandler {
             // use the channel itself as the artifact transport). Future: wire
             // through if a caller needs a file alongside the channel event.
             output_artifact_path: None,
+            attended: false,
+            deadline_secs: super::message_send::caller_deadline_secs(&p),
         };
 
         // Synchronous is not attended: the caller is a fleet router waiting on

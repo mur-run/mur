@@ -59,6 +59,17 @@ pub struct TaskSpec {
     /// is declared in the system prompt every turn. `None` leaves the session
     /// cwd where it is.
     pub cwd: Option<std::path::PathBuf>,
+    /// Is a person watching this turn and able to stop it by hand? Attended
+    /// turns have no deadline and a stuck clock that only warns (spec §3.2).
+    /// Deliberately not defaulted: every construction site says which it is,
+    /// the way it already says `intent`. `message/send` passes its
+    /// `can_approve`; `channel/delegate` and every runtime scheduler pass
+    /// `false`.
+    pub attended: bool,
+    /// The launching scope's REMAINING clock, in seconds — a fleet delegating
+    /// with twelve minutes left passes 720 (spec §3.4). `None` = resolve the
+    /// deadline from `profile.yaml` → `config.yaml` → built-in.
+    pub deadline_secs: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -409,6 +420,12 @@ pub struct TaskRunner {
     /// loop picks it up at the next iteration boundary.
     steering: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::mpsc::Sender<String>>>>,
     hitl_timeout_secs: u32,
+    /// The two scopes this process can see — `config.yaml limits:` and the
+    /// agent's own `profile.yaml limits:` — resolved per turn in `bounds_for`.
+    limits: (
+        mur_common::limits::Limits,
+        Option<mur_common::limits::Limits>,
+    ),
     max_iterations: u32,
     /// Per-task ceiling on cumulative input tokens for the agentic loop. The
     /// loop snapshots the (per-runner) counter at entry and stops gracefully
@@ -548,6 +565,7 @@ impl TaskRunner {
             client_notifiers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             steering: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             hitl_timeout_secs: 300,
+            limits: (Default::default(), None),
             max_iterations: DEFAULT_MAX_ITERATIONS,
             max_token_budget: DEFAULT_MAX_TOKEN_BUDGET,
             tools: vec![],
@@ -876,6 +894,32 @@ impl TaskRunner {
     pub fn with_hitl_timeout_secs(mut self, secs: u32) -> Self {
         self.hitl_timeout_secs = secs;
         self
+    }
+
+    /// The two scopes the runtime can see: `config.yaml limits:` and the
+    /// agent's own `profile.yaml limits:`. Resolved per turn in `bounds_for`.
+    pub fn with_limits(
+        mut self,
+        global: mur_common::limits::Limits,
+        agent: Option<mur_common::limits::Limits>,
+    ) -> Self {
+        self.limits = (global, agent);
+        self
+    }
+
+    /// What bounds this turn. Errors only when a file carries an unparsable
+    /// value — surfaced as a failed task that names the key, per spec §4.
+    // consumed by Task 2 of the loop-switch plan
+    #[allow(dead_code)]
+    fn bounds_for(&self, spec: &TaskSpec) -> Result<crate::bounds::TurnBounds, TaskError> {
+        crate::bounds::resolve_bounds(
+            spec.attended,
+            &self.limits.0,
+            self.limits.1.as_ref(),
+            spec.deadline_secs,
+            std::time::Instant::now(),
+        )
+        .map_err(|e| task_error("limits", format!("limits: {e}"), false))
     }
 
     pub fn with_max_iterations(mut self, n: u32) -> Self {
@@ -2937,6 +2981,8 @@ mod tests {
             output_artifact_path: None,
             active_fleet: None,
             active_team: None,
+            attended: true,
+            deadline_secs: None,
         }
     }
 
@@ -2988,6 +3034,8 @@ mod tests {
             output_artifact_path: None,
             active_fleet: None,
             active_team: None,
+            attended: true,
+            deadline_secs: None,
         };
         assert_eq!(spec.task_id.as_deref(), Some("task-fixed-1"));
     }
@@ -3007,6 +3055,8 @@ mod tests {
             output_artifact_path: None,
             active_fleet: None,
             active_team: None,
+            attended: true,
+            deadline_secs: None,
         };
         let outcome = runner.run_sync(spec).await;
         let TaskOutcome::Completed(task) = outcome else {
@@ -3028,6 +3078,8 @@ mod tests {
             output_artifact_path: None,
             active_fleet: None,
             active_team: None,
+            attended: true,
+            deadline_secs: None,
         }
     }
 
@@ -3226,6 +3278,8 @@ mod tests {
             output_artifact_path: None,
             active_fleet: None,
             active_team: None,
+            attended: true,
+            deadline_secs: None,
         };
         let r2 = runner.clone();
         let handle = tokio::spawn(async move { r2.run_sync_streaming(spec, tx, None).await });
@@ -4024,6 +4078,8 @@ mod tests {
             output_artifact_path: None,
             active_fleet: None,
             active_team: None,
+            attended: true,
+            deadline_secs: None,
         };
         let outcome = runner.run_sync(spec).await;
         assert!(matches!(outcome, TaskOutcome::Completed(_)));
@@ -4073,6 +4129,8 @@ mod tests {
             output_artifact_path: None,
             active_fleet: None,
             active_team: None,
+            attended: true,
+            deadline_secs: None,
         };
         let outcome = runner.run_sync(spec).await;
         let TaskOutcome::Completed(task) = outcome else {
@@ -4217,6 +4275,8 @@ mod tests {
             output_artifact_path: None,
             active_fleet: None,
             active_team: None,
+            attended: true,
+            deadline_secs: None,
         }
     }
 
