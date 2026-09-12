@@ -43,14 +43,6 @@ export function FleetOverview({ detail, jobs, agentMap, onGoTo }: FleetOverviewP
           <span>{t("fleet.settings.lastRun")}</span>
         </div>
         <div>
-          <b>{loop ? loop.max_iterations : DASH}</b>
-          <span>{t("fleet.settings.maxIterations")}</span>
-        </div>
-        <div>
-          <b>{loop ? `$${loop.budget_usd}` : DASH}</b>
-          <span>{t("fleet.settings.budget")}</span>
-        </div>
-        <div>
           <b>{loop?.done_when || (loop ? t("fleet.settings.donePolicyRouter") : DASH)}</b>
           <span>{t("fleet.settings.doneWhen")}</span>
         </div>

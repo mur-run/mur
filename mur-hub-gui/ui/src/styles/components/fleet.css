@@ -476,3 +476,95 @@
 .fleet-overview__initial { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; background: var(--status-idle); color: #fff; font-size: 11px; font-weight: 600; }
 .fleet-overview__add { padding: 5px 10px; border-radius: var(--radius-md); border: 1px dashed var(--border-line); background: transparent; color: var(--text-secondary); font: inherit; font-size: var(--text-sm); cursor: pointer; }
 .fleet-overview__job { grid-template-columns: 80px 1fr auto; }
+
+/* ── LimitsPanel (spec §10.1) — mounted on Settings → General, the fleet
+   Settings tab, and the agent Overview card. ─────────────────────────── */
+
+.limits-panel {
+  margin-top: 4px;
+}
+
+.limits-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.limits-row__knob {
+  width: 70px;
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.limits-row__value {
+  min-width: 48px;
+}
+
+.limits-row--inherited .limits-row__value,
+.limits-row--inherited .limits-chip {
+  opacity: 0.55;
+}
+
+.limits-row__note {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.limits-row input {
+  flex: none;
+  width: 90px;
+  font-size: 12px;
+  padding: 5px 8px;
+}
+
+.limits-chip {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: var(--bg-card, rgba(255, 255, 255, 0.04));
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.limits-stale {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: #d97706;
+  padding: 4px 0;
+}
+
+.limits-panel__error {
+  margin-bottom: 8px;
+}
+
+/* ── Bounded badge (§10.2), on the fleet header meta line ──────────────── */
+
+.fleet-detail__bounded {
+  font-size: 11px;
+}
+
+.fleet-detail__bounded--ok {
+  color: #16a34a;
+}
+
+.fleet-detail__bounded--amber {
+  color: #d97706;
+}
+
+.fleet-detail__bounded--off {
+  color: #ef4444;
+}
+
+.fleet-detail__bounded-link {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline dotted;
+}

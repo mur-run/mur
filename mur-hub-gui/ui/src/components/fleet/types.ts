@@ -23,8 +23,6 @@ export interface LabelView {
 
 export interface FleetLoopView {
   trigger: string;
-  max_iterations: number;
-  budget_usd: number;
   deadline: string;
   done_when: string;
   last_run: string | null;
@@ -46,6 +44,7 @@ export interface FleetDetail {
   stopped: boolean;
   loop_cfg: FleetLoopView | null;
   parallel_summary: ParallelSummary | null;
+  limits: LimitsView;
 }
 
 export interface JobRow {
@@ -59,4 +58,33 @@ export interface JobRow {
   source?: string;
   started_at?: string;
   run_id?: string;
+}
+
+export interface LimitsRowView {
+  knob: "deadline" | "stuck" | "cost_usd";
+  value: string;
+  source: string;
+  note: string | null;
+  applies: boolean;
+  local: boolean;
+  raw: string | null;
+}
+
+export interface StaleView {
+  key: string;
+  file: string;
+  value: string;
+  message: string;
+}
+
+export interface LimitsView {
+  scope: "global" | "fleet" | "agent";
+  name: string | null;
+  rows: LimitsRowView[];
+  stale: StaleView[];
+  billable: boolean;
+  needs_restart: boolean;
+  attended_note: string;
+  bounded: "bounded" | "deadline_only" | "unbounded";
+  error: string | null;
 }
