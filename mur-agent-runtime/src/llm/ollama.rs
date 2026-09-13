@@ -27,14 +27,15 @@ fn to_ollama_messages(messages: &[RichMessage]) -> Vec<serde_json::Value> {
 pub struct OllamaClient {
     base_url: String,
     model: String,
-    http: reqwest::Client,
+    http: crate::sandbox::reqwest_guard::GuardedHttpClient,
 }
 
 impl OllamaClient {
     pub fn new(base_url: String, model: String) -> Self {
-        let http = crate::llm::llm_client_builder()
-            .build()
-            .expect("failed to build reqwest client");
+        let http = crate::sandbox::reqwest_guard::GuardedHttpClient::unrestricted(
+            crate::llm::llm_client_builder(),
+        )
+        .expect("failed to build guarded reqwest client");
         Self {
             base_url,
             model,
@@ -42,8 +43,13 @@ impl OllamaClient {
         }
     }
 
-    /// Construct with a pre-built reqwest client (e.g. carrying a HostGuard DNS resolver).
-    pub fn with_http_client(base_url: String, model: String, http: reqwest::Client) -> Self {
+    /// Construct with a pre-built guarded client (see `GuardedHttpClient`: the
+    /// host allowlist, `.no_proxy()` and the redirect re-check travel with it).
+    pub fn with_http_client(
+        base_url: String,
+        model: String,
+        http: crate::sandbox::reqwest_guard::GuardedHttpClient,
+    ) -> Self {
         Self {
             base_url,
             model,
@@ -104,14 +110,10 @@ impl LlmClient for OllamaClient {
         if let Some(m) = req.max_tokens {
             body["options"]["num_predict"] = json!(m);
         }
-        if let Ok(parsed) = reqwest::Url::parse(&url)
-            && let Err(e) = crate::sandbox::reqwest_guard::check_request_url(&parsed)
-        {
-            return Err(LlmError::Http(e));
-        }
         let resp = self
             .http
-            .post(url)
+            .post(&url)
+            .map_err(LlmError::Http)?
             .json(&body)
             .send()
             .await
@@ -162,14 +164,10 @@ impl LlmClient for OllamaClient {
         if let Some(m) = req.max_tokens {
             body["options"]["num_predict"] = json!(m);
         }
-        if let Ok(parsed) = reqwest::Url::parse(&url)
-            && let Err(e) = crate::sandbox::reqwest_guard::check_request_url(&parsed)
-        {
-            return Err(LlmError::Http(e));
-        }
         let mut resp = self
             .http
-            .post(url)
+            .post(&url)
+            .map_err(LlmError::Http)?
             .json(&body)
             .send()
             .await

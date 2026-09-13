@@ -31,14 +31,15 @@ pub struct OpenAiClient {
     base_url: String,
     auth: OpenAiAuth,
     model: String,
-    http: reqwest::Client,
+    http: crate::sandbox::reqwest_guard::GuardedHttpClient,
 }
 
 impl OpenAiClient {
     pub fn new(base_url: String, api_key: String, model: String) -> Self {
-        let http = crate::llm::llm_client_builder()
-            .build()
-            .expect("failed to build reqwest client");
+        let http = crate::sandbox::reqwest_guard::GuardedHttpClient::unrestricted(
+            crate::llm::llm_client_builder(),
+        )
+        .expect("failed to build guarded reqwest client");
         Self {
             base_url,
             auth: OpenAiAuth::Bearer(api_key),
@@ -52,7 +53,7 @@ impl OpenAiClient {
         base_url: String,
         api_key: String,
         model: String,
-        http: reqwest::Client,
+        http: crate::sandbox::reqwest_guard::GuardedHttpClient,
     ) -> Self {
         Self {
             base_url,
@@ -69,7 +70,7 @@ impl OpenAiClient {
     pub(crate) fn authless_with_http(
         base_url: String,
         model: String,
-        http: reqwest::Client,
+        http: crate::sandbox::reqwest_guard::GuardedHttpClient,
     ) -> Self {
         Self {
             base_url,
@@ -141,7 +142,7 @@ impl OpenAiClient {
         key: &secrecy::SecretString,
         model: String,
         base_url: Option<String>,
-        http: reqwest::Client,
+        http: crate::sandbox::reqwest_guard::GuardedHttpClient,
     ) -> Self {
         use secrecy::ExposeSecret;
         let base = base_url.unwrap_or_else(|| {
@@ -155,7 +156,7 @@ impl OpenAiClient {
     pub async fn from_agent_credentials_with_http(
         agent_name: &str,
         model: String,
-        http: reqwest::Client,
+        http: crate::sandbox::reqwest_guard::GuardedHttpClient,
     ) -> Result<Self, LlmError> {
         let account = format!("{agent_name}/OPENAI_API_KEY");
         // Through `SecretRef`, so a value cached before the sandbox sealed is
@@ -352,13 +353,8 @@ impl LlmClient for OpenAiClient {
         }
 
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        if let Ok(parsed) = reqwest::Url::parse(&url)
-            && let Err(e) = crate::sandbox::reqwest_guard::check_request_url(&parsed)
-        {
-            return Err(LlmError::Http(e));
-        }
         let resp = self
-            .apply_auth(self.http.post(url))
+            .apply_auth(self.http.post(&url).map_err(LlmError::Http)?)
             .json(&body)
             .send()
             .await
@@ -427,13 +423,8 @@ impl LlmClient for OpenAiClient {
         }
 
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        if let Ok(parsed) = reqwest::Url::parse(&url)
-            && let Err(e) = crate::sandbox::reqwest_guard::check_request_url(&parsed)
-        {
-            return Err(LlmError::Http(e));
-        }
         let mut resp = self
-            .apply_auth(self.http.post(url))
+            .apply_auth(self.http.post(&url).map_err(LlmError::Http)?)
             .json(&body)
             .send()
             .await

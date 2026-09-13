@@ -83,8 +83,12 @@ fn set_bounds(first: u64, idle: u64) {
     }
 }
 
-fn http() -> reqwest::Client {
-    super::llm_client_builder().build().unwrap()
+fn http() -> crate::sandbox::reqwest_guard::GuardedHttpClient {
+    // Unrestricted: these tests are about stream timing, not host policy, and
+    // they talk to 127.0.0.1 listeners. The SSRF screen still applies, which is
+    // why the loopback addresses here are not link-local.
+    crate::sandbox::reqwest_guard::GuardedHttpClient::unrestricted(super::llm_client_builder())
+        .unwrap()
 }
 
 fn req() -> LlmRequest {
