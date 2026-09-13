@@ -33,21 +33,16 @@ const DEFAULT_VERSION: &str = "2023-06-01";
 /// mid-tool_use truncation returns, now caused by thinking eating the budget.
 const DEFAULT_MAX_TOKENS: u32 = 32768;
 
-/// Total time allowed for a single LLM request (including server think time).
-///
-/// This is a TOTAL timeout — reqwest applies it until the response body has
-/// finished, so it bounds streamed responses too, and it is the constraint
-/// that actually binds. At roughly 50-80 output tokens/sec, 60s ran out
-/// somewhere around 3-5k tokens, well under `DEFAULT_MAX_TOKENS`; raising the
-/// token ceiling alone would have changed nothing. Adaptive thinking (now on
-/// by default — see above) spends part of that same wall clock before any
-/// text is emitted, which tightened it further.
-///
-/// 180s is chosen to make the token ceiling reachable while still failing a
-/// wedged request inside a few minutes rather than holding the slot open.
-const LLM_REQUEST_TIMEOUT_SECS: u64 = 180;
-/// Time allowed to establish a TCP connection to the LLM endpoint.
-const LLM_CONNECT_TIMEOUT_SECS: u64 = 10;
+// There was a TOTAL request timeout here (60s, then 180s). It is gone: reqwest
+// applies `.timeout()` until the response body finishes, so it bounded streamed
+// responses too, and at roughly 50-80 output tokens/sec it ran out somewhere
+// around 3-5k tokens — well under `DEFAULT_MAX_TOKENS`, so raising the token
+// ceiling alone changed nothing. Adaptive thinking spends part of the same wall
+// clock before any text is emitted, tightening it further. Raising the number
+// again would only move the cliff, so the clock was removed: liveness is now
+// the gap between streamed chunks (`crate::llm::StreamActivity`), and the
+// connect clock lives in `llm_client_builder()`. See spec
+// docs/superpowers/specs/2026-09-13-llm-idle-not-total-design.md.
 
 /// Service constant used by `mur agent secret set` / `mur agent secret delete`.
 /// Account format is `{agent_name}/{KEY}` (e.g. `kelp/ANTHROPIC_API_KEY`).
@@ -164,8 +159,6 @@ pub struct AnthropicClient {
 impl AnthropicClient {
     pub fn new(base_url: String, api_key: String, model: String) -> Self {
         let http = crate::llm::llm_client_builder()
-            .timeout(std::time::Duration::from_secs(LLM_REQUEST_TIMEOUT_SECS))
-            .connect_timeout(std::time::Duration::from_secs(LLM_CONNECT_TIMEOUT_SECS))
             .build()
             .expect("failed to build reqwest client");
         Self {

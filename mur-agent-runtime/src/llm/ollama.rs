@@ -4,11 +4,6 @@ use super::{LlmClient, LlmError, LlmRequest, LlmResponse, RichMessage, StopReaso
 use async_trait::async_trait;
 use serde_json::json;
 
-/// Total time allowed for a single LLM request (including server think time).
-const LLM_REQUEST_TIMEOUT_SECS: u64 = 60;
-/// Time allowed to establish a TCP connection to the LLM endpoint.
-const LLM_CONNECT_TIMEOUT_SECS: u64 = 10;
-
 /// Convert history into Ollama's `/api/chat` message array. Ollama's
 /// per-message `images` field takes raw base64 with no data-URI prefix and
 /// auto-detects the format, so (unlike Anthropic's typed `source.media_type`)
@@ -38,8 +33,6 @@ pub struct OllamaClient {
 impl OllamaClient {
     pub fn new(base_url: String, model: String) -> Self {
         let http = crate::llm::llm_client_builder()
-            .timeout(std::time::Duration::from_secs(LLM_REQUEST_TIMEOUT_SECS))
-            .connect_timeout(std::time::Duration::from_secs(LLM_CONNECT_TIMEOUT_SECS))
             .build()
             .expect("failed to build reqwest client");
         Self {
