@@ -2,8 +2,10 @@ import { useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { FleetDetail as Detail } from "../../fleet/types";
+import type { FleetTabId } from "../../shell/detailTabs";
+import { badgeOf } from "../../limits/limitsPanelLogic";
 import { useT } from "../../../i18n";
-import { loopDeadlineIsValid, modeBadgeLabel } from "../../fleet/fleetSettingsForm";
+import { modeBadgeLabel } from "../../fleet/fleetSettingsForm";
 import { SplitButton } from "../../shell/SplitButton";
 import { OverflowMenu } from "../../shell/OverflowMenu";
 import { deleteFleet, showToast, useFleetCall } from "./fleetActions";
@@ -11,8 +13,9 @@ import { deleteFleet, showToast, useFleetCall } from "./fleetActions";
 type T = ReturnType<typeof useT>["t"];
 
 /** The meta line under the title: router · members · channel · mode. */
-export function fleetMeta(detail: Detail, t: T): ReactNode {
+export function fleetMeta(detail: Detail, t: T, onGoTo: (tab: FleetTabId) => void): ReactNode {
   const mode = modeBadgeLabel(detail.parallel_summary, t);
+  const badge = badgeOf(detail.limits, t);
   return (
     <>
       <span>{t("fleet.router")}: {detail.router}</span>
@@ -25,6 +28,14 @@ export function fleetMeta(detail: Detail, t: T): ReactNode {
           <span className="sep">·</span>
           <span className="fleet-detail__mode-badge">{mode}</span>
         </>
+      )}
+      <span className="sep">·</span>
+      {badge.tone === "off" ? (
+        <button type="button" className="fleet-detail__bounded-link" onClick={() => onGoTo("settings")}>
+          <span className={`fleet-detail__bounded fleet-detail__bounded--${badge.tone}`}>{badge.text}</span>
+        </button>
+      ) : (
+        <span className={`fleet-detail__bounded fleet-detail__bounded--${badge.tone}`}>{badge.text}</span>
       )}
     </>
   );
@@ -45,31 +56,15 @@ export function FleetHeader({ detail, onRefresh, onDelete, onOpenInWindow }: Fle
   const { t } = useT();
   const { busy, setBusy, call } = useFleetCall(onRefresh);
   const [worktree, setWorktree] = useState(false);
-  const [loopOpen, setLoopOpen] = useState(false);
-  const [loopIterations, setLoopIterations] = useState("");
-  const [loopDeadline, setLoopDeadline] = useState("");
-  const [loopBudget, setLoopBudget] = useState("");
   const [sendOpen, setSendOpen] = useState(false);
   const [sendInput, setSendInput] = useState("");
 
-  function openLoopPanel() {
-    setLoopIterations(detail.loop_cfg?.max_iterations ? String(detail.loop_cfg.max_iterations) : "");
-    setLoopDeadline(detail.loop_cfg?.deadline ?? "");
-    setLoopBudget(detail.loop_cfg?.budget_usd ? String(detail.loop_cfg.budget_usd) : "");
-    setSendOpen(false);
-    setLoopOpen(true);
-  }
-
+  // No override fields any more (spec §10.1): the loop's bounds live in the
+  // Settings tab's LimitsPanel, one scope, always in force -- there is
+  // nothing left for a per-run popover to collect.
   async function handleRunLoop() {
-    if (!loopDeadlineIsValid(loopDeadline)) return;
     showToast(t("fleet.runStarted"));
-    setLoopOpen(false);
-    await call("fleet_run_loop", {
-      name: detail.name,
-      maxIterations: loopIterations.trim() ? Math.trunc(Number(loopIterations)) : null,
-      deadline: loopDeadline.trim() || null,
-      budgetUsd: loopBudget.trim() ? Number(loopBudget) : null,
-    });
+    await call("fleet_run_loop", { name: detail.name });
   }
 
   async function handleRun() {
@@ -151,14 +146,17 @@ export function FleetHeader({ detail, onRefresh, onDelete, onOpenInWindow }: Fle
         disabled={disabled || stopped}
         menuLabel={t("fleet.runOptions")}
         items={[
-          { id: "loop", label: t("fleet.run.loop"), onSelect: openLoopPanel },
+          {
+            id: "loop",
+            label: t("fleet.run.loop"),
+            onSelect: () => {
+              void handleRunLoop();
+            },
+          },
           {
             id: "send",
             label: t("fleet.send"),
-            onSelect: () => {
-              setLoopOpen(false);
-              setSendOpen(true);
-            },
+            onSelect: () => setSendOpen(true),
           },
           ...(detail.parallel_summary
             ? [
@@ -191,38 +189,6 @@ export function FleetHeader({ detail, onRefresh, onDelete, onOpenInWindow }: Fle
           { id: "delete", label: t("fleet.delete"), danger: true, onSelect: handleDelete },
         ]}
       />
-      {loopOpen && (
-        <div className="fleet-popover" role="dialog" aria-label={t("fleet.run.loop")}>
-          <div className="fleet-detail__loop-row">
-            <input
-              type="number"
-              min="1"
-              step="1"
-              value={loopIterations}
-              onChange={(e) => setLoopIterations(e.target.value)}
-              placeholder="8"
-            />
-            <input value={loopDeadline} onChange={(e) => setLoopDeadline(e.target.value)} placeholder="2h" />
-            <input value={loopBudget} onChange={(e) => setLoopBudget(e.target.value)} placeholder="$" type="number" min="0" step="0.01" />
-            <button
-              type="button"
-              className="btn btn--primary"
-              onClick={() => {
-                void handleRunLoop();
-              }}
-              disabled={disabled || !loopDeadlineIsValid(loopDeadline)}
-            >
-              {t("fleet.run.go")}
-            </button>
-            <button type="button" className="btn btn--secondary" onClick={() => setLoopOpen(false)}>
-              {t("fleet.cancel")}
-            </button>
-          </div>
-          {!loopDeadlineIsValid(loopDeadline) && (
-            <div className="fleet-settings__warning">{t("fleet.settings.invalidDuration")}</div>
-          )}
-        </div>
-      )}
       {sendOpen && (
         <div className="fleet-popover" role="dialog" aria-label={t("fleet.send")}>
           <div className="fleet-send">

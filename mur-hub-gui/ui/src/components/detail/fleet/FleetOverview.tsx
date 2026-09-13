@@ -1,28 +1,22 @@
 import type { AgentEntry } from "../../../types";
-import type { FleetDetail as Detail, JobRow } from "../../fleet/types";
+import type { FleetDetail as Detail, JobRow, LimitsRowView } from "../../fleet/types";
 import type { FleetTabId } from "../../shell/detailTabs";
 import { useT } from "../../../i18n";
-import type { TranslationKey } from "../../../i18n/types";
 import { avatarPreset, familyOf } from "../../../utils";
 import { PetFace } from "../../PetFace";
+import { statCards } from "./fleetOverviewCards";
+import { knobFor, statusLabel } from "./fleetJobsLogic";
 
 export interface FleetOverviewProps {
   detail: Detail;
   jobs: JobRow[];
   agentMap: Map<string, AgentEntry>;
-  onGoTo: (tab: FleetTabId) => void;
+  onGoTo: (tab: FleetTabId, knob?: LimitsRowView["knob"]) => void;
 }
 
 const DASH = "—";
 const JOB_PREVIEW = 3;
 
-/** `last_run` is an ISO timestamp from the loop record; show it in the
- *  viewer's locale when it parses, else as given. */
-function lastRunLabel(raw: string | null | undefined, never: string): string {
-  if (!raw) return never;
-  const ms = Date.parse(raw);
-  return Number.isNaN(ms) ? raw : new Date(ms).toLocaleString();
-}
 
 /** Overview (spec §4.4): goal, the loop limits from `loop_cfg`, members, the
  *  first jobs, and the loop summary. Iterations used and budget spent have no
@@ -38,23 +32,21 @@ export function FleetOverview({ detail, jobs, agentMap, onGoTo }: FleetOverviewP
         <p className="fleet-goal">{detail.goal}</p>
       </div>
       <div className="detail-card detail-stats">
-        <div>
-          <b>{lastRunLabel(loop?.last_run, t("fleet.never"))}</b>
-          <span>{t("fleet.settings.lastRun")}</span>
-        </div>
-        <div>
-          <b>{loop ? loop.max_iterations : DASH}</b>
-          <span>{t("fleet.settings.maxIterations")}</span>
-        </div>
-        <div>
-          <b>{loop ? `$${loop.budget_usd}` : DASH}</b>
-          <span>{t("fleet.settings.budget")}</span>
-        </div>
-        <div>
-          <b>{loop?.done_when || (loop ? t("fleet.settings.donePolicyRouter") : DASH)}</b>
-          <span>{t("fleet.settings.doneWhen")}</span>
-        </div>
+        {statCards(detail.limits, loop, t).map((card) => (
+          <div key={card.label}>
+            <b>{card.value}</b>
+            <span>{t(card.label)}</span>
+          </div>
+        ))}
       </div>
+      {detail.last_stop && detail.last_stop.stop_reason !== "converged" && (
+        <div className="fleet-overview__stopped">
+          <span>■ {t("limits.stopped", { reason: detail.last_stop.stop_reason })}</span>
+          <button type="button" className="btn btn--link" onClick={() => onGoTo("settings", knobFor(detail.last_stop!.stop_reason) ?? undefined)}>
+            {t("limits.openSettings")}
+          </button>
+        </div>
+      )}
       <div className="detail-two">
         <div className="detail-card">
           <div className="detail-card__eyebrow">{t("fleet.members")}</div>
@@ -85,9 +77,7 @@ export function FleetOverview({ detail, jobs, agentMap, onGoTo }: FleetOverviewP
             <div key={job.id} className="detail-kv fleet-overview__job">
               <span>{job.created_at.slice(0, 10)}</span>
               <span>{job.text}</span>
-              <span className={`fleet-job__status fleet-job__status--${job.status}`}>
-                {t(`fleet.status.${job.status}` as TranslationKey)}
-              </span>
+              <span className={`fleet-job__status fleet-job__status--${job.status}`}>{statusLabel(job, t)}</span>
             </div>
           ))}
           {jobs.length > JOB_PREVIEW && (

@@ -3,8 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import type { FleetDetail as Detail, JobRow } from "../../fleet/types";
 import { useT } from "../../../i18n";
-import type { TranslationKey } from "../../../i18n/types";
 import { showToast, useFleetCall } from "./fleetActions";
+import { statusLabel } from "./fleetJobsLogic";
 
 export interface FleetJobsProps {
   detail: Detail;
@@ -74,9 +74,7 @@ export function FleetJobs({ detail, jobs, onRefresh }: FleetJobsProps) {
         )}
         {displayedJobs.map((job) => (
           <div key={job.id} className="fleet-job">
-            <span className={jobStatusClass(job.status)}>
-              {t(`fleet.status.${job.status}` as TranslationKey)}
-            </span>
+            <span className={jobStatusClass(job.status)}>{statusLabel(job, t)}</span>
             <span className="fleet-job__text">{job.text}</span>
             <span className="fleet-job__ts">{job.created_at.slice(0, 10)}</span>
             {job.status === "queued" && (

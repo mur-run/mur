@@ -4,6 +4,7 @@ import type { AgentTabId } from "../../shell/detailTabs";
 import { useT } from "../../../i18n";
 import { NeedsYouBadge } from "../../shell/Status";
 import { activityFor } from "./agentOverview";
+import { LimitsPanel } from "../../limits/LimitsPanel";
 
 export interface OverviewTabProps {
   detail: AgentDetail | null;
@@ -108,6 +109,10 @@ export function OverviewTab(p: OverviewTabProps) {
             <button type="button" onClick={() => p.onGoTo("memory")}>{t("detail.tab.memory")}</button>
           </div>
         </div>
+      </div>
+      <div className="detail-card">
+        <div className="detail-card__eyebrow">{t("limits.title")}</div>
+        <LimitsPanel scope="agent" name={p.agentName} />
       </div>
     </>
   );

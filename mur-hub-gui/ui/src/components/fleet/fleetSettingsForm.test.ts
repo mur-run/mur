@@ -4,7 +4,6 @@ import {
   buildTrigger,
   settingsAreValid,
   modeBadgeLabel,
-  loopDeadlineIsValid,
   parseDonePolicy,
   buildDoneWhen,
   buildCronExpr,
@@ -17,12 +16,12 @@ describe("parseTrigger", () => {
   });
   it("splits interval:<dur>", () => {
     expect(
-      parseTrigger({ trigger: "interval:30m", max_iterations: 0, budget_usd: 0, deadline: "", done_when: "", last_run: null })
+      parseTrigger({ trigger: "interval:30m", deadline: "", done_when: "", last_run: null })
     ).toEqual({ kind: "interval", value: "30m" });
   });
   it("splits cron:<expr>", () => {
     expect(
-      parseTrigger({ trigger: "cron:*/15 * * * *", max_iterations: 0, budget_usd: 0, deadline: "", done_when: "", last_run: null })
+      parseTrigger({ trigger: "cron:*/15 * * * *", deadline: "", done_when: "", last_run: null })
     ).toEqual({ kind: "cron", value: "*/15 * * * *" });
   });
 });
@@ -38,47 +37,23 @@ describe("buildTrigger", () => {
 });
 
 describe("settingsAreValid", () => {
-  // Regression scenario for the Task 6 review finding: a calendar-date-shaped
-  // deadline must NOT slip through, because parse_duration on the backend only
-  // accepts digits + optional single-char s/m/h/d suffix -- an unparseable value
-  // silently means "no deadline enforced" (fail-open).
-  it("rejects a calendar-date-shaped deadline (manual trigger)", () => {
-    expect(settingsAreValid("manual", "", "2026-12-31")).toBe(false);
-  });
-
-  it("accepts a valid duration deadline", () => {
-    expect(settingsAreValid("manual", "", "2h")).toBe(true);
-  });
-
+  // Deadline/stuck/cost_usd moved to LimitsPanel (spec §10.1), which
+  // validates through the same server-side parser (see mur-core's
+  // limits_write tests) -- this function is trigger-only now.
   it("rejects an interval trigger with a non-duration value", () => {
-    expect(settingsAreValid("interval", "2026-12-31", "")).toBe(false);
+    expect(settingsAreValid("interval", "2026-12-31")).toBe(false);
   });
 
   it("accepts an interval trigger with a valid duration value", () => {
-    expect(settingsAreValid("interval", "30m", "")).toBe(true);
+    expect(settingsAreValid("interval", "30m")).toBe(true);
   });
 
-  it("accepts manual trigger with empty deadline (nothing configured)", () => {
-    expect(settingsAreValid("manual", "", "")).toBe(true);
-  });
-});
-
-describe("loopDeadlineIsValid", () => {
-  // Regression scenario mirroring settingsAreValid's: the Run-as-loop panel's
-  // deadline override is sent straight to fleet_run_loop, so a calendar-date-shaped
-  // value must NOT slip through -- parse_duration on the backend only accepts
-  // digits + optional single-char s/m/h/d suffix, and silently drops anything else
-  // (fail-open: "no deadline enforced").
-  it("rejects a calendar-date-shaped deadline", () => {
-    expect(loopDeadlineIsValid("2026-12-31")).toBe(false);
+  it("accepts a manual trigger regardless of value", () => {
+    expect(settingsAreValid("manual", "")).toBe(true);
   });
 
-  it("accepts a valid duration", () => {
-    expect(loopDeadlineIsValid("2h")).toBe(true);
-  });
-
-  it("accepts an empty string (no override)", () => {
-    expect(loopDeadlineIsValid("")).toBe(true);
+  it("rejects a cron trigger with an empty expression", () => {
+    expect(settingsAreValid("cron", "")).toBe(false);
   });
 });
 

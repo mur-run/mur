@@ -22,16 +22,22 @@ import {
   type CronShape,
 } from "../../fleet/fleetSettingsForm";
 import { deleteFleet, showToast, useFleetCall } from "./fleetActions";
+import { LimitsPanel } from "../../limits/LimitsPanel";
+import type { LimitsRowView, LimitsView } from "../../fleet/types";
 
 export interface FleetSettingsProps {
   detail: Detail;
   onRefresh: () => void;
   onDelete: () => void;
+  /** Set by the fleet Overview's "Adjust" action (spec §10.3): opens this
+   *  tab with the stop reason's knob already in edit mode. */
+  focusKnob?: LimitsRowView["knob"];
+  onLimitsChanged?: (v: LimitsView) => void;
 }
 
 /** Settings tab (spec §4.4): trigger / cron / loop guards / done-when, with
  *  the Danger zone last. State and effects are the old FleetDetail's. */
-export function FleetSettings({ detail, onRefresh, onDelete }: FleetSettingsProps) {
+export function FleetSettings({ detail, onRefresh, onDelete, focusKnob, onLimitsChanged }: FleetSettingsProps) {
   const { t } = useT();
   const { busy, setBusy } = useFleetCall(onRefresh);
 
@@ -93,34 +99,17 @@ export function FleetSettings({ detail, onRefresh, onDelete }: FleetSettingsProp
     };
   }, [detail.name, detail.loop_cfg?.trigger, detail.loop_cfg?.last_run]);
 
-  const [maxIter, setMaxIter] = useState(
-    detail.loop_cfg?.max_iterations ? String(detail.loop_cfg.max_iterations) : "",
-  );
-  const [deadline, setDeadlineValue] = useState(detail.loop_cfg?.deadline ?? "");
-  const [budget, setBudget] = useState(
-    detail.loop_cfg?.budget_usd ? String(detail.loop_cfg.budget_usd) : "",
-  );
   const loadedDoneWhen = detail.loop_cfg?.done_when ?? "";
   const loadedDonePolicy = parseDonePolicy(loadedDoneWhen);
   const [donePolicy, setDonePolicy] = useState<DonePolicyKind>(loadedDonePolicy);
 
-  const budgetWarning = trigKind !== "manual" && (!budget.trim() || Number(budget) <= 0);
-
   async function handleSaveSettings() {
-    if (!settingsAreValid(trigKind, trigValue, deadline)) return;
+    if (!settingsAreValid(trigKind, trigValue)) return;
     setBusy("fleet_set_loop");
     try {
       await invoke("fleet_set_loop", {
         name: detail.name,
         trigger: buildTrigger(trigKind, trigValue),
-        maxIterations: maxIter.trim() ? Math.trunc(Number(maxIter)) : null,
-        // Always a string, never null: the backend reads a `null` deadline as
-        // "leave this field alone", so `|| null` here was the same
-        // can't-clear-the-field bug `buildDoneWhen` already fixed for
-        // `done_when` -- an emptied box would save, say "Settings saved", and
-        // silently keep the old deadline. The validator already accepts "".
-        deadline: deadline.trim(),
-        budgetUsd: budget.trim() ? Number(budget) : null,
         doneWhen: buildDoneWhen(donePolicy, loadedDoneWhen),
       });
       showToast(t("fleet.settings.saved"));
@@ -202,37 +191,6 @@ export function FleetSettings({ detail, onRefresh, onDelete }: FleetSettingsProp
           </div>
         )}
         <div className="fleet-settings__row">
-          <label>{t("fleet.settings.maxIterations")}</label>
-          <input
-            type="number"
-            min="1"
-            step="1"
-            value={maxIter}
-            onChange={(e) => setMaxIter(e.target.value)}
-            placeholder="8"
-          />
-        </div>
-        <div className="fleet-settings__row">
-          <label>{t("fleet.settings.deadline")}</label>
-          <input value={deadline} onChange={(e) => setDeadlineValue(e.target.value)} placeholder="2h" />
-        </div>
-        {deadline.trim() !== "" && !DURATION_RE.test(deadline.trim()) && (
-          <div className="fleet-settings__warning">{t("fleet.settings.invalidDuration")}</div>
-        )}
-        <div className="fleet-settings__hint">{t("fleet.settings.deadlineHint")}</div>
-        <div className="fleet-settings__row">
-          <label>{t("fleet.settings.budget")}</label>
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            value={budget}
-            onChange={(e) => setBudget(e.target.value)}
-            placeholder="0.00"
-          />
-        </div>
-        {budgetWarning && <div className="fleet-settings__warning">{t("fleet.settings.budgetWarning")}</div>}
-        <div className="fleet-settings__row">
           <label>{t("fleet.settings.doneWhen")}</label>
           <select
             value={donePolicy}
@@ -266,10 +224,22 @@ export function FleetSettings({ detail, onRefresh, onDelete }: FleetSettingsProp
         <button
           className="btn btn--primary"
           onClick={handleSaveSettings}
-          disabled={busy !== null || !settingsAreValid(trigKind, trigValue, deadline)}
+          disabled={busy !== null || !settingsAreValid(trigKind, trigValue)}
         >
           {t("fleet.settings.save")}
         </button>
+
+        {/* The Hub renders what the CLI resolves (spec §10.1): the guard
+            fields above are gone — deadline, stuck and the cost cap live
+            here, one scope at a time. */}
+        <h3 className="detail-section__title limits-panel__title">{t("limits.title")}</h3>
+        <LimitsPanel
+          scope="fleet"
+          name={detail.name}
+          initial={detail.limits}
+          focusKnob={focusKnob}
+          onChanged={onLimitsChanged}
+        />
       </section>
 
       <section className="detail-section fleet-detail__danger" id="fleet-danger">

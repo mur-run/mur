@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useT } from "../../../i18n";
 import type { AgentEntry } from "../../../types";
-import { JOBS_POLL_MS, type FleetSummary, type FleetDetail as Detail, type JobRow, type LabelView } from "../../fleet/types";
+import { JOBS_POLL_MS, type FleetSummary, type FleetDetail as Detail, type JobRow, type LabelView, type LimitsRowView } from "../../fleet/types";
 import { Ico } from "../../agents/GridCard";
 import { DetailPage } from "../../shell/DetailPage";
 import { fleetStatusOf } from "../../shell/Status";
@@ -50,6 +50,14 @@ export function FleetDetailPane({
   const [detail, setDetail] = useState<Detail | null>(null);
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [tab, setTab] = useState<FleetTabId>(initialTab);
+  const [settingsFocus, setSettingsFocus] = useState<LimitsRowView["knob"] | undefined>(undefined);
+
+  // Every navigation sets or clears the settings focus, so a stale Adjust
+  // target does not linger once the user leaves and comes back another way.
+  function goTo(next: FleetTabId, knob?: LimitsRowView["knob"]) {
+    setSettingsFocus(knob);
+    setTab(next);
+  }
 
   const load = useCallback(async () => {
     try {
@@ -105,18 +113,26 @@ export function FleetDetailPane({
       avatar={<span className="fleet-avatar fleet-avatar--lg" aria-hidden="true"><Ico>{FLEET_GLYPH}</Ico></span>}
       title={detail.display_name}
       status={fleetStatusOf(summary)}
-      meta={fleetMeta(detail, t)}
+      meta={fleetMeta(detail, t, setTab)}
       actions={<FleetHeader detail={detail} onRefresh={refresh} onDelete={onDeleted} onOpenInWindow={onOpenInWindow} />}
       tabs={FLEET_TABS.map((id) => ({ id, label: t(FLEET_TAB_LABEL_KEY[id]) }))}
       activeTab={tab}
-      onTab={setTab}
+      onTab={goTo}
     >
-      {tab === "overview" && <FleetOverview detail={detail} jobs={jobs} agentMap={agentMap} onGoTo={setTab} />}
+      {tab === "overview" && <FleetOverview detail={detail} jobs={jobs} agentMap={agentMap} onGoTo={goTo} />}
       {tab === "members" && (
         <FleetMembers detail={detail} agentMap={agentMap} labels={labels} fleetLabels={summary.labels} onRefresh={refresh} />
       )}
       {tab === "jobs" && <FleetJobs detail={detail} jobs={jobs} onRefresh={refresh} />}
-      {tab === "settings" && <FleetSettings detail={detail} onRefresh={refresh} onDelete={onDeleted} />}
+      {tab === "settings" && (
+        <FleetSettings
+          detail={detail}
+          onRefresh={refresh}
+          onDelete={onDeleted}
+          focusKnob={settingsFocus}
+          onLimitsChanged={() => void load()}
+        />
+      )}
     </DetailPage>
   );
 }
