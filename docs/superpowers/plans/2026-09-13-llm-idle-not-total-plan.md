@@ -593,22 +593,22 @@ Spec D6a, §3.5.
 ## Task 5 — whole-workspace verification and the live check
 
 - [ ] `command grep -rn "LLM_REQUEST_TIMEOUT_SECS" mur-agent-runtime/src mur-core/src` → no hits.
-- [ ] `cargo fmt --all -- --check; echo $?` → `0`.
-- [ ] `cargo nextest run -p mur-agent-runtime > /tmp/ar.log 2>&1; echo $?` → `0`.
+- [x] `cargo fmt --all -- --check; echo $?` → `0`.
+- [x] `cargo nextest run -p mur-agent-runtime > /tmp/ar.log 2>&1; echo $?` → `0`.
       Record the pass count and compare it with Task 0's recorded count plus
       the tests this plan adds. A count that only went up by less than the
       number of new tests means something stopped being compiled.
-- [ ] `cargo nextest run -p mur-core > /tmp/core.log 2>&1; echo $?` → `0`.
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings > /tmp/cw.log 2>&1; echo $?` → `0`.
-- [ ] Hub, **last**: `cd mur-hub-gui/src-tauri && cargo check > /tmp/hub.log 2>&1; echo $?` → `0`.
+- [x] `cargo nextest run -p mur-core > /tmp/core.log 2>&1; echo $?` → `0`.
+- [x] `cargo clippy --workspace --all-targets -- -D warnings > /tmp/cw.log 2>&1; echo $?` → `0`.
+- [x] Hub, **last**: `cd mur-hub-gui/src-tauri && cargo check > /tmp/hub.log 2>&1; echo $?` → `0`.
       If the worktree lacks `mur-hub-gui/ui/dist`, symlink it from the main
       checkout first and **remove the symlink before committing**.
       `StopReason` is not referenced in the Hub (spec §3.4), so this is a
       regression check, not an expected edit.
-- [ ] Record the file sizes as *facts*, not as a pass/fail criterion:
+- [x] Record the file sizes as *facts*, not as a pass/fail criterion:
       `wc -l mur-agent-runtime/src/llm/{mod.rs,ollama.rs,anthropic.rs,client_builder.rs} mur-agent-runtime/src/llm/openai/mod.rs mur-agent-runtime/src/task_runner.rs`
-- [ ] Set the spec's Status line to `Implemented in #<PR>`.
-- [ ] Open PR 2. Body carries: D1–D7 one line each, the §1.1 correction (the
+- [x] Set the spec's Status line to `Implemented in #<PR>`.
+- [x] Open PR 2. Body carries: D1–D7 one line each, the §1.1 correction (the
       constants never reached a running agent), the §1.3 verdict from Task 1's
       recorded result, the file-size table above, and the live observations
       below.
@@ -635,6 +635,37 @@ Spec D6a, §3.5.
             truncation happen at ~5 s — proving the env override reaches the
             running process.
 - [ ] Tick this task and close #1287 via the PR.
+
+**Recorded facts from Task 5.**
+
+| Check | Result |
+|---|---|
+| `mur-agent-runtime` nextest | 1117 passed / 6 skipped, exit 0 (1086 on main) |
+| `mur-core` nextest | 5992 passed / 23 skipped, exit 0 |
+| workspace clippy `--all-targets -D warnings` | exit 0 |
+| `cargo fmt --all -- --check` | exit 0 |
+| Hub `cargo check` | exit 0 |
+| leftover `LLM_REQUEST_TIMEOUT_SECS` | none |
+
+| File | Lines |
+|---|---|
+| `llm/mod.rs` | 687 |
+| `llm/stream_activity.rs` (new) | 228 |
+| `llm/stream_idle_tests.rs` (new) | 566 |
+| `llm/openai/mod.rs` | 626 |
+| `llm/client_builder.rs` | 594 |
+| `llm/ollama.rs` | 352 |
+| `llm/anthropic.rs` | 1448 (pre-existing violation, 1400 before) |
+| `task_runner.rs` | 6335 (pre-existing violation, 6174 before) |
+
+The size check did its job: `llm/mod.rs` reached **901** with `StreamActivity`
+inlined, which is a §4 violation this branch created, so it was extracted to its
+own module in a separate commit. The two pre-existing violations were declared in
+Global Constraints before starting, so they are a recorded deviation and not a
+check that failed at the end.
+
+The Hub `ui/dist` symlink was created for the Hub check and **removed before the
+commit** — `git status` confirmed clean of it.
 
 ## Self-review
 
