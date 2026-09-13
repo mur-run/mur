@@ -26,7 +26,7 @@ impl ClaudeClient {
     pub fn with_http_client(
         base_url: String,
         model: String,
-        http: reqwest::Client,
+        http: crate::sandbox::reqwest_guard::GuardedHttpClient,
     ) -> Result<Self, LlmError> {
         let url = validate_loopback_base_url(&base_url, CLAUDE_ROUTE_PATH)?;
         // `AnthropicClient` appends `/v1/messages` itself, so hand it the
@@ -40,7 +40,10 @@ impl ClaudeClient {
     /// Registry entry → client. Rejects a `secret` outright rather than
     /// ignoring it: a key on a claude entry means someone expects it to be
     /// sent, and this route never sends one.
-    pub(crate) fn from_entry(entry: &ModelEntry, http: reqwest::Client) -> Result<Self, LlmError> {
+    pub(crate) fn from_entry(
+        entry: &ModelEntry,
+        http: crate::sandbox::reqwest_guard::GuardedHttpClient,
+    ) -> Result<Self, LlmError> {
         if entry.secret.is_some() {
             return Err(LlmError::Http(
                 "claude entries take no secret: the loopback gateway holds the Claude Code login"
@@ -122,7 +125,10 @@ mod tests {
 
     #[test]
     fn factory_builds_only_secret_free_loopback_entries() {
-        let http = reqwest::Client::new();
+        let http = crate::sandbox::reqwest_guard::GuardedHttpClient::unrestricted(
+            reqwest::Client::builder(),
+        )
+        .unwrap();
         let ok =
             ClaudeClient::from_entry(&entry(Some("http://127.0.0.1:8088/v1"), None), http.clone())
                 .unwrap();
@@ -165,7 +171,10 @@ mod tests {
         let client = ClaudeClient::with_http_client(
             format!("{}/v1", server.base_url()),
             "claude-opus-5".into(),
-            reqwest::Client::new(),
+            crate::sandbox::reqwest_guard::GuardedHttpClient::unrestricted(
+                reqwest::Client::builder(),
+            )
+            .unwrap(),
         )
         .unwrap();
         let req = LlmRequest {
