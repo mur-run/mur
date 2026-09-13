@@ -1,6 +1,6 @@
 # murmur: `!cmd` streams and is cancelled, never killed by a clock
 
-**Status:** Approved in conversation 2026-09-13; revised twice the same day after review (eleven findings across two rounds, each checked against the source before the design moved — see §7). Awaiting plan.
+**Status:** Approved in conversation 2026-09-13; revised twice the same day after review (eleven findings across two rounds, each checked against the source before the design moved — see §7). Implemented in #1293 (movement-only split in #1292).
 **Scope:** `mur-core/src/cmd/agent/cli/` only — a new `shell.rs` submodule plus thin edits to `stream.rs`, `app.rs`, `mod.rs`, `ui/message.rs`. No runtime, protocol, or agent-side change.
 **Issue:** #1286. Sibling of the agent-side fix in #1288 (`docs/superpowers/specs/2026-09-12-bash-yield-not-kill-design.md`), found by that spec's §1 scan.
 
