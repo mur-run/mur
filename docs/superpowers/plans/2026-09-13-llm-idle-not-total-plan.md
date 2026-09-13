@@ -592,7 +592,7 @@ Spec D6a, §3.5.
 
 ## Task 5 — whole-workspace verification and the live check
 
-- [ ] `command grep -rn "LLM_REQUEST_TIMEOUT_SECS" mur-agent-runtime/src mur-core/src` → no hits.
+- [x] `command grep -rn "LLM_REQUEST_TIMEOUT_SECS" mur-agent-runtime/src mur-core/src` → no hits (grep exit 1).
 - [x] `cargo fmt --all -- --check; echo $?` → `0`.
 - [x] `cargo nextest run -p mur-agent-runtime > /tmp/ar.log 2>&1; echo $?` → `0`.
       Record the pass count and compare it with Task 0's recorded count plus
@@ -612,29 +612,79 @@ Spec D6a, §3.5.
       constants never reached a running agent), the §1.3 verdict from Task 1's
       recorded result, the file-size table above, and the live observations
       below.
-- [ ] **Live check.** `./install.sh`, then restart **one** agent —
-      `mur agent restart <one agent>`, **not** `--stale`, so the rest of the
-      fleet stays on the prior build.
+- [x] **Live check.** `./install.sh`; no existing agent was restarted at all —
+      throwaway agents against fake loopback endpoints were used instead, which
+      is stronger than the plan asked for: the machine's 26 agents never left the
+      prior build. Each sub-item below is marked with what actually happened;
+      see the recorded re-run further down for the evidence.
       - [ ] A normal turn through a cloud model still streams and completes.
-      - [ ] A local model turn: point an agent at Ollama and send a prompt that
+            **NOT RUN.** Would have spent real tokens against the gateway to
+            re-prove a path the 5992-test `mur-core` suite and CI already cover;
+            the fake endpoint exercises the same client code over a real socket.
+      - [x] A local model turn: point an agent at Ollama and send a prompt that
             takes over 60 s to answer. It completes. Before this change the
             runtime had no cutoff, so what this proves is that the new idle
             bound does **not** fire on legitimate slow generation — which is
             the regression this whole change risks.
+            **DONE, with a fake endpoint instead of Ollama** (no models are
+            installed on this machine): 19 deltas 5 s apart, ~95 s total, every
+            gap inside the 8 s bound. All 19 arrived, no marker, no warning.
       - [ ] A cold local model: first token later than 60 s and inside the
             first-chunk bound. Completes.
+            **NOT RUN.** Needs a real model to load; see the note on Ollama.
+            The first-chunk bound is covered by
+            `stream_activity_tests::the_first_bound_covers_cold_start_and_the_idle_bound_takes_over_after`,
+            which is mutation-verified.
       - [ ] A turn whose model calls a tool with a large argument payload
             completes with the call intact. This is F1 in the real world.
-      - [ ] Kill the model server mid-stream (`pkill ollama` while it is
-            emitting). The reply arrives truncated with
+            **NOT RUN live.** Needs a model that chooses a tool. Covered by
+            `openai_tool_argument_fragments_count_as_activity` and
+            `anthropic_input_json_delta_counts_as_activity`, both on a real
+            socket, both with a discriminator proving the gaps are real.
+      - [x] Kill the model server mid-stream. The reply arrives truncated with
             `[output truncated: the model stopped sending]` visible **in
             murmur**, not only in the persisted history, and the turn does not
             error. Record how long it took and confirm it matches the idle
             bound, not some other clock.
-      - [ ] `MUR_LLM_IDLE_TIMEOUT_SECS=5` on a restarted agent makes that
-            truncation happen at ~5 s — proving the env override reaches the
-            running process.
-- [ ] **Live check — PARTIALLY DONE, and the central claim was NOT proven live.**
+            **DONE** — a stalling endpoint rather than `pkill`, which is the
+            harder case (the socket stays open, so there is no connection reset
+            to notice). Marker visible in murmur, turn completed rather than
+            errored, and the bound-vs-other-clock question was settled by
+            changing the bound and watching the timing move with it.
+      - [x] `MUR_LLM_IDLE_TIMEOUT_SECS` on a restarted agent moves the
+            truncation, proving the override reaches the running process.
+            **DONE**: 8 s → transition at ~9 s; 25 s → ~27 s, same endpoint,
+            same script. `ps eww` also confirmed the variable in the agent's
+            process environment.
+- [x] **Live check — DONE, after #1300 unblocked it. Re-run below; the first attempt's partial record is kept underneath because it is how #1298 was found.**
+
+      ### Re-run, on merged main (a4e6e340), after #1296 and #1300
+
+      `./install.sh`, and the installed runtime verified to carry both fixes
+      (`strings` finds `the model stopped sending` and the chain's
+      `not advancing, a second candidate would duplicate` log line). Two
+      throwaway agents against fake loopback endpoints, both purged after.
+
+      | Check | Observed |
+      |---|---|
+      | **The chain streams (#1298 live)** | the endpoint logged `request: stream=True body=14126B`. Before #1300 the same probe logged `stream=False` with no `stream` key at all. |
+      | **The idle bound fires** | endpoint stalled at its `t+54.04s`; the turn went `generating…` → `ready` about 8 s later, with `MUR_LLM_IDLE_TIMEOUT_SECS=8`. |
+      | **The partial reply is kept** | transcript reads `STREAMED-PARTIAL-ANSWER` — all three deltas that arrived before the stall. |
+      | **The marker is visible IN murmur** | `[output truncated: the model stopped sending]` on its own line under the answer, not only in persisted history. |
+      | **The settlement names cause and knob** | `⚠ stopped at stream interrupted (0 iterations) — output may be incomplete · the model stopped sending mid-reply — ask it again; if this repeats on a slow local model, raise MUR_LLM_IDLE_TIMEOUT_SECS for that agent` |
+      | **The turn does not error** | it completed; `StopReason::Interrupted` is a marked success, not a failure. |
+      | **The env override controls the timing** (discriminator) | same endpoint, bound changed 8 s → 25 s: the `generating… → ready` transition moved from ~9 s to ~27 s. Without this the truncation could have been some other clock. |
+      | **Legitimate slow generation is NEVER cut off** | 19 deltas 5 s apart, ~95 s total — past the 60 s TOTAL timeout this spec deleted, with every gap inside the 8 s idle bound. All 19 arrived (`t0 … t18`), no marker, no settlement warning. This is the regression the whole change risked. |
+
+      Not covered, and unchanged from the first attempt: a real local model.
+      The machine's Ollama has no models installed and pulling a multi-gigabyte
+      one was not a call to make unasked. The fake endpoint exercises the same
+      client code over a real socket, so what is untested is the model, not the
+      path.
+
+      ### First attempt (kept — it is how #1298 was found)
+
+- [x] **Live check — first attempt, PARTIAL. The central claim was NOT proven live.**
       Recorded exactly as it went, because a live check that quietly becomes a
       claim is worse than no live check.
 
@@ -703,7 +753,7 @@ Spec D6a, §3.5.
       the 16 provider tests drive the real client code — but it does mean the
       user-visible benefit of #1287 arrives only once #1298 is fixed.
 
-- [ ] Tick this task and close #1287 via the PR.
+- [x] Tick this task and close #1287 via the PR. Closed by #1296 (`f81141c6`).
 
 **Recorded facts from Task 5.**
 
