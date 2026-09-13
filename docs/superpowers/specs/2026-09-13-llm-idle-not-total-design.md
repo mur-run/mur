@@ -1,6 +1,6 @@
 # LLM clients: bound idleness, not generation
 
-**Status:** Drafted 2026-09-13; revised the same day after review — six findings, all six valid, none rebutted. The decorator seam of the first draft is gone (§7 F1). §1.3's proxy bypass was left open in the draft and is now **confirmed by probe** (§1.3). Awaiting re-review.
+**Status:** Drafted 2026-09-13; revised the same day after review — six findings, all six valid, none rebutted. The decorator seam of the first draft is gone (§7 F1). §1.3's proxy bypass was left open in the draft and is now **confirmed by probe** (§1.3). Implemented in #1296 (movement-only openai.rs split in #1295; spec and plan merged in #1294).
 **Scope:** `llm/mod.rs` (shared client builder, `StopReason`, one marker constant, the shared activity helper), `llm/client_builder.rs` (the single place the runtime's HTTP client is built), `llm/{ollama,openai,anthropic}.rs` (delete three constants; each SSE loop awaits through the helper), `task_runner.rs` (mark an interrupted reply the way `MaxTokens` is already marked), the workspace `Cargo.toml` (tokio `test-util`, dev-only), and `mur-core/src/cmd/agent_companion/preview.rs` (all three of its timeout-bearing branches). No wire-protocol change. No new YAML keys; two env overrides.
 **Parent:** `docs/superpowers/specs/2026-09-12-execution-limits-design.md` — applies its D3 ("attended runs have no hard stops") and D7 ("liveness is heartbeats, not a bigger read timeout") to the LLM transport, the last layer the redesign did not reach.
 **Issue:** #1287, filed by the sibling-limit scan in `docs/superpowers/specs/2026-09-12-bash-yield-not-kill-design.md` §1.
@@ -248,9 +248,23 @@ pub const STREAM_IDLE_TRUNCATION_MARKER: &str =
 sink as one `thinking: false` delta so the live UI shows the truncation too.
 One rule, one place, already-proven shape.
 
-Adding a variant makes every `match` on `StopReason` non-exhaustive, which is
-the point: each site is a decision about whether interrupted behaves like
-`MaxTokens` (truncated) or `EndTurn` (complete).
+**This claim was wrong and implementation disproved it.** The draft said adding
+a variant makes every `match` on `StopReason` non-exhaustive, so the compiler
+would list each decision site. It does not: every `match` involving
+`StopReason` maps a provider's *string* INTO the enum (`_ => StopReason::EndTurn`),
+and the consumers use equality — `truncated_by_max_tokens()`,
+`== StopReason::ToolUse`. `cargo check --all-targets` reported **zero**
+non-exhaustive errors, so the sites had to be found by hand:
+
+| Site | Decision |
+|---|---|
+| `task_runner.rs:1626`, `:2330` | `truncated_by_max_tokens()` — the two marking sites, D6a |
+| `task_runner.rs:2351` | `ToolUse` with no calls is a hard error; `Interrupted` never equals `ToolUse`, so it does not apply |
+| `task_runner.rs:2373` | `tool_calls.is_empty() || EndTurn` ends the turn. `Interrupted` with complete calls therefore **runs them**, which is deliberate: the calls kept are the ones fully emitted, and skipping them after `history.push(ToolUse)` would leave an orphan `tool_use` with no `tool_result` — invalid for the next Anthropic request |
+| `task_runner.rs:2376` | the ledger's `StopKind`. `EndTurn` would be a falsehood in a durable audit record, so `StopKind::StreamInterrupted` was added. Unlike `StopReason`, `StopKind` *is* matched exhaustively twice (`as_str`, `remedy`), so those two were compiler-enforced |
+
+The lesson generalises: "the compiler will find the sites for you" is a claim
+to verify, not assume. An enum read by equality gives no such help.
 
 Checked rather than assumed: `StopReason` appears only inside
 `mur-agent-runtime` (`task_runner.rs`, `supervisor_runner.rs`,
@@ -273,6 +287,18 @@ tokio = { workspace = true, features = ["test-util"] }
 
 Named here because the first draft mandated a paused clock while excluding
 the manifest from its scope (§7 F4).
+
+**And the paused clock turned out to be usable for only half of it.** A paused
+clock is right for unit-testing the timing rule, where nothing is blocked on
+I/O. It cannot test a provider against a fake server, because a task blocked on
+socket I/O counts as idle for auto-advance: tokio jumps straight to the
+server's next sleep deadline and every gap the harness tries to create
+collapses. This was caught by a discriminator — the
+fragments-count-as-activity test passed, then passed *again* with the idle
+bound set below the gap, which is only possible if the gap does not exist. The
+provider tests therefore run on a real clock with one-second bounds and
+gaps of a few hundred milliseconds, and their wall-clock durations are the
+evidence the gaps are real (the Ollama slow-generation test takes 6 s).
 
 ### 3.6 Known limitation, recorded rather than papered over
 

@@ -14,11 +14,6 @@ use serde_json::json;
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 
-/// Total time allowed for a single LLM request (including server think time).
-const LLM_REQUEST_TIMEOUT_SECS: u64 = 60;
-/// Time allowed to establish a TCP connection to the LLM endpoint.
-const LLM_CONNECT_TIMEOUT_SECS: u64 = 10;
-
 /// Service constant used by `mur agent secret set` (mirrors agent.rs).
 const MUR_AGENT_KEYCHAIN_SERVICE: &str = "mur-agent";
 
@@ -42,8 +37,6 @@ pub struct OpenAiClient {
 impl OpenAiClient {
     pub fn new(base_url: String, api_key: String, model: String) -> Self {
         let http = crate::llm::llm_client_builder()
-            .timeout(std::time::Duration::from_secs(LLM_REQUEST_TIMEOUT_SECS))
-            .connect_timeout(std::time::Duration::from_secs(LLM_CONNECT_TIMEOUT_SECS))
             .build()
             .expect("failed to build reqwest client");
         Self {
@@ -474,7 +467,25 @@ impl LlmClient for OpenAiClient {
             arguments: String,
         }
         let mut partial: std::collections::BTreeMap<u64, PartialToolCall> = Default::default();
-        while let Some(chunk) = resp.chunk().await.map_err(|e| LlmError::from_reqwest(&e))? {
+        let mut activity = crate::llm::StreamActivity::from_env();
+        let mut interrupted = false;
+        loop {
+            // Bounded by silence, never by total time (#1287). The bound is
+            // applied to the arrival of BYTES, not to anything reaching the
+            // sink: a chunk carrying only tool-argument fragments or a usage
+            // frame is life, and a sink-side guard would have called it idle.
+            let next = activity
+                .bounded(async { resp.chunk().await.map_err(|e| LlmError::from_reqwest(&e)) })
+                .await;
+            let chunk = match next {
+                Ok(Some(c)) => c,
+                Ok(None) => break,
+                Err(LlmError::Timeout) => {
+                    interrupted = true;
+                    break;
+                }
+                Err(e) => return Err(e),
+            };
             buf.extend_from_slice(&chunk);
             while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
                 let raw: Vec<u8> = buf.drain(..=nl).collect();
@@ -562,13 +573,38 @@ impl LlmClient for OpenAiClient {
         let tool_calls: Vec<crate::llm::ToolCallResult> = partial
             .into_values()
             .filter(|p| !p.name.is_empty())
-            .map(|p| crate::llm::ToolCallResult {
-                call_id: p.id,
-                tool_name: p.name,
-                input: serde_json::from_str(&p.arguments)
-                    .unwrap_or(serde_json::Value::Object(Default::default())),
+            .filter_map(|p| {
+                let input = if p.arguments.trim().is_empty() {
+                    // A no-argument call legitimately sends "".
+                    serde_json::Value::Object(Default::default())
+                } else {
+                    match serde_json::from_str(&p.arguments) {
+                        Ok(v) => v,
+                        // Unparseable arguments on an INTERRUPTED stream mean
+                        // the fragments stopped mid-JSON. Dropping the call
+                        // tells the model plainly that it did not happen;
+                        // substituting `{}` here would run a tool with
+                        // arguments the model never chose.
+                        Err(_) if interrupted => return None,
+                        // On a normal end this stays exactly as it was: a
+                        // server that sent malformed arguments gets the empty
+                        // object it always got.
+                        Err(_) => serde_json::Value::Object(Default::default()),
+                    }
+                };
+                Some(crate::llm::ToolCallResult {
+                    call_id: p.id,
+                    tool_name: p.name,
+                    input,
+                })
             })
             .collect();
+        if interrupted {
+            if text.is_empty() && tool_calls.is_empty() {
+                return Err(LlmError::Timeout);
+            }
+            stop_reason = StopReason::Interrupted;
+        }
         // A turn that goes straight to a tool call carries no text at all, and
         // that is a complete, correct response — only a turn with neither text
         // nor calls is the blank reply this guard exists to catch.

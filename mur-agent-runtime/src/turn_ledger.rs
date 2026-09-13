@@ -106,6 +106,12 @@ pub enum StopKind {
     LoopDetected,
     /// Output hit `max_tokens` mid-thought.
     MaxTokens,
+    /// The model's stream stopped sending and the partial reply was kept
+    /// (`StopReason::Interrupted`). Distinct from `MaxTokens`: nothing decided
+    /// to stop, the connection went quiet, so token usage for the turn is
+    /// unknown. Recorded separately because labelling it `end_turn` would put
+    /// a falsehood in a durable audit record (#1287).
+    StreamInterrupted,
     /// The unattended deadline passed (spec §3.2).
     Deadline,
     /// No progress for the stuck window; the last three tool calls (§3.5).
@@ -134,6 +140,7 @@ impl StopKind {
             StopKind::TokenBudget => "token budget",
             StopKind::LoopDetected => "loop detected",
             StopKind::MaxTokens => "max_tokens",
+            StopKind::StreamInterrupted => "stream interrupted",
             StopKind::Deadline => "deadline",
             StopKind::Stuck { .. } => "stuck",
         }
@@ -157,6 +164,11 @@ impl StopKind {
             }
             StopKind::MaxTokens => {
                 "the model's output limit — ask it to continue from where it stopped".to_string()
+            }
+            StopKind::StreamInterrupted => {
+                "the model stopped sending mid-reply — ask it again; if this repeats on a slow \
+                 local model, raise MUR_LLM_IDLE_TIMEOUT_SECS for that agent"
+                    .to_string()
             }
             StopKind::Deadline => format!(
                 "raise it: mur limits {agent} --deadline <1h>  (or --deadline on the fleet that launched it)"
