@@ -191,11 +191,7 @@ pub fn cancel(state: &mut ShellState, hard: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::stream::StreamMsg;
-    use super::run::alive;
     use super::*;
-    use std::time::Duration;
-    use tokio::sync::mpsc;
 
     #[test]
     fn shell_output_routes_by_turn_state() {
@@ -287,6 +283,13 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_quit_after_a_cancel_still_kills_the_group() {
+        // Unix-only imports live in the unix-only test: at module scope they
+        // break the Windows build, where `alive` is configured out.
+        use super::super::stream::StreamMsg;
+        use super::run::alive;
+        use std::time::Duration;
+        use tokio::sync::mpsc;
+
         // A group that ignores SIGTERM, so only the SIGKILL can end it —
         // which is the whole point: a polite signal would pass either way.
         let (child, pid) = spawn("trap '' TERM; sleep 60 & echo $!; wait")

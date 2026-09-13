@@ -377,7 +377,10 @@ pub(super) fn alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the process-spawning tests use these, and all of them are unix-only.
+    #[cfg(unix)]
     use std::time::Duration;
+    #[cfg(unix)]
     use tokio::sync::{mpsc, oneshot};
 
     /// Drive a command to completion, collecting every streamed chunk.
