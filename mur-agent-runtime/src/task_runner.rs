@@ -1634,6 +1634,21 @@ impl TaskRunner {
                             .await;
                     }
                 }
+                // The stream stopped sending (#1287). Same three destinations as
+                // the max_tokens marker above — returned reply, streamed output,
+                // persisted history — because a UI that only ever saw the
+                // deltas would show a truncated answer as a complete one.
+                if resp.stop_reason == crate::llm::StopReason::Interrupted {
+                    self.mark_stream_interruption(task_id, &mut resp);
+                    if let Some(s) = &sink {
+                        let _ = s
+                            .send(crate::llm::StreamDelta {
+                                text: crate::llm::STREAM_IDLE_TRUNCATION_MARKER.to_string(),
+                                thinking: false,
+                            })
+                            .await;
+                    }
+                }
                 let latency_ms = start.elapsed().as_millis() as u64;
                 *self
                     .last_model_ref
@@ -1723,6 +1738,35 @@ impl TaskRunner {
             "llm generation hit the max_tokens ceiling; reply is truncated (visible marker appended)"
         );
         resp.text.push_str(crate::llm::MAX_TOKENS_TRUNCATION_MARKER);
+    }
+
+    /// Mark a reply whose stream stopped sending (#1287).
+    ///
+    /// Reuses `last_turn_truncated`, and therefore the existing `truncated`
+    /// flag on the usage JSON, rather than adding a wire field: an interrupted
+    /// reply is truncated for every purpose the `max_tokens` marker exists for.
+    /// The ledger is where the two are told apart
+    /// (`StopKind::StreamInterrupted`).
+    ///
+    /// `output_tokens` is deliberately not logged here the way the max_tokens
+    /// helper logs it: providers send usage in the final frame, which by
+    /// definition never arrived, so the value is 0 and printing it would read
+    /// as "this reply cost nothing".
+    fn mark_stream_interruption(&self, task_id: &str, resp: &mut crate::llm::LlmResponse) {
+        self.last_turn_truncated.store(true, Ordering::Relaxed);
+        tracing::warn!(
+            agent = self
+                .hook_ctx
+                .as_ref()
+                .map(|c| c.agent_name.as_str())
+                .unwrap_or("<unknown>"),
+            task_id,
+            model = %resp.model,
+            kept_chars = resp.text.len(),
+            "llm stream stopped sending; partial reply kept (visible marker appended)"
+        );
+        resp.text
+            .push_str(crate::llm::STREAM_IDLE_TRUNCATION_MARKER);
     }
 
     async fn prepare_system_prompt(
@@ -2333,6 +2377,21 @@ impl TaskRunner {
                     let _ = s
                         .send(crate::llm::StreamDelta {
                             text: crate::llm::MAX_TOKENS_TRUNCATION_MARKER.to_string(),
+                            thinking: false,
+                        })
+                        .await;
+                }
+            }
+            // Second of the two sites (#1287). This repo has already shipped a
+            // bug where one of a pair of identical response-handling sites was
+            // updated and the other was not, so both carry this and a count
+            // assertion in the tests guards the pair.
+            if resp.stop_reason == StopReason::Interrupted {
+                self.mark_stream_interruption(task_id, &mut resp);
+                if let Some(s) = &sink {
+                    let _ = s
+                        .send(crate::llm::StreamDelta {
+                            text: crate::llm::STREAM_IDLE_TRUNCATION_MARKER.to_string(),
                             thinking: false,
                         })
                         .await;
@@ -4417,6 +4476,105 @@ mod tests {
         assert_eq!(
             usage["truncated"], true,
             "usage must flag the truncation; usage={usage:?}"
+        );
+    }
+
+    fn interrupted_text_response(text: &str) -> crate::llm::LlmResponse {
+        crate::llm::LlmResponse {
+            text: text.into(),
+            input_tokens: 5,
+            // 0 on purpose: usage arrives in the final frame, which never
+            // came. See `mark_stream_interruption`.
+            output_tokens: 0,
+            model: "test".into(),
+            tool_calls: vec![],
+            stop_reason: crate::llm::StopReason::Interrupted,
+        }
+    }
+
+    /// #1287, the agentic path (the deeper of the two response-handling sites).
+    /// A reply whose stream stopped sending must reach the user marked, and the
+    /// usage must flag it — the same three destinations the `max_tokens` marker
+    /// already has.
+    #[tokio::test]
+    async fn agentic_path_marks_a_stream_interruption() {
+        use crate::llm::stub::SequenceLlm;
+        let responses = vec![interrupted_text_response("half an ans")];
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                .with_iteration_ceiling(5),
+        );
+        let outcome = runner.run_sync(loop_spec("interrupted-agentic")).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed, got {outcome:?}");
+        };
+        let reply_text = task.messages.last().map(text_of).unwrap_or_default();
+        // `contains`, not `ends_with`: this path appends a settlement card
+        // after the reply. The marker must sit with the answer, before it.
+        let (answer, settlement) = reply_text
+            .split_once("─ settlement ─")
+            .expect("the agentic path always settles");
+        // The settlement card opens with a code fence, so trim that too: what
+        // must come last is the marker, not the fence.
+        let answer_body = answer.trim_end().trim_end_matches('`').trim_end();
+        assert!(
+            answer_body.ends_with(crate::llm::STREAM_IDLE_TRUNCATION_MARKER.trim_end()),
+            "an interrupted reply must not look complete, got: {answer_body}"
+        );
+        // The settlement names the cause and the knob, because `StopKind` keeps
+        // them apart. Without the added variant this said "end_turn".
+        assert!(
+            settlement.contains("stream interrupted"),
+            "the card must say what stopped the turn: {settlement}"
+        );
+        assert!(
+            settlement.contains("MUR_LLM_IDLE_TIMEOUT_SECS"),
+            "and name the knob that changes it: {settlement}"
+        );
+        let usage = task.usage.expect("usage is always populated");
+        assert_eq!(
+            usage["truncated"], true,
+            "an interrupted reply is truncated; usage={usage:?}"
+        );
+    }
+
+    /// The SECOND site, `run_llm` (companion / plain generate). Both sites are
+    /// asserted because this repo has already shipped a bug where one of a pair
+    /// of identical response-handling sites was updated and the other was not.
+    #[tokio::test]
+    async fn run_llm_path_marks_a_stream_interruption() {
+        use crate::llm::stub::SequenceLlm;
+        let responses = vec![interrupted_text_response("plain reply cut off")];
+        let runner = TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)));
+        let outcome = runner.run_sync(loop_spec("interrupted-run-llm")).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed, got {outcome:?}");
+        };
+        let reply_text = task.messages.last().map(text_of).unwrap_or_default();
+        assert!(
+            reply_text.ends_with(crate::llm::STREAM_IDLE_TRUNCATION_MARKER),
+            "run_llm reply must end with the interruption marker, got: {reply_text}"
+        );
+        let usage = task.usage.expect("usage is always populated");
+        assert_eq!(usage["truncated"], true, "usage={usage:?}");
+    }
+
+    /// The ledger tells the two truncations apart even though the usage flag
+    /// does not: `end_turn` for an interrupted turn would be a falsehood in a
+    /// durable audit record.
+    #[test]
+    fn the_ledger_distinguishes_an_interruption_from_a_clean_end() {
+        use crate::turn_ledger::StopKind;
+        assert_eq!(StopKind::StreamInterrupted.as_str(), "stream interrupted");
+        assert!(!StopKind::StreamInterrupted.is_clean());
+        assert!(
+            StopKind::StreamInterrupted
+                .remedy("a1")
+                .is_some_and(|r| r.contains("MUR_LLM_IDLE_TIMEOUT_SECS")),
+            "the remedy must name the knob that changes this"
         );
     }
 
