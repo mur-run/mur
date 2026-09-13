@@ -2,7 +2,11 @@
 
 > Execute with **`mur-executing-plans`**. Spec:
 > `docs/superpowers/specs/2026-09-13-murmur-bang-streaming-design.md` (D1–D10, §3.1–§3.7, §7 review log).
-> Issue: #1286. Base: `origin/main` at or after `a78427e5`. Work in a worktree under `.worktrees/` on branch `feat/murmur-bang-streaming`.
+> Issue: #1286. Base: `origin/main` at or after `a78427e5`.
+>
+> **Two PRs, in order.** PR 1 is Task 0 alone — pure code movement, which CLAUDE.md §4 requires to be its own PR, not merely its own commit. Merge it, then rebase PR 2 (Tasks 1–3) onto the new `main`. Branches: `refactor/cli-shell-module` then `feat/murmur-bang-streaming`, both in a worktree under `.worktrees/`.
+>
+> **Every commit builds.** Tasks 1–3 change an enum, its producer and its consumers together; splitting them would leave commits that cannot compile, so they are three *phases of one task* with a single commit and a single clippy run at the end. Do not commit mid-cutover.
 
 **Goal.** A `!cmd` in murmur runs with no wall-clock limit, streams its output into the transcript from the moment it is accepted, and ends only when it finishes or when the user stops it — by Ctrl-C, by quitting, by `/clear`, or by switching channel — at which point its whole process group dies and nothing it still emits reaches the screen.
 
@@ -20,13 +24,15 @@
 - **D6:** two caps, both keeping the **tail**: the card at `SHELL_CARD_MAX_BYTES` (256 KiB), the agent block at `SHELL_MAX_BYTES` (8 KiB, value unchanged).
 - **D7:** `!cmd` is single-flight. A second one is refused **before anything is spawned**. Never overwrite a live cancel handle — dropping an `oneshot::Sender` resolves its receiver, which would silently cancel the first command.
 - **D8:** one teardown path. `shell::cancel` is called by Ctrl-C, quit, `/clear` and a channel switch; every event carries its generation and the UI drops events from a retired one.
-- **D9:** every chunk a command will ever produce is forwarded before `ShellDone`. When a grandchild holds the pipes past the drain grace, the card says so rather than truncating silently.
+- **D9:** every chunk a command will ever produce is forwarded before `ShellDone`.
+- **D11:** a cancelled card is finalised synchronously by `stop_shell`, at the keypress. Never rely on the late `ShellDone` to stamp it — that event carries a generation the same call has just retired, so it is dropped by design.
+- **§3.5:** a soft cancel keeps the pid in `Cancelling` until the task reports back; `ShellDone` calls `state.done(gen)` **unconditionally**, before the UI's generation check. The SIGKILL escalation lives inside `run`'s select loop, never in a detached task. When a grandchild holds the pipes past the drain grace, the card says so rather than truncating silently.
 - **D10:** how a command ended is one enum, `ShellEnd`, not two loose fields.
 - **§1.4:** the agent block keeps the tail so `[exit N]` and a failure summary survive; `[output truncated]` leads the block.
 - **§3.1 / CLAUDE.md §4:** `app.rs` is 2894 lines and `mod.rs` is 3770, both already past the 800-line rule. New code goes in `cli/shell.rs`. Task 0 is pure movement in its own commit, as the rule requires.
 - stdin stays `Stdio::null()`. Interactive `!cmd` is out of scope.
 - `mur-core` must not reach into `mur-agent-runtime::tools::bash_jobs` for the kill helper even though the dependency exists — `signal_group` is local to `shell.rs` (spec §3.1 records why).
-- Before every commit: `cargo fmt --all`, then `cargo clippy -p mur-core --all-targets -- -D warnings > /tmp/c.log 2>&1; echo $?` — read the **exit code**, never a grep of the output.
+- Before every commit: `cargo fmt --all`, then `cargo clippy -p mur-core --all-targets -- -D warnings > /tmp/c.log 2>&1; echo $?` — read the **exit code**, never a grep of the output. Every commit this plan asks for must satisfy that; no commit may be made from a tree that does not build.
 
 ## File structure
 
@@ -42,7 +48,7 @@
 
 ## Task 0 — Pure movement: `shell_block` and `route_shell_output` into a new `shell.rs`
 
-No behaviour change. Its own commit so a reviewer can confirm that with `git show --stat` and a diff that only moves lines. CLAUDE.md §4 asks for exactly this.
+No behaviour change. **Its own PR on `refactor/cli-shell-module`**, because CLAUDE.md §4 asks for pure movement in a separate PR — a reviewer confirms it with `git show --stat` and a diff that only moves lines. Merge it before starting Task 1, then branch `feat/murmur-bang-streaming` from the new `main`.
 
 **Interfaces.** Produces: module `crate::cmd::agent::cli::shell` exporting `shell_block`, `ShellRoute`, `route_shell_output`. Consumes: nothing.
 
@@ -62,10 +68,20 @@ No behaviour change. Its own commit so a reviewer can confirm that with `git sho
 - [ ] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core -- cli:: > /tmp/t0.log 2>&1; echo $?` → `0`. Same test count as before the move; nothing was rewritten.
 - [ ] `cargo fmt --all`; `cargo clippy -p mur-core --all-targets -- -D warnings > /tmp/c0.log 2>&1; echo $?` → `0`.
 - [ ] Commit: `refactor(murmur): move shell_block/route_shell_output into cli/shell.rs (no behaviour change) (#1286 T0)`.
+- [ ] Open PR 1, title `refactor(murmur): move shell helpers into cli/shell.rs (no behaviour change)`, body naming CLAUDE.md §4 and stating that the diff only moves lines. Merge it on green CI.
+- [ ] `git fetch origin && git checkout -b feat/murmur-bang-streaming origin/main` — Tasks 1–4 build on the merged movement, not on top of the unmerged branch.
 
 ---
 
-## Task 1 — `shell.rs`: the engine
+## Task 1 — the cutover (three phases, ONE commit)
+
+Phases A–C below change `StreamMsg`, its producer and its consumers. Rust
+will not compile any intermediate state, so there is **one** commit, at the
+end of phase C, and **one** clippy run. Run `cargo check -p mur-core` between
+phases if you want a progress signal — expect errors until C closes — but do
+not commit and do not treat those errors as a checkpoint.
+
+### Phase A — `shell.rs`: the engine
 
 **Interfaces.** Consumes: `StreamMsg` (from `stream.rs`). Produces, in `crate::cmd::agent::cli::shell`:
 
@@ -148,8 +164,12 @@ pub const DRAIN_INCOMPLETE_NOTE: &str =
     "[output may be incomplete — a background process still holds this command's pipes]";
 const READ_BUF: usize = 8 * 1024;
 
-/// Keep the last `max` bytes of `text`, on a char boundary, prefixed with a
-/// marker when anything was dropped.
+/// Marker charged against the budget, not added on top of it (D6).
+const TRUNCATED: &str = "[output truncated]\n";
+
+/// Keep the last bytes of `text` that fit in `max`, on a char boundary,
+/// prefixed with a marker when anything was dropped. The result is **always**
+/// `<= max`: the marker comes out of the budget.
 ///
 /// The tail, not the head: the exit marker and a test run's verdict are the
 /// last lines written, and the old head-keeping cap dropped exactly those —
@@ -158,11 +178,22 @@ pub fn cap_tail(text: &str, max: usize) -> String {
     if text.len() <= max {
         return text.to_string();
     }
-    let mut cut = text.len() - max;
+    // Nudging `cut` forward to a char boundary only ever shrinks the result,
+    // so both branches stay within the cap.
+    if max <= TRUNCATED.len() {
+        // No room to say anything about the truncation; keep what fits.
+        let mut cut = text.len() - max;
+        while !text.is_char_boundary(cut) {
+            cut += 1;
+        }
+        return text[cut..].to_string();
+    }
+    let room = max - TRUNCATED.len();
+    let mut cut = text.len() - room;
     while !text.is_char_boundary(cut) {
         cut += 1;
     }
-    format!("[output truncated]\n{}", &text[cut..])
+    format!("{TRUNCATED}{}", &text[cut..])
 }
 
 /// How a `!command` ended (D10). One enum rather than `(Option<i32>, bool)`,
@@ -386,6 +417,8 @@ pub async fn run(
     let mut cancel = cancel;
     let mut cancelled = false;
     let mut end: Option<ShellEnd> = None;
+    // `Some` only between SIGTERM and its SIGKILL; dropped when the loop ends.
+    let mut escalate: Option<std::pin::Pin<Box<tokio::time::Sleep>>> = None;
     loop {
         tokio::select! {
             Some(chunk) = out_rx.recv() => {
@@ -403,13 +436,18 @@ pub async fn run(
             _ = &mut cancel, if !cancelled => {
                 cancelled = true;
                 signal_group(pid, SIGTERM_NUM);
-                // Fire-and-forget escalation: SIGKILL to a group that already
-                // died is ESRCH, which is harmless, so this needs no shared
-                // "is it still alive" state.
-                tokio::spawn(async move {
-                    tokio::time::sleep(KILL_GRACE).await;
-                    signal_group(pid, SIGKILL_NUM);
-                });
+                // D5: the escalation is OWNED BY THIS LOOP, not detached. A
+                // child that exits inside the grace breaks below and drops
+                // this timer, so no delayed `killpg` is ever left in flight —
+                // which also means we never signal a pgid we have stopped
+                // owning, as a recycled pid would make somebody else's.
+                escalate = Some(Box::pin(tokio::time::sleep(KILL_GRACE)));
+            }
+            () = async { escalate.as_mut().expect("guarded by the condition").await },
+                 if escalate.is_some() =>
+            {
+                signal_group(pid, SIGKILL_NUM);
+                escalate = None; // fires once
             }
         }
     }
@@ -604,26 +642,48 @@ pub async fn run(
         assert!(!ShellEnd::Cancelled.reaches_agent());
     }
 
-    /// Test 8 — D6 + §1.4: the cap keeps the TAIL and leads with the marker,
-    /// so an exit line written last survives.
+    /// Test 8 — D6 + §1.4: the cap keeps the TAIL, leads with the marker, and
+    /// the marker is INSIDE the budget. The old version returned `max` bytes
+    /// plus 19, so "the block is <= SHELL_MAX_BYTES" was false by a marker.
     #[test]
-    fn cap_tail_keeps_the_end_and_marks_the_front() {
+    fn cap_tail_keeps_the_end_within_the_budget() {
         let text = format!("{}\n[exit 1]", "x".repeat(100));
-        let out = cap_tail(&text, 32);
-        assert!(out.starts_with("[output truncated]\n"), "{out}");
+        let out = cap_tail(&text, 40);
+        assert!(out.starts_with(TRUNCATED), "{out}");
         assert!(out.ends_with("[exit 1]"), "{out}");
-        assert!(out.len() <= 32 + "[output truncated]\n".len());
-        assert_eq!(cap_tail("short", 32), "short");
+        assert!(out.len() <= 40, "busted the cap: {} > 40", out.len());
+        assert_eq!(cap_tail("short", 40), "short");
+    }
+
+    /// Boundary: a cap with no room for the marker still honours the cap,
+    /// by dropping the marker rather than the promise.
+    #[test]
+    fn cap_tail_below_the_marker_length_still_fits() {
+        let text = "y".repeat(100);
+        for max in [1usize, 5, TRUNCATED.len(), TRUNCATED.len() + 1] {
+            let out = cap_tail(&text, max);
+            assert!(out.len() <= max, "max={max}: {} bytes", out.len());
+        }
+    }
+
+    /// A multi-byte tail is never split: the result stays valid UTF-8 and
+    /// still fits.
+    #[test]
+    fn cap_tail_never_splits_a_character() {
+        let text = "✓".repeat(50); // 3 bytes each
+        for max in 20..40 {
+            let out = cap_tail(&text, max);
+            assert!(out.len() <= max, "max={max}");
+            assert!(out.strip_prefix(TRUNCATED).unwrap_or(&out).chars().all(|c| c == '✓'));
+        }
     }
 ```
 
-- [ ] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core -- cli::shell > /tmp/t1.log 2>&1; echo $?` → `0`. If `cancel_kills_the_group_promptly` fails on "outlived the cancel", `process_group(0)` is not taking effect: check it is set on the `Command` **before** `spawn()`.
-- [ ] `cargo fmt --all`; `cargo clippy -p mur-core --all-targets -- -D warnings > /tmp/c1.log 2>&1; echo $?` → `0`. `mod.rs` and `app.rs` will be broken here (they still use the old `ShellDone` shape and `run_local_shell`); that is Tasks 2–3. Any failure *outside* those two files is real.
-- [ ] Commit: `feat(murmur): shell.rs engine — streaming, process-group cancel, ShellEnd (#1286 T1)`.
+- [ ] No commit, no clippy gate yet — `mod.rs` and `app.rs` still use the old `ShellDone` shape and `run_local_shell`, so the crate does not build until phase C. Proceed to phase B.
 
 ---
 
-## Task 2 — `ShellState` and the live card
+### Phase B — `ShellState` and the live card
 
 **Interfaces.** Consumes: `ShellEnd`, `signal_group`, `SIGTERM_NUM`, `SIGKILL_NUM`, `cap_tail`, `SHELL_CARD_MAX_BYTES` (T1). Produces:
 
@@ -637,7 +697,8 @@ impl ShellState {
     pub fn begin(&mut self, pid: u32, cancel: oneshot::Sender<()>) -> Option<u64>;
     pub fn finish(&mut self, gen: u64);
 }
-pub fn cancel(state: &mut ShellState, hard: bool);
+pub fn cancel(state: &mut ShellState, hard: bool) -> bool;   // true = something was stopped
+impl ShellState { pub fn done(&mut self, gen: u64); }        // replaces `finish`
 // app.rs
 pub shell: shell::ShellState,             // App field
 impl App {
@@ -652,79 +713,134 @@ impl App {
 - [ ] Append to `shell.rs`:
 
 ```rust
-/// The one running `!command`, if any (D7: single-flight), plus the
-/// generation that makes its events identifiable after a teardown (D8).
+/// The one `!command` slot (D7: single-flight), its generation (D8), and —
+/// crucially — the pid of a command that has been signalled but not yet
+/// confirmed dead.
+///
+/// Two questions, two answers. "May this still touch the UI?" is the
+/// generation. "Is this process still ours to kill?" is the slot. Collapsing
+/// them is what let a quit two seconds after a Ctrl-C leave an orphaned
+/// process group (§7, round 2, finding 2).
 #[derive(Default)]
 pub struct ShellState {
     gen: u64,
-    running: Option<Running>,
+    slot: Slot,
 }
 
-struct Running {
-    pid: u32,
-    cancel: oneshot::Sender<()>,
+#[derive(Default)]
+enum Slot {
+    #[default]
+    Idle,
+    /// Live: Ctrl-C ends it and the spinner ticks for it.
+    Running {
+        gen: u64,
+        pid: u32,
+        cancel: oneshot::Sender<()>,
+    },
+    /// Signalled, not yet reaped. The UI has moved on — the card is already
+    /// finalised (D11) and this generation retired — but the pid stays so a
+    /// quit inside the grace window still has a group to kill.
+    Cancelling { gen: u64, pid: u32 },
+}
+
+impl Slot {
+    fn gen(&self) -> Option<u64> {
+        match self {
+            Slot::Idle => None,
+            Slot::Running { gen, .. } | Slot::Cancelling { gen, .. } => Some(*gen),
+        }
+    }
+
+    fn pid(&self) -> Option<u32> {
+        match self {
+            Slot::Idle => None,
+            Slot::Running { pid, .. } | Slot::Cancelling { pid, .. } => Some(*pid),
+        }
+    }
 }
 
 impl ShellState {
+    /// A command the user can still Ctrl-C, and that the spinner ticks for.
+    /// A `Cancelling` one is neither: its card is already finalised.
     pub fn is_running(&self) -> bool {
-        self.running.is_some()
+        matches!(self.slot, Slot::Running { .. })
     }
 
     pub fn generation(&self) -> u64 {
         self.gen
     }
 
-    /// Is an event from generation `gen` still wanted? A teardown retires the
-    /// generation, so anything the dying task still emits is dropped rather
-    /// than written into a cleared transcript or another channel (D8).
+    /// May an event from `gen` still touch the UI? A teardown retires the
+    /// generation, so anything the dying task emits afterwards is dropped
+    /// rather than written into a cleared transcript or another channel (D8).
     pub fn accepts(&self, gen: u64) -> bool {
         gen == self.gen
     }
 
-    /// Claim the single slot. `None` when one is already running — the caller
-    /// refuses *before spawning* (D7).
+    /// Claim the slot. `None` when one is already held — the caller refuses
+    /// *before spawning* (D7).
     ///
     /// Never assign over a live handle: dropping an `oneshot::Sender`
     /// resolves its receiver, so an overwrite would silently cancel the
-    /// command already running (§7, finding 1).
+    /// command already running (§7, round 1, finding 1).
     pub fn begin(&mut self, pid: u32, cancel: oneshot::Sender<()>) -> Option<u64> {
-        if self.running.is_some() {
+        if !matches!(self.slot, Slot::Idle) {
             return None;
         }
         self.gen += 1;
-        self.running = Some(Running { pid, cancel });
+        self.slot = Slot::Running {
+            gen: self.gen,
+            pid,
+            cancel,
+        };
         Some(self.gen)
     }
 
-    /// The command ended on its own. Frees the slot without retiring the
-    /// generation — its `ShellDone` is still wanted.
-    pub fn finish(&mut self, gen: u64) {
-        if gen == self.gen {
-            self.running = None;
+    /// The task reported the child is gone — whichever way it went. Called
+    /// unconditionally on `ShellDone`, *including* for a retired generation,
+    /// because this is the resource question, not the UI one: it is what
+    /// clears `Cancelling` so quit stops trying to kill a dead group.
+    pub fn done(&mut self, gen: u64) {
+        if self.slot.gen() == Some(gen) {
+            self.slot = Slot::Idle;
         }
     }
 }
 
-/// End the running `!command`, if any, and retire its generation (D8).
+/// End whatever the slot holds and retire its generation (D8).
 ///
-/// `hard` is the quit path: the UI is about to stop reading, so nothing is
-/// left to run the escalation timer. Signal the group directly instead —
-/// dropping the task fires `kill_on_drop`, which reaches the direct shell and
-/// leaves the group, i.e. exactly the orphan D5 exists to prevent (§3.5).
-pub fn cancel(state: &mut ShellState, hard: bool) {
-    let Some(run) = state.running.take() else {
-        return;
+/// `hard` is the quit path: the event loop is about to stop, so nothing is
+/// left to run a grace timer. Signal the group directly and synchronously,
+/// and do it for a `Cancelling` slot too — a user who pressed Ctrl-C and then
+/// quit within two seconds is exactly the case where the soft path's
+/// escalation never gets to run (§3.5).
+///
+/// Returns whether anything was stopped, so the call site knows whether to
+/// finalise a card (D11).
+pub fn cancel(state: &mut ShellState, hard: bool) -> bool {
+    let slot = std::mem::replace(&mut state.slot, Slot::Idle);
+    let (gen, pid) = match (slot.gen(), slot.pid()) {
+        (Some(g), Some(p)) => (g, p),
+        _ => return false,
     };
     state.gen += 1;
-    if hard {
-        // No grace: there is no one left to wait for it. TERM gives a
-        // fast-handling child its chance; KILL guarantees the rest.
-        signal_group(run.pid, SIGTERM_NUM);
-        signal_group(run.pid, SIGKILL_NUM);
-    } else {
-        // Err = the command already exited and the receiver is gone.
-        let _ = run.cancel.send(());
+    match slot {
+        Slot::Running { cancel, .. } if !hard => {
+            // Err = the command already exited and the receiver is gone.
+            let _ = cancel.send(());
+            // The pid stays ours until the task reports back.
+            state.slot = Slot::Cancelling { gen, pid };
+        }
+        _ => {
+            // Hard, or already cancelling: no grace, no waiting, no timer to
+            // outlive us. TERM gives a fast-handling child its chance; KILL
+            // guarantees the rest. The slot is left Idle — nothing survives
+            // this that we would need to kill again.
+            signal_group(pid, SIGTERM_NUM);
+            signal_group(pid, SIGKILL_NUM);
+        }
     }
+    true
 }
 ```
 
@@ -758,12 +874,76 @@ pub fn cancel(state: &mut ShellState, hard: bool) {
         let (tx, mut rx) = oneshot::channel();
         let gen = s.begin(0, tx).unwrap();
         assert!(s.accepts(gen));
-        cancel(&mut s, false);
+        assert!(cancel(&mut s, false), "something was stopped");
         assert!(!s.accepts(gen), "stale events are rejected");
         assert!(!s.is_running());
         assert_eq!(rx.try_recv(), Ok(()), "the soft path signalled the task");
-        // Idempotent: a second press has nothing to take.
+        // Idempotent: a second press finds a Cancelling slot, kills it hard,
+        // and a third finds nothing at all.
+        assert!(cancel(&mut s, false));
+        assert!(!cancel(&mut s, false), "nothing left to stop");
+    }
+
+    /// Tests 13 + 18 — §3.5, with a REAL process group, not a placeholder
+    /// pid. Two regressions in one: a hard quit must kill the group
+    /// synchronously (the detached timer dies with the runtime), and it must
+    /// still find the group when the user pressed Ctrl-C moments earlier —
+    /// the soft path deliberately keeps the pid in `Cancelling` for exactly
+    /// this.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_quit_after_a_cancel_still_kills_the_group() {
+        // A group that ignores SIGTERM, so only the SIGKILL can end it —
+        // which is the whole point: a polite signal would pass either way.
+        let (child, pid) = spawn("trap '' TERM; sleep 60 & echo $!; wait").expect("spawn");
+        let (tx, mut rx) = mpsc::channel(64);
+        let (c_tx, c_rx) = oneshot::channel();
+        let task = tokio::spawn(run(child, pid, 1, tx, c_rx));
+        let chunk = loop {
+            match tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .expect("pid line")
+                .expect("open")
+            {
+                StreamMsg::ShellOutput { chunk, .. } if !chunk.trim().is_empty() => break chunk,
+                _ => continue,
+            }
+        };
+        let grandchild: u32 = chunk.trim().parse().expect("a pid");
+
+        let mut state = ShellState::default();
+        state.begin(pid, c_tx).expect("slot");
+
+        // Ctrl-C: soft. The pid must survive into `Cancelling`.
+        assert!(cancel(&mut state, false), "something was stopped");
+        assert!(!state.is_running());
+
+        // Quit, well inside the grace window — the case that orphaned.
+        assert!(cancel(&mut state, true), "the cancelling slot was still killable");
+
+        for p in [pid, grandchild] {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while std::time::Instant::now() < deadline && alive(p) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            assert!(!alive(p), "pid {p} survived a hard quit");
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(3), task).await;
+    }
+
+    /// `done` clears a `Cancelling` slot even though its generation is
+    /// retired — the resource question is not the UI question (D8).
+    #[test]
+    fn done_clears_a_cancelling_slot_despite_the_retired_generation() {
+        let mut s = ShellState::default();
+        let (tx, _rx) = oneshot::channel();
+        let gen = s.begin(0, tx).unwrap();
         cancel(&mut s, false);
+        assert!(!s.accepts(gen), "the UI has moved on");
+        s.done(gen);
+        assert!(!s.is_running());
+        // Nothing left to kill: a later hard quit is a no-op.
+        assert!(!cancel(&mut s, true), "the slot was already empty");
     }
 
     /// A natural end frees the slot but keeps the generation, because its own
@@ -773,7 +953,7 @@ pub fn cancel(state: &mut ShellState, hard: bool) {
         let mut s = ShellState::default();
         let (tx, _rx) = oneshot::channel();
         let gen = s.begin(0, tx).unwrap();
-        s.finish(gen);
+        s.done(gen);
         assert!(!s.is_running());
         assert!(s.accepts(gen), "its own ShellDone is still wanted");
     }
@@ -952,13 +1132,11 @@ pub fn cancel(state: &mut ShellState, hard: bool) {
     }
 ```
 
-- [ ] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core -- cli::shell cli::app > /tmp/t2.log 2>&1; echo $?` → `0`.
-- [ ] `cargo fmt --all`; `cargo clippy -p mur-core --all-targets -- -D warnings > /tmp/c2.log 2>&1; echo $?` → `0`. `mod.rs` is still broken here — Task 3. Any failure outside `mod.rs` is real.
-- [ ] Commit: `feat(murmur): single-flight ShellState with generations + live card ops (#1286 T2)`.
+- [ ] Still no commit — `mod.rs` closes the cutover in phase C, and only then does the crate build. Proceed.
 
 ---
 
-## Task 3 — `mod.rs`: wiring, the four teardown sites, the spinner
+### Phase C — `mod.rs`: wiring, the four teardown sites, the spinner
 
 **Interfaces.** Consumes everything from T1 and T2. Produces: `route_shell_output(cancelled, streaming, task_id, over_budget)`.
 
@@ -1027,6 +1205,30 @@ pub(super) fn route_shell_output(
     }
 ```
 
+- [ ] Add `stop_shell` beside `start_shell_turn`. This is the D11 fix: the
+  card is finalised **here**, synchronously, not by the `ShellDone` that
+  arrives up to two seconds later carrying a generation this very call has
+  just retired — which is why that card would otherwise have stayed
+  `streaming` forever, unstamped, unpersisted, under a frozen footer:
+
+```rust
+/// End the running `!cmd` from any exit — Ctrl-C, quit, `/clear`, a channel
+/// switch — and close its card on the spot (D8, D11).
+///
+/// `hard` is quit: signal the group synchronously, because nothing will be
+/// left to run a grace timer. Nothing is routed to the agent either way: the
+/// user stopped this on purpose (D4).
+fn stop_shell(app: &mut App, hard: bool) {
+    if !shell::cancel(&mut app.shell, hard) {
+        return; // nothing was running
+    }
+    // Stamp `[cancelled]`, clear `streaming` (which also stops the footer
+    // rendering as live), and persist. The late `ShellDone` will be dropped
+    // by the generation check, so this is the only chance to do it.
+    let _ = app.finish_shell(&shell::ShellEnd::Cancelled);
+}
+```
+
 - [ ] Add the shared finaliser beside `start_shell_turn` (used by both the spawn-failure path above and the `ShellDone` arm below, so the routing rule exists once):
 
 ```rust
@@ -1068,10 +1270,17 @@ fn finish_shell_turn(
             }
         }
         StreamMsg::ShellDone { gen, cmd, end } => {
+            // Unconditional: the child is gone, so its pid stops being ours
+            // to kill. This is the resource question, and it must be answered
+            // even for a generation the UI has retired — otherwise a quit
+            // would keep signalling a dead group (§3.5).
+            app.shell.done(gen);
+            // Conditional: a retired generation has already had its card
+            // finalised by `stop_shell` (D11), so there is nothing to draw
+            // and nothing to route.
             if !app.shell.accepts(gen) {
                 return;
             }
-            app.shell.finish(gen);
             let output = app.finish_shell(&end);
             finish_shell_turn(app, &cmd, &end, output, tx);
         }
@@ -1086,7 +1295,7 @@ fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
     // has Esc-Esc. The state is retired here, so a second press falls
     // through to the behaviour below, unchanged.
     if app.shell.is_running() {
-        shell::cancel(&mut app.shell, false);
+        stop_shell(app, false);
         return;
     }
     if app.streaming {
@@ -1098,8 +1307,9 @@ fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
 ```rust
     // Hard: the event loop is about to stop, so nothing is left to run the
     // escalation timer, and dropping the task would only `kill_on_drop` the
-    // direct shell and leave its group (§3.5).
-    shell::cancel(&mut app.shell, true);
+    // direct shell and leave its group. Covers a slot still `Cancelling`
+    // from a Ctrl-C moments ago, which is the case that orphaned (§3.5).
+    stop_shell(app, true);
 ```
 
   In the `SlashCmd::Clear` arm, immediately after the existing
@@ -1108,14 +1318,14 @@ fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
   reason, so put it under the same one:
 
 ```rust
-            shell::cancel(&mut app.shell, false);
+            stop_shell(app, false);
 ```
 
   At the `app.switch_channel(&id)` call site (`mod.rs:2105`), immediately
   before the call:
 
 ```rust
-                        shell::cancel(&mut app.shell, false);
+                        stop_shell(app, false);
 ```
 
 - [ ] Change the event loop's spinner guard (`mod.rs:1039`) so a shell-only command animates (§3.6) — without this the footer renders once and freezes, which reads as hung:
@@ -1236,23 +1446,34 @@ fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         assert!(!app.streaming, "the second press cancelled the turn");
     }
 
-    /// Test 12 — D8: after a teardown, the dying task's events are dropped.
-    /// No card, no persisted turn, no stray system note in the conversation
-    /// the user moved on to.
+    /// Test 17 — D11: Ctrl-C finalises the card ON THE KEYPRESS. The
+    /// regression: the only event that would otherwise have stamped it is
+    /// the `ShellDone` whose generation this very keypress retired, so the
+    /// card stayed `streaming` forever — unstamped, unpersisted, under a
+    /// footer whose ticker had also stopped.
     #[tokio::test]
-    async fn events_from_a_retired_generation_are_dropped() {
+    async fn ctrl_c_finalises_the_card_immediately() {
         let (tx, _rx) = mpsc::channel(16);
         let mut app = App::test_fixture();
         let (c_tx, _c_rx) = tokio::sync::oneshot::channel();
-        let gen = app.shell.begin(0, c_tx).expect("slot");
+        let gen = app.shell.begin(4242, c_tx).expect("slot");
         app.begin_shell("sleep 60");
+        app.append_shell_output("partial");
 
-        // What every teardown path does.
-        shell::cancel(&mut app.shell, false);
-        app.messages.clear();
+        handle_ctrl_c(&mut app, &tx);
+
+        let card = app
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == Role::Shell)
+            .expect("card");
+        assert!(!card.streaming, "the spinner stopped");
+        assert!(card.text.ends_with("[cancelled]"), "{}", card.text);
+        assert!(!app.shell.is_running(), "no longer Ctrl-C-able");
+
+        // The late report changes nothing further, and must not start a turn.
         let before = app.messages.len();
-
-        handle_stream(&mut app, StreamMsg::ShellOutput { gen, chunk: "late".into() }, &tx);
         handle_stream(
             &mut app,
             StreamMsg::ShellDone {
@@ -1262,9 +1483,64 @@ fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
             },
             &tx,
         );
-
-        assert_eq!(app.messages.len(), before, "nothing was written");
+        assert_eq!(app.messages.len(), before, "nothing more was written");
         assert!(!app.streaming, "no turn was started");
+    }
+
+    /// Test 12 — D8, one per path, each through its REAL entry point. A test
+    /// that called `stop_shell` directly would have passed while any of these
+    /// call sites was missing.
+    #[tokio::test]
+    async fn every_teardown_path_stops_the_shell_and_retires_it() {
+        // (name, how the user triggers it)
+        for (name, trigger) in [
+            ("quit", 0u8),
+            ("clear", 1u8),
+            ("channel switch", 2u8),
+        ] {
+            let (tx, _rx) = mpsc::channel(16);
+            let mut app = App::test_fixture();
+            let (c_tx, mut c_rx) = tokio::sync::oneshot::channel();
+            let gen = app.shell.begin(0, c_tx).expect("slot");
+            app.begin_shell("sleep 60");
+
+            match trigger {
+                0 => request_quit(&mut app, &tx),
+                1 => handle_slash(&mut app, SlashCmd::Clear, &tx).await,
+                // The switch path: what the `app.switch_channel(&id)` call
+                // site does before switching.
+                _ => {
+                    stop_shell(&mut app, false);
+                    let _ = app.switch_channel("does-not-exist");
+                }
+            }
+
+            assert!(!app.shell.is_running(), "{name}: shell still running");
+            assert!(!app.shell.accepts(gen), "{name}: generation not retired");
+            if trigger != 0 {
+                // Quit kills the group outright; the soft paths signal the task.
+                assert_eq!(c_rx.try_recv(), Ok(()), "{name}: task not signalled");
+            }
+
+            // Whatever the dying task still emits writes nothing.
+            let before = app.messages.len();
+            handle_stream(
+                &mut app,
+                StreamMsg::ShellOutput { gen, chunk: "late".into() },
+                &tx,
+            );
+            handle_stream(
+                &mut app,
+                StreamMsg::ShellDone {
+                    gen,
+                    cmd: "sleep 60".into(),
+                    end: shell::ShellEnd::Cancelled,
+                },
+                &tx,
+            );
+            assert_eq!(app.messages.len(), before, "{name}: a stale event drew");
+            assert!(!app.streaming, "{name}: a stale event started a turn");
+        }
     }
 
     /// Test 11 (wiring half) — D7: a second `!cmd` is refused with a note and
@@ -1293,13 +1569,14 @@ fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
   If `app.set_input` is not the composer setter used elsewhere in this test
   module, use whatever the neighbouring `submit` tests use — `grep -n "submit(&mut app" -B 4 mur-core/src/cmd/agent/cli/mod.rs` shows the setup they share.
 
-- [ ] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core -- cli:: > /tmp/t3.log 2>&1; echo $?` → `0`.
-- [ ] `cargo fmt --all`; `cargo clippy -p mur-core --all-targets -- -D warnings > /tmp/c3.log 2>&1; echo $?` → `0`.
-- [ ] Commit: `feat(murmur): single-flight wiring, four teardown sites, shell-aware spinner (#1286 T3)`.
+- [ ] The cutover is closed; the crate builds again. Run everything phases A and B deferred:
+  `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core -- cli:: > /tmp/t1.log 2>&1; echo $?` → `0`. If `cancel_kills_the_group_promptly` fails on "outlived the cancel", `process_group(0)` is not taking effect: check it is set on the `Command` **before** `spawn()`.
+- [ ] `cargo fmt --all`; `cargo clippy -p mur-core --all-targets -- -D warnings > /tmp/c1.log 2>&1; echo $?` → `0`. No exemptions: every file must be clean, because this is the first commit of the cutover.
+- [ ] Commit, once, for all three phases: `feat(murmur): !cmd streams, single-flight, cancellable to its process group (#1286 T1)`.
 
 ---
 
-## Task 4 — `ui/message.rs`: the running footer
+## Task 2 — `ui/message.rs`: the running footer
 
 **Interfaces.** Consumes: `ChatMsg.streaming` on a `Role::Shell` message (T2). Produces: no new symbols.
 
@@ -1379,11 +1656,11 @@ mod shell_footer_tests {
 
 - [ ] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core -- cli::ui > /tmp/t4.log 2>&1; echo $?` → `0`.
 - [ ] `cargo fmt --all`; `cargo clippy -p mur-core --all-targets -- -D warnings > /tmp/c4.log 2>&1; echo $?` → `0`.
-- [ ] Commit: `feat(murmur): running footer on a live shell card (#1286 T4)`.
+- [ ] Commit: `feat(murmur): running footer on a live shell card (#1286 T2)`.
 
 ---
 
-## Task 5 — Whole-crate verification, docs, PR
+## Task 3 — Whole-crate verification, docs, PR
 
 - [ ] `grep -rn "SHELL_TIMEOUT_SECS\|push_shell\|run_local_shell" mur-core/src mur-agent-runtime/src mur-hub-gui/src-tauri/src` → **no hits**. Any remaining one is a caller the tasks missed.
 - [ ] `wc -l mur-core/src/cmd/agent/cli/{shell.rs,mod.rs,app.rs,stream.rs}` — record the numbers in the PR body. `shell.rs` must be under 800; `mod.rs` and `app.rs` must be **smaller** than the 3770 / 2894 they started at, since Task 0 moved code out and Tasks 1–3 added the bulk elsewhere. If either grew, the split did not do its job and the new code is in the wrong file.
@@ -1400,6 +1677,8 @@ mod shell_footer_tests {
   - A second `!cmd` while one runs: refused with the note, and the first keeps running (D7).
   - With an agent turn streaming, start `!sleep 30` and press Ctrl-C: the shell ends, the turn keeps going.
   - `/clear` mid-`!cargo build`: `pgrep -f rustc` shows nothing, and the new conversation gains no stray line (D8).
+  - `/channels` switch mid-`!cargo build`: the same (D8, the fourth call site).
+  - Ctrl-C mid-`!cargo build`, then quit **within two seconds**: `pgrep -f rustc` shows nothing. This is the orphan the detached timer left behind (§3.5).
   - Quit (Ctrl-D) mid-`!cargo build`: `pgrep -f rustc` shows nothing (§3.5 — this is the path `kill_on_drop` alone would have left orphaned).
 - [ ] Open the PR: title `feat(murmur): !cmd streams and is cancelled, never killed by a clock (#1286)`, body = D1–D10 one line each, the §1.4 exit-marker fix called out as a behaviour change, the file-size numbers, and the live observations.
 
@@ -1407,4 +1686,5 @@ mod shell_footer_tests {
 
 - **Spec coverage.** D1 → T1 (constant deleted, test 1). D2 → T2 (`begin_shell` at submit, test 15) + T1 (streaming, test 2) + T4 (footer). D3 → T3 (`handle_ctrl_c` first branch, test 6). D4 → T3 (`route_shell_output` first arm, test 5) + T1 (`reaches_agent`, test 10). D5 → T1 (`process_group`, `signal_group`, test 3/4) + §3.7 on Windows. D6 → T1 (`cap_tail`) + T2 (card cap, test 7) + T3 (block cap). D7 → T2 (`ShellState::begin`, test 11a) + T3 (submit guard, test 11b). D8 → T2 (`accepts`/`cancel`, test 12a) + T3 (four call sites, gen filtering, test 12b). D9 → T1 (drain before return + `DRAIN_INCOMPLETE_NOTE`, test 14). D10 → T1 (`ShellEnd`, test 10). §1.4 → T1 (`cap_tail`) + T3 (block uses it). §3.1 → T0 (movement) + T5 (file-size check). §3.5 → T2 (`cancel(hard)`) + T3 (`request_quit`) + T5 (live quit check). §3.6 → T3 (tick guard) + T5 (live animating check). §4 error table: spawn failure → T3 (submit arm) + T1 (`SpawnFailed`); group refusal → T1; second command → T3; SIGTERM ignored → T1 escalation; double Ctrl-C → T3; race on send → T2 (`let _ =`); drain bound → T1; non-UTF-8 → T1 (`pump` carry, test 9); retired generation → T3. §5 tests 1–16 all land in a task. §6 out-of-scope items are implemented nowhere.
 - **Cross-task names.** `cap_tail`, `SHELL_MAX_BYTES`, `SHELL_CARD_MAX_BYTES`, `KILL_GRACE`, `DRAIN_INCOMPLETE_NOTE`, `signal_group`, `SIGTERM_NUM`/`SIGKILL_NUM`, `ShellEnd`, `spawn`, `run` (T1) are used verbatim in T2/T3. `ShellState::{is_running, generation, accepts, begin, finish}` and `shell::cancel` (T2) are used verbatim in T3. `begin_shell`/`append_shell_output`/`finish_shell` (T2) are used verbatim in T3. `route_shell_output`'s new arity (T3) is updated at every call site in the same task. `finish_shell_turn` is defined once in T3 and used by both of its callers. `ChatMsg.streaming` (existing) is set in T2 and read in T4.
+- **Round-2 coverage.** D11 → Phase C (`stop_shell`) + test 17. §3.5 pid retention → Phase B (`Slot::Cancelling`, `done`) + Phase C (`ShellDone` calls `done` first) + tests 13/18 and `done_clears_a_cancelling_slot…`. Escalation in the loop → Phase A (`escalate` in the select). D6 marker-in-budget → Phase A (`cap_tail`) + three cap tests. Teardown per path → Phase C (`every_teardown_path_stops_the_shell_and_retires_it`, through `request_quit`, `handle_slash(Clear)` and the switch site) + the live check. Buildable commits → the header banner and the phase structure. Movement in its own PR → Task 0's banner and its two closing steps.
 - **Known soft spots, each with an in-task instruction rather than a guess.** T2's module path to `shell::` from inside `step_app_tests` (instruction: try both). T3's composer setter in the refusal test (instruction: copy the neighbouring `submit` tests' setup). Everything the previous revision flagged in T4 was resolved before handoff: `ChatMsg::for_test` and `&theme::ANSI` exist and are used verbatim by the neighbouring module.
