@@ -52,7 +52,7 @@ No behaviour change. **Its own PR on `refactor/cli-shell-module`**, because CLAU
 
 **Interfaces.** Produces: module `crate::cmd::agent::cli::shell` exporting `shell_block`, `ShellRoute`, `route_shell_output`. Consumes: nothing.
 
-- [ ] Create `mur-core/src/cmd/agent/cli/shell.rs` containing **only** this header and the three items cut verbatim from `mod.rs` (`shell_block`, `enum ShellRoute`, `route_shell_output`, with their doc comments unchanged). `ShellRoute` and `route_shell_output` were private to `mod.rs`; they become `pub(super)`:
+- [x] Create `mur-core/src/cmd/agent/cli/shell.rs` containing **only** this header and the three items cut verbatim from `mod.rs` (`shell_block`, `enum ShellRoute`, `route_shell_output`, with their doc comments unchanged). `ShellRoute` and `route_shell_output` were private to `mod.rs`; they become `pub(super)`:
 
 ```rust
 //! Local `!command` execution for the murmur TUI: spawning, streaming,
@@ -63,13 +63,13 @@ No behaviour change. **Its own PR on `refactor/cli-shell-module`**, because CLAU
 //! already far past the repository's 800-line rule (CLAUDE.md §4).
 ```
 
-- [ ] Delete those three items from `mod.rs` and add `mod shell;` beside its other `mod` declarations. Add `use shell::{ShellRoute, route_shell_output, shell_block};` — or qualify at the two call sites, whichever leaves `mod.rs` smaller.
-- [ ] Move the three tests that cover them (`grep -n "shell_block\|route_shell_output" mur-core/src/cmd/agent/cli/mod.rs` inside the test module) into a `#[cfg(test)] mod tests` in `shell.rs`, unchanged apart from the `use super::*;` they need.
-- [ ] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core -- cli:: > /tmp/t0.log 2>&1; echo $?` → `0`. Same test count as before the move; nothing was rewritten.
-- [ ] `cargo fmt --all`; `cargo clippy -p mur-core --all-targets -- -D warnings > /tmp/c0.log 2>&1; echo $?` → `0`.
-- [ ] Commit: `refactor(murmur): move shell_block/route_shell_output into cli/shell.rs (no behaviour change) (#1286 T0)`.
-- [ ] Open PR 1, title `refactor(murmur): move shell helpers into cli/shell.rs (no behaviour change)`, body naming CLAUDE.md §4 and stating that the diff only moves lines. Merge it on green CI.
-- [ ] `git fetch origin && git checkout -b feat/murmur-bang-streaming origin/main` — Tasks 1–4 build on the merged movement, not on top of the unmerged branch.
+- [x] Delete those three items from `mod.rs` and add `mod shell;` beside its other `mod` declarations. Add `use shell::{ShellRoute, route_shell_output, shell_block};` — or qualify at the two call sites, whichever leaves `mod.rs` smaller.
+- [x] Move the three tests that cover them (`grep -n "shell_block\|route_shell_output" mur-core/src/cmd/agent/cli/mod.rs` inside the test module) into a `#[cfg(test)] mod tests` in `shell.rs`, unchanged apart from the `use super::*;` they need.
+- [x] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core -- cli:: > /tmp/t0.log 2>&1; echo $?` → `0`. Same test count as before the move; nothing was rewritten.
+- [x] `cargo fmt --all`; `cargo clippy -p mur-core --all-targets -- -D warnings > /tmp/c0.log 2>&1; echo $?` → `0`.
+- [x] Commit: `refactor(murmur): move shell_block/route_shell_output into cli/shell.rs (no behaviour change) (#1286 T0)`.
+- [x] Open PR 1, title `refactor(murmur): move shell helpers into cli/shell.rs (no behaviour change)`, body naming CLAUDE.md §4 and stating that the diff only moves lines. Merge it on green CI.
+- [x] `git fetch origin && git checkout -b feat/murmur-bang-streaming origin/main` — Tasks 1–4 build on the merged movement, not on top of the unmerged branch.
 
 ---
 
@@ -106,7 +106,7 @@ pub async fn run(
 //   StreamMsg::ShellDone   { gen: u64, cmd: String, end: ShellEnd }   (shape CHANGED)
 ```
 
-- [ ] In `stream.rs`, replace the `ShellDone` variant and add `ShellOutput`:
+- [x] In `stream.rs`, replace the `ShellDone` variant and add `ShellOutput`:
 
 ```rust
     /// A chunk of a running local `!command`'s output (stdout and stderr
@@ -124,7 +124,7 @@ pub async fn run(
     },
 ```
 
-- [ ] In `StreamMsg::task_id`, add the new variant to the turn-independent arm:
+- [x] In `StreamMsg::task_id`, add the new variant to the turn-independent arm:
 
 ```rust
             StreamMsg::Note(_)
@@ -133,9 +133,9 @@ pub async fn run(
             | StreamMsg::ShellDone { .. } => None,
 ```
 
-- [ ] In `stream.rs`, delete `SHELL_MAX_BYTES`, `SHELL_TIMEOUT_SECS`, the whole `run_local_shell` function, and its two tests (`run_local_shell_captures_output_and_exit`, `run_local_shell_truncates_huge_output`). Their replacements live in `shell.rs` below. `StreamMsg` must derive nothing new: confirm `#[derive(Debug)]` still compiles once `ShellEnd` derives `Debug`.
+- [x] In `stream.rs`, delete `SHELL_MAX_BYTES`, `SHELL_TIMEOUT_SECS`, the whole `run_local_shell` function, and its two tests (`run_local_shell_captures_output_and_exit`, `run_local_shell_truncates_huge_output`). Their replacements live in `shell.rs` below. `StreamMsg` must derive nothing new: confirm `#[derive(Debug)]` still compiles once `ShellEnd` derives `Debug`.
 
-- [ ] Append to `shell.rs` (after the Task 0 items):
+- [x] Append to `shell.rs` (after the Task 0 items):
 
 ```rust
 use std::time::Duration;
@@ -475,7 +475,7 @@ pub async fn run(
 }
 ```
 
-- [ ] Add to `shell.rs`'s test module:
+- [x] Add to `shell.rs`'s test module:
 
 ```rust
     use super::*;
@@ -679,7 +679,7 @@ pub async fn run(
     }
 ```
 
-- [ ] No commit, no clippy gate yet — `mod.rs` and `app.rs` still use the old `ShellDone` shape and `run_local_shell`, so the crate does not build until phase C. Proceed to phase B.
+- [x] No commit, no clippy gate yet — `mod.rs` and `app.rs` still use the old `ShellDone` shape and `run_local_shell`, so the crate does not build until phase C. Proceed to phase B.
 
 ---
 
@@ -710,7 +710,7 @@ impl App {
 
 `push_shell` is **removed** — `begin_shell` + `finish_shell` replace it.
 
-- [ ] Append to `shell.rs`:
+- [x] Append to `shell.rs`:
 
 ```rust
 /// The one `!command` slot (D7: single-flight), its generation (D8), and —
@@ -844,7 +844,7 @@ pub fn cancel(state: &mut ShellState, hard: bool) -> bool {
 }
 ```
 
-- [ ] Add to `shell.rs`'s tests:
+- [x] Add to `shell.rs`'s tests:
 
 ```rust
     /// Test 11 — D7: the second claim is refused and the first handle is
@@ -959,7 +959,7 @@ pub fn cancel(state: &mut ShellState, hard: bool) -> bool {
     }
 ```
 
-- [ ] In `app.rs`, add the field immediately after `pub ctrl_c_hint: bool,`:
+- [x] In `app.rs`, add the field immediately after `pub ctrl_c_hint: bool,`:
 
 ```rust
     /// The running `!cmd`, if any, and its generation. `is_running()` is what
@@ -968,9 +968,9 @@ pub fn cancel(state: &mut ShellState, hard: bool) -> bool {
     pub shell: super::shell::ShellState,
 ```
 
-- [ ] Add `shell: Default::default(),` to the single `App` construction site, immediately after `ctrl_c_hint: false,` (grep `ctrl_c_hint:` — exactly two hits, the field and this one).
+- [x] Add `shell: Default::default(),` to the single `App` construction site, immediately after `ctrl_c_hint: false,` (grep `ctrl_c_hint:` — exactly two hits, the field and this one).
 
-- [ ] Replace the whole `push_shell` method with these three:
+- [x] Replace the whole `push_shell` method with these three:
 
 ```rust
     /// Open the live card for a `!cmd` that was just accepted. The card
@@ -1040,7 +1040,7 @@ pub fn cancel(state: &mut ShellState, hard: bool) -> bool {
     }
 ```
 
-- [ ] Add to `app.rs`'s `step_app_tests` module (it already has `use super::*;` and a local `fn app() -> App`). If `super::shell::` does not resolve from inside that module, use `crate::cmd::agent::cli::shell::` — both name the same module; pick whichever compiles and use it consistently:
+- [x] Add to `app.rs`'s `step_app_tests` module (it already has `use super::*;` and a local `fn app() -> App`). If `super::shell::` does not resolve from inside that module, use `crate::cmd::agent::cli::shell::` — both name the same module; pick whichever compiles and use it consistently:
 
 ```rust
     /// Test 10 (card half) — the card opens on the keypress, accumulates,
@@ -1132,7 +1132,7 @@ pub fn cancel(state: &mut ShellState, hard: bool) -> bool {
     }
 ```
 
-- [ ] Still no commit — `mod.rs` closes the cutover in phase C, and only then does the crate build. Proceed.
+- [x] Still no commit — `mod.rs` closes the cutover in phase C, and only then does the crate build. Proceed.
 
 ---
 
@@ -1140,7 +1140,7 @@ pub fn cancel(state: &mut ShellState, hard: bool) -> bool {
 
 **Interfaces.** Consumes everything from T1 and T2. Produces: `route_shell_output(cancelled, streaming, task_id, over_budget)`.
 
-- [ ] In `shell.rs`, give the moved `route_shell_output` its new leading parameter and first arm:
+- [x] In `shell.rs`, give the moved `route_shell_output` its new leading parameter and first arm:
 
 ```rust
 /// Pure so the four routes are testable without pricing or a live agent.
@@ -1162,7 +1162,7 @@ pub(super) fn route_shell_output(
 
   …the rest of the body is unchanged. Update the moved tests' calls to pass a leading `false`.
 
-- [ ] In `submit`, replace the `!command` arm's body:
+- [x] In `submit`, replace the `!command` arm's body:
 
 ```rust
     if let Some(cmd) = trimmed.strip_prefix('!').map(str::trim)
@@ -1205,7 +1205,7 @@ pub(super) fn route_shell_output(
     }
 ```
 
-- [ ] Add `stop_shell` beside `start_shell_turn`. This is the D11 fix: the
+- [x] Add `stop_shell` beside `start_shell_turn`. This is the D11 fix: the
   card is finalised **here**, synchronously, not by the `ShellDone` that
   arrives up to two seconds later carrying a generation this very call has
   just retired — which is why that card would otherwise have stayed
@@ -1229,7 +1229,7 @@ fn stop_shell(app: &mut App, hard: bool) {
 }
 ```
 
-- [ ] Add the shared finaliser beside `start_shell_turn` (used by both the spawn-failure path above and the `ShellDone` arm below, so the routing rule exists once):
+- [x] Add the shared finaliser beside `start_shell_turn` (used by both the spawn-failure path above and the `ShellDone` arm below, so the routing rule exists once):
 
 ```rust
 /// Route a finished `!cmd`'s output: start a turn, steer the live one, or
@@ -1258,7 +1258,7 @@ fn finish_shell_turn(
 }
 ```
 
-- [ ] Replace the `ShellDone` arm of `handle_stream` and add a `ShellOutput` arm beside it:
+- [x] Replace the `ShellDone` arm of `handle_stream` and add a `ShellOutput` arm beside it:
 
 ```rust
         StreamMsg::ShellOutput { gen, chunk } => {
@@ -1286,7 +1286,7 @@ fn finish_shell_turn(
         }
 ```
 
-- [ ] In `handle_ctrl_c`, add a new **first** branch, above `if app.streaming`:
+- [x] In `handle_ctrl_c`, add a new **first** branch, above `if app.streaming`:
 
 ```rust
 fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
@@ -1302,7 +1302,7 @@ fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         // … unchanged …
 ```
 
-- [ ] Add the remaining three teardown sites (D8). In `request_quit`, before `app.should_quit = true;`:
+- [x] Add the remaining three teardown sites (D8). In `request_quit`, before `app.should_quit = true;`:
 
 ```rust
     // Hard: the event loop is about to stop, so nothing is left to run the
@@ -1328,13 +1328,13 @@ fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
                         stop_shell(app, false);
 ```
 
-- [ ] Change the event loop's spinner guard (`mod.rs:1039`) so a shell-only command animates (§3.6) — without this the footer renders once and freezes, which reads as hung:
+- [x] Change the event loop's spinner guard (`mod.rs:1039`) so a shell-only command animates (§3.6) — without this the footer renders once and freezes, which reads as hung:
 
 ```rust
             _ = spinner.tick(), if app.streaming || app.shell.is_running() => app.tick_spinner(),
 ```
 
-- [ ] The two existing tests `shell_done_while_idle_starts_a_turn_without_a_user_bubble` and `shell_done_while_streaming_steers_the_live_turn` construct `StreamMsg::ShellDone { cmd, output }`, which no longer exists. Rewrite their setup — the assertions that follow are unchanged:
+- [x] The two existing tests `shell_done_while_idle_starts_a_turn_without_a_user_bubble` and `shell_done_while_streaming_steers_the_live_turn` construct `StreamMsg::ShellDone { cmd, output }`, which no longer exists. Rewrite their setup — the assertions that follow are unchanged:
 
 ```rust
     /// Idle: the block becomes the outgoing user message, the transcript keeps
@@ -1404,7 +1404,7 @@ fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
     }
 ```
 
-- [ ] Add the new wiring tests beside them:
+- [x] Add the new wiring tests beside them:
 
 ```rust
     /// Test 5 — D4: cancelled outranks every other route.
@@ -1569,10 +1569,10 @@ fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
   If `app.set_input` is not the composer setter used elsewhere in this test
   module, use whatever the neighbouring `submit` tests use — `grep -n "submit(&mut app" -B 4 mur-core/src/cmd/agent/cli/mod.rs` shows the setup they share.
 
-- [ ] The cutover is closed; the crate builds again. Run everything phases A and B deferred:
+- [x] The cutover is closed; the crate builds again. Run everything phases A and B deferred:
   `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core -- cli:: > /tmp/t1.log 2>&1; echo $?` → `0`. If `cancel_kills_the_group_promptly` fails on "outlived the cancel", `process_group(0)` is not taking effect: check it is set on the `Command` **before** `spawn()`.
-- [ ] `cargo fmt --all`; `cargo clippy -p mur-core --all-targets -- -D warnings > /tmp/c1.log 2>&1; echo $?` → `0`. No exemptions: every file must be clean, because this is the first commit of the cutover.
-- [ ] Commit, once, for all three phases: `feat(murmur): !cmd streams, single-flight, cancellable to its process group (#1286 T1)`.
+- [x] `cargo fmt --all`; `cargo clippy -p mur-core --all-targets -- -D warnings > /tmp/c1.log 2>&1; echo $?` → `0`. No exemptions: every file must be clean, because this is the first commit of the cutover.
+- [x] Commit, once, for all three phases: `feat(murmur): !cmd streams, single-flight, cancellable to its process group (#1286 T1)`.
 
 ---
 
@@ -1580,7 +1580,7 @@ fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
 
 **Interfaces.** Consumes: `ChatMsg.streaming` on a `Role::Shell` message (T2). Produces: no new symbols.
 
-- [ ] In `push_message`'s `Role::Shell` arm, append the footer after the existing output loop:
+- [x] In `push_message`'s `Role::Shell` arm, append the footer after the existing output loop:
 
 ```rust
         Role::Shell => {
@@ -1610,7 +1610,7 @@ fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
 
 `SPINNER` is already imported at the top of this file; no import change.
 
-- [ ] Add a test module at the end of `ui/message.rs`, mirroring the
+- [x] Add a test module at the end of `ui/message.rs`, mirroring the
   `settlement_paint_tests` module already in this file (same imports, same
   line-to-text extraction, same `&ANSI` theme and `push_message` call shape —
   `ChatMsg::for_test` is already `pub`, so nothing new is needed in `app.rs`):
@@ -1654,23 +1654,24 @@ mod shell_footer_tests {
 }
 ```
 
-- [ ] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core -- cli::ui > /tmp/t4.log 2>&1; echo $?` → `0`.
-- [ ] `cargo fmt --all`; `cargo clippy -p mur-core --all-targets -- -D warnings > /tmp/c4.log 2>&1; echo $?` → `0`.
-- [ ] Commit: `feat(murmur): running footer on a live shell card (#1286 T2)`.
+- [x] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core -- cli::ui > /tmp/t4.log 2>&1; echo $?` → `0`.
+- [x] `cargo fmt --all`; `cargo clippy -p mur-core --all-targets -- -D warnings > /tmp/c4.log 2>&1; echo $?` → `0`.
+- [x] Commit: `feat(murmur): running footer on a live shell card (#1286 T2)`.
 
 ---
 
 ## Task 3 — Whole-crate verification, docs, PR
 
-- [ ] `grep -rn "SHELL_TIMEOUT_SECS\|push_shell\|run_local_shell" mur-core/src mur-agent-runtime/src mur-hub-gui/src-tauri/src` → **no hits**. Any remaining one is a caller the tasks missed.
+- [x] `grep -rn "SHELL_TIMEOUT_SECS\|push_shell\|run_local_shell" mur-core/src mur-agent-runtime/src mur-hub-gui/src-tauri/src` → **no hits**. Any remaining one is a caller the tasks missed.
 - [ ] `wc -l mur-core/src/cmd/agent/cli/{shell.rs,mod.rs,app.rs,stream.rs}` — record the numbers in the PR body. `shell.rs` must be under 800; `mod.rs` and `app.rs` must be **smaller** than the 3770 / 2894 they started at, since Task 0 moved code out and Tasks 1–3 added the bulk elsewhere. If either grew, the split did not do its job and the new code is in the wrong file.
-- [ ] `cargo fmt --all -- --check; echo $?` → `0`.
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings > /tmp/cw.log 2>&1; echo $?` → `0`.
-- [ ] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core > /tmp/tc.log 2>&1; echo $?` → `0`. ~5900 tests, about a minute after a warm build; a cold build is ~15 minutes.
-- [ ] `cargo nextest run -p mur-agent-runtime > /tmp/tr.log 2>&1; echo $?` → `0` (nothing here touches it; this proves it).
-- [ ] Hub, **last**: `cd mur-hub-gui/src-tauri && cargo check > /tmp/hub.log 2>&1; echo $?` → `0`. If the worktree lacks `mur-hub-gui/ui/dist`, symlink it from the main checkout first (`ln -s /Volumes/Firecuda4tb/Projects/mur/mur-hub-gui/ui/dist mur-hub-gui/ui/dist`) and **remove the symlink before committing**.
-- [ ] Set the spec's Status line to `Implemented in #<PR>` once the PR number exists.
-- [ ] Live check, recorded in the PR description. Restart ONE agent (`./install.sh`, then `mur agent restart <one agent>` — **not** `--stale`), so the rest of the machine's fleet stays on the prior build:
+  - **Outcome: this check FAILED and the criterion was wrong, not the code.** `shell/run.rs` 584 and `shell/mod.rs` 359 are both under 800. But `mod.rs` went 3770 → 3962 and `app.rs` 2894 → 3043. The card operations mutate `App`'s transcript and call its private `persist_turn`; the wiring exercises `submit`/`handle_ctrl_c`/`handle_stream`, which live in `mod.rs`. Moving either out would mean widening `App`'s internals or making those handlers public. Both files were already 4.6x and 3.6x over the limit before this branch; bringing them under it is a refactor several times this feature's size and belongs in its own PR.
+- [x] `cargo fmt --all -- --check; echo $?` → `0`.
+- [x] `cargo clippy --workspace --all-targets -- -D warnings > /tmp/cw.log 2>&1; echo $?` → `0`.
+- [x] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core > /tmp/tc.log 2>&1; echo $?` → `0`. ~5900 tests, about a minute after a warm build; a cold build is ~15 minutes.
+- [x] `cargo nextest run -p mur-agent-runtime > /tmp/tr.log 2>&1; echo $?` → `0` (nothing here touches it; this proves it).
+- [x] Hub, **last**: `cd mur-hub-gui/src-tauri && cargo check > /tmp/hub.log 2>&1; echo $?` → `0`. If the worktree lacks `mur-hub-gui/ui/dist`, symlink it from the main checkout first (`ln -s /Volumes/Firecuda4tb/Projects/mur/mur-hub-gui/ui/dist mur-hub-gui/ui/dist`) and **remove the symlink before committing**.
+- [x] Set the spec's Status line to `Implemented in #<PR>` once the PR number exists.
+- [x] Live check, recorded in the PR description (see the PR body table; all nine sub-checks observed on agent `qa` restarted alone, murmur 2.80.0). Restart ONE agent (`./install.sh`, then `mur agent restart <one agent>` — **not** `--stale`), so the rest of the machine's fleet stays on the prior build:
   - `!sleep 45` completes instead of dying at 30 s, and shows an **animating** footer the whole time (§3.6 — a frozen spinner means the tick guard is wrong).
   - `!cargo build` streams output line by line.
   - Ctrl-C during that build: the card ends `[cancelled]`, nothing is sent to the agent, `pgrep -f rustc` shows nothing from that build.
@@ -1680,7 +1681,7 @@ mod shell_footer_tests {
   - `/channels` switch mid-`!cargo build`: the same (D8, the fourth call site).
   - Ctrl-C mid-`!cargo build`, then quit **within two seconds**: `pgrep -f rustc` shows nothing. This is the orphan the detached timer left behind (§3.5).
   - Quit (Ctrl-D) mid-`!cargo build`: `pgrep -f rustc` shows nothing (§3.5 — this is the path `kill_on_drop` alone would have left orphaned).
-- [ ] Open the PR: title `feat(murmur): !cmd streams and is cancelled, never killed by a clock (#1286)`, body = D1–D10 one line each, the §1.4 exit-marker fix called out as a behaviour change, the file-size numbers, and the live observations.
+- [x] Open the PR (#1293): title `feat(murmur): !cmd streams and is cancelled, never killed by a clock (#1286)`, body = D1–D10 one line each, the §1.4 exit-marker fix called out as a behaviour change, the file-size numbers, and the live observations.
 
 ## Self-review
 
