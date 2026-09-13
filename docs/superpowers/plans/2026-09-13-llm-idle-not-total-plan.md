@@ -259,7 +259,7 @@ pub(crate) const LLM_STREAM_IDLE_TIMEOUT_SECS: u64 = 120;
 ```
 **Consumes:** `LlmError::Timeout` (exists), `llm_client_builder` (Task 1).
 
-- [ ] Write the timing tests first, against a generic private core so no HTTP
+- [x] Write the timing tests first, against a generic private core so no HTTP
       is needed:
       ```rust
       impl StreamActivity {
@@ -297,15 +297,26 @@ pub(crate) const LLM_STREAM_IDLE_TIMEOUT_SECS: u64 = 120;
       - `Ok(None)` passes through as end-of-stream, never as a timeout;
       - an inner `Err` passes through unchanged (a transport error must not be
         relabelled `Timeout`, because `classify` treats them differently).
-- [ ] Implement `from_env`: parse each variable, and on an unparseable value
+- [x] Implement `from_env`: parse each variable, and on an unparseable value
       keep the constant and `tracing::warn!` once naming the variable — a typo
       must not disable the bound. Test both.
-- [ ] Verify and commit:
+- [x] Verify and commit:
       ```sh
       cargo clippy -p mur-agent-runtime --all-targets -- -D warnings; echo $?
       cargo nextest run -p mur-agent-runtime -E 'test(/stream_activity/) or test(/bounded/)'; echo $?
       ```
       Commit: `feat(llm): StreamActivity bounds stream silence, not generation (#1287)`
+
+**Plan correction made during execution.** Task 4 was where the plan put the
+tokio `test-util` dev-dependency, but Task 2's own tests need
+`#[tokio::test(start_paused = true)]`, so the manifest change moved here. Task
+4's first step is therefore already done.
+
+**Mutation-verified**, because seven green tests prove nothing on their own:
+collapsing `bounded` to a single bound (`let bound = self.first`) makes
+`the_first_bound_covers_cold_start_and_the_idle_bound_takes_over_after` FAIL
+and the other six still pass. D4 is the decision that test defends, and it is
+the one a reviewer would most reasonably suspect of being decoration.
 
 ## Task 3 — wire the three loops and return partials
 

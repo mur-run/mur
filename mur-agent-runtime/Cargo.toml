@@ -141,6 +141,12 @@ windows-sys = { version = "0.59", features = [
 
 [dev-dependencies]
 tempfile = "3"
+# `tokio::time::pause` / `#[tokio::test(start_paused = true)]` for the
+# stream-idle tests (#1287): the bounds are minutes long, so a real clock
+# would mean minutes-long tests. Dev-only, so no production build gains
+# test-util. Features are additive, so this does not disturb the workspace
+# tokio entry.
+tokio = { workspace = true, features = ["test-util"] }
 ctor = "0.2"
 httpmock = "0.7"
 # C5 / M5.2 webhook handler unit tests use `tower::ServiceExt::oneshot`
