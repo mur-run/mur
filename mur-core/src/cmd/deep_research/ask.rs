@@ -67,7 +67,103 @@ pub fn plan_preflight(s: &DeepResearchStatus) -> Result<Vec<PreflightAction>> {
     Ok(plan)
 }
 
+/// Write a minimal failed [`RunProgress`] record for `run_id`/`question` —
+/// used when preflight fails before the loop ever runs (points A–G) so a
+/// poller with only the run id still finds a terminal, explained record.
+///
+/// If a progress file already exists for a DIFFERENT `run_id`, it is
+/// overwritten: the file is last-run storage by design (`loop_run.rs`
+/// stamps the terminal state onto the same path), so "last run" is always
+/// what a fresh caller should see. If it exists for the SAME `run_id`,
+/// only `outcome`/`error`/`finished_at` are set — other fields (e.g. a
+/// partially-populated `iteration`/`steps`) are preserved.
+fn record_preflight_failure(mur_home: &Path, run_id: &str, question: &str, error_summary: &str) {
+    let existing = crate::cmd::fleet::progress::load(mur_home, DEFAULT_FLEET_NAME)
+        .map(|(p, _)| p)
+        .filter(|p| p.run_id == run_id);
+    let mut progress = existing.unwrap_or_else(|| crate::cmd::fleet::progress::RunProgress {
+        schema_version: 1,
+        run_id: run_id.to_string(),
+        question: question.to_string(),
+        started_at: chrono::Utc::now().to_rfc3339(),
+        finished_at: None,
+        outcome: None,
+        iteration: 0,
+        model: None,
+        budget_usd: None,
+        spend_usd: 0.0,
+        steps: vec![],
+        artifact_path: None,
+        error: None,
+    });
+    progress.outcome = Some("failed".to_string());
+    progress.error = Some(error_summary.to_string());
+    progress.finished_at = Some(chrono::Utc::now().to_rfc3339());
+    progress.save(mur_home, DEFAULT_FLEET_NAME);
+}
+
+/// Back-fill `artifact_path` onto the progress record for `run_id` after
+/// [`save_report`] succeeds, so `mur_job_status`'s fallback (Task 4) can
+/// tell "report being saved" from "done, here's the path" — see
+/// `ProgressPhase::ReportSaving` in `cmd/fleet/progress.rs`. A no-op when
+/// the current record belongs to a different run.
+fn backfill_artifact_path(mur_home: &Path, run_id: &str, path: &std::path::Path) {
+    let Some((mut progress, _)) = crate::cmd::fleet::progress::load(mur_home, DEFAULT_FLEET_NAME)
+    else {
+        return;
+    };
+    if progress.run_id != run_id {
+        return;
+    }
+    progress.artifact_path = Some(path.to_path_buf());
+    progress.save(mur_home, DEFAULT_FLEET_NAME);
+}
+
+/// Resolve this invocation's run id: an externally-supplied `MUR_RUN_ID`
+/// (e.g. set by the `fleet_run` MCP tool before spawning this process) when
+/// present and non-empty, else a freshly minted v7 uuid — mirrors
+/// `loop_run::resolve_run_id_from` (`mur_common::fleet::RUN_ID_ENV` is the
+/// shared join key both honour).
+fn resolve_run_id() -> String {
+    match std::env::var(mur_common::fleet::RUN_ID_ENV).ok() {
+        Some(v) if !v.is_empty() => v,
+        _ => uuid::Uuid::now_v7().to_string(),
+    }
+}
+
 pub async fn cmd_ask(mur_home: &Path, question: &str, run_id: Option<String>) -> Result<()> {
+    let run_id = run_id.unwrap_or_else(resolve_run_id);
+    // Same `set_var` block as `MUR_HOME` below (single-shot CLI process) —
+    // so the loop this process spawns (Task 2, `loop_run.rs:420`) sees the
+    // same id, whether it was handed to us or we just minted it.
+    unsafe {
+        std::env::set_var(mur_common::fleet::RUN_ID_ENV, &run_id);
+    }
+    // Read by both `fleet_run` (piped stdout) and a terminal user; must be
+    // the first line so a poller can grab it without waiting on preflight.
+    println!("run_id: {run_id}");
+
+    match ask_inner(mur_home, question, &run_id).await {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Only preflight failures (points A–G) land here without a
+            // progress file already carrying a loop-written outcome — a
+            // loop-internal failure (`ask_inner`'s call into
+            // `cmd_deep_research_run`) has already had its terminal state
+            // stamped by `run_guarded` (`loop_run.rs:719-727`), so recording
+            // over it would clobber the loop's own explanation.
+            let already_terminal = crate::cmd::fleet::progress::load(mur_home, DEFAULT_FLEET_NAME)
+                .map(|(p, _)| p.run_id == run_id && p.outcome.is_some())
+                .unwrap_or(false);
+            if !already_terminal {
+                record_preflight_failure(mur_home, &run_id, question, &e.to_string());
+            }
+            Err(e)
+        }
+    }
+}
+
+async fn ask_inner(mur_home: &Path, question: &str, run_id: &str) -> Result<()> {
     // `cmd_start`/`cmd_mcp_pin` resolve their home via the `MUR_HOME` env
     // var (same caveat as `provision.rs`'s `grant_egress`). Process-lifetime
     // set_var is intentional here: `mur deep-research "<question>"` is a
@@ -139,8 +235,7 @@ pub async fn cmd_ask(mur_home: &Path, question: &str, run_id: Option<String>) ->
 
     // Budget comes from fleet.yaml loop.budget_usd (set by setup); pass None
     // overrides so the existing precedence applies unchanged.
-    super::run::cmd_deep_research_run(mur_home, DEFAULT_FLEET_NAME, None, None, None, run_id)
-        .await?;
+    super::run::cmd_deep_research_run(mur_home, DEFAULT_FLEET_NAME, None, None, None).await?;
 
     // Persist the synthesized report so the answer outlives the console
     // scrollback — and so a sandboxed caller (fleet_run tool) gets a file
@@ -150,6 +245,7 @@ pub async fn cmd_ask(mur_home: &Path, question: &str, run_id: Option<String>) ->
         && let Some(report) = extract_report(&events, &fleet, baseline_seq)
         && let Ok(path) = save_report(mur_home, question, &report)
     {
+        backfill_artifact_path(mur_home, run_id, &path);
         println!("Report: {}", path.display());
     }
 
@@ -316,5 +412,115 @@ mod tests {
                 .iter()
                 .any(|a| matches!(a, PreflightAction::StartWorker(n) | PreflightAction::RepinGateway(n) if n == "dr_worker_extra"))
         );
+    }
+
+    #[test]
+    fn record_preflight_failure_writes_minimal_record() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(crate::cmd::fleet::progress::load(tmp.path(), DEFAULT_FLEET_NAME).is_none());
+
+        record_preflight_failure(
+            tmp.path(),
+            "run-1",
+            "why is the sky blue",
+            "no workers found",
+        );
+
+        let (p, _) =
+            crate::cmd::fleet::progress::load(tmp.path(), DEFAULT_FLEET_NAME).expect("written");
+        assert_eq!(p.run_id, "run-1");
+        assert_eq!(p.question, "why is the sky blue");
+        assert_eq!(p.outcome.as_deref(), Some("failed"));
+        assert!(p.error.as_deref().unwrap().contains("no workers found"));
+        assert!(p.finished_at.is_some());
+        assert_eq!(p.iteration, 0);
+        assert!(p.steps.is_empty());
+    }
+
+    #[test]
+    fn record_preflight_failure_updates_same_id_only() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Existing record for the SAME run id, not yet terminal (as if a
+        // partial write happened before preflight failed) — only
+        // outcome/error/finished_at should change; everything else (e.g.
+        // `iteration`, `steps`) is preserved.
+        let mut existing = sample_progress("run-1", "original question");
+        existing.iteration = 3;
+        existing.save(tmp.path(), DEFAULT_FLEET_NAME);
+
+        record_preflight_failure(tmp.path(), "run-1", "original question", "boom");
+
+        let (p, _) = crate::cmd::fleet::progress::load(tmp.path(), DEFAULT_FLEET_NAME).unwrap();
+        assert_eq!(p.outcome.as_deref(), Some("failed"));
+        assert_eq!(p.error.as_deref(), Some("boom"));
+        assert!(p.finished_at.is_some());
+        assert_eq!(p.iteration, 3, "unrelated fields must be preserved");
+
+        // A DIFFERENT run id with a loop-written terminal outcome already on
+        // disk: the file is last-run storage, so a fresh minimal record for
+        // the new id overwrites it (recommended behaviour per the handoff).
+        let mut other = sample_progress("run-OLD", "old question");
+        other.outcome = Some("converged".to_string());
+        other.finished_at = Some("2026-01-01T00:00:00Z".to_string());
+        other.save(tmp.path(), DEFAULT_FLEET_NAME);
+
+        record_preflight_failure(tmp.path(), "run-2", "new question", "setup missing");
+
+        let (p2, _) = crate::cmd::fleet::progress::load(tmp.path(), DEFAULT_FLEET_NAME).unwrap();
+        assert_eq!(p2.run_id, "run-2");
+        assert_eq!(p2.question, "new question");
+        assert_eq!(p2.outcome.as_deref(), Some("failed"));
+        assert_eq!(p2.iteration, 0);
+    }
+
+    #[test]
+    fn backfill_artifact_path_reloads_and_saves() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let mut existing = sample_progress("run-1", "q");
+        existing.finished_at = Some("2026-01-01T00:00:00Z".to_string());
+        existing.outcome = Some("converged".to_string());
+        existing.save(tmp.path(), DEFAULT_FLEET_NAME);
+
+        let path = std::path::PathBuf::from("/tmp/report.md");
+        backfill_artifact_path(tmp.path(), "run-1", &path);
+
+        let (p, _) = crate::cmd::fleet::progress::load(tmp.path(), DEFAULT_FLEET_NAME).unwrap();
+        assert_eq!(p.artifact_path, Some(path));
+
+        // A file whose run_id differs is left alone.
+        let mut other = sample_progress("run-OTHER", "q2");
+        other.finished_at = Some("2026-01-01T00:00:00Z".to_string());
+        other.outcome = Some("converged".to_string());
+        other.save(tmp.path(), DEFAULT_FLEET_NAME);
+
+        backfill_artifact_path(
+            tmp.path(),
+            "run-1",
+            &std::path::PathBuf::from("/tmp/should-not-apply.md"),
+        );
+
+        let (p2, _) = crate::cmd::fleet::progress::load(tmp.path(), DEFAULT_FLEET_NAME).unwrap();
+        assert_eq!(p2.run_id, "run-OTHER");
+        assert_eq!(p2.artifact_path, None);
+    }
+
+    fn sample_progress(run_id: &str, question: &str) -> crate::cmd::fleet::progress::RunProgress {
+        crate::cmd::fleet::progress::RunProgress {
+            schema_version: 1,
+            run_id: run_id.to_string(),
+            question: question.to_string(),
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+            finished_at: None,
+            outcome: None,
+            iteration: 0,
+            model: None,
+            budget_usd: None,
+            spend_usd: 0.0,
+            steps: vec![],
+            artifact_path: None,
+            error: None,
+        }
     }
 }
