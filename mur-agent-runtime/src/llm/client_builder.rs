@@ -186,7 +186,13 @@ fn build_bare_client(
         }
         NetworkOutboundMode::Off => HostGuard::off(),
     };
-    let guarded_http = reqwest::ClientBuilder::new()
+    // Through `llm_client_builder()`, not a bare `ClientBuilder`: that is where
+    // `.no_proxy()` and the connect clock live. Building bare here meant an
+    // ambient `HTTP_PROXY` captured this client's traffic, and because
+    // `HostGuard` is a DNS resolver — the only host enforcement for this
+    // process's egress — a proxied request never resolved its real destination
+    // and `allow_hosts` did not apply to it. See `ambient_proxy_tests` below.
+    let guarded_http = crate::llm::llm_client_builder()
         .dns_resolver(std::sync::Arc::new(host_guard))
         .build()
         .context("failed to build guarded HTTP client")
@@ -467,5 +473,122 @@ mod endpoint_named_tests {
             panic!("class must not change")
         };
         assert_eq!(body, "too large", "must not be decorated");
+    }
+}
+
+#[cfg(test)]
+mod ambient_proxy_tests {
+    use super::*;
+    use mur_common::agent::{AgentProfile, NetworkOutboundMode};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    /// The runtime's own LLM client must ignore an ambient proxy, exactly as
+    /// `llm_client_builder()` already does (`llm/mod.rs`'s
+    /// `llm_client_builder_ignores_ambient_http_proxy`).
+    ///
+    /// This is not a hypothetical. Before the fix this path built its client
+    /// with a bare `reqwest::ClientBuilder`, and a probe confirmed the bypass:
+    /// with `HTTP_PROXY` set and `HostGuard::restricted(vec![])` — an
+    /// allowlist permitting nothing — a request to a forbidden host was
+    /// proxied and answered 200, the proxy logging
+    /// `GET http://blocked.example.com/v1/messages HTTP/1.1` in absolute form.
+    ///
+    /// `HostGuard` is installed as a DNS resolver and is the ONLY host
+    /// enforcement for this process's egress, so a proxied request never has
+    /// its real destination resolved and `allow_hosts` does not apply to it.
+    /// Asserting the proxy sees nothing is therefore the whole guarantee: no
+    /// proxy means the resolver runs.
+    #[tokio::test]
+    async fn the_guarded_client_ignores_an_ambient_proxy() {
+        // The "proxy": accepts, records that it was contacted, answers 200 so
+        // a captured request looks successful rather than hanging.
+        let proxy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = proxy.local_addr().unwrap();
+        let (seen_tx, seen_rx) = tokio::sync::oneshot::channel::<String>();
+        tokio::spawn(async move {
+            if let Ok((mut s, _)) = proxy.accept().await {
+                let mut buf = [0u8; 2048];
+                let n = s.read(&mut buf).await.unwrap_or(0);
+                let first = String::from_utf8_lossy(&buf[..n])
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                let _ = s
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await;
+                let _ = s.flush().await;
+                let _ = s.shutdown().await;
+                let _ = seen_tx.send(first);
+            }
+        });
+
+        // The agent's actual LLM endpoint. It only has to accept and answer;
+        // the assertion is about the proxy, not about parsing a reply.
+        let endpoint = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint_addr = endpoint.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = endpoint.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf).await;
+                let _ = s
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    )
+                    .await;
+                let _ = s.flush().await;
+                let _ = s.shutdown().await;
+            }
+        });
+
+        let mut prof = AgentProfile::default_for_tests();
+        prof.entitlements.network.outbound.mode = NetworkOutboundMode::Restricted;
+        prof.entitlements.network.outbound.allow_hosts = vec![];
+        let profile = Profile {
+            inner: prof,
+            agent_home: std::path::PathBuf::from("/tmp/does-not-need-to-exist"),
+            digest: String::new(),
+            raw_yaml: String::new(),
+            system_prompt: None,
+        };
+        let entry = ModelEntry {
+            provider: "openai".into(),
+            model: "local-model".into(),
+            base_url: Some(format!("http://{endpoint_addr}/v1")),
+            secret: None,
+            ..Default::default()
+        };
+
+        // SAFETY: set and cleared inside this test; reqwest reads proxy env at
+        // build time, so the client must be constructed while it is set.
+        unsafe {
+            std::env::set_var("HTTP_PROXY", format!("http://{proxy_addr}"));
+        }
+        let client = build_bare_client(&entry, &profile, std::path::Path::new("/tmp"))
+            .expect("keyless loopback entry builds");
+        let _ = client
+            .generate(crate::llm::LlmRequest {
+                messages: vec![crate::llm::RichMessage::Text {
+                    role: "user".into(),
+                    content: "hi".into(),
+                }],
+                ..Default::default()
+            })
+            .await;
+        unsafe {
+            std::env::remove_var("HTTP_PROXY");
+        }
+
+        if let Ok(Ok(line)) = tokio::time::timeout(std::time::Duration::from_secs(3), seen_rx).await
+        {
+            panic!(
+                "an ambient HTTP_PROXY captured the runtime's LLM traffic, so HostGuard \
+                 never resolved the real destination and allow_hosts did not apply. \
+                 The proxy saw: {line:?}"
+            );
+        }
     }
 }

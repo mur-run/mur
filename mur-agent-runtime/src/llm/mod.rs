@@ -20,8 +20,23 @@ pub mod switchable;
 /// keeps the per-MCP-server egress proxy (and a user's debug cc-proxy, which is
 /// configured via base_url) from ever capturing the agent's own LLM traffic.
 /// See `docs/superpowers/plans/2026-06-26-mcp-per-server-egress.md`.
+/// Time allowed to establish a TCP connection to an LLM endpoint.
+///
+/// The only clock on this client. `read_timeout` is deliberately absent:
+/// reqwest polls that timer while the response head is still outstanding
+/// (`async_impl/client.rs`, `PendingRequest::poll`), so any value at all
+/// becomes a hard ceiling on how long a model may think before its first
+/// byte — the thing the execution-limits redesign exists to remove. A stream
+/// that stops sending is bounded by [`StreamActivity`] instead, where the
+/// difference between "thinking" and "dead" is actually observable, and a
+/// non-stream call is bounded by its turn's deadline and by cancellation.
+/// See `docs/superpowers/specs/2026-09-13-llm-idle-not-total-design.md` D2/D5.
+pub(crate) const LLM_CONNECT_TIMEOUT_SECS: u64 = 10;
+
 pub(crate) fn llm_client_builder() -> reqwest::ClientBuilder {
-    reqwest::Client::builder().no_proxy()
+    reqwest::Client::builder()
+        .no_proxy()
+        .connect_timeout(std::time::Duration::from_secs(LLM_CONNECT_TIMEOUT_SECS))
 }
 
 /// Gate function that the supervisor calls before constructing any concrete
@@ -559,6 +574,38 @@ mod tests {
             assert!(matches!(e, LlmError::Auth(..)), "{status}: {e:?}");
             assert_eq!(classify(&e), Disposition::Stop, "{status}");
         }
+    }
+}
+
+#[cfg(test)]
+mod builder_clock_tests {
+    use super::*;
+
+    /// F5's regression guard. A `read_timeout` or a total `.timeout()` on this
+    /// client is a hard ceiling on how long a model may think — reqwest polls
+    /// the read timer while the response head is still outstanding, so before
+    /// the first byte it cannot tell "thinking" from "hung". Either one
+    /// reintroduces exactly the bug #1287 is about.
+    ///
+    /// Asserted through `Debug`, which prints `read_timeout` and the total
+    /// timeout when they are set (`async_impl/client.rs`, `Config::fmt_fields`).
+    ///
+    /// Honest limitation: that same `Debug` does **not** print
+    /// `connect_timeout`, so this test cannot prove the connect clock is
+    /// applied — only that the two forbidden ones are absent. Proving the
+    /// connect clock behaviourally needs a TCP connect that stalls rather than
+    /// refuses, which means an unroutable address and a flaky test.
+    #[test]
+    fn the_client_carries_neither_a_total_nor_a_read_timeout() {
+        let printed = format!("{:?}", llm_client_builder().build().unwrap());
+        assert!(
+            !printed.contains("read_timeout"),
+            "a read_timeout bounds server think time before the first byte: {printed}"
+        );
+        assert!(
+            !printed.contains("timeout: Some"),
+            "a total timeout kills a live streamed response: {printed}"
+        );
     }
 }
 

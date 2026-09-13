@@ -76,12 +76,12 @@ in this task changes behaviour, so its diff must be reviewable as a move.
 resolve to the same public items (`OpenAiClient` and its constructors). No
 consumer changes.
 
-- [ ] Confirm the branch and the starting point:
+- [x] Confirm the branch and the starting point:
       `git branch --show-current` → `feat/llm-idle-not-total`;
       `wc -l mur-agent-runtime/src/llm/openai.rs` → `791`.
-- [ ] `mkdir mur-agent-runtime/src/llm/openai`
-- [ ] `git mv mur-agent-runtime/src/llm/openai.rs mur-agent-runtime/src/llm/openai/mod.rs`
-- [ ] Move lines from `#[cfg(test)]` (was line 589) to end of file out of
+- [x] `mkdir mur-agent-runtime/src/llm/openai`
+- [x] `git mv mur-agent-runtime/src/llm/openai.rs mur-agent-runtime/src/llm/openai/mod.rs`
+- [x] Move lines from `#[cfg(test)]` (was line 589) to end of file out of
       `mod.rs` and into `mur-agent-runtime/src/llm/openai/tests.rs`, dropping
       the outer `#[cfg(test)] mod tests {` wrapper and its closing brace, and
       keeping every `use` inside it. In `mod.rs`, replace what you removed
@@ -92,15 +92,15 @@ consumer changes.
       ```
       The sibling pattern is `llm/fallback/{mod.rs,tests.rs}`; open it if the
       shape of the split is unclear.
-- [ ] In `tests.rs`, the moved code referred to items by `super::*` **from
+- [x] In `tests.rs`, the moved code referred to items by `super::*` **from
       inside** `mod tests`, which was one level shallower. Fix imports by
       compiling, not by guessing: the first `use super::*;` still means the
       parent module, so it usually needs no change. Any `super::super::`
       becomes `super::`.
-- [ ] `wc -l mur-agent-runtime/src/llm/openai/mod.rs mur-agent-runtime/src/llm/openai/tests.rs`
-      → `mod.rs` **under 800**, and the two together within one or two lines
-      of 791.
-- [ ] Prove it is a pure move — the production half must be untouched:
+- [x] `wc -l mur-agent-runtime/src/llm/openai/mod.rs mur-agent-runtime/src/llm/openai/tests.rs`
+      → `mod.rs` **under 800**, and the two together within one or two lines **Recorded: mod.rs 590, tests.rs 200, total 790 vs 791 — `mod tests {` became `mod tests;`.**
+      of 791. **Recorded: mod.rs 590, tests.rs 200, total 790 vs 791 — `mod tests {` became `mod tests;`.**
+- [x] Prove it is a pure move — the production half must be untouched:
       ```sh
       git show HEAD:mur-agent-runtime/src/llm/openai.rs | sed -n '1,588p' > /tmp/before.rs
       sed -n '1,588p' mur-agent-runtime/src/llm/openai/mod.rs > /tmp/after.rs
@@ -109,20 +109,21 @@ consumer changes.
       Expect only the trailing `#[cfg(test)] mod tests;` to differ, and
       **nothing** inside any function body. If a function body differs, you
       edited instead of moved — revert and redo.
-- [ ] Build and test:
+- [x] Build and test:
       ```sh
       export ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432
       cargo clippy -p mur-agent-runtime --all-targets -- -D warnings; echo "clippy exit=$?"
       cargo nextest run -p mur-agent-runtime; echo "nextest exit=$?"
       ```
       Both `0`. The nextest count must equal the count on `origin/main` —
+      **Recorded: 1086 passed / 6 skipped before the move, 1086 / 6 after, both exit 0.** Equal, so nothing stopped being compiled.
       record both numbers here, because a test that silently stopped being
       compiled is the failure mode a moved `mod` invites.
-- [ ] Commit: `refactor(llm): split openai.rs into openai/{mod,tests}.rs (pure move)`
-- [ ] Open PR 1 with the `diff exit=0` output and both nextest counts in the
+- [x] Commit: `refactor(llm): split openai.rs into openai/{mod,tests}.rs (pure move)`
+- [x] Open PR 1 with the `diff exit=0` output and both nextest counts in the
       body. **Do not tick any later task's checkbox on this branch** — that
       would put a docs change into a PR whose claim is "movement only".
-- [ ] Merge PR 1, then `git fetch origin && git rebase origin/main`.
+- [x] Merge PR 1, then `git fetch origin && git rebase origin/main`.
 
 ## Task 1 — the shared builder: one clock, and the proxy gap closed
 
@@ -136,7 +137,7 @@ pub(crate) fn llm_client_builder() -> reqwest::ClientBuilder;  // + .connect_tim
 ```
 **Consumes:** nothing from Task 0 beyond the moved module path.
 
-- [ ] Write the falsifiable test FIRST, and run it against the **unfixed**
+- [x] Write the falsifiable test FIRST, and run it against the **unfixed**
       code so you see what today does. In `llm/client_builder.rs` tests:
       ```rust
       /// §1.3 of the spec, as a question rather than a claim: the guarded
@@ -168,7 +169,7 @@ pub(crate) fn llm_client_builder() -> reqwest::ClientBuilder;  // + .connect_tim
       genuine guard: it must fail without `.no_proxy()` and pass with it.
       Confirm that ordering once while implementing — write the test, watch it
       fail, then apply the builder change.
-- [ ] In `llm/mod.rs`, add above `llm_client_builder`:
+- [x] In `llm/mod.rs`, add above `llm_client_builder`:
       ```rust
       /// Time allowed to establish a TCP connection to an LLM endpoint. The
       /// only clock on the client: `read_timeout` is deliberately absent
@@ -185,7 +186,7 @@ pub(crate) fn llm_client_builder() -> reqwest::ClientBuilder;  // + .connect_tim
               .connect_timeout(std::time::Duration::from_secs(LLM_CONNECT_TIMEOUT_SECS))
       }
       ```
-- [ ] In `llm/client_builder.rs`, replace the `guarded_http` build (was line
+- [x] In `llm/client_builder.rs`, replace the `guarded_http` build (was line
       189) with:
       ```rust
       let guarded_http = crate::llm::llm_client_builder()
@@ -194,13 +195,20 @@ pub(crate) fn llm_client_builder() -> reqwest::ClientBuilder;  // + .connect_tim
           .context("failed to build guarded HTTP client")
           .map_err(GuardedHttpBuildError)?;
       ```
-- [ ] Delete `LLM_REQUEST_TIMEOUT_SECS` and `LLM_CONNECT_TIMEOUT_SECS` from
+- [x] Delete `LLM_REQUEST_TIMEOUT_SECS` and `LLM_CONNECT_TIMEOUT_SECS` from
       all three of `llm/ollama.rs`, `llm/openai/mod.rs`, `llm/anthropic.rs`,
       and in each self-building constructor drop the `.timeout(...)` and
       `.connect_timeout(...)` calls so it reads `crate::llm::llm_client_builder().build()`.
-- [ ] Re-run the proxy test. It must now pass whichever way it went before.
-- [ ] `command grep -rn "LLM_REQUEST_TIMEOUT_SECS" mur-agent-runtime/src mur-core/src` → **no hits**.
-- [ ] Add the two guards:
+- [x] Re-run the proxy test. It must now pass whichever way it went before.
+- [x] `command grep -rn "LLM_REQUEST_TIMEOUT_SECS" mur-agent-runtime/src mur-core/src` → **no hits**.
+- [x] Add the two guards (**the builder guard was mutation-verified**: adding
+      `.read_timeout(600s)` to the builder makes it FAIL, removing it makes it
+      pass, so it is not a tautology. **Honest limitation recorded in the test
+      itself**: `reqwest::Client`'s `Debug` does not print `connect_timeout`,
+      so the guard proves only that the two forbidden clocks are absent, not
+      that the connect clock is applied — proving that behaviourally needs a
+      TCP connect that stalls rather than refuses, i.e. an unroutable address
+      and a flaky test):
       ```rust
       // llm/mod.rs tests
       #[test]
@@ -212,7 +220,7 @@ pub(crate) fn llm_client_builder() -> reqwest::ClientBuilder;  // + .connect_tim
       back to a behavioural assertion: a server that accepts and stalls past
       any former backstop keeps the request pending (drive it with
       `tokio::time::pause` from Task 4's feature).
-- [ ] Verify and commit:
+- [x] Verify and commit:
       ```sh
       cargo clippy -p mur-agent-runtime --all-targets -- -D warnings; echo $?
       cargo nextest run -p mur-agent-runtime; echo $?
