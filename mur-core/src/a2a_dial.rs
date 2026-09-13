@@ -334,6 +334,9 @@ pub enum StepEvent {
         /// from a legitimate non-zero exit (`ok: false`); an older runtime that
         /// doesn't send this key is treated as not-denied.
         denied: bool,
+        /// The call yielded and the command is still running (a runtime ≥ the
+        /// bash-yield release sends this; older ones omit it = not running).
+        running: bool,
     },
 }
 
@@ -355,6 +358,7 @@ pub fn parse_step(p: &Value, completed: bool) -> StepEvent {
             error: p.get("error").and_then(Value::as_str).map(str::to_string),
             duration_ms: p.get("duration_ms").and_then(Value::as_u64).unwrap_or(0),
             denied: p.get("denied").and_then(Value::as_bool).unwrap_or(false),
+            running: p.get("running").and_then(Value::as_bool).unwrap_or(false),
         }
     } else {
         StepEvent::Started {
@@ -1017,7 +1021,8 @@ mod step_parse_tests {
             "full_len": 4u64,
             "error": null,
             "duration_ms": 123u64,
-            "denied": false
+            "denied": false,
+            "running": false
         });
         match parse_step(&p, true) {
             StepEvent::Completed {
@@ -1030,6 +1035,7 @@ mod step_parse_tests {
                 error,
                 duration_ms,
                 denied,
+                running,
             } => {
                 assert_eq!(step_id, "s2");
                 assert_eq!(task_id, "t2");
@@ -1040,8 +1046,25 @@ mod step_parse_tests {
                 assert!(error.is_none());
                 assert_eq!(duration_ms, 123);
                 assert!(!denied);
+                assert!(!running);
             }
             StepEvent::Started { .. } => panic!("expected Completed"),
+        }
+    }
+
+    #[test]
+    fn parses_completed_running_flag() {
+        let p = serde_json::json!({
+            "step_id": "s3", "task_id": "t3", "ok": true, "output": "…",
+            "truncated": false, "full_len": 1u64, "error": null,
+            "duration_ms": 30000u64, "denied": false, "running": true
+        });
+        match parse_step(&p, true) {
+            StepEvent::Completed { running, ok, .. } => {
+                assert!(running);
+                assert!(ok, "a yield is not an error");
+            }
+            other => panic!("{other:?}"),
         }
     }
 }

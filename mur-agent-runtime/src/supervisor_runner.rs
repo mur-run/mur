@@ -204,6 +204,9 @@ pub fn build_runner(
     // The tools' shared session cwd and the roots a turn may move it to, so
     // the prompt declares the working directory from the runtime's own state.
     session_cwd: Option<(crate::tools::fs_policy::SessionCwd, Vec<String>)>,
+    // Shared with the bash tool: lets the loop end a task's jobs on an
+    // unattended stop or a cancel (spec D3/D8). `None` for the stub runners.
+    bash_jobs: Option<Arc<crate::tools::bash_jobs::JobTable>>,
 ) -> Arc<TaskRunner> {
     let mut runner = TaskRunner::with_llm(client)
         .with_agent_name(agent_name)
@@ -217,6 +220,9 @@ pub fn build_runner(
         .with_effort(effort);
     if let Some(v) = secrets {
         runner = runner.with_secrets(v);
+    }
+    if let Some(j) = bash_jobs {
+        runner = runner.with_bash_jobs(j);
     }
     runner = runner.with_limits(limits.0, limits.1);
     if let (Some(chain), Some(ctx), Some(cancel)) = (hook_chain, hook_ctx, hook_cancel) {
@@ -338,7 +344,8 @@ pub async fn build_provider_runner(
     // parameter updates it; file tools resolve relative paths against the
     // current snapshot. A `cd` inside a bash subprocess is NOT retained.
     let session_cwd = crate::tools::fs_policy::SessionCwd::new(agent_home.to_path_buf());
-    let bash_exec: Arc<dyn crate::tools::ToolExecutor> = Arc::new(
+    let bash_jobs = crate::tools::bash_jobs::JobTable::new();
+    let bash = Arc::new(
         BashTool::new(agent_home.to_path_buf(), session_cwd.clone())
             .with_agent(mur_home.clone(), profile.inner.name.clone())
             // From the profile already in memory: the agent cannot read its own
@@ -354,8 +361,10 @@ pub async fn build_provider_runner(
                     .map(|w| crate::sandbox::policy::expand_entitlement_path(w))
                     .collect(),
             )
-            .with_secrets(secrets.clone()),
+            .with_secrets(secrets.clone())
+            .with_jobs(bash_jobs.clone()),
     );
+    let bash_exec: Arc<dyn crate::tools::ToolExecutor> = bash.clone();
     let bash_def = bash_exec.def();
     // Issue #712: the file tools must never touch the agent's own
     // profile.yaml / identity.key, whatever the profile grants.
@@ -408,6 +417,8 @@ pub async fn build_provider_runner(
         pool.clone(),
     )
     .await;
+    // bash_wait / bash_kill ride on bash's registration and policy (D6/D11).
+    crate::tools::registry::attach_bash_control(&mut tool_map, bash.control_tools());
 
     // Built-in fleet_run: registered ONLY for agents allowlisted in the global
     // config (`fleet_run.agents`, deny-by-default) — unauthorized agents never
@@ -552,6 +563,7 @@ pub async fn build_provider_runner(
             Some(decision_store.clone()),
             Some(secrets.clone()),
             Some((session_cwd.clone(), cwd_roots.clone())),
+            Some(bash_jobs.clone()),
         );
         (r, Some(client), Some(pool.clone()))
     };

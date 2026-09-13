@@ -951,6 +951,12 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             profile.inner.lifecycle.stop_timeout_secs
         );
     }
+    // Every bash job is a process group this runtime started; nothing else
+    // will end them once we are gone (spec D3/D9).
+    let killed = runner.kill_all_jobs().await;
+    if killed > 0 {
+        info!(jobs = killed, "ended running bash jobs");
+    }
     for t in transport_tasks {
         t.abort();
     }

@@ -6,6 +6,11 @@ pub enum StepState {
     Running,
     Done,
     Error,
+    /// The call yielded: the runtime answered, the command did not finish.
+    /// Neither `Done` (nothing is proven yet) nor `Error` (nothing failed),
+    /// and not `Running` — that spinner is for a call the runtime has not
+    /// answered yet and gets abandoned when the turn ends.
+    Yielded,
 }
 
 /// Max args lines shown inside an expanded card (mirrors the old HITL modal cap).
@@ -25,6 +30,8 @@ pub enum CallOutcome {
     Ok,
     Failed,
     Denied,
+    /// Yielded — still running under a job id.
+    Running,
 }
 
 /// One tool call, shown inline in the transcript.
@@ -80,6 +87,7 @@ impl StepCard {
         self.state = match outcome {
             CallOutcome::Ok => StepState::Done,
             CallOutcome::Failed | CallOutcome::Denied => StepState::Error,
+            CallOutcome::Running => StepState::Yielded,
         };
         self.output = output;
         self.truncated = truncated;
@@ -107,6 +115,7 @@ impl StepCard {
             StepState::Running => "◐",
             StepState::Done => "✔",
             StepState::Error => "✗",
+            StepState::Yielded => "⏳",
         }
     }
 }
@@ -175,5 +184,22 @@ mod tests {
         c.complete(CallOutcome::Ok, "no matches".into(), false, 10, None, 4);
         assert_eq!(c.state, StepState::Done);
         assert_eq!(c.glyph(), "✔");
+    }
+
+    #[test]
+    fn complete_running_sets_yielded_and_hourglass() {
+        let mut c = card();
+        c.complete(
+            CallOutcome::Running,
+            "[still running …]".into(),
+            false,
+            20,
+            None,
+            30_000,
+        );
+        assert_eq!(c.state, StepState::Yielded);
+        assert_eq!(c.glyph(), "⏳");
+        assert_ne!(c.state, StepState::Error);
+        assert_ne!(c.state, StepState::Done);
     }
 }
