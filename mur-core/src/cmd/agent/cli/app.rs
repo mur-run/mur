@@ -1169,6 +1169,7 @@ impl App {
         error: Option<String>,
         duration_ms: u64,
         denied: bool,
+        running: bool,
     ) {
         if let Some(card) = self
             .messages
@@ -1176,10 +1177,11 @@ impl App {
             .rev()
             .find_map(|m| m.step.as_mut().filter(|c| c.id == step_id))
         {
-            let outcome = match (ok, denied) {
-                (_, true) => super::step::CallOutcome::Denied,
-                (true, _) => super::step::CallOutcome::Ok,
-                (false, _) => super::step::CallOutcome::Failed,
+            let outcome = match (ok, denied, running) {
+                (_, true, _) => super::step::CallOutcome::Denied,
+                (_, _, true) => super::step::CallOutcome::Running,
+                (true, _, _) => super::step::CallOutcome::Ok,
+                (false, _, _) => super::step::CallOutcome::Failed,
             };
             card.complete(outcome, output, truncated, full_len, error, duration_ms);
         }
@@ -2321,7 +2323,17 @@ mod step_app_tests {
             "bash".into(),
             serde_json::json!({ "cmd": "ls" }),
         );
-        a.update_step_completed("s1", true, "foo.rs\n".into(), false, 7, None, 42, false);
+        a.update_step_completed(
+            "s1",
+            true,
+            "foo.rs\n".into(),
+            false,
+            7,
+            None,
+            42,
+            false,
+            false,
+        );
         let card = a
             .messages
             .iter()
@@ -2330,6 +2342,41 @@ mod step_app_tests {
         assert_eq!(card.state, StepState::Done);
         assert_eq!(card.duration_ms, Some(42));
         assert_eq!(card.output, "foo.rs\n");
+    }
+
+    /// Test 18 — a yield is ⏳, and the end of the turn does not abandon it
+    /// the way it abandons a card the runtime never answered.
+    #[test]
+    fn a_running_step_renders_yielded_not_done() {
+        let mut a = app();
+        a.begin_user_turn("hi");
+        a.push_step_started(
+            "s1".into(),
+            "bash".into(),
+            serde_json::json!({ "command": "cargo test" }),
+        );
+        a.update_step_completed(
+            "s1",
+            true,
+            "[still running after 30s — job_id: j-1]".into(),
+            false,
+            40,
+            None,
+            30_000,
+            false,
+            true,
+        );
+        let state = |a: &App| {
+            a.messages
+                .iter()
+                .rev()
+                .find_map(|m| m.step.as_ref())
+                .map(|c| (c.state, c.glyph()))
+                .unwrap()
+        };
+        assert_eq!(state(&a), (StepState::Yielded, "⏳"));
+        a.resolve_open_steps("turn ended");
+        assert_eq!(state(&a).0, StepState::Yielded, "abandon must skip a yield");
     }
 
     #[test]
@@ -2341,7 +2388,7 @@ mod step_app_tests {
             "read".into(),
             serde_json::json!({"path":"a.rs"}),
         );
-        a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5, false);
+        a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5, false, false);
         // No streaming segment now (tool turn, no text deltas).
         a.finish_agent_turn("here is the summary".into(), Some("t1".into()));
         let last = a.messages.last().unwrap();
@@ -2526,7 +2573,7 @@ mod awaiting_tests {
             "edit".into(),
             serde_json::json!({"file_path":"a.rs"}),
         );
-        a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5, false);
+        a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5, false, false);
         a.mark_card_awaiting("s1");
         let card = a.messages.iter().find_map(|m| m.step.as_ref()).unwrap();
         assert!(card.awaiting_hitl);
@@ -2544,7 +2591,7 @@ mod awaiting_tests {
             "edit".into(),
             serde_json::json!({"file_path":"a.rs"}),
         );
-        a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5, false);
+        a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5, false, false);
 
         // No card exists for this step_id: the renderer must be told so it can
         // fall back to the modal instead of assuming inline approval worked.
@@ -2573,7 +2620,7 @@ mod awaiting_tests {
             "edit".into(),
             serde_json::json!({"file_path":"a.rs"}),
         );
-        a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5, false);
+        a.update_step_completed("s1", true, "ok".into(), false, 2, None, 5, false, false);
         a.mark_card_awaiting("s1");
         assert!(a.hitl_inline_visible(Some("s1")), "live band: row shows");
 

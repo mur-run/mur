@@ -13,7 +13,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use secrecy::{ExposeSecret, SecretString};
 
@@ -124,6 +124,99 @@ impl SecretVault {
     fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, SecretString>> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
+
+    /// Longest stored value in bytes; 0 when the vault is empty. The streaming
+    /// masker holds back one less than this between reads.
+    pub fn longest_value_len(&self) -> usize {
+        self.lock()
+            .values()
+            .map(|v| v.expose_secret().len())
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// A masker for a byte stream whose chunk boundaries are arbitrary.
+    pub fn masker(self: &Arc<Self>) -> StreamMasker {
+        StreamMasker {
+            vault: Arc::clone(self),
+            carry: Vec::new(),
+        }
+    }
+
+    /// Move `split` left until no stored value straddles it. Emitting
+    /// `buf[..split]` is then safe: every occurrence in it is complete, so
+    /// `mask` sees it whole. Returns an occurrence START when it moves, which
+    /// is a char boundary because every value is a `str`.
+    fn safe_split(&self, buf: &[u8], mut split: usize) -> usize {
+        let guard = self.lock();
+        loop {
+            let mut moved = false;
+            for v in guard.values() {
+                let needle = v.expose_secret().as_bytes();
+                if needle.is_empty() || needle.len() > buf.len() {
+                    continue;
+                }
+                for s in 0..=buf.len() - needle.len() {
+                    let e = s + needle.len();
+                    if s < split && split < e && &buf[s..e] == needle {
+                        split = s;
+                        moved = true;
+                        break;
+                    }
+                }
+            }
+            if !moved {
+                return split;
+            }
+        }
+    }
+}
+
+/// Masks a stream read in arbitrary chunks (D10). `push` returns the bytes
+/// that are safe to emit; `finish` flushes what was held back. Between calls
+/// it retains `longest_value_len() - 1` bytes (enough that a value cannot end
+/// in an already-emitted chunk without having been seen whole) and never
+/// splits inside a UTF-8 sequence or inside an occurrence of a value.
+pub struct StreamMasker {
+    vault: Arc<SecretVault>,
+    carry: Vec<u8>,
+}
+
+impl StreamMasker {
+    pub fn push(&mut self, chunk: &[u8]) -> Vec<u8> {
+        self.carry.extend_from_slice(chunk);
+        // Re-read every push: `secret/set` can add a longer value mid-job.
+        let hold = self.vault.longest_value_len().saturating_sub(1);
+        if self.carry.len() <= hold {
+            return Vec::new();
+        }
+        let mut split = self.carry.len() - hold;
+        // Back off a continuation byte so a multi-byte char stays whole.
+        // Bounded at 3: past that the bytes are not UTF-8 and lossy is fine.
+        let floor = split.saturating_sub(3);
+        while split > floor && split < self.carry.len() && (self.carry[split] & 0xC0) == 0x80 {
+            split -= 1;
+        }
+        let split = self.vault.safe_split(&self.carry, split);
+        if split == 0 {
+            return Vec::new();
+        }
+        let ready: Vec<u8> = self.carry.drain(..split).collect();
+        mask_bytes(&self.vault, &ready)
+    }
+
+    pub fn finish(&mut self) -> Vec<u8> {
+        let rest = std::mem::take(&mut self.carry);
+        mask_bytes(&self.vault, &rest)
+    }
+}
+
+fn mask_bytes(vault: &SecretVault, bytes: &[u8]) -> Vec<u8> {
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(bytes);
+    vault.mask(&text).into_owned().into_bytes()
 }
 
 #[cfg(test)]
@@ -238,5 +331,66 @@ mod tests {
             f.contains("Authorization"),
             "the git guidance line is part of the fragment: {f}"
         );
+    }
+
+    fn masked_through(v: &Arc<SecretVault>, a: &[u8], b: &[u8]) -> Vec<u8> {
+        let mut m = v.masker();
+        let mut out = m.push(a);
+        out.extend(m.push(b));
+        out.extend(m.finish());
+        out
+    }
+
+    /// D10, test 9: a secret split at EVERY byte boundary between two pipe
+    /// reads is still replaced exactly once, and the plaintext never appears.
+    #[test]
+    fn stream_masker_catches_a_secret_across_every_split_point() {
+        let v = Arc::new(SecretVault::new());
+        v.set("PW", "hunter2hunter2").unwrap();
+        let text = b"pre hunter2hunter2 post";
+        for k in 0..=text.len() {
+            let out = masked_through(&v, &text[..k], &text[k..]);
+            let s = String::from_utf8(out).unwrap();
+            assert!(!s.contains("hunter2hunter2"), "split at {k}: {s}");
+            assert_eq!(s.matches("[SECRET:PW]").count(), 1, "split at {k}: {s}");
+            assert_eq!(s, "pre [SECRET:PW] post", "split at {k}");
+        }
+    }
+
+    /// A multi-byte character right at the split must not be cut in half.
+    #[test]
+    fn stream_masker_keeps_utf8_intact_around_the_split() {
+        let v = Arc::new(SecretVault::new());
+        v.set("PW", "hunter2hunter2").unwrap();
+        let text = "préfix ü hunter2hunter2 ü".as_bytes();
+        for k in 0..=text.len() {
+            let out = masked_through(&v, &text[..k], &text[k..]);
+            let s = String::from_utf8(out).unwrap_or_else(|e| panic!("split at {k}: {e}"));
+            assert_eq!(s, "préfix ü [SECRET:PW] ü", "split at {k}");
+        }
+    }
+
+    /// Two secrets where one is a prefix of the other: the longer one wins,
+    /// whatever the split.
+    #[test]
+    fn stream_masker_prefers_the_longer_secret_across_splits() {
+        let v = Arc::new(SecretVault::new());
+        v.set("SHORT", "hunter2hunter2").unwrap();
+        v.set("LONG", "hunter2hunter2extra").unwrap();
+        let text = b"x hunter2hunter2extra y";
+        for k in 0..=text.len() {
+            let out = masked_through(&v, &text[..k], &text[k..]);
+            let s = String::from_utf8(out).unwrap();
+            assert_eq!(s, "x [SECRET:LONG] y", "split at {k}: {s}");
+        }
+    }
+
+    /// An empty vault is a passthrough with no hold-back.
+    #[test]
+    fn stream_masker_without_secrets_passes_bytes_straight_through() {
+        let v = Arc::new(SecretVault::new());
+        let mut m = v.masker();
+        assert_eq!(m.push(b"abc"), b"abc".to_vec());
+        assert_eq!(m.finish(), Vec::<u8>::new());
     }
 }

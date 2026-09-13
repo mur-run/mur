@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use tokio::process::Command;
 
 use mur_common::agent_facts::who_can_exec;
 
@@ -12,15 +11,14 @@ use super::{ToolError, ToolExecutor, ToolOutput, ToolStatus};
 use crate::exec_dirs;
 use crate::llm::ToolDef;
 
-/// Default timeout (in seconds) applied to a bash command when the caller
-/// doesn't supply `timeout_secs` in the tool input.
+/// Default wait (in seconds) before `bash` yields a handle when the caller
+/// doesn't supply `timeout_secs`.
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
-/// Upper bound (in seconds) on the `timeout_secs` a caller may request.
-/// Requests above this (or invalid/non-positive values) are clamped down to
-/// this ceiling, so agents can run long builds without the risk of an
-/// effectively unbounded command (dogfood issue 8: the old hardcoded 30s cap
-/// made the `nohup` workaround undiscoverable for anything longer).
+/// Upper bound on how long ONE call may hold the turn waiting. It is not a
+/// bound on the command: past it the command keeps running and the reply
+/// carries a `job_id` (spec 2026-09-12 bash-yield D2). It exists so a turn
+/// stays responsive to cancel/steer, nothing else.
 const MAX_TIMEOUT_SECS: u64 = 600;
 
 /// Build the `PATH` to use for spawned bash commands: start from whatever
@@ -70,16 +68,16 @@ pub struct BashTool {
     /// Credentials the user handed the agent, exported into every child's
     /// environment. `None` (tests, embedded uses) exports nothing.
     pub secrets: Option<std::sync::Arc<crate::secrets::SecretVault>>,
+    /// The runtime-wide job table (spec D3): shared with `bash_wait` and
+    /// `bash_kill`, and with `TaskRunner` for deadline/cancel cleanup.
+    pub jobs: std::sync::Arc<crate::tools::bash_jobs::JobTable>,
 }
 
-/// Resolve the effective timeout (in seconds) from the tool input's optional
-/// `timeout_secs` field: missing or non-positive/invalid values fall back to
-/// [`DEFAULT_TIMEOUT_SECS`], and anything above [`MAX_TIMEOUT_SECS`] is
-/// clamped down to it, so a caller can never request an effectively
-/// unbounded command.
+/// `timeout_secs` (alias `wait_secs`): missing/invalid → default; negative →
+/// default; `0` → return the handle at once; above the cap → the cap.
 fn resolve_timeout_secs(requested: Option<i64>) -> u64 {
     match requested {
-        Some(secs) if secs >= 1 => (secs as u64).min(MAX_TIMEOUT_SECS),
+        Some(secs) if secs >= 0 => (secs as u64).min(MAX_TIMEOUT_SECS),
         _ => DEFAULT_TIMEOUT_SECS,
     }
 }
@@ -92,6 +90,7 @@ impl BashTool {
             agent: None,
             write_grants: Vec::new(),
             secrets: None,
+            jobs: crate::tools::bash_jobs::JobTable::new(),
         }
     }
 
@@ -131,6 +130,22 @@ impl BashTool {
         self.secrets = Some(vault);
         self
     }
+
+    /// Share a job table (production: one per runtime, built in
+    /// `supervisor_runner`).
+    pub fn with_jobs(mut self, jobs: std::sync::Arc<crate::tools::bash_jobs::JobTable>) -> Self {
+        self.jobs = jobs;
+        self
+    }
+
+    /// The two control tools over this tool's table. Registered together with
+    /// `bash` and gated by its policy (`registry::attach_bash_control`).
+    pub fn control_tools(self: &std::sync::Arc<Self>) -> Vec<std::sync::Arc<dyn ToolExecutor>> {
+        vec![
+            std::sync::Arc::new(crate::tools::bash_control::BashWaitTool { bash: self.clone() }),
+            std::sync::Arc::new(crate::tools::bash_control::BashKillTool { bash: self.clone() }),
+        ]
+    }
 }
 
 #[async_trait::async_trait]
@@ -143,9 +158,9 @@ impl ToolExecutor for BashTool {
         ToolDef {
             name: "bash".into(),
             description: format!(
-                "Run a bash shell command. Returns combined stdout+stderr. Non-zero exit codes appear in the output but are not errors. \
-Commands are killed after `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {MAX_TIMEOUT_SECS}s) \
-— pass a larger `timeout_secs` for long-running commands like builds instead of resorting to `nohup`."
+                "Run a bash shell command. Returns stdout, then stderr under `[stderr]`; a non-zero exit code appears in the output and is not an error. \
+Waits up to `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {MAX_TIMEOUT_SECS}s) for the command to finish. If it is still running after that you get a `job_id` and the output so far — the command KEEPS RUNNING. \
+Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` to start a command in the background immediately. Never use `nohup` or `&` to work around the wait."
             ),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -171,8 +186,8 @@ Commands are killed after `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {
                     "timeout_secs": {
                         "type": "integer",
                         "description": format!(
-                            "Maximum seconds to let the command run before it is killed. Defaults to {DEFAULT_TIMEOUT_SECS} \
-            if omitted or invalid, clamped to the range 1-{MAX_TIMEOUT_SECS}. Use a larger value for slow commands such as builds or test suites."
+                            "Seconds to wait for the command before yielding a job handle (default {DEFAULT_TIMEOUT_SECS}, clamped to 0-{MAX_TIMEOUT_SECS}). \
+            The command is NOT killed when this elapses. 0 = return immediately with the handle. `wait_secs` is accepted as an alias."
                         )
                     }
                 },
@@ -201,94 +216,162 @@ Commands are killed after `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {
             None => self.session_cwd.current(),
         };
 
-        let timeout_secs = resolve_timeout_secs(input["timeout_secs"].as_i64());
+        let timeout_secs = resolve_timeout_secs(
+            input
+                .get("timeout_secs")
+                .or_else(|| input.get("wait_secs"))
+                .and_then(serde_json::Value::as_i64),
+        );
 
-        let path = augmented_path(std::env::var("PATH").ok().as_deref());
-
-        let mut cmd = Command::new("bash");
-        cmd.arg("-c")
-            .arg(&command)
-            .current_dir(&working_dir)
-            .env("PATH", path)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
+        let mut env = vec![(
+            "PATH".to_string(),
+            augmented_path(std::env::var("PATH").ok().as_deref()),
+        )];
         // Values leave the vault only here, straight into the child's
-        // environment. The parent never holds them as plain strings past this
-        // statement, and the model never sees them at all: what comes back is
-        // masked at the runner's tool-result chokepoint.
+        // environment. The model never sees them: the pump masks every chunk
+        // before it reaches the tail or the spool (D10).
         if let Some(vault) = &self.secrets {
-            cmd.envs(vault.env_pairs());
+            env.extend(vault.env_pairs());
         }
-        let child = cmd.spawn().map_err(|e| {
-            let mut msg = format!("spawn failed: {e}");
-            if crate::tools::fs_policy::is_removable_volume_eperm(&working_dir, &e) {
-                msg.push_str("\n\n");
-                msg.push_str(crate::tools::fs_policy::REMOVABLE_VOLUME_EPERM_HINT);
-            }
-            ToolError::Execution(msg)
-        })?;
+        let spool_dir = self.working_dir.join("jobs");
+        let job_id = self
+            .jobs
+            .spawn(crate::tools::bash_jobs::SpawnSpec {
+                command: &command,
+                cwd: &working_dir,
+                env,
+                spool_dir: &spool_dir,
+                vault: self.secrets.clone(),
+            })
+            .map_err(|e| match e {
+                crate::tools::bash_jobs::JobError::Spawn(io) => {
+                    let mut msg = format!("spawn failed: {io}");
+                    if crate::tools::fs_policy::is_removable_volume_eperm(&working_dir, &io) {
+                        msg.push_str("\n\n");
+                        msg.push_str(crate::tools::fs_policy::REMOVABLE_VOLUME_EPERM_HINT);
+                    }
+                    ToolError::Execution(msg)
+                }
+                too_many @ crate::tools::bash_jobs::JobError::TooMany(_) => {
+                    ToolError::InvalidInput(too_many.to_string())
+                }
+                other => ToolError::Execution(other.to_string()),
+            })?;
+        let poll = self
+            .jobs
+            .poll(&job_id, std::time::Duration::from_secs(timeout_secs))
+            .await
+            .map_err(|e| ToolError::Execution(e.to_string()))?;
+        Ok(self.finish_poll(poll, &working_dir, false))
+    }
+}
 
-        let output = match tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
-            child.wait_with_output(),
-        )
-        .await
-        {
-            Ok(result) => result.map_err(|e| ToolError::Execution(format!("spawn failed: {e}")))?,
-            Err(_) => {
-                // `wait_with_output` consumed `child`, so on timeout we never
-                // get a handle back to kill/reap it here; `kill_on_drop`
-                // above ensures tokio's process driver still sends the kill
-                // and reaps the exit status in the background instead of
-                // leaving a zombie behind (dogfood issue 11).
-                return Err(ToolError::Execution(format!(
-                    "command timed out after {timeout_secs}s"
-                )));
-            }
-        };
-
+impl BashTool {
+    /// Turn a poll into the model-facing reply. Shared by `bash`, `bash_wait`
+    /// and `bash_kill` so the three never disagree about what an exit code,
+    /// a denial, or a yield looks like. `killed` = the caller was `bash_kill`.
+    pub(crate) fn finish_poll(
+        &self,
+        poll: crate::tools::bash_jobs::Poll,
+        working_dir: &Path,
+        killed: bool,
+    ) -> ToolOutput {
         let mut combined = String::new();
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if !stdout.is_empty() {
-            combined.push_str(&stdout);
+        if poll.skipped > 0 {
+            let where_ = poll
+                .spool
+                .as_ref()
+                .map(|p| format!(" — read_file {}", p.display()))
+                .unwrap_or_default();
+            combined.push_str(&format!("[… {} bytes not shown{where_}]\n", poll.skipped));
         }
-        if !stderr.is_empty() {
+        combined.push_str(&poll.new_stdout);
+        if !poll.new_stderr.is_empty() {
             if !combined.is_empty() {
                 combined.push_str("\n[stderr]\n");
             }
-            combined.push_str(&stderr);
+            combined.push_str(&poll.new_stderr);
         }
+        let elapsed = crate::bounds::fmt_dur(poll.elapsed);
+        let spool_line = poll
+            .spool
+            .as_ref()
+            .map(|p| format!("; full log: {}", p.display()))
+            .unwrap_or_default();
+        let note = poll
+            .spool_note
+            .as_ref()
+            .map(|n| format!("\n[{n}]"))
+            .unwrap_or_default();
+
+        let Some(exit) = poll.exit else {
+            if !combined.is_empty() && !combined.ends_with('\n') {
+                combined.push('\n');
+            }
+            combined.push_str(&format!(
+                "[still running after {elapsed} — job_id: {}; call bash_wait to keep waiting, bash_kill to stop{spool_line}]{note}",
+                poll.job_id
+            ));
+            return ToolOutput {
+                text: combined,
+                status: ToolStatus::Running {
+                    job_id: poll.job_id,
+                    bytes_seen: poll.bytes_seen,
+                },
+                images: Vec::new(),
+            };
+        };
+
+        let code = exit.code.unwrap_or(-1);
         let mut status = ToolStatus::Ok;
-        if !output.status.success() {
-            let code = output.status.code().unwrap_or(-1);
+        if killed {
+            if !combined.is_empty() && !combined.ends_with('\n') {
+                combined.push('\n');
+            }
+            match exit.killed_by {
+                Some(sig) => combined.push_str(&format!(
+                    "[killed {} by {sig} after {elapsed}]{note}",
+                    poll.job_id
+                )),
+                None => combined.push_str(&format!(
+                    "[{} had already exited with code {code} after {elapsed}]{note}",
+                    poll.job_id
+                )),
+            }
+            return ToolOutput {
+                text: combined,
+                status,
+                images: Vec::new(),
+            };
+        }
+        if exit.code != Some(0) {
             if !combined.is_empty() {
                 combined.push('\n');
             }
             combined.push_str(&format!("[exit code: {code}]"));
-            if let Some(bin) = spawn_denied_path(output.status.code(), &stderr)
+            if let Some(bin) = spawn_denied_path(exit.code, &poll.new_stderr)
                 && let Some((mur_home, agent)) = &self.agent
             {
-                let cwd = working_dir.canonicalize().unwrap_or(working_dir.clone());
+                let cwd = working_dir
+                    .canonicalize()
+                    .unwrap_or(working_dir.to_path_buf());
                 let routes = who_can_exec(mur_home, agent, &bin, Some(&cwd));
                 let hint = spawn_denied_hint(&bin, agent, &routes);
                 combined.push_str(&hint);
                 status = ToolStatus::Denied { detail: hint };
-            } else if let Some(hint) = self.explain_write_denial(&stderr, &working_dir) {
+            } else if let Some(hint) = self.explain_write_denial(&poll.new_stderr, working_dir) {
                 combined.push_str(&hint);
                 status = ToolStatus::Denied { detail: hint };
             } else {
                 status = ToolStatus::Failed { exit_code: code };
             }
         }
-
-        Ok(ToolOutput {
+        combined.push_str(&note);
+        ToolOutput {
             text: combined,
             status,
             images: Vec::new(),
-        })
+        }
     }
 }
 
@@ -367,7 +450,11 @@ mod tests {
         // Absent -> default.
         assert_eq!(resolve_timeout_secs(None), DEFAULT_TIMEOUT_SECS);
         // Non-positive/invalid -> default.
-        assert_eq!(resolve_timeout_secs(Some(0)), DEFAULT_TIMEOUT_SECS);
+        assert_eq!(
+            resolve_timeout_secs(Some(0)),
+            0,
+            "zero is the background case"
+        );
         assert_eq!(resolve_timeout_secs(Some(-5)), DEFAULT_TIMEOUT_SECS);
         // In-range value passes through unchanged.
         assert_eq!(resolve_timeout_secs(Some(120)), 120);
@@ -404,10 +491,10 @@ mod tests {
             .execute(serde_json::json!({"command": "printf '%s' \"$GITEA_TOKEN\""}))
             .await
             .unwrap();
-        // The TOOL returns the raw value; masking is the runner's job at the
-        // chokepoint, not this tool's. This test pins that division — moving
-        // the mask in here would leave every other tool unprotected.
-        assert_eq!(out.text.trim(), "d8b04a3cc632a5c8026cf5a810d36e292c603f99");
+        // Masking now happens in the pump (D10) because the spool is
+        // model-readable; the runner's chokepoint stays as the guard for
+        // every other tool.
+        assert_eq!(out.text.trim(), "[SECRET:GITEA_TOKEN]");
     }
 
     #[cfg(unix)]
@@ -488,73 +575,85 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn timeout_kill_path_leaves_no_zombie_children() {
-        // Regression test for dogfood issue 11: murmurd/mur-agent-runtime
-        // accumulated hundreds of defunct children (631 zombies on one
-        // murmurd, 585 and 291 on two runtime instances, ~1.6 new
-        // zombies/minute on a fresh process) because the bash tool's
-        // timeout branch dropped its `Child` without ever waiting on it.
-        // `BashTool::execute` only returns captured text, so there's no
-        // pid to inspect after the fact; this mirrors its exact spawn +
-        // `kill_on_drop(true)` + timeout shape to capture pids directly
-        // and confirm each one is *fully reaped* (not left defunct) once
-        // the timed-out future's `Child` is dropped.
+    async fn yielded_then_finished_jobs_are_reaped_not_left_defunct() {
+        // The yield path leaves no zombie either: the pump reaps the shell.
+        // Regression cover for dogfood issue 11 under the new semantics.
+        let t = make_tool();
         let mut pids = Vec::new();
-
-        for _ in 0..5 {
-            let mut child = Command::new("bash")
-                .arg("-c")
-                .arg("sleep 60")
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .kill_on_drop(true)
-                .spawn()
-                .expect("spawn failed");
-            let pid = child.id().expect("child should have a pid") as libc::pid_t;
-            pids.push(pid);
-
-            // Same shape as `execute`'s timeout branch: a short timeout
-            // fires long before the 60s sleep finishes, and the `Child`
-            // (owned by the timed-out future) is dropped here at the end
-            // of this loop iteration.
-            let _ = tokio::time::timeout(std::time::Duration::from_millis(50), child.wait()).await;
+        for _ in 0..3 {
+            let out = t
+                .execute(serde_json::json!({"command": "sleep 0.2", "timeout_secs": 0}))
+                .await
+                .unwrap();
+            let job_id = match out.status {
+                ToolStatus::Running { job_id, .. } => job_id,
+                other => panic!("expected Running, got {other:?}"),
+            };
+            pids.push(t.jobs.pid(&job_id).unwrap() as libc::pid_t);
         }
-
-        // Give tokio's process-driver orphan reaper a moment to finish
-        // reaping in the background: `kill_on_drop` only *starts* the
-        // kill on drop, reaping the exit status happens asynchronously.
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
         for pid in pids {
-            // SAFETY: `pid` is a plain integer obtained from `Child::id()`
-            // moments ago in this same test process, which is the direct
-            // parent of that pid. `waitpid` with `WNOHANG` is a
-            // non-blocking status query on a raw pid/status buffer we own
-            // on the stack; there is no aliasing or lifetime hazard.
             let mut status: libc::c_int = 0;
             let ret = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-            let errno = std::io::Error::last_os_error();
-
-            // A leaked zombie would still be sitting defunct in the
-            // process table, so `waitpid` would successfully reap it
-            // right here (`ret == pid`). Once the timeout-kill path
-            // properly reaps its children (the fix), the kernel has no
-            // child entry left for `pid` by the time we get here, so
-            // `waitpid` fails with `ECHILD`.
-            assert_eq!(
-                ret, -1,
-                "pid {pid} was still present (zombie or running) after \
-                 the timeout-kill path instead of already being reaped; \
-                 waitpid returned {ret}, status {status}, errno {errno:?}"
-            );
-            assert_eq!(
-                errno.raw_os_error(),
-                Some(libc::ECHILD),
-                "expected ECHILD (no such child) confirming pid {pid} was \
-                 already reaped in the background, got errno {errno:?}"
-            );
+            assert_eq!(ret, -1, "pid {pid} still a child of this process (zombie)");
         }
+    }
+
+    /// D1 at the tool boundary: a yield is `Running`, not an error, and says
+    /// so in words the model can act on.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timeout_yields_a_running_status_instead_of_killing() {
+        let t = make_tool();
+        let out = t
+            .execute(serde_json::json!({"command": "echo start; sleep 3", "timeout_secs": 1}))
+            .await
+            .unwrap();
+        let job_id = match &out.status {
+            ToolStatus::Running { job_id, bytes_seen } => {
+                assert_eq!(*bytes_seen, 6, "{out:?}");
+                job_id.clone()
+            }
+            other => panic!("expected Running, got {other:?}"),
+        };
+        assert!(out.text.contains("start"), "{}", out.text);
+        assert!(out.text.contains("still running"), "{}", out.text);
+        assert!(!out.text.contains("timed out"), "{}", out.text);
+        assert!(out.text.contains(&job_id), "{}", out.text);
+        assert!(crate::tools::bash_jobs::pid_alive(
+            t.jobs.pid(&job_id).unwrap()
+        ));
+        t.jobs.kill_all().await;
+    }
+
+    /// `wait_secs` is an alias for `timeout_secs`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn wait_secs_is_an_alias() {
+        let t = make_tool();
+        let out = t
+            .execute(serde_json::json!({"command": "sleep 2", "wait_secs": 0}))
+            .await
+            .unwrap();
+        assert!(matches!(out.status, ToolStatus::Running { .. }), "{out:?}");
+        t.jobs.kill_all().await;
+    }
+
+    /// A finished command still renders exactly as before the yield existed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn finished_command_renders_stdout_then_stderr_then_exit_code() {
+        let t = make_tool();
+        let out = t
+            .execute(serde_json::json!({"command": "echo out; echo err >&2; exit 3"}))
+            .await
+            .unwrap();
+        assert_eq!(out.status, ToolStatus::Failed { exit_code: 3 });
+        assert_eq!(
+            out.text, "out\n\n[stderr]\nerr\n\n[exit code: 3]",
+            "{}",
+            out.text
+        );
     }
 
     #[tokio::test]

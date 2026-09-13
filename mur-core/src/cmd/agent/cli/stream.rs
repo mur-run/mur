@@ -78,6 +78,8 @@ pub enum StreamMsg {
         /// non-zero exit (`ok: false`); an older runtime that omits this key
         /// is treated as not-denied.
         denied: bool,
+        /// The call yielded and the command is still running.
+        running: bool,
     },
 }
 
@@ -308,6 +310,7 @@ pub fn spawn_stream(
                         error,
                         duration_ms,
                         denied,
+                        running,
                     } => StreamMsg::StepCompleted {
                         task_id,
                         step_id,
@@ -318,6 +321,7 @@ pub fn spawn_stream(
                         error,
                         duration_ms,
                         denied,
+                        running,
                     },
                 };
                 let _ = tx.blocking_send(msg);

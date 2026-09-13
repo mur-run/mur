@@ -1,6 +1,6 @@
 # bash: a timeout is a yield, not a kill
 
-**Status:** Approved in conversation 2026-09-12; revised the same day after review (six findings, all verified against main — see §8). Awaiting plan.
+**Status:** Implemented in #1288. Live verification (spec §5) still pending — see that PR's description.
 **Scope:** `mur-agent-runtime` (`tools/bash.rs`, new `tools/bash_jobs.rs`, `tools/registry.rs`, `secrets.rs` streaming masker, `task_runner.rs` policy alias + task-local owner + deadline/cancel cleanup + fingerprint, `turn_ledger.rs` running outcome) and `mur-core` (murmur `CallOutcome::Running` rendering only). No protocol change on the wire beyond one additive boolean on the existing `ToolResult` event. No new config keys.
 **Parent:** `docs/superpowers/specs/2026-09-12-execution-limits-design.md` — this applies its D6 ("long-running tools return a handle, never block") to the last built-in tool that still blocks and kills.
 
@@ -160,9 +160,9 @@ tokio's `Command`), `pgid == child pid`. Kill sequence:
 `killpg(pgid, SIGKILL)`. The reader task reaps the direct child; group
 members are reparented to init and reaped there.
 
-Windows: only the direct child is terminated
-(`// ponytail: direct child only on Windows; Job Objects when a Windows
-user reports an orphan`). Documented in the tool text on that platform.
+Windows: `taskkill /F /T /PID <pid>` — a tree kill, so grandchildren die
+there too (`ponytail:` note in code names Job Objects as the upgrade if
+an orphan is ever reported).
 
 The seatbelt sandbox on macOS is not expected to deny `setpgid`; the live
 verification (§5) confirms it inside a real sealed agent, because a comment
@@ -187,7 +187,7 @@ every other tool.
 | Bound | Default | Where | Why |
 |---|---|---|---|
 | concurrent jobs per agent | 8 | `MAX_JOBS` const (D12) | a doom-looping model must not fork-bomb the host; the 9th `bash` gets `InvalidInput: 8 jobs running — bash_wait or bash_kill one first` |
-| spool size | 64 MiB per job | const | log lands on disk; beyond this the spool truncates its head and says so |
+| spool size | 64 MiB per job | const | log lands on disk; past the cap the spool stops growing, the tail stays live, and the reply says so |
 | bytes per reply | 16 KiB tail | const | same figure `fleet_run` uses; `read_file` on the spool for more |
 | result retention | 1 h after exit | const | abandoned handles are reaped; killed on runtime exit regardless |
 | kill grace | 2 s | const | SIGTERM → SIGKILL on the group |
@@ -207,17 +207,20 @@ printed nothing for 30 minutes are identical, the unattended run stops with
 ends the job. That is the correct verdict.
 
 **Settlement ledger.** `turn_ledger::Outcome` gains `Running(String)`
-(detail: job id + elapsed). `classify` maps `ToolStatus::Running` to it
-before the `is_error` check. The card renders it as its own line —
-`⏳ bash · still running (j-01J…, 10m) — bash_wait` — and the summary counts
-running separately from ✔ and ✘.
+(detail: the job id — elapsed lives in the tool's own reply text, not
+duplicated onto the ledger `Action`). `classify` maps
+`ToolStatus::Running` to it before the `is_error` check. The card
+renders it as its own line —
+`⏳ bash · still running (j-01J…) — bash_wait to continue` — and the
+summary counts running separately from ✔ and ✘.
 
 **murmur.** The `ToolResult` event already carries `ok` and `denied`; it
 gains `running: bool` (additive, old readers ignore it). `CallOutcome`
-gains `Running`, mapped to a `StepState::Running` that renders as ⏳ and is
-neither `Done` nor `Error`. A step that later completes via `bash_wait` is a
-different call and a different card; the running card stays as the record
-of the yield.
+gains `Running`, mapped to a `StepState::Yielded` (named apart from the
+existing `Running` spinner state — that one means "the runtime has not
+answered yet") that renders as ⏳ and is neither `Done` nor `Error`. A step
+that later completes via `bash_wait` is a different call and a different
+card; the running card stays as the record of the yield.
 
 ### 3.8 Policy (D11)
 
