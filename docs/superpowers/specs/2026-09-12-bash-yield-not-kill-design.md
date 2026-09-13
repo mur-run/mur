@@ -1,6 +1,6 @@
 # bash: a timeout is a yield, not a kill
 
-**Status:** Implemented in #1288. Live verification (spec §5) still pending — see that PR's description.
+**Status:** Implemented in #1288 and live-verified against `rustsmith` (2026-09-13) — see §5 for the observations.
 **Scope:** `mur-agent-runtime` (`tools/bash.rs`, new `tools/bash_jobs.rs`, `tools/registry.rs`, `secrets.rs` streaming masker, `task_runner.rs` policy alias + task-local owner + deadline/cancel cleanup + fingerprint, `turn_ledger.rs` running outcome) and `mur-core` (murmur `CallOutcome::Running` rendering only). No protocol change on the wire beyond one additive boolean on the existing `ToolResult` event. No new config keys.
 **Parent:** `docs/superpowers/specs/2026-09-12-execution-limits-design.md` — this applies its D6 ("long-running tools return a handle, never block") to the last built-in tool that still blocks and kills.
 
@@ -322,6 +322,32 @@ Live verification (not CI): from murmur, ask a sealed agent to run
 exit code; `bash_kill` a `cargo build` and confirm with `pgrep` that no
 `rustc` survives. The previous failure is the exact reproduction; the
 `pgrep` is the D9 and seatbelt check.
+
+**Done, 2026-09-13, against the real `rustsmith` agent** (restarted onto
+the merged binary; the other ~25 agents on the machine were left
+untouched on the prior build, confirmed via `mur agent status` showing
+"stale runtime" for a sibling):
+
+- Yield: `bash` on `sleep 5 && echo done-sleeping` with `timeout_secs: 2`
+  returned `Running` with a `job_id`; `bash_wait` (`wait_secs: 10`)
+  returned the real output (`done-sleeping`) only once the full 5 s had
+  elapsed — the sleep was never killed at the 2 s mark.
+- Grandchild + process group (D9): `bash -c 'sleep 60 & echo $!; wait'`
+  reported grandchild pid 94013; a plain `ps -p 94013` from the
+  controlling shell confirmed it alive; `bash_kill` returned
+  `[killed … by SIGTERM after 23s]`; the same `ps -p 94013` immediately
+  after found no such process (exit 1), and `pgrep -f "sleep 60"` did not
+  list it — the grandchild died with the group, on the real macOS
+  seatbelt sandbox, not just in a unit test's own process.
+- One environment interaction found and **not** a bug in this feature: a
+  `cargo build` whose crate lives on the external volume
+  (`/Volumes/Firecuda4tb/…`) fails to run its build-script binary with
+  `Operation not permitted` — this is the pre-existing external-volume
+  TCC/exec restriction on this machine (unrelated agents hit the same
+  thing), not a regression from process-group spawning. `setpgid` itself
+  was never denied; pure-Rust deps with no build script (`proc-macro2`,
+  `quote`, `memchr`, …) compiled and ran fine before the external build
+  script hit the pre-existing wall.
 
 ## 6. Rollout
 
