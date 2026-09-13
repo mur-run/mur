@@ -1665,6 +1665,14 @@ mod shell_footer_tests {
 - [x] `grep -rn "SHELL_TIMEOUT_SECS\|push_shell\|run_local_shell" mur-core/src mur-agent-runtime/src mur-hub-gui/src-tauri/src` → **no hits**. Any remaining one is a caller the tasks missed.
 - [ ] `wc -l mur-core/src/cmd/agent/cli/{shell.rs,mod.rs,app.rs,stream.rs}` — record the numbers in the PR body. `shell.rs` must be under 800; `mod.rs` and `app.rs` must be **smaller** than the 3770 / 2894 they started at, since Task 0 moved code out and Tasks 1–3 added the bulk elsewhere. If either grew, the split did not do its job and the new code is in the wrong file.
   - **Outcome: this check FAILED and the criterion was wrong, not the code.** `shell/run.rs` 584 and `shell/mod.rs` 359 are both under 800. But `mod.rs` went 3770 → 3962 and `app.rs` 2894 → 3043. The card operations mutate `App`'s transcript and call its private `persist_turn`; the wiring exercises `submit`/`handle_ctrl_c`/`handle_stream`, which live in `mod.rs`. Moving either out would mean widening `App`'s internals or making those handlers public. Both files were already 4.6x and 3.6x over the limit before this branch; bringing them under it is a refactor several times this feature's size and belongs in its own PR.
+  - **Resolved by #1307 (2026-09-14).** That own PR happened: `cli/mod.rs` is
+    430, `app.rs` is 633, and nothing under `cli/` exceeds 791. The deviation
+    recorded above is closed, but the note stays as written — the criterion it
+    reports was still the wrong criterion for *this* plan, and a ledger that
+    edits its failures away afterwards is worth nothing. What #1307 showed is
+    that the obstacle named here was real and surmountable: the card operations
+    do need `App`'s private `persist_turn`, so `pub(super)` restores exactly the
+    visibility those items had before the split rather than widening anything.
 - [x] `cargo fmt --all -- --check; echo $?` → `0`.
 - [x] `cargo clippy --workspace --all-targets -- -D warnings > /tmp/cw.log 2>&1; echo $?` → `0`.
 - [x] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core > /tmp/tc.log 2>&1; echo $?` → `0`. ~5900 tests, about a minute after a warm build; a cold build is ~15 minutes.
