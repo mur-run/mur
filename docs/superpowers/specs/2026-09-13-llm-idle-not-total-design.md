@@ -1,6 +1,6 @@
 # LLM clients: bound idleness, not generation
 
-**Status:** Drafted 2026-09-13; revised the same day after review — six findings, all six valid, none rebutted. The decorator seam of the first draft is gone (§7 F1). Awaiting re-review.
+**Status:** Drafted 2026-09-13; revised the same day after review — six findings, all six valid, none rebutted. The decorator seam of the first draft is gone (§7 F1). §1.3's proxy bypass was left open in the draft and is now **confirmed by probe** (§1.3). Awaiting re-review.
 **Scope:** `llm/mod.rs` (shared client builder, `StopReason`, one marker constant, the shared activity helper), `llm/client_builder.rs` (the single place the runtime's HTTP client is built), `llm/{ollama,openai,anthropic}.rs` (delete three constants; each SSE loop awaits through the helper), `task_runner.rs` (mark an interrupted reply the way `MaxTokens` is already marked), the workspace `Cargo.toml` (tokio `test-util`, dev-only), and `mur-core/src/cmd/agent_companion/preview.rs` (all three of its timeout-bearing branches). No wire-protocol change. No new YAML keys; two env overrides.
 **Parent:** `docs/superpowers/specs/2026-09-12-execution-limits-design.md` — applies its D3 ("attended runs have no hard stops") and D7 ("liveness is heartbeats, not a bigger read timeout") to the LLM transport, the last layer the redesign did not reach.
 **Issue:** #1287, filed by the sibling-limit scan in `docs/superpowers/specs/2026-09-12-bash-yield-not-kill-design.md` §1.
@@ -84,9 +84,22 @@ this client. When reqwest routes through a proxy it resolves the *proxy*
 host, so the allowlist in `entitlements.network.outbound.allow_hosts` is
 never consulted for the real destination.
 
-This is stated here as what the code shows. §5 test 7 is what will prove or
-disprove the bypass; the spec does not claim it as established until that
-test runs.
+**Confirmed empirically, 2026-09-13, before any of this was implemented.** A
+throwaway probe replicated exactly what `client_builder.rs:189` builds today —
+a bare `ClientBuilder` with `HostGuard::restricted(vec![])` as its DNS
+resolver, an allowlist that permits nothing — set `HTTP_PROXY` to a local
+listener, and requested `http://blocked.example.com/v1/messages`:
+
+```
+PROBE RESULT: the proxy CAPTURED it — HostGuard bypassed.
+status=Ok(200) first line=Some("GET http://blocked.example.com/v1/messages HTTP/1.1")
+```
+
+The absolute-form request line is the proof that it was proxied rather than
+resolved. So an agent in `Restricted` outbound mode has its LLM egress
+allowlist silently defeated by an ambient `HTTP_PROXY` in its environment,
+and `.no_proxy()` in D2 is the fix. The probe was deleted after it answered;
+§5 test 12 is its permanent form.
 
 ### 1.4 Which calls stream, and which do not
 
@@ -300,7 +313,7 @@ missing one.
 9. Interrupted mid-arguments: the incomplete tool call is absent from `tool_calls`, and the reply is `Interrupted` with the preceding text (or `Timeout` if there was none).
 10. `thinking: true` events keep a stream alive, and the thinking text does **not** appear in the returned answer — F2's regression guard.
 11. Env overrides parsed; an unparseable value falls back to the constant and warns.
-12. **The proxy claim from §1.3.** A restricted-mode agent whose `allow_hosts` excludes the target, with `HTTP_PROXY` pointed at a local listener: assert the request does not reach the proxy listener. Run it against the pre-fix builder first and record what happens — if it passes before the fix, §1.3's bypass is wrong and §7 says so instead of the claim standing.
+12. **The §1.3 bypass, now a confirmed regression guard.** A restricted-mode agent whose `allow_hosts` excludes the target, with `HTTP_PROXY` pointed at a local listener: assert the listener accepts **no** connection. The pre-fix behaviour is recorded in §1.3 — the proxy captured the request and returned 200 — so this test fails without D2's `.no_proxy()` and is a real guard rather than a tautology.
 13. All **three** `preview.rs` branches (`anthropic`/`openai` via `from_env` → `new`, and `ollama` via `new`) build through the shared builder. The first draft named only the Ollama one (§7 F6).
 
 Every stream test drives a `tokio::time::pause`d clock (§3.5), not a real sleep.

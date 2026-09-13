@@ -154,12 +154,20 @@ pub(crate) fn llm_client_builder() -> reqwest::ClientBuilder;  // + .connect_tim
       the client through `build_bare_client` with a `Restricted` profile whose
       `allow_hosts` does **not** contain the target host, with `HTTP_PROXY`
       pointed at the listener. Assert the listener accepts **no** connection.
-- [ ] `cargo nextest run -p mur-agent-runtime -E 'test(a_restricted_agent_ignores_an_ambient_proxy)'; echo $?`
-      → **record the result verbatim in this file, whichever way it goes.**
-      - Fails before the fix → §1.3's bypass is real; this test is its guard.
-      - Passes before the fix → §1.3 is **wrong**. Say so in the spec's §7,
-        strike the security framing from §1.3, and keep the test as a
-        regression guard for `.no_proxy()` on this path.
+- [x] **Already settled, 2026-09-13, by a throwaway probe run before Task 0 —
+      the answer is in the spec's §1.3.** The bypass is **real**:
+
+      ```
+      PROBE RESULT: the proxy CAPTURED it — HostGuard bypassed.
+      status=Ok(200) first line=Some("GET http://blocked.example.com/v1/messages HTTP/1.1")
+      ```
+
+      A bare `ClientBuilder` with `HostGuard::restricted(vec![])` and
+      `HTTP_PROXY` set reached a host the allowlist forbade. The absolute-form
+      request line proves it was proxied, not resolved. So the test above is a
+      genuine guard: it must fail without `.no_proxy()` and pass with it.
+      Confirm that ordering once while implementing — write the test, watch it
+      fail, then apply the builder change.
 - [ ] In `llm/mod.rs`, add above `llm_client_builder`:
       ```rust
       /// Time allowed to establish a TCP connection to an LLM endpoint. The
