@@ -29,6 +29,7 @@ mod recover;
 mod render_card;
 mod secret_cmd;
 mod settlement;
+mod shell;
 mod shell_complete;
 mod step;
 mod stream;
@@ -66,6 +67,7 @@ use self::app::{
     arm_input_debounce, esc_action, overlay_key_action, parse_slash, take_due_input,
 };
 use self::persist::Session;
+use self::shell::{ShellRoute, route_shell_output, shell_block};
 use self::stream::{StreamMsg, build_params, cancel_task, respond_hitl, spawn_stream};
 use crate::a2a_dial::{DialMode, canonicalize_agent_name, dial_method};
 
@@ -1921,45 +1923,6 @@ fn start_turn(app: &mut App, trimmed: String, tx: &mpsc::Sender<StreamMsg>) {
     );
 }
 
-/// What the agent receives for a `!cmd` run. Singular, framed, nothing else:
-/// the agent may answer with one line, and the block does not ask for more.
-fn shell_block(cmd: &str, output: &str) -> String {
-    if output.is_empty() {
-        format!("[shell command the user ran locally]\n$ {cmd}\n[end of shell output]")
-    } else {
-        format!("[shell command the user ran locally]\n$ {cmd}\n{output}\n[end of shell output]")
-    }
-}
-
-/// Where a finished `!cmd` block goes.
-#[derive(Debug)]
-enum ShellRoute {
-    /// Idle: start a turn with the block as the user's message.
-    Start,
-    /// A turn is live: steer it with the block.
-    Steer(String),
-    /// Nowhere; the note says why. The Shell card still renders.
-    Skip(&'static str),
-}
-
-/// Pure so the three routes are testable without pricing or a live agent.
-/// The budget gates a NEW turn only, exactly as `submit` does for typed text:
-/// a steer rides the turn already being paid for.
-fn route_shell_output(streaming: bool, task_id: Option<&str>, over_budget: bool) -> ShellRoute {
-    if streaming {
-        return match task_id {
-            Some(t) => ShellRoute::Steer(t.to_string()),
-            None => {
-                ShellRoute::Skip("shell output not sent — a turn is generating without a task id")
-            }
-        };
-    }
-    if over_budget {
-        return ShellRoute::Skip("↯ shell output not sent — session budget reached");
-    }
-    ShellRoute::Start
-}
-
 /// Start a turn whose transcript entry is the Shell card already pushed by
 /// `push_shell`: no User bubble, no second channel event. A staged image is
 /// left staged — it belongs to the user's next typed message.
@@ -3610,42 +3573,6 @@ mod fallback_visibility_tests {
 #[cfg(test)]
 mod shell_turn_tests {
     use super::*;
-
-    #[test]
-    fn shell_output_routes_by_turn_state() {
-        assert!(matches!(
-            route_shell_output(false, None, false),
-            ShellRoute::Start
-        ));
-        assert!(
-            matches!(route_shell_output(true, Some("t1"), false), ShellRoute::Steer(ref t) if t == "t1")
-        );
-        assert!(matches!(
-            route_shell_output(true, None, false),
-            ShellRoute::Skip(_)
-        ));
-        // Budget gates a NEW turn only; a steer rides the turn already paid for.
-        assert!(matches!(
-            route_shell_output(false, None, true),
-            ShellRoute::Skip(_)
-        ));
-        assert!(matches!(
-            route_shell_output(true, Some("t1"), true),
-            ShellRoute::Steer(_)
-        ));
-    }
-
-    #[test]
-    fn shell_block_frames_command_and_output() {
-        assert_eq!(
-            shell_block("ls", "a\nb"),
-            "[shell command the user ran locally]\n$ ls\na\nb\n[end of shell output]"
-        );
-        assert_eq!(
-            shell_block("true", ""),
-            "[shell command the user ran locally]\n$ true\n[end of shell output]"
-        );
-    }
 
     /// Idle: the block becomes the outgoing user message, the transcript keeps
     /// the one Shell card and gains no User bubble.
