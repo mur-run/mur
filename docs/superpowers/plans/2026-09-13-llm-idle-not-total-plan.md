@@ -675,12 +675,33 @@ Spec D6a, §3.5.
       `message/send`) against a stalling endpoint before calling the live check
       done.
 
-      **One observation worth its own look, not a claim.** During the hung
-      non-stream turn the dial reported `last: none since the request` — no
-      heartbeat arrived in 90 s, while the parent spec's D7 says the runtime
-      emits one at least every 30 s during a turn, including model inference. If
-      that is a real gap, the dial's backstop is doing work D7 intended the
-      heartbeat to make unnecessary. Not investigated here.
+      **Both loose ends were then chased down and filed.**
+
+      - **#1298 — chain agents never stream, which is why the live check could
+        not reach `generate_stream` at all.** `FallbackLlmClient`
+        (`fallback/mod.rs:340`) does not override `generate_stream`, so it
+        inherits the trait default, which calls `generate` and emits the whole
+        answer as one delta. `SwitchableLlmClient` does override it. Because the
+        global `models.fallback_chain` makes every agent a chain agent, every
+        agent here takes the non-stream path. Proven with a probe that reads the
+        full request body: `body_len=14063 stream=False keys=['messages',
+        'model', 'tools']` — no `stream` key at all — from both `mur agent send`
+        and murmur. Everything above the client is wired correctly
+        (`unix_socket.rs:96` builds the notifier, `message_send.rs:207` takes the
+        streaming branch, `run_sync_streaming` threads `Some(sink)` through);
+        the path stops at the chain client.
+      - **#1299 — no heartbeat without a caller-supplied `task_id`.**
+        `message_send.rs:237` gates the beat on `turn_task_id`, which is
+        `params.task_id` and optional. `mur agent send` sends none, so a healthy
+        turn emits no proof of life and trips the dial's 90 s check — exactly
+        the `last: none since the request` observed above. The parent spec's D7
+        promises a beat every 30 s during a turn; that holds only for callers
+        that happen to pass an id.
+
+      The first of those is the reason this spec's streaming work is currently
+      unreachable in practice on this machine. It does not invalidate the work —
+      the 16 provider tests drive the real client code — but it does mean the
+      user-visible benefit of #1287 arrives only once #1298 is fixed.
 
 - [ ] Tick this task and close #1287 via the PR.
 
