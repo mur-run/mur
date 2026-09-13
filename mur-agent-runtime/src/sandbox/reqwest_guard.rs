@@ -48,33 +48,41 @@ pub(crate) fn screened_socket_addrs(target: &str) -> std::io::Result<Vec<SocketA
 /// reqwest DNS resolver guard. Rejects hostnames not in the allowlist
 /// before the OS resolver is called.
 ///
-/// `None` for `allow_hosts` = allow all (Unrestricted).
-/// `Some([])` = deny all (Off). `Some(hosts)` = restricted.
+/// What this guard permits. Spelled out rather than encoded in an
+/// `Option<Vec<String>>`, because that representation made `Some([])` mean two
+/// different things — `Off` (no network at all) and `Restricted` with nothing
+/// listed — and those need opposite answers about loopback.
+#[derive(Clone, Debug)]
+enum Policy {
+    /// `Unrestricted`: no host allowlist. The SSRF screen still applies.
+    AllowAll,
+    /// `Restricted` / `ProxyOnly`: these hosts, plus loopback.
+    Allowlist(Vec<String>),
+    /// `Off`: nothing, loopback included.
+    DenyAll,
+}
+
 #[derive(Clone, Debug)]
 pub struct HostGuard {
-    allow_hosts: Option<Vec<String>>,
+    policy: Policy,
 }
 
 impl HostGuard {
     pub fn unrestricted() -> Self {
-        Self { allow_hosts: None }
+        Self {
+            policy: Policy::AllowAll,
+        }
     }
 
     pub fn restricted(hosts: Vec<String>) -> Self {
         Self {
-            allow_hosts: Some(hosts),
+            policy: Policy::Allowlist(hosts),
         }
     }
 
     pub fn off() -> Self {
         Self {
-            allow_hosts: Some(vec![]),
-        }
-    }
-
-    pub fn from_policy_hosts(allow_hosts: &Option<Vec<String>>) -> Self {
-        Self {
-            allow_hosts: allow_hosts.clone(),
+            policy: Policy::DenyAll,
         }
     }
 
@@ -105,18 +113,57 @@ impl HostGuard {
         Ok(())
     }
 
+    /// One rule, consulted by both entry points — the DNS resolver below and
+    /// [`Self::check_url`] — so a host cannot be permitted by one and refused
+    /// by the other.
     fn is_allowed(&self, host: &str) -> bool {
-        match &self.allow_hosts {
-            None => true,
-            Some(list) => {
-                if list.is_empty() {
-                    return false;
-                }
-                list.iter()
-                    .any(|pattern| host_matches_pattern(host, pattern))
+        match &self.policy {
+            Policy::AllowAll => true,
+            Policy::DenyAll => false,
+            // Loopback is not governed by `allow_hosts` and never was. The
+            // runtime keeps it off the list deliberately — `provider_host`
+            // returns `None` for `127.0.0.1` / `localhost` / `::1` — and grants
+            // the agent's own local LLM *port* through the B1 sandbox instead.
+            // `ProxyOnly` makes the point louder: its definition is "egress
+            // ONLY via loopback proxies", so refusing loopback would make that
+            // mode unusable.
+            //
+            // Enforcement is not removed, it stays where it belongs: the OS
+            // sandbox decides which local ports an agent may reach. And the
+            // SSRF screen is separate, so cloud metadata — link-local, not
+            // loopback — does not get in this way.
+            Policy::Allowlist(list) => {
+                host_str_is_loopback(host)
+                    || list
+                        .iter()
+                        .any(|pattern| host_matches_pattern(host, pattern))
             }
         }
     }
+}
+
+/// Is this URL's host this machine? Mirrors `llm::loopback::host_is_loopback`,
+/// duplicated rather than imported so `sandbox` does not depend on `llm`; the
+/// two are checked against each other by `the_two_loopback_predicates_agree`.
+fn host_is_loopback(url: &reqwest::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    }
+}
+
+/// The same question asked of a bare host string, which is all the DNS resolver
+/// gets. An IPv6 literal arrives here without its brackets.
+fn host_str_is_loopback(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let trimmed = host.trim_start_matches('[').trim_end_matches(']');
+    trimmed
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// Reject requests whose URL contains an IP-literal host in the blocked range.
@@ -456,7 +503,9 @@ mod guarded_client_tests {
     #[test]
     fn an_ip_literal_outside_the_allowlist_is_refused() {
         let c = guarded(HostGuard::restricted(vec!["api.anthropic.com".into()]));
-        let err = c.post("http://127.0.0.1:9/").unwrap_err();
+        // 203.0.113.0/24 is TEST-NET-3: a real IP literal that is not
+        // loopback, so the loopback exemption does not apply to it.
+        let err = c.post("http://203.0.113.5/").unwrap_err();
         assert!(
             err.contains("not in this agent's outbound allowlist"),
             "{err}"
@@ -467,8 +516,8 @@ mod guarded_client_tests {
     /// allowlist, not a ban on addresses.
     #[test]
     fn an_ip_literal_on_the_allowlist_is_allowed() {
-        let c = guarded(HostGuard::restricted(vec!["127.0.0.1".into()]));
-        assert!(c.post("http://127.0.0.1:9/v1/chat").is_ok());
+        let c = guarded(HostGuard::restricted(vec!["203.0.113.5".into()]));
+        assert!(c.post("http://203.0.113.5/v1/chat").is_ok());
     }
 
     /// Hostname matching is unchanged: exact and wildcard both still work.
@@ -489,6 +538,8 @@ mod guarded_client_tests {
     fn off_denies_every_host() {
         let c = guarded(HostGuard::off());
         assert!(c.post("https://api.anthropic.com/v1/messages").is_err());
+        // Loopback included: `Off` means no network, and the loopback
+        // exemption must not become a hole in the strictest mode.
         assert!(c.post("http://127.0.0.1:11434/api/chat").is_err());
     }
 
@@ -523,8 +574,12 @@ mod guarded_client_tests {
             if let Ok((mut s, _)) = origin.accept().await {
                 let mut b = [0u8; 1024];
                 let _ = s.read(&mut b).await;
+                // A NAME, not the loopback literal: loopback is exempt by
+                // design (an agent's own model lives there), so the property
+                // under test has to be "this host is not on the allowlist".
                 let r = format!(
-                    "HTTP/1.1 302 Found\r\nLocation: http://{dest}/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    "HTTP/1.1 302 Found\r\nLocation: http://blocked.example:{}/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    dest.port()
                 );
                 let _ = s.write_all(r.as_bytes()).await;
                 let _ = s.flush().await;
@@ -532,7 +587,11 @@ mod guarded_client_tests {
             }
         });
         let c = GuardedHttpClient::build(
-            reqwest::Client::builder().resolve("allowed.example", origin_addr),
+            reqwest::Client::builder()
+                .resolve("allowed.example", origin_addr)
+                // Reachable if it were followed, which is the point: the
+                // refusal is the allowlist's, not a connection failure.
+                .resolve("blocked.example", dest),
             HostGuard::restricted(vec!["allowed.example".into()]),
         )
         .unwrap();
@@ -567,7 +626,8 @@ mod guarded_client_tests {
                 let mut b = [0u8; 1024];
                 let _ = s.read(&mut b).await;
                 let r = format!(
-                    "HTTP/1.1 302 Found\r\nLocation: http://{dest}/moved\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    "HTTP/1.1 302 Found\r\nLocation: http://second.example:{}/moved\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    dest.port()
                 );
                 let _ = s.write_all(r.as_bytes()).await;
                 let _ = s.flush().await;
@@ -575,9 +635,11 @@ mod guarded_client_tests {
             }
         });
         let c = GuardedHttpClient::build(
-            reqwest::Client::builder().resolve("allowed.example", origin_addr),
-            // Both hops named.
-            HostGuard::restricted(vec!["allowed.example".into(), "127.0.0.1".into()]),
+            reqwest::Client::builder()
+                .resolve("allowed.example", origin_addr)
+                .resolve("second.example", dest),
+            // Both hops named, so it is the allowlist permitting the follow.
+            HostGuard::restricted(vec!["allowed.example".into(), "second.example".into()]),
         )
         .unwrap();
         let resp = c
@@ -592,5 +654,100 @@ mod guarded_client_tests {
             .expect("the target was contacted")
             .expect("and reported its request line");
         assert!(saw.contains("/moved"), "got {saw:?}");
+    }
+}
+
+#[cfg(test)]
+mod loopback_regression_tests {
+    use super::*;
+
+    /// The regression #1303 introduced, now a guard.
+    ///
+    /// A Restricted agent's own model endpoint is on loopback, and loopback is
+    /// deliberately absent from `allow_hosts`: `provider_host` returns `None`
+    /// for it and the B1 sandbox grants the port instead. Applying the
+    /// allowlist at the request layer without an exemption refused the agent's
+    /// own model — probed as `127.0.0.1=false localhost=false gateway8088=false`.
+    #[test]
+    fn a_restricted_agent_can_still_reach_its_own_local_model() {
+        let g = HostGuard::restricted(vec![]);
+        for url in [
+            "http://127.0.0.1:11434/api/chat",          // Ollama
+            "http://localhost:11434/api/chat",          // the same by name
+            "http://127.0.0.1:8088/v1/messages",        // the loopback model gateway
+            "http://127.0.0.1:8088/codex/v1/responses", // and its codex route
+            "http://[::1]:50320/v1/chat/completions",   // bundled MLX over IPv6
+        ] {
+            let parsed = reqwest::Url::parse(url).unwrap();
+            assert!(
+                g.check_url(&parsed).is_ok(),
+                "loopback is governed by the sandbox port grant, not allow_hosts: {url}"
+            );
+        }
+    }
+
+    /// `ProxyOnly` is defined as "egress ONLY via loopback proxies", so it is
+    /// the mode that would break hardest.
+    #[test]
+    fn proxy_only_can_reach_its_loopback_proxies() {
+        // ProxyOnly resolves to the same HostGuard shape as Restricted.
+        let g = HostGuard::restricted(vec!["api.anthropic.com".into()]);
+        assert!(
+            g.check_url(&reqwest::Url::parse("http://127.0.0.1:8088/v1/messages").unwrap())
+                .is_ok()
+        );
+    }
+
+    /// `Off` means no network at all, and that has to include loopback —
+    /// otherwise the exemption would become a hole in the strictest mode.
+    #[test]
+    fn off_still_denies_loopback() {
+        let g = HostGuard::off();
+        let err = g
+            .check_url(&reqwest::Url::parse("http://127.0.0.1:11434/api/chat").unwrap())
+            .unwrap_err();
+        assert!(err.contains("allowlist"), "{err}");
+    }
+
+    /// The exemption must not become a way to reach cloud metadata: that
+    /// address is link-local, not loopback, and the SSRF screen runs first.
+    #[test]
+    fn the_exemption_does_not_cover_link_local_metadata() {
+        for g in [
+            HostGuard::unrestricted(),
+            HostGuard::restricted(vec!["127.0.0.1".into()]),
+        ] {
+            let err = g
+                .check_url(
+                    &reqwest::Url::parse("http://169.254.169.254/latest/meta-data/").unwrap(),
+                )
+                .unwrap_err();
+            assert!(err.contains("link-local"), "{err}");
+        }
+    }
+
+    /// Two copies of "is this host me?" exist, one here and one in
+    /// `llm::loopback`, because `sandbox` must not depend on `llm`. This keeps
+    /// them from drifting.
+    #[test]
+    fn the_two_loopback_predicates_agree() {
+        for (raw, expected) in [
+            ("http://127.0.0.1:1/", true),
+            ("http://127.0.0.2:1/", true),
+            ("http://localhost:1/", true),
+            ("http://LOCALHOST:1/", true),
+            ("http://[::1]:1/", true),
+            ("http://169.254.169.254/", false),
+            ("http://api.anthropic.com/", false),
+            ("http://0.0.0.0:1/", false),
+        ] {
+            let url = reqwest::Url::parse(raw).unwrap();
+            assert_eq!(host_is_loopback(&url), expected, "local predicate: {raw}");
+            assert_eq!(
+                crate::llm::loopback::is_loopback_base_url(raw),
+                expected,
+                "llm predicate disagrees: {raw}"
+            );
+        }
     }
 }
