@@ -154,15 +154,23 @@ impl MethodHandler for MessageSendHandler {
             .map(|s| s.to_string());
         // Caller-supplied id for this turn (distinct from `context.task_id`,
         // which threads multi-turn context). When present the runner honors it
-        // so the client can cancel by an id it already holds; absent → None,
-        // back-compatible.
-        let task_id = p
+        // so the client can cancel by an id it already holds.
+        //
+        // When absent we mint one HERE rather than letting `run_sync_inner`
+        // mint it a layer down (#1299). The id is not just an identifier on
+        // this path: the heartbeat, the HITL notifier registration and the
+        // steering channel were all gated on it, so a caller that simply did
+        // not send one — `mur agent send` does not — got no proof of life for
+        // the whole turn and tripped the dial's 90 s liveness check while the
+        // agent was healthy and thinking. Liveness must not depend on a caller
+        // courtesy. Same shape and same `Uuid::now_v7()` as the runner's own
+        // fallback, so the id a caller sees is unchanged.
+        let turn_task_id = p
             .get("task_id")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        // Kept for stamping deltas and routing this turn's HITL prompts after
-        // `spec` consumes the originals below.
-        let turn_task_id = task_id.clone();
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("task-{}", uuid::Uuid::now_v7()));
+        let task_id = Some(turn_task_id.clone());
         let turn_context_id = context_task_id.clone();
         let output_artifact_path = p
             .get("output_artifact_path")
@@ -210,37 +218,34 @@ impl MethodHandler for MessageSendHandler {
             Some(notifier) => {
                 // Route this turn's HITL approval prompts back to this same
                 // connection (looked up by task id inside the runner).
-                if let Some(tid) = &turn_task_id {
-                    self.runner
-                        .register_client_notifier(tid, notifier.clone(), can_approve)
-                        .await;
-                }
+                self.runner
+                    .register_client_notifier(&turn_task_id, notifier.clone(), can_approve)
+                    .await;
                 // Steering channel: only when this turn has a task id to address
                 // it by. Without an id the sender would be immediately dropped,
                 // leaving the agentic loop with a permanently-closed receiver.
-                let steer_rx = if let Some(tid) = &turn_task_id {
+                let steer_rx = {
                     let (steer_tx, steer_rx) = tokio::sync::mpsc::channel::<String>(STEER_CAP);
-                    self.runner.register_steering(tid, steer_tx).await;
+                    self.runner.register_steering(&turn_task_id, steer_tx).await;
                     Some(steer_rx)
-                } else {
-                    None
                 };
                 // Forward each LLM token delta to the connected client as a
                 // `message/delta` notification while the reply generates, stamped
                 // with task_id/context_id so the client can correlate the turn.
                 let (delta_tx, mut delta_rx) =
                     mpsc::channel::<crate::llm::StreamDelta>(STREAM_DELTA_CAP);
-                let delta_task_id = turn_task_id.clone();
+                let delta_task_id = Some(turn_task_id.clone());
                 let delta_context_id = turn_context_id.clone();
                 // Proof of life for the dialing side while this turn runs —
                 // including through model inference, when no delta flows.
-                let _beat = turn_task_id.as_ref().map(|tid| {
-                    crate::protocol::heartbeat::spawn(
-                        notifier.clone(),
-                        tid.clone(),
-                        self.heartbeat_interval,
-                    )
-                });
+                // Unconditional, deliberately. This was a `.map()` over an
+                // optional id, which is exactly how a healthy turn came to
+                // emit no proof of life at all (#1299).
+                let _beat = crate::protocol::heartbeat::spawn(
+                    notifier.clone(),
+                    turn_task_id.clone(),
+                    self.heartbeat_interval,
+                );
                 let forward = tokio::spawn(async move {
                     while let Some(d) = delta_rx.recv().await {
                         let mut delta_params = json!({ "text": d.text, "thinking": d.thinking });
@@ -265,9 +270,9 @@ impl MethodHandler for MessageSendHandler {
                     .run_sync_streaming(spec, delta_tx, steer_rx)
                     .await;
                 let _ = forward.await;
-                if let Some(tid) = &turn_task_id {
-                    self.runner.unregister_client_notifier(tid).await;
-                    self.runner.unregister_steering(tid).await;
+                {
+                    self.runner.unregister_client_notifier(&turn_task_id).await;
+                    self.runner.unregister_steering(&turn_task_id).await;
                 }
                 outcome
             }
@@ -312,6 +317,126 @@ mod tests {
         assert_eq!(
             out.get("id").and_then(Value::as_str),
             Some("task-from-client")
+        );
+    }
+
+    /// A client whose turn takes long enough for the beat loop to tick. The
+    /// heartbeat guard is dropped when the handler returns, so beats can only
+    /// be observed DURING a turn — which is also the only time they matter.
+    struct SlowClient;
+    #[async_trait::async_trait]
+    impl crate::llm::LlmClient for SlowClient {
+        async fn generate(
+            &self,
+            _req: crate::llm::LlmRequest,
+        ) -> Result<crate::llm::LlmResponse, crate::llm::LlmError> {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            Ok(crate::llm::LlmResponse {
+                text: "slow reply".into(),
+                input_tokens: 1,
+                output_tokens: 1,
+                model: "slow".into(),
+                tool_calls: vec![],
+                stop_reason: crate::llm::StopReason::EndTurn,
+            })
+        }
+        fn model_name(&self) -> &str {
+            "slow"
+        }
+    }
+
+    /// #1299's regression guard. A caller that sends no `task_id` — which is
+    /// what `mur agent send` does — must still get `turn/heartbeat` frames.
+    ///
+    /// Before the fix the beat was `turn_task_id.as_ref().map(...)`, so a turn
+    /// like this emitted no proof of life at all and the dial's 90 s liveness
+    /// check fired while the agent was healthy and thinking. The dial resets
+    /// that timer on ANY frame (`a2a_dial.rs`), so what matters is that beats
+    /// exist at all.
+    #[tokio::test]
+    async fn a_caller_with_no_task_id_still_gets_heartbeats() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Value>(64);
+        let handler = MessageSendHandler::new(Arc::new(TaskRunner::with_llm(Arc::new(SlowClient))))
+            .with_heartbeat_interval(std::time::Duration::from_millis(40));
+        let out = handler
+            .handle(
+                Some(user_params(None)),
+                &RequestContext::with_notifier(tx.clone()),
+            )
+            .await
+            .expect("handle ok");
+        let id = out.get("id").and_then(Value::as_str).unwrap_or_default();
+        assert!(id.starts_with("task-"), "got {id:?}");
+
+        drop(tx);
+        let mut beat_ids = Vec::new();
+        while let Ok(f) = rx.try_recv() {
+            if f.get("method").and_then(Value::as_str) == Some("turn/heartbeat") {
+                beat_ids.push(
+                    f.get("params")
+                        .and_then(|p| p.get("task_id"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("<missing>")
+                        .to_string(),
+                );
+            }
+        }
+        assert!(
+            !beat_ids.is_empty(),
+            "a turn with no caller-supplied task_id must still beat"
+        );
+        // The beat carries the id the runtime minted, so a client can correlate
+        // it with the task it is handed back.
+        assert!(
+            beat_ids.iter().all(|b| b == id),
+            "beats must carry the turn's id {id:?}, got {beat_ids:?}"
+        );
+    }
+
+    /// A caller that DOES send an id keeps beating too — the fix must not have
+    /// traded one gate for another.
+    #[tokio::test]
+    async fn a_caller_with_a_task_id_also_gets_heartbeats() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Value>(64);
+        let handler = MessageSendHandler::new(Arc::new(TaskRunner::with_llm(Arc::new(SlowClient))))
+            .with_heartbeat_interval(std::time::Duration::from_millis(40));
+        let _ = handler
+            .handle(
+                Some(user_params(Some("task-from-client"))),
+                &RequestContext::with_notifier(tx.clone()),
+            )
+            .await
+            .expect("handle ok");
+        drop(tx);
+        let mut beats = 0;
+        while let Ok(f) = rx.try_recv() {
+            if f.get("method").and_then(Value::as_str) == Some("turn/heartbeat") {
+                assert_eq!(
+                    f["params"]["task_id"].as_str(),
+                    Some("task-from-client"),
+                    "a supplied id must be honoured, not replaced"
+                );
+                beats += 1;
+            }
+        }
+        assert!(beats > 0, "a supplied-id turn must beat as well");
+    }
+
+    /// The same turn also gets its HITL notifier and steering channel
+    /// registered now, because all three were gated on the same optional id.
+    /// Asserted through the id the caller gets back: the runtime minted it
+    /// before the turn rather than a layer down, which is what un-gates them.
+    #[tokio::test]
+    async fn the_minted_id_is_the_one_the_caller_is_told_about() {
+        let handler = MessageSendHandler::new(Arc::new(TaskRunner::new_stub_echo()));
+        let out = handler
+            .handle(Some(user_params(None)), &RequestContext::none())
+            .await
+            .expect("handle ok");
+        let id = out.get("id").and_then(Value::as_str).unwrap_or_default();
+        assert!(
+            id.starts_with("task-") && id.len() > "task-".len(),
+            "minted id must be a real id the caller can cancel by: {id:?}"
         );
     }
 
