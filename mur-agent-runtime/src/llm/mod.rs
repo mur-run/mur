@@ -200,6 +200,15 @@ pub enum StopReason {
     EndTurn,
     ToolUse,
     MaxTokens,
+    /// The stream stopped sending and the partial reply was kept.
+    ///
+    /// Distinct from `MaxTokens`, which is the provider deciding to stop at a
+    /// ceiling it told us about. This one is the connection going quiet: no
+    /// final frame arrived, so token usage is unknown and any tool call that
+    /// was mid-arguments is gone. Truncated for every purpose `MaxTokens` is
+    /// truncated for. See `StreamActivity` and spec
+    /// docs/superpowers/specs/2026-09-13-llm-idle-not-total-design.md D6.
+    Interrupted,
 }
 
 /// Visible marker appended to assistant text when the provider cut the
@@ -209,6 +218,13 @@ pub enum StopReason {
 /// users, delegating agents, and channel history all read this text, and a
 /// silent mid-word cut is how issue #715's corrupted artifact happened.
 pub const MAX_TOKENS_TRUNCATION_MARKER: &str = "\n\n[output truncated: max_tokens reached]";
+
+/// Visible marker appended when a stream stopped sending and the partial reply
+/// was kept ([`StopReason::Interrupted`]). Same rule as
+/// [`MAX_TOKENS_TRUNCATION_MARKER`] and the same reason (#715): a truncated
+/// reply must never look complete, because users, delegating agents and channel
+/// history all read this text.
+pub const STREAM_IDLE_TRUNCATION_MARKER: &str = "\n\n[output truncated: the model stopped sending]";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolResultEntry {
@@ -690,6 +706,9 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod stream_idle_tests;
 
 #[cfg(test)]
 mod builder_clock_tests {

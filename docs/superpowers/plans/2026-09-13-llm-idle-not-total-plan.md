@@ -337,12 +337,12 @@ while let Some(chunk) = resp.chunk().await.map_err(|e| LlmError::from_reqwest(&e
 ```
 at `ollama.rs:198`, `openai/mod.rs:477` (was `openai.rs:477`), `anthropic.rs:806`.
 
-- [ ] Add the `Interrupted` variant and the marker to `llm/mod.rs`. Compile
+- [x] Add the `Interrupted` variant and the marker to `llm/mod.rs`. Compile
       and let the non-exhaustive `match` errors list every site:
       `cargo check -p mur-agent-runtime --all-targets 2>&1 | command grep -c "non-exhaustive"`.
       Decide each one as "behaves like `MaxTokens`" (truncated) unless the site
       says otherwise, and record which sites you touched in this file.
-- [ ] In each of the three loops, replace the `while let` head with:
+- [x] In each of the three loops, replace the `while let` head with:
       ```rust
       let mut activity = crate::llm::StreamActivity::from_env();
       let mut interrupted = false;
@@ -362,7 +362,7 @@ at `ollama.rs:198`, `openai/mod.rs:477` (was `openai.rs:477`), `anthropic.rs:806
       await, which is why `bounded` takes a future rather than the response.
       Do not otherwise touch the body. The point of D3a is that the body is
       irrelevant to liveness.
-- [ ] **Ollama** (`ollama.rs`): after the loop, before the `text.is_empty()`
+- [x] **Ollama** (`ollama.rs`): after the loop, before the `text.is_empty()`
       guard:
       ```rust
       if interrupted {
@@ -374,7 +374,7 @@ at `ollama.rs:198`, `openai/mod.rs:477` (was `openai.rs:477`), `anthropic.rs:806
       ```
       Ollama has no tool calls (`tool_calls: vec![]`), so text is the only
       usable content.
-- [ ] **OpenAI** (`openai/mod.rs`): the existing assembly parses each
+- [x] **OpenAI** (`openai/mod.rs`): the existing assembly parses each
       fragment's arguments with `unwrap_or(empty object)`. On a normal end that
       is fine; on an interruption it would hand the model a call with
       **invented empty arguments**. Split the rule:
@@ -409,7 +409,7 @@ at `ollama.rs:198`, `openai/mod.rs:477` (was `openai.rs:477`), `anthropic.rs:806
       ```
       Keeping the non-interrupted `Err(_)` arm as `{}` preserves today's
       behaviour exactly; only the interrupted path is new.
-- [ ] **Anthropic** (`anthropic.rs`): `cur_tool` is committed only at
+- [x] **Anthropic** (`anthropic.rs`): `cur_tool` is committed only at
       `content_block_stop`, so a call interrupted mid-arguments is already
       dropped — no filter needed. Give `finish_stream` the flag:
       ```rust
@@ -439,37 +439,67 @@ at `ollama.rs:198`, `openai/mod.rs:477` (was `openai.rs:477`), `anthropic.rs:806
       Update the call site and the existing
       `finish_stream_errors_on_truly_empty_response` test
       (`anthropic.rs:1251`) to pass `false`.
-- [ ] Tests — one per provider, named individually, because the rule now lives
+- [x] Tests — one per provider, named individually, because the rule now lives
       in three loops (spec §5 tests 4, 5, 6, 8, 9, 10). Drive them with a real
       `tokio::net::TcpListener` that writes a hand-built partial response and
       then holds the socket open without closing it; `httpmock` cannot express
       "send some bytes then stall". The shape to copy is
       `llm/mod.rs::proxy_isolation_tests`.
-      - [ ] `ollama`: gaps inside the bound → every delta forwarded, `EndTurn`,
+      - [x] `ollama`: gaps inside the bound → every delta forwarded, `EndTurn`,
             no marker.
-      - [ ] `openai`: same.
-      - [ ] `anthropic`: same.
-      - [ ] **F1's guard, `openai`:** one text delta, then only `tool_calls`
+      - [x] `openai`: same.
+      - [x] `anthropic`: same.
+      - [x] **F1's guard, `openai`:** one text delta, then only `tool_calls`
             fragments for longer than the idle bound, then a normal end → the
             call completes with its tool call intact and is **not**
             `Interrupted`. This is the test the first design would have failed.
-      - [ ] **F1's guard, `anthropic`:** the same with `input_json_delta`.
-      - [ ] **F2's guard:** `thinking: true` events keep a stream alive, and
+      - [x] **F1's guard, `anthropic`:** the same with `input_json_delta`.
+      - [x] **F2's guard:** `thinking: true` events keep a stream alive, and
             the thinking text does not appear in `LlmResponse.text`.
-      - [ ] Stops after three text deltas: `Ok`, `Interrupted`, text is those
+      - [x] Stops after three text deltas: `Ok`, `Interrupted`, text is those
             three, and the sink received exactly **three** deltas. The fourth
             (the marker) belongs to Task 4.
-      - [ ] Interrupted mid-arguments: the incomplete call is absent from
+      - [x] Interrupted mid-arguments: the incomplete call is absent from
             `tool_calls`; `Interrupted` with the preceding text, or `Timeout`
             if there was none.
-      - [ ] First chunk never arrives: `Err(LlmError::Timeout)` and the sink
+      - [x] First chunk never arrives: `Err(LlmError::Timeout)` and the sink
             received nothing.
-- [ ] Verify and commit:
+- [x] Verify and commit:
       ```sh
       cargo clippy -p mur-agent-runtime --all-targets -- -D warnings; echo $?
       cargo nextest run -p mur-agent-runtime; echo $?
       ```
       Commit: `feat(llm): a stream that stops sending yields its partial, not an error (#1287)`
+
+**Three deviations from this task as written, all recorded rather than quietly absorbed.**
+
+1. **The compiler did not find the decision sites.** The plan's first step said
+   to add the variant and let non-exhaustive `match` errors list every site.
+   `cargo check --all-targets` reported **zero**: every `match` maps a provider
+   string INTO `StopReason`, and consumers use equality. The sites were found by
+   hand and are tabulated in the spec's §3.4. One of them needed a real
+   decision: `task_runner.rs:2373` ends the turn on
+   `tool_calls.is_empty() || EndTurn`, so an `Interrupted` response carrying
+   complete calls runs them — kept deliberately, because skipping after
+   `history.push(ToolUse)` would leave an orphan `tool_use` with no
+   `tool_result`, which is invalid for the next Anthropic request.
+2. **`StopKind::StreamInterrupted` added to the ledger**, which this task did
+   not plan. Mapping an interrupted turn to `end_turn` would write a falsehood
+   into a durable audit record. `StopKind` is matched exhaustively twice, so
+   those two sites were compiler-enforced.
+3. **The paused clock does not work for provider tests, and a discriminator
+   caught it.** The fragments-count-as-activity test passed, then passed AGAIN
+   with the idle bound set below the gap — impossible unless the gap did not
+   exist. Cause: a task blocked on socket I/O counts as idle for auto-advance,
+   so tokio jumps to the fake server's next sleep and every gap collapses. The
+   16 provider tests moved to a real clock with one-second bounds and gaps of a
+   few hundred milliseconds; their wall-clock times are the evidence the gaps
+   are real (`ollama_slow_but_steady_generation_is_never_cut_off` takes 6.06 s,
+   `openai_tool_argument_fragments_count_as_activity` 2.44 s). The timing rule
+   itself is still unit-tested on a paused clock, where nothing blocks on I/O.
+   The tests live in one new file, `llm/stream_idle_tests.rs`, rather than three
+   modules: the harness is identical for all three providers and `anthropic.rs`
+   is already 1400 lines against §4's 800.
 
 ## Task 4 — mark it where `MaxTokens` is already marked
 
