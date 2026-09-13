@@ -656,3 +656,233 @@ fn background_image_turn_drops_a_cheap_model_that_cannot_see() {
         "a tool result without images is ordinary background work"
     );
 }
+
+// ── #1298: the chain must stream ────────────────────────────────────────────
+
+/// A candidate that emits `deltas` (text, then optionally thinking-only) and
+/// then either completes or fails. `ScriptClient` cannot express this because
+/// it only overrides `generate`, which is the whole bug being fixed.
+struct StreamingClient {
+    name: String,
+    /// (text, thinking) pairs, sent in order before the outcome.
+    deltas: Vec<(String, bool)>,
+    outcome: Result<(), LlmError>,
+    /// Counts calls, so a test can prove a candidate was never reached.
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl LlmClient for StreamingClient {
+    async fn generate(&self, _req: LlmRequest) -> Result<LlmResponse, LlmError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        match &self.outcome {
+            Ok(()) => Ok(mk_resp(&self.name)),
+            Err(e) => Err(e.clone()),
+        }
+    }
+    fn model_name(&self) -> &str {
+        &self.name
+    }
+    async fn generate_stream(
+        &self,
+        _req: LlmRequest,
+        sink: tokio::sync::mpsc::Sender<StreamDelta>,
+    ) -> Result<LlmResponse, LlmError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        for (text, thinking) in &self.deltas {
+            let _ = sink
+                .send(StreamDelta {
+                    text: text.clone(),
+                    thinking: *thinking,
+                })
+                .await;
+        }
+        match &self.outcome {
+            Ok(()) => Ok(mk_resp(&self.name)),
+            Err(e) => Err(e.clone()),
+        }
+    }
+}
+
+struct Spec {
+    deltas: Vec<(&'static str, bool)>,
+    outcome: Result<(), LlmError>,
+    calls: Arc<AtomicUsize>,
+}
+
+/// One candidate's scripted stream, owned by the factory closure.
+type OwnedSpec = (Vec<(String, bool)>, Result<(), LlmError>, Arc<AtomicUsize>);
+
+fn streaming_factory(specs: HashMap<String, Spec>) -> ClientFactory {
+    let specs: HashMap<String, OwnedSpec> = specs
+        .into_iter()
+        .map(|(k, v)| {
+            (
+                k,
+                (
+                    v.deltas
+                        .into_iter()
+                        .map(|(t, th)| (t.to_string(), th))
+                        .collect(),
+                    v.outcome,
+                    v.calls,
+                ),
+            )
+        })
+        .collect();
+    Box::new(move |r: &str| {
+        let (deltas, outcome, calls) = specs
+            .get(r)
+            .cloned()
+            .unwrap_or_else(|| (vec![], Ok(()), Arc::new(AtomicUsize::new(0))));
+        Ok(Arc::new(StreamingClient {
+            name: r.to_string(),
+            deltas,
+            outcome,
+            calls,
+        }) as Arc<dyn LlmClient>)
+    })
+}
+
+fn collect(rx: &mut tokio::sync::mpsc::Receiver<StreamDelta>) -> Vec<(String, bool)> {
+    let mut out = Vec::new();
+    while let Ok(d) = rx.try_recv() {
+        out.push((d.text, d.thinking));
+    }
+    out
+}
+
+/// **The regression guard for #1298.** Without an override, the trait's default
+/// `generate_stream` calls `generate` and pushes the whole answer as ONE delta.
+/// Here the caller must receive the candidate's deltas individually.
+#[tokio::test]
+async fn the_chain_streams_each_delta_instead_of_one_blob() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut s = HashMap::new();
+    s.insert(
+        "a".into(),
+        Spec {
+            deltas: vec![("one ", false), ("two ", false), ("three", false)],
+            outcome: Ok(()),
+            calls: calls.clone(),
+        },
+    );
+    let fb = FallbackLlmClient::new(vec!["a".into()], streaming_factory(s), retry0());
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    let resp = fb.generate_stream(LlmRequest::default(), tx).await.unwrap();
+    assert_eq!(resp.text, "a");
+    let got = collect(&mut rx);
+    assert_eq!(
+        got.len(),
+        3,
+        "three deltas must arrive as three, not as one blob: {got:?}"
+    );
+    assert_eq!(got[0].0, "one ");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+/// A candidate that fails BEFORE emitting anything still advances the chain —
+/// the pre-existing behaviour, now also on the streaming path.
+#[tokio::test]
+async fn a_candidate_that_fails_before_streaming_still_advances() {
+    let b_calls = Arc::new(AtomicUsize::new(0));
+    let mut s = HashMap::new();
+    s.insert(
+        "a".into(),
+        Spec {
+            deltas: vec![],
+            outcome: Err(LlmError::ServerError(500)),
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+    );
+    s.insert(
+        "b".into(),
+        Spec {
+            deltas: vec![("from b", false)],
+            outcome: Ok(()),
+            calls: b_calls.clone(),
+        },
+    );
+    let fb = FallbackLlmClient::new(vec!["a".into(), "b".into()], streaming_factory(s), retry0());
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    let resp = fb.generate_stream(LlmRequest::default(), tx).await.unwrap();
+    assert_eq!(resp.text, "b");
+    assert_eq!(collect(&mut rx), vec![("from b".to_string(), false)]);
+    assert_eq!(b_calls.load(Ordering::SeqCst), 1);
+}
+
+/// The hazard this design exists to avoid: a candidate that fails AFTER text
+/// has reached the caller must NOT advance, because the next candidate would
+/// write a second copy of the answer into the same stream.
+#[tokio::test]
+async fn a_candidate_that_fails_after_streaming_does_not_advance() {
+    let b_calls = Arc::new(AtomicUsize::new(0));
+    let mut s = HashMap::new();
+    s.insert(
+        "a".into(),
+        Spec {
+            deltas: vec![("half an ans", false)],
+            // Retryable in isolation — so only the committed-delta rule can
+            // stop the chain here.
+            outcome: Err(LlmError::ServerError(500)),
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+    );
+    s.insert(
+        "b".into(),
+        Spec {
+            deltas: vec![("a whole different answer", false)],
+            outcome: Ok(()),
+            calls: b_calls.clone(),
+        },
+    );
+    let fb = FallbackLlmClient::new(vec!["a".into(), "b".into()], streaming_factory(s), retry0());
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    let err = fb
+        .generate_stream(LlmRequest::default(), tx)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, LlmError::ServerError(500)),
+        "the real cause must survive, not be relabelled: {err:?}"
+    );
+    assert_eq!(
+        b_calls.load(Ordering::SeqCst),
+        0,
+        "the second candidate must never run once text was streamed"
+    );
+    assert_eq!(
+        collect(&mut rx),
+        vec![("half an ans".to_string(), false)],
+        "the caller keeps exactly what arrived, once"
+    );
+}
+
+/// Thinking is not the answer. A candidate that emits only thinking and then
+/// fails has committed nothing the user keeps, so the chain still advances.
+#[tokio::test]
+async fn a_thinking_only_prefix_does_not_pin_the_chain() {
+    let b_calls = Arc::new(AtomicUsize::new(0));
+    let mut s = HashMap::new();
+    s.insert(
+        "a".into(),
+        Spec {
+            deltas: vec![("hmm ", true), ("still hmm", true)],
+            outcome: Err(LlmError::ServerError(500)),
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+    );
+    s.insert(
+        "b".into(),
+        Spec {
+            deltas: vec![("real answer", false)],
+            outcome: Ok(()),
+            calls: b_calls.clone(),
+        },
+    );
+    let fb = FallbackLlmClient::new(vec!["a".into(), "b".into()], streaming_factory(s), retry0());
+    let (tx, _rx) = tokio::sync::mpsc::channel(16);
+    let resp = fb.generate_stream(LlmRequest::default(), tx).await.unwrap();
+    assert_eq!(resp.text, "b");
+    assert_eq!(b_calls.load(Ordering::SeqCst), 1);
+}

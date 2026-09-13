@@ -12,7 +12,7 @@ use mur_common::model::{Requirement, choose_by_difficulty, resolve_model_refs};
 
 use super::{
     BackgroundKind, Disposition, LlmClient, LlmError, LlmRequest, LlmResponse, RequestIntent,
-    RichMessage, classify,
+    RichMessage, StreamDelta, classify,
 };
 use crate::telemetry_writer::Event;
 
@@ -20,6 +20,11 @@ use crate::telemetry_writer::Event;
 /// — enough to identify the turn in telemetry review without leaking a whole
 /// prompt into the local JSONL log.
 const ROUTING_SUMMARY_MAX: usize = 200;
+
+/// Buffer for one candidate's deltas on their way to the caller's sink.
+/// Only has to absorb the gap between a provider emitting and the forwarder
+/// relaying; the caller's own channel provides the real backpressure.
+const CANDIDATE_DELTA_CAP: usize = 256;
 
 /// Factory that builds a concrete `LlmClient` for a given model_ref. Boxed so
 /// `FallbackLlmClient` doesn't need a generic parameter per candidate type.
@@ -201,9 +206,55 @@ impl FallbackLlmClient {
     /// The exact pre-Task-5 fallback/cascade loop, unchanged in behavior —
     /// only the return type grew a `RoutingMeta` sidecar so `generate()`
     /// (below) can emit `Event::Routing` without touching this control flow.
+    /// Run one attempt against one candidate.
+    ///
+    /// Returns the candidate's result and **how many answer deltas reached the
+    /// caller**. That count is what makes streaming safe to put behind a
+    /// fallback chain: once the caller has seen text, advancing to another
+    /// candidate would replay the same prose into the same stream, so the
+    /// chain must stop instead (see `generate_with_meta`).
+    ///
+    /// Thinking deltas are deliberately not counted. They are a transient
+    /// indicator, not the answer, so re-running after emitting only thinking
+    /// duplicates nothing the user keeps.
+    async fn attempt_once(
+        client: &Arc<dyn LlmClient>,
+        req: &LlmRequest,
+        sink: Option<&tokio::sync::mpsc::Sender<StreamDelta>>,
+    ) -> (Result<LlmResponse, LlmError>, u64) {
+        let Some(out) = sink else {
+            return (client.generate(req.clone()).await, 0);
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamDelta>(CANDIDATE_DELTA_CAP);
+        let committed = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let counter = committed.clone();
+        let out = out.clone();
+        let forward = tokio::spawn(async move {
+            while let Some(d) = rx.recv().await {
+                if !d.thinking {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                if out.send(d).await.is_err() {
+                    break; // the caller went away
+                }
+            }
+        });
+        let result = client.generate_stream(req.clone(), tx).await;
+        // `generate_stream` owns the sender and drops it on return, which ends
+        // the forwarder. Awaiting it is what guarantees every delta the
+        // candidate emitted has reached the caller before the count is read.
+        let _ = forward.await;
+        (result, committed.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// The chain. `sink` present = stream from whichever candidate answers;
+    /// absent = the whole-response call. One loop for both, so retry, cooldown,
+    /// escalation and telemetry cannot drift between them — which is how
+    /// streaming came to be missing here in the first place (#1298).
     async fn generate_with_meta(
         &self,
         req: &LlmRequest,
+        sink: Option<&tokio::sync::mpsc::Sender<StreamDelta>>,
     ) -> (Result<LlmResponse, LlmError>, RoutingMeta) {
         let now = Instant::now();
         // Every candidate's failure, in order. Reporting only the last one
@@ -249,7 +300,34 @@ impl FallbackLlmClient {
             };
             for attempt in 0..=self.retry.max_retries {
                 attempts += 1;
-                match client.generate(req.clone()).await {
+                let (outcome, committed) = Self::attempt_once(&client, req, sink).await;
+                // Text has already reached the caller's stream. Retrying this
+                // candidate or advancing to the next would send a second copy
+                // of the same answer down the same channel, so the chain ends
+                // here and the error is surfaced with whatever was streamed.
+                // The partial is not converted into a success: unlike a stream
+                // that simply went quiet (#1287), this carries a real error the
+                // operator can act on, and hiding it behind a truncation marker
+                // would lose the cause.
+                if let Err(e) = &outcome
+                    && committed > 0
+                {
+                    tracing::info!(
+                        model_ref,
+                        deltas = committed,
+                        error = %e,
+                        "llm fallback: candidate failed after streaming to the caller — \
+                         not advancing, a second candidate would duplicate the reply"
+                    );
+                    let meta = RoutingMeta {
+                        attempts,
+                        escalations,
+                        last_model_ref: model_ref.clone(),
+                        structural_final: false,
+                    };
+                    return (outcome, meta);
+                }
+                match outcome {
                     Ok(resp) => {
                         let meta = RoutingMeta {
                             attempts,
@@ -339,19 +417,51 @@ impl FallbackLlmClient {
 #[async_trait]
 impl LlmClient for FallbackLlmClient {
     async fn generate(&self, req: LlmRequest) -> Result<LlmResponse, LlmError> {
-        let (result, meta) = self.generate_with_meta(&req).await;
+        let (result, meta) = self.generate_with_meta(&req, None).await;
+        self.emit_routing(&req, &result, &meta);
+        result
+    }
 
-        // Best-effort routing telemetry (Phase B training-data feed) — never
-        // await, never let a full mpsc channel or missing sink affect the
-        // turn. `try_send` + ignored result is the entire contract.
+    fn model_name(&self) -> &str {
+        &self.primary_name
+    }
+
+    /// The reason this impl exists (#1298): without it the trait's default
+    /// `generate_stream` ran `generate` and emitted the whole answer as one
+    /// delta, so every agent with a fallback chain — which, with a global
+    /// `models.fallback_chain`, is every agent — silently never streamed.
+    async fn generate_stream(
+        &self,
+        req: LlmRequest,
+        sink: tokio::sync::mpsc::Sender<StreamDelta>,
+    ) -> Result<LlmResponse, LlmError> {
+        let (result, meta) = self.generate_with_meta(&req, Some(&sink)).await;
+        self.emit_routing(&req, &result, &meta);
+        result
+    }
+}
+
+impl FallbackLlmClient {
+    /// Best-effort routing telemetry (Phase B training-data feed) — never
+    /// await, never let a full mpsc channel or missing sink affect the turn.
+    /// `try_send` + ignored result is the entire contract.
+    ///
+    /// Shared by both entry points: when it lived inside `generate` only, a
+    /// streaming turn would have been absent from routing telemetry.
+    fn emit_routing(
+        &self,
+        req: &LlmRequest,
+        result: &Result<LlmResponse, LlmError>,
+        meta: &RoutingMeta,
+    ) {
         if let Some(tx) = &self.telemetry {
-            let outcome = match (&result, meta.structural_final) {
+            let outcome = match (result, meta.structural_final) {
                 (Ok(_), _) if meta.escalations > 0 => "escalated",
                 (Ok(_), _) => "ok",
                 (Err(_), true) => "structural_fail",
                 (Err(_), false) => "error",
             };
-            let (model_ref, input_tokens, output_tokens) = match &result {
+            let (model_ref, input_tokens, output_tokens) = match result {
                 Ok(resp) => (resp.model.clone(), resp.input_tokens, resp.output_tokens),
                 Err(_) => (meta.last_model_ref.clone(), 0, 0),
             };
@@ -360,22 +470,16 @@ impl LlmClient for FallbackLlmClient {
                 task_id: req.task_id.clone(),
                 intent: intent_label(&req.intent),
                 model_ref,
-                reason: self.selection_reason(&req),
+                reason: self.selection_reason(req),
                 outcome: outcome.to_string(),
                 attempts: meta.attempts,
                 escalations: meta.escalations,
                 input_tokens,
                 output_tokens,
-                task_summary: task_summary(&req),
+                task_summary: task_summary(req),
             };
             let _ = tx.try_send(ev);
         }
-
-        result
-    }
-
-    fn model_name(&self) -> &str {
-        &self.primary_name
     }
 }
 
