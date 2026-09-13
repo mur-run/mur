@@ -191,16 +191,32 @@ mod tests {
     /// to parse and `fleet_billing`'s `.ok()` turns that into "unknown",
     /// which would make every billing assertion below pass for the wrong
     /// reason.
+    ///
+    /// Line-by-line (like `seed_mur::assign_fresh_profile_id`), not a raw
+    /// `\n`-anchored substring replace: a Windows git checkout gives this
+    /// resource CRLF line endings, so `"name: mur\n"` never matches and the
+    /// substitution silently no-ops — every agent then keeps the template's
+    /// default name/model_ref, which broke this exact test on Windows CI.
     fn agent_profile_yaml(name: &str, model_ref: &str) -> String {
         let tmpl = std::fs::read_to_string(
             env!("CARGO_MANIFEST_DIR").to_string() + "/resources/mur-agent-template/profile.yaml",
         )
         .expect("shipped agent template");
-        tmpl.replacen(
-            "name: mur\n",
-            &format!("name: {name}\nmodel_ref: {model_ref}\n"),
-            1,
-        )
+        let mut replaced = false;
+        let out = tmpl
+            .lines()
+            .map(|line| {
+                if !replaced && line == "name: mur" {
+                    replaced = true;
+                    format!("name: {name}\nmodel_ref: {model_ref}")
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(replaced, "template's `name: mur` line not found");
+        out + "\n"
     }
 
     fn write_agent(home: &std::path::Path, name: &str, model_ref: &str) {
