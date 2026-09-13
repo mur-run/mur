@@ -153,14 +153,15 @@ pub struct AnthropicClient {
     auth: AnthropicAuth,
     version: String,
     model: String,
-    http: reqwest::Client,
+    http: crate::sandbox::reqwest_guard::GuardedHttpClient,
 }
 
 impl AnthropicClient {
     pub fn new(base_url: String, api_key: String, model: String) -> Self {
-        let http = crate::llm::llm_client_builder()
-            .build()
-            .expect("failed to build reqwest client");
+        let http = crate::sandbox::reqwest_guard::GuardedHttpClient::unrestricted(
+            crate::llm::llm_client_builder(),
+        )
+        .expect("failed to build guarded reqwest client");
         Self {
             base_url,
             auth: AnthropicAuth::ApiKey(api_key),
@@ -175,7 +176,7 @@ impl AnthropicClient {
         base_url: String,
         api_key: String,
         model: String,
-        http: reqwest::Client,
+        http: crate::sandbox::reqwest_guard::GuardedHttpClient,
     ) -> Self {
         Self {
             base_url,
@@ -193,7 +194,7 @@ impl AnthropicClient {
     pub(crate) fn authless_with_http(
         base_url: String,
         model: String,
-        http: reqwest::Client,
+        http: crate::sandbox::reqwest_guard::GuardedHttpClient,
     ) -> Self {
         Self {
             base_url,
@@ -276,7 +277,7 @@ impl AnthropicClient {
         key: &secrecy::SecretString,
         model: String,
         base_url: Option<String>,
-        http: reqwest::Client,
+        http: crate::sandbox::reqwest_guard::GuardedHttpClient,
     ) -> Self {
         use secrecy::ExposeSecret;
         let base = base_url.unwrap_or_else(anthropic_base_url);
@@ -288,7 +289,7 @@ impl AnthropicClient {
     pub async fn from_agent_credentials_with_http(
         agent_name: &str,
         model: String,
-        http: reqwest::Client,
+        http: crate::sandbox::reqwest_guard::GuardedHttpClient,
     ) -> Result<Self, LlmError> {
         let account = format!("{agent_name}/ANTHROPIC_API_KEY");
         // Through `SecretRef`, so a value cached before the sandbox sealed is
@@ -711,15 +712,11 @@ impl LlmClient for AnthropicClient {
         }
 
         let url = format!("{}/v1/messages", self.base_url);
-        if let Ok(parsed) = reqwest::Url::parse(&url)
-            && let Err(e) = crate::sandbox::reqwest_guard::check_request_url(&parsed)
-        {
-            return Err(LlmError::Http(e));
-        }
         let resp = self
             .apply_auth(
                 self.http
-                    .post(url)
+                    .post(&url)
+                    .map_err(LlmError::Http)?
                     .header("anthropic-version", &self.version)
                     .header("content-type", "application/json"),
             )
@@ -790,15 +787,11 @@ impl LlmClient for AnthropicClient {
         }
 
         let url = format!("{}/v1/messages", self.base_url);
-        if let Ok(parsed) = reqwest::Url::parse(&url)
-            && let Err(e) = crate::sandbox::reqwest_guard::check_request_url(&parsed)
-        {
-            return Err(LlmError::Http(e));
-        }
         let mut resp = self
             .apply_auth(
                 self.http
-                    .post(url)
+                    .post(&url)
+                    .map_err(LlmError::Http)?
                     .header("anthropic-version", &self.version)
                     .header("content-type", "application/json"),
             )
@@ -1374,7 +1367,10 @@ mod tests {
         let client = AnthropicClient::authless_with_http(
             server.base_url(),
             "claude-opus-5".into(),
-            reqwest::Client::new(),
+            crate::sandbox::reqwest_guard::GuardedHttpClient::unrestricted(
+                reqwest::Client::builder(),
+            )
+            .unwrap(),
         );
         let resp = client.generate(hello()).await.unwrap();
         assert_eq!(resp.text, "hi");

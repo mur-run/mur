@@ -32,7 +32,7 @@ impl CodexClient {
     pub fn with_http_client(
         base_url: String,
         model: String,
-        http: reqwest::Client,
+        http: crate::sandbox::reqwest_guard::GuardedHttpClient,
     ) -> Result<Self, LlmError> {
         let url = validate_codex_base_url(&base_url)?;
         Ok(Self {
@@ -43,7 +43,10 @@ impl CodexClient {
     /// Registry entry → client. Rejects a `secret` outright rather than
     /// ignoring it: a key on a codex entry means someone expects it to be
     /// sent, and this route never sends one.
-    pub(crate) fn from_entry(entry: &ModelEntry, http: reqwest::Client) -> Result<Self, LlmError> {
+    pub(crate) fn from_entry(
+        entry: &ModelEntry,
+        http: crate::sandbox::reqwest_guard::GuardedHttpClient,
+    ) -> Result<Self, LlmError> {
         if entry.secret.is_some() {
             return Err(LlmError::Http(
                 "codex entries take no secret: the loopback gateway holds the ChatGPT login".into(),
@@ -118,7 +121,10 @@ mod tests {
 
     #[test]
     fn factory_builds_only_secret_free_loopback_entries() {
-        let http = reqwest::Client::new();
+        let http = crate::sandbox::reqwest_guard::GuardedHttpClient::unrestricted(
+            reqwest::Client::builder(),
+        )
+        .unwrap();
         let ok = CodexClient::from_entry(
             &entry(Some("http://127.0.0.1:8088/codex/v1"), None),
             http.clone(),
