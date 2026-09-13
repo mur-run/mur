@@ -634,6 +634,54 @@ Spec D6a, §3.5.
       - [ ] `MUR_LLM_IDLE_TIMEOUT_SECS=5` on a restarted agent makes that
             truncation happen at ~5 s — proving the env override reaches the
             running process.
+- [ ] **Live check — PARTIALLY DONE, and the central claim was NOT proven live.**
+      Recorded exactly as it went, because a live check that quietly becomes a
+      claim is worse than no live check.
+
+      **Setup.** `./install.sh` (2.80.0) and the installed
+      `mur-agent-runtime` verified to contain the new code (`strings` finds both
+      `the model stopped sending` and `MUR_LLM_IDLE_TIMEOUT_SECS`). No existing
+      agent was restarted: three throwaway agents were created against fake
+      loopback endpoints instead, then purged, so the machine's 26 agents stayed
+      on the prior build.
+
+      **What was established.**
+      - `mur agent send` drives the **non-stream** path. A path-discriminating
+        fake endpoint (valid JSON for `stream:false`, SSE-then-stall for
+        `stream:true`) reported `stream=False` and the turn completed in 1 s.
+      - **murmur, over the unix socket in this configuration, also drove the
+        non-stream path** — same `stream=False`, instant completion, `3/3 tok`.
+      - D5's consequence is real and was observed: against an endpoint that
+        sends a partial body and then holds the socket, a non-stream call has no
+        clock and does not return. What ended it was the dial's own liveness
+        check: `agent 'idleprobe' stopped responding — no frame for 90s`. That
+        is the user-visible backstop for this surface, and it worked.
+      - The global `models.fallback_chain` makes even a single-model agent a
+        chain agent (three candidates), confirmed again in the error text.
+
+      **What could NOT be proven live, and why.**
+      - The idle bound firing, the partial reply, and the visible marker. Both
+        surfaces available here take the non-stream path, so `generate_stream`
+        was never entered. `MUR_LLM_IDLE_TIMEOUT_SECS=5` was confirmed present
+        in the agent's process environment (`ps eww`), but nothing exercised it.
+      - Slow and cold local-model generation. The local Ollama is running with
+        **no models installed** (`{"models":[]}`), and pulling a multi-gigabyte
+        model was not a call to make unasked.
+
+      So the idle bound is proven by the 16 automated provider tests — which do
+      drive the real client code against real sockets, with wall-clock gaps —
+      and **not** by a live agent turn. Anyone finishing this should run the
+      streaming surface (Hub, or whatever supplies `ctx.notifier` on
+      `message/send`) against a stalling endpoint before calling the live check
+      done.
+
+      **One observation worth its own look, not a claim.** During the hung
+      non-stream turn the dial reported `last: none since the request` — no
+      heartbeat arrived in 90 s, while the parent spec's D7 says the runtime
+      emits one at least every 30 s during a turn, including model inference. If
+      that is a real gap, the dial's backstop is doing work D7 intended the
+      heartbeat to make unnecessary. Not investigated here.
+
 - [ ] Tick this task and close #1287 via the PR.
 
 **Recorded facts from Task 5.**
