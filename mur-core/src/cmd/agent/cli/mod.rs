@@ -1038,7 +1038,7 @@ async fn event_loop(
             Some(f) = panel_rx.recv() => match f {
                 mur_common::panel::HubFrame::Insert { text } => app.set_input(&text),
             },
-            _ = spinner.tick(), if app.streaming => app.tick_spinner(),
+            _ = spinner.tick(), if app.streaming || app.shell.is_running() => app.tick_spinner(),
             _ = tokio::time::sleep_until(follow_at), if follow_armed => {
                 app.poll_follow(StdInstant::now());
             }
@@ -1653,10 +1653,23 @@ fn cancel_in_flight(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
 /// stops doing abandoned server-side work.
 fn request_quit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
     cancel_in_flight(app, tx);
+    // Hard: the event loop is about to stop, so nothing is left to run the
+    // escalation timer, and dropping the task would only `kill_on_drop` the
+    // direct shell and leave its group. Covers a slot still `Cancelling`
+    // from a Ctrl-C moments ago, which is the case that orphaned (§3.5).
+    stop_shell(app, true);
     app.should_quit = true;
 }
 
 fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
+    // D3: a running `!cmd` is what Ctrl-C ends — it is the thing the user
+    // just launched and is watching. Any agent turn keeps running and still
+    // has Esc-Esc. The state is retired here, so a second press falls
+    // through to the behaviour below, unchanged.
+    if app.shell.is_running() {
+        stop_shell(app, false);
+        return;
+    }
     if app.streaming {
         cancel_in_flight(app, tx);
         app.push_system("cancelled");
@@ -1842,11 +1855,39 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         && !cmd.is_empty()
     {
         app.clear_input();
-        app.push_system(format!("running `{cmd}`…"));
+        // D7: one foreground job. Refuse before spawning — and never assign
+        // over a live handle, which would drop its sender and silently
+        // cancel the command already running.
+        if app.shell.is_running() {
+            app.push_system("a `!command` is already running — Ctrl-C to stop it");
+            return;
+        }
+        let (child, pid) = match shell::spawn(cmd).await {
+            Ok(v) => v,
+            Err(e) => {
+                // Nothing to cancel and nothing to stream: one finished card.
+                app.begin_shell(cmd);
+                let end = shell::ShellEnd::SpawnFailed(e.to_string());
+                let output = app.finish_shell(&end);
+                finish_shell_turn(app, cmd, &end, output, tx);
+                return;
+            }
+        };
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+        let Some(gen_id) = app.shell.begin(pid, cancel_tx) else {
+            // Unreachable given the guard above; refuse rather than leak.
+            shell::signal_group(pid, shell::SIGKILL_NUM);
+            return;
+        };
+        // D2: the card exists from the keypress, so `!sleep 45` is visibly
+        // running rather than silent for 45 seconds. No "running …" system
+        // line: the card carries its own footer, and two indicators for one
+        // command is one too many.
+        app.begin_shell(cmd);
         let (cmd, t) = (cmd.to_string(), tx.clone());
         tokio::spawn(async move {
-            let output = stream::run_local_shell(cmd.clone()).await;
-            let _ = t.send(StreamMsg::ShellDone { cmd, output }).await;
+            let end = shell::run(child, pid, gen_id, t.clone(), cancel_rx).await;
+            let _ = t.send(StreamMsg::ShellDone { gen_id, cmd, end }).await;
         });
         return;
     }
@@ -1923,6 +1964,47 @@ fn start_turn(app: &mut App, trimmed: String, tx: &mpsc::Sender<StreamMsg>) {
     );
 }
 
+/// End the running `!cmd` from any exit — Ctrl-C, quit, `/clear`, a channel
+/// switch — and close its card on the spot (D8, D11).
+///
+/// `hard` is quit: signal the group synchronously, because nothing will be
+/// left to run a grace timer. Nothing is routed to the agent either way: the
+/// user stopped this on purpose (D4).
+fn stop_shell(app: &mut App, hard: bool) {
+    if !shell::cancel(&mut app.shell, hard) {
+        return; // nothing was running
+    }
+    // Stamp `[cancelled]`, clear `streaming` (which also stops the footer
+    // rendering as live), and persist. The late `ShellDone` will be dropped
+    // by the generation check, so this is the only chance to do it.
+    let _ = app.finish_shell(&shell::ShellEnd::Cancelled);
+}
+
+/// Route a finished `!cmd`'s output: start a turn, steer the live one, or
+/// say why it went nowhere. The card is already finalised by the caller.
+fn finish_shell_turn(
+    app: &mut App,
+    cmd: &str,
+    end: &shell::ShellEnd,
+    output: String,
+    tx: &mpsc::Sender<StreamMsg>,
+) {
+    let block = shell_block(cmd, &shell::cap_tail(&output, shell::SHELL_MAX_BYTES));
+    match route_shell_output(
+        !end.reaches_agent(),
+        app.streaming,
+        app.current_task_id.as_deref(),
+        app.over_budget(),
+    ) {
+        ShellRoute::Start => start_shell_turn(app, block, tx),
+        ShellRoute::Steer(task_id) => {
+            let label = format!("$ {cmd} output");
+            steer_now(app, task_id, block, &label, tx);
+        }
+        ShellRoute::Skip(why) => app.push_system(why),
+    }
+}
+
 /// Start a turn whose transcript entry is the Shell card already pushed by
 /// `push_shell`: no User bubble, no second channel event. A staged image is
 /// left staged — it belongs to the user's next typed message.
@@ -1984,8 +2066,11 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
         SlashCmd::Quit => request_quit(app, tx),
         SlashCmd::Clear => {
             // Stop the in-flight turn first so its worker can't write into the
-            // fresh conversation after the reset.
+            // fresh conversation after the reset. Same reason for a running
+            // `!cmd` (D8): otherwise the process runs on invisibly and its
+            // report lands in the new conversation.
             cancel_in_flight(app, tx);
+            stop_shell(app, false);
             match Session::create(&app.home, &app.agent) {
                 Ok(s) => app.start_new_session(s),
                 Err(e) => app.push_system(format!("could not start new session: {e}")),
@@ -2065,6 +2150,7 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
                 Some(n) => match recent.get(n.wrapping_sub(1)) {
                     Some(s) => {
                         let id = s.id.clone();
+                        stop_shell(app, false);
                         match app.switch_channel(&id) {
                             Ok(()) => app.push_system(format!(
                                 "switched to channel {} ({} turns)",
@@ -2544,21 +2630,28 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
                 start_turn(app, text, tx);
             }
         }
-        StreamMsg::ShellDone { cmd, output } => {
-            app.push_shell(&cmd, &output);
-            let block = shell_block(&cmd, &output);
-            match route_shell_output(
-                app.streaming,
-                app.current_task_id.as_deref(),
-                app.over_budget(),
-            ) {
-                ShellRoute::Start => start_shell_turn(app, block, tx),
-                ShellRoute::Steer(task_id) => {
-                    let label = format!("$ {cmd} output");
-                    steer_now(app, task_id, block, &label, tx);
-                }
-                ShellRoute::Skip(why) => app.push_system(why),
+        StreamMsg::ShellOutput { gen_id, chunk } => {
+            // D8: a retired generation is a command the user already walked
+            // away from; its output must not land in whatever conversation
+            // is open now.
+            if app.shell.accepts(gen_id) {
+                app.append_shell_output(&chunk);
             }
+        }
+        StreamMsg::ShellDone { gen_id, cmd, end } => {
+            // Unconditional: the child is gone, so its pid stops being ours
+            // to kill. This is the resource question, and it must be answered
+            // even for a generation the UI has retired — otherwise a quit
+            // would keep signalling a dead group (§3.5).
+            app.shell.done(gen_id);
+            // Conditional: a retired generation has already had its card
+            // finalised by `stop_shell` (D11), so there is nothing to draw
+            // and nothing to route.
+            if !app.shell.accepts(gen_id) {
+                return;
+            }
+            let output = app.finish_shell(&end);
+            finish_shell_turn(app, &cmd, &end, output, tx);
         }
         StreamMsg::StepStarted {
             step_id,
@@ -3580,11 +3673,16 @@ mod shell_turn_tests {
     async fn shell_done_while_idle_starts_a_turn_without_a_user_bubble() {
         let (tx, _rx) = mpsc::channel(16);
         let mut app = App::test_fixture();
+        let (c_tx, _c_rx) = tokio::sync::oneshot::channel();
+        let gen_id = app.shell.begin(0, c_tx).expect("slot");
+        app.begin_shell("ls");
+        app.append_shell_output("a\nb");
         handle_stream(
             &mut app,
             StreamMsg::ShellDone {
+                gen_id,
                 cmd: "ls".into(),
-                output: "a\nb".into(),
+                end: shell::ShellEnd::Exited(0),
             },
             &tx,
         );
@@ -3615,11 +3713,16 @@ mod shell_turn_tests {
         let (tx, _rx) = mpsc::channel(16);
         let mut app = App::test_fixture();
         let before = app.begin_user_turn("working");
+        let (c_tx, _c_rx) = tokio::sync::oneshot::channel();
+        let gen_id = app.shell.begin(0, c_tx).expect("slot");
+        app.begin_shell("ls");
+        app.append_shell_output("a");
         handle_stream(
             &mut app,
             StreamMsg::ShellDone {
+                gen_id,
                 cmd: "ls".into(),
-                output: "a".into(),
+                end: shell::ShellEnd::Exited(0),
             },
             &tx,
         );
@@ -3645,6 +3748,168 @@ mod shell_turn_tests {
                 .count(),
             1
         );
+    }
+
+    /// Test 5 — D4: cancelled outranks every other route.
+    #[test]
+    fn cancelled_shell_output_is_never_sent() {
+        for streaming in [true, false] {
+            for over_budget in [true, false] {
+                let route = route_shell_output(true, streaming, Some("t-1"), over_budget);
+                assert!(
+                    matches!(route, ShellRoute::Skip(w) if w.contains("cancelled")),
+                    "streaming={streaming} over_budget={over_budget}: {route:?}"
+                );
+            }
+        }
+        assert!(matches!(
+            route_shell_output(false, false, None, false),
+            ShellRoute::Start
+        ));
+    }
+
+    /// Test 6 — D3: with a shell running, Ctrl-C ends the shell and leaves
+    /// the live turn alone; a second press then behaves as it always has.
+    #[tokio::test]
+    async fn ctrl_c_ends_the_shell_before_the_turn() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut app = App::test_fixture();
+        let task = app.begin_user_turn("working");
+        let (c_tx, mut c_rx) = tokio::sync::oneshot::channel();
+        app.shell.begin(0, c_tx).expect("slot");
+        app.begin_shell("sleep 60");
+
+        handle_ctrl_c(&mut app, &tx);
+
+        assert_eq!(c_rx.try_recv(), Ok(()), "the shell was signalled");
+        assert!(!app.shell.is_running(), "slot freed");
+        assert!(app.streaming, "the turn kept running");
+        assert_eq!(app.current_task_id.as_deref(), Some(task.as_str()));
+
+        handle_ctrl_c(&mut app, &tx);
+        assert!(!app.streaming, "the second press cancelled the turn");
+    }
+
+    /// Test 17 — D11: Ctrl-C finalises the card ON THE KEYPRESS. The
+    /// regression: the only event that would otherwise have stamped it is
+    /// the `ShellDone` whose generation this very keypress retired, so the
+    /// card stayed `streaming` forever — unstamped, unpersisted, under a
+    /// footer whose ticker had also stopped.
+    #[tokio::test]
+    async fn ctrl_c_finalises_the_card_immediately() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut app = App::test_fixture();
+        let (c_tx, _c_rx) = tokio::sync::oneshot::channel();
+        let gen_id = app.shell.begin(4242, c_tx).expect("slot");
+        app.begin_shell("sleep 60");
+        app.append_shell_output("partial");
+
+        handle_ctrl_c(&mut app, &tx);
+
+        let card = app
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == Role::Shell)
+            .expect("card");
+        assert!(!card.streaming, "the spinner stopped");
+        assert!(card.text.ends_with("[cancelled]"), "{}", card.text);
+        assert!(!app.shell.is_running(), "no longer Ctrl-C-able");
+
+        // The late report changes nothing further, and must not start a turn.
+        let before = app.messages.len();
+        handle_stream(
+            &mut app,
+            StreamMsg::ShellDone {
+                gen_id,
+                cmd: "sleep 60".into(),
+                end: shell::ShellEnd::Cancelled,
+            },
+            &tx,
+        );
+        assert_eq!(app.messages.len(), before, "nothing more was written");
+        assert!(!app.streaming, "no turn was started");
+    }
+
+    /// Test 12 — D8, one per path, each through its REAL entry point. A test
+    /// that called `stop_shell` directly would have passed while any of these
+    /// call sites was missing.
+    #[tokio::test]
+    async fn every_teardown_path_stops_the_shell_and_retires_it() {
+        for (name, trigger) in [("quit", 0u8), ("clear", 1u8), ("channel switch", 2u8)] {
+            let (tx, _rx) = mpsc::channel(16);
+            let mut app = App::test_fixture();
+            let (c_tx, mut c_rx) = tokio::sync::oneshot::channel();
+            // `pid: 0` stands for "no real process" — `signal_group` refuses
+            // it rather than signalling this test runner's own group. The
+            // real-group kill is covered in `shell.rs`.
+            let gen_id = app.shell.begin(0, c_tx).expect("slot");
+            app.begin_shell("sleep 60");
+
+            match trigger {
+                0 => request_quit(&mut app, &tx),
+                1 => handle_slash(&mut app, SlashCmd::Clear, &tx).await,
+                // The switch path: what the `app.switch_channel(&id)` call
+                // site does before switching.
+                _ => {
+                    stop_shell(&mut app, false);
+                    let _ = app.switch_channel("does-not-exist");
+                }
+            }
+
+            assert!(!app.shell.is_running(), "{name}: shell still running");
+            assert!(!app.shell.accepts(gen_id), "{name}: generation not retired");
+            if trigger != 0 {
+                // Quit kills the group outright; the soft paths signal the task.
+                assert_eq!(c_rx.try_recv(), Ok(()), "{name}: task not signalled");
+            }
+
+            // Whatever the dying task still emits writes nothing.
+            let before = app.messages.len();
+            handle_stream(
+                &mut app,
+                StreamMsg::ShellOutput {
+                    gen_id,
+                    chunk: "late".into(),
+                },
+                &tx,
+            );
+            handle_stream(
+                &mut app,
+                StreamMsg::ShellDone {
+                    gen_id,
+                    cmd: "sleep 60".into(),
+                    end: shell::ShellEnd::Cancelled,
+                },
+                &tx,
+            );
+            assert_eq!(app.messages.len(), before, "{name}: a stale event drew");
+            assert!(!app.streaming, "{name}: a stale event started a turn");
+        }
+    }
+
+    /// Test 11 (wiring half) — D7: a second `!cmd` is refused with a note and
+    /// the first keeps its slot.
+    #[tokio::test]
+    async fn a_second_bang_command_is_refused() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut app = App::test_fixture();
+        let (c_tx, mut c_rx) = tokio::sync::oneshot::channel();
+        app.shell.begin(0, c_tx).expect("slot");
+        app.set_input("!echo two");
+
+        submit(&mut app, &tx).await;
+
+        assert!(app.shell.is_running(), "the first still holds the slot");
+        assert!(
+            matches!(
+                c_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "the first was cancelled or its handle dropped"
+        );
+        let last = app.messages.last().expect("a note");
+        assert!(last.text.contains("already running"), "{}", last.text);
     }
 
     /// `!` lines open the shell menu through the same refresh path as `/`,

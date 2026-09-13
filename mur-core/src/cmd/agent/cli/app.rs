@@ -489,6 +489,10 @@ pub struct App {
     /// the composer is empty and idle. Mirrors `last_esc_at`.
     pub last_ctrl_c_at: Option<std::time::Instant>,
     pub ctrl_c_hint: bool,
+    /// The running `!cmd`, if any, and its generation. `is_running()` is what
+    /// makes Ctrl-C end the shell rather than the agent turn (D3), and what
+    /// keeps the spinner ticking for a shell-only command (§3.6).
+    pub shell: super::shell::ShellState,
     pub last_sent: Option<String>,
     /// #8 / proposal 3a: the user request whose tool approval auto-denied at
     /// timeout. A pre-execution timeout deny has NO side effects (the tool
@@ -666,6 +670,7 @@ impl App {
             overlay_text: None,
             last_ctrl_c_at: None,
             ctrl_c_hint: false,
+            shell: Default::default(),
             last_sent: None,
             expired_retry: None,
             pending_image: None,
@@ -1500,17 +1505,70 @@ impl App {
         );
     }
 
-    /// Record a completed `!command` run: show it and persist it. The block is
-    /// sent to the agent by `handle_stream`'s `ShellDone` arm, not stashed.
-    pub fn push_shell(&mut self, cmd: &str, output: &str) {
-        let text = if output.is_empty() {
-            format!("$ {cmd}")
-        } else {
-            format!("$ {cmd}\n{output}")
-        };
-        self.messages.push(ChatMsg::new(Role::Shell, text.clone()));
-        self.persist_turn("shell", &text, None, &[]);
+    /// Open the live card for a `!cmd` that was just accepted. The card
+    /// exists from the keypress (D2), so a silent command is still visibly
+    /// running, and `append_shell_output` always has a target.
+    pub fn begin_shell(&mut self, cmd: &str) {
+        let mut m = ChatMsg::new(Role::Shell, format!("$ {cmd}"));
+        m.streaming = true;
+        self.messages.push(m);
         self.scroll_back = 0;
+    }
+
+    /// The live shell card, if one is open.
+    fn streaming_shell_mut(&mut self) -> Option<&mut ChatMsg> {
+        self.messages
+            .iter_mut()
+            .rev()
+            .find(|m| m.role == Role::Shell && m.streaming)
+    }
+
+    /// Append streamed `!cmd` output to the live card (D2), head-dropping
+    /// past `SHELL_CARD_MAX_BYTES` so a chatty command cannot grow the
+    /// transcript without bound (D6).
+    ///
+    /// NB: does not reset `scroll_back` — same reason as `append_delta`. A
+    /// user scrolled up to read earlier output must not be yanked back to
+    /// the bottom by every new line.
+    pub fn append_shell_output(&mut self, chunk: &str) {
+        let Some(m) = self.streaming_shell_mut() else {
+            return; // no live card (a teardown cleared it); drop the chunk
+        };
+        if !m.text.is_empty() && !m.text.ends_with('\n') {
+            m.text.push('\n');
+        }
+        m.text.push_str(chunk);
+        if m.text.len() > super::shell::SHELL_CARD_MAX_BYTES {
+            // The `$ cmd` line is the card's identity; keep it above the
+            // truncation marker rather than letting the tail eat it.
+            let first = m.text.lines().next().unwrap_or_default().to_string();
+            let rest = m.text.split_once('\n').map(|(_, r)| r).unwrap_or_default();
+            let kept = super::shell::cap_tail(rest, super::shell::SHELL_CARD_MAX_BYTES);
+            m.text = format!("{first}\n{kept}");
+        }
+    }
+
+    /// Close the live `!cmd` card: stamp how it ended, stop the spinner,
+    /// persist it, and hand back the output body for the agent block.
+    pub fn finish_shell(&mut self, end: &super::shell::ShellEnd) -> String {
+        let Some(m) = self.streaming_shell_mut() else {
+            return String::new();
+        };
+        if let Some(tail) = end.card_tail() {
+            if !m.text.ends_with('\n') {
+                m.text.push('\n');
+            }
+            m.text.push_str(&tail);
+        }
+        m.streaming = false;
+        let text = m.text.trim_end().to_string();
+        m.text = text.clone();
+        self.persist_turn("shell", &text, None, &[]);
+        // The block wants the output alone; the card's first line is `$ cmd`
+        // and `shell_block` re-adds it.
+        text.split_once('\n')
+            .map(|(_, r)| r.to_string())
+            .unwrap_or_default()
     }
 
     pub fn load_history(&mut self, turns: Vec<TurnRecord>) {
@@ -2342,6 +2400,97 @@ mod step_app_tests {
         assert_eq!(card.state, StepState::Done);
         assert_eq!(card.duration_ms, Some(42));
         assert_eq!(card.output, "foo.rs\n");
+    }
+
+    /// Test 10 (card half) — the card opens on the keypress, accumulates,
+    /// and stamps a non-zero exit; a clean exit stamps nothing.
+    #[test]
+    fn shell_card_opens_accumulates_and_stamps_exit() {
+        use crate::cmd::agent::cli::shell::ShellEnd;
+        let mut a = app();
+        a.begin_shell("cargo test");
+        let card = a.messages.last().expect("card");
+        assert_eq!(card.text, "$ cargo test");
+        assert!(card.streaming, "the card is live");
+
+        a.append_shell_output("running 3 tests");
+        a.append_shell_output("test result: FAILED");
+        let body = a.finish_shell(&ShellEnd::Exited(1));
+        let card = a.messages.last().expect("card");
+        assert!(!card.streaming, "the card is finalised");
+        assert_eq!(
+            card.text,
+            "$ cargo test\nrunning 3 tests\ntest result: FAILED\n[exit 1]"
+        );
+        assert_eq!(body, "running 3 tests\ntest result: FAILED\n[exit 1]");
+
+        let mut b = app();
+        b.begin_shell("true");
+        b.append_shell_output("ok");
+        b.finish_shell(&ShellEnd::Exited(0));
+        assert_eq!(b.messages.last().unwrap().text, "$ true\nok");
+    }
+
+    /// Test 15 — D2: a silent command still has a live card, immediately.
+    #[test]
+    fn a_silent_command_still_shows_a_live_card() {
+        let mut a = app();
+        a.begin_shell("sleep 45");
+        let card = a.messages.last().expect("card");
+        assert_eq!(card.text, "$ sleep 45");
+        assert!(card.streaming, "live before any output exists");
+    }
+
+    /// D4 render half: a cancelled card says so.
+    #[test]
+    fn cancelled_shell_card_is_marked() {
+        use crate::cmd::agent::cli::shell::ShellEnd;
+        let mut a = app();
+        a.begin_shell("sleep 60");
+        a.append_shell_output("partial");
+        let body = a.finish_shell(&ShellEnd::Cancelled);
+        assert_eq!(
+            a.messages.last().unwrap().text,
+            "$ sleep 60\npartial\n[cancelled]"
+        );
+        assert!(body.contains("[cancelled]"));
+    }
+
+    /// Test 7 — D6: the card cap keeps the tail and never eats `$ cmd`.
+    #[test]
+    fn shell_card_cap_keeps_the_tail_and_the_command_line() {
+        use crate::cmd::agent::cli::shell::SHELL_CARD_MAX_BYTES;
+        let mut a = app();
+        a.begin_shell("noisy");
+        a.append_shell_output(&"x".repeat(SHELL_CARD_MAX_BYTES + 1024));
+        a.append_shell_output("LAST");
+        let text = &a.messages.last().unwrap().text;
+        assert!(text.starts_with("$ noisy\n"), "command line survived");
+        assert!(text.ends_with("LAST"), "tail survived");
+        assert!(text.contains("[output truncated]"));
+        assert!(text.len() < SHELL_CARD_MAX_BYTES + 512);
+    }
+
+    /// An empty-output command still leaves exactly one card, and a teardown
+    /// that cleared the transcript leaves nothing for a late chunk to hit.
+    #[test]
+    fn empty_output_leaves_one_card_and_a_cleared_one_absorbs_late_chunks() {
+        use crate::cmd::agent::cli::shell::ShellEnd;
+        let mut a = app();
+        a.begin_shell("true");
+        a.finish_shell(&ShellEnd::Exited(0));
+        assert_eq!(
+            a.messages.iter().filter(|m| m.role == Role::Shell).count(),
+            1
+        );
+        assert_eq!(a.messages.last().unwrap().text, "$ true");
+
+        a.messages.clear(); // what /clear does
+        a.append_shell_output("late");
+        assert!(
+            a.messages.is_empty(),
+            "a late chunk found no card and was dropped"
+        );
     }
 
     /// Test 18 — a yield is ⏳, and the end of the turn does not abandon it
