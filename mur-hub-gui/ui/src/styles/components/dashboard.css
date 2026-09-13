@@ -633,3 +633,7 @@
   flex-basis: 100%;
   margin: 2px 0 0;
 }
+
+.limits-panel__title {
+  margin-top: 18px;
+}

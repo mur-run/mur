@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../i18n";
 import { applyTheme, getStoredTheme, type ThemeChoice } from "../../theme";
+import { LimitsPanel } from "../limits/LimitsPanel";
 
 const THEMES: ThemeChoice[] = ["system", "light", "dark"];
 
@@ -85,6 +86,11 @@ export function GeneralSettings() {
         />
       </div>
       <p className="settings-row__hint">{t("settings.fleetAutorun.description")}</p>
+
+      {/* The Hub renders what the CLI resolves (spec §10.1): global execution
+          limits, editable in one place, never re-derived here. */}
+      <h3 className="settings-section__title limits-panel__title">{t("limits.title")}</h3>
+      <LimitsPanel scope="global" />
     </section>
   );
 }

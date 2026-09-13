@@ -20,32 +20,16 @@ export function buildTrigger(kind: TriggerKind, value: string): string {
 
 /**
  * Gates the Settings Save button. Mirrors mur-core's parse_duration acceptance:
- * an interval trigger's value, and any non-empty deadline, must match DURATION_RE
- * (digits + optional single-char s/m/h/d suffix, e.g. 30s/5m/2h/1d -- NOT a calendar
- * date) or Save stays disabled. Cron just needs a non-empty value. An unparseable
- * value slipping through here would silently mean "no deadline enforced" / "never
- * fires" on the backend (fail-open) -- this is the safety property Task 6 review
- * flagged as needing test coverage.
+ * an interval trigger's value must match DURATION_RE (digits + optional
+ * single-char s/m/h/d suffix, e.g. 30s/5m/2h/1d -- NOT a calendar date) or
+ * Save stays disabled. Cron just needs a non-empty value. Deadline / stuck /
+ * cost_usd no longer live in this form -- LimitsPanel validates those through
+ * the same `mur limits` parser, server-side, on save.
  */
-export function settingsAreValid(
-  trigKind: TriggerKind,
-  trigValue: string,
-  deadline: string
-): boolean {
+export function settingsAreValid(trigKind: TriggerKind, trigValue: string): boolean {
   if (trigKind === "interval" && !DURATION_RE.test(trigValue.trim())) return false;
   if (trigKind === "cron" && trigValue.trim() === "") return false;
-  if (deadline.trim() !== "" && !DURATION_RE.test(deadline.trim())) return false;
   return true;
-}
-
-/**
- * Gates the Run-as-loop panel's Go button for its deadline override field.
- * Same fail-open risk as settingsAreValid's deadline check: empty means "no
- * override" (valid); non-empty must match DURATION_RE, or the backend
- * silently treats an unparseable value as "no deadline enforced".
- */
-export function loopDeadlineIsValid(deadline: string): boolean {
-  return deadline.trim() === "" || DURATION_RE.test(deadline.trim());
 }
 
 /**

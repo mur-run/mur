@@ -82,6 +82,12 @@ pub async fn run(cli: Cli) -> Result<()> {
                     cmd::limits::Target::Agent(a) => {
                         cmd::limits_write::write_agent_limits(&a, &patch)?
                     }
+                    // `detect_target` resolves a name to a fleet or an agent
+                    // only — `Global` is reached solely via the `--global`
+                    // flag, handled in the arms above.
+                    cmd::limits::Target::Global => {
+                        unreachable!("detect_target never resolves a name to Global")
+                    }
                 },
                 (false, Some(n)) => cmd::limits::cmd_limits(&n, json)?,
                 (false, None) => anyhow::bail!("give a fleet or agent name, or --global"),
