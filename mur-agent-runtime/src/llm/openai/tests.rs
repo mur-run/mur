@@ -198,3 +198,19 @@ async fn keyed_client_still_sends_bearer() {
     client.generate(hello()).await.unwrap();
     m.assert_async().await;
 }
+
+/// #1287: `OpenAiClient::new` is what `from_env` delegates to, and
+/// `mur agent companion preview` calls `from_env`
+/// (`mur-core/src/cmd/agent_companion/preview.rs`). The 60 s TOTAL timeout that
+/// used to live here bounded streamed bodies as well as think time; neither it
+/// nor a read timeout may come back. Those are the only two clocks that end a
+/// live response instead of a dead connection.
+#[test]
+fn the_self_built_client_has_no_response_clock() {
+    let printed = format!(
+        "{:?}",
+        OpenAiClient::new("http://x".into(), "k".into(), "m".into()).http
+    );
+    assert!(!printed.contains("read_timeout"), "{printed}");
+    assert!(!printed.contains("timeout: Some"), "{printed}");
+}

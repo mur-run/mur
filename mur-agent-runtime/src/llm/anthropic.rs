@@ -33,21 +33,16 @@ const DEFAULT_VERSION: &str = "2023-06-01";
 /// mid-tool_use truncation returns, now caused by thinking eating the budget.
 const DEFAULT_MAX_TOKENS: u32 = 32768;
 
-/// Total time allowed for a single LLM request (including server think time).
-///
-/// This is a TOTAL timeout — reqwest applies it until the response body has
-/// finished, so it bounds streamed responses too, and it is the constraint
-/// that actually binds. At roughly 50-80 output tokens/sec, 60s ran out
-/// somewhere around 3-5k tokens, well under `DEFAULT_MAX_TOKENS`; raising the
-/// token ceiling alone would have changed nothing. Adaptive thinking (now on
-/// by default — see above) spends part of that same wall clock before any
-/// text is emitted, which tightened it further.
-///
-/// 180s is chosen to make the token ceiling reachable while still failing a
-/// wedged request inside a few minutes rather than holding the slot open.
-const LLM_REQUEST_TIMEOUT_SECS: u64 = 180;
-/// Time allowed to establish a TCP connection to the LLM endpoint.
-const LLM_CONNECT_TIMEOUT_SECS: u64 = 10;
+// There was a TOTAL request timeout here (60s, then 180s). It is gone: reqwest
+// applies `.timeout()` until the response body finishes, so it bounded streamed
+// responses too, and at roughly 50-80 output tokens/sec it ran out somewhere
+// around 3-5k tokens — well under `DEFAULT_MAX_TOKENS`, so raising the token
+// ceiling alone changed nothing. Adaptive thinking spends part of the same wall
+// clock before any text is emitted, tightening it further. Raising the number
+// again would only move the cliff, so the clock was removed: liveness is now
+// the gap between streamed chunks (`crate::llm::StreamActivity`), and the
+// connect clock lives in `llm_client_builder()`. See spec
+// docs/superpowers/specs/2026-09-13-llm-idle-not-total-design.md.
 
 /// Service constant used by `mur agent secret set` / `mur agent secret delete`.
 /// Account format is `{agent_name}/{KEY}` (e.g. `kelp/ANTHROPIC_API_KEY`).
@@ -164,8 +159,6 @@ pub struct AnthropicClient {
 impl AnthropicClient {
     pub fn new(base_url: String, api_key: String, model: String) -> Self {
         let http = crate::llm::llm_client_builder()
-            .timeout(std::time::Duration::from_secs(LLM_REQUEST_TIMEOUT_SECS))
-            .connect_timeout(std::time::Duration::from_secs(LLM_CONNECT_TIMEOUT_SECS))
             .build()
             .expect("failed to build reqwest client");
         Self {
@@ -590,18 +583,41 @@ fn apply_sse_event(acc: &mut StreamAccum, v: &serde_json::Value) -> Option<super
 /// legitimate, not malformed — let it through so task_runner's MaxTokens
 /// retry path can nudge the model toward a shorter answer instead of
 /// surfacing a raw protocol error.
-fn finish_stream(acc: StreamAccum, model: String) -> Result<LlmResponse, LlmError> {
+/// `interrupted` = the stream stopped sending rather than ending (#1287).
+///
+/// Nothing special is needed to protect a half-emitted tool call: `cur_tool`
+/// is committed to `acc.tool_calls` only at `content_block_stop`, so a call
+/// interrupted mid-arguments is already absent. The model is then told plainly
+/// that its call did not happen, instead of being handed arguments it never
+/// finished choosing.
+fn finish_stream(
+    acc: StreamAccum,
+    model: String,
+    interrupted: bool,
+) -> Result<LlmResponse, LlmError> {
     if acc.text.is_empty() && acc.tool_calls.is_empty() && acc.stop_reason != StopReason::MaxTokens
     {
-        return Err(LlmError::InvalidResponse("empty streamed response".into()));
+        // An interruption with nothing assembled is a timeout, not a malformed
+        // response: `classify` makes `Timeout` RetryThenAdvance and
+        // `InvalidResponse` Stop, and nothing reached the sink to duplicate.
+        return Err(if interrupted {
+            LlmError::Timeout
+        } else {
+            LlmError::InvalidResponse("empty streamed response".into())
+        });
     }
+    let stop_reason = if interrupted {
+        StopReason::Interrupted
+    } else {
+        acc.stop_reason
+    };
     Ok(LlmResponse {
         text: acc.text,
         input_tokens: acc.input_tokens,
         output_tokens: acc.output_tokens,
         model,
         tool_calls: acc.tool_calls,
-        stop_reason: acc.stop_reason,
+        stop_reason,
     })
 }
 
@@ -803,7 +819,25 @@ impl LlmClient for AnthropicClient {
         // chunks to forward to the sink.
         let mut buf: Vec<u8> = Vec::new();
         let mut acc = StreamAccum::default();
-        while let Some(chunk) = resp.chunk().await.map_err(|e| LlmError::from_reqwest(&e))? {
+        let mut activity = crate::llm::StreamActivity::from_env();
+        let mut interrupted = false;
+        loop {
+            // Bounded by silence, never by total time (#1287). The bound is
+            // applied to the arrival of BYTES, not to anything reaching the
+            // sink: a chunk carrying only tool-argument fragments or a usage
+            // frame is life, and a sink-side guard would have called it idle.
+            let next = activity
+                .bounded(async { resp.chunk().await.map_err(|e| LlmError::from_reqwest(&e)) })
+                .await;
+            let chunk = match next {
+                Ok(Some(c)) => c,
+                Ok(None) => break,
+                Err(LlmError::Timeout) => {
+                    interrupted = true;
+                    break;
+                }
+                Err(e) => return Err(e),
+            };
             buf.extend_from_slice(&chunk);
             while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
                 let raw: Vec<u8> = buf.drain(..=nl).collect();
@@ -823,12 +857,26 @@ impl LlmClient for AnthropicClient {
                 }
             }
         }
-        finish_stream(acc, self.model.clone())
+        finish_stream(acc, self.model.clone(), interrupted)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    /// #1287, same guarantee as `ollama.rs`'s: `AnthropicClient::new` is the
+    /// constructor `from_env` delegates to, and `preview.rs` calls `from_env`.
+    /// The 180 s total timeout that used to live here bounded streamed bodies
+    /// too; neither it nor a read timeout may come back.
+    #[test]
+    fn the_self_built_client_has_no_response_clock() {
+        let printed = format!(
+            "{:?}",
+            super::AnthropicClient::new("http://x".into(), "k".into(), "m".into()).http
+        );
+        assert!(!printed.contains("read_timeout"), "{printed}");
+        assert!(!printed.contains("timeout: Some"), "{printed}");
+    }
+
     use super::*;
     use crate::llm::{RichMessage, ToolCallResult, ToolResultEntry};
     use serde_json::json;
@@ -1250,7 +1298,7 @@ mod tests {
     #[test]
     fn finish_stream_errors_on_truly_empty_response() {
         let acc = StreamAccum::default();
-        let err = finish_stream(acc, "claude-x".into()).unwrap_err();
+        let err = finish_stream(acc, "claude-x".into(), false).unwrap_err();
         assert!(matches!(err, LlmError::InvalidResponse(_)));
     }
 
@@ -1264,7 +1312,7 @@ mod tests {
             stop_reason: StopReason::MaxTokens,
             ..StreamAccum::default()
         };
-        let resp = finish_stream(acc, "claude-x".into()).expect("should not error");
+        let resp = finish_stream(acc, "claude-x".into(), false).expect("should not error");
         assert_eq!(resp.text, "");
         assert!(resp.tool_calls.is_empty());
         assert_eq!(resp.stop_reason, StopReason::MaxTokens);
@@ -1276,7 +1324,7 @@ mod tests {
             stop_reason: StopReason::EndTurn,
             ..StreamAccum::default()
         };
-        assert!(finish_stream(acc, "claude-x".into()).is_err());
+        assert!(finish_stream(acc, "claude-x".into(), false).is_err());
     }
 
     fn ok_message() -> serde_json::Value {
