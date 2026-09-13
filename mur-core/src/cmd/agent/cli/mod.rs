@@ -2005,9 +2005,10 @@ fn finish_shell_turn(
     }
 }
 
-/// Start a turn whose transcript entry is the Shell card already pushed by
-/// `push_shell`: no User bubble, no second channel event. A staged image is
-/// left staged — it belongs to the user's next typed message.
+/// Start a turn whose transcript entry is the Shell card already opened by
+/// `begin_shell` and closed by `finish_shell`: no User bubble, no second
+/// channel event. A staged image is left staged — it belongs to the user's
+/// next typed message.
 fn start_shell_turn(app: &mut App, block: String, tx: &mpsc::Sender<StreamMsg>) {
     let task_id = app.begin_turn();
     let params = build_params(
