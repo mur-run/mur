@@ -467,7 +467,25 @@ impl LlmClient for OpenAiClient {
             arguments: String,
         }
         let mut partial: std::collections::BTreeMap<u64, PartialToolCall> = Default::default();
-        while let Some(chunk) = resp.chunk().await.map_err(|e| LlmError::from_reqwest(&e))? {
+        let mut activity = crate::llm::StreamActivity::from_env();
+        let mut interrupted = false;
+        loop {
+            // Bounded by silence, never by total time (#1287). The bound is
+            // applied to the arrival of BYTES, not to anything reaching the
+            // sink: a chunk carrying only tool-argument fragments or a usage
+            // frame is life, and a sink-side guard would have called it idle.
+            let next = activity
+                .bounded(async { resp.chunk().await.map_err(|e| LlmError::from_reqwest(&e)) })
+                .await;
+            let chunk = match next {
+                Ok(Some(c)) => c,
+                Ok(None) => break,
+                Err(LlmError::Timeout) => {
+                    interrupted = true;
+                    break;
+                }
+                Err(e) => return Err(e),
+            };
             buf.extend_from_slice(&chunk);
             while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
                 let raw: Vec<u8> = buf.drain(..=nl).collect();
@@ -555,13 +573,38 @@ impl LlmClient for OpenAiClient {
         let tool_calls: Vec<crate::llm::ToolCallResult> = partial
             .into_values()
             .filter(|p| !p.name.is_empty())
-            .map(|p| crate::llm::ToolCallResult {
-                call_id: p.id,
-                tool_name: p.name,
-                input: serde_json::from_str(&p.arguments)
-                    .unwrap_or(serde_json::Value::Object(Default::default())),
+            .filter_map(|p| {
+                let input = if p.arguments.trim().is_empty() {
+                    // A no-argument call legitimately sends "".
+                    serde_json::Value::Object(Default::default())
+                } else {
+                    match serde_json::from_str(&p.arguments) {
+                        Ok(v) => v,
+                        // Unparseable arguments on an INTERRUPTED stream mean
+                        // the fragments stopped mid-JSON. Dropping the call
+                        // tells the model plainly that it did not happen;
+                        // substituting `{}` here would run a tool with
+                        // arguments the model never chose.
+                        Err(_) if interrupted => return None,
+                        // On a normal end this stays exactly as it was: a
+                        // server that sent malformed arguments gets the empty
+                        // object it always got.
+                        Err(_) => serde_json::Value::Object(Default::default()),
+                    }
+                };
+                Some(crate::llm::ToolCallResult {
+                    call_id: p.id,
+                    tool_name: p.name,
+                    input,
+                })
             })
             .collect();
+        if interrupted {
+            if text.is_empty() && tool_calls.is_empty() {
+                return Err(LlmError::Timeout);
+            }
+            stop_reason = StopReason::Interrupted;
+        }
         // A turn that goes straight to a tool call carries no text at all, and
         // that is a complete, correct response — only a turn with neither text
         // nor calls is the blank reply this guard exists to catch.

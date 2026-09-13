@@ -2372,10 +2372,13 @@ impl TaskRunner {
 
             if resp.tool_calls.is_empty() || resp.stop_reason == StopReason::EndTurn {
                 ledger.iterations = iteration;
-                ledger.stop = if resp.stop_reason == StopReason::MaxTokens {
-                    crate::turn_ledger::StopKind::MaxTokens
-                } else {
-                    crate::turn_ledger::StopKind::EndTurn
+                ledger.stop = match resp.stop_reason {
+                    StopReason::MaxTokens => crate::turn_ledger::StopKind::MaxTokens,
+                    // Not `EndTurn`: nothing ended the turn, the stream went
+                    // quiet. The ledger is a durable audit record and this is
+                    // the only place that distinction survives.
+                    StopReason::Interrupted => crate::turn_ledger::StopKind::StreamInterrupted,
+                    _ => crate::turn_ledger::StopKind::EndTurn,
                 };
                 return Ok((settle(resp.text, &ledger), None));
             }

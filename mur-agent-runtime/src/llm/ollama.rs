@@ -188,7 +188,25 @@ impl LlmClient for OllamaClient {
         let mut input_tokens = 0u64;
         let mut output_tokens = 0u64;
         let mut stop_reason = StopReason::EndTurn;
-        while let Some(chunk) = resp.chunk().await.map_err(|e| LlmError::from_reqwest(&e))? {
+        let mut activity = crate::llm::StreamActivity::from_env();
+        let mut interrupted = false;
+        loop {
+            // Bounded by silence, never by total time (#1287). The bound is
+            // applied to the arrival of BYTES, not to anything reaching the
+            // sink: a chunk carrying only tool-argument fragments or a usage
+            // frame is life, and a sink-side guard would have called it idle.
+            let next = activity
+                .bounded(async { resp.chunk().await.map_err(|e| LlmError::from_reqwest(&e)) })
+                .await;
+            let chunk = match next {
+                Ok(Some(c)) => c,
+                Ok(None) => break,
+                Err(LlmError::Timeout) => {
+                    interrupted = true;
+                    break;
+                }
+                Err(e) => return Err(e),
+            };
             buf.extend_from_slice(&chunk);
             while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
                 let line: Vec<u8> = buf.drain(..=nl).collect();
@@ -233,6 +251,18 @@ impl LlmClient for OllamaClient {
                     }
                 }
             }
+        }
+        if interrupted {
+            // Nothing assembled means nothing reached the sink either, so a
+            // retry cannot duplicate anything. `Timeout` is RetryThenAdvance
+            // in `classify`, which is the disposition this wants —
+            // `InvalidResponse` would Stop the fallback chain instead.
+            if text.is_empty() {
+                return Err(LlmError::Timeout);
+            }
+            // Ollama carries no tool calls, so text is the only usable
+            // content and it is present. Keep it, marked.
+            stop_reason = StopReason::Interrupted;
         }
         if text.is_empty() {
             return Err(LlmError::InvalidResponse("empty streamed response".into()));
