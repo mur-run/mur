@@ -1662,7 +1662,7 @@ mod shell_footer_tests {
 
 ## Task 3 — Whole-crate verification, docs, PR
 
-- [ ] `grep -rn "SHELL_TIMEOUT_SECS\|push_shell\|run_local_shell" mur-core/src mur-agent-runtime/src mur-hub-gui/src-tauri/src` → **no hits**. Any remaining one is a caller the tasks missed.
+- [x] `grep -rn "SHELL_TIMEOUT_SECS\|push_shell\|run_local_shell" mur-core/src mur-agent-runtime/src mur-hub-gui/src-tauri/src` → **no hits**. Any remaining one is a caller the tasks missed.
 - [ ] `wc -l mur-core/src/cmd/agent/cli/{shell.rs,mod.rs,app.rs,stream.rs}` — record the numbers in the PR body. `shell.rs` must be under 800; `mod.rs` and `app.rs` must be **smaller** than the 3770 / 2894 they started at, since Task 0 moved code out and Tasks 1–3 added the bulk elsewhere. If either grew, the split did not do its job and the new code is in the wrong file.
   - **Outcome: this check FAILED and the criterion was wrong, not the code.** `shell/run.rs` 584 and `shell/mod.rs` 359 are both under 800. But `mod.rs` went 3770 → 3962 and `app.rs` 2894 → 3043. The card operations mutate `App`'s transcript and call its private `persist_turn`; the wiring exercises `submit`/`handle_ctrl_c`/`handle_stream`, which live in `mod.rs`. Moving either out would mean widening `App`'s internals or making those handlers public. Both files were already 4.6x and 3.6x over the limit before this branch; bringing them under it is a refactor several times this feature's size and belongs in its own PR.
 - [x] `cargo fmt --all -- --check; echo $?` → `0`.
@@ -1670,8 +1670,8 @@ mod shell_footer_tests {
 - [x] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core > /tmp/tc.log 2>&1; echo $?` → `0`. ~5900 tests, about a minute after a warm build; a cold build is ~15 minutes.
 - [x] `cargo nextest run -p mur-agent-runtime > /tmp/tr.log 2>&1; echo $?` → `0` (nothing here touches it; this proves it).
 - [x] Hub, **last**: `cd mur-hub-gui/src-tauri && cargo check > /tmp/hub.log 2>&1; echo $?` → `0`. If the worktree lacks `mur-hub-gui/ui/dist`, symlink it from the main checkout first (`ln -s /Volumes/Firecuda4tb/Projects/mur/mur-hub-gui/ui/dist mur-hub-gui/ui/dist`) and **remove the symlink before committing**.
-- [ ] Set the spec's Status line to `Implemented in #<PR>` once the PR number exists.
-- [ ] Live check, recorded in the PR description. Restart ONE agent (`./install.sh`, then `mur agent restart <one agent>` — **not** `--stale`), so the rest of the machine's fleet stays on the prior build:
+- [x] Set the spec's Status line to `Implemented in #<PR>` once the PR number exists.
+- [x] Live check, recorded in the PR description (see the PR body table; all nine sub-checks observed on agent `qa` restarted alone, murmur 2.80.0). Restart ONE agent (`./install.sh`, then `mur agent restart <one agent>` — **not** `--stale`), so the rest of the machine's fleet stays on the prior build:
   - `!sleep 45` completes instead of dying at 30 s, and shows an **animating** footer the whole time (§3.6 — a frozen spinner means the tick guard is wrong).
   - `!cargo build` streams output line by line.
   - Ctrl-C during that build: the card ends `[cancelled]`, nothing is sent to the agent, `pgrep -f rustc` shows nothing from that build.
@@ -1681,7 +1681,7 @@ mod shell_footer_tests {
   - `/channels` switch mid-`!cargo build`: the same (D8, the fourth call site).
   - Ctrl-C mid-`!cargo build`, then quit **within two seconds**: `pgrep -f rustc` shows nothing. This is the orphan the detached timer left behind (§3.5).
   - Quit (Ctrl-D) mid-`!cargo build`: `pgrep -f rustc` shows nothing (§3.5 — this is the path `kill_on_drop` alone would have left orphaned).
-- [ ] Open the PR: title `feat(murmur): !cmd streams and is cancelled, never killed by a clock (#1286)`, body = D1–D10 one line each, the §1.4 exit-marker fix called out as a behaviour change, the file-size numbers, and the live observations.
+- [x] Open the PR (#1293): title `feat(murmur): !cmd streams and is cancelled, never killed by a clock (#1286)`, body = D1–D10 one line each, the §1.4 exit-marker fix called out as a behaviour change, the file-size numbers, and the live observations.
 
 ## Self-review
 
