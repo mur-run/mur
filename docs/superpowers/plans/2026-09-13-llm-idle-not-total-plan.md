@@ -507,14 +507,14 @@ Spec D6a, §3.5.
 
 **Consumes:** `StopReason::Interrupted`, `STREAM_IDLE_TRUNCATION_MARKER` (Task 3).
 
-- [ ] `mur-agent-runtime/Cargo.toml`, under the existing `[dev-dependencies]`
+- [x] `mur-agent-runtime/Cargo.toml`, under the existing `[dev-dependencies]`
       (line 142):
       ```toml
       # `tokio::time::pause` for the stream-idle tests; dev-only so no
       # production build gains test-util.
       tokio = { workspace = true, features = ["test-util"] }
       ```
-- [ ] In `task_runner.rs`, beside `mark_max_tokens_truncation` (line 1712),
+- [x] In `task_runner.rs`, beside `mark_max_tokens_truncation` (line 1712),
       add the sibling:
       ```rust
       /// An interrupted stream is truncated for every purpose the max_tokens
@@ -531,7 +531,7 @@ Spec D6a, §3.5.
           resp.text.push_str(crate::llm::STREAM_IDLE_TRUNCATION_MARKER);
       }
       ```
-- [ ] At the `MaxTokens` site (lines 2329-2339), add the parallel branch so the
+- [x] At the `MaxTokens` site (lines 2329-2339), add the parallel branch so the
       marker reaches the returned reply, the streamed output **and** the
       persisted history — the three destinations that comment already names:
       ```rust
@@ -553,20 +553,42 @@ Spec D6a, §3.5.
       below must exercise whichever site a normal streamed turn goes through,
       and a `command grep -c "STREAM_IDLE_TRUNCATION_MARKER" mur-agent-runtime/src/task_runner.rs`
       must report **3** afterwards (one const use per site, plus the helper).
-- [ ] Test (spec §5 test 7): an `Interrupted` response reaches
+- [x] Test (spec §5 test 7): an `Interrupted` response reaches
       `task_runner`'s finish path → `resp.text` ends with the marker, the sink
       receives it as one `thinking: false` delta, and the usage JSON carries
       `truncated: true`.
-- [ ] Test (spec §5 test 13): all **three** `preview.rs` branches
+- [x] Test (spec §5 test 13): all **three** `preview.rs` branches
       (`anthropic`/`openai` via `from_env` → `new`, `ollama` via `new`) build a
       client through the shared builder. Assert the same property Task 1's
       guard asserts, so a future edit cannot restore a per-file timeout there.
-- [ ] Verify and commit:
+- [x] Verify and commit:
       ```sh
       cargo clippy -p mur-agent-runtime --all-targets -- -D warnings; echo $?
       cargo nextest run -p mur-agent-runtime; echo $?
       ```
       Commit: `feat(runtime): mark an interrupted reply in reply, stream and history (#1287)`
+
+**Notes from execution.**
+
+- Both sites patched; `command grep -c STREAM_IDLE_TRUNCATION_MARKER
+  mur-agent-runtime/src/task_runner.rs` reports **3** (one per site plus the
+  helper), and each site has its own test.
+- The agentic path's assertion could not be `ends_with`: that path appends a
+  settlement card. The test now splits on the card, requires the marker to be
+  last in the answer, and additionally asserts the card names the cause and the
+  knob. The card renders by itself as
+  `⚠ stopped at stream interrupted (0 iterations) — output may be incomplete ·
+  the model stopped sending mid-reply — ask it again; if this repeats on a slow
+  local model, raise MUR_LLM_IDLE_TIMEOUT_SECS for that agent`, which is
+  `StopKind::StreamInterrupted` paying for itself.
+- **`preview.rs` cannot be asserted the way this task imagined.** It lives in
+  `mur-core` and only sees `Arc<dyn LlmClient>`, so the HTTP client inside is
+  unreachable from there. What its three branches actually depend on is the
+  three self-building constructors, so the guard went where the `http` field is
+  visible: one test in each of `ollama.rs`, `openai/tests.rs` and
+  `anthropic.rs`, each asserting `new()` produces a client with neither a total
+  nor a read timeout. That covers both `from_env` branches (they delegate to
+  `new`) and the direct `OllamaClient::new` branch.
 
 ## Task 5 — whole-workspace verification and the live check
 

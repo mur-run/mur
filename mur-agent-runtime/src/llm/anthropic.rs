@@ -863,6 +863,20 @@ impl LlmClient for AnthropicClient {
 
 #[cfg(test)]
 mod tests {
+    /// #1287, same guarantee as `ollama.rs`'s: `AnthropicClient::new` is the
+    /// constructor `from_env` delegates to, and `preview.rs` calls `from_env`.
+    /// The 180 s total timeout that used to live here bounded streamed bodies
+    /// too; neither it nor a read timeout may come back.
+    #[test]
+    fn the_self_built_client_has_no_response_clock() {
+        let printed = format!(
+            "{:?}",
+            super::AnthropicClient::new("http://x".into(), "k".into(), "m".into()).http
+        );
+        assert!(!printed.contains("read_timeout"), "{printed}");
+        assert!(!printed.contains("timeout: Some"), "{printed}");
+    }
+
     use super::*;
     use crate::llm::{RichMessage, ToolCallResult, ToolResultEntry};
     use serde_json::json;

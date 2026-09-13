@@ -280,6 +280,21 @@ impl LlmClient for OllamaClient {
 
 #[cfg(test)]
 mod tests {
+    /// #1287: `OllamaClient::new` is what `mur agent companion preview` builds
+    /// (`mur-core/src/cmd/agent_companion/preview.rs`), and it used to carry a
+    /// 60 s TOTAL timeout that cut a long local answer off mid-stream. It must
+    /// now carry neither a total nor a read timeout — those are the two clocks
+    /// that bound a live response rather than a dead one.
+    #[test]
+    fn the_self_built_client_has_no_response_clock() {
+        let printed = format!(
+            "{:?}",
+            super::OllamaClient::new("http://x".into(), "m".into()).http
+        );
+        assert!(!printed.contains("read_timeout"), "{printed}");
+        assert!(!printed.contains("timeout: Some"), "{printed}");
+    }
+
     #[test]
     fn think_is_sent_only_for_models_that_take_it() {
         use mur_common::llm::{Effort, EffortShape, effort_shape};
