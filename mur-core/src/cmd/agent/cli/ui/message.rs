@@ -187,6 +187,16 @@ pub(super) fn push_message(
             for l in it {
                 lines.push(Line::styled(l.to_string(), theme.muted));
             }
+            // Live command: the same spinner frame the agent header uses, so
+            // the two animate together, plus the one key that ends it (D3).
+            // The event loop ticks this for a shell-only command too (§3.6).
+            if m.streaming {
+                let spin = SPINNER[spinner % SPINNER.len()];
+                lines.push(Line::styled(
+                    format!("{spin} running · Ctrl-C to stop"),
+                    theme.muted,
+                ));
+            }
         }
         Role::Agent => {
             // Animated bullet while streaming, solid bullet once done — so an
@@ -363,5 +373,42 @@ mod block_tests {
         assert!(!first.first().is_some_and(|l| is_gap(l)), "{first:?}");
         let resumed = text(&message_block(&app, 3, &m, 2, false));
         assert!(!resumed.first().is_some_and(|l| is_gap(l)), "{resumed:?}");
+    }
+}
+
+#[cfg(test)]
+mod shell_footer_tests {
+    use super::push_message;
+    use crate::cmd::agent::cli::app::{ChatMsg, Role};
+    use crate::cmd::agent::cli::theme::ANSI;
+
+    fn rendered(text: &str, streaming: bool) -> Vec<String> {
+        let mut m = ChatMsg::for_test(Role::Shell, text);
+        m.streaming = streaming;
+        let mut lines = Vec::new();
+        push_message(&mut lines, &m, 0, &ANSI, false, 60);
+        lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
+    }
+
+    /// A live card says it is running and names the key that ends it (D3);
+    /// a finished one says neither, and both keep the `$ cmd` line.
+    #[test]
+    fn a_running_shell_card_shows_the_footer() {
+        let live = rendered("$ cargo test\nCompiling", true);
+        assert!(
+            live.iter().any(|l| l.contains("running · Ctrl-C to stop")),
+            "{live:?}"
+        );
+        assert!(live.iter().any(|l| l.contains("$ cargo test")), "{live:?}");
+
+        let done = rendered("$ cargo test\nCompiling\n[exit 0]", false);
+        assert!(
+            !done.iter().any(|l| l.contains("Ctrl-C to stop")),
+            "{done:?}"
+        );
+        assert!(done.iter().any(|l| l.contains("$ cargo test")), "{done:?}");
     }
 }
