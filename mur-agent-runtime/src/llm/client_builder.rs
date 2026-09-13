@@ -186,17 +186,17 @@ fn build_bare_client(
         }
         NetworkOutboundMode::Off => HostGuard::off(),
     };
-    // Through `llm_client_builder()`, not a bare `ClientBuilder`: that is where
-    // `.no_proxy()` and the connect clock live. Building bare here meant an
-    // ambient `HTTP_PROXY` captured this client's traffic, and because
-    // `HostGuard` is a DNS resolver — the only host enforcement for this
-    // process's egress — a proxied request never resolved its real destination
-    // and `allow_hosts` did not apply to it. See `ambient_proxy_tests` below.
-    let guarded_http = crate::llm::llm_client_builder()
-        .dns_resolver(std::sync::Arc::new(host_guard))
-        .build()
-        .context("failed to build guarded HTTP client")
-        .map_err(GuardedHttpBuildError)?;
+    // `GuardedHttpClient`, not a bare `reqwest::Client`: the resolver,
+    // `.no_proxy()`, the redirect re-check and the per-request URL allowlist are
+    // one indivisible capability, because #1297 was four separate things a call
+    // site had to remember and this one forgot two of them. `llm_client_builder`
+    // still owns the non-host policy (the connect clock, no total timeout).
+    let guarded_http = crate::sandbox::reqwest_guard::GuardedHttpClient::build(
+        crate::llm::llm_client_builder(),
+        host_guard,
+    )
+    .context("failed to build guarded HTTP client")
+    .map_err(GuardedHttpBuildError)?;
 
     match entry.provider.as_str() {
         "local" => {
