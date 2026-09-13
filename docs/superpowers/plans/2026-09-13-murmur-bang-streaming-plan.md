@@ -1580,7 +1580,7 @@ fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
 
 **Interfaces.** Consumes: `ChatMsg.streaming` on a `Role::Shell` message (T2). Produces: no new symbols.
 
-- [ ] In `push_message`'s `Role::Shell` arm, append the footer after the existing output loop:
+- [x] In `push_message`'s `Role::Shell` arm, append the footer after the existing output loop:
 
 ```rust
         Role::Shell => {
@@ -1610,7 +1610,7 @@ fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
 
 `SPINNER` is already imported at the top of this file; no import change.
 
-- [ ] Add a test module at the end of `ui/message.rs`, mirroring the
+- [x] Add a test module at the end of `ui/message.rs`, mirroring the
   `settlement_paint_tests` module already in this file (same imports, same
   line-to-text extraction, same `&ANSI` theme and `push_message` call shape —
   `ChatMsg::for_test` is already `pub`, so nothing new is needed in `app.rs`):
@@ -1654,9 +1654,9 @@ mod shell_footer_tests {
 }
 ```
 
-- [ ] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core -- cli::ui > /tmp/t4.log 2>&1; echo $?` → `0`.
-- [ ] `cargo fmt --all`; `cargo clippy -p mur-core --all-targets -- -D warnings > /tmp/c4.log 2>&1; echo $?` → `0`.
-- [ ] Commit: `feat(murmur): running footer on a live shell card (#1286 T2)`.
+- [x] `ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core -- cli::ui > /tmp/t4.log 2>&1; echo $?` → `0`.
+- [x] `cargo fmt --all`; `cargo clippy -p mur-core --all-targets -- -D warnings > /tmp/c4.log 2>&1; echo $?` → `0`.
+- [x] Commit: `feat(murmur): running footer on a live shell card (#1286 T2)`.
 
 ---
 
