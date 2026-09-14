@@ -780,6 +780,31 @@ mur deep-research "question"   # preflight (start workers, re-pin gateway) + gua
 
 `provision` / `run` remain as the flag-based advanced path. Egress is only ever granted in `setup`/`provision --grant-egress` (explicit consent); the smart run never touches grants.
 
+Inside a murmur chat the same three verbs are a slash command, and they render on
+your screen without costing the agent a turn — the transcript it sees stays clean:
+
+```
+/deep-research                 # status panel
+/deep-research ask <question>  # start a run, progress streams while you keep typing
+/deep-research stop            # end it (outcome = stopped)
+```
+
+Agents reach it through the built-in `fleet_run` tool rather than the CLI. With
+`wait: false` the tool returns a handle within a second instead of holding the
+call open for the length of the run:
+
+```
+fleet_run {fleet: "deep-research", goal: "<question>", wait: false}
+→ run_id: 019bd4c1-…            # first line, before preflight even starts
+mur_job_status <run_id>
+→ run … — state: running, liveness: alive
+  progress: iteration 2 · 3✓ 0✗ 2 pending · spend $0.31/$2.00
+```
+
+`mur_job_status` answers from the run record while the run is live and falls back
+to the progress file by `run_id`, so a preflight that failed before any run
+existed still reports `state: failed` with its error instead of nothing.
+
 Runs report progress: each step prints `✓ s2 research dr_worker_2 $0.08 42s` as it
 completes, every iteration ends with a summary (`iteration 2 done: 3✓ 0✗ 2 pending ·
 spend $0.31/$2.00 · model claude_haiku`), and the bare `mur deep-research` panel shows
