@@ -118,6 +118,9 @@ pub enum StopKind {
     Stuck {
         last_calls: String,
     },
+    /// The model kept calling a tool withdrawn earlier in the turn, so no
+    /// further iteration could run anything.
+    ToolWithdrawn,
 }
 
 /// Repeated from `task_runner::ITERATION_CEILING` in prose; a test pins the
@@ -143,6 +146,7 @@ impl StopKind {
             StopKind::StreamInterrupted => "stream interrupted",
             StopKind::Deadline => "deadline",
             StopKind::Stuck { .. } => "stuck",
+            StopKind::ToolWithdrawn => "tool withdrawn",
         }
     }
 
@@ -175,6 +179,10 @@ impl StopKind {
             ),
             StopKind::Stuck { last_calls } => format!(
                 "no progress; last calls: {last_calls} — change the ask, or widen it: mur limits {agent} --stuck <20m|off>"
+            ),
+            StopKind::ToolWithdrawn => format!(
+                "a tool was refused and withdrawn for the turn, and the model kept calling it — \
+                 allow it and retry: mur agent perm tool-allow {agent} <tool>"
             ),
         })
     }
@@ -337,7 +345,7 @@ fn truncate(s: &str, max: usize) -> String {
 /// guessed — and so is a sandbox denial: it comes from the tool's own
 /// `ToolStatus`, not from sniffing the output text for a hint.
 pub fn classify(content: &str, is_error: bool, status: &crate::tools::ToolStatus) -> Outcome {
-    if let crate::tools::ToolStatus::Denied { detail } = status {
+    if let crate::tools::ToolStatus::Denied { detail, .. } = status {
         return Outcome::Denied(truncate(detail, RUNAWAY_BACKSTOP));
     }
     // Before the `is_error` check: a yield is never an error, and it must not
@@ -582,6 +590,7 @@ mod tests {
             false,
             &crate::tools::ToolStatus::Denied {
                 detail: "`cargo` is not in agent 'mur''s spawn allowlist".to_string(),
+                scope: crate::tools::DenialScope::Action,
             },
         );
         match denied {
