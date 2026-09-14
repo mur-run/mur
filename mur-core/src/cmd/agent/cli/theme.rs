@@ -31,8 +31,18 @@ pub struct Theme {
     // ── chrome ────────────────────────────────────────────────────────────
     /// Unfocused rules: composer top rule, table grid, fleet rail.
     pub border: Style,
-    /// Status bar and card background (bg only).
+    /// Status bar and ordinary card background (bg only).
     pub surface: Style,
+    /// Per-turn settlement card palette. It is complete rather than only a
+    /// background: `light` may run inside a dark terminal, so inheriting its
+    /// normal dark-on-light text tokens would make the card unreadable.
+    pub settlement_surface: Style,
+    pub settlement_text: Style,
+    pub settlement_muted: Style,
+    pub settlement_accent: Style,
+    pub settlement_ok: Style,
+    pub settlement_warn: Style,
+    pub settlement_error: Style,
     /// Agent-name / AUTO badge on the status bar; the SETTLEMENT title chip.
     pub badge: Style,
     // ── layout ────────────────────────────────────────────────────────────
@@ -63,6 +73,16 @@ pub const ANSI: Theme = Theme {
     error: fg(Color::Red),
     border: Style::new().add_modifier(Modifier::DIM),
     surface: Style::new(),
+    // Do not invert a completed turn: on light terminals that becomes a large,
+    // attention-stealing white slab. The cyan rail and title chip define this
+    // card while the body stays inside the terminal's own quiet surface.
+    settlement_surface: Style::new(),
+    settlement_text: Style::new(),
+    settlement_muted: Style::new().add_modifier(Modifier::DIM),
+    settlement_accent: fg(Color::Cyan),
+    settlement_ok: fg(Color::Green),
+    settlement_warn: fg(Color::Yellow),
+    settlement_error: fg(Color::Red),
     badge: fg(Color::Cyan)
         .add_modifier(Modifier::REVERSED)
         .add_modifier(Modifier::BOLD),
@@ -82,11 +102,21 @@ pub const LIGHT: Theme = Theme {
     emphasis: rgb(0x00, 0x00, 0x00).add_modifier(Modifier::BOLD),
     accent: rgb(0x0b, 0x6e, 0x8f),
     accent_alt: rgb(0x1a, 0x6b, 0x3a),
-    ok: rgb(0x1a, 0x7f, 0x3a),
+    ok: rgb(0x0f, 0x6e, 0x35),
     warn: rgb(0x8a, 0x5a, 0x00),
     error: rgb(0xb3, 0x26, 0x1e),
     border: rgb(0xc9, 0xcc, 0xd6),
     surface: Style::new().bg(Color::Rgb(0xee, 0xf0, 0xf5)),
+    // A self-contained dark inset avoids both failure modes seen in practice:
+    // a bright paper-like slab and dark light-skin text disappearing into the
+    // user's dark terminal background.
+    settlement_surface: Style::new().bg(Color::Rgb(0x20, 0x26, 0x31)),
+    settlement_text: rgb(0xf4, 0xf6, 0xfa),
+    settlement_muted: rgb(0xb8, 0xc0, 0xcc),
+    settlement_accent: rgb(0x65, 0xcb, 0xe8),
+    settlement_ok: rgb(0x70, 0xd6, 0x9a),
+    settlement_warn: rgb(0xf2, 0xc6, 0x6d),
+    settlement_error: rgb(0xff, 0x9a, 0x96),
     badge: Style::new()
         .fg(Color::Rgb(0x0b, 0x6e, 0x8f))
         .bg(Color::Rgb(0xe0, 0xf0, 0xf8)),
@@ -112,6 +142,13 @@ pub const MUR: Theme = Theme {
     error: rgb(0xf2, 0x8b, 0x98),
     border: rgb(0x3f, 0x3f, 0x78),
     surface: Style::new().bg(Color::Rgb(0x14, 0x14, 0x2c)),
+    settlement_surface: Style::new().bg(Color::Rgb(0x1d, 0x1d, 0x3a)),
+    settlement_text: rgb(0xe4, 0xe4, 0xf4),
+    settlement_muted: rgb(0x9a, 0x9a, 0xc4),
+    settlement_accent: rgb(0xfb, 0xbf, 0x24),
+    settlement_ok: rgb(0x7f, 0xd4, 0x8f),
+    settlement_warn: rgb(0xf2, 0xc7, 0x6a),
+    settlement_error: rgb(0xf2, 0x8b, 0x98),
     badge: Style::new()
         .fg(Color::Rgb(0xfb, 0xbf, 0x24))
         .bg(Color::Rgb(0x22, 0x1a, 0x06)),
@@ -139,6 +176,13 @@ pub const CLAY: Theme = Theme {
     error: rgb(0xff, 0x6b, 0x80),
     border: rgb(0x88, 0x88, 0x88),
     surface: Style::new().bg(Color::Rgb(0x26, 0x26, 0x26)),
+    settlement_surface: Style::new().bg(Color::Rgb(0x30, 0x27, 0x25)),
+    settlement_text: rgb(0xff, 0xff, 0xff),
+    settlement_muted: rgb(0xb8, 0xae, 0xaa),
+    settlement_accent: rgb(0xe8, 0x91, 0x72),
+    settlement_ok: rgb(0x72, 0xd2, 0x83),
+    settlement_warn: rgb(0xff, 0xc9, 0x38),
+    settlement_error: rgb(0xff, 0x83, 0x91),
     badge: Style::new()
         .fg(Color::Rgb(0x1a, 0x1a, 0x1a))
         .bg(Color::Rgb(0xd9, 0x77, 0x57)),
@@ -149,6 +193,14 @@ pub const CLAY: Theme = Theme {
 
 /// The names `/skin` and `--skin` accept, in the order they are listed.
 /// `dark` is an alias of `ansi` and is not listed.
+pub const SKIN_CHOICES: &[(&str, &str)] = &[
+    ("ansi", "default — follows your terminal"),
+    ("light", "light terminals"),
+    ("mur", "MUR brand"),
+    ("clay", "warm terracotta on dark"),
+];
+
+/// Human-readable canonical names, derived from the same registry as menus.
 pub const SKIN_NAMES: &str = "ansi, light, mur, clay";
 
 const KNOWN: [(&str, &Theme); 5] = [
@@ -244,25 +296,61 @@ mod tests {
             ("mur", &MUR, ASSUMED_BG_MUR),
             ("clay", &CLAY, ASSUMED_BG_CLAY),
         ] {
-            let fg = |s: Style| s.fg.expect("text token has a colour");
-            let r = contrast_ratio(fg(theme.text), bg);
-            assert!(r >= 7.0, "{name}: text is {r:.1}:1");
-            for (label, s) in [
-                ("muted", theme.muted),
-                ("emphasis", theme.emphasis),
-                ("accent", theme.accent),
-                ("accent_alt", theme.accent_alt),
-                ("ok", theme.ok),
-                ("warn", theme.warn),
-                ("error", theme.error),
-            ] {
-                let r = contrast_ratio(fg(s), bg);
-                assert!(r >= 4.5, "{name}: {label} is {r:.1}:1");
-            }
+            // Each surface is judged against the tokens actually painted on
+            // it: the settlement card never draws with the terminal-surface
+            // tokens, so checking those against its background is meaningless.
+            let check = |surface: &str, bg: Color, text: Style, tokens: &[(&str, Style)]| {
+                let r = contrast_ratio(text.fg.expect("text token has a colour"), bg);
+                assert!(r >= 7.0, "{name}/{surface}: text is {r:.1}:1");
+                for (label, s) in tokens {
+                    let r = contrast_ratio(s.fg.expect("text token has a colour"), bg);
+                    assert!(r >= 4.5, "{name}/{surface}: {label} is {r:.1}:1");
+                }
+            };
+            check(
+                "terminal",
+                bg,
+                theme.text,
+                &[
+                    ("muted", theme.muted),
+                    ("emphasis", theme.emphasis),
+                    ("accent", theme.accent),
+                    ("accent_alt", theme.accent_alt),
+                    ("ok", theme.ok),
+                    ("warn", theme.warn),
+                    ("error", theme.error),
+                ],
+            );
+            check(
+                "settlement",
+                theme.settlement_surface.bg.unwrap_or(bg),
+                theme.settlement_text,
+                &[
+                    ("muted", theme.settlement_muted),
+                    ("accent", theme.settlement_accent),
+                    ("ok", theme.settlement_ok),
+                    ("warn", theme.settlement_warn),
+                    ("error", theme.settlement_error),
+                ],
+            );
             let badge_bg = theme.badge.bg.expect("badge has a background");
-            let r = contrast_ratio(fg(theme.badge), badge_bg);
+            let r = contrast_ratio(theme.badge.fg.expect("badge has a foreground"), badge_bg);
             assert!(r >= 4.5, "{name}: badge is {r:.1}:1");
         }
+    }
+
+    #[test]
+    fn light_settlement_is_readable_without_terminal_background_assumptions() {
+        let bg = LIGHT
+            .settlement_surface
+            .bg
+            .expect("light settlement must paint a stable background");
+        let text = LIGHT
+            .settlement_text
+            .fg
+            .expect("light settlement copy must have a foreground");
+        let ratio = contrast_ratio(text, bg);
+        assert!(ratio >= 7.0, "light settlement text is only {ratio:.1}:1");
     }
 
     /// `ansi` pins nothing: every token is a named ANSI colour or Reset, so

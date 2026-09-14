@@ -161,11 +161,7 @@ pub enum Args {
 }
 
 const ON_OFF: &[(&str, &str)] = &[("on", "enable"), ("off", "disable")];
-const SKINS: &[(&str, &str)] = &[
-    ("ansi", "default — follows your terminal"),
-    ("light", "light terminals"),
-    ("mur", "MUR brand"),
-];
+use super::theme::SKIN_CHOICES;
 const MCP_SUBS: &[(&str, &str)] = &[
     ("list", "servers this agent has"),
     ("add", "add a stdio server"),
@@ -243,7 +239,7 @@ const COMMANDS: &[(&str, &str, Args)] = &[
     ),
     ("sessions", "list past sessions", Args::None),
     ("skill", "manage agent skills", Args::Fixed(SKILL_SUBS)),
-    ("skin", "switch theme", Args::Fixed(SKINS)),
+    ("skin", "switch theme", Args::Fixed(SKIN_CHOICES)),
     ("verbose", "expand tool cards", Args::Fixed(ON_OFF)),
 ];
 
