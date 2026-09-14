@@ -30,7 +30,8 @@ content:
 
     ## 2. For intent queries, read index state as JSON
     ```bash
-    mur project status --path "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" --json
+    root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    mur project status --path "$root" --json
     ```
     Never scrape the human text output. The index is **usable** when
     `indexed == true` AND `indexing_in_progress == false` AND
@@ -42,7 +43,12 @@ content:
     git status --porcelain=v1 -z | tr '\0' '\n'
     ```
     Entries are `XY <path>`; a rename emits the new path and then the old one.
-    **changed paths** = modified + staged + untracked + renamed-to.
+    Every path git prints is relative to `$root` — **not** your cwd — even
+    when you ran the command from a subdirectory. Keep `$root` from step 2 and
+    reuse it: don't let a fresh `git status` from wherever you happen to be
+    reintroduce the cwd mismatch.
+    **changed paths** = modified + staged + untracked + renamed-to, each one
+    only meaningful joined to `$root` (`"$root/<path>"`).
     Deleted paths and renamed-from paths are NOT searched — they are the list
     of paths whose semantic hits you must distrust.
     A git failure means "not a Git project", not "search failed".
@@ -60,9 +66,13 @@ content:
     and report why.
 
     Hybrid is two searches and one answer: run the semantic call, then
-    `rg -n "<term>" -- <changed paths that still exist>`. One unrelated dirty
-    file never cancels the semantic half — that is the whole point of asking
-    git for paths instead of asking it whether the tree is clean.
+    `rg -n "<term>" -- "$root/<path>"` for each changed path — joined to
+    `$root`, never left as the bare string git printed. A git-reported path
+    run from the wrong cwd looks "missing" to `rg`, and the stale-path rule
+    below will silently swallow that as an ordinary stale hit instead of the
+    path-resolution bug it actually is. One unrelated dirty file never
+    cancels the semantic half — that is the whole point of asking git for
+    paths instead of asking it whether the tree is clean.
 
     ## 5. Scope
     `mur project search` and the `mur_project_search` MCP tool search **the
