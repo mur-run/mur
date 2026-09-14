@@ -255,78 +255,131 @@ impl MonitorStore {
     }
 
     /// Rule 6: a second `create` with the same key while the first is still
-    /// open returns the first monitor, never a duplicate.
+    /// open returns the first monitor, never a duplicate — including across
+    /// the independent connections the CLI, the daemon and (plan-2) an
+    /// agent runtime each open onto this same file.
+    ///
+    /// Driven as an explicit `BEGIN IMMEDIATE` / `COMMIT` rather than
+    /// rusqlite's safe `transaction()` wrapper, for two reasons (same shape
+    /// as `ChannelIndex::rebuild_from` in `mur-channel/src/index.rs`):
+    ///
+    /// - `transaction()` needs `&mut Connection`; this method takes `&self`
+    ///   (`MonitorStore` is shared behind `&self` by every caller), so the
+    ///   safe wrapper is not available and the transaction is driven by
+    ///   hand, with `ROLLBACK` on every error path before the error is
+    ///   propagated.
+    /// - `BEGIN IMMEDIATE` (not the default `BEGIN`/deferred behaviour of
+    ///   `unchecked_transaction()`) takes the write lock up front, before
+    ///   the existence `SELECT` runs. Under `journal_mode=WAL`, a *deferred*
+    ///   transaction fixes its read snapshot at that `SELECT`; if another
+    ///   connection commits a row with the same `idempotency_key` afterward,
+    ///   this transaction's own `INSERT` then fails with
+    ///   `SQLITE_BUSY_SNAPSHOT` — a variant `busy_timeout` does not retry,
+    ///   because a stale-snapshot writer cannot be resolved without
+    ///   restarting the whole transaction. `BEGIN IMMEDIATE` avoids the
+    ///   snapshot ever going stale: it acquires the write lock (waiting on
+    ///   `busy_timeout` like any other writer) before the `SELECT`, so the
+    ///   `SELECT` always sees the latest committed state and no concurrent
+    ///   writer can slip a row in underneath it.
     pub fn create(
         &self,
         spec: &MonitorSpec,
         now: DateTime<Utc>,
         work_started_at: Option<DateTime<Utc>>,
     ) -> Result<Created> {
-        let tx = self.conn.unchecked_transaction()?;
-        let existing: Option<(String, String)> = tx
-            .query_row(
-                "SELECT id, next_check_at FROM monitors WHERE idempotency_key = ?1 AND state != 'completed'",
-                [&spec.idempotency_key],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
-        if let Some((id, next)) = existing {
-            tx.commit()?;
-            return Ok(Created {
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE")
+            .context("begin create transaction")?;
+
+        let result = (|| -> Result<Created> {
+            let existing: Option<(String, String)> = self
+                .conn
+                .query_row(
+                    "SELECT id, next_check_at FROM monitors WHERE idempotency_key = ?1 AND state != 'completed'",
+                    [&spec.idempotency_key],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            if let Some((id, next)) = existing {
+                return Ok(Created {
+                    id,
+                    existing: true,
+                    next_check_at: parse_ts(&next),
+                });
+            }
+            let id = uuid::Uuid::now_v7().to_string();
+            let cycle_id = uuid::Uuid::now_v7().to_string();
+            let started = work_started_at.unwrap_or(now);
+            self.conn.execute(
+                &format!(
+                    "INSERT INTO monitors ({MONITOR_COLS}) VALUES \
+                     (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12, NULL, 0, 0, 0, ?13, NULL, 0, 0, 0, 1)"
+                ),
+                params![
+                    id,
+                    spec.name,
+                    serde_json::to_string(spec)?,
+                    MonitorState::Active.as_str(),
+                    Outcome::Pending.as_str(),
+                    spec.source.r#type.as_str(),
+                    spec.source.reference,
+                    spec.idempotency_key,
+                    ts(now),
+                    ts(started),
+                    ts(now),
+                    ts(started),
+                    cycle_id,
+                ],
+            )?;
+            self.conn.execute(
+                "INSERT INTO monitor_cycles (id, monitor_id, parent_cycle_id, reference, started_at) VALUES (?1, ?2, NULL, ?3, ?4)",
+                params![cycle_id, id, spec.source.reference, ts(started)],
+            )?;
+            self.conn.execute(
+                "INSERT INTO monitor_events (monitor_id, cycle_id, kind, dedup_key, payload, created_at) VALUES (?1, ?2, 'created', 'created', ?3, ?4)",
+                params![
+                    id,
+                    cycle_id,
+                    serde_json::json!({
+                        "schema_version": spec.schema_version,
+                        "actor": spec.created_by.actor,
+                        "reason": spec.created_by.reason,
+                        "originating_run_id": spec.created_by.originating_run_id,
+                    })
+                    .to_string(),
+                    ts(now)
+                ],
+            )?;
+            Ok(Created {
                 id,
-                existing: true,
-                next_check_at: parse_ts(&next),
-            });
+                existing: false,
+                next_check_at: now,
+            })
+        })();
+
+        match result {
+            Ok(created) => match self.conn.execute_batch("COMMIT") {
+                Ok(()) => Ok(created),
+                Err(e) => {
+                    // COMMIT itself failed (e.g. disk full at commit time).
+                    // Without this, `?` would escape with the transaction
+                    // still open, and `self.conn` would silently queue
+                    // every later statement inside it instead of
+                    // autocommitting. Roll back before propagating, same
+                    // as the Err(e) arm below; a rollback that itself
+                    // fails must not mask the original COMMIT error.
+                    let _ = self.conn.execute_batch("ROLLBACK");
+                    Err(e).context("commit create transaction")
+                }
+            },
+            Err(e) => {
+                // Best-effort: if the rollback itself fails, the original
+                // error is still the one worth surfacing, not the
+                // rollback failure.
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
         }
-        let id = uuid::Uuid::now_v7().to_string();
-        let cycle_id = uuid::Uuid::now_v7().to_string();
-        let started = work_started_at.unwrap_or(now);
-        tx.execute(
-            &format!(
-                "INSERT INTO monitors ({MONITOR_COLS}) VALUES \
-                 (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12, NULL, 0, 0, 0, ?13, NULL, 0, 0, 0, 1)"
-            ),
-            params![
-                id,
-                spec.name,
-                serde_json::to_string(spec)?,
-                MonitorState::Active.as_str(),
-                Outcome::Pending.as_str(),
-                spec.source.r#type.as_str(),
-                spec.source.reference,
-                spec.idempotency_key,
-                ts(now),
-                ts(started),
-                ts(now),
-                ts(started),
-                cycle_id,
-            ],
-        )?;
-        tx.execute(
-            "INSERT INTO monitor_cycles (id, monitor_id, parent_cycle_id, reference, started_at) VALUES (?1, ?2, NULL, ?3, ?4)",
-            params![cycle_id, id, spec.source.reference, ts(started)],
-        )?;
-        tx.execute(
-            "INSERT INTO monitor_events (monitor_id, cycle_id, kind, dedup_key, payload, created_at) VALUES (?1, ?2, 'created', 'created', ?3, ?4)",
-            params![
-                id,
-                cycle_id,
-                serde_json::json!({
-                    "schema_version": spec.schema_version,
-                    "actor": spec.created_by.actor,
-                    "reason": spec.created_by.reason,
-                    "originating_run_id": spec.created_by.originating_run_id,
-                })
-                .to_string(),
-                ts(now)
-            ],
-        )?;
-        tx.commit()?;
-        Ok(Created {
-            id,
-            existing: false,
-            next_check_at: now,
-        })
     }
 
     pub fn get(&self, id: &str) -> Result<Option<MonitorRow>> {
@@ -502,5 +555,66 @@ created_by: {{ actor: user:test }}
         s.set_state(&a.id, MonitorState::Exhausted, t0()).unwrap();
         assert!(s.reactivate(&a.id, t0(), true).unwrap());
         assert_eq!(s.get(&a.id).unwrap().unwrap().remediation_attempts, 0);
+    }
+
+    /// Rule 6 under the deployment this file's module doc describes: the
+    /// CLI, the daemon and (plan-2) an agent runtime each open independent
+    /// connections to the same `monitors.db`. A single in-process
+    /// connection (every other test here) can never observe a cross-process
+    /// race, so this test opens one `MonitorStore` per thread against the
+    /// same on-disk file and lines them up with a `Barrier` to force
+    /// concurrent `create()` calls on the same idempotency key.
+    #[test]
+    fn concurrent_create_on_one_key_never_errors_and_never_duplicates() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().to_path_buf();
+        // Migrate once up front so every thread's own `open()` below only
+        // has to race on `create()`, not on schema creation too.
+        MonitorStore::open(&dir).unwrap();
+
+        const N: usize = 8;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(N));
+        let handles: Vec<_> = (0..N)
+            .map(|_| {
+                let dir = dir.clone();
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let s = MonitorStore::open(&dir).unwrap();
+                    barrier.wait();
+                    s.create(&spec("race"), t0(), None)
+                })
+            })
+            .collect();
+        let results: Vec<Result<Created>> =
+            handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        let mut ids = std::collections::HashSet::new();
+        let (mut created, mut existing) = (0, 0);
+        for r in &results {
+            let c = r
+                .as_ref()
+                .expect("create() must never error under a racing insert");
+            ids.insert(c.id.clone());
+            if c.existing {
+                existing += 1;
+            } else {
+                created += 1;
+            }
+        }
+        assert_eq!(created, 1, "exactly one caller creates the monitor");
+        assert_eq!(existing, N - 1, "everyone else finds it existing");
+        assert_eq!(ids.len(), 1, "every caller must agree on the same id");
+
+        let s = MonitorStore::open(&dir).unwrap();
+        assert_eq!(
+            s.list(&ListFilter {
+                include_completed: true,
+                ..Default::default()
+            })
+            .unwrap()
+            .len(),
+            1,
+            "no duplicate row was inserted"
+        );
     }
 }
