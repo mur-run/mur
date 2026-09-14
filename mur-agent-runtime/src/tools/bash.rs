@@ -7,7 +7,7 @@ use super::denial::{
     write_denied_path,
 };
 
-use super::{ToolError, ToolExecutor, ToolOutput, ToolStatus};
+use super::{DenialScope, ToolError, ToolExecutor, ToolOutput, ToolStatus};
 use crate::exec_dirs;
 use crate::llm::ToolDef;
 
@@ -358,10 +358,22 @@ impl BashTool {
                 let routes = who_can_exec(mur_home, agent, &bin, Some(&cwd));
                 let hint = spawn_denied_hint(&bin, agent, &routes);
                 combined.push_str(&hint);
-                status = ToolStatus::Denied { detail: hint };
+                status = ToolStatus::Denied {
+                    detail: hint,
+                    // The sandbox denied a PATH or a BINARY, not `bash`.
+                    // Withdrawing the tool here is what turned one denied
+                    // exec into a whole lost turn (2026-09-13).
+                    scope: DenialScope::Action,
+                };
             } else if let Some(hint) = self.explain_write_denial(&poll.new_stderr, working_dir) {
                 combined.push_str(&hint);
-                status = ToolStatus::Denied { detail: hint };
+                status = ToolStatus::Denied {
+                    detail: hint,
+                    // The sandbox denied a PATH or a BINARY, not `bash`.
+                    // Withdrawing the tool here is what turned one denied
+                    // exec into a whole lost turn (2026-09-13).
+                    scope: DenialScope::Action,
+                };
             } else {
                 status = ToolStatus::Failed { exit_code: code };
             }

@@ -52,6 +52,14 @@ pub enum ToolStatus {
     },
     Denied {
         detail: String,
+        /// Whether the TOOL is gone or only THIS action was refused.
+        /// `#[serde(default)]` so a record written before this field existed
+        /// deserialises as `Action` — the fail-safe direction: at worst the
+        /// model retries a genuinely unavailable tool and is refused again,
+        /// whereas the other default would resurrect the bug below from old
+        /// data.
+        #[serde(default)]
+        scope: DenialScope,
     },
     /// The call yielded (spec 2026-09-12 bash-yield D1/D5): the command is
     /// still running under `job_id` and this reply carried its output up to
@@ -60,6 +68,34 @@ pub enum ToolStatus {
         job_id: String,
         bytes_seen: u64,
     },
+}
+
+/// What a [`ToolStatus::Denied`] denies: the tool, or just this action.
+///
+/// The distinction is load-bearing. `task_runner`'s `withdraws()` drops a
+/// tool from the request list for the rest of the turn after a refusal, and
+/// it used to fire on ANY `Denied`. But the sandbox returns `Denied` too —
+/// and what it denies is a path or a binary, not the tool. So one denied
+/// `./cmdtest` exec took `bash` away entirely; every later call, including
+/// ones that would have succeeded, came back refused, and the agent flailed
+/// through `pwd` / `true` / `echo` until the doom-loop detector stopped it 54
+/// iterations later with no work done (2026-09-13).
+///
+/// CLAUDE.md states the intended trigger precisely: "any authorization
+/// refusal (`not authorized:`) withdraws that tool for the rest of the turn".
+/// An EPERM on one path is not that.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DenialScope {
+    /// This action was refused; the tool still works for other arguments.
+    /// Sandbox path and exec denials land here — they name a path or a
+    /// binary, and `tools::denial` already returns a hint saying which.
+    #[default]
+    Action,
+    /// The tool itself is unavailable for the rest of the turn (spec §3.8):
+    /// a policy denial, or an authorization refusal the human just gave.
+    /// Calling it again can only be refused again.
+    Tool,
 }
 
 /// Result of a tool execution: the model-facing text plus the real,
