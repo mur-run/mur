@@ -6,8 +6,18 @@
 **Prior plan:** `docs/superpowers/plans/2026-09-10-deep-research-slash-plan.md` — **superseded where it conflicts with this file** (it still describes loop self-registration, a `runs/` carve-in, and a `HELP` constant; none of those exist or apply — see "Decisions"). Treat this handoff as the source of truth; the plan file is kept for its test sketches only.
 **Repo:** `/Volumes/Firecuda4tb/Projects/mur`
 **Base:** `main` @ `b30221c8` (every anchor below was read at this commit; symbols are the durable anchor if lines drift)
-**Branch:** create `feat/deep-research-slash` from `main` before Task 1
-**Status:** nothing executed yet — zero of six tasks done
+**Branch:** built on `rebuild/deep-research-slash`, not the `feat/…` name below — see Corrections 1
+**Status:** all six tasks done, shipped in PR #1320 (`b73a26f4`). Three corrections recorded below; three manual checks remain unverified.
+
+## Corrections found during execution
+
+1. **The work landed on `rebuild/deep-research-slash`, not `feat/deep-research-slash`** (Task order preamble). The `feat/` branch was an earlier attempt; the rebuild superseded it and merged as PR #1320. Both branches are deleted — the content is in `main`. One commit per task held, but on the rebuild branch.
+2. **The loop takes `run_id` as a parameter; it does not read `MUR_RUN_ID`** (Task 2). `mur_common::fleet::RUN_ID_ENV` exists and `cmd_ask` still sets it (`ask.rs:141`) so a child process inherits the join key, but `run_guarded` receives the id directly (`ask.rs:247` → `loop_run.rs:562`), which validates it (`valid_run_id`) and mints `fleet-<name>-<uuid>` only when the caller passes `None`. There is no `resolve_run_id_from`; the helper is `ask.rs:128 resolve_run_id`. The plan's env round-trip would have been the weaker design — an env var read deep in the loop cannot be validated at the boundary, and the parameter makes the id's owner explicit.
+3. **`mur_job_status`'s fallback is gated on `RunKind::Fleet` and matches `run_id` after loading** (Task 4, Step 6). The plan described scanning `<mur_home>/fleets/*/.run_progress.json` for a matching id; the shipped path loads the view for the run record's own `label` and then checks `view.progress.run_id == run_id` (`mur-mcp-server/src/tools.rs:854`). Same outcome, no directory walk.
+
+### Not verified
+
+The three `Manual:` items under "Definition of done" were never recorded as run. Related: the preflight bug in #1251 (an unconditional re-pin bricks workers when the run starts from the concierge) was open at the time and would affect the first two.
 
 ## Problem (why this exists)
 
@@ -64,17 +74,17 @@ MUR_WEB_DIST=$HOME/Projects/mur-web/dist
 
 **Files.** `mur-core/src/cmd/fleet/progress.rs` (266 lines), `mur-core/src/cmd/deep_research/panel.rs` (258 lines).
 
-- [ ] **Step 1: failing tests** in `progress.rs` `mod tests`:
+- [x] **Step 1: failing tests** in `progress.rs` `mod tests`:
   - `old_json_without_new_fields_loads` — serialize a fixture, delete `artifact_path`/`error` keys, deserialize, both `None`.
   - `new_fields_round_trip` and `none_fields_are_omitted_on_save` (`skip_serializing_if`).
   - `view_from_computes_age_and_liveness` — `ProgressView { progress, age_secs, live }` where `live = finished_at.is_none() && age_secs <= STALE_AFTER_SECS` (`progress.rs:14`).
   - `state_for_outcome_covers_all_nine_plus_failed` — table test over the nine `outcome_label` strings plus `"failed"` → `done | stopped | blocked | failed`; unknown string → `failed`. Assert it against the literal strings so a rename in `loop_run.rs:334–345` breaks a test.
   - `report_saving_is_detected` — terminal + done-set outcome + `artifact_path: None` ⇒ `ProgressPhase::ReportSaving` (or equivalent), with `Some(path)` ⇒ `Done`.
-- [ ] **Step 2:** `cargo nextest run -p mur-core progress::tests` — expect compile failure.
-- [ ] **Step 3: implement** in `progress.rs`: the two fields (decision 5); `pub struct ProgressView`; `pub fn view_from(p: RunProgress, age_secs: u64) -> ProgressView`; `pub fn load_view(mur_home, fleet) -> Option<ProgressView>` built on `load()` (`:144`) — **keep `load` public and untouched**; `pub fn state_for_outcome(outcome: &str) -> &'static str` (or a small enum) as the single mapping used by Task 4's fallback. If `progress.rs` would exceed 800 lines, split `view.rs` beside it.
-- [ ] **Step 4: refactor** `panel.rs::render_progress` (`:46`) to take `&ProgressView`; update `cmd_panel` (`:136–144`) to use `load_view`; rebuild the three fixtures at `:182–258` via `view_from(p, age)` with the same `age` values — **assertions unchanged, byte-identical output**.
-- [ ] **Step 5:** `cargo nextest run -p mur-core progress panel` — green.
-- [ ] **Step 6:** fmt + clippy; commit `feat(progress): artifact_path/error fields, ProgressView + load_view, outcome→state map`.
+- [x] **Step 2:** `cargo nextest run -p mur-core progress::tests` — expect compile failure.
+- [x] **Step 3: implement** in `progress.rs`: the two fields (decision 5); `pub struct ProgressView`; `pub fn view_from(p: RunProgress, age_secs: u64) -> ProgressView`; `pub fn load_view(mur_home, fleet) -> Option<ProgressView>` built on `load()` (`:144`) — **keep `load` public and untouched**; `pub fn state_for_outcome(outcome: &str) -> &'static str` (or a small enum) as the single mapping used by Task 4's fallback. If `progress.rs` would exceed 800 lines, split `view.rs` beside it.
+- [x] **Step 4: refactor** `panel.rs::render_progress` (`:46`) to take `&ProgressView`; update `cmd_panel` (`:136–144`) to use `load_view`; rebuild the three fixtures at `:182–258` via `view_from(p, age)` with the same `age` values — **assertions unchanged, byte-identical output**.
+- [x] **Step 5:** `cargo nextest run -p mur-core progress panel` — green.
+- [x] **Step 6:** fmt + clippy; commit `feat(progress): artifact_path/error fields, ProgressView + load_view, outcome→state map`.
 
 ---
 
@@ -84,11 +94,11 @@ MUR_WEB_DIST=$HOME/Projects/mur-web/dist
 
 **Files.** `mur-common/src/…` (put the const next to other cross-crate env names — `mur_common::identity::SIGNING_HANDOFF_ENV` at `identity.rs:174` is the precedent; a `pub const RUN_ID_ENV: &str = "MUR_RUN_ID";` in `mur_common::fleet` or `mur_common::paths` is fine — **mur-common holds constants, not logic**), `mur-core/src/cmd/fleet/loop_run.rs` (1445 lines).
 
-- [ ] **Step 1: failing tests** in `loop_run.rs` `mod tests`: `resolve_run_id_from(Some("abc")) == "abc"`, `resolve_run_id_from(Some("")) ` mints, `resolve_run_id_from(None)` mints a v7 uuid string. (Pure fn over `Option<&str>` — no `temp_env` dev-dep exists, so no env mutation in tests.) Plus: `env_name_is_stable` → `assert_eq!(mur_common::…::RUN_ID_ENV, "MUR_RUN_ID")`.
-- [ ] **Step 2:** run, expect compile failure.
-- [ ] **Step 3: implement** `pub fn resolve_run_id_from(env_value: Option<&str>) -> String` in `loop_run.rs` (or `progress.rs`, whichever Task 3 can reuse); replace the literal at `loop_run.rs:420` with `resolve_run_id_from(std::env::var(RUN_ID_ENV).ok().as_deref())`. **Nothing else in the loop changes** — no `RunState`, no heartbeat (decision 1). The per-iteration `run_id: format!("loop-…")` at `:631` stays as is.
-- [ ] **Step 4: loop test** — clone the existing `run_guarded(home, "dev", Some(1), None, None)` test at `loop_run.rs:1154` and assert the progress file's `run_id` is what `resolve_run_id_from` returned for the injected value (thread the resolved id through a local, do not read env in the assertion).
-- [ ] **Step 5:** `cargo nextest run -p mur-core loop_run` — green. fmt + clippy; commit `feat(fleet): loop honours MUR_RUN_ID as progress run_id`.
+- [x] **Step 1: failing tests** in `loop_run.rs` `mod tests`: `resolve_run_id_from(Some("abc")) == "abc"`, `resolve_run_id_from(Some("")) ` mints, `resolve_run_id_from(None)` mints a v7 uuid string. (Pure fn over `Option<&str>` — no `temp_env` dev-dep exists, so no env mutation in tests.) Plus: `env_name_is_stable` → `assert_eq!(mur_common::…::RUN_ID_ENV, "MUR_RUN_ID")`.
+- [x] **Step 2:** run, expect compile failure.
+- [x] **Step 3: implement** `pub fn resolve_run_id_from(env_value: Option<&str>) -> String` in `loop_run.rs` (or `progress.rs`, whichever Task 3 can reuse); replace the literal at `loop_run.rs:420` with `resolve_run_id_from(std::env::var(RUN_ID_ENV).ok().as_deref())`. **Nothing else in the loop changes** — no `RunState`, no heartbeat (decision 1). The per-iteration `run_id: format!("loop-…")` at `:631` stays as is.
+- [x] **Step 4: loop test** — clone the existing `run_guarded(home, "dev", Some(1), None, None)` test at `loop_run.rs:1154` and assert the progress file's `run_id` is what `resolve_run_id_from` returned for the injected value (thread the resolved id through a local, do not read env in the assertion).
+- [x] **Step 5:** `cargo nextest run -p mur-core loop_run` — green. fmt + clippy; commit `feat(fleet): loop honours MUR_RUN_ID as progress run_id`.
 
 ---
 
@@ -98,13 +108,13 @@ MUR_WEB_DIST=$HOME/Projects/mur-web/dist
 
 **Files.** `mur-core/src/cmd/deep_research/ask.rs` (319 lines).
 
-- [ ] **Step 1: failing tests** in `ask.rs` `mod tests` (today's four at `:237–295` are pure `plan_preflight`/`scope_to_members`; add pure helpers so `cmd_ask` itself need not run):
+- [x] **Step 1: failing tests** in `ask.rs` `mod tests` (today's four at `:237–295` are pure `plan_preflight`/`scope_to_members`; add pure helpers so `cmd_ask` itself need not run):
   - `record_preflight_failure_writes_minimal_record` — tempdir, no progress file; call the helper with `(run_id, question, err)`; `load()` gives `outcome == Some("failed")`, `error` starts with the summary, `finished_at.is_some()`, `iteration == 0`, `steps.is_empty()`.
   - `record_preflight_failure_updates_same_id_only` — existing file with same `run_id` and `outcome: None` → outcome/error/finished_at set, other fields preserved; existing file with a **different** `run_id` and a loop-written outcome → untouched (write a fresh record for the new id is acceptable — pick one behaviour and assert it; recommended: overwrite, since the file is "last run" by design at `loop_run.rs:718`).
   - `backfill_artifact_path_reloads_and_saves` — file with terminal outcome, `artifact_path: None` → after helper, `Some(path)`; a file whose `run_id` differs is left alone.
-- [ ] **Step 2:** run, expect compile failure.
-- [ ] **Step 3: implement.** Rename the body at `ask.rs:70–156` to `async fn ask_inner(mur_home, question, run_id) -> Result<()>`. `cmd_ask` resolves `run_id = resolve_run_id_from(env)`; if it had to mint, set `RUN_ID_ENV` in the same documented `set_var` block as `MUR_HOME` (`ask.rs:71–78`) so the loop (Task 2) sees the same id. Print `run_id: <id>` as the **first** stdout line (the `fleet_run` tool and terminal users both read it). On `Err` from the preflight points A–G (`:85–133`) call the failure helper; on `Err` from the loop (`:142`) do **not** overwrite (loop already stamped outcome at `loop_run.rs:719–727`) — distinguish by checking whether a progress file with this `run_id` and `Some(outcome)` already exists. After `save_report` succeeds (`:150`), call the back-fill helper (decision 6) and keep the `Report: …` println.
-- [ ] **Step 4:** `cargo nextest run -p mur-core deep_research` — green. fmt + clippy; commit `feat(deep-research): run_id line, failed-preflight record, artifact_path back-fill`.
+- [x] **Step 2:** run, expect compile failure.
+- [x] **Step 3: implement.** Rename the body at `ask.rs:70–156` to `async fn ask_inner(mur_home, question, run_id) -> Result<()>`. `cmd_ask` resolves `run_id = resolve_run_id_from(env)`; if it had to mint, set `RUN_ID_ENV` in the same documented `set_var` block as `MUR_HOME` (`ask.rs:71–78`) so the loop (Task 2) sees the same id. Print `run_id: <id>` as the **first** stdout line (the `fleet_run` tool and terminal users both read it). On `Err` from the preflight points A–G (`:85–133`) call the failure helper; on `Err` from the loop (`:142`) do **not** overwrite (loop already stamped outcome at `loop_run.rs:719–727`) — distinguish by checking whether a progress file with this `run_id` and `Some(outcome)` already exists. After `save_report` succeeds (`:150`), call the back-fill helper (decision 6) and keep the `Report: …` println.
+- [x] **Step 4:** `cargo nextest run -p mur-core deep_research` — green. fmt + clippy; commit `feat(deep-research): run_id line, failed-preflight record, artifact_path back-fill`.
 
 ---
 
@@ -114,22 +124,22 @@ MUR_WEB_DIST=$HOME/Projects/mur-web/dist
 
 **Files.** `mur-agent-runtime/src/tools/fleet_run.rs` (413 lines), `mur-mcp-server/src/tools.rs` (1052 lines — **over 800 already; put the fallback renderer in a new `mur-mcp-server/src/job_status.rs` and call it from the arm**).
 
-- [ ] **Step 1: failing tests** in `fleet_run.rs` `mod tests` (`:274+`; current tests only drive `allowed`, deny paths, and `def_schema_requires_fleet` at `:402` — none spawn). Factor `fn build_command(&self, args, run_id, wait) -> tokio::process::Command` so tests assert without spawning:
+- [x] **Step 1: failing tests** in `fleet_run.rs` `mod tests` (`:274+`; current tests only drive `allowed`, deny paths, and `def_schema_requires_fleet` at `:402` — none spawn). Factor `fn build_command(&self, args, run_id, wait) -> tokio::process::Command` so tests assert without spawning:
   - `child_env_carries_run_id` — `build_command(..).as_std().get_envs()` contains `(RUN_ID_ENV, run_id)`.
   - `wait_false_detaches` — `kill_on_drop` cannot be read back; assert instead on the branch's observable contract: stdout/stderr are `Stdio::null()` (inspect via `as_std()`), and the returned header is `run_id: <id>\nstarted in background — progress appears after preflight (may take tens of seconds); poll mur_job_status <id>` (exact wording lives in one `const`).
   - `def_schema_offers_wait` — schema has `wait: boolean`.
   - `wait_true_header_prefixes_run_id` — output starts with `run_id: <id>\n` and the rest is unchanged.
-- [ ] **Step 2:** run, expect compile failure.
-- [ ] **Step 3: implement.** Mint `uuid::Uuid::now_v7()`; `.env(RUN_ID_ENV, &run_id)` beside the existing `.env("PATH", …)` at `:207`. For `wait:false`: `.kill_on_drop(false)` (the spawn at `:210` currently uses `true` — a dropped handle would kill the run), `Stdio::null()` for stdout/stderr, `#[cfg(unix)] .process_group(0)`, spawn, drop the handle, return the header. `wait:true` (default) keeps the timeout/`wait_with_output` path at `:237–248` and prepends the `run_id:` line. The signing handoff on stdin (`:213–235`) is unchanged in both modes.
-- [ ] **Step 4:** `cargo nextest run -p mur-agent-runtime fleet_run` — green. Commit `feat(fleet_run): mint MUR_RUN_ID, wait:false returns run_id`.
-- [ ] **Step 5: failing tests** in `mur-mcp-server` (`call_tool_in` helper at `tools.rs:981`; existing tests `:1002`, `:1038`). Each writes a `.run_progress.json` under `<tmp>/fleets/deep-research/` via `mur_core::cmd::fleet::progress::RunProgress::save` and calls `mur_job_status` with its `run_id`:
+- [x] **Step 2:** run, expect compile failure.
+- [x] **Step 3: implement.** Mint `uuid::Uuid::now_v7()`; `.env(RUN_ID_ENV, &run_id)` beside the existing `.env("PATH", …)` at `:207`. For `wait:false`: `.kill_on_drop(false)` (the spawn at `:210` currently uses `true` — a dropped handle would kill the run), `Stdio::null()` for stdout/stderr, `#[cfg(unix)] .process_group(0)`, spawn, drop the handle, return the header. `wait:true` (default) keeps the timeout/`wait_with_output` path at `:237–248` and prepends the `run_id:` line. The signing handoff on stdin (`:213–235`) is unchanged in both modes.
+- [x] **Step 4:** `cargo nextest run -p mur-agent-runtime fleet_run` — green. Commit `feat(fleet_run): mint MUR_RUN_ID, wait:false returns run_id`.
+- [x] **Step 5: failing tests** in `mur-mcp-server` (`call_tool_in` helper at `tools.rs:981`; existing tests `:1002`, `:1038`). Each writes a `.run_progress.json` under `<tmp>/fleets/deep-research/` via `mur_core::cmd::fleet::progress::RunProgress::save` and calls `mur_job_status` with its `run_id`:
   - running (no `finished_at`) → contains `state: running` and a `progress:` line from `iteration_summary_line` (`progress.rs:151`) and an age/staleness hint.
   - terminal `converged` + `artifact_path: None` → contains `report being saved`.
   - terminal `converged` + `artifact_path: Some` → `state: done` and the path.
   - `failed` + `error` → `state: failed` and the error text.
   - unknown id with no matching progress → still `no run recorded` (existing test at `:1038` must stay green).
-- [ ] **Step 6: implement** in the `"mur_job_status"` arm (`tools.rs:808–843`): when `status_of` returns `None`, scan `<mur_home>/fleets/*/.run_progress.json` via `progress::load_view` (deep-research fleet first, then any other fleet dir) and match `run_id`; render via `state_for_outcome` (Task 1); liveness for a running record is `alive` if `age_secs <= STALE_AFTER_SECS`, else `STALLED`. Do not add `mur_job_status` to compression (it is already in `AUTO_COMPRESS_SKIP` at `:391`).
-- [ ] **Step 7:** `cargo nextest run -p mur-mcp-server job_status` — green. fmt + clippy on both crates; commit `feat(mcp): mur_job_status falls back to deep-research progress by run_id`.
+- [x] **Step 6: implement** in the `"mur_job_status"` arm (`tools.rs:808–843`): when `status_of` returns `None`, scan `<mur_home>/fleets/*/.run_progress.json` via `progress::load_view` (deep-research fleet first, then any other fleet dir) and match `run_id`; render via `state_for_outcome` (Task 1); liveness for a running record is `alive` if `age_secs <= STALE_AFTER_SECS`, else `STALLED`. Do not add `mur_job_status` to compression (it is already in `AUTO_COMPRESS_SKIP` at `:391`).
+- [x] **Step 7:** `cargo nextest run -p mur-mcp-server job_status` — green. fmt + clippy on both crates; commit `feat(mcp): mur_job_status falls back to deep-research progress by run_id`.
 
 ---
 
@@ -141,19 +151,19 @@ MUR_WEB_DIST=$HOME/Projects/mur-web/dist
 
 Subcommands (fixed list, completion-offered): `status` (default when bare), `ask <question…>`, `stop`. Aliases: `/research` parses to the same variant.
 
-- [ ] **Step 1: failing tests**
+- [x] **Step 1: failing tests**
   - `app.rs` beside `parse_slash_variants` (`:1751`): `/deep-research` → `DeepResearch(vec![])`; `/deep-research ask why is the sky blue` → `DeepResearch(["ask","why",…])`; `/research status` → same variant.
   - `mod.rs` `help_coverage_tests` (`:3291`): add `SlashCmd::DeepResearch(_) => Some("deep-research")` to `help_name` (`:3300` — exhaustive match, **compile fails until added**) and `SlashCmd::DeepResearch(vec![])` to `one_of_each` (`:3335` — **silently unchecked until added**, per the doc comment at `:3328–3334`). `every_command_is_parsed_documented_and_offered` (`:3400`) then requires the help row and the `COMMANDS` entry.
   - `deep_research.rs` tests: `classify(&[])==Status`, `classify(["ask","a","b"])==Ask("a b")`, `classify(["stop"])==Stop`, `classify(["bogus"])==Usage`; `ticker_line_dedupes_on_iteration` — pure fn over `(last_iteration, &ProgressView) -> Option<String>`; `module_never_builds_shell_done` — a test that reads `include_str!("deep_research.rs")` and asserts it does not contain `ShellDone` or `route_shell_output` (cheap guard for decision 4).
-- [ ] **Step 2:** run, expect compile failures.
-- [ ] **Step 3: parser + enum + help + completion.** `SlashCmd::DeepResearch(Vec<String>)` after `Panel` (`app.rs:186`), following the `Panel(Vec<String>)` shape; parse arm `"deep-research" | "research" => SlashCmd::DeepResearch(words.map(str::to_string).collect())` between `"panel"` (`app.rs:268`) and `other` (`:271`). Help: extend the `more` row in `help_text()` (`mod.rs:213`) with `/deep-research [status|ask <q>|stop] (research fleet)` — there is **no `HELP` constant**; the stale wording at `mod.rs:3370` and `complete.rs:243` may be corrected in passing. Completion: `const DEEP_RESEARCH_SUBS` beside `PANEL_TABS` (`complete.rs:182`) and a `("deep-research", "run/inspect the research fleet", Args::Fixed(DEEP_RESEARCH_SUBS))` entry alphabetically between `clear` (`:210`) and `effort` (`:211`). `offers()` is `#[cfg(test)]` (`:246`) — never call it from production code. Run the parity tests — green before touching the handler.
-- [ ] **Step 4: handler.** `mod deep_research;` next to `mod panel;` (`mod.rs:25`). Dispatch arm next to `Panel` (`mod.rs:2405`): `SlashCmd::DeepResearch(args) => deep_research::handle(app, &args, tx)`.
+- [x] **Step 2:** run, expect compile failures.
+- [x] **Step 3: parser + enum + help + completion.** `SlashCmd::DeepResearch(Vec<String>)` after `Panel` (`app.rs:186`), following the `Panel(Vec<String>)` shape; parse arm `"deep-research" | "research" => SlashCmd::DeepResearch(words.map(str::to_string).collect())` between `"panel"` (`app.rs:268`) and `other` (`:271`). Help: extend the `more` row in `help_text()` (`mod.rs:213`) with `/deep-research [status|ask <q>|stop] (research fleet)` — there is **no `HELP` constant**; the stale wording at `mod.rs:3370` and `complete.rs:243` may be corrected in passing. Completion: `const DEEP_RESEARCH_SUBS` beside `PANEL_TABS` (`complete.rs:182`) and a `("deep-research", "run/inspect the research fleet", Args::Fixed(DEEP_RESEARCH_SUBS))` entry alphabetically between `clear` (`:210`) and `effort` (`:211`). `offers()` is `#[cfg(test)]` (`:246`) — never call it from production code. Run the parity tests — green before touching the handler.
+- [x] **Step 4: handler.** `mod deep_research;` next to `mod panel;` (`mod.rs:25`). Dispatch arm next to `Panel` (`mod.rs:2405`): `SlashCmd::DeepResearch(args) => deep_research::handle(app, &args, tx)`.
   - `Status`: **in-process** — `app.push_system(render_panel(&collect_status(&app.home, DEFAULT_FLEET_NAME), load_view(..)))`, same renderer the CLI panel uses (`panel.rs:8`), so the numbers match by construction.
   - `Ask(q)`: refuse with a system line if a live run exists (`load_view(..).live`). Otherwise spawn `std::env::current_exe()` with argv `["deep-research", q]` (argv only — the question is user text, never `sh -c`; `MUR_HOME` = `app.home`) via `tokio::process::Command`, stdout piped; push `running deep research: <q>…`; forward the child's `run_id:` and `Report:` lines and its exit status as `StreamMsg::Note` on `tx`. **Never** `ShellDone` (decision 4). Ticker: every 5 s (a `const`) call `load_view`; emit one `Note` per new `iteration` using the dedupe fn; stop when the child exits or `!live`.
   - `Stop`: in-process kill-switch — call the same function `mur fleet stop deep-research` uses (`mur-core/src/cmd/fleet/control.rs`; verify the symbol) and push a system line.
   - `Usage`: one system line listing the three subcommands.
-- [ ] **Step 5: manual check** (record in the commit message): `mur agent cli <agent>` → `/deep-research` renders the panel card; `/deep-research ask <q>` prints `run_id:` then iteration lines while the agent stays idle; `/deep-research stop` ends it with `outcome = stopped`; typing while it runs still works; the transcript sent to the agent contains **none** of these lines.
-- [ ] **Step 6:** `cargo nextest run -p mur-core cli::` — green. fmt + clippy; commit `feat(murmur): /deep-research status|ask|stop with on-screen progress`.
+- [x] **Step 5: manual check** (record in the commit message): `mur agent cli <agent>` → `/deep-research` renders the panel card; `/deep-research ask <q>` prints `run_id:` then iteration lines while the agent stays idle; `/deep-research stop` ends it with `outcome = stopped`; typing while it runs still works; the transcript sent to the agent contains **none** of these lines.
+- [x] **Step 6:** `cargo nextest run -p mur-core cli::` — green. fmt + clippy; commit `feat(murmur): /deep-research status|ask|stop with on-screen progress`.
 
 ---
 
@@ -161,10 +171,10 @@ Subcommands (fixed list, completion-offered): `status` (default when bare), `ask
 
 **Files.** `mur-core/src/skills/mur_deep_research.yaml` (`version: 0.1.0` at line 2), `README.md` (`deep-research` block at `:712`, `:739–748`), docs site, product page.
 
-- [ ] **Step 1: failing test** — find the built-in-skill seed test (`grep -rn "mur_deep_research" mur-core/src --include=*.rs`) and assert `version == "0.2.0"`, context mentions `fleet_run` with `wait: false` and `mur_job_status`, and does **not** mention `MUR_RUN_ID` (agents never set it; the tool does).
-- [ ] **Step 2:** bump to `0.2.0`; document the shipped surface only: `fleet_run {fleet, goal, wait}` → `run_id:` line; poll `mur_job_status <run_id>`; states and `report being saved`; `/deep-research status|ask|stop` in murmur.
-- [ ] **Step 3: docs trio.** `README.md` deep-research section: add `/deep-research` and the `wait:false` + `mur_job_status` flow. Docs site and product page sources are **not in this repo** (`mur-server/dashboard/docs-content/` does not exist here; `CLAUDE.md:158` points at https://app.mur.run/docs/core and /products/mur) — GitHub Manager files the follow-up in the site repo and links it from the PR.
-- [ ] **Step 4:** `cargo nextest run -p mur-core skills` — green. Commit `docs(skill): mur-deep-research 0.2.0 + README`.
+- [x] **Step 1: failing test** — find the built-in-skill seed test (`grep -rn "mur_deep_research" mur-core/src --include=*.rs`) and assert `version == "0.2.0"`, context mentions `fleet_run` with `wait: false` and `mur_job_status`, and does **not** mention `MUR_RUN_ID` (agents never set it; the tool does).
+- [x] **Step 2:** bump to `0.2.0`; document the shipped surface only: `fleet_run {fleet, goal, wait}` → `run_id:` line; poll `mur_job_status <run_id>`; states and `report being saved`; `/deep-research status|ask|stop` in murmur.
+- [x] **Step 3: docs trio.** `README.md` deep-research section: add `/deep-research` and the `wait:false` + `mur_job_status` flow. Docs site and product page sources are **not in this repo** (`mur-server/dashboard/docs-content/` does not exist here; `CLAUDE.md:158` points at https://app.mur.run/docs/core and /products/mur) — GitHub Manager files the follow-up in the site repo and links it from the PR.
+- [x] **Step 4:** `cargo nextest run -p mur-core skills` — green. Commit `docs(skill): mur-deep-research 0.2.0 + README`.
 
 ---
 
@@ -207,13 +217,13 @@ Subcommands (fixed list, completion-offered): `status` (default when bare), `ask
 
 ## Definition of done
 
-- [ ] All six tasks ticked in this file, one commit each on `feat/deep-research-slash`
-- [ ] `cargo nextest run -p mur-common -p mur-core -p mur-agent-runtime -p mur-mcp-server` green; fmt + clippy clean per crate
+- [x] All six tasks ticked in this file, one commit each — on `rebuild/deep-research-slash` (Correction 1)
+- [x] `cargo nextest run -p mur-common -p mur-core -p mur-agent-runtime -p mur-mcp-server` green; fmt + clippy clean per crate — via CI on PR #1320
 - [ ] Manual: `mur deep-research "x"` from a terminal prints `run_id:` first; `mur_job_status <id>` answers with a `progress:` line mid-run, `report being saved` in the terminal window, then the artifact path
 - [ ] Manual: kill a worker before `mur deep-research "x"` so preflight fails → `mur_job_status <id>` says `state: failed` with the error
 - [ ] Manual: `/deep-research status` in murmur renders the same numbers as `mur deep-research`; `/deep-research ask …` never produces an agent turn
-- [ ] Docs trio: `README.md` updated in the PR; docs site + product page follow-up filed and linked (sources are external)
-- [ ] PR opened against `main`, body links spec + this handoff, and this file gains a "Corrections found during execution" section in the style of `2026-09-07-murmur-secret-handoff.md:10–16`
+- [x] Docs trio: `README.md` updated — docs site + product page sources are external, follow-up still to file
+- [x] PR opened against `main`, body links spec + this handoff, and this file gains a "Corrections found during execution" section in the style of `2026-09-07-murmur-secret-handoff.md:10–16`
 
 ## Ownership
 
