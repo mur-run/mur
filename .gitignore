@@ -31,3 +31,4 @@ registry-work/
 AGENTS.md
 .cursorrules
 .windsurfrules
+/.cargo-target-*/
