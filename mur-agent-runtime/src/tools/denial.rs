@@ -141,18 +141,62 @@ pub(super) fn write_denied_hint(path: &Path, agent: &str, d: &WriteDenial) -> St
 /// `sandbox-exec -p '(version 1)(allow default)(deny process-exec* (subpath "/opt"))' \
 ///   /bin/bash -c '/opt/homebrew/bin/git --version'`
 /// → `/bin/bash: /opt/homebrew/bin/git: Operation not permitted`, exit 126.
-pub(super) fn spawn_denied_path(exit_code: Option<i32>, stderr: &str) -> Option<String> {
+pub(super) fn spawn_denied_path(
+    exit_code: Option<i32>,
+    stderr: &str,
+    cwd: &Path,
+) -> Option<String> {
     if exit_code != Some(126) {
         return None;
     }
     stderr.lines().rev().find_map(|line| {
-        let path = line
-            .trim_end()
-            .strip_suffix(": Operation not permitted")?
-            .rsplit(": ")
-            .next()?;
-        path.starts_with('/').then(|| path.to_string())
+        let head = line.trim_end().strip_suffix(": Operation not permitted")?;
+        // Two shapes reach us, and reading only the last segment saw one:
+        //
+        //   bash: /tmp/probe-bin: Operation not permitted
+        //   bash: /tmp/x.sh: /bin/sh: bad interpreter: Operation not permitted
+        //
+        // In the second the kernel refused `execve` on the SCRIPT; bash found
+        // a shebang and blamed the interpreter, so the trailing segment is
+        // prose, not a path, and the whole hint was skipped. Taking the FIRST
+        // path-shaped segment names the script in both — and the script is
+        // what the hint can act on.
+        //
+        // `bash: line 7: ./cmdtest: …` is why relative spellings are resolved
+        // rather than skipped: bash echoes the command as written, so the
+        // originally reported failure carried no leading `/` either.
+        let tok = head
+            .split(": ")
+            .skip(1)
+            .find(|t| t.starts_with('/') || t.starts_with("./") || t.starts_with("../"))?;
+        let p = Path::new(tok);
+        Some(if p.is_absolute() {
+            tok.to_string()
+        } else {
+            // `join` keeps a leading `./`, and this string is both shown to
+            // the model and looked up by `who_can_exec` — `/repo/./cmdtest`
+            // reads like a typo and compares unequal to the real path. `../`
+            // is left alone: it carries meaning that cannot be dropped, and
+            // resolving it properly needs the filesystem.
+            let rel = tok.strip_prefix("./").unwrap_or(tok);
+            cwd.join(rel).to_string_lossy().into_owned()
+        })
     })
+}
+
+/// Does this path start with a `#!` line?
+///
+/// Decides which half of [`spawn_denied_hint`] applies. Read rather than
+/// guessed from the extension: the denied file in the reported failure was
+/// named `cmdtest`, with no suffix at all. Unreadable or absent ⇒ `false`,
+/// so the conservative branch (ask the user) is what a failed read produces.
+fn is_script(path: &str) -> bool {
+    use std::io::Read;
+    let mut buf = [0u8; 2];
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut buf))
+        .is_ok()
+        && &buf == b"#!"
 }
 
 /// Turn an opaque kernel EPERM into a route that can actually resolve it. The
@@ -173,6 +217,25 @@ pub(super) fn spawn_denied_hint(bin: &str, agent: &str, routes: &ExecRoutes) -> 
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| bin.to_string());
+    // A denied SCRIPT needs nobody. `bash` is already in the allowlist and
+    // reads are allow-default, so its interpreter can run the file today —
+    // verified against the live sandbox 2026-09-14: `./exectest.sh` was
+    // refused while `sh /tmp/exectest.sh` printed its output.
+    //
+    // This grants nothing and reveals nothing: the capability exists whether
+    // or not we mention it (a heredoc piped into `sh` is the same thing), and
+    // what the allowlist actually protects is execution of arbitrary
+    // BINARIES, which no interpreter can rescue. Saying so turns a dead end
+    // into a one-word fix instead of an interruption for the user — the same
+    // reason this module exists.
+    if is_script(bin) {
+        return format!(
+            "\n\n[sandbox] `{name}` is not in agent '{agent}''s spawn allowlist, so the kernel \
+             refused to exec it directly. It is a script, so run it through its interpreter \
+             instead — that needs no new permission:\n    sh {bin}\n\
+             (Use `bash {bin}` if it needs bash.) Nothing else about the command changes."
+        );
+    }
     let route = if routes.ready.is_empty() {
         format!("No authorized fleet can run `{name}`, so this one needs the user.")
     } else {
@@ -225,24 +288,114 @@ mod tests {
     use super::*;
     const DENIED: &str = "bash: line 1: /Users/d/.cargo/bin/cargo: Operation not permitted";
 
+    /// bash reports a denied SCRIPT in a different shape: the kernel refuses
+    /// `execve` on the file, bash sees the shebang and blames the interpreter.
+    /// The trailing segment is then "bad interpreter", not a path, so the
+    /// original parser matched nothing and the model got no hint at all — just
+    /// `Operation not permitted`. Verified against the live sandbox
+    /// 2026-09-14.
+    ///
+    /// The path to name is the SCRIPT: that is the file the kernel refused,
+    /// and the one `sh <script>` makes runnable.
+    #[test]
+    fn spawn_denied_path_reads_the_bad_interpreter_shape() {
+        let stderr = "bash: /tmp/exectest.sh: /bin/sh: bad interpreter: Operation not permitted\n";
+        assert_eq!(
+            spawn_denied_path(Some(126), stderr, Path::new("/work")),
+            Some("/tmp/exectest.sh".to_string()),
+            "the denied script, not the interpreter and not the trailing prose"
+        );
+    }
+
+    /// The spelling from the originally reported failure. bash prints the
+    /// command as the user wrote it, so a denied `./x` is reported relative —
+    /// and the parser required a leading `/`, so the case that started this
+    /// investigation produced no hint either.
+    #[test]
+    fn spawn_denied_path_resolves_a_relative_path_against_cwd() {
+        let stderr = "bash: line 7: ./cmdtest: Operation not permitted\n";
+        assert_eq!(
+            spawn_denied_path(Some(126), stderr, Path::new("/work/repo")),
+            Some("/work/repo/cmdtest".to_string())
+        );
+    }
+
+    /// Still conservative: a token that names no path at all is not guessed at.
+    #[test]
+    fn spawn_denied_path_ignores_a_bare_word() {
+        assert_eq!(
+            spawn_denied_path(
+                Some(126),
+                "bash: frobnicate: Operation not permitted\n",
+                Path::new("/work")
+            ),
+            None,
+            "a bare word could be anything; a wrong path makes a confident wrong hint"
+        );
+    }
+
+    /// A denied SCRIPT does not need the user at all: `bash` is already in the
+    /// allowlist and reads are allow-default, so running it through its
+    /// interpreter works today. Verified live 2026-09-14 — `./exectest.sh` was
+    /// refused while `sh /tmp/exectest.sh` printed SCRIPT-RAN. Sending the
+    /// agent to interrupt a human for a missing `sh` is the waste this hint
+    /// exists to prevent.
+    #[test]
+    fn a_denied_script_is_told_to_use_its_interpreter() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("cmdtest");
+        std::fs::write(&script, "#!/bin/sh\necho hi\n").unwrap();
+        let hint = spawn_denied_hint(
+            script.to_str().unwrap(),
+            "rustsmith",
+            &ExecRoutes::default(),
+        );
+        assert!(
+            hint.contains("sh ") && hint.contains("cmdtest"),
+            "must name the interpreter form: {hint}"
+        );
+        assert!(
+            !hint.contains("allow-spawn"),
+            "must NOT send the agent to the user for a script it can already run: {hint}"
+        );
+    }
+
+    /// Negative control: a real binary cannot be rescued by an interpreter, so
+    /// the existing advice stands. This is the case the allowlist genuinely
+    /// protects — the sandbox stops arbitrary BINARIES, not shell code.
+    #[test]
+    fn a_denied_binary_still_points_at_allow_spawn() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("payload");
+        std::fs::write(&bin, [0xcf, 0xfa, 0xed, 0xfe, 0x0c]).unwrap();
+        let hint = spawn_denied_hint(bin.to_str().unwrap(), "rustsmith", &ExecRoutes::default());
+        assert!(hint.contains("allow-spawn"), "{hint}");
+        assert!(
+            !hint.contains("interpreter"),
+            "a Mach-O binary has no interpreter to fall back to: {hint}"
+        );
+    }
+
     #[test]
     fn spawn_denied_path_matches_only_the_kernel_exec_denial() {
+        let cwd = Path::new("/work");
         assert_eq!(
-            spawn_denied_path(Some(126), DENIED).as_deref(),
+            spawn_denied_path(Some(126), DENIED, cwd).as_deref(),
             Some("/Users/d/.cargo/bin/cargo")
         );
         // Same text, but a write EPERM (exit 1) or a missing binary (127) —
         // neither is a spawn-allowlist denial, so neither gets the hint.
-        assert_eq!(spawn_denied_path(Some(1), DENIED), None);
-        assert_eq!(spawn_denied_path(Some(127), DENIED), None);
+        assert_eq!(spawn_denied_path(Some(1), DENIED, cwd), None);
+        assert_eq!(spawn_denied_path(Some(127), DENIED, cwd), None);
         // 126 without the signature (e.g. a real non-executable file).
         assert_eq!(
-            spawn_denied_path(Some(126), "bash: ./x: Permission denied"),
+            spawn_denied_path(Some(126), "bash: ./x: Permission denied", cwd),
             None
         );
-        // A relative/garbled path is not a usable route — don't guess.
+        // A BARE name names no path — still not guessed at. (A `./`-relative
+        // one now IS resolved against cwd; see the dedicated test.)
         assert_eq!(
-            spawn_denied_path(Some(126), "bash: cargo: Operation not permitted"),
+            spawn_denied_path(Some(126), "bash: cargo: Operation not permitted", cwd),
             None
         );
     }

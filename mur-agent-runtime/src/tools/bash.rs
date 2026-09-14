@@ -349,12 +349,16 @@ impl BashTool {
                 combined.push('\n');
             }
             combined.push_str(&format!("[exit code: {code}]"));
-            if let Some(bin) = spawn_denied_path(exit.code, &poll.new_stderr)
+            // cwd is resolved BEFORE the parse, not after: bash echoes the
+            // command as the model wrote it, so a denied `./x` arrives
+            // relative and only the session cwd can turn it into a path the
+            // hint (and `who_can_exec`) can act on.
+            let cwd = working_dir
+                .canonicalize()
+                .unwrap_or(working_dir.to_path_buf());
+            if let Some(bin) = spawn_denied_path(exit.code, &poll.new_stderr, &cwd)
                 && let Some((mur_home, agent)) = &self.agent
             {
-                let cwd = working_dir
-                    .canonicalize()
-                    .unwrap_or(working_dir.to_path_buf());
                 let routes = who_can_exec(mur_home, agent, &bin, Some(&cwd));
                 let hint = spawn_denied_hint(&bin, agent, &routes);
                 combined.push_str(&hint);
